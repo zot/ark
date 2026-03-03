@@ -339,42 +339,78 @@ LMDB subdatabase `ark` stores:
   - sourceConfig: embedded or path reference to config
   - dotfiles: boolean — whether * matches dotfiles (default true)
 
-## Not in V1
+## V2 — Model-Free
 
-These are documented in the brainstorm and architecture files in
-~/work/daneel/ but deferred:
+No embedding model required. Tags + FTS give fully functional
+recall on any hardware.
 
+- Chunk retrieval — CLI option to return chunk text instead of ranges
+  - `ark search --chunks` — emit chunk text (JSONL)
+  - `ark search --files` — emit full file content for matches
+  - Enables permission end-run: if it's indexed, ark can emit it
+  - Works with FTS and tag search, no model needed
+- Tag tracking — track @tags as files are ingested
+  - 'T' [tagname] [count] in ark subdatabase
+  - 'F' [filename] [tag] [count]
+  - helps keep ~/work/daneel/tags.md up-to-date
+  - maybe move some files from ~/work/daneel into ~/.ark to generalize
+  - subcommands:
+    - ark tag counts <tag>...
+    - ark tag files <tag>...
+      - outputs filename size
+      - option to output with tag to end of the line for each occurrence
+- Recall agent / /ark skill
+- CLAUDE.md bootstrap — run ark at session start to seed context
+  - use ark instead of local files when possible
+  - tags + FTS queries, no model needed
+- Export microfts2 chunker functions (eliminate exec-per-file)
+  - AddStrategyFunc alongside AddStrategy
+  - Built-in chunkers call Go functions directly
+
+## V3 — With-Model
+
+Add vector search for users with the hardware. Batteries included.
+
+- In-process embedding via gollama
+  - Load nomic-embed-text at server startup, hold in memory
+  - EmbedFunc in microvec alongside EmbedCmd (no exec)
+  - Cold-start CLI loads model on demand (slower, acceptable)
+- Model distribution — fetch from HuggingFace on `ark init`
+  - nomic-embed-text-v1.5.Q8_0.gguf (~140MB, one-time download)
+  - Store in ~/.ark/models/
+  - Model-free operation remains fully supported without download
+- Orchestrator architecture
+  - One Daneel session, launches subagents for heavy work
+  - Subagents write back to ark (notes, decisions, tags)
+  - Orchestrator queries ark for recall, stays lean
+  - Does not need to compact nearly as often
 - @manifest files for per-directory indexing rules
   - whenever ingesting a file, check it for @manifest entries
-  - we need to track files included specifically from @manifest entries because the entries "manage" them
+  - track files included specifically from @manifest entries
+    because the entries "manage" them
   - maybe a record: 'M' [manifest] [dependent]
-  - need format for @manifest -- a markdown list might work well here
-- Frictionless management app
+  - need format for @manifest — a markdown list might work well here
+
+## V4 — Proactive
+
+Ark surfaces things to you without being asked. Requires model
+warm (server mode).
+
+- Time-decay scoring (we store timestamps, scoring comes later)
+- Conversation JSONL chunker
 - Reminder / proactive memory system
   - ark watches ~/.claude/projects for changes
-  - claude sessions subscribe for changes (HTTP, cookie for session id, grace period TTL)
-  - send accumulated lines in response (one JSON per line, added dynamically during chat)
+  - claude sessions subscribe for changes (HTTP, cookie for session
+    id, grace period TTL)
+  - send accumulated lines in response (one JSON per line, added
+    dynamically during chat)
   - track file position for next connect
   - claude uses CLI to connect, which connects via HTTP
 - Inspiration mode (random tag from vector results)
-  - reminder system (above) chooses one from top N matches that contain tags
-- Recall agent / /ark skill
-- Time-decay scoring (we store timestamps, scoring comes later)
-- Conversation JSONL chunker
-- Secondary "arkive" database for cold storage
+  - reminder system (above) chooses one from top N matches that
+    contain tags
+
+## Future
 - LLM-driven tag extraction
-- track tags as files are ingested so we can easily enumerate and find tags
-  - this helps us keep ~/work/daneel/tags.md up-to-date
-  - maybe move some files from ~/work/daneel into ~/.ark to generalize
-  - 'T' [tagname] [count]
-  - 'F' [filename] [tag] [count]
-- woring with the ark
-  - today I launch one claude for each project
-  - the future: operate with one Daneel orchestrator, the host of the show who chats with the user
-    - run ark in CLAUDE.md to seed with the latest -- use ark instead of local files when possible
-      - make ark retrieve files so we can end-run permissions for indexed files
-      - retrieve chunks -- CLI option to return chunks instead of ranges
-      - retrieve whole files
-    - launches agents in different project directories to do software process things / mini-spec work
-    - chats with user, launches recall agents when needed
-    - does not need to compact nearly as often
+- Secondary "arkive" database for cold storage
+- Frictionless management app
