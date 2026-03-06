@@ -251,10 +251,11 @@ argument list.
 - `ark refresh [--dir <path>] [<pattern>...]`
   Re-index stale files. If patterns given, only refresh matching
   files. No patterns = all stale files. Report missing files.
-- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] <query>...`
+- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] [--source <pat>...] [--not-source <pat>...] <query>...`
   Combined search. `--chunks` emits chunk text as JSONL. `--files`
-  emits full file content as JSONL.
-- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files]`
+  emits full file content as JSONL. `--source`/`--not-source` filter
+  by source directory (substring match, mutually exclusive).
+- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files] [--source <pat>...] [--not-source <pat>...]`
   Split search.
 - `ark serve [--dir <path>]`
   Start the server.

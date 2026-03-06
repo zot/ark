@@ -341,3 +341,15 @@
 - **R212:** Uses `io.MultiWriter` for both stderr and the log file
 - **R213:** On startup, if the log file exceeds 10MB, truncate to last 1MB
 - **R214:** CLI commands that cold-start do not log to file — server only
+
+## Feature: Source Filtering
+**Source:** specs/search.md
+
+- **R215:** `--source <pattern>` restricts search to files from source directories matching the pattern (substring match)
+- **R216:** `--not-source <pattern>` excludes files from source directories matching the pattern (substring match)
+- **R217:** Multiple `--source` or `--not-source` flags allowed (OR logic within each)
+- **R218:** `--source` and `--not-source` are mutually exclusive — error if both provided
+- **R219:** Source filtering is pushed to microfts2 as a file ID set — excluded files never enter scoring or consume result slots
+- **R220:** microfts2 provides WithOnly(ids) and WithExcept(ids) search options that filter during result resolution
+- **R221:** Source filtering works with both SearchCombined and SearchSplit paths
+- **R222:** (inferred) Source filtering fields pass through the server proxy via searchRequest JSON

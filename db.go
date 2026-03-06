@@ -226,7 +226,7 @@ func Open(dbPath string) (*DB, error) {
 		matcher: matcher,
 		indexer: &Indexer{fts: fts, vec: vec, store: store},
 		scanner: &Scanner{config: config, matcher: matcher, fts: fts},
-		search:  &Searcher{fts: fts, vec: vec},
+		search:  &Searcher{fts: fts, vec: vec, config: config},
 		dbPath:  dbPath,
 	}
 	return db, nil

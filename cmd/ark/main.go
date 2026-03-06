@@ -25,6 +25,15 @@ import (
 // arkDir is the ark directory, set from --dir flag (global, parsed before subcommand).
 var arkDir string
 
+// stringSlice is a flag.Value that accumulates repeated flag values.
+type stringSlice []string
+
+func (s *stringSlice) String() string { return strings.Join(*s, ",") }
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -359,6 +368,9 @@ func cmdSearch(args []string) {
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("files", false, "emit full file content as JSONL")
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")
+	var source, notSource stringSlice
+	fs.Var(&source, "source", "only search files from matching source dirs (repeatable)")
+	fs.Var(&notSource, "not-source", "exclude files from matching source dirs (repeatable)")
 	fs.Parse(args)
 
 	if *chunks && *files {
@@ -385,6 +397,12 @@ func cmdSearch(args []string) {
 			"chunks": *chunks,
 			"files":  *files,
 			"tags":   *tags,
+		}
+		if len(source) > 0 {
+			body["source"] = []string(source)
+		}
+		if len(notSource) > 0 {
+			body["notSource"] = []string(notSource)
 		}
 		if isSplit {
 			body["about"] = *about
@@ -417,14 +435,16 @@ func cmdSearch(args []string) {
 
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
-			K:        *k,
-			Scores:   *scores,
-			After:    afterNano,
-			About:    *about,
-			Contains: *contains,
-			Regex:    *regex,
-			LikeFile: *likeFile,
-			Tags:     *tags,
+			K:         *k,
+			Scores:    *scores,
+			After:     afterNano,
+			About:     *about,
+			Contains:  *contains,
+			Regex:     *regex,
+			LikeFile:  *likeFile,
+			Tags:      *tags,
+			Source:    []string(source),
+			NotSource: []string(notSource),
 		}
 
 		var results []ark.SearchResultEntry

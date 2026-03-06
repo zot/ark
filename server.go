@@ -186,17 +186,19 @@ func PidFilePath(dbPath string) string {
 // JSON request/response helpers
 
 type searchRequest struct {
-	Query    string `json:"query"`
-	About    string `json:"about"`
-	Contains string `json:"contains"`
-	Regex    string `json:"regex"`
-	LikeFile string `json:"likeFile"`
-	K        int    `json:"k"`
-	Scores   bool   `json:"scores"`
-	After    int64  `json:"after"`
-	Chunks   bool   `json:"chunks"`
-	Files    bool   `json:"files"`
-	Tags     bool   `json:"tags"`
+	Query     string   `json:"query"`
+	About     string   `json:"about"`
+	Contains  string   `json:"contains"`
+	Regex     string   `json:"regex"`
+	LikeFile  string   `json:"likeFile"`
+	K         int      `json:"k"`
+	Scores    bool     `json:"scores"`
+	After     int64    `json:"after"`
+	Chunks    bool     `json:"chunks"`
+	Files     bool     `json:"files"`
+	Tags      bool     `json:"tags"`
+	Source    []string `json:"source"`
+	NotSource []string `json:"notSource"`
 }
 
 type addRequest struct {
@@ -233,14 +235,16 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := SearchOpts{
-		K:        req.K,
-		Scores:   req.Scores,
-		After:    req.After,
-		About:    req.About,
-		Contains: req.Contains,
-		Regex:    req.Regex,
-		LikeFile: req.LikeFile,
-		Tags:     req.Tags,
+		K:         req.K,
+		Scores:    req.Scores,
+		After:     req.After,
+		About:     req.About,
+		Contains:  req.Contains,
+		Regex:     req.Regex,
+		LikeFile:  req.LikeFile,
+		Tags:      req.Tags,
+		Source:    req.Source,
+		NotSource: req.NotSource,
 	}
 
 	var results []SearchResultEntry

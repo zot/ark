@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"microfts2"
 
@@ -17,14 +18,16 @@ var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K        int    // max results (default 20)
-	Scores   bool   // include scores in output
-	After    int64  // only results newer than this timestamp (unix nano, 0 = no filter)
-	About    string // semantic query (microvec)
-	Contains string // exact match query (microfts2)
-	Regex    string // regex query (microfts2)
-	LikeFile string // file path — use content as FTS density query
-	Tags     bool   // output extracted tags instead of content
+	K         int      // max results (default 20)
+	Scores    bool     // include scores in output
+	After     int64    // only results newer than this timestamp (unix nano, 0 = no filter)
+	About     string   // semantic query (microvec)
+	Contains  string   // exact match query (microfts2)
+	Regex     string   // regex query (microfts2)
+	LikeFile  string   // file path — use content as FTS density query
+	Tags      bool     // output extracted tags instead of content
+	Source    []string // only search files from matching source dirs (substring)
+	NotSource []string // exclude files from matching source dirs (substring)
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -64,8 +67,9 @@ type chunkKey struct {
 
 // Searcher queries both engines and merges or intersects results.
 type Searcher struct {
-	fts *microfts2.DB
-	vec *microvec.DB
+	fts    *microfts2.DB
+	vec    *microvec.DB
+	config *Config
 }
 
 // SearchCombined sends the same query to both engines, merges by
@@ -79,14 +83,28 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 		k = 20
 	}
 
-	ftsResults, err := s.fts.Search(query)
+	sourceFilter, err := s.resolveSourceFilter(opts)
+	if err != nil {
+		return nil, err
+	}
+	var ftsSearchOpts []microfts2.SearchOption
+	if sourceFilter != nil {
+		ftsSearchOpts = append(ftsSearchOpts, sourceFilter)
+	}
+
+	ftsResults, err := s.fts.Search(query, ftsSearchOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
 	vecResults, err := s.vec.Search(query, k*2) // over-fetch for merge
 	if err != nil {
-		return nil, fmt.Errorf("vec search: %w", err)
+		// FTS-only mode: skip vec, return FTS results
+		results := s.ftsOnly(ftsResults.Results)
+		if len(results) > k {
+			results = results[:k]
+		}
+		return s.filterAndResolve(results, opts)
 	}
 
 	merged := s.merge(ftsResults.Results, vecResults)
@@ -105,6 +123,15 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	k := opts.K
 	if k == 0 {
 		k = 20
+	}
+
+	sourceFilter, err := s.resolveSourceFilter(opts)
+	if err != nil {
+		return nil, err
+	}
+	var ftsSearchOpts []microfts2.SearchOption
+	if sourceFilter != nil {
+		ftsSearchOpts = append(ftsSearchOpts, sourceFilter)
 	}
 
 	hasAbout := opts.About != ""
@@ -126,19 +153,19 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read like-file: %w", err)
 		}
-		fr, err := s.fts.Search(string(content), microfts2.WithDensity())
+		fr, err := s.fts.Search(string(content), append(ftsSearchOpts, microfts2.WithDensity())...)
 		if err != nil {
 			return nil, fmt.Errorf("fts like-file search: %w", err)
 		}
 		ftsResults = fr.Results
 	} else if opts.Contains != "" {
-		fr, err := s.fts.Search(opts.Contains)
+		fr, err := s.fts.Search(opts.Contains, ftsSearchOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
 		ftsResults = fr.Results
 	} else if opts.Regex != "" {
-		fr, err := s.fts.SearchRegex(opts.Regex)
+		fr, err := s.fts.SearchRegex(opts.Regex, ftsSearchOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("fts regex search: %w", err)
 		}
@@ -171,7 +198,53 @@ func validateSearchFlags(opts SearchOpts) error {
 	if opts.LikeFile != "" && (opts.Contains != "" || opts.Regex != "") {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
 	}
+	if len(opts.Source) > 0 && len(opts.NotSource) > 0 {
+		return fmt.Errorf("--source and --not-source are mutually exclusive")
+	}
 	return nil
+}
+
+// resolveSourceFilter builds a microfts2 search option that filters by source directory.
+// Returns nil if no source filtering is requested.
+func (s *Searcher) resolveSourceFilter(opts SearchOpts) (microfts2.SearchOption, error) {
+	if len(opts.Source) == 0 && len(opts.NotSource) == 0 {
+		return nil, nil
+	}
+
+	// Find matching source dirs
+	var matchedDirs []string
+	patterns := opts.Source
+	if len(patterns) == 0 {
+		patterns = opts.NotSource
+	}
+	for _, src := range s.config.Sources {
+		for _, pat := range patterns {
+			if strings.Contains(src.Dir, pat) {
+				matchedDirs = append(matchedDirs, src.Dir)
+				break
+			}
+		}
+	}
+
+	// Collect file IDs for files in matched source dirs
+	statuses, err := s.fts.StaleFiles()
+	if err != nil {
+		return nil, fmt.Errorf("resolve source filter: %w", err)
+	}
+	ids := make(map[uint64]struct{})
+	for _, fs := range statuses {
+		for _, dir := range matchedDirs {
+			if strings.HasPrefix(fs.Path, dir+"/") || strings.HasPrefix(fs.Path, dir) {
+				ids[fs.FileID] = struct{}{}
+				break
+			}
+		}
+	}
+
+	if len(opts.Source) > 0 {
+		return microfts2.WithOnly(ids), nil
+	}
+	return microfts2.WithExcept(ids), nil
 }
 
 // merge combines results from both engines by (fileid, chunknum).

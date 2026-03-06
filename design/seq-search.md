@@ -13,8 +13,13 @@ Covers combined search, split search, and chunk/file retrieval.
 ```
 CLI ──> Searcher.SearchCombined(query, opts)
          │
-         ├──> microfts2.Search(query)
-         │     └── returns []SearchResult{Path, StartLine, EndLine, Score}
+         ├──> if --source/--not-source: ResolveSourceFilter(opts)
+         │     ├── match patterns against source dirs (substring)
+         │     ├── collect fileIDs for matching sources
+         │     └── return WithOnly(ids) or WithExcept(ids)
+         │
+         ├──> microfts2.Search(query, ...filterOpts)
+         │     └── returns []SearchResult (filtered by source)
          │
          ├──> microvec.Search(query, k)
          │     └── returns []SearchResult{FileID, ChunkNum, Score}
@@ -64,9 +69,11 @@ CLI ──> Searcher.ValidateSplitFlags(opts)
 ```
 CLI ──> Searcher.SearchSplit(opts)
          │
+         ├──> if --source/--not-source: ResolveSourceFilter(opts)
+         │
          ├── only --about? ──> microvec.Search(text, k)
-         ├── only --contains? ──> microfts2.Search(text)
-         └── only --regex? ──> microfts2.SearchRegex(pattern)
+         ├── only --contains? ──> microfts2.Search(text, ...filterOpts)
+         └── only --regex? ──> microfts2.SearchRegex(pattern, ...filterOpts)
               │
               └──> FillChunks/FillFiles/FormatResults (same as combined)
 ```

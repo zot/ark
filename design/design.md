@@ -91,3 +91,5 @@ Content is read from disk at query time using offsets from microfts2.
 - [ ] O5: ark stop does not verify process is ark (PID rollover could kill wrong process) — check /proc/PID/cmdline on Linux
 - [ ] A3: R187 (vector search) deferred to V4 — no design artifact needed until then
 - [ ] A4: R214 (negative requirement — no separate lock file) — verified by absence, no design artifact needed
+- [ ] O6: JSONL chunks flood search results — single conversation file produces hundreds of score-1.0 chunks, burying small .md files. Mitigated by --source/--not-source filtering.
+- [ ] A5: R220 (microfts2 WithOnly/WithExcept) — implemented in microfts2 dependency, no ark design artifact needed
