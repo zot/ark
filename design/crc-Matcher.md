@@ -1,5 +1,5 @@
 # Matcher
-**Requirements:** R9, R10, R15, R16, R17, R18, R19, R20, R21
+**Requirements:** R9, R10, R15, R16, R17, R18, R19, R20, R21, R147
 
 Evaluates the four-form pattern language against file paths. Stateless
 — receives patterns and paths, returns classification.
@@ -22,3 +22,4 @@ Evaluates the four-form pattern language against file paths. Stateless
 
 ## Sequences
 - seq-add.md
+- seq-config-mutate.md

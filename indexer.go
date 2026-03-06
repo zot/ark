@@ -4,29 +4,34 @@ package ark
 
 import (
 	"fmt"
-	"os"
+	"regexp"
+	"strings"
 
 	"microfts2"
 
 	"github.com/anthropics/microvec"
 )
 
+var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
+
 // Indexer coordinates adding, removing, and refreshing files across
-// both microfts2 and microvec.
+// both microfts2 and microvec. Extracts tags from file content.
 type Indexer struct {
-	fts *microfts2.DB
-	vec *microvec.DB
+	fts   *microfts2.DB
+	vec   *microvec.DB
+	store *Store
 }
 
-// AddFile adds a file to both engines. microfts2 first (gets fileid
-// and chunk offsets), then reads chunks and adds to microvec.
+// AddFile adds a file to both engines and extracts tags. microfts2
+// first (gets fileid and chunk offsets), then reads chunks and adds
+// to microvec, then extracts and stores tags.
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
-	fileid, err := idx.fts.AddFile(path, strategy)
+	fileid, content, err := idx.fts.AddFileWithContent(path, strategy)
 	if err != nil {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
 	}
 
-	chunks, err := readChunks(path, fileid, idx.fts)
+	data, chunks, err := splitChunks(content, fileid, idx.fts)
 	if err != nil {
 		return fileid, fmt.Errorf("read chunks %s: %w", path, err)
 	}
@@ -35,10 +40,17 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		return fileid, fmt.Errorf("vec add %s: %w", path, err)
 	}
 
+	if idx.store != nil {
+		tags := ExtractTags(data)
+		if err := idx.store.UpdateTags(fileid, tags); err != nil {
+			return fileid, fmt.Errorf("update tags %s: %w", path, err)
+		}
+	}
+
 	return fileid, nil
 }
 
-// RemoveFile removes a file from both engines by path.
+// RemoveFile removes a file from both engines and tags by path.
 func (idx *Indexer) RemoveFile(path string) error {
 	status, err := idx.fts.CheckFile(path)
 	if err != nil {
@@ -52,10 +64,15 @@ func (idx *Indexer) RemoveFile(path string) error {
 	if err := idx.vec.RemoveFile(fileid); err != nil {
 		return fmt.Errorf("vec remove %s: %w", path, err)
 	}
+	if idx.store != nil {
+		if err := idx.store.RemoveTags(fileid); err != nil {
+			return fmt.Errorf("remove tags %s: %w", path, err)
+		}
+	}
 	return nil
 }
 
-// RemoveByID removes a file from both engines by fileid.
+// RemoveByID removes a file from both engines and tags by fileid.
 func (idx *Indexer) RemoveByID(fileid uint64) error {
 	info, err := idx.fts.FileInfoByID(fileid)
 	if err != nil {
@@ -67,12 +84,17 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	if err := idx.vec.RemoveFile(fileid); err != nil {
 		return fmt.Errorf("vec remove %d: %w", fileid, err)
 	}
+	if idx.store != nil {
+		if err := idx.store.RemoveTags(fileid); err != nil {
+			return fmt.Errorf("remove tags %d: %w", fileid, err)
+		}
+	}
 	return nil
 }
 
 // RefreshFile re-indexes a single file: reindex in microfts2 first,
-// then swap vectors. FTS-first ordering ensures old state is intact
-// if the reindex fails.
+// then swap vectors and tags. FTS-first ordering ensures old state
+// is intact if the reindex fails.
 func (idx *Indexer) RefreshFile(path, strategy string) error {
 	// Get old fileid to remove old vectors later
 	status, err := idx.fts.CheckFile(path)
@@ -82,7 +104,7 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 	oldID := status.FileID
 
 	// Re-index in microfts2 first (safe: failure leaves old state)
-	fileid, err := idx.fts.Reindex(path, strategy)
+	fileid, content, err := idx.fts.ReindexWithContent(path, strategy)
 	if err != nil {
 		return fmt.Errorf("fts reindex %s: %w", path, err)
 	}
@@ -92,13 +114,21 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 		return fmt.Errorf("vec remove old %s: %w", path, err)
 	}
 
-	// Read new chunks and add to microvec
-	chunks, err := readChunks(path, fileid, idx.fts)
+	// Split content into chunks using offsets from microfts2
+	data, chunks, err := splitChunks(content, fileid, idx.fts)
 	if err != nil {
 		return fmt.Errorf("read chunks %s: %w", path, err)
 	}
 	if err := idx.vec.AddFile(fileid, chunks); err != nil {
 		return fmt.Errorf("vec add %s: %w", path, err)
+	}
+
+	// Re-extract tags (replaces old counts for this file)
+	if idx.store != nil {
+		tags := ExtractTags(data)
+		if err := idx.store.UpdateTags(fileid, tags); err != nil {
+			return fmt.Errorf("update tags %s: %w", path, err)
+		}
 	}
 
 	return nil
@@ -141,35 +171,35 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 	return missing, nil
 }
 
+// ExtractTags scans content for @tag: patterns and returns tag counts.
+// Tag names are stored lowercase. The colon is required (disambiguates
+// from emails and mentions).
+func ExtractTags(content []byte) map[string]uint32 {
+	matches := tagRegex.FindAllSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	tags := make(map[string]uint32)
+	for _, m := range matches {
+		name := strings.ToLower(string(m[1]))
+		tags[name]++
+	}
+	return tags
+}
+
 // readChunks reads chunk text from a file using offsets from microfts2.
-func readChunks(path string, fileid uint64, fts *microfts2.DB) ([][]byte, error) {
+// Returns the raw file data alongside sliced chunks (avoids bytes.Join
+// when callers need the full content for tag extraction).
+func splitChunks(data []byte, fileid uint64, fts *microfts2.DB) ([]byte, [][]byte, error) {
 	info, err := fts.FileInfoByID(fileid)
 	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	offsets := info.ChunkOffsets
 	chunks := make([][]byte, len(offsets))
-	for i, off := range offsets {
-		start := off
-		var end int64
-		if i+1 < len(offsets) {
-			end = offsets[i+1]
-		} else {
-			end = int64(len(data))
-		}
-		if start > int64(len(data)) {
-			start = int64(len(data))
-		}
-		if end > int64(len(data)) {
-			end = int64(len(data))
-		}
-		chunks[i] = data[start:end]
+	for i := range offsets {
+		chunks[i] = sliceChunk(data, offsets, i)
 	}
-	return chunks, nil
+	return data, chunks, nil
 }

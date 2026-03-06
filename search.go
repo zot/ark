@@ -4,12 +4,16 @@ package ark
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
 
 	"microfts2"
 
 	"github.com/anthropics/microvec"
 )
+
+var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
@@ -19,6 +23,8 @@ type SearchOpts struct {
 	About    string // semantic query (microvec)
 	Contains string // exact match query (microfts2)
 	Regex    string // regex query (microfts2)
+	LikeFile string // file path — use content as FTS density query
+	Tags     bool   // output extracted tags instead of content
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -31,6 +37,23 @@ type SearchResultEntry struct {
 	Score     float64
 	FileID    uint64
 	ChunkNum  uint64
+	Text      string // populated by FillChunks or FillFiles
+}
+
+// ChunkResult is the JSONL output for --chunks.
+type ChunkResult struct {
+	Path      string  `json:"path"`
+	StartLine int     `json:"startLine"`
+	EndLine   int     `json:"endLine"`
+	Score     float64 `json:"score"`
+	Text      string  `json:"text"`
+}
+
+// FileResult is the JSONL output for --files.
+type FileResult struct {
+	Path  string  `json:"path"`
+	Score float64 `json:"score"`
+	Text  string  `json:"text"`
 }
 
 // chunkKey uniquely identifies a chunk across both engines.
@@ -48,6 +71,9 @@ type Searcher struct {
 // SearchCombined sends the same query to both engines, merges by
 // (fileid, chunknum), combines scores, sorts descending.
 func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	if err := validateSearchFlags(opts); err != nil {
+		return nil, err
+	}
 	k := opts.K
 	if k == 0 {
 		k = 20
@@ -64,16 +90,15 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 	}
 
 	merged := s.merge(ftsResults.Results, vecResults)
-	merged = s.applyFilters(merged, opts)
 	if len(merged) > k {
 		merged = merged[:k]
 	}
-	return s.resolveResults(merged)
+	return s.filterAndResolve(merged, opts)
 }
 
 // SearchSplit dispatches --about, --contains, --regex to appropriate engines.
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
-	if err := validateSplitFlags(opts); err != nil {
+	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
 	}
 
@@ -83,7 +108,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	}
 
 	hasAbout := opts.About != ""
-	hasFTS := opts.Contains != "" || opts.Regex != ""
+	hasFTS := opts.Contains != "" || opts.Regex != "" || opts.LikeFile != ""
 
 	var vecResults []microvec.SearchResult
 	var ftsResults []microfts2.SearchResult
@@ -96,7 +121,17 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		vecResults = vr
 	}
 
-	if opts.Contains != "" {
+	if opts.LikeFile != "" {
+		content, err := os.ReadFile(opts.LikeFile)
+		if err != nil {
+			return nil, fmt.Errorf("read like-file: %w", err)
+		}
+		fr, err := s.fts.Search(string(content), microfts2.WithDensity())
+		if err != nil {
+			return nil, fmt.Errorf("fts like-file search: %w", err)
+		}
+		ftsResults = fr.Results
+	} else if opts.Contains != "" {
 		fr, err := s.fts.Search(opts.Contains)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
@@ -123,16 +158,18 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		results = s.ftsOnly(ftsResults)
 	}
 
-	results = s.applyFilters(results, opts)
 	if len(results) > k {
 		results = results[:k]
 	}
-	return s.resolveResults(results)
+	return s.filterAndResolve(results, opts)
 }
 
-func validateSplitFlags(opts SearchOpts) error {
+func validateSearchFlags(opts SearchOpts) error {
 	if opts.Contains != "" && opts.Regex != "" {
 		return fmt.Errorf("--contains and --regex are mutually exclusive")
+	}
+	if opts.LikeFile != "" && (opts.Contains != "" || opts.Regex != "") {
+		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
 	}
 	return nil
 }
@@ -140,9 +177,10 @@ func validateSplitFlags(opts SearchOpts) error {
 // merge combines results from both engines by (fileid, chunknum).
 func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []microvec.SearchResult) []SearchResultEntry {
 	m := make(map[chunkKey]*SearchResultEntry)
+	cache := s.newFTSKeyCache()
 
 	for _, r := range ftsResults {
-		key, ok := s.ftsChunkKey(r)
+		key, ok := cache.resolve(r)
 		if !ok {
 			continue
 		}
@@ -189,9 +227,10 @@ func (s *Searcher) intersect(ftsResults []microfts2.SearchResult, vecResults []m
 		vecMap[key] = r.Score
 	}
 
+	cache := s.newFTSKeyCache()
 	var results []SearchResultEntry
 	for _, r := range ftsResults {
-		key, ok := s.ftsChunkKey(r)
+		key, ok := cache.resolve(r)
 		if !ok {
 			continue
 		}
@@ -225,9 +264,10 @@ func (s *Searcher) vecOnly(vecResults []microvec.SearchResult) []SearchResultEnt
 }
 
 func (s *Searcher) ftsOnly(ftsResults []microfts2.SearchResult) []SearchResultEntry {
+	cache := s.newFTSKeyCache()
 	var results []SearchResultEntry
 	for _, r := range ftsResults {
-		key, ok := s.ftsChunkKey(r)
+		key, ok := cache.resolve(r)
 		if !ok {
 			continue
 		}
@@ -241,28 +281,16 @@ func (s *Searcher) ftsOnly(ftsResults []microfts2.SearchResult) []SearchResultEn
 	return results
 }
 
-func (s *Searcher) applyFilters(results []SearchResultEntry, opts SearchOpts) []SearchResultEntry {
-	if opts.After == 0 {
-		return results
-	}
-	var filtered []SearchResultEntry
+// filterAndResolve applies time filtering and resolves file paths/lines
+// in a single pass, avoiding redundant FileInfoByID lookups.
+func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts) ([]SearchResultEntry, error) {
+	var resolved []SearchResultEntry
 	for _, r := range results {
 		info, err := s.fts.FileInfoByID(r.FileID)
 		if err != nil {
 			continue
 		}
-		if info.ModTime >= opts.After {
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered
-}
-
-func (s *Searcher) resolveResults(results []SearchResultEntry) ([]SearchResultEntry, error) {
-	var resolved []SearchResultEntry
-	for _, r := range results {
-		info, err := s.fts.FileInfoByID(r.FileID)
-		if err != nil {
+		if opts.After != 0 && info.ModTime < opts.After {
 			continue
 		}
 		r.Path = info.Filename
@@ -278,18 +306,170 @@ func (s *Searcher) resolveResults(results []SearchResultEntry) ([]SearchResultEn
 	return resolved, nil
 }
 
-// ftsChunkKey resolves an FTS search result to a chunkKey.
-func (s *Searcher) ftsChunkKey(r microfts2.SearchResult) (chunkKey, bool) {
-	status, err := s.fts.CheckFile(r.Path)
-	if err != nil {
-		return chunkKey{}, false
+// FillChunks reads chunk text for each result from disk.
+// Groups by FileID to avoid re-reading the same file.
+func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
+	type fileCache struct {
+		data    []byte
+		offsets []int64
 	}
-	info, err := s.fts.FileInfoByID(status.FileID)
-	if err != nil {
-		return chunkKey{}, false
+	cache := make(map[uint64]*fileCache)
+
+	for i := range results {
+		r := &results[i]
+		fc, ok := cache[r.FileID]
+		if !ok {
+			info, err := s.fts.FileInfoByID(r.FileID)
+			if err != nil {
+				continue
+			}
+			data, err := os.ReadFile(info.Filename)
+			if err != nil {
+				continue
+			}
+			fc = &fileCache{data: data, offsets: info.ChunkOffsets}
+			cache[r.FileID] = fc
+		}
+		r.Text = string(sliceChunk(fc.data, fc.offsets, int(r.ChunkNum)))
+	}
+	return results, nil
+}
+
+// FillFiles deduplicates results by file and reads full content.
+// Multiple chunk hits from one file → one entry with best score.
+func (s *Searcher) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, error) {
+	type fileEntry struct {
+		idx   int
+		score float64
+	}
+	seen := make(map[uint64]*fileEntry)
+	var deduped []SearchResultEntry
+
+	for _, r := range results {
+		if fe, ok := seen[r.FileID]; ok {
+			if r.Score > fe.score {
+				deduped[fe.idx].Score = r.Score
+				fe.score = r.Score
+			}
+			continue
+		}
+		seen[r.FileID] = &fileEntry{idx: len(deduped), score: r.Score}
+		deduped = append(deduped, r)
+	}
+
+	for i := range deduped {
+		r := &deduped[i]
+		info, err := s.fts.FileInfoByID(r.FileID)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(info.Filename)
+		if err != nil {
+			continue
+		}
+		r.Text = string(data)
+		r.StartLine = 0
+		r.EndLine = 0
+	}
+	return deduped, nil
+}
+
+// sliceChunk extracts a single chunk from data using byte offsets.
+func sliceChunk(data []byte, offsets []int64, chunkNum int) []byte {
+	if chunkNum >= len(offsets) {
+		return nil
+	}
+	start := offsets[chunkNum]
+	var end int64
+	if chunkNum+1 < len(offsets) {
+		end = offsets[chunkNum+1]
+	} else {
+		end = int64(len(data))
+	}
+	if start > int64(len(data)) {
+		start = int64(len(data))
+	}
+	if end > int64(len(data)) {
+		end = int64(len(data))
+	}
+	return data[start:end]
+}
+
+// ftsKeyCache caches LMDB lookups for FTS result resolution.
+type ftsKeyCache struct {
+	s        *Searcher
+	fileIDs  map[string]uint64
+	fileInfo map[uint64]microfts2.FileInfo
+}
+
+func (s *Searcher) newFTSKeyCache() *ftsKeyCache {
+	return &ftsKeyCache{
+		s:        s,
+		fileIDs:  make(map[string]uint64),
+		fileInfo: make(map[uint64]microfts2.FileInfo),
+	}
+}
+
+func (c *ftsKeyCache) resolve(r microfts2.SearchResult) (chunkKey, bool) {
+	fileID, ok := c.fileIDs[r.Path]
+	if !ok {
+		status, err := c.s.fts.CheckFile(r.Path)
+		if err != nil {
+			return chunkKey{}, false
+		}
+		fileID = status.FileID
+		c.fileIDs[r.Path] = fileID
+	}
+	info, ok := c.fileInfo[fileID]
+	if !ok {
+		var err error
+		info, err = c.s.fts.FileInfoByID(fileID)
+		if err != nil {
+			return chunkKey{}, false
+		}
+		c.fileInfo[fileID] = info
 	}
 	cn := chunkNumForLines(info, r.StartLine)
-	return chunkKey{FileID: status.FileID, ChunkNum: cn}, true
+	return chunkKey{FileID: fileID, ChunkNum: cn}, true
+}
+
+// TagResult is a tag found in search results.
+type TagResult struct {
+	Tag       string  `json:"tag"`
+	Count     int     `json:"count"`
+	BestScore float64 `json:"bestScore,omitempty"`
+}
+
+// ExtractResultTags scans result chunk texts for @tag: patterns and returns
+// tag names with counts and best scores. Results must have Text populated.
+func ExtractResultTags(results []SearchResultEntry) []TagResult {
+	re := tagPattern
+	counts := make(map[string]int)
+	bestScores := make(map[string]float64)
+
+	for _, r := range results {
+		matches := re.FindAllStringSubmatch(r.Text, -1)
+		seen := make(map[string]bool)
+		for _, m := range matches {
+			tag := m[1]
+			if !seen[tag] {
+				counts[tag]++
+				seen[tag] = true
+			}
+			if r.Score > bestScores[tag] {
+				bestScores[tag] = r.Score
+			}
+		}
+	}
+
+	tags := make([]TagResult, 0, len(counts))
+	for tag, count := range counts {
+		tags = append(tags, TagResult{Tag: tag, Count: count, BestScore: bestScores[tag]})
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		return tags[i].Count > tags[j].Count
+	})
+	return tags
 }
 
 // chunkNumForLines finds which chunk contains the given start line.

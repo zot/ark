@@ -1,0 +1,10 @@
+<template>
+  <div class="ark-result-item">
+    <span class="ark-result-rank" ui-value="_rank"></span>
+    <sl-tooltip>
+      <span slot="content" ui-value="path"></span>
+      <span class="ark-result-path" ui-value="displayPath()"></span>
+    </sl-tooltip>
+    <span class="ark-result-score" ui-value="scoreText()"></span>
+  </div>
+</template>

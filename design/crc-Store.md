@@ -1,8 +1,8 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
-and ark-level settings.
+ark-level settings, and tag tracking.
 
 ## Knows
 - env: *lmdb.Env — shared LMDB environment
@@ -21,10 +21,22 @@ and ark-level settings.
 - ResolveByPattern(patterns): remove unresolved records matching patterns
 - GetSettings(): read ark settings (I key)
 - PutSettings(settings): write ark settings
+- UpdateTags(fileid, tags): replace all F records for fileid, recompute T totals.
+  tags is map[string]uint32 (tagname → count in file).
+  Within one LMDB txn: delete old F records for fileid, write new F records,
+  recompute T totals from all F records for affected tagnames.
+- RemoveTags(fileid): delete all F records for fileid, decrement T totals
+- ListTags(): scan T prefix, return all tagname/count pairs
+- TagCounts(tags []string): look up T records for specific tags
+- TagFiles(tags []string): scan F prefix for matching tags,
+  return fileid + count per file. Caller resolves fileid to path/size.
+- TagContext(tags []string): for each F record match, read file content
+  and extract lines containing the tag — return tag-to-end-of-line text
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern
 
 ## Sequences
 - seq-add.md
+- seq-search.md
 - seq-server-startup.md

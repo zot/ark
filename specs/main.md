@@ -1,7 +1,21 @@
 # ark
 
-Orchestration layer over microfts2 (trigram) and microvec (vector).
-Digital zettelkasten with hybrid search. Go CLI and server.
+Your one digital zettelkasten. One database, one server, one index
+for everything — notes, code, conversations, decisions. Orchestration
+layer over microfts2 (trigram) and microvec (vector). Go CLI and server.
+
+## Principles
+
+- **You own the data.** Your files stay where they are — ark never
+  moves, copies, or ingests them into an opaque store. The index is
+  derived. Delete it, rebuild from your files. No lock-in, no cloud
+  dependency, no single point of corruption.
+- **Long-term memory for your AI assistant.** Ark is how your
+  assistant remembers across sessions, projects, and time.
+- **Know everything about all your stuff.** Index your notes, code,
+  conversations, decisions. One place to search all of it.
+- **Runs anywhere.** Full functionality on any hardware. Vector
+  search enhances but is never required.
 
 ## Language and Environment
 
@@ -82,6 +96,7 @@ TOML format. Lives in the database directory.
 ```toml
 # Global settings
 dotfiles = true  # whether * matches dotfiles (default true)
+case_insensitive = true
 
 # Global patterns — apply to all sources
 include = ["*.md", "*.txt", "*.org"]
@@ -118,111 +133,49 @@ Ark stores everything in one directory:
 - `ark.toml` config file
 - Unix domain socket (while server is running)
 
-Default: `~/.ark/` or specified via `-db` flag.
+Default: `~/.ark/` or specified via `--dir` flag.
+
+### PATH Injection
+
+On init and open, ark inserts the database directory into `PATH`
+just before `/usr/bin` (or `/usr/local/bin`). This ensures that
+companion binaries in the ark directory (`microfts`, `microvec`,
+chunking commands) are found before system commands with the same
+name — notably `ark` itself, which is an archive manager on some
+Linux distributions (e.g. Steam Deck). User-installed paths
+(`~/.local/bin`, etc.) still take priority since they appear
+earlier in PATH.
 
 ## Init
 
 Create a new ark database:
-- Initialize microfts2 (character set, case insensitivity, aliases)
-- Initialize microvec (embedding command)
+- Initialize microfts2 (case insensitivity, byte aliases)
+- Initialize microvec (embedding command — optional, can be added later)
 - Create ark's own subdatabase
 - Write default config
 
-The character set, embedding command, and aliases are immutable after
-creation (inherited from microfts2 and microvec constraints).
+microfts2 uses raw byte trigrams — no character set configuration
+needed. All non-whitespace bytes are indexed. Case insensitivity and
+aliases are creation-time settings (inherited from microfts2
+constraints). The embedding command can be configured after creation
+to enable vector search on an existing FTS-only database.
 
-Newline alias: microfts2 character alias maps `\n` to `\x01` (SOH).
-Never appears in real text content. Enables `^` line-start matching
-on frontmatter, tags, etc. The agent inserts `\x01` in queries
-where line-start anchoring is needed.
+### Init Seeding from ark.toml
 
-## Chunking Strategies
+If `ark.toml` already exists in the database directory, `ark init`
+reads `case_insensitive` and `aliases` from it instead of requiring
+flags. This enables a clean "delete DB, re-init, scan" workflow —
+the config file preserves the settings.
 
-microfts2 uses external commands for chunking: the command receives
-a file path and outputs byte offsets to stdout. Strategies are
-registered by name in the database.
+If `ark.toml` does not exist, `ark init` writes one with
+case_insensitive so it is complete for next time.
 
-### Built-in strategies (from microfts2 CLI)
+### Newline Alias
 
-- `lines` — `microfts chunk-lines <file>`: split by line count
-- `lines-overlap` — `microfts chunk-lines-overlap -lines 50 <file>`:
-  overlapping line-based chunks
-- `words-overlap` — `microfts chunk-words-overlap <file>`:
-  overlapping word-based chunks
-
-`ark init` registers these three by default.
-
-### Future strategies (ark subcommands or external)
-
-- `jsonl` — one JSONL record per chunk (split on newlines)
-- `markdown` — split on heading boundaries (## level)
-- `code` — keep functions/methods with their doc comments intact
-  (tree-sitter or per-language heuristics)
-- `manual` — read a sidecar offset file written by a human or agent
-  for complex cases where automated chunking fails
-
-Custom strategies can be registered via microfts2's AddStrategy API
-pointing at any command that follows the offsets-to-stdout protocol.
-
-## Add Files
-
-Add files to the index:
-- Walk source directories per config
-- For each file matching include/exclude patterns:
-  - Check staleness via microfts2 (skip if fresh)
-  - Add to microfts2 (gets fileid, chunk offsets)
-  - Read chunk text from the file using offsets
-  - Add to microvec (fileid + chunk texts)
-
-Both engines indexed in one pass per file. microfts2 is the source of
-truth for file identity — microvec receives fileids from it.
-
-## Remove Files
-
-Remove a file from both engines by path. microfts2 resolves the path
-to a fileid, microvec removes by fileid.
-
-## Refresh
-
-Re-index stale files. Uses microfts2's staleness detection (modtime +
-content hash). For each stale file:
-- Re-add to microfts2 (gets new chunk offsets)
-- Remove old vectors from microvec
-- Add new vectors to microvec
-
-Missing files are not auto-deleted. They're added to ark's missing
-files list for review. The user or agent decides what to do.
-
-## Search
-
-### Combined search
-
-Both engines query the same text. Results merged and re-ranked.
-
-- microfts2 returns file/chunk matches with trigram scores
-- microvec returns file/chunk matches with cosine similarity scores
-- Ark merges by (fileid, chunknum), combining scores
-- Results sorted by combined score descending
-- Output: filepath:startline-endline with score
-
-### Split search
-
-Targeted queries for one or both engines:
-
-- `--about <text>` goes to microvec (semantic)
-- `--contains <text>` goes to microfts2 (exact)
-- `--regex <pattern>` goes to microfts2 (regex)
-- `--contains` and `--regex` are mutually exclusive — error if both
-- Either flag works alone (single-engine search, no intersection)
-- Both `--about` + one of `--contains`/`--regex` — results intersected
-  by (fileid, chunknum)
-- Output: same format as combined
-
-### Common search options
-
-- `-k <num>` — max results (default 20)
-- `--scores` — show scores in output
-- `--after <date>` — only results newer than date (time filtering)
+microfts2 byte alias maps `\n` to `\x01` (SOH). Never appears
+in real text content. Enables line-start matching on frontmatter,
+tags, etc. The agent inserts `\x01` in queries where line-start
+anchoring is needed.
 
 ## Server
 
@@ -242,7 +195,9 @@ shutdown and now):
 3. Refresh — check indexed files for staleness and missing
 
 Watch first, then reconcile. V1 without fsnotify runs steps 2-3
-on startup by default. `--no-scan` to skip.
+on startup by default. `--no-scan` to skip. Reconciliation runs
+in a background goroutine so the server accepts requests
+immediately — status queries work during scan.
 
 Highlander rule: there can be only one server per database. The
 socket bind is the real lock — if another server holds it, bind
@@ -254,49 +209,100 @@ with cold-start.
 The PID file is an ops convenience for manual shutdown, not a
 correctness mechanism. Location TBD (e.g. `~/.ark/ark.pid`).
 
+### Server Lifecycle
+
+`ark serve` exits 0 if a server is already running (intent: "make
+sure it's up" — already up means success). Message on stderr for
+humans.
+
+`ark stop` reads the PID file, verifies the process exists and is
+ark (handles PID rollover), sends SIGTERM, and polls until the
+process exits. Returns 1 if the process doesn't die within timeout.
+`-f` flag sends SIGKILL instead.
+
+Server signal handling: catch SIGTERM, close socket, close DB, exit
+0. The server process never removes the PID file — stale PID files
+are safe because `ark stop` verifies before killing.
+
+The current `defer os.Remove(pidPath)` in server.go should be
+removed.
+
 The CLI tries to connect to the socket. If it connects — proxy to
 server. If not — clean up any stale socket and run the operation
 directly (cold start for embedding).
 
 ## CLI
 
-All commands take `-db <path>` (default `~/.ark/`).
+All commands accept `[--dir <path>]` (default `~/.ark/`). This is a global
+flag parsed before the subcommand — it can appear anywhere in the
+argument list.
 
-- `ark init -db <path> -embed-cmd <command> [-query-cmd <command>] [-charset <chars>] [-case-insensitive] [-aliases <from=to,...>]`
-  Create a new database.
-- `ark add -db <path> [-strategy <name>] <file-or-dir>...`
+- `ark init [--dir <path>] [-embed-cmd <command>] [-query-cmd <command>] [-case-insensitive] [-aliases <from=to,...>]`
+  Create a new database. Without `-embed-cmd`, creates an FTS-only
+  database (vector search disabled). Embed command can be added later
+  via `ark config set-embed-cmd`.
+- `ark add [--dir <path>] [-strategy <name>] <file-or-dir>...`
   Add files. If directory, walk per config. If file, add directly.
-- `ark remove -db <path> <file-or-pattern>...`
+- `ark remove [--dir <path>] <file-or-pattern>...`
   Remove files from both engines. Accepts paths or glob patterns.
-- `ark scan -db <path>`
+- `ark scan [--dir <path>]`
   Walk configured directories. Index new files matching include
   rules, flag new unresolved files. Does not re-check existing files.
-- `ark refresh -db <path> [<pattern>...]`
+- `ark refresh [--dir <path>] [<pattern>...]`
   Re-index stale files. If patterns given, only refresh matching
   files. No patterns = all stale files. Report missing files.
-- `ark search -db <path> [-k <num>] [--scores] [--after <date>] <query>...`
-  Combined search.
-- `ark search -db <path> --about <text> --contains <text> [--regex] [-k <num>] [--scores]`
+- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] <query>...`
+  Combined search. `--chunks` emits chunk text as JSONL. `--files`
+  emits full file content as JSONL.
+- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files]`
   Split search.
-- `ark serve -db <path>`
+- `ark serve [--dir <path>]`
   Start the server.
-- `ark status -db <path>`
+- `ark status [--dir <path>]`
   Show counts: files, stale, missing, unresolved. Index built.
   Server running or not.
-- `ark files -db <path>`
-  List all indexed files.
-- `ark stale -db <path>`
-  List files that need re-indexing.
-- `ark missing -db <path>`
-  List files that are no longer at their indexed path.
-- `ark dismiss -db <path> <file-or-pattern>...`
+- `ark files [--dir <path>] [--status] [<pattern>...]`
+  List indexed files. If patterns given, only list matching files.
+  `--status` prefixes each line with a status letter:
+  `G` (good — not missing, not stale), `S` (stale), `M` (missing).
+- `ark stale [--dir <path>] [<pattern>...]`
+  List files that need re-indexing. If patterns given, only list matching.
+- `ark missing [--dir <path>] [<pattern>...]`
+  List files no longer at their indexed path. If patterns given, only list matching.
+- `ark dismiss [--dir <path>] <file-or-pattern>...`
   Remove missing files from the missing list (and from both engines).
   Accepts paths or glob patterns.
-- `ark config -db <path>`
+- `ark config [--dir <path>]`
   Show current source configuration.
-- `ark unresolved -db <path>`
+- `ark config add-source [--dir <path>] <dir> --strategy <name>`
+  Add a source directory to ark.toml.
+- `ark config remove-source [--dir <path>] <dir>`
+  Remove a source directory from ark.toml. Does not remove indexed
+  files — they become orphans until dismissed or re-added.
+- `ark config add-include [--dir <path>] <pattern> [--source <dir>]`
+  Add an include pattern. If --source given, adds per-source; otherwise global.
+- `ark config add-exclude [--dir <path>] <pattern> [--source <dir>]`
+  Add an exclude pattern. If --source given, adds per-source; otherwise global.
+- `ark config remove-pattern [--dir <path>] <pattern> [--source <dir>]`
+  Remove a pattern from include or exclude lists. If --source given,
+  removes from per-source; otherwise global.
+- `ark config set-embed-cmd [--dir <path>] <command>`
+  Set or change the embedding command. Enables vector search on an
+  FTS-only database. Existing files will need `ark refresh` to
+  generate embeddings.
+- `ark config show-why [--dir <path>] <file-path>`
+  Explain why a file is included, excluded, or unresolved. Shows the
+  matching pattern(s), their source (global, per-source, .gitignore,
+  .arkignore), and whether include-wins-conflicts applied.
+- `ark fetch [--dir <path>] <file-path>`
+  Return the full contents of any indexed file. The file must be in
+  the index (known to microfts2). Adding a file to ark implies
+  read-approval — using fetch side-steps other permission gates.
+  Agents with access to the ark binary can view any indexed file
+  without needing separate file-read permissions.
+- `ark unresolved [--dir <path>]`
   List files that don't match any include or exclude pattern.
-- `ark resolve -db <path> <pattern>...`
+- `ark resolve [--dir <path>] <pattern>...`
   Dismiss unresolved files matching the given patterns (remove from
   unresolved list without adding a permanent rule). Patterns use the
   same glob syntax as include/exclude. Backslash-escape literal
@@ -319,6 +325,7 @@ Mirrors the CLI. JSON request/response.
 - `GET /config` — current source configuration
 - `GET /unresolved` — unresolved files list
 - `POST /resolve` — dismiss unresolved files by pattern
+- `POST /fetch` — return full file content for an indexed file path
 
 ## Ark Subdatabase
 
@@ -335,82 +342,70 @@ LMDB subdatabase `ark` stores:
   rule that covers them or explicitly dismisses them. During scans,
   unresolved files that no longer exist on disk are removed silently
   (no need to track missing files that were never indexed).
+- `T` [tagname] -> count — tag vocabulary with global counts
+- `F` [fileid: 8] [tagname] -> count — per-file tag occurrences
 - `I` -> JSON — ark-level settings
   - sourceConfig: embedded or path reference to config
   - dotfiles: boolean — whether * matches dotfiles (default true)
 
-## V2 — Model-Free
+## Install
 
-No embedding model required. Tags + FTS give fully functional
-recall on any hardware.
+`ark install` bootstraps ark into a project directory. It is designed
+to be run by Claude following the ark README instructions.
 
-- Chunk retrieval — CLI option to return chunk text instead of ranges
-  - `ark search --chunks` — emit chunk text (JSONL)
-  - `ark search --files` — emit full file content for matches
-  - Enables permission end-run: if it's indexed, ark can emit it
-  - Works with FTS and tag search, no model needed
-- Tag tracking — track @tags as files are ingested
-  - 'T' [tagname] [count] in ark subdatabase
-  - 'F' [filename] [tag] [count]
-  - helps keep ~/work/daneel/tags.md up-to-date
-  - maybe move some files from ~/work/daneel into ~/.ark to generalize
-  - subcommands:
-    - ark tag counts <tag>...
-    - ark tag files <tag>...
-      - outputs filename size
-      - option to output with tag to end of the line for each occurrence
-- Recall agent / /ark skill
-- CLAUDE.md bootstrap — run ark at session start to seed context
-  - use ark instead of local files when possible
-  - tags + FTS queries, no model needed
-- Export microfts2 chunker functions (eliminate exec-per-file)
-  - AddStrategyFunc alongside AddStrategy
-  - Built-in chunkers call Go functions directly
+### Prerequisites
 
-## V3 — With-Model
+The ark README instructs Claude to first install Frictionless
+(github/zot/frictionless) using its own README. Frictionless creates
+the `.ui/` directory structure. Ark's install checks for this.
 
-Add vector search for users with the hardware. Batteries included.
+### Install flow
 
-- In-process embedding via gollama
-  - Load nomic-embed-text at server startup, hold in memory
-  - EmbedFunc in microvec alongside EmbedCmd (no exec)
-  - Cold-start CLI loads model on demand (slower, acceptable)
-- Model distribution — fetch from HuggingFace on `ark init`
-  - nomic-embed-text-v1.5.Q8_0.gguf (~140MB, one-time download)
-  - Store in ~/.ark/models/
-  - Model-free operation remains fully supported without download
-- Orchestrator architecture
-  - One Daneel session, launches subagents for heavy work
-  - Subagents write back to ark (notes, decisions, tags)
-  - Orchestrator queries ark for recall, stays lean
-  - Does not need to compact nearly as often
-- @manifest files for per-directory indexing rules
-  - whenever ingesting a file, check it for @manifest entries
-  - track files included specifically from @manifest entries
-    because the entries "manage" them
-  - maybe a record: 'M' [manifest] [dependent]
-  - need format for @manifest — a markdown list might work well here
+`ark install` runs in the current project directory:
 
-## V4 — Proactive
+1. **Check for `.ui/` directory.** If missing, output a crank-handle
+   prompt: "Install Frictionless first using the github/zot/frictionless
+   README, then re-run `~/.ark/ark install`." Exit.
 
-Ark surfaces things to you without being asked. Requires model
-warm (server mode).
+2. **Install skill.** Copy the ark skill to `.claude/skills/ark/SKILL.md`.
+   The skill contains the bootstrap sequence (start server, load tags)
+   and the `/ark` invocation that spawns the ark agent.
 
-- Time-decay scoring (we store timestamps, scoring comes later)
-- Conversation JSONL chunker
-- Reminder / proactive memory system
-  - ark watches ~/.claude/projects for changes
-  - claude sessions subscribe for changes (HTTP, cookie for session
-    id, grace period TTL)
-  - send accumulated lines in response (one JSON per line, added
-    dynamically during chat)
-  - track file position for next connect
-  - claude uses CLI to connect, which connects via HTTP
-- Inspiration mode (random tag from vector results)
-  - reminder system (above) chooses one from top N matches that
-    contain tags
+3. **Install agent.** Copy the ark agent doc to `.claude/agents/ark.md`.
+   The agent carries the CLI reference, output formats, and guidelines
+   (prefer `--wrap`, use knowledge vs memory).
 
-## Future
-- LLM-driven tag extraction
-- Secondary "arkive" database for cold storage
-- Frictionless management app
+4. **Install app.** Copy the Frictionless app to `.ui/apps/ark/`.
+   This gives the user the interactive search UI.
+
+5. **Crank-handle output.** Print a prompt instructing Claude to add
+   `load /ark` at the top of the project's CLAUDE.md. This is the
+   final step — Claude edits CLAUDE.md, and every future session in
+   this project starts with ark context.
+
+### Crank-handle pattern
+
+`ark install` is a Go binary — it can copy files but cannot edit
+CLAUDE.md intelligently. The crank-handle output is a self-contained
+prompt designed for any model tier (including Haiku) to follow:
+
+- If prerequisite missing: tells Claude exactly what to install and
+  how, then asks to re-run `ark install`
+- If install succeeds: tells Claude exactly what line to add to
+  CLAUDE.md and where
+
+Each output is a complete instruction. Claude reads it, follows it,
+done. No context about ark internals needed.
+
+### README-driven installation
+
+The user's only action is telling Claude: "use the ark README to
+install it." The README provides:
+
+1. Check if `~/.ark/ark` exists
+2. If not, download the binary and place it at `~/.ark/ark`
+3. Run `~/.ark/ark install` in the project directory
+
+The README also instructs Claude to install Frictionless first if
+not already present. The entire chain is self-resolving — each step
+either succeeds or tells Claude what to do next.

@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Store.md
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 )
 
 // Store manages ark's own LMDB subdatabase for missing files,
-// unresolved files, and settings.
+// unresolved files, settings, and tag tracking.
 type Store struct {
 	env *lmdb.Env
 	dbi lmdb.DBI
@@ -38,11 +39,26 @@ type ArkSettings struct {
 	Dotfiles bool `json:"dotfiles"`
 }
 
+// TagFileRecord is a per-file tag count returned by TagFiles.
+type TagFileRecord struct {
+	FileID uint64
+	Tag    string
+	Count  uint32
+}
+
+// TagCount is a tag name with its total count.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count uint32 `json:"count"`
+}
+
 // Key prefixes for the ark subdatabase.
 const (
 	prefixMissing    = 'M'
 	prefixUnresolved = 'U'
 	prefixInfo       = 'I'
+	prefixTagTotal   = 'T'
+	prefixTagFile    = 'F'
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -84,29 +100,17 @@ func (s *Store) RemoveMissing(fileid uint64) error {
 func (s *Store) ListMissing() ([]MissingRecord, error) {
 	var records []MissingRecord
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		cur, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cur.Close()
-
-		prefix := []byte{byte(prefixMissing)}
-		k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) < 9 || k[0] != byte(prefixMissing) {
-				break
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixMissing)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 9 {
+				return nil
 			}
 			var rec MissingRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				rec.FileID = binary.BigEndian.Uint64(k[1:9])
 				records = append(records, rec)
 			}
-			k, v, err = cur.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
 			return nil
-		}
-		return err
+		})
 	})
 	return records, err
 }
@@ -136,28 +140,13 @@ func (s *Store) RemoveUnresolved(path string) error {
 func (s *Store) ListUnresolved() ([]UnresolvedRecord, error) {
 	var records []UnresolvedRecord
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		cur, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cur.Close()
-
-		prefix := []byte{byte(prefixUnresolved)}
-		k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) == 0 || k[0] != byte(prefixUnresolved) {
-				break
-			}
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixUnresolved)}, func(_ *lmdb.Cursor, k, v []byte) error {
 			var rec UnresolvedRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				records = append(records, rec)
 			}
-			k, v, err = cur.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
 			return nil
-		}
-		return err
+		})
 	})
 	return records, err
 }
@@ -183,17 +172,9 @@ func (s *Store) CleanUnresolved() error {
 func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]MissingRecord, error) {
 	var dismissed []MissingRecord
 	err := s.env.Update(func(txn *lmdb.Txn) error {
-		cur, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cur.Close()
-
-		prefix := []byte{byte(prefixMissing)}
-		k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) < 9 || k[0] != byte(prefixMissing) {
-				break
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixMissing)}, func(cur *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 9 {
+				return nil
 			}
 			var rec MissingRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
@@ -201,19 +182,12 @@ func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]Missing
 					if matcher.Match(pat, rec.Path, false) {
 						rec.FileID = binary.BigEndian.Uint64(k[1:9])
 						dismissed = append(dismissed, rec)
-						if e := cur.Del(0); e != nil {
-							return e
-						}
-						break
+						return cur.Del(0)
 					}
 				}
 			}
-			k, v, err = cur.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
 			return nil
-		}
-		return err
+		})
 	})
 	return dismissed, err
 }
@@ -221,35 +195,17 @@ func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]Missing
 // ResolveByPattern removes unresolved records where the path matches any pattern.
 func (s *Store) ResolveByPattern(patterns []string, matcher *Matcher) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		cur, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cur.Close()
-
-		prefix := []byte{byte(prefixUnresolved)}
-		k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) == 0 || k[0] != byte(prefixUnresolved) {
-				break
-			}
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixUnresolved)}, func(cur *lmdb.Cursor, k, v []byte) error {
 			var rec UnresolvedRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				for _, pat := range patterns {
 					if matcher.Match(pat, rec.Path, false) {
-						if e := cur.Del(0); e != nil {
-							return e
-						}
-						break
+						return cur.Del(0)
 					}
 				}
 			}
-			k, v, err = cur.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
 			return nil
-		}
-		return err
+		})
 	})
 }
 
@@ -280,6 +236,194 @@ func (s *Store) PutSettings(settings ArkSettings) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		return txn.Put(s.dbi, key, val, 0)
 	})
+}
+
+// UpdateTags replaces all tag records for a file and recomputes totals.
+// tags maps tagname → count-in-file. All within one LMDB transaction.
+func (s *Store) UpdateTags(fileid uint64, tags map[string]uint32) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		// Collect old tags for this file
+		oldTags, err := s.fileTagsInTxn(txn, fileid)
+		if err != nil {
+			return err
+		}
+
+		// Delete old F records and decrement T totals
+		for tag, oldCount := range oldTags {
+			fk := tagFileKey(fileid, tag)
+			txn.Del(s.dbi, fk, nil)
+			if err := s.adjustTagTotal(txn, tag, -int64(oldCount)); err != nil {
+				return err
+			}
+		}
+
+		// Write new F records and increment T totals
+		for tag, count := range tags {
+			fk := tagFileKey(fileid, tag)
+			val := make([]byte, 4)
+			binary.BigEndian.PutUint32(val, count)
+			if err := txn.Put(s.dbi, fk, val, 0); err != nil {
+				return err
+			}
+			if err := s.adjustTagTotal(txn, tag, int64(count)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveTags deletes all tag records for a file and decrements totals.
+func (s *Store) RemoveTags(fileid uint64) error {
+	return s.UpdateTags(fileid, nil)
+}
+
+// ListTags returns all tags with their total counts.
+func (s *Store) ListTags() ([]TagCount, error) {
+	var tags []TagCount
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) >= 2 && len(v) == 4 {
+				count := binary.BigEndian.Uint32(v)
+				if count > 0 {
+					tags = append(tags, TagCount{Tag: string(k[1:]), Count: count})
+				}
+			}
+			return nil
+		})
+	})
+	return tags, err
+}
+
+// TagCounts returns counts for specific tags.
+func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
+	var results []TagCount
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		for _, tag := range tags {
+			tk := tagTotalKey(tag)
+			v, err := txn.Get(s.dbi, tk)
+			if lmdb.IsNotFound(err) {
+				results = append(results, TagCount{Tag: tag, Count: 0})
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if len(v) == 4 {
+				results = append(results, TagCount{
+					Tag:   tag,
+					Count: binary.BigEndian.Uint32(v),
+				})
+			}
+		}
+		return nil
+	})
+	return results, err
+}
+
+// TagFiles returns per-file records for the given tags.
+func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
+	tagSet := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		tagSet[t] = true
+	}
+
+	var records []TagFileRecord
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) >= 10 && len(v) == 4 {
+				tag := string(k[9:])
+				if tagSet[tag] {
+					records = append(records, TagFileRecord{
+						FileID: binary.BigEndian.Uint64(k[1:9]),
+						Tag:    tag,
+						Count:  binary.BigEndian.Uint32(v),
+					})
+				}
+			}
+			return nil
+		})
+	})
+	return records, err
+}
+
+// fileTagsInTxn reads all tag counts for a file within an existing transaction.
+func (s *Store) fileTagsInTxn(txn *lmdb.Txn, fileid uint64) (map[string]uint32, error) {
+	tags := make(map[string]uint32)
+	prefix := make([]byte, 9)
+	prefix[0] = byte(prefixTagFile)
+	binary.BigEndian.PutUint64(prefix[1:], fileid)
+
+	err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+		if len(k) >= 10 && len(v) == 4 {
+			tags[string(k[9:])] = binary.BigEndian.Uint32(v)
+		}
+		return nil
+	})
+	return tags, err
+}
+
+// adjustTagTotal increments or decrements a T record within an existing transaction.
+func (s *Store) adjustTagTotal(txn *lmdb.Txn, tag string, delta int64) error {
+	tk := tagTotalKey(tag)
+	var current uint32
+	v, err := txn.Get(s.dbi, tk)
+	if err == nil && len(v) == 4 {
+		current = binary.BigEndian.Uint32(v)
+	} else if !lmdb.IsNotFound(err) && err != nil {
+		return err
+	}
+
+	newVal := int64(current) + delta
+	if newVal <= 0 {
+		// Remove the T record entirely
+		txn.Del(s.dbi, tk, nil)
+		return nil
+	}
+
+	val := make([]byte, 4)
+	binary.BigEndian.PutUint32(val, uint32(newVal))
+	return txn.Put(s.dbi, tk, val, 0)
+}
+
+func tagTotalKey(tag string) []byte {
+	key := make([]byte, 1+len(tag))
+	key[0] = byte(prefixTagTotal)
+	copy(key[1:], tag)
+	return key
+}
+
+func tagFileKey(fileid uint64, tag string) []byte {
+	key := make([]byte, 9+len(tag))
+	key[0] = byte(prefixTagFile)
+	binary.BigEndian.PutUint64(key[1:], fileid)
+	copy(key[9:], tag)
+	return key
+}
+
+// scanPrefix iterates all keys with the given prefix, calling fn for each.
+// fn receives the cursor (for mutations like Del), key, and value.
+func scanPrefix(txn *lmdb.Txn, dbi lmdb.DBI, prefix []byte, fn func(cur *lmdb.Cursor, k, v []byte) error) error {
+	cur, err := txn.OpenCursor(dbi)
+	if err != nil {
+		return err
+	}
+	defer cur.Close()
+
+	k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
+	for err == nil {
+		if !bytes.HasPrefix(k, prefix) {
+			break
+		}
+		if err := fn(cur, k, v); err != nil {
+			return err
+		}
+		k, v, err = cur.Get(nil, nil, lmdb.Next)
+	}
+	if lmdb.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func missingKey(fileid uint64) []byte {

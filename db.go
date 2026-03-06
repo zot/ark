@@ -10,6 +10,7 @@ import (
 
 	"microfts2"
 
+	"github.com/BurntSushi/toml"
 	"github.com/anthropics/microvec"
 )
 
@@ -33,21 +34,39 @@ type DB struct {
 type InitOpts struct {
 	EmbedCmd        string
 	QueryCmd        string
-	CharSet         string
 	CaseInsensitive bool
-	Aliases         map[rune]rune
+	Aliases         map[byte]byte
 }
 
 // Init creates a new ark database at the given path.
 func Init(dbPath string, opts InitOpts) error {
+	injectPath(dbPath)
+
 	if err := os.MkdirAll(dbPath, 0755); err != nil {
 		return fmt.Errorf("create db dir: %w", err)
+	}
+
+	// Seed from existing ark.toml if present — CLI flags override seeded values
+	configPath := filepath.Join(dbPath, "ark.toml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		var seed Config
+		if parseErr := toml.Unmarshal(data, &seed); parseErr == nil {
+			if !opts.CaseInsensitive && seed.CaseInsensitive {
+				opts.CaseInsensitive = seed.CaseInsensitive
+			}
+			if opts.EmbedCmd == "" && seed.EmbedCmd != "" {
+				opts.EmbedCmd = seed.EmbedCmd
+			}
+			if opts.QueryCmd == "" && seed.QueryCmd != "" {
+				opts.QueryCmd = seed.QueryCmd
+			}
+		}
 	}
 
 	// Ensure newline alias for line-start matching
 	aliases := opts.Aliases
 	if aliases == nil {
-		aliases = make(map[rune]rune)
+		aliases = make(map[byte]byte)
 	}
 	if _, ok := aliases['\n']; !ok {
 		aliases['\n'] = '\x01'
@@ -55,10 +74,10 @@ func Init(dbPath string, opts InitOpts) error {
 
 	// Initialize microfts2 (creates the LMDB environment)
 	ftsOpts := microfts2.Options{
-		CharSet:         opts.CharSet,
 		CaseInsensitive: opts.CaseInsensitive,
 		Aliases:         aliases,
 		MaxDBs:          8,
+		MapSize:         8 << 30, // 8GB — conversation logs can be large
 	}
 	fts, err := microfts2.Create(dbPath, ftsOpts)
 	if err != nil {
@@ -88,6 +107,7 @@ func Init(dbPath string, opts InitOpts) error {
 		"lines":         "microfts chunk-lines",
 		"lines-overlap": "microfts chunk-lines-overlap -lines 50",
 		"words-overlap": "microfts chunk-words-overlap",
+		"jsonl":         "ark chunk-jsonl",
 	}
 	for name, cmd := range defaultStrategies {
 		if err := fts.AddStrategy(name, cmd); err != nil {
@@ -100,17 +120,66 @@ func Init(dbPath string, opts InitOpts) error {
 		return fmt.Errorf("write settings: %w", err)
 	}
 
-	// Write default config
-	configPath := filepath.Join(dbPath, "ark.toml")
-	if err := WriteDefaultConfig(configPath); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	// Write default config only if none exists (configPath declared above for seeding)
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := WriteDefaultConfig(configPath); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+	}
+
+	// Create starter tags.md
+	tagsPath := filepath.Join(dbPath, "tags.md")
+	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
+		if err := os.WriteFile(tagsPath, []byte(defaultTagsContent), 0644); err != nil {
+			return fmt.Errorf("write tags.md: %w", err)
+		}
 	}
 
 	return nil
 }
 
+const defaultTagsContent = `# Tags
+
+Ark tag vocabulary. Tags are @word: patterns found in any indexed file.
+New tags emerge by use. This file documents what they mean.
+
+Format: @tag: name -- description
+
+@tag: tag -- the description of a tag
+@tag: connection -- a relationship between two ideas or systems
+@tag: pattern -- a recurring approach or solution
+@tag: decision -- a choice that was made and why
+@tag: question -- an open question, unanswered
+@tag: learned -- something confirmed through experience
+@tag: project -- which project something relates to
+@tag: ephemeral -- content that should leave the index when no longer relevant
+@tag: burn -- consume and destroy, true temporary notes
+`
+
 // Open opens an existing ark database.
+// injectPath inserts dbPath into PATH just before /usr/bin (if present),
+// so user entries win but db companions beat system defaults.
+func injectPath(dbPath string) {
+	path := os.Getenv("PATH")
+	parts := strings.Split(path, ":")
+	var result []string
+	inserted := false
+	for _, p := range parts {
+		if !inserted && (p == "/usr/bin" || p == "/usr/local/bin") {
+			result = append(result, dbPath)
+			inserted = true
+		}
+		result = append(result, p)
+	}
+	if !inserted {
+		result = append(result, dbPath)
+	}
+	os.Setenv("PATH", strings.Join(result, ":"))
+}
+
 func Open(dbPath string) (*DB, error) {
+	injectPath(dbPath)
+
 	// Load config
 	configPath := filepath.Join(dbPath, "ark.toml")
 	config, err := LoadConfig(configPath)
@@ -119,7 +188,7 @@ func Open(dbPath string) (*DB, error) {
 	}
 
 	// Open microfts2 (opens the LMDB environment)
-	fts, err := microfts2.Open(dbPath, microfts2.Options{MaxDBs: 8})
+	fts, err := microfts2.Open(dbPath, microfts2.Options{MaxDBs: 8, MapSize: 2 << 30})
 	if err != nil {
 		return nil, fmt.Errorf("open microfts2: %w", err)
 	}
@@ -155,7 +224,7 @@ func Open(dbPath string) (*DB, error) {
 		store:   store,
 		config:  config,
 		matcher: matcher,
-		indexer: &Indexer{fts: fts, vec: vec},
+		indexer: &Indexer{fts: fts, vec: vec, store: store},
 		scanner: &Scanner{config: config, matcher: matcher, fts: fts},
 		search:  &Searcher{fts: fts, vec: vec},
 		dbPath:  dbPath,
@@ -174,6 +243,34 @@ func (db *DB) Close() error {
 
 // Config returns the current configuration.
 func (db *DB) Config() *Config { return db.config }
+
+// ConfigPath returns the path to ark.toml.
+func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") }
+
+// SaveConfig writes the current config to disk and re-validates.
+func (db *DB) SaveConfig() error { return db.config.SaveConfig(db.ConfigPath()) }
+
+// ReloadConfig re-reads ark.toml from disk and propagates to components.
+func (db *DB) ReloadConfig() error {
+	cfg, err := LoadConfig(db.ConfigPath())
+	if err != nil {
+		return err
+	}
+	db.config = cfg
+	db.scanner.config = cfg
+	db.matcher.Dotfiles = cfg.Dotfiles
+	return nil
+}
+
+// FillChunks populates Text for each result with chunk content from disk.
+func (db *DB) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
+	return db.search.FillChunks(results)
+}
+
+// FillFiles deduplicates results by file and populates Text with full content.
+func (db *DB) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, error) {
+	return db.search.FillFiles(results)
+}
 
 // Add indexes files. If path is a directory, walks per config.
 // If a file, adds directly with the given strategy.
@@ -306,6 +403,16 @@ func (db *DB) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchSplit(opts)
 }
 
+// QueryTrigrams returns trigram info for a query string.
+func (db *DB) QueryTrigrams(query string) ([]microfts2.TrigramInfo, error) {
+	return db.fts.QueryTrigrams(query)
+}
+
+// SetCutoff rebuilds the active trigram set at a new percentile.
+func (db *DB) SetCutoff(percentile int) error {
+	return db.fts.BuildIndex(percentile)
+}
+
 // Status returns database status counts.
 func (db *DB) Status() (*StatusInfo, error) {
 	stale, err := db.fts.StaleFiles()
@@ -402,4 +509,152 @@ func (db *DB) Unresolved() ([]UnresolvedRecord, error) {
 // Resolve dismisses unresolved files by pattern.
 func (db *DB) Resolve(patterns []string) error {
 	return db.store.ResolveByPattern(patterns, db.matcher)
+}
+
+// Fetch returns the full content of an indexed file.
+// The file must be known to microfts2 (in the index).
+func (db *DB) Fetch(path string) ([]byte, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+	// Verify the file is indexed by checking against StaleFiles
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return nil, fmt.Errorf("check index: %w", err)
+	}
+	indexed := false
+	for _, s := range statuses {
+		if s.Path == absPath {
+			indexed = true
+			break
+		}
+	}
+	if !indexed {
+		return nil, fmt.Errorf("not indexed: %s", absPath)
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return data, nil
+}
+
+// SourcesCheck expands glob sources and reconciles with concrete sources.
+func (db *DB) SourcesCheck() (*SourcesCheckResult, error) {
+	result, err := db.config.ResolveGlobs()
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Added) > 0 {
+		if err := db.SaveConfig(); err != nil {
+			return result, fmt.Errorf("save config: %w", err)
+		}
+	}
+	return result, nil
+}
+
+// TagList returns all known tags with their total counts.
+func (db *DB) TagList() ([]TagCount, error) {
+	return db.store.ListTags()
+}
+
+// TagCounts returns counts for specific tags.
+func (db *DB) TagCounts(tags []string) ([]TagCount, error) {
+	return db.store.TagCounts(tags)
+}
+
+// TagFileInfo is a file with tag occurrence info.
+type TagFileInfo struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	Tag   string `json:"tag"`
+	Count uint32 `json:"count"`
+}
+
+// TagFiles returns files containing the specified tags with file size.
+func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
+	records, err := db.store.TagFiles(tags)
+	if err != nil {
+		return nil, err
+	}
+	var results []TagFileInfo
+	for _, rec := range records {
+		info, err := db.fts.FileInfoByID(rec.FileID)
+		if err != nil {
+			continue
+		}
+		var size int64
+		if fi, err := os.Stat(info.Filename); err == nil {
+			size = fi.Size()
+		}
+		results = append(results, TagFileInfo{
+			Path:  info.Filename,
+			Size:  size,
+			Tag:   rec.Tag,
+			Count: rec.Count,
+		})
+	}
+	return results, nil
+}
+
+// TagContextEntry is a tag occurrence with its context line.
+type TagContextEntry struct {
+	Path string `json:"path"`
+	Tag  string `json:"tag"`
+	Line string `json:"line"`
+}
+
+// TagContext returns tag occurrences with context (tag to end of line).
+func (db *DB) TagContext(tags []string) ([]TagContextEntry, error) {
+	records, err := db.store.TagFiles(tags)
+	if err != nil {
+		return nil, err
+	}
+
+	// Group by fileid to avoid re-reading the same file
+	type fileGroup struct {
+		path string
+		tags []string
+	}
+	groups := make(map[uint64]*fileGroup)
+	for _, rec := range records {
+		g, ok := groups[rec.FileID]
+		if !ok {
+			info, err := db.fts.FileInfoByID(rec.FileID)
+			if err != nil {
+				continue
+			}
+			g = &fileGroup{path: info.Filename}
+			groups[rec.FileID] = g
+		}
+		g.tags = append(g.tags, rec.Tag)
+	}
+
+	var entries []TagContextEntry
+	for _, g := range groups {
+		data, err := os.ReadFile(g.path)
+		if err != nil {
+			continue
+		}
+		// Build needles once, scan each line against all tags
+		needles := make([]string, len(g.tags))
+		for i, tag := range g.tags {
+			needles[i] = "@" + tag + ":"
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			for i, needle := range needles {
+				idx := strings.Index(line, needle)
+				if idx < 0 {
+					continue
+				}
+				entries = append(entries, TagContextEntry{
+					Path: g.path,
+					Tag:  g.tags[i],
+					Line: strings.TrimSpace(line[idx:]),
+				})
+			}
+		}
+	}
+	return entries, nil
 }

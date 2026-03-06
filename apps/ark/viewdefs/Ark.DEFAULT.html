@@ -1,0 +1,472 @@
+<template>
+  <div class="ark-app">
+    <div class="ark-inner">
+    <div class="ark-layout">
+      <!-- Left panel: Sources -->
+      <div class="sidebar-panel ark-sources">
+        <div class="panel-header">
+          <span class="panel-title">Sources</span>
+          <sl-icon-button name="plus-lg" ui-action="openAddForm()" label="Add source"></sl-icon-button>
+        </div>
+
+        <div class="ark-source-list">
+          <div ui-view="_sources?wrapper=lua.ViewList"></div>
+        </div>
+
+        <div class="ark-quick-add">
+          <div class="section-header">Claude Quick-Add</div>
+          <div class="ark-quick-buttons">
+            <sl-button size="small" variant="default" outline ui-action="quickAddClaudeProjects()">
+              <sl-icon slot="prefix" name="robot"></sl-icon> Claude Projects
+            </sl-button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right panel: File tree or placeholder -->
+      <div class="content-panel ark-detail">
+
+        <!-- Search bar — always visible -->
+        <div class="ark-search-bar">
+          <div class="ark-search-modes">
+            <sl-button size="small" ui-event-click="setModeContains()" ui-class-ark-mode-active="modeIsContains()">contains</sl-button>
+            <sl-button size="small" ui-event-click="setModeAbout()" ui-class-ark-mode-active="modeIsAbout()">about</sl-button>
+            <sl-button size="small" ui-event-click="setModeRegex()" ui-class-ark-mode-active="modeIsRegex()">regex</sl-button>
+          </div>
+          <sl-input class="ark-search-input" placeholder="Search the ark..." ui-value="searchQuery?keypress" ui-event-keypress-enter="search()" size="small">
+            <sl-icon slot="prefix" name="search"></sl-icon>
+          </sl-input>
+          <sl-icon-button name="x-lg" ui-action="clearSearch()" label="Clear search" ui-class-hidden="hideSearchResults()"></sl-icon-button>
+          <span class="hidden" ui-value="onSearchInput()"></span>
+        </div>
+
+        <!-- Search results -->
+        <div class="ark-search-results" ui-class-hidden="hideSearchResults()">
+          <div class="ark-search-meta">
+            <span ui-value="searchResultCount()"></span>
+          </div>
+          <div class="ark-results-list">
+            <div ui-view="searchResults()?wrapper=lua.ViewList"></div>
+          </div>
+        </div>
+
+        <!-- Placeholder when nothing selected -->
+        <div class="ark-placeholder" ui-class-hidden="hidePlaceholder()">
+          <sl-icon name="archive" class="ark-placeholder-icon"></sl-icon>
+          <p>Select a source to view its file tree</p>
+        </div>
+
+        <!-- Add source form -->
+        <div class="ark-add-form" ui-class-hidden="hideAddForm()">
+          <div class="panel-header">
+            <span class="panel-title">Add Source</span>
+          </div>
+          <div class="ark-form-body">
+            <sl-input label="Directory" placeholder="~/work/myproject" ui-value="newDir?keypress"></sl-input>
+            <sl-input label="Strategy" placeholder="markdown" ui-value="newStrategy?keypress"></sl-input>
+            <div class="ark-form-actions">
+              <sl-button variant="default" ui-action="cancelAddForm()">Cancel</sl-button>
+              <sl-button variant="primary" ui-action="addSource()">Add</sl-button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Source detail: file tree -->
+        <div class="ark-tree-panel" ui-class-hidden="hideSourceDetail()">
+          <div class="panel-header">
+            <sl-tooltip placement="bottom">
+              <span slot="content" ui-value="sourceHeaderFullPath()"></span>
+              <span class="panel-title ark-source-path" ui-value="sourceHeaderText()"></span>
+            </sl-tooltip>
+            <div class="ark-tree-actions">
+              <sl-button size="small" variant="default" outline ui-action="collapseResolved()">
+                Collapse Resolved
+              </sl-button>
+              <sl-icon-button name="arrow-clockwise" ui-action="refresh()" label="Scan & Refresh"></sl-icon-button>
+            </div>
+          </div>
+
+          <div class="ark-tree-container">
+            <div ui-view="visibleNodes()?wrapper=lua.ViewList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="ark-status-bar">
+      <span class="ark-status-counts" ui-value="statusText()"></span>
+      <span class="ark-status-divider">|</span>
+      <span>Server: </span>
+      <span ui-value="serverStatusText()" ui-class-server-running="_serverRunning"></span>
+    </div>
+    </div>
+  </div>
+
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; }
+
+    .ark-app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-family: var(--term-mono, 'JetBrains Mono', monospace);
+      font-size: 13px;
+      color: var(--term-text, #e0e0e8);
+      background: var(--term-bg, #0a0a0f);
+    }
+
+    .ark-inner {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    .ark-layout {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Left panel */
+    .ark-sources {
+      width: 280px;
+      min-width: 280px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-source-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .ark-source-list > .view-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ark-quick-add {
+      border-top: 1px solid var(--term-border, #2a2a3a);
+      padding: 8px;
+    }
+
+    .ark-quick-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-top: 6px;
+    }
+
+    .ark-quick-buttons sl-button {
+      width: 100%;
+    }
+
+    .ark-quick-buttons sl-button::part(base) {
+      justify-content: flex-start;
+    }
+
+    /* Right panel */
+    .ark-detail {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .ark-placeholder {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--term-text-dim, #8888a0);
+      gap: 12px;
+    }
+
+    .ark-placeholder-icon {
+      font-size: 48px;
+      opacity: 0.3;
+    }
+
+    .ark-placeholder.hidden { display: none; }
+
+    /* Add form */
+    .ark-add-form {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ark-add-form.hidden { display: none; }
+
+    .ark-form-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .ark-form-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding-top: 8px;
+    }
+
+    /* Tree panel */
+    .ark-tree-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .ark-tree-panel.hidden { display: none; }
+
+    .ark-tree-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .ark-source-path {
+      font-size: 12px;
+      opacity: 0.8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ark-tree-container {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+
+    .ark-tree-container > .view-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Status bar */
+    .ark-status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      border-top: 1px solid var(--term-border, #2a2a3a);
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      background: var(--term-bg-elevated, #12121a);
+    }
+
+    .ark-status-divider {
+      opacity: 0.3;
+    }
+
+    .server-running {
+      color: #4ade80;
+    }
+
+    .server-stopped {
+      color: var(--term-text-dim, #8888a0);
+    }
+
+    /* State colors */
+    .state-included { color: #4ade80; }
+    .state-excluded { color: #f87171; opacity: 0.6; }
+    .state-unresolved { color: #fbbf24; }
+
+    .missing { font-style: italic; opacity: 0.6; }
+    .unresolved-name { font-weight: bold; }
+
+    .hidden { display: none; }
+
+    /* Source list items */
+    .ark-source-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background 0.15s;
+    }
+
+    .ark-source-item:hover {
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-source-item.selected {
+      border-left-color: var(--term-accent, #E07A47);
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-source-dir {
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ark-source-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      margin-top: 2px;
+    }
+
+    .ark-source-counts {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Tree nodes */
+    .ark-node {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      cursor: default;
+      white-space: nowrap;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .ark-node:hover {
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-node-expand {
+      width: 16px;
+      text-align: center;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--term-text-dim, #8888a0);
+      flex-shrink: 0;
+    }
+
+    .ark-node-spacer {
+      visibility: hidden;
+    }
+
+    .ark-node-state {
+      width: 18px;
+      text-align: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      font-size: 12px;
+    }
+
+    .ark-node-state.state-included { color: #4ade80; }
+    .ark-node-state.state-excluded { color: #f87171; opacity: 0.6; }
+    .ark-node-state.state-unresolved { color: #fbbf24; }
+
+    .ark-dir-slash {
+      color: var(--term-text-dim, #8888a0);
+      opacity: 0.5;
+    }
+
+    /* Search */
+    .ark-search-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-search-modes {
+      display: flex;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    .ark-search-modes sl-button::part(base) {
+      font-size: 11px;
+      padding: 2px 8px;
+      min-height: 24px;
+      opacity: 0.5;
+    }
+
+    .ark-search-modes sl-button.ark-mode-active::part(base) {
+      opacity: 1;
+      color: var(--term-accent, #E07A47);
+      border-color: var(--term-accent, #E07A47);
+    }
+
+    .ark-search-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ark-search-results {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .ark-search-results.hidden { display: none; }
+
+    .ark-search-meta {
+      padding: 6px 12px;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-results-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .ark-results-list > .view-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Search result items */
+    .ark-result-item {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 6px 12px;
+      cursor: default;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .ark-result-item:hover {
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-result-rank {
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      font-variant-numeric: tabular-nums;
+      min-width: 20px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .ark-result-path {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ark-result-score {
+      font-size: 11px;
+      color: var(--term-accent, #E07A47);
+      flex-shrink: 0;
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</template>

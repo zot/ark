@@ -34,6 +34,9 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 	results := &ScanResults{}
 
 	for _, src := range sc.config.Sources {
+		if IsGlob(src.Dir) {
+			continue // glob sources are directives, not walkable dirs
+		}
 		includes, excludes := sc.config.EffectivePatterns(src)
 		dir := src.Dir
 
@@ -73,7 +76,7 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 				}
 				results.NewFiles = append(results.NewFiles, FileEntry{
 					Path:     path,
-					Strategy: src.Strategy,
+					Strategy: sc.config.StrategyForFile(relPath, src.Strategy),
 				})
 			case Unresolved:
 				results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{

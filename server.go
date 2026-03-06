@@ -4,14 +4,18 @@ package ark
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Server is an HTTP server on a Unix domain socket.
@@ -27,8 +31,42 @@ type ServeOpts struct {
 	NoScan bool
 }
 
+// ServerAlreadyRunning is returned when `ark serve` finds an existing server.
+// The CLI uses this to exit 0 (idempotent "make sure it's up").
+var ServerAlreadyRunning = errors.New("server already running")
+
+const maxLogSize = 10 * 1024 * 1024 // 10MB
+const keepLogSize = 1 * 1024 * 1024 // 1MB
+
+// setupLogging configures file logging for the server.
+// Logs go to both stderr and ~/.ark/logs/ark.log.
+func setupLogging(dbPath string) {
+	logsDir := filepath.Join(dbPath, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		log.Printf("warning: could not create logs dir: %v", err)
+		return
+	}
+	logPath := filepath.Join(logsDir, "ark.log")
+
+	// Truncate if over size cap — keep the last 1MB
+	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
+		data, err := os.ReadFile(logPath)
+		if err == nil && len(data) > keepLogSize {
+			os.WriteFile(logPath, data[len(data)-keepLogSize:], 0644)
+		}
+	}
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("warning: could not open log file: %v", err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+}
+
 // Serve starts the ark server: binds socket, opens DB, reconciles, serves.
 func Serve(dbPath string, opts ServeOpts) error {
+	setupLogging(dbPath)
 	socketPath := filepath.Join(dbPath, "ark.sock")
 
 	// Highlander: try to bind the socket
@@ -38,7 +76,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		conn, dialErr := net.Dial("unix", socketPath)
 		if dialErr == nil {
 			conn.Close()
-			return fmt.Errorf("another ark server is already running for %s", dbPath)
+			return ServerAlreadyRunning
 		}
 		// Stale socket — remove and retry
 		os.Remove(socketPath)
@@ -47,22 +85,20 @@ func Serve(dbPath string, opts ServeOpts) error {
 			return fmt.Errorf("bind socket: %w", err)
 		}
 	}
-	defer listener.Close()
-	defer os.Remove(socketPath)
 
-	// Write PID file
-	pidPath := pidFilePath(dbPath)
+	// Write PID file — never removed by server (stale PID is safe,
+	// ark stop verifies before killing)
+	pidPath := PidFilePath(dbPath)
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
-	defer os.Remove(pidPath)
 
 	// Open database
 	db, err := Open(dbPath)
 	if err != nil {
+		listener.Close()
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
 
 	srv := &Server{
 		db:       db,
@@ -71,17 +107,36 @@ func Serve(dbPath string, opts ServeOpts) error {
 		noScan:   opts.NoScan,
 	}
 
-	// Startup reconciliation
+	// Signal handling: catch SIGTERM, close socket, close DB, exit 0
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		log.Printf("received %s, shutting down", sig)
+		listener.Close()
+		db.Close()
+		os.Exit(0)
+	}()
+
+	// Startup reconciliation — background so server accepts requests immediately
 	if !opts.NoScan {
-		log.Println("startup reconciliation: scanning...")
-		if _, err := db.Scan(); err != nil {
-			log.Printf("scan error: %v", err)
-		}
-		log.Println("startup reconciliation: refreshing...")
-		if err := db.Refresh(nil); err != nil {
-			log.Printf("refresh error: %v", err)
-		}
-		log.Println("startup reconciliation complete")
+		go func() {
+			// Resolve glob sources before scanning
+			if result, err := db.SourcesCheck(); err != nil {
+				log.Printf("sources check error: %v", err)
+			} else if len(result.Added) > 0 {
+				log.Printf("sources check: added %d new source(s)", len(result.Added))
+			}
+			log.Println("startup reconciliation: scanning...")
+			if _, err := db.Scan(); err != nil {
+				log.Printf("scan error: %v", err)
+			}
+			log.Println("startup reconciliation: refreshing...")
+			if err := db.Refresh(nil); err != nil {
+				log.Printf("refresh error: %v", err)
+			}
+			log.Println("startup reconciliation complete")
+		}()
 	}
 
 	// Set up routes
@@ -99,12 +154,25 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /config", srv.handleConfig)
 	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)
 	mux.HandleFunc("POST /resolve", srv.handleResolve)
+	mux.HandleFunc("GET /tags", srv.handleTags)
+	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
+	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("POST /config/add-source", srv.handleConfigAddSource)
+	mux.HandleFunc("POST /config/remove-source", srv.handleConfigRemoveSource)
+	mux.HandleFunc("POST /config/add-include", srv.handleConfigAddInclude)
+	mux.HandleFunc("POST /config/add-exclude", srv.handleConfigAddExclude)
+	mux.HandleFunc("POST /config/remove-pattern", srv.handleConfigRemovePattern)
+	mux.HandleFunc("POST /config/show-why", srv.handleConfigShowWhy)
+	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
+	mux.HandleFunc("POST /config/set-cutoff", srv.handleConfigSetCutoff)
+	mux.HandleFunc("POST /fetch", srv.handleFetch)
+	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
 }
 
-func pidFilePath(dbPath string) string {
+func PidFilePath(dbPath string) string {
 	// PID file outside the database directory, derived from dbPath
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
@@ -122,9 +190,13 @@ type searchRequest struct {
 	About    string `json:"about"`
 	Contains string `json:"contains"`
 	Regex    string `json:"regex"`
+	LikeFile string `json:"likeFile"`
 	K        int    `json:"k"`
 	Scores   bool   `json:"scores"`
 	After    int64  `json:"after"`
+	Chunks   bool   `json:"chunks"`
+	Files    bool   `json:"files"`
+	Tags     bool   `json:"tags"`
 }
 
 type addRequest struct {
@@ -155,6 +227,11 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Chunks && req.Files {
+		http.Error(w, "--chunks and --files are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+
 	opts := SearchOpts{
 		K:        req.K,
 		Scores:   req.Scores,
@@ -162,21 +239,37 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		About:    req.About,
 		Contains: req.Contains,
 		Regex:    req.Regex,
+		LikeFile: req.LikeFile,
+		Tags:     req.Tags,
 	}
 
 	var results []SearchResultEntry
 	var err error
-	if req.About != "" || req.Contains != "" || req.Regex != "" {
+	if req.About != "" || req.Contains != "" || req.Regex != "" || req.LikeFile != "" {
 		results, err = srv.db.SearchSplit(opts)
 	} else {
 		results, err = srv.db.SearchCombined(req.Query, opts)
 	}
-
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, results)
+
+	if req.Tags || req.Chunks {
+		results, err = srv.db.FillChunks(results)
+	} else if req.Files {
+		results, err = srv.db.FillFiles(results)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if req.Tags {
+		writeJSON(w, ExtractResultTags(results))
+	} else {
+		writeJSON(w, results)
+	}
 }
 
 func (srv *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +396,183 @@ func (srv *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+type tagRequest struct {
+	Tags    []string `json:"tags"`
+	Context bool     `json:"context"`
+}
+
+func (srv *Server) handleTags(w http.ResponseWriter, r *http.Request) {
+	tags, err := srv.db.TagList()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, tags)
+}
+
+func (srv *Server) handleTagCounts(w http.ResponseWriter, r *http.Request) {
+	var req tagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	counts, err := srv.db.TagCounts(req.Tags)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, counts)
+}
+
+func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
+	var req tagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Context {
+		entries, err := srv.db.TagContext(req.Tags)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, entries)
+		return
+	}
+
+	files, err := srv.db.TagFiles(req.Tags)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, files)
+}
+
+// Seq: seq-config-mutate.md
+
+type configPatternRequest struct {
+	Pattern string `json:"pattern"`
+	Source  string `json:"source"`
+}
+
+type configSourceRequest struct {
+	Dir      string `json:"dir"`
+	Strategy string `json:"strategy"`
+}
+
+type configWhyRequest struct {
+	Path string `json:"path"`
+}
+
+// configMutate decodes a request, applies a config mutation, and saves.
+func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func() error) {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := fn(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := srv.db.SaveConfig(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request) {
+	var req configSourceRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddSource(req.Dir, req.Strategy) })
+}
+
+func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {
+	var req configSourceRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().RemoveSource(req.Dir) })
+}
+
+func (srv *Server) handleConfigAddInclude(w http.ResponseWriter, r *http.Request) {
+	var req configPatternRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddInclude(req.Pattern, req.Source) })
+}
+
+func (srv *Server) handleConfigAddExclude(w http.ResponseWriter, r *http.Request) {
+	var req configPatternRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddExclude(req.Pattern, req.Source) })
+}
+
+func (srv *Server) handleConfigRemovePattern(w http.ResponseWriter, r *http.Request) {
+	var req configPatternRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().RemovePattern(req.Pattern, req.Source) })
+}
+
+type configStrategyRequest struct {
+	Pattern  string `json:"pattern"`
+	Strategy string `json:"strategy"`
+}
+
+func (srv *Server) handleConfigAddStrategy(w http.ResponseWriter, r *http.Request) {
+	var req configStrategyRequest
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddStrategy(req.Pattern, req.Strategy) })
+}
+
+func (srv *Server) handleConfigSetCutoff(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cutoff int `json:"cutoff"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := srv.db.SetCutoff(req.Cutoff); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
+	var req configWhyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := srv.db.Config().ShowWhy(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, result)
+}
+
+type fetchRequest struct {
+	Path string `json:"path"`
+}
+
+func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
+	var req fetchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	data, err := srv.db.Fetch(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"content": string(data)})
+}
+
+func (srv *Server) handleSourcesCheck(w http.ResponseWriter, r *http.Request) {
+	result, err := srv.db.SourcesCheck()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, result)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

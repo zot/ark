@@ -1,0 +1,12 @@
+<template>
+  <div class="ark-source-item" ui-event-click="selectMe()" ui-class-selected="isSelected()">
+    <sl-tooltip placement="right">
+      <span slot="content" ui-value="dir"></span>
+      <div class="ark-source-dir" ui-value="displayDir()"></div>
+    </sl-tooltip>
+    <div class="ark-source-meta">
+      <span class="ark-source-strategy" ui-value="strategy"></span>
+      <span class="ark-source-counts" ui-value="countsText()"></span>
+    </div>
+  </div>
+</template>

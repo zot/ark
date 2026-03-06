@@ -1,0 +1,28 @@
+<template>
+  <div class="ark-node" ui-style-padding-left="indentPx()">
+    <!-- Expand/collapse icon for directories -->
+    <span class="ark-node-expand" ui-event-click="toggle()" ui-class-hidden="hideExpandIcon()">
+      <span ui-value="expandIcon()"></span>
+    </span>
+    <span class="ark-node-expand ark-node-spacer" ui-class-hidden="showExpandIcon()"></span>
+
+    <!-- State indicator with tooltip -->
+    <sl-tooltip>
+      <span slot="content" ui-value="whyTooltip()"></span>
+      <span class="ark-node-state" ui-event-click="cycleState()"
+            ui-class-state-included="stateIncluded()"
+            ui-class-state-excluded="stateExcluded()"
+            ui-class-state-unresolved="stateUnresolved()">
+        <span ui-value="stateIcon()"></span>
+      </span>
+    </sl-tooltip>
+
+    <!-- Filename -->
+    <span ui-value="name" ui-event-click="toggle()"
+          ui-class-missing="isMissing"
+          ui-class-unresolved-name="stateUnresolved()"></span>
+
+    <!-- Directory slash -->
+    <span class="ark-dir-slash" ui-class-hidden="notExpandable()">/</span>
+  </div>
+</template>

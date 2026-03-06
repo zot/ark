@@ -1,5 +1,5 @@
 # Scanner
-**Requirements:** R8, R9, R14, R15, R35, R75, R106
+**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208
 
 Walks configured source directories and classifies files using the
 pattern matcher. Identifies new files to index and new unresolved
@@ -17,7 +17,7 @@ files.
   - unresolved + not already tracked → add to "new unresolved" list
   - excluded → skip (don't walk into excluded directories)
 - ScanResults: struct with newFiles []FileEntry, newUnresolved []string
-- FileEntry: struct with path, strategy (from source config)
+- FileEntry: struct with path, strategy (from Config.StrategyForFile, falling back to source config)
 
 ## Collaborators
 - Config: provides directories and effective patterns

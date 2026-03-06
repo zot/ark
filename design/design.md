@@ -11,6 +11,10 @@ an index. The CLI and HTTP API expose identical operations. A
 long-running server keeps the embedding model warm; the CLI proxies to
 it or falls back to cold-start.
 
+V2 adds model-free recall: chunk/file content retrieval (JSONL), @tag
+tracking with vocabulary, and JSONL chunking for conversation logs.
+Tags + FTS give fully functional recall on any hardware.
+
 ## Cross-cutting Concerns
 
 ### LMDB Lifecycle
@@ -34,6 +38,19 @@ Config errors (identical include/exclude) are reported on every
 operation until resolved. Missing/unresolved files are persisted
 and surfaced through status and listing commands.
 
+### Tag Tracking
+@tags (format: `@word:`) are extracted from file content during
+add and refresh. Stored in the ark subdatabase with T (global count)
+and F (per-file count) prefix keys. Tag names are the portion between
+@ and :, stored lowercase. The tag vocabulary file (`~/.ark/tags.md`)
+documents definitions using `@tag: name -- description` format.
+
+### Chunk/File Retrieval
+Search results can include content via `--chunks` (JSONL per chunk)
+or `--files` (JSONL per file, deduplicated). This enables the
+permission end-run: indexed content emitted without per-file prompts.
+Content is read from disk at query time using offsets from microfts2.
+
 ## Artifacts
 
 ### CRC Cards
@@ -52,16 +69,25 @@ and surfaced through status and listing commands.
 - [x] seq-search.md → `search.go`
 - [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
 - [x] seq-cli-dispatch.md → `cmd/ark/main.go`, `server.go`
+- [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
+- [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 
 ### Test Designs
-- [ ] test-Config.md → `config_test.go`
-- [ ] test-Matcher.md → `match_test.go`
-- [ ] test-Searcher.md → `search_test.go`
-- [ ] test-Store.md → `store_test.go`
+- [x] test-Config.md → `config_test.go`
+- [x] test-Matcher.md → `match_test.go`
+- [x] test-Searcher.md → `search_test.go`
+- [x] test-Store.md → `store_test.go`
+- [x] test-Tags.md → `indexer_test.go`, `store_test.go`
+- [x] test-ChunkRetrieval.md → `search_test.go`
 
 ## Gaps
 
-- [ ] O1: Test files not yet written: config_test.go, match_test.go, search_test.go, store_test.go
+- [x] O1: Test files not yet written: config_test.go, match_test.go, search_test.go, store_test.go, tags_test.go
 - [ ] O2: serverClient TOCTOU race — probe can succeed but actual request fails if server dies between. Acceptable for v1
 - [ ] A1: IndexBuilt field removed from StatusInfo during simplification — spec still mentions it, update spec
 - [ ] A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from LMDB key on read)
+- [ ] O3: Integration tests need live microfts2+microvec: merge/intersect (test-Searcher), FillChunks/FillFiles (test-ChunkRetrieval)
+- [ ] O4: Fetch uses O(n) StaleFiles scan — add direct path lookup to microfts2 when performance matters
+- [ ] O5: ark stop does not verify process is ark (PID rollover could kill wrong process) — check /proc/PID/cmdline on Linux
+- [ ] A3: R187 (vector search) deferred to V4 — no design artifact needed until then
+- [ ] A4: R214 (negative requirement — no separate lock file) — verified by absence, no design artifact needed
