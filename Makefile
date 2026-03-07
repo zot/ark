@@ -35,6 +35,7 @@ $(FRICTIONLESS_BIN):
 	@echo "Building frictionless..."
 	@cd $(FRICTIONLESS_DIR); $(MAKE) build
 
+#@note: need to scrape emacs backups out of $(CACHE_DIR)/apps/ark after copy
 $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	@echo "Extracting frictionless assets..."
 	$(FRICTIONLESS_BIN) extract $(CACHE_DIR)

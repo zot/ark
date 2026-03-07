@@ -1,6 +1,6 @@
 ---
 name: ark
-description: "Query the ark digital zettelkasten and write tagged content. Use when the user asks to search notes, recall something, find connections, explore tags, or when you need context from the knowledge base."
+description: "Query the ark digital zettelkasten and write tagged content. Use when the user asks to search notes, recall something, find connections, explore tags, or when you need context from the knowledge base. Also use when setting up ark UI support in a project."
 ---
 
 ## Bootstrap
@@ -9,33 +9,21 @@ At session start, start ark, load tag definitions and usage from the knowledge b
 
 ```bash
 ~/.ark/ark server
-~/.ark/ark tag files --context tag
+~/.ark/ark tag files --context --filter-files '*.md' tag
 ```
 
 This shows where tags are defined and how they're used across the zettelkasten.
 
-## Tag Vocabulary
+## Tags
 
 Tags are `@word:` patterns in indexed files. The colon is required.
-New tags emerge by use — no registry enforces this list.
+Everything after the colon to end of line is the tag's content — this
+is what gets indexed and searched. The bootstrap command above loads
+all tag definitions from the knowledge base. New tags emerge by use. Any tagged line is a reminder candidate —
+the reminder system finds tagged content matching the current
+conversation via vector + FTS.
 
-| Tag | Purpose |
-|-----|---------|
-| `@tag:` | Defines a tag (the tag about tags) |
-| `@connection:` | Relationship between ideas. Format: `@connection: A = B` |
-| `@pattern:` | A recurring approach or solution. Name it. |
-| `@decision:` | A choice that was made and why |
-| `@question:` | An open question, unanswered, searchable |
-| `@learned:` | Confirmed through experience, not just theorized |
-| `@project:` | Which project something relates to |
-| `@manifest:` | Indexing rules for a directory |
-| `@ephemeral:` | Content that should leave the index when stale |
-| `@burn:` | Consume and destroy — delete after processing |
-
-Any tagged line is a reminder candidate. The reminder system finds tagged
-content matching the current conversation via vector + FTS.
-
-## Writing Tags
+### Writing Tags
 
 In markdown, bare on its own line:
 ```
@@ -50,6 +38,16 @@ In code, inside block comments so the tag starts on its own line:
 */
 ```
 
+## Project Setup
+
+To install ark UI support in a particular project, run:
+
+```bash
+~/.ark/ark ui install
+```
+
+This creates skill symlinks in the project's `.claude/skills/`, sets up the database if needed, and prints a CLAUDE.md snippet to paste. Run it once per project.
+
 ## Search Queries
 
 Spawn the `ark` agent for search, tag exploration, and index management.
@@ -57,4 +55,4 @@ It has the full CLI reference and runs ark commands via Bash.
 
 ```
 Agent(subagent_type="ark", prompt="Find notes about [topic]")
-    ```
+```

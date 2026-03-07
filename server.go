@@ -222,6 +222,10 @@ func (srv *Server) startUIEngine(dbPath string) {
 			return
 		}
 		log.Printf("ui: engine started (dir: %s)", dbPath)
+		// Auto-display the ark app so every new session starts with it
+		if _, err := rt.RunLua(`mcp:display("ark")`); err != nil {
+			log.Printf("ui: auto-display ark failed: %v", err)
+		}
 	}()
 }
 

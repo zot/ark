@@ -1503,6 +1503,8 @@ func cmdUI(args []string) {
 		cmdUIPatterns(subArgs)
 	case "progress":
 		cmdUIProgress(subArgs)
+	case "reload":
+		cmdUIReload(subArgs)
 	case "run":
 		cmdUIRun(subArgs)
 	case "state":
@@ -1531,6 +1533,7 @@ Subcommands:
   linkapp add|remove <app>   manage app symlinks
   patterns                   list available patterns
   progress <app> <pct> <msg> report build progress
+  reload                     reload UI (fresh Lua VM)
   run '<lua>'                execute Lua code in UI session
   state                      get current session state
   status                     ui-engine server status
@@ -2035,6 +2038,13 @@ func cmdUIAudit(args []string) {
 	fmt.Println()
 }
 
+func cmdUIReload(args []string) {
+	body, _ := json.Marshal(map[string]string{"base_dir": arkDir})
+	result := uiRequest("POST", "/api/ui_configure", string(body))
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
 func cmdUIStatus(args []string) {
 	result := uiRequest("GET", "/api/ui_status", "")
 	os.Stdout.Write(result)
@@ -2383,6 +2393,9 @@ func cmdTagCounts(args []string) {
 func cmdTagFiles(args []string) {
 	fs := flag.NewFlagSet("tag files", flag.ExitOnError)
 	context := fs.Bool("context", false, "show tag occurrences with context")
+	var filterFiles, excludeFiles stringSlice
+	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
+	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
 	fs.Parse(args)
 
 	tags := fs.Args()
@@ -2392,7 +2405,7 @@ func cmdTagFiles(args []string) {
 	}
 
 	if *context {
-		cmdTagFilesContext(tags)
+		cmdTagFilesContext(tags, filterFiles, excludeFiles)
 		return
 	}
 
@@ -2402,7 +2415,9 @@ func cmdTagFiles(args []string) {
 			fatal(err)
 		}
 		for _, f := range files {
-			fmt.Printf("%s\t%d\n", f.Path, f.Size)
+			if matchPath(f.Path, filterFiles, excludeFiles) {
+				fmt.Printf("%s\t%d\n", f.Path, f.Size)
+			}
 		}
 		return
 	}
@@ -2413,12 +2428,37 @@ func cmdTagFiles(args []string) {
 			fatal(err)
 		}
 		for _, f := range files {
-			fmt.Printf("%s\t%d\n", f.Path, f.Size)
+			if matchPath(f.Path, filterFiles, excludeFiles) {
+				fmt.Printf("%s\t%d\n", f.Path, f.Size)
+			}
 		}
 	})
 }
 
-func cmdTagFilesContext(tags []string) {
+// matchPath returns true if a path passes the include/exclude filters.
+func matchPath(path string, include, exclude []string) bool {
+	m := &ark.Matcher{Dotfiles: true}
+	if len(include) > 0 {
+		matched := false
+		for _, pat := range include {
+			if m.Match(pat, path, false) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, pat := range exclude {
+		if m.Match(pat, path, false) {
+			return false
+		}
+	}
+	return true
+}
+
+func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
 	if client := serverClient(arkDir); client != nil {
 		var entries []ark.TagContextEntry
 		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{
@@ -2427,7 +2467,9 @@ func cmdTagFilesContext(tags []string) {
 			fatal(err)
 		}
 		for _, e := range entries {
-			fmt.Printf("%s\t%s\n", e.Path, e.Line)
+			if matchPath(e.Path, filterFiles, excludeFiles) {
+				fmt.Printf("%s\t%s\n", e.Path, e.Line)
+			}
 		}
 		return
 	}
@@ -2438,7 +2480,9 @@ func cmdTagFilesContext(tags []string) {
 			fatal(err)
 		}
 		for _, e := range entries {
-			fmt.Printf("%s\t%s\n", e.Path, e.Line)
+			if matchPath(e.Path, filterFiles, excludeFiles) {
+				fmt.Printf("%s\t%s\n", e.Path, e.Line)
+			}
 		}
 	})
 }
