@@ -170,9 +170,27 @@ Ark = session:prototype("Ark", {
     searchQuery = "",
     searchMode = "contains",
     _searchResults = EMPTY,
+    _searchGroups = EMPTY,
     _searching = false,
     _searchView = false,
     _lastSearchedQuery = "",
+    _hitsPerFile = "1",
+    -- Filter panel
+    _showFilterPanel = false,
+    filterFiles = "",
+    excludeFiles = "",
+    filterContent = "",
+    excludeContent = "",
+    -- Display grouping
+    _displayItems = EMPTY,
+    _projects = EMPTY,
+    _dataSources = EMPTY,
+    -- Project search panel
+    _projectSearchOpen = false,
+    _projectSearchQuery = "",
+    _projectCandidates = EMPTY,
+    -- Pattern editing
+    _showPatterns = false,
 })
 
 Ark.Source = session:prototype("Ark.Source", {
@@ -186,13 +204,71 @@ Ark.Source = session:prototype("Ark.Source", {
     _missingPaths = EMPTY,
     _loaded = false,
     _loading = false,
+    _searchIncluded = true,
+    -- Pattern editing
+    _includePatterns = EMPTY,
+    _excludePatterns = EMPTY,
+    includeText = "",
+    excludeText = "",
+    _patternError = "",
 })
 local Source = Ark.Source
+
+Ark.SearchFileGroup = session:prototype("Ark.SearchFileGroup", {
+    path = "",
+    _chunks = EMPTY,
+    _expanded = false,
+    topScore = 0,
+    _rank = 0,
+})
+local SearchFileGroup = Ark.SearchFileGroup
+
+function SearchFileGroup:displayPath()
+    return compressPath(self.path)
+end
+
+function SearchFileGroup:scoreText()
+    if self.topScore == 0 then return "" end
+    return string.format("%.2f", self.topScore)
+end
+
+function SearchFileGroup:chunkCountText()
+    local n = self._chunks and #self._chunks or 0
+    if n <= 1 then return "" end
+    if self._expanded then return "" end
+    return "+" .. tostring(n - 1) .. " more"
+end
+
+function SearchFileGroup:visibleChunks()
+    if not self._chunks or #self._chunks == 0 then return {} end
+    if self._expanded then return self._chunks end
+    return { self._chunks[1] }
+end
+
+function SearchFileGroup:toggleExpand()
+    self._expanded = not self._expanded
+end
+
+function SearchFileGroup:expandIcon()
+    if not self._chunks or #self._chunks <= 1 then return "dot" end
+    if self._expanded then return "chevron-down" end
+    return "chevron-right"
+end
+
+function SearchFileGroup:isExpandable()
+    return self._chunks and #self._chunks > 1
+end
+
+function SearchFileGroup:notExpandable()
+    return not self:isExpandable()
+end
 
 Ark.SearchResult = session:prototype("Ark.SearchResult", {
     path = "",
     score = 0,
     snippet = "",
+    text = "",
+    range = "",
     _rank = 0,
 })
 local SearchResult = Ark.SearchResult
@@ -205,6 +281,62 @@ function SearchResult:scoreText()
     if self.score == 0 then return "" end
     return string.format("%.2f", self.score)
 end
+
+function SearchResult:lineRange()
+    if not self.range or self.range == "" then return "" end
+    local s, e = self.range:match("^(%d+)-(%d+)$")
+    if not s then return "L" .. self.range end
+    if s == e then return "L" .. s end
+    return "L" .. s .. "-" .. e
+end
+
+function SearchResult:previewText()
+    if not self.text or self.text == "" then return "" end
+    local t = self.text
+    if #t > 400 then
+        t = t:sub(1, 400) .. "\xe2\x80\xa6"
+    end
+    return t
+end
+
+function SearchResult:hasPreview()
+    return self.text ~= nil and self.text ~= ""
+end
+
+function SearchResult:hidePreview()
+    return not self:hasPreview()
+end
+
+Ark.Project = session:prototype("Ark.Project", {
+    name = "",
+    slug = "",
+    _fileSource = EMPTY,
+    _claudeSource = EMPTY,
+    _resolvedPath = "",
+    filesOn = true,
+    memoryOn = true,
+    chatsOn = false,
+    _hasFiles = false,
+    _hasMemory = false,
+    _hasChats = false,
+})
+local Project = Ark.Project
+
+Ark.DataSource = session:prototype("Ark.DataSource", {
+    _source = EMPTY,
+    dataOn = true,
+    name = "",
+    _dir = "",
+})
+local DataSource = Ark.DataSource
+
+Ark.ProjectCandidate = session:prototype("Ark.ProjectCandidate", {
+    slug = "",
+    name = "",
+    _resolvedPath = "",
+    selected = true,
+})
+local ProjectCandidate = Ark.ProjectCandidate
 
 Ark.Node = session:prototype("Ark.Node", {
     name = "",
@@ -234,11 +366,31 @@ function Ark:mutate()
     if self._searchResults == nil then
         self._searchResults = {}
     end
+    if self._searchGroups == nil then
+        self._searchGroups = {}
+    end
     if self.searchQuery == nil then
         self.searchQuery = ""
     end
     if self.searchMode == nil then
         self.searchMode = "contains"
+    end
+    if self._hitsPerFile == nil then
+        self._hitsPerFile = "1"
+    end
+    if self.filterFiles == nil then self.filterFiles = "" end
+    if self.excludeFiles == nil then self.excludeFiles = "" end
+    if self.filterContent == nil then self.filterContent = "" end
+    if self.excludeContent == nil then self.excludeContent = "" end
+    if self._showFilterPanel == nil then self._showFilterPanel = false end
+    if self._displayItems == nil then
+        self._displayItems = {}
+        self._projects = {}
+        self._dataSources = {}
+        self:buildDisplayItems()
+    end
+    if self._projectCandidates == nil then
+        self._projectCandidates = {}
     end
 end
 
@@ -265,10 +417,17 @@ function Ark:loadConfig()
     for _, src in ipairs(sources) do
         local dir = src.Dir or src.dir or ""
         local strategy = src.Strategy or src.strategy or ""
+        local inc = src.Include or src.include or {}
+        local exc = src.Exclude or src.exclude or {}
+
         -- Reuse existing Source to preserve loaded state
         local existing = oldSources[dir]
         if existing then
             existing.strategy = strategy
+            existing._includePatterns = inc
+            existing._excludePatterns = exc
+            existing.includeText = table.concat(inc, "\n")
+            existing.excludeText = table.concat(exc, "\n")
             table.insert(self._sources, existing)
         else
             local s = session:create(Source)
@@ -277,11 +436,16 @@ function Ark:loadConfig()
             s._visibleNodes = {}
             s._nodeMap = {}
             s._missingPaths = {}
+            s._includePatterns = inc
+            s._excludePatterns = exc
+            s.includeText = table.concat(inc, "\n")
+            s.excludeText = table.concat(exc, "\n")
             table.insert(self._sources, s)
         end
     end
 
     self:checkServer()
+    self:buildDisplayItems()
 end
 
 function Ark:refresh()
@@ -333,6 +497,24 @@ function Ark:removeSource()
     arkCmd('config remove-source "' .. self.selectedSource.dir .. '"')
     self.selectedSource = nil
     self:loadConfig()
+end
+
+function Ark:saveSelectedPatterns()
+    if not self.selectedSource then return end
+    self.selectedSource:savePatterns()
+    if (self.selectedSource._patternError or "") == "" then
+        mcp:notify("Patterns saved", "success")
+    else
+        mcp:notify("Pattern errors: " .. self.selectedSource._patternError, "danger")
+    end
+end
+
+function Ark:togglePatterns()
+    self._showPatterns = not self._showPatterns
+end
+
+function Ark:hidePatterns()
+    return not self._showPatterns or not self.selectedSource
 end
 
 function Ark:collapseResolved()
@@ -418,12 +600,6 @@ function Ark:serverStatusText()
     return "○"
 end
 
-function Ark:prefillAddForm(subpath, strategy)
-    self.newDir = HOME .. "/" .. subpath
-    self.newStrategy = strategy
-    self.showAddForm = true
-end
-
 function Ark:quickAddClaudeProjects()
     -- One glob source with include patterns; global strategy mappings handle file types
     arkCmd('config add-source "~/.claude/projects/*"')
@@ -432,6 +608,601 @@ function Ark:quickAddClaudeProjects()
     arkCmd('config add-strategy "*.jsonl" jsonl')
     arkCmd('config add-strategy "*.md" markdown')
     self:loadConfig()
+end
+
+------------------------------------------------------------------------
+-- Project search panel
+------------------------------------------------------------------------
+
+function Ark:openProjectSearch()
+    self._projectSearchOpen = true
+    self._projectSearchQuery = ""
+    self:scanProjectCandidates()
+end
+
+function Ark:closeProjectSearch()
+    self._projectSearchOpen = false
+    self._projectCandidates = {}
+    self._projectSearchQuery = ""
+end
+
+function Ark:hideProjectSearch()
+    return not self._projectSearchOpen
+end
+
+function Ark:scanProjectCandidates()
+    local claudeDir = HOME .. "/.claude/projects"
+    local entries = listDir(claudeDir)
+
+    -- Collect existing project slugs to exclude
+    local existingSlugs = {}
+    for _, p in ipairs(self._projects or {}) do
+        existingSlugs[p.slug] = true
+    end
+
+    local candidates = {}
+    for _, entry in ipairs(entries) do
+        if entry.isDir and entry.name:sub(1, 1) == "-" then
+            local slug = entry.name
+            if not existingSlugs[slug] then
+                local c = session:create(ProjectCandidate)
+                c.slug = slug
+                local name, resolvedPath = resolveSlugName(slug)
+                c.name = name
+                c._resolvedPath = resolvedPath or ""
+                c.selected = true
+                table.insert(candidates, c)
+            end
+        end
+    end
+
+    table.sort(candidates, function(a, b) return a.name:lower() < b.name:lower() end)
+    self._projectCandidates = candidates
+end
+
+function Ark:refreshProjectSearch()
+    self:scanProjectCandidates()
+end
+
+function Ark:filteredProjectCandidates()
+    local q = (self._projectSearchQuery or ""):lower()
+    if q == "" then return self._projectCandidates or {} end
+    local results = {}
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+            table.insert(results, c)
+        end
+    end
+    return results
+end
+
+function Ark:addSelectedProjects()
+    -- Ensure Claude glob source exists
+    arkCmd('config add-source "~/.claude/projects/*"')
+    arkCmd('config add-include "*.jsonl" --source "~/.claude/projects/*"')
+    arkCmd('config add-include "memory/**" --source "~/.claude/projects/*"')
+    arkCmd('config add-strategy "*.jsonl" jsonl')
+    arkCmd('config add-strategy "*.md" markdown')
+
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected and c._resolvedPath ~= "" then
+            arkCmd('config add-source "' .. c._resolvedPath .. '"')
+        end
+    end
+
+    self:closeProjectSearch()
+    self:loadConfig()
+end
+
+function Ark:hideAddSelectedBtn()
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected then return false end
+    end
+    return true
+end
+
+------------------------------------------------------------------------
+-- Slug resolution: find real directory name from Claude project slug
+------------------------------------------------------------------------
+
+-- Resolve a Claude project slug to a human-readable project name.
+-- The slug encodes a path with / replaced by -, which is ambiguous when
+-- directory names contain hyphens. We resolve by walking the filesystem.
+-- Returns name, resolvedPath
+local function resolveSlugName(slug)
+    local homeSlug = "-" .. HOME:sub(2):gsub("/", "-") .. "-"
+    local rest = slug
+    if slug:sub(1, #homeSlug) == homeSlug then
+        rest = slug:sub(#homeSlug + 1)
+    elseif rest:sub(1, 1) == "-" then
+        rest = rest:sub(2)
+    end
+
+    -- Split on hyphens
+    local parts = {}
+    for part in rest:gmatch("[^%-]+") do
+        table.insert(parts, part)
+    end
+    if #parts == 0 then return rest end
+
+    -- Handle double-dash (nested Claude project scope): take only before --
+    local mainRest = rest:match("^([^%-].-)[%-][%-]") or rest
+
+    -- Split on single hyphens
+    local parts = {}
+    for part in mainRest:gmatch("[^%-]+") do
+        table.insert(parts, part)
+    end
+    if #parts == 0 then return rest end
+
+    -- Walk from HOME, trying LONGEST match first at each step
+    local current = HOME
+    local i = 1
+    while i <= #parts do
+        local found = false
+        -- Try longest combination first (most specific match)
+        for j = #parts, i, -1 do
+            local combined = table.concat(parts, "-", i, j)
+            local candidate = current .. "/" .. combined
+            local fh = io.popen('test -d "' .. candidate .. '" && echo y 2>/dev/null')
+            local exists = fh and fh:read("*a"):match("y") or false
+            if fh then fh:close() end
+            if exists then
+                current = candidate
+                i = j + 1
+                found = true
+                break
+            end
+        end
+        if not found then
+            -- Remaining unconsumed parts are the project name
+            local remaining = table.concat(parts, "-", i)
+            return remaining, current .. "/" .. remaining
+        end
+    end
+
+    -- All parts consumed — last directory is the name
+    local name = current:match("([^/]+)$")
+    if current == HOME then
+        if mainRest:sub(1, 5) == "work-" then mainRest = mainRest:sub(6) end
+        return mainRest, HOME .. "/" .. mainRest
+    end
+    return name or rest, current
+end
+
+------------------------------------------------------------------------
+-- Display grouping: sources → projects + data sources
+------------------------------------------------------------------------
+
+function Ark:buildDisplayItems()
+    local claudePrefix = HOME .. "/.claude/projects/"
+    local claudeBySlug = {}   -- slug → Source
+    local fileSources = {}    -- array of {dir, source}
+
+    for _, src in ipairs(self._sources or {}) do
+        if src.dir:sub(1, #claudePrefix) == claudePrefix then
+            local rest = src.dir:sub(#claudePrefix + 1)
+            if rest ~= "*" and rest ~= "" then
+                claudeBySlug[rest] = src
+            end
+        else
+            table.insert(fileSources, src)
+        end
+    end
+
+    -- Build projects from Claude dirs
+    local projects = {}
+    local matchedFileDirs = {}
+
+    for slug, claudeSrc in pairs(claudeBySlug) do
+        local proj = session:create(Project)
+        proj.slug = slug
+        proj._claudeSource = claudeSrc
+        proj._hasMemory = true
+        proj._hasChats = true
+        proj.memoryOn = true
+        proj.chatsOn = false
+
+        -- Match file source by converting dir → slug
+        for _, fileSrc in ipairs(fileSources) do
+            local testSlug = "-" .. fileSrc.dir:sub(2):gsub("/", "-")
+            if testSlug == slug then
+                proj._fileSource = fileSrc
+                proj._hasFiles = true
+                proj.filesOn = true
+                matchedFileDirs[fileSrc.dir] = true
+                break
+            end
+        end
+
+        -- Name: from file source dir, or resolve slug via filesystem
+        if proj._fileSource then
+            proj.name = proj._fileSource.dir:match("([^/]+)$") or slug
+            proj._resolvedPath = proj._fileSource.dir
+        else
+            local name, resolvedPath = resolveSlugName(slug)
+            proj.name = name
+            proj._resolvedPath = resolvedPath
+        end
+
+        table.insert(projects, proj)
+    end
+
+    table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
+
+    -- Emacs-style disambiguation: name<parent> with escalation
+    -- _resolvedPath was set during name resolution (the actual filesystem path)
+    -- For file sources, use the known dir; otherwise keep the resolved path
+
+    local function disambiguate(items)
+        -- Group by name
+        local groups = {}
+        for _, p in ipairs(items) do
+            groups[p.name] = groups[p.name] or {}
+            table.insert(groups[p.name], p)
+        end
+
+        for name, group in pairs(groups) do
+            if #group > 1 then
+                -- Try parent directory at increasing depth until unique
+                local depth = 1
+                local resolved = false
+                while not resolved and depth <= 5 do
+                    local suffixes = {}
+                    local allUnique = true
+                    for _, p in ipairs(group) do
+                        -- Walk up the path to get parent components
+                        local parts = {}
+                        for seg in p._resolvedPath:gmatch("[^/]+") do
+                            table.insert(parts, seg)
+                        end
+                        -- Get 'depth' parent components above the project name
+                        local suffix = {}
+                        local nameIdx = #parts  -- last component is the name
+                        for d = 1, depth do
+                            local idx = nameIdx - d
+                            if idx >= 1 then
+                                table.insert(suffix, 1, parts[idx])
+                            end
+                        end
+                        local key = table.concat(suffix, "/")
+                        suffixes[p] = key
+                        -- Check uniqueness
+                        for _, other in ipairs(group) do
+                            if other ~= p and suffixes[other] == key then
+                                allUnique = false
+                            end
+                        end
+                    end
+                    if allUnique then
+                        for _, p in ipairs(group) do
+                            p.name = name .. "<" .. suffixes[p] .. ">"
+                        end
+                        resolved = true
+                    end
+                    depth = depth + 1
+                end
+                -- If still not unique after 5 levels, append slug hash
+                if not resolved then
+                    for _, p in ipairs(group) do
+                        p.name = name .. "<" .. p.slug:sub(-8) .. ">"
+                    end
+                end
+            end
+        end
+    end
+
+    disambiguate(projects)
+
+    -- Re-sort after disambiguation
+    table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
+
+    -- Data sources: unmatched file sources
+    local dataSources = {}
+    for _, fileSrc in ipairs(fileSources) do
+        if not matchedFileDirs[fileSrc.dir] then
+            local ds = session:create(DataSource)
+            ds._source = fileSrc
+            ds._dir = fileSrc.dir
+            ds.name = compressPath(fileSrc.dir)
+            ds.dataOn = true
+            table.insert(dataSources, ds)
+        end
+    end
+
+    table.sort(dataSources, function(a, b) return a.name:lower() < b.name:lower() end)
+
+    -- Preserve existing filter states on rebuild
+    if self._projects then
+        local oldBySlug = {}
+        for _, p in ipairs(self._projects) do oldBySlug[p.slug] = p end
+        for _, p in ipairs(projects) do
+            local old = oldBySlug[p.slug]
+            if old then
+                p.filesOn = old.filesOn
+                p.memoryOn = old.memoryOn
+                p.chatsOn = old.chatsOn
+            end
+        end
+    end
+    if self._dataSources then
+        local oldByDir = {}
+        for _, d in ipairs(self._dataSources) do oldByDir[d._dir] = d end
+        for _, ds in ipairs(dataSources) do
+            local old = oldByDir[ds._dir]
+            if old then ds.dataOn = old.dataOn end
+        end
+    end
+
+    self._projects = projects
+    self._dataSources = dataSources
+
+    -- Combined display list: projects first, then data
+    self._displayItems = {}
+    for _, p in ipairs(projects) do
+        table.insert(self._displayItems, p)
+    end
+    for _, d in ipairs(dataSources) do
+        table.insert(self._displayItems, d)
+    end
+end
+
+------------------------------------------------------------------------
+-- Filter bar: tri-state toggles, solo, reset, invert
+------------------------------------------------------------------------
+
+-- Compute tri-state for a filter type: "on", "off", "mixed"
+function Ark:computeFilterState(filterType)
+    local allOn, allOff = true, true
+    local hasItems = false
+
+    if filterType == "data" then
+        for _, d in ipairs(self._dataSources or {}) do
+            hasItems = true
+            if d.dataOn then allOff = false else allOn = false end
+        end
+    else
+        for _, p in ipairs(self._projects or {}) do
+            if filterType == "project" and p._hasFiles then
+                hasItems = true
+                if p.filesOn then allOff = false else allOn = false end
+            elseif filterType == "memory" and p._hasMemory then
+                hasItems = true
+                if p.memoryOn then allOff = false else allOn = false end
+            elseif filterType == "chats" and p._hasChats then
+                hasItems = true
+                if p.chatsOn then allOff = false else allOn = false end
+            end
+        end
+    end
+
+    if not hasItems then return "off" end
+    if allOn then return "on"
+    elseif allOff then return "off"
+    else return "mixed" end
+end
+
+-- Generic toggle: mixed/off → on, on → off
+local function nextToggleState(state)
+    if state == "on" then return false end
+    return true  -- mixed or off → on
+end
+
+function Ark:toggleFilterData()
+    local newVal = nextToggleState(self:computeFilterState("data"))
+    for _, d in ipairs(self._dataSources or {}) do
+        d.dataOn = newVal
+    end
+    self:refilterSearch()
+end
+
+function Ark:toggleFilterProject()
+    local newVal = nextToggleState(self:computeFilterState("project"))
+    for _, p in ipairs(self._projects or {}) do
+        if p._hasFiles then p.filesOn = newVal end
+    end
+    self:refilterSearch()
+end
+
+function Ark:toggleFilterMemory()
+    local newVal = nextToggleState(self:computeFilterState("memory"))
+    for _, p in ipairs(self._projects or {}) do
+        if p._hasMemory then p.memoryOn = newVal end
+    end
+    self:refilterSearch()
+end
+
+function Ark:toggleFilterChats()
+    local newVal = nextToggleState(self:computeFilterState("chats"))
+    for _, p in ipairs(self._projects or {}) do
+        if p._hasChats then p.chatsOn = newVal end
+    end
+    self:refilterSearch()
+end
+
+-- Solo: double-click turns only this type on, all others off
+function Ark:soloFilterData()
+    for _, d in ipairs(self._dataSources or {}) do d.dataOn = true end
+    for _, p in ipairs(self._projects or {}) do
+        p.filesOn = false; p.memoryOn = false; p.chatsOn = false
+    end
+    self:refilterSearch()
+end
+
+function Ark:soloFilterProject()
+    for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
+    for _, p in ipairs(self._projects or {}) do
+        p.filesOn = p._hasFiles; p.memoryOn = false; p.chatsOn = false
+    end
+    self:refilterSearch()
+end
+
+function Ark:soloFilterMemory()
+    for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
+    for _, p in ipairs(self._projects or {}) do
+        p.filesOn = false; p.memoryOn = p._hasMemory; p.chatsOn = false
+    end
+    self:refilterSearch()
+end
+
+function Ark:soloFilterChats()
+    for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
+    for _, p in ipairs(self._projects or {}) do
+        p.filesOn = false; p.memoryOn = false; p.chatsOn = p._hasChats
+    end
+    self:refilterSearch()
+end
+
+-- Reset: project ON, memory ON, data ON, chats OFF
+function Ark:resetFilters()
+    for _, p in ipairs(self._projects or {}) do
+        p.filesOn = p._hasFiles
+        p.memoryOn = p._hasMemory
+        p.chatsOn = false
+    end
+    for _, d in ipairs(self._dataSources or {}) do
+        d.dataOn = true
+    end
+    self:refilterSearch()
+end
+
+-- Invert all filters
+function Ark:invertFilters()
+    for _, p in ipairs(self._projects or {}) do
+        if p._hasFiles then p.filesOn = not p.filesOn end
+        if p._hasMemory then p.memoryOn = not p.memoryOn end
+        if p._hasChats then p.chatsOn = not p.chatsOn end
+    end
+    for _, d in ipairs(self._dataSources or {}) do
+        d.dataOn = not d.dataOn
+    end
+    self:refilterSearch()
+end
+
+-- Re-run search if active
+function Ark:refilterSearch()
+    if self._searchView and self.searchQuery ~= "" then
+        self:search()
+    end
+end
+
+-- Filter bar icon methods (filled = on, outline = off/mixed)
+function Ark:filterDataIcon()
+    return self:computeFilterState("data") == "off" and "file-earmark" or "file-earmark-fill"
+end
+function Ark:filterProjectIcon()
+    return self:computeFilterState("project") == "off" and "folder" or "folder-fill"
+end
+function Ark:filterMemoryIcon()
+    return self:computeFilterState("memory") == "off" and "lightbulb" or "lightbulb-fill"
+end
+function Ark:filterChatsIcon()
+    return self:computeFilterState("chats") == "off" and "chat" or "chat-fill"
+end
+
+-- Filter bar boolean methods for ui-class bindings
+function Ark:filterDataIsOn() return self:computeFilterState("data") == "on" end
+function Ark:filterDataIsMixed() return self:computeFilterState("data") == "mixed" end
+function Ark:filterProjectIsOn() return self:computeFilterState("project") == "on" end
+function Ark:filterProjectIsMixed() return self:computeFilterState("project") == "mixed" end
+function Ark:filterMemoryIsOn() return self:computeFilterState("memory") == "on" end
+function Ark:filterMemoryIsMixed() return self:computeFilterState("memory") == "mixed" end
+function Ark:filterChatsIsOn() return self:computeFilterState("chats") == "on" end
+function Ark:filterChatsIsMixed() return self:computeFilterState("chats") == "mixed" end
+
+-- Tooltip text for filter buttons
+function Ark:filterDataTooltip()
+    return "Data sources (" .. self:computeFilterState("data") .. ") — double-click to solo"
+end
+function Ark:filterProjectTooltip()
+    return "Project files (" .. self:computeFilterState("project") .. ") — double-click to solo"
+end
+function Ark:filterMemoryTooltip()
+    return "Memories (" .. self:computeFilterState("memory") .. ") — double-click to solo"
+end
+function Ark:filterChatsTooltip()
+    return "Chat logs (" .. self:computeFilterState("chats") .. ") — double-click to solo"
+end
+
+-- Build filter flags from source filter buttons + filter panel fields
+function Ark:buildFilterFlags()
+    local flags = {}
+
+    -- Source filter buttons → filter-files patterns
+    local allDirs = {}
+    local enabledDirs = {}
+
+    for _, p in ipairs(self._projects or {}) do
+        if p._fileSource then
+            table.insert(allDirs, p._fileSource.dir)
+            if p.filesOn then
+                table.insert(enabledDirs, p._fileSource.dir)
+            end
+        end
+        if p._claudeSource then
+            table.insert(allDirs, p._claudeSource.dir)
+            if p.memoryOn or p.chatsOn then
+                table.insert(enabledDirs, p._claudeSource.dir)
+            end
+        end
+    end
+
+    for _, d in ipairs(self._dataSources or {}) do
+        table.insert(allDirs, d._source.dir)
+        if d.dataOn then
+            table.insert(enabledDirs, d._source.dir)
+        end
+    end
+
+    local disabledCount = #allDirs - #enabledDirs
+    if disabledCount > 0 and #enabledDirs > 0 then
+        if disabledCount <= #enabledDirs then
+            local enabledSet = {}
+            for _, dir in ipairs(enabledDirs) do enabledSet[dir] = true end
+            for _, dir in ipairs(allDirs) do
+                if not enabledSet[dir] then
+                    table.insert(flags, '--exclude-files "' .. dir .. '/*"')
+                end
+            end
+        else
+            for _, dir in ipairs(enabledDirs) do
+                table.insert(flags, '--filter-files "' .. dir .. '/*"')
+            end
+        end
+    end
+
+    -- Filter panel fields (one pattern per line)
+    for line in self.filterFiles:gmatch("[^\n]+") do
+        local pat = line:match("^%s*(.-)%s*$")
+        if pat and pat ~= "" then
+            table.insert(flags, '--filter-files "' .. pat .. '"')
+        end
+    end
+    for line in self.excludeFiles:gmatch("[^\n]+") do
+        local pat = line:match("^%s*(.-)%s*$")
+        if pat and pat ~= "" then
+            table.insert(flags, '--exclude-files "' .. pat .. '"')
+        end
+    end
+    for line in self.filterContent:gmatch("[^\n]+") do
+        local q = line:match("^%s*(.-)%s*$")
+        if q and q ~= "" then
+            table.insert(flags, '--filter "' .. q .. '"')
+        end
+    end
+    for line in self.excludeContent:gmatch("[^\n]+") do
+        local q = line:match("^%s*(.-)%s*$")
+        if q and q ~= "" then
+            table.insert(flags, '--except "' .. q .. '"')
+        end
+    end
+
+    return table.concat(flags, " ")
+end
+
+-- Kept for backward compat during transition
+function Ark:sourceFilterFlags()
+    return self:buildFilterFlags()
 end
 
 -- Search: incremental via variable check cycle.
@@ -459,51 +1230,131 @@ function Ark:search()
     if self.searchQuery == "" then return end
     self._lastSearchedQuery = self.searchQuery
     self._searching = true
-    self._searchResults = {}
+    -- Clear in-place to preserve table reference for ViewList diffing
+    if self._searchGroups then
+        for i = #self._searchGroups, 1, -1 do
+            table.remove(self._searchGroups, i)
+        end
+    else
+        self._searchGroups = {}
+    end
 
     local flag = "--" .. self.searchMode
-    local output = arkCmd('search ' .. flag .. ' "' .. self.searchQuery .. '" -k 20 -scores')
+    local filterFlags = self:buildFilterFlags()
+
+    -- Determine k: if grouping, ask for more chunks to fill groups
+    local hpf = tonumber(self._hitsPerFile) or 1
+    local k = hpf == 0 and 100 or 20 * hpf
+    if k > 100 then k = 100 end
+
+    local cmd = 'search ' .. flag .. ' "' .. self.searchQuery .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
+    if filterFlags ~= "" then
+        cmd = cmd .. " " .. filterFlags
+    end
+
+    -- Read pipe line-by-line: avoids building a 2MB string then splitting it
+    -- (straycat: process each line as it arrives, no gmatch over the whole output)
+    local dbFlag = '--dir "' .. DB_PATH .. '"'
+    local fullCmd = '"' .. ARK_BIN .. '" search ' .. dbFlag .. ' ' .. flag
+        .. ' "' .. self.searchQuery .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
+    if filterFlags ~= "" then
+        fullCmd = fullCmd .. " " .. filterFlags
+    end
+    local handle = io.popen(ARK_PATH .. " " .. fullCmd .. " 2>/dev/null")
     self._searching = false
 
-    if not output or output == "" then
+    if not handle then
         self._searchView = true
         return
     end
 
-    local results = {}
-    local rank = 0
-    for line in output:gmatch("[^\n]+") do
-        rank = rank + 1
-        -- Format: "path:startline-endline\tscore" or just "path:startline-endline"
-        local pathpart, score = line:match("^(.+)\t([%d%.]+)$")
-        if not pathpart then
-            pathpart = line:match("^%s*(.+)%s*$")
-            score = "0"
-        end
-        if pathpart and pathpart ~= "" then
-            -- Strip :startline-endline suffix
-            local path = pathpart:match("^(.+):%d+%-%d+$") or pathpart
-            local r = session:create(SearchResult)
-            r.path = path
-            r.score = tonumber(score) or 0
-            r._rank = rank
-            -- Shorten home paths for display
-            if path:sub(1, #HOME) == HOME then
-                r.snippet = "~" .. path:sub(#HOME + 1)
-            else
-                r.snippet = path
+    -- Parse JSONL chunks line-by-line and group by file
+    -- For "contains" mode, post-filter: trigram index returns superset,
+    -- verify chunk text actually contains the query string
+    local fileOrder = {}   -- ordered list of paths (first seen)
+    local fileMap = {}     -- path → { chunks = {}, topScore = 0 }
+
+    for line in handle:lines() do
+        local path = line:match('"path":"(.-)"')
+        if not path then goto continue end
+
+        local range = line:match('"range":"(.-)"') or ""
+        local score = tonumber(line:match('"score":([%d%.]+)')) or 0
+
+        -- Extract preview field (server-side windowed, ~300 chars)
+        local text = ""
+        local previewStart = line:find('"preview":"')
+        if previewStart then
+            local ps = previewStart + 11
+            -- Find closing quote (not escaped)
+            local pe = ps
+            while pe <= #line do
+                local ch = line:sub(pe, pe)
+                if ch == '\\' then
+                    pe = pe + 2  -- skip escaped char
+                elseif ch == '"' then
+                    break
+                else
+                    pe = pe + 1
+                end
             end
-            table.insert(results, r)
+            text = line:sub(ps, pe - 1)
+            -- Unescape JSON string
+            text = text:gsub('\\n', '\n'):gsub('\\t', '\t'):gsub('\\"', '"'):gsub('\\\\', '\\')
         end
+
+        -- No post-filter needed: the trigram index verified the match,
+        -- and --preview centers the window on it when possible.
+        -- When the match is deep in a huge chunk, the preview shows what
+        -- it can — dropping the result would be worse than showing it.
+
+        if not fileMap[path] then
+            fileMap[path] = { chunks = {}, topScore = 0 }
+            table.insert(fileOrder, path)
+        end
+        local group = fileMap[path]
+        if score > group.topScore then
+            group.topScore = score
+        end
+
+        local r = session:create(SearchResult)
+        r.path = path
+        r.score = score
+        r.range = range
+        r.text = text
+        if path:sub(1, #HOME) == HOME then
+            r.snippet = "~" .. path:sub(#HOME + 1)
+        else
+            r.snippet = path
+        end
+        table.insert(group.chunks, r)
+        ::continue::
+    end
+    handle:close()
+
+    -- Build grouped results — insert into existing table for ViewList
+    for rank, path in ipairs(fileOrder) do
+        local gdata = fileMap[path]
+        local g = session:create(SearchFileGroup)
+        g.path = path
+        g.topScore = gdata.topScore
+        g._chunks = gdata.chunks
+        g._rank = rank
+        g._expanded = false
+        table.insert(self._searchGroups, g)
     end
 
-    self._searchResults = results
     self._searchView = true
 end
 
 function Ark:clearSearch()
     self.searchQuery = ""
     self._searchResults = {}
+    if self._searchGroups then
+        for i = #self._searchGroups, 1, -1 do
+            table.remove(self._searchGroups, i)
+        end
+    end
     self._searchView = false
 end
 
@@ -532,11 +1383,7 @@ function Ark:modeIsRegex()
 end
 
 function Ark:searchResults()
-    return self._searchResults or {}
-end
-
-function Ark:hasSearchResults()
-    return self._searchView
+    return self._searchGroups or {}
 end
 
 function Ark:hideSearchResults()
@@ -544,10 +1391,62 @@ function Ark:hideSearchResults()
 end
 
 function Ark:searchResultCount()
-    local n = self._searchResults and #self._searchResults or 0
-    if n == 0 and self._searchView then return "No results" end
-    if n == 1 then return "1 result" end
-    return tostring(n) .. " results"
+    local groups = self._searchGroups or {}
+    local nFiles = #groups
+    local nChunks = 0
+    for _, g in ipairs(groups) do
+        nChunks = nChunks + (g._chunks and #g._chunks or 0)
+    end
+    if nFiles == 0 and self._searchView then return "No results" end
+    if nChunks == nFiles then
+        if nFiles == 1 then return "1 result" end
+        return tostring(nFiles) .. " results"
+    end
+    return tostring(nChunks) .. " hits across " .. tostring(nFiles) .. " files"
+end
+
+-- Filter panel toggle
+function Ark:toggleFilterPanel()
+    self._showFilterPanel = not self._showFilterPanel
+end
+
+function Ark:hideFilterPanel()
+    return not self._showFilterPanel
+end
+
+function Ark:filterPanelIcon()
+    if self._showFilterPanel then return "funnel-fill" end
+    -- Show filled funnel if any filter is active
+    if self.filterFiles ~= "" or self.excludeFiles ~= ""
+        or self.filterContent ~= "" or self.excludeContent ~= "" then
+        return "funnel-fill"
+    end
+    return "funnel"
+end
+
+function Ark:hasActiveFilters()
+    return self.filterFiles ~= "" or self.excludeFiles ~= ""
+        or self.filterContent ~= "" or self.excludeContent ~= ""
+end
+
+-- Hits per file
+function Ark:hitsPerFileText()
+    if self._hitsPerFile == "0" then return "all" end
+    return self._hitsPerFile
+end
+
+function Ark:cycleHitsPerFile()
+    if self._hitsPerFile == "1" then
+        self._hitsPerFile = "3"
+    elseif self._hitsPerFile == "3" then
+        self._hitsPerFile = "0"
+    else
+        self._hitsPerFile = "1"
+    end
+    -- Re-search to apply new grouping
+    if self._searchView and self.searchQuery ~= "" then
+        self:search()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -559,6 +1458,10 @@ function Source:displayDir()
 end
 
 function Source:selectMe()
+    if ark._filterClicked then
+        ark._filterClicked = false
+        return
+    end
     ark:selectSource(self)
 end
 
@@ -744,6 +1647,286 @@ end
 
 function Source:notLoading()
     return not self._loading
+end
+
+-- Parse textarea text into pattern list (one per line, skip blanks)
+local function parsePatterns(text)
+    local patterns = {}
+    for line in (text or ""):gmatch("[^\n]+") do
+        local trimmed = line:match("^%s*(.-)%s*$")
+        if trimmed ~= "" then
+            table.insert(patterns, trimmed)
+        end
+    end
+    return patterns
+end
+
+function Source:savePatterns()
+    local newInc = parsePatterns(self.includeText)
+    local newExc = parsePatterns(self.excludeText)
+    local oldInc = self._includePatterns or {}
+    local oldExc = self._excludePatterns or {}
+
+    -- Build sets for diffing
+    local oldIncSet, newIncSet = {}, {}
+    for _, p in ipairs(oldInc) do oldIncSet[p] = true end
+    for _, p in ipairs(newInc) do newIncSet[p] = true end
+
+    local oldExcSet, newExcSet = {}, {}
+    for _, p in ipairs(oldExc) do oldExcSet[p] = true end
+    for _, p in ipairs(newExc) do newExcSet[p] = true end
+
+    local errors = {}
+    local sourceFlag = '--source "' .. self.dir .. '"'
+
+    -- Remove old includes not in new
+    for _, p in ipairs(oldInc) do
+        if not newIncSet[p] then
+            local out = arkCmd('config remove-pattern "' .. p .. '" ' .. sourceFlag)
+            if out and out:match("error") then table.insert(errors, out) end
+        end
+    end
+
+    -- Remove old excludes not in new
+    for _, p in ipairs(oldExc) do
+        if not newExcSet[p] then
+            local out = arkCmd('config remove-pattern "' .. p .. '" ' .. sourceFlag)
+            if out and out:match("error") then table.insert(errors, out) end
+        end
+    end
+
+    -- Add new includes not in old
+    for _, p in ipairs(newInc) do
+        if not oldIncSet[p] then
+            local out = arkCmd('config add-include "' .. p .. '" ' .. sourceFlag)
+            if out and out:match("error") then table.insert(errors, out) end
+        end
+    end
+
+    -- Add new excludes not in old
+    for _, p in ipairs(newExc) do
+        if not oldExcSet[p] then
+            local out = arkCmd('config add-exclude "' .. p .. '" ' .. sourceFlag)
+            if out and out:match("error") then table.insert(errors, out) end
+        end
+    end
+
+    if #errors > 0 then
+        self._patternError = table.concat(errors, "\n")
+    else
+        self._patternError = ""
+    end
+
+    -- Reload to sync state
+    ark:loadConfig()
+
+    -- Refresh tree if loaded
+    if self._loaded then
+        self._loaded = false
+        self:loadRootNodes()
+    end
+end
+
+function Source:patternError()
+    return self._patternError or ""
+end
+
+function Source:hasPatternError()
+    return (self._patternError or "") ~= ""
+end
+
+------------------------------------------------------------------------
+-- Project methods
+------------------------------------------------------------------------
+
+function Project:selectMe()
+    if ark._filterClicked then
+        ark._filterClicked = false
+        return
+    end
+    local source = self._fileSource or self._claudeSource
+    if source then
+        ark:selectSource(source)
+    end
+end
+
+function Project:isSelected()
+    if not ark.selectedSource then return false end
+    return ark.selectedSource == self._fileSource or ark.selectedSource == self._claudeSource
+end
+
+function Project:toggleFiles()
+    ark._filterClicked = true
+    if self._hasFiles then
+        self.filesOn = not self.filesOn
+        ark:refilterSearch()
+    end
+end
+
+function Project:toggleMemory()
+    ark._filterClicked = true
+    if self._hasMemory then
+        self.memoryOn = not self.memoryOn
+        ark:refilterSearch()
+    end
+end
+
+function Project:toggleChats()
+    ark._filterClicked = true
+    if self._hasChats then
+        self.chatsOn = not self.chatsOn
+        ark:refilterSearch()
+    end
+end
+
+function Project:filesIcon()
+    if not self._hasFiles then return "folder" end
+    return self.filesOn and "folder-fill" or "folder"
+end
+
+function Project:memoryIcon()
+    if not self._hasMemory then return "lightbulb" end
+    return self.memoryOn and "lightbulb-fill" or "lightbulb"
+end
+
+function Project:chatsIcon()
+    if not self._hasChats then return "chat" end
+    return self.chatsOn and "chat-fill" or "chat"
+end
+
+function Project:filesIsOn()
+    return self._hasFiles and self.filesOn
+end
+function Project:filesIsDisabled()
+    return not self._hasFiles
+end
+
+function Project:memoryIsOn()
+    return self._hasMemory and self.memoryOn
+end
+function Project:memoryIsDisabled()
+    return not self._hasMemory
+end
+
+function Project:chatsIsOn()
+    return self._hasChats and self.chatsOn
+end
+function Project:chatsIsDisabled()
+    return not self._hasChats
+end
+
+function Project:filesTooltip()
+    if not self._hasFiles then return "No file source configured" end
+    return self.filesOn and "Files: included in search" or "Files: excluded from search"
+end
+
+function Project:memoryTooltip()
+    if not self._hasMemory then return "No memory patterns configured" end
+    return self.memoryOn and "Memory: included in search" or "Memory: excluded from search"
+end
+
+function Project:chatsTooltip()
+    if not self._hasChats then return "No chat patterns configured" end
+    return self.chatsOn and "Chats: included in search" or "Chats: excluded from search"
+end
+
+function Project:displayPath()
+    if self._fileSource then
+        return compressPath(self._fileSource.dir)
+    end
+    return compressPath(self._resolvedPath or "")
+end
+
+function Project:fullPath()
+    if self._fileSource then return self._fileSource.dir end
+    return self._resolvedPath or ""
+end
+
+function Project:removeMe()
+    if self._fileSource then
+        arkCmd('config remove-source "' .. self._fileSource.dir .. '"')
+    end
+    if self._claudeSource then
+        arkCmd('config remove-source "' .. self._claudeSource.dir .. '"')
+    end
+    if ark.selectedSource == self._fileSource or ark.selectedSource == self._claudeSource then
+        ark.selectedSource = nil
+    end
+    ark:loadConfig()
+end
+
+------------------------------------------------------------------------
+-- DataSource methods
+------------------------------------------------------------------------
+
+function DataSource:selectMe()
+    if ark._filterClicked then
+        ark._filterClicked = false
+        return
+    end
+    if self._source then
+        ark:selectSource(self._source)
+    end
+end
+
+function DataSource:isSelected()
+    return ark.selectedSource == self._source
+end
+
+function DataSource:toggleData()
+    ark._filterClicked = true
+    self.dataOn = not self.dataOn
+    ark:refilterSearch()
+end
+
+function DataSource:dataIcon()
+    return self.dataOn and "file-earmark-fill" or "file-earmark"
+end
+
+function DataSource:dataIsOn()
+    return self.dataOn
+end
+
+function DataSource:dataTooltip()
+    return self.dataOn and "Included in search" or "Excluded from search"
+end
+
+function DataSource:displayDir()
+    return self.name
+end
+
+function DataSource:fullDir()
+    return self._dir
+end
+
+function DataSource:removeMe()
+    if self._source then
+        arkCmd('config remove-source "' .. self._source.dir .. '"')
+    end
+    if ark.selectedSource == self._source then
+        ark.selectedSource = nil
+    end
+    ark:loadConfig()
+end
+
+------------------------------------------------------------------------
+-- ProjectCandidate methods
+------------------------------------------------------------------------
+
+function ProjectCandidate:toggleSelect()
+    self.selected = not self.selected
+end
+
+function ProjectCandidate:isSelected()
+    return self.selected
+end
+
+function ProjectCandidate:isDeselected()
+    return not self.selected
+end
+
+function ProjectCandidate:displayPath()
+    return compressPath(self._resolvedPath or "")
 end
 
 ------------------------------------------------------------------------

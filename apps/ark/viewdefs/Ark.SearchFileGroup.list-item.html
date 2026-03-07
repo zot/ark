@@ -1,0 +1,14 @@
+<template>
+  <div class="ark-file-group">
+    <div class="ark-file-header" ui-event-click="toggleExpand()">
+      <sl-icon ui-attr-name="expandIcon()" class="ark-file-expand" ui-class-hidden="notExpandable()"></sl-icon>
+      <sl-tooltip placement="bottom">
+        <span slot="content" ui-value="path"></span>
+        <span class="ark-file-path" ui-value="displayPath()"></span>
+      </sl-tooltip>
+      <span class="ark-file-score" ui-value="scoreText()"></span>
+      <span class="ark-file-more" ui-value="chunkCountText()"></span>
+    </div>
+    <div ui-view="visibleChunks()?wrapper=lua.ViewList"></div>
+  </div>
+</template>

@@ -1,0 +1,22 @@
+<template>
+  <div class="ark-source-item ark-data-item" ui-event-click="selectMe()" ui-class-selected="isSelected()">
+    <div class="ark-source-row">
+      <sl-icon name="file-earmark" class="ark-item-type-icon"></sl-icon>
+      <div class="ark-source-info">
+        <sl-tooltip placement="right">
+          <span slot="content" ui-value="fullDir()"></span>
+          <div class="ark-source-dir" ui-value="displayDir()"></div>
+        </sl-tooltip>
+      </div>
+      <div class="ark-switch-group">
+        <sl-tooltip>
+          <span slot="content" ui-value="dataTooltip()"></span>
+          <sl-icon-button ui-event-click="toggleData()" ui-attr-name="dataIcon()" ui-class-ark-switch-on="dataIsOn()" label="Toggle data"></sl-icon-button>
+        </sl-tooltip>
+      </div>
+      <sl-tooltip content="Don't index this source">
+        <sl-icon-button name="dash-lg" ui-event-click="removeMe()" class="ark-remove-btn" label="Don't index"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+  </div>
+</template>

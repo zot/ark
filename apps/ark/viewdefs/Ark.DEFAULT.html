@@ -9,25 +9,99 @@
           <sl-icon-button name="plus-lg" ui-action="openAddForm()" label="Add source"></sl-icon-button>
         </div>
 
-        <div class="ark-source-list">
-          <div ui-view="_sources?wrapper=lua.ViewList"></div>
+        <!-- Filter bar -->
+        <div class="ark-filter-bar">
+          <sl-tooltip content="Invert all filters">
+            <sl-icon-button name="arrow-left-right" ui-action="invertFilters()" label="Invert" class="ark-filter-invert"></sl-icon-button>
+          </sl-tooltip>
+          <div class="ark-filter-divider"></div>
+          <sl-tooltip>
+            <span slot="content" ui-value="filterDataTooltip()"></span>
+            <sl-icon-button ui-attr-name="filterDataIcon()" ui-event-click="toggleFilterData()" ui-event-dblclick="soloFilterData()" label="Data" class="ark-filter-btn" ui-class-ark-filter-on="filterDataIsOn()" ui-class-ark-filter-mixed="filterDataIsMixed()"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip>
+            <span slot="content" ui-value="filterProjectTooltip()"></span>
+            <sl-icon-button ui-attr-name="filterProjectIcon()" ui-event-click="toggleFilterProject()" ui-event-dblclick="soloFilterProject()" label="Projects" class="ark-filter-btn" ui-class-ark-filter-on="filterProjectIsOn()" ui-class-ark-filter-mixed="filterProjectIsMixed()"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip>
+            <span slot="content" ui-value="filterMemoryTooltip()"></span>
+            <sl-icon-button ui-attr-name="filterMemoryIcon()" ui-event-click="toggleFilterMemory()" ui-event-dblclick="soloFilterMemory()" label="Memory" class="ark-filter-btn" ui-class-ark-filter-on="filterMemoryIsOn()" ui-class-ark-filter-mixed="filterMemoryIsMixed()"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip>
+            <span slot="content" ui-value="filterChatsTooltip()"></span>
+            <sl-icon-button ui-attr-name="filterChatsIcon()" ui-event-click="toggleFilterChats()" ui-event-dblclick="soloFilterChats()" label="Chats" class="ark-filter-btn" ui-class-ark-filter-on="filterChatsIsOn()" ui-class-ark-filter-mixed="filterChatsIsMixed()"></sl-icon-button>
+          </sl-tooltip>
+          <div class="ark-filter-divider"></div>
+          <sl-tooltip content="Reset: project + memory + data on, chats off">
+            <sl-icon-button name="arrow-counterclockwise" ui-action="resetFilters()" label="Reset" class="ark-filter-reset"></sl-icon-button>
+          </sl-tooltip>
         </div>
 
-        <div class="ark-quick-add">
-          <div class="section-header">Claude Quick-Add</div>
-          <div class="ark-quick-buttons">
-            <sl-button size="small" variant="default" outline ui-action="quickAddClaudeProjects()">
-              <sl-icon slot="prefix" name="robot"></sl-icon> Claude Projects
-            </sl-button>
+        <div class="ark-source-list">
+          <div ui-view="_displayItems?wrapper=lua.ViewList"></div>
+        </div>
+
+        <div class="ark-sidebar-actions">
+          <sl-button size="small" variant="default" outline ui-action="openProjectSearch()">
+            <sl-icon slot="prefix" name="robot"></sl-icon> Add Projects
+          </sl-button>
+        </div>
+
+        <!-- Project search overlay -->
+        <div class="ark-project-search" ui-class-hidden="hideProjectSearch()">
+          <div class="panel-header">
+            <span class="panel-title">Add Claude Projects</span>
+            <sl-icon-button name="x-lg" ui-action="closeProjectSearch()" label="Close"></sl-icon-button>
+          </div>
+          <div class="ark-project-search-bar">
+            <sl-input size="small" placeholder="Filter projects..." ui-value="_projectSearchQuery?keypress" class="ark-project-search-input">
+              <sl-icon slot="prefix" name="search"></sl-icon>
+            </sl-input>
+            <sl-tooltip content="Rescan Claude projects">
+              <sl-icon-button name="arrow-clockwise" ui-action="refreshProjectSearch()" label="Refresh"></sl-icon-button>
+            </sl-tooltip>
+          </div>
+          <div class="ark-project-search-list">
+            <div ui-view="filteredProjectCandidates()?wrapper=lua.ViewList"></div>
+          </div>
+          <div class="ark-project-search-actions">
+            <sl-button size="small" variant="default" ui-action="closeProjectSearch()">Cancel</sl-button>
+            <sl-button size="small" variant="primary" ui-action="addSelectedProjects()" ui-attr-disabled="hideAddSelectedBtn()">Add Selected</sl-button>
           </div>
         </div>
       </div>
 
+      <!-- Resize handle -->
+      <div class="ark-resize-handle"></div>
+
       <!-- Right panel: File tree or placeholder -->
       <div class="content-panel ark-detail">
 
+        <!-- Filter panel — above search bar because it limits what's below -->
+        <div class="ark-filter-panel" ui-class-hidden="hideFilterPanel()">
+          <div class="ark-filter-grid">
+            <div class="ark-filter-field">
+              <label class="ark-filter-label">Filter files</label>
+              <sl-textarea size="small" rows="2" placeholder="*.md&#10;~/work/proj/*" ui-value="filterFiles" class="ark-filter-input"></sl-textarea>
+            </div>
+            <div class="ark-filter-field">
+              <label class="ark-filter-label">Exclude files</label>
+              <sl-textarea size="small" rows="2" placeholder="*.jsonl&#10;*.tmp" ui-value="excludeFiles" class="ark-filter-input"></sl-textarea>
+            </div>
+            <div class="ark-filter-field">
+              <label class="ark-filter-label">Filter content</label>
+              <sl-textarea size="small" rows="2" placeholder="@project: ark" ui-value="filterContent" class="ark-filter-input"></sl-textarea>
+            </div>
+            <div class="ark-filter-field">
+              <label class="ark-filter-label">Exclude content</label>
+              <sl-textarea size="small" rows="2" placeholder="tool_result" ui-value="excludeContent" class="ark-filter-input"></sl-textarea>
+            </div>
+          </div>
+        </div>
+
         <!-- Search bar — always visible -->
         <div class="ark-search-bar">
+          <sl-icon-button ui-attr-name="filterPanelIcon()" ui-event-click="toggleFilterPanel()" label="Filters" class="ark-funnel-btn" ui-class-ark-funnel-active="hasActiveFilters()"></sl-icon-button>
           <div class="ark-search-modes">
             <sl-button size="small" ui-event-click="setModeContains()" ui-class-ark-mode-active="modeIsContains()">contains</sl-button>
             <sl-button size="small" ui-event-click="setModeAbout()" ui-class-ark-mode-active="modeIsAbout()">about</sl-button>
@@ -37,13 +111,19 @@
             <sl-icon slot="prefix" name="search"></sl-icon>
           </sl-input>
           <sl-icon-button name="x-lg" ui-action="clearSearch()" label="Clear search" ui-class-hidden="hideSearchResults()"></sl-icon-button>
-          <span class="hidden" ui-value="onSearchInput()"></span>
+          <span class="hidden" ui-value="onSearchInput()?priority=high"></span>
         </div>
 
         <!-- Search results -->
         <div class="ark-search-results" ui-class-hidden="hideSearchResults()">
           <div class="ark-search-meta">
             <span ui-value="searchResultCount()"></span>
+            <sl-tooltip content="Hits per file: click to cycle 1 / 3 / all">
+              <sl-button size="small" class="ark-hits-btn" ui-event-click="cycleHitsPerFile()">
+                <sl-icon slot="prefix" name="layers"></sl-icon>
+                <span ui-value="hitsPerFileText()"></span>
+              </sl-button>
+            </sl-tooltip>
           </div>
           <div class="ark-results-list">
             <div ui-view="searchResults()?wrapper=lua.ViewList"></div>
@@ -79,10 +159,27 @@
               <span class="panel-title ark-source-path" ui-value="sourceHeaderText()"></span>
             </sl-tooltip>
             <div class="ark-tree-actions">
+              <sl-icon-button name="gear" ui-event-click="togglePatterns()" label="Pattern settings" ui-class-ark-gear-active="_showPatterns"></sl-icon-button>
               <sl-button size="small" variant="default" outline ui-action="collapseResolved()">
                 Collapse Resolved
               </sl-button>
               <sl-icon-button name="arrow-clockwise" ui-action="refresh()" label="Scan & Refresh"></sl-icon-button>
+            </div>
+          </div>
+
+          <!-- Pattern editing -->
+          <div class="ark-patterns" ui-class-hidden="hidePatterns()">
+            <div class="ark-pattern-hint">Glob patterns, one per line — e.g. <code>*.md</code>, <code>docs/**</code>, <code>test/</code></div>
+            <div class="ark-pattern-group">
+              <label class="ark-pattern-label">Include</label>
+              <sl-textarea size="small" rows="2" placeholder="*.md&#10;*.txt" ui-value="selectedSource.includeText" class="ark-pattern-input"></sl-textarea>
+            </div>
+            <div class="ark-pattern-group">
+              <label class="ark-pattern-label">Exclude</label>
+              <sl-textarea size="small" rows="2" placeholder="test/&#10;*.tmp" ui-value="selectedSource.excludeText" class="ark-pattern-input"></sl-textarea>
+            </div>
+            <div class="ark-pattern-actions">
+              <sl-button size="small" variant="primary" ui-action="saveSelectedPatterns()">Save</sl-button>
             </div>
           </div>
 
@@ -133,10 +230,25 @@
     /* Left panel */
     .ark-sources {
       width: 280px;
-      min-width: 280px;
+      min-width: 180px;
+      max-width: 50vw;
       display: flex;
       flex-direction: column;
-      border-right: 1px solid var(--term-border, #2a2a3a);
+      position: relative;
+    }
+
+    /* Resize handle */
+    .ark-resize-handle {
+      width: 4px;
+      cursor: col-resize;
+      background: var(--term-border, #2a2a3a);
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .ark-resize-handle:hover,
+    .ark-resize-handle.ark-resizing {
+      background: var(--term-accent, #E07A47);
     }
 
     .ark-source-list {
@@ -150,24 +262,84 @@
       flex-direction: column;
     }
 
-    .ark-quick-add {
+    .ark-sidebar-actions {
       border-top: 1px solid var(--term-border, #2a2a3a);
-      padding: 8px;
+      padding: 6px 8px;
     }
 
-    .ark-quick-buttons {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      padding-top: 6px;
-    }
-
-    .ark-quick-buttons sl-button {
+    .ark-sidebar-actions sl-button {
       width: 100%;
     }
 
-    .ark-quick-buttons sl-button::part(base) {
-      justify-content: flex-start;
+    /* Project search overlay */
+    .ark-project-search {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      background: var(--term-bg, #0a0a0f);
+      border-right: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-project-search.hidden { display: none; }
+
+    .ark-project-search-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-project-search-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ark-project-search-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .ark-project-search-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      padding: 8px;
+      border-top: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    /* Project candidate items */
+    .ark-candidate-item {
+      padding: 6px 8px;
+      transition: opacity 0.15s;
+    }
+
+    .ark-candidate-item:hover {
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-candidate-item.ark-candidate-deselected {
+      opacity: 0.3;
+    }
+
+    .ark-candidate-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ark-candidate-remove {
+      flex-shrink: 0;
+      opacity: 0.4;
+      font-size: 12px;
+    }
+
+    .ark-candidate-remove:hover {
+      opacity: 1;
+      color: #f87171;
     }
 
     /* Right panel */
@@ -243,6 +415,57 @@
       text-overflow: ellipsis;
     }
 
+    .ark-gear-active {
+      color: var(--term-accent, #E07A47);
+    }
+
+    /* Pattern editing */
+    .ark-patterns.hidden { display: none; }
+
+    .ark-pattern-hint {
+      width: 100%;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      margin-bottom: 2px;
+    }
+
+    .ark-pattern-hint code {
+      color: var(--term-text, #e0e0e8);
+      opacity: 0.7;
+    }
+
+    .ark-patterns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      align-items: flex-end;
+    }
+
+    .ark-pattern-group {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ark-pattern-label {
+      display: block;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      margin-bottom: 4px;
+    }
+
+    .ark-pattern-input {
+      width: 100%;
+      font-family: var(--term-mono, 'JetBrains Mono', monospace);
+      font-size: 12px;
+    }
+
+    .ark-pattern-actions {
+      flex-shrink: 0;
+      padding-bottom: 2px;
+    }
+
     .ark-tree-container {
       flex: 1;
       min-height: 0;
@@ -291,7 +514,7 @@
 
     /* Source list items */
     .ark-source-item {
-      padding: 8px 12px;
+      padding: 4px 8px;
       cursor: pointer;
       border-left: 3px solid transparent;
       transition: background 0.15s;
@@ -306,11 +529,36 @@
       background: var(--term-bg-hover, #1a1a24);
     }
 
-    .ark-source-dir {
-      font-size: 12px;
+    .ark-source-name {
+      font-size: 13px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .ark-source-dir {
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--term-text-dim, #8888a0);
+    }
+
+    /* Remove button on list items */
+    .ark-remove-btn {
+      flex-shrink: 0;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .ark-source-item:hover .ark-remove-btn {
+      opacity: 0.4;
+    }
+
+    .ark-remove-btn:hover {
+      opacity: 1 !important;
+      color: #f87171;
     }
 
     .ark-source-meta {
@@ -414,10 +662,17 @@
     .ark-search-results.hidden { display: none; }
 
     .ark-search-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       padding: 6px 12px;
       font-size: 11px;
       color: var(--term-text-dim, #8888a0);
       border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-hits-btn {
+      font-size: 11px;
     }
 
     .ark-results-list {
@@ -429,6 +684,243 @@
     .ark-results-list > .view-list {
       display: flex;
       flex-direction: column;
+    }
+
+    /* Filter panel */
+    .ark-filter-panel {
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      background: var(--term-bg-elevated, #12121a);
+      padding: 8px 12px;
+    }
+
+    .ark-filter-panel.hidden { display: none; }
+
+    .ark-filter-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .ark-filter-field {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .ark-filter-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--term-text-dim, #8888a0);
+      opacity: 0.7;
+    }
+
+    .ark-filter-input {
+      font-family: var(--term-mono, 'JetBrains Mono', monospace);
+      font-size: 12px;
+    }
+
+    .ark-funnel-btn {
+      opacity: 0.5;
+      transition: opacity 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+
+    .ark-funnel-btn:hover {
+      opacity: 0.8;
+    }
+
+    .ark-funnel-btn.ark-funnel-active {
+      opacity: 1;
+      color: var(--term-accent, #E07A47);
+    }
+
+    /* File group results */
+    .ark-file-group {
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .ark-file-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.1s;
+    }
+
+    .ark-file-header:hover {
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .ark-file-expand {
+      font-size: 12px;
+      color: var(--term-text-dim, #8888a0);
+      flex-shrink: 0;
+      width: 16px;
+    }
+
+    .ark-file-path {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--term-accent, #E07A47);
+    }
+
+    .ark-file-score {
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .ark-file-more {
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
+
+    /* Chunk items under file groups */
+    .ark-chunk-item {
+      padding: 4px 12px 8px 34px;
+    }
+
+    .ark-chunk-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+      margin-bottom: 2px;
+    }
+
+    .ark-chunk-lines {
+      font-variant-numeric: tabular-nums;
+      opacity: 0.7;
+    }
+
+    .ark-chunk-score {
+      font-variant-numeric: tabular-nums;
+      opacity: 0.5;
+    }
+
+    .ark-chunk-preview {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--term-text, #e0e0e8);
+      opacity: 0.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* Filter bar */
+    .ark-filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      background: var(--term-bg-elevated, #12121a);
+    }
+
+    .ark-filter-divider {
+      width: 1px;
+      height: 18px;
+      background: var(--term-border, #2a2a3a);
+      margin: 0 4px;
+    }
+
+    .ark-filter-btn {
+      opacity: 0.35;
+      transition: opacity 0.15s, color 0.15s;
+    }
+
+    .ark-filter-btn:hover {
+      opacity: 0.7;
+    }
+
+    .ark-filter-btn.ark-filter-on {
+      opacity: 1;
+      color: var(--term-accent, #E07A47);
+    }
+
+    .ark-filter-btn.ark-filter-mixed {
+      opacity: 0.7;
+      color: #fbbf24;
+    }
+
+    .ark-filter-invert,
+    .ark-filter-reset {
+      opacity: 0.5;
+      transition: opacity 0.15s;
+    }
+
+    .ark-filter-invert:hover,
+    .ark-filter-reset:hover {
+      opacity: 1;
+    }
+
+    /* Source list items (shared) */
+    .ark-source-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ark-source-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ark-item-type-icon {
+      flex-shrink: 0;
+      font-size: 14px;
+      opacity: 0.5;
+    }
+
+    .ark-project-item .ark-item-type-icon {
+      color: var(--term-accent, #E07A47);
+      opacity: 0.7;
+    }
+
+    .ark-data-item .ark-item-type-icon {
+      opacity: 0.5;
+    }
+
+    /* Switch group on list items */
+    .ark-switch-group {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-shrink: 0;
+    }
+
+    .ark-switch-group sl-icon-button {
+      font-size: 14px;
+      opacity: 0.3;
+      transition: opacity 0.15s, color 0.15s;
+    }
+
+    .ark-switch-group sl-icon-button:hover {
+      opacity: 0.8;
+    }
+
+    .ark-switch-group sl-icon-button.ark-switch-on {
+      opacity: 1;
+      color: var(--term-accent, #E07A47);
+    }
+
+    .ark-switch-group sl-icon-button.ark-switch-disabled {
+      opacity: 0.1;
+      pointer-events: none;
     }
 
     /* Search result items */
@@ -469,4 +961,43 @@
       font-variant-numeric: tabular-nums;
     }
   </style>
+
+  <script>
+  (function() {
+    function setup() {
+      var handle = document.querySelector('.ark-resize-handle');
+      var panel = document.querySelector('.ark-sources');
+      if (!handle || !panel) return;
+
+      handle.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        handle.classList.add('ark-resizing');
+        var startX = e.clientX;
+        var startWidth = panel.offsetWidth;
+
+        function onMove(e) {
+          var newWidth = startWidth + (e.clientX - startX);
+          if (newWidth >= 180 && newWidth <= window.innerWidth * 0.5) {
+            panel.style.width = newWidth + 'px';
+          }
+        }
+
+        function onUp() {
+          handle.classList.remove('ark-resizing');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setup);
+    } else {
+      setup();
+    }
+  })();
+  </script>
 </template>

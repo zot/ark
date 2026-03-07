@@ -18,6 +18,10 @@ import (
 	"github.com/anthropics/microvec"
 )
 
+// Version is set by ldflags at build time from README.md.
+// Fallback value for plain `go build`.
+var Version = "dev"
+
 // DB is the main ark facade. It coordinates microfts2, microvec,
 // and the ark subdatabase.
 type DB struct {
@@ -484,6 +488,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 	}
 
 	return &StatusInfo{
+		Version:    Version,
 		Files:      len(stale),
 		Stale:      staleCount,
 		Missing:    len(missing),
@@ -498,12 +503,13 @@ func (db *DB) Status() (*StatusInfo, error) {
 
 // StatusInfo holds database status counts and LMDB map usage.
 type StatusInfo struct {
-	Files      int `json:"files"`
-	Stale      int `json:"stale"`
-	Missing    int `json:"missing"`
-	Unresolved int `json:"unresolved"`
-	Chunks     int `json:"chunks"`
-	Sources    int `json:"sources"`
+	Version    string `json:"version"`
+	Files      int    `json:"files"`
+	Stale      int    `json:"stale"`
+	Missing    int    `json:"missing"`
+	Unresolved int    `json:"unresolved"`
+	Chunks     int    `json:"chunks"`
+	Sources    int    `json:"sources"`
 	Strategies map[string]int `json:"strategies"`
 	MapUsed    int64 `json:"mapUsed"`
 	MapTotal   int64 `json:"mapTotal"`

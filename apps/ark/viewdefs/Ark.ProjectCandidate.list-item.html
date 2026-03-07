@@ -1,0 +1,12 @@
+<template>
+  <div class="ark-candidate-item" ui-class-ark-candidate-deselected="isDeselected()">
+    <div class="ark-candidate-row">
+      <sl-icon name="code-square" class="ark-item-type-icon"></sl-icon>
+      <div class="ark-source-info">
+        <div class="ark-source-name" ui-value="name"></div>
+        <div class="ark-source-dir" ui-value="displayPath()"></div>
+      </div>
+      <sl-icon-button name="x-lg" ui-event-click="toggleSelect()" class="ark-candidate-remove" label="Remove from selection"></sl-icon-button>
+    </div>
+  </div>
+</template>

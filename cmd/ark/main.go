@@ -594,7 +594,7 @@ func cmdServe(args []string) {
 func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	server := "not running"
 	if serverRunning {
-		server = "running"
+		server = "running (v" + status.Version + ")"
 	}
 	fmt.Printf("files: %d\nstale: %d\nmissing: %d\nunresolved: %d\n",
 		status.Files, status.Stale, status.Missing, status.Unresolved)
@@ -677,6 +677,10 @@ func cmdStatus(args []string) {
 			fatal(err)
 		}
 		printStatus(&status, true)
+		if status.Version != ark.Version {
+			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
+				status.Version, ark.Version)
+		}
 		return
 	}
 

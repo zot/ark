@@ -1,0 +1,31 @@
+<template>
+  <div class="ark-source-item ark-project-item" ui-event-click="selectMe()" ui-class-selected="isSelected()">
+    <div class="ark-source-row">
+      <sl-icon name="code-square" class="ark-item-type-icon"></sl-icon>
+      <div class="ark-source-info">
+        <div class="ark-source-name" ui-value="name"></div>
+        <sl-tooltip placement="right">
+          <span slot="content" ui-value="fullPath()"></span>
+          <div class="ark-source-dir" ui-value="displayPath()"></div>
+        </sl-tooltip>
+      </div>
+      <div class="ark-switch-group">
+        <sl-tooltip>
+          <span slot="content" ui-value="filesTooltip()"></span>
+          <sl-icon-button ui-event-click="toggleFiles()" ui-attr-name="filesIcon()" ui-class-ark-switch-on="filesIsOn()" ui-class-ark-switch-disabled="filesIsDisabled()" label="Toggle files"></sl-icon-button>
+        </sl-tooltip>
+        <sl-tooltip>
+          <span slot="content" ui-value="memoryTooltip()"></span>
+          <sl-icon-button ui-event-click="toggleMemory()" ui-attr-name="memoryIcon()" ui-class-ark-switch-on="memoryIsOn()" ui-class-ark-switch-disabled="memoryIsDisabled()" label="Toggle memory"></sl-icon-button>
+        </sl-tooltip>
+        <sl-tooltip>
+          <span slot="content" ui-value="chatsTooltip()"></span>
+          <sl-icon-button ui-event-click="toggleChats()" ui-attr-name="chatsIcon()" ui-class-ark-switch-on="chatsIsOn()" ui-class-ark-switch-disabled="chatsIsDisabled()" label="Toggle chats"></sl-icon-button>
+        </sl-tooltip>
+      </div>
+      <sl-tooltip content="Don't index this project">
+        <sl-icon-button name="dash-lg" ui-event-click="removeMe()" class="ark-remove-btn" label="Don't index"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+  </div>
+</template>

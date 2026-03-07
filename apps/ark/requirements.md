@@ -168,6 +168,37 @@ When honored, the ignore file's patterns fold into the tree — files
 excluded by an ignore rule show as `[✗]` with a tooltip indicating
 the source (e.g. "Excluded by .gitignore: *.log").
 
+## Source Search Filter
+
+Each source in the sidebar has a filter toggle (funnel icon) that
+controls whether it's included in search results. This lives on the
+source list items themselves — no separate chip row needed.
+
+### Display Rules
+
+- Filter toggles shown on each source list item
+- All sources start included (no filter active = search everything)
+- All/Invert buttons in sidebar header (visible when 2+ sources)
+
+### Toggle Behavior
+
+- Click funnel icon to exclude source from search (dims the icon)
+- Click again to re-include (fills the icon)
+- Toggling re-triggers current search immediately if results showing
+
+### Control Buttons
+
+- **All** (check2-all icon) — resets all sources to included
+- **Invert** (arrow-left-right icon) — flips every source's inclusion
+
+### CLI Flag Selection
+
+The app auto-picks `--source` vs `--not-source` based on which
+produces fewer flags:
+- If most sources are included, use `--not-source` for the excluded ones
+- If most are excluded, use `--source` for the included ones
+- If all included or all excluded, no source flag is sent
+
 ## Status Bar
 
 Bottom of the app. Shows:

@@ -11,9 +11,9 @@ The app shells out to `ark` CLI commands for all operations.
 
 ```
 +-------------------+------------------------------------------+
-| Sources      [+]  | ~/work/myproject          [Collapse] [⟳] |
+| Sources [✓][⇄][+] | ~/work/myproject          [Collapse] [⟳] |
 |-------------------|------------------------------------------|
-| > ~/work/myproj   | ├── [✓] src/                             |
+| > ~/work/myproj 🔍 | ├── [✓] src/                             |
 |   markdown  47/3/2 | │   ├── [✓] main.go                     |
 |                    | │   ├── [✓] server.go                    |
 |   ~/notes          | │   └── [?] utils_test.go                |
@@ -103,6 +103,7 @@ State icons have tooltips showing pattern resolution:
 | _missingPaths | table | Set of missing file paths |
 | _loaded | boolean | Root nodes have been loaded |
 | _loading | boolean | Currently loading nodes |
+| _searchIncluded | boolean | Whether this source is included in search filter (default true) |
 
 ### Ark.Node (tree file/directory node)
 
@@ -154,6 +155,10 @@ State icons have tooltips showing pattern resolution:
 | quickAddChat() | Pre-fill with Claude chat history path |
 | quickAddMemories() | Pre-fill with Claude memory path |
 | sourceHeaderText() | Return selectedSource.dir or "" |
+| showSourceFilter() | True when 2+ sources exist |
+| selectAllSources() | Set all sources to searchIncluded, re-search |
+| invertSourceSelection() | Flip all source search inclusion, re-search |
+| sourceFilterFlags() | Return --source/--not-source flags string for search |
 
 ### Ark.Source
 
@@ -173,6 +178,10 @@ State icons have tooltips showing pattern resolution:
 | removeMe() | Call ark:removeSource() with self.dir |
 | isLoading() | Return _loading |
 | notLoading() | Return not _loading |
+| toggleSearchInclude() | Flip _searchIncluded, re-search if results showing |
+| isSearchIncluded() | Return _searchIncluded |
+| isSearchExcluded() | Return not _searchIncluded |
+| searchFilterIcon() | Return "funnel-fill" if included, "funnel" if excluded |
 
 ### Ark.Node
 

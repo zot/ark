@@ -1,10 +1,9 @@
 <template>
-  <div class="ark-result-item">
-    <span class="ark-result-rank" ui-value="_rank"></span>
-    <sl-tooltip>
-      <span slot="content" ui-value="path"></span>
-      <span class="ark-result-path" ui-value="displayPath()"></span>
-    </sl-tooltip>
-    <span class="ark-result-score" ui-value="scoreText()"></span>
+  <div class="ark-chunk-item">
+    <div class="ark-chunk-meta">
+      <span class="ark-chunk-lines" ui-value="lineRange()"></span>
+      <span class="ark-chunk-score" ui-value="scoreText()"></span>
+    </div>
+    <div class="ark-chunk-preview" ui-value="previewText()" ui-class-hidden="hidePreview()"></div>
   </div>
 </template>
