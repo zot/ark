@@ -195,16 +195,15 @@ func Serve(dbPath string, opts ServeOpts) error {
 // If the UI assets aren't present or the server fails to start, it logs
 // a warning and continues — the UI is optional.
 func (srv *Server) startUIEngine(dbPath string) {
-	// Check if html/ exists — if not, UI assets haven't been installed
-	htmlDir := filepath.Join(dbPath, "html")
-	if _, err := os.Stat(htmlDir); os.IsNotExist(err) {
-		log.Printf("ui: no html/ directory in %s, skipping UI engine (run 'ark install' to set up)", dbPath)
-		return
-	}
-
+	// Project points to a staging area under ~/.ark/ so auto-install
+	// doesn't write skills into uncontrolled directories. Skills land
+	// in ~/.ark/staging/.claude/skills/ — ark init copies them to
+	// ~/.ark/skills/ where projects can symlink to them.
+	stagingDir := filepath.Join(dbPath, "staging")
 	rt, err := flib.New(flib.Config{
-		Dir:  dbPath,
-		Host: "127.0.0.1",
+		Dir:     dbPath,
+		Host:    "127.0.0.1",
+		Project: stagingDir,
 	})
 	if err != nil {
 		log.Printf("ui: failed to create runtime: %v", err)

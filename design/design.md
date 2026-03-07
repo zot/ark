@@ -52,13 +52,15 @@ permission end-run: indexed content emitted without per-file prompts.
 Content is read from disk at query time using offsets from microfts2.
 
 ### Embedded UI Engine
-The ui-engine (`github.com/zot/ui-engine/cli`) runs in-process
-alongside the ark API server. `cfg.Server.Dir` points to `~/.ark/`,
-where UI assets (html/, lua/, viewdefs/, apps/) coexist with ark
-data (data.mdb, ark.toml, ark.sock). The ui-engine manages its own
-`ui-port` and `mcp-port` files. If the ui-engine fails to start,
-the ark API server continues — UI is optional. On shutdown, the
-ui-engine shuts down before the LMDB env closes.
+Frictionless runs in-process via the `flib` facade package
+(`github.com/zot/frictionless/flib`), which wraps the ui-engine.
+`cfg.Server.Dir` points to `~/.ark/`, where UI assets (html/, lua/,
+viewdefs/, apps/) coexist with ark data (data.mdb, ark.toml,
+ark.sock). Two listeners: the unix socket serves both ark API and
+Frictionless `/api/*` routes (via `flib.RegisterAPI`); the HTTP port
+(written to `ui-port`) serves the browser UI. If the ui-engine fails
+to start, the ark API server continues — UI is optional. On shutdown,
+`flib.Shutdown()` runs before the LMDB env closes.
 
 ## Artifacts
 
