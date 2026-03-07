@@ -5,10 +5,10 @@ BUILDFLAGS := -buildvcs=false
 .PHONY: build install test clean
 
 build:
-	go build $(BUILDFLAGS) $(LDFLAGS) ./...
+	go build $(BUILDFLAGS) $(LDFLAGS) -o bin/ark ./cmd/ark
 
 install: build
-	go build $(BUILDFLAGS) $(LDFLAGS) -o ~/.ark/ark ./cmd/ark
+	cp bin/ark ~/.ark/ark
 
 test:
 	go test $(BUILDFLAGS) ./...

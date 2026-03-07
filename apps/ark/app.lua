@@ -1128,45 +1128,68 @@ end
 function Ark:buildFilterFlags()
     local flags = {}
 
-    -- Source filter buttons → filter-files patterns
-    local allDirs = {}
-    local enabledDirs = {}
+    -- Source filter: uses --filter-files when any source needs sub-filtering,
+    -- otherwise uses --exclude-files for fully disabled sources.
+    -- Because --filter-files is a positive filter (only matching paths survive),
+    -- ALL enabled sources must be listed when any --filter-files is emitted.
+    local hasPartial = false  -- any Claude source with only memory or only chats
 
     for _, p in ipairs(self._projects or {}) do
-        if p._fileSource then
-            table.insert(allDirs, p._fileSource.dir)
-            if p.filesOn then
-                table.insert(enabledDirs, p._fileSource.dir)
-            end
-        end
         if p._claudeSource then
-            table.insert(allDirs, p._claudeSource.dir)
-            if p.memoryOn or p.chatsOn then
-                table.insert(enabledDirs, p._claudeSource.dir)
+            if (p.memoryOn and not p.chatsOn) or (p.chatsOn and not p.memoryOn) then
+                hasPartial = true
+                break
             end
         end
     end
 
-    for _, d in ipairs(self._dataSources or {}) do
-        table.insert(allDirs, d._source.dir)
-        if d.dataOn then
-            table.insert(enabledDirs, d._source.dir)
-        end
-    end
+    if hasPartial then
+        -- Positive filter mode: list every enabled source explicitly
+        local filterPatterns = {}
 
-    local disabledCount = #allDirs - #enabledDirs
-    if disabledCount > 0 and #enabledDirs > 0 then
-        if disabledCount <= #enabledDirs then
-            local enabledSet = {}
-            for _, dir in ipairs(enabledDirs) do enabledSet[dir] = true end
-            for _, dir in ipairs(allDirs) do
-                if not enabledSet[dir] then
-                    table.insert(flags, '--exclude-files "' .. dir .. '/*"')
+        for _, p in ipairs(self._projects or {}) do
+            if p._fileSource and p.filesOn then
+                table.insert(filterPatterns, p._fileSource.dir .. "/**")
+            end
+            if p._claudeSource then
+                local cdir = p._claudeSource.dir
+                if p.memoryOn and p.chatsOn then
+                    table.insert(filterPatterns, cdir .. "/**")
+                elseif p.memoryOn then
+                    table.insert(filterPatterns, cdir .. "/memory/**")
+                elseif p.chatsOn then
+                    table.insert(filterPatterns, cdir .. "/**")
+                    table.insert(flags, '--exclude-files "' .. cdir .. '/memory/**"')
+                end
+                -- Both off: omit → filtered out
+            end
+        end
+
+        for _, d in ipairs(self._dataSources or {}) do
+            if d.dataOn then
+                table.insert(filterPatterns, d._source.dir .. "/**")
+            end
+        end
+
+        for _, pat in ipairs(filterPatterns) do
+            table.insert(flags, '--filter-files "' .. pat .. '"')
+        end
+    else
+        -- Simple exclude mode: only fully disabled sources
+        for _, p in ipairs(self._projects or {}) do
+            if p._fileSource and not p.filesOn then
+                table.insert(flags, '--exclude-files "' .. p._fileSource.dir .. '/**"')
+            end
+            if p._claudeSource then
+                if not p.memoryOn and not p.chatsOn then
+                    table.insert(flags, '--exclude-files "' .. p._claudeSource.dir .. '/**"')
                 end
             end
-        else
-            for _, dir in ipairs(enabledDirs) do
-                table.insert(flags, '--filter-files "' .. dir .. '/*"')
+        end
+
+        for _, d in ipairs(self._dataSources or {}) do
+            if not d.dataOn then
+                table.insert(flags, '--exclude-files "' .. d._source.dir .. '/**"')
             end
         end
     end
@@ -1227,7 +1250,8 @@ function Ark:onSearchInput()
 end
 
 function Ark:search()
-    if self.searchQuery == "" then return end
+    local q = (self.searchQuery:match("^%s*(.-)%s*$") or "")
+    if q == "" then return end
     self._lastSearchedQuery = self.searchQuery
     self._searching = true
     -- Clear in-place to preserve table reference for ViewList diffing
@@ -1247,7 +1271,7 @@ function Ark:search()
     local k = hpf == 0 and 100 or 20 * hpf
     if k > 100 then k = 100 end
 
-    local cmd = 'search ' .. flag .. ' "' .. self.searchQuery .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
+    local cmd = 'search ' .. flag .. ' "' .. q .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
     if filterFlags ~= "" then
         cmd = cmd .. " " .. filterFlags
     end
@@ -1256,7 +1280,7 @@ function Ark:search()
     -- (straycat: process each line as it arrives, no gmatch over the whole output)
     local dbFlag = '--dir "' .. DB_PATH .. '"'
     local fullCmd = '"' .. ARK_BIN .. '" search ' .. dbFlag .. ' ' .. flag
-        .. ' "' .. self.searchQuery .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
+        .. ' "' .. q .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
     if filterFlags ~= "" then
         fullCmd = fullCmd .. " " .. filterFlags
     end

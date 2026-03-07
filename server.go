@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	uicli "github.com/zot/ui-engine/cli"
+	"github.com/zot/frictionless/flib"
 )
 
 // Server is an HTTP server on a Unix domain socket.
@@ -28,7 +28,7 @@ type Server struct {
 	listener net.Listener
 	pidPath  string
 	noScan   bool
-	uiServer *uicli.Server
+	uiRuntime *flib.Runtime
 }
 
 // ServeOpts controls server behavior.
@@ -118,9 +118,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	go func() {
 		sig := <-sigCh
 		log.Printf("received %s, shutting down", sig)
-		if srv.uiServer != nil {
+		if srv.uiRuntime != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			srv.uiServer.Shutdown(ctx)
+			srv.uiRuntime.Shutdown(ctx)
 			cancel()
 		}
 		listener.Close()
@@ -154,6 +154,13 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	// Set up routes
 	mux := http.NewServeMux()
+
+	// Mount Frictionless API routes (/api/*, /wait, /state, /variables)
+	// on the same unix socket — no separate MCP port needed.
+	if srv.uiRuntime != nil {
+		srv.uiRuntime.RegisterAPI(mux)
+	}
+
 	mux.HandleFunc("POST /search", srv.handleSearch)
 	mux.HandleFunc("POST /add", srv.handleAdd)
 	mux.HandleFunc("POST /remove", srv.handleRemove)
@@ -184,7 +191,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	return http.Serve(listener, mux)
 }
 
-// startUIEngine configures and starts the embedded ui-engine server.
+// startUIEngine configures and starts the embedded Frictionless runtime.
 // If the UI assets aren't present or the server fails to start, it logs
 // a warning and continues — the UI is optional.
 func (srv *Server) startUIEngine(dbPath string) {
@@ -195,23 +202,28 @@ func (srv *Server) startUIEngine(dbPath string) {
 		return
 	}
 
-	cfg := uicli.DefaultConfig()
-	cfg.Server.Dir = dbPath
-	cfg.Server.Port = 0 // auto-select available port
-	cfg.Server.Host = "127.0.0.1"
-	cfg.Lua.Enabled = true
-	cfg.Lua.Hotload = true
-
-	uiSrv := uicli.NewServer(cfg)
-	srv.uiServer = uiSrv
+	rt, err := flib.New(flib.Config{
+		Dir:  dbPath,
+		Host: "127.0.0.1",
+	})
+	if err != nil {
+		log.Printf("ui: failed to create runtime: %v", err)
+		return
+	}
+	if err := rt.Configure(); err != nil {
+		log.Printf("ui: configure failed: %v", err)
+		return
+	}
+	srv.uiRuntime = rt
 
 	go func() {
-		if err := uiSrv.Start(); err != nil {
-			log.Printf("ui: engine failed to start: %v", err)
-			srv.uiServer = nil
+		if _, err := rt.Start(); err != nil {
+			log.Printf("ui: start failed: %v", err)
+			srv.uiRuntime = nil
+			return
 		}
+		log.Printf("ui: engine started (dir: %s)", dbPath)
 	}()
-	log.Printf("ui: engine starting (dir: %s)", dbPath)
 }
 
 func PidFilePath(dbPath string) string {

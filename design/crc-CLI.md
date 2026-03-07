@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -19,7 +19,8 @@ dispatches operations via proxy or cold-start.
 - CleanStaleSocket(dbPath): if connect fails, remove socket file
 - Each subcommand: init, add, remove, scan, refresh, search, serve,
   status, files, stale, missing, dismiss, config, unresolved, resolve,
-  tag (with sub-subcommands: list, counts, files)
+  tag (with sub-subcommands: list, counts, files),
+  bundle, ls, cat, cp
 - cmdConfig: dispatches to show (default), add-source, remove-source,
   add-include, add-exclude, remove-pattern, show-why sub-subcommands.
   Config subcommands with positional args + optional flags use
@@ -51,9 +52,18 @@ dispatches operations via proxy or cold-start.
   run, display, event, checkpoint, audit, status, browser.
   Each subcommand sends HTTP requests to the mcp-port.
   Replaces the `.ui/mcp` shell script — one binary, no separate script.
-- cmdInstall: extract embedded UI assets (html/, apps/ark/) to dbPath,
-  create lua/ and viewdefs/ dirs, run linkapp to wire symlinks.
-  Refreshes assets when binary is updated.
+- cmdInstall: extract bundled UI assets (html/, apps/ark/) to dbPath
+  using bundle.ExtractBundle, create lua/ and viewdefs/ dirs, run
+  linkapp to wire symlinks. Refreshes assets when binary is updated.
+- cmdBundle: graft a directory onto a binary as a zip appendix.
+  Calls bundle.CreateBundle(src, dir, output). Build-time command.
+- cmdLs: list embedded assets. Calls bundle.ListFilesWithInfo,
+  prints one file per line (symlinks show target). Exit 1 if not bundled.
+- cmdCat: print an embedded file to stdout. Calls bundle.ReadFile.
+  Exit 1 if not bundled.
+- cmdCp: extract embedded files matching a glob to a directory.
+  Matches against basename and full path. Preserves permissions,
+  recreates symlinks. Exit 1 if not bundled or no matches.
 
 ## Collaborators
 - Server: proxy target when server is running

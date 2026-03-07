@@ -449,9 +449,9 @@
 - **R292:** (inferred) `ark ui` subcommands replace the `.ui/mcp` shell script — no separate script needed
 
 ### ark install — UI Assets
-- **R276:** The ark app (apps/ark/) is embedded in the binary via `//go:embed`
-- **R277:** The ui-engine static site (html/) is embedded in the binary via `//go:embed`
-- **R278:** `ark install` extracts embedded UI assets to `~/.ark/` (html/, apps/ark/)
+- **R276:** UI assets are embedded in the binary via zip-graft (ui-engine's bundle system), not `//go:embed`
+- **R277:** The bundle contains the full UI stack: ui-engine static site (html/), frictionless assets, and ark's own app (apps/ark/)
+- **R278:** `ark install` extracts embedded UI assets to `~/.ark/` (html/, apps/ark/) using `bundle.ExtractBundle`
 - **R279:** `ark install` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
 - **R280:** Updating the ark binary and running `ark install` refreshes the UI assets
 - **R281:** (inferred) `ark install` creates the apps/, lua/, viewdefs/ directories if they don't exist
@@ -459,3 +459,48 @@
 ### No MCP Server for Ark
 - **R282:** Ark does not register as an MCP server — its interface is the CLI
 - **R283:** Agents drive the UI via `ark ui` subcommands (e.g. `~/.ark/ark ui run '...'`) — no separate shell script or MCP registration needed
+
+## Feature: Bundle and Asset Commands
+**Source:** specs/bundle-assets.md
+
+### Bundle Mechanism
+- **R293:** Assets are grafted onto the ark binary as a zip appendix using ui-engine's bundle system
+- **R294:** The zip-graft approach allows the Makefile to layer assets from multiple sources without recompilation
+- **R295:** Ark imports ui-engine's exported bundle functions directly (`cli.IsBundled`, `cli.BundleListFilesWithInfo`, `cli.BundleReadFile`)
+- **R296:** `bundle.CreateBundle` and `bundle.ExtractBundle` must be re-exported from ui-engine's `cli/exports.go`
+
+### ark bundle
+- **R297:** `ark bundle -o <output> [-src <binary>] <dir>` grafts a directory onto a binary as a zip appendix
+- **R298:** `-o` (output path) is required
+- **R299:** `-src` specifies the source binary; default is the current executable
+- **R300:** The positional argument is the directory to bundle; required
+- **R301:** Both source binary and directory must exist — error if not
+- **R302:** On success, prints "Created bundled binary: <output>"
+- **R303:** (inferred) This is a build-time command used by the Makefile, not by end users
+
+### ark ls
+- **R304:** `ark ls` lists embedded assets in the running binary
+- **R305:** If the binary is not bundled, print an error and exit 1
+- **R306:** One file per line; symlinks show as `path -> target`
+
+### ark cat
+- **R307:** `ark cat <file>` prints an embedded file's contents to stdout
+- **R308:** If the binary is not bundled, print an error and exit 1
+- **R309:** Output is raw bytes — no trailing newline added
+
+### ark cp
+- **R310:** `ark cp <pattern> <dest-dir>` extracts embedded files matching a glob pattern
+- **R311:** If the binary is not bundled, print an error and exit 1
+- **R312:** Pattern matches against both basename and full path
+- **R313:** Creates destination directories as needed
+- **R314:** Preserves file permissions from the bundle
+- **R315:** Recreates symlinks as symlinks (not copies)
+- **R316:** Removes existing files/symlinks before writing (allows overwrite)
+- **R317:** Reports each copied file to stdout
+- **R318:** If no files match the pattern, print an error and exit 1
+
+### Makefile Asset Pipeline
+- **R319:** The build pipeline extracts frictionless assets (which include ui-engine assets) into a cache directory
+- **R320:** Ark's own assets (apps/ark/) are layered on top of the cache
+- **R321:** The ark Go binary is built, then `ark bundle` grafts the cache onto it
+- **R322:** The result is one binary containing the full UI stack

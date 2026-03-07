@@ -22,6 +22,8 @@ import (
 
 	"ark"
 	"microfts2"
+
+	cli "github.com/zot/ui-engine/cli"
 )
 
 // arkDir is the ark directory, set from --dir flag (global, parsed before subcommand).
@@ -65,50 +67,58 @@ func main() {
 	args := filtered[1:]
 
 	switch cmd {
-	case "init":
-		cmdInit(args)
 	case "add":
 		cmdAdd(args)
-	case "remove":
-		cmdRemove(args)
-	case "scan":
-		cmdScan(args)
+	case "bundle":
+		cmdBundle(args)
+	case "cat":
+		cmdBundleCat(args)
+	case "chunk-jsonl":
+		cmdChunkJSONL(args)
+	case "config":
+		cmdConfig(args)
+	case "cp":
+		cmdBundleCp(args)
+	case "dismiss":
+		cmdDismiss(args)
+	case "fetch":
+		cmdFetch(args)
+	case "files":
+		cmdFiles(args)
+	case "grams":
+		cmdGrams(args)
+	case "init":
+		cmdInit(args)
+	case "ls":
+		cmdBundleLs(args)
+	case "missing":
+		cmdMissing(args)
 	case "refresh":
 		cmdRefresh(args)
+	case "remove":
+		cmdRemove(args)
+	case "resolve":
+		cmdResolve(args)
+	case "scan":
+		cmdScan(args)
 	case "search":
 		cmdSearch(args)
 	case "serve":
 		cmdServe(args)
-	case "status":
-		cmdStatus(args)
-	case "files":
-		cmdFiles(args)
-	case "stale":
-		cmdStale(args)
-	case "missing":
-		cmdMissing(args)
-	case "dismiss":
-		cmdDismiss(args)
-	case "config":
-		cmdConfig(args)
-	case "unresolved":
-		cmdUnresolved(args)
-	case "resolve":
-		cmdResolve(args)
-	case "tag":
-		cmdTag(args)
-	case "fetch":
-		cmdFetch(args)
-	case "stop":
-		cmdStop(args)
-	case "grams":
-		cmdGrams(args)
 	case "sources":
 		cmdSources(args)
-	case "chunk-jsonl":
-		cmdChunkJSONL(args)
+	case "stale":
+		cmdStale(args)
+	case "status":
+		cmdStatus(args)
+	case "stop":
+		cmdStop(args)
+	case "tag":
+		cmdTag(args)
 	case "ui":
 		cmdUI(args)
+	case "unresolved":
+		cmdUnresolved(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
@@ -120,28 +130,33 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: ark <command> [options]
 
 Commands:
-  init        Create a new database
   add         Add files to the index
-  remove      Remove files from the index
-  scan        Walk directories, index new files
-  refresh     Re-index stale files
-  search      Search the index
-  serve       Start the server
-  status      Show database status
-  files       List indexed files
-  stale       List stale files
-  missing     List missing files
-  dismiss     Dismiss missing files
+  bundle      Graft a directory onto a binary as a zip appendix (build-time)
+  cat         Print an embedded file to stdout
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
               remove-pattern, show-why, add-strategy
-  grams       Show trigrams for a query (active/inactive, frequency)
-  unresolved  List unresolved files
-  resolve     Dismiss unresolved files by pattern
-  tag         Tag operations (list, counts, files)
+  cp          Extract embedded files matching a glob pattern
+  dismiss     Dismiss missing files
   fetch       Return full contents of an indexed file
+  files       List indexed files
+  grams       Show trigrams for a query (active/inactive, frequency)
+  init        Create a new database
+  ls          List embedded assets
+  missing     List missing files
+  refresh     Re-index stale files
+  remove      Remove files from the index
+  resolve     Dismiss unresolved files by pattern
+  scan        Walk directories, index new files
+  search      Search the index
+  serve       Start the server
+  sources     Manage source directories
+  stale       List stale files
+  status      Show database status
   stop        Stop the running server
-  ui          Open the browser UI`)
+  tag         Tag operations (list, counts, files)
+  ui          UI operations (run, display, event, checkpoint, ...)
+  unresolved  List unresolved files`)
 }
 
 func defaultDB() string {
@@ -1319,6 +1334,526 @@ func cmdStop(args []string) {
 
 // CRC: crc-CLI.md
 func cmdUI(args []string) {
+	if len(args) == 0 {
+		cmdUIBrowser(nil)
+		return
+	}
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "audit":
+		cmdUIAudit(subArgs)
+	case "browser":
+		cmdUIBrowser(subArgs)
+	case "checkpoint":
+		cmdUICheckpoint(subArgs)
+	case "display":
+		cmdUIDisplay(subArgs)
+	case "event":
+		cmdUIEvent(subArgs)
+	case "linkapp":
+		cmdUILinkapp(subArgs)
+	case "patterns":
+		cmdUIPatterns(subArgs)
+	case "progress":
+		cmdUIProgress(subArgs)
+	case "run":
+		cmdUIRun(subArgs)
+	case "state":
+		cmdUIState(subArgs)
+	case "status":
+		cmdUIStatus(subArgs)
+	case "theme":
+		cmdUITheme(subArgs)
+	case "update":
+		cmdUIUpdate(subArgs)
+	case "variables":
+		cmdUIVariables(subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, `unknown ui subcommand: %s
+
+Usage: ark ui [subcommand]
+
+Subcommands:
+  (none)                     open browser to UI
+  audit <app>                run code quality audit
+  browser                    open browser to current session
+  checkpoint <cmd> <app>     manage app checkpoints
+  display <app>              display app in the browser
+  event                      wait for next UI event (120s timeout)
+  linkapp add|remove <app>   manage app symlinks
+  patterns                   list available patterns
+  progress <app> <pct> <msg> report build progress
+  run '<lua>'                execute Lua code in UI session
+  state                      get current session state
+  status                     ui-engine server status
+  theme list|classes|audit   theme management
+  update [-t]                smart update or version check
+  variables                  get current variable values
+`, sub)
+		os.Exit(1)
+	}
+}
+
+// uiClient returns an http.Client connected to the ark unix socket.
+// Exits if the server isn't running.
+func uiClient() *http.Client {
+	client := serverClient(arkDir)
+	if client == nil {
+		fmt.Fprintln(os.Stderr, "UI not available — server may not be running")
+		os.Exit(1)
+	}
+	return client
+}
+
+// uiRequest sends an HTTP request to the Frictionless API via the unix socket.
+func uiRequest(method, path string, jsonBody string) []byte {
+	client := uiClient()
+
+	var body io.Reader
+	if jsonBody != "" {
+		body = strings.NewReader(jsonBody)
+	}
+
+	req, err := http.NewRequest(method, "http://ark"+path, body)
+	if err != nil {
+		fatal(err)
+	}
+	if jsonBody != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "UI not available — server may not be running")
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fatal(err)
+	}
+	return data
+}
+
+func cmdUIRun(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark ui run '<lua code>'")
+		os.Exit(1)
+	}
+	code := args[0]
+	body, _ := json.Marshal(map[string]string{"code": code})
+	result := uiRequest("POST", "/api/ui_run", string(body))
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+func cmdUIDisplay(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark ui display <app-name>")
+		os.Exit(1)
+	}
+	body, _ := json.Marshal(map[string]string{"name": args[0]})
+	result := uiRequest("POST", "/api/ui_display", string(body))
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+func cmdUIEvent(args []string) {
+	client := uiClient()
+	for {
+		req, err := http.NewRequest("GET", "http://ark/wait?timeout=120", nil)
+		if err != nil {
+			fatal(err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			// Connection failed — server may have restarted
+			time.Sleep(1 * time.Second)
+			client = uiClient()
+			continue
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		out := strings.TrimSpace(string(data))
+
+		if out == "" {
+			continue
+		}
+		// On server_reconfigured or transient responses, retry
+		if strings.Contains(out, "server_reconfigured") || strings.Contains(out, "No active session") {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		fmt.Println(out)
+		return
+	}
+}
+
+func cmdUICheckpoint(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, `usage: ark ui checkpoint <cmd> <app> [msg]
+
+Commands:
+  save <app> [msg]       save a checkpoint
+  list <app>             list checkpoints
+  rollback <app> [n]     rollback to nth checkpoint (default: undo last)
+  diff <app> [n]         diff against nth checkpoint (default: 1)
+  clear <app>            reset to baseline
+  baseline <app>         set current state as baseline
+  count <app>            count checkpoints
+  update <app> [msg]     save to updates branch
+  local <app> [msg]      save to local branch`)
+		os.Exit(1)
+	}
+
+	cmd := args[0]
+	app := args[1]
+	var msg string
+	if len(args) > 2 {
+		msg = args[2]
+	}
+
+	fossil := fossilBin()
+	if fossil == "" {
+		// Crank-handle: output a prompt for the agent to install fossil
+		fmt.Printf(`Fossil is not installed. To set up checkpoints, run these commands:
+
+mkdir -p ~/.claude/bin
+# Download fossil for your platform:
+#   Linux x86_64:
+curl -sL "https://fossil-scm.org/home/uv/fossil-linux-x64-2.27.tar.gz" | tar -xzf - -C ~/.claude/bin fossil
+#   macOS ARM:
+# curl -sL "https://fossil-scm.org/home/uv/fossil-mac-arm-2.27.tar.gz" | tar -xzf - -C ~/.claude/bin fossil
+#   macOS x86_64:
+# curl -sL "https://fossil-scm.org/home/uv/fossil-mac-x64-2.27.tar.gz" | tar -xzf - -C ~/.claude/bin fossil
+chmod +x ~/.claude/bin/fossil
+
+Then re-run: ark ui checkpoint %s %s
+`, cmd, app)
+		os.Exit(1)
+	}
+
+	appDir := filepath.Join(arkDir, "apps", app)
+	if _, err := os.Stat(appDir); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "App not found: %s\n", app)
+		os.Exit(1)
+	}
+
+	repo := filepath.Join(appDir, "checkpoint.fossil")
+
+	switch cmd {
+	case "save":
+		checkpointSave(fossil, appDir, repo, msg)
+	case "list":
+		checkpointList(fossil, appDir, repo)
+	case "rollback":
+		checkpointRollback(fossil, appDir, repo, msg) // msg is used as "n"
+	case "diff":
+		checkpointDiff(fossil, appDir, repo, msg) // msg is used as "n"
+	case "clear":
+		checkpointBaseline(fossil, appDir, repo)
+	case "baseline":
+		checkpointBaseline(fossil, appDir, repo)
+	case "count":
+		checkpointCount(fossil, appDir, repo)
+	case "update":
+		checkpointUpdate(fossil, appDir, repo, msg)
+	case "local":
+		checkpointLocal(fossil, appDir, repo, msg)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown checkpoint command: %s\n", cmd)
+		os.Exit(1)
+	}
+}
+
+// fossilBin returns the path to the fossil binary, or "" if not found.
+func fossilBin() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	bin := filepath.Join(home, ".claude", "bin", "fossil")
+	if _, err := os.Stat(bin); err != nil {
+		return ""
+	}
+	return bin
+}
+
+// fossilRun executes a fossil command in the given directory, returning combined output.
+func fossilRun(fossil, dir string, args ...string) (string, error) {
+	cmd := exec.Command(fossil, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// fossilInit initializes a new checkpoint repo for an app.
+func fossilInit(fossil, appDir, repo string) {
+	fossilRun(fossil, appDir, "init", repo, "--project-name", filepath.Base(appDir))
+	fossilRun(fossil, appDir, "open", repo, "--force")
+	fossilRun(fossil, appDir, "settings", "ignore-glob", ".#*,.*~,*~,checkpoint.fossil,.fslckout")
+	fossilRun(fossil, appDir, "add", ".")
+}
+
+func checkpointSave(fossil, appDir, repo, msg string) {
+	if msg == "" {
+		msg = "checkpoint"
+	}
+
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fossilInit(fossil, appDir, repo)
+		if msg == "checkpoint" {
+			msg = "initial state"
+		}
+		fossilRun(fossil, appDir, "commit", "-m", msg, "--no-warnings")
+		fmt.Printf("Created checkpoint: %s\n", msg)
+	} else {
+		fossilRun(fossil, appDir, "addremove")
+		changes, _ := fossilRun(fossil, appDir, "changes", "--quiet")
+		if strings.TrimSpace(changes) == "" {
+			fmt.Println("No changes to checkpoint")
+			return
+		}
+		fossilRun(fossil, appDir, "commit", "-m", msg, "--no-warnings")
+		fmt.Printf("Saved checkpoint: %s\n", msg)
+	}
+	// Notify UI of checkpoint change
+	notifyCheckpointChange()
+}
+
+func checkpointList(fossil, appDir, repo string) {
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fmt.Printf("No checkpoints for %s\n", filepath.Base(appDir))
+		return
+	}
+	out, _ := fossilRun(fossil, appDir, "timeline", "-t", "ci", "--oneline")
+	// Remove last 3 lines (fossil footer)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) > 3 {
+		lines = lines[:len(lines)-3]
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+}
+
+func checkpointRollback(fossil, appDir, repo, n string) {
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "No checkpoints for %s\n", filepath.Base(appDir))
+		os.Exit(1)
+	}
+	if n == "" {
+		out, _ := fossilRun(fossil, appDir, "undo")
+		fmt.Print(out)
+	} else {
+		out, _ := fossilRun(fossil, appDir, "timeline", "-n", "100", "-t", "ci", "--oneline")
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		// Filter out footer/baseline lines
+		var commits []string
+		for _, l := range lines {
+			if strings.HasPrefix(l, "---") || strings.HasPrefix(l, "+++") || strings.Contains(l, "=== BASELINE ===") {
+				continue
+			}
+			commits = append(commits, l)
+		}
+		idx, err := strconv.Atoi(n)
+		if err != nil || idx < 1 || idx > len(commits) {
+			fmt.Fprintf(os.Stderr, "Checkpoint %s not found\n", n)
+			os.Exit(1)
+		}
+		hash := strings.Fields(commits[idx-1])[0]
+		fossilRun(fossil, appDir, "checkout", hash, "--force")
+	}
+	fmt.Println("Rolled back to checkpoint")
+}
+
+func checkpointDiff(fossil, appDir, repo, n string) {
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "No checkpoints for %s\n", filepath.Base(appDir))
+		os.Exit(1)
+	}
+	if n == "" {
+		n = "1"
+	}
+	out, _ := fossilRun(fossil, appDir, "timeline", "-t", "ci", "--oneline")
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	// Remove last 3 lines (footer)
+	if len(lines) > 3 {
+		lines = lines[:len(lines)-3]
+	}
+	idx, err := strconv.Atoi(n)
+	if err != nil || idx < 1 || idx > len(lines) {
+		fmt.Fprintf(os.Stderr, "Checkpoint %s not found\n", n)
+		os.Exit(1)
+	}
+	hash := strings.Fields(lines[idx-1])[0]
+	out, _ = fossilRun(fossil, appDir, "diff", "--from", hash)
+	fmt.Print(out)
+}
+
+func checkpointBaseline(fossil, appDir, repo string) {
+	app := filepath.Base(appDir)
+	bundle := filepath.Join(appDir, ".preserved-bundle")
+	hasBundle := false
+
+	if _, err := os.Stat(repo); err == nil {
+		// Export updates and local branches into a bundle before destroying
+		for _, branch := range []string{"updates", "local"} {
+			branchList, _ := fossilRun(fossil, appDir, "branch", "list")
+			if strings.Contains(branchList, branch) {
+				_, err := fossilRun(fossil, appDir, "bundle", "export", bundle, "--branch", branch, "--standalone")
+				if err == nil {
+					hasBundle = true
+				}
+			}
+		}
+		fossilRun(fossil, appDir, "close", "--force")
+		os.Remove(repo)
+		os.Remove(filepath.Join(appDir, ".fslckout"))
+	}
+
+	// Create fresh repo with current state as baseline
+	fossilInit(fossil, appDir, repo)
+	fossilRun(fossil, appDir, "commit", "-m", "=== BASELINE ===", "--no-warnings")
+
+	// Restore preserved branches
+	if hasBundle {
+		if _, err := os.Stat(bundle); err == nil {
+			fossilRun(fossil, appDir, "bundle", "import", bundle, "--force", "--publish")
+			os.Remove(bundle)
+			fmt.Printf("Baseline set for %s (preserved branches restored)\n", app)
+			notifyCheckpointChange()
+			return
+		}
+	}
+	fmt.Printf("Baseline set for %s\n", app)
+	notifyCheckpointChange()
+}
+
+func checkpointCount(fossil, appDir, repo string) {
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fmt.Println("0")
+		return
+	}
+	out, _ := fossilRun(fossil, appDir, "timeline", "-t", "ci", "--oneline", "-b", "trunk")
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || strings.Contains(line, "=== BASELINE ===") ||
+			strings.Contains(line, "initial empty check-in") ||
+			strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		count++
+	}
+	fmt.Println(count)
+}
+
+func checkpointUpdate(fossil, appDir, repo, msg string) {
+	if msg == "" {
+		msg = "update"
+	}
+
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fossilInit(fossil, appDir, repo)
+		fossilRun(fossil, appDir, "commit", "-m", "=== BASELINE ===", "--no-warnings")
+		fossilRun(fossil, appDir, "commit", "--branch", "updates", "-m", msg, "--allow-empty", "--no-warnings")
+		fossilRun(fossil, appDir, "update", "trunk")
+	} else {
+		// Check for uncommitted checkpoints
+		countOut, _ := fossilRun(fossil, appDir, "timeline", "-t", "ci", "--oneline", "-b", "trunk")
+		count := 0
+		for _, line := range strings.Split(countOut, "\n") {
+			if line == "" || strings.Contains(line, "=== BASELINE ===") ||
+				strings.Contains(line, "initial empty check-in") ||
+				strings.HasPrefix(line, "+++ ") {
+				continue
+			}
+			count++
+		}
+		if count > 0 {
+			fmt.Fprintf(os.Stderr, "Error: %d checkpoint(s) exist. Consolidate before updating.\n", count)
+			os.Exit(1)
+		}
+		// Switch to updates branch (create if needed), commit, switch back
+		_, err := fossilRun(fossil, appDir, "update", "updates")
+		if err != nil {
+			fossilRun(fossil, appDir, "addremove")
+			fossilRun(fossil, appDir, "commit", "--branch", "updates", "-m", msg, "--allow-empty", "--no-warnings")
+		} else {
+			fossilRun(fossil, appDir, "addremove")
+			fossilRun(fossil, appDir, "commit", "-m", msg, "--allow-empty", "--no-warnings")
+		}
+		fossilRun(fossil, appDir, "update", "trunk")
+	}
+	fmt.Printf("Update checkpoint: %s\n", msg)
+}
+
+func checkpointLocal(fossil, appDir, repo, msg string) {
+	if msg == "" {
+		msg = "local"
+	}
+
+	if _, err := os.Stat(repo); os.IsNotExist(err) {
+		fossilInit(fossil, appDir, repo)
+		fossilRun(fossil, appDir, "commit", "-m", "=== BASELINE ===", "--no-warnings")
+		fossilRun(fossil, appDir, "commit", "--branch", "local", "-m", msg, "--allow-empty", "--no-warnings")
+		fossilRun(fossil, appDir, "update", "trunk")
+	} else {
+		_, err := fossilRun(fossil, appDir, "update", "local")
+		if err != nil {
+			fossilRun(fossil, appDir, "addremove")
+			fossilRun(fossil, appDir, "commit", "--branch", "local", "-m", msg, "--allow-empty", "--no-warnings")
+		} else {
+			fossilRun(fossil, appDir, "addremove")
+			fossilRun(fossil, appDir, "commit", "-m", msg, "--allow-empty", "--no-warnings")
+		}
+		fossilRun(fossil, appDir, "update", "trunk")
+	}
+	fmt.Printf("Local checkpoint: %s\n", msg)
+}
+
+// notifyCheckpointChange tells the UI to refresh checkpoint state.
+func notifyCheckpointChange() {
+	// Best-effort via unix socket — ignore errors
+	client := serverClient(arkDir)
+	if client == nil {
+		return
+	}
+	body, _ := json.Marshal(map[string]string{
+		"code": "if appConsole then appConsole._checkpointsTime = 0 end",
+	})
+	req, err := http.NewRequest("POST", "http://ark/api/ui_run", strings.NewReader(string(body)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
+}
+
+func cmdUIAudit(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark ui audit <app-name>")
+		os.Exit(1)
+	}
+	body, _ := json.Marshal(map[string]string{"name": args[0]})
+	result := uiRequest("POST", "/api/ui_audit", string(body))
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+func cmdUIStatus(args []string) {
+	result := uiRequest("GET", "/api/ui_status", "")
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+func cmdUIBrowser(args []string) {
 	portPath := filepath.Join(arkDir, "ui-port")
 	data, err := os.ReadFile(portPath)
 	if err != nil {
@@ -1335,6 +1870,208 @@ func cmdUI(args []string) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "could not open browser — visit %s\n", url)
+}
+
+// CRC: crc-CLI.md
+func cmdUILinkapp(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ark ui linkapp add|remove <app>")
+		os.Exit(1)
+	}
+	action := args[0]
+	app := args[1]
+	appsDir := filepath.Join(arkDir, "apps")
+	luaDir := filepath.Join(arkDir, "lua")
+	viewdefsDir := filepath.Join(arkDir, "viewdefs")
+
+	switch action {
+	case "add":
+		appDir := filepath.Join(appsDir, app)
+		if _, err := os.Stat(appDir); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Error: app '%s' not found in %s/\n", app, appsDir)
+			os.Exit(1)
+		}
+		os.MkdirAll(luaDir, 0755)
+		os.MkdirAll(viewdefsDir, 0755)
+
+		// Link lua file: lua/app.lua -> ../apps/app/app.lua
+		appLua := filepath.Join(appDir, "app.lua")
+		if _, err := os.Stat(appLua); err == nil {
+			target := filepath.Join(luaDir, app+".lua")
+			os.Remove(target)
+			os.Symlink(filepath.Join("../apps", app, "app.lua"), target)
+			fmt.Printf("Linked: %s\n", target)
+		}
+
+		// Link app directory: lua/app -> ../apps/app
+		appLink := filepath.Join(luaDir, app)
+		os.Remove(appLink)
+		os.Symlink(filepath.Join("../apps", app), appLink)
+		fmt.Printf("Linked: %s\n", appLink)
+
+		// Link viewdefs
+		vdDir := filepath.Join(appDir, "viewdefs")
+		if entries, err := os.ReadDir(vdDir); err == nil {
+			for _, e := range entries {
+				if filepath.Ext(e.Name()) == ".html" {
+					target := filepath.Join(viewdefsDir, e.Name())
+					os.Remove(target)
+					os.Symlink(filepath.Join("../apps", app, "viewdefs", e.Name()), target)
+					fmt.Printf("Linked: %s\n", target)
+				}
+			}
+		}
+		fmt.Printf("Done: %s linked\n", app)
+
+	case "remove":
+		// Remove lua file symlink
+		luaFile := filepath.Join(luaDir, app+".lua")
+		if fi, err := os.Lstat(luaFile); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			os.Remove(luaFile)
+			fmt.Printf("Removed: %s\n", luaFile)
+		}
+		// Remove app directory symlink
+		appLink := filepath.Join(luaDir, app)
+		if fi, err := os.Lstat(appLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			os.Remove(appLink)
+			fmt.Printf("Removed: %s\n", appLink)
+		}
+		// Remove viewdefs that point to this app
+		if entries, err := os.ReadDir(viewdefsDir); err == nil {
+			for _, e := range entries {
+				link := filepath.Join(viewdefsDir, e.Name())
+				if target, err := os.Readlink(link); err == nil {
+					if strings.Contains(target, "/apps/"+app+"/viewdefs/") {
+						os.Remove(link)
+						fmt.Printf("Removed: %s\n", link)
+					}
+				}
+			}
+		}
+		fmt.Printf("Done: %s unlinked\n", app)
+
+	default:
+		fmt.Fprintln(os.Stderr, "Usage: ark ui linkapp add|remove <app>")
+		os.Exit(1)
+	}
+}
+
+// CRC: crc-CLI.md
+func cmdUIPatterns(args []string) {
+	patternsDir := filepath.Join(arkDir, "patterns")
+	entries, err := os.ReadDir(patternsDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "No patterns directory")
+		os.Exit(0)
+	}
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		// Extract description from frontmatter
+		data, err := os.ReadFile(filepath.Join(patternsDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		desc := ""
+		lines := strings.Split(string(data), "\n")
+		inFrontmatter := false
+		for _, line := range lines {
+			if line == "---" {
+				if inFrontmatter {
+					break
+				}
+				inFrontmatter = true
+				continue
+			}
+			if inFrontmatter && strings.HasPrefix(line, "description:") {
+				desc = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+			}
+		}
+		fmt.Printf("- `%s.md` - %s\n", name, desc)
+	}
+}
+
+// CRC: crc-CLI.md
+func cmdUIProgress(args []string) {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: ark ui progress <app> <percent> <stage>")
+		os.Exit(1)
+	}
+	app, pct, stage := args[0], args[1], args[2]
+	code := fmt.Sprintf("mcp:appProgress('%s', %s, '%s'); mcp:addAgentThinking('%s')", app, pct, stage, stage)
+	body, _ := json.Marshal(map[string]string{"code": code})
+	uiRequest("POST", "/api/ui_run", string(body))
+}
+
+// CRC: crc-CLI.md
+func cmdUIState(args []string) {
+	result := uiRequest("GET", "/state", "")
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+// CRC: crc-CLI.md
+func cmdUITheme(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: ark ui theme list|classes|audit [args]")
+		os.Exit(1)
+	}
+	action := args[0]
+	switch action {
+	case "list":
+		body, _ := json.Marshal(map[string]string{"action": "list"})
+		result := uiRequest("POST", "/api/ui_theme", string(body))
+		os.Stdout.Write(result)
+		fmt.Println()
+	case "classes":
+		req := map[string]string{"action": "classes"}
+		if len(args) > 1 {
+			req["theme"] = args[1]
+		}
+		body, _ := json.Marshal(req)
+		result := uiRequest("POST", "/api/ui_theme", string(body))
+		os.Stdout.Write(result)
+		fmt.Println()
+	case "audit":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: ark ui theme audit <app> [theme]")
+			os.Exit(1)
+		}
+		req := map[string]string{"action": "audit", "app": args[1]}
+		if len(args) > 2 {
+			req["theme"] = args[2]
+		}
+		body, _ := json.Marshal(req)
+		result := uiRequest("POST", "/api/ui_theme", string(body))
+		os.Stdout.Write(result)
+		fmt.Println()
+	default:
+		fmt.Fprintln(os.Stderr, "Usage: ark ui theme list|classes|audit [args]")
+		os.Exit(1)
+	}
+}
+
+// CRC: crc-CLI.md
+func cmdUIUpdate(args []string) {
+	if len(args) > 0 && args[0] == "-t" {
+		// Version check only — get current status
+		result := uiRequest("GET", "/api/ui_status", "")
+		os.Stdout.Write(result)
+		fmt.Println()
+		return
+	}
+	result := uiRequest("POST", "/api/ui_update", "{}")
+	os.Stdout.Write(result)
+	fmt.Println()
+}
+
+// CRC: crc-CLI.md
+func cmdUIVariables(args []string) {
+	result := uiRequest("GET", "/variables", "")
+	os.Stdout.Write(result)
+	fmt.Println()
 }
 
 // parseDate parses a date string: "2006-01-02", "2006-01-02T15:04:05", or
@@ -1581,4 +2318,172 @@ func parseAliases(s string) map[byte]byte {
 		}
 	}
 	return aliases
+}
+
+// CRC: crc-CLI.md
+func cmdBundle(args []string) {
+	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
+	output := fs.String("o", "", "Output path for bundled binary (required)")
+	source := fs.String("src", "", "Source binary to bundle (default: current executable)")
+	fs.Parse(args)
+
+	if *output == "" {
+		fmt.Fprintln(os.Stderr, "Error: -o output path is required")
+		fmt.Fprintln(os.Stderr, "Usage: ark bundle [-src <binary>] -o <output> <dir>")
+		os.Exit(1)
+	}
+
+	dir := fs.Arg(0)
+	if dir == "" {
+		fmt.Fprintln(os.Stderr, "Error: directory is required")
+		fmt.Fprintln(os.Stderr, "Usage: ark bundle [-src <binary>] -o <output> <dir>")
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: directory %s does not exist\n", dir)
+		os.Exit(1)
+	}
+
+	src := *source
+	if src == "" {
+		var err error
+		src, err = os.Executable()
+		if err != nil {
+			fatal(fmt.Errorf("failed to get executable path: %w", err))
+		}
+	}
+
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: source binary %s does not exist\n", src)
+		os.Exit(1)
+	}
+
+	if err := cli.BundleCreateBundle(src, dir, *output); err != nil {
+		fatal(fmt.Errorf("failed to create bundle: %w", err))
+	}
+	fmt.Printf("Created bundled binary: %s\n", *output)
+}
+
+// CRC: crc-CLI.md
+func cmdBundleLs(args []string) {
+	bundled, err := cli.IsBundled()
+	if err != nil {
+		fatal(fmt.Errorf("failed to check bundle status: %w", err))
+	}
+	if !bundled {
+		fmt.Fprintln(os.Stderr, "Error: binary is not bundled")
+		os.Exit(1)
+	}
+
+	files, err := cli.BundleListFilesWithInfo()
+	if err != nil {
+		fatal(fmt.Errorf("failed to list files: %w", err))
+	}
+
+	for _, file := range files {
+		if file.IsSymlink {
+			fmt.Printf("%s -> %s\n", file.Name, file.SymlinkTarget)
+		} else {
+			fmt.Println(file.Name)
+		}
+	}
+}
+
+// CRC: crc-CLI.md
+func cmdBundleCat(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: file path is required")
+		fmt.Fprintln(os.Stderr, "Usage: ark cat <file>")
+		os.Exit(1)
+	}
+
+	bundled, err := cli.IsBundled()
+	if err != nil {
+		fatal(fmt.Errorf("failed to check bundle status: %w", err))
+	}
+	if !bundled {
+		fmt.Fprintln(os.Stderr, "Error: binary is not bundled")
+		os.Exit(1)
+	}
+
+	content, err := cli.BundleReadFile(args[0])
+	if err != nil {
+		fatal(fmt.Errorf("failed to read file: %w", err))
+	}
+	os.Stdout.Write(content)
+}
+
+// CRC: crc-CLI.md
+func cmdBundleCp(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Error: pattern and destination directory are required")
+		fmt.Fprintln(os.Stderr, "Usage: ark cp <pattern> <dest-dir>")
+		os.Exit(1)
+	}
+
+	pattern := args[0]
+	destDir := args[1]
+
+	bundled, err := cli.IsBundled()
+	if err != nil {
+		fatal(fmt.Errorf("failed to check bundle status: %w", err))
+	}
+	if !bundled {
+		fmt.Fprintln(os.Stderr, "Error: binary is not bundled")
+		os.Exit(1)
+	}
+
+	files, err := cli.BundleListFilesWithInfo()
+	if err != nil {
+		fatal(fmt.Errorf("failed to list files: %w", err))
+	}
+
+	copied := 0
+	for _, file := range files {
+		matched, _ := filepath.Match(pattern, filepath.Base(file.Name))
+		if !matched {
+			matched, _ = filepath.Match(pattern, file.Name)
+		}
+		if !matched {
+			continue
+		}
+
+		destPath := filepath.Join(destDir, filepath.Base(file.Name))
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create directory: %v\n", err)
+			continue
+		}
+
+		os.Remove(destPath)
+
+		if file.IsSymlink {
+			if err := os.Symlink(file.SymlinkTarget, destPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to create symlink %s: %v\n", destPath, err)
+				continue
+			}
+			fmt.Printf("Copied: %s -> %s (symlink to %s)\n", file.Name, destPath, file.SymlinkTarget)
+		} else {
+			content, err := cli.BundleReadFile(file.Name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to read %s: %v\n", file.Name, err)
+				continue
+			}
+			mode := file.Mode.Perm()
+			if mode == 0 {
+				mode = 0644
+			}
+			if err := os.WriteFile(destPath, content, mode); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to write %s: %v\n", destPath, err)
+				continue
+			}
+			fmt.Printf("Copied: %s -> %s\n", file.Name, destPath)
+		}
+		copied++
+	}
+
+	if copied == 0 {
+		fmt.Fprintln(os.Stderr, "No files matched the pattern")
+		os.Exit(1)
+	}
 }

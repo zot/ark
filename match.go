@@ -110,6 +110,7 @@ func (m *Matcher) matchGlob(pattern, path string) bool {
 	anchored := strings.HasPrefix(pattern, "/")
 	if anchored {
 		pattern = pattern[1:]
+		path = strings.TrimPrefix(path, "/")
 		return m.globMatch(pattern, path)
 	}
 	// Unanchored: try matching against path and every suffix after /
@@ -131,6 +132,7 @@ func (m *Matcher) matchDescendant(dirPat, path string) bool {
 	anchored := strings.HasPrefix(dirPat, "/")
 	if anchored {
 		dirPat = dirPat[1:]
+		path = strings.TrimPrefix(path, "/")
 	}
 	// Split path into components, check if any prefix matches dirPat
 	parts := strings.Split(path, "/")
