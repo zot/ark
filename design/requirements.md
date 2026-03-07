@@ -448,13 +448,32 @@
 - **R291:** All `ark ui` subcommands read mcp-port from `~/.ark/mcp-port` and communicate via HTTP
 - **R292:** (inferred) `ark ui` subcommands replace the `.ui/mcp` shell script — no separate script needed
 
-### ark install — UI Assets
+### ark setup — Global Bootstrap
 - **R276:** UI assets are embedded in the binary via zip-graft (ui-engine's bundle system), not `//go:embed`
 - **R277:** The bundle contains the full UI stack: ui-engine static site (html/), frictionless assets, and ark's own app (apps/ark/)
-- **R278:** `ark install` extracts embedded UI assets to `~/.ark/` (html/, apps/ark/) using `bundle.ExtractBundle`
-- **R279:** `ark install` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
-- **R280:** Updating the ark binary and running `ark install` refreshes the UI assets
-- **R281:** (inferred) `ark install` creates the apps/, lua/, viewdefs/ directories if they don't exist
+- **R278:** `ark setup` extracts bundled UI assets to `~/.ark/` (html/, lua/, viewdefs/, apps/) using `bundle.ExtractBundle`
+- **R279:** `ark setup` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
+- **R280:** `ark setup` is idempotent — safe to run after every binary update, overwrites assets from the binary
+- **R281:** `ark setup` creates `~/.ark/` if it doesn't exist
+- **R323:** `ark setup` installs the ark skill to `~/.claude/skills/ark/SKILL.md` from bundled assets
+- **R324:** `ark setup` installs the ui skill to `~/.claude/skills/ui/SKILL.md` from bundled assets
+- **R325:** `ark setup` installs the ark agent to `~/.claude/agents/ark.md` from bundled assets
+- **R326:** `ark setup` reports what was installed/updated — no crank-handle output
+
+### ark init — Setup Integration
+- **R327:** `ark init` runs `ark setup` first if `~/.ark/` has not been bootstrapped (no `html/` directory present)
+- **R328:** `ark init --no-setup` skips the automatic setup, only creates the database
+- **R329:** `ark init --if-needed` skips database creation when a database already exists (exits silently)
+- **R330:** (inferred) `--if-needed` checks for `data.mdb` in the database directory
+
+### ark ui install — Per-project Setup
+- **R331:** `ark ui install` is the single entry point for connecting a project to ark
+- **R332:** `ark ui install` internally runs `ark init --if-needed` to ensure setup and database exist
+- **R333:** `ark ui install` creates symlinks in the project's `.claude/skills/` pointing to `~/.ark/skills/ark/` and `~/.ark/skills/ui/`
+- **R334:** Symlinks, not copies — `ark setup` keeps the originals current
+- **R335:** `ark ui install` prints a crank-handle prompt instructing Claude to add the ark bootstrap line to the project's CLAUDE.md
+- **R336:** Per-project setup does NOT install UI building skills (ui-thorough, ui-fast) — those are for specialist agents only
+- **R337:** (inferred) `ark ui install` creates `.claude/skills/` in the project directory if it doesn't exist
 
 ### No MCP Server for Ark
 - **R282:** Ark does not register as an MCP server — its interface is the CLI

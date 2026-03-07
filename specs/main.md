@@ -385,54 +385,79 @@ LMDB subdatabase `ark` stores:
   - sourceConfig: embedded or path reference to config
   - dotfiles: boolean — whether * matches dotfiles (default true)
 
-## Install
+## Setup and Install
 
-`ark install` bootstraps ark into a project directory. It is designed
-to be run by Claude following the ark README instructions.
+Ark embeds Frictionless — there is no separate UI install. One binary
+carries the full stack: search engine, HTTP server, and UI assets.
+Three commands handle the journey from binary to working system.
 
-### Prerequisites
+### `ark setup` — global bootstrap
 
-The ark README instructs Claude to first install Frictionless
-(github/zot/frictionless) using its own README. Frictionless creates
-the `.ui/` directory structure. Ark's install checks for this.
+`ark setup` prepares `~/.ark/` for use. It is idempotent — safe to
+run after every binary update.
 
-### Install flow
+1. **Extract bundled assets.** UI assets (html/, lua/, viewdefs/,
+   apps/) are extracted from the binary's zip appendix to `~/.ark/`.
+   Existing files are overwritten (they come from the binary, not the
+   user).
 
-`ark install` runs in the current project directory:
+2. **Install global skills.** Copy the ark skill to
+   `~/.claude/skills/ark/SKILL.md` and the ui skill to
+   `~/.claude/skills/ui/SKILL.md`. These are the lightweight
+   interaction skills — every session gets them.
 
-1. **Check for `.ui/` directory.** If missing, output a crank-handle
-   prompt: "Install Frictionless first using the github/zot/frictionless
-   README, then re-run `~/.ark/ark install`." Exit.
+3. **Install agent.** Copy the ark agent doc to
+   `~/.claude/agents/ark.md`.
 
-2. **Install skill.** Copy the ark skill to `.claude/skills/ark/SKILL.md`.
-   The skill contains the bootstrap sequence (start server, load tags)
-   and the `/ark` invocation that spawns the ark agent.
+4. **Link the ark app.** Run `linkapp add ark` so the Frictionless
+   UI can serve the ark search interface.
 
-3. **Install agent.** Copy the ark agent doc to `.claude/agents/ark.md`.
-   The agent carries the CLI reference, output formats, and guidelines
-   (prefer `--wrap`, use knowledge vs memory).
+5. **Report.** Print what was installed/updated. No crank-handle
+   output — setup is complete in itself.
 
-4. **Install app.** Copy the Frictionless app to `.ui/apps/ark/`.
-   This gives the user the interactive search UI.
+If `~/.ark/` doesn't exist, it is created. If skills or agents
+already exist, they are overwritten with the version from the
+current binary. The bundled assets are the source of truth.
 
-5. **Crank-handle output.** Print a prompt instructing Claude to add
-   `load /ark` at the top of the project's CLAUDE.md. This is the
-   final step — Claude edits CLAUDE.md, and every future session in
-   this project starts with ark context.
+### `ark init` — database creation
 
-### Crank-handle pattern
+`ark init` creates a new ark database. Existing behavior is
+unchanged: initializes microfts2, microvec, ark subdatabase, writes
+default config.
 
-`ark install` is a Go binary — it can copy files but cannot edit
-CLAUDE.md intelligently. The crank-handle output is a self-contained
-prompt designed for any model tier (including Haiku) to follow:
+By default, `ark init` runs `ark setup` first if `~/.ark/` has not
+been bootstrapped (no `html/` directory present). This means the
+common case — first install — is a single command. `--no-setup`
+skips the bootstrap for callers who only want the database.
 
-- If prerequisite missing: tells Claude exactly what to install and
-  how, then asks to re-run `ark install`
-- If install succeeds: tells Claude exactly what line to add to
-  CLAUDE.md and where
+`--if-needed` skips database creation when a database already exists.
+This is for callers (like `ark ui install`) that want to ensure a
+working system without risking an existing database.
 
-Each output is a complete instruction. Claude reads it, follows it,
-done. No context about ark internals needed.
+### `ark ui install` — per-project setup
+
+`ark ui install` is the single entry point for connecting a project
+to ark. It runs in the current working directory and ensures the
+entire system is ready — the user never needs to run `ark setup` or
+`ark init` separately.
+
+1. **Bootstrap.** Internally runs `ark init --if-needed`, which
+   triggers setup if needed and creates the database if it doesn't
+   exist. If everything is already in place, this is a no-op.
+
+2. **Symlink skills.** Create symlinks in the project's
+   `.claude/skills/` pointing to `~/.ark/skills/ark/` and
+   `~/.ark/skills/ui/`. Symlinks, not copies — `ark setup` keeps the
+   originals current.
+
+3. **Crank-handle output.** Print a prompt instructing Claude to add
+   the ark bootstrap line to the project's CLAUDE.md. The binary
+   cannot edit CLAUDE.md intelligently; the crank-handle prompt is
+   designed for any model tier (including Haiku) to follow.
+
+Per-project setup does NOT install UI building skills (ui-thorough,
+ui-fast). Those are heavyweight design systems loaded by specialist
+agents, never global.
 
 ### README-driven installation
 
@@ -441,8 +466,8 @@ install it." The README provides:
 
 1. Check if `~/.ark/ark` exists
 2. If not, download the binary and place it at `~/.ark/ark`
-3. Run `~/.ark/ark install` in the project directory
+3. Run `~/.ark/ark ui install` in the project directory
 
-The README also instructs Claude to install Frictionless first if
-not already present. The entire chain is self-resolving — each step
-either succeeds or tells Claude what to do next.
+One command. The entire chain is self-resolving — setup, database,
+project connection. No separate Frictionless install. No `.ui/`
+prerequisite.

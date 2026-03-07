@@ -105,6 +105,8 @@ func main() {
 		cmdSearch(args)
 	case "serve":
 		cmdServe(args)
+	case "setup":
+		cmdSetup(args)
 	case "sources":
 		cmdSources(args)
 	case "stale":
@@ -143,6 +145,7 @@ Commands:
   grams       Show trigrams for a query (active/inactive, frequency)
   init        Create a new database
   ls          List embedded assets
+  setup       Bootstrap ~/.ark/ (extract assets, install skills)
   missing     List missing files
   refresh     Re-index stale files
   remove      Remove files from the index
@@ -254,13 +257,154 @@ func fatal(err error) {
 
 // Command implementations
 
+// CRC: crc-CLI.md | Seq: seq-install.md
+func cmdSetup(args []string) {
+	if err := runSetup(); err != nil {
+		fatal(err)
+	}
+}
+
+// runSetup is the idempotent global bootstrap. Extracts bundled assets to
+// ~/.ark/, installs global skills and agent, runs linkapp.
+func runSetup() error {
+	bundled, err := cli.IsBundled()
+	if err != nil || !bundled {
+		return fmt.Errorf("binary is not bundled — cannot extract assets")
+	}
+
+	// Create ~/.ark/ if needed
+	if err := os.MkdirAll(arkDir, 0755); err != nil {
+		return fmt.Errorf("create %s: %w", arkDir, err)
+	}
+
+	// Extract bundled assets (html/, lua/, viewdefs/, apps/, skills/, agents/)
+	if err := cli.BundleExtractBundle(arkDir); err != nil {
+		return fmt.Errorf("extract bundle: %w", err)
+	}
+	fmt.Println("Extracted bundled assets to", arkDir)
+
+	// Run linkapp for the ark app
+	appsDir := filepath.Join(arkDir, "apps", "ark")
+	if _, err := os.Stat(appsDir); err == nil {
+		runLinkapp(arkDir, "ark")
+	}
+
+	// Install global skills and agent to ~/.claude/
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("home dir: %w", err)
+	}
+	claudeDir := filepath.Join(home, ".claude")
+	installed := installBundledSkillsAndAgent(arkDir, claudeDir)
+	for _, item := range installed {
+		fmt.Println("Installed:", item)
+	}
+
+	return nil
+}
+
+// installBundledSkillsAndAgent copies skills and agent from ~/.ark/ to ~/.claude/.
+func installBundledSkillsAndAgent(arkDir, claudeDir string) []string {
+	var installed []string
+
+	// Skills: ~/.ark/skills/ark/ → ~/.claude/skills/ark/
+	//         ~/.ark/skills/ui/  → ~/.claude/skills/ui/
+	for _, skill := range []string{"ark", "ui"} {
+		src := filepath.Join(arkDir, "skills", skill, "SKILL.md")
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dstDir := filepath.Join(claudeDir, "skills", skill)
+		os.MkdirAll(dstDir, 0755)
+		dst := filepath.Join(dstDir, "SKILL.md")
+		if data, err := os.ReadFile(src); err == nil {
+			if err := os.WriteFile(dst, data, 0644); err == nil {
+				installed = append(installed, dst)
+			}
+		}
+	}
+
+	// Agent: ~/.ark/agents/ark.md → ~/.claude/agents/ark.md
+	agentSrc := filepath.Join(arkDir, "agents", "ark.md")
+	if _, err := os.Stat(agentSrc); err == nil {
+		agentDstDir := filepath.Join(claudeDir, "agents")
+		os.MkdirAll(agentDstDir, 0755)
+		agentDst := filepath.Join(agentDstDir, "ark.md")
+		if data, err := os.ReadFile(agentSrc); err == nil {
+			if err := os.WriteFile(agentDst, data, 0644); err == nil {
+				installed = append(installed, agentDst)
+			}
+		}
+	}
+
+	return installed
+}
+
+// runLinkapp creates lua/ and viewdefs/ symlinks for an app.
+func runLinkapp(baseDir, app string) {
+	appsDir := filepath.Join(baseDir, "apps")
+	luaDir := filepath.Join(baseDir, "lua")
+	viewdefsDir := filepath.Join(baseDir, "viewdefs")
+	appDir := filepath.Join(appsDir, app)
+
+	os.MkdirAll(luaDir, 0755)
+	os.MkdirAll(viewdefsDir, 0755)
+
+	// Link lua file: lua/app.lua -> ../apps/app/app.lua
+	appLua := filepath.Join(appDir, "app.lua")
+	if _, err := os.Stat(appLua); err == nil {
+		target := filepath.Join(luaDir, app+".lua")
+		os.Remove(target)
+		os.Symlink(filepath.Join("../apps", app, "app.lua"), target)
+	}
+
+	// Link app directory: lua/app -> ../apps/app
+	appLink := filepath.Join(luaDir, app)
+	os.Remove(appLink)
+	os.Symlink(filepath.Join("../apps", app), appLink)
+
+	// Link viewdefs
+	vdDir := filepath.Join(appDir, "viewdefs")
+	if entries, err := os.ReadDir(vdDir); err == nil {
+		for _, e := range entries {
+			if filepath.Ext(e.Name()) == ".html" {
+				target := filepath.Join(viewdefsDir, e.Name())
+				os.Remove(target)
+				os.Symlink(filepath.Join("../apps", app, "viewdefs", e.Name()), target)
+			}
+		}
+	}
+}
+
+// isBootstrapped checks if ~/.ark/ has been set up (html/ directory exists).
+func isBootstrapped() bool {
+	_, err := os.Stat(filepath.Join(arkDir, "html"))
+	return err == nil
+}
+
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	embedCmd := fs.String("embed-cmd", "", "embedding command (optional, enables vector search)")
 	queryCmd := fs.String("query-cmd", "", "query embedding command (optional)")
 	caseInsensitive := fs.Bool("case-insensitive", true, "case-insensitive indexing")
 	aliasStr := fs.String("aliases", "", "byte aliases (from=to,...)")
+	noSetup := fs.Bool("no-setup", false, "skip automatic setup")
+	ifNeeded := fs.Bool("if-needed", false, "skip if database already exists")
 	fs.Parse(args)
+
+	// --if-needed: exit silently if DB exists
+	if *ifNeeded {
+		if _, err := os.Stat(filepath.Join(arkDir, "data.mdb")); err == nil {
+			return
+		}
+	}
+
+	// Auto-setup if not bootstrapped (unless --no-setup)
+	if !*noSetup && !isBootstrapped() {
+		if err := runSetup(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: setup failed: %v\n", err)
+		}
+	}
 
 	aliases := parseAliases(*aliasStr)
 
@@ -1351,6 +1495,8 @@ func cmdUI(args []string) {
 		cmdUIDisplay(subArgs)
 	case "event":
 		cmdUIEvent(subArgs)
+	case "install":
+		cmdUIInstall(subArgs)
 	case "linkapp":
 		cmdUILinkapp(subArgs)
 	case "patterns":
@@ -1381,6 +1527,7 @@ Subcommands:
   checkpoint <cmd> <app>     manage app checkpoints
   display <app>              display app in the browser
   event                      wait for next UI event (120s timeout)
+  install                    connect this project to ark
   linkapp add|remove <app>   manage app symlinks
   patterns                   list available patterns
   progress <app> <pct> <msg> report build progress
@@ -1435,6 +1582,47 @@ func uiRequest(method, path string, jsonBody string) []byte {
 		fatal(err)
 	}
 	return data
+}
+
+// CRC: crc-CLI.md | Seq: seq-install.md
+func cmdUIInstall(args []string) {
+	// Bootstrap: ensure setup and database exist
+	cmdInit([]string{"--if-needed"})
+
+	// Create project .claude/skills/ if needed
+	cwd, err := os.Getwd()
+	if err != nil {
+		fatal(fmt.Errorf("get working directory: %w", err))
+	}
+	skillsDir := filepath.Join(cwd, ".claude", "skills")
+	os.MkdirAll(skillsDir, 0755)
+
+	// Symlink skills from ~/.ark/skills/ into project
+	for _, skill := range []string{"ark", "ui"} {
+		src := filepath.Join(arkDir, "skills", skill)
+		if _, err := os.Stat(src); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %s not found in %s\n", skill, filepath.Join(arkDir, "skills"))
+			continue
+		}
+		dst := filepath.Join(skillsDir, skill)
+		// Remove existing (file, symlink, or directory)
+		os.RemoveAll(dst)
+		if err := os.Symlink(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: symlink %s: %v\n", skill, err)
+			continue
+		}
+		fmt.Printf("Linked: %s → %s\n", dst, src)
+	}
+
+	// Crank-handle: tell Claude what to do next
+	fmt.Println()
+	fmt.Println("---")
+	fmt.Println("Add the following line near the top of this project's CLAUDE.md:")
+	fmt.Println()
+	fmt.Printf("  Use /ark to query the ark knowledge base. Binary: %s\n", filepath.Join(arkDir, "ark"))
+	fmt.Println()
+	fmt.Println("Then start the server with: " + filepath.Join(arkDir, "ark") + " serve")
+	fmt.Println("---")
 }
 
 func cmdUIRun(args []string) {
