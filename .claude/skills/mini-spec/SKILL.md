@@ -346,6 +346,7 @@ The `minispec` CLI tool (at `~/.claude/bin/minispec`) performs structural operat
 # Updates - gaps
 ~/.claude/bin/minispec update add-gap O "Test coverage needed" # Add oversight gap
 ~/.claude/bin/minispec update resolve-gap O3                   # Mark gap resolved
+~/.claude/bin/minispec update approve-gap D3                   # Convert gap to approved (A) type
 ```
 
 Use the tool to:

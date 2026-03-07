@@ -10,6 +10,7 @@ reconciliation sequence.
 - Scanner
 - Indexer
 - Store
+- ui-engine (cli.Server)
 
 ## Flow
 
@@ -49,6 +50,31 @@ CLI ──> Server.Serve(dbPath, opts)
          │     │
          │     └──> log reconciliation summary
          │
+         ├──> Server.StartUIEngine(dbPath)
+         │     ├── cfg := cli.DefaultConfig()
+         │     ├── cfg.Server.Dir = dbPath
+         │     ├── cfg.Server.Port = 0 (auto-select)
+         │     ├── uiSrv := cli.NewServer(cfg)
+         │     ├── go uiSrv.Start()
+         │     ├── if error → log warning, continue without UI
+         │     └── ui-engine writes ui-port, mcp-port to dbPath
+         │
          └──> http.Serve(listener, router)
                └── blocks, serving requests until shutdown
+
+## Shutdown
+
+```
+Signal (SIGTERM/SIGINT)
+  │
+  ├──> if uiServer != nil: uiServer.Shutdown(ctx)
+  │     └── ui-engine cleans up sessions, closes ports
+  │
+  ├──> listener.Close()
+  │     └── stops accepting new ark API requests
+  │
+  └──> db.Close()
+        ├── Store.Close
+        ├── microvec.Close
+        └── microfts2.Close (closes LMDB env)
 ```

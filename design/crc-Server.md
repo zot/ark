@@ -1,18 +1,22 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs startup reconciliation.
+Optionally starts the embedded ui-engine alongside.
 
 ## Knows
 - db: *DB — ark database facade
 - listener: net.Listener — Unix socket
 - pidPath: string — PID file location
 - noScan: bool — skip startup reconciliation
+- uiServer: *cli.Server — embedded ui-engine server (nil if UI disabled/failed)
 
 ## Does
 - Serve(dbPath, opts): bind socket (highlander lock), write PID file,
-  open DB, run startup reconciliation, start HTTP server
+  open DB, run startup reconciliation, start ui-engine, start HTTP server
+- StartUIEngine(dbPath): configure ui-engine (Dir=dbPath), start in
+  goroutine. On failure, log error and continue without UI.
 - StartupReconciliation(): scan then refresh (unless --no-scan)
 - BindSocket(path): create Unix domain socket, fail if already bound
 - WritePID(path): write PID file for emergency kill
@@ -33,13 +37,15 @@ Keeps embedding model warm. Runs startup reconciliation.
 - HandleFetch: POST /fetch — return file content for indexed path
 - HandleSourcesCheck: POST /config/sources-check — run glob reconciliation
 - SetupLogging(dbPath): create ~/.ark/logs/ dir, open log file, truncate if >10MB (keep last 1MB), set log.SetOutput to MultiWriter(stderr, file)
-- Signal handling: catch SIGTERM, close listener, close DB, exit 0
+- Signal handling: catch SIGTERM, shut down ui-engine first, then
+  close listener, close DB, exit 0
 - Never remove PID file (stale PID is safe — stop verifies before kill)
 
 ## Collaborators
 - DB: all operations delegated through the facade
 - Scanner: startup reconciliation scan
 - Indexer: startup reconciliation refresh
+- ui-engine (cli.Server): embedded UI server, started alongside ark API
 
 ## Sequences
 - seq-server-startup.md

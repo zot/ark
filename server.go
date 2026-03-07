@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Server.md | Seq: seq-server-startup.md
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	uicli "github.com/zot/ui-engine/cli"
 )
 
 // Server is an HTTP server on a Unix domain socket.
@@ -24,6 +28,7 @@ type Server struct {
 	listener net.Listener
 	pidPath  string
 	noScan   bool
+	uiServer *uicli.Server
 }
 
 // ServeOpts controls server behavior.
@@ -107,16 +112,24 @@ func Serve(dbPath string, opts ServeOpts) error {
 		noScan:   opts.NoScan,
 	}
 
-	// Signal handling: catch SIGTERM, close socket, close DB, exit 0
+	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigCh
 		log.Printf("received %s, shutting down", sig)
+		if srv.uiServer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			srv.uiServer.Shutdown(ctx)
+			cancel()
+		}
 		listener.Close()
 		db.Close()
 		os.Exit(0)
 	}()
+
+	// Start embedded UI engine (optional — failure is non-fatal)
+	srv.startUIEngine(dbPath)
 
 	// Startup reconciliation — background so server accepts requests immediately
 	if !opts.NoScan {
@@ -169,6 +182,36 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
+}
+
+// startUIEngine configures and starts the embedded ui-engine server.
+// If the UI assets aren't present or the server fails to start, it logs
+// a warning and continues — the UI is optional.
+func (srv *Server) startUIEngine(dbPath string) {
+	// Check if html/ exists — if not, UI assets haven't been installed
+	htmlDir := filepath.Join(dbPath, "html")
+	if _, err := os.Stat(htmlDir); os.IsNotExist(err) {
+		log.Printf("ui: no html/ directory in %s, skipping UI engine (run 'ark install' to set up)", dbPath)
+		return
+	}
+
+	cfg := uicli.DefaultConfig()
+	cfg.Server.Dir = dbPath
+	cfg.Server.Port = 0 // auto-select available port
+	cfg.Server.Host = "127.0.0.1"
+	cfg.Lua.Enabled = true
+	cfg.Lua.Hotload = true
+
+	uiSrv := uicli.NewServer(cfg)
+	srv.uiServer = uiSrv
+
+	go func() {
+		if err := uiSrv.Start(); err != nil {
+			log.Printf("ui: engine failed to start: %v", err)
+			srv.uiServer = nil
+		}
+	}()
+	log.Printf("ui: engine starting (dir: %s)", dbPath)
 }
 
 func PidFilePath(dbPath string) string {

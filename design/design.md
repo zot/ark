@@ -51,6 +51,15 @@ or `--files` (JSONL per file, deduplicated). This enables the
 permission end-run: indexed content emitted without per-file prompts.
 Content is read from disk at query time using offsets from microfts2.
 
+### Embedded UI Engine
+The ui-engine (`github.com/zot/ui-engine/cli`) runs in-process
+alongside the ark API server. `cfg.Server.Dir` points to `~/.ark/`,
+where UI assets (html/, lua/, viewdefs/, apps/) coexist with ark
+data (data.mdb, ark.toml, ark.sock). The ui-engine manages its own
+`ui-port` and `mcp-port` files. If the ui-engine fails to start,
+the ark API server continues — UI is optional. On shutdown, the
+ui-engine shuts down before the LMDB env closes.
+
 ## Artifacts
 
 ### CRC Cards
@@ -95,3 +104,6 @@ Content is read from disk at query time using offsets from microfts2.
 - [ ] A5: microfts2 WithOnly/WithExcept — implemented in microfts2 dependency, used by Searcher.ResolveFilters
 - [ ] A6: R231 (no backward compatibility for --source/--not-source) — verified by removal, no design artifact needed
 - [ ] A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
+- [ ] O7: Shutdown SIGSEGV: signal handler goroutine (server.go:113-119) calls db.Close() while background reconciliation goroutine (server.go:122-139) may still be running Scan/Refresh against the LMDB env. Need to cancel/wait for reconciliation before closing.
+- [ ] O8: ark install UI asset extraction not yet implemented — R276-R281 designed but install command needs the go:embed directives and extraction logic
+- [x] O9: ~/.ark/mcp shell script (R283) not yet created — needs adaptation of .ui/mcp pattern for ~/.ark/ paths

@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -46,6 +46,14 @@ dispatches operations via proxy or cold-start.
   CLI flags override seeded values
 - cmdSourcesCheck: expand globs, add new dirs, report MIA/orphan.
   Output: +/−/? prefix per line. Proxies to server if running.
+- cmdUI: gateway for all UI operations. Reads mcp-port/ui-port from
+  dbPath. No subcommand → open browser. Subcommands:
+  run, display, event, checkpoint, audit, status, browser.
+  Each subcommand sends HTTP requests to the mcp-port.
+  Replaces the `.ui/mcp` shell script — one binary, no separate script.
+- cmdInstall: extract embedded UI assets (html/, apps/ark/) to dbPath,
+  create lua/ and viewdefs/ dirs, run linkapp to wire symlinks.
+  Refreshes assets when binary is updated.
 
 ## Collaborators
 - Server: proxy target when server is running

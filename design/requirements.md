@@ -408,3 +408,54 @@
 - **R256:** Output order: files, stale, missing, unresolved, chunks, sources, strategies, map, server
 - **R257:** `GET /status` returns the same enhanced data in the JSON StatusInfo response
 - **R258:** (inferred) Chunk count is computed by summing ChunkRanges across all indexed files via microfts2 FileInfoByID
+
+## Feature: Embedded UI Engine
+**Source:** specs/embedded-ui.md
+
+### Dependency
+- **R259:** Ark imports `github.com/zot/ui-engine/cli` as a Go library dependency
+- **R260:** No separate frictionless binary is required — one ark binary serves everything
+
+### Unified Home Directory
+- **R261:** `~/.ark/` contains both ark data (data.mdb, ark.toml, ark.sock, logs/) and UI assets (html/, lua/, viewdefs/, apps/)
+- **R262:** The ui-engine's `Server.Dir` is set to `~/.ark/`
+- **R263:** UI directories (html/, lua/, viewdefs/, apps/) coexist with ark files without namespace collision
+
+### Three Listeners
+- **R264:** `ark serve` starts the ark API server on a Unix socket (`ark.sock`)
+- **R265:** `ark serve` starts the ui-engine HTTP server (port written to `ui-port`)
+- **R266:** `ark serve` starts the ui-engine MCP protocol server (port written to `mcp-port`)
+- **R267:** All three listeners run in one process
+
+### Server Lifecycle
+- **R268:** The ark API server (socket, DB) starts before the ui-engine server
+- **R269:** If the ui-engine fails to start (port conflict, missing assets), the ark API server continues running — UI is optional
+- **R270:** The failure is logged but does not cause `ark serve` to exit
+- **R271:** On SIGTERM/SIGINT, the ui-engine server shuts down before the ark DB closes
+- **R272:** (inferred) The ui-engine server is started in a goroutine so it doesn't block the ark API server
+
+### ark ui Command
+- **R273:** `ark ui` (no subcommand) opens the default browser to the ui-engine's HTTP URL
+- **R274:** `ark ui` reads `~/.ark/ui-port` to determine the port
+- **R275:** If the server is not running (no ui-port file or port not listening), `ark ui` reports an error
+- **R284:** `ark ui run '<lua>'` executes Lua code in the UI session via mcp-port
+- **R285:** `ark ui display <app>` displays an app in the browser via mcp-port
+- **R286:** `ark ui event` waits for the next UI event (long-poll, 120s timeout)
+- **R287:** `ark ui checkpoint <cmd> <app> [msg]` manages app checkpoints (save/list/rollback/diff/clear/baseline/count/update/local)
+- **R288:** `ark ui audit <app>` runs a code quality audit on an app
+- **R289:** `ark ui status` returns the ui-engine server status
+- **R290:** `ark ui browser` opens the browser to the current UI session
+- **R291:** All `ark ui` subcommands read mcp-port from `~/.ark/mcp-port` and communicate via HTTP
+- **R292:** (inferred) `ark ui` subcommands replace the `.ui/mcp` shell script — no separate script needed
+
+### ark install — UI Assets
+- **R276:** The ark app (apps/ark/) is embedded in the binary via `//go:embed`
+- **R277:** The ui-engine static site (html/) is embedded in the binary via `//go:embed`
+- **R278:** `ark install` extracts embedded UI assets to `~/.ark/` (html/, apps/ark/)
+- **R279:** `ark install` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
+- **R280:** Updating the ark binary and running `ark install` refreshes the UI assets
+- **R281:** (inferred) `ark install` creates the apps/, lua/, viewdefs/ directories if they don't exist
+
+### No MCP Server for Ark
+- **R282:** Ark does not register as an MCP server — its interface is the CLI
+- **R283:** Agents drive the UI via `ark ui` subcommands (e.g. `~/.ark/ark ui run '...'`) — no separate shell script or MCP registration needed

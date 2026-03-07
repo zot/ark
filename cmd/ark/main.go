@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -106,6 +107,8 @@ func main() {
 		cmdSources(args)
 	case "chunk-jsonl":
 		cmdChunkJSONL(args)
+	case "ui":
+		cmdUI(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
@@ -137,7 +140,8 @@ Commands:
   resolve     Dismiss unresolved files by pattern
   tag         Tag operations (list, counts, files)
   fetch       Return full contents of an indexed file
-  stop        Stop the running server`)
+  stop        Stop the running server
+  ui          Open the browser UI`)
 }
 
 func defaultDB() string {
@@ -1311,6 +1315,26 @@ func cmdStop(args []string) {
 
 	fmt.Fprintf(os.Stderr, "server did not stop within timeout (pid %d)\n", pid)
 	os.Exit(1)
+}
+
+// CRC: crc-CLI.md
+func cmdUI(args []string) {
+	portPath := filepath.Join(arkDir, "ui-port")
+	data, err := os.ReadFile(portPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "UI not available — server may not be running or UI not installed")
+		os.Exit(1)
+	}
+	port := strings.TrimSpace(string(data))
+	url := "http://127.0.0.1:" + port
+	// Try xdg-open (Linux), then open (macOS)
+	for _, cmd := range []string{"xdg-open", "open"} {
+		if err := exec.Command(cmd, url).Start(); err == nil {
+			fmt.Fprintf(os.Stderr, "opened %s\n", url)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "could not open browser — visit %s\n", url)
 }
 
 // parseDate parses a date string: "2006-01-02", "2006-01-02T15:04:05", or
