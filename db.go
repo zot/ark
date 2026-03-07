@@ -3,10 +3,14 @@ package ark
 // CRC: crc-DB.md
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"microfts2"
 
@@ -103,13 +107,21 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// Register default chunking strategies
-	defaultStrategies := map[string]string{
-		"lines":         "microfts chunk-lines",
+	// Func strategies avoid external process overhead and scanner buffer limits
+	funcStrategies := map[string]microfts2.ChunkFunc{
+		"lines": microfts2.LineChunkFunc,
+		"jsonl": JSONLChunkFunc,
+	}
+	for name, fn := range funcStrategies {
+		if err := fts.AddStrategyFunc(name, fn); err != nil {
+			return fmt.Errorf("register strategy %s: %w", name, err)
+		}
+	}
+	externalStrategies := map[string]string{
 		"lines-overlap": "microfts chunk-lines-overlap -lines 50",
 		"words-overlap": "microfts chunk-words-overlap",
-		"jsonl":         "ark chunk-jsonl",
 	}
-	for name, cmd := range defaultStrategies {
+	for name, cmd := range externalStrategies {
 		if err := fts.AddStrategy(name, cmd); err != nil {
 			return fmt.Errorf("register strategy %s: %w", name, err)
 		}
@@ -218,6 +230,23 @@ func Open(dbPath string) (*DB, error) {
 
 	matcher := &Matcher{Dotfiles: settings.Dotfiles}
 
+	// Register built-in func strategies (must happen on every Open,
+	// not just InitDB — func strategies aren't persisted in LMDB).
+	// The jsonl chunker is wrapped in an LRU cache — conversation logs
+	// are append-only, so chunks stay valid until the file changes.
+	// The cache is captured by the closure; microfts2 never sees it.
+	jsonlCache := newChunkCache(64)
+	for name, fn := range map[string]microfts2.ChunkFunc{
+		"lines": microfts2.LineChunkFunc,
+		"jsonl": jsonlCache.wrap(JSONLChunkFunc),
+	} {
+		if err := fts.AddStrategyFunc(name, fn); err != nil {
+			vec.Close()
+			fts.Close()
+			return nil, fmt.Errorf("register %s strategy: %w", name, err)
+		}
+	}
+
 	db := &DB{
 		fts:     fts,
 		vec:     vec,
@@ -310,6 +339,9 @@ func (db *DB) addDirectory(dir string) error {
 			continue
 		}
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
+			if errors.Is(err, microfts2.ErrNoChunks) {
+				continue
+			}
 			return fmt.Errorf("add %s: %w", f.Path, err)
 		}
 	}
@@ -361,6 +393,9 @@ func (db *DB) Scan() (*ScanResults, error) {
 
 	for _, f := range results.NewFiles {
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
+			if errors.Is(err, microfts2.ErrNoChunks) {
+				continue // skip files with no indexable content
+			}
 			return results, fmt.Errorf("add %s: %w", f.Path, err)
 		}
 	}
@@ -403,14 +438,9 @@ func (db *DB) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchSplit(opts)
 }
 
-// QueryTrigrams returns trigram info for a query string.
-func (db *DB) QueryTrigrams(query string) ([]microfts2.TrigramInfo, error) {
-	return db.fts.QueryTrigrams(query)
-}
-
-// SetCutoff rebuilds the active trigram set at a new percentile.
-func (db *DB) SetCutoff(percentile int) error {
-	return db.fts.BuildIndex(percentile)
+// QueryTrigramCounts returns trigram counts for a query string.
+func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
+	return db.fts.QueryTrigramCounts(query)
 }
 
 // Status returns database status counts.
@@ -430,27 +460,53 @@ func (db *DB) Status() (*StatusInfo, error) {
 		return nil, err
 	}
 
-	var staleCount int
+	var staleCount, totalChunks int
+	strategies := make(map[string]int)
 	for _, s := range stale {
 		if s.Status == "stale" {
 			staleCount++
 		}
+		strategies[s.Strategy]++
+		info, err := db.fts.FileInfoByID(s.FileID)
+		if err == nil {
+			totalChunks += len(info.ChunkRanges)
+		}
+	}
+
+	// LMDB map usage
+	var mapUsed, mapTotal int64
+	env := db.fts.Env()
+	if envInfo, err := env.Info(); err == nil {
+		mapTotal = envInfo.MapSize
+		if stat, err := env.Stat(); err == nil {
+			mapUsed = (envInfo.LastPNO + 1) * int64(stat.PSize)
+		}
 	}
 
 	return &StatusInfo{
-		Files:      len(stale), // total indexed (fresh + stale + missing in fts)
+		Files:      len(stale),
 		Stale:      staleCount,
 		Missing:    len(missing),
 		Unresolved: len(unresolved),
+		Chunks:     totalChunks,
+		Sources:    len(db.config.Sources),
+		Strategies: strategies,
+		MapUsed:    mapUsed,
+		MapTotal:   mapTotal,
 	}, nil
 }
 
-// StatusInfo holds database status counts.
+// StatusInfo holds database status counts and LMDB map usage.
 type StatusInfo struct {
 	Files      int `json:"files"`
 	Stale      int `json:"stale"`
 	Missing    int `json:"missing"`
 	Unresolved int `json:"unresolved"`
+	Chunks     int `json:"chunks"`
+	Sources    int `json:"sources"`
+	Strategies map[string]int `json:"strategies"`
+	MapUsed    int64 `json:"mapUsed"`
+	MapTotal   int64 `json:"mapTotal"`
 }
 
 // Files returns all indexed file paths.
@@ -657,4 +713,476 @@ func (db *DB) TagContext(tags []string) ([]TagContextEntry, error) {
 		}
 	}
 	return entries, nil
+}
+
+// chunkCache is an LRU cache for chunker output. The cache key is (path, content length) —
+// if the file size changed, the entry is stale. The closure captures this cache so
+// microfts2's verify path gets cached chunks without knowing about the cache.
+type chunkCache struct {
+	maxSize int
+	entries map[chunkCacheKey]*chunkCacheEntry
+	order   []*chunkCacheEntry // LRU order, most recent last
+}
+
+type chunkCacheKey struct {
+	path       string
+	contentLen int
+}
+
+type chunkCacheEntry struct {
+	key    chunkCacheKey
+	chunks []microfts2.Chunk
+}
+
+func newChunkCache(maxSize int) *chunkCache {
+	return &chunkCache{
+		maxSize: maxSize,
+		entries: make(map[chunkCacheKey]*chunkCacheEntry),
+	}
+}
+
+// wrap returns a ChunkFunc that checks the cache before calling the underlying chunker.
+func (cc *chunkCache) wrap(fn microfts2.ChunkFunc) microfts2.ChunkFunc {
+	return func(path string, content []byte, yield func(microfts2.Chunk) bool) error {
+		key := chunkCacheKey{path, len(content)}
+
+		if entry, ok := cc.entries[key]; ok {
+			cc.touch(entry)
+			for _, c := range entry.chunks {
+				if !yield(c) {
+					return nil
+				}
+			}
+			return nil
+		}
+
+		// Cache miss — run the real chunker and collect results
+		var chunks []microfts2.Chunk
+		err := fn(path, content, func(c microfts2.Chunk) bool {
+			// Copy to decouple from the content buffer
+			cp := microfts2.Chunk{
+				Range:   append([]byte{}, c.Range...),
+				Content: append([]byte{}, c.Content...),
+			}
+			chunks = append(chunks, cp)
+			return true
+		})
+		if err != nil {
+			return err
+		}
+
+		cc.put(key, chunks)
+
+		// Now yield the cached chunks to the caller
+		for _, c := range chunks {
+			if !yield(c) {
+				return nil
+			}
+		}
+		return nil
+	}
+}
+
+func (cc *chunkCache) touch(entry *chunkCacheEntry) {
+	for i, e := range cc.order {
+		if e == entry {
+			cc.order = append(cc.order[:i], cc.order[i+1:]...)
+			break
+		}
+	}
+	cc.order = append(cc.order, entry)
+}
+
+func (cc *chunkCache) put(key chunkCacheKey, chunks []microfts2.Chunk) {
+	// Evict oldest if at capacity
+	for len(cc.order) >= cc.maxSize {
+		oldest := cc.order[0]
+		cc.order = cc.order[1:]
+		delete(cc.entries, oldest.key)
+	}
+	entry := &chunkCacheEntry{key: key, chunks: chunks}
+	cc.entries[key] = entry
+	cc.order = append(cc.order, entry)
+}
+
+// CRC: crc-DB.md | R236, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247
+// JSONLChunkFunc is a content-aware chunker for Claude conversation logs.
+// Parses each line as JSON and extracts only human-readable text
+// (user/assistant text blocks and thinking blocks). Skips tool_use,
+// tool_result, signatures, metadata, and non-message record types.
+func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) error {
+	lineNum := 0
+	start := 0
+	for i := 0; i <= len(content); i++ {
+		if i < len(content) && content[i] != '\n' {
+			continue
+		}
+		lineNum++
+		line := content[start:i]
+		start = i + 1
+
+		if len(line) == 0 {
+			continue
+		}
+
+		text := extractJSONLTextFast(line)
+		if len(text) == 0 {
+			continue
+		}
+
+		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
+		if !yield(microfts2.Chunk{Range: []byte(r), Content: text}) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// JSONLChunkFuncOld is the json.Unmarshal-based chunker, kept for comparison.
+func JSONLChunkFuncOld(_ string, content []byte, yield func(microfts2.Chunk) bool) error {
+	lineNum := 0
+	start := 0
+	for i := 0; i <= len(content); i++ {
+		if i < len(content) && content[i] != '\n' {
+			continue
+		}
+		lineNum++
+		line := content[start:i]
+		start = i + 1
+
+		if len(line) == 0 {
+			continue
+		}
+
+		text := extractJSONLText(line)
+		if text == "" {
+			continue
+		}
+
+		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
+		if !yield(microfts2.Chunk{Range: []byte(r), Content: []byte(text)}) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// extractJSONLTextFast extracts searchable text using a DFT byte scanner.
+// Scans for the "content" key, then handles two cases:
+//   - string value: the entire string is the chunk text
+//   - array value: extracts "text" and "thinking" fields from blocks
+func extractJSONLTextFast(line []byte) []byte {
+	// Quick skip: check for known non-message types before full scan.
+	if bytes.Contains(line, []byte(`"type":"progress"`)) ||
+		bytes.Contains(line, []byte(`"type":"file-history-snapshot"`)) ||
+		bytes.Contains(line, []byte(`"type":"queue-operation"`)) ||
+		bytes.Contains(line, []byte(`"type":"system"`)) ||
+		bytes.Contains(line, []byte(`"type":"last-prompt"`)) {
+		return nil
+	}
+
+	// Find "content" key and its value
+	contentVal, contentStart := findKeyValue(line, []byte("content"))
+	if contentStart < 0 {
+		return nil
+	}
+
+	// Case 1: "content":"string"
+	if contentVal == '"' {
+		valStart := contentStart + 1
+		valEnd := scanStringEnd(line, valStart)
+		if valEnd < 0 {
+			return nil
+		}
+		return unescapeJSON(line[valStart:valEnd])
+	}
+
+	// Case 2: "content":[...blocks...]
+	if contentVal != '[' {
+		return nil
+	}
+
+	// Scan blocks inside the array for "text" and "thinking" values
+	var parts []byte
+	i := contentStart + 1 // past '['
+	for i < len(line) {
+		if line[i] == ']' {
+			break
+		}
+		if line[i] == '"' {
+			keyStart := i + 1
+			keyEnd := scanStringEnd(line, keyStart)
+			if keyEnd < 0 {
+				break
+			}
+			key := line[keyStart:keyEnd]
+			i = keyEnd + 1
+
+			// Skip to colon
+			for i < len(line) && line[i] != ':' && line[i] != ',' && line[i] != '}' {
+				i++
+			}
+			if i >= len(line) || line[i] != ':' {
+				continue
+			}
+			i++ // past colon
+			for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+				i++
+			}
+
+			isText := bytes.Equal(key, []byte("text"))
+			isThinking := bytes.Equal(key, []byte("thinking"))
+
+			if (isText || isThinking) && i < len(line) && line[i] == '"' {
+				valStart := i + 1
+				valEnd := scanStringEnd(line, valStart)
+				if valEnd < 0 {
+					break
+				}
+				val := unescapeJSON(line[valStart:valEnd])
+				if len(val) > 0 {
+					if len(parts) > 0 {
+						parts = append(parts, '\n')
+					}
+					parts = append(parts, val...)
+				}
+				i = valEnd + 1
+			} else {
+				i = skipJSONValue(line, i)
+			}
+		} else {
+			i++
+		}
+	}
+	return parts
+}
+
+// findKeyValue scans for a JSON key and returns the first byte of its value
+// and the position of that byte. Returns (-1, -1) if not found.
+func findKeyValue(data, key []byte) (byte, int) {
+	target := make([]byte, 0, len(key)+2)
+	target = append(target, '"')
+	target = append(target, key...)
+	target = append(target, '"')
+
+	i := 0
+	for i < len(data) {
+		if data[i] == '"' {
+			// Check if this is our key
+			if bytes.HasPrefix(data[i:], target) {
+				i += len(target)
+				// Skip to colon
+				for i < len(data) && (data[i] == ' ' || data[i] == '\t') {
+					i++
+				}
+				if i >= len(data) || data[i] != ':' {
+					continue
+				}
+				i++ // past colon
+				for i < len(data) && (data[i] == ' ' || data[i] == '\t') {
+					i++
+				}
+				if i < len(data) {
+					return data[i], i
+				}
+				return 0, -1
+			}
+			// Not our key — skip past this string
+			end := scanStringEnd(data, i+1)
+			if end < 0 {
+				return 0, -1
+			}
+			i = end + 1
+		} else {
+			i++
+		}
+	}
+	return 0, -1
+}
+
+// scanStringEnd finds the closing quote of a JSON string, handling escapes.
+// start points to the first character after the opening quote.
+// Returns the index of the closing quote, or -1 if not found.
+func scanStringEnd(data []byte, start int) int {
+	i := start
+	for i < len(data) {
+		if data[i] == '\\' {
+			i += 2 // skip escaped char
+		} else if data[i] == '"' {
+			return i
+		} else {
+			i++
+		}
+	}
+	return -1
+}
+
+// skipJSONValue skips over a JSON value starting at position i.
+// Handles strings, numbers, booleans, null, arrays, and objects.
+func skipJSONValue(data []byte, i int) int {
+	if i >= len(data) {
+		return i
+	}
+	switch data[i] {
+	case '"':
+		end := scanStringEnd(data, i+1)
+		if end < 0 {
+			return len(data)
+		}
+		return end + 1
+	case '{', '[':
+		// Track nesting with a counter (no stack needed — just depth)
+		open := data[i]
+		close := byte('}')
+		if open == '[' {
+			close = ']'
+		}
+		depth := 1
+		i++
+		for i < len(data) && depth > 0 {
+			if data[i] == '"' {
+				end := scanStringEnd(data, i+1)
+				if end < 0 {
+					return len(data)
+				}
+				i = end + 1
+			} else if data[i] == open {
+				depth++
+				i++
+			} else if data[i] == close {
+				depth--
+				i++
+			} else {
+				i++
+			}
+		}
+		return i
+	default:
+		// number, bool, null — scan to next structural char
+		for i < len(data) && data[i] != ',' && data[i] != '}' && data[i] != ']' {
+			i++
+		}
+		return i
+	}
+}
+
+// unescapeJSON handles basic JSON string escapes.
+func unescapeJSON(data []byte) []byte {
+	if bytes.IndexByte(data, '\\') < 0 {
+		return data // fast path: no escapes
+	}
+	out := make([]byte, 0, len(data))
+	i := 0
+	for i < len(data) {
+		if data[i] == '\\' && i+1 < len(data) {
+			switch data[i+1] {
+			case '"', '\\', '/':
+				out = append(out, data[i+1])
+			case 'n':
+				out = append(out, '\n')
+			case 't':
+				out = append(out, '\t')
+			case 'r':
+				out = append(out, '\r')
+			case 'b':
+				out = append(out, '\b')
+			case 'f':
+				out = append(out, '\f')
+			case 'u':
+				if i+5 < len(data) {
+					r := hexToRune(data[i+2 : i+6])
+					if r >= 0 {
+						var buf [4]byte
+						n := utf8.EncodeRune(buf[:], r)
+						out = append(out, buf[:n]...)
+						i += 6
+						continue
+					}
+				}
+				out = append(out, data[i], data[i+1])
+			default:
+				out = append(out, data[i], data[i+1])
+			}
+			i += 2
+		} else {
+			out = append(out, data[i])
+			i++
+		}
+	}
+	return out
+}
+
+// hexToRune converts 4 hex bytes to a rune. Returns -1 on invalid input.
+func hexToRune(h []byte) rune {
+	if len(h) != 4 {
+		return -1
+	}
+	var r rune
+	for _, b := range h {
+		r <<= 4
+		switch {
+		case b >= '0' && b <= '9':
+			r |= rune(b - '0')
+		case b >= 'a' && b <= 'f':
+			r |= rune(b - 'a' + 10)
+		case b >= 'A' && b <= 'F':
+			r |= rune(b - 'A' + 10)
+		default:
+			return -1
+		}
+	}
+	return r
+}
+
+// extractJSONLText extracts searchable text using json.Unmarshal (old, slow).
+func extractJSONLText(line []byte) string {
+	var record struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &record); err != nil {
+		return ""
+	}
+
+	// Skip non-message record types
+	switch record.Type {
+	case "progress", "file-history-snapshot", "queue-operation", "system", "last-prompt":
+		return ""
+	}
+
+	if len(record.Message.Content) == 0 {
+		return ""
+	}
+
+	// Content can be a string or an array of blocks
+	var str string
+	if json.Unmarshal(record.Message.Content, &str) == nil {
+		return str
+	}
+
+	var blocks []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		Thinking string `json:"thinking"`
+	}
+	if json.Unmarshal(record.Message.Content, &blocks) != nil {
+		return ""
+	}
+
+	var parts []string
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		case "thinking":
+			if b.Thinking != "" {
+				parts = append(parts, b.Thinking)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }

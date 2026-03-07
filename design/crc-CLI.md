@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -21,12 +21,18 @@ dispatches operations via proxy or cold-start.
   status, files, stale, missing, dismiss, config, unresolved, resolve,
   tag (with sub-subcommands: list, counts, files)
 - cmdConfig: dispatches to show (default), add-source, remove-source,
-  add-include, add-exclude, remove-pattern, show-why sub-subcommands
+  add-include, add-exclude, remove-pattern, show-why sub-subcommands.
+  Config subcommands with positional args + optional flags use
+  reorderArgs() to ensure flags are parsed before positional args
+  (Go's flag package stops at first non-flag argument).
 - cmdSearch: adds --chunks and --files flags (mutually exclusive),
   outputs JSONL when either is set. --wrap <name> wraps output in
   XML tags of that name. --like-file <path> uses file content as
   FTS density query (mutually exclusive with --contains/--regex).
   --tags outputs extracted tag names instead of chunk content.
+  --filter/--except for content-based filtering,
+  --filter-files/--exclude-files for path-based filtering.
+  Replaces --source/--not-source.
 - --wrap: parameterized context wrapper. Escapes closing tag in content.
   Convention: "memory" for experience, "knowledge" for facts.
 - cmdTag: dispatches to list/counts/files sub-subcommands,

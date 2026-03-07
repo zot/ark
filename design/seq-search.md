@@ -13,9 +13,12 @@ Covers combined search, split search, and chunk/file retrieval.
 ```
 CLI ──> Searcher.SearchCombined(query, opts)
          │
-         ├──> if --source/--not-source: ResolveSourceFilter(opts)
-         │     ├── match patterns against source dirs (substring)
-         │     ├── collect fileIDs for matching sources
+         ├──> ResolveFilters(opts)
+         │     ├── path filters: glob --filter-files/--exclude-files
+         │     │   against indexed file paths → file ID set
+         │     ├── content filters: FTS search --filter/--except
+         │     │   queries → file ID sets
+         │     ├── positives intersect, negatives subtract
          │     └── return WithOnly(ids) or WithExcept(ids)
          │
          ├──> microfts2.Search(query, ...filterOpts)
@@ -69,7 +72,7 @@ CLI ──> Searcher.ValidateSplitFlags(opts)
 ```
 CLI ──> Searcher.SearchSplit(opts)
          │
-         ├──> if --source/--not-source: ResolveSourceFilter(opts)
+         ├──> ResolveFilters(opts)
          │
          ├── only --about? ──> microvec.Search(text, k)
          ├── only --contains? ──> microfts2.Search(text, ...filterOpts)

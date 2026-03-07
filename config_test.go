@@ -117,6 +117,90 @@ func TestWriteDefaultConfig(t *testing.T) {
 	}
 }
 
+// Test: test-Config.md — add-include per-source round-trip
+func TestAddIncludePerSourceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ark.toml")
+	content := `dotfiles = true
+include = ["*.md"]
+exclude = [".git/"]
+
+[[source]]
+dir = "` + dir + `"
+strategy = "lines"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cfg.AddInclude("*.org", dir); err != nil {
+		t.Fatalf("AddInclude: %v", err)
+	}
+	if err := cfg.SaveConfig(configPath); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	cfg2, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(cfg2.Sources) == 0 {
+		t.Fatal("no sources after round-trip")
+	}
+	found := false
+	for _, p := range cfg2.Sources[0].Include {
+		if p == "*.org" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("per-source include missing *.org after round-trip, got %v", cfg2.Sources[0].Include)
+	}
+}
+
+// Test: test-Config.md — global add-include round-trip
+func TestAddIncludeGlobalRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ark.toml")
+	content := `dotfiles = true
+include = ["*.md"]
+exclude = [".git/"]
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.AddInclude("*.txt", ""); err != nil {
+		t.Fatalf("AddInclude: %v", err)
+	}
+	if err := cfg.SaveConfig(configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg2, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range cfg2.GlobalInclude {
+		if p == "*.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("global include missing *.txt after round-trip, got %v", cfg2.GlobalInclude)
+	}
+}
+
 func TestMissingSourceDirNotError(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")

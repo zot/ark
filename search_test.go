@@ -25,58 +25,41 @@ func TestValidateSearchFlagsAcceptsRegexAlone(t *testing.T) {
 	}
 }
 
-func TestSliceChunk(t *testing.T) {
-	data := []byte("chunk0\nchunk1\nchunk2\n")
-	offsets := []int64{0, 7, 14}
+func TestExtractByRange(t *testing.T) {
+	lines := []string{"chunk0", "chunk1", "chunk2", ""}
 
-	// Chunk 0
-	got := string(sliceChunk(data, offsets, 0))
+	// Line 1
+	got := extractByRange(lines, "1-1")
 	if got != "chunk0\n" {
-		t.Errorf("chunk 0: expected %q, got %q", "chunk0\n", got)
+		t.Errorf("range 1-1: expected %q, got %q", "chunk0\n", got)
 	}
 
-	// Chunk 1 (middle)
-	got = string(sliceChunk(data, offsets, 1))
-	if got != "chunk1\n" {
-		t.Errorf("chunk 1: expected %q, got %q", "chunk1\n", got)
+	// Lines 2-3
+	got = extractByRange(lines, "2-3")
+	if got != "chunk1\nchunk2\n" {
+		t.Errorf("range 2-3: expected %q, got %q", "chunk1\nchunk2\n", got)
 	}
 
-	// Chunk 2 (last, extends to end)
-	got = string(sliceChunk(data, offsets, 2))
-	if got != "chunk2\n" {
-		t.Errorf("chunk 2: expected %q, got %q", "chunk2\n", got)
-	}
-}
-
-func TestSliceChunkOutOfBounds(t *testing.T) {
-	data := []byte("hello")
-	offsets := []int64{0}
-	got := sliceChunk(data, offsets, 5)
-	if got != nil {
-		t.Errorf("expected nil for out-of-bounds chunk, got %q", got)
+	// Invalid range
+	got = extractByRange(lines, "bad")
+	if got != "" {
+		t.Errorf("bad range: expected empty, got %q", got)
 	}
 }
 
-func TestSliceChunkBeyondData(t *testing.T) {
-	data := []byte("short")
-	offsets := []int64{0, 100}
-	// Chunk 0 should be clamped
-	got := string(sliceChunk(data, offsets, 0))
-	if got != "short" {
-		t.Errorf("expected %q, got %q", "short", got)
+func TestParseRange(t *testing.T) {
+	s, e := parseRange("5-10")
+	if s != 5 || e != 10 {
+		t.Errorf("expected 5,10 got %d,%d", s, e)
+	}
+	s, e = parseRange("bad")
+	if s != 0 || e != 0 {
+		t.Errorf("expected 0,0 for bad range, got %d,%d", s, e)
 	}
 }
 
-func TestChunkNumForLines(t *testing.T) {
-	// Fake a FileInfo-like struct via the function signature
-	// chunkNumForLines uses ChunkStartLines and ChunkEndLines
-	type fakeInfo struct {
-		ChunkStartLines []int
-		ChunkEndLines   []int
-	}
-
-	// Test that we can import the function — it takes microfts2.FileInfo
-	// so we test sliceChunk behavior instead (already covered above).
+func TestChunkNumForRange(t *testing.T) {
+	// chunkNumForRange uses ChunkRanges from microfts2.FileInfo
 	// The merge/intersect logic requires live microfts2, tested via
 	// integration tests.
 }

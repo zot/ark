@@ -164,7 +164,6 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/remove-pattern", srv.handleConfigRemovePattern)
 	mux.HandleFunc("POST /config/show-why", srv.handleConfigShowWhy)
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
-	mux.HandleFunc("POST /config/set-cutoff", srv.handleConfigSetCutoff)
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
 
@@ -186,19 +185,21 @@ func PidFilePath(dbPath string) string {
 // JSON request/response helpers
 
 type searchRequest struct {
-	Query     string   `json:"query"`
-	About     string   `json:"about"`
-	Contains  string   `json:"contains"`
-	Regex     string   `json:"regex"`
-	LikeFile  string   `json:"likeFile"`
-	K         int      `json:"k"`
-	Scores    bool     `json:"scores"`
-	After     int64    `json:"after"`
-	Chunks    bool     `json:"chunks"`
-	Files     bool     `json:"files"`
-	Tags      bool     `json:"tags"`
-	Source    []string `json:"source"`
-	NotSource []string `json:"notSource"`
+	Query        string   `json:"query"`
+	About        string   `json:"about"`
+	Contains     string   `json:"contains"`
+	Regex        string   `json:"regex"`
+	LikeFile     string   `json:"likeFile"`
+	K            int      `json:"k"`
+	Scores       bool     `json:"scores"`
+	After        int64    `json:"after"`
+	Chunks       bool     `json:"chunks"`
+	Files        bool     `json:"files"`
+	Tags         bool     `json:"tags"`
+	Filter       []string `json:"filter"`
+	Except       []string `json:"except"`
+	FilterFiles  []string `json:"filterFiles"`
+	ExcludeFiles []string `json:"excludeFiles"`
 }
 
 type addRequest struct {
@@ -235,16 +236,18 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := SearchOpts{
-		K:         req.K,
-		Scores:    req.Scores,
-		After:     req.After,
-		About:     req.About,
-		Contains:  req.Contains,
-		Regex:     req.Regex,
-		LikeFile:  req.LikeFile,
-		Tags:      req.Tags,
-		Source:    req.Source,
-		NotSource: req.NotSource,
+		K:            req.K,
+		Scores:       req.Scores,
+		After:        req.After,
+		About:        req.About,
+		Contains:     req.Contains,
+		Regex:        req.Regex,
+		LikeFile:     req.LikeFile,
+		Tags:         req.Tags,
+		Filter:       req.Filter,
+		Except:       req.Except,
+		FilterFiles:  req.FilterFiles,
+		ExcludeFiles: req.ExcludeFiles,
 	}
 
 	var results []SearchResultEntry
@@ -521,21 +524,6 @@ type configStrategyRequest struct {
 func (srv *Server) handleConfigAddStrategy(w http.ResponseWriter, r *http.Request) {
 	var req configStrategyRequest
 	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddStrategy(req.Pattern, req.Strategy) })
-}
-
-func (srv *Server) handleConfigSetCutoff(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Cutoff int `json:"cutoff"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := srv.db.SetCutoff(req.Cutoff); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {

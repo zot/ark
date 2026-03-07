@@ -30,3 +30,15 @@
 **Input:** TOML with dir pointing to nonexistent path
 **Expected:** Config loads successfully (runtime check during scan, not load)
 **Refs:** crc-Config.md
+
+## Test: add-include per-source round-trip
+**Purpose:** AddInclude with sourceDir persists through SaveConfig/LoadConfig
+**Input:** Config with a source, AddInclude("*.org", sourceDir), save, reload
+**Expected:** Reloaded config has "*.org" in that source's Include list
+**Refs:** crc-Config.md, R235
+
+## Test: reorderArgs puts flags before positional args
+**Purpose:** CLI helper ensures Go flag parsing sees all flags
+**Input:** ["*.md", "--source", "/path/to/dir"]
+**Expected:** Reordered to ["--source", "/path/to/dir", "*.md"]
+**Refs:** crc-CLI.md, R232, R233

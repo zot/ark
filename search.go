@@ -7,7 +7,9 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"microfts2"
 
@@ -16,40 +18,142 @@ import (
 
 var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
 
+// defaultSearchOpts returns FTS search options with dynamic trigram filtering.
+// The filter uses a 50% ratio threshold — trigrams appearing in more than
+// half of all chunks are skipped as non-discriminating.
+func defaultSearchOpts(filterOpt microfts2.SearchOption) []microfts2.SearchOption {
+	opts := []microfts2.SearchOption{
+		microfts2.WithTrigramFilter(microfts2.FilterByRatio(0.50)),
+	}
+	if filterOpt != nil {
+		opts = append(opts, filterOpt)
+	}
+	return opts
+}
+
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K         int      // max results (default 20)
-	Scores    bool     // include scores in output
-	After     int64    // only results newer than this timestamp (unix nano, 0 = no filter)
-	About     string   // semantic query (microvec)
-	Contains  string   // exact match query (microfts2)
-	Regex     string   // regex query (microfts2)
-	LikeFile  string   // file path — use content as FTS density query
-	Tags      bool     // output extracted tags instead of content
-	Source    []string // only search files from matching source dirs (substring)
-	NotSource []string // exclude files from matching source dirs (substring)
+	K            int      // max results (default 20)
+	Scores       bool     // include scores in output
+	After        int64    // only results newer than this timestamp (unix nano, 0 = no filter)
+	About        string   // semantic query (microvec)
+	Contains     string   // exact match query (microfts2)
+	Regex        string   // regex query (microfts2)
+	LikeFile     string   // file path — use content as FTS density query
+	Tags         bool     // output extracted tags instead of content
+	Filter       []string // content-based positive filters (FTS queries, intersect)
+	Except       []string // content-based negative filters (FTS queries, subtract)
+	FilterFiles  []string // path-based positive filters (glob patterns, intersect)
+	ExcludeFiles []string // path-based negative filters (glob patterns, subtract)
 }
 
 // SearchResultEntry is a merged/intersected search result.
 type SearchResultEntry struct {
-	Path      string
-	StartLine int
-	EndLine   int
-	FTSScore  float64
-	VecScore  float64
-	Score     float64
-	FileID    uint64
-	ChunkNum  uint64
-	Text      string // populated by FillChunks or FillFiles
+	Path     string
+	Range    string // opaque range from chunker (e.g. "1-10" for lines chunker)
+	FTSScore float64
+	VecScore float64
+	Score    float64
+	FileID   uint64
+	ChunkNum uint64
+	Text     string // populated by FillChunks or FillFiles
 }
 
 // ChunkResult is the JSONL output for --chunks.
 type ChunkResult struct {
-	Path      string  `json:"path"`
-	StartLine int     `json:"startLine"`
-	EndLine   int     `json:"endLine"`
-	Score     float64 `json:"score"`
-	Text      string  `json:"text"`
+	Path    string  `json:"path"`
+	Range   string  `json:"range"`
+	Score   float64 `json:"score"`
+	Text    string  `json:"text"`
+	Preview string  `json:"preview,omitempty"`
+}
+
+// ExtractPreview returns a window of n characters from text centered on the
+// first case-insensitive occurrence of query. It adjusts to word boundaries
+// and adds ellipsis when truncated. If query is not found, falls back to
+// the first n characters (the FTS engine already verified the match against
+// the raw file content).
+func ExtractPreview(text, query string, n int) string {
+	if n <= 0 || len(text) == 0 {
+		return ""
+	}
+	// If text fits in the window, return it whole
+	textRunes := []rune(text)
+	if len(textRunes) <= n {
+		return text
+	}
+
+	// Find match position (case-insensitive)
+	matchPos := -1
+	if query != "" {
+		lower := strings.ToLower(text)
+		idx := strings.Index(lower, strings.ToLower(query))
+		if idx >= 0 {
+			// Convert byte offset to rune offset
+			matchPos = utf8.RuneCountInString(text[:idx])
+		}
+	}
+
+	// No match: fall back to start of text
+	if matchPos < 0 {
+		matchPos = 0
+	}
+
+	// Center the window on the match
+	queryRunes := utf8.RuneCountInString(query)
+	half := (n - queryRunes) / 2
+	start := matchPos - half
+	end := start + n
+
+	// Clamp to bounds
+	if start < 0 {
+		start = 0
+		end = n
+	}
+	if end > len(textRunes) {
+		end = len(textRunes)
+		start = end - n
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	// Adjust to word boundaries (don't cut mid-word)
+	if start > 0 {
+		// Move start forward to next space
+		for start < end && textRunes[start] != ' ' && textRunes[start] != '\n' {
+			start++
+		}
+		if start < end && (textRunes[start] == ' ' || textRunes[start] == '\n') {
+			start++ // skip the space
+		}
+	}
+	if end < len(textRunes) {
+		// Move end back to previous space
+		for end > start && textRunes[end-1] != ' ' && textRunes[end-1] != '\n' {
+			end--
+		}
+	}
+
+	if start >= end {
+		// Word boundary adjustment collapsed the window; fall back
+		start = matchPos
+		end = matchPos + n
+		if end > len(textRunes) {
+			end = len(textRunes)
+		}
+	}
+
+	result := string(textRunes[start:end])
+
+	// Add ellipsis
+	if start > 0 {
+		result = "..." + result
+	}
+	if end < len(textRunes) {
+		result = result + "..."
+	}
+	return result
 }
 
 // FileResult is the JSONL output for --files.
@@ -83,14 +187,11 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 		k = 20
 	}
 
-	sourceFilter, err := s.resolveSourceFilter(opts)
+	filterOpt, err := s.resolveFilters(opts)
 	if err != nil {
 		return nil, err
 	}
-	var ftsSearchOpts []microfts2.SearchOption
-	if sourceFilter != nil {
-		ftsSearchOpts = append(ftsSearchOpts, sourceFilter)
-	}
+	ftsSearchOpts := defaultSearchOpts(filterOpt)
 
 	ftsResults, err := s.fts.Search(query, ftsSearchOpts...)
 	if err != nil {
@@ -125,14 +226,11 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		k = 20
 	}
 
-	sourceFilter, err := s.resolveSourceFilter(opts)
+	filterOpt, err := s.resolveFilters(opts)
 	if err != nil {
 		return nil, err
 	}
-	var ftsSearchOpts []microfts2.SearchOption
-	if sourceFilter != nil {
-		ftsSearchOpts = append(ftsSearchOpts, sourceFilter)
-	}
+	ftsSearchOpts := defaultSearchOpts(filterOpt)
 
 	hasAbout := opts.About != ""
 	hasFTS := opts.Contains != "" || opts.Regex != "" || opts.LikeFile != ""
@@ -159,7 +257,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		}
 		ftsResults = fr.Results
 	} else if opts.Contains != "" {
-		fr, err := s.fts.Search(opts.Contains, ftsSearchOpts...)
+		fr, err := s.fts.Search(opts.Contains, append(ftsSearchOpts, microfts2.WithVerify())...)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
@@ -198,53 +296,115 @@ func validateSearchFlags(opts SearchOpts) error {
 	if opts.LikeFile != "" && (opts.Contains != "" || opts.Regex != "") {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
 	}
-	if len(opts.Source) > 0 && len(opts.NotSource) > 0 {
-		return fmt.Errorf("--source and --not-source are mutually exclusive")
-	}
 	return nil
 }
 
-// resolveSourceFilter builds a microfts2 search option that filters by source directory.
-// Returns nil if no source filtering is requested.
-func (s *Searcher) resolveSourceFilter(opts SearchOpts) (microfts2.SearchOption, error) {
-	if len(opts.Source) == 0 && len(opts.NotSource) == 0 {
+// CRC: crc-Searcher.md
+// resolveFilters builds a microfts2 search option from all filter flags.
+// Path filters first (cheap), then content filters. Positives intersect,
+// negatives subtract. Returns nil if no filtering is requested.
+func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
+	hasFilters := len(opts.Filter) > 0 || len(opts.Except) > 0 ||
+		len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0
+	if !hasFilters {
 		return nil, nil
 	}
 
-	// Find matching source dirs
-	var matchedDirs []string
-	patterns := opts.Source
-	if len(patterns) == 0 {
-		patterns = opts.NotSource
-	}
-	for _, src := range s.config.Sources {
-		for _, pat := range patterns {
-			if strings.Contains(src.Dir, pat) {
-				matchedDirs = append(matchedDirs, src.Dir)
-				break
-			}
-		}
-	}
-
-	// Collect file IDs for files in matched source dirs
+	// Get all indexed files for path matching and ID resolution
 	statuses, err := s.fts.StaleFiles()
 	if err != nil {
-		return nil, fmt.Errorf("resolve source filter: %w", err)
+		return nil, fmt.Errorf("resolve filters: %w", err)
 	}
-	ids := make(map[uint64]struct{})
+
+	// Start with all file IDs (will narrow down)
+	allIDs := make(map[uint64]struct{}, len(statuses))
+	pathIndex := make(map[uint64]string, len(statuses)) // fileID → path
 	for _, fs := range statuses {
-		for _, dir := range matchedDirs {
-			if strings.HasPrefix(fs.Path, dir+"/") || strings.HasPrefix(fs.Path, dir) {
-				ids[fs.FileID] = struct{}{}
-				break
+		allIDs[fs.FileID] = struct{}{}
+		pathIndex[fs.FileID] = fs.Path
+	}
+
+	// Track whether we have any positive filters (which means "only these")
+	hasPositive := len(opts.FilterFiles) > 0 || len(opts.Filter) > 0
+	included := allIDs // start with all; narrow if positive filters exist
+	if hasPositive {
+		included = nil // will be built by intersection
+	}
+
+	// Path-based positive filters (--filter-files): intersect
+	if len(opts.FilterFiles) > 0 {
+		m := &Matcher{Dotfiles: true}
+		matched := make(map[uint64]struct{})
+		for id, path := range pathIndex {
+			for _, pat := range opts.FilterFiles {
+				if m.Match(pat, path, false) {
+					matched[id] = struct{}{}
+					break
+				}
+			}
+		}
+		included = matched
+	}
+
+	// Content-based positive filters (--filter): intersect
+	for _, query := range opts.Filter {
+		fr, err := s.fts.Search(query)
+		if err != nil {
+			return nil, fmt.Errorf("filter query %q: %w", query, err)
+		}
+		matched := make(map[uint64]struct{})
+		for _, r := range fr.Results {
+			status, err := s.fts.CheckFile(r.Path)
+			if err != nil {
+				continue
+			}
+			matched[status.FileID] = struct{}{}
+		}
+		if included == nil {
+			included = matched
+		} else {
+			// Intersect
+			for id := range included {
+				if _, ok := matched[id]; !ok {
+					delete(included, id)
+				}
 			}
 		}
 	}
 
-	if len(opts.Source) > 0 {
-		return microfts2.WithOnly(ids), nil
+	if included == nil {
+		included = allIDs
 	}
-	return microfts2.WithExcept(ids), nil
+
+	// Path-based negative filters (--exclude-files): subtract
+	if len(opts.ExcludeFiles) > 0 {
+		m := &Matcher{Dotfiles: true}
+		for id, path := range pathIndex {
+			for _, pat := range opts.ExcludeFiles {
+				if m.Match(pat, path, false) {
+					delete(included, id)
+					break
+				}
+			}
+		}
+	}
+
+	// Content-based negative filters (--except): subtract
+	for _, query := range opts.Except {
+		fr, err := s.fts.Search(query)
+		if err != nil {
+			return nil, fmt.Errorf("except query %q: %w", query, err)
+		}
+		for _, r := range fr.Results {
+			status, err := s.fts.CheckFile(r.Path)
+			if err != nil {
+				continue
+			}
+			delete(included, status.FileID)
+		}
+	}
+
+	return microfts2.WithOnly(included), nil
 }
 
 // merge combines results from both engines by (fileid, chunknum).
@@ -368,11 +528,8 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 		}
 		r.Path = info.Filename
 		cn := int(r.ChunkNum)
-		if cn < len(info.ChunkStartLines) {
-			r.StartLine = info.ChunkStartLines[cn]
-		}
-		if cn < len(info.ChunkEndLines) {
-			r.EndLine = info.ChunkEndLines[cn]
+		if cn < len(info.ChunkRanges) {
+			r.Range = info.ChunkRanges[cn]
 		}
 		resolved = append(resolved, r)
 	}
@@ -383,8 +540,7 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 // Groups by FileID to avoid re-reading the same file.
 func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	type fileCache struct {
-		data    []byte
-		offsets []int64
+		lines []string
 	}
 	cache := make(map[uint64]*fileCache)
 
@@ -400,10 +556,10 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 			if err != nil {
 				continue
 			}
-			fc = &fileCache{data: data, offsets: info.ChunkOffsets}
+			fc = &fileCache{lines: strings.Split(string(data), "\n")}
 			cache[r.FileID] = fc
 		}
-		r.Text = string(sliceChunk(fc.data, fc.offsets, int(r.ChunkNum)))
+		r.Text = extractByRange(fc.lines, r.Range)
 	}
 	return results, nil
 }
@@ -441,31 +597,46 @@ func (s *Searcher) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, 
 			continue
 		}
 		r.Text = string(data)
-		r.StartLine = 0
-		r.EndLine = 0
+		r.Range = ""
 	}
 	return deduped, nil
 }
 
-// sliceChunk extracts a single chunk from data using byte offsets.
-func sliceChunk(data []byte, offsets []int64, chunkNum int) []byte {
-	if chunkNum >= len(offsets) {
-		return nil
+// parseRange parses a "start-end" range string into 1-based line numbers.
+// Returns (0, 0) if the range cannot be parsed.
+func parseRange(r string) (startLine, endLine int) {
+	parts := strings.SplitN(r, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0
 	}
-	start := offsets[chunkNum]
-	var end int64
-	if chunkNum+1 < len(offsets) {
-		end = offsets[chunkNum+1]
-	} else {
-		end = int64(len(data))
+	s, err1 := strconv.Atoi(parts[0])
+	e, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0
 	}
-	if start > int64(len(data)) {
-		start = int64(len(data))
+	return s, e
+}
+
+// extractByRange extracts text from lines using a "start-end" range string.
+// Lines are 1-based. Returns the joined lines including trailing newline.
+func extractByRange(lines []string, rangeStr string) string {
+	start, end := parseRange(rangeStr)
+	if start == 0 && end == 0 {
+		return ""
 	}
-	if end > int64(len(data)) {
-		end = int64(len(data))
+	// Convert to 0-based index
+	si := start - 1
+	ei := end
+	if si < 0 {
+		si = 0
 	}
-	return data[start:end]
+	if ei > len(lines) {
+		ei = len(lines)
+	}
+	if si >= ei {
+		return ""
+	}
+	return strings.Join(lines[si:ei], "\n") + "\n"
 }
 
 // ftsKeyCache caches LMDB lookups for FTS result resolution.
@@ -502,7 +673,7 @@ func (c *ftsKeyCache) resolve(r microfts2.SearchResult) (chunkKey, bool) {
 		}
 		c.fileInfo[fileID] = info
 	}
-	cn := chunkNumForLines(info, r.StartLine)
+	cn := chunkNumForRange(info, r.Range)
 	return chunkKey{FileID: fileID, ChunkNum: cn}, true
 }
 
@@ -545,20 +716,18 @@ func ExtractResultTags(results []SearchResultEntry) []TagResult {
 	return tags
 }
 
-// chunkNumForLines finds which chunk contains the given start line.
-func chunkNumForLines(info microfts2.FileInfo, startLine int) uint64 {
-	for i, sl := range info.ChunkStartLines {
-		if sl == startLine {
+// chunkNumForRange finds which chunk matches the given range string.
+func chunkNumForRange(info microfts2.FileInfo, rangeStr string) uint64 {
+	for i, cr := range info.ChunkRanges {
+		if cr == rangeStr {
 			return uint64(i)
 		}
 	}
-	// Fallback: find the chunk whose range contains this line
-	for i, sl := range info.ChunkStartLines {
-		el := 0
-		if i < len(info.ChunkEndLines) {
-			el = info.ChunkEndLines[i]
-		}
-		if startLine >= sl && startLine <= el {
+	// Fallback: find the chunk whose range contains the start line
+	startLine, _ := parseRange(rangeStr)
+	for i, cr := range info.ChunkRanges {
+		s, e := parseRange(cr)
+		if startLine >= s && startLine <= e {
 			return uint64(i)
 		}
 	}

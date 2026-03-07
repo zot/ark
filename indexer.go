@@ -187,7 +187,7 @@ func ExtractTags(content []byte) map[string]uint32 {
 	return tags
 }
 
-// readChunks reads chunk text from a file using offsets from microfts2.
+// splitChunks reads chunk text from a file using ranges from microfts2.
 // Returns the raw file data alongside sliced chunks (avoids bytes.Join
 // when callers need the full content for tag extraction).
 func splitChunks(data []byte, fileid uint64, fts *microfts2.DB) ([]byte, [][]byte, error) {
@@ -196,10 +196,10 @@ func splitChunks(data []byte, fileid uint64, fts *microfts2.DB) ([]byte, [][]byt
 		return nil, nil, err
 	}
 
-	offsets := info.ChunkOffsets
-	chunks := make([][]byte, len(offsets))
-	for i := range offsets {
-		chunks[i] = sliceChunk(data, offsets, i)
+	lines := strings.Split(string(data), "\n")
+	chunks := make([][]byte, len(info.ChunkRanges))
+	for i, r := range info.ChunkRanges {
+		chunks[i] = []byte(extractByRange(lines, r))
 	}
 	return data, chunks, nil
 }

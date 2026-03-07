@@ -342,14 +342,69 @@
 - **R213:** On startup, if the log file exceeds 10MB, truncate to last 1MB
 - **R214:** CLI commands that cold-start do not log to file — server only
 
-## Feature: Source Filtering
-**Source:** specs/search.md
+## Feature: Search Filtering
+**Source:** specs/search-filtering.md
 
-- **R215:** `--source <pattern>` restricts search to files from source directories matching the pattern (substring match)
-- **R216:** `--not-source <pattern>` excludes files from source directories matching the pattern (substring match)
-- **R217:** Multiple `--source` or `--not-source` flags allowed (OR logic within each)
-- **R218:** `--source` and `--not-source` are mutually exclusive — error if both provided
-- **R219:** Source filtering is pushed to microfts2 as a file ID set — excluded files never enter scoring or consume result slots
-- **R220:** microfts2 provides WithOnly(ids) and WithExcept(ids) search options that filter during result resolution
-- **R221:** Source filtering works with both SearchCombined and SearchSplit paths
-- **R222:** (inferred) Source filtering fields pass through the server proxy via searchRequest JSON
+### Content Filtering
+- **R215:** `--filter <query>` runs a preliminary FTS search; matching file IDs become the scope for the main search
+- **R216:** Multiple `--filter` flags intersect — all must match (file must appear in every filter's results)
+- **R217:** `--except <query>` runs a preliminary FTS search and subtracts those file IDs from the scope
+- **R218:** Multiple `--except` flags union — any match is excluded
+- **R219:** Content filters are pushed to microfts2 as file ID sets via WithOnly/WithExcept
+
+### Path Filtering
+- **R220:** `--filter-files <pattern>` restricts search to files whose paths match the glob pattern
+- **R221:** `--exclude-files <pattern>` excludes files whose paths match the glob pattern
+- **R222:** Multiple patterns supported for both (OR logic — match any pattern)
+- **R223:** Path filtering matches against the full indexed file path using glob syntax
+- **R224:** (inferred) Path filters are resolved to file ID sets from microfts2's file list — no FTS query needed
+
+### Composition
+- **R225:** All filters produce file ID sets: positive filters intersect, negative filters subtract
+- **R226:** Evaluation order: path filters first (cheap), then content filters
+- **R227:** The combined file ID set is passed to microfts2 as WithOnly (if any positives) or WithExcept (if only negatives)
+- **R228:** Search filtering works with SearchCombined, SearchSplit, and tag search
+- **R229:** (inferred) Filter fields pass through the server proxy via searchRequest JSON
+
+### Replaces Source Filtering
+- **R230:** `--source` and `--not-source` flags are removed — replaced by `--filter-files` and `--exclude-files`
+- **R231:** (inferred) No backward compatibility shim needed — flags are not in use outside testing
+
+## Feature: Config Flag Parsing Bug
+**Source:** specs/config-flag-bug.md
+
+- **R232:** Config mutation subcommands must parse flags correctly when positional args precede optional flags
+- **R233:** Fix: reorder args so flags come first before calling `fs.Parse`, or document flags-first convention
+- **R234:** Affected subcommands: `add-include`, `add-exclude`, `remove-pattern` — any with positional arg + optional `--source` flag
+- **R235:** (inferred) Add a test that verifies per-source add-include round-trips correctly through the CLI arg parsing path
+
+## Feature: Content-Aware JSONL Chunker
+**Source:** specs/main.md
+
+- **R236:** The `jsonl` strategy is a Go func chunker registered with microfts2 on both Init and Open
+- **R237:** Each JSONL line is parsed as JSON; lines with no extractable text produce no chunk
+- **R238:** The chunker extracts `type:text` blocks (the `text` field) from `message.content`
+- **R239:** The chunker extracts `type:thinking` blocks (the `thinking` field, not the `signature`)
+- **R240:** The chunker skips `tool_use` blocks entirely (input contains file contents, code edits)
+- **R241:** The chunker skips `tool_result` blocks entirely (command output, file reads)
+- **R242:** The chunker skips `planContent` top-level field (duplicate of message content)
+- **R243:** The chunker skips record types: `progress`, `file-history-snapshot`, `queue-operation`, `system`
+- **R244:** Chunk range is `N-N` (1-based line number) for traceability back to source
+- **R245:** Chunk content is the concatenation of extracted text blocks, separated by newlines
+- **R246:** As a Go func strategy, the chunker avoids scanner buffer limits on large JSONL lines
+- **R247:** (inferred) When `message.content` is a string (not array), the entire string is the chunk text
+- **R248:** (inferred) The `jsonl` strategy replaces the external `ark chunk-jsonl` command — no external process needed
+
+## Feature: Enhanced Status
+**Source:** specs/status-enhanced.md
+
+- **R249:** `ark status` reports LMDB map usage: used bytes, total map size, and percentage
+- **R250:** Map usage is displayed in human-readable units (MB/GB)
+- **R251:** Map usage is computed from LMDB env info: (LastPNO + 1) * PageSize = used bytes
+- **R252:** `ark status` reports total chunk count across all indexed files
+- **R253:** `ark status` reports file count per chunking strategy (e.g., lines=1200 jsonl=73)
+- **R254:** `ark status` reports number of configured source directories
+- **R255:** New status fields appear after existing fields (files, stale, missing, unresolved)
+- **R256:** Output order: files, stale, missing, unresolved, chunks, sources, strategies, map, server
+- **R257:** `GET /status` returns the same enhanced data in the JSON StatusInfo response
+- **R258:** (inferred) Chunk count is computed by summing ChunkRanges across all indexed files via microfts2 FileInfoByID

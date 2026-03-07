@@ -72,25 +72,11 @@ This lets the agent ask "what tags are relevant to X?" without
 reading content — useful for navigation, topic discovery, and the
 V3 inspiration engine.
 
-## Source filtering
+## Source filtering (replaced)
 
-`--source <pattern>` and `--not-source <pattern>` restrict which
-source directories participate in search. Pattern is a substring
-match against source directory paths. Multiple flags allowed.
-
-- `--source daneel` — only search files from sources matching "daneel"
-- `--not-source .claude` — exclude files from sources matching ".claude"
-- `--source` and `--not-source` are mutually exclusive
-
-The filter is pushed down to microfts2 as a file ID set. Ark resolves
-source patterns to directories, collects file IDs belonging to those
-sources, and passes the set to microfts2's Search as a WithOnly or
-WithExcept option. Excluded files never enter scoring — they don't
-consume result slots or distort ranking.
-
-This solves the JSONL flooding problem: conversation logs produce
-hundreds of chunks per file, burying small notes. With source
-filtering, searches default to what you mean.
+Replaced by search filtering in specs/search-filtering.md.
+`--source`/`--not-source` removed in favor of `--filter-files`/
+`--exclude-files` (path-based) and `--filter`/`--except` (content-based).
 
 ## Common search options
 

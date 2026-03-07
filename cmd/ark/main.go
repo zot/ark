@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"ark"
+	"microfts2"
 )
 
 // arkDir is the ark directory, set from --dir flag (global, parsed before subcommand).
@@ -130,7 +131,7 @@ Commands:
   dismiss     Dismiss missing files
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
-              remove-pattern, show-why, set-cutoff, add-strategy
+              remove-pattern, show-why, add-strategy
   grams       Show trigrams for a query (active/inactive, frequency)
   unresolved  List unresolved files
   resolve     Dismiss unresolved files by pattern
@@ -367,10 +368,13 @@ func cmdSearch(args []string) {
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("files", false, "emit full file content as JSONL")
+	preview := fs.Int("preview", 0, "with --chunks: extract N-char preview window around match")
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")
-	var source, notSource stringSlice
-	fs.Var(&source, "source", "only search files from matching source dirs (repeatable)")
-	fs.Var(&notSource, "not-source", "exclude files from matching source dirs (repeatable)")
+	var filter, except, filterFiles, excludeFiles stringSlice
+	fs.Var(&filter, "filter", "content-based positive filter (repeatable, FTS query)")
+	fs.Var(&except, "except", "content-based negative filter (repeatable, FTS query)")
+	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
+	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
 	fs.Parse(args)
 
 	if *chunks && *files {
@@ -398,11 +402,17 @@ func cmdSearch(args []string) {
 			"files":  *files,
 			"tags":   *tags,
 		}
-		if len(source) > 0 {
-			body["source"] = []string(source)
+		if len(filter) > 0 {
+			body["filter"] = []string(filter)
 		}
-		if len(notSource) > 0 {
-			body["notSource"] = []string(notSource)
+		if len(except) > 0 {
+			body["except"] = []string(except)
+		}
+		if len(filterFiles) > 0 {
+			body["filterFiles"] = []string(filterFiles)
+		}
+		if len(excludeFiles) > 0 {
+			body["excludeFiles"] = []string(excludeFiles)
 		}
 		if isSplit {
 			body["about"] = *about
@@ -428,23 +438,34 @@ func cmdSearch(args []string) {
 			if err := proxyDecode(client, "POST", "/search", body, &results); err != nil {
 				fatal(err)
 			}
-			printSearchResults(results, *scores, *chunks, *files, *wrap)
+			// Extract query for preview
+			var pq string
+			if v, ok := body["contains"].(string); ok && v != "" {
+				pq = v
+			} else if v, ok := body["about"].(string); ok && v != "" {
+				pq = v
+			} else if v, ok := body["query"].(string); ok {
+				pq = v
+			}
+			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, pq)
 		}
 		return
 	}
 
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
-			K:         *k,
-			Scores:    *scores,
-			After:     afterNano,
-			About:     *about,
-			Contains:  *contains,
-			Regex:     *regex,
-			LikeFile:  *likeFile,
-			Tags:      *tags,
-			Source:    []string(source),
-			NotSource: []string(notSource),
+			K:            *k,
+			Scores:       *scores,
+			After:        afterNano,
+			About:        *about,
+			Contains:     *contains,
+			Regex:        *regex,
+			LikeFile:     *likeFile,
+			Tags:         *tags,
+			Filter:       []string(filter),
+			Except:       []string(except),
+			FilterFiles:  []string(filterFiles),
+			ExcludeFiles: []string(excludeFiles),
 		}
 
 		var results []ark.SearchResultEntry
@@ -476,19 +497,31 @@ func cmdSearch(args []string) {
 			}
 		}
 
+		// Determine query for preview extraction
+		var query string
+		if *contains != "" {
+			query = *contains
+		} else if *about != "" {
+			query = *about
+		} else if *regex != "" {
+			query = *regex
+		} else {
+			query = strings.Join(fs.Args(), " ")
+		}
+
 		if *tags {
 			printTagResults(results, *scores)
 		} else {
-			printSearchResults(results, *scores, *chunks, *files, *wrap)
+			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, query)
 		}
 	})
 }
 
-func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files bool, wrap string) {
+func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files bool, wrap string, previewN int, query string) {
 	if wrap != "" {
 		for _, r := range results {
 			if chunks {
-				fmt.Printf("<%s source=%q lines=\"%d-%d\">\n", wrap, r.Path, r.StartLine, r.EndLine)
+				fmt.Printf("<%s source=%q range=%q>\n", wrap, r.Path, r.Range)
 				writeEscaped(os.Stdout, r.Text, wrap)
 				fmt.Printf("</%s>\n", wrap)
 			} else if files {
@@ -496,7 +529,7 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 				writeEscaped(os.Stdout, r.Text, wrap)
 				fmt.Printf("</%s>\n", wrap)
 			} else {
-				fmt.Printf("<%s source=%q lines=\"%d-%d\" />\n", wrap, r.Path, r.StartLine, r.EndLine)
+				fmt.Printf("<%s source=%q range=%q />\n", wrap, r.Path, r.Range)
 			}
 		}
 		return
@@ -504,13 +537,17 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 	enc := json.NewEncoder(os.Stdout)
 	for _, r := range results {
 		if chunks {
-			enc.Encode(ark.ChunkResult{
-				Path:      r.Path,
-				StartLine: r.StartLine,
-				EndLine:   r.EndLine,
-				Score:     r.Score,
-				Text:      r.Text,
-			})
+			cr := ark.ChunkResult{
+				Path:  r.Path,
+				Range: r.Range,
+				Score: r.Score,
+				Text:  r.Text,
+			}
+			if previewN > 0 {
+				cr.Preview = ark.ExtractPreview(r.Text, query, previewN)
+				cr.Text = "" // omit full text when preview is requested
+			}
+			enc.Encode(cr)
 		} else if files {
 			enc.Encode(ark.FileResult{
 				Path:  r.Path,
@@ -518,9 +555,9 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 				Text:  r.Text,
 			})
 		} else if scores {
-			fmt.Printf("%s:%d-%d\t%.4f\n", r.Path, r.StartLine, r.EndLine, r.Score)
+			fmt.Printf("%s:%s\t%.4f\n", r.Path, r.Range, r.Score)
 		} else {
-			fmt.Printf("%s:%d-%d\n", r.Path, r.StartLine, r.EndLine)
+			fmt.Printf("%s:%s\n", r.Path, r.Range)
 		}
 	}
 }
@@ -559,8 +596,35 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	if serverRunning {
 		server = "running"
 	}
-	fmt.Printf("files: %d\nstale: %d\nmissing: %d\nunresolved: %d\nserver: %s\n",
-		status.Files, status.Stale, status.Missing, status.Unresolved, server)
+	fmt.Printf("files: %d\nstale: %d\nmissing: %d\nunresolved: %d\n",
+		status.Files, status.Stale, status.Missing, status.Unresolved)
+	fmt.Printf("chunks: %d\nsources: %d\n", status.Chunks, status.Sources)
+	if len(status.Strategies) > 0 {
+		fmt.Print("strategies:")
+		for name, count := range status.Strategies {
+			fmt.Printf(" %s=%d", name, count)
+		}
+		fmt.Println()
+	}
+	if status.MapTotal > 0 {
+		pct := float64(status.MapUsed) / float64(status.MapTotal) * 100
+		fmt.Printf("map: %s / %s (%.0f%%)\n",
+			formatBytes(status.MapUsed), formatBytes(status.MapTotal), pct)
+	}
+	fmt.Printf("server: %s\n", server)
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 // writeEscaped writes s to w, escaping the closing tag to prevent premature tag closure.
@@ -802,8 +866,6 @@ func cmdConfig(args []string) {
 		cmdConfigRemovePattern(args[1:])
 	case "show-why":
 		cmdConfigShowWhy(args[1:])
-	case "set-cutoff":
-		cmdConfigSetCutoff(args[1:])
 	case "add-strategy":
 		cmdConfigAddStrategy(args[1:])
 	default:
@@ -896,7 +958,7 @@ func cmdConfigRemoveSource(args []string) {
 func cmdConfigAddInclude(args []string) {
 	fs := flag.NewFlagSet("config add-include", flag.ExitOnError)
 	source := fs.String("source", "", "source directory (empty for global)")
-	fs.Parse(args)
+	fs.Parse(reorderArgs(args))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "error: pattern required")
@@ -919,7 +981,7 @@ func cmdConfigAddInclude(args []string) {
 func cmdConfigAddExclude(args []string) {
 	fs := flag.NewFlagSet("config add-exclude", flag.ExitOnError)
 	source := fs.String("source", "", "source directory (empty for global)")
-	fs.Parse(args)
+	fs.Parse(reorderArgs(args))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "error: pattern required")
@@ -942,7 +1004,7 @@ func cmdConfigAddExclude(args []string) {
 func cmdConfigRemovePattern(args []string) {
 	fs := flag.NewFlagSet("config remove-pattern", flag.ExitOnError)
 	source := fs.String("source", "", "source directory (empty for global)")
-	fs.Parse(args)
+	fs.Parse(reorderArgs(args))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "error: pattern required")
@@ -997,36 +1059,6 @@ func cmdConfigShowWhy(args []string) {
 	fmt.Println(string(data))
 }
 
-func cmdConfigSetCutoff(args []string) {
-	fs := flag.NewFlagSet("config set-cutoff", flag.ExitOnError)
-	fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "error: percentile required (e.g. 50)")
-		os.Exit(1)
-	}
-	pct, err := strconv.Atoi(fs.Arg(0))
-	if err != nil || pct < 1 || pct > 100 {
-		fmt.Fprintln(os.Stderr, "error: percentile must be 1-100")
-		os.Exit(1)
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/set-cutoff", map[string]any{"cutoff": pct}); err != nil {
-			fatal(err)
-		}
-		fmt.Printf("cutoff set to %d%%\n", pct)
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.SetCutoff(pct); err != nil {
-			fatal(err)
-		}
-		fmt.Printf("cutoff set to %d%%\n", pct)
-	})
-}
-
 func cmdConfigAddStrategy(args []string) {
 	fs := flag.NewFlagSet("config add-strategy", flag.ExitOnError)
 	fs.Parse(args)
@@ -1063,16 +1095,12 @@ func cmdGrams(args []string) {
 	}
 
 	withDB(func(d *ark.DB) {
-		trigrams, err := d.QueryTrigrams(query)
+		trigrams, err := d.QueryTrigramCounts(query)
 		if err != nil {
 			fatal(err)
 		}
 		for _, t := range trigrams {
-			status := " "
-			if t.Active {
-				status = "*"
-			}
-			fmt.Printf("%s %q\t%d\n", status, t.Trigram, t.DocFreq)
+			fmt.Printf("%q\t%d\n", microfts2.DecodeTrigram(t.Trigram), t.Count)
 		}
 	})
 }
@@ -1463,7 +1491,7 @@ func cmdTagFilesContext(tags []string) {
 }
 
 // cmdChunkJSONL is a chunking strategy command: splits a file on newline
-// boundaries and outputs byte offsets to stdout (one per line).
+// boundaries and outputs range\tcontent lines (microfts2 v0.4 protocol).
 func cmdChunkJSONL(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: ark chunk-jsonl <file>")
@@ -1475,13 +1503,39 @@ func cmdChunkJSONL(args []string) {
 		fatal(err)
 	}
 
-	// Output byte offset for each line start
-	fmt.Println(0) // first chunk starts at 0
+	lineNum := 1
+	start := 0
 	for i, b := range data {
-		if b == '\n' && i+1 < len(data) {
-			fmt.Println(i + 1)
+		if b == '\n' {
+			fmt.Printf("%d-%d\t%s\n", lineNum, lineNum, data[start:i])
+			lineNum++
+			start = i + 1
 		}
 	}
+	if start < len(data) {
+		fmt.Printf("%d-%d\t%s", lineNum, lineNum, data[start:])
+	}
+}
+
+// CRC: crc-CLI.md
+// reorderArgs moves flag arguments (starting with -) before positional
+// arguments. Go's flag package stops parsing at the first non-flag
+// argument, so flags after positional args are silently ignored.
+func reorderArgs(args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			// If this flag takes a value (next arg doesn't start with -)
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	return append(flags, positional...)
 }
 
 func parseAliases(s string) map[byte]byte {

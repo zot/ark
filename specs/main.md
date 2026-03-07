@@ -177,6 +177,42 @@ in real text content. Enables line-start matching on frontmatter,
 tags, etc. The agent inserts `\x01` in queries where line-start
 anchoring is needed.
 
+## Chunking Strategies
+
+Ark registers chunking strategies with microfts2. Strategies are
+either Go functions (registered on every Init and Open) or external
+commands (persisted in LMDB settings).
+
+Built-in func strategies:
+- `lines` — one chunk per line (microfts2's LineChunkFunc)
+- `jsonl` — content-aware JSONL chunker for Claude conversation logs
+
+The `jsonl` strategy parses each line as JSON and extracts only
+human-readable text content. Claude conversation logs contain
+metadata envelopes, tool inputs (file contents, code edits),
+tool results, cryptographic signatures, duplicate plan content,
+and file snapshots — typically 97%+ of the file is not useful
+for search. The chunker extracts:
+- `type:text` blocks from `message.content` (user and assistant text)
+- `type:thinking` blocks (the `thinking` field, not the `signature`)
+
+It skips everything else:
+- `tool_use` blocks (input contains file contents, code edits — machine payload)
+- `tool_result` blocks (command output, file reads)
+- `planContent` top-level field (duplicate of content already in message)
+- `progress`, `file-history-snapshot`, `queue-operation`, `system` record types
+- `signature` fields on thinking blocks (cryptographic, not searchable)
+- All envelope metadata (`uuid`, `sessionId`, `cwd`, `usage`, etc.)
+
+Each JSONL line produces at most one chunk. The range is `N-N`
+(1-based line number) for traceability. Lines with no extractable
+text produce no chunk. The chunk content is the concatenation of
+all extracted text blocks from that line, separated by newlines.
+
+This is a Go func strategy, not an external command — it avoids
+the scanner buffer limit that external chunkers hit on large
+JSONL lines, and eliminates the exec-per-file overhead.
+
 ## Server
 
 `ark serve` starts a long-running server:
@@ -251,11 +287,11 @@ argument list.
 - `ark refresh [--dir <path>] [<pattern>...]`
   Re-index stale files. If patterns given, only refresh matching
   files. No patterns = all stale files. Report missing files.
-- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] [--source <pat>...] [--not-source <pat>...] <query>...`
+- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] [--filter <query>...] [--except <query>...] [--filter-files <pat>...] [--exclude-files <pat>...] <query>...`
   Combined search. `--chunks` emits chunk text as JSONL. `--files`
-  emits full file content as JSONL. `--source`/`--not-source` filter
-  by source directory (substring match, mutually exclusive).
-- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files] [--source <pat>...] [--not-source <pat>...]`
+  emits full file content as JSONL. Filter flags scope the search
+  (see specs/search-filtering.md).
+- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files] [--filter <query>...] [--except <query>...] [--filter-files <pat>...] [--exclude-files <pat>...]`
   Split search.
 - `ark serve [--dir <path>]`
   Start the server.
