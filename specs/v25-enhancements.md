@@ -68,7 +68,7 @@ to chunking strategy names. When scanning, the scanner checks each
 file against the strategy map before falling back to the source's
 default strategy.
 
-Longest pattern wins — `docs/**.md` beats `*.md` because it's more
+Longest pattern wins — `docs/**/*.md` beats `*.md` because it's more
 specific. Pattern length (in characters) is the tiebreaker. This is
 poor-man's specificity: simple, predictable, no CSS-style priority
 rules.
@@ -79,7 +79,7 @@ rules.
 [strategies]
 "*.md" = "markdown"
 "*.jsonl" = "jsonl"
-"docs/**.md" = "markdown"
+"docs/**/*.md" = "markdown"
 ```
 
 ### Behavior

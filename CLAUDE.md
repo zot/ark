@@ -2,6 +2,8 @@
 
 Digital zettelkasten — files on disk, LMDB index. Hybrid trigram + vector search.
 
+load /ark first. This will let you remember and access memories.
+
 ## Build
 
 ```

@@ -61,9 +61,8 @@ func (idx *Indexer) RemoveFile(path string) error {
 	if err := idx.fts.RemoveFile(path); err != nil {
 		return fmt.Errorf("fts remove %s: %w", path, err)
 	}
-	if err := idx.vec.RemoveFile(fileid); err != nil {
-		return fmt.Errorf("vec remove %s: %w", path, err)
-	}
+	// Vec removal is best-effort: file may never have been vectorized
+	idx.vec.RemoveFile(fileid)
 	if idx.store != nil {
 		if err := idx.store.RemoveTags(fileid); err != nil {
 			return fmt.Errorf("remove tags %s: %w", path, err)
@@ -81,9 +80,8 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	if err := idx.fts.RemoveFile(info.Filename); err != nil {
 		return fmt.Errorf("fts remove %d: %w", fileid, err)
 	}
-	if err := idx.vec.RemoveFile(fileid); err != nil {
-		return fmt.Errorf("vec remove %d: %w", fileid, err)
-	}
+	// Vec removal is best-effort: file may never have been vectorized
+	idx.vec.RemoveFile(fileid)
 	if idx.store != nil {
 		if err := idx.store.RemoveTags(fileid); err != nil {
 			return fmt.Errorf("remove tags %d: %w", fileid, err)
@@ -109,10 +107,8 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 		return fmt.Errorf("fts reindex %s: %w", path, err)
 	}
 
-	// Remove old vectors
-	if err := idx.vec.RemoveFile(oldID); err != nil {
-		return fmt.Errorf("vec remove old %s: %w", path, err)
-	}
+	// Remove old vectors (best-effort: may not exist)
+	idx.vec.RemoveFile(oldID)
 
 	// Split content into chunks using offsets from microfts2
 	data, chunks, err := splitChunks(content, fileid, idx.fts)

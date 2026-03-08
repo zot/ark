@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-Server.md | Seq: seq-server-startup.md
+// CRC: crc-Server.md | Seq: seq-server-startup.md, seq-reconcile.md, seq-file-change.md
 
 import (
 	"context"
@@ -19,16 +19,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/zot/frictionless/flib"
 )
 
 // Server is an HTTP server on a Unix domain socket.
 type Server struct {
-	db       *DB
-	listener net.Listener
-	pidPath  string
-	noScan   bool
-	uiRuntime *flib.Runtime
+	db          *DB
+	listener    net.Listener
+	pidPath     string
+	noScan      bool
+	uiRuntime   *flib.Runtime
+	watcher     *fsnotify.Watcher
+	reconcileCh chan struct{}
 }
 
 // ServeOpts controls server behavior.
@@ -105,12 +108,21 @@ func Serve(dbPath string, opts ServeOpts) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 
+	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)
+	db.Config().EnsureArkSource()
+
 	srv := &Server{
-		db:       db,
-		listener: listener,
-		pidPath:  pidPath,
-		noScan:   opts.NoScan,
+		db:          db,
+		listener:    listener,
+		pidPath:     pidPath,
+		noScan:      opts.NoScan,
+		reconcileCh: make(chan struct{}, 1),
 	}
+
+	// Reconciliation goroutine — serializes all reconcile requests.
+	// Buffered channel ensures at most one pending request queues
+	// behind a running reconciliation.
+	go srv.reconcileLoop()
 
 	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
 	sigCh := make(chan os.Signal, 1)
@@ -118,6 +130,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	go func() {
 		sig := <-sigCh
 		log.Printf("received %s, shutting down", sig)
+		if srv.watcher != nil {
+			srv.watcher.Close()
+		}
 		if srv.uiRuntime != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			srv.uiRuntime.Shutdown(ctx)
@@ -131,25 +146,16 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// Start embedded UI engine (optional — failure is non-fatal)
 	srv.startUIEngine(dbPath)
 
+	// Start filesystem watches BEFORE reconciliation (R358) so nothing
+	// changes unseen during the scan. Watching is optional — failure
+	// is non-fatal.
+	if !opts.NoScan {
+		srv.startWatching()
+	}
+
 	// Startup reconciliation — background so server accepts requests immediately
 	if !opts.NoScan {
-		go func() {
-			// Resolve glob sources before scanning
-			if result, err := db.SourcesCheck(); err != nil {
-				log.Printf("sources check error: %v", err)
-			} else if len(result.Added) > 0 {
-				log.Printf("sources check: added %d new source(s)", len(result.Added))
-			}
-			log.Println("startup reconciliation: scanning...")
-			if _, err := db.Scan(); err != nil {
-				log.Printf("scan error: %v", err)
-			}
-			log.Println("startup reconciliation: refreshing...")
-			if err := db.Refresh(nil); err != nil {
-				log.Printf("refresh error: %v", err)
-			}
-			log.Println("startup reconciliation complete")
-		}()
+		srv.reconcile()
 	}
 
 	// Set up routes
@@ -227,6 +233,53 @@ func (srv *Server) startUIEngine(dbPath string) {
 			log.Printf("ui: auto-display ark failed: %v", err)
 		}
 	}()
+}
+
+// reconcileLoop processes reconciliation requests serially.
+// Each request triggers a full sources-check → scan → refresh cycle.
+func (srv *Server) reconcileLoop() {
+	for range srv.reconcileCh {
+		srv.doReconcile()
+	}
+}
+
+// reconcile requests a reconciliation cycle. Non-blocking — if a
+// reconciliation is already running, the request queues (buffer of 1).
+// If the buffer is full, the request is a no-op since a pending
+// reconciliation will pick up the latest state anyway.
+func (srv *Server) reconcile() {
+	select {
+	case srv.reconcileCh <- struct{}{}:
+	default:
+		// Already one queued — filesystem state will be current when it runs
+	}
+}
+
+// doReconcile runs the actual reconciliation: sources-check, scan, refresh.
+// After sources-check, updates watches for any new/removed sources (R351).
+func (srv *Server) doReconcile() {
+	if result, err := srv.db.SourcesCheck(); err != nil {
+		log.Printf("reconcile: sources check error: %v", err)
+	} else {
+		if len(result.Added) > 0 {
+			log.Printf("reconcile: added %d new source(s)", len(result.Added))
+			for _, dir := range result.Added {
+				srv.watchDirRecursive(dir)
+			}
+		}
+		for _, dir := range result.Orphaned {
+			srv.unwatchDir(dir)
+		}
+	}
+	log.Println("reconcile: scanning...")
+	if _, err := srv.db.Scan(); err != nil {
+		log.Printf("reconcile: scan error: %v", err)
+	}
+	log.Println("reconcile: refreshing...")
+	if err := srv.db.Refresh(nil); err != nil {
+		log.Printf("reconcile: refresh error: %v", err)
+	}
+	log.Println("reconcile: complete")
 }
 
 func PidFilePath(dbPath string) string {
@@ -532,7 +585,8 @@ type configWhyRequest struct {
 	Path string `json:"path"`
 }
 
-// configMutate decodes a request, applies a config mutation, and saves.
+// configMutate decodes a request, applies a config mutation, saves,
+// and triggers reconciliation so the index reflects the new config.
 func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func() error) {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -546,6 +600,7 @@ func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, f
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	srv.reconcile()
 	w.WriteHeader(http.StatusOK)
 }
 

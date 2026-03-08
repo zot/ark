@@ -30,25 +30,16 @@ CLI ──> Server.Serve(dbPath, opts)
          │     ├── microvec.Open (receives env)
          │     └── Store.Open (receives env)
          │
-         ├──> if !noScan: Server.StartupReconciliation()
+         ├──> Server.EnsureArkSource()
+         │     └── ensure ~/.ark is a source (hardcoded, not in ark.toml)
+         │
+         ├──> if !noScan:
+         │     ├──> Server.StartWatching(source dirs + ark.toml)
+         │     │     └── fsnotify watches before reconciliation
+         │     │         so nothing changes unseen during scan
          │     │
-         │     ├──> Step 1 (future): start fsnotify watches
-         │     │
-         │     ├──> Step 2: Scanner.Scan(config)
-         │     │     ├── walk all configured directories
-         │     │     ├── find new files to index
-         │     │     └── find new unresolved files
-         │     │
-         │     ├──> Indexer.AddFile(path, strategy)  [for each new file]
-         │     ├──> Store.AddUnresolved(...)         [for each new unresolved]
-         │     ├──> Store.CleanUnresolved()
-         │     │
-         │     ├──> Step 3: Indexer.RefreshStale()
-         │     │     ├── microfts2.StaleFiles() → list stale/missing
-         │     │     ├── for each stale: RefreshFile(path)
-         │     │     └── for each missing: Store.AddMissing(fileid, path)
-         │     │
-         │     └──> log reconciliation summary
+         │     └──> Server.Reconcile()
+         │           └── see seq-reconcile.md
          │
          ├──> Server.StartUIEngine(dbPath)
          │     ├── cfg := cli.DefaultConfig()
@@ -66,6 +57,9 @@ CLI ──> Server.Serve(dbPath, opts)
 
 ```
 Signal (SIGTERM/SIGINT)
+  │
+  ├──> if watcher != nil: watcher.Close()
+  │     └── stop filesystem watches
   │
   ├──> if uiServer != nil: uiServer.Shutdown(ctx)
   │     └── ui-engine cleans up sessions, closes ports

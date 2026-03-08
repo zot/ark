@@ -29,9 +29,12 @@ reference files by fileid. microfts2 is the single source of truth
 for path→fileid mapping.
 
 ### Pattern Matching
-The four-form pattern language (name, name/, name/*, name/**) with
-dotfiles support, anchoring, and glob wildcards is used throughout:
-source config, CLI remedy commands, scan classification.
+Doublestar glob patterns (`github.com/bmatcuk/doublestar/v4`) with
+ark-level semantic modifiers: trailing `/` for directory-only, no
+trailing `/` for file-only. Unanchored patterns match at any depth
+(prepend `**/`). Dotfile filtering is a post-match check. Used
+throughout: source config, CLI remedy commands, scan classification,
+strategy mapping.
 
 ### Error Reporting
 Config errors (identical include/exclude) are reported on every
@@ -66,23 +69,25 @@ to start, the ark API server continues — UI is optional. On shutdown,
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`
-- [x] crc-Config.md → `config.go`
+- [ ] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
-- [x] crc-Store.md → `store.go`
+- [ ] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
-- [x] crc-Indexer.md → `indexer.go`
-- [x] crc-Searcher.md → `search.go`
-- [x] crc-Server.md → `server.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`
+- [ ] crc-Indexer.md → `indexer.go`
+- [ ] crc-Searcher.md → `search.go`
+- [ ] crc-Server.md → `server.go`, `watcher.go`
+- [ ] crc-CLI.md → `cmd/ark/main.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
 - [x] seq-search.md → `search.go`
-- [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
+- [ ] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
 - [x] seq-cli-dispatch.md → `cmd/ark/main.go`, `server.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`
+- [ ] seq-reconcile.md → `server.go`
+- [ ] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -107,10 +112,15 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] A5: microfts2 WithOnly/WithExcept — implemented in microfts2 dependency, used by Searcher.ResolveFilters
 - [ ] A6: R231 (no backward compatibility for --source/--not-source) — verified by removal, no design artifact needed
 - [ ] A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
-- [ ] O7: Shutdown SIGSEGV: signal handler goroutine (server.go:113-119) calls db.Close() while background reconciliation goroutine (server.go:122-139) may still be running Scan/Refresh against the LMDB env. Need to cancel/wait for reconciliation before closing.
+- [ ] O7: Shutdown race: signal handler calls db.Close() while reconcileLoop and watchLoop goroutines may still be running. watcher.Close() stops watchLoop, but reconcileLoop can still be mid-Scan/Refresh against the LMDB env. Need to close reconcileCh and wait for goroutine to drain before db.Close().
+- [x] D1: R338-R339 (EnsureArkSource) — designed in crc-Server.md but not implemented. Server should ensure ~/.ark is a source on every startup, before reconciliation.
+- [x] D2: R340 (RemoveSource guard for ~/.ark) — designed in crc-Config.md line 25 but not implemented. Config.RemoveSource should reject the ark database directory.
 - [x] O8: ark install UI asset extraction not yet implemented — R276-R281 designed, bundle commands (R297-R318) implemented, install needs to call ExtractBundle
 - [x] O9: ~/.ark/mcp shell script (R283) not yet created — needs adaptation of .ui/mcp pattern for ~/.ark/ paths
 - [ ] A8: R294 (zip-graft allows layering without recompilation) — build process property, no code artifact
 - [ ] A9: R296 (re-export CreateBundle/ExtractBundle from ui-engine) — upstream change in ui-engine/cli/exports.go, done
 - [ ] A10: R303 (bundle is build-time command) — inferred, covered by R297 implementation
 - [ ] A11: R319-R322 (Makefile asset pipeline) — Makefile infrastructure, not Go code
+- [ ] O10: Self-triggered ark.toml events — configMutate saves ark.toml, watcher fires, watchLoop reloads config + triggers a second reconcile. Harmless (idempotent) but wasteful. Could suppress with a short debounce or write-flag.
+- [ ] O11: No tests for watcher/throttle — the throttle state machine is testable (inject clock, mock watcher channels) but untested
+- [ ] D3: Phase C (R360-R369, append detection) blocked on microfts2 — needs FileLength in N record, AppendChunks API, chunker offset support. Requests in ~/work/microfts2/UPDATES.md items 2-4

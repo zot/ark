@@ -1,21 +1,30 @@
 # Matcher
 **Requirements:** R9, R10, R15, R16, R17, R18, R19, R20, R21, R147
 
-Evaluates the four-form pattern language against file paths. Stateless
-— receives patterns and paths, returns classification.
+Evaluates doublestar glob patterns against file paths with ark-level
+semantic modifiers (trailing `/` for directory-only). Stateless —
+receives patterns and paths, returns classification.
+
+Uses `github.com/bmatcuk/doublestar/v4` for glob matching. Ark adds:
+- Trailing `/` modifier: pattern matches directories only
+- No trailing `/`: pattern matches files only
+- Unanchored patterns: prepend `**/` to match at any depth
+- Dotfile filtering: post-match check when dotfiles=false
 
 ## Knows
-- dotfiles: bool — whether * matches dotfiles
+- dotfiles: bool — whether * and ** match dotfiles
 
 ## Does
-- Match(pattern, path): bool — does this pattern match this path?
-- Classify(includes, excludes, path): included | excluded | unresolved
+- Match(pattern, path, isDir): bool — does this pattern match this path?
+  - Strips trailing `/` for directory patterns, rejects files
+  - Rejects directories for non-`/` patterns
+  - Prepends `**/` for unanchored patterns
+  - Delegates to doublestar.Match
+  - Post-filters dotfiles when dotfiles=false
+- Classify(includes, excludes, path, isDir): included | excluded | unresolved
   - If any include matches → included (include wins)
   - If any exclude matches and no include → excluded
   - If nothing matches → unresolved
-- IsDirectory(pattern): bool — does pattern end with /?
-- IsAnchored(pattern): bool — does pattern start with /?
-- ParsePattern(pattern): parsed form (name, name/, name/*, name/**)
 
 ## Collaborators
 - None (stateless utility)

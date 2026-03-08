@@ -25,7 +25,12 @@ conversation via vector + FTS.
 
 ### Writing Tags
 
-In markdown, bare on its own line:
+**Tags match to end of line.** Never break a tag across lines — the
+content after the colon through the newline is one atomic unit.
+Wrapping a tag line splits the content and loses everything after
+the break.
+
+In markdown, bare on its own line (no line breaks):
 ```
 @connection: recall agent context isolation = closure-actor private state
 ```

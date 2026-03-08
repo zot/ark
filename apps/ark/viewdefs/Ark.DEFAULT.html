@@ -43,14 +43,14 @@
 
         <div class="ark-sidebar-actions">
           <sl-button size="small" variant="default" outline ui-action="openProjectSearch()">
-            <sl-icon slot="prefix" name="robot"></sl-icon> Add Projects
+            <sl-icon slot="prefix" name="pencil-square"></sl-icon> Choose Projects
           </sl-button>
         </div>
 
-        <!-- Project search overlay -->
+        <!-- Project editor overlay -->
         <div class="ark-project-search" ui-class-hidden="hideProjectSearch()">
           <div class="panel-header">
-            <span class="panel-title">Add Claude Projects</span>
+            <span class="panel-title">Choose Projects</span>
             <sl-icon-button name="x-lg" ui-action="closeProjectSearch()" label="Close"></sl-icon-button>
           </div>
           <div class="ark-project-search-bar">
@@ -62,11 +62,23 @@
             </sl-tooltip>
           </div>
           <div class="ark-project-search-list">
-            <div ui-view="filteredProjectCandidates()?wrapper=lua.ViewList"></div>
+            <!-- Projects section: current config + pending changes -->
+            <div class="ark-project-section" ui-class-hidden="hideUpperSection()">
+              <div class="ark-project-section-header" ui-value="projectSelectedHeader()"></div>
+              <div ui-view="projectCandidatesUpper()?wrapper=lua.ViewList"></div>
+            </div>
+            <!-- Available section: not yet in config -->
+            <div class="ark-project-section" ui-class-hidden="hideAvailableSection()">
+              <div class="ark-project-section-header" ui-value="projectAvailableHeader()"></div>
+              <div ui-view="projectCandidatesLower()?wrapper=lua.ViewList"></div>
+            </div>
           </div>
           <div class="ark-project-search-actions">
             <sl-button size="small" variant="default" ui-action="closeProjectSearch()">Cancel</sl-button>
-            <sl-button size="small" variant="primary" ui-action="addSelectedProjects()" ui-attr-disabled="hideAddSelectedBtn()">Add Selected</sl-button>
+            <sl-button size="small" variant="default" ui-action="resetProjectSelections()" ui-class-hidden="hideProjectReset()">Reset</sl-button>
+            <sl-button size="small" variant="primary" ui-action="saveProjects()" ui-attr-disabled="hideProjectSave()">
+              <span ui-value="projectSaveText()"></span>
+            </sl-button>
           </div>
         </div>
       </div>
@@ -235,6 +247,8 @@
       display: flex;
       flex-direction: column;
       position: relative;
+      z-index: 1;
+      overflow: hidden;
     }
 
     /* Resize handle */
@@ -306,10 +320,22 @@
     .ark-project-search-actions {
       display: flex;
       gap: 6px;
-      justify-content: flex-end;
+      align-items: center;
       padding: 8px;
       border-top: 1px solid var(--term-border, #2a2a3a);
     }
+
+    .ark-project-section-header {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--term-text-dim, #8888a0);
+      padding: 8px 8px 4px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      opacity: 0.7;
+    }
+
+    .ark-project-section.hidden { display: none; }
 
     /* Project candidate items */
     .ark-candidate-item {
@@ -322,8 +348,48 @@
     }
 
     .ark-candidate-item.ark-candidate-deselected {
-      opacity: 0.3;
+      opacity: 0.4;
     }
+
+    .ark-candidate-check {
+      flex-shrink: 0;
+      font-size: 14px;
+      color: var(--term-text-dim, #8888a0);
+      transition: color 0.15s;
+    }
+
+    .ark-candidate-check.ark-check-on {
+      color: var(--term-accent, #E07A47);
+    }
+
+    .ark-badge-new {
+      display: inline-block;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0 4px;
+      border-radius: 3px;
+      background: #4ade8033;
+      color: #4ade80;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    .ark-badge-removed {
+      display: inline-block;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0 4px;
+      border-radius: 3px;
+      background: #f8717133;
+      color: #f87171;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    .ark-badge-new.hidden,
+    .ark-badge-removed.hidden { display: none; }
 
     .ark-candidate-row {
       display: flex;

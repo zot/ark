@@ -24,6 +24,7 @@ type Config struct {
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
 	Errors          []string          `toml:"-"`
+	dbPath          string            `toml:"-"`
 }
 
 // Source is a directory entry in the configuration.
@@ -69,6 +70,21 @@ exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 # strategy = "markdown"
 `
 	return os.WriteFile(path, []byte(defaultConfig), 0644)
+}
+
+// EnsureArkSource adds the database directory as an in-memory source
+// if not already present. This source is hardcoded — it does not appear
+// in ark.toml and cannot be removed.
+func (c *Config) EnsureArkSource() {
+	if c.dbPath == "" {
+		return
+	}
+	for _, src := range c.Sources {
+		if src.Dir == c.dbPath {
+			return
+		}
+	}
+	c.Sources = append(c.Sources, Source{Dir: c.dbPath, Strategy: "lines"})
 }
 
 // EffectivePatterns returns the combined global + per-source patterns.
@@ -163,9 +179,13 @@ func (c *Config) AddSource(dir, strategy string) error {
 }
 
 // RemoveSource removes a source directory by path. Returns an error
-// if the source is a concrete dir managed by a glob pattern.
+// if the source is a concrete dir managed by a glob pattern or if
+// the directory is the ark database directory (hardcoded source).
 func (c *Config) RemoveSource(dir string) error {
 	dir = expandHome(dir)
+	if c.dbPath != "" && dir == c.dbPath {
+		return fmt.Errorf("cannot remove %s — hardcoded source", dir)
+	}
 	// Check if this concrete source is managed by a glob (via from_glob field)
 	if !IsGlob(dir) {
 		for _, src := range c.Sources {

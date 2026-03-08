@@ -63,31 +63,45 @@ No automagic indexing of unknown files. This prevents the
 virus-scanner / git-auto-add problem: nothing enters the index
 without an explicit rule or action.
 
-Pattern language — four forms with distinct meanings:
-- `name` — matches a file named "name" (not a directory)
-- `name/` — matches a directory named "name" (not its contents;
-  for exclude this means "don't walk into it")
-- `name/*` — matches immediate children of "name"
-- `name/**` — matches any descendant of "name" at any depth
+Pattern language uses doublestar glob syntax
+(`github.com/bmatcuk/doublestar/v4`). Two semantic modifiers
+control file-vs-directory matching:
 
-Wildcards: `*` matches within a path component (including dotfiles
-by default — unlike shell globs), `**` matches any number of path
-components. Standard glob wildcards (`?`, `[abc]`) also supported.
-A `dotfiles` config preference controls this — default true (match
-dotfiles), set to false for standard shell glob behavior.
+- Trailing `/` — pattern matches directories only (not files).
+  For exclude this means "don't walk into it."
+- No trailing `/` — pattern matches files only (not directories).
+
+Wildcards:
+- `*` matches any sequence of non-separator characters within a
+  single path component (including dotfiles by default — unlike
+  shell globs)
+- `**` matches zero or more path components (directories). Must
+  appear between separators or at pattern boundaries: `**/`, `/**/`,
+  `/**`. Mid-pattern `**` without separators (e.g. `**.md`) acts
+  as a single `*` — use `**/*.md` for recursive matching.
+- `?` matches any single non-separator character
+- `[abc]`, `[a-z]` — character classes
+- `{alt1,alt2}` — comma-separated alternatives (can nest)
+
+A `dotfiles` config preference controls whether `*` and `**`
+match dot-prefixed names — default true (match dotfiles), set to
+false for standard shell glob behavior.
 Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
 for filenames that contain them.
 `ark init` ships with default excludes for `.git/`, `.env`, etc.
 
 Patterns without a leading `/` match at any depth within the
-watched directory. Patterns with a leading `/` are anchored to the
-watched directory root.
+watched directory (equivalent to prepending `**/`). Patterns with
+a leading `/` are anchored to the watched directory root.
 
 Examples (given `dir: ~/work/myproject`):
 - `exclude: node_modules/` — skips node_modules dirs anywhere
 - `exclude: /vendor/` — skips vendor/ only at project root
 - `include: *.md` — matches markdown files at any depth
 - `include: /src/**` — matches everything under src/ at root
+- `include: **/*.md` — same as `*.md` (explicit recursive form)
+- `include: docs/**/*.txt` — text files anywhere under docs/
+- `include: *.{md,txt,org}` — multiple extensions in one pattern
 
 ### Config file: `ark.toml`
 

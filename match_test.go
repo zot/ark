@@ -24,7 +24,7 @@ func TestMatchDirFormMatchesDirectoryOnly(t *testing.T) {
 	}
 }
 
-func TestMatchChildrenForm(t *testing.T) {
+func TestMatchSingleStarChildren(t *testing.T) {
 	m := &Matcher{Dotfiles: true}
 	if !m.Match("docs/*", "docs/readme.md", false) {
 		t.Error("should match immediate child docs/readme.md")
@@ -44,6 +44,48 @@ func TestMatchDescendantsForm(t *testing.T) {
 	}
 }
 
+func TestMatchDoublestarWithExtension(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if !m.Match("**/*.md", "readme.md", false) {
+		t.Error("**/*.md should match readme.md at root")
+	}
+	if !m.Match("**/*.md", "docs/guide.md", false) {
+		t.Error("**/*.md should match docs/guide.md")
+	}
+	if !m.Match("**/*.md", "a/b/c/notes.md", false) {
+		t.Error("**/*.md should match a/b/c/notes.md")
+	}
+	if m.Match("**/*.md", "readme.txt", false) {
+		t.Error("**/*.md should not match readme.txt")
+	}
+}
+
+func TestMatchDoublestarMidPattern(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if !m.Match("docs/**/*.txt", "docs/a.txt", false) {
+		t.Error("should match docs/a.txt")
+	}
+	if !m.Match("docs/**/*.txt", "docs/sub/b.txt", false) {
+		t.Error("should match docs/sub/b.txt")
+	}
+	if m.Match("docs/**/*.txt", "other/c.txt", false) {
+		t.Error("should not match other/c.txt")
+	}
+}
+
+func TestMatchAlternationBraces(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if !m.Match("*.{md,txt}", "readme.md", false) {
+		t.Error("should match readme.md")
+	}
+	if !m.Match("*.{md,txt}", "notes.txt", false) {
+		t.Error("should match notes.txt")
+	}
+	if m.Match("*.{md,txt}", "data.csv", false) {
+		t.Error("should not match data.csv")
+	}
+}
+
 func TestMatchDotfilesEnabled(t *testing.T) {
 	m := &Matcher{Dotfiles: true}
 	if !m.Match("*", ".gitignore", false) {
@@ -55,6 +97,13 @@ func TestMatchDotfilesDisabled(t *testing.T) {
 	m := &Matcher{Dotfiles: false}
 	if m.Match("*", ".gitignore", false) {
 		t.Error("* should not match dotfiles when dotfiles=false")
+	}
+}
+
+func TestMatchDotfilesDisabledExplicitDot(t *testing.T) {
+	m := &Matcher{Dotfiles: false}
+	if !m.Match(".gitignore", ".gitignore", false) {
+		t.Error("explicit .gitignore should match even with dotfiles=false")
 	}
 }
 
@@ -108,5 +157,15 @@ func TestMatchBackslashEscapes(t *testing.T) {
 	m := &Matcher{Dotfiles: true}
 	if !m.Match("file\\*name", "file*name", false) {
 		t.Error("\\* should match literal asterisk")
+	}
+}
+
+func TestMatchCharacterClass(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if !m.Match("[abc].txt", "a.txt", false) {
+		t.Error("[abc] should match 'a'")
+	}
+	if m.Match("[abc].txt", "d.txt", false) {
+		t.Error("[abc] should not match 'd'")
 	}
 }

@@ -202,6 +202,7 @@ func Open(dbPath string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
+	config.dbPath = dbPath
 
 	// Open microfts2 (opens the LMDB environment)
 	fts, err := microfts2.Open(dbPath, microfts2.Options{MaxDBs: 8, MapSize: 2 << 30})
@@ -289,8 +290,10 @@ func (db *DB) ReloadConfig() error {
 	if err != nil {
 		return err
 	}
+	cfg.dbPath = db.dbPath
 	db.config = cfg
 	db.scanner.config = cfg
+	db.search.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
 	return nil
 }

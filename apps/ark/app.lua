@@ -334,7 +334,8 @@ Ark.ProjectCandidate = session:prototype("Ark.ProjectCandidate", {
     slug = "",
     name = "",
     _resolvedPath = "",
-    selected = true,
+    selected = false,
+    _wasConfigured = false,
 })
 local ProjectCandidate = Ark.ProjectCandidate
 
@@ -419,6 +420,7 @@ function Ark:loadConfig()
         local strategy = src.Strategy or src.strategy or ""
         local inc = src.Include or src.include or {}
         local exc = src.Exclude or src.exclude or {}
+        local fromGlob = src.FromGlob or src.from_glob or ""
 
         -- Reuse existing Source to preserve loaded state
         local existing = oldSources[dir]
@@ -426,6 +428,7 @@ function Ark:loadConfig()
             existing.strategy = strategy
             existing._includePatterns = inc
             existing._excludePatterns = exc
+            existing._fromGlob = fromGlob
             existing.includeText = table.concat(inc, "\n")
             existing.excludeText = table.concat(exc, "\n")
             table.insert(self._sources, existing)
@@ -438,6 +441,7 @@ function Ark:loadConfig()
             s._missingPaths = {}
             s._includePatterns = inc
             s._excludePatterns = exc
+            s._fromGlob = fromGlob
             s.includeText = table.concat(inc, "\n")
             s.excludeText = table.concat(exc, "\n")
             table.insert(self._sources, s)
@@ -601,104 +605,20 @@ function Ark:serverStatusText()
 end
 
 function Ark:quickAddClaudeProjects()
-    -- One glob source with include patterns; global strategy mappings handle file types
-    arkCmd('config add-source "~/.claude/projects/*"')
-    arkCmd('config add-include "*.jsonl" --source "~/.claude/projects/*"')
-    arkCmd('config add-include "memory/**" --source "~/.claude/projects/*"')
     arkCmd('config add-strategy "*.jsonl" jsonl')
-    arkCmd('config add-strategy "*.md" markdown')
-    self:loadConfig()
-end
-
-------------------------------------------------------------------------
--- Project search panel
-------------------------------------------------------------------------
-
-function Ark:openProjectSearch()
-    self._projectSearchOpen = true
-    self._projectSearchQuery = ""
-    self:scanProjectCandidates()
-end
-
-function Ark:closeProjectSearch()
-    self._projectSearchOpen = false
-    self._projectCandidates = {}
-    self._projectSearchQuery = ""
-end
-
-function Ark:hideProjectSearch()
-    return not self._projectSearchOpen
-end
-
-function Ark:scanProjectCandidates()
+    arkCmd('config add-strategy "*.md" lines')
+    -- Add each Claude project dir as a concrete source
     local claudeDir = HOME .. "/.claude/projects"
     local entries = listDir(claudeDir)
-
-    -- Collect existing project slugs to exclude
-    local existingSlugs = {}
-    for _, p in ipairs(self._projects or {}) do
-        existingSlugs[p.slug] = true
-    end
-
-    local candidates = {}
     for _, entry in ipairs(entries) do
         if entry.isDir and entry.name:sub(1, 1) == "-" then
-            local slug = entry.name
-            if not existingSlugs[slug] then
-                local c = session:create(ProjectCandidate)
-                c.slug = slug
-                local name, resolvedPath = resolveSlugName(slug)
-                c.name = name
-                c._resolvedPath = resolvedPath or ""
-                c.selected = true
-                table.insert(candidates, c)
-            end
+            local dir = claudeDir .. "/" .. entry.name
+            arkCmd('config add-source "' .. dir .. '"')
+            arkCmd('config add-include "*.jsonl" --source "' .. dir .. '"')
+            arkCmd('config add-include "memory/*.md" --source "' .. dir .. '"')
         end
     end
-
-    table.sort(candidates, function(a, b) return a.name:lower() < b.name:lower() end)
-    self._projectCandidates = candidates
-end
-
-function Ark:refreshProjectSearch()
-    self:scanProjectCandidates()
-end
-
-function Ark:filteredProjectCandidates()
-    local q = (self._projectSearchQuery or ""):lower()
-    if q == "" then return self._projectCandidates or {} end
-    local results = {}
-    for _, c in ipairs(self._projectCandidates or {}) do
-        if c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
-            table.insert(results, c)
-        end
-    end
-    return results
-end
-
-function Ark:addSelectedProjects()
-    -- Ensure Claude glob source exists
-    arkCmd('config add-source "~/.claude/projects/*"')
-    arkCmd('config add-include "*.jsonl" --source "~/.claude/projects/*"')
-    arkCmd('config add-include "memory/**" --source "~/.claude/projects/*"')
-    arkCmd('config add-strategy "*.jsonl" jsonl')
-    arkCmd('config add-strategy "*.md" markdown')
-
-    for _, c in ipairs(self._projectCandidates or {}) do
-        if c.selected and c._resolvedPath ~= "" then
-            arkCmd('config add-source "' .. c._resolvedPath .. '"')
-        end
-    end
-
-    self:closeProjectSearch()
     self:loadConfig()
-end
-
-function Ark:hideAddSelectedBtn()
-    for _, c in ipairs(self._projectCandidates or {}) do
-        if c.selected then return false end
-    end
-    return true
 end
 
 ------------------------------------------------------------------------
@@ -726,7 +646,8 @@ local function resolveSlugName(slug)
     if #parts == 0 then return rest end
 
     -- Handle double-dash (nested Claude project scope): take only before --
-    local mainRest = rest:match("^([^%-].-)[%-][%-]") or rest
+    local mainRest, scopeSuffix = rest:match("^([^%-].-)[%-][%-](.*)")
+    mainRest = mainRest or rest
 
     -- Split on single hyphens
     local parts = {}
@@ -757,17 +678,270 @@ local function resolveSlugName(slug)
         if not found then
             -- Remaining unconsumed parts are the project name
             local remaining = table.concat(parts, "-", i)
+            if scopeSuffix then remaining = remaining .. " (" .. scopeSuffix .. ")" end
             return remaining, current .. "/" .. remaining
         end
     end
 
     -- All parts consumed — last directory is the name
     local name = current:match("([^/]+)$")
+    if scopeSuffix then name = (name or rest) .. " (" .. scopeSuffix .. ")" end
     if current == HOME then
         if mainRest:sub(1, 5) == "work-" then mainRest = mainRest:sub(6) end
-        return mainRest, HOME .. "/" .. mainRest
+        local n = mainRest
+        if scopeSuffix then n = n .. " (" .. scopeSuffix .. ")" end
+        return n, HOME .. "/" .. mainRest
     end
     return name or rest, current
+end
+
+------------------------------------------------------------------------
+-- Project search panel
+------------------------------------------------------------------------
+
+function Ark:openProjectSearch()
+    self._projectSearchOpen = true
+    self._projectSearchQuery = ""
+    self:scanProjectCandidates()
+end
+
+function Ark:closeProjectSearch()
+    self._projectSearchOpen = false
+    self._projectCandidates = {}
+    self._projectSearchQuery = ""
+end
+
+function Ark:hideProjectSearch()
+    return not self._projectSearchOpen
+end
+
+function Ark:scanProjectCandidates()
+    local claudeDir = HOME .. "/.claude/projects"
+    local entries = listDir(claudeDir)
+
+    -- Collect existing project slugs
+    local existingSlugs = {}
+    for _, p in ipairs(self._projects or {}) do
+        existingSlugs[p.slug] = true
+    end
+
+    local candidates = {}
+    for _, entry in ipairs(entries) do
+        if entry.isDir and entry.name:sub(1, 1) == "-" then
+            local slug = entry.name
+            local c = session:create(ProjectCandidate)
+            c.slug = slug
+            local name, resolvedPath = resolveSlugName(slug)
+            c.name = name
+            c._resolvedPath = resolvedPath or ""
+            local configured = existingSlugs[slug] or false
+            c.selected = configured
+            c._wasConfigured = configured
+            table.insert(candidates, c)
+        end
+    end
+
+    table.sort(candidates, function(a, b) return a.name:lower() < b.name:lower() end)
+    self._projectCandidates = candidates
+end
+
+function Ark:refreshProjectSearch()
+    self:scanProjectCandidates()
+end
+
+function Ark:filteredProjectCandidates()
+    local q = (self._projectSearchQuery or ""):lower()
+    local results = {}
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+            table.insert(results, c)
+        end
+    end
+    -- Pin selected to top
+    table.sort(results, function(a, b)
+        if a.selected ~= b.selected then return a.selected end
+        return a.name:lower() < b.name:lower()
+    end)
+    return results
+end
+
+function Ark:saveProjects()
+    local claudeDir = HOME .. "/.claude/projects"
+    local added, removed = 0, 0
+
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected and not c._wasConfigured then
+            -- Newly selected: add sources
+            arkCmd('config add-strategy "*.jsonl" jsonl')
+            arkCmd('config add-strategy "*.md" lines')
+            local dir = claudeDir .. "/" .. c.slug
+            arkCmd('config add-source "' .. dir .. '"')
+            arkCmd('config add-include "*.jsonl" --source "' .. dir .. '"')
+            arkCmd('config add-include "memory/*.md" --source "' .. dir .. '"')
+            if c._resolvedPath ~= "" then
+                arkCmd('config add-source "' .. c._resolvedPath .. '"')
+            end
+            added = added + 1
+        elseif not c.selected and c._wasConfigured then
+            -- Deselected: remove sources
+            local dir = claudeDir .. "/" .. c.slug
+            arkCmd('config remove-source "' .. dir .. '"')
+            arkCmd('remove "' .. dir .. '/**"')
+            -- Remove file source if it was matched
+            for _, p in ipairs(self._projects or {}) do
+                if p.slug == c.slug and p._fileSource then
+                    arkCmd('config remove-source "' .. p._fileSource.dir .. '"')
+                    break
+                end
+            end
+            removed = removed + 1
+        end
+    end
+
+    self:closeProjectSearch()
+    self:loadConfig()
+
+    if added > 0 or removed > 0 then
+        local parts = {}
+        if added > 0 then table.insert(parts, added .. " added") end
+        if removed > 0 then table.insert(parts, removed .. " removed") end
+        mcp:notify(table.concat(parts, ", "), "success")
+    end
+end
+
+function Ark:hasProjectChanges()
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected ~= c._wasConfigured then return true end
+    end
+    return false
+end
+
+function Ark:hideProjectSave()
+    return not self:hasProjectChanges()
+end
+
+function Ark:projectNewCount()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected and not c._wasConfigured then n = n + 1 end
+    end
+    return n
+end
+
+function Ark:projectRemovedCount()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if not c.selected and c._wasConfigured then n = n + 1 end
+    end
+    return n
+end
+
+function Ark:projectSaveText()
+    local added = self:projectNewCount()
+    local removed = self:projectRemovedCount()
+    if added == 0 and removed == 0 then return "No changes" end
+    local parts = {}
+    if added > 0 then table.insert(parts, added .. " new") end
+    if removed > 0 then table.insert(parts, removed .. " removed") end
+    return "Save · " .. table.concat(parts, ", ")
+end
+
+function Ark:projectSelectedCount()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected then n = n + 1 end
+    end
+    return n
+end
+
+function Ark:projectSelectedHeader()
+    return "Projects (" .. self:projectSelectedCount() .. ")"
+end
+
+function Ark:projectAvailableCount()
+    local q = (self._projectSearchQuery or ""):lower()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if not c.selected then
+            if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+function Ark:projectAvailableHeader()
+    return "Available (" .. self:projectAvailableCount() .. ")"
+end
+
+function Ark:projectCandidatesUpper()
+    -- Upper section: selected OR was configured (the "result" view)
+    local q = (self._projectSearchQuery or ""):lower()
+    local results = {}
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected or c._wasConfigured then
+            if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+                table.insert(results, c)
+            end
+        end
+    end
+    table.sort(results, function(a, b) return a.name:lower() < b.name:lower() end)
+    return results
+end
+
+function Ark:projectCandidatesLower()
+    -- Lower section: not selected AND not configured (purely available)
+    local q = (self._projectSearchQuery or ""):lower()
+    local results = {}
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if not c.selected and not c._wasConfigured then
+            if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+                table.insert(results, c)
+            end
+        end
+    end
+    table.sort(results, function(a, b) return a.name:lower() < b.name:lower() end)
+    return results
+end
+
+function Ark:upperSectionCount()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if c.selected or c._wasConfigured then n = n + 1 end
+    end
+    return n
+end
+
+function Ark:lowerSectionCount()
+    local q = (self._projectSearchQuery or ""):lower()
+    local n = 0
+    for _, c in ipairs(self._projectCandidates or {}) do
+        if not c.selected and not c._wasConfigured then
+            if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+function Ark:hideUpperSection()
+    return self:upperSectionCount() == 0
+end
+
+function Ark:hideAvailableSection()
+    return self:lowerSectionCount() == 0
+end
+
+function Ark:resetProjectSelections()
+    for _, c in ipairs(self._projectCandidates or {}) do
+        c.selected = c._wasConfigured
+    end
+end
+
+function Ark:hideProjectReset()
+    return not self:hasProjectChanges()
 end
 
 ------------------------------------------------------------------------
@@ -1867,16 +2041,8 @@ function Project:fullPath()
 end
 
 function Project:removeMe()
-    if self._fileSource then
-        arkCmd('config remove-source "' .. self._fileSource.dir .. '"')
-    end
-    if self._claudeSource then
-        arkCmd('config remove-source "' .. self._claudeSource.dir .. '"')
-    end
-    if ark.selectedSource == self._fileSource or ark.selectedSource == self._claudeSource then
-        ark.selectedSource = nil
-    end
-    ark:loadConfig()
+    -- Open the project editor instead of removing directly
+    ark:openProjectSearch()
 end
 
 ------------------------------------------------------------------------
@@ -1947,6 +2113,27 @@ end
 
 function ProjectCandidate:isDeselected()
     return not self.selected
+end
+
+function ProjectCandidate:checkIcon()
+    if self.selected then return "check-square-fill" end
+    return "square"
+end
+
+function ProjectCandidate:isNew()
+    return self.selected and not self._wasConfigured
+end
+
+function ProjectCandidate:hideNew()
+    return not self:isNew()
+end
+
+function ProjectCandidate:isRemoved()
+    return not self.selected and self._wasConfigured
+end
+
+function ProjectCandidate:hideRemoved()
+    return not self:isRemoved()
 end
 
 function ProjectCandidate:displayPath()

@@ -26,10 +26,10 @@
 - **R13:** Per-source include/exclude are additive — combine with global, not replace
 - **R14:** Each source directory specifies a chunking strategy name (microfts2 chunker)
 - **R15:** Files matching no include or exclude pattern are held in an "unresolved" list — no automatic indexing
-- **R16:** Pattern language has four forms: `name` (file), `name/` (directory), `name/*` (immediate children), `name/**` (any descendant)
-- **R17:** `*` matches within a path component, `**` matches any number of path components
-- **R18:** `*` matches dotfiles by default (controlled by `dotfiles` config, default true)
-- **R19:** Standard glob wildcards (`?`, `[abc]`) are supported
+- **R16:** Pattern language uses doublestar glob syntax (github.com/bmatcuk/doublestar/v4). Trailing `/` means directory-only; no trailing `/` means file-only. These are ark-level semantic modifiers on top of doublestar matching.
+- **R17:** `*` matches within a path component, `**` matches zero or more path components (must appear between separators or at pattern boundaries). Mid-pattern `**` without separators (e.g. `**.md`) acts as single `*` — use `**/*.md` for recursive matching.
+- **R18:** `*` and `**` match dotfiles by default (controlled by `dotfiles` config, default true)
+- **R19:** Standard glob wildcards (`?`, `[abc]`, `{alt1,alt2}`) are supported
 - **R20:** Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
 - **R21:** Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
 - **R22:** `ark init` ships default excludes for `.git/`, `.env`, etc.
@@ -523,3 +523,56 @@
 - **R320:** Ark's own assets (apps/ark/) are layered on top of the cache
 - **R321:** The ark Go binary is built, then `ark bundle` grafts the cache onto it
 - **R322:** The result is one binary containing the full UI stack
+
+## Feature: Source Monitoring
+**Source:** specs/source-monitoring.md
+
+### ~/.ark Hardcoded Source
+- **R338:** ~/.ark is always a source — hardcoded, not configured via ark.toml
+- **R339:** The server ensures ~/.ark is a source on every startup, before reading ark.toml
+- **R340:** `ark config remove-source` on ~/.ark returns an error
+- **R341:** ~/.ark does not appear in ark.toml's source list
+
+### Phase A: Config-Triggered Reconcile
+- **R342:** A Reconcile method encapsulates the startup reconciliation cycle: sources-check → scan → refresh
+- **R343:** Startup calls Reconcile (existing behavior, extracted into method)
+- **R344:** Every config mutation handler (add-source, remove-source, add-include, add-exclude, remove-pattern) triggers Reconcile after completing
+- **R345:** Reconcile runs in a background goroutine — HTTP handlers return immediately
+- **R346:** If a Reconcile is already running when another is requested, the new request waits for the current one to finish, then runs
+- **R347:** Reconcile is idempotent — safe to call repeatedly
+
+### Phase B: Filesystem Watching
+- **R348:** The server watches ark.toml with fsnotify; any write triggers config reload + Reconcile
+- **R349:** The server watches each resolved source directory with fsnotify
+- **R350:** Watches are recursive — subdirectories within sources are watched
+- **R351:** When Reconcile adds new sources, new watches start; when sources are removed, watches stop
+- **R352:** File events use throttled on-notify: first event triggers immediate index update, then a throttle window starts
+- **R353:** Events during the throttle window are ignored — the filesystem is the source of truth
+- **R354:** When the throttle window expires, one re-index of current state runs
+- **R355:** If events arrive during the re-index, another throttle window starts after it completes
+- **R356:** When a window expires with no events, the next notification triggers immediately again
+- **R357:** A maximum wait ceiling forces re-index regardless of incoming events, preventing event storms from starving the index
+- **R358:** Startup watches source directories before running reconciliation — so nothing changes unseen during the scan
+- **R359:** (inferred) fsnotify only sees changes while watching; startup scan catches changes between shutdown and boot
+
+### Phase C: Append Detection
+- **R360:** When a file's modtime changes, check whether the change was append-only before full reindex
+- **R361:** Hash the file's content up to the stored length; if hash matches, the change is append-only
+- **R362:** If hash differs, fall back to full reindex
+- **R363:** For append-only changes, compare the last stored chunk against the same byte range to check for a clean chunk boundary
+- **R364:** Ark stores the start offset of the last chunk in its subdatabase for fast boundary checking
+- **R365:** If last chunk matches (clean boundary), append new chunks from the end of the file
+- **R366:** If last chunk doesn't match (unclean boundary), re-chunk from the last chunk's start offset only
+- **R367:** Append-only chunks only extract tags from new chunks, adding to existing T/F counts
+- **R368:** Append detection is universal — every file gets it, not strategy-specific
+- **R369:** (inferred) Strategies can report whether they produce clean chunk boundaries (line-based and JSONL always do)
+
+### chat-jsonl Rename
+- **R370:** The current `jsonl` chunking strategy is renamed to `chat-jsonl`
+- **R371:** A generic JSONL strategy should also exist for non-chat JSONL files
+
+### Search Consistency
+- **R372:** Searches check results for staleness (via microfts2 CheckFile)
+- **R373:** If stale hits exist, re-index those files and re-search
+- **R374:** After 2 retries with still-stale results, prune stale results and return what's valid
+- **R375:** Search never blocks on achieving a perfectly consistent index
