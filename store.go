@@ -278,6 +278,36 @@ func (s *Store) RemoveTags(fileid uint64) error {
 	return s.UpdateTags(fileid, nil)
 }
 
+// AppendTags adds to existing F record counts and T totals for a file
+// without replacing. Used by the append-only indexing path where only
+// new content is scanned for tags.
+func (s *Store) AppendTags(fileid uint64, tags map[string]uint32) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		for tag, count := range tags {
+			fk := tagFileKey(fileid, tag)
+			var existing uint32
+			v, err := txn.Get(s.dbi, fk)
+			if err == nil && len(v) == 4 {
+				existing = binary.BigEndian.Uint32(v)
+			} else if !lmdb.IsNotFound(err) && err != nil {
+				return err
+			}
+			val := make([]byte, 4)
+			binary.BigEndian.PutUint32(val, existing+count)
+			if err := txn.Put(s.dbi, fk, val, 0); err != nil {
+				return err
+			}
+			if err := s.adjustTagTotal(txn, tag, int64(count)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ListTags returns all tags with their total counts.
 func (s *Store) ListTags() ([]TagCount, error) {
 	var tags []TagCount

@@ -71,9 +71,9 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-DB.md → `db.go`
 - [ ] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
-- [ ] crc-Store.md → `store.go`
+- [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
-- [ ] crc-Indexer.md → `indexer.go`
+- [x] crc-Indexer.md → `indexer.go`
 - [ ] crc-Searcher.md → `search.go`
 - [ ] crc-Server.md → `server.go`, `watcher.go`
 - [ ] crc-CLI.md → `cmd/ark/main.go`
@@ -87,7 +87,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`
 - [ ] seq-reconcile.md → `server.go`
-- [ ] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
+- [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -123,4 +123,6 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] A11: R319-R322 (Makefile asset pipeline) — Makefile infrastructure, not Go code
 - [ ] O10: Self-triggered ark.toml events — configMutate saves ark.toml, watcher fires, watchLoop reloads config + triggers a second reconcile. Harmless (idempotent) but wasteful. Could suppress with a short debounce or write-flag.
 - [ ] O11: No tests for watcher/throttle — the throttle state machine is testable (inject clock, mock watcher channels) but untested
-- [ ] D3: Phase C (R360-R369, append detection) blocked on microfts2 — needs FileLength in N record, AppendChunks API, chunker offset support. Requests in ~/work/microfts2/UPDATES.md items 2-4
+- [x] D3: Phase C (R360-R369, append detection) blocked on microfts2 — needs FileLength in N record, AppendChunks API, chunker offset support. Requests in ~/work/microfts2/UPDATES.md items 2-4
+- [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, jsonl) produce clean boundaries. When a paragraph-based markdown chunker is added, implement back-seek from last chunk to find match point (chunker provides boundary-check capability) and WithReplaceFrom in microfts2.AppendChunks
+- [ ] O13: AppendFile reads full file twice (once in DetectAppend for prefix hash, once in AppendFile for new bytes + full hash). Acceptable because savings come from avoiding re-chunking/re-indexing old content. Could optimize with hash state passing if profiling shows it matters.

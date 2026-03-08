@@ -320,3 +320,63 @@ func TestTagCounts(t *testing.T) {
 		t.Errorf("expected nonexistent=0, got %d", m["nonexistent"])
 	}
 }
+
+// --- AppendTags tests ---
+
+func TestAppendTagsAddsToExisting(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTags(1, map[string]uint32{"decision": 2, "pattern": 1})
+
+	if err := s.AppendTags(1, map[string]uint32{"decision": 1, "new-tag": 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags, err := s.ListTags()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := make(map[string]uint32)
+	for _, tc := range tags {
+		m[tc.Tag] = tc.Count
+	}
+	if m["decision"] != 3 {
+		t.Errorf("expected decision=3, got %d", m["decision"])
+	}
+	if m["pattern"] != 1 {
+		t.Errorf("expected pattern=1 (unchanged), got %d", m["pattern"])
+	}
+	if m["new-tag"] != 3 {
+		t.Errorf("expected new-tag=3, got %d", m["new-tag"])
+	}
+}
+
+func TestAppendTagsEmptyIsNoop(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTags(1, map[string]uint32{"decision": 2})
+
+	if err := s.AppendTags(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendTags(1, map[string]uint32{}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags, _ := s.ListTags()
+	if len(tags) != 1 || tags[0].Count != 2 {
+		t.Errorf("expected decision=2 unchanged, got %v", tags)
+	}
+}
+
+func TestAppendTagsNewFile(t *testing.T) {
+	s := testStore(t)
+
+	// AppendTags on a fileid with no existing tags
+	if err := s.AppendTags(99, map[string]uint32{"fresh": 5}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags, _ := s.ListTags()
+	if len(tags) != 1 || tags[0].Tag != "fresh" || tags[0].Count != 5 {
+		t.Errorf("expected fresh=5, got %v", tags)
+	}
+}

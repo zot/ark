@@ -22,13 +22,15 @@ file content and updates the Store.
   old vectors, add new vectors, re-extract tags and update Store.
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
   by patterns, refresh each one. Return list of missing files.
-- DetectAppend(path, fileInfo): hash file content up to stored length.
-  If hash matches, compare last stored chunk against same byte range.
-  Returns append offset (clean boundary) or last-chunk offset (unclean).
-  Returns -1 if not an append (content modified).
-- AppendFile(path, offset, strategy): chunk only content from offset,
-  append chunks to microfts2, add new vectors, extract tags from new
-  chunks only and add to Store counts.
+- DetectAppend(path, fileid): get FileInfo from microfts2, check
+  FileLength > 0, stat file for growth, hash first FileLength bytes,
+  compare to stored ContentHash. Returns true if append-only.
+  (Future: back-seek from last chunk for unclean boundary detection.)
+- AppendFile(path, fileid, strategy): read new bytes from FileLength
+  to EOF, parse last ChunkRange for base line, call AppendChunks
+  with WithBaseLine/WithContentHash/WithModTime/WithFileLength.
+  Remove+re-add vectors (full vector refresh). Extract tags from
+  new bytes only, Store.AppendTags for incremental tag update.
 - ExtractTags(content []byte): scan content with regex `@[a-zA-Z][\w-]*:`,
   return map[string]uint32 of tagname → count. Tag name is the part
   between @ and : (lowercase).

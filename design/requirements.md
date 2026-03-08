@@ -560,7 +560,7 @@
 - **R361:** Hash the file's content up to the stored length; if hash matches, the change is append-only
 - **R362:** If hash differs, fall back to full reindex
 - **R363:** For append-only changes, compare the last stored chunk against the same byte range to check for a clean chunk boundary
-- **R364:** Ark stores the start offset of the last chunk in its subdatabase for fast boundary checking
+- **R364:** Ark reads the last chunk's position from microfts2 FileInfo.ChunkRanges for boundary checking
 - **R365:** If last chunk matches (clean boundary), append new chunks from the end of the file
 - **R366:** If last chunk doesn't match (unclean boundary), re-chunk from the last chunk's start offset only
 - **R367:** Append-only chunks only extract tags from new chunks, adding to existing T/F counts

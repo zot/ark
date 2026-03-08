@@ -3,7 +3,10 @@ package ark
 // CRC: crc-Indexer.md
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 
@@ -90,27 +93,34 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	return nil
 }
 
-// RefreshFile re-indexes a single file: reindex in microfts2 first,
-// then swap vectors and tags. FTS-first ordering ensures old state
-// is intact if the reindex fails.
+// RefreshFile re-indexes a single file. Tries append detection first;
+// falls back to full reindex if the change isn't append-only.
 func (idx *Indexer) RefreshFile(path, strategy string) error {
-	// Get old fileid to remove old vectors later
 	status, err := idx.fts.CheckFile(path)
 	if err != nil {
 		return fmt.Errorf("check file %s: %w", path, err)
 	}
-	oldID := status.FileID
 
-	// Re-index in microfts2 first (safe: failure leaves old state)
+	// Try append-only path
+	if ok, aErr := idx.DetectAppend(path, status.FileID); aErr == nil && ok {
+		if aErr := idx.AppendFile(path, status.FileID, strategy); aErr == nil {
+			return nil
+		}
+		// Append failed — fall through to full reindex
+	}
+
+	return idx.fullRefresh(path, strategy, status.FileID)
+}
+
+// fullRefresh does a complete reindex: microfts2 first, then vectors and tags.
+func (idx *Indexer) fullRefresh(path, strategy string, oldID uint64) error {
 	fileid, content, err := idx.fts.ReindexWithContent(path, strategy)
 	if err != nil {
 		return fmt.Errorf("fts reindex %s: %w", path, err)
 	}
 
-	// Remove old vectors (best-effort: may not exist)
 	idx.vec.RemoveFile(oldID)
 
-	// Split content into chunks using offsets from microfts2
 	data, chunks, err := splitChunks(content, fileid, idx.fts)
 	if err != nil {
 		return fmt.Errorf("read chunks %s: %w", path, err)
@@ -119,11 +129,107 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 		return fmt.Errorf("vec add %s: %w", path, err)
 	}
 
-	// Re-extract tags (replaces old counts for this file)
 	if idx.store != nil {
+		if fileid != oldID {
+			idx.store.RemoveTags(oldID)
+		}
 		tags := ExtractTags(data)
 		if err := idx.store.UpdateTags(fileid, tags); err != nil {
 			return fmt.Errorf("update tags %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+// DetectAppend checks whether a file change is append-only by hashing
+// the first FileLength bytes and comparing to the stored ContentHash.
+// Returns true if the prefix is unchanged and the file grew.
+func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
+	info, err := idx.fts.FileInfoByID(fileid)
+	if err != nil {
+		return false, err
+	}
+	if info.FileLength <= 0 || info.ContentHash == "" {
+		return false, nil
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	if fi.Size() <= info.FileLength {
+		return false, nil // didn't grow
+	}
+
+	// Hash the first FileLength bytes
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.CopyN(h, f, info.FileLength); err != nil {
+		return false, err
+	}
+	hash := fmt.Sprintf("%x", h.Sum(nil))
+
+	return hash == info.ContentHash, nil
+}
+
+// AppendFile indexes only the new content appended to a file.
+// FTS uses AppendChunks; vectors get a full refresh; tags are incremental.
+func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) error {
+	info, err := idx.fts.FileInfoByID(fileid)
+	if err != nil {
+		return fmt.Errorf("file info %d: %w", fileid, err)
+	}
+
+	// Read only the new bytes
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	newBytes := data[info.FileLength:]
+
+	// Parse last chunk range for base line
+	baseLine := 0
+	if n := len(info.ChunkRanges); n > 0 {
+		_, endLine := parseRange(info.ChunkRanges[n-1])
+		baseLine = endLine
+	}
+
+	// Compute new file metadata
+	fullHash := sha256.Sum256(data)
+	fi, _ := os.Stat(path)
+
+	// Append to FTS index
+	err = idx.fts.AppendChunks(fileid, newBytes, strategy,
+		microfts2.WithBaseLine(baseLine),
+		microfts2.WithContentHash(fmt.Sprintf("%x", fullHash)),
+		microfts2.WithModTime(fi.ModTime().UnixNano()),
+		microfts2.WithFileLength(fi.Size()),
+	)
+	if err != nil {
+		return fmt.Errorf("fts append %s: %w", path, err)
+	}
+
+	// Vectors: full refresh (remove old, re-add all chunks)
+	idx.vec.RemoveFile(fileid)
+	_, allChunks, err := splitChunks(data, fileid, idx.fts)
+	if err != nil {
+		return fmt.Errorf("read chunks %s: %w", path, err)
+	}
+	if err := idx.vec.AddFile(fileid, allChunks); err != nil {
+		return fmt.Errorf("vec add %s: %w", path, err)
+	}
+
+	// Tags: incremental — only scan new content
+	if idx.store != nil {
+		tags := ExtractTags(newBytes)
+		if err := idx.store.AppendTags(fileid, tags); err != nil {
+			return fmt.Errorf("append tags %s: %w", path, err)
 		}
 	}
 

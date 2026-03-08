@@ -1,5 +1,5 @@
 # Sequence: File Change (fsnotify)
-**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369
+**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R360, R361, R362, R363, R365, R366, R367, R368, R369
 
 Covers fsnotify events on source directories, throttled on-notify,
 and append detection.
@@ -42,39 +42,35 @@ fsnotify event (CREATE | WRITE | REMOVE | RENAME)
 ## Append Detection (during refresh)
 
 ```
-Indexer.RefreshFile(path)
+Indexer.RefreshFile(path, strategy)
   │
-  ├──> Indexer.DetectAppend(path, fileInfo)
+  ├──> Indexer.DetectAppend(path, fileid)
   │     │
-  │     ├── read stored length, content hash from microfts2 N record
-  │     ├── read file up to stored length
-  │     ├── hash and compare
+  │     ├── FileInfoByID(fileid) → stored FileLength, ContentHash
+  │     ├── stat file: if size <= FileLength → not append
+  │     ├── read first FileLength bytes, SHA-256, compare
   │     │
-  │     ├── hash differs → return -1 (not append, full reindex)
+  │     ├── hash differs → return false (not append, full reindex)
   │     │
-  │     ├── hash matches → append-only change
-  │     │     ├── Store.GetLastChunkOffset(fileid)
-  │     │     ├── seek to offset, compare bytes vs stored chunk
-  │     │     │
-  │     │     ├── chunk matches (clean boundary):
-  │     │     │     └── return file end offset (append from here)
-  │     │     │
-  │     │     └── chunk doesn't match (unclean boundary):
-  │     │           └── return last chunk start offset (re-chunk from here)
+  │     ├── hash matches → append confirmed
+  │     │     (current strategies always have clean chunk boundaries;
+  │     │      future: back-seek from last chunk to find match point,
+  │     │      chunker provides boundary-check capability)
   │     │
-  │     └── (small files: hash is trivial, full reindex is cheap anyway)
+  │     └── return true
   │
-  ├── if append offset >= 0:
-  │     └──> Indexer.AppendFile(path, offset, strategy)
-  │           ├── chunk content from offset only
-  │           ├── microfts2.AppendChunks(fileid, newChunks)
-  │           ├── microvec: add vectors for new chunks
-  │           ├── Store.AppendTags(fileid, newTags)
-  │           └── Store.PutLastChunkOffset(fileid, lastNewChunkOffset)
+  ├── if append:
+  │     └──> Indexer.AppendFile(path, fileid, strategy)
+  │           ├── read file from FileLength to EOF (new bytes)
+  │           ├── parse last ChunkRange for base line
+  │           ├── microfts2.AppendChunks(fileid, newBytes, strategy,
+  │           │     WithBaseLine, WithContentHash, WithModTime, WithFileLength)
+  │           ├── microvec: remove + re-add all vectors (full refresh)
+  │           ├── ExtractTags(newBytes) → newTags
+  │           └── Store.AppendTags(fileid, newTags)
   │
   └── if not append:
         └──> full RefreshFile path (existing behavior)
-             └── Store.PutLastChunkOffset(fileid, lastChunkOffset)
 ```
 
 ## Search Consistency

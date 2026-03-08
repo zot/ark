@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R364, R367
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -32,9 +32,6 @@ ark-level settings, and tag tracking.
   return fileid + count per file. Caller resolves fileid to path/size.
 - TagContext(tags []string): for each F record match, read file content
   and extract lines containing the tag — return tag-to-end-of-line text
-- PutLastChunkOffset(fileid, offset): store start offset of last chunk
-  for append detection (L prefix key)
-- GetLastChunkOffset(fileid): read last chunk offset for a file
 - AppendTags(fileid, tags): add to existing F record counts and T totals
   without replacing — used by append-only indexing path
 
