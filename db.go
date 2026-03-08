@@ -114,7 +114,7 @@ func Init(dbPath string, opts InitOpts) error {
 	// Func strategies avoid external process overhead and scanner buffer limits
 	funcStrategies := map[string]microfts2.ChunkFunc{
 		"lines": microfts2.LineChunkFunc,
-		"jsonl": JSONLChunkFunc,
+		"chat-jsonl": JSONLChunkFunc,
 	}
 	for name, fn := range funcStrategies {
 		if err := fts.AddStrategyFunc(name, fn); err != nil {
@@ -237,13 +237,13 @@ func Open(dbPath string) (*DB, error) {
 
 	// Register built-in func strategies (must happen on every Open,
 	// not just InitDB — func strategies aren't persisted in LMDB).
-	// The jsonl chunker is wrapped in an LRU cache — conversation logs
+	// The chat-jsonl chunker is wrapped in an LRU cache — conversation logs
 	// are append-only, so chunks stay valid until the file changes.
 	// The cache is captured by the closure; microfts2 never sees it.
 	jsonlCache := newChunkCache(64)
 	for name, fn := range map[string]microfts2.ChunkFunc{
 		"lines": microfts2.LineChunkFunc,
-		"jsonl": jsonlCache.wrap(JSONLChunkFunc),
+		"chat-jsonl": jsonlCache.wrap(JSONLChunkFunc),
 	} {
 		if err := fts.AddStrategyFunc(name, fn); err != nil {
 			vec.Close()

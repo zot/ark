@@ -22,7 +22,7 @@ Status should show what's in the index:
 - **Total chunks** — how many chunks are indexed across all files.
   More chunks = more granular search but larger DB.
 - **Files by strategy** — how many files use each chunking strategy
-  (e.g., 1200 lines, 73 jsonl). Shows the mix of content types.
+  (e.g., 1200 lines, 73 chat-jsonl). Shows the mix of content types.
 - **Sources configured** — how many source directories are in
   ark.toml. Quick sanity check that config is loaded.
 
@@ -38,7 +38,7 @@ missing: 12
 unresolved: 3
 chunks: 8451
 sources: 5
-strategies: lines=1200 jsonl=73
+strategies: lines=1200 chat-jsonl=73
 map: 511 MB / 8 GB (6%)
 server: not running
 ```

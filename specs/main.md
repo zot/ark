@@ -199,9 +199,9 @@ commands (persisted in LMDB settings).
 
 Built-in func strategies:
 - `lines` — one chunk per line (microfts2's LineChunkFunc)
-- `jsonl` — content-aware JSONL chunker for Claude conversation logs
+- `chat-jsonl` — content-aware JSONL chunker for Claude conversation logs
 
-The `jsonl` strategy parses each line as JSON and extracts only
+The `chat-jsonl` strategy parses each line as JSON and extracts only
 human-readable text content. Claude conversation logs contain
 metadata envelopes, tool inputs (file contents, code edits),
 tool results, cryptographic signatures, duplicate plan content,

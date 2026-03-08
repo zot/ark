@@ -78,7 +78,7 @@ rules.
 ```toml
 [strategies]
 "*.md" = "markdown"
-"*.jsonl" = "jsonl"
+"*.jsonl" = "chat-jsonl"
 "docs/**/*.md" = "markdown"
 ```
 

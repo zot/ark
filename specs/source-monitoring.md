@@ -93,10 +93,10 @@ Strategies can report whether they produce clean chunk boundaries.
 Line-based and JSONL strategies always end on boundaries. Markdown
 heading-based strategies might not.
 
-### chat-jsonl rename
+### chat-jsonl (done)
 
-The current `jsonl` strategy extracts chat-specific data (speaker,
-tool use). Rename to `chat-jsonl`. A generic JSONL strategy should
+The `chat-jsonl` strategy extracts chat-specific data (speaker,
+tool use). Renamed from `jsonl`. A generic JSONL strategy should
 also exist for non-chat JSONL files.
 
 ## Search Consistency

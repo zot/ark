@@ -16,8 +16,9 @@ registered by name in the database.
 
 `ark init` registers these by default, plus:
 
-- `jsonl` — `ark chunk-jsonl <file>`: one JSONL record per chunk
-  (split on newlines). Enables indexing Claude conversation logs.
+- `chat-jsonl` — `ark chunk-chat-jsonl <file>`: content-aware chunker
+  for Claude conversation logs. Extracts text and thinking blocks,
+  skips tool use/results and metadata.
 
 ### Future strategies (ark subcommands or external)
 

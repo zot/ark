@@ -14,9 +14,9 @@ microvec, and the ark subdatabase. Entry point for all operations.
 ## Does
 - Init(path, opts): create new database — open microfts2, pass env to
   microvec, create ark subdatabase, write default config, register
-  func strategies (lines, jsonl), create starter tags.md
+  func strategies (lines, chat-jsonl), create starter tags.md
 - Open(path): open existing database — same sequence, read config.
-  Registers func strategies (lines, jsonl). Passes store to Indexer
+  Registers func strategies (lines, chat-jsonl). Passes store to Indexer
   for tag tracking.
 - JSONLChunkFunc: content-aware JSONL chunker — parses JSON, extracts
   text and thinking blocks, skips tool_use/tool_result/signatures/metadata

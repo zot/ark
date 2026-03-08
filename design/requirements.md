@@ -204,8 +204,8 @@
 ## Feature: Indexing Strategies
 **Source:** specs/indexing.md
 
-- **R135:** A `jsonl` chunking strategy splits files on newline boundaries — each line is one chunk
-- **R136:** `ark init` registers the `jsonl` strategy alongside the existing line-based strategies
+- **R135:** A `chat-jsonl` chunking strategy splits files on newline boundaries — each line is one chunk
+- **R136:** `ark init` registers the `chat-jsonl` strategy alongside the existing line-based strategies
 - **R137:** (inferred) The JSONL chunker is a microfts2 external command or Go function that outputs byte offsets at newline boundaries
 
 ## Feature: Recall Agent
@@ -381,7 +381,7 @@
 ## Feature: Content-Aware JSONL Chunker
 **Source:** specs/main.md
 
-- **R236:** The `jsonl` strategy is a Go func chunker registered with microfts2 on both Init and Open
+- **R236:** The `chat-jsonl` strategy is a Go func chunker registered with microfts2 on both Init and Open
 - **R237:** Each JSONL line is parsed as JSON; lines with no extractable text produce no chunk
 - **R238:** The chunker extracts `type:text` blocks (the `text` field) from `message.content`
 - **R239:** The chunker extracts `type:thinking` blocks (the `thinking` field, not the `signature`)
@@ -393,7 +393,7 @@
 - **R245:** Chunk content is the concatenation of extracted text blocks, separated by newlines
 - **R246:** As a Go func strategy, the chunker avoids scanner buffer limits on large JSONL lines
 - **R247:** (inferred) When `message.content` is a string (not array), the entire string is the chunk text
-- **R248:** (inferred) The `jsonl` strategy replaces the external `ark chunk-jsonl` command — no external process needed
+- **R248:** (inferred) The `chat-jsonl` strategy replaces the external `ark chunk-chat-jsonl` command — no external process needed
 
 ## Feature: Enhanced Status
 **Source:** specs/status-enhanced.md
@@ -402,7 +402,7 @@
 - **R250:** Map usage is displayed in human-readable units (MB/GB)
 - **R251:** Map usage is computed from LMDB env info: (LastPNO + 1) * PageSize = used bytes
 - **R252:** `ark status` reports total chunk count across all indexed files
-- **R253:** `ark status` reports file count per chunking strategy (e.g., lines=1200 jsonl=73)
+- **R253:** `ark status` reports file count per chunking strategy (e.g., lines=1200 chat-jsonl=73)
 - **R254:** `ark status` reports number of configured source directories
 - **R255:** New status fields appear after existing fields (files, stale, missing, unresolved)
 - **R256:** Output order: files, stale, missing, unresolved, chunks, sources, strategies, map, server

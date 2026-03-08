@@ -112,7 +112,7 @@ Then scan and refresh:
 ~/.ark/ark refresh
 ```
 
-Available chunking strategies: `lines`, `lines-overlap`, `words-overlap`, `jsonl`
+Available chunking strategies: `lines`, `lines-overlap`, `words-overlap`, `chat-jsonl`
 
 ## Guidelines
 

@@ -73,7 +73,7 @@ func main() {
 		cmdBundle(args)
 	case "cat":
 		cmdBundleCat(args)
-	case "chunk-jsonl":
+	case "chunk-chat-jsonl":
 		cmdChunkJSONL(args)
 	case "config":
 		cmdConfig(args)
@@ -2491,7 +2491,7 @@ func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
 // boundaries and outputs range\tcontent lines (microfts2 v0.4 protocol).
 func cmdChunkJSONL(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ark chunk-jsonl <file>")
+		fmt.Fprintln(os.Stderr, "usage: ark chunk-chat-jsonl <file>")
 		os.Exit(1)
 	}
 
