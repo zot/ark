@@ -19,3 +19,7 @@ The Frictionless command is `~/.ark/ark ui`. UI skills use `{cmd}` as a placehol
 ## Quick Recall
 
 Use /ark to query the knowledge base or write tagged content.
+
+## Code Changes
+
+Don't forget about gofmt -- no need to sed your way into poverty!

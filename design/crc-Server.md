@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -14,6 +14,7 @@ Optionally starts the embedded ui-engine alongside.
 - uiServer: *cli.Server — embedded ui-engine server (nil if UI disabled/failed)
 - watcher: *fsnotify.Watcher — filesystem watcher (nil if watching disabled)
 - reconcileCh: chan struct{} — triggers reconciliation (serialized)
+- ignoredPaths: map[string]struct{} — negative cache of non-indexable paths, cleared on config reload
 
 ## Does
 - Serve(dbPath, opts): bind socket (highlander lock), write PID file,
@@ -30,6 +31,9 @@ Optionally starts the embedded ui-engine alongside.
   first event, then throttle window. Events during window ignored.
   Window expiry triggers single re-index of current state. Max wait
   ceiling prevents starvation.
+- isIgnored(path): check negative cache, then DB.IsIndexable if miss.
+  Non-indexable paths are cached. Directory events and ark.toml bypass.
+- clearIgnoredPaths(): reset the negative cache — called on config reload
 - EnsureArkSource(): ensure ~/.ark is a source — hardcoded, not in
   ark.toml, cannot be removed
 - StartUIEngine(dbPath): configure ui-engine (Dir=dbPath), start in

@@ -54,6 +54,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// CRC: crc-DB.md | R383
 // WriteDefaultConfig writes an initial ark.toml with default excludes.
 func WriteDefaultConfig(path string) error {
 	const defaultConfig = `# Ark configuration
@@ -63,6 +64,11 @@ case_insensitive = true
 # Global patterns — apply to all sources
 include = []
 exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+
+# Strategy mapping — glob pattern to chunking strategy
+[strategies]
+"*.md" = "markdown"
+"*.jsonl" = "chat-jsonl"
 
 # Sources — directories to watch
 # [[source]]

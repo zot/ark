@@ -25,13 +25,14 @@ import (
 
 // Server is an HTTP server on a Unix domain socket.
 type Server struct {
-	db          *DB
-	listener    net.Listener
-	pidPath     string
-	noScan      bool
-	uiRuntime   *flib.Runtime
-	watcher     *fsnotify.Watcher
-	reconcileCh chan struct{}
+	db           *DB
+	listener     net.Listener
+	pidPath      string
+	noScan       bool
+	uiRuntime    *flib.Runtime
+	watcher      *fsnotify.Watcher
+	reconcileCh  chan struct{}
+	ignoredPaths map[string]struct{} // negative cache: non-indexable paths
 }
 
 // ServeOpts controls server behavior.

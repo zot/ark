@@ -1,5 +1,5 @@
 # Sequence: File Change (fsnotify)
-**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R360, R361, R362, R363, R365, R366, R367, R368, R369
+**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R392, R393, R394, R395, R360, R361, R362, R363, R365, R366, R367, R368, R369
 
 Covers fsnotify events on source directories, throttled on-notify,
 and append detection.
@@ -15,11 +15,24 @@ and append detection.
 ```
 fsnotify event (CREATE | WRITE | REMOVE | RENAME)
   │
-  ├── if ark.toml changed:
-  │     └── Config.Load() + Server.Reconcile()
-  │         (full reconciliation, not per-file)
+  ├── if new directory created:
+  │     └── watchDirRecursive (bypass indexability check)
   │
-  ├── if source file changed:
+  ├── if ark.toml changed:
+  │     ├── Config.Load() + Server.Reconcile()
+  │     │   (full reconciliation, not per-file)
+  │     └── clearIgnoredPaths() (invalidate negative cache)
+  │
+  ├── isIgnored(path)?
+  │     ├── check ignoredPaths set (negative cache)
+  │     ├── if miss: DB.IsIndexable(path)
+  │     │     ├── find source for path
+  │     │     ├── Config.EffectivePatterns(src)
+  │     │     └── Matcher.Classify(includes, excludes, relPath, false)
+  │     ├── if not indexable: add to ignoredPaths, skip event
+  │     └── if indexable: continue to throttle
+  │
+  ├── if source file changed (passes indexability check):
   │     │
   │     ├── if in immediate mode (no active throttle):
   │     │     ├── index/refresh the file immediately

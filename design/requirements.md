@@ -555,6 +555,17 @@
 - **R358:** Startup watches source directories before running reconciliation — so nothing changes unseen during the scan
 - **R359:** (inferred) fsnotify only sees changes while watching; startup scan catches changes between shutdown and boot
 
+### Watcher Pattern Filtering
+- **R387:** Before triggering reconcile on a file event, the watcher checks whether the file is indexable — same Classify check the Scanner uses during Scan()
+- **R388:** The watcher finds which source directory the file belongs to, gets effective include/exclude patterns, and calls Classify
+- **R389:** If the file would not be included by any source's patterns, the event is ignored (no reconcile)
+- **R390:** Directory creation events bypass the indexability check — new directories need watches regardless of pattern match
+- **R391:** ark.toml changes have their own code path and bypass the indexability check
+- **R392:** DB exposes an IsIndexable(path) method that encapsulates the source lookup and pattern check
+- **R393:** Non-indexable paths are cached in a set (negative cache) — subsequent events for the same path skip Classify in favor of a set lookup
+- **R394:** The negative cache is cleared whenever ark.toml is reloaded, since pattern changes can alter indexability
+- **R395:** (inferred) The negative cache is safe because ark.toml reload is the only event that changes pattern rules — between reloads, indexability cannot change
+
 ### Phase C: Append Detection
 - **R360:** When a file's modtime changes, check whether the change was append-only before full reindex
 - **R361:** Hash the file's content up to the stored length; if hash matches, the change is append-only
@@ -570,6 +581,20 @@
 ### chat-jsonl Rename
 - **R370:** The current `jsonl` chunking strategy is renamed to `chat-jsonl`
 - **R371:** A generic JSONL strategy should also exist for non-chat JSONL files
+
+### Markdown Chunker
+
+- **R376:** A `markdown` chunking strategy splits files on paragraph boundaries (blank lines and heading transitions)
+- **R377:** A heading line (starting with `#`) always starts a new chunk
+- **R378:** A heading and its immediately following paragraph (up to the next blank line or heading) form one chunk
+- **R379:** Consecutive blank lines collapse to a single boundary
+- **R380:** Chunks use 1-based line ranges (`"5-12"`) consistent with `LineChunkFunc`
+- **R381:** The chunker is a `ChunkFunc` in microfts2, registered via `AddStrategyFunc`
+- **R382:** Ark registers the markdown strategy in both `InitDB` and `Open`
+- **R383:** The default strategy mapping for `*.md` changes from `lines` to `markdown`
+- **R384:** Blank lines are boundaries only — not included in any chunk's content
+- **R385:** (inferred) Append detection derives boundary cleanliness from last chunk end vs file length — no chunker reporting needed
+- **R386:** (inferred) Until O12 back-seek is implemented, append detection falls back to full reindex for markdown-strategy files
 
 ### Search Consistency
 - **R372:** Searches check results for staleness (via microfts2 CheckFile)

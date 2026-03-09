@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	throttleWindow  = 1 * time.Second
-	maxWaitCeiling  = 30 * time.Second
+	throttleWindow = 1 * time.Second
+	maxWaitCeiling = 30 * time.Second
 )
 
 // startWatching creates an fsnotify watcher for ark.toml and all source
@@ -27,6 +27,7 @@ func (srv *Server) startWatching() {
 		return
 	}
 	srv.watcher = w
+	srv.ignoredPaths = make(map[string]struct{})
 
 	// Watch ark.toml
 	configPath := srv.db.ConfigPath()
@@ -126,12 +127,22 @@ func (srv *Server) watchLoop() {
 			if event.Name == configPath || filepath.Base(event.Name) == "ark.toml" {
 				// ark.toml changed — reload config + full reconcile
 				log.Println("watch: ark.toml changed, reloading config")
+				srv.ignoredPaths = make(map[string]struct{}) // invalidate negative cache
 				if err := srv.db.ReloadConfig(); err != nil {
 					log.Printf("watch: config reload failed: %v", err)
 				} else {
 					srv.db.Config().EnsureArkSource()
 					srv.reconcile()
 				}
+				continue
+			}
+
+			// Skip non-indexable files (negative cache + pattern check)
+			if _, ignored := srv.ignoredPaths[event.Name]; ignored {
+				continue
+			}
+			if !srv.db.IsIndexable(event.Name) {
+				srv.ignoredPaths[event.Name] = struct{}{}
 				continue
 			}
 

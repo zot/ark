@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 microvec, and the ark subdatabase. Entry point for all operations.
@@ -14,9 +14,9 @@ microvec, and the ark subdatabase. Entry point for all operations.
 ## Does
 - Init(path, opts): create new database — open microfts2, pass env to
   microvec, create ark subdatabase, write default config, register
-  func strategies (lines, chat-jsonl), create starter tags.md
+  func strategies (lines, chat-jsonl, markdown), create starter tags.md
 - Open(path): open existing database — same sequence, read config.
-  Registers func strategies (lines, chat-jsonl). Passes store to Indexer
+  Registers func strategies (lines, chat-jsonl, markdown). Passes store to Indexer
   for tag tracking.
 - JSONLChunkFunc: content-aware JSONL chunker — parses JSON, extracts
   text and thinking blocks, skips tool_use/tool_result/signatures/metadata
@@ -34,6 +34,8 @@ microvec, and the ark subdatabase. Entry point for all operations.
 - QueryTrigramCounts(query): delegate to microfts2, returns trigram counts for CLI grams command
 - Init seeding: if ark.toml exists, read case_insensitive/aliases from it
 - SourcesCheck(): delegate to Config.ResolveGlobs, add new sources, flag MIA, report orphans
+- IsIndexable(path): find which source the path belongs to, get effective
+  patterns, call Matcher.Classify. Returns true if any source would index it.
 
 ## Collaborators
 - Config: loads and validates ark.toml
@@ -41,6 +43,7 @@ microvec, and the ark subdatabase. Entry point for all operations.
 - Scanner: walks directories (uses Config + Matcher)
 - Indexer: adds/removes files in both engines, extracts tags
 - Searcher: queries both engines and merges results
+- Matcher: pattern matching for IsIndexable
 
 ## Sequences
 - seq-add.md

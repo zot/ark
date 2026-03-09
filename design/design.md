@@ -75,7 +75,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [ ] crc-Searcher.md → `search.go`
-- [ ] crc-Server.md → `server.go`, `watcher.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`
 - [ ] crc-CLI.md → `cmd/ark/main.go`
 
 ### Sequences
@@ -121,8 +121,9 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] A9: R296 (re-export CreateBundle/ExtractBundle from ui-engine) — upstream change in ui-engine/cli/exports.go, done
 - [ ] A10: R303 (bundle is build-time command) — inferred, covered by R297 implementation
 - [ ] A11: R319-R322 (Makefile asset pipeline) — Makefile infrastructure, not Go code
-- [ ] O10: Self-triggered ark.toml events — configMutate saves ark.toml, watcher fires, watchLoop reloads config + triggers a second reconcile. Harmless (idempotent) but wasteful. Could suppress with a short debounce or write-flag.
+- [x] O10: Self-triggered ark.toml events — configMutate saves ark.toml, watcher fires, watchLoop reloads config + triggers a second reconcile. Harmless (idempotent) but wasteful. Could suppress with a short debounce or write-flag.
 - [ ] O11: No tests for watcher/throttle — the throttle state machine is testable (inject clock, mock watcher channels) but untested
 - [x] D3: Phase C (R360-R369, append detection) blocked on microfts2 — needs FileLength in N record, AppendChunks API, chunker offset support. Requests in ~/work/microfts2/UPDATES.md items 2-4
-- [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, chat-jsonl) produce clean boundaries. When a paragraph-based markdown chunker is added, implement back-seek from last chunk to find match point (chunker provides boundary-check capability) and WithReplaceFrom in microfts2.AppendChunks
+- [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, chat-jsonl) produce clean boundaries. For markdown strategy, derive boundary cleanliness from last chunk end vs file length. When unclean, implement back-seek from last chunk to find match point and WithReplaceFrom in microfts2.AppendChunks
 - [ ] O13: AppendFile reads full file twice (once in DetectAppend for prefix hash, once in AppendFile for new bytes + full hash). Acceptable because savings come from avoiding re-chunking/re-indexing old content. Could optimize with hash state passing if profiling shows it matters.
+- [x] A12: R376-R381, R384 (markdown chunker) — implemented in microfts2 as MarkdownChunkFunc

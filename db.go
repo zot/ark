@@ -31,7 +31,7 @@ type DB struct {
 	config  *Config
 	matcher *Matcher
 
-	indexer  *Indexer
+	indexer *Indexer
 	scanner *Scanner
 	search  *Searcher
 
@@ -110,10 +110,12 @@ func Init(dbPath string, opts InitOpts) error {
 		return fmt.Errorf("init ark store: %w", err)
 	}
 
+	// CRC: crc-DB.md | R382
 	// Register default chunking strategies
 	// Func strategies avoid external process overhead and scanner buffer limits
 	funcStrategies := map[string]microfts2.ChunkFunc{
-		"lines": microfts2.LineChunkFunc,
+		"lines":      microfts2.LineChunkFunc,
+		"markdown":   microfts2.MarkdownChunkFunc,
 		"chat-jsonl": JSONLChunkFunc,
 	}
 	for name, fn := range funcStrategies {
@@ -235,6 +237,7 @@ func Open(dbPath string) (*DB, error) {
 
 	matcher := &Matcher{Dotfiles: settings.Dotfiles}
 
+	// CRC: crc-DB.md | R382
 	// Register built-in func strategies (must happen on every Open,
 	// not just InitDB — func strategies aren't persisted in LMDB).
 	// The chat-jsonl chunker is wrapped in an LRU cache — conversation logs
@@ -242,7 +245,8 @@ func Open(dbPath string) (*DB, error) {
 	// The cache is captured by the closure; microfts2 never sees it.
 	jsonlCache := newChunkCache(64)
 	for name, fn := range map[string]microfts2.ChunkFunc{
-		"lines": microfts2.LineChunkFunc,
+		"lines":      microfts2.LineChunkFunc,
+		"markdown":   microfts2.MarkdownChunkFunc,
 		"chat-jsonl": jsonlCache.wrap(JSONLChunkFunc),
 	} {
 		if err := fts.AddStrategyFunc(name, fn); err != nil {
@@ -296,6 +300,25 @@ func (db *DB) ReloadConfig() error {
 	db.search.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
 	return nil
+}
+
+// IsIndexable returns true if path would be indexed by any configured source.
+// CRC: crc-DB.md | Seq: seq-file-change.md
+func (db *DB) IsIndexable(path string) bool {
+	for _, src := range db.config.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		relPath, err := filepath.Rel(src.Dir, path)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			continue // path not under this source
+		}
+		includes, excludes := db.config.EffectivePatterns(src)
+		if db.matcher.Classify(includes, excludes, relPath, false) == Included {
+			return true
+		}
+	}
+	return false
 }
 
 // FillChunks populates Text for each result with chunk content from disk.
@@ -506,16 +529,16 @@ func (db *DB) Status() (*StatusInfo, error) {
 
 // StatusInfo holds database status counts and LMDB map usage.
 type StatusInfo struct {
-	Version    string `json:"version"`
-	Files      int    `json:"files"`
-	Stale      int    `json:"stale"`
-	Missing    int    `json:"missing"`
-	Unresolved int    `json:"unresolved"`
-	Chunks     int    `json:"chunks"`
-	Sources    int    `json:"sources"`
+	Version    string         `json:"version"`
+	Files      int            `json:"files"`
+	Stale      int            `json:"stale"`
+	Missing    int            `json:"missing"`
+	Unresolved int            `json:"unresolved"`
+	Chunks     int            `json:"chunks"`
+	Sources    int            `json:"sources"`
 	Strategies map[string]int `json:"strategies"`
-	MapUsed    int64 `json:"mapUsed"`
-	MapTotal   int64 `json:"mapTotal"`
+	MapUsed    int64          `json:"mapUsed"`
+	MapTotal   int64          `json:"mapTotal"`
 }
 
 // Files returns all indexed file paths.

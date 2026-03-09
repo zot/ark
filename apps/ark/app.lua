@@ -606,7 +606,7 @@ end
 
 function Ark:quickAddClaudeProjects()
     arkCmd('config add-strategy "*.jsonl" chat-jsonl')
-    arkCmd('config add-strategy "*.md" lines')
+    arkCmd('config add-strategy "*.md" markdown')
     -- Add each Claude project dir as a concrete source
     local claudeDir = HOME .. "/.claude/projects"
     local entries = listDir(claudeDir)
@@ -773,7 +773,7 @@ function Ark:saveProjects()
         if c.selected and not c._wasConfigured then
             -- Newly selected: add sources
             arkCmd('config add-strategy "*.jsonl" chat-jsonl')
-            arkCmd('config add-strategy "*.md" lines')
+            arkCmd('config add-strategy "*.md" markdown')
             local dir = claudeDir .. "/" .. c.slug
             arkCmd('config add-source "' .. dir .. '"')
             arkCmd('config add-include "*.jsonl" --source "' .. dir .. '"')

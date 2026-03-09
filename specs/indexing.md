@@ -20,9 +20,39 @@ registered by name in the database.
   for Claude conversation logs. Extracts text and thinking blocks,
   skips tool use/results and metadata.
 
+### Paragraph-based markdown chunker
+
+`markdown` — a func strategy in microfts2 that splits markdown files
+on paragraph boundaries. A paragraph boundary is a blank line or a
+heading transition (a line starting with one or more `#` characters).
+
+Each chunk is a coherent unit of thought: a paragraph, a heading with
+its immediately following paragraph, or a contiguous block of
+non-blank lines. Consecutive blank lines collapse to a single boundary.
+
+Chunks use the same line-range format as other strategies (`"5-12"`),
+1-based, for consistency with `extractByRange` and `WithBaseLine`.
+
+A heading line starts a new chunk. The heading and the paragraph
+immediately following it (up to the next blank line or next heading)
+form one chunk together.
+
+Blank lines are boundaries only — not included in any chunk's content.
+Gaps between chunks are expected.
+
+Chunk boundaries are not always clean for append detection: the last
+paragraph may continue when content is appended. The consumer derives
+this by comparing the last chunk's end position to the file length —
+the chunker doesn't report it. Until back-seek (O12) is implemented,
+append detection falls back to full reindex for markdown-strategy files.
+
+Registered as a func strategy via `AddStrategyFunc` in microfts2,
+alongside `LineChunkFunc`. Ark registers it in both `InitDB` and
+`Open`, and adds it to the global strategy map in ark.toml
+(`"*.md" = "markdown"` replaces `"*.md" = "lines"`).
+
 ### Future strategies (ark subcommands or external)
 
-- `markdown` — split on heading boundaries (## level)
 - `code` — keep functions/methods with their doc comments intact
   (tree-sitter or per-language heuristics)
 - `manual` — read a sidecar offset file written by a human or agent

@@ -57,6 +57,43 @@ A maximum wait ceiling prevents event storms from starving the
 index indefinitely. After the ceiling, force a re-index regardless
 of incoming events.
 
+### Watcher pattern filtering
+
+Not every file in a watched directory is indexable. LMDB database
+files, socket files, log files, PID files — all live in watched
+directories (especially ~/.ark) but should never trigger reconcile.
+Without filtering, a reconcile writes to LMDB, LMDB modifies
+data.mdb, fsnotify fires, and the watcher triggers another reconcile.
+The database changes itself in a loop.
+
+Before triggering reconcile on a file event, the watcher checks
+whether the changed file would actually be indexed. It finds which
+source directory the file belongs to, gets the effective
+include/exclude patterns, and runs the same Classify check that the
+Scanner uses during Scan(). If the file wouldn't be included, the
+event is ignored.
+
+Directory creation events bypass this filter — new directories need
+watches regardless of whether their contents match patterns yet.
+
+ark.toml changes have their own code path and also bypass this filter.
+
+#### Ignored-file cache
+
+Files that fail the indexability check are added to a set of known
+non-indexable paths. Subsequent events for the same path skip the
+Classify call entirely — a set lookup instead of glob matching.
+
+Yes, this is negative caching — normally an antipattern. It works
+here because the invalidation is clean and complete: the cache is
+cleared whenever ark.toml is reloaded, which is the only event that
+can change pattern rules. Between reloads, a file's indexability
+cannot change.
+
+The cache only holds paths that were checked and rejected. It does
+not cache positive results — indexable files go through normal
+throttle/reconcile and don't benefit from caching.
+
 ### Startup + fsnotify (not either/or)
 
 fsnotify only sees changes while watching. Anything that changed
