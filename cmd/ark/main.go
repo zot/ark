@@ -89,6 +89,8 @@ func main() {
 		cmdGrams(args)
 	case "init":
 		cmdInit(args)
+	case "rebuild":
+		cmdRebuild(args)
 	case "ls":
 		cmdBundleLs(args)
 	case "missing":
@@ -399,6 +401,11 @@ func cmdInit(args []string) {
 		}
 	}
 
+	// Remove existing database files before creating fresh
+	for _, f := range []string{"data.mdb", "lock.mdb"} {
+		os.Remove(filepath.Join(arkDir, f))
+	}
+
 	// Auto-setup if not bootstrapped (unless --no-setup)
 	if !*noSetup && !isBootstrapped() {
 		if err := runSetup(); err != nil {
@@ -418,6 +425,20 @@ func cmdInit(args []string) {
 		fatal(err)
 	}
 	fmt.Printf("initialized ark database at %s\n", arkDir)
+}
+
+// CRC: crc-CLI.md
+func cmdRebuild(args []string) {
+	// Refuse if server is running
+	if client := serverClient(arkDir); client != nil {
+		fmt.Fprintln(os.Stderr, "error: server is running — stop it first with 'ark stop'")
+		os.Exit(1)
+	}
+	// init --no-setup handles db removal and recreation, reading settings from ark.toml
+	cmdInit([]string{"--no-setup"})
+	// scan to re-index all sources
+	cmdScan(nil)
+	fmt.Println("rebuild complete")
 }
 
 func cmdAdd(args []string) {
@@ -1079,7 +1100,6 @@ func withConfig(dbPath string, fn func(cfg *ark.Config) error) {
 
 func cmdConfigAddSource(args []string) {
 	fs := flag.NewFlagSet("config add-source", flag.ExitOnError)
-	strategy := fs.String("strategy", "", "chunking strategy (optional for globs using global strategies)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -1090,14 +1110,14 @@ func cmdConfigAddSource(args []string) {
 
 	if client := serverClient(arkDir); client != nil {
 		if err := proxyOK(client, "POST", "/config/add-source", map[string]string{
-			"dir": dir, "strategy": *strategy,
+			"dir": dir,
 		}); err != nil {
 			fatal(err)
 		}
 		return
 	}
 
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddSource(dir, *strategy) })
+	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddSource(dir) })
 }
 
 func cmdConfigRemoveSource(args []string) {
@@ -1479,7 +1499,7 @@ func cmdStop(args []string) {
 // CRC: crc-CLI.md
 func cmdUI(args []string) {
 	if len(args) == 0 {
-		cmdUIBrowser(nil)
+		cmdUIOpen(nil)
 		return
 	}
 	sub := args[0]
@@ -1487,8 +1507,8 @@ func cmdUI(args []string) {
 	switch sub {
 	case "audit":
 		cmdUIAudit(subArgs)
-	case "browser":
-		cmdUIBrowser(subArgs)
+	case "open":
+		cmdUIOpen(subArgs)
 	case "checkpoint":
 		cmdUICheckpoint(subArgs)
 	case "display":
@@ -2051,7 +2071,7 @@ func cmdUIStatus(args []string) {
 	fmt.Println()
 }
 
-func cmdUIBrowser(args []string) {
+func cmdUIOpen(args []string) {
 	portPath := filepath.Join(arkDir, "ui-port")
 	data, err := os.ReadFile(portPath)
 	if err != nil {

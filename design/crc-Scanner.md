@@ -17,7 +17,7 @@ files.
   - unresolved + not already tracked → add to "new unresolved" list
   - excluded → skip (don't walk into excluded directories)
 - ScanResults: struct with newFiles []FileEntry, newUnresolved []string
-- FileEntry: struct with path, strategy (from Config.StrategyForFile, falling back to source config)
+- FileEntry: struct with path, strategy (from Config.StrategyForFile with source's strategies merged over global)
 
 ## Collaborators
 - Config: provides directories and effective patterns

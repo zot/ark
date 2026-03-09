@@ -82,7 +82,7 @@ replacing the `.ui/mcp` shell script:
 - `ark ui checkpoint <cmd> <app> [msg]` — manage app checkpoints
 - `ark ui audit <app>` — run code quality audit
 - `ark ui status` — ui-engine server status
-- `ark ui browser` — open browser to current session
+- `ark ui open` — open browser to current session
 
 All subcommands communicate via the unix socket (`ark.sock`), same
 transport as every other ark command. Skills and agents use

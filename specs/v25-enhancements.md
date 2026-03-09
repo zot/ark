@@ -82,12 +82,24 @@ rules.
 "docs/**/*.md" = "markdown"
 ```
 
+### Per-source strategies
+
+A source may include its own `strategies` map that amends the global
+one for files in that source. The per-source entries take precedence
+over global entries for the same pattern — they overlay, not replace.
+
+```toml
+[[source]]
+dir = "~/work/logs"
+strategies = {"*.jsonl" = "chat-jsonl"}
+```
+
 ### Behavior
 
-- During scan, for each file: check strategies map (longest match
-  wins), then fall back to the source's `strategy` field
-- The source `strategy` field remains the default for files that
-  don't match any global pattern
+- During scan, for each file: merge the source's strategies over the
+  global strategies, then find the longest matching pattern
+- If no pattern matches in the merged map, the file has no strategy
+  and is chunked with the default (`lines`)
 - Strategy names must be registered in microfts2 — error at scan
   time if a strategy name is unknown
 

@@ -18,7 +18,7 @@ exclude = [".git/", ".env"]
 
 [[source]]
 dir = "` + dir + `"
-strategy = "lines"
+strategies = {"*.txt" = "lines"}
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -33,8 +33,8 @@ strategy = "lines"
 	if len(cfg.Sources) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(cfg.Sources))
 	}
-	if cfg.Sources[0].Strategy != "lines" {
-		t.Errorf("expected strategy 'lines', got %q", cfg.Sources[0].Strategy)
+	if cfg.Sources[0].Strategies["*.txt"] != "lines" {
+		t.Errorf("expected per-source strategy for *.txt = 'lines', got %v", cfg.Sources[0].Strategies)
 	}
 	if cfg.HasErrors() {
 		t.Errorf("should have no errors, got %v", cfg.Errors)
@@ -50,7 +50,7 @@ exclude = []
 
 [[source]]
 dir = "` + dir + `"
-strategy = "lines"
+
 include = ["*.txt"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -127,7 +127,7 @@ exclude = [".git/"]
 
 [[source]]
 dir = "` + dir + `"
-strategy = "lines"
+
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ exclude = []
 
 [[source]]
 dir = "/nonexistent/path/that/will/never/exist"
-strategy = "lines"
+
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)

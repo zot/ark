@@ -76,7 +76,7 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 				}
 				results.NewFiles = append(results.NewFiles, FileEntry{
 					Path:     path,
-					Strategy: sc.config.StrategyForFile(relPath, src.Strategy),
+					Strategy: sc.config.StrategyForFile(relPath, src.Strategies),
 				})
 			case Unresolved:
 				results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{

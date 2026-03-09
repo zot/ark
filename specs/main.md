@@ -53,8 +53,10 @@ operation until the user resolves the contradiction.
 Global include/exclude patterns apply to all directories. Per-directory
 overrides are optional.
 
-Each directory entry also specifies a chunking strategy name (which
-microfts2 chunker to use).
+Each directory entry may optionally specify a `strategies` map (glob
+pattern → chunking strategy name) that amends the global strategies
+table for files in that source. This lets a source override or
+extend strategy assignments without affecting other sources.
 
 **No rule means no action.** Files that don't match any include or
 exclude pattern are not indexed and not ignored — they're held in an
@@ -119,17 +121,15 @@ exclude = [".git/", ".env", "node_modules/"]
 # Sources — directories to watch
 [[source]]
 dir = "~/work/myproject"
-strategy = "markdown"
 
 [[source]]
 dir = "~/notes"
-strategy = "markdown"
 include = ["*.md"]          # per-source override (adds to global)
 exclude = ["drafts/"]       # per-source override (adds to global)
 
 [[source]]
 dir = "~/work/reference"
-strategy = "plain"
+strategies = {"*.txt" = "plain"}  # amends global strategies for this source
 ```
 
 Per-source `include` and `exclude` are additive — they combine with
@@ -291,6 +291,11 @@ argument list.
   Create a new database. Without `-embed-cmd`, creates an FTS-only
   database (vector search disabled). Embed command can be added later
   via `ark config set-embed-cmd`.
+- `ark rebuild [--dir <path>]`
+  Delete and recreate the database, then re-scan all sources. Reads
+  init settings (case_insensitive, aliases, embed_cmd) from ark.toml
+  so the new database matches the old one. Sources and strategies
+  are preserved — only the index is rebuilt.
 - `ark add [--dir <path>] [-strategy <name>] <file-or-dir>...`
   Add files. If directory, walk per config. If file, add directly.
 - `ark remove [--dir <path>] <file-or-pattern>...`
@@ -325,7 +330,7 @@ argument list.
   Accepts paths or glob patterns.
 - `ark config [--dir <path>]`
   Show current source configuration.
-- `ark config add-source [--dir <path>] <dir> --strategy <name>`
+- `ark config add-source [--dir <path>] <dir>`
   Add a source directory to ark.toml.
 - `ark config remove-source [--dir <path>] <dir>`
   Remove a source directory from ark.toml. Does not remove indexed
@@ -443,6 +448,11 @@ By default, `ark init` runs `ark setup` first if `~/.ark/` has not
 been bootstrapped (no `html/` directory present). This means the
 common case — first install — is a single command. `--no-setup`
 skips the bootstrap for callers who only want the database.
+
+When the database already exists, `ark init` removes it first (deletes
+`data.mdb` and `lock.mdb`) before creating a fresh one. This applies
+regardless of `--no-setup`. Use `ark rebuild` for the common
+"delete and re-scan" workflow — it handles the full cycle.
 
 `--if-needed` skips database creation when a database already exists.
 This is for callers (like `ark ui install`) that want to ensure a

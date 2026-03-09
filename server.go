@@ -578,8 +578,7 @@ type configPatternRequest struct {
 }
 
 type configSourceRequest struct {
-	Dir      string `json:"dir"`
-	Strategy string `json:"strategy"`
+	Dir string `json:"dir"`
 }
 
 type configWhyRequest struct {
@@ -607,7 +606,7 @@ func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, f
 
 func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddSource(req.Dir, req.Strategy) })
+	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddSource(req.Dir) })
 }
 
 func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {

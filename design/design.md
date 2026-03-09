@@ -69,14 +69,14 @@ to start, the ark API server continues — UI is optional. On shutdown,
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`
-- [ ] crc-Config.md → `config.go`
+- [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [ ] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
-- [ ] crc-CLI.md → `cmd/ark/main.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`

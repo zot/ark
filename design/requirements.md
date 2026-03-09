@@ -24,7 +24,7 @@
 - **R11:** Identical include and exclude strings are a config error, reported on every operation until resolved
 - **R12:** Global include/exclude patterns apply to all directories
 - **R13:** Per-source include/exclude are additive — combine with global, not replace
-- **R14:** Each source directory specifies a chunking strategy name (microfts2 chunker)
+- **R14:** Each source directory may optionally specify a `strategies` map (glob pattern → chunking strategy name) that amends the global strategies table for files in that source
 - **R15:** Files matching no include or exclude pattern are held in an "unresolved" list — no automatic indexing
 - **R16:** Pattern language uses doublestar glob syntax (github.com/bmatcuk/doublestar/v4). Trailing `/` means directory-only; no trailing `/` means file-only. These are ark-level semantic modifiers on top of doublestar matching.
 - **R17:** `*` matches within a path component, `**` matches zero or more path components (must appear between separators or at pattern boundaries). Mid-pattern `**` without separators (e.g. `**.md`) acts as single `*` — use `**/*.md` for recursive matching.
@@ -40,7 +40,7 @@
 - **R24:** Config file lives in the database directory
 - **R25:** Config has global `dotfiles` setting (default true)
 - **R26:** Config has global `include` and `exclude` pattern arrays
-- **R27:** Config has `[[source]]` entries with `dir`, `strategy`, and optional `include`/`exclude`
+- **R27:** Config has `[[source]]` entries with `dir`, optional `strategies` map, and optional `include`/`exclude`
 
 ### Database Directory
 
@@ -227,7 +227,7 @@
 
 ### Config Subcommands
 
-- **R143:** `ark config add-source <dir> --strategy <name>` adds a new `[[source]]` entry to ark.toml
+- **R143:** `ark config add-source <dir>` adds a new `[[source]]` entry to ark.toml
 - **R159:** `ark config remove-source <dir>` removes a source directory from ark.toml — does not remove indexed files (they become orphans until dismissed or re-added)
 - **R144:** `ark config add-include <pattern> [--source <dir>]` adds an include pattern — global if no --source, per-source otherwise
 - **R145:** `ark config add-exclude <pattern> [--source <dir>]` adds an exclude pattern — global if no --source, per-source otherwise
@@ -328,9 +328,9 @@
 **Source:** specs/v25-enhancements.md
 
 - **R205:** A `[strategies]` table in ark.toml maps file glob patterns to chunking strategy names
-- **R206:** During scan, each file is checked against the strategies map before the source's default strategy
+- **R206:** During scan, each file is checked against the merged strategies map (per-source overlaid on global)
 - **R207:** Longest matching pattern wins (character count as tiebreaker)
-- **R208:** The source `strategy` field is the fallback when no global pattern matches
+- **R208:** Per-source `strategies` entries take precedence over global entries for the same pattern; if no pattern matches, the default strategy is `lines`
 - **R209:** (inferred) Strategy names in the map must be registered in microfts2 — error at scan time if unknown
 
 ## Feature: File Logging
@@ -444,7 +444,7 @@
 - **R287:** `ark ui checkpoint <cmd> <app> [msg]` manages app checkpoints (save/list/rollback/diff/clear/baseline/count/update/local)
 - **R288:** `ark ui audit <app>` runs a code quality audit on an app
 - **R289:** `ark ui status` returns the ui-engine server status
-- **R290:** `ark ui browser` opens the browser to the current UI session
+- **R290:** `ark ui open` opens the browser to the current UI session
 - **R291:** All `ark ui` subcommands read mcp-port from `~/.ark/mcp-port` and communicate via HTTP
 - **R292:** (inferred) `ark ui` subcommands replace the `.ui/mcp` shell script — no separate script needed
 
@@ -595,6 +595,22 @@
 - **R384:** Blank lines are boundaries only — not included in any chunk's content
 - **R385:** (inferred) Append detection derives boundary cleanliness from last chunk end vs file length — no chunker reporting needed
 - **R386:** (inferred) Until O12 back-seek is implemented, append detection falls back to full reindex for markdown-strategy files
+
+## Feature: Cluster 1 — Config/CLI Fixes
+**Source:** specs/main.md
+
+### ark rebuild
+- **R396:** `ark rebuild` deletes `data.mdb` and `lock.mdb`, then re-runs init (reading settings from ark.toml) and scan
+- **R397:** `ark rebuild` preserves ark.toml — only the index is destroyed and recreated
+- **R398:** (inferred) `ark rebuild` refuses to run if the server is running — the server holds the DB open
+
+### ark init --no-setup db nuke
+- **R399:** `ark init` removes the existing database files (`data.mdb`, `lock.mdb`) before creating a fresh database, regardless of `--no-setup`
+- **R400:** (inferred) `ark init --if-needed` does NOT remove existing database — its purpose is the opposite (skip if exists)
+
+### ark ui open rename
+- **R401:** `ark ui browser` is renamed to `ark ui open`
+- **R402:** (inferred) No alias for `browser` — clean break
 
 ### Search Consistency
 - **R372:** Searches check results for staleness (via microfts2 CheckFile)

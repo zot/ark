@@ -29,11 +29,11 @@ type Config struct {
 
 // Source is a directory entry in the configuration.
 type Source struct {
-	Dir      string   `toml:"dir"`
-	Strategy string   `toml:"strategy"`
-	Include  []string `toml:"include"`
-	Exclude  []string `toml:"exclude"`
-	FromGlob string   `toml:"from_glob,omitempty"`
+	Dir        string            `toml:"dir"`
+	Strategies map[string]string `toml:"strategies,omitempty"`
+	Include    []string          `toml:"include"`
+	Exclude    []string          `toml:"exclude"`
+	FromGlob   string            `toml:"from_glob,omitempty"`
 }
 
 // LoadConfig reads and validates an ark.toml file.
@@ -73,7 +73,7 @@ exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 # Sources — directories to watch
 # [[source]]
 # dir = "~/notes"
-# strategy = "markdown"
+# strategies = {"*.org" = "lines"}  # optional, amends global strategies
 `
 	return os.WriteFile(path, []byte(defaultConfig), 0644)
 }
@@ -90,7 +90,7 @@ func (c *Config) EnsureArkSource() {
 			return
 		}
 	}
-	c.Sources = append(c.Sources, Source{Dir: c.dbPath, Strategy: "lines"})
+	c.Sources = append(c.Sources, Source{Dir: c.dbPath})
 }
 
 // EffectivePatterns returns the combined global + per-source patterns.
@@ -163,7 +163,7 @@ func IsGlob(dir string) bool {
 
 // AddSource adds a new source directory. Glob patterns (containing *, ?, [)
 // are stored as-is without validation. Concrete paths are validated to exist.
-func (c *Config) AddSource(dir, strategy string) error {
+func (c *Config) AddSource(dir string) error {
 	dir = expandHome(dir)
 	for _, src := range c.Sources {
 		if src.Dir == dir {
@@ -179,7 +179,7 @@ func (c *Config) AddSource(dir, strategy string) error {
 			return fmt.Errorf("%q is not a directory", dir)
 		}
 	}
-	c.Sources = append(c.Sources, Source{Dir: dir, Strategy: strategy})
+	c.Sources = append(c.Sources, Source{Dir: dir})
 	c.validate()
 	return nil
 }
@@ -250,11 +250,11 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 			if !concreteSet[m] {
 				// New directory — add as concrete source
 				c.Sources = append(c.Sources, Source{
-					Dir:      m,
-					Strategy: src.Strategy,
-					Include:  src.Include,
-					Exclude:  src.Exclude,
-					FromGlob: src.Dir,
+					Dir:        m,
+					Strategies: src.Strategies,
+					Include:    src.Include,
+					Exclude:    src.Exclude,
+					FromGlob:   src.Dir,
 				})
 				concreteSet[m] = true
 				result.Added = append(result.Added, m)
@@ -286,23 +286,32 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 	return result, nil
 }
 
-// StrategyForFile checks the global strategies map for a matching pattern.
-// Returns the matched strategy name, or fallback if no pattern matches.
-// Longest matching pattern wins (poor-man's specificity).
-func (c *Config) StrategyForFile(relPath, fallback string) string {
-	if len(c.Strategies) == 0 {
-		return fallback
+// StrategyForFile merges per-source strategies over global strategies,
+// then finds the longest matching pattern. Returns the matched strategy
+// name, or "lines" if no pattern matches.
+func (c *Config) StrategyForFile(relPath string, sourceStrategies map[string]string) string {
+	if len(c.Strategies) == 0 && len(sourceStrategies) == 0 {
+		return "lines"
+	}
+	// Merge: start with global, overlay per-source (same key = per-source wins)
+	merged := make(map[string]string, len(c.Strategies)+len(sourceStrategies))
+	for k, v := range c.Strategies {
+		merged[k] = v
+	}
+	for k, v := range sourceStrategies {
+		merged[k] = v
 	}
 	bestStrategy := ""
 	bestLen := 0
-	for pattern, strategy := range c.Strategies {
+	base := filepath.Base(relPath)
+	for pattern, strategy := range merged {
 		matched, err := filepath.Match(pattern, relPath)
 		if err != nil {
 			continue
 		}
 		// Also try matching just the filename for simple patterns like "*.md"
 		if !matched {
-			matched, err = filepath.Match(pattern, filepath.Base(relPath))
+			matched, err = filepath.Match(pattern, base)
 			if err != nil {
 				continue
 			}
@@ -315,7 +324,7 @@ func (c *Config) StrategyForFile(relPath, fallback string) string {
 	if bestStrategy != "" {
 		return bestStrategy
 	}
-	return fallback
+	return "lines"
 }
 
 // AddStrategy adds a global strategy mapping (e.g. "*.md" -> "markdown").
