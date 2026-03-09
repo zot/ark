@@ -612,8 +612,68 @@
 - **R401:** `ark ui browser` is renamed to `ark ui open`
 - **R402:** (inferred) No alias for `browser` — clean break
 
+## Feature: App Search Support
+**Source:** specs/app-search.md
+
+### Grouped Search Response
+- **R403:** `POST /search/grouped` returns results grouped by file as a tuple array: `[[filename, [chunk, ...]], ...]`
+- **R404:** Files sorted by best chunk score (descending), chunks sorted by score within each file
+- **R405:** Each chunk object includes `range`, `score`, and `preview` (pre-rendered HTML)
+- **R406:** Preview rendering uses goldmark for markdown, JSON pretty-print for JSON (under a length threshold), plain text with HTML escaping otherwise
+- **R407:** Query tokens are highlighted with `<mark>` tags in all preview formats
+- **R408:** The file's chunking strategy determines which renderer to use
+- **R409:** (inferred) The existing `POST /search` endpoint is unchanged — grouped is a separate endpoint
+
+### Click to Open
+- **R410:** `POST /open` accepts a file path and opens it with the system viewer (`xdg-open` on Linux, `open` on macOS)
+- **R411:** The endpoint returns immediately — the viewer opens asynchronously
+- **R412:** (inferred) The file path must be an indexed file — error if not found
+
+### Indexing State
+- **R413:** `GET /indexing` returns a JSON array of source directory paths currently being indexed
+- **R414:** Returns an empty array when no indexing is in progress
+- **R415:** `mcp:indexing()` is a Go function registered on the Lua mcp table, returns a Lua array of strings
+- **R416:** (inferred) `mcp:indexing()` is registered after Frictionless setupMCPGlobal completes
+
 ### Search Consistency
 - **R372:** Searches check results for staleness (via microfts2 CheckFile)
 - **R373:** If stale hits exist, re-index those files and re-search
 - **R374:** After 2 retries with still-stale results, prune stale results and return what's valid
 - **R375:** Search never blocks on achieving a perfectly consistent index
+
+## Feature: infrastructure
+**Source:** specs/infrastructure.md
+
+### ark ui reload — port persistence
+- **R417:** `ark ui reload` restarts the ui-engine without changing the HTTP port
+- **R418:** The browser page reconnects automatically via existing WebSocket reconnect logic
+- **R419:** If the previous port is unavailable on restart, fall back to a new port and log a warning
+- **R420:** (inferred) Reload requires passing a preferred port to flib/ui-engine on restart
+- **R421:** If a second WebSocket connection arrives while one is active, the UI shows a "use the other tab" message
+- **R422:** (inferred) Second-tab detection is a ui-engine or Frictionless concern, not ark Go code
+
+### MCP event pulse indicator
+- **R423:** The 9-dot app grid button pulses while the MCP shell is waiting for Claude to respond
+- **R424:** Tooltip on the grid button shows the pending event count
+- **R425:** No permanent screen real estate is consumed by the pulse indicator
+- **R426:** Pulse stops when the event resolves (Claude responds or timeout)
+- **R427:** (inferred) Pulse is driven by CSS class toggle on the grid button element
+- **R428:** (inferred) Event pending state already exists in the MCP shell — no new Go code needed
+
+### ark install — project bootstrap
+- **R429:** `ark install` runs `ark init --if-needed` internally to bootstrap `~/.ark/`
+- **R430:** `ark install` starts the server if not already running
+- **R431:** `ark install` creates symlinks in `.claude/skills/` pointing to `~/.ark/skills/`
+- **R432:** `ark install` creates a symlink for `.claude/agents/ark.md` pointing to `~/.ark/agents/ark.md`
+- **R433:** `ark install` prints a crank-handle prompt instructing Claude to add `load /ark first` to CLAUDE.md
+- **R434:** (inferred) Symlinks are idempotent — re-running `ark install` updates existing symlinks without error
+- **R435:** (inferred) `ark install` creates `.claude/skills/` and `.claude/agents/` directories if they don't exist
+- **R436:** (inferred) `ark install` is an alias for `ark ui install`
+
+### UI status endpoint
+- **R437:** `ark ui status` reports whether the UI engine is running and its port
+- **R438:** `ark ui status` reports the number of connected browsers (WebSocket connections)
+- **R439:** (inferred) Browser count replaces session count in status output (session count is always 1)
+- **R440:** `ark ui status` reports indexing state (true/false)
+- **R441:** (inferred) Status information is available both as CLI output and via `GET /status` JSON
+- **R442:** (inferred) When the UI is not running, `ark ui status` outputs "ui: not available"

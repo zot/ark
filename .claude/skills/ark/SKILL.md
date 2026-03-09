@@ -3,6 +3,9 @@ name: ark
 description: "Query the ark digital zettelkasten and write tagged content. Use when the user asks to search notes, recall something, find connections, explore tags, or when you need context from the knowledge base. Also use when setting up ark UI support in a project."
 ---
 
+sessionid=${CLAUDE_SESSION_ID}
+session8 is the prefix.
+
 ## Bootstrap
 
 At session start, start ark, load tag definitions and usage from the knowledge base:
@@ -53,11 +56,35 @@ To install ark UI support in a particular project, run:
 
 This creates skill symlinks in the project's `.claude/skills/`, sets up the database if needed, and prints a CLAUDE.md snippet to paste. Run it once per project.
 
+## Cross-Project Messaging
+
+Projects communicate through tagged files in `requests/` directories.
+Tags: `@request`, `@response`, `@from-project`, `@to-project`, `@status`.
+The ark agent knows the conventions and query patterns — delegate to it:
+
+```
+Agent(subagent_type="ark", prompt="Find open requests targeting PROJECT-NAME")
+Agent(subagent_type="ark", prompt="Find responses to request ID")
+```
+
+To write a request or response, see `ARK-MESSAGING.md` in the ark project
+(`ark fetch --wrap knowledge ~/.ark/ARK-MESSAGING.md` if you need it).
+
 ## Search Queries
 
-Spawn the `ark` agent for search, tag exploration, and index management.
-It has the full CLI reference and runs ark commands via Bash.
+**Simple lookups** — run `ark search` directly via Bash:
+```bash
+# Single-tag search
+~/.ark/ark search --exclude-files '*.jsonl' --tags pattern
+```
 
+**Multi-step searches, messaging, exploration** — spawn the ark agent:
 ```
+Agent(subagent_type="ark", prompt="Find open requests targeting PROJECT-NAME")
+Agent(subagent_type="ark", prompt="Find responses to request flib-port-7d28514c")
 Agent(subagent_type="ark", prompt="Find notes about [topic]")
+Agent(subagent_type="ark", prompt="What tags co-occur with @decision in the last month?")
 ```
+The agent knows the CLI, messaging conventions, and can iterate
+across multiple queries cheaply on Haiku. Use it for anything
+that might take more than one search.

@@ -9,6 +9,8 @@ Covers the three install commands and how they chain together.
 
 ## Flow: ark ui install (single entry point)
 
+Also reachable as `ark install` (alias).
+
 ```
 CLI.cmdUIInstall(cwd)
   │
@@ -22,12 +24,18 @@ CLI.cmdUIInstall(cwd)
   │     │
   │     └──> (if DB needed) create DB normally
   │
+  ├──> start server if not running
+  │     └── exec self as `ark serve` (background)
+  │
   ├──> create cwd/.claude/skills/ if needed
+  ├──> create cwd/.claude/agents/ if needed
   │
   ├──> symlink cwd/.claude/skills/ark → ~/.ark/skills/ark
   ├──> symlink cwd/.claude/skills/ui  → ~/.ark/skills/ui
+  ├──> symlink cwd/.claude/agents/ark.md → ~/.ark/agents/ark.md
   │
   └──> print crank-handle prompt for CLAUDE.md
+       ("add `load /ark first` to CLAUDE.md")
 ```
 
 ## Flow: ark setup (idempotent bootstrap)

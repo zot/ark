@@ -32,6 +32,10 @@ SEARCH
          --wrap NAME (wrap output in XML tags, e.g. --wrap memory, --wrap knowledge)
          --about/--contains/--regex can combine (--contains and --regex mutually exclusive)
          --chunks and --files mutually exclusive
+         --regex <pattern> (repeatable, all must match — AND logic)
+         --except-regex <pattern> (repeatable, any match rejects — subtract)
+         --filter-files <glob> (restrict to matching paths)
+         --exclude-files <glob> (reject matching paths)
 
 TAGS
   ark tag list                    All known tags with counts
@@ -114,16 +118,92 @@ Then scan and refresh:
 
 Available chunking strategies: `lines`, `lines-overlap`, `words-overlap`, `chat-jsonl`
 
+## Cross-Project Messaging
+
+Projects communicate through tagged files in `requests/` directories.
+Ark indexes them and connects them through content.
+
+### Finding requests for a project
+```bash
+# Open requests targeting a project
+~/.ark/ark search --exclude-files '*.jsonl' \
+  --regex '@to-project:.*\bPROJECT\b' --regex '@status:.*\bopen\b'
+
+# All requests (any status) targeting a project
+~/.ark/ark search --exclude-files '*.jsonl' \
+  --regex '@to-project:.*\bPROJECT\b' --tags request
+
+# Responses to a specific request
+~/.ark/ark search --exclude-files '*.jsonl' \
+  --regex '@response:.*REQUEST-ID'
+```
+
+### Finding requests by status
+```bash
+# All open requests across all projects
+~/.ark/ark search --exclude-files '*.jsonl' \
+  --regex '@status:.*\bopen\b' --tags request
+
+# Requests that were reopened
+~/.ark/ark search --exclude-files '*.jsonl' --tags reopened
+```
+
+### Reading request/response content
+```bash
+# Fetch the full file once you have the path
+~/.ark/ark fetch --wrap knowledge <path>
+```
+
+### Writing requests/responses
+
+All tags go in a block at the top of the file, no blank lines between
+them. The markdown chunker splits on blank lines — tags in the same
+chunk are searchable together. A blank line after the tag block
+separates them from the body.
+
+```markdown
+@request: short-name-session8
+@from-project: this-project
+@to-project: target-project
+@status: open
+@issue: one-line description
+
+# short-name-session8
+
+Body text here.
+```
+
+Response files go in your own `requests/` directory, prefixed `RESP-`:
+
+```markdown
+@response: short-name-session8
+@from-project: this-project
+@to-project: requesting-project
+@status: done
+
+# RESP short-name-session8
+
+What was done.
+```
+
+To change status: edit the `@status:` tag in the tag block, not elsewhere.
+
+Tags used: `@request`, `@response`, `@from-project`, `@to-project`,
+`@status` (open/in-progress/done/declined), `@reopened`, `@resolved`.
+
 ## Guidelines
 
 - **Always use `--wrap` when retrieving content** — it wraps output in
   XML tags that drop directly into context with source attribution
+- **Always exclude jsonls from searches unless specifically requested to retrieve Claude chats:** `ark search --exclude-files '*.jsonl' ...`
 - Use `--wrap knowledge` for notes, docs, code (distilled facts)
 - Use `--wrap memory` for conversation logs (experience, process)
 - Use `ark search --wrap knowledge --chunks <query>` for search results with content
-- Use `ark fetch --wrap knowledge <path>...` to load specific files into context
+- Use `ark fetch --wrap knowledge <path>...` to load specific files into context, **never read files directly unless specifically requested**
 - Use `ark files <pattern>` to find files, then fetch the ones you need
 - Use `ark tag files --context` to look up tag definitions
 - For broad exploration, start with `ark tag list` then drill into interesting tags
 - Combine `--about` with `--contains` to intersect semantic and exact matches
+- Combine `--regex` flags for AND filtering (all must match)
+- Use `--except-regex` to subtract unwanted matches
 - Return results concisely — summarize, don't dump raw output unless asked

@@ -106,6 +106,61 @@ CLI ──> read file content from path
          └──> FillChunks/FillFiles/FormatResults (same as above)
 ```
 
+## Flow: Grouped Search (app)
+
+```
+Server ──> HandleSearchGrouped(req)
+            │
+            ├──> Searcher.SearchGrouped(query, opts)
+            │     │
+            │     ├──> SearchWithConsistency(query, opts)
+            │     │     └── (same flow as combined search above)
+            │     │
+            │     ├──> FillChunks(results) — need text for previews
+            │     │
+            │     ├──> group by fileid, lookup strategy per file
+            │     │
+            │     ├──> for each chunk: RenderPreview(chunk, strategy, queryTokens)
+            │     │     ├── markdown: goldmark → HTML
+            │     │     ├── JSON: pretty-print if under threshold
+            │     │     └── other: HTML-escape plain text
+            │     │     └── highlight query tokens with <mark> tags
+            │     │
+            │     ├──> sort files by best chunk score (desc)
+            │     ├──> sort chunks within file by score (desc)
+            │     │
+            │     └──> return [[filepath, strategy, [chunk, ...]], ...]
+            │           chunk = {range, score, preview}
+            │
+            └──> JSON response to client
+```
+
+## Flow: Click to Open
+
+```
+Server ──> HandleOpen(req)
+            │
+            ├──> verify path is indexed (DB lookup)
+            │
+            ├──> exec.Command("xdg-open", path).Start()  [Linux]
+            │    exec.Command("open", path).Start()       [macOS]
+            │
+            └──> return 200 immediately (async)
+```
+
+## Flow: Indexing State
+
+```
+Server ──> HandleIndexing(req)
+            │
+            └──> return JSON(currentlyIndexing())
+
+Lua ──> mcp:indexing()
+         │
+         └──> Go function (registered via WithLua)
+               └──> return currentlyIndexing() as Lua table
+```
+
 ## Flow: --tags
 
 ```

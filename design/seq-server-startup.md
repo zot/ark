@@ -53,6 +53,37 @@ CLI ──> Server.Serve(dbPath, opts)
          └──> http.Serve(listener, router)
                └── blocks, serving requests until shutdown
 
+## Flow: UI Reload (keep port)
+
+```
+CLI ──> POST /api/reload (via unix socket)
+         │
+Server ──> ReloadUIEngine()
+            │
+            ├──> savedPort = uiPort (from initial start)
+            │
+            ├──> uiRuntime.Shutdown(ctx)
+            │     └── ui-engine cleans up sessions, closes port
+            │
+            ├──> uiRuntime = flib.New(Config{Dir, Host, Port: savedPort})
+            │     └── Port field tells ui-engine to bind same port
+            │
+            ├──> uiRuntime.Configure()
+            ├──> uiRuntime.Start()
+            │     ├── if savedPort busy → fall back to auto (port 0)
+            │     └── log warning if port changed
+            │
+            ├──> RegisterLuaFunctions()
+            │     └── re-register mcp:indexing() on new Lua session
+            │
+            ├──> uiRuntime.RunLua(`mcp:display("ark")`)
+            │
+            └──> browser reconnects via WebSocket auto-reconnect
+```
+
+Note: Requires `flib.Config.Port` field (upstream change in
+Frictionless). Without it, reload always picks a new port.
+
 ## Shutdown
 
 ```

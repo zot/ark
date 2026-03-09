@@ -279,6 +279,9 @@ func (db *DB) Close() error {
 	return db.fts.Close()
 }
 
+// Path returns the database directory path.
+func (db *DB) Path() string { return db.dbPath }
+
 // Config returns the current configuration.
 func (db *DB) Config() *Config { return db.config }
 
@@ -468,6 +471,11 @@ func (db *DB) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchSplit(opts)
 }
 
+// SearchGrouped runs a search and groups results by file with rendered previews.
+func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
+	return db.search.SearchGrouped(query, opts)
+}
+
 // QueryTrigramCounts returns trigram counts for a query string.
 func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
 	return db.fts.QueryTrigramCounts(query)
@@ -539,6 +547,10 @@ type StatusInfo struct {
 	Strategies map[string]int `json:"strategies"`
 	MapUsed    int64          `json:"mapUsed"`
 	MapTotal   int64          `json:"mapTotal"`
+	// UI fields — populated by server when ui-engine is running
+	UIRunning  bool `json:"uiRunning"`
+	UIPort     int  `json:"uiPort,omitempty"`
+	UIIndexing bool `json:"uiIndexing"`
 }
 
 // Files returns all indexed file paths.
@@ -626,6 +638,19 @@ func (db *DB) Fetch(path string) ([]byte, error) {
 		return nil, fmt.Errorf("read file: %w", err)
 	}
 	return data, nil
+}
+
+// IsIndexed returns true if the given file path is in the index.
+func (db *DB) IsIndexed(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	status, err := db.fts.CheckFile(absPath)
+	if err != nil {
+		return false
+	}
+	return status.FileID != 0
 }
 
 // SourcesCheck expands glob sources and reconciles with concrete sources.

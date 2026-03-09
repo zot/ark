@@ -3,7 +3,10 @@ package ark
 // CRC: crc-Searcher.md
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"regexp"
 	"sort"
@@ -14,6 +17,7 @@ import (
 	"microfts2"
 
 	"github.com/anthropics/microvec"
+	"github.com/yuin/goldmark"
 )
 
 var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
@@ -714,6 +718,190 @@ func ExtractResultTags(results []SearchResultEntry) []TagResult {
 		return tags[i].Count > tags[j].Count
 	})
 	return tags
+}
+
+// GroupedResult is a file with its matching chunks, for the app UI.
+// Tuple array in JSON: [filepath, strategy, [chunk, ...]]
+type GroupedResult struct {
+	Path     string         `json:"path"`
+	Strategy string         `json:"strategy"`
+	Chunks   []GroupedChunk `json:"chunks"`
+}
+
+// GroupedChunk is a single chunk in a grouped search result.
+type GroupedChunk struct {
+	Range   string  `json:"range"`
+	Score   float64 `json:"score"`
+	Preview string  `json:"preview"`
+}
+
+// SearchGrouped runs a search and groups results by file.
+// Files sorted by best chunk score (descending), chunks within each file
+// sorted by score (descending). Each chunk includes a pre-rendered HTML preview.
+// CRC: crc-Searcher.md
+func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
+	var results []SearchResultEntry
+	var err error
+	if opts.About != "" || opts.Contains != "" || opts.Regex != "" || opts.LikeFile != "" {
+		results, err = s.SearchSplit(opts)
+	} else {
+		results, err = s.SearchCombined(query, opts)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	results, err = s.FillChunks(results)
+	if err != nil {
+		return nil, err
+	}
+
+	// Compile highlight patterns once for all chunks
+	tokenPatterns := compileTokenPatterns(query)
+
+	// Group by file
+	type fileGroup struct {
+		path     string
+		strategy string
+		chunks   []GroupedChunk
+		best     float64
+	}
+	groups := make(map[uint64]*fileGroup)
+	var order []uint64
+
+	for _, r := range results {
+		g, ok := groups[r.FileID]
+		if !ok {
+			// Look up strategy for this file
+			strategy := ""
+			if info, err := s.fts.FileInfoByID(r.FileID); err == nil {
+				strategy = info.ChunkingStrategy
+			}
+			g = &fileGroup{path: r.Path, strategy: strategy}
+			groups[r.FileID] = g
+			order = append(order, r.FileID)
+		}
+		preview := RenderPreview(r.Text, g.strategy, tokenPatterns)
+		g.chunks = append(g.chunks, GroupedChunk{
+			Range:   r.Range,
+			Score:   r.Score,
+			Preview: preview,
+		})
+		if r.Score > g.best {
+			g.best = r.Score
+		}
+	}
+
+	// Sort files by best chunk score (descending)
+	sort.Slice(order, func(i, j int) bool {
+		return groups[order[i]].best > groups[order[j]].best
+	})
+
+	// Build result, sort chunks within each file by score (descending)
+	grouped := make([]GroupedResult, 0, len(order))
+	for _, fid := range order {
+		g := groups[fid]
+		sort.Slice(g.chunks, func(i, j int) bool {
+			return g.chunks[i].Score > g.chunks[j].Score
+		})
+		grouped = append(grouped, GroupedResult{
+			Path:     g.path,
+			Strategy: g.strategy,
+			Chunks:   g.chunks,
+		})
+	}
+	return grouped, nil
+}
+
+// RenderPreview renders chunk text as HTML for app display.
+// Strategy determines the renderer: goldmark for markdown,
+// JSON pretty-print for JSON (under a length threshold),
+// plain text with HTML escaping otherwise.
+// Query tokens are highlighted with <mark> tags in all formats.
+// CRC: crc-Searcher.md
+func RenderPreview(text, strategy string, patterns []*regexp.Regexp) string {
+	var rendered string
+	switch strategy {
+	case "markdown":
+		var buf bytes.Buffer
+		if err := goldmark.Convert([]byte(text), &buf); err == nil {
+			rendered = buf.String()
+		} else {
+			rendered = preEscaped(text)
+		}
+	default:
+		if len(text) < 4096 && looksLikeJSON(text) {
+			var out bytes.Buffer
+			if err := json.Indent(&out, []byte(text), "", "  "); err == nil {
+				rendered = preEscaped(out.String())
+			} else {
+				rendered = preEscaped(text)
+			}
+		} else {
+			rendered = preEscaped(text)
+		}
+	}
+	return highlightTokens(rendered, patterns)
+}
+
+func preEscaped(text string) string {
+	return "<pre>" + html.EscapeString(text) + "</pre>"
+}
+
+// looksLikeJSON checks if text starts with { or [ after trimming whitespace.
+func looksLikeJSON(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+}
+
+// compileTokenPatterns splits a query into tokens and compiles case-insensitive
+// regexes for each. Compiled once per search, reused across all chunk previews.
+func compileTokenPatterns(query string) []*regexp.Regexp {
+	var patterns []*regexp.Regexp
+	for _, token := range strings.Fields(query) {
+		re, err := regexp.Compile("(?i)(" + regexp.QuoteMeta(token) + ")")
+		if err == nil {
+			patterns = append(patterns, re)
+		}
+	}
+	return patterns
+}
+
+// highlightTokens wraps occurrences of query tokens in <mark> tags.
+// Case-insensitive matching. Operates on HTML — avoids matching inside tags.
+func highlightTokens(htmlStr string, patterns []*regexp.Regexp) string {
+	for _, re := range patterns {
+		htmlStr = replaceOutsideTags(htmlStr, re)
+	}
+	return htmlStr
+}
+
+// replaceOutsideTags applies regex replacement only to text outside HTML tags.
+func replaceOutsideTags(s string, re *regexp.Regexp) string {
+	var buf strings.Builder
+	for len(s) > 0 {
+		// Find next tag
+		tagStart := strings.IndexByte(s, '<')
+		if tagStart < 0 {
+			// No more tags — highlight remaining text
+			buf.WriteString(re.ReplaceAllString(s, "<mark>$1</mark>"))
+			break
+		}
+		// Highlight text before the tag
+		if tagStart > 0 {
+			buf.WriteString(re.ReplaceAllString(s[:tagStart], "<mark>$1</mark>"))
+		}
+		// Copy tag verbatim
+		tagEnd := strings.IndexByte(s[tagStart:], '>')
+		if tagEnd < 0 {
+			// Unclosed tag — copy rest verbatim
+			buf.WriteString(s[tagStart:])
+			break
+		}
+		buf.WriteString(s[tagStart : tagStart+tagEnd+1])
+		s = s[tagStart+tagEnd+1:]
+	}
+	return buf.String()
 }
 
 // chunkNumForRange finds which chunk matches the given range string.

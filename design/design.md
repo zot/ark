@@ -74,19 +74,19 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
-- [ ] crc-Searcher.md → `search.go`
+- [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
 - [x] seq-search.md → `search.go`
-- [ ] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
+- [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
 - [x] seq-cli-dispatch.md → `cmd/ark/main.go`, `server.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`
-- [ ] seq-reconcile.md → `server.go`
+- [x] seq-reconcile.md → `server.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 
 ### Test Designs
@@ -127,3 +127,9 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, chat-jsonl) produce clean boundaries. For markdown strategy, derive boundary cleanliness from last chunk end vs file length. When unclean, implement back-seek from last chunk to find match point and WithReplaceFrom in microfts2.AppendChunks
 - [ ] O13: AppendFile reads full file twice (once in DetectAppend for prefix hash, once in AppendFile for new bytes + full hash). Acceptable because savings come from avoiding re-chunking/re-indexing old content. Could optimize with hash state passing if profiling shows it matters.
 - [x] A12: R376-R381, R384 (markdown chunker) — implemented in microfts2 as MarkdownChunkFunc
+- [x] D4: R416 RegisterLuaFunctions (mcp:indexing) designed but not implemented — needs flib.WithLua wiring
+- [ ] A13: R423-R428 (MCP event pulse indicator) — pure Lua/CSS in Frictionless status bar, no ark Go code needed
+- [ ] A14: R418 (browser reconnect on reload) — handled by ui-engine WebSocket reconnect logic, no ark code
+- [ ] A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code
+- [x] D5: R420 (preferred port on restart) — needs flib.Config.Port field in Frictionless upstream
+- [ ] D6: R438-R439 (browser count) — flib.Runtime doesn't expose WebSocket connection count. UIStatus reports running/port/indexing but not browser count. Needs flib API addition.

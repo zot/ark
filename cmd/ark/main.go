@@ -119,6 +119,8 @@ func main() {
 		cmdStop(args)
 	case "tag":
 		cmdTag(args)
+	case "install":
+		cmdUIInstall(args)
 	case "ui":
 		cmdUI(args)
 	case "unresolved":
@@ -146,6 +148,7 @@ Commands:
   files       List indexed files
   grams       Show trigrams for a query (active/inactive, frequency)
   init        Create a new database
+  install     Connect this project to ark (alias for ui install)
   ls          List embedded assets
   setup       Bootstrap ~/.ark/ (extract assets, install skills)
   missing     List missing files
@@ -796,6 +799,11 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 			formatBytes(status.MapUsed), formatBytes(status.MapTotal), pct)
 	}
 	fmt.Printf("server: %s\n", server)
+	if status.UIRunning {
+		fmt.Printf("ui: running (port %d)\n", status.UIPort)
+	} else if serverRunning {
+		fmt.Println("ui: not available")
+	}
 }
 
 func formatBytes(b int64) string {
@@ -1609,18 +1617,39 @@ func uiRequest(method, path string, jsonBody string) []byte {
 
 // CRC: crc-CLI.md | Seq: seq-install.md
 func cmdUIInstall(args []string) {
-	// Bootstrap: ensure setup and database exist
+	// R429: Bootstrap — ensure setup and database exist
 	cmdInit([]string{"--if-needed"})
 
-	// Create project .claude/skills/ if needed
+	// R430: Start server if not running
+	if serverClient(arkDir) == nil {
+		self, err := os.Executable()
+		if err != nil {
+			fatal(fmt.Errorf("find executable: %w", err))
+		}
+		cmd := exec.Command(self, "--dir", arkDir, "serve")
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not start server: %v\n", err)
+		} else {
+			// Detach — let server run independently
+			cmd.Process.Release()
+			fmt.Println("Started ark server")
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fatal(fmt.Errorf("get working directory: %w", err))
 	}
-	skillsDir := filepath.Join(cwd, ".claude", "skills")
-	os.MkdirAll(skillsDir, 0755)
 
-	// Symlink skills from ~/.ark/skills/ into project
+	// R431, R435: Create project .claude/skills/ and .claude/agents/ if needed
+	skillsDir := filepath.Join(cwd, ".claude", "skills")
+	agentsDir := filepath.Join(cwd, ".claude", "agents")
+	os.MkdirAll(skillsDir, 0755)
+	os.MkdirAll(agentsDir, 0755)
+
+	// R431: Symlink skills from ~/.ark/skills/ into project
 	for _, skill := range []string{"ark", "ui"} {
 		src := filepath.Join(arkDir, "skills", skill)
 		if _, err := os.Stat(src); err != nil {
@@ -1628,7 +1657,7 @@ func cmdUIInstall(args []string) {
 			continue
 		}
 		dst := filepath.Join(skillsDir, skill)
-		// Remove existing (file, symlink, or directory)
+		// R434: Remove existing (file, symlink, or directory) — idempotent
 		os.RemoveAll(dst)
 		if err := os.Symlink(src, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: symlink %s: %v\n", skill, err)
@@ -1637,14 +1666,26 @@ func cmdUIInstall(args []string) {
 		fmt.Printf("Linked: %s → %s\n", dst, src)
 	}
 
-	// Crank-handle: tell Claude what to do next
+	// R432: Symlink agent from ~/.ark/agents/ark.md into project
+	agentSrc := filepath.Join(arkDir, "agents", "ark.md")
+	if _, err := os.Stat(agentSrc); err == nil {
+		agentDst := filepath.Join(agentsDir, "ark.md")
+		os.Remove(agentDst)
+		if err := os.Symlink(agentSrc, agentDst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: symlink agent: %v\n", err)
+		} else {
+			fmt.Printf("Linked: %s → %s\n", agentDst, agentSrc)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: agent not found at %s\n", agentSrc)
+	}
+
+	// R433: Crank-handle — tell Claude what to do next
 	fmt.Println()
 	fmt.Println("---")
 	fmt.Println("Add the following line near the top of this project's CLAUDE.md:")
 	fmt.Println()
-	fmt.Printf("  Use /ark to query the ark knowledge base. Binary: %s\n", filepath.Join(arkDir, "ark"))
-	fmt.Println()
-	fmt.Println("Then start the server with: " + filepath.Join(arkDir, "ark") + " serve")
+	fmt.Println("  load /ark first")
 	fmt.Println("---")
 }
 
@@ -2058,17 +2099,40 @@ func cmdUIAudit(args []string) {
 	fmt.Println()
 }
 
+// CRC: crc-CLI.md | Seq: seq-server-startup.md
 func cmdUIReload(args []string) {
-	body, _ := json.Marshal(map[string]string{"base_dir": arkDir})
-	result := uiRequest("POST", "/api/ui_configure", string(body))
-	os.Stdout.Write(result)
-	fmt.Println()
+	client := uiClient()
+	var result struct {
+		Status string `json:"status"`
+		Port   int    `json:"port"`
+	}
+	if err := proxyDecode(client, "POST", "/ui/reload", nil, &result); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("ui: reloaded (port %d)\n", result.Port)
 }
 
+// CRC: crc-CLI.md
 func cmdUIStatus(args []string) {
-	result := uiRequest("GET", "/api/ui_status", "")
-	os.Stdout.Write(result)
-	fmt.Println()
+	client := serverClient(arkDir)
+	if client == nil {
+		fmt.Println("ui: not available")
+		return
+	}
+	var status ark.StatusInfo
+	if err := proxyDecode(client, "GET", "/status", nil, &status); err != nil {
+		fatal(err)
+	}
+	if !status.UIRunning {
+		fmt.Println("ui: not available")
+		return
+	}
+	fmt.Printf("ui: running (port %d)\n", status.UIPort)
+	if status.UIIndexing {
+		fmt.Println("indexing: yes")
+	} else {
+		fmt.Println("indexing: no")
+	}
 }
 
 func cmdUIOpen(args []string) {

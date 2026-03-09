@@ -12,27 +12,35 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/frictionless/flib"
+	"github.com/zot/ui-engine/cli"
 )
 
 // Server is an HTTP server on a Unix domain socket.
 type Server struct {
-	db           *DB
-	listener     net.Listener
-	pidPath      string
-	noScan       bool
-	uiRuntime    *flib.Runtime
-	watcher      *fsnotify.Watcher
-	reconcileCh  chan struct{}
-	ignoredPaths map[string]struct{} // negative cache: non-indexable paths
+	db              *DB
+	listener        net.Listener
+	pidPath         string
+	noScan          bool
+	uiRuntime       *flib.Runtime
+	watcher         *fsnotify.Watcher
+	reconcileCh     chan struct{}
+	ignoredPaths    map[string]struct{} // negative cache: non-indexable paths
+	indexingMu      sync.Mutex
+	indexingSources []string // source dirs currently being indexed
+	uiPort          int      // HTTP port the ui-engine is listening on (0 if not started)
 }
 
 // ServeOpts controls server behavior.
@@ -193,6 +201,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
+	mux.HandleFunc("POST /search/grouped", srv.handleSearchGrouped)
+	mux.HandleFunc("POST /open", srv.handleOpen)
+	mux.HandleFunc("GET /indexing", srv.handleIndexing)
+	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -223,17 +235,86 @@ func (srv *Server) startUIEngine(dbPath string) {
 	srv.uiRuntime = rt
 
 	go func() {
-		if _, err := rt.Start(); err != nil {
+		url, err := rt.Start()
+		if err != nil {
 			log.Printf("ui: start failed: %v", err)
 			srv.uiRuntime = nil
 			return
 		}
-		log.Printf("ui: engine started (dir: %s)", dbPath)
+		if p := parseURLPort(url); p != 0 {
+			srv.uiPort = p
+		}
+		log.Printf("ui: engine started on %s (dir: %s)", url, dbPath)
+		// Register Go functions on the Lua mcp table (passive path)
+		srv.registerLuaFunctions()
 		// Auto-display the ark app so every new session starts with it
 		if _, err := rt.RunLua(`mcp:display("ark")`); err != nil {
 			log.Printf("ui: auto-display ark failed: %v", err)
 		}
 	}()
+}
+
+// parseURLPort extracts the port number from a URL like "http://127.0.0.1:8080".
+func parseURLPort(url string) int {
+	if parts := strings.SplitN(url, ":", 3); len(parts) == 3 {
+		if p, err := strconv.Atoi(parts[2]); err == nil {
+			return p
+		}
+	}
+	return 0
+}
+
+// ReloadUIEngine stops the current ui-engine and starts a fresh one
+// on the same port. Re-registers Lua functions and re-displays the ark app.
+// CRC: crc-Server.md | Seq: seq-server-startup.md
+func (srv *Server) ReloadUIEngine() error {
+	if srv.uiRuntime == nil {
+		return fmt.Errorf("ui engine not running")
+	}
+	dbPath := srv.db.Path()
+	savedPort := srv.uiPort
+
+	// Shutdown current runtime
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	srv.uiRuntime.Shutdown(ctx)
+	cancel()
+	srv.uiRuntime = nil
+
+	// Create new runtime with saved port
+	stagingDir := filepath.Join(dbPath, "staging")
+	rt, err := flib.New(flib.Config{
+		Dir:     dbPath,
+		Host:    "127.0.0.1",
+		Project: stagingDir,
+		Port:    savedPort,
+	})
+	if err != nil {
+		return fmt.Errorf("ui reload: create runtime: %w", err)
+	}
+	if err := rt.Configure(); err != nil {
+		return fmt.Errorf("ui reload: configure: %w", err)
+	}
+
+	url, err := rt.Start()
+	if err != nil {
+		return fmt.Errorf("ui reload: start: %w", err)
+	}
+	srv.uiRuntime = rt
+
+	// Extract new port — may differ if saved port was unavailable
+	if p := parseURLPort(url); p != 0 {
+		if p != savedPort {
+			log.Printf("ui reload: port changed %d → %d (saved port unavailable)", savedPort, p)
+		}
+		srv.uiPort = p
+	}
+
+	log.Printf("ui: reloaded on %s", url)
+	srv.registerLuaFunctions()
+	if _, err := rt.RunLua(`mcp:display("ark")`); err != nil {
+		log.Printf("ui: auto-display ark failed: %v", err)
+	}
+	return nil
 }
 
 // reconcileLoop processes reconciliation requests serially.
@@ -272,6 +353,14 @@ func (srv *Server) doReconcile() {
 			srv.unwatchDir(dir)
 		}
 	}
+	// Collect source dirs for indexing state
+	var sourceDirs []string
+	for _, src := range srv.db.Config().Sources {
+		sourceDirs = append(sourceDirs, src.Dir)
+	}
+	srv.setIndexing(sourceDirs)
+	defer srv.setIndexing(nil)
+
 	log.Println("reconcile: scanning...")
 	if _, err := srv.db.Scan(); err != nil {
 		log.Printf("reconcile: scan error: %v", err)
@@ -335,19 +424,8 @@ type resolveRequest struct {
 	Patterns []string `json:"patterns"`
 }
 
-func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	var req searchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if req.Chunks && req.Files {
-		http.Error(w, "--chunks and --files are mutually exclusive", http.StatusBadRequest)
-		return
-	}
-
-	opts := SearchOpts{
+func buildSearchOpts(req searchRequest) SearchOpts {
+	return SearchOpts{
 		K:            req.K,
 		Scores:       req.Scores,
 		After:        req.After,
@@ -361,6 +439,21 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		FilterFiles:  req.FilterFiles,
 		ExcludeFiles: req.ExcludeFiles,
 	}
+}
+
+func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	var req searchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Chunks && req.Files {
+		http.Error(w, "--chunks and --files are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+
+	opts := buildSearchOpts(req)
 
 	var results []SearchResultEntry
 	var err error
@@ -442,12 +535,19 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+// CRC: crc-Server.md
 func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := srv.db.Status()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// R437-R441: Enrich with UI fields
+	if srv.uiRuntime != nil {
+		status.UIRunning = true
+		status.UIPort = srv.uiPort
+	}
+	status.UIIndexing = len(srv.currentlyIndexing()) > 0
 	writeJSON(w, status)
 }
 
@@ -684,5 +784,130 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("json encode error: %v", err)
+	}
+}
+
+// CRC: crc-Server.md
+func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
+	var req searchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	results, err := srv.db.SearchGrouped(req.Query, buildSearchOpts(req))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, results)
+}
+
+// CRC: crc-Server.md
+func (srv *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify file is indexed
+	if !srv.db.IsIndexed(req.Path) {
+		http.Error(w, "file not indexed", http.StatusNotFound)
+		return
+	}
+
+	// Open with system viewer (async)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("open", req.Path)
+	} else {
+		cmd = exec.Command("xdg-open", req.Path)
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// CRC: crc-Server.md
+func (srv *Server) handleIndexing(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, srv.currentlyIndexing())
+}
+
+// CRC: crc-Server.md | Seq: seq-server-startup.md
+func (srv *Server) handleUIReload(w http.ResponseWriter, r *http.Request) {
+	if err := srv.ReloadUIEngine(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"status": "ok",
+		"port":   srv.uiPort,
+	})
+}
+
+// currentlyIndexing returns the list of source dirs currently being indexed.
+// CRC: crc-Server.md
+func (srv *Server) currentlyIndexing() []string {
+	srv.indexingMu.Lock()
+	defer srv.indexingMu.Unlock()
+	if srv.indexingSources == nil {
+		return []string{}
+	}
+	result := make([]string, len(srv.indexingSources))
+	copy(result, srv.indexingSources)
+	return result
+}
+
+// setIndexing updates the list of currently indexing sources.
+func (srv *Server) setIndexing(sources []string) {
+	srv.indexingMu.Lock()
+	defer srv.indexingMu.Unlock()
+	if sources == nil {
+		srv.indexingSources = nil
+		return
+	}
+	srv.indexingSources = append([]string{}, sources...)
+}
+
+// registerLuaFunctions registers Go functions on the Lua mcp table
+// via the passive execution path (no UI update push).
+// CRC: crc-Server.md | Seq: seq-search.md
+func (srv *Server) registerLuaFunctions() {
+	if srv.uiRuntime == nil {
+		return
+	}
+	err := srv.uiRuntime.WithLua(func(rt *cli.LuaRuntime) error {
+		L := rt.State
+		mcpTable := L.GetGlobal("mcp")
+		if mcpTable == lua.LNil {
+			return fmt.Errorf("mcp table not found")
+		}
+		tbl, ok := mcpTable.(*lua.LTable)
+		if !ok {
+			return fmt.Errorf("mcp is not a table")
+		}
+		// mcp:indexing() — returns array of source dirs currently being indexed
+		L.SetField(tbl, "indexing", L.NewFunction(func(L *lua.LState) int {
+			sources := srv.currentlyIndexing()
+			result := L.NewTable()
+			for i, dir := range sources {
+				result.RawSetInt(i+1, lua.LString(dir))
+			}
+			L.Push(result)
+			return 1
+		}))
+		return nil
+	})
+	if err != nil {
+		log.Printf("ui: register lua functions failed: %v", err)
 	}
 }

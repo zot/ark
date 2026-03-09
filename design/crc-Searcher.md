@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -47,11 +47,22 @@ Optionally retrieves chunk text or full file content.
 - SearchWithConsistency(query, opts): search, check staleness,
   re-index stale files and re-search. Max 2 retries. After that,
   prune stale results and return what's valid.
+- SearchGrouped(query, opts): run SearchWithConsistency, then group
+  results by fileid. Returns tuple array: [[filepath, [chunk, ...]]]
+  where files are sorted by best chunk score (descending) and chunks
+  within each file are sorted by score (descending). Each chunk
+  includes range, score, and preview (pre-rendered HTML).
+- RenderPreview(chunk, strategy, queryTokens): render chunk text as
+  HTML for app display. Strategy determines renderer: goldmark for
+  markdown, JSON pretty-print for JSON (under length threshold),
+  plain text with HTML escaping otherwise. Query tokens highlighted
+  with <mark> tags in all formats.
 
 ## Collaborators
 - microfts2.DB: trigram search, file info resolution, chunk offsets
 - microvec.DB: vector search
 - Indexer: re-index stale files during consistent search
+- goldmark: markdown → HTML rendering for previews
 
 ## Sequences
 - seq-search.md
