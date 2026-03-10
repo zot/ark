@@ -8,14 +8,20 @@ session8 is the prefix.
 
 ## Bootstrap
 
-At session start, start ark, load tag definitions and usage from the knowledge base:
+At session start, start ark, load tags, and check your inbox:
 
 ```bash
-~/.ark/ark server
+~/.ark/ark serve
 ~/.ark/ark tag files --context --filter-files '*.md' tag
 ```
 
-This shows where tags are defined and how they're used across the zettelkasten.
+Then spawn Franklin to check what needs attention:
+```
+Agent(subagent_type="ark-franklin", prompt="Check inbox and open items for PROJECT_NAME. Report unread messages, waiting-for items, and anything stale. Be brief.")
+```
+
+Replace PROJECT_NAME with the current project. Franklin reports the
+landscape; you decide what's on the plate today.
 
 ## Tags
 
@@ -56,35 +62,57 @@ To install ark UI support in a particular project, run:
 
 This creates skill symlinks in the project's `.claude/skills/`, sets up the database if needed, and prints a CLAUDE.md snippet to paste. Run it once per project.
 
+## Routing
+
+Three categories — route by what you're doing, not by complexity:
+
+**Operational commands** — direct Bash. Mechanical, no judgment:
+```bash
+~/.ark/ark serve
+~/.ark/ark status
+~/.ark/ark tag list
+```
+
+**Context loading** — direct Bash. You're loading data into yourself,
+not asking a question:
+```bash
+~/.ark/ark tag files --context --filter-files '*.md' tag
+~/.ark/ark fetch --wrap knowledge <path>
+```
+
+**All search** — spawn ark-librarian. If you're asking a question,
+delegate. The librarian curates, expands queries, and reports honest
+misses. Never interpret raw search results yourself.
+
+**Operational context:** your default scope is the current project.
+Include the project name when spawning agents.
+
+**Messages and status** — spawn ark-franklin. Inbox, open items,
+waiting-for, acknowledging messages. Franklin tracks commitments.
+```
+Agent(subagent_type="ark-franklin", prompt="Check inbox for ark")
+Agent(subagent_type="ark-franklin", prompt="What am I waiting on from other projects?")
+Agent(subagent_type="ark-franklin", prompt="Mark ark-chunk-context-ready.md as read")
+```
+
+**Search and research** — spawn ark-librarian. Finding information,
+exploring connections, curating results. The librarian finds things.
+```
+Agent(subagent_type="ark-librarian", prompt="Find notes about append detection")
+Agent(subagent_type="ark-librarian", prompt="What patterns relate to concurrency?")
+Agent(subagent_type="ark-librarian", prompt="Find responses to request flib-port-7d28514c")
+```
+
 ## Cross-Project Messaging
 
 Projects communicate through tagged files in `requests/` directories.
-Tags: `@request`, `@response`, `@from-project`, `@to-project`, `@status`.
-The ark agent knows the conventions and query patterns — delegate to it:
 
-```
-Agent(subagent_type="ark", prompt="Find open requests targeting PROJECT-NAME")
-Agent(subagent_type="ark", prompt="Find responses to request ID")
-```
+Two lifecycle tags:
+- `@status` — work state: open, in-progress, done, declined
+- `@msg` — delivery state: new, read, acting, closed
 
-To write a request or response, see `ARK-MESSAGING.md` in the ark project
-(`ark fetch --wrap knowledge ~/.ark/ARK-MESSAGING.md` if you need it).
+**Franklin manages messages.** Inbox, acknowledgment, status tracking.
+**The librarian searches messages.** Finding specific requests, exploring
+conversations across projects.
 
-## Search Queries
-
-**Simple lookups** — run `ark search` directly via Bash:
-```bash
-# Single-tag search
-~/.ark/ark search --exclude-files '*.jsonl' --tags pattern
-```
-
-**Multi-step searches, messaging, exploration** — spawn the ark agent:
-```
-Agent(subagent_type="ark", prompt="Find open requests targeting PROJECT-NAME")
-Agent(subagent_type="ark", prompt="Find responses to request flib-port-7d28514c")
-Agent(subagent_type="ark", prompt="Find notes about [topic]")
-Agent(subagent_type="ark", prompt="What tags co-occur with @decision in the last month?")
-```
-The agent knows the CLI, messaging conventions, and can iterate
-across multiple queries cheaply on Haiku. Use it for anything
-that might take more than one search.
+To write a request or response, see `ARK-MESSAGING.md` in the ark project.

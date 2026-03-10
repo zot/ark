@@ -677,3 +677,56 @@
 - **R440:** `ark ui status` reports indexing state (true/false)
 - **R441:** (inferred) Status information is available both as CLI output and via `GET /status` JSON
 - **R442:** (inferred) When the UI is not running, `ark ui status` outputs "ui: not available"
+
+## Feature: Messaging
+**Source:** specs/messaging.md
+
+### Tag Block Format
+- **R443:** A tag block is consecutive lines at the top of a file, each matching `@tag: value`
+- **R444:** The first line that doesn't match `@tag: value` ends the tag block
+- **R445:** No blank lines within the tag block
+- **R446:** A blank line separates the tag block from the body
+- **R447:** Tag format is `@name: value` — space after colon is required
+- **R448:** One tag per line
+- **R449:** Tag names use the same character set as ark tags: letters, digits, hyphens, dots, underscores (starting with a letter)
+
+### new-request
+- **R450:** `ark message new-request --from PROJECT --to PROJECT --issue "..." FILE` creates a new request file
+- **R451:** The request ID is derived from the filename (basename without extension)
+- **R452:** Output file has tag block (`@request`, `@from-project`, `@to-project`, `@status: open`, `@issue`) followed by blank line, heading, and issue text as body
+- **R453:** Errors if FILE already exists
+
+### new-response
+- **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file
+- **R455:** Output file has tag block (`@response`, `@from-project`, `@to-project`, `@status: done`) followed by blank line and `# RESP <id>` heading
+- **R456:** Errors if FILE already exists
+
+### set-tags
+- **R457:** `ark message set-tags FILE TAG VALUE [TAG VALUE ...]` updates or adds tags in the tag block
+- **R458:** Arguments are pairs: tag name (without `@` or `:`) then value
+- **R459:** If the tag exists, its value is replaced in place (preserving position)
+- **R460:** If the tag doesn't exist, it is appended to the end of the tag block
+- **R461:** Body content is untouched
+- **R462:** Errors if FILE doesn't exist
+- **R463:** If the file has no tag block (body starts on line 1), tags are inserted at the top with a blank line before existing content
+
+### get-tags
+- **R464:** `ark message get-tags FILE [TAG ...]` reads tags from the tag block
+- **R465:** Output is one `tag\tvalue` per line (tab-separated, no `@` or `:`)
+- **R466:** If specific tags named, output only those in the order requested
+- **R467:** If no tags named, output all tags in file order
+- **R468:** Exits with status 1 if a requested tag is not found (still outputs any found tags)
+
+### check
+- **R469:** `ark message check FILE` validates the file against tag block format rules
+- **R470:** If valid, exits 0 with no output
+- **R471:** If invalid, outputs a crank-handle diagnostic: problem descriptions and exact `ark message` commands to fix them
+- **R472:** Detects tag-like patterns (`@word:` or `## Word:`) in the body that look like misplaced tags
+- **R473:** Detects blank lines within the tag block
+- **R474:** Detects missing blank line between tag block and body
+- **R475:** Detects malformed tag lines in the tag block (missing space after colon, etc.)
+- **R476:** (inferred) The diagnostic output is designed as a crank-handle prompt — self-contained instructions a model can follow without additional context
+
+### General
+- **R477:** All `ark message` subcommands operate on plain files — no server dependency, no new storage
+- **R478:** (inferred) The tag block parser is shared across all subcommands

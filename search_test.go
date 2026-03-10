@@ -5,7 +5,7 @@ package ark
 import "testing"
 
 func TestValidateSearchFlagsContainsAndRegexMutuallyExclusive(t *testing.T) {
-	err := validateSearchFlags(SearchOpts{Contains: "foo", Regex: "bar"})
+	err := validateSearchFlags(SearchOpts{Contains: "foo", Regex: []string{"bar"}})
 	if err == nil {
 		t.Error("expected error for both --contains and --regex")
 	}
@@ -19,7 +19,7 @@ func TestValidateSearchFlagsAcceptsContainsAlone(t *testing.T) {
 }
 
 func TestValidateSearchFlagsAcceptsRegexAlone(t *testing.T) {
-	err := validateSearchFlags(SearchOpts{Regex: "foo"})
+	err := validateSearchFlags(SearchOpts{Regex: []string{"foo"}})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/anthropics/microvec"
 )
 
-var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
+var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.

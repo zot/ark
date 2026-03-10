@@ -389,7 +389,8 @@ type searchRequest struct {
 	Query        string   `json:"query"`
 	About        string   `json:"about"`
 	Contains     string   `json:"contains"`
-	Regex        string   `json:"regex"`
+	Regex        []string `json:"regex"`
+	ExceptRegex  []string `json:"exceptRegex"`
 	LikeFile     string   `json:"likeFile"`
 	K            int      `json:"k"`
 	Scores       bool     `json:"scores"`
@@ -432,6 +433,7 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		About:        req.About,
 		Contains:     req.Contains,
 		Regex:        req.Regex,
+		ExceptRegex:  req.ExceptRegex,
 		LikeFile:     req.LikeFile,
 		Tags:         req.Tags,
 		Filter:       req.Filter,
@@ -457,7 +459,7 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	var results []SearchResultEntry
 	var err error
-	if req.About != "" || req.Contains != "" || req.Regex != "" || req.LikeFile != "" {
+	if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
 		results, err = srv.db.SearchSplit(opts)
 	} else {
 		results, err = srv.db.SearchCombined(req.Query, opts)

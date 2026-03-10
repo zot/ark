@@ -77,6 +77,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`
+- [x] crc-TagBlock.md → `tagblock.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -88,6 +89,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] seq-install.md → `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
+- [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -96,6 +98,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] test-Store.md → `store_test.go`
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
+- [x] test-TagBlock.md → `tagblock_test.go`
 
 ## Gaps
 

@@ -42,7 +42,8 @@ type SearchOpts struct {
 	After        int64    // only results newer than this timestamp (unix nano, 0 = no filter)
 	About        string   // semantic query (microvec)
 	Contains     string   // exact match query (microfts2)
-	Regex        string   // regex query (microfts2)
+	Regex        []string // regex patterns (first drives SearchRegex, all are AND post-filters)
+	ExceptRegex  []string // regex subtract post-filters (any match rejects)
 	LikeFile     string   // file path — use content as FTS density query
 	Tags         bool     // output extracted tags instead of content
 	Filter       []string // content-based positive filters (FTS queries, intersect)
@@ -237,7 +238,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	ftsSearchOpts := defaultSearchOpts(filterOpt)
 
 	hasAbout := opts.About != ""
-	hasFTS := opts.Contains != "" || opts.Regex != "" || opts.LikeFile != ""
+	hasFTS := opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != ""
 
 	var vecResults []microvec.SearchResult
 	var ftsResults []microfts2.SearchResult
@@ -248,6 +249,11 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 			return nil, fmt.Errorf("vec search: %w", err)
 		}
 		vecResults = vr
+	}
+
+	// Apply --except-regex as post-filter to any search mode
+	if len(opts.ExceptRegex) > 0 {
+		ftsSearchOpts = append(ftsSearchOpts, microfts2.WithExceptRegex(opts.ExceptRegex...))
 	}
 
 	if opts.LikeFile != "" {
@@ -266,8 +272,10 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
 		ftsResults = fr.Results
-	} else if opts.Regex != "" {
-		fr, err := s.fts.SearchRegex(opts.Regex, ftsSearchOpts...)
+	} else if len(opts.Regex) > 0 {
+		// First regex drives the search; all regexes are AND post-filters
+		regexOpts := append(ftsSearchOpts, microfts2.WithRegexFilter(opts.Regex...))
+		fr, err := s.fts.SearchRegex(opts.Regex[0], regexOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("fts regex search: %w", err)
 		}
@@ -294,10 +302,10 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 }
 
 func validateSearchFlags(opts SearchOpts) error {
-	if opts.Contains != "" && opts.Regex != "" {
+	if opts.Contains != "" && len(opts.Regex) > 0 {
 		return fmt.Errorf("--contains and --regex are mutually exclusive")
 	}
-	if opts.LikeFile != "" && (opts.Contains != "" || opts.Regex != "") {
+	if opts.LikeFile != "" && (opts.Contains != "" || len(opts.Regex) > 0) {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
 	}
 	return nil
@@ -742,7 +750,7 @@ type GroupedChunk struct {
 func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
 	var results []SearchResultEntry
 	var err error
-	if opts.About != "" || opts.Contains != "" || opts.Regex != "" || opts.LikeFile != "" {
+	if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
 		results, err = s.SearchSplit(opts)
 	} else {
 		results, err = s.SearchCombined(query, opts)

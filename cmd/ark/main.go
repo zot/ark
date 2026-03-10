@@ -121,6 +121,8 @@ func main() {
 		cmdTag(args)
 	case "install":
 		cmdUIInstall(args)
+	case "message":
+		cmdMessage(args)
 	case "ui":
 		cmdUI(args)
 	case "unresolved":
@@ -550,7 +552,9 @@ func cmdSearch(args []string) {
 	after := fs.String("after", "", "only results after date")
 	about := fs.String("about", "", "semantic search query")
 	contains := fs.String("contains", "", "exact match query")
-	regex := fs.String("regex", "", "regex query")
+	var regex, exceptRegex stringSlice
+	fs.Var(&regex, "regex", "regex query (repeatable, AND logic)")
+	fs.Var(&exceptRegex, "except-regex", "regex exclude filter (repeatable, any match rejects)")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
@@ -578,7 +582,7 @@ func cmdSearch(args []string) {
 		afterNano = t.UnixNano()
 	}
 
-	isSplit := *about != "" || *contains != "" || *regex != "" || *likeFile != ""
+	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
 
 	if client := serverClient(arkDir); client != nil {
 		body := map[string]any{
@@ -604,7 +608,12 @@ func cmdSearch(args []string) {
 		if isSplit {
 			body["about"] = *about
 			body["contains"] = *contains
-			body["regex"] = *regex
+			if len(regex) > 0 {
+				body["regex"] = []string(regex)
+			}
+			if len(exceptRegex) > 0 {
+				body["exceptRegex"] = []string(exceptRegex)
+			}
 			body["likeFile"] = *likeFile
 		} else {
 			query := strings.Join(fs.Args(), " ")
@@ -646,7 +655,8 @@ func cmdSearch(args []string) {
 			After:        afterNano,
 			About:        *about,
 			Contains:     *contains,
-			Regex:        *regex,
+			Regex:        []string(regex),
+			ExceptRegex:  []string(exceptRegex),
 			LikeFile:     *likeFile,
 			Tags:         *tags,
 			Filter:       []string(filter),
@@ -690,8 +700,8 @@ func cmdSearch(args []string) {
 			query = *contains
 		} else if *about != "" {
 			query = *about
-		} else if *regex != "" {
-			query = *regex
+		} else if len(regex) > 0 {
+			query = regex[0]
 		} else {
 			query = strings.Join(fs.Args(), " ")
 		}
@@ -2802,4 +2812,220 @@ func cmdBundleCp(args []string) {
 		fmt.Fprintln(os.Stderr, "No files matched the pattern")
 		os.Exit(1)
 	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-message.md
+// R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477
+func cmdMessage(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: ark message <subcommand>
+
+Subcommands:
+  new-request   Create a new request file
+  new-response  Create a new response file
+  set-tags      Update or add tags in a file's tag block
+  get-tags      Read tags from a file's tag block
+  check         Validate file format`)
+		os.Exit(1)
+	}
+
+	sub := args[0]
+	subArgs := args[1:]
+
+	switch sub {
+	case "new-request":
+		cmdMessageNewRequest(subArgs)
+	case "new-response":
+		cmdMessageNewResponse(subArgs)
+	case "set-tags":
+		cmdMessageSetTags(subArgs)
+	case "get-tags":
+		cmdMessageGetTags(subArgs)
+	case "check":
+		cmdMessageCheck(subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown message subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+func cmdMessageNewRequest(args []string) {
+	fs := flag.NewFlagSet("message new-request", flag.ExitOnError)
+	from := fs.String("from", "", "source project name (required)")
+	to := fs.String("to", "", "target project name (required)")
+	issue := fs.String("issue", "", "one-line issue description (required)")
+	fs.Parse(args)
+
+	if *from == "" || *to == "" || *issue == "" {
+		fmt.Fprintln(os.Stderr, "error: --from, --to, and --issue are required")
+		os.Exit(1)
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "error: FILE path required")
+		os.Exit(1)
+	}
+	filePath := fs.Arg(0)
+
+	if _, err := os.Stat(filePath); err == nil {
+		fmt.Fprintf(os.Stderr, "error: file already exists: %s\n", filePath)
+		os.Exit(1)
+	}
+
+	// Derive request ID from filename
+	base := filepath.Base(filePath)
+	id := strings.TrimSuffix(base, filepath.Ext(base))
+
+	tb := ark.ParseTagBlock(nil)
+	tb.Set("request", id)
+	tb.Set("from-project", *from)
+	tb.Set("to-project", *to)
+	tb.Set("status", "open")
+	tb.Set("issue", *issue)
+
+	var buf bytes.Buffer
+	buf.Write(tb.Render())
+	fmt.Fprintf(&buf, "# %s\n\n%s\n", id, *issue)
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdMessageNewResponse(args []string) {
+	fs := flag.NewFlagSet("message new-response", flag.ExitOnError)
+	from := fs.String("from", "", "source project name (required)")
+	to := fs.String("to", "", "target project name (required)")
+	request := fs.String("request", "", "request ID being responded to (required)")
+	fs.Parse(args)
+
+	if *from == "" || *to == "" || *request == "" {
+		fmt.Fprintln(os.Stderr, "error: --from, --to, and --request are required")
+		os.Exit(1)
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "error: FILE path required")
+		os.Exit(1)
+	}
+	filePath := fs.Arg(0)
+
+	if _, err := os.Stat(filePath); err == nil {
+		fmt.Fprintf(os.Stderr, "error: file already exists: %s\n", filePath)
+		os.Exit(1)
+	}
+
+	tb := ark.ParseTagBlock(nil)
+	tb.Set("response", *request)
+	tb.Set("from-project", *from)
+	tb.Set("to-project", *to)
+	tb.Set("status", "done")
+
+	var buf bytes.Buffer
+	buf.Write(tb.Render())
+	fmt.Fprintf(&buf, "# RESP %s\n\n", *request)
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdMessageSetTags(args []string) {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: ark message set-tags FILE TAG VALUE [TAG VALUE ...]")
+		os.Exit(1)
+	}
+
+	filePath := args[0]
+	pairs := args[1:]
+	if len(pairs)%2 != 0 {
+		fmt.Fprintln(os.Stderr, "error: tags must be given as TAG VALUE pairs")
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	for i := 0; i < len(pairs); i += 2 {
+		tb.Set(pairs[i], pairs[i+1])
+	}
+
+	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdMessageGetTags(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark message get-tags FILE [TAG ...]")
+		os.Exit(1)
+	}
+
+	filePath := args[0]
+	requestedTags := args[1:]
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	exitCode := 0
+
+	if len(requestedTags) > 0 {
+		for _, name := range requestedTags {
+			v, ok := tb.Get(name)
+			if ok {
+				fmt.Printf("%s\t%s\n", name, v)
+			} else {
+				fmt.Fprintf(os.Stderr, "tag not found: %s\n", name)
+				exitCode = 1
+			}
+		}
+	} else {
+		for _, t := range tb.Tags() {
+			fmt.Printf("%s\t%s\n", t.Name, t.Value)
+		}
+	}
+
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func cmdMessageCheck(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark message check FILE")
+		os.Exit(1)
+	}
+
+	filePath := args[0]
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	problems := tb.Validate()
+	bodyProblems := tb.ScanBody()
+
+	if len(problems) == 0 && len(bodyProblems) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "The file %s has format problems:\n", filePath)
+	for _, p := range problems {
+		fmt.Fprintf(os.Stderr, "- %s\n", p)
+	}
+	for _, p := range bodyProblems {
+		fmt.Fprintf(os.Stderr, "- %s\n", p)
+	}
+	os.Exit(1)
 }
