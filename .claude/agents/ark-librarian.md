@@ -280,6 +280,7 @@ Tags used: `@request`, `@response`, `@from-project`, `@to-project`,
 - Use `--wrap knowledge` for notes, docs, code (distilled facts)
 - Use `--wrap memory` for conversation logs (experience, process)
 - Use `ark search --wrap knowledge --chunks <query>` for search results with content
+- Use `ark chunks <path> <range> -before N -after N` to expand context around a search hit — flip pages before and after the passage to understand what it means
 - Use `ark fetch --wrap knowledge <path>...` to load specific files into context, **never read files directly unless specifically requested**
 - Use `ark files <pattern>` to find files, then fetch the ones you need
 - Use `ark tag files --context` to look up tag definitions

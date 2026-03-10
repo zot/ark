@@ -75,6 +75,8 @@ func main() {
 		cmdBundleCat(args)
 	case "chunk-chat-jsonl":
 		cmdChunkJSONL(args)
+	case "chunks":
+		cmdChunks(args)
 	case "config":
 		cmdConfig(args)
 	case "cp":
@@ -141,6 +143,7 @@ Commands:
   add         Add files to the index
   bundle      Graft a directory onto a binary as a zip appendix (build-time)
   cat         Print an embedded file to stdout
+  chunks      Show chunks around a search hit (context expansion)
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
               remove-pattern, show-why, add-strategy
@@ -1458,6 +1461,42 @@ func cmdFetch(args []string) {
 			os.Stdout.WriteString(content)
 		}
 	}
+}
+
+// CRC: crc-CLI.md
+func cmdChunks(args []string) {
+	fs := flag.NewFlagSet("chunks", flag.ExitOnError)
+	before := fs.Int("before", 0, "number of chunks before target")
+	after := fs.Int("after", 0, "number of chunks after target")
+	wrap := fs.String("wrap", "", "wrap output in XML tags")
+	fs.Parse(reorderArgs(args))
+
+	posArgs := fs.Args()
+	if len(posArgs) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: ark chunks <path> <range> [-before N] [-after N]")
+		os.Exit(1)
+	}
+	filePath := posArgs[0]
+	chunkRange := posArgs[1]
+
+	withDB(func(d *ark.DB) {
+		results, err := d.GetChunks(filePath, chunkRange, *before, *after)
+		if err != nil {
+			fatal(err)
+		}
+		if *wrap != "" {
+			for _, c := range results {
+				fmt.Printf("<%s source=%q range=%q>\n", *wrap, c.Path, c.Range)
+				writeEscaped(os.Stdout, c.Content, *wrap)
+				fmt.Printf("</%s>\n", *wrap)
+			}
+		} else {
+			enc := json.NewEncoder(os.Stdout)
+			for _, c := range results {
+				enc.Encode(c)
+			}
+		}
+	})
 }
 
 func cmdStop(args []string) {

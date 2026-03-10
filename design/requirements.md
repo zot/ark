@@ -730,3 +730,18 @@
 ### General
 - **R477:** All `ark message` subcommands operate on plain files — no server dependency, no new storage
 - **R478:** (inferred) The tag block parser is shared across all subcommands
+
+## Feature: Chunk Context Expansion
+**Source:** specs/chunk-context.md
+
+### ark chunks command
+- **R479:** `ark chunks <path> <range> [-before N] [-after N]` returns the target chunk plus N neighboring chunks
+- **R480:** Default for `-before` and `-after` is 0 (target chunk only)
+- **R481:** Output is JSONL — one JSON object per chunk, same format as `ark search --chunks`
+- **R482:** Each output object includes `path`, `range`, `content`, and `index` (0-based position in file's chunk list)
+- **R483:** Chunks are returned in positional order (ascending index)
+- **R484:** Calls `microfts2.DB.GetChunks()` directly — no re-implementation of chunk retrieval
+- **R485:** Works via cold-start (`withDB`) — no server proxy needed (read-only, fast)
+- **R486:** The file must be indexed — error if not found in the database
+- **R487:** `--wrap <name>` wraps output in XML tags, consistent with `ark search` and `ark fetch`
+- **R488:** (inferred) Range labels are opaque — the exact string from search results is passed through to `GetChunks`

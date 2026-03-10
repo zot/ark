@@ -476,6 +476,11 @@ func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, err
 	return db.search.SearchGrouped(query, opts)
 }
 
+// GetChunks returns the target chunk and its positional neighbors.
+func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microfts2.ChunkResult, error) {
+	return db.fts.GetChunks(fpath, targetRange, before, after)
+}
+
 // QueryTrigramCounts returns trigram counts for a query string.
 func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
 	return db.fts.QueryTrigramCounts(query)
