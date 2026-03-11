@@ -8,20 +8,25 @@ session8 is the prefix.
 
 ## Bootstrap
 
-At session start, start ark, load tags, and check your inbox:
+At session start, start ark, load tags, then run the dead drop:
 
 ```bash
 ~/.ark/ark serve
 ~/.ark/ark tag files --context --filter-files '*.md' tag
 ```
 
-Then spawn Franklin to check what needs attention:
+Then the two-step morning sweep — Hermes gathers, Franklin narrows:
 ```
-Agent(subagent_type="ark-franklin", prompt="Check inbox and open items for PROJECT_NAME. Report unread messages, waiting-for items, and anything stale. Be brief.")
+Agent(subagent_type="ark-hermes", prompt="Check inbox for PROJECT_NAME. Write a summary to requests/summary.md — counts, what's new, what's waiting, what's stale. Plain markdown, no tag block.")
+```
+Then:
+```
+Agent(subagent_type="ark-franklin", prompt="Morning sweep for PROJECT_NAME. Read requests/summary.md for the inbox state. What needs attention today?")
 ```
 
-Replace PROJECT_NAME with the current project. Franklin reports the
-landscape; you decide what's on the plate today.
+Replace PROJECT_NAME with the current project. Hermes leaves the
+summary at the drop point; Franklin reads it and asks the daily question.
+Neither agent knows the other exists.
 
 ## Tags
 
@@ -87,20 +92,20 @@ misses. Never interpret raw search results yourself.
 **Operational context:** your default scope is the current project.
 Include the project name when spawning agents.
 
-**Messages and status** — spawn ark-franklin. Inbox, open items,
-waiting-for, acknowledging messages. Franklin tracks commitments.
+**What needs doing** — spawn ark-franklin. The daily question, narrowing,
+"what should I work on." Franklin reads the landscape and helps you cut.
 ```
-Agent(subagent_type="ark-franklin", prompt="Check inbox for ark")
-Agent(subagent_type="ark-franklin", prompt="What am I waiting on from other projects?")
-Agent(subagent_type="ark-franklin", prompt="Mark ark-chunk-context-ready.md as read")
+Agent(subagent_type="ark-franklin", prompt="Morning sweep for ark. Read requests/summary.md for inbox state.")
+Agent(subagent_type="ark-franklin", prompt="I finished the chunker interface. What's next?")
 ```
 
-**Search and research** — spawn ark-hermes. Finding information,
-exploring connections, curating results, managing messages. Hermes finds things.
+**Mail room** — spawn ark-hermes. Inbox checks, sending messages,
+acknowledging, searching, research. Hermes gathers and carries.
 ```
-Agent(subagent_type="ark-hermes", prompt="Find notes about append detection")
-Agent(subagent_type="ark-hermes", prompt="What patterns relate to concurrency?")
+Agent(subagent_type="ark-hermes", prompt="Check inbox for ark. Write summary to requests/summary.md")
 Agent(subagent_type="ark-hermes", prompt="Send a request from ark to microfts2 about chunker interface")
+Agent(subagent_type="ark-hermes", prompt="Find notes about append detection")
+Agent(subagent_type="ark-hermes", prompt="Ack the microfts2 chunk-context notification")
 ```
 
 ## Cross-Project Messaging
