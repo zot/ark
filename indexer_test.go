@@ -53,6 +53,45 @@ func TestExtractTagsIgnoresEmailsAndMentions(t *testing.T) {
 	}
 }
 
+func TestExtractTagDefs(t *testing.T) {
+	content := []byte("@tag: decision A choice that was made\n@tag: pattern A recurring approach\nnot a @tag: inline mention\n@tag: x\n")
+	defs := ExtractTagDefs(content)
+	if defs["decision"] != "A choice that was made" {
+		t.Errorf("expected decision description, got %q", defs["decision"])
+	}
+	if defs["pattern"] != "A recurring approach" {
+		t.Errorf("expected pattern description, got %q", defs["pattern"])
+	}
+	if _, ok := defs["inline"]; ok {
+		t.Error("mid-line @tag: should not be extracted")
+	}
+	if _, ok := defs["x"]; ok {
+		t.Error("@tag: with only name and no description should not match")
+	}
+}
+
+func TestExtractTagDefsWithSeparator(t *testing.T) {
+	content := []byte("@tag: decision -- A choice that was made and why\n")
+	defs := ExtractTagDefs(content)
+	if defs["decision"] != "-- A choice that was made and why" {
+		t.Errorf("expected full description including --, got %q", defs["decision"])
+	}
+}
+
+func TestExtractTagsLineStartOnly(t *testing.T) {
+	content := []byte("some text @decision: mid-line\n@pattern: at-start\n  indented @status: not-start")
+	tags := ExtractTags(content)
+	if tags["decision"] != 0 {
+		t.Errorf("mid-line @decision: should not be extracted, got %d", tags["decision"])
+	}
+	if tags["pattern"] != 1 {
+		t.Errorf("expected pattern=1, got %d", tags["pattern"])
+	}
+	if tags["status"] != 0 {
+		t.Errorf("indented @status: should not be extracted, got %d", tags["status"])
+	}
+}
+
 // --- Append detection integration tests ---
 
 // testIndexer creates a microfts2.DB, microvec.DB, Store, and Indexer

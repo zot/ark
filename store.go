@@ -59,6 +59,7 @@ const (
 	prefixInfo       = 'I'
 	prefixTagTotal   = 'T'
 	prefixTagFile    = 'F'
+	prefixTagDef     = 'D'
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -468,4 +469,100 @@ func unresolvedKey(path string) []byte {
 	key[0] = byte(prefixUnresolved)
 	copy(key[1:], path)
 	return key
+}
+
+// tagDefKey builds a D prefix key: D[tagname][fileid].
+func tagDefKey(tag string, fileid uint64) []byte {
+	key := make([]byte, 1+len(tag)+8)
+	key[0] = byte(prefixTagDef)
+	copy(key[1:], tag)
+	binary.BigEndian.PutUint64(key[1+len(tag):], fileid)
+	return key
+}
+
+// TagDefRecord is a tag definition from LMDB.
+type TagDefRecord struct {
+	Tag         string
+	Description string
+	FileID      uint64
+}
+
+// UpdateTagDefs replaces all D records for a fileid with new definitions.
+func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		// Remove old D records for this fileid
+		prefix := []byte{byte(prefixTagDef)}
+		_ = scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
+			// Key format: D[tagname][fileid:8] — fileid is last 8 bytes
+			if len(k) < 9 {
+				return nil
+			}
+			fid := binary.BigEndian.Uint64(k[len(k)-8:])
+			if fid == fileid {
+				return cur.Del(0)
+			}
+			return nil
+		})
+
+		// Write new D records
+		for tag, desc := range defs {
+			dk := tagDefKey(tag, fileid)
+			if err := txn.Put(s.dbi, dk, []byte(desc), 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveTagDefs deletes all D records for a fileid.
+func (s *Store) RemoveTagDefs(fileid uint64) error {
+	return s.UpdateTagDefs(fileid, nil)
+}
+
+// AppendTagDefs adds D records without removing existing ones.
+func (s *Store) AppendTagDefs(fileid uint64, defs map[string]string) error {
+	if len(defs) == 0 {
+		return nil
+	}
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		for tag, desc := range defs {
+			dk := tagDefKey(tag, fileid)
+			if err := txn.Put(s.dbi, dk, []byte(desc), 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ListTagDefs returns tag definitions from D records.
+// If tags is empty, returns all. Otherwise filters to requested tags.
+func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
+	var results []TagDefRecord
+	tagSet := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		tagSet[t] = true
+	}
+
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		prefix := []byte{byte(prefixTagDef)}
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 9 {
+				return nil
+			}
+			tag := string(k[1 : len(k)-8])
+			if len(tagSet) > 0 && !tagSet[tag] {
+				return nil
+			}
+			fid := binary.BigEndian.Uint64(k[len(k)-8:])
+			results = append(results, TagDefRecord{
+				Tag:         tag,
+				Description: string(v),
+				FileID:      fid,
+			})
+			return nil
+		})
+	})
+	return results, err
 }

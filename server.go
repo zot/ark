@@ -192,6 +192,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /tags", srv.handleTags)
 	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
 	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
 	mux.HandleFunc("POST /config/add-source", srv.handleConfigAddSource)
 	mux.HandleFunc("POST /config/remove-source", srv.handleConfigRemoveSource)
 	mux.HandleFunc("POST /config/add-include", srv.handleConfigAddInclude)
@@ -670,6 +671,20 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, files)
+}
+
+func (srv *Server) handleTagDefs(w http.ResponseWriter, r *http.Request) {
+	var req tagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defs, err := srv.db.TagDefs(req.Tags)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, defs)
 }
 
 // Seq: seq-config-mutate.md

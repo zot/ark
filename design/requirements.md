@@ -201,6 +201,18 @@
 - **R133:** (inferred) `POST /tags/counts` — get counts for specified tags (server API)
 - **R134:** (inferred) `POST /tags/files` — get files for specified tags (server API)
 
+### Tag Definitions
+- **R502:** Tag definitions are lines matching `@tag: <name> <description>` — first word after `@tag:` is the tag name, rest is description
+- **R503:** Definitions are extracted at index time and cached in LMDB as `D` prefix records
+- **R504:** Storage: `D` [tagname] [fileid: 8] → description bytes. One record per definition per source file
+- **R505:** When a file is re-indexed, its D records are removed and re-extracted (same lifecycle as F records)
+- **R506:** `ark tag defs [TAG...]` outputs tag definitions from the LMDB cache
+- **R507:** No args: all definitions. With args: only those tags
+- **R508:** Default output: `tagname description` per line, deduplicated, sorted alphabetically
+- **R509:** `--path` output: `path tagname description` per line, lexically sorted, not deduplicated. Spaces in paths are backslash-escaped
+- **R510:** (inferred) Uses server proxy when available, falls back to cold-start withDB. Read-only
+- **R511:** (inferred) Append path: scan new bytes for `@tag:` definitions, add D records (no removal — append only adds)
+
 ## Feature: Indexing Strategies
 **Source:** specs/indexing.md
 
@@ -727,8 +739,27 @@
 - **R475:** Detects malformed tag lines in the tag block (missing space after colon, etc.)
 - **R476:** (inferred) The diagnostic output is designed as a crank-handle prompt — self-contained instructions a model can follow without additional context
 
+### ack
+- **R489:** `ark message ack FILE` sets `@msg` to `read` in the file's tag block
+- **R490:** If `@msg` is already `read`, `acting`, or `closed`, does nothing (no error)
+- **R491:** (inferred) Uses same file read/parse/render/write pattern as set-tags
+
+### close
+- **R492:** `ark message close FILE` sets `@msg` to `closed` in the file's tag block
+- **R493:** If `@msg` is already `closed`, does nothing (no error)
+- **R494:** (inferred) Uses same file read/parse/render/write pattern as set-tags
+
+### inbox
+- **R495:** `ark message inbox [--project PROJECT]` lists non-closed messages across all indexed sources
+- **R496:** Finds files containing `@msg:` tags via the database, reads each file's tag block
+- **R497:** Filters to messages where `@msg` is not `closed`
+- **R498:** When `--project` is given, further filters to `@to-project` matching PROJECT
+- **R499:** Output sorted: `@msg:new` first, then others; within each group, sorted by file path
+- **R500:** Output format: one tab-separated line per message: `msg-value\tto-project\tfrom-project\tstatus\tissue-or-response\tpath`
+- **R501:** (inferred) Uses server proxy when available, falls back to cold-start withDB. Read-only.
+
 ### General
-- **R477:** All `ark message` subcommands operate on plain files — no server dependency, no new storage
+- **R477:** Most `ark message` subcommands operate on plain files — no server dependency, no new storage. Exception: `inbox` requires the database.
 - **R478:** (inferred) The tag block parser is shared across all subcommands
 
 ## Feature: Chunk Context Expansion

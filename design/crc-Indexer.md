@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511
 
 Coordinates adding, removing, and refreshing files across both
 engines. microfts2 first, microvec second. Extracts tags from
@@ -13,13 +13,14 @@ file content and updates the Store.
 ## Does
 - AddFile(path, strategy): add to microfts2 (gets fileid + chunk offsets),
   read chunk text from file, add to microvec (fileid + chunks),
-  extract tags from content, update Store tag records
+  extract tags from content, update Store tag records,
+  extract tag definitions, update Store D records
 - RemoveFile(path): resolve path to fileid via microfts2, remove from both,
   remove tags via Store.RemoveTags(fileid)
 - RemoveByID(fileid): remove from both engines and tags by fileid
 - RefreshFile(path): check for append-only change first. If append:
   use AppendChunks path. Otherwise full re-add to microfts2, remove
-  old vectors, add new vectors, re-extract tags and update Store.
+  old vectors, add new vectors, re-extract tags and tag defs, update Store.
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
   by patterns, refresh each one. Return list of missing files.
 - DetectAppend(path, fileid): get FileInfo from microfts2, check
@@ -29,11 +30,15 @@ file content and updates the Store.
 - AppendFile(path, fileid, strategy): read new bytes from FileLength
   to EOF, parse last ChunkRange for base line, call AppendChunks
   with WithBaseLine/WithContentHash/WithModTime/WithFileLength.
-  Remove+re-add vectors (full vector refresh). Extract tags from
-  new bytes only, Store.AppendTags for incremental tag update.
-- ExtractTags(content []byte): scan content with regex `@[a-zA-Z][\w-]*:`,
+  Remove+re-add vectors (full vector refresh). Extract tags and tag
+  defs from new bytes only, Store.AppendTags and Store.AppendTagDefs
+  for incremental update.
+- ExtractTags(content []byte): scan content with regex `(?:^|\n)@[a-zA-Z][\w.-]*:`,
   return map[string]uint32 of tagname → count. Tag name is the part
-  between @ and : (lowercase).
+  between @ and : (lowercase). Only matches at line start.
+- ExtractTagDefs(content []byte): scan content for `@tag: <name> <description>`
+  lines. First word after `@tag:` is the tag name, rest is description.
+  Returns map[string]string (tagname → description).
 
 ## Collaborators
 - microfts2.DB: file identity, trigram indexing, staleness detection

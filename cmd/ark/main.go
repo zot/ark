@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -587,70 +588,8 @@ func cmdSearch(args []string) {
 
 	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
 
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{
-			"k":      *k,
-			"scores": *scores,
-			"after":  afterNano,
-			"chunks": *chunks,
-			"files":  *files,
-			"tags":   *tags,
-		}
-		if len(filter) > 0 {
-			body["filter"] = []string(filter)
-		}
-		if len(except) > 0 {
-			body["except"] = []string(except)
-		}
-		if len(filterFiles) > 0 {
-			body["filterFiles"] = []string(filterFiles)
-		}
-		if len(excludeFiles) > 0 {
-			body["excludeFiles"] = []string(excludeFiles)
-		}
-		if isSplit {
-			body["about"] = *about
-			body["contains"] = *contains
-			if len(regex) > 0 {
-				body["regex"] = []string(regex)
-			}
-			if len(exceptRegex) > 0 {
-				body["exceptRegex"] = []string(exceptRegex)
-			}
-			body["likeFile"] = *likeFile
-		} else {
-			query := strings.Join(fs.Args(), " ")
-			if query == "" {
-				fmt.Fprintln(os.Stderr, "error: no search query")
-				os.Exit(1)
-			}
-			body["query"] = query
-		}
-		if *tags {
-			var tagResults []ark.TagResult
-			if err := proxyDecode(client, "POST", "/search", body, &tagResults); err != nil {
-				fatal(err)
-			}
-			printTagResultsDirect(tagResults, *scores)
-		} else {
-			var results []ark.SearchResultEntry
-			if err := proxyDecode(client, "POST", "/search", body, &results); err != nil {
-				fatal(err)
-			}
-			// Extract query for preview
-			var pq string
-			if v, ok := body["contains"].(string); ok && v != "" {
-				pq = v
-			} else if v, ok := body["about"].(string); ok && v != "" {
-				pq = v
-			} else if v, ok := body["query"].(string); ok {
-				pq = v
-			}
-			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, pq)
-		}
-		return
-	}
-
+	// Always use local LMDB — mmap shares pages with server,
+	// and the server doesn't re-index before searching anyway.
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
 			K:            *k,
@@ -1421,46 +1360,25 @@ func cmdFetch(args []string) {
 		os.Exit(1)
 	}
 
-	client := serverClient(arkDir)
-	var db *ark.DB
-	if client == nil {
-		var err error
-		db, err = ark.Open(arkDir)
-		if err != nil {
-			fatal(err)
-		}
-		defer db.Close()
-	}
-
-	for _, filePath := range paths {
-		var content string
-		if client != nil {
-			var result struct {
-				Content string `json:"content"`
-			}
-			if err := proxyDecode(client, "POST", "/fetch", map[string]string{
-				"path": filePath,
-			}, &result); err != nil {
-				fatal(err)
-			}
-			content = result.Content
-		} else {
-			data, err := db.Fetch(filePath)
+	// Always use local LMDB — pure read, mmap shares pages with server.
+	withDB(func(d *ark.DB) {
+		for _, filePath := range paths {
+			data, err := d.Fetch(filePath)
 			if err != nil {
 				fatal(err)
 			}
-			content = string(data)
-		}
+			content := string(data)
 
-		if *wrap != "" {
-			absPath, _ := filepath.Abs(filePath)
-			fmt.Printf("<%s source=%q>\n", *wrap, absPath)
-			writeEscaped(os.Stdout, content, *wrap)
-			fmt.Printf("</%s>\n", *wrap)
-		} else {
-			os.Stdout.WriteString(content)
+			if *wrap != "" {
+				absPath, _ := filepath.Abs(filePath)
+				fmt.Printf("<%s source=%q>\n", *wrap, absPath)
+				writeEscaped(os.Stdout, content, *wrap)
+				fmt.Printf("</%s>\n", *wrap)
+			} else {
+				os.Stdout.WriteString(content)
+			}
 		}
-	}
+	})
 }
 
 // CRC: crc-CLI.md
@@ -2459,6 +2377,8 @@ Subcommands:
 		cmdTagCounts(subArgs)
 	case "files":
 		cmdTagFiles(subArgs)
+	case "defs":
+		cmdTagDefs(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
 		os.Exit(1)
@@ -2617,6 +2537,65 @@ func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
 				fmt.Printf("%s\t%s\n", e.Path, e.Line)
 			}
 		}
+	})
+}
+
+// CRC: crc-CLI.md
+func cmdTagDefs(args []string) {
+	fs := flag.NewFlagSet("tag defs", flag.ExitOnError)
+	showPath := fs.Bool("path", false, "show source file path, not deduplicated")
+	fs.Parse(args)
+	tags := fs.Args()
+
+	printDefs := func(defs []ark.TagDefInfo) {
+		if *showPath {
+			sort.Slice(defs, func(i, j int) bool {
+				if defs[i].Path != defs[j].Path {
+					return defs[i].Path < defs[j].Path
+				}
+				if defs[i].Tag != defs[j].Tag {
+					return defs[i].Tag < defs[j].Tag
+				}
+				return defs[i].Description < defs[j].Description
+			})
+			for _, d := range defs {
+				path := strings.ReplaceAll(d.Path, " ", "\\ ")
+				fmt.Printf("%s %s %s\n", path, d.Tag, d.Description)
+			}
+		} else {
+			sort.Slice(defs, func(i, j int) bool {
+				if defs[i].Tag != defs[j].Tag {
+					return defs[i].Tag < defs[j].Tag
+				}
+				return defs[i].Description < defs[j].Description
+			})
+			seen := make(map[string]bool)
+			for _, d := range defs {
+				key := d.Tag + "\t" + d.Description
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				fmt.Printf("%s %s\n", d.Tag, d.Description)
+			}
+		}
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		var defs []ark.TagDefInfo
+		if err := proxyDecode(client, "POST", "/tags/defs", map[string]any{"tags": tags}, &defs); err != nil {
+			fatal(err)
+		}
+		printDefs(defs)
+		return
+	}
+
+	withDB(func(d *ark.DB) {
+		defs, err := d.TagDefs(tags)
+		if err != nil {
+			fatal(err)
+		}
+		printDefs(defs)
 	})
 }
 
@@ -2864,7 +2843,10 @@ Subcommands:
   new-response  Create a new response file
   set-tags      Update or add tags in a file's tag block
   get-tags      Read tags from a file's tag block
-  check         Validate file format`)
+  check         Validate file format
+  ack           Mark message as read (@msg: read)
+  close         Mark message as closed (@msg: closed)
+  inbox         List non-closed messages`)
 		os.Exit(1)
 	}
 
@@ -2882,6 +2864,12 @@ Subcommands:
 		cmdMessageGetTags(subArgs)
 	case "check":
 		cmdMessageCheck(subArgs)
+	case "ack":
+		cmdMessageAck(subArgs)
+	case "close":
+		cmdMessageClose(subArgs)
+	case "inbox":
+		cmdMessageInbox(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown message subcommand: %s\n", sub)
 		os.Exit(1)
@@ -3067,4 +3055,149 @@ func cmdMessageCheck(args []string) {
 		fmt.Fprintf(os.Stderr, "- %s\n", p)
 	}
 	os.Exit(1)
+}
+
+// CRC: crc-CLI.md | Seq: seq-message.md
+func cmdMessageAck(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark message ack FILE")
+		os.Exit(1)
+	}
+
+	filePath := args[0]
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	if v, ok := tb.Get("msg"); ok {
+		switch v {
+		case "read", "acting", "closed":
+			return
+		}
+	}
+
+	tb.Set("msg", "read")
+	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-message.md
+func cmdMessageClose(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: ark message close FILE")
+		os.Exit(1)
+	}
+
+	filePath := args[0]
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	if v, ok := tb.Get("msg"); ok && v == "closed" {
+		return
+	}
+
+	tb.Set("msg", "closed")
+	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-message.md
+func cmdMessageInbox(args []string) {
+	fs := flag.NewFlagSet("message inbox", flag.ExitOnError)
+	project := fs.String("project", "", "filter by to-project")
+	fs.Parse(args)
+
+	type entry struct {
+		msg     string
+		to      string
+		from    string
+		status  string
+		summary string
+		path    string
+	}
+
+	collect := func(files []ark.TagFileInfo) []entry {
+		seen := make(map[string]bool)
+		var entries []entry
+		for _, f := range files {
+			if seen[f.Path] {
+				continue
+			}
+			seen[f.Path] = true
+
+			data, err := os.ReadFile(f.Path)
+			if err != nil {
+				continue
+			}
+			tb := ark.ParseTagBlock(data)
+
+			msgVal, ok := tb.Get("msg")
+			if !ok || msgVal == "closed" {
+				continue
+			}
+
+			toVal, _ := tb.Get("to-project")
+			if *project != "" && toVal != *project {
+				continue
+			}
+
+			fromVal, _ := tb.Get("from-project")
+			statusVal, _ := tb.Get("status")
+
+			var summary string
+			if v, ok := tb.Get("issue"); ok {
+				summary = v
+			} else if v, ok := tb.Get("response"); ok {
+				summary = "response:" + v
+			}
+
+			entries = append(entries, entry{
+				msg:     msgVal,
+				to:      toVal,
+				from:    fromVal,
+				status:  statusVal,
+				summary: summary,
+				path:    f.Path,
+			})
+		}
+
+		sort.Slice(entries, func(i, j int) bool {
+			if (entries[i].msg == "new") != (entries[j].msg == "new") {
+				return entries[i].msg == "new"
+			}
+			return entries[i].path < entries[j].path
+		})
+		return entries
+	}
+
+	printEntries := func(entries []entry) {
+		for _, e := range entries {
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
+				e.msg, e.to, e.from, e.status, e.summary, e.path)
+		}
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		var files []ark.TagFileInfo
+		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": []string{"msg"}}, &files); err != nil {
+			fatal(err)
+		}
+		printEntries(collect(files))
+		return
+	}
+
+	withDB(func(d *ark.DB) {
+		files, err := d.TagFiles([]string{"msg"})
+		if err != nil {
+			fatal(err)
+		}
+		printEntries(collect(files))
+	})
 }

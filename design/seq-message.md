@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478
+**Requirements:** R450-R478, R489-R501
 
 ## Flow: set-tags
 
@@ -99,4 +99,63 @@ CLI ──> parse args: FILE
                 for each stray tag:
                   describe finding + line number
                   emit "remove line N" instruction
+```
+
+## Flow: ack
+
+```
+CLI ──> parse args: FILE
+         │
+         ├──> read FILE bytes
+         │
+         ├──> TagBlock.Parse(bytes)
+         │
+         ├──> TagBlock.Get("msg")
+         │     if value is "read", "acting", or "closed" → exit 0
+         │
+         ├──> TagBlock.Set("msg", "read")
+         │
+         ├──> TagBlock.Render() → new file bytes
+         │
+         └──> write FILE
+```
+
+## Flow: close
+
+```
+CLI ──> parse args: FILE
+         │
+         ├──> read FILE bytes
+         │
+         ├──> TagBlock.Parse(bytes)
+         │
+         ├──> TagBlock.Get("msg")
+         │     if value is "closed" → exit 0
+         │
+         ├──> TagBlock.Set("msg", "closed")
+         │
+         ├──> TagBlock.Render() → new file bytes
+         │
+         └──> write FILE
+```
+
+## Flow: inbox
+
+```
+CLI ──> parse flags: optional --project PROJECT
+         │
+         ├──> withDB or server proxy:
+         │      DB.TagFiles(["msg"]) → list of (path, size) entries
+         │
+         ├──> for each file path:
+         │      read file bytes
+         │      TagBlock.Parse(bytes)
+         │      Get("msg") → skip if "closed"
+         │      Get("to-project") → skip if --project given and doesn't match
+         │      collect: msg value, to-project, from-project, status,
+         │               issue (or "response:<id>"), path
+         │
+         ├──> sort: @msg:new first, then by path
+         │
+         └──> output tab-separated lines
 ```

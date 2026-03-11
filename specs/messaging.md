@@ -131,3 +131,56 @@ Problems detected:
 - Blank lines within the tag block
 - Missing blank line between tag block and body
 - Malformed tag lines in the tag block (missing space after colon, etc.)
+
+### ack
+
+```
+ark message ack FILE
+```
+
+Marks a message as read: sets `@msg` to `read`. Convenience wrapper
+around `set-tags` — same file I/O, same TagBlock mechanics.
+
+If `@msg` is already `read`, `acting`, or `closed`, does nothing (no
+error). The intent is "I saw it" — idempotent, safe to call repeatedly.
+
+### close
+
+```
+ark message close FILE
+```
+
+Marks a message as closed: sets `@msg` to `closed`. Same mechanics as
+ack. If `@msg` is already `closed`, does nothing.
+
+### inbox
+
+```
+ark message inbox [--project PROJECT]
+```
+
+Lists messages that are not closed. Unlike the other message
+subcommands, inbox is a search operation — it needs the database to
+find message files across all indexed sources.
+
+Finds all indexed files that contain `@msg:` tags, reads each file's
+tag block, and filters to those where `@msg` is not `closed`.
+
+When `--project` is given, further filters to messages where
+`@to-project` matches. Without `--project`, shows all non-closed
+messages.
+
+Output is sorted: `@msg:new` messages first, then others. Within
+each group, sorted by file path.
+
+Output format: one line per message, tab-separated:
+```
+msg-value	to-project	from-project	status	issue-or-response	path
+```
+
+The `issue-or-response` field is the `@issue` value (for requests)
+or `response:<id>` (for responses). If neither tag exists, the field
+is empty.
+
+Uses the server proxy when available, falls back to cold-start
+(`withDB`). Read-only operation.

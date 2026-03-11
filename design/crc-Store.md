@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -34,6 +34,14 @@ ark-level settings, and tag tracking.
   and extract lines containing the tag — return tag-to-end-of-line text
 - AppendTags(fileid, tags): add to existing F record counts and T totals
   without replacing — used by append-only indexing path
+- UpdateTagDefs(fileid, defs): replace all D records for fileid, write new ones.
+  defs is map[string]string (tagname → description).
+  Within one LMDB txn: delete old D records for fileid, write new D records.
+- RemoveTagDefs(fileid): delete all D records for fileid
+- AppendTagDefs(fileid, defs): add D records without removing — append path
+- ListTagDefs(tags []string): scan D prefix, return definitions.
+  If tags is empty, return all. Otherwise filter to requested tags.
+  Returns (tagname, description, fileid) triples.
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern

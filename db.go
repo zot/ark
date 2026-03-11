@@ -161,6 +161,10 @@ const defaultTagsContent = `# Tags
 Ark tag vocabulary. Tags are @word: patterns found in any indexed file.
 New tags emerge by use. This file documents what they mean.
 
+Tag definitions can appear in any indexed file, not just this one.
+They must be at the start of a line — indented or mid-line @tag:
+is ignored. Use ark tag defs to see all definitions from all sources.
+
 Format: @tag: name -- description
 
 @tag: tag -- the description of a tag
@@ -623,19 +627,7 @@ func (db *DB) Fetch(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
-	// Verify the file is indexed by checking against StaleFiles
-	statuses, err := db.fts.StaleFiles()
-	if err != nil {
-		return nil, fmt.Errorf("check index: %w", err)
-	}
-	indexed := false
-	for _, s := range statuses {
-		if s.Path == absPath {
-			indexed = true
-			break
-		}
-	}
-	if !indexed {
+	if !db.IsIndexed(absPath) {
 		return nil, fmt.Errorf("not indexed: %s", absPath)
 	}
 	data, err := os.ReadFile(absPath)
@@ -711,6 +703,34 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 			Size:  size,
 			Tag:   rec.Tag,
 			Count: rec.Count,
+		})
+	}
+	return results, nil
+}
+
+// TagDefInfo is a tag definition with its source file path.
+type TagDefInfo struct {
+	Tag         string `json:"tag"`
+	Description string `json:"description"`
+	Path        string `json:"path"`
+}
+
+// TagDefs returns tag definitions from LMDB, resolving fileids to paths.
+func (db *DB) TagDefs(tags []string) ([]TagDefInfo, error) {
+	records, err := db.store.ListTagDefs(tags)
+	if err != nil {
+		return nil, err
+	}
+	var results []TagDefInfo
+	for _, rec := range records {
+		info, err := db.fts.FileInfoByID(rec.FileID)
+		if err != nil {
+			continue
+		}
+		results = append(results, TagDefInfo{
+			Tag:         rec.Tag,
+			Description: rec.Description,
+			Path:        info.Filename,
 		})
 	}
 	return results, nil

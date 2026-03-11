@@ -15,7 +15,7 @@ import (
 	"github.com/anthropics/microvec"
 )
 
-var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
+var tagRegex = regexp.MustCompile(`(?:^|\n)@([a-zA-Z][\w.-]*):`)
 
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.
@@ -48,6 +48,10 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if err := idx.store.UpdateTags(fileid, tags); err != nil {
 			return fileid, fmt.Errorf("update tags %s: %w", path, err)
 		}
+		defs := ExtractTagDefs(data)
+		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
+			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
+		}
 	}
 
 	return fileid, nil
@@ -70,6 +74,7 @@ func (idx *Indexer) RemoveFile(path string) error {
 		if err := idx.store.RemoveTags(fileid); err != nil {
 			return fmt.Errorf("remove tags %s: %w", path, err)
 		}
+		idx.store.RemoveTagDefs(fileid)
 	}
 	return nil
 }
@@ -89,6 +94,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 		if err := idx.store.RemoveTags(fileid); err != nil {
 			return fmt.Errorf("remove tags %d: %w", fileid, err)
 		}
+		idx.store.RemoveTagDefs(fileid)
 	}
 	return nil
 }
@@ -132,10 +138,15 @@ func (idx *Indexer) fullRefresh(path, strategy string, oldID uint64) error {
 	if idx.store != nil {
 		if fileid != oldID {
 			idx.store.RemoveTags(oldID)
+			idx.store.RemoveTagDefs(oldID)
 		}
 		tags := ExtractTags(data)
 		if err := idx.store.UpdateTags(fileid, tags); err != nil {
 			return fmt.Errorf("update tags %s: %w", path, err)
+		}
+		defs := ExtractTagDefs(data)
+		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
+			return fmt.Errorf("update tag defs %s: %w", path, err)
 		}
 	}
 
@@ -225,11 +236,15 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		return fmt.Errorf("vec add %s: %w", path, err)
 	}
 
-	// Tags: incremental — only scan new content
+	// Tags and defs: incremental — only scan new content
 	if idx.store != nil {
 		tags := ExtractTags(newBytes)
 		if err := idx.store.AppendTags(fileid, tags); err != nil {
 			return fmt.Errorf("append tags %s: %w", path, err)
+		}
+		defs := ExtractTagDefs(newBytes)
+		if err := idx.store.AppendTagDefs(fileid, defs); err != nil {
+			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
 	}
 
@@ -287,6 +302,26 @@ func ExtractTags(content []byte) map[string]uint32 {
 		tags[name]++
 	}
 	return tags
+}
+
+// tagDefRegex matches @tag: definitions at line start. First word after
+// "@tag:" is the tag name, rest is description.
+var tagDefRegex = regexp.MustCompile(`(?:^|\n)@tag:\s+(\S+)\s+(.+)`)
+
+// ExtractTagDefs scans content for @tag: name description lines.
+// Returns map of tagname → description.
+func ExtractTagDefs(content []byte) map[string]string {
+	matches := tagDefRegex.FindAllSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	defs := make(map[string]string)
+	for _, m := range matches {
+		name := strings.ToLower(string(m[1]))
+		desc := strings.TrimSpace(string(m[2]))
+		defs[name] = desc
+	}
+	return defs
 }
 
 // splitChunks reads chunk text from a file using ranges from microfts2.

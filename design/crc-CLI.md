@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R498, R499, R500, R501, R506, R507, R508, R509, R510
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -42,8 +42,13 @@ dispatches operations via proxy or cold-start.
   Replaces --source/--not-source.
 - --wrap: parameterized context wrapper. Escapes closing tag in content.
   Convention: "memory" for experience, "knowledge" for facts.
-- cmdTag: dispatches to list/counts/files sub-subcommands,
+- cmdTag: dispatches to list/counts/files/defs sub-subcommands,
   --context flag on files sub-subcommand
+- cmdTagDefs: query D records from LMDB. Optional tag name args filter.
+  Default: `tagname description`, deduplicated, sorted alphabetically.
+  --path: `path tagname description`, lexically sorted, not deduplicated,
+  spaces in paths backslash-escaped.
+  Uses server proxy when available, falls back to withDB.
 - cmdFetch: verify indexed, output raw file content to stdout.
   --wrap <name> wraps output in XML tags.
 - cmdChunks: context expansion around search hits. Takes path, range,
@@ -92,8 +97,9 @@ dispatches operations via proxy or cold-start.
   recreates symlinks. Exit 1 if not bundled or no matches.
 
 - cmdMessage: dispatches to new-request, new-response, set-tags,
-  get-tags, check sub-subcommands. All operate on plain files via
-  TagBlock — no server, no DB. Pure file I/O.
+  get-tags, check, ack, close, inbox sub-subcommands. Most operate
+  on plain files via TagBlock — no server, no DB. Exception: inbox
+  requires the database.
 - cmdMessageSetTags: read file, parse TagBlock, apply tag updates,
   render and write back atomically.
 - cmdMessageGetTags: read file, parse TagBlock, print requested tags
@@ -103,6 +109,14 @@ dispatches operations via proxy or cold-start.
 - cmdMessageNewResponse: same pattern as new-request with response tags.
 - cmdMessageCheck: read file, parse TagBlock, run Validate + ScanBody,
   format crank-handle diagnostic with fix commands. Exit 0 if valid.
+- cmdMessageAck: read file, parse TagBlock, skip if @msg is read/acting/closed,
+  otherwise set @msg to read, render and write back.
+- cmdMessageClose: read file, parse TagBlock, skip if @msg is closed,
+  otherwise set @msg to closed, render and write back.
+- cmdMessageInbox: query DB for files with @msg tag via TagFiles,
+  read each file's TagBlock, filter non-closed, optionally filter by
+  --project matching @to-project, sort @msg:new first then by path,
+  output tab-separated summary lines.
 
 ## Collaborators
 - Server: proxy target when server is running

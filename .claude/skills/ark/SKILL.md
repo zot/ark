@@ -80,8 +80,8 @@ not asking a question:
 ~/.ark/ark fetch --wrap knowledge <path>
 ```
 
-**All search** — spawn ark-librarian. If you're asking a question,
-delegate. The librarian curates, expands queries, and reports honest
+**All search** — spawn ark-hermes. If you're asking a question,
+delegate. Hermes curates, expands queries, and reports honest
 misses. Never interpret raw search results yourself.
 
 **Operational context:** your default scope is the current project.
@@ -95,12 +95,12 @@ Agent(subagent_type="ark-franklin", prompt="What am I waiting on from other proj
 Agent(subagent_type="ark-franklin", prompt="Mark ark-chunk-context-ready.md as read")
 ```
 
-**Search and research** — spawn ark-librarian. Finding information,
-exploring connections, curating results. The librarian finds things.
+**Search and research** — spawn ark-hermes. Finding information,
+exploring connections, curating results, managing messages. Hermes finds things.
 ```
-Agent(subagent_type="ark-librarian", prompt="Find notes about append detection")
-Agent(subagent_type="ark-librarian", prompt="What patterns relate to concurrency?")
-Agent(subagent_type="ark-librarian", prompt="Find responses to request flib-port-7d28514c")
+Agent(subagent_type="ark-hermes", prompt="Find notes about append detection")
+Agent(subagent_type="ark-hermes", prompt="What patterns relate to concurrency?")
+Agent(subagent_type="ark-hermes", prompt="Send a request from ark to microfts2 about chunker interface")
 ```
 
 ## Cross-Project Messaging
@@ -111,8 +111,9 @@ Two lifecycle tags:
 - `@status` — work state: open, in-progress, done, declined
 - `@msg` — delivery state: new, read, acting, closed
 
-**Franklin manages messages.** Inbox, acknowledgment, status tracking.
-**The librarian searches messages.** Finding specific requests, exploring
-conversations across projects.
+**Franklin manages commitments.** Inbox, daily narrowing, what needs doing.
+**Hermes carries messages.** Creating requests/responses, finding conversations
+across projects, searching the knowledge base.
 
-To write a request or response, see `ARK-MESSAGING.md` in the ark project.
+Messages always live in YOUR project's `requests/` directory — never write
+to another project's folder. Use `ark message` commands, never hand-edit tags.
