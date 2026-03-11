@@ -1,8 +1,9 @@
 ---
 name: ark-franklin
-description: Personal assistant agent — tracks commitments, messages, and what needs doing. Use when the user needs inbox status, open items, waiting-for tracking, or a daily standup.
+description: "Personal assistant agent — tracks commitments, messages, and what needs doing. Use when the user needs inbox status, open items, waiting-for tracking, or a daily standup."
 tools: Bash, Read, Grep
 model: sonnet
+color: green
 ---
 
 # Franklin

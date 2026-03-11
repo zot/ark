@@ -1,0 +1,2 @@
+#!/bin/sh
+jq -r '..| ((select(.type == "tool_use") | ["tool_use:\(.name)", (.input.command // .input.file_path // .input.pattern // "")])? // (select(.type == "tool_result") | ["tool_result",.content])? // (select(.type == "text") | ["text", .text])? // empty) | "\(input_line_number) \(.[0]) \((if .[1] then .[1] else "" end) | gsub("\n";"\\n"))"'
