@@ -17,16 +17,15 @@ At session start, start ark, load tags, then run the dead drop:
 
 Then the two-step morning sweep — Hermes gathers, Franklin narrows:
 ```
-Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n\nThen, using only the commands from that reference:\nCheck inbox for PROJECT_NAME. Report incoming messages, outgoing counts by status, and what's new or stale.")
+Agent(subagent_type="ark-messenger", prompt="Check inbox for PROJECT_NAME. Report incoming messages, outgoing counts by status, and what's new or stale.")
 ```
 Then:
 ```
 Agent(subagent_type="ark-franklin", prompt="Morning sweep for PROJECT_NAME. Read requests/summary.md for the inbox state. What needs attention today?")
 ```
 
-Replace PROJECT_NAME with the current project. Hermes fetches its
-own skill reference first — the caller must always include the fetch
-instruction because Haiku won't do it on its own. Franklin reads
+Replace PROJECT_NAME with the current project. The messenger's
+SessionStart hook auto-loads its skill reference. Franklin reads
 the summary and asks the daily question. Neither agent knows the
 other exists.
 
@@ -87,12 +86,20 @@ not asking a question:
 ~/.ark/ark fetch --wrap knowledge <path>
 ```
 
-**All search** — spawn ark-hermes. If you're asking a question,
-delegate. Hermes curates, expands queries, and reports honest
-misses. Never interpret raw search results yourself.
+**Messaging** — spawn ark-messenger. Inbox, sending, ack, status changes.
+Hermes curates and reports honest misses.
+```
+Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale.")
+Agent(subagent_type="ark-messenger", prompt="Send a request from ark to microfts2 about chunker interface.")
+```
 
-**Operational context:** your default scope is the current project.
-Include the project name when spawning agents.
+**Search** — spawn ark-searcher. Finding notes, exploring tags, retrieval.
+Hermes expands queries and curates results. Never interpret raw search
+results yourself.
+```
+Agent(subagent_type="ark-searcher", prompt="Find notes about append detection.")
+Agent(subagent_type="ark-searcher", prompt="What tags relate to concurrency patterns?")
+```
 
 **What needs doing** — spawn ark-franklin. The daily question, narrowing,
 "what should I work on." Franklin reads the landscape and helps you cut.
@@ -101,24 +108,13 @@ Agent(subagent_type="ark-franklin", prompt="Morning sweep for ark. Read requests
 Agent(subagent_type="ark-franklin", prompt="I finished the chunker interface. What's next?")
 ```
 
-**Calling Hermes** — every Hermes prompt MUST start with a skill fetch.
-Hermes is a persona, not an expert — it only knows what you hand it.
-Like a GM explaining the rules: every session, every time.
+**Operational context:** your default scope is the current project.
+Include the project name when spawning agents.
 
-For messaging (inbox, sending, ack, status):
-```
-Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n\nThen, using only the commands from that reference:\nCheck inbox for ark. Report incoming, outgoing counts, what's new or stale.")
-```
-
-For search (finding notes, exploring tags, retrieval):
-```
-Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md\n\nThen, using only the commands from that reference:\nFind notes about append detection.")
-```
-
-For both (search + messaging in one task):
-```
-Agent(subagent_type="ark-hermes", prompt="First, run these commands exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md\n\nThen, using only the commands from those references:\nSend a request from ark to microfts2 about chunker interface.")
-```
+Each Hermes agent auto-loads its skill reference via a SessionStart
+hook — the caller no longer needs to include a fetch preamble.
+Hermes is a persona, not an expert — the hook is the GM explaining
+the rules every session, every time.
 
 ## Cross-Project Messaging
 
@@ -138,8 +134,9 @@ means "I saw it." No cross-project file writes, ever.
 Filenames: bare `<short-name>.md`. Only add `-<session8>` suffix if the name collides.
 
 **Franklin manages commitments.** Inbox, daily narrowing, what needs doing.
-**Hermes carries messages.** Creating requests/responses, finding conversations
-across projects, searching the knowledge base.
+**ark-messenger carries messages.** Creating requests/responses, status changes.
+**ark-searcher finds things.** Searching the knowledge base, finding conversations
+across projects, exploring tags.
 
 Messages always live in YOUR project's `requests/` directory — never write
 to another project's folder. Use `ark message` commands, never hand-edit tags.

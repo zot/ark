@@ -131,7 +131,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, chat-jsonl) produce clean boundaries. For markdown strategy, derive boundary cleanliness from last chunk end vs file length. When unclean, implement back-seek from last chunk to find match point and WithReplaceFrom in microfts2.AppendChunks
 - [ ] O13: AppendFile reads full file twice (once in DetectAppend for prefix hash, once in AppendFile for new bytes + full hash). Acceptable because savings come from avoiding re-chunking/re-indexing old content. Could optimize with hash state passing if profiling shows it matters.
 - [x] A12: R376-R381, R384 (markdown chunker) — implemented in microfts2 as MarkdownChunkFunc
-- [x] D4: R416 RegisterLuaFunctions (mcp:indexing) designed but not implemented — needs flib.WithLua wiring
+- [x] D4: R415-R416, R541-R546 RegisterLuaFunctions — mcp:indexing(), mcp:search_grouped(), mcp:open() all registered. HTTP endpoints removed.
 - [ ] A13: R423-R428 (MCP event pulse indicator) — pure Lua/CSS in Frictionless status bar, no ark Go code needed
 - [ ] A14: R418 (browser reconnect on reload) — handled by ui-engine WebSocket reconnect logic, no ark code
 - [ ] A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code

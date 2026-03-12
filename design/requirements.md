@@ -634,25 +634,31 @@
 ## Feature: App Search Support
 **Source:** specs/app-search.md
 
-### Grouped Search Response
-- **R403:** `POST /search/grouped` returns results grouped by file as a tuple array: `[[filename, [chunk, ...]], ...]`
+### Grouped Search — mcp:search_grouped()
+- **R403:** `mcp:search_grouped(query, opts)` returns results grouped by file as a Lua table of tables
 - **R404:** Files sorted by best chunk score (descending), chunks sorted by score within each file
-- **R405:** Each chunk object includes `range`, `score`, and `preview` (pre-rendered HTML)
+- **R405:** Each chunk table includes `range`, `score`, and `preview` (pre-rendered HTML)
 - **R406:** Preview rendering uses goldmark for markdown, JSON pretty-print for JSON (under a length threshold), plain text with HTML escaping otherwise
 - **R407:** Query tokens are highlighted with `<mark>` tags in all preview formats
 - **R408:** The file's chunking strategy determines which renderer to use
-- **R409:** (inferred) The existing `POST /search` endpoint is unchanged — grouped is a separate endpoint
+- **R541:** `opts` table supports: `mode` (contains/about/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`
+- **R542:** (inferred) Default mode is "combined", default k is 20, default preview is 0
 
-### Click to Open
-- **R410:** `POST /open` accepts a file path and opens it with the system viewer (`xdg-open` on Linux, `open` on macOS)
-- **R411:** The endpoint returns immediately — the viewer opens asynchronously
+### Click to Open — mcp:open()
+- **R410:** `mcp:open(path)` opens a file with the system viewer (`xdg-open` on Linux, `open` on macOS)
+- **R411:** The function returns immediately — the viewer opens asynchronously
 - **R412:** (inferred) The file path must be an indexed file — error if not found
 
-### Indexing State
-- **R413:** `GET /indexing` returns a JSON array of source directory paths currently being indexed
-- **R414:** Returns an empty array when no indexing is in progress
+### Indexing State — mcp:indexing()
+- **R414:** Returns an empty table when no indexing is in progress
 - **R415:** `mcp:indexing()` is a Go function registered on the Lua mcp table, returns a Lua array of strings
-- **R416:** (inferred) `mcp:indexing()` is registered after Frictionless setupMCPGlobal completes
+- **R416:** (inferred) All mcp Lua functions are registered after Frictionless setup completes
+
+### HTTP Endpoint Removal
+- **R543:** `POST /search/grouped` endpoint is removed
+- **R544:** `POST /open` endpoint is removed
+- **R545:** `GET /indexing` endpoint is removed
+- **R546:** (inferred) All three operations are available only as Lua functions on the mcp table
 
 ### Search Consistency
 - **R372:** Searches check results for staleness (via microfts2 CheckFile)

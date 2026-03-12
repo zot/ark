@@ -202,9 +202,6 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
-	mux.HandleFunc("POST /search/grouped", srv.handleSearchGrouped)
-	mux.HandleFunc("POST /open", srv.handleOpen)
-	mux.HandleFunc("GET /indexing", srv.handleIndexing)
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 
 	log.Printf("ark server listening on %s", socketPath)
@@ -387,20 +384,20 @@ func PidFilePath(dbPath string) string {
 // JSON request/response helpers
 
 type searchRequest struct {
-	Query        string   `json:"query"`
-	About        string   `json:"about"`
-	Contains     string   `json:"contains"`
-	Regex        []string `json:"regex"`
-	ExceptRegex  []string `json:"exceptRegex"`
-	LikeFile     string   `json:"likeFile"`
-	K            int      `json:"k"`
-	Scores       bool     `json:"scores"`
-	After        int64    `json:"after"`
-	Chunks       bool     `json:"chunks"`
-	Files        bool     `json:"files"`
-	Tags         bool     `json:"tags"`
-	Filter       []string `json:"filter"`
-	Except       []string `json:"except"`
+	Query           string   `json:"query"`
+	About           string   `json:"about"`
+	Contains        string   `json:"contains"`
+	Regex           []string `json:"regex"`
+	ExceptRegex     []string `json:"exceptRegex"`
+	LikeFile        string   `json:"likeFile"`
+	K               int      `json:"k"`
+	Scores          bool     `json:"scores"`
+	After           int64    `json:"after"`
+	Chunks          bool     `json:"chunks"`
+	Files           bool     `json:"files"`
+	Tags            bool     `json:"tags"`
+	Filter          []string `json:"filter"`
+	Except          []string `json:"except"`
 	FilterFiles     []string `json:"filterFiles"`
 	ExcludeFiles    []string `json:"excludeFiles"`
 	FilterFileTags  []string `json:"filterFileTags"`
@@ -430,17 +427,17 @@ type resolveRequest struct {
 
 func buildSearchOpts(req searchRequest) SearchOpts {
 	return SearchOpts{
-		K:            req.K,
-		Scores:       req.Scores,
-		After:        req.After,
-		About:        req.About,
-		Contains:     req.Contains,
-		Regex:        req.Regex,
-		ExceptRegex:  req.ExceptRegex,
-		LikeFile:     req.LikeFile,
-		Tags:         req.Tags,
-		Filter:       req.Filter,
-		Except:       req.Except,
+		K:               req.K,
+		Scores:          req.Scores,
+		After:           req.After,
+		About:           req.About,
+		Contains:        req.Contains,
+		Regex:           req.Regex,
+		ExceptRegex:     req.ExceptRegex,
+		LikeFile:        req.LikeFile,
+		Tags:            req.Tags,
+		Filter:          req.Filter,
+		Except:          req.Except,
 		FilterFiles:     req.FilterFiles,
 		ExcludeFiles:    req.ExcludeFiles,
 		FilterFileTags:  req.FilterFileTags,
@@ -808,61 +805,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-// CRC: crc-Server.md
-func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
-	var req searchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	results, err := srv.db.SearchGrouped(req.Query, buildSearchOpts(req))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, results)
-}
-
-// CRC: crc-Server.md
-func (srv *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Path == "" {
-		http.Error(w, "path required", http.StatusBadRequest)
-		return
-	}
-
-	// Verify file is indexed
-	if !srv.db.IsIndexed(req.Path) {
-		http.Error(w, "file not indexed", http.StatusNotFound)
-		return
-	}
-
-	// Open with system viewer (async)
-	var cmd *exec.Cmd
-	if runtime.GOOS == "darwin" {
-		cmd = exec.Command("open", req.Path)
-	} else {
-		cmd = exec.Command("xdg-open", req.Path)
-	}
-	if err := cmd.Start(); err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-// CRC: crc-Server.md
-func (srv *Server) handleIndexing(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, srv.currentlyIndexing())
-}
-
 // CRC: crc-Server.md | Seq: seq-server-startup.md
 func (srv *Server) handleUIReload(w http.ResponseWriter, r *http.Request) {
 	if err := srv.ReloadUIEngine(); err != nil {
@@ -916,6 +858,7 @@ func (srv *Server) registerLuaFunctions() {
 		if !ok {
 			return fmt.Errorf("mcp is not a table")
 		}
+
 		// mcp:indexing() — returns array of source dirs currently being indexed
 		L.SetField(tbl, "indexing", L.NewFunction(func(L *lua.LState) int {
 			sources := srv.currentlyIndexing()
@@ -926,6 +869,94 @@ func (srv *Server) registerLuaFunctions() {
 			L.Push(result)
 			return 1
 		}))
+
+		// mcp:search_grouped(query, opts) — grouped search results as Lua tables
+		L.SetField(tbl, "search_grouped", L.NewFunction(func(L *lua.LState) int {
+			query := L.CheckString(1)
+			opts := SearchOpts{K: 20}
+			if L.GetTop() >= 2 {
+				optsTable := L.CheckTable(2)
+				if v := optsTable.RawGetString("k"); v != lua.LNil {
+					if n, ok := v.(lua.LNumber); ok {
+						opts.K = int(n)
+					}
+				}
+				if v := optsTable.RawGetString("mode"); v != lua.LNil {
+					mode := v.String()
+					switch mode {
+					case "contains":
+						opts.Contains = query
+						query = ""
+					case "about":
+						opts.About = query
+						query = ""
+					}
+					// "combined" is the default — uses query as-is
+				}
+				if v := optsTable.RawGetString("filter_files"); v != lua.LNil {
+					opts.FilterFiles = []string{v.String()}
+				}
+				if v := optsTable.RawGetString("exclude_files"); v != lua.LNil {
+					opts.ExcludeFiles = []string{v.String()}
+				}
+				if v := optsTable.RawGetString("filter_file_tags"); v != lua.LNil {
+					opts.FilterFileTags = []string{v.String()}
+				}
+				if v := optsTable.RawGetString("exclude_file_tags"); v != lua.LNil {
+					opts.ExcludeFileTags = []string{v.String()}
+				}
+			}
+
+			results, err := srv.db.SearchGrouped(query, opts)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+
+			resultTable := L.NewTable()
+			for i, group := range results {
+				groupTable := L.NewTable()
+				L.SetField(groupTable, "path", lua.LString(group.Path))
+				L.SetField(groupTable, "strategy", lua.LString(group.Strategy))
+				chunksTable := L.NewTable()
+				for j, chunk := range group.Chunks {
+					chunkTable := L.NewTable()
+					L.SetField(chunkTable, "range", lua.LString(chunk.Range))
+					L.SetField(chunkTable, "score", lua.LNumber(chunk.Score))
+					L.SetField(chunkTable, "preview", lua.LString(chunk.Preview))
+					chunksTable.RawSetInt(j+1, chunkTable)
+				}
+				L.SetField(groupTable, "chunks", chunksTable)
+				resultTable.RawSetInt(i+1, groupTable)
+			}
+			L.Push(resultTable)
+			return 1
+		}))
+
+		// mcp:open(path) — open indexed file with system viewer
+		L.SetField(tbl, "open", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			if !srv.db.IsIndexed(path) {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("file not indexed"))
+				return 2
+			}
+			var cmd *exec.Cmd
+			if runtime.GOOS == "darwin" {
+				cmd = exec.Command("open", path)
+			} else {
+				cmd = exec.Command("xdg-open", path)
+			}
+			if err := cmd.Start(); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(fmt.Sprintf("open: %v", err)))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
 		return nil
 	})
 	if err != nil {

@@ -1,25 +1,27 @@
 # App Search Support
 
 Go-side support for the Frictionless ark app's search UI. These
-features shape the search response and expose server state for the
-app to render — the app itself is pure Lua.
+features are exposed as Lua functions on the `mcp` table — the app
+is in-process, so no HTTP round-trip is needed. The app itself is
+pure Lua.
 
-## Grouped search response
+## Grouped search — `mcp:search_grouped(query, opts)`
 
-The search API gains a grouped response mode for the app. Instead of
-a flat list of chunks, results are returned as a tuple array grouped
-by file:
+Returns search results grouped by file as a Lua table of tables.
+Each element is `{path, strategy, chunks}` where chunks is an array
+of `{range, score, preview}` tables. Files sorted by best chunk
+score (descending), chunks sorted by score within each file.
 
-```
-[[filename, [chunk, ...]], ...]
-```
+### Query and opts
 
-Each element is a two-element array: the file path (string) and an
-array of chunk objects. Files are sorted by their best chunk score
-(descending). Chunks within each file are sorted by score (descending).
+`query` is the search string. `opts` is an optional Lua table:
 
-This is a new endpoint (`POST /search/grouped`) — the existing
-`POST /search` response is unchanged.
+- `mode` — "contains", "about", or "combined" (default "combined")
+- `k` — max results (default 20)
+- `filter_files` — glob pattern to restrict paths
+- `exclude_files` — glob pattern to exclude paths
+- `filter_file_tags` — tag name to restrict by
+- `exclude_file_tags` — tag name to exclude by
 
 ### Chunk object
 
@@ -35,25 +37,24 @@ text with HTML escaping for everything else. Query tokens are
 highlighted with `<mark>` tags in all preview formats.
 
 The strategy that indexed the file determines which renderer to use.
-The search response includes the strategy alongside the file path.
 
-## Click to open
+## Click to open — `mcp:open(path)`
 
-`POST /open` accepts a file path and opens it with the system viewer
-(`xdg-open` on Linux, `open` on macOS). The app calls this when a
-user clicks a search result. The endpoint returns immediately — the
-viewer opens asynchronously.
+Opens an indexed file with the system viewer (`xdg-open` on Linux,
+`open` on macOS). Returns immediately — the viewer opens
+asynchronously. Errors if the path is not an indexed file.
 
-## Indexing state
+## Indexing state — `mcp:indexing()`
 
-`GET /indexing` returns a JSON array of source directory paths that
-are currently being indexed (scan or refresh in progress). Empty array
-when idle.
+Returns a Lua array of source directory paths currently being indexed
+(scan or refresh in progress). Empty table when idle.
 
 The app polls this at 250ms intervals to show/hide spinners on
 sources in the UI.
 
-The server exposes this to Lua via `mcp:indexing()` — a Go function
-registered on the mcp table after Frictionless setup. Returns a Lua
-table (array of strings). This lets the app call `mcp:indexing()`
-directly instead of making an HTTP request.
+## HTTP endpoint removal
+
+The HTTP endpoints `POST /search/grouped`, `POST /open`, and
+`GET /indexing` are removed. All three operations are available
+only as Lua functions on the mcp table. The app is in-process
+and does not need HTTP for these operations.
