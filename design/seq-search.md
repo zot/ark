@@ -120,11 +120,14 @@ Server ──> HandleSearchGrouped(req)
             │     │
             │     ├──> group by fileid, lookup strategy per file
             │     │
-            │     ├──> for each chunk: RenderPreview(chunk, strategy, queryTokens)
+            │     ├──> derive highlightQuery from query, opts.Contains,
+            │     │     opts.About, or opts.Regex[0] (whichever carries text)
+            │     │
+            │     ├──> for each chunk: RenderPreview(chunk, strategy, highlightPatterns)
             │     │     ├── markdown: goldmark → HTML
             │     │     ├── JSON: pretty-print if under threshold
             │     │     └── other: HTML-escape plain text
-            │     │     └── highlight query tokens with <mark> tags
+            │     │     └── highlight tokens with <mark> tags
             │     │
             │     ├──> sort files by best chunk score (desc)
             │     ├──> sort chunks within file by score (desc)

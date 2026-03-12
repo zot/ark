@@ -813,8 +813,19 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 		return nil, err
 	}
 
-	// Compile highlight patterns once for all chunks
-	tokenPatterns := compileTokenPatterns(query)
+	// Compile highlight patterns from whichever field carries the user's query text
+	highlightQuery := query
+	if highlightQuery == "" {
+		switch {
+		case opts.Contains != "":
+			highlightQuery = opts.Contains
+		case opts.About != "":
+			highlightQuery = opts.About
+		case len(opts.Regex) > 0:
+			highlightQuery = opts.Regex[0]
+		}
+	}
+	tokenPatterns := compileTokenPatterns(highlightQuery)
 
 	// Group by file
 	type fileGroup struct {

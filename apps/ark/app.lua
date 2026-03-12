@@ -48,7 +48,7 @@ local function compressPath(fullPath)
     -- Rule 2: Home paths ~/very/long/path/dirname
     if fullPath:sub(1, #HOME) == HOME then
         local lastName = fullPath:match("([^/]+)$") or fullPath
-        return "~/" .. "\xE2\x80\xA6" .. lastName
+        return "~/…" .. lastName
     end
 
     -- Rule 3: Other user paths /home/otheruser/...
@@ -56,7 +56,7 @@ local function compressPath(fullPath)
     if otherUser then
         local lastName = fullPath:match("([^/]+)$") or fullPath
         if otherRest and #otherRest > 1 then
-            return "~" .. otherUser .. "/" .. "\xE2\x80\xA6" .. lastName
+            return "~" .. otherUser .. "/…" .. lastName
         else
             return "~" .. otherUser
         end
@@ -66,7 +66,7 @@ local function compressPath(fullPath)
     local firstComp = fullPath:match("^/([^/]+)")
     local lastName = fullPath:match("([^/]+)$") or fullPath
     if firstComp and firstComp ~= lastName then
-        return "/" .. firstComp .. "/" .. "\xE2\x80\xA6" .. lastName
+        return "/" .. firstComp .. "/…" .. lastName
     end
 
     return display
@@ -294,7 +294,7 @@ function SearchResult:previewText()
     if not self.text or self.text == "" then return "" end
     local t = self.text
     if #t > 400 then
-        t = t:sub(1, 400) .. "\xe2\x80\xa6"
+        t = t:sub(1, 400) .. "…"
     end
     return t
 end
@@ -1298,14 +1298,19 @@ function Ark:filterChatsTooltip()
     return "Chat logs (" .. self:computeFilterState("chats") .. ") — double-click to solo"
 end
 
--- Build filter flags from source filter buttons + filter panel fields
-function Ark:buildFilterFlags()
-    local flags = {}
+-- Build filter opts table from source filter buttons + filter panel fields.
+-- Returns a table with filter_files, exclude_files, filter, except arrays
+-- suitable for passing to mcp:search_grouped().
+function Ark:buildFilterOpts()
+    local filter_files = {}
+    local exclude_files = {}
+    local filter = {}
+    local except = {}
 
-    -- Source filter: uses --filter-files when any source needs sub-filtering,
-    -- otherwise uses --exclude-files for fully disabled sources.
-    -- Because --filter-files is a positive filter (only matching paths survive),
-    -- ALL enabled sources must be listed when any --filter-files is emitted.
+    -- Source filter: uses filter_files when any source needs sub-filtering,
+    -- otherwise uses exclude_files for fully disabled sources.
+    -- Because filter_files is a positive filter (only matching paths survive),
+    -- ALL enabled sources must be listed when any filter_files is emitted.
     local hasPartial = false  -- any Claude source with only memory or only chats
 
     for _, p in ipairs(self._projects or {}) do
@@ -1319,21 +1324,19 @@ function Ark:buildFilterFlags()
 
     if hasPartial then
         -- Positive filter mode: list every enabled source explicitly
-        local filterPatterns = {}
-
         for _, p in ipairs(self._projects or {}) do
             if p._fileSource and p.filesOn then
-                table.insert(filterPatterns, p._fileSource.dir .. "/**")
+                table.insert(filter_files, p._fileSource.dir .. "/**")
             end
             if p._claudeSource then
                 local cdir = p._claudeSource.dir
                 if p.memoryOn and p.chatsOn then
-                    table.insert(filterPatterns, cdir .. "/**")
+                    table.insert(filter_files, cdir .. "/**")
                 elseif p.memoryOn then
-                    table.insert(filterPatterns, cdir .. "/memory/**")
+                    table.insert(filter_files, cdir .. "/memory/**")
                 elseif p.chatsOn then
-                    table.insert(filterPatterns, cdir .. "/**")
-                    table.insert(flags, '--exclude-files "' .. cdir .. '/memory/**"')
+                    table.insert(filter_files, cdir .. "/**")
+                    table.insert(exclude_files, cdir .. "/memory/**")
                 end
                 -- Both off: omit → filtered out
             end
@@ -1341,29 +1344,25 @@ function Ark:buildFilterFlags()
 
         for _, d in ipairs(self._dataSources or {}) do
             if d.dataOn then
-                table.insert(filterPatterns, d._source.dir .. "/**")
+                table.insert(filter_files, d._source.dir .. "/**")
             end
-        end
-
-        for _, pat in ipairs(filterPatterns) do
-            table.insert(flags, '--filter-files "' .. pat .. '"')
         end
     else
         -- Simple exclude mode: only fully disabled sources
         for _, p in ipairs(self._projects or {}) do
             if p._fileSource and not p.filesOn then
-                table.insert(flags, '--exclude-files "' .. p._fileSource.dir .. '/**"')
+                table.insert(exclude_files, p._fileSource.dir .. "/**")
             end
             if p._claudeSource then
                 if not p.memoryOn and not p.chatsOn then
-                    table.insert(flags, '--exclude-files "' .. p._claudeSource.dir .. '/**"')
+                    table.insert(exclude_files, p._claudeSource.dir .. "/**")
                 end
             end
         end
 
         for _, d in ipairs(self._dataSources or {}) do
             if not d.dataOn then
-                table.insert(flags, '--exclude-files "' .. d._source.dir .. '/**"')
+                table.insert(exclude_files, d._source.dir .. "/**")
             end
         end
     end
@@ -1372,40 +1371,40 @@ function Ark:buildFilterFlags()
     for line in self.filterFiles:gmatch("[^\n]+") do
         local pat = line:match("^%s*(.-)%s*$")
         if pat and pat ~= "" then
-            table.insert(flags, '--filter-files "' .. pat .. '"')
+            table.insert(filter_files, pat)
         end
     end
     for line in self.excludeFiles:gmatch("[^\n]+") do
         local pat = line:match("^%s*(.-)%s*$")
         if pat and pat ~= "" then
-            table.insert(flags, '--exclude-files "' .. pat .. '"')
+            table.insert(exclude_files, pat)
         end
     end
     for line in self.filterContent:gmatch("[^\n]+") do
         local q = line:match("^%s*(.-)%s*$")
         if q and q ~= "" then
-            table.insert(flags, '--filter "' .. q .. '"')
+            table.insert(filter, q)
         end
     end
     for line in self.excludeContent:gmatch("[^\n]+") do
         local q = line:match("^%s*(.-)%s*$")
         if q and q ~= "" then
-            table.insert(flags, '--except "' .. q .. '"')
+            table.insert(except, q)
         end
     end
 
-    return table.concat(flags, " ")
-end
-
--- Kept for backward compat during transition
-function Ark:sourceFilterFlags()
-    return self:buildFilterFlags()
+    local opts = {}
+    if #filter_files > 0 then opts.filter_files = filter_files end
+    if #exclude_files > 0 then opts.exclude_files = exclude_files end
+    if #filter > 0 then opts.filter = filter end
+    if #except > 0 then opts.except = except end
+    return opts
 end
 
 -- Search: incremental via variable check cycle.
 -- onSearchInput() runs on every variable check when searchQuery changes.
 -- If the query changed, has 3+ chars, and no search is pending → fire search.
--- io.popen blocks Lua, so keystrokes naturally compress during search.
+-- mcp:search_grouped blocks Lua, so keystrokes naturally compress during search.
 local MIN_QUERY_LEN = 3
 
 function Ark:onSearchInput()
@@ -1437,108 +1436,52 @@ function Ark:search()
         self._searchGroups = {}
     end
 
-    local flag = "--" .. self.searchMode
-    local filterFlags = self:buildFilterFlags()
-
     -- Determine k: if grouping, ask for more chunks to fill groups
     local hpf = tonumber(self._hitsPerFile) or 1
     local k = hpf == 0 and 100 or 20 * hpf
     if k > 100 then k = 100 end
 
-    local cmd = 'search ' .. flag .. ' "' .. q .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
-    if filterFlags ~= "" then
-        cmd = cmd .. " " .. filterFlags
-    end
+    -- Build opts for mcp:search_grouped
+    local opts = self:buildFilterOpts()
+    opts.mode = self.searchMode
+    opts.k = k
 
-    -- Read pipe line-by-line: avoids building a 2MB string then splitting it
-    -- (straycat: process each line as it arrives, no gmatch over the whole output)
-    local dbFlag = '--dir "' .. DB_PATH .. '"'
-    local fullCmd = '"' .. ARK_BIN .. '" search ' .. dbFlag .. ' ' .. flag
-        .. ' "' .. q .. '" -k ' .. tostring(k) .. ' -chunks --preview 300'
-    if filterFlags ~= "" then
-        fullCmd = fullCmd .. " " .. filterFlags
-    end
-    local handle = io.popen(ARK_PATH .. " " .. fullCmd .. " 2>/dev/null")
+    local results, err = mcp.search_grouped(q, opts)
     self._searching = false
 
-    if not handle then
+    if not results then
         self._searchView = true
         return
     end
 
-    -- Parse JSONL chunks line-by-line and group by file
-    -- For "contains" mode, post-filter: trigram index returns superset,
-    -- verify chunk text actually contains the query string
-    local fileOrder = {}   -- ordered list of paths (first seen)
-    local fileMap = {}     -- path → { chunks = {}, topScore = 0 }
-
-    for line in handle:lines() do
-        local path = line:match('"path":"(.-)"')
-        if not path then goto continue end
-
-        local range = line:match('"range":"(.-)"') or ""
-        local score = tonumber(line:match('"score":([%d%.]+)')) or 0
-
-        -- Extract preview field (server-side windowed, ~300 chars)
-        local text = ""
-        local previewStart = line:find('"preview":"')
-        if previewStart then
-            local ps = previewStart + 11
-            -- Find closing quote (not escaped)
-            local pe = ps
-            while pe <= #line do
-                local ch = line:sub(pe, pe)
-                if ch == '\\' then
-                    pe = pe + 2  -- skip escaped char
-                elseif ch == '"' then
-                    break
-                else
-                    pe = pe + 1
-                end
-            end
-            text = line:sub(ps, pe - 1)
-            -- Unescape JSON string
-            text = text:gsub('\\n', '\n'):gsub('\\t', '\t'):gsub('\\"', '"'):gsub('\\\\', '\\')
-        end
-
-        -- No post-filter needed: the trigram index verified the match,
-        -- and --preview centers the window on it when possible.
-        -- When the match is deep in a huge chunk, the preview shows what
-        -- it can — dropping the result would be worse than showing it.
-
-        if not fileMap[path] then
-            fileMap[path] = { chunks = {}, topScore = 0 }
-            table.insert(fileOrder, path)
-        end
-        local group = fileMap[path]
-        if score > group.topScore then
-            group.topScore = score
-        end
-
-        local r = session:create(SearchResult)
-        r.path = path
-        r.score = score
-        r.range = range
-        r.text = text
-        if path:sub(1, #HOME) == HOME then
-            r.snippet = "~" .. path:sub(#HOME + 1)
-        else
-            r.snippet = path
-        end
-        table.insert(group.chunks, r)
-        ::continue::
-    end
-    handle:close()
-
-    -- Build grouped results — insert into existing table for ViewList
-    for rank, path in ipairs(fileOrder) do
-        local gdata = fileMap[path]
+    -- Results are already grouped by file, sorted by best score.
+    -- Each group: {path, strategy, chunks={range, score, preview}}
+    for rank, group in ipairs(results) do
         local g = session:create(SearchFileGroup)
-        g.path = path
-        g.topScore = gdata.topScore
-        g._chunks = gdata.chunks
+        g.path = group.path
         g._rank = rank
         g._expanded = false
+
+        local topScore = 0
+        local chunks = {}
+        for _, chunk in ipairs(group.chunks) do
+            local r = session:create(SearchResult)
+            r.path = group.path
+            r.score = chunk.score
+            r.range = chunk.range
+            r.text = chunk.preview
+            if group.path:sub(1, #HOME) == HOME then
+                r.snippet = "~" .. group.path:sub(#HOME + 1)
+            else
+                r.snippet = group.path
+            end
+            table.insert(chunks, r)
+            if chunk.score > topScore then
+                topScore = chunk.score
+            end
+        end
+        g.topScore = topScore
+        g._chunks = chunks
         table.insert(self._searchGroups, g)
     end
 

@@ -54,7 +54,10 @@ Optionally retrieves chunk text or full file content.
   results by fileid. Returns tuple array: [[filepath, [chunk, ...]]]
   where files are sorted by best chunk score (descending) and chunks
   within each file are sorted by score (descending). Each chunk
-  includes range, score, and preview (pre-rendered HTML).
+  includes range, score, and preview (pre-rendered HTML). Highlight
+  tokens derived from the effective query — falls back to
+  opts.Contains, opts.About, or opts.Regex[0] when mode extraction
+  clears the query string.
 - RenderPreview(chunk, strategy, queryTokens): render chunk text as
   HTML for app display. Strategy determines renderer: goldmark for
   markdown, JSON pretty-print for JSON (under length threshold),

@@ -870,6 +870,24 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// luaStringSlice extracts a []string from a Lua value:
+		// string → single-element slice, table → iterate array part.
+		luaStringSlice := func(v lua.LValue) []string {
+			switch val := v.(type) {
+			case lua.LString:
+				return []string{string(val)}
+			case *lua.LTable:
+				var ss []string
+				val.ForEach(func(k, v lua.LValue) {
+					if _, ok := k.(lua.LNumber); ok {
+						ss = append(ss, v.String())
+					}
+				})
+				return ss
+			}
+			return nil
+		}
+
 		// mcp:search_grouped(query, opts) — grouped search results as Lua tables
 		L.SetField(tbl, "search_grouped", L.NewFunction(func(L *lua.LState) int {
 			query := L.CheckString(1)
@@ -890,20 +908,29 @@ func (srv *Server) registerLuaFunctions() {
 					case "about":
 						opts.About = query
 						query = ""
+					case "regex":
+						opts.Regex = []string{query}
+						query = ""
 					}
 					// "combined" is the default — uses query as-is
 				}
 				if v := optsTable.RawGetString("filter_files"); v != lua.LNil {
-					opts.FilterFiles = []string{v.String()}
+					opts.FilterFiles = luaStringSlice(v)
 				}
 				if v := optsTable.RawGetString("exclude_files"); v != lua.LNil {
-					opts.ExcludeFiles = []string{v.String()}
+					opts.ExcludeFiles = luaStringSlice(v)
 				}
 				if v := optsTable.RawGetString("filter_file_tags"); v != lua.LNil {
-					opts.FilterFileTags = []string{v.String()}
+					opts.FilterFileTags = luaStringSlice(v)
 				}
 				if v := optsTable.RawGetString("exclude_file_tags"); v != lua.LNil {
-					opts.ExcludeFileTags = []string{v.String()}
+					opts.ExcludeFileTags = luaStringSlice(v)
+				}
+				if v := optsTable.RawGetString("filter"); v != lua.LNil {
+					opts.Filter = luaStringSlice(v)
+				}
+				if v := optsTable.RawGetString("except"); v != lua.LNil {
+					opts.Except = luaStringSlice(v)
 				}
 			}
 

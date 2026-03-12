@@ -60,10 +60,12 @@ Optionally starts the embedded ui-engine alongside.
 - RegisterLuaFunctions(): called after flib.Start(). Uses
   flib.WithLua (passive path) to register Go functions on the
   Lua mcp table:
-  - mcp:search_grouped(query, opts) — calls Searcher.SearchGrouped,
-    returns results as nested Lua tables. opts supports mode,
-    k, preview, filter_files, exclude_files, filter_file_tags,
-    exclude_file_tags.
+  - mcp.search_grouped(query, opts) — calls Searcher.SearchGrouped,
+    returns results as nested Lua tables. Registered as plain function
+    (dot syntax, not colon — no self parameter). opts supports mode
+    (combined/contains/about/regex), k, filter_files, exclude_files,
+    filter_file_tags, exclude_file_tags, filter, except. Array-valued
+    fields accept Lua string or table via luaStringSlice helper.
   - mcp:open(path) — open indexed file with system viewer
     (xdg-open on Linux, open on macOS). Returns immediately.
     Error if not indexed.
