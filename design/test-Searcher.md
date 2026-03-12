@@ -31,10 +31,10 @@
 **Expected:** microvec results passed through directly
 **Refs:** crc-Searcher.md, R56
 
-## Test: contains and regex mutually exclusive
-**Purpose:** Error when both --contains and --regex provided
+## Test: contains and regex compose
+**Purpose:** --contains drives FTS, --regex post-filters results
 **Input:** contains="foo", regex="bar"
-**Expected:** error returned
+**Expected:** FTS results filtered by regex pattern
 **Refs:** crc-Searcher.md, R55
 
 ## Test: k limit applied

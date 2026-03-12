@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478, R489-R501
+**Requirements:** R450-R478, R489-R501, R525, R530-R540
 
 ## Flow: set-tags
 
@@ -48,7 +48,7 @@ CLI ──> parse flags: --from, --to, --issue, FILE
          ├──> derive ID from basename(FILE) without extension
          │
          ├──> build TagBlock:
-         │      Set("request", ID)
+         │      Set("ark-request", ID)
          │      Set("from-project", FROM)
          │      Set("to-project", TO)
          │      Set("status", "open")
@@ -67,10 +67,10 @@ CLI ──> parse flags: --from, --to, --request, FILE
          ├──> if FILE exists → error
          │
          ├──> build TagBlock:
-         │      Set("response", REQUEST_ID)
+         │      Set("ark-response", REQUEST_ID)
          │      Set("from-project", FROM)
          │      Set("to-project", TO)
-         │      Set("status", "done")
+         │      Set("status", "accepted")
          │
          ├──> Render() + append "# RESP <ID>" heading
          │
@@ -101,61 +101,32 @@ CLI ──> parse args: FILE
                   emit "remove line N" instruction
 ```
 
-## Flow: ack
-
-```
-CLI ──> parse args: FILE
-         │
-         ├──> read FILE bytes
-         │
-         ├──> TagBlock.Parse(bytes)
-         │
-         ├──> TagBlock.Get("msg")
-         │     if value is "read", "acting", or "closed" → exit 0
-         │
-         ├──> TagBlock.Set("msg", "read")
-         │
-         ├──> TagBlock.Render() → new file bytes
-         │
-         └──> write FILE
-```
-
-## Flow: close
-
-```
-CLI ──> parse args: FILE
-         │
-         ├──> read FILE bytes
-         │
-         ├──> TagBlock.Parse(bytes)
-         │
-         ├──> TagBlock.Get("msg")
-         │     if value is "closed" → exit 0
-         │
-         ├──> TagBlock.Set("msg", "closed")
-         │
-         ├──> TagBlock.Render() → new file bytes
-         │
-         └──> write FILE
-```
-
 ## Flow: inbox
 
 ```
-CLI ──> parse flags: optional --project PROJECT
+CLI ──> parse flags: --project, --from, --all, --include-archived, --counts
          │
          ├──> withDB or server proxy:
-         │      DB.TagFiles(["msg"]) → list of (path, size) entries
+         │      DB.TagFiles(["status"]) → list of (path, size) entries
+         │      filter to paths containing /requests/
          │
          ├──> for each file path:
          │      read file bytes
          │      TagBlock.Parse(bytes)
-         │      Get("msg") → skip if "closed"
+         │      Get("status"):
+         │        if not --all: skip if "completed", "done", or "denied"
+         │      Get("archived"):
+         │        if not --include-archived: skip if present
          │      Get("to-project") → skip if --project given and doesn't match
-         │      collect: msg value, to-project, from-project, status,
+         │      Get("from-project") → skip if --from given and doesn't match
+         │      collect: status, to-project, from-project,
          │               issue (or "response:<id>"), path
          │
-         ├──> sort: @msg:new first, then by path
+         ├──> sort: @status:open first, then by path
          │
-         └──> output tab-separated lines
+         ├──> if --counts:
+         │      count entries per status value
+         │      output tab-separated: status\tcount (sorted alphabetically)
+         │    else:
+         │      output tab-separated lines (existing format)
 ```

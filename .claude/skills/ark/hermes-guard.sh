@@ -12,5 +12,8 @@ if [ "$TOOL" = Bash ]; then
     fi
 fi
 
+echo >> /tmp/denied
+echo "$INPUT" >> /tmp/denied
+
 echo "Use ~/.ark/ark commands instead. ark search, ark fetch, ark files, and ark message can do everything you need."
 exit 2

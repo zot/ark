@@ -17,16 +17,18 @@ At session start, start ark, load tags, then run the dead drop:
 
 Then the two-step morning sweep — Hermes gathers, Franklin narrows:
 ```
-Agent(subagent_type="ark-hermes", prompt="Check inbox for PROJECT_NAME. Write a summary to requests/summary.md — counts, what's new, what's waiting, what's stale. Plain markdown, no tag block.")
+Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n\nThen, using only the commands from that reference:\nCheck inbox for PROJECT_NAME. Report incoming messages, outgoing counts by status, and what's new or stale.")
 ```
 Then:
 ```
 Agent(subagent_type="ark-franklin", prompt="Morning sweep for PROJECT_NAME. Read requests/summary.md for the inbox state. What needs attention today?")
 ```
 
-Replace PROJECT_NAME with the current project. Hermes leaves the
-summary at the drop point; Franklin reads it and asks the daily question.
-Neither agent knows the other exists.
+Replace PROJECT_NAME with the current project. Hermes fetches its
+own skill reference first — the caller must always include the fetch
+instruction because Haiku won't do it on its own. Franklin reads
+the summary and asks the daily question. Neither agent knows the
+other exists.
 
 ## Tags
 
@@ -99,22 +101,41 @@ Agent(subagent_type="ark-franklin", prompt="Morning sweep for ark. Read requests
 Agent(subagent_type="ark-franklin", prompt="I finished the chunker interface. What's next?")
 ```
 
-**Mail room** — spawn ark-hermes. Inbox checks, sending messages,
-acknowledging, searching, research. Hermes gathers and carries.
+**Calling Hermes** — every Hermes prompt MUST start with a skill fetch.
+Hermes is a persona, not an expert — it only knows what you hand it.
+Like a GM explaining the rules: every session, every time.
+
+For messaging (inbox, sending, ack, status):
 ```
-Agent(subagent_type="ark-hermes", prompt="Check inbox for ark. Write summary to requests/summary.md")
-Agent(subagent_type="ark-hermes", prompt="Send a request from ark to microfts2 about chunker interface")
-Agent(subagent_type="ark-hermes", prompt="Find notes about append detection")
-Agent(subagent_type="ark-hermes", prompt="Ack the microfts2 chunk-context notification")
+Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n\nThen, using only the commands from that reference:\nCheck inbox for ark. Report incoming, outgoing counts, what's new or stale.")
+```
+
+For search (finding notes, exploring tags, retrieval):
+```
+Agent(subagent_type="ark-hermes", prompt="First, run this command exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md\n\nThen, using only the commands from that reference:\nFind notes about append detection.")
+```
+
+For both (search + messaging in one task):
+```
+Agent(subagent_type="ark-hermes", prompt="First, run these commands exactly:\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md\n~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md\n\nThen, using only the commands from those references:\nSend a request from ark to microfts2 about chunker interface.")
 ```
 
 ## Cross-Project Messaging
 
 Projects communicate through tagged files in `requests/` directories.
+See ARK-MESSAGING.md for full protocol.
 
-Two lifecycle tags:
-- `@status` — work state: open, in-progress, done, declined
-- `@msg` — delivery state: new, read, acting, closed
+Message identity tags: `@ark-request: <id>` and `@ark-response: <id>`.
+The `ark-` prefix avoids collision with generic uses of "request"/"response".
+Other tags in the block (`@from-project:`, `@to-project:`, `@status:`,
+`@issue:`) are generic — unambiguous once the discriminator is present.
+
+One lifecycle tag — `@status`: open, accepted, in-progress, completed, denied, future.
+
+**Response = ack.** Creating a response file with `@status: accepted`
+means "I saw it." No cross-project file writes, ever.
+
+Filenames: bare `<short-name>.md`. Only add `-<session8>` suffix if the name collides.
 
 **Franklin manages commitments.** Inbox, daily narrowing, what needs doing.
 **Hermes carries messages.** Creating requests/responses, finding conversations
@@ -122,3 +143,14 @@ across projects, searching the knowledge base.
 
 Messages always live in YOUR project's `requests/` directory — never write
 to another project's folder. Use `ark message` commands, never hand-edit tags.
+
+**Reference tags** (for citing messages in any file):
+- `@ark-request-sent: <path>` — a request was sent from this planning item
+- `@ark-request-ref: <path-or-id>` — see this request
+- `@ark-response-ref: <path-or-id>` — see this response
+
+**Audit trail:** When sending a cross-project request, tag the planning or
+tracking file that motivated it with `@ark-request-sent: requests/foo.md`
+near the relevant item. This makes the link searchable — `ark search --regex
+'@ark-request-sent:'` finds every planning item with a pending request,
+across all projects.

@@ -1,14 +1,27 @@
 # Ark Cross-Project Messaging
 
+## Version 2 2026-0311-1845
+
 How ark projects communicate requests and responses through tagged
 files that ark indexes and connects automatically.
 
 ## Why
 
 Projects often need things from each other — API changes, new
-exports, bug fixes. Previously this lived in UPDATES.md drop-box
-files per project. Ark replaces that with tagged notes that are
-searchable from any project context.
+exports, bug fixes. Ark replaces ad-hoc drop-box files with tagged
+notes that are searchable from any project context.
+
+## Cardinal Rule
+
+**Always write to YOUR project's `requests/` directory.** Never
+modify files in another project's directory. A request FROM ark
+TO microfts2 lives in `ark/requests/`. A response FROM microfts2
+TO ark lives in `microfts2/requests/`.
+
+This is load-bearing. It means:
+- No cross-project file writes, ever
+- Each project owns its own files completely
+- Acknowledgment happens by creating a response, not modifying the request
 
 ## Convention
 
@@ -17,24 +30,31 @@ searchable from any project context.
 A requesting project creates a file in its own `requests/` directory:
 
 ```
-requests/<short-name>-<session>.md
+requests/<short-name>.md
 ```
 
-`<session>` is the first 8 characters of the Claude session ID that
-creates the request — appended as a suffix so the meaningful name
-comes first. This namespaces IDs so concurrent sessions don't collide.
+Use the bare name. If the name already exists, append `-<session8>`
+(first 8 chars of Claude session ID) to disambiguate.
+
+Use `ark message new-request` to create (never hand-write tag blocks):
+
+```bash
+~/.ark/ark message new-request \
+  --from my-project --to target-project \
+  --issue "short description" \
+  requests/chunker-interface.md
+```
 
 The file uses tags for discoverability:
 
 ```markdown
-@request: flib-withlua-fafaf11c
-@from-project: requesting-project
-@to-project: target-project
+@ark-request: chunker-interface
+@from-project: ark
+@to-project: microfts2
 @status: open
-@msg: new
-@issue: short description
+@issue: Define Chunker interface for per-chunk attributes
 
-# flib-withlua-fafaf11c
+# chunker-interface
 
 What's needed and why. Include enough context for the target
 project to act without reading the requesting project's code.
@@ -45,106 +65,129 @@ project to act without reading the requesting project's code.
 The target project creates a response file in its own `requests/`:
 
 ```
-requests/RESP-<short-name>-<session>.md
+requests/RESP-<request-id>.md
+```
+
+Use `ark message new-response` to create:
+
+```bash
+~/.ark/ark message new-response \
+  --from my-project --to requesting-project \
+  --request original-request-id \
+  requests/RESP-original-request-id.md
 ```
 
 ```markdown
-@response: flib-withlua-fafaf11c
-@from-project: target-project
-@to-project: requesting-project
-@status: done
-@msg: new
+@ark-response: chunker-interface
+@from-project: microfts2
+@to-project: ark
+@status: accepted
 
-# RESP flib-withlua-fafaf11c
+# RESP chunker-interface
 
 What was done. Reference commits, files, or API surfaces.
 ```
 
-### Finding conversations
+### Response as acknowledgment
+
+**The response file's existence is the ack.** Creating a response
+with `@status: accepted` means "I saw your request, I'll act on it."
+No need to modify the sender's file. No cross-project writes.
+
+Response status progression:
+1. `accepted` — I saw it, I'll do it
+2. `in-progress` — working on it
+3. `completed` — here's the result
+
+The sender checks whether their request was seen by searching for
+responses to their request ID.
+
+### Self-messages
+
+For notes-to-self (same project as sender and receiver), a single
+file with `@status` is sufficient. No response file needed —
+just update status on the original: `open` → `completed`.
+
+## Status Values
+
+One lifecycle, clear progression:
+
+- **open** — needs attention
+- **accepted** — acknowledged, will act
+- **in-progress** — being worked on
+- **completed** — finished
+- **denied** — won't do (response body explains why)
+- **future** — not yet actionable, parked for later
+
+### Archiving
+
+`@archived: true` is separate from status. Any message can be archived
+regardless of its status. Inbox excludes archived messages by default.
+Searches can exclude with `--exclude-file-tags archived`.
 
 ```bash
-# All tags co-occurring with a request
-ark search --exclude-files '*.jsonl' --tags flib-withlua-fafaf11c
+# Archive a completed request
+~/.ark/ark message set-tags requests/old-request.md archived true
 
-# Full text search for a request
-ark search '@request: flib-withlua-fafaf11c'
+# Find archived messages
+~/.ark/ark search --filter-file-tags archived --filter-files '**/requests/*'
 ```
-
-Both files surface together — ark connects them through content,
-not directory structure.
 
 ## IDs
 
-Format: `<short-name>-<session8>` where session8 is the first
-8 chars of the Claude session ID, appended as suffix. The
-meaningful name leads for readability. The `@request:` /
-`@response:` tag says what it is. The requesting project owns
-the ID.
-
-Find existing requests:
-
-```bash
-ark search --exclude-files '*.jsonl' --tags request
-```
+Format: `<short-name>` — the bare descriptive name. Only append
+`-<session8>` (first 8 chars of Claude session ID) if the name
+already exists. The `@ark-request:` / `@ark-response:` tag says what it
+is. The requesting project owns the ID.
 
 ## Tags
 
-- `@request: <id>` — a cross-project request
-- `@response: <id>` — a response to a request
+- `@ark-request: <id>` — a cross-project request
+- `@ark-response: <id>` — a response to a request
 - `@from-project: <name>` — who's asking
 - `@to-project: <name>` — who's answering
-- `@issue:` — short description (also used standalone)
-- `@status: <value>` — work/task lifecycle (open, in-progress, done, declined)
-- `@msg: <value>` — message delivery lifecycle (new, read, acting, closed)
+- `@issue:` — short description
+- `@status: <value>` — lifecycle state (open, accepted, in-progress, completed, denied, future)
 - `@reopened: <date> -- <reason>` — request was completed but incomplete
 - `@resolved: <date> -- <description>` — reopened issue was fixed
 
-## Two lifecycles
+## Finding Conversations
 
-Messages track two independent things: the **work** being discussed
-and the **message** itself. These are separate tags because they
-move independently.
+```bash
+# Inbox: requests to me with no response from me yet
+# (implementation TBD — needs join logic in ark message inbox)
 
-### @status — work lifecycle
+# All requests to a project
+~/.ark/ark search --exclude-files '*.jsonl' --regex '@to-project:.*\bPROJECT\b'
 
-What's happening with the task, feature, or bug:
+# Responses to a specific request
+~/.ark/ark search --exclude-files '*.jsonl' --regex '@ark-response:.*REQUEST-ID'
 
-- **open** — not yet addressed
-- **in-progress** — target project is working on it
-- **done** — implemented
-- **declined** — won't do, response explains why
+# All tags co-occurring with a request
+~/.ark/ark search --exclude-files '*.jsonl' --tags REQUEST-ID
 
-### @msg — message delivery lifecycle
+# Waiting-for: my requests with no response yet
+~/.ark/ark search --exclude-files '*.jsonl' \
+  --regex '@from-project:.*\bMY-PROJECT\b' --regex '@ark-request:'
+# then check which have matching @ark-response: files
+```
 
-Whether the recipient has consumed and acted on the message:
+Both request and response files surface together — ark connects
+them through content, not directory structure.
 
-- **new** — unread, needs attention
-- **read** — recipient has seen it
-- **acting** — recipient is working on a response or follow-up
-- **closed** — resolved, no further action needed
-
-A notification reporting completed work is `@status:done @msg:new` —
-the feature is done, but the recipient hasn't read the message yet.
-A request that's been filed and acknowledged is `@status:open @msg:read`.
-
-The librarian skips `@msg:closed` by default. Everything else is
-potentially relevant, with `@msg:new` items getting priority.
-
-### Reopening
+## Reopening
 
 When a completed request turns out to be incomplete, change
-`@status:` back to `open`, set `@msg:new`, and add a `@reopened:`
-tag with the date and reason:
+`@status:` back to `open` and add a `@reopened:` tag with the
+date and reason:
 
 ```markdown
 @status: open
-@msg: new
 @reopened: 2026-03-09 -- field added but Start() ignores it
 ```
 
 The `@reopened:` tag is searchable — `ark search --tags reopened`
-finds all requests that needed a second pass. The date and
-description after `--` explain what was missed.
+finds all requests that needed a second pass.
 
 When the reopened issue is fixed, add `@resolved:` with the date
 and description:
@@ -153,24 +196,41 @@ and description:
 @resolved: 2026-03-09 -- fixed in mcp.Server.Start()
 ```
 
-Both request and response files should also append a
-`## Reopened DATE` section in the body documenting what was
-missed and what was done to fix it. This gives human-readable
-context alongside the searchable tags.
+## Project View
 
-## Skill Text
+Every request and response has a `@status` value. Query across
+all projects to build a project board:
 
-Cross-project requests via ark-indexed tagged files. Each project
-keeps a `requests/` directory. Requests use `@request: <id>`,
-responses use `@response: <id>`. ID format: `<short-name>-<session8>`
-(session = first 8 chars of Claude session ID, suffix for
-disambiguation). Response filenames prefixed with `RESP-`.
+```bash
+# All open work
+~/.ark/ark search --exclude-files '*.jsonl' --regex '@status:.*\bopen\b'
 
-Tags (`@request`, `@response`, `@from-project`, `@to-project`) make everything
-searchable with `ark search --tags`. Ark connects request and
-response files across projects through content — no registry,
-no coordination, just files and tags.
+# Everything in progress
+~/.ark/ark search --exclude-files '*.jsonl' --regex '@status:.*\bin-progress\b'
 
-Work status (`@status`): open, in-progress, done, declined.
-Message delivery (`@msg`): new, read, acting, closed.
-Librarian skips `@msg:closed` by default.
+# Completed items
+~/.ark/ark search --exclude-files '*.jsonl' --regex '@status:.*\bcompleted\b'
+```
+
+A project dashboard built from status tags:
+
+```
+ Future       Open          Accepted      In-Progress   Completed     Denied
+ ──────       ────          ────────      ───────────   ─────────     ──────
+ tag+value    chunker       chunk attrs                 JSONL unwrap
+ index        interface                                 ack/close
+              CLI help                                  inbox
+              ark approve                               local fetch
+```
+
+Franklin uses this to build the daily view — what's open, what's
+waiting, what got done.
+
+## Response Content
+
+Responses should always contain at least a one-line summary of
+what was done. An empty response body with `@status: accepted`
+is valid as an ack, but once work is complete the response should
+reference what changed — commits, files, API surfaces. Franklin
+needs this to distinguish "completed" from "completed but nobody
+wrote down what happened."

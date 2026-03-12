@@ -14,7 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"microfts2"
+	"github.com/zot/microfts2"
 
 	"github.com/anthropics/microvec"
 	"github.com/yuin/goldmark"
@@ -48,8 +48,10 @@ type SearchOpts struct {
 	Tags         bool     // output extracted tags instead of content
 	Filter       []string // content-based positive filters (FTS queries, intersect)
 	Except       []string // content-based negative filters (FTS queries, subtract)
-	FilterFiles  []string // path-based positive filters (glob patterns, intersect)
-	ExcludeFiles []string // path-based negative filters (glob patterns, subtract)
+	FilterFiles     []string // path-based positive filters (glob patterns, intersect)
+	ExcludeFiles    []string // path-based negative filters (glob patterns, subtract)
+	FilterFileTags  []string // tag-based positive filters (tag names, intersect)
+	ExcludeFileTags []string // tag-based negative filters (tag names, subtract)
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -178,6 +180,7 @@ type chunkKey struct {
 type Searcher struct {
 	fts    *microfts2.DB
 	vec    *microvec.DB
+	store  *Store
 	config *Config
 }
 
@@ -267,7 +270,11 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		}
 		ftsResults = fr.Results
 	} else if opts.Contains != "" {
-		fr, err := s.fts.Search(opts.Contains, append(ftsSearchOpts, microfts2.WithVerify())...)
+		containsOpts := append(ftsSearchOpts, microfts2.WithVerify())
+		if len(opts.Regex) > 0 {
+			containsOpts = append(containsOpts, microfts2.WithRegexFilter(opts.Regex...))
+		}
+		fr, err := s.fts.Search(opts.Contains, containsOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
@@ -302,9 +309,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 }
 
 func validateSearchFlags(opts SearchOpts) error {
-	if opts.Contains != "" && len(opts.Regex) > 0 {
-		return fmt.Errorf("--contains and --regex are mutually exclusive")
-	}
+	// --contains and --regex can combine: contains drives FTS, regex post-filters
 	if opts.LikeFile != "" && (opts.Contains != "" || len(opts.Regex) > 0) {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
 	}
@@ -317,7 +322,8 @@ func validateSearchFlags(opts SearchOpts) error {
 // negatives subtract. Returns nil if no filtering is requested.
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
 	hasFilters := len(opts.Filter) > 0 || len(opts.Except) > 0 ||
-		len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0
+		len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 ||
+		len(opts.FilterFileTags) > 0 || len(opts.ExcludeFileTags) > 0
 	if !hasFilters {
 		return nil, nil
 	}
@@ -337,7 +343,7 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 	}
 
 	// Track whether we have any positive filters (which means "only these")
-	hasPositive := len(opts.FilterFiles) > 0 || len(opts.Filter) > 0
+	hasPositive := len(opts.FilterFiles) > 0 || len(opts.Filter) > 0 || len(opts.FilterFileTags) > 0
 	included := allIDs // start with all; narrow if positive filters exist
 	if hasPositive {
 		included = nil // will be built by intersection
@@ -356,6 +362,27 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 			}
 		}
 		included = matched
+	}
+
+	// Tag-based positive filters (--filter-file-tags): intersect
+	if len(opts.FilterFileTags) > 0 {
+		records, err := s.store.TagFiles(opts.FilterFileTags)
+		if err != nil {
+			return nil, fmt.Errorf("filter-file-tags: %w", err)
+		}
+		matched := make(map[uint64]struct{})
+		for _, rec := range records {
+			matched[rec.FileID] = struct{}{}
+		}
+		if included == nil {
+			included = matched
+		} else {
+			for id := range included {
+				if _, ok := matched[id]; !ok {
+					delete(included, id)
+				}
+			}
+		}
 	}
 
 	// Content-based positive filters (--filter): intersect
@@ -413,6 +440,17 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 				continue
 			}
 			delete(included, status.FileID)
+		}
+	}
+
+	// Tag-based negative filters (--exclude-file-tags): subtract
+	if len(opts.ExcludeFileTags) > 0 {
+		records, err := s.store.TagFiles(opts.ExcludeFileTags)
+		if err != nil {
+			return nil, fmt.Errorf("exclude-file-tags: %w", err)
+		}
+		for _, rec := range records {
+			delete(included, rec.FileID)
 		}
 	}
 
@@ -550,9 +588,11 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 
 // FillChunks reads chunk text for each result from disk.
 // Groups by FileID to avoid re-reading the same file.
+// For chat-jsonl strategy, extracts human-readable text instead of raw JSON.
 func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	type fileCache struct {
-		lines []string
+		lines    []string
+		strategy string
 	}
 	cache := make(map[uint64]*fileCache)
 
@@ -568,10 +608,19 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 			if err != nil {
 				continue
 			}
-			fc = &fileCache{lines: strings.Split(string(data), "\n")}
+			fc = &fileCache{
+				lines:    strings.Split(string(data), "\n"),
+				strategy: info.ChunkingStrategy,
+			}
 			cache[r.FileID] = fc
 		}
-		r.Text = extractByRange(fc.lines, r.Range)
+		text := extractByRange(fc.lines, r.Range)
+		if fc.strategy == "chat-jsonl" {
+			if extracted := extractJSONLTextFast([]byte(text)); len(extracted) > 0 {
+				text = string(extracted)
+			}
+		}
+		r.Text = text
 	}
 	return results, nil
 }

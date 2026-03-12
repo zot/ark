@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"microfts2"
+	"github.com/zot/microfts2"
 
 	"github.com/BurntSushi/toml"
 	"github.com/anthropics/microvec"
@@ -268,7 +268,7 @@ func Open(dbPath string) (*DB, error) {
 		matcher: matcher,
 		indexer: &Indexer{fts: fts, vec: vec, store: store},
 		scanner: &Scanner{config: config, matcher: matcher, fts: fts},
-		search:  &Searcher{fts: fts, vec: vec, config: config},
+		search:  &Searcher{fts: fts, vec: vec, store: store, config: config},
 		dbPath:  dbPath,
 	}
 	return db, nil
@@ -430,8 +430,8 @@ func (db *DB) Scan() (*ScanResults, error) {
 
 	for _, f := range results.NewFiles {
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
-			if errors.Is(err, microfts2.ErrNoChunks) {
-				continue // skip files with no indexable content
+			if errors.Is(err, microfts2.ErrNoChunks) || errors.Is(err, microfts2.ErrAlreadyIndexed) {
+				continue
 			}
 			return results, fmt.Errorf("add %s: %w", f.Path, err)
 		}

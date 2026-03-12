@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"microfts2"
+	"github.com/zot/microfts2"
 )
 
 // FileEntry is a file that should be indexed, with its source strategy.
@@ -69,9 +69,10 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 			cls := sc.matcher.Classify(includes, excludes, relPath, false)
 			switch cls {
 			case Included:
-				// Check if already indexed
+				// Check if already indexed (fresh or stale — both mean it's known;
+				// stale files are handled by Refresh, not re-added as new)
 				status, err := sc.fts.CheckFile(path)
-				if err == nil && status.Status == "fresh" {
+				if err == nil && (status.Status == "fresh" || status.Status == "stale") {
 					return nil
 				}
 				results.NewFiles = append(results.NewFiles, FileEntry{

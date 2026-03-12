@@ -401,8 +401,10 @@ type searchRequest struct {
 	Tags         bool     `json:"tags"`
 	Filter       []string `json:"filter"`
 	Except       []string `json:"except"`
-	FilterFiles  []string `json:"filterFiles"`
-	ExcludeFiles []string `json:"excludeFiles"`
+	FilterFiles     []string `json:"filterFiles"`
+	ExcludeFiles    []string `json:"excludeFiles"`
+	FilterFileTags  []string `json:"filterFileTags"`
+	ExcludeFileTags []string `json:"excludeFileTags"`
 }
 
 type addRequest struct {
@@ -439,8 +441,10 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		Tags:         req.Tags,
 		Filter:       req.Filter,
 		Except:       req.Except,
-		FilterFiles:  req.FilterFiles,
-		ExcludeFiles: req.ExcludeFiles,
+		FilterFiles:     req.FilterFiles,
+		ExcludeFiles:    req.ExcludeFiles,
+		FilterFileTags:  req.FilterFileTags,
+		ExcludeFileTags: req.ExcludeFileTags,
 	}
 }
 

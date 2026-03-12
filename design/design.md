@@ -88,6 +88,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`
+- [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 

@@ -52,12 +52,32 @@ Evaluation order: path filters first (cheap — no FTS needed), then
 content filters. The combined file ID set is passed to microfts2
 as WithOnly or WithExcept.
 
+## Tag filtering
+
+`--filter-file-tags <tag>` restricts search to files that contain
+the given tag. Uses the tag index to resolve file IDs — no chunk
+scanning needed. Much faster than `--regex "@tag:"` for file-level
+filtering.
+
+`--exclude-file-tags <tag>` excludes files that contain the given
+tag. Same mechanism.
+
+Multiple patterns supported (same composition rules as other filters).
+Tag argument matches tag names, not values.
+
+Examples:
+- `--filter-file-tags "request"` — only search request files
+- `--exclude-file-tags "msg"` — skip files with legacy @msg tags
+- `--filter-file-tags "status"` combined with `--filter-files "requests/*"` — message files with status tags
+
 ## CLI
 
 - `--filter <query>` — repeatable, content-based positive filter
 - `--except <query>` — repeatable, content-based negative filter
 - `--filter-files <pattern>` — repeatable, path-based positive filter
 - `--exclude-files <pattern>` — repeatable, path-based negative filter
+- `--filter-file-tags <tag>` — repeatable, tag-based positive filter
+- `--exclude-file-tags <tag>` — repeatable, tag-based negative filter
 
 Quoting and backslash escaping supported (handles paths with spaces).
 Works with combined search, split search, and tag search.
@@ -70,6 +90,8 @@ Filter fields pass through the server proxy via searchRequest JSON:
   "filter": ["@project: ark"],
   "except": ["draft"],
   "filterFiles": ["*.md"],
-  "excludeFiles": ["*.jsonl"]
+  "excludeFiles": ["*.jsonl"],
+  "filterFileTags": ["status"],
+  "excludeFileTags": ["msg"]
 }
 ```

@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	"ark"
-	"microfts2"
+	"github.com/zot/ark"
+	"github.com/zot/microfts2"
 
 	cli "github.com/zot/ui-engine/cli"
 )
@@ -61,10 +61,14 @@ func main() {
 	}
 	if len(filtered) == 0 {
 		usage()
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	cmd := filtered[0]
+	if cmd == "--help" || cmd == "-h" || cmd == "help" {
+		usage()
+		os.Exit(0)
+	}
 	args := filtered[1:]
 
 	switch cmd {
@@ -156,19 +160,21 @@ Commands:
   init        Create a new database
   install     Connect this project to ark (alias for ui install)
   ls          List embedded assets
-  setup       Bootstrap ~/.ark/ (extract assets, install skills)
+  message     Messaging (new-request, new-response, set-tags, get-tags, check, inbox)
   missing     List missing files
+  rebuild     Drop and rebuild the entire index
   refresh     Re-index stale files
   remove      Remove files from the index
   resolve     Dismiss unresolved files by pattern
   scan        Walk directories, index new files
   search      Search the index
   serve       Start the server
+  setup       Bootstrap ~/.ark/ (extract assets, install skills)
   sources     Manage source directories
   stale       List stale files
   status      Show database status
   stop        Stop the running server
-  tag         Tag operations (list, counts, files)
+  tag         Tag operations (list, counts, files, defs)
   ui          UI operations (run, display, event, checkpoint, ...)
   unresolved  List unresolved files`)
 }
@@ -270,6 +276,10 @@ func fatal(err error) {
 
 // CRC: crc-CLI.md | Seq: seq-install.md
 func cmdSetup(args []string) {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(os.Stderr, "Usage: ark setup\n\nBootstrap ~/.ark/: extract bundled assets, install global skills\nand agent, run linkapp. Idempotent.")
+		os.Exit(0)
+	}
 	if err := runSetup(); err != nil {
 		fatal(err)
 	}
@@ -452,6 +462,15 @@ func cmdRebuild(args []string) {
 
 func cmdAdd(args []string) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark add [options] [PATH...]
+
+Add files to the index. If paths given, adds those files.
+If no paths, walks configured source directories.
+
+Options:`)
+		fs.PrintDefaults()
+	}
 	strategy := fs.String("strategy", "", "chunking strategy")
 	fs.Parse(args)
 
@@ -479,6 +498,9 @@ func cmdAdd(args []string) {
 
 func cmdRemove(args []string) {
 	fs := flag.NewFlagSet("remove", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark remove <path|pattern>...\n\nRemove files from the index. Accepts paths or glob patterns.")
+	}
 	fs.Parse(args)
 
 	patterns := fs.Args()
@@ -503,6 +525,9 @@ func cmdRemove(args []string) {
 
 func cmdScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark scan\n\nWalk configured source directories, index new files, flag unresolved.\nDoes not re-check existing files (use refresh for that).")
+	}
 	fs.Parse(args)
 
 	if client := serverClient(arkDir); client != nil {
@@ -529,6 +554,9 @@ func cmdScan(args []string) {
 
 func cmdRefresh(args []string) {
 	fs := flag.NewFlagSet("refresh", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark refresh [PATTERN...]\n\nRe-index stale files. Optional glob patterns to scope the refresh.")
+	}
 	fs.Parse(args)
 
 	patterns := fs.Args()
@@ -565,11 +593,13 @@ func cmdSearch(args []string) {
 	files := fs.Bool("files", false, "emit full file content as JSONL")
 	preview := fs.Int("preview", 0, "with --chunks: extract N-char preview window around match")
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")
-	var filter, except, filterFiles, excludeFiles stringSlice
+	var filter, except, filterFiles, excludeFiles, filterFileTags, excludeFileTags stringSlice
 	fs.Var(&filter, "filter", "content-based positive filter (repeatable, FTS query)")
 	fs.Var(&except, "except", "content-based negative filter (repeatable, FTS query)")
 	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
 	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
+	fs.Var(&filterFileTags, "filter-file-tags", "tag-based positive filter (repeatable, tag name)")
+	fs.Var(&excludeFileTags, "exclude-file-tags", "tag-based negative filter (repeatable, tag name)")
 	fs.Parse(args)
 
 	if *chunks && *files {
@@ -592,19 +622,21 @@ func cmdSearch(args []string) {
 	// and the server doesn't re-index before searching anyway.
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
-			K:            *k,
-			Scores:       *scores,
-			After:        afterNano,
-			About:        *about,
-			Contains:     *contains,
-			Regex:        []string(regex),
-			ExceptRegex:  []string(exceptRegex),
-			LikeFile:     *likeFile,
-			Tags:         *tags,
-			Filter:       []string(filter),
-			Except:       []string(except),
-			FilterFiles:  []string(filterFiles),
-			ExcludeFiles: []string(excludeFiles),
+			K:               *k,
+			Scores:          *scores,
+			After:           afterNano,
+			About:           *about,
+			Contains:        *contains,
+			Regex:           []string(regex),
+			ExceptRegex:     []string(exceptRegex),
+			LikeFile:        *likeFile,
+			Tags:            *tags,
+			Filter:          []string(filter),
+			Except:          []string(except),
+			FilterFiles:     []string(filterFiles),
+			ExcludeFiles:    []string(excludeFiles),
+			FilterFileTags:  []string(filterFileTags),
+			ExcludeFileTags: []string(excludeFileTags),
 		}
 
 		var results []ark.SearchResultEntry
@@ -941,6 +973,9 @@ func cmdStale(args []string) {
 
 func cmdMissing(args []string) {
 	fs := flag.NewFlagSet("missing", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark missing [PATTERN...]\n\nList files that are indexed but no longer exist on disk.\nOptional patterns to filter the list.")
+	}
 	fs.Parse(args)
 	patterns := fs.Args()
 
@@ -972,6 +1007,9 @@ func cmdMissing(args []string) {
 
 func cmdDismiss(args []string) {
 	fs := flag.NewFlagSet("dismiss", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark dismiss <path|pattern>...\n\nRemove missing files from the index. Accepts paths or glob patterns.")
+	}
 	fs.Parse(args)
 
 	patterns := fs.Args()
@@ -1060,6 +1098,9 @@ func withConfig(dbPath string, fn func(cfg *ark.Config) error) {
 
 func cmdConfigAddSource(args []string) {
 	fs := flag.NewFlagSet("config add-source", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark config add-source <dir>\n\nAdd a source directory (or glob pattern) to ark.toml.")
+	}
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -1082,6 +1123,9 @@ func cmdConfigAddSource(args []string) {
 
 func cmdConfigRemoveSource(args []string) {
 	fs := flag.NewFlagSet("config remove-source", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark config remove-source <dir>\n\nRemove a source directory from ark.toml.\nIndexed files become orphans until dismissed or re-added.")
+	}
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -1254,11 +1298,18 @@ func cmdGrams(args []string) {
 
 func cmdSources(args []string) {
 	fs := flag.NewFlagSet("sources", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark sources [check]\n\nManage source directories. Default subcommand is 'check':\nexpand globs from config, add new directories, report orphans.")
+	}
 	fs.Parse(args)
 
 	sub := "check"
 	if fs.NArg() > 0 {
 		sub = fs.Arg(0)
+	}
+	if sub == "--help" || sub == "-h" {
+		fs.Usage()
+		os.Exit(0)
 	}
 
 	switch sub {
@@ -1327,6 +1378,9 @@ func cmdUnresolved(args []string) {
 
 func cmdResolve(args []string) {
 	fs := flag.NewFlagSet("resolve", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark resolve <pattern>...\n\nDismiss unresolved files matching the given glob patterns.")
+	}
 	fs.Parse(args)
 
 	patterns := fs.Args()
@@ -1478,6 +1532,10 @@ func cmdUI(args []string) {
 		return
 	}
 	sub := args[0]
+	if sub == "--help" || sub == "-h" {
+		uiUsage("")
+		os.Exit(0)
+	}
 	subArgs := args[1:]
 	switch sub {
 	case "audit":
@@ -1513,9 +1571,17 @@ func cmdUI(args []string) {
 	case "variables":
 		cmdUIVariables(subArgs)
 	default:
-		fmt.Fprintf(os.Stderr, `unknown ui subcommand: %s
+		fmt.Fprintf(os.Stderr, "unknown ui subcommand: %s\n", sub)
+		uiUsage("")
+		os.Exit(1)
+	}
+}
 
-Usage: ark ui [subcommand]
+func uiUsage(prefix string) {
+	if prefix != "" {
+		fmt.Fprintln(os.Stderr, prefix)
+	}
+	fmt.Fprintln(os.Stderr, `Usage: ark ui [subcommand]
 
 Subcommands:
   (none)                     open browser to UI
@@ -1534,10 +1600,7 @@ Subcommands:
   status                     ui-engine server status
   theme list|classes|audit   theme management
   update [-t]                smart update or version check
-  variables                  get current variable values
-`, sub)
-		os.Exit(1)
-	}
+  variables                  get current variable values`)
 }
 
 // uiClient returns an http.Client connected to the ark unix socket.
@@ -2357,14 +2420,17 @@ func parseDate(s string) (time.Time, error) {
 }
 
 func cmdTag(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, `Usage: ark tag <subcommand>
+	tagUsage := `Usage: ark tag <subcommand>
 
 Subcommands:
   list              List all known tags with counts
   counts <tag>...   Show count for each specified tag
-  files <tag>...    Show files containing specified tags`)
-		os.Exit(1)
+  files <tag>...    Show files containing specified tags
+  defs [TAG...]     Show tag definitions (from tags.md)`
+
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, tagUsage)
+		os.Exit(0)
 	}
 
 	sub := args[0]
@@ -2381,6 +2447,7 @@ Subcommands:
 		cmdTagDefs(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
+		fmt.Fprintln(os.Stderr, tagUsage)
 		os.Exit(1)
 	}
 }
@@ -2669,11 +2736,19 @@ func cmdBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	output := fs.String("o", "", "Output path for bundled binary (required)")
 	source := fs.String("src", "", "Source binary to bundle (default: current executable)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark bundle [-src <binary>] -o <output> <dir>")
+		fmt.Fprintln(os.Stderr, "\nCreate a bundled binary with embedded UI assets.")
+		fmt.Fprintln(os.Stderr, "Zip-grafts the contents of <dir> onto the ark binary so")
+		fmt.Fprintln(os.Stderr, "that UI assets (html, lua, viewdefs) are self-contained.")
+		fmt.Fprintln(os.Stderr, "\nFlags:")
+		fs.PrintDefaults()
+	}
 	fs.Parse(args)
 
 	if *output == "" {
 		fmt.Fprintln(os.Stderr, "Error: -o output path is required")
-		fmt.Fprintln(os.Stderr, "Usage: ark bundle [-src <binary>] -o <output> <dir>")
+		fs.Usage()
 		os.Exit(1)
 	}
 
@@ -2711,6 +2786,10 @@ func cmdBundle(args []string) {
 
 // CRC: crc-CLI.md
 func cmdBundleLs(args []string) {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(os.Stderr, "Usage: ark ls\n\nList embedded assets in the bundled binary.")
+		os.Exit(0)
+	}
 	bundled, err := cli.IsBundled()
 	if err != nil {
 		fatal(fmt.Errorf("failed to check bundle status: %w", err))
@@ -2736,10 +2815,9 @@ func cmdBundleLs(args []string) {
 
 // CRC: crc-CLI.md
 func cmdBundleCat(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: file path is required")
-		fmt.Fprintln(os.Stderr, "Usage: ark cat <file>")
-		os.Exit(1)
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, "Usage: ark cat <file>\n\nPrint an embedded file from the bundled binary to stdout.")
+		os.Exit(0)
 	}
 
 	bundled, err := cli.IsBundled()
@@ -2760,10 +2838,9 @@ func cmdBundleCat(args []string) {
 
 // CRC: crc-CLI.md
 func cmdBundleCp(args []string) {
-	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "Error: pattern and destination directory are required")
-		fmt.Fprintln(os.Stderr, "Usage: ark cp <pattern> <dest-dir>")
-		os.Exit(1)
+	if len(args) < 2 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, "Usage: ark cp <pattern> <dest-dir>\n\nExtract embedded files matching a glob pattern to a directory.\nPreserves permissions and recreates symlinks.")
+		os.Exit(0)
 	}
 
 	pattern := args[0]
@@ -2835,19 +2912,19 @@ func cmdBundleCp(args []string) {
 // CRC: crc-CLI.md | Seq: seq-message.md
 // R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477
 func cmdMessage(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, `Usage: ark message <subcommand>
+	messageUsage := `Usage: ark message <subcommand>
 
 Subcommands:
   new-request   Create a new request file
-  new-response  Create a new response file
+  new-response  Create a new response file (response = ack)
   set-tags      Update or add tags in a file's tag block
   get-tags      Read tags from a file's tag block
   check         Validate file format
-  ack           Mark message as read (@msg: read)
-  close         Mark message as closed (@msg: closed)
-  inbox         List non-closed messages`)
-		os.Exit(1)
+  inbox         List non-completed messages`
+
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, messageUsage)
+		os.Exit(0)
 	}
 
 	sub := args[0]
@@ -2864,14 +2941,11 @@ Subcommands:
 		cmdMessageGetTags(subArgs)
 	case "check":
 		cmdMessageCheck(subArgs)
-	case "ack":
-		cmdMessageAck(subArgs)
-	case "close":
-		cmdMessageClose(subArgs)
 	case "inbox":
 		cmdMessageInbox(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown message subcommand: %s\n", sub)
+		fmt.Fprintln(os.Stderr, messageUsage)
 		os.Exit(1)
 	}
 }
@@ -2903,7 +2977,7 @@ func cmdMessageNewRequest(args []string) {
 	id := strings.TrimSuffix(base, filepath.Ext(base))
 
 	tb := ark.ParseTagBlock(nil)
-	tb.Set("request", id)
+	tb.Set("ark-request", id)
 	tb.Set("from-project", *from)
 	tb.Set("to-project", *to)
 	tb.Set("status", "open")
@@ -2944,10 +3018,10 @@ func cmdMessageNewResponse(args []string) {
 	}
 
 	tb := ark.ParseTagBlock(nil)
-	tb.Set("response", *request)
+	tb.Set("ark-response", *request)
 	tb.Set("from-project", *from)
 	tb.Set("to-project", *to)
-	tb.Set("status", "done")
+	tb.Set("status", "accepted")
 
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
@@ -2962,9 +3036,9 @@ func cmdMessageNewResponse(args []string) {
 }
 
 func cmdMessageSetTags(args []string) {
-	if len(args) < 3 {
+	if len(args) < 3 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "usage: ark message set-tags FILE TAG VALUE [TAG VALUE ...]")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	filePath := args[0]
@@ -2990,9 +3064,9 @@ func cmdMessageSetTags(args []string) {
 }
 
 func cmdMessageGetTags(args []string) {
-	if len(args) < 1 {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "usage: ark message get-tags FILE [TAG ...]")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	filePath := args[0]
@@ -3028,9 +3102,9 @@ func cmdMessageGetTags(args []string) {
 }
 
 func cmdMessageCheck(args []string) {
-	if len(args) < 1 {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "usage: ark message check FILE")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	filePath := args[0]
@@ -3058,67 +3132,19 @@ func cmdMessageCheck(args []string) {
 }
 
 // CRC: crc-CLI.md | Seq: seq-message.md
-func cmdMessageAck(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: ark message ack FILE")
-		os.Exit(1)
-	}
-
-	filePath := args[0]
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fatal(err)
-	}
-
-	tb := ark.ParseTagBlock(data)
-	if v, ok := tb.Get("msg"); ok {
-		switch v {
-		case "read", "acting", "closed":
-			return
-		}
-	}
-
-	tb.Set("msg", "read")
-	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
-		fatal(err)
-	}
-}
-
-// CRC: crc-CLI.md | Seq: seq-message.md
-func cmdMessageClose(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: ark message close FILE")
-		os.Exit(1)
-	}
-
-	filePath := args[0]
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fatal(err)
-	}
-
-	tb := ark.ParseTagBlock(data)
-	if v, ok := tb.Get("msg"); ok && v == "closed" {
-		return
-	}
-
-	tb.Set("msg", "closed")
-	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
-		fatal(err)
-	}
-}
-
-// CRC: crc-CLI.md | Seq: seq-message.md
 func cmdMessageInbox(args []string) {
 	fs := flag.NewFlagSet("message inbox", flag.ExitOnError)
 	project := fs.String("project", "", "filter by to-project")
+	from := fs.String("from", "", "filter by from-project")
+	all := fs.Bool("all", false, "include completed/done/denied messages")
+	includeArchived := fs.Bool("include-archived", false, "include archived messages")
+	counts := fs.Bool("counts", false, "output status counts instead of rows")
 	fs.Parse(args)
 
 	type entry struct {
-		msg     string
+		status  string
 		to      string
 		from    string
-		status  string
 		summary string
 		path    string
 	}
@@ -3132,15 +3158,28 @@ func cmdMessageInbox(args []string) {
 			}
 			seen[f.Path] = true
 
+			if !strings.Contains(f.Path, "/requests/") {
+				continue
+			}
+
 			data, err := os.ReadFile(f.Path)
 			if err != nil {
 				continue
 			}
 			tb := ark.ParseTagBlock(data)
 
-			msgVal, ok := tb.Get("msg")
-			if !ok || msgVal == "closed" {
+			statusVal, ok := tb.Get("status")
+			if !ok {
 				continue
+			}
+			if !*all && (statusVal == "completed" || statusVal == "done" || statusVal == "denied") {
+				continue
+			}
+
+			if !*includeArchived {
+				if _, archived := tb.Get("archived"); archived {
+					continue
+				}
 			}
 
 			toVal, _ := tb.Get("to-project")
@@ -3149,28 +3188,29 @@ func cmdMessageInbox(args []string) {
 			}
 
 			fromVal, _ := tb.Get("from-project")
-			statusVal, _ := tb.Get("status")
+			if *from != "" && fromVal != *from {
+				continue
+			}
 
 			var summary string
 			if v, ok := tb.Get("issue"); ok {
 				summary = v
-			} else if v, ok := tb.Get("response"); ok {
-				summary = "response:" + v
+			} else if v, ok := tb.Get("ark-response"); ok {
+				summary = "ark-response:" + v
 			}
 
 			entries = append(entries, entry{
-				msg:     msgVal,
+				status:  statusVal,
 				to:      toVal,
 				from:    fromVal,
-				status:  statusVal,
 				summary: summary,
 				path:    f.Path,
 			})
 		}
 
 		sort.Slice(entries, func(i, j int) bool {
-			if (entries[i].msg == "new") != (entries[j].msg == "new") {
-				return entries[i].msg == "new"
+			if (entries[i].status == "open") != (entries[j].status == "open") {
+				return entries[i].status == "open"
 			}
 			return entries[i].path < entries[j].path
 		})
@@ -3178,15 +3218,30 @@ func cmdMessageInbox(args []string) {
 	}
 
 	printEntries := func(entries []entry) {
+		if *counts {
+			statusCounts := make(map[string]int)
+			for _, e := range entries {
+				statusCounts[e.status]++
+			}
+			var keys []string
+			for k := range statusCounts {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Printf("%s\t%d\n", k, statusCounts[k])
+			}
+			return
+		}
 		for _, e := range entries {
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
-				e.msg, e.to, e.from, e.status, e.summary, e.path)
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\n",
+				e.status, e.to, e.from, e.summary, e.path)
 		}
 	}
 
 	if client := serverClient(arkDir); client != nil {
 		var files []ark.TagFileInfo
-		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": []string{"msg"}}, &files); err != nil {
+		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": []string{"status"}}, &files); err != nil {
 			fatal(err)
 		}
 		printEntries(collect(files))
@@ -3194,7 +3249,7 @@ func cmdMessageInbox(args []string) {
 	}
 
 	withDB(func(d *ark.DB) {
-		files, err := d.TagFiles([]string{"msg"})
+		files, err := d.TagFiles([]string{"status"})
 		if err != nil {
 			fatal(err)
 		}

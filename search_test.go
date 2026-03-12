@@ -4,10 +4,10 @@ package ark
 
 import "testing"
 
-func TestValidateSearchFlagsContainsAndRegexMutuallyExclusive(t *testing.T) {
+func TestValidateSearchFlagsContainsAndRegexCompose(t *testing.T) {
 	err := validateSearchFlags(SearchOpts{Contains: "foo", Regex: []string{"bar"}})
-	if err == nil {
-		t.Error("expected error for both --contains and --regex")
+	if err != nil {
+		t.Errorf("--contains and --regex should compose, got error: %v", err)
 	}
 }
 

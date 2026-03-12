@@ -89,7 +89,7 @@
 - **R52:** `--about <text>` sends query to microvec only (semantic search)
 - **R53:** `--contains <text>` sends query to microfts2 only (exact match)
 - **R54:** `--regex <pattern>` sends query to microfts2 only (regex match)
-- **R55:** `--contains` and `--regex` are mutually exclusive — error if both provided
+- **R55:** `--contains` and `--regex` compose — `--contains` drives FTS query, `--regex` post-filters results
 - **R56:** Either `--about` or `--contains`/`--regex` works alone (single-engine, no intersection)
 - **R57:** When both `--about` and one of `--contains`/`--regex` are used, results are intersected by (fileid, chunknum)
 
@@ -370,6 +370,13 @@
 - **R222:** Multiple patterns supported for both (OR logic — match any pattern)
 - **R223:** Path filtering matches against the full indexed file path using glob syntax
 - **R224:** (inferred) Path filters are resolved to file ID sets from microfts2's file list — no FTS query needed
+
+### Tag Filtering
+- **R512:** `--filter-file-tags <tag>` restricts search to files that contain the given tag, using the tag index to resolve file IDs
+- **R513:** `--exclude-file-tags <tag>` excludes files that contain the given tag
+- **R514:** Multiple tag patterns supported (same composition rules as other filters: positive intersect, negative subtract)
+- **R515:** Tag filters use the LMDB tag index (T records via Store.TagFiles) — no FTS query or chunk scanning needed
+- **R516:** (inferred) Tag filters evaluate after path filters and before content filters in the resolveFilters pipeline
 
 ### Composition
 - **R225:** All filters produce file ID sets: positive filters intersect, negative filters subtract
@@ -705,12 +712,12 @@
 ### new-request
 - **R450:** `ark message new-request --from PROJECT --to PROJECT --issue "..." FILE` creates a new request file
 - **R451:** The request ID is derived from the filename (basename without extension)
-- **R452:** Output file has tag block (`@request`, `@from-project`, `@to-project`, `@status: open`, `@issue`) followed by blank line, heading, and issue text as body
+- **R452:** Output file has tag block (`@ark-request`, `@from-project`, `@to-project`, `@status: open`, `@issue`) followed by blank line, heading, and issue text as body
 - **R453:** Errors if FILE already exists
 
 ### new-response
 - **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file
-- **R455:** Output file has tag block (`@response`, `@from-project`, `@to-project`, `@status: done`) followed by blank line and `# RESP <id>` heading
+- **R455:** Output file has tag block (`@ark-response`, `@from-project`, `@to-project`, `@status: done`) followed by blank line and `# RESP <id>` heading
 - **R456:** Errors if FILE already exists
 
 ### set-tags
@@ -758,6 +765,26 @@
 - **R500:** Output format: one tab-separated line per message: `msg-value\tto-project\tfrom-project\tstatus\tissue-or-response\tpath`
 - **R501:** (inferred) Uses server proxy when available, falls back to cold-start withDB. Read-only.
 
+### inbox enhancements
+- **R530:** `--from PROJECT` flag filters messages where `@from-project` matches PROJECT
+- **R531:** `--from` is composable with `--project` — when both given, a message must match both (intersection)
+- **R532:** When only `--from` is given, `--project` is unconstrained
+- **R533:** `--all` flag includes messages with any `@status` value (completed, done, denied)
+- **R534:** Without `--all`, current behavior preserved (completed/done/denied filtered out)
+- **R535:** `--include-archived` flag includes messages with `@archived: true`
+- **R536:** Without `--include-archived`, archived messages excluded (current behavior)
+- **R537:** `--counts` flag outputs one line per status value with count instead of individual rows
+- **R538:** `--counts` output is tab-separated (`status\tcount`), sorted alphabetically by status
+- **R539:** All four flags are composable — counts reflect whatever the other filters select
+- **R540:** (inferred) No changes to output format for existing usage — new flags are additive
+
+### Message tag vocabulary
+- **R525:** Message identity uses `@ark-request:` and `@ark-response:` tags (ark-prefixed to avoid collision with generic uses)
+- **R526:** `@ark-request-sent: <path>` — reference tag for planning files linking to a sent request
+- **R527:** `@ark-request-ref: <path-or-id>` — reference tag for citing a request in any file
+- **R528:** `@ark-response-ref: <path-or-id>` — reference tag for citing a response in any file
+- **R529:** (inferred) Reference tags are passive — ark indexes them like any other tag but assigns no special behavior
+
 ### General
 - **R477:** Most `ark message` subcommands operate on plain files — no server dependency, no new storage. Exception: `inbox` requires the database.
 - **R478:** (inferred) The tag block parser is shared across all subcommands
@@ -776,3 +803,15 @@
 - **R486:** The file must be indexed — error if not found in the database
 - **R487:** `--wrap <name>` wraps output in XML tags, consistent with `ark search` and `ark fetch`
 - **R488:** (inferred) Range labels are opaque — the exact string from search results is passed through to `GetChunks`
+
+## Feature: Parallel Indexing
+**Source:** specs/parallel-indexing.md
+
+- **R517:** Rebuild and refresh prepare files in parallel — read, chunk, extract tags/trigrams are independent per file
+- **R518:** LMDB writes are serialized through a ChanSvc actor — workers send closures that capture prepared data
+- **R519:** Worker count defaults to `runtime.NumCPU()`
+- **R520:** Worker errors (file read, chunk failure) skip the file and log a warning — do not abort the batch
+- **R521:** Missing files are collected and returned as before (no behavior change)
+- **R522:** (inferred) Applies to RefreshStale (used by rebuild, refresh, and server reconcile) — single-file paths unchanged
+- **R523:** (inferred) No changes to microfts2 API — all writes go through existing methods
+- **R524:** (inferred) No changes to fsnotify coordination — reconcileLoop already serializes via channel

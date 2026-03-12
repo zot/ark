@@ -51,8 +51,8 @@ CLI ──> Searcher.SearchCombined(query, opts)
 
 ```
 CLI ──> Searcher.ValidateSplitFlags(opts)
-         │  error if --contains and --regex both set
          │  error if --chunks and --files both set
+         │  (--contains + --regex compose: FTS + post-filter)
          │
          ├──> dispatch --about to microvec.Search(aboutText, k)
          │     └── returns vecResults

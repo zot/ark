@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"microfts2"
+	"github.com/zot/microfts2"
 
 	"github.com/anthropics/microvec"
 )

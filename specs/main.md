@@ -223,6 +223,36 @@ Each JSONL line produces at most one chunk. The range is `N-N`
 text produce no chunk. The chunk content is the concatenation of
 all extracted text blocks from that line, separated by newlines.
 
+### Extracted fields
+
+From each JSONL record's `message.content` array:
+- `"text"` blocks → user messages, assistant responses
+- `"thinking"` blocks → assistant reasoning (not the `signature`)
+
+From records with `"content":"string"` (simple text content):
+- The string value directly
+
+### Skipped record types
+
+Entire records are skipped for these `type` values:
+- `progress`, `file-history-snapshot`, `queue-operation`, `system`, `last-prompt`
+
+### Skipped fields within message records
+
+- `tool_use` blocks (file contents, code edits — machine payload)
+- `tool_result` blocks (command output, file reads)
+- `planContent` (duplicate of content already in message)
+- `signature` fields (cryptographic, not searchable)
+- All envelope metadata (`uuid`, `sessionId`, `cwd`, `usage`, `parentUuid`, etc.)
+
+### Chunk output consistency
+
+`FillChunks` applies the same extraction when emitting chunk text
+via `--chunks`, `--wrap`, or `ark chunks`. The raw JSONL line is
+never exposed — agents see human-readable text, not JSON envelopes.
+This means search results, chunk expansion, and wrapped output all
+contain the same extracted content that was indexed.
+
 This is a Go func strategy, not an external command — it avoids
 the scanner buffer limit that external chunkers hit on large
 JSONL lines, and eliminates the exec-per-file overhead.

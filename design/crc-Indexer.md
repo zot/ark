@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522
 
 Coordinates adding, removing, and refreshing files across both
 engines. microfts2 first, microvec second. Extracts tags from
@@ -22,7 +22,10 @@ file content and updates the Store.
   use AppendChunks path. Otherwise full re-add to microfts2, remove
   old vectors, add new vectors, re-extract tags and tag defs, update Store.
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
-  by patterns, refresh each one. Return list of missing files.
+  by patterns, refresh each one in parallel. Worker pool (NumCPU goroutines)
+  reads+chunks+extracts per file. ChanSvc actor serializes all LMDB writes —
+  workers send closures capturing prepared data. Errors skip the file and
+  log a warning. Return list of missing files.
 - DetectAppend(path, fileid): get FileInfo from microfts2, check
   FileLength > 0, stat file for growth, hash first FileLength bytes,
   compare to stored ContentHash. Returns true if append-only.

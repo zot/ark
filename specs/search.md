@@ -17,9 +17,9 @@ Targeted queries for one or both engines:
 - `--about <text>` goes to microvec (semantic)
 - `--contains <text>` goes to microfts2 (exact)
 - `--regex <pattern>` goes to microfts2 (regex)
-- `--contains` and `--regex` are mutually exclusive — error if both
+- `--contains` and `--regex` compose: `--contains` drives FTS, `--regex` post-filters
 - Either flag works alone (single-engine search, no intersection)
-- Both `--about` + one of `--contains`/`--regex` — results intersected
+- Both `--about` + `--contains`/`--regex` — results intersected
   by (fileid, chunknum)
 - Output: same format as combined
 
