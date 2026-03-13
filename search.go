@@ -16,7 +16,7 @@ import (
 
 	"github.com/zot/microfts2"
 
-	"github.com/anthropics/microvec"
+	"github.com/zot/microvec"
 	"github.com/yuin/goldmark"
 )
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"github.com/zot/microfts2"
 
 	"github.com/BurntSushi/toml"
-	"github.com/anthropics/microvec"
+	"github.com/zot/microvec"
 )
 
 // Version is set by ldflags at build time from README.md.
@@ -348,6 +349,10 @@ func (db *DB) Add(paths []string, strategy string) error {
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				log.Printf("add: skipping %s: %v", path, err)
+				continue
+			}
 			return fmt.Errorf("stat %s: %w", path, err)
 		}
 		if info.IsDir() {
@@ -377,6 +382,10 @@ func (db *DB) addDirectory(dir string) error {
 		}
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
 			if errors.Is(err, microfts2.ErrNoChunks) {
+				continue
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				log.Printf("add: skipping %s: %v", f.Path, err)
 				continue
 			}
 			return fmt.Errorf("add %s: %w", f.Path, err)
@@ -431,6 +440,10 @@ func (db *DB) Scan() (*ScanResults, error) {
 	for _, f := range results.NewFiles {
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
 			if errors.Is(err, microfts2.ErrNoChunks) || errors.Is(err, microfts2.ErrAlreadyIndexed) {
+				continue
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				log.Printf("scan: skipping %s: %v", f.Path, err)
 				continue
 			}
 			return results, fmt.Errorf("add %s: %w", f.Path, err)

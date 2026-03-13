@@ -4,7 +4,6 @@ go 1.25.3
 
 require (
 	github.com/BurntSushi/toml v1.5.0
-	github.com/anthropics/microvec v0.0.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/fsnotify/fsnotify v1.9.0
@@ -12,6 +11,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zot/frictionless v0.0.0
 	github.com/zot/microfts2 v0.0.0
+	github.com/zot/microvec v0.0.0
 	github.com/zot/ui-engine v0.19.0
 )
 
@@ -35,7 +35,6 @@ require (
 )
 
 replace (
-	github.com/anthropics/microvec => ../microvec
 	github.com/zot/frictionless => ../frictionless
 	github.com/zot/microfts2 => ../microfts2
 	github.com/zot/microvec => ../microvec

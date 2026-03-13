@@ -15,5 +15,11 @@ fi
 echo >> /tmp/denied
 echo "$INPUT" >> /tmp/denied
 
-echo "Use ~/.ark/ark commands instead. ark search, ark fetch, ark files, and ark message can do everything you need."
+AGENT=$(echo "$INPUT" | jq -r '.agent_type // "messenger"')
+case "$AGENT" in
+  ark-searcher) SKILL="hermes-search.md" ;;
+  *)            SKILL="hermes-messaging.md" ;;
+esac
+
+echo "BLOCKED. Run this command exactly: \`~/.ark/ark fetch --wrap knowledge ~/.ark/skills/$SKILL\` — then use ~/.ark/ark commands for everything." >&2
 exit 2

@@ -6,16 +6,11 @@ model: haiku
 color: blue
 memory: local
 hooks:
-  SessionStart:
-    - matcher: startup
-      hooks:
-        - type: prompt
-          prompt: "run this command exactly: `~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-messaging.md`"
   PreToolUse:
     - matcher: "Bash|Read|Grep|Glob|Search|Write"
       hooks:
         - type: command
-          command: "$CLAUDE_PROJECT_DIR/.claude/skills/ark/hermes-guard.sh"
+          command: "~/.claude/skills/ark/hermes-guard.sh"
 ---
 sessionid=${CLAUDE_SESSION_ID}
 session8 is the prefix.

@@ -315,6 +315,8 @@ MCP restrictions.
   UI engine underneath Frictionless.
 - [**microfts2**](https://github.com/zot/microfts2) -- Trigram
   full-text search library that powers Ark's search.
+- [**microvec**](https://github.com/zot/microvec) -- LMDB-backed
+  vector database for semantic search. Go library with CLI.
 - [**Humble Master**](https://github.com/zot/humble-master) --
   Narrative alignment research for LLMs. The agentic patterns
   documented above connect to the broader question of how personas

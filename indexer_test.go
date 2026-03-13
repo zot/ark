@@ -9,7 +9,7 @@ import (
 
 	"github.com/zot/microfts2"
 
-	"github.com/anthropics/microvec"
+	"github.com/zot/microvec"
 )
 
 func TestExtractTagsBasic(t *testing.T) {
