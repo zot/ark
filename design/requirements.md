@@ -821,3 +821,26 @@
 - **R522:** (inferred) Applies to RefreshStale (used by rebuild, refresh, and server reconcile) — single-file paths unchanged
 - **R523:** (inferred) No changes to microfts2 API — all writes go through existing methods
 - **R524:** (inferred) No changes to fsnotify coordination — reconcileLoop already serializes via channel
+
+## Feature: Vector Benchmark
+**Source:** specs/vec-bench.md
+
+### ark vec bench
+- **R547:** `ark vec bench --model PATH` loads a GGUF model in-process via gollama and benchmarks embedding against real LMDB chunks
+- **R548:** `--n N` controls how many chunks to embed (default 10)
+- **R549:** `--random` selects chunks randomly; without it, chunks are sequential from start of index
+- **R550:** `--ctx N` sets context window size in tokens (default 2048)
+- **R551:** `--prefix TEXT` prepends text before each chunk (e.g. "search_document: " for nomic models)
+- **R552:** Model is loaded once at command start; only embedding computation is timed per chunk
+- **R553:** Model load time is reported separately from embedding timings
+- **R554:** Per-chunk output includes chunk byte length and embedding duration
+- **R555:** Summary stats: min, max, mean, median, total time, chunks/sec
+- **R556:** Read-only — does not write to the database
+- **R557:** (inferred) Uses cold-start (withDB) — benchmark is a one-off diagnostic, not a server operation
+
+### ark vec bench-search
+- **R558:** `ark vec bench-search --model PATH --query TEXT` benchmarks the full search path: embed query, brute-force cosine against stored vectors
+- **R559:** `--k N` controls number of results (default 10)
+- **R560:** `--prefix TEXT` sets query embedding prefix
+- **R561:** Reports how many vectors exist in the index and total search time
+- **R562:** (inferred) Only useful if vectors have been previously stored — reports zero vectors gracefully

@@ -76,7 +76,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 
 ### Sequences
@@ -137,3 +137,4 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code
 - [x] D5: R420 (preferred port on restart) — needs flib.Config.Port field in Frictionless upstream
 - [ ] D6: R438-R439 (browser count) — flib.Runtime doesn't expose WebSocket connection count. UIStatus reports running/port/indexing but not browser count. Needs flib API addition.
+- [ ] O14: gollama v0.1.8 SIGILL on Zen 2 (Steam Deck) — llama.cpp compute graph uses unsupported instructions. vec bench loads model but crashes on GetEmbeddings. Needs gollama rebuild with -march=znver2 or compatible flags.

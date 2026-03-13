@@ -7,6 +7,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/godeps/gollama v0.1.8
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zot/frictionless v0.0.0
@@ -35,6 +36,7 @@ require (
 )
 
 replace (
+	github.com/godeps/gollama => ../gollama
 	github.com/zot/frictionless => ../frictionless
 	github.com/zot/microfts2 => ../microfts2
 	github.com/zot/microvec => ../microvec

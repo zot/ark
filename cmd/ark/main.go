@@ -134,6 +134,8 @@ func main() {
 		cmdUI(args)
 	case "unresolved":
 		cmdUnresolved(args)
+	case "vec":
+		cmdVec(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
