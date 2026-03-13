@@ -52,6 +52,37 @@ Returns a Lua array of source directory paths currently being indexed
 The app polls this at 250ms intervals to show/hide spinners on
 sources in the UI.
 
+## Message inbox — `mcp:inbox(show_all)`
+
+Returns cross-project messages as a Lua table of tables. Each element
+is `{status, to, from, summary, path}`. Messages come from files in
+`requests/` directories that have an `@status:` tag.
+
+`show_all` is an optional boolean (default false). When false,
+completed/done/denied messages are excluded. Archived messages are
+always excluded.
+
+Results are sorted: open messages first, then alphabetically by path.
+
+The summary comes from the `@issue:` tag. For responses without an
+issue tag, the `@ark-response:` ID is used instead.
+
+## JSON parsing — `mcp:parseJson(str)`
+
+Parses a JSON string and returns the corresponding Lua value. Objects
+become tables with string keys, arrays become tables with integer
+keys, strings/numbers/booleans map directly, null becomes nil.
+
+Returns nil + error string on parse failure.
+
+## JSON file reading — `mcp:readJsonFile(path)`
+
+Reads a file from disk and parses its JSON content into a Lua table.
+Same conversion rules as `parseJson`. Combines `io.open` + `parseJson`
+in a single Go call — no temp variables in Lua.
+
+Returns nil + error string on read or parse failure.
+
 ## HTTP endpoint removal
 
 The HTTP endpoints `POST /search/grouped`, `POST /open`, and

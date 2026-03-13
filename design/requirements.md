@@ -844,3 +844,19 @@
 - **R560:** `--prefix TEXT` sets query embedding prefix
 - **R561:** Reports how many vectors exist in the index and total search time
 - **R562:** (inferred) Only useful if vectors have been previously stored — reports zero vectors gracefully
+
+## Feature: Messaging Dashboard
+**Source:** .scratch/MSG-DASHBOARD.md
+
+### Go Data Pipe
+- **R563:** `mcp:inbox(show_all)` Lua function returns a table of message entries from the LMDB tag index
+- **R564:** Each entry contains: status, to (project), from (project), summary, path
+- **R565:** Messages are filtered to `requests/` paths only
+- **R566:** By default excludes completed/done/denied; `show_all=true` includes them
+- **R567:** Excludes archived messages unless explicitly included
+- **R568:** Results sorted: open first, then alphabetically by path
+
+### JSON Utilities
+- **R569:** `mcp:parseJson(str)` parses a JSON string and returns a Lua table
+- **R570:** `mcp:readJsonFile(path)` reads a file and parses its JSON content into a Lua table
+- **R571:** Both return nil + error string on parse failure

@@ -3143,87 +3143,22 @@ func cmdMessageInbox(args []string) {
 	counts := fs.Bool("counts", false, "output status counts instead of rows")
 	fs.Parse(args)
 
-	type entry struct {
-		status  string
-		to      string
-		from    string
-		summary string
-		path    string
-	}
-
-	collect := func(files []ark.TagFileInfo) []entry {
-		seen := make(map[string]bool)
-		var entries []entry
-		for _, f := range files {
-			if seen[f.Path] {
+	printEntries := func(entries []ark.InboxEntry) {
+		// CLI-specific post-filters (project, from)
+		var filtered []ark.InboxEntry
+		for _, e := range entries {
+			if *project != "" && e.To != *project {
 				continue
 			}
-			seen[f.Path] = true
-
-			if !strings.Contains(f.Path, "/requests/") {
+			if *from != "" && e.From != *from {
 				continue
 			}
-
-			data, err := os.ReadFile(f.Path)
-			if err != nil {
-				continue
-			}
-			tb := ark.ParseTagBlock(data)
-
-			statusVal, ok := tb.Get("status")
-			if !ok {
-				continue
-			}
-			if !*all && (statusVal == "completed" || statusVal == "done" || statusVal == "denied") {
-				continue
-			}
-
-			if !*includeArchived {
-				if _, archived := tb.Get("archived"); archived {
-					continue
-				}
-			}
-
-			toVal, _ := tb.Get("to-project")
-			if *project != "" && toVal != *project {
-				continue
-			}
-
-			fromVal, _ := tb.Get("from-project")
-			if *from != "" && fromVal != *from {
-				continue
-			}
-
-			var summary string
-			if v, ok := tb.Get("issue"); ok {
-				summary = v
-			} else if v, ok := tb.Get("ark-response"); ok {
-				summary = "ark-response:" + v
-			}
-
-			entries = append(entries, entry{
-				status:  statusVal,
-				to:      toVal,
-				from:    fromVal,
-				summary: summary,
-				path:    f.Path,
-			})
+			filtered = append(filtered, e)
 		}
-
-		sort.Slice(entries, func(i, j int) bool {
-			if (entries[i].status == "open") != (entries[j].status == "open") {
-				return entries[i].status == "open"
-			}
-			return entries[i].path < entries[j].path
-		})
-		return entries
-	}
-
-	printEntries := func(entries []entry) {
 		if *counts {
 			statusCounts := make(map[string]int)
-			for _, e := range entries {
-				statusCounts[e.status]++
+			for _, e := range filtered {
+				statusCounts[e.Status]++
 			}
 			var keys []string
 			for k := range statusCounts {
@@ -3235,26 +3170,17 @@ func cmdMessageInbox(args []string) {
 			}
 			return
 		}
-		for _, e := range entries {
+		for _, e := range filtered {
 			fmt.Printf("%s\t%s\t%s\t%s\t%s\n",
-				e.status, e.to, e.from, e.summary, e.path)
+				e.Status, e.To, e.From, e.Summary, e.Path)
 		}
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		var files []ark.TagFileInfo
-		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": []string{"status"}}, &files); err != nil {
-			fatal(err)
-		}
-		printEntries(collect(files))
-		return
 	}
 
 	withDB(func(d *ark.DB) {
-		files, err := d.TagFiles([]string{"status"})
+		entries, err := d.Inbox(*all, *includeArchived)
 		if err != nil {
 			fatal(err)
 		}
-		printEntries(collect(files))
+		printEntries(entries)
 	})
 }

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -719,6 +720,76 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 		})
 	}
 	return results, nil
+}
+
+// InboxEntry is a message from the cross-project messaging system.
+// R563-R568
+type InboxEntry struct {
+	Status  string `json:"status"`
+	To      string `json:"to"`
+	From    string `json:"from"`
+	Summary string `json:"summary"`
+	Path    string `json:"path"`
+}
+
+// Inbox returns cross-project messages from the tag index.
+// If showAll is false, completed/done/denied messages are excluded.
+// If includeArchived is false, archived messages are excluded.
+func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
+	files, err := db.TagFiles([]string{"status"})
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var entries []InboxEntry
+	for _, f := range files {
+		if seen[f.Path] {
+			continue
+		}
+		seen[f.Path] = true
+		if !strings.Contains(f.Path, "/requests/") {
+			continue
+		}
+		data, err := os.ReadFile(f.Path)
+		if err != nil {
+			continue
+		}
+		tb := ParseTagBlock(data)
+		statusVal, ok := tb.Get("status")
+		if !ok {
+			continue
+		}
+		if !showAll && (statusVal == "completed" || statusVal == "done" || statusVal == "denied") {
+			continue
+		}
+		if !includeArchived {
+			if _, archived := tb.Get("archived"); archived {
+				continue
+			}
+		}
+		toVal, _ := tb.Get("to-project")
+		fromVal, _ := tb.Get("from-project")
+		var summary string
+		if v, ok := tb.Get("issue"); ok {
+			summary = v
+		} else if v, ok := tb.Get("ark-response"); ok {
+			summary = "ark-response:" + v
+		}
+		entries = append(entries, InboxEntry{
+			Status:  statusVal,
+			To:      toVal,
+			From:    fromVal,
+			Summary: summary,
+			Path:    f.Path,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if (entries[i].Status == "open") != (entries[j].Status == "open") {
+			return entries[i].Status == "open"
+		}
+		return entries[i].Path < entries[j].Path
+	})
+	return entries, nil
 }
 
 // TagDefInfo is a tag definition with its source file path.

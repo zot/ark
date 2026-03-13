@@ -984,9 +984,98 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp:inbox(show_all) — cross-project message entries as Lua tables
+		// R563-R568
+		L.SetField(tbl, "inbox", L.NewFunction(func(L *lua.LState) int {
+			showAll := false
+			if L.GetTop() >= 1 {
+				showAll = L.ToBool(1)
+			}
+			entries, err := srv.db.Inbox(showAll, false)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, e := range entries {
+				row := L.NewTable()
+				L.SetField(row, "status", lua.LString(e.Status))
+				L.SetField(row, "to", lua.LString(e.To))
+				L.SetField(row, "from", lua.LString(e.From))
+				L.SetField(row, "summary", lua.LString(e.Summary))
+				L.SetField(row, "path", lua.LString(e.Path))
+				result.RawSetInt(i+1, row)
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:parseJson(str) — parse JSON string into Lua table
+		// R569, R571
+		L.SetField(tbl, "parseJson", L.NewFunction(func(L *lua.LState) int {
+			str := L.CheckString(1)
+			var data any
+			if err := json.Unmarshal([]byte(str), &data); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(jsonToLua(L, data))
+			return 1
+		}))
+
+		// mcp:readJsonFile(path) — read file and parse JSON into Lua table
+		// R570, R571
+		L.SetField(tbl, "readJsonFile", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			var data any
+			if err := json.Unmarshal(raw, &data); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(jsonToLua(L, data))
+			return 1
+		}))
+
 		return nil
 	})
 	if err != nil {
 		log.Printf("ui: register lua functions failed: %v", err)
+	}
+}
+
+// jsonToLua converts a Go value (from json.Unmarshal) to a Lua value.
+func jsonToLua(L *lua.LState, v any) lua.LValue {
+	switch val := v.(type) {
+	case map[string]any:
+		tbl := L.NewTable()
+		for k, v := range val {
+			L.SetField(tbl, k, jsonToLua(L, v))
+		}
+		return tbl
+	case []any:
+		tbl := L.NewTable()
+		for i, v := range val {
+			tbl.RawSetInt(i+1, jsonToLua(L, v))
+		}
+		return tbl
+	case string:
+		return lua.LString(val)
+	case float64:
+		return lua.LNumber(val)
+	case bool:
+		return lua.LBool(val)
+	case nil:
+		return lua.LNil
+	default:
+		return lua.LString(fmt.Sprintf("%v", val))
 	}
 }

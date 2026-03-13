@@ -68,6 +68,21 @@ To install ark UI support in a particular project, run:
 
 This creates skill symlinks in the project's `.claude/skills/`, sets up the database if needed, and prints a CLAUDE.md snippet to paste. Run it once per project.
 
+## Search Before You Design
+
+Before planning or building a feature, ask ark what it already knows.
+The zettelkasten connects dots across projects, old plans, and design
+conversations you may have forgotten.
+
+```bash
+~/.ark/ark search --contains "topic keywords" --chunks --wrap recall --exclude-files '*.jsonl'
+```
+
+`--wrap recall` marks retrieved content as stored knowledge. `--chunks`
+gives you the relevant passages, not just file paths. Read the results
+before writing anything — they often surface context that changes the
+approach.
+
 ## Routing
 
 Three categories — route by what you're doing, not by complexity:
@@ -88,9 +103,11 @@ not asking a question:
 
 **Messaging** — spawn ark-messenger. Inbox, sending, ack, status changes.
 Hermes curates and reports honest misses.
+**Send in background** — sending is fire-and-forget, don't block the
+conversation. Inbox checks need the result, so run foreground.
 ```
+Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a request from ark to microfts2 about chunker interface.")
 Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale.")
-Agent(subagent_type="ark-messenger", prompt="Send a request from ark to microfts2 about chunker interface.")
 ```
 
 **Search** — spawn ark-searcher. Finding notes, exploring tags, retrieval.
