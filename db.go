@@ -472,7 +472,7 @@ func (db *DB) Refresh(patterns []string) error {
 		if err != nil {
 			continue
 		}
-		if err := db.store.AddMissing(m.FileID, info.Filename, timeNow()); err != nil {
+		if err := db.store.AddMissing(m.FileID, info.Names[0], timeNow()); err != nil {
 			return err
 		}
 	}
@@ -487,6 +487,11 @@ func (db *DB) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry
 // SearchSplit performs a targeted search with --about, --contains, --regex.
 func (db *DB) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchSplit(opts)
+}
+
+// SearchMulti runs a query through multiple scoring strategies.
+func (db *DB) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	return db.search.SearchMulti(query, opts)
 }
 
 // SearchGrouped runs a search and groups results by file with rendered previews.
@@ -530,9 +535,12 @@ func (db *DB) Status() (*StatusInfo, error) {
 		strategies[s.Strategy]++
 		info, err := db.fts.FileInfoByID(s.FileID)
 		if err == nil {
-			totalChunks += len(info.ChunkRanges)
+			totalChunks += len(info.Chunks)
 		}
 	}
+
+	// DB format version
+	dbFormat, _ := db.fts.Version()
 
 	// LMDB map usage
 	var mapUsed, mapTotal int64
@@ -546,6 +554,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 
 	return &StatusInfo{
 		Version:    Version,
+		DBFormat:   dbFormat,
 		Files:      len(stale),
 		Stale:      staleCount,
 		Missing:    len(missing),
@@ -561,6 +570,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 // StatusInfo holds database status counts and LMDB map usage.
 type StatusInfo struct {
 	Version    string         `json:"version"`
+	DBFormat   string         `json:"dbFormat,omitempty"`
 	Files      int            `json:"files"`
 	Stale      int            `json:"stale"`
 	Missing    int            `json:"missing"`
@@ -709,11 +719,11 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 			continue
 		}
 		var size int64
-		if fi, err := os.Stat(info.Filename); err == nil {
+		if fi, err := os.Stat(info.Names[0]); err == nil {
 			size = fi.Size()
 		}
 		results = append(results, TagFileInfo{
-			Path:  info.Filename,
+			Path:  info.Names[0],
 			Size:  size,
 			Tag:   rec.Tag,
 			Count: rec.Count,
@@ -814,7 +824,7 @@ func (db *DB) TagDefs(tags []string) ([]TagDefInfo, error) {
 		results = append(results, TagDefInfo{
 			Tag:         rec.Tag,
 			Description: rec.Description,
-			Path:        info.Filename,
+			Path:        info.Names[0],
 		})
 	}
 	return results, nil
@@ -847,7 +857,7 @@ func (db *DB) TagContext(tags []string) ([]TagContextEntry, error) {
 			if err != nil {
 				continue
 			}
-			g = &fileGroup{path: info.Filename}
+			g = &fileGroup{path: info.Names[0]}
 			groups[rec.FileID] = g
 		}
 		g.tags = append(g.tags, rec.Tag)

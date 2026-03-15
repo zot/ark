@@ -720,11 +720,47 @@
 - **R451:** The request ID is derived from the filename (basename without extension)
 - **R452:** Output file has tag block (`@ark-request`, `@from-project`, `@to-project`, `@status: open`, `@issue`) followed by blank line, heading, and issue text as body
 - **R453:** Errors if FILE already exists
+- **R580:** If stdin is not a terminal, new-request reads body text from stdin until a lone `.` on a line
+- **R581:** Stdin body is appended after the heading scaffold (after the issue text line)
+- **R582:** If stdin is a terminal or empty, the command produces the same output as before (no behavior change)
 
 ### new-response
 - **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file
 - **R455:** Output file has tag block (`@ark-response`, `@from-project`, `@to-project`, `@status: done`) followed by blank line and `# RESP <id>` heading
 - **R456:** Errors if FILE already exists
+- **R583:** If stdin is not a terminal, new-response reads body text from stdin until a lone `.` on a line
+- **R584:** Stdin body is appended after the `# RESP <id>` heading
+
+## Feature: Multisearch
+**Source:** specs/multisearch.md
+
+### Multi-strategy search
+- **R585:** `--multi` flag on `ark search` runs the query through all four scoring strategies in a single pass
+- **R586:** The four strategies are: coverage, density, overlap, bm25
+- **R587:** `--multi` calls microfts2 `SearchMulti` which collects candidates once (single LMDB transaction) and scores with each strategy independently
+- **R588:** Results from all strategies are deduplicated by (fileid, chunknum), keeping the best score per chunk
+- **R589:** `-k` applies to the final merged set, not per-strategy
+- **R590:** `--multi` is mutually exclusive with `--score` — using both is an error
+- **R591:** `--multi` works with combined search (query arg) and `--contains`
+- **R592:** `--multi` does not apply to `--regex`, `--about`, or `--like-file` — using `--multi` with these is an error
+- **R593:** All filter flags (`--filter-files`, `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`, `--filter`, `--except`) apply to all strategies equally
+
+### Proximity reranking
+- **R594:** `--proximity` flag enables post-search proximity reranking
+- **R595:** Proximity reranking reads chunk text for top candidates and adjusts scores based on minimum term span
+- **R596:** The number of candidates to rerank defaults to 2x the `-k` value
+- **R597:** `--proximity` composes with any search mode including `--multi`
+- **R598:** When used with `--multi`, proximity reranking happens after the multi-strategy merge
+
+### Strategy tagging
+- **R599:** When `--scores` and `--multi` are both active, each result includes which strategy produced it
+- **R600:** If multiple strategies found the same chunk, the strategy is reported as "multi"
+
+### Go API
+- **R601:** `Searcher.SearchMulti(query, opts)` wraps microfts2 SearchMulti for internal callers
+- **R602:** SearchMulti handles filter resolution, strategy setup (including BM25 initialization from index counters), deduplication, proximity reranking if requested, and the standard resolve/filter pipeline
+- **R603:** SearchGrouped supports multi-strategy search for the UI
+- **R604:** (inferred) BM25 initialization reads I record counters (totalTokens, totalChunks) from the microfts2 database — these counters must exist (require reindex on older databases)
 
 ### set-tags
 - **R457:** `ark message set-tags FILE TAG VALUE [TAG VALUE ...]` updates or adds tags in the tag block
@@ -860,3 +896,15 @@
 - **R569:** `mcp:parseJson(str)` parses a JSON string and returns a Lua table
 - **R570:** `mcp:readJsonFile(path)` reads a file and parses its JSON content into a Lua table
 - **R571:** Both return nil + error string on parse failure
+
+## Feature: Scoring Strategy
+**Source:** specs/search.md
+
+- **R572:** `--score <mode>` flag on `ark search` controls FTS scoring strategy
+- **R573:** Three modes: `auto` (default when omitted), `coverage`, `density`
+- **R574:** `coverage` mode uses microfts2 coverage scoring (fraction of query trigrams present). No escalation
+- **R575:** `density` mode uses microfts2 density scoring (token-density, OR semantics). No escalation
+- **R576:** `auto` mode uses coverage first; if zero FTS results, retries with density scoring (fuzzy escalation)
+- **R577:** Fuzzy escalation only fires in auto mode — explicit `--score coverage` or `--score density` disables it
+- **R578:** `--like-file` always uses density scoring regardless of `--score`
+- **R579:** (inferred) Unknown `--score` values produce an error message and exit

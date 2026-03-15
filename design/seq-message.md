@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478, R489-R501, R525, R530-R540
+**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584
 
 ## Flow: set-tags
 
@@ -56,6 +56,10 @@ CLI ──> parse flags: --from, --to, --issue, FILE
          │
          ├──> Render() + append heading + issue body
          │
+         ├──> if stdin is not a terminal:
+         │      readStdinBody() → body text (read until lone ".")
+         │      append body after scaffold
+         │
          └──> write FILE
 ```
 
@@ -73,6 +77,10 @@ CLI ──> parse flags: --from, --to, --request, FILE
          │      Set("status", "accepted")
          │
          ├──> Render() + append "# RESP <ID>" heading
+         │
+         ├──> if stdin is not a terminal:
+         │      readStdinBody() → body text (read until lone ".")
+         │      append body after heading
          │
          └──> write FILE
 ```

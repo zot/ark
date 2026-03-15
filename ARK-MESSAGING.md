@@ -148,6 +148,7 @@ is. The requesting project owns the ID.
 - `@to-project: <name>` — who's answering
 - `@issue:` — short description
 - `@status: <value>` — lifecycle state (open, accepted, in-progress, completed, denied, future)
+- `@status-date: <date>` — when status last changed (set automatically by `ark message`)
 - `@reopened: <date> -- <reason>` — request was completed but incomplete
 - `@resolved: <date> -- <description>` — reopened issue was fixed
 

@@ -78,11 +78,35 @@ Replaced by search filtering in specs/search-filtering.md.
 `--source`/`--not-source` removed in favor of `--filter-files`/
 `--exclude-files` (path-based) and `--filter`/`--except` (content-based).
 
+## Scoring strategy
+
+`--score <mode>` controls how microfts2 ranks chunks. Three modes:
+
+- `auto` (default, when `--score` is omitted) — coverage scoring first.
+  If zero results, automatically retry with density scoring (fuzzy
+  escalation). This is the normal search experience: precise when
+  possible, exploratory when needed.
+- `coverage` — fraction of query trigrams present in chunk. Strict:
+  all query terms should appear. Good for short, targeted queries.
+  No escalation.
+- `density` — token-density scoring. OR semantics: a chunk matches
+  if it contains *any* query token, ranked by how dense the overlap
+  is relative to chunk size. Good for exploratory search and long
+  queries. No escalation.
+
+Fuzzy escalation only fires in auto mode. When the user explicitly
+chooses a scoring strategy, ark respects that choice without fallback.
+
+`--like-file` always uses density scoring regardless of `--score`,
+since file-content queries are inherently long and benefit from
+density normalization.
+
 ## Common search options
 
 - `-k <num>` — max results (default 20)
 - `--scores` — show scores in output
 - `--after <date>` — only results newer than date (time filtering)
+- `--score <mode>` — scoring strategy: auto (default), coverage, density
 
 ## Search during incomplete embedding
 

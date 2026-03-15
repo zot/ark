@@ -88,7 +88,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	if err != nil {
 		return fmt.Errorf("file info %d: %w", fileid, err)
 	}
-	if err := idx.fts.RemoveFile(info.Filename); err != nil {
+	if err := idx.fts.RemoveFile(info.Names[0]); err != nil {
 		return fmt.Errorf("fts remove %d: %w", fileid, err)
 	}
 	// Vec removal is best-effort: file may never have been vectorized
@@ -143,8 +143,8 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 		if err == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength {
 			prep.isAppend = true
 			prep.newBytes = data[info.FileLength:]
-			if n := len(info.ChunkRanges); n > 0 {
-				_, endLine := parseRange(info.ChunkRanges[n-1])
+			if n := len(info.Chunks); n > 0 {
+				_, endLine := parseRange(info.Chunks[n-1].Location)
 				prep.baseLine = endLine
 			}
 			fullHash := sha256.Sum256(data)
@@ -265,7 +265,8 @@ func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.FileLength <= 0 || info.ContentHash == "" {
+	var zeroHash [32]byte
+	if info.FileLength <= 0 || info.ContentHash == zeroHash {
 		return false, nil
 	}
 
@@ -288,7 +289,8 @@ func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
 	if _, err := io.CopyN(h, f, info.FileLength); err != nil {
 		return false, err
 	}
-	hash := fmt.Sprintf("%x", h.Sum(nil))
+	var hash [32]byte
+	copy(hash[:], h.Sum(nil))
 
 	return hash == info.ContentHash, nil
 }
@@ -310,8 +312,8 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 
 	// Parse last chunk range for base line
 	baseLine := 0
-	if n := len(info.ChunkRanges); n > 0 {
-		_, endLine := parseRange(info.ChunkRanges[n-1])
+	if n := len(info.Chunks); n > 0 {
+		_, endLine := parseRange(info.Chunks[n-1].Location)
 		baseLine = endLine
 	}
 
@@ -517,9 +519,9 @@ func splitChunks(data []byte, fileid uint64, fts *microfts2.DB) ([]byte, [][]byt
 	}
 
 	lines := strings.Split(string(data), "\n")
-	chunks := make([][]byte, len(info.ChunkRanges))
-	for i, r := range info.ChunkRanges {
-		chunks[i] = []byte(extractByRange(lines, r))
+	chunks := make([][]byte, len(info.Chunks))
+	for i, r := range info.Chunks {
+		chunks[i] = []byte(extractByRange(lines, r.Location))
 	}
 	return data, chunks, nil
 }

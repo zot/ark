@@ -11,7 +11,7 @@ session8 is the prefix.
 At session start, start ark, load tags, then run the dead drop:
 
 ```bash
-~/.ark/ark serve
+~/.ark/ark serve &
 ~/.ark/ark tag files --context --filter-files '*.md' tag
 ```
 

@@ -1,46 +1,67 @@
-# Ark Index Manager
+# Ark
 
 @note: add interactive searching -- this is the user's google and yahoo on all their stuff and all of the assistant's stuff. Frictionless chat and other events links to the AI partner directly
 @note: need to have a way to show unresolved files deep in the trees. Ark CLI should help with this. `ark unresolved` has "path" right now but it should be <pattern>
 
-Visual frontend for ark's source configuration. Shows what's indexed,
-what's excluded, and what's unaccounted for — merged into one tree so
-discrepancies are immediately visible.
+The ark app has two top-level views, mirroring the two ark agents:
+
+- **Searching** — index manager + full-text search (ark-searcher)
+- **Messaging** — cross-project message dashboard (ark-messenger)
+
+A thin root object routes between them. The MCP shell's bottom bar
+has two ark buttons: one for searching (archive icon), one for
+messaging (envelope icon). Each sets the view mode and displays the
+ark app.
 
 ## Architecture
 
-**Lua + ark CLI:** The app shells out to `ark` commands for all
-operations. If we discover missing CLI support during development,
-that's the app doing its job — we go add it to ark.
+**Lua + in-process Go:** The app uses `mcp:search_grouped()` for search
+and `mcp:inbox()` for messaging (both in-process Go functions). Config
+operations use `ark` CLI commands.
+If we discover missing CLI support during development, that's the app
+doing its job — we go add it to ark.
 
 ## Source List
 
-Left panel. Shows configured source directories from ark.toml plus
-an "Add Source" control.
+Left panel. Shows configured source directories grouped into projects
+and data sources.
 
 Each source shows:
-- Directory path
+- Directory path (compressed for display, full path in tooltip)
 - Strategy name (markdown, lines, etc.)
 - File counts: included / excluded / unresolved
 
 Clicking a source shows its file tree in the right panel.
 
-### Add Source
+### Source Display Grouping
 
-Button or form to add a new source directory:
-- Directory path (text input)
-- Strategy picker (from registered strategies)
-- Writes to ark.toml
+Sources are grouped into two categories:
 
-### Claude Integration
+- **Projects** — Claude project directories, showing resolved project
+  name, file/memory/chat toggle switches
+- **Data Sources** — standalone directories with a data toggle
 
-Quick-add buttons for common Claude paths:
-- **Claude Projects** — pick-list of directories under `~/.claude/projects/`
-- **Chat History** — Claude's conversation logs
-- **Memories** — Claude's memory files
+Filter bar at top of source list controls which categories are
+included in search: data, projects, memory, chats. Each has a
+tri-state icon (on/mixed/off). Double-click to solo. Reset button
+restores defaults.
 
-These pre-fill the "Add Source" form with the right path and a
-sensible default strategy.
+### Project Editor
+
+"Choose Projects" button opens an overlay panel in the sidebar:
+- Search/filter bar with refresh button
+- Upper section: currently configured projects (with checkboxes)
+- Lower section: available projects (not yet configured)
+- Checkboxes toggle selection, badges show "new" / "removed" state
+- Save button applies add/remove deltas to ark config
+- Cancel discards changes, Reset restores original selection
+
+### Pattern Editing
+
+Each source has a gear icon that reveals include/exclude pattern
+textareas. Patterns are one per line (glob syntax). Save button
+diffs old vs new patterns and applies add-include/add-exclude/
+remove-pattern commands. Errors are reported via notifications.
 
 ## File Tree
 
@@ -62,146 +83,112 @@ Visual treatment:
 - *Italic* — indexed in ark but missing from disk (ghost file)
 - **Bold** — exists on disk but not accounted for (unresolved)
 
-### Example Tree
-
-```
-~/work/myproject/
-├── [✓] src/                      ← collapsed by default (fully included)
-│   ├── [✓] main.go                  (visible when expanded)
-│   ├── [✓] server.go
-│   └── [?] utils_test.go        ← unresolved (bold)
-├── [✗] .git/                     ← collapsed (fully excluded)
-├── [✗] node_modules/             ← collapsed (fully excluded)
-├── [✓] README.md
-├── [✓] design.md
-├── [?] scratch.txt               ← unresolved (bold)
-└── [✓] api-notes.md              ← missing (italic)
-```
-
-Directory states roll up from children:
-- All children included → directory shows [✓]
-- All children excluded → directory shows [✗]
-- Mixed or has unresolved → directory shows [~]
-
 ### Expanding and Collapsing
 
 All directories are expandable regardless of state. A fully-included
-`[✓]` directory can be expanded to carve out exceptions — flip any
-descendant to `[✗]` to exclude it from the blanket include.
+`[✓]` directory can be expanded to carve out exceptions.
 
 **Default collapse:** Fully-included and fully-excluded directories
-start collapsed. Mixed directories (`[~]`) start expanded so
-discrepancies are immediately visible.
+start collapsed. Mixed directories (`[~]`) start expanded.
 
 **"Collapse resolved" button:** Collapses all fully-included and
-fully-excluded directories in one click, cleaning up the view to
-show only the things that need attention.
+fully-excluded directories in one click.
 
 ### Lazy Loading
 
-The tree does not generate all nodes at once. Children are loaded
-in batches when a directory is expanded — keeps the DOM clean while
-balancing against round-trip latency. Directories that have never
-been expanded have no child nodes until the user opens them.
+Children are loaded in batches when a directory is expanded.
+Directories that have never been expanded have no child nodes.
 
 ### Changing State
 
 Clicking a file's state indicator cycles: include → exclude → unresolved.
-
-Clicking a directory's state indicator applies to all unresolved
-children (does not override existing explicit rules).
-
-**Pattern generation:** When the user changes a file's state, the app
-generates the simplest pattern that covers it:
-- Single file → `filename`
-- Directory → `dirname/`
-- All children → `dirname/**`
-
-**Exception patterns:** Each directory node has a combobox with
-common exception patterns. If the directory is included, the
-patterns create prefixed excludes. If excluded, they create
-prefixed includes. The last option is "type a glob" for custom
-patterns.
-
-Example for an included `src/` directory:
-```
-├── [✓] src/ [ ▾ exceptions    ]
-│              ├─ *_test.go
-│              ├─ *.generated.*
-│              ├─ vendor/**
-│              └─ type a glob...
-```
-
-The selected pattern is automatically prefixed by the node's path
-(e.g. `src/*_test.go`).
-
-Expanding the directory still works — you can combine exception
-patterns with individual overrides on children.
-
-**Under the hood:** The three states map directly to ark.toml
-patterns:
-- Include → add an include pattern for this file/directory
-- Exclude → add an exclude pattern for this file/directory
-- No pattern → remove any pattern covering this file
-
-The UI shows the *effective* state (a file may be included because
-a parent glob matches it), but clicking always operates on
-explicit patterns.
+Clicking a directory's state applies to all unresolved children only.
 
 ### Why Tooltips
 
-Every state indicator has a tooltip explaining *why* the file has
-that state:
-- "Included by pattern: *.md"
-- "Excluded by .gitignore: node_modules/"
-- "Excluded by pattern: *_test.go (source: src/)"
-- "No matching pattern"
+Every state indicator has a tooltip explaining why the file has
+that state (pattern match, .gitignore, etc.).
 
-This makes the rule resolution transparent without cluttering the
-tree itself.
+### Resizable Panels
 
-### Ignore File Integration
+A draggable handle between left and right panels allows resizing.
+Minimum 180px, maximum 50% of viewport width.
 
-If a directory contains a `.gitignore` or `.arkignore`, the tree
-node shows a checkbox for whether to honor it (checked by default).
-When honored, the ignore file's patterns fold into the tree — files
-excluded by an ignore rule show as `[✗]` with a tooltip indicating
-the source (e.g. "Excluded by .gitignore: *.log").
+## Search
 
-## Source Search Filter
+### Search Bar
 
-Each source in the sidebar has a filter toggle (funnel icon) that
-controls whether it's included in search results. This lives on the
-source list items themselves — no separate chip row needed.
+Always visible at top of right panel. Contains:
+- Filter panel toggle (funnel icon, fills when active)
+- Mode selector: contains / about / regex
+- Search input with live search (fires on 3+ chars, Enter for immediate)
+- Clear button (visible when results showing)
 
-### Display Rules
+### Search Results
 
-- Filter toggles shown on each source list item
-- All sources start included (no filter active = search everything)
-- All/Invert buttons in sidebar header (visible when 2+ sources)
+Results grouped by file using `SearchFileGroup` type:
+- File header: compressed path (accent color), top score, "+N more" count
+- Expandable: click to show/hide additional chunks
+- Each chunk: line range, score, preview text (HTML with highlights)
+- Hits per file: cycle button (1 / 3 / all) re-searches with adjusted k
 
-### Toggle Behavior
+Search uses `mcp:search_grouped()` (in-process Go function) with
+filter opts built from source filter buttons + filter panel fields.
 
-- Click funnel icon to exclude source from search (dims the icon)
-- Click again to re-include (fills the icon)
-- Toggling re-triggers current search immediately if results showing
+### Filter Panel
 
-### Control Buttons
+Collapsible 2×2 grid above search bar:
+- Filter files (glob patterns, one per line)
+- Exclude files (glob patterns)
+- Filter content (FTS queries, one per line)
+- Exclude content (FTS queries)
 
-- **All** (check2-all icon) — resets all sources to included
-- **Invert** (arrow-left-right icon) — flips every source's inclusion
-
-### CLI Flag Selection
-
-The app auto-picks `--source` vs `--not-source` based on which
-produces fewer flags:
-- If most sources are included, use `--not-source` for the excluded ones
-- If most are excluded, use `--source` for the included ones
-- If all included or all excluded, no source flag is sent
+All fields compose with source filter buttons.
 
 ## Status Bar
 
 Bottom of the app. Shows:
 - Total files: included / excluded / unresolved / missing
-- Last scan timestamp
 - Server status (running or not)
+
+## Messaging Dashboard
+
+Kanban-style view showing cross-project messages grouped by status
+columns. Data comes from `mcp:inbox()` (in-process Go function).
+
+### Layout
+
+Status columns displayed horizontally. Only columns with items are
+shown. Target normal monitors (external monitor or XR glasses on
+the Deck, not the 7-inch screen).
+
+Status columns (from ARK-MESSAGING.md):
+- Future, Open, Accepted, In-Progress, Completed, Denied
+
+### Message Cards
+
+Each card shows:
+- Summary (from @issue tag)
+- From/To project names
+- Status badge
+- Click to open file via `mcp:open(path)`
+
+### Refresh
+
+Manual refresh button. Real-time updates are V3 territory.
+
+### What's NOT in scope
+
+- Status mutation from the UI
+- Response threading / conversation view
+- Cross-project file writes (never, by design)
+- Claude-in-the-loop card name polish (Phase 3, deferred)
+
+## MCP Shell Integration
+
+Two ark buttons in the MCP bottom bar:
+- **Archive icon** — displays ark in searching mode (current behavior)
+- **Envelope icon** — displays ark in messaging mode (new)
+
+Each button sets the view mode on the ark instance before calling
+`mcp:display("ark")`.

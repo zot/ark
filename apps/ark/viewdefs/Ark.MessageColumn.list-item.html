@@ -1,0 +1,11 @@
+<template>
+  <div class="msg-column">
+    <div class="msg-column-header">
+      <span ui-attr-class="statusClass()" ui-value="statusLabel()"></span>
+      <span class="msg-column-count" ui-value="itemCount()"></span>
+    </div>
+    <div class="msg-column-cards">
+      <div ui-view="items()?wrapper=lua.ViewList" ui-namespace="DEFAULT"></div>
+    </div>
+  </div>
+</template>

@@ -21,8 +21,15 @@ CLI ──> Searcher.SearchCombined(query, opts)
          │     ├── positives intersect, negatives subtract
          │     └── return WithOnly(ids) or WithExcept(ids)
          │
-         ├──> microfts2.Search(query, ...filterOpts)
+         ├──> defaultSearchOpts(filterOpt, opts.Score)
+         │     └── adds WithDensity() if score="density"
+         │
+         ├──> microfts2.Search(query, ...searchOpts)
          │     └── returns []SearchResult (filtered by source)
+         │
+         ├──> if auto mode && 0 FTS results:
+         │     └── retry microfts2.Search(query, ...searchOpts+WithDensity())
+         │         (fuzzy escalation — OR semantics fallback)
          │
          ├──> microvec.Search(query, k)
          │     └── returns []SearchResult{FileID, ChunkNum, Score}
@@ -91,6 +98,41 @@ CLI ──> Searcher.SearchSplit(opts)
 One JSON object per line. Score is the combined/best score.
 --files deduplicates: multiple chunk hits from one file → one entry,
 score is the best chunk score for that file.
+
+## Flow: Multi-strategy Search (--multi)
+
+```
+CLI ──> Searcher.SearchMulti(query, opts)
+         │
+         ├──> ResolveFilters(opts)
+         │     └── (same as combined search)
+         │
+         ├──> buildStrategies(query)
+         │     ├── "coverage": scoreCoverage (static)
+         │     ├── "density":  scoreDensity (static)
+         │     ├── "overlap":  ScoreOverlap (static)
+         │     └── "bm25":    db.BM25Func(queryTrigrams)
+         │                     └── reads I record counters
+         │
+         ├──> if --proximity:
+         │     └── append WithProximityRerank(2*k) to search opts
+         │
+         ├──> microfts2.SearchMulti(query, strategies, k, ...filterOpts)
+         │     ├── single LMDB View transaction
+         │     ├── collect candidates once (trigram intersection)
+         │     ├── score with each strategy independently
+         │     └── if proximity: rerank top-N per strategy by term span
+         │          returns []MultiSearchResult (one per strategy)
+         │
+         ├──> deduplicate by (fileid, chunknum)
+         │     ├── keep best score per chunk across strategies
+         │     └── track which strategy produced each result
+         │
+         ├──> apply -k limit
+         │
+         └──> filterAndResolve(results, opts)
+               └── (same as combined search)
+```
 
 ## Flow: --like-file
 

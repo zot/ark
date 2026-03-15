@@ -138,3 +138,6 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] D5: R420 (preferred port on restart) — needs flib.Config.Port field in Frictionless upstream
 - [ ] D6: R438-R439 (browser count) — flib.Runtime doesn't expose WebSocket connection count. UIStatus reports running/port/indexing but not browser count. Needs flib API addition.
 - [ ] O14: gollama v0.1.8 SIGILL on Zen 2 (Steam Deck) — llama.cpp compute graph uses unsupported instructions. vec bench loads model but crashes on GetEmbeddings. Needs gollama rebuild with -march=znver2 or compatible flags.
+- [ ] O15: No unit tests for SearchMulti — needs test with mock microfts2 DB or integration test
+- [ ] O16: QueryTrigramCounts + BM25Func open two separate LMDB Views for overlapping data — could be one transaction with a BM25FuncFromQuery helper in microfts2
+- [ ] O17: --proximity only works with --multi currently — spec says it composes with any search mode (R597)

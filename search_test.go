@@ -59,7 +59,7 @@ func TestParseRange(t *testing.T) {
 }
 
 func TestChunkNumForRange(t *testing.T) {
-	// chunkNumForRange uses ChunkRanges from microfts2.FileInfo
+	// chunkNumForRange uses Chunks from microfts2.FRecord
 	// The merge/intersect logic requires live microfts2, tested via
 	// integration tests.
 }

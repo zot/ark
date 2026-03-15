@@ -71,6 +71,13 @@ local function compressPath(fullPath)
 
     return display
 end
+-- Forward declarations
+-- searching: child types (Source, Project, etc.) reference the
+-- searching view via this local. Assigned during instance creation.
+local searching
+-- Forward-declared so Ark:new/mutate can see them before their definitions
+local Searching, Messaging, MessageColumn, Message
+
 local ARK_BIN = DB_PATH .. "/ark"
 local ARK_PATH = "PATH=" .. DB_PATH .. ":" .. (os.getenv("PATH") or "")
 
@@ -154,10 +161,58 @@ local function nodePattern(node, mode)
 end
 
 ------------------------------------------------------------------------
--- Ark (main app)
+-- Ark (root shell — routes between Searching and Messaging views)
 ------------------------------------------------------------------------
 
 Ark = session:prototype("Ark", {
+    _viewMode = "searching",
+    _searching = EMPTY,
+    _messaging = EMPTY,
+})
+
+function Ark:new(instance)
+    instance = session:create(Ark, instance)
+    instance._searching = Searching:new()
+    instance._messaging = Messaging:new()
+    return instance
+end
+
+function Ark:currentView()
+    if self._viewMode == "messaging" then
+        if not self._messaging then
+            self._messaging = Messaging:new()
+        end
+        return self._messaging
+    end
+    return self._searching
+end
+
+function Ark:showSearching()
+    self._viewMode = "searching"
+end
+
+function Ark:showMessaging()
+    self._viewMode = "messaging"
+    if not self._messaging then
+        self._messaging = Messaging:new()
+    end
+    self._messaging:refresh()
+end
+
+function Ark:mutate()
+    if self._searching == nil then
+        self._searching = Searching:new()
+    end
+    if self._messaging == nil then
+        self._messaging = Messaging:new()
+    end
+end
+
+------------------------------------------------------------------------
+-- Ark.Searching (index manager + full-text search)
+------------------------------------------------------------------------
+
+Ark.Searching = session:prototype("Ark.Searching", {
     _sources = EMPTY,
     selectedSource = EMPTY,
     showAddForm = false,
@@ -192,6 +247,7 @@ Ark = session:prototype("Ark", {
     -- Pattern editing
     _showPatterns = false,
 })
+Searching = Ark.Searching
 
 Ark.Source = session:prototype("Ark.Source", {
     dir = "",
@@ -363,7 +419,7 @@ local Node = Ark.Node
 -- Ark methods
 ------------------------------------------------------------------------
 
-function Ark:mutate()
+function Searching:mutate()
     if self._searchResults == nil then
         self._searchResults = {}
     end
@@ -395,15 +451,15 @@ function Ark:mutate()
     end
 end
 
-function Ark:new(instance)
-    instance = session:create(Ark, instance)
+function Searching:new(instance)
+    instance = session:create(Searching, instance)
     instance._sources = instance._sources or {}
     instance._statusCounts = instance._statusCounts or {}
     instance:loadConfig()
     return instance
 end
 
-function Ark:loadConfig()
+function Searching:loadConfig()
     local cfg = arkJSON("config")
     if not cfg then return end
 
@@ -452,7 +508,7 @@ function Ark:loadConfig()
     self:buildDisplayItems()
 end
 
-function Ark:refresh()
+function Searching:refresh()
     arkCmd("scan")
     arkCmd("refresh")
     self:loadConfig()
@@ -462,7 +518,7 @@ function Ark:refresh()
     end
 end
 
-function Ark:selectSource(source)
+function Searching:selectSource(source)
     self.selectedSource = source
     self.showAddForm = false
     self._searchView = false
@@ -471,17 +527,17 @@ function Ark:selectSource(source)
     end
 end
 
-function Ark:openAddForm()
+function Searching:openAddForm()
     self.showAddForm = true
 end
 
-function Ark:cancelAddForm()
+function Searching:cancelAddForm()
     self.showAddForm = false
     self.newDir = ""
     self.newStrategy = "markdown"
 end
 
-function Ark:addSource()
+function Searching:addSource()
     if self.newDir == "" then return end
     arkCmd('config add-source --strategy ' .. self.newStrategy .. ' "' .. self.newDir .. '"')
     self:cancelAddForm()
@@ -496,14 +552,14 @@ function Ark:addSource()
     end
 end
 
-function Ark:removeSource()
+function Searching:removeSource()
     if not self.selectedSource then return end
     arkCmd('config remove-source "' .. self.selectedSource.dir .. '"')
     self.selectedSource = nil
     self:loadConfig()
 end
 
-function Ark:saveSelectedPatterns()
+function Searching:saveSelectedPatterns()
     if not self.selectedSource then return end
     self.selectedSource:savePatterns()
     if (self.selectedSource._patternError or "") == "" then
@@ -513,15 +569,15 @@ function Ark:saveSelectedPatterns()
     end
 end
 
-function Ark:togglePatterns()
+function Searching:togglePatterns()
     self._showPatterns = not self._showPatterns
 end
 
-function Ark:hidePatterns()
+function Searching:hidePatterns()
     return not self._showPatterns or not self.selectedSource
 end
 
-function Ark:collapseResolved()
+function Searching:collapseResolved()
     if not self.selectedSource then return end
     local nodes = self.selectedSource._visibleNodes
     -- Iterate backwards to safely remove descendants
@@ -536,7 +592,7 @@ function Ark:collapseResolved()
     end
 end
 
-function Ark:checkServer()
+function Searching:checkServer()
     local output = arkCmd("status")
     if not output or output == "" then
         self._serverRunning = false
@@ -556,70 +612,54 @@ function Ark:checkServer()
     }
 end
 
-function Ark:visibleNodes()
+function Searching:visibleNodes()
     if self.selectedSource then
         return self.selectedSource._visibleNodes or {}
     end
     return {}
 end
 
-function Ark:showSourceDetail()
+function Searching:showSourceDetail()
     return self.selectedSource ~= nil and not self.showAddForm and not self._searchView
 end
 
-function Ark:hideSourceDetail()
+function Searching:hideSourceDetail()
     return not self:showSourceDetail()
 end
 
-function Ark:showPlaceholder()
+function Searching:showPlaceholder()
     return self.selectedSource == nil and not self.showAddForm and not self._searchView
 end
 
-function Ark:hidePlaceholder()
+function Searching:hidePlaceholder()
     return not self:showPlaceholder()
 end
 
-function Ark:hideAddForm()
+function Searching:hideAddForm()
     return not self.showAddForm
 end
 
-function Ark:sourceHeaderText()
+function Searching:sourceHeaderText()
     if self.selectedSource then return compressPath(self.selectedSource.dir) end
     return ""
 end
 
-function Ark:sourceHeaderFullPath()
+function Searching:sourceHeaderFullPath()
     if self.selectedSource then return self.selectedSource.dir end
     return ""
 end
 
-function Ark:statusText()
+function Searching:statusText()
     local c = self._statusCounts or {}
     return string.format("✓ %d  |  ✗ %d  |  ? %d  |  👻 %d",
         c.included or 0, c.stale or 0, c.unresolved or 0, c.missing or 0)
 end
 
-function Ark:serverStatusText()
+function Searching:serverStatusText()
     if self._serverRunning then return "●" end
     return "○"
 end
 
-function Ark:quickAddClaudeProjects()
-    arkCmd('config add-strategy "*.jsonl" chat-jsonl')
-    arkCmd('config add-strategy "*.md" markdown')
-    -- Add each Claude project dir as a concrete source
-    local claudeDir = HOME .. "/.claude/projects"
-    local entries = listDir(claudeDir)
-    for _, entry in ipairs(entries) do
-        if entry.isDir and entry.name:sub(1, 1) == "-" then
-            local dir = claudeDir .. "/" .. entry.name
-            arkCmd('config add-source "' .. dir .. '"')
-            arkCmd('config add-include "*.jsonl" --source "' .. dir .. '"')
-            arkCmd('config add-include "memory/*.md" --source "' .. dir .. '"')
-        end
-    end
-    self:loadConfig()
-end
 
 ------------------------------------------------------------------------
 -- Slug resolution: find real directory name from Claude project slug
@@ -699,23 +739,23 @@ end
 -- Project search panel
 ------------------------------------------------------------------------
 
-function Ark:openProjectSearch()
+function Searching:openProjectSearch()
     self._projectSearchOpen = true
     self._projectSearchQuery = ""
     self:scanProjectCandidates()
 end
 
-function Ark:closeProjectSearch()
+function Searching:closeProjectSearch()
     self._projectSearchOpen = false
     self._projectCandidates = {}
     self._projectSearchQuery = ""
 end
 
-function Ark:hideProjectSearch()
+function Searching:hideProjectSearch()
     return not self._projectSearchOpen
 end
 
-function Ark:scanProjectCandidates()
+function Searching:scanProjectCandidates()
     local claudeDir = HOME .. "/.claude/projects"
     local entries = listDir(claudeDir)
 
@@ -745,27 +785,12 @@ function Ark:scanProjectCandidates()
     self._projectCandidates = candidates
 end
 
-function Ark:refreshProjectSearch()
+function Searching:refreshProjectSearch()
     self:scanProjectCandidates()
 end
 
-function Ark:filteredProjectCandidates()
-    local q = (self._projectSearchQuery or ""):lower()
-    local results = {}
-    for _, c in ipairs(self._projectCandidates or {}) do
-        if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
-            table.insert(results, c)
-        end
-    end
-    -- Pin selected to top
-    table.sort(results, function(a, b)
-        if a.selected ~= b.selected then return a.selected end
-        return a.name:lower() < b.name:lower()
-    end)
-    return results
-end
 
-function Ark:saveProjects()
+function Searching:saveProjects()
     local claudeDir = HOME .. "/.claude/projects"
     local added, removed = 0, 0
 
@@ -809,18 +834,18 @@ function Ark:saveProjects()
     end
 end
 
-function Ark:hasProjectChanges()
+function Searching:hasProjectChanges()
     for _, c in ipairs(self._projectCandidates or {}) do
         if c.selected ~= c._wasConfigured then return true end
     end
     return false
 end
 
-function Ark:hideProjectSave()
+function Searching:hideProjectSave()
     return not self:hasProjectChanges()
 end
 
-function Ark:projectNewCount()
+function Searching:projectNewCount()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
         if c.selected and not c._wasConfigured then n = n + 1 end
@@ -828,7 +853,7 @@ function Ark:projectNewCount()
     return n
 end
 
-function Ark:projectRemovedCount()
+function Searching:projectRemovedCount()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
         if not c.selected and c._wasConfigured then n = n + 1 end
@@ -836,7 +861,7 @@ function Ark:projectRemovedCount()
     return n
 end
 
-function Ark:projectSaveText()
+function Searching:projectSaveText()
     local added = self:projectNewCount()
     local removed = self:projectRemovedCount()
     if added == 0 and removed == 0 then return "No changes" end
@@ -846,7 +871,7 @@ function Ark:projectSaveText()
     return "Save · " .. table.concat(parts, ", ")
 end
 
-function Ark:projectSelectedCount()
+function Searching:projectSelectedCount()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
         if c.selected then n = n + 1 end
@@ -854,11 +879,11 @@ function Ark:projectSelectedCount()
     return n
 end
 
-function Ark:projectSelectedHeader()
+function Searching:projectSelectedHeader()
     return "Projects (" .. self:projectSelectedCount() .. ")"
 end
 
-function Ark:projectAvailableCount()
+function Searching:projectAvailableCount()
     local q = (self._projectSearchQuery or ""):lower()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
@@ -871,11 +896,11 @@ function Ark:projectAvailableCount()
     return n
 end
 
-function Ark:projectAvailableHeader()
+function Searching:projectAvailableHeader()
     return "Available (" .. self:projectAvailableCount() .. ")"
 end
 
-function Ark:projectCandidatesUpper()
+function Searching:projectCandidatesUpper()
     -- Upper section: selected OR was configured (the "result" view)
     local q = (self._projectSearchQuery or ""):lower()
     local results = {}
@@ -890,7 +915,7 @@ function Ark:projectCandidatesUpper()
     return results
 end
 
-function Ark:projectCandidatesLower()
+function Searching:projectCandidatesLower()
     -- Lower section: not selected AND not configured (purely available)
     local q = (self._projectSearchQuery or ""):lower()
     local results = {}
@@ -905,7 +930,7 @@ function Ark:projectCandidatesLower()
     return results
 end
 
-function Ark:upperSectionCount()
+function Searching:upperSectionCount()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
         if c.selected or c._wasConfigured then n = n + 1 end
@@ -913,7 +938,7 @@ function Ark:upperSectionCount()
     return n
 end
 
-function Ark:lowerSectionCount()
+function Searching:lowerSectionCount()
     local q = (self._projectSearchQuery or ""):lower()
     local n = 0
     for _, c in ipairs(self._projectCandidates or {}) do
@@ -926,21 +951,21 @@ function Ark:lowerSectionCount()
     return n
 end
 
-function Ark:hideUpperSection()
+function Searching:hideUpperSection()
     return self:upperSectionCount() == 0
 end
 
-function Ark:hideAvailableSection()
+function Searching:hideAvailableSection()
     return self:lowerSectionCount() == 0
 end
 
-function Ark:resetProjectSelections()
+function Searching:resetProjectSelections()
     for _, c in ipairs(self._projectCandidates or {}) do
         c.selected = c._wasConfigured
     end
 end
 
-function Ark:hideProjectReset()
+function Searching:hideProjectReset()
     return not self:hasProjectChanges()
 end
 
@@ -948,7 +973,7 @@ end
 -- Display grouping: sources → projects + data sources
 ------------------------------------------------------------------------
 
-function Ark:buildDisplayItems()
+function Searching:buildDisplayItems()
     local claudePrefix = HOME .. "/.claude/projects/"
     local claudeBySlug = {}   -- slug → Source
     local fileSources = {}    -- array of {dir, source}
@@ -1126,7 +1151,7 @@ end
 ------------------------------------------------------------------------
 
 -- Compute tri-state for a filter type: "on", "off", "mixed"
-function Ark:computeFilterState(filterType)
+function Searching:computeFilterState(filterType)
     local allOn, allOff = true, true
     local hasItems = false
 
@@ -1162,7 +1187,7 @@ local function nextToggleState(state)
     return true  -- mixed or off → on
 end
 
-function Ark:toggleFilterData()
+function Searching:toggleFilterData()
     local newVal = nextToggleState(self:computeFilterState("data"))
     for _, d in ipairs(self._dataSources or {}) do
         d.dataOn = newVal
@@ -1170,7 +1195,7 @@ function Ark:toggleFilterData()
     self:refilterSearch()
 end
 
-function Ark:toggleFilterProject()
+function Searching:toggleFilterProject()
     local newVal = nextToggleState(self:computeFilterState("project"))
     for _, p in ipairs(self._projects or {}) do
         if p._hasFiles then p.filesOn = newVal end
@@ -1178,7 +1203,7 @@ function Ark:toggleFilterProject()
     self:refilterSearch()
 end
 
-function Ark:toggleFilterMemory()
+function Searching:toggleFilterMemory()
     local newVal = nextToggleState(self:computeFilterState("memory"))
     for _, p in ipairs(self._projects or {}) do
         if p._hasMemory then p.memoryOn = newVal end
@@ -1186,7 +1211,7 @@ function Ark:toggleFilterMemory()
     self:refilterSearch()
 end
 
-function Ark:toggleFilterChats()
+function Searching:toggleFilterChats()
     local newVal = nextToggleState(self:computeFilterState("chats"))
     for _, p in ipairs(self._projects or {}) do
         if p._hasChats then p.chatsOn = newVal end
@@ -1195,7 +1220,7 @@ function Ark:toggleFilterChats()
 end
 
 -- Solo: double-click turns only this type on, all others off
-function Ark:soloFilterData()
+function Searching:soloFilterData()
     for _, d in ipairs(self._dataSources or {}) do d.dataOn = true end
     for _, p in ipairs(self._projects or {}) do
         p.filesOn = false; p.memoryOn = false; p.chatsOn = false
@@ -1203,7 +1228,7 @@ function Ark:soloFilterData()
     self:refilterSearch()
 end
 
-function Ark:soloFilterProject()
+function Searching:soloFilterProject()
     for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
     for _, p in ipairs(self._projects or {}) do
         p.filesOn = p._hasFiles; p.memoryOn = false; p.chatsOn = false
@@ -1211,7 +1236,7 @@ function Ark:soloFilterProject()
     self:refilterSearch()
 end
 
-function Ark:soloFilterMemory()
+function Searching:soloFilterMemory()
     for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
     for _, p in ipairs(self._projects or {}) do
         p.filesOn = false; p.memoryOn = p._hasMemory; p.chatsOn = false
@@ -1219,7 +1244,7 @@ function Ark:soloFilterMemory()
     self:refilterSearch()
 end
 
-function Ark:soloFilterChats()
+function Searching:soloFilterChats()
     for _, d in ipairs(self._dataSources or {}) do d.dataOn = false end
     for _, p in ipairs(self._projects or {}) do
         p.filesOn = false; p.memoryOn = false; p.chatsOn = p._hasChats
@@ -1228,7 +1253,7 @@ function Ark:soloFilterChats()
 end
 
 -- Reset: project ON, memory ON, data ON, chats OFF
-function Ark:resetFilters()
+function Searching:resetFilters()
     for _, p in ipairs(self._projects or {}) do
         p.filesOn = p._hasFiles
         p.memoryOn = p._hasMemory
@@ -1241,7 +1266,7 @@ function Ark:resetFilters()
 end
 
 -- Invert all filters
-function Ark:invertFilters()
+function Searching:invertFilters()
     for _, p in ipairs(self._projects or {}) do
         if p._hasFiles then p.filesOn = not p.filesOn end
         if p._hasMemory then p.memoryOn = not p.memoryOn end
@@ -1254,54 +1279,54 @@ function Ark:invertFilters()
 end
 
 -- Re-run search if active
-function Ark:refilterSearch()
+function Searching:refilterSearch()
     if self._searchView and self.searchQuery ~= "" then
         self:search()
     end
 end
 
 -- Filter bar icon methods (filled = on, outline = off/mixed)
-function Ark:filterDataIcon()
+function Searching:filterDataIcon()
     return self:computeFilterState("data") == "off" and "file-earmark" or "file-earmark-fill"
 end
-function Ark:filterProjectIcon()
+function Searching:filterProjectIcon()
     return self:computeFilterState("project") == "off" and "folder" or "folder-fill"
 end
-function Ark:filterMemoryIcon()
+function Searching:filterMemoryIcon()
     return self:computeFilterState("memory") == "off" and "lightbulb" or "lightbulb-fill"
 end
-function Ark:filterChatsIcon()
+function Searching:filterChatsIcon()
     return self:computeFilterState("chats") == "off" and "chat" or "chat-fill"
 end
 
 -- Filter bar boolean methods for ui-class bindings
-function Ark:filterDataIsOn() return self:computeFilterState("data") == "on" end
-function Ark:filterDataIsMixed() return self:computeFilterState("data") == "mixed" end
-function Ark:filterProjectIsOn() return self:computeFilterState("project") == "on" end
-function Ark:filterProjectIsMixed() return self:computeFilterState("project") == "mixed" end
-function Ark:filterMemoryIsOn() return self:computeFilterState("memory") == "on" end
-function Ark:filterMemoryIsMixed() return self:computeFilterState("memory") == "mixed" end
-function Ark:filterChatsIsOn() return self:computeFilterState("chats") == "on" end
-function Ark:filterChatsIsMixed() return self:computeFilterState("chats") == "mixed" end
+function Searching:filterDataIsOn() return self:computeFilterState("data") == "on" end
+function Searching:filterDataIsMixed() return self:computeFilterState("data") == "mixed" end
+function Searching:filterProjectIsOn() return self:computeFilterState("project") == "on" end
+function Searching:filterProjectIsMixed() return self:computeFilterState("project") == "mixed" end
+function Searching:filterMemoryIsOn() return self:computeFilterState("memory") == "on" end
+function Searching:filterMemoryIsMixed() return self:computeFilterState("memory") == "mixed" end
+function Searching:filterChatsIsOn() return self:computeFilterState("chats") == "on" end
+function Searching:filterChatsIsMixed() return self:computeFilterState("chats") == "mixed" end
 
 -- Tooltip text for filter buttons
-function Ark:filterDataTooltip()
+function Searching:filterDataTooltip()
     return "Data sources (" .. self:computeFilterState("data") .. ") — double-click to solo"
 end
-function Ark:filterProjectTooltip()
+function Searching:filterProjectTooltip()
     return "Project files (" .. self:computeFilterState("project") .. ") — double-click to solo"
 end
-function Ark:filterMemoryTooltip()
+function Searching:filterMemoryTooltip()
     return "Memories (" .. self:computeFilterState("memory") .. ") — double-click to solo"
 end
-function Ark:filterChatsTooltip()
+function Searching:filterChatsTooltip()
     return "Chat logs (" .. self:computeFilterState("chats") .. ") — double-click to solo"
 end
 
 -- Build filter opts table from source filter buttons + filter panel fields.
 -- Returns a table with filter_files, exclude_files, filter, except arrays
 -- suitable for passing to mcp:search_grouped().
-function Ark:buildFilterOpts()
+function Searching:buildFilterOpts()
     local filter_files = {}
     local exclude_files = {}
     local filter = {}
@@ -1407,7 +1432,7 @@ end
 -- mcp:search_grouped blocks Lua, so keystrokes naturally compress during search.
 local MIN_QUERY_LEN = 3
 
-function Ark:onSearchInput()
+function Searching:onSearchInput()
     local q = self.searchQuery
     if q == self._lastSearchedQuery then return "" end
 
@@ -1422,7 +1447,7 @@ function Ark:onSearchInput()
     return ""
 end
 
-function Ark:search()
+function Searching:search()
     local q = (self.searchQuery:match("^%s*(.-)%s*$") or "")
     if q == "" then return end
     self._lastSearchedQuery = self.searchQuery
@@ -1488,7 +1513,7 @@ function Ark:search()
     self._searchView = true
 end
 
-function Ark:clearSearch()
+function Searching:clearSearch()
     self.searchQuery = ""
     self._searchResults = {}
     if self._searchGroups then
@@ -1499,39 +1524,39 @@ function Ark:clearSearch()
     self._searchView = false
 end
 
-function Ark:setModeAbout()
+function Searching:setModeAbout()
     self.searchMode = "about"
 end
 
-function Ark:setModeContains()
+function Searching:setModeContains()
     self.searchMode = "contains"
 end
 
-function Ark:setModeRegex()
+function Searching:setModeRegex()
     self.searchMode = "regex"
 end
 
-function Ark:modeIsAbout()
+function Searching:modeIsAbout()
     return self.searchMode == "about"
 end
 
-function Ark:modeIsContains()
+function Searching:modeIsContains()
     return self.searchMode == "contains"
 end
 
-function Ark:modeIsRegex()
+function Searching:modeIsRegex()
     return self.searchMode == "regex"
 end
 
-function Ark:searchResults()
+function Searching:searchResults()
     return self._searchGroups or {}
 end
 
-function Ark:hideSearchResults()
+function Searching:hideSearchResults()
     return not self._searchView
 end
 
-function Ark:searchResultCount()
+function Searching:searchResultCount()
     local groups = self._searchGroups or {}
     local nFiles = #groups
     local nChunks = 0
@@ -1547,15 +1572,15 @@ function Ark:searchResultCount()
 end
 
 -- Filter panel toggle
-function Ark:toggleFilterPanel()
+function Searching:toggleFilterPanel()
     self._showFilterPanel = not self._showFilterPanel
 end
 
-function Ark:hideFilterPanel()
+function Searching:hideFilterPanel()
     return not self._showFilterPanel
 end
 
-function Ark:filterPanelIcon()
+function Searching:filterPanelIcon()
     if self._showFilterPanel then return "funnel-fill" end
     -- Show filled funnel if any filter is active
     if self.filterFiles ~= "" or self.excludeFiles ~= ""
@@ -1565,18 +1590,18 @@ function Ark:filterPanelIcon()
     return "funnel"
 end
 
-function Ark:hasActiveFilters()
+function Searching:hasActiveFilters()
     return self.filterFiles ~= "" or self.excludeFiles ~= ""
         or self.filterContent ~= "" or self.excludeContent ~= ""
 end
 
 -- Hits per file
-function Ark:hitsPerFileText()
+function Searching:hitsPerFileText()
     if self._hitsPerFile == "0" then return "all" end
     return self._hitsPerFile
 end
 
-function Ark:cycleHitsPerFile()
+function Searching:cycleHitsPerFile()
     if self._hitsPerFile == "1" then
         self._hitsPerFile = "3"
     elseif self._hitsPerFile == "3" then
@@ -1599,15 +1624,15 @@ function Source:displayDir()
 end
 
 function Source:selectMe()
-    if ark._filterClicked then
-        ark._filterClicked = false
+    if searching._filterClicked then
+        searching._filterClicked = false
         return
     end
-    ark:selectSource(self)
+    searching:selectSource(self)
 end
 
 function Source:isSelected()
-    return self == ark.selectedSource
+    return self == searching.selectedSource
 end
 
 function Source:countsText()
@@ -1779,7 +1804,7 @@ function Source:refreshCounts()
 end
 
 function Source:removeMe()
-    ark:removeSource()
+    searching:removeSource()
 end
 
 function Source:isLoading()
@@ -1859,7 +1884,7 @@ function Source:savePatterns()
     end
 
     -- Reload to sync state
-    ark:loadConfig()
+    searching:loadConfig()
 
     -- Refresh tree if loaded
     if self._loaded then
@@ -1868,55 +1893,48 @@ function Source:savePatterns()
     end
 end
 
-function Source:patternError()
-    return self._patternError or ""
-end
-
-function Source:hasPatternError()
-    return (self._patternError or "") ~= ""
-end
 
 ------------------------------------------------------------------------
 -- Project methods
 ------------------------------------------------------------------------
 
 function Project:selectMe()
-    if ark._filterClicked then
-        ark._filterClicked = false
+    if searching._filterClicked then
+        searching._filterClicked = false
         return
     end
     local source = self._fileSource or self._claudeSource
     if source then
-        ark:selectSource(source)
+        searching:selectSource(source)
     end
 end
 
 function Project:isSelected()
-    if not ark.selectedSource then return false end
-    return ark.selectedSource == self._fileSource or ark.selectedSource == self._claudeSource
+    if not searching.selectedSource then return false end
+    return searching.selectedSource == self._fileSource or searching.selectedSource == self._claudeSource
 end
 
 function Project:toggleFiles()
-    ark._filterClicked = true
+    searching._filterClicked = true
     if self._hasFiles then
         self.filesOn = not self.filesOn
-        ark:refilterSearch()
+        searching:refilterSearch()
     end
 end
 
 function Project:toggleMemory()
-    ark._filterClicked = true
+    searching._filterClicked = true
     if self._hasMemory then
         self.memoryOn = not self.memoryOn
-        ark:refilterSearch()
+        searching:refilterSearch()
     end
 end
 
 function Project:toggleChats()
-    ark._filterClicked = true
+    searching._filterClicked = true
     if self._hasChats then
         self.chatsOn = not self.chatsOn
-        ark:refilterSearch()
+        searching:refilterSearch()
     end
 end
 
@@ -1985,7 +2003,7 @@ end
 
 function Project:removeMe()
     -- Open the project editor instead of removing directly
-    ark:openProjectSearch()
+    searching:openProjectSearch()
 end
 
 ------------------------------------------------------------------------
@@ -1993,23 +2011,23 @@ end
 ------------------------------------------------------------------------
 
 function DataSource:selectMe()
-    if ark._filterClicked then
-        ark._filterClicked = false
+    if searching._filterClicked then
+        searching._filterClicked = false
         return
     end
     if self._source then
-        ark:selectSource(self._source)
+        searching:selectSource(self._source)
     end
 end
 
 function DataSource:isSelected()
-    return ark.selectedSource == self._source
+    return searching.selectedSource == self._source
 end
 
 function DataSource:toggleData()
-    ark._filterClicked = true
+    searching._filterClicked = true
     self.dataOn = not self.dataOn
-    ark:refilterSearch()
+    searching:refilterSearch()
 end
 
 function DataSource:dataIcon()
@@ -2036,10 +2054,10 @@ function DataSource:removeMe()
     if self._source then
         arkCmd('config remove-source "' .. self._source.dir .. '"')
     end
-    if ark.selectedSource == self._source then
-        ark.selectedSource = nil
+    if searching.selectedSource == self._source then
+        searching.selectedSource = nil
     end
-    ark:loadConfig()
+    searching:loadConfig()
 end
 
 ------------------------------------------------------------------------
@@ -2098,7 +2116,7 @@ end
 
 function Node:expand()
     if not self.isDir or self.expanded then return end
-    local source = ark.selectedSource
+    local source = searching.selectedSource
     if not source then return end
     source:loadChildren(self)
     self.expanded = true
@@ -2106,14 +2124,14 @@ end
 
 function Node:collapse()
     if not self.isDir or not self.expanded then return end
-    local source = ark.selectedSource
+    local source = searching.selectedSource
     if not source then return end
     source:removeDescendants(self)
     self.expanded = false
 end
 
 function Node:cycleState()
-    local source = ark.selectedSource
+    local source = searching.selectedSource
     if not source then return end
     local srcFlag = ' --source "' .. source.dir .. '"'
 
@@ -2212,7 +2230,7 @@ end
 
 function Node:applyException()
     if self.exceptionPattern == "" then return end
-    local source = ark.selectedSource
+    local source = searching.selectedSource
     if not source then return end
 
     local pattern = self.relPath .. "/" .. self.exceptionPattern
@@ -2241,9 +2259,168 @@ function Node:toggleHonorIgnore()
 end
 
 ------------------------------------------------------------------------
+-- Ark.Messaging (cross-project message dashboard)
+------------------------------------------------------------------------
+
+Ark.Messaging = session:prototype("Ark.Messaging", {
+    _messages = EMPTY,
+    _loading = false,
+})
+Messaging = Ark.Messaging
+
+Ark.MessageColumn = session:prototype("Ark.MessageColumn", {
+    status = "",
+    _items = EMPTY,
+})
+MessageColumn = Ark.MessageColumn
+
+Ark.Message = session:prototype("Ark.Message", {
+    status = "",
+    to = "",
+    from = "",
+    summary = "",
+    path = "",
+})
+Message = Ark.Message
+
+function Messaging:new(instance)
+    instance = session:create(Messaging, instance)
+    instance._messages = {}
+    return instance
+end
+
+function Messaging:refresh()
+    self._loading = true
+    local entries = mcp.inbox(true)
+    self._loading = false
+    if not entries then
+        self._messages = {}
+        return
+    end
+    local msgs = {}
+    for _, e in ipairs(entries) do
+        local m = session:create(Message)
+        m.status = e.status
+        m.to = e.to
+        m.from = e.from
+        m.summary = e.summary
+        m.path = e.path
+        table.insert(msgs, m)
+    end
+    self._messages = msgs
+end
+
+function Messaging:columns()
+    local order = {"open", "accepted", "in-progress", "future", "completed", "denied"}
+    local cols = {}
+    for _, status in ipairs(order) do
+        local items = {}
+        for _, m in ipairs(self._messages or {}) do
+            if m.status == status then
+                table.insert(items, m)
+            end
+        end
+        if #items > 0 then
+            local col = session:create(MessageColumn)
+            col.status = status
+            col._items = items
+            table.insert(cols, col)
+        end
+    end
+    return cols
+end
+
+function Messaging:messageCount()
+    return #(self._messages or {})
+end
+
+function Messaging:isLoading()
+    return self._loading
+end
+
+function Messaging:isEmpty()
+    return self:messageCount() == 0 and not self._loading
+end
+
+function Messaging:statusText()
+    local n = self:messageCount()
+    if n == 0 then return "No messages" end
+    if n == 1 then return "1 message" end
+    return tostring(n) .. " messages"
+end
+
+function MessageColumn:items()
+    return self._items or {}
+end
+
+function MessageColumn:statusLabel()
+    local labels = {
+        open = "Open",
+        accepted = "Accepted",
+        ["in-progress"] = "In Progress",
+        future = "Future",
+        completed = "Completed",
+        denied = "Denied",
+    }
+    return labels[self.status] or self.status
+end
+
+function MessageColumn:itemCount()
+    return #(self._items or {})
+end
+
+function MessageColumn:statusClass()
+    local s = self.status
+    if s == "open" then return "msg-status-open" end
+    if s == "accepted" or s == "in-progress" then return "msg-status-active" end
+    if s == "completed" or s == "done" then return "msg-status-done" end
+    if s == "denied" then return "msg-status-denied" end
+    if s == "future" then return "msg-status-future" end
+    return ""
+end
+
+function Message:openFile()
+    mcp.open(self.path)
+end
+
+function Message:shortSummary()
+    local s = self.summary or ""
+    if #s > 60 then
+        s = s:sub(1, 57) .. "..."
+    end
+    return s
+end
+
+function Message:projectLabel()
+    local from = self.from or "?"
+    local to = self.to or "?"
+    return from .. " → " .. to
+end
+
+function Message:statusClass()
+    local s = self.status
+    if s == "open" then return "msg-status-open" end
+    if s == "accepted" or s == "in-progress" then return "msg-status-active" end
+    if s == "completed" or s == "done" then return "msg-status-done" end
+    if s == "denied" then return "msg-status-denied" end
+    if s == "future" then return "msg-status-future" end
+    return ""
+end
+
+------------------------------------------------------------------------
 -- Instance creation
 ------------------------------------------------------------------------
 
+-- Local reference for child types (Source, Project, etc.) that need
+-- the searching view. The global `ark` is the root shell.
+local searching
+
 if not session.reloading then
     ark = Ark:new()
+    searching = ark._searching
+else
+    -- On hot-reload, update the local reference
+    if ark and ark._searching then
+        searching = ark._searching
+    end
 end

@@ -16,8 +16,8 @@ import (
 
 	"github.com/zot/microfts2"
 
-	"github.com/zot/microvec"
 	"github.com/yuin/goldmark"
+	"github.com/zot/microvec"
 )
 
 var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
@@ -25,9 +25,13 @@ var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
 // defaultSearchOpts returns FTS search options with dynamic trigram filtering.
 // The filter uses a 50% ratio threshold — trigrams appearing in more than
 // half of all chunks are skipped as non-discriminating.
-func defaultSearchOpts(filterOpt microfts2.SearchOption) []microfts2.SearchOption {
+// Seq: seq-search.md | R572, R574, R575
+func defaultSearchOpts(filterOpt microfts2.SearchOption, score string) []microfts2.SearchOption {
 	opts := []microfts2.SearchOption{
 		microfts2.WithTrigramFilter(microfts2.FilterByRatio(0.50)),
+	}
+	if score == "density" {
+		opts = append(opts, microfts2.WithDensity())
 	}
 	if filterOpt != nil {
 		opts = append(opts, filterOpt)
@@ -37,21 +41,24 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption) []microfts2.SearchOptio
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K            int      // max results (default 20)
-	Scores       bool     // include scores in output
-	After        int64    // only results newer than this timestamp (unix nano, 0 = no filter)
-	About        string   // semantic query (microvec)
-	Contains     string   // exact match query (microfts2)
-	Regex        []string // regex patterns (first drives SearchRegex, all are AND post-filters)
-	ExceptRegex  []string // regex subtract post-filters (any match rejects)
-	LikeFile     string   // file path — use content as FTS density query
-	Tags         bool     // output extracted tags instead of content
-	Filter       []string // content-based positive filters (FTS queries, intersect)
-	Except       []string // content-based negative filters (FTS queries, subtract)
+	K               int      // max results (default 20)
+	Scores          bool     // include scores in output
+	After           int64    // only results newer than this timestamp (unix nano, 0 = no filter)
+	About           string   // semantic query (microvec)
+	Contains        string   // exact match query (microfts2)
+	Regex           []string // regex patterns (first drives SearchRegex, all are AND post-filters)
+	ExceptRegex     []string // regex subtract post-filters (any match rejects)
+	LikeFile        string   // file path — use content as FTS density query
+	Tags            bool     // output extracted tags instead of content
+	Filter          []string // content-based positive filters (FTS queries, intersect)
+	Except          []string // content-based negative filters (FTS queries, subtract)
 	FilterFiles     []string // path-based positive filters (glob patterns, intersect)
 	ExcludeFiles    []string // path-based negative filters (glob patterns, subtract)
 	FilterFileTags  []string // tag-based positive filters (tag names, intersect)
 	ExcludeFileTags []string // tag-based negative filters (tag names, subtract)
+	Score           string   // scoring strategy: "", "auto", "coverage", "density"
+	Multi           bool     // run all four strategies via SearchMulti
+	Proximity       bool     // enable proximity reranking
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -64,6 +71,7 @@ type SearchResultEntry struct {
 	FileID   uint64
 	ChunkNum uint64
 	Text     string // populated by FillChunks or FillFiles
+	Strategy string // which scoring strategy produced this result (multi-search only)
 }
 
 // ChunkResult is the JSONL output for --chunks.
@@ -199,11 +207,21 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 	if err != nil {
 		return nil, err
 	}
-	ftsSearchOpts := defaultSearchOpts(filterOpt)
+	score := opts.Score
+	ftsSearchOpts := defaultSearchOpts(filterOpt, score)
 
 	ftsResults, err := s.fts.Search(query, ftsSearchOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
+	}
+
+	// R576: Fuzzy escalation: auto mode retries with density on zero results
+	if len(ftsResults.Results) == 0 && (score == "" || score == "auto") {
+		densityOpts := defaultSearchOpts(filterOpt, "density")
+		ftsResults, err = s.fts.Search(query, densityOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("fts density search: %w", err)
+		}
 	}
 
 	vecResults, err := s.vec.Search(query, k*2) // over-fetch for merge
@@ -238,7 +256,8 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	ftsSearchOpts := defaultSearchOpts(filterOpt)
+	score := opts.Score
+	ftsSearchOpts := defaultSearchOpts(filterOpt, score)
 
 	hasAbout := opts.About != ""
 	hasFTS := opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != ""
@@ -260,6 +279,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	}
 
 	if opts.LikeFile != "" {
+		// --like-file always uses density regardless of --score
 		content, err := os.ReadFile(opts.LikeFile)
 		if err != nil {
 			return nil, fmt.Errorf("read like-file: %w", err)
@@ -279,6 +299,19 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
 		ftsResults = fr.Results
+		// R576: Fuzzy escalation: auto mode retries with density on zero results
+		if len(ftsResults) == 0 && (score == "" || score == "auto") {
+			densityOpts := defaultSearchOpts(filterOpt, "density")
+			densityOpts = append(densityOpts, microfts2.WithVerify())
+			if len(opts.Regex) > 0 {
+				densityOpts = append(densityOpts, microfts2.WithRegexFilter(opts.Regex...))
+			}
+			fr, err = s.fts.Search(opts.Contains, densityOpts...)
+			if err != nil {
+				return nil, fmt.Errorf("fts density search: %w", err)
+			}
+			ftsResults = fr.Results
+		}
 	} else if len(opts.Regex) > 0 {
 		// First regex drives the search; all regexes are AND post-filters
 		regexOpts := append(ftsSearchOpts, microfts2.WithRegexFilter(opts.Regex...))
@@ -312,6 +345,10 @@ func validateSearchFlags(opts SearchOpts) error {
 	// --contains and --regex can combine: contains drives FTS, regex post-filters
 	if opts.LikeFile != "" && (opts.Contains != "" || len(opts.Regex) > 0) {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
+	}
+	// R590: --multi is mutually exclusive with --score
+	if opts.Multi && opts.Score != "" {
+		return fmt.Errorf("--multi and --score are mutually exclusive")
 	}
 	return nil
 }
@@ -576,10 +613,10 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 		if opts.After != 0 && info.ModTime < opts.After {
 			continue
 		}
-		r.Path = info.Filename
+		r.Path = info.Names[0]
 		cn := int(r.ChunkNum)
-		if cn < len(info.ChunkRanges) {
-			r.Range = info.ChunkRanges[cn]
+		if cn < len(info.Chunks) {
+			r.Range = info.Chunks[cn].Location
 		}
 		resolved = append(resolved, r)
 	}
@@ -604,13 +641,13 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 			if err != nil {
 				continue
 			}
-			data, err := os.ReadFile(info.Filename)
+			data, err := os.ReadFile(info.Names[0])
 			if err != nil {
 				continue
 			}
 			fc = &fileCache{
 				lines:    strings.Split(string(data), "\n"),
-				strategy: info.ChunkingStrategy,
+				strategy: info.Strategy,
 			}
 			cache[r.FileID] = fc
 		}
@@ -653,7 +690,7 @@ func (s *Searcher) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, 
 		if err != nil {
 			continue
 		}
-		data, err := os.ReadFile(info.Filename)
+		data, err := os.ReadFile(info.Names[0])
 		if err != nil {
 			continue
 		}
@@ -704,14 +741,14 @@ func extractByRange(lines []string, rangeStr string) string {
 type ftsKeyCache struct {
 	s        *Searcher
 	fileIDs  map[string]uint64
-	fileInfo map[uint64]microfts2.FileInfo
+	fileInfo map[uint64]microfts2.FRecord
 }
 
 func (s *Searcher) newFTSKeyCache() *ftsKeyCache {
 	return &ftsKeyCache{
 		s:        s,
 		fileIDs:  make(map[string]uint64),
-		fileInfo: make(map[uint64]microfts2.FileInfo),
+		fileInfo: make(map[uint64]microfts2.FRecord),
 	}
 }
 
@@ -792,6 +829,119 @@ type GroupedChunk struct {
 	Preview string  `json:"preview"`
 }
 
+// SearchMulti runs a query through all four scoring strategies (coverage, density,
+// overlap, bm25) in a single microfts2 SearchMulti call. Results are deduplicated
+// by (fileid, chunknum), keeping the best score per chunk across strategies.
+// CRC: crc-Searcher.md | Seq: seq-search.md
+func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	if err := validateSearchFlags(opts); err != nil {
+		return nil, err
+	}
+	k := opts.K
+	if k == 0 {
+		k = 20
+	}
+
+	filterOpt, err := s.resolveFilters(opts)
+	if err != nil {
+		return nil, err
+	}
+	ftsSearchOpts := defaultSearchOpts(filterOpt, "")
+
+	// Proximity reranking is handled inside microfts2.SearchMulti
+	if opts.Proximity {
+		ftsSearchOpts = append(ftsSearchOpts, microfts2.WithProximityRerank(k*2))
+	}
+
+	// Build strategy map
+	strategies, err := s.buildStrategies(query)
+	if err != nil {
+		return nil, fmt.Errorf("build strategies: %w", err)
+	}
+
+	multiResults, err := s.fts.SearchMulti(query, strategies, k, ftsSearchOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("multi search: %w", err)
+	}
+
+	// Deduplicate by (fileid, chunknum), keeping best score and tracking strategy
+	type dedup struct {
+		entry SearchResultEntry
+		multi bool // seen from multiple strategies
+	}
+	cache := s.newFTSKeyCache()
+	seen := make(map[chunkKey]*dedup)
+
+	for _, mr := range multiResults {
+		for _, r := range mr.Results {
+			key, ok := cache.resolve(r)
+			if !ok {
+				continue
+			}
+			if d, exists := seen[key]; exists {
+				if r.Score > d.entry.Score {
+					d.entry.FTSScore = r.Score
+					d.entry.Score = r.Score
+				}
+				d.multi = true
+			} else {
+				seen[key] = &dedup{
+					entry: SearchResultEntry{
+						FileID:   key.FileID,
+						ChunkNum: key.ChunkNum,
+						FTSScore: r.Score,
+						Score:    r.Score,
+						Strategy: mr.Strategy,
+					},
+				}
+			}
+		}
+	}
+
+	results := make([]SearchResultEntry, 0, len(seen))
+	for _, d := range seen {
+		if d.multi {
+			d.entry.Strategy = "multi"
+		}
+		results = append(results, d.entry)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > k {
+		results = results[:k]
+	}
+	return s.filterAndResolve(results, opts)
+}
+
+// buildStrategies creates the strategy map for SearchMulti.
+// CRC: crc-Searcher.md
+func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc, error) {
+	strategies := map[string]microfts2.ScoreFunc{
+		"coverage": microfts2.ScoreCoverage,
+		"density":  microfts2.ScoreDensityFunc,
+		"overlap":  microfts2.ScoreOverlap,
+	}
+
+	// BM25 needs query trigrams for IDF computation
+	trigramCounts, err := s.fts.QueryTrigramCounts(query)
+	if err != nil {
+		return nil, fmt.Errorf("query trigram counts: %w", err)
+	}
+	queryTrigrams := make([]uint32, len(trigramCounts))
+	for i, tc := range trigramCounts {
+		queryTrigrams[i] = tc.Trigram
+	}
+	bm25, err := s.fts.BM25Func(queryTrigrams)
+	if err != nil {
+		return nil, fmt.Errorf("bm25 init: %w", err)
+	}
+	strategies["bm25"] = bm25
+
+	return strategies, nil
+}
+
 // SearchGrouped runs a search and groups results by file.
 // Files sorted by best chunk score (descending), chunks within each file
 // sorted by score (descending). Each chunk includes a pre-rendered HTML preview.
@@ -799,7 +949,9 @@ type GroupedChunk struct {
 func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
 	var results []SearchResultEntry
 	var err error
-	if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
+	if opts.Multi {
+		results, err = s.SearchMulti(query, opts)
+	} else if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
 		results, err = s.SearchSplit(opts)
 	} else {
 		results, err = s.SearchCombined(query, opts)
@@ -843,7 +995,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			// Look up strategy for this file
 			strategy := ""
 			if info, err := s.fts.FileInfoByID(r.FileID); err == nil {
-				strategy = info.ChunkingStrategy
+				strategy = info.Strategy
 			}
 			g = &fileGroup{path: r.Path, strategy: strategy}
 			groups[r.FileID] = g
@@ -973,16 +1125,16 @@ func replaceOutsideTags(s string, re *regexp.Regexp) string {
 }
 
 // chunkNumForRange finds which chunk matches the given range string.
-func chunkNumForRange(info microfts2.FileInfo, rangeStr string) uint64 {
-	for i, cr := range info.ChunkRanges {
-		if cr == rangeStr {
+func chunkNumForRange(info microfts2.FRecord, rangeStr string) uint64 {
+	for i, cr := range info.Chunks {
+		if cr.Location == rangeStr {
 			return uint64(i)
 		}
 	}
 	// Fallback: find the chunk whose range contains the start line
 	startLine, _ := parseRange(rangeStr)
-	for i, cr := range info.ChunkRanges {
-		s, e := parseRange(cr)
+	for i, cr := range info.Chunks {
+		s, e := parseRange(cr.Location)
 		if startLine >= s && startLine <= e {
 			return uint64(i)
 		}

@@ -86,6 +86,15 @@ Creates a new request file with the correct tag block and body scaffold.
 Errors if FILE already exists. The request ID is derived from the
 filename (basename without extension).
 
+If stdin is not a terminal, the command reads body text from stdin
+until a lone `.` on a line (like UNIX `mail` and `ed`). The body is
+appended after the heading scaffold. This is the crank-handle path
+for agents: the agent writes naturally to stdin and signals end-of-body
+with a dot line — no heredocs, no quoting, no Write tool needed.
+
+If stdin is a terminal (or empty), the command produces the same
+output as before: heading + issue text as body.
+
 Output file:
 ```
 @ark-request: <id>
@@ -97,6 +106,8 @@ Output file:
 # <id>
 
 <issue text>
+
+<stdin body, if provided>
 ```
 
 ### new-response
@@ -109,6 +120,9 @@ Creates a new response file. Errors if FILE already exists. The
 response file's existence is the acknowledgment — creating it means
 "I saw the request."
 
+Stdin body reading works the same as new-request: if stdin is not a
+terminal, read until lone `.` on a line and append after the heading.
+
 Output file:
 ```
 @ark-response: <id>
@@ -118,6 +132,7 @@ Output file:
 
 # RESP <id>
 
+<stdin body, if provided>
 ```
 
 ### set-tags

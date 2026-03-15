@@ -3,6 +3,7 @@ package main
 // CRC: crc-CLI.md | Seq: seq-cli-dispatch.md
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -590,6 +591,9 @@ func cmdSearch(args []string) {
 	fs.Var(&regex, "regex", "regex query (repeatable, AND logic)")
 	fs.Var(&exceptRegex, "except-regex", "regex exclude filter (repeatable, any match rejects)")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
+	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
+	multi := fs.Bool("multi", false, "run all four strategies (coverage, density, overlap, bm25)")
+	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("files", false, "emit full file content as JSONL")
@@ -618,6 +622,25 @@ func cmdSearch(args []string) {
 		afterNano = t.UnixNano()
 	}
 
+	switch *score {
+	case "", "auto", "coverage", "density":
+		// valid
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown --score mode: %s\n", *score)
+		os.Exit(1)
+	}
+
+	// R590: --multi is mutually exclusive with --score
+	if *multi && *score != "" {
+		fmt.Fprintln(os.Stderr, "error: --multi and --score are mutually exclusive")
+		os.Exit(1)
+	}
+	// R592: --multi does not apply to --regex, --about, or --like-file
+	if *multi && (*about != "" || len(regex) > 0 || *likeFile != "") {
+		fmt.Fprintln(os.Stderr, "error: --multi cannot be used with --about, --regex, or --like-file")
+		os.Exit(1)
+	}
+
 	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
 
 	// Always use local LMDB — mmap shares pages with server,
@@ -639,11 +662,25 @@ func cmdSearch(args []string) {
 			ExcludeFiles:    []string(excludeFiles),
 			FilterFileTags:  []string(filterFileTags),
 			ExcludeFileTags: []string(excludeFileTags),
+			Score:           *score,
+			Multi:           *multi,
+			Proximity:       *proximity,
 		}
 
 		var results []ark.SearchResultEntry
 		var err error
-		if isSplit {
+		if *multi {
+			// R585: multi-strategy search
+			query := strings.Join(fs.Args(), " ")
+			if query == "" && *contains == "" {
+				fmt.Fprintln(os.Stderr, "error: no search query")
+				os.Exit(1)
+			}
+			if query == "" {
+				query = *contains
+			}
+			results, err = d.SearchMulti(query, opts)
+		} else if isSplit {
 			results, err = d.SearchSplit(opts)
 		} else {
 			query := strings.Join(fs.Args(), " ")
@@ -728,7 +765,12 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 				Text:  r.Text,
 			})
 		} else if scores {
-			fmt.Printf("%s:%s\t%.4f\n", r.Path, r.Range, r.Score)
+			// R599, R600: show strategy when multi-search produced the result
+			if r.Strategy != "" {
+				fmt.Printf("%s:%s\t%.4f\t%s\n", r.Path, r.Range, r.Score, r.Strategy)
+			} else {
+				fmt.Printf("%s:%s\t%.4f\n", r.Path, r.Range, r.Score)
+			}
 		} else {
 			fmt.Printf("%s:%s\n", r.Path, r.Range)
 		}
@@ -768,6 +810,9 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	server := "not running"
 	if serverRunning {
 		server = "running (v" + status.Version + ")"
+	}
+	if status.DBFormat != "" {
+		fmt.Printf("db format: %s\n", status.DBFormat)
 	}
 	fmt.Printf("files: %d\nstale: %d\nmissing: %d\nunresolved: %d\n",
 		status.Files, status.Stale, status.Missing, status.Unresolved)
@@ -2952,6 +2997,30 @@ Subcommands:
 	}
 }
 
+// CRC: crc-CLI.md | R580, R581, R582, R583, R584
+func readStdinBody() string {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return ""
+	}
+	if info.Mode()&os.ModeCharDevice != 0 {
+		return "" // terminal, not piped
+	}
+	var lines []string
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "." {
+			break
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
 func cmdMessageNewRequest(args []string) {
 	fs := flag.NewFlagSet("message new-request", flag.ExitOnError)
 	from := fs.String("from", "", "source project name (required)")
@@ -2988,6 +3057,9 @@ func cmdMessageNewRequest(args []string) {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# %s\n\n%s\n", id, *issue)
+	if body := readStdinBody(); body != "" {
+		fmt.Fprintf(&buf, "\n%s", body)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		fatal(err)
@@ -3028,6 +3100,9 @@ func cmdMessageNewResponse(args []string) {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# RESP %s\n\n", *request)
+	if body := readStdinBody(); body != "" {
+		buf.WriteString(body)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		fatal(err)

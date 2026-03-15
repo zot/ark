@@ -218,8 +218,8 @@ func TestAppendFileUpdatesIndex(t *testing.T) {
 
 	// Verify initial state
 	info, _ := idx.fts.FileInfoByID(fileid)
-	if len(info.ChunkRanges) != 1 {
-		t.Fatalf("expected 1 chunk, got %d", len(info.ChunkRanges))
+	if len(info.Chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(info.Chunks))
 	}
 
 	// Append content with a new tag
@@ -234,8 +234,8 @@ func TestAppendFileUpdatesIndex(t *testing.T) {
 
 	// Verify FTS has 2 chunks now
 	info, _ = idx.fts.FileInfoByID(fileid)
-	if len(info.ChunkRanges) != 2 {
-		t.Fatalf("expected 2 chunks after append, got %d", len(info.ChunkRanges))
+	if len(info.Chunks) != 2 {
+		t.Fatalf("expected 2 chunks after append, got %d", len(info.Chunks))
 	}
 
 	// Verify tags were appended (not replaced)

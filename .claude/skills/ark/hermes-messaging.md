@@ -54,24 +54,44 @@ status	count
 Always write to YOUR project's `requests/` directory. Never write to
 another project's folder.
 
+**Use heredoc to include body content.** The command reads stdin until
+a lone `.` on a line or EOF. Write the body naturally — no quoting,
+no escaping needed.
+
 ```bash
-# Send a request
+# Send a request with body
 ~/.ark/ark message new-request \
   --from this-project --to target-project \
   --issue "short description" \
-  requests/short-name.md
+  requests/short-name.md <<'BODY'
+Detailed description goes here.
 
-# Acknowledge a request (response = ack)
+Multiple paragraphs work. Use markdown freely.
+
+## Subsections are fine
+
+Tables, lists, code blocks — whatever the message needs.
+.
+BODY
+
+# Acknowledge a request with body
 ~/.ark/ark message new-response \
   --from this-project --to requesting-project \
   --request original-request-id \
-  requests/RESP-original-request-id.md
+  requests/RESP-original-request-id.md <<'BODY'
+Response content here.
+.
+BODY
 ```
+
+The `.` line ends the body. Everything between the heredoc markers
+becomes stdin. Without a heredoc, the command creates the scaffold
+with no body (tags + heading only).
 
 Bare filenames: `requests/<short-name>.md`. Only add `-<session8>`
 suffix if the name collides.
 
-After creating, edit the body with details, then validate:
+After creating, validate:
 ```bash
 ~/.ark/ark message check requests/the-file.md
 ```
