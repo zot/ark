@@ -28,6 +28,10 @@ See [ACCESSING-FRICTIONLESS.md](ACCESSING-FRICTIONLESS.md) for how ark registers
 
 ## Code Changes
 
+**Go changes must go through mini-spec.** Load `/mini-spec` and update the design (requirements, CRC cards, sequences) before modifying any Go files. Unanchored Go changes — code not tracked by the spec — can silently drift or disappear in future sessions. The spec is the anchor.
+
+**Separate Go and UI work.** The mini-spec and Frictionless UI workflows overlap significantly. Do Go/spec changes in one pass, UI changes (Lua, viewdefs) in another. Don't mix them in the same work stream.
+
 Go files use tabs for indentation. The Read tool displays them as spaces, so the Edit tool's `old_string` often fails on the first attempt. Use `cat -A` to see the actual whitespace when an edit doesn't match.
 
 Don't forget about gofmt -- no need to sed your way into poverty!

@@ -2265,6 +2265,7 @@ end
 Ark.Messaging = session:prototype("Ark.Messaging", {
     _messages = EMPTY,
     _loading = false,
+    _chips = EMPTY,    -- Ark.FilterChip[] — one per project
 })
 Messaging = Ark.Messaging
 
@@ -2274,19 +2275,80 @@ Ark.MessageColumn = session:prototype("Ark.MessageColumn", {
 })
 MessageColumn = Ark.MessageColumn
 
+-- Filter chip: one per project, cycles none → to → from → both → none
+-- modes: "none", "to", "from", "both"
+Ark.FilterChip = session:prototype("Ark.FilterChip", {
+    project = "",
+    mode = "both",     -- default: show all involving this project
+    _matchCount = 0,
+})
+local FilterChip = Ark.FilterChip
+
+function FilterChip:cycle()
+    local order = {"none", "to", "from", "both"}
+    for i, m in ipairs(order) do
+        if m == self.mode then
+            self.mode = order[(i % #order) + 1]
+            return
+        end
+    end
+    self.mode = "none"
+end
+
+function FilterChip:label()
+    if self.mode == "none" then return self.project end
+    return self.mode .. ": " .. self.project
+end
+
+function FilterChip:isActive()
+    return self.mode ~= "none"
+end
+
+function FilterChip:chipClass()
+    if self.mode == "none" then return "msg-chip msg-chip-inactive" end
+    if self._matchCount == 0 then return "msg-chip msg-chip-empty" end
+    return "msg-chip msg-chip-active"
+end
+
+-- Ark.Message represents a conversation: a request + optional response.
+-- Column placement uses the most advanced status (response wins if present).
 Ark.Message = session:prototype("Ark.Message", {
-    status = "",
-    to = "",
-    from = "",
-    summary = "",
-    path = "",
+    requestId = "",
+    kind = "",          -- "request", "response", or "self"
+    -- Request fields
+    reqStatus = "",
+    reqTo = "",
+    reqFrom = "",
+    reqSummary = "",
+    reqPath = "",
+    -- Response fields (empty if no response)
+    respStatus = "",
+    respTo = "",
+    respFrom = "",
+    respSummary = "",
+    respPath = "",
+    _hasResponse = false,
 })
 Message = Ark.Message
+
+-- Status rank for determining column placement (higher = more advanced)
+local STATUS_RANK = {
+    open = 1, future = 2, accepted = 3,
+    ["in-progress"] = 4, completed = 5, done = 5, denied = 6,
+}
 
 function Messaging:new(instance)
     instance = session:create(Messaging, instance)
     instance._messages = {}
+    instance._chips = {}
     return instance
+end
+
+function Messaging:mutate()
+    if self._chips == nil then
+        self._chips = {}
+        self:refresh()
+    end
 end
 
 function Messaging:refresh()
@@ -2297,26 +2359,102 @@ function Messaging:refresh()
         self._messages = {}
         return
     end
-    local msgs = {}
+    -- Group by requestId
+    local byId = {}   -- requestId -> {request=entry, response=entry}
+    local order = {}   -- preserve first-seen order
     for _, e in ipairs(entries) do
+        local id = e.requestId or ""
+        if id == "" then id = e.path end  -- fallback for untagged
+        if not byId[id] then
+            byId[id] = {}
+            table.insert(order, id)
+        end
+        if e.kind == "response" then
+            byId[id].response = e
+        else
+            byId[id].request = e
+        end
+    end
+    -- Build merged Message objects
+    local msgs = {}
+    for _, id in ipairs(order) do
+        local pair = byId[id]
         local m = session:create(Message)
-        m.status = e.status
-        m.to = e.to
-        m.from = e.from
-        m.summary = e.summary
-        m.path = e.path
+        m.requestId = id
+        local req = pair.request
+        local resp = pair.response
+        if req then
+            m.kind = req.kind or "request"
+            m.reqStatus = req.status
+            m.reqTo = req.to
+            m.reqFrom = req.from
+            m.reqSummary = req.summary
+            m.reqPath = req.path
+        end
+        if resp then
+            m._hasResponse = true
+            m.respStatus = resp.status
+            m.respTo = resp.to
+            m.respFrom = resp.from
+            m.respSummary = resp.summary
+            m.respPath = resp.path
+            if not req then
+                -- Orphan response with no request — use response fields for display
+                m.kind = "response"
+                m.reqTo = resp.from    -- swap: response's from is request's to
+                m.reqFrom = resp.to
+                m.reqSummary = resp.summary
+            end
+        end
         table.insert(msgs, m)
     end
     self._messages = msgs
+    -- Rebuild chips: one per distinct project, preserving existing modes
+    local oldModes = {}
+    for _, chip in ipairs(self._chips or {}) do
+        oldModes[chip.project] = chip.mode
+    end
+    local seen = {}
+    local projects = {}
+    for _, m in ipairs(msgs) do
+        for _, p in ipairs({m.reqFrom, m.reqTo}) do
+            if p and p ~= "" and not seen[p] then
+                seen[p] = true
+                table.insert(projects, p)
+            end
+        end
+    end
+    table.sort(projects)
+    local chips = {}
+    for _, p in ipairs(projects) do
+        local chip = session:create(FilterChip)
+        chip.project = p
+        chip.mode = oldModes[p] or "both"
+        table.insert(chips, chip)
+    end
+    self._chips = chips
 end
 
 function Messaging:columns()
-    local order = {"open", "accepted", "in-progress", "future", "completed", "denied"}
+    -- Update chip match counts (how many total messages involve each project)
+    local msgs = self._messages or {}
+    for _, chip in ipairs(self._chips or {}) do
+        local count = 0
+        local p = chip.project
+        for _, m in ipairs(msgs) do
+            if m.reqFrom == p or m.reqTo == p then
+                count = count + 1
+            end
+        end
+        chip._matchCount = count
+    end
+    local colOrder = {"open", "accepted", "in-progress", "future", "completed", "denied"}
+    local filtered = self:filteredMessages()
     local cols = {}
-    for _, status in ipairs(order) do
+    for _, status in ipairs(colOrder) do
         local items = {}
-        for _, m in ipairs(self._messages or {}) do
-            if m.status == status then
+        for _, m in ipairs(filtered) do
+            if m:effectiveStatus() == status then
                 table.insert(items, m)
             end
         end
@@ -2343,10 +2481,45 @@ function Messaging:isEmpty()
 end
 
 function Messaging:statusText()
-    local n = self:messageCount()
-    if n == 0 then return "No messages" end
-    if n == 1 then return "1 message" end
-    return tostring(n) .. " messages"
+    local filtered = self:filteredMessages()
+    local total = #(self._messages or {})
+    local n = #filtered
+    if total == 0 then return "No messages" end
+    if n == total then
+        if n == 1 then return "1 conversation" end
+        return tostring(n) .. " conversations"
+    end
+    return tostring(n) .. " of " .. tostring(total) .. " conversations"
+end
+
+function Messaging:chips()
+    return self._chips or {}
+end
+
+function Messaging:hasActiveFilters()
+    for _, chip in ipairs(self._chips or {}) do
+        if chip.mode ~= "none" then return true end
+    end
+    return false
+end
+
+function Messaging:filteredMessages()
+    local msgs = self._messages or {}
+    if not self:hasActiveFilters() then return msgs end
+    local result = {}
+    for _, m in ipairs(msgs) do
+        local matched = false
+        for _, chip in ipairs(self._chips) do
+            if chip.mode ~= "none" then
+                local p = chip.project
+                if chip.mode == "from" and m.reqFrom == p then matched = true end
+                if chip.mode == "to" and m.reqTo == p then matched = true end
+                if chip.mode == "both" and (m.reqFrom == p or m.reqTo == p) then matched = true end
+            end
+        end
+        if matched then table.insert(result, m) end
+    end
+    return result
 end
 
 function MessageColumn:items()
@@ -2379,12 +2552,38 @@ function MessageColumn:statusClass()
     return ""
 end
 
+-- The effective status determines column placement.
+-- Response status wins if it's more advanced than the request status.
+function Message:effectiveStatus()
+    if not self._hasResponse then
+        return self.reqStatus
+    end
+    local reqRank = STATUS_RANK[self.reqStatus] or 0
+    local respRank = STATUS_RANK[self.respStatus] or 0
+    if respRank >= reqRank then
+        -- Normalize "done" to "completed" for column matching
+        local s = self.respStatus
+        if s == "done" then s = "completed" end
+        return s
+    end
+    return self.reqStatus
+end
+
 function Message:openFile()
-    mcp.open(self.path)
+    -- Open the request file (primary); response can be opened separately
+    local path = self.reqPath
+    if path == "" then path = self.respPath end
+    mcp.open(path)
+end
+
+function Message:openResponse()
+    if self._hasResponse and self.respPath ~= "" then
+        mcp.open(self.respPath)
+    end
 end
 
 function Message:shortSummary()
-    local s = self.summary or ""
+    local s = self.reqSummary or ""
     if #s > 60 then
         s = s:sub(1, 57) .. "..."
     end
@@ -2392,13 +2591,33 @@ function Message:shortSummary()
 end
 
 function Message:projectLabel()
-    local from = self.from or "?"
-    local to = self.to or "?"
+    local from = self.reqFrom or "?"
+    local to = self.reqTo or "?"
     return from .. " → " .. to
 end
 
+function Message:hasResponse()
+    return self._hasResponse
+end
+
+function Message:noResponse()
+    return not self._hasResponse
+end
+
+function Message:responseStatusLabel()
+    if not self._hasResponse then return "" end
+    local labels = {
+        accepted = "accepted",
+        ["in-progress"] = "in progress",
+        completed = "completed",
+        done = "completed",
+        denied = "denied",
+    }
+    return labels[self.respStatus] or self.respStatus
+end
+
 function Message:statusClass()
-    local s = self.status
+    local s = self:effectiveStatus()
     if s == "open" then return "msg-status-open" end
     if s == "accepted" or s == "in-progress" then return "msg-status-active" end
     if s == "completed" or s == "done" then return "msg-status-done" end

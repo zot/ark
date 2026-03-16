@@ -1,10 +1,10 @@
 <template>
   <div class="msg-card" ui-event-click="openFile()">
+    <div class="msg-card-projects" ui-value="projectLabel()"></div>
     <div class="msg-card-summary" ui-value="shortSummary()"></div>
-    <div class="msg-card-projects">
-      <span ui-value="from"></span>
-      <span class="msg-card-arrow">→</span>
-      <span ui-value="to"></span>
+    <div class="msg-card-response" ui-class-hidden="noResponse()">
+      <span class="msg-resp-indicator">↩</span>
+      <span class="msg-resp-status" ui-attr-class="statusClass()" ui-value="responseStatusLabel()"></span>
     </div>
   </div>
 </template>
