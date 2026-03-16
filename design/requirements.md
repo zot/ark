@@ -924,3 +924,11 @@
 - **R614:** `ark message set-tags` and `ark message get-tags` become aliases for `ark tag set` and `ark tag get`
 - **R615:** (inferred) Help text for `ark tag` lists the new subcommands (set, get, check)
 - **R616:** (inferred) Help text for aliased commands points users to `ark tag`
+
+## Feature: Inbox Entry Enrichment
+**Source:** specs/inbox-entry-enrichment.md
+
+- **R617:** InboxEntry includes a `RequestID` field extracted from `@ark-request:` or `@ark-response:` tag value
+- **R618:** InboxEntry includes a `Kind` field: "request" (has `@ark-request:`, different from/to), "response" (has `@ark-response:`), or "self" (has `@ark-request:`, same from/to)
+- **R619:** When `@to-project:` contains a comma, Inbox takes the first project name (trimmed) and discards the rest
+- **R620:** `mcp:inbox()` passes `requestId` and `kind` fields through to Lua entry tables

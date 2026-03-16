@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584
+**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584, R617, R618, R619, R620
 
 ## Flow: set-tags
 
@@ -125,10 +125,13 @@ CLI ──> parse flags: --project, --from, --all, --include-archived, --counts
          │        if not --all: skip if "completed", "done", or "denied"
          │      Get("archived"):
          │        if not --include-archived: skip if present
-         │      Get("to-project") → skip if --project given and doesn't match
+         │      Get("to-project") → normalize comma-separated to first entry
+         │        skip if --project given and doesn't match
          │      Get("from-project") → skip if --from given and doesn't match
-         │      collect: status, to-project, from-project,
-         │               issue (or "response:<id>"), path
+         │      Get("ark-request") or Get("ark-response") → requestID, kind
+         │        kind = "request" | "response" | "self" (same from/to)
+         │      Get("issue") → summary (fallback: "ark-response:<id>")
+         │      collect: status, to, from, summary, path, requestID, kind
          │
          ├──> sort: @status:open first, then by path
          │

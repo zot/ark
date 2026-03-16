@@ -720,16 +720,19 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 }
 
 // InboxEntry is a message from the cross-project messaging system.
-// R563-R568
+// R563-R568, R617, R618, R619
 type InboxEntry struct {
-	Status  string `json:"status"`
-	To      string `json:"to"`
-	From    string `json:"from"`
-	Summary string `json:"summary"`
-	Path    string `json:"path"`
+	Status    string `json:"status"`
+	To        string `json:"to"`
+	From      string `json:"from"`
+	Summary   string `json:"summary"`
+	Path      string `json:"path"`
+	RequestID string `json:"requestId"`
+	Kind      string `json:"kind"` // "request", "response", or "self"
 }
 
 // Inbox returns cross-project messages from the tag index.
+// CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617, R618, R619
 // If showAll is false, completed/done/denied messages are excluded.
 // If includeArchived is false, archived messages are excluded.
 func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
@@ -765,19 +768,39 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			}
 		}
 		toVal, _ := tb.Get("to-project")
+		// Handle comma-separated multi-target: take first project
+		if i := strings.IndexByte(toVal, ','); i >= 0 {
+			toVal = strings.TrimSpace(toVal[:i])
+		}
 		fromVal, _ := tb.Get("from-project")
-		var summary string
-		if v, ok := tb.Get("issue"); ok {
-			summary = v
+		var summary, requestID, kind string
+		if v, ok := tb.Get("ark-request"); ok {
+			requestID = v
+			if toVal == fromVal {
+				kind = "self"
+			} else {
+				kind = "request"
+			}
+			if iss, ok := tb.Get("issue"); ok {
+				summary = iss
+			}
 		} else if v, ok := tb.Get("ark-response"); ok {
-			summary = "ark-response:" + v
+			requestID = v
+			kind = "response"
+			if iss, ok := tb.Get("issue"); ok {
+				summary = iss
+			} else {
+				summary = "ark-response:" + v
+			}
 		}
 		entries = append(entries, InboxEntry{
-			Status:  statusVal,
-			To:      toVal,
-			From:    fromVal,
-			Summary: summary,
-			Path:    f.Path,
+			Status:    statusVal,
+			To:        toVal,
+			From:      fromVal,
+			Summary:   summary,
+			Path:      f.Path,
+			RequestID: requestID,
+			Kind:      kind,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
