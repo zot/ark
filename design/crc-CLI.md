@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R498, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R547, R548, R549, R550, R551, R552, R553, R554, R555, R556, R557, R558, R559, R560, R561, R562, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R498, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R547, R548, R549, R550, R551, R552, R553, R554, R555, R556, R557, R558, R559, R560, R561, R562, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -19,12 +19,12 @@ dispatches operations via proxy or cold-start.
 - CleanStaleSocket(dbPath): if connect fails, remove socket file
 - Each subcommand: init, setup, rebuild, add, remove, scan, refresh, search,
   serve, status, files, stale, missing, dismiss, config, unresolved, resolve,
-  tag (with sub-subcommands: list, counts, files),
+  tag (with sub-subcommands: list, counts, files, set, get, check),
   ui (with sub-subcommands: run, display, event, checkpoint, audit,
   status, open, install),
   bundle, ls, cat, cp, chunks,
   message (with sub-subcommands: new-request, new-response, set-tags,
-  get-tags, check)
+  get-tags, check — set-tags/get-tags alias ark tag set/get)
 - cmdRebuild: refuse if server running. Delete data.mdb and lock.mdb,
   re-run init (reading settings from ark.toml), then scan.
 - cmdConfig: dispatches to show (default), add-source, remove-source,
@@ -50,8 +50,10 @@ dispatches operations via proxy or cold-start.
   Replaces --source/--not-source.
 - --wrap: parameterized context wrapper. Escapes closing tag in content.
   Convention: "memory" for experience, "knowledge" for facts.
-- cmdTag: dispatches to list/counts/files/defs sub-subcommands,
-  --context flag on files sub-subcommand
+- cmdTag: dispatches to list/counts/files/defs/set/get/check sub-subcommands,
+  --context flag on files sub-subcommand.
+  set/get/check are generic tag block operations (no DB needed).
+  check accepts optional heading arguments for allowed-heading validation.
 - cmdTagDefs: query D records from LMDB. Optional tag name args filter.
   Default: `tagname description`, deduplicated, sorted alphabetically.
   --path: `path tagname description`, lexically sorted, not deduplicated,
@@ -107,10 +109,8 @@ dispatches operations via proxy or cold-start.
 - cmdMessage: dispatches to new-request, new-response, set-tags,
   get-tags, check, inbox sub-subcommands. Most operate on plain files
   via TagBlock — no server, no DB. Exception: inbox requires the database.
-- cmdMessageSetTags: read file, parse TagBlock, apply tag updates,
-  render and write back atomically.
-- cmdMessageGetTags: read file, parse TagBlock, print requested tags
-  as tab-separated output. Exit 1 if requested tag not found.
+- cmdMessageSetTags: alias for cmdTagSet. Help text points to `ark tag set`.
+- cmdMessageGetTags: alias for cmdTagGet. Help text points to `ark tag get`.
 - cmdMessageNewRequest: validate FILE doesn't exist, build TagBlock
   from flags (ark-request=ID, status=open), render with heading scaffold.
   If stdin is not a terminal, read body until lone `.` on a line and
@@ -120,8 +120,8 @@ dispatches operations via proxy or cold-start.
   works identically.
 - readStdinBody(): if stdin is not a terminal, read lines until lone `.`
   or EOF. Returns the collected body text (may be empty).
-- cmdMessageCheck: read file, parse TagBlock, run Validate + ScanBody,
-  format crank-handle diagnostic with fix commands. Exit 0 if valid.
+- cmdMessageCheck: wrapper that calls cmdTagCheck with the standard
+  message heading list. Crank-handle for agents — terser than passing headings.
 - cmdMessageInbox: query DB for files with @status tag via TagFiles,
   filter to requests/ paths, read each file's TagBlock.
   Flags: --project (filter @to-project), --from (filter @from-project),

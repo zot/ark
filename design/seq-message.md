@@ -103,7 +103,7 @@ CLI ──> parse args: FILE
          └──> format crank-handle output:
                 for each problem:
                   describe issue + line number
-                  emit fix command (ark message set-tags ...)
+                  emit fix command (ark tag set ...)
                 for each stray tag:
                   describe finding + line number
                   emit "remove line N" instruction

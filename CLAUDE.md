@@ -12,6 +12,8 @@ go build -buildvcs=false ./...
 
 The `-buildvcs=false` is needed because the repo has both git and fossil.
 
+The ark CLI should have nice --help. All subcommands should support --help.
+
 ## Frictionless UI
 
 The Frictionless command is `~/.ark/ark ui`. UI skills use `{cmd}` as a placeholder for this.

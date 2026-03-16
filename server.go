@@ -392,7 +392,8 @@ type searchRequest struct {
 	LikeFile        string   `json:"likeFile"`
 	K               int      `json:"k"`
 	Scores          bool     `json:"scores"`
-	After           int64    `json:"after"`
+	After           string   `json:"after"`
+	Before          string   `json:"before"`
 	Chunks          bool     `json:"chunks"`
 	Files           bool     `json:"files"`
 	Tags            bool     `json:"tags"`
@@ -426,10 +427,9 @@ type resolveRequest struct {
 }
 
 func buildSearchOpts(req searchRequest) SearchOpts {
-	return SearchOpts{
+	opts := SearchOpts{
 		K:               req.K,
 		Scores:          req.Scores,
-		After:           req.After,
 		About:           req.About,
 		Contains:        req.Contains,
 		Regex:           req.Regex,
@@ -443,6 +443,17 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		FilterFileTags:  req.FilterFileTags,
 		ExcludeFileTags: req.ExcludeFileTags,
 	}
+	if req.After != "" {
+		if t, err := ParseDate(req.After); err == nil {
+			opts.After = t
+		}
+	}
+	if req.Before != "" {
+		if t, err := ParseDate(req.Before); err == nil {
+			opts.Before = t
+		}
+	}
+	return opts
 }
 
 func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

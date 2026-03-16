@@ -1,5 +1,5 @@
 # TagBlock
-**Requirements:** R443, R444, R445, R446, R447, R448, R449, R478, R459, R460, R461, R463, R465, R472, R473, R474, R475, R476
+**Requirements:** R443, R444, R445, R446, R447, R448, R449, R478, R459, R460, R461, R463, R465, R472, R473, R474, R475, R476, R611
 
 Parses and manipulates the tag block at the top of a markdown file.
 The tag block is consecutive `@tag: value` lines starting from line 1.
@@ -24,6 +24,8 @@ The tag block is consecutive `@tag: value` lines starting from line 1.
   description.
 - ScanBody(): scan body for stray tag-like patterns (`@word:` at
   line start, `## Word:` headings). Return findings with line numbers.
+- CheckHeadings(allowed []string): scan body for `## ...` headings,
+  flag any whose first word is not in the allowed list. Case-insensitive.
 
 ## Collaborators
 - None — pure data structure, no dependencies

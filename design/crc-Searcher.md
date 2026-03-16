@@ -38,9 +38,10 @@ Optionally retrieves chunk text or full file content.
   present in both result sets
 - FormatResults(results, opts): resolve fileids to paths and line
   ranges via microfts2.FileInfoByID, apply --scores and --after filters
-- FillChunks(results): for each result, read chunk text from file
-  using offsets from microfts2.FileInfoByID. Uses same readChunks
-  logic as Indexer but reads only the matched chunk.
+- FillChunks(results): for each result, retrieve chunk text via
+  microfts2 ChunkCache. Creates a per-query cache, calls ChunkText
+  per result. The chunker handles format-specific extraction (e.g.
+  chat-jsonl text extraction). Files are read once per query.
 - FillFiles(results): deduplicate results by fileid, read full file
   content for each unique file. Best chunk score becomes file score.
 - SearchLikeFile(path, opts): read file content, use as FTS query
@@ -80,7 +81,7 @@ Optionally retrieves chunk text or full file content.
   I record counters (totalTokens, totalChunks).
 
 ## Collaborators
-- microfts2.DB: trigram search, file info resolution, chunk offsets
+- microfts2.DB: trigram search, file info resolution, ChunkCache for chunk text retrieval
 - microvec.DB: vector search
 - Store: LMDB tag index (TagFiles queries for tag-based filtering)
 - Indexer: re-index stale files during consistent search

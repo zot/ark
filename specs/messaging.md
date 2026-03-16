@@ -135,57 +135,14 @@ Output file:
 <stdin body, if provided>
 ```
 
-### set-tags
+### set-tags / get-tags / check
 
-```
-ark message set-tags FILE TAG VALUE [TAG VALUE ...]
-```
+These are aliases for `ark tag set`, `ark tag get`, and `ark tag check`.
+See specs/tag-block-commands.md for full documentation.
 
-Updates or adds tags in the tag block. Arguments are pairs: tag name
-then value. If the tag exists, its value is replaced. If not, the tag
-is appended to the end of the tag block. Tag order is preserved for
-existing tags. Body is untouched.
-
-The tag name should be given without `@` prefix or `:` suffix — the
-command adds those.
-
-Errors if FILE doesn't exist. If the file has no tag block (e.g. body
-starts on line 1), the tags are inserted at the top with a blank line
-before the existing content.
-
-### get-tags
-
-```
-ark message get-tags FILE [TAG ...]
-```
-
-Reads tags from the tag block. Outputs one `tag\tvalue` per line
-(tab-separated, no `@` or `:`). If specific tags are named, outputs
-only those (in the order requested). If no tags named, outputs all
-tags in file order.
-
-Exits with status 1 if a requested tag is not found (but still outputs
-any tags that were found).
-
-### check
-
-```
-ark message check FILE
-```
-
-Validates the file against the tag block format rules. If the file is
-valid, exits 0 with no output.
-
-If invalid, outputs a crank-handle diagnostic: a description of each
-problem and the exact `ark message` command to fix it. The output is
-designed to be followed by a model without additional context.
-
-Problems detected:
-- Tag-like patterns (`@word:` or `## Word:`) in the body that look
-  like misplaced tags
-- Blank lines within the tag block
-- Missing blank line between tag block and body
-- Malformed tag lines in the tag block (missing space after colon, etc.)
+`ark message check` calls `ark tag check` with no heading arguments
+(generic structural validation). Message-specific heading validation
+can be added by passing heading names to `ark tag check` directly.
 
 ### inbox
 

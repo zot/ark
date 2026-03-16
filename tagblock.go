@@ -243,12 +243,57 @@ func (tb *TagBlock) ScanBody() []Problem {
 				word := strings.TrimSuffix(parts[1], ":")
 				problems = append(problems, Problem{
 					Line:    lineNum,
-					Message: fmt.Sprintf("%q is a markdown heading, not a tag — use `ark message set-tags FILE %s %s` instead", string(trimmed), strings.ToLower(word), valueFromHeading(string(trimmed))),
+					Message: fmt.Sprintf("%q is a markdown heading, not a tag — use `ark tag set FILE %s %s` instead", string(trimmed), strings.ToLower(word), valueFromHeading(string(trimmed))),
 				})
 			}
 		}
 	}
 
+	return problems
+}
+
+// CheckHeadings scans the body for markdown headings (## ...) and flags
+// any whose first word is not in the allowed list. Case-insensitive.
+// CRC: crc-TagBlock.md | R611
+func (tb *TagBlock) CheckHeadings(allowed []string) []Problem {
+	var problems []Problem
+	body := tb.Body()
+	if body == nil {
+		return nil
+	}
+
+	allowSet := make(map[string]bool, len(allowed))
+	for _, h := range allowed {
+		allowSet[strings.ToLower(h)] = true
+	}
+
+	bodyStartLine := 1
+	for i := 0; i < tb.bodyOffset && i < len(tb.raw); i++ {
+		if tb.raw[i] == '\n' {
+			bodyStartLine++
+		}
+	}
+
+	lines := bytes.Split(body, []byte("\n"))
+	for i, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("## ")) {
+			continue
+		}
+		// Extract the heading word (first word after ##)
+		rest := bytes.TrimSpace(trimmed[3:])
+		word := string(rest)
+		if idx := bytes.IndexAny(rest, " :\t"); idx >= 0 {
+			word = string(rest[:idx])
+		}
+		if !allowSet[strings.ToLower(word)] {
+			lineNum := bodyStartLine + i
+			problems = append(problems, Problem{
+				Line:    lineNum,
+				Message: fmt.Sprintf("unexpected heading %q — allowed: %s", string(trimmed), strings.Join(allowed, ", ")),
+			})
+		}
+	}
 	return problems
 }
 

@@ -99,10 +99,10 @@ something, you can update message state:
 ~/.ark/ark message close <path>
 
 # Update status
-~/.ark/ark message set-tags <path> status in-progress
+~/.ark/ark tag set <path> status in-progress
 ```
 
-**Never hand-edit tag blocks.** Use `ark message` commands — the CLI
+**Never hand-edit tag blocks.** Use `ark tag set`/`get`/`check` — the CLI
 enforces format that models get wrong reliably.
 
 ## Ark CLI

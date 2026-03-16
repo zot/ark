@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zot/microfts2"
@@ -46,6 +48,7 @@ type InitOpts struct {
 	QueryCmd        string
 	CaseInsensitive bool
 	Aliases         map[byte]byte
+	TagsSeed        []byte // seed content for tags.md (falls back to built-in default)
 }
 
 // Init creates a new ark database at the given path.
@@ -147,38 +150,18 @@ func Init(dbPath string, opts InitOpts) error {
 		}
 	}
 
-	// Create starter tags.md
+	// Create starter tags.md from bundle seed if provided
 	tagsPath := filepath.Join(dbPath, "tags.md")
-	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
-		if err := os.WriteFile(tagsPath, []byte(defaultTagsContent), 0644); err != nil {
-			return fmt.Errorf("write tags.md: %w", err)
+	if len(opts.TagsSeed) > 0 {
+		if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
+			if err := os.WriteFile(tagsPath, opts.TagsSeed, 0644); err != nil {
+				return fmt.Errorf("write tags.md: %w", err)
+			}
 		}
 	}
 
 	return nil
 }
-
-const defaultTagsContent = `# Tags
-
-Ark tag vocabulary. Tags are @word: patterns found in any indexed file.
-New tags emerge by use. This file documents what they mean.
-
-Tag definitions can appear in any indexed file, not just this one.
-They must be at the start of a line — indented or mid-line @tag:
-is ignored. Use ark tag defs to see all definitions from all sources.
-
-Format: @tag: name -- description
-
-@tag: tag -- the description of a tag
-@tag: connection -- a relationship between two ideas or systems
-@tag: pattern -- a recurring approach or solution
-@tag: decision -- a choice that was made and why
-@tag: question -- an open question, unanswered
-@tag: learned -- something confirmed through experience
-@tag: project -- which project something relates to
-@tag: ephemeral -- content that should leave the index when no longer relevant
-@tag: burn -- consume and destroy, true temporary notes
-`
 
 // Open opens an existing ark database.
 // injectPath inserts dbPath into PATH just before /usr/bin (if present),
@@ -527,6 +510,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 	}
 
 	var staleCount, totalChunks int
+	var totalSize int64
 	strategies := make(map[string]int)
 	for _, s := range stale {
 		if s.Status == "stale" {
@@ -536,6 +520,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		info, err := db.fts.FileInfoByID(s.FileID)
 		if err == nil {
 			totalChunks += len(info.Chunks)
+			totalSize += info.FileLength
 		}
 	}
 
@@ -556,6 +541,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		Version:    Version,
 		DBFormat:   dbFormat,
 		Files:      len(stale),
+		TotalSize:  totalSize,
 		Stale:      staleCount,
 		Missing:    len(missing),
 		Unresolved: len(unresolved),
@@ -572,6 +558,7 @@ type StatusInfo struct {
 	Version    string         `json:"version"`
 	DBFormat   string         `json:"dbFormat,omitempty"`
 	Files      int            `json:"files"`
+	TotalSize  int64          `json:"totalSize"`
 	Stale      int            `json:"stale"`
 	Missing    int            `json:"missing"`
 	Unresolved int            `json:"unresolved"`
@@ -1007,7 +994,11 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 		}
 
 		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
-		if !yield(microfts2.Chunk{Range: []byte(r), Content: text}) {
+		chunk := microfts2.Chunk{Range: []byte(r), Content: text}
+		if ts := extractJSONLTimestamp(line); ts != nil {
+			chunk.Attrs = []microfts2.Pair{{Key: []byte("timestamp"), Value: ts}}
+		}
+		if !yield(chunk) {
 			return nil
 		}
 	}
@@ -1041,6 +1032,31 @@ func JSONLChunkFuncOld(_ string, content []byte, yield func(microfts2.Chunk) boo
 		}
 	}
 	return nil
+}
+
+// extractJSONLTimestamp finds "timestamp":"..." in a JSONL line, parses it
+// as RFC3339, and returns Unix nanoseconds as a byte string (matching the
+// format microfts2.chunkTimestamp expects via strconv.ParseInt).
+func extractJSONLTimestamp(line []byte) []byte {
+	valByte, pos := findKeyValue(line, []byte("timestamp"))
+	if pos < 0 || valByte != '"' {
+		return nil
+	}
+	// Extract the string value (pos points to the opening quote)
+	start := pos + 1
+	end := bytes.IndexByte(line[start:], '"')
+	if end < 0 {
+		return nil
+	}
+	tsStr := string(line[start : start+end])
+	t, err := time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			return nil
+		}
+	}
+	return []byte(strconv.FormatInt(t.UnixNano(), 10))
 }
 
 // extractJSONLTextFast extracts searchable text using a DFT byte scanner.

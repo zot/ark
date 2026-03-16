@@ -127,7 +127,7 @@ Searches can exclude with `--exclude-file-tags archived`.
 
 ```bash
 # Archive a completed request
-~/.ark/ark message set-tags requests/old-request.md archived true
+~/.ark/ark tag set requests/old-request.md archived true
 
 # Find archived messages
 ~/.ark/ark search --filter-file-tags archived --filter-files '**/requests/*'

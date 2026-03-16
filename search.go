@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zot/microfts2"
@@ -26,7 +27,7 @@ var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
 // The filter uses a 50% ratio threshold — trigrams appearing in more than
 // half of all chunks are skipped as non-discriminating.
 // Seq: seq-search.md | R572, R574, R575
-func defaultSearchOpts(filterOpt microfts2.SearchOption, score string) []microfts2.SearchOption {
+func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts SearchOpts) []microfts2.SearchOption {
 	opts := []microfts2.SearchOption{
 		microfts2.WithTrigramFilter(microfts2.FilterByRatio(0.50)),
 	}
@@ -36,15 +37,22 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string) []microft
 	if filterOpt != nil {
 		opts = append(opts, filterOpt)
 	}
+	if !sopts.After.IsZero() {
+		opts = append(opts, microfts2.WithAfter(sopts.After))
+	}
+	if !sopts.Before.IsZero() {
+		opts = append(opts, microfts2.WithBefore(sopts.Before))
+	}
 	return opts
 }
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K               int      // max results (default 20)
-	Scores          bool     // include scores in output
-	After           int64    // only results newer than this timestamp (unix nano, 0 = no filter)
-	About           string   // semantic query (microvec)
+	K               int       // max results (default 20)
+	Scores          bool      // include scores in output
+	After           time.Time // only results newer than this (zero = no filter)
+	Before          time.Time // only results older than this (zero = no filter)
+	About           string    // semantic query (microvec)
 	Contains        string   // exact match query (microfts2)
 	Regex           []string // regex patterns (first drives SearchRegex, all are AND post-filters)
 	ExceptRegex     []string // regex subtract post-filters (any match rejects)
@@ -208,7 +216,7 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 		return nil, err
 	}
 	score := opts.Score
-	ftsSearchOpts := defaultSearchOpts(filterOpt, score)
+	ftsSearchOpts := defaultSearchOpts(filterOpt, score, opts)
 
 	ftsResults, err := s.fts.Search(query, ftsSearchOpts...)
 	if err != nil {
@@ -217,7 +225,7 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 
 	// R576: Fuzzy escalation: auto mode retries with density on zero results
 	if len(ftsResults.Results) == 0 && (score == "" || score == "auto") {
-		densityOpts := defaultSearchOpts(filterOpt, "density")
+		densityOpts := defaultSearchOpts(filterOpt, "density", opts)
 		ftsResults, err = s.fts.Search(query, densityOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("fts density search: %w", err)
@@ -257,7 +265,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		return nil, err
 	}
 	score := opts.Score
-	ftsSearchOpts := defaultSearchOpts(filterOpt, score)
+	ftsSearchOpts := defaultSearchOpts(filterOpt, score, opts)
 
 	hasAbout := opts.About != ""
 	hasFTS := opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != ""
@@ -301,7 +309,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		ftsResults = fr.Results
 		// R576: Fuzzy escalation: auto mode retries with density on zero results
 		if len(ftsResults) == 0 && (score == "" || score == "auto") {
-			densityOpts := defaultSearchOpts(filterOpt, "density")
+			densityOpts := defaultSearchOpts(filterOpt, "density", opts)
 			densityOpts = append(densityOpts, microfts2.WithVerify())
 			if len(opts.Regex) > 0 {
 				densityOpts = append(densityOpts, microfts2.WithRegexFilter(opts.Regex...))
@@ -601,16 +609,13 @@ func (s *Searcher) ftsOnly(ftsResults []microfts2.SearchResult) []SearchResultEn
 	return results
 }
 
-// filterAndResolve applies time filtering and resolves file paths/lines
-// in a single pass, avoiding redundant FileInfoByID lookups.
+// filterAndResolve resolves file paths and chunk ranges for search results.
+// Date filtering is now handled by microfts2 WithAfter/WithBefore at search time.
 func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts) ([]SearchResultEntry, error) {
 	var resolved []SearchResultEntry
 	for _, r := range results {
 		info, err := s.fts.FileInfoByID(r.FileID)
 		if err != nil {
-			continue
-		}
-		if opts.After != 0 && info.ModTime < opts.After {
 			continue
 		}
 		r.Path = info.Names[0]
@@ -623,41 +628,19 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 	return resolved, nil
 }
 
-// FillChunks reads chunk text for each result from disk.
-// Groups by FileID to avoid re-reading the same file.
-// For chat-jsonl strategy, extracts human-readable text instead of raw JSON.
+// FillChunks reads chunk text for each result using the microfts2 ChunkCache.
+// The cache reads each file once and resolves chunks through the Chunker interface,
+// so format-specific extraction (e.g. chat-jsonl) is handled by the chunker itself.
+// CRC: crc-Searcher.md | R605
 func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
-	type fileCache struct {
-		lines    []string
-		strategy string
-	}
-	cache := make(map[uint64]*fileCache)
-
+	cache := s.fts.NewChunkCache()
 	for i := range results {
 		r := &results[i]
-		fc, ok := cache[r.FileID]
+		content, ok := cache.ChunkText(r.Path, r.Range)
 		if !ok {
-			info, err := s.fts.FileInfoByID(r.FileID)
-			if err != nil {
-				continue
-			}
-			data, err := os.ReadFile(info.Names[0])
-			if err != nil {
-				continue
-			}
-			fc = &fileCache{
-				lines:    strings.Split(string(data), "\n"),
-				strategy: info.Strategy,
-			}
-			cache[r.FileID] = fc
+			continue
 		}
-		text := extractByRange(fc.lines, r.Range)
-		if fc.strategy == "chat-jsonl" {
-			if extracted := extractJSONLTextFast([]byte(text)); len(extracted) > 0 {
-				text = string(extracted)
-			}
-		}
-		r.Text = text
+		r.Text = string(content)
 	}
 	return results, nil
 }
@@ -846,7 +829,7 @@ func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEnt
 	if err != nil {
 		return nil, err
 	}
-	ftsSearchOpts := defaultSearchOpts(filterOpt, "")
+	ftsSearchOpts := defaultSearchOpts(filterOpt, "", opts)
 
 	// Proximity reranking is handled inside microfts2.SearchMulti
 	if opts.Proximity {

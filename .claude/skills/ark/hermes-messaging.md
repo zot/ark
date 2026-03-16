@@ -93,7 +93,7 @@ suffix if the name collides.
 
 After creating, validate:
 ```bash
-~/.ark/ark message check requests/the-file.md
+~/.ark/ark tag check requests/the-file.md
 ```
 Follow any fix commands it outputs.
 
@@ -101,17 +101,17 @@ Follow any fix commands it outputs.
 
 ```bash
 # Update status
-~/.ark/ark message set-tags <path> status in-progress
-~/.ark/ark message set-tags <path> status completed
+~/.ark/ark tag set <path> status in-progress
+~/.ark/ark tag set <path> status completed
 
 # Read tags
-~/.ark/ark message get-tags <path> [TAG ...]
+~/.ark/ark tag get <path> [TAG ...]
 
 # Read message content
 ~/.ark/ark fetch --wrap knowledge <path>
 ```
 
-Never hand-edit tag blocks. Use `ark message set-tags` to change tags.
+Never hand-edit tag blocks. Use `ark tag set` to change tags.
 The CLI enforces format that models get wrong.
 
 ## Status Values

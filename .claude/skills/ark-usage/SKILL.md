@@ -103,14 +103,14 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
   --request ORIGINAL-ID \
   requests/RESP-original-id.md
 
-# Set tags on a message
-~/.ark/ark message set-tags FILE status completed
+# Set tags on any file with a tag block
+~/.ark/ark tag set FILE status completed
 
 # Read tags
-~/.ark/ark message get-tags FILE
+~/.ark/ark tag get FILE
 
 # Validate format (do this after creating/editing)
-~/.ark/ark message check FILE
+~/.ark/ark tag check FILE
 ```
 
 ## Gotchas
@@ -119,8 +119,8 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
 - **Always `--wrap`** when retrieving content — gives source attribution
 - **`ark tag defs`** not grep — to find tag definitions
 - **`ark fetch`** not Read — to view indexed files from other projects
-- **`ark message` commands** not hand-editing — for tag blocks
-- **`ark message check`** after creating any message file
+- **`ark tag set`/`get`/`check`** not hand-editing — for tag blocks
+- **`ark tag check`** after creating any message file
 - **Tags are line-start-only** — indented `@tag:` in prose won't index
 - **Tag values are single-line** — everything from `@tag:` to newline
 - **Message cardinal rule** — always write to YOUR `requests/` directory

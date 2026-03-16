@@ -26,13 +26,20 @@ Status should show what's in the index:
 - **Sources configured** — how many source directories are in
   ark.toml. Quick sanity check that config is loaded.
 
+## Total Size
+
+Status should report the total size of all indexed files. This is the
+sum of file lengths as recorded in the index (not re-read from disk).
+Displayed in human-readable units (KB/MB/GB), on the same line as
+the file count.
+
 ## Output Format
 
 All new fields appear after the existing ones. The output stays
 plain text, one field per line, same as current status. Example:
 
 ```
-files: 1273
+files: 1273 (156 MB)
 stale: 0
 missing: 12
 unresolved: 3
@@ -43,7 +50,8 @@ map: 511 MB / 8 GB (6%)
 server: not running
 ```
 
-The `strategies` line lists each strategy with its file count,
+The total size appears parenthesized after the file count. The
+`strategies` line lists each strategy with its file count,
 space-separated. The `map` line shows used/total with percentage.
 
 ## Server Endpoint

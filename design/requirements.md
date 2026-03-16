@@ -427,6 +427,8 @@
 - **R256:** Output order: files, stale, missing, unresolved, chunks, sources, strategies, map, server
 - **R257:** `GET /status` returns the same enhanced data in the JSON StatusInfo response
 - **R258:** (inferred) Chunk count is computed by summing ChunkRanges across all indexed files via microfts2 FileInfoByID
+- **R605:** `ark status` reports total size of all indexed files, summed from FRecord.FileLength
+- **R606:** Total size is displayed parenthesized after the file count in human-readable units (e.g., "files: 1273 (156 MB)")
 
 ## Feature: Embedded UI Engine
 **Source:** specs/embedded-ui.md
@@ -762,8 +764,8 @@
 - **R603:** SearchGrouped supports multi-strategy search for the UI
 - **R604:** (inferred) BM25 initialization reads I record counters (totalTokens, totalChunks) from the microfts2 database — these counters must exist (require reindex on older databases)
 
-### set-tags
-- **R457:** `ark message set-tags FILE TAG VALUE [TAG VALUE ...]` updates or adds tags in the tag block
+### set-tags (alias for `ark tag set`)
+- **R457:** `ark tag set FILE TAG VALUE [TAG VALUE ...]` updates or adds tags in the tag block
 - **R458:** Arguments are pairs: tag name (without `@` or `:`) then value
 - **R459:** If the tag exists, its value is replaced in place (preserving position)
 - **R460:** If the tag doesn't exist, it is appended to the end of the tag block
@@ -771,17 +773,17 @@
 - **R462:** Errors if FILE doesn't exist
 - **R463:** If the file has no tag block (body starts on line 1), tags are inserted at the top with a blank line before existing content
 
-### get-tags
-- **R464:** `ark message get-tags FILE [TAG ...]` reads tags from the tag block
+### get-tags (alias for `ark tag get`)
+- **R464:** `ark tag get FILE [TAG ...]` reads tags from the tag block
 - **R465:** Output is one `tag\tvalue` per line (tab-separated, no `@` or `:`)
 - **R466:** If specific tags named, output only those in the order requested
 - **R467:** If no tags named, output all tags in file order
 - **R468:** Exits with status 1 if a requested tag is not found (still outputs any found tags)
 
-### check
-- **R469:** `ark message check FILE` validates the file against tag block format rules
+### check (alias for `ark tag check`)
+- **R469:** `ark tag check FILE` validates the file against tag block format rules
 - **R470:** If valid, exits 0 with no output
-- **R471:** If invalid, outputs a crank-handle diagnostic: problem descriptions and exact `ark message` commands to fix them
+- **R471:** If invalid, outputs a crank-handle diagnostic: problem descriptions and exact `ark tag set` commands to fix them
 - **R472:** Detects tag-like patterns (`@word:` or `## Word:`) in the body that look like misplaced tags
 - **R473:** Detects blank lines within the tag block
 - **R474:** Detects missing blank line between tag block and body
@@ -908,3 +910,17 @@
 - **R577:** Fuzzy escalation only fires in auto mode — explicit `--score coverage` or `--score density` disables it
 - **R578:** `--like-file` always uses density scoring regardless of `--score`
 - **R579:** (inferred) Unknown `--score` values produce an error message and exit
+
+## Feature: Tag Block Commands
+**Source:** specs/tag-block-commands.md
+
+- **R607:** `ark tag set FILE TAG VALUE [TAG VALUE ...]` updates or adds tags in a file's tag block
+- **R608:** `ark tag get FILE [TAG ...]` reads tags from a file's tag block, outputs `tag\tvalue` per line
+- **R609:** `ark tag get` exits 1 if a requested tag is not found
+- **R610:** `ark tag check FILE [HEADING ...]` validates tag block structure, exits 0 if valid, 1 with diagnostics if not
+- **R611:** `ark tag check` with heading arguments flags body headings not in the allowed list
+- **R612:** `ark tag check` without heading arguments runs structural validation only
+- **R613:** `ark message check FILE` becomes a wrapper that calls `ark tag check` with the standard message heading list
+- **R614:** `ark message set-tags` and `ark message get-tags` become aliases for `ark tag set` and `ark tag get`
+- **R615:** (inferred) Help text for `ark tag` lists the new subcommands (set, get, check)
+- **R616:** (inferred) Help text for aliased commands points users to `ark tag`

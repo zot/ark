@@ -227,7 +227,7 @@ the workflow or hands off the next step.
 
 CLI commands read and write rigidly formatted files so models never
 touch the format directly. The shape is fixed; the model provides
-content. `ark message set-tags FILE status done` stamps the value into
+content. `ark tag set FILE status done` stamps the value into
 the correct slot. `ark message new-request` generates the entire file
 with correct structure.
 

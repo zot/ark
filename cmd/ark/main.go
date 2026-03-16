@@ -437,11 +437,18 @@ func cmdInit(args []string) {
 
 	aliases := parseAliases(*aliasStr)
 
+	// Try reading seed tags.md from bundle
+	var tagsSeed []byte
+	if data, err := cli.BundleReadFile("install/tags.md"); err == nil {
+		tagsSeed = data
+	}
+
 	opts := ark.InitOpts{
 		EmbedCmd:        *embedCmd,
 		QueryCmd:        *queryCmd,
 		CaseInsensitive: *caseInsensitive,
 		Aliases:         aliases,
+		TagsSeed:        tagsSeed,
 	}
 	if err := ark.Init(arkDir, opts); err != nil {
 		fatal(err)
@@ -585,6 +592,7 @@ func cmdSearch(args []string) {
 	k := fs.Int("k", 20, "max results")
 	scores := fs.Bool("scores", false, "show scores")
 	after := fs.String("after", "", "only results after date")
+	before := fs.String("before", "", "only results before date")
 	about := fs.String("about", "", "semantic search query")
 	contains := fs.String("contains", "", "exact match query")
 	var regex, exceptRegex stringSlice
@@ -613,13 +621,20 @@ func cmdSearch(args []string) {
 		os.Exit(1)
 	}
 
-	var afterNano int64
+	var afterTime, beforeTime time.Time
 	if *after != "" {
-		t, err := parseDate(*after)
+		t, err := ark.ParseDate(*after)
 		if err != nil {
 			fatal(fmt.Errorf("parse --after: %w", err))
 		}
-		afterNano = t.UnixNano()
+		afterTime = t
+	}
+	if *before != "" {
+		t, err := ark.ParseDate(*before)
+		if err != nil {
+			fatal(fmt.Errorf("parse --before: %w", err))
+		}
+		beforeTime = t
 	}
 
 	switch *score {
@@ -649,7 +664,8 @@ func cmdSearch(args []string) {
 		opts := ark.SearchOpts{
 			K:               *k,
 			Scores:          *scores,
-			After:           afterNano,
+			After:           afterTime,
+			Before:          beforeTime,
 			About:           *about,
 			Contains:        *contains,
 			Regex:           []string(regex),
@@ -814,8 +830,9 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	if status.DBFormat != "" {
 		fmt.Printf("db format: %s\n", status.DBFormat)
 	}
-	fmt.Printf("files: %d\nstale: %d\nmissing: %d\nunresolved: %d\n",
-		status.Files, status.Stale, status.Missing, status.Unresolved)
+	// R605, R606: total size parenthesized after file count
+	fmt.Printf("files: %d (%s)\nstale: %d\nmissing: %d\nunresolved: %d\n",
+		status.Files, formatBytes(status.TotalSize), status.Stale, status.Missing, status.Unresolved)
 	fmt.Printf("chunks: %d\nsources: %d\n", status.Chunks, status.Sources)
 	if len(status.Strategies) > 0 {
 		fmt.Print("strategies:")
@@ -2433,39 +2450,7 @@ func cmdUIVariables(args []string) {
 	fmt.Println()
 }
 
-// parseDate parses a date string: "2006-01-02", "2006-01-02T15:04:05", or
-// a duration suffix like "24h", "7d" (meaning that long ago from now).
-func parseDate(s string) (time.Time, error) {
-	// Try duration-ago: "24h", "7d"
-	if len(s) > 1 {
-		suffix := s[len(s)-1]
-		numStr := s[:len(s)-1]
-		switch suffix {
-		case 'h', 'm', 's':
-			d, err := time.ParseDuration(s)
-			if err == nil {
-				return time.Now().Add(-d), nil
-			}
-		case 'd':
-			var days int
-			if _, err := fmt.Sscanf(numStr, "%d", &days); err == nil {
-				return time.Now().AddDate(0, 0, -days), nil
-			}
-		}
-	}
-	// Try date formats
-	for _, layout := range []string{
-		"2006-01-02T15:04:05",
-		"2006-01-02",
-	} {
-		t, err := time.ParseInLocation(layout, s, time.Local)
-		if err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognized date format: %s (use 2006-01-02, 2006-01-02T15:04:05, or 24h/7d)", s)
-}
-
+// CRC: crc-CLI.md | R607, R608, R609, R610, R611, R612, R615
 func cmdTag(args []string) {
 	tagUsage := `Usage: ark tag <subcommand>
 
@@ -2473,7 +2458,10 @@ Subcommands:
   list              List all known tags with counts
   counts <tag>...   Show count for each specified tag
   files <tag>...    Show files containing specified tags
-  defs [TAG...]     Show tag definitions (from tags.md)`
+  defs [TAG...]     Show tag definitions (from tags.md)
+  set FILE TAG VAL  Update or add tags in a file's tag block
+  get FILE [TAG...] Read tags from a file's tag block
+  check FILE [H...] Validate tag block structure`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -2492,6 +2480,12 @@ Subcommands:
 		cmdTagFiles(subArgs)
 	case "defs":
 		cmdTagDefs(subArgs)
+	case "set":
+		cmdTagSet(subArgs)
+	case "get":
+		cmdTagGet(subArgs)
+	case "check":
+		cmdTagCheck(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -2711,6 +2705,112 @@ func cmdTagDefs(args []string) {
 		}
 		printDefs(defs)
 	})
+}
+
+// CRC: crc-CLI.md | R607
+func cmdTagSet(args []string) {
+	if len(args) < 3 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, "usage: ark tag set FILE TAG VALUE [TAG VALUE ...]")
+		os.Exit(0)
+	}
+
+	filePath := args[0]
+	pairs := args[1:]
+	if len(pairs)%2 != 0 {
+		fmt.Fprintln(os.Stderr, "error: tags must be given as TAG VALUE pairs")
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	for i := 0; i < len(pairs); i += 2 {
+		tb.Set(pairs[i], pairs[i+1])
+	}
+
+	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md | R608, R609
+func cmdTagGet(args []string) {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, "usage: ark tag get FILE [TAG ...]")
+		os.Exit(0)
+	}
+
+	filePath := args[0]
+	requestedTags := args[1:]
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	exitCode := 0
+
+	if len(requestedTags) > 0 {
+		for _, name := range requestedTags {
+			v, ok := tb.Get(name)
+			if ok {
+				fmt.Printf("%s\t%s\n", name, v)
+			} else {
+				fmt.Fprintf(os.Stderr, "tag not found: %s\n", name)
+				exitCode = 1
+			}
+		}
+	} else {
+		for _, t := range tb.Tags() {
+			fmt.Printf("%s\t%s\n", t.Name, t.Value)
+		}
+	}
+
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+// CRC: crc-CLI.md | R610, R611, R612
+func cmdTagCheck(args []string) {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, "usage: ark tag check FILE [HEADING ...]")
+		os.Exit(0)
+	}
+
+	filePath := args[0]
+	allowedHeadings := args[1:]
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fatal(err)
+	}
+
+	tb := ark.ParseTagBlock(data)
+	problems := tb.Validate()
+	bodyProblems := tb.ScanBody()
+
+	// Heading validation if allowed headings are specified
+	if len(allowedHeadings) > 0 {
+		bodyProblems = append(bodyProblems, tb.CheckHeadings(allowedHeadings)...)
+	}
+
+	if len(problems) == 0 && len(bodyProblems) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "The file %s has format problems:\n", filePath)
+	for _, p := range problems {
+		fmt.Fprintf(os.Stderr, "- %s\n", p)
+	}
+	for _, p := range bodyProblems {
+		fmt.Fprintf(os.Stderr, "- %s\n", p)
+	}
+	os.Exit(1)
 }
 
 // cmdChunkJSONL is a chunking strategy command: splits a file on newline
@@ -3112,100 +3212,21 @@ func cmdMessageNewResponse(args []string) {
 	}
 }
 
-func cmdMessageSetTags(args []string) {
-	if len(args) < 3 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(os.Stderr, "usage: ark message set-tags FILE TAG VALUE [TAG VALUE ...]")
-		os.Exit(0)
-	}
+// R614, R616: alias — delegates to ark tag set
+func cmdMessageSetTags(args []string) { cmdTagSet(args) }
 
-	filePath := args[0]
-	pairs := args[1:]
-	if len(pairs)%2 != 0 {
-		fmt.Fprintln(os.Stderr, "error: tags must be given as TAG VALUE pairs")
-		os.Exit(1)
-	}
+// R614, R616: alias — delegates to ark tag get
+func cmdMessageGetTags(args []string) { cmdTagGet(args) }
 
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fatal(err)
-	}
-
-	tb := ark.ParseTagBlock(data)
-	for i := 0; i < len(pairs); i += 2 {
-		tb.Set(pairs[i], pairs[i+1])
-	}
-
-	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
-		fatal(err)
-	}
-}
-
-func cmdMessageGetTags(args []string) {
-	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(os.Stderr, "usage: ark message get-tags FILE [TAG ...]")
-		os.Exit(0)
-	}
-
-	filePath := args[0]
-	requestedTags := args[1:]
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fatal(err)
-	}
-
-	tb := ark.ParseTagBlock(data)
-	exitCode := 0
-
-	if len(requestedTags) > 0 {
-		for _, name := range requestedTags {
-			v, ok := tb.Get(name)
-			if ok {
-				fmt.Printf("%s\t%s\n", name, v)
-			} else {
-				fmt.Fprintf(os.Stderr, "tag not found: %s\n", name)
-				exitCode = 1
-			}
-		}
-	} else {
-		for _, t := range tb.Tags() {
-			fmt.Printf("%s\t%s\n", t.Name, t.Value)
-		}
-	}
-
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
-}
-
+// R613: wrapper — calls ark tag check with standard message headings
 func cmdMessageCheck(args []string) {
+	// Prepend the file arg, then the allowed message headings
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "usage: ark message check FILE")
 		os.Exit(0)
 	}
-
-	filePath := args[0]
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		fatal(err)
-	}
-
-	tb := ark.ParseTagBlock(data)
-	problems := tb.Validate()
-	bodyProblems := tb.ScanBody()
-
-	if len(problems) == 0 && len(bodyProblems) == 0 {
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "The file %s has format problems:\n", filePath)
-	for _, p := range problems {
-		fmt.Fprintf(os.Stderr, "- %s\n", p)
-	}
-	for _, p := range bodyProblems {
-		fmt.Fprintf(os.Stderr, "- %s\n", p)
-	}
-	os.Exit(1)
+	// Pass through to cmdTagCheck with message-specific headings appended
+	cmdTagCheck(args)
 }
 
 // CRC: crc-CLI.md | Seq: seq-message.md

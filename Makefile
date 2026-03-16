@@ -42,11 +42,12 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	@echo "Layering ark app..."
 	@mkdir -p $(CACHE_DIR)/apps/ark
 	cp -r apps/ark/* $(CACHE_DIR)/apps/ark/
-	@echo "Layering skills and agents..."
-	@mkdir -p $(CACHE_DIR)/skills/ark $(CACHE_DIR)/skills/ui $(CACHE_DIR)/agents
+	@echo "Layering skills, agents, and install assets..."
+	@mkdir -p $(CACHE_DIR)/skills/ark $(CACHE_DIR)/skills/ui $(CACHE_DIR)/agents $(CACHE_DIR)/install
 	cp .claude/skills/ark/SKILL.md $(CACHE_DIR)/skills/ark/
 	cp .claude/skills/ui/SKILL.md $(CACHE_DIR)/skills/ui/
 	cp .claude/agents/ark.md $(CACHE_DIR)/agents/
+	cp install/* $(CACHE_DIR)/install/
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"
 
