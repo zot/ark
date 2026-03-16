@@ -18,6 +18,8 @@ The ark CLI should have nice --help. All subcommands should support --help.
 
 The Frictionless command is `~/.ark/ark ui`. UI skills use `{cmd}` as a placeholder for this.
 
+**The ark app lives in both Git and Fossil.** The app source is at `apps/ark/` inside this Git repo, but since it's also a Frictionless app it uses the Fossil checkpoint flow (`{cmd} checkpoint local`, `{cmd} checkpoint baseline`). After a `/ui-thorough` pass, do both: `checkpoint local` for the Fossil branch, then a Git commit for the repo. This is non-standard — most Frictionless apps only use Fossil.
+
 ## Quick Recall
 
 Use /ark to query the knowledge base or write tagged content.
