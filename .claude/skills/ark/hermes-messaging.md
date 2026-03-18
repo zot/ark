@@ -54,6 +54,9 @@ status	count
 Always write to YOUR project's `requests/` directory. Never write to
 another project's folder.
 
+**`@issue:` is the card name.** The `--issue` flag on `new-request`
+sets it at creation time. Keep it short (5-8 words) for dashboard display.
+
 **Use heredoc to include body content.** The command reads stdin until
 a lone `.` on a line or EOF. Write the body naturally — no quoting,
 no escaping needed.
@@ -119,6 +122,16 @@ The CLI enforces format that models get wrong.
 One lifecycle — `@status`: open, accepted, in-progress, completed, denied, future.
 
 Response progression: accepted → in-progress → completed.
+
+### Bookmark tags (read-only for Hermes)
+
+- `@response-handled:` on requests — what the sender has dealt with
+- `@request-handled:` on responses — what the responder has dealt with
+
+**Hermes never updates these tags.** They are bookmarks — the owning
+session sets them when it has discharged its obligations. Report them
+in inbox summaries (e.g., "response is completed but request has no
+@response-handled — sender hasn't integrated yet") but do not modify.
 
 ## Retrieval and Status
 

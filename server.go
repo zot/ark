@@ -996,7 +996,7 @@ func (srv *Server) registerLuaFunctions() {
 		}))
 
 		// mcp:inbox(show_all) — cross-project message entries as Lua tables
-		// CRC: crc-Server.md | Seq: seq-message.md | R563-R568, R620
+		// CRC: crc-Server.md | Seq: seq-message.md | R563-R568, R620, R623
 		L.SetField(tbl, "inbox", L.NewFunction(func(L *lua.LState) int {
 			showAll := false
 			if L.GetTop() >= 1 {
@@ -1018,6 +1018,8 @@ func (srv *Server) registerLuaFunctions() {
 				L.SetField(row, "path", lua.LString(e.Path))
 				L.SetField(row, "requestId", lua.LString(e.RequestID))
 				L.SetField(row, "kind", lua.LString(e.Kind))
+				L.SetField(row, "responseHandled", lua.LString(e.ResponseHandled))
+				L.SetField(row, "requestHandled", lua.LString(e.RequestHandled))
 				result.RawSetInt(i+1, row)
 			}
 			L.Push(result)

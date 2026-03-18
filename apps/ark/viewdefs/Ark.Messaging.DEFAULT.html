@@ -11,6 +11,9 @@
     <!-- Filter chips -->
     <div class="msg-chips">
       <div ui-view="chips()?wrapper=lua.ViewList" ui-namespace="msg-chip"></div>
+      <div class="msg-schip-row">
+        <div ui-view="statusChips()?wrapper=lua.ViewList" ui-namespace="msg-status-chip"></div>
+      </div>
     </div>
 
     <!-- Empty state -->
@@ -21,7 +24,7 @@
 
     <!-- Kanban columns -->
     <div class="msg-kanban">
-      <div ui-view="columns()?wrapper=lua.ViewList" ui-namespace="KANBAN"></div>
+      <div ui-view="columns()?wrapper=lua.ViewList&priority=high" ui-namespace="KANBAN"></div>
     </div>
   </div>
 
@@ -63,6 +66,7 @@
       padding: 2px 10px;
       border-radius: 12px;
       font-size: 11px;
+      font-weight: bold;
       cursor: pointer;
       transition: all 0.15s;
       user-select: none;
@@ -70,12 +74,14 @@
     }
 
     .msg-chip-inactive {
-      opacity: 0.4;
-      background: transparent;
+      opacity: 0.3;
+      background: var(--term-accent, #E07A47);
+      color: var(--term-bg, #0a0a0f);
+      border-color: var(--term-accent, #E07A47);
     }
 
     .msg-chip-inactive:hover {
-      opacity: 0.7;
+      opacity: 0.5;
     }
 
     .msg-chip-active {
@@ -83,7 +89,6 @@
       background: var(--term-accent, #E07A47);
       color: var(--term-bg, #0a0a0f);
       border-color: var(--term-accent, #E07A47);
-      font-weight: bold;
     }
 
     .msg-chip-empty {
@@ -91,7 +96,6 @@
       background: var(--term-accent, #E07A47);
       color: var(--term-bg, #0a0a0f);
       border-color: var(--term-accent, #E07A47);
-      font-weight: bold;
     }
 
     .msg-count {
@@ -215,6 +219,30 @@
       font-size: 10px;
     }
 
+    .msg-card-bookmark {
+      font-size: 10px;
+      color: #fbbf24;
+      margin-bottom: 6px;
+      padding: 3px 0 5px;
+      border-bottom: 1px dashed color-mix(in srgb, #fbbf24 30%, transparent);
+      font-family: var(--term-mono, 'JetBrains Mono', monospace);
+      letter-spacing: 0.03em;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .msg-bookmark-pill {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, #fbbf24 40%, transparent);
+      background: color-mix(in srgb, #fbbf24 8%, transparent);
+      white-space: nowrap;
+    }
+
+    .msg-card-bookmark.hidden { display: none; }
+
     .msg-card-response.hidden { display: none; }
 
     .msg-resp-indicator {
@@ -223,6 +251,58 @@
 
     .msg-resp-status {
       font-size: 10px;
+    }
+
+    /* Status chip row */
+    .msg-schip-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .msg-schip-label {
+      font-size: 10px;
+      color: var(--term-text-dim, #8888a0);
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
+
+    .msg-schip {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+      border: 1px solid transparent;
+    }
+
+    .msg-schip-visible {
+      opacity: 1;
+      border-color: currentColor;
+    }
+
+    .msg-schip-empty {
+      opacity: 0.3;
+      border-color: currentColor;
+    }
+
+    .msg-schip-hidden {
+      opacity: 0.6;
+      border-color: currentColor;
+      text-decoration: line-through;
+    }
+
+    .msg-schip-hidden:hover {
+      opacity: 0.8;
+    }
+
+    .msg-schip-empty:hover {
+      opacity: 0.6;
     }
 
     /* Status colors for column headers and badges */

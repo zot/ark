@@ -1,5 +1,5 @@
 # Config
-**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397
+**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397, R624, R625, R631, R632, R633, R634, R635
 
 Parses, validates, and mutates ark.toml. Provides the effective pattern
 sets for each source directory. Explains pattern resolution for any file.
@@ -12,6 +12,7 @@ chunking strategies.
 - globalExclude: []string — global exclude patterns
 - sources: []Source — directory entries with optional per-source strategies and pattern overrides
 - strategies: map[string]string — file glob pattern → strategy name
+- chunkers: []ChunkerConfig — language definitions from `[[chunker]]` entries
 - errors: []string — validation errors (identical include/exclude)
 
 ## Does

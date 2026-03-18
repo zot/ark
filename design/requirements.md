@@ -932,3 +932,30 @@
 - **R618:** InboxEntry includes a `Kind` field: "request" (has `@ark-request:`, different from/to), "response" (has `@ark-response:`), or "self" (has `@ark-request:`, same from/to)
 - **R619:** When `@to-project:` contains a comma, Inbox takes the first project name (trimmed) and discards the rest
 - **R620:** `mcp:inbox()` passes `requestId` and `kind` fields through to Lua entry tables
+
+## Feature: Inbox Bookmark Fields
+**Source:** specs/inbox-bookmark-fields.md
+
+- **R621:** InboxEntry includes a `ResponseHandled` field extracted from the `@response-handled:` tag value (empty if absent)
+- **R622:** InboxEntry includes a `RequestHandled` field extracted from the `@request-handled:` tag value (empty if absent)
+- **R623:** `mcp:inbox()` passes `responseHandled` and `requestHandled` fields through to Lua entry tables
+
+## Feature: Chunker Strategy Registration
+**Source:** specs/chunker-strategies.md
+
+- **R624:** Chunker language configs are defined in `ark.toml` as `[[chunker]]` entries, not hardcoded in Go
+- **R625:** Each `[[chunker]]` entry has a `name` (strategy name), `type` ("bracket" or "indent"), and language fields (line_comments, block_comments, strings, brackets, leading_comments)
+- **R626:** `type = "bracket"` entries register via `microfts2.AddChunker` with `microfts2.BracketChunker(lang)`
+- **R627:** `type = "indent"` entries register via `microfts2.AddChunker` with `microfts2.IndentChunker(lang, tabWidth)`
+- **R628:** `tab_width` field is required for indent type; defaults to 4 if omitted
+- **R629:** Unknown `type` values produce a warning at init, not a fatal error
+- **R630:** Invalid configs (missing required fields) produce a warning at init and are skipped
+- **R631:** Default chunker configs ship in `install/ark.toml`, bundled via `BundleReadFile` with fallback
+- **R632:** `ark init` seeds `ark.toml` from `install/ark.toml` when no ark.toml exists; preserves existing ark.toml
+- **R633:** Custom distributions replace `install/ark.toml` before bundling to customize defaults
+- **R634:** Default skeleton includes bracket configs for Go, C/C++, Java, JS, Lisp, nginx, Pascal, Shell/Bash
+- **R635:** Default skeleton includes indent configs for Python (tab width 4) and YAML (tab width 2)
+- **R636:** On `DB.Init`, ark reads `[[chunker]]` entries from ark.toml, constructs `BracketLang` values, and calls `AddChunker` for each
+- **R637:** If a `[[chunker]]` name conflicts with a hardcoded strategy, the TOML config wins
+- **R638:** Existing hardcoded strategies (lines, markdown, chat-jsonl, lines-overlap, words-overlap) remain unchanged
+- **R639:** (inferred) Chunker strategies appear in `ark strategy list` alongside existing strategies

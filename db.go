@@ -49,6 +49,7 @@ type InitOpts struct {
 	CaseInsensitive bool
 	Aliases         map[byte]byte
 	TagsSeed        []byte // seed content for tags.md (falls back to built-in default)
+	ConfigSeed      []byte // seed content for ark.toml (falls back to built-in default)
 }
 
 // Init creates a new ark database at the given path.
@@ -145,7 +146,7 @@ func Init(dbPath string, opts InitOpts) error {
 
 	// Write default config only if none exists (configPath declared above for seeding)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if err := WriteDefaultConfig(configPath); err != nil {
+		if err := WriteDefaultConfig(configPath, opts.ConfigSeed); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
 	}
@@ -245,6 +246,10 @@ func Open(dbPath string) (*DB, error) {
 		}
 	}
 
+	// CRC: crc-DB.md | R624, R626, R627, R628, R629, R630, R636, R637
+	// Register chunker strategies from ark.toml [[chunker]] entries
+	registerChunkers(fts, config)
+
 	db := &DB{
 		fts:     fts,
 		vec:     vec,
@@ -266,6 +271,81 @@ func (db *DB) Close() error {
 		return err
 	}
 	return db.fts.Close()
+}
+
+// registerChunkers reads [[chunker]] entries from config and registers
+// bracket/indent chunkers via microfts2.AddChunker.
+// CRC: crc-DB.md | R624, R625, R626, R627, R628, R629, R630, R636, R637
+func registerChunkers(fts *microfts2.DB, cfg *Config) {
+	for _, cc := range cfg.Chunkers {
+		if cc.Name == "" {
+			log.Printf("warning: skipping chunker with empty name")
+			continue
+		}
+		lang := buildBracketLang(cc)
+		isIndent := cc.Type == "indent" || cc.Type == "indent-full"
+		isBracket := cc.Type == "bracket" || cc.Type == "bracket-full"
+		switch {
+		case isBracket:
+			if err := fts.AddChunker(cc.Name, microfts2.BracketChunker(lang)); err != nil {
+				log.Printf("warning: register chunker %s: %v", cc.Name, err)
+			}
+		case isIndent:
+			tabWidth := cc.TabWidth
+			if tabWidth <= 0 {
+				tabWidth = 4
+			}
+			if err := fts.AddChunker(cc.Name, microfts2.IndentChunker(lang, tabWidth)); err != nil {
+				log.Printf("warning: register chunker %s: %v", cc.Name, err)
+			}
+		default:
+			log.Printf("warning: unknown chunker type %q for %s", cc.Type, cc.Name)
+		}
+	}
+}
+
+// buildBracketLang converts a ChunkerConfig to a microfts2.BracketLang.
+// Handles both easy form (flat pairs) and full form (struct defs).
+func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
+	lang := microfts2.BracketLang{
+		LineComments: cc.LineComments,
+	}
+	for _, pair := range cc.BlockComments {
+		if len(pair) == 2 {
+			lang.BlockComments = append(lang.BlockComments, [2]string{pair[0], pair[1]})
+		}
+	}
+	isFull := cc.Type == "bracket-full" || cc.Type == "indent-full"
+	if isFull {
+		// Full form: string_defs and bracket_defs
+		for _, sd := range cc.StringDefs {
+			lang.StringDelims = append(lang.StringDelims, microfts2.StringDelim{
+				Open: sd.Open, Close: sd.Close, Escape: sd.Escape,
+			})
+		}
+		for _, bd := range cc.BracketDefs {
+			lang.Brackets = append(lang.Brackets, microfts2.BracketGroup{
+				Open: bd.Open, Separators: bd.Separators, Close: bd.Close,
+			})
+		}
+	} else {
+		// Easy form: flat pairs with default escape "\"
+		for _, pair := range cc.Strings {
+			if len(pair) == 2 {
+				lang.StringDelims = append(lang.StringDelims, microfts2.StringDelim{
+					Open: pair[0], Close: pair[1], Escape: `\`,
+				})
+			}
+		}
+		for _, pair := range cc.Brackets {
+			if len(pair) == 2 {
+				lang.Brackets = append(lang.Brackets, microfts2.BracketGroup{
+					Open: []string{pair[0]}, Close: []string{pair[1]},
+				})
+			}
+		}
+	}
+	return lang
 }
 
 // Path returns the database directory path.
@@ -720,19 +800,21 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 }
 
 // InboxEntry is a message from the cross-project messaging system.
-// R563-R568, R617, R618, R619
+// R563-R568, R617, R618, R619, R621, R622
 type InboxEntry struct {
-	Status    string `json:"status"`
-	To        string `json:"to"`
-	From      string `json:"from"`
-	Summary   string `json:"summary"`
-	Path      string `json:"path"`
-	RequestID string `json:"requestId"`
-	Kind      string `json:"kind"` // "request", "response", or "self"
+	Status          string `json:"status"`
+	To              string `json:"to"`
+	From            string `json:"from"`
+	Summary         string `json:"summary"`
+	Path            string `json:"path"`
+	RequestID       string `json:"requestId"`
+	Kind            string `json:"kind"`            // "request", "response", or "self"
+	ResponseHandled string `json:"responseHandled"` // @response-handled: tag value
+	RequestHandled  string `json:"requestHandled"`  // @request-handled: tag value
 }
 
 // Inbox returns cross-project messages from the tag index.
-// CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617, R618, R619
+// CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617, R618, R619, R621, R622
 // If showAll is false, completed/done/denied messages are excluded.
 // If includeArchived is false, archived messages are excluded.
 func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
@@ -793,14 +875,18 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 				summary = "ark-response:" + v
 			}
 		}
+		responseHandled, _ := tb.Get("response-handled")
+		requestHandled, _ := tb.Get("request-handled")
 		entries = append(entries, InboxEntry{
-			Status:    statusVal,
-			To:        toVal,
-			From:      fromVal,
-			Summary:   summary,
-			Path:      f.Path,
-			RequestID: requestID,
-			Kind:      kind,
+			Status:          statusVal,
+			To:              toVal,
+			From:            fromVal,
+			Summary:         summary,
+			Path:            f.Path,
+			RequestID:       requestID,
+			Kind:            kind,
+			ResponseHandled: responseHandled,
+			RequestHandled:  requestHandled,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {

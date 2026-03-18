@@ -76,7 +76,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
+- [ ] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 
 ### Sequences

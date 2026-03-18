@@ -14,6 +14,7 @@ import (
 )
 
 // Config represents the parsed ark.toml configuration.
+// CRC: crc-Config.md | R624, R625
 type Config struct {
 	Dotfiles        bool              `toml:"dotfiles"`
 	CaseInsensitive bool              `toml:"case_insensitive,omitempty"`
@@ -23,8 +24,43 @@ type Config struct {
 	GlobalExclude   []string          `toml:"exclude"`
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
+	Chunkers        []ChunkerConfig   `toml:"chunker"`
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`
+}
+
+// ChunkerConfig defines a language chunker from [[chunker]] in ark.toml.
+// Easy form (bracket/indent): flat string pairs for strings/brackets.
+// Full form (bracket-full/indent-full): inline table structs.
+// CRC: crc-Config.md | R624, R625
+type ChunkerConfig struct {
+	Name          string     `toml:"name"`
+	Type          string     `toml:"type"` // bracket, bracket-full, indent, indent-full
+	TabWidth      int        `toml:"tab_width,omitempty"`
+	LineComments  []string   `toml:"line_comments"`
+	BlockComments [][]string `toml:"block_comments"`
+
+	// Easy form fields (bracket/indent)
+	Strings  [][]string `toml:"strings"`
+	Brackets [][]string `toml:"brackets"`
+
+	// Full form fields (bracket-full/indent-full)
+	StringDefs  []StringDefConfig  `toml:"string_defs"`
+	BracketDefs []BracketDefConfig `toml:"bracket_defs"`
+}
+
+// StringDefConfig is the full-form string delimiter config.
+type StringDefConfig struct {
+	Open   string `toml:"open"`
+	Close  string `toml:"close"`
+	Escape string `toml:"escape"`
+}
+
+// BracketDefConfig is the full-form bracket group config.
+type BracketDefConfig struct {
+	Open       []string `toml:"open"`
+	Separators []string `toml:"separators"`
+	Close      []string `toml:"close"`
 }
 
 // Source is a directory entry in the configuration.
@@ -56,7 +92,14 @@ func LoadConfig(path string) (*Config, error) {
 
 // CRC: crc-DB.md | R383
 // WriteDefaultConfig writes an initial ark.toml with default excludes.
-func WriteDefaultConfig(path string) error {
+// WriteDefaultConfig writes the initial ark.toml.
+// If configSeed is non-nil, uses that (from install/ark.toml bundle).
+// Otherwise falls back to a minimal built-in default.
+// CRC: crc-Config.md | R631, R632, R633
+func WriteDefaultConfig(path string, configSeed []byte) error {
+	if len(configSeed) > 0 {
+		return os.WriteFile(path, configSeed, 0644)
+	}
 	const defaultConfig = `# Ark configuration
 dotfiles = true
 case_insensitive = true
@@ -69,11 +112,6 @@ exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 [strategies]
 "*.md" = "markdown"
 "*.jsonl" = "chat-jsonl"
-
-# Sources — directories to watch
-# [[source]]
-# dir = "~/notes"
-# strategies = {"*.org" = "lines"}  # optional, amends global strategies
 `
 	return os.WriteFile(path, []byte(defaultConfig), 0644)
 }

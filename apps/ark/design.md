@@ -77,23 +77,63 @@ filterFiles, excludeFiles, filterContent, excludeContent,
 _displayItems, _projects, _dataSources, _projectSearchOpen,
 _projectCandidates, _showPatterns, _statusCounts, _serverRunning.
 
-### Ark.Messaging (new)
+### Ark.Messaging
 
 | Field | Type | Description |
 |-------|------|-------------|
-| _messages | Ark.Message[] | All messages from mcp:inbox() |
-| _columns | table | status → Ark.Message[] grouping |
+| _messages | Ark.Message[] | Merged conversations from mcp:inbox() |
 | _loading | boolean | Refresh in progress |
+| _chips | Ark.FilterChip[] | One per project, cycles filter modes |
+| _statusChips | Ark.StatusChip[] | One per status, toggles column visibility |
 
-### Ark.Message (new)
+### Ark.Message
+
+A conversation: one request merged with its response(s). Column
+placement uses the **request's** `@status` — the requester owns the
+issue. One card per conversation, never duplicated.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| status | string | open, accepted, in-progress, completed, denied, future |
-| to | string | Target project name |
-| from | string | Source project name |
-| summary | string | @issue text |
-| path | string | Full file path |
+| requestId | string | Conversation ID (from @ark-request/@ark-response) |
+| kind | string | "request", "response", or "self" |
+| reqStatus | string | Request's @status |
+| reqTo | string | Request's target project |
+| reqFrom | string | Request's source project |
+| reqSummary | string | Request's @issue text |
+| reqPath | string | Request file path |
+| respStatus | string | Response's @status (empty if no response) |
+| respTo | string | Response's target project |
+| respFrom | string | Response's source project |
+| respSummary | string | Response's @issue text |
+| respPath | string | Response file path |
+| _hasResponse | boolean | Whether a response file exists |
+| reqResponseHandled | string | Request's @response-handled value |
+| respRequestHandled | string | Response's @request-handled value |
+
+### Ark.FilterChip
+
+| Field | Type | Description |
+|-------|------|-------------|
+| project | string | Project name |
+| mode | string | "all", "to", "from", "none" — cycles on click |
+| matchCount | number | Messages matching current mode |
+| toCount | number | Messages where this project is target |
+| fromCount | number | Messages where this project is sender |
+
+### Ark.StatusChip
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | string | Status value (open, accepted, etc.) |
+| count | number | Messages in this status |
+| visible | boolean | Whether this column is shown |
+
+### Ark.MessageColumn
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | string | Column status label |
+| _items | Ark.Message[] | Messages in this column |
 
 ## Methods
 
@@ -118,21 +158,54 @@ use `self` and are unaffected.
 
 | Method | Description |
 |--------|-------------|
-| new() | Create instance, call refresh() |
-| refresh() | Call mcp:inbox(true), populate _messages and _columns |
-| columns() | Return _columns (status → message array) |
+| new() | Create instance, init chips |
+| mutate() | Init chips/statusChips on schema change, trigger refresh |
+| refresh() | Call mcp:inbox(true), group by requestId, merge into Messages, rebuild chips |
+| columns() | Build MessageColumn[] from _messages, filtered by chips. Priority=high (runs before chip styling) |
 | columnOrder() | Return ordered list of statuses that have messages |
 | isLoading() | Return _loading |
 | messageCount() | Total message count |
+| filteredCount() | Count of messages passing current filter |
+| countLabel() | "N of M messages" display string |
+
+### Ark.FilterChip
+
+| Method | Description |
+|--------|-------------|
+| cycle() | Advance mode: all → to → from → none → all (skips modes with 0 count) |
+| label() | Project name + directional count display |
+| chipClass() | CSS class based on mode and matchCount |
+
+### Ark.StatusChip
+
+| Method | Description |
+|--------|-------------|
+| toggle() | Toggle column visibility |
+| label() | Status name + count |
+| chipClass() | CSS class based on visibility and count |
+
+### Ark.MessageColumn
+
+| Method | Description |
+|--------|-------------|
+| statusLabel() | Human-readable column header |
+| itemCount() | Number of messages in column |
+| statusClass() | CSS class for column header color |
 
 ### Ark.Message
 
 | Method | Description |
 |--------|-------------|
-| openFile() | Call mcp:open(self.path) |
-| shortSummary() | Truncated summary for card display |
+| effectiveStatus() | Request's @status drives column placement |
+| openFile() | Open request file (primary) via mcp:open() |
+| openResponse() | Open response file via mcp:open() |
+| shortSummary() | Truncated @issue for card display (60 char max) |
 | projectLabel() | "from → to" formatted string |
+| hasResponse() | Whether a response file exists |
+| noResponse() | Inverse of hasResponse |
+| responseStatusLabel() | Human-readable response status |
 | statusClass() | CSS class for status badge color |
+| bookmarkChips() | Return stale bookmark chips as "PROJECT:status" strings. Empty when all bookmarks current. |
 
 ## ViewDefs
 

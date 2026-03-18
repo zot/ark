@@ -105,9 +105,17 @@ not asking a question:
 Hermes curates and reports honest misses.
 **Send in background** — sending is fire-and-forget, don't block the
 conversation. Inbox checks need the result, so run foreground.
+**Be explicit about direction.** Hermes is Haiku — it answers what
+you ask, not what you meant. "Requests for us without responses" is
+ambiguous (outbound awaiting reply? inbound awaiting our RESP file?).
+Say exactly what you need:
+- "inbound requests TO project with no RESP file" — unanswered work
+- "outbound requests FROM project still open" — waiting on others
+- "all messages involving project" — full picture
 ```
 Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a request from ark to microfts2 about chunker interface.")
 Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale.")
+Agent(subagent_type="ark-messenger", prompt="Find inbound requests TO microfts2 that have no RESP file in microfts2's requests/ directory.")
 ```
 
 **Search** — spawn ark-searcher. Finding notes, exploring tags, retrieval.
@@ -145,8 +153,32 @@ Other tags in the block (`@from-project:`, `@to-project:`, `@status:`,
 
 One lifecycle tag — `@status`: open, accepted, in-progress, completed, denied, future.
 
+**`@issue:`** — short description, also used as card name in the dashboard.
+
 **Response = ack.** Creating a response file with `@status: accepted`
 means "I saw it." No cross-project file writes, ever.
+
+### Bookmark tags
+
+Each side tracks what it has **dealt with** from the counterpart:
+
+- `@response-handled:` on requests — the response status the sender has processed
+- `@request-handled:` on responses — the request status the responder has processed
+
+The bookmark marks your place. The gap between where the bookmark is
+and where the counterpart has moved is unfinished business — Franklin
+surfaces these as reminders. **Hermes never updates any status tag.**
+Only the owning session updates when obligations are discharged.
+
+**Setting the value:** the bookmark should reflect how far along you
+are in processing the counterpart's state — not what you saw, but
+the farthest status level you've reached given the work you've done.
+If the response is `completed` and you've read it and started
+integration, set `@response-handled: in-progress`. When integration
+is done, set it to `completed`. The bookmark tracks your progress,
+not your awareness.
+
+See ARK-MESSAGING.md for the full lifecycle example.
 
 Filenames: bare `<short-name>.md`. Only add `-<session8>` suffix if the name collides.
 

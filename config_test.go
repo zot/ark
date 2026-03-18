@@ -95,7 +95,7 @@ exclude = ["*.md"]
 func TestWriteDefaultConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
-	if err := WriteDefaultConfig(configPath); err != nil {
+	if err := WriteDefaultConfig(configPath, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(configPath)

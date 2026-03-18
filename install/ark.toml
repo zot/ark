@@ -1,0 +1,95 @@
+# Ark configuration
+dotfiles = true
+case_insensitive = true
+
+# Global patterns — apply to all sources
+include = []
+exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+
+# Strategy mapping — glob pattern to chunking strategy
+[strategies]
+"*.md" = "markdown"
+"*.jsonl" = "chat-jsonl"
+
+# Sources — directories to watch
+# [[source]]
+# dir = "~/notes"
+# strategies = {"*.org" = "lines"}  # optional, amends global strategies
+
+# Chunker language definitions
+# type = "bracket" / "indent" — easy form with flat string pairs (default escape \)
+# type = "bracket-full" / "indent-full" — full form with inline table structs
+
+[[chunker]]
+name = "bracket-go"
+type = "bracket"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+strings = [["\"", "\""], ["`", "`"], ["'", "'"]]
+brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+[[chunker]]
+name = "bracket-c"
+type = "bracket"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+strings = [["\"", "\""], ["'", "'"]]
+brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+[[chunker]]
+name = "bracket-java"
+type = "bracket"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+strings = [["\"", "\""], ["'", "'"]]
+brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+[[chunker]]
+name = "bracket-js"
+type = "bracket"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+strings = [["\"", "\""], ["'", "'"], ["`", "`"]]
+brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+[[chunker]]
+name = "bracket-lisp"
+type = "bracket"
+line_comments = [";"]
+strings = [["\"", "\""]]
+brackets = [["(", ")"], ["[", "]"]]
+
+[[chunker]]
+name = "bracket-nginx"
+type = "bracket"
+line_comments = ["#"]
+strings = [["\"", "\""], ["'", "'"]]
+brackets = [["{", "}"]]
+
+[[chunker]]
+name = "bracket-pascal"
+type = "bracket-full"
+block_comments = [["{", "}"], ["(*", "*)"]]
+string_defs = [{open = "'", close = "'"}]
+bracket_defs = [{open = ["begin", "record", "class"], close = ["end"]}, {open = ["if"], separators = ["then", "else"], close = ["end"]}, {open = ["repeat"], close = ["until"]}]
+
+[[chunker]]
+name = "bracket-shell"
+type = "bracket-full"
+line_comments = ["#"]
+string_defs = [{open = "\"", close = "\"", escape = "\\"}, {open = "'", close = "'"}]
+bracket_defs = [{open = ["if"], separators = ["then", "elif", "else"], close = ["fi"]}, {open = ["do"], close = ["done"]}, {open = ["case"], separators = ["in"], close = ["esac"]}, {open = ["{"], close = ["}"]}]
+
+[[chunker]]
+name = "indent-python"
+type = "indent"
+tab_width = 4
+line_comments = ["#"]
+strings = [["\"", "\""], ["'", "'"], ["\"\"\"", "\"\"\""], ["'''", "'''"]]
+
+[[chunker]]
+name = "indent-yaml"
+type = "indent"
+tab_width = 2
+line_comments = ["#"]
+strings = [["\"", "\""], ["'", "'"]]

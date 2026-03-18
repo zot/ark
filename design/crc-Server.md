@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -72,8 +72,9 @@ Optionally starts the embedded ui-engine alongside.
   - mcp:indexing() — returns Lua array of source dirs currently
     being indexed. Empty table when idle.
   - mcp:inbox(show_all) — returns Lua table of InboxEntry records
-    from the tag index. Calls DB.Inbox(). Each entry includes requestId
-    and kind fields alongside status, to, from, summary, path.
+    from the tag index. Calls DB.Inbox(). Each entry includes requestId,
+    kind, responseHandled, and requestHandled fields alongside status,
+    to, from, summary, path.
   - mcp:parseJson(str) — parse JSON string into Lua table.
     Uses jsonToLua recursive converter.
   - mcp:readJsonFile(path) — read file, parse JSON into Lua table.

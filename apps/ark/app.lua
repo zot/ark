@@ -1899,6 +1899,7 @@ end
 ------------------------------------------------------------------------
 
 function Project:selectMe()
+    if not searching then return end
     if searching._filterClicked then
         searching._filterClicked = false
         return
@@ -2265,7 +2266,8 @@ end
 Ark.Messaging = session:prototype("Ark.Messaging", {
     _messages = EMPTY,
     _loading = false,
-    _chips = EMPTY,    -- Ark.FilterChip[] — one per project
+    _chips = EMPTY,       -- Ark.FilterChip[] — one per project
+    _statusChips = EMPTY, -- Ark.StatusChip[] — one per status
 })
 Messaging = Ark.Messaging
 
@@ -2279,25 +2281,35 @@ MessageColumn = Ark.MessageColumn
 -- modes: "none", "to", "from", "both"
 Ark.FilterChip = session:prototype("Ark.FilterChip", {
     project = "",
-    mode = "both",     -- default: show all involving this project
-    _matchCount = 0,
+    mode = "all",      -- default: unfiltered (show all involving this project)
+    matchCount = 0,
+    toCount = 0,       -- messages where this project is the target
+    fromCount = 0,     -- messages where this project is the sender
 })
 local FilterChip = Ark.FilterChip
 
 function FilterChip:cycle()
-    local order = {"none", "to", "from", "both"}
-    for i, m in ipairs(order) do
-        if m == self.mode then
-            self.mode = order[(i % #order) + 1]
+    -- Build available states based on counts
+    local states = {"all"}  -- unfiltered is always available
+    if self.toCount > 0 then table.insert(states, "to") end
+    if self.fromCount > 0 then table.insert(states, "from") end
+    table.insert(states, "none")  -- deselected is always available
+    -- Find current and advance
+    for i, s in ipairs(states) do
+        if s == self.mode then
+            self.mode = states[(i % #states) + 1]
             return
         end
     end
-    self.mode = "none"
+    self.mode = "all"
 end
 
 function FilterChip:label()
-    if self.mode == "none" then return self.project end
-    return self.mode .. ": " .. self.project
+    local counts = " " .. self.toCount .. "/" .. self.fromCount
+    if self.mode == "all" or self.mode == "none" then
+        return self.project .. counts
+    end
+    return self.mode .. ": " .. self.project .. counts
 end
 
 function FilterChip:isActive()
@@ -2306,12 +2318,54 @@ end
 
 function FilterChip:chipClass()
     if self.mode == "none" then return "msg-chip msg-chip-inactive" end
-    if self._matchCount == 0 then return "msg-chip msg-chip-empty" end
+    if self.matchCount == 0 then return "msg-chip msg-chip-empty" end
     return "msg-chip msg-chip-active"
 end
 
+-- Status chip: toggle column visibility
+Ark.StatusChip = session:prototype("Ark.StatusChip", {
+    status = "",
+    visible = true,
+    count = 0,
+})
+local StatusChip = Ark.StatusChip
+
+local STATUS_LABELS = {
+    open = "open",
+    accepted = "accepted",
+    ["in-progress"] = "in progress",
+    future = "future",
+    completed = "completed",
+    denied = "denied",
+}
+
+local STATUS_CSS = {
+    open = "msg-status-open",
+    accepted = "msg-status-active",
+    ["in-progress"] = "msg-status-active",
+    future = "msg-status-future",
+    completed = "msg-status-done",
+    denied = "msg-status-denied",
+}
+
+function StatusChip:toggle()
+    self.visible = not self.visible
+end
+
+function StatusChip:label()
+    return (STATUS_LABELS[self.status] or self.status) .. " " .. self.count
+end
+
+function StatusChip:chipClass()
+    local base = "msg-schip"
+    local color = STATUS_CSS[self.status] or ""
+    if not self.visible then return base .. " msg-schip-hidden " .. color end
+    if self.count == 0 then return base .. " msg-schip-empty " .. color end
+    return base .. " msg-schip-visible " .. color
+end
+
 -- Ark.Message represents a conversation: a request + optional response.
--- Column placement uses the most advanced status (response wins if present).
+-- Column placement uses the request's @status (requester owns the issue).
 Ark.Message = session:prototype("Ark.Message", {
     requestId = "",
     kind = "",          -- "request", "response", or "self"
@@ -2328,6 +2382,10 @@ Ark.Message = session:prototype("Ark.Message", {
     respSummary = "",
     respPath = "",
     _hasResponse = false,
+    -- Bookmark fields (populated from @response-handled / @request-handled)
+    -- Empty until Go inbox plumbing lands; UI is ready for them.
+    reqResponseHandled = "",   -- request's @response-handled value
+    respRequestHandled = "",   -- response's @request-handled value
 })
 Message = Ark.Message
 
@@ -2341,10 +2399,14 @@ function Messaging:new(instance)
     instance = session:create(Messaging, instance)
     instance._messages = {}
     instance._chips = {}
+    instance._statusChips = {}
     return instance
 end
 
 function Messaging:mutate()
+    if self._statusChips == nil then
+        self._statusChips = {}
+    end
     if self._chips == nil then
         self._chips = {}
         self:refresh()
@@ -2390,6 +2452,7 @@ function Messaging:refresh()
             m.reqFrom = req.from
             m.reqSummary = req.summary
             m.reqPath = req.path
+            m.reqResponseHandled = req.responseHandled or ""
         end
         if resp then
             m._hasResponse = true
@@ -2398,6 +2461,7 @@ function Messaging:refresh()
             m.respFrom = resp.from
             m.respSummary = resp.summary
             m.respPath = resp.path
+            m.respRequestHandled = resp.requestHandled or ""
             if not req then
                 -- Orphan response with no request — use response fields for display
                 m.kind = "response"
@@ -2429,40 +2493,87 @@ function Messaging:refresh()
     for _, p in ipairs(projects) do
         local chip = session:create(FilterChip)
         chip.project = p
-        chip.mode = oldModes[p] or "both"
+        chip.mode = oldModes[p] or "all"
         table.insert(chips, chip)
     end
     self._chips = chips
+    -- Rebuild status chips, preserving visibility
+    local oldVis = {}
+    for _, sc in ipairs(self._statusChips or {}) do
+        oldVis[sc.status] = sc.visible
+    end
+    local statusOrder = {"open", "accepted", "in-progress", "future", "completed", "denied"}
+    local schips = {}
+    for _, s in ipairs(statusOrder) do
+        local sc = session:create(StatusChip)
+        sc.status = s
+        sc.visible = oldVis[s] ~= false  -- default true
+        table.insert(schips, sc)
+    end
+    self._statusChips = schips
+end
+
+function Messaging:statusChips()
+    return self._statusChips or {}
 end
 
 function Messaging:columns()
-    -- Update chip match counts (how many total messages involve each project)
+    -- Update chip match counts
     local msgs = self._messages or {}
     for _, chip in ipairs(self._chips or {}) do
-        local count = 0
+        local toC, fromC = 0, 0
         local p = chip.project
         for _, m in ipairs(msgs) do
-            if m.reqFrom == p or m.reqTo == p then
-                count = count + 1
-            end
+            if m.reqTo == p then toC = toC + 1 end
+            if m.reqFrom == p then fromC = fromC + 1 end
         end
-        chip._matchCount = count
+        chip.toCount = toC
+        chip.fromCount = fromC
+        local mode = chip.mode
+        if mode == "to" then chip.matchCount = toC
+        elseif mode == "from" then chip.matchCount = fromC
+        elseif mode == "all" then
+            -- Count distinct messages (don't double-count self-messages)
+            local allC = 0
+            for _, m in ipairs(msgs) do
+                if m.reqTo == p or m.reqFrom == p then allC = allC + 1 end
+            end
+            chip.matchCount = allC
+        else chip.matchCount = 0
+        end
+    end
+    -- Build status visibility lookup and count per status
+    local statusVisible = {}
+    for _, sc in ipairs(self._statusChips or {}) do
+        statusVisible[sc.status] = sc.visible
     end
     local colOrder = {"open", "accepted", "in-progress", "future", "completed", "denied"}
     local filtered = self:filteredMessages()
+    -- Count items per status (for chip counts) and build visible columns
+    local statusCounts = {}
+    for _, m in ipairs(filtered) do
+        local s = m:effectiveStatus()
+        statusCounts[s] = (statusCounts[s] or 0) + 1
+    end
+    -- Update status chip counts
+    for _, sc in ipairs(self._statusChips or {}) do
+        sc.count = statusCounts[sc.status] or 0
+    end
     local cols = {}
     for _, status in ipairs(colOrder) do
-        local items = {}
-        for _, m in ipairs(filtered) do
-            if m:effectiveStatus() == status then
-                table.insert(items, m)
+        if statusVisible[status] ~= false then
+            local items = {}
+            for _, m in ipairs(filtered) do
+                if m:effectiveStatus() == status then
+                    table.insert(items, m)
+                end
             end
-        end
-        if #items > 0 then
-            local col = session:create(MessageColumn)
-            col.status = status
-            col._items = items
-            table.insert(cols, col)
+            if #items > 0 then
+                local col = session:create(MessageColumn)
+                col.status = status
+                col._items = items
+                table.insert(cols, col)
+            end
         end
     end
     return cols
@@ -2514,7 +2625,7 @@ function Messaging:filteredMessages()
                 local p = chip.project
                 if chip.mode == "from" and m.reqFrom == p then matched = true end
                 if chip.mode == "to" and m.reqTo == p then matched = true end
-                if chip.mode == "both" and (m.reqFrom == p or m.reqTo == p) then matched = true end
+                if chip.mode == "all" and (m.reqFrom == p or m.reqTo == p) then matched = true end
             end
         end
         if matched then table.insert(result, m) end
@@ -2553,20 +2664,11 @@ function MessageColumn:statusClass()
 end
 
 -- The effective status determines column placement.
--- Response status wins if it's more advanced than the request status.
+-- Request's status drives the column — the requester owns the issue.
 function Message:effectiveStatus()
-    if not self._hasResponse then
-        return self.reqStatus
-    end
-    local reqRank = STATUS_RANK[self.reqStatus] or 0
-    local respRank = STATUS_RANK[self.respStatus] or 0
-    if respRank >= reqRank then
-        -- Normalize "done" to "completed" for column matching
-        local s = self.respStatus
-        if s == "done" then s = "completed" end
-        return s
-    end
-    return self.reqStatus
+    local s = self.reqStatus
+    if s == "done" then s = "completed" end
+    return s
 end
 
 function Message:openFile()
@@ -2626,20 +2728,53 @@ function Message:statusClass()
     return ""
 end
 
+-- Return stale bookmark chips as "PROJECT:status" strings.
+-- Empty table when all bookmarks are current.
+function Message:bookmarkChips()
+    local chips = {}
+    -- Check request side: is reqResponseHandled behind respStatus?
+    if self._hasResponse and self.respStatus ~= "" then
+        local handled = self.reqResponseHandled
+        if handled == "" or handled ~= self.respStatus then
+            -- Requester hasn't caught up with response
+            table.insert(chips, self.reqFrom .. ":" .. (handled ~= "" and handled or "unseen"))
+        end
+    end
+    -- Check response side: is respRequestHandled behind reqStatus?
+    if self._hasResponse and self.reqStatus ~= "" then
+        local handled = self.respRequestHandled
+        if handled == "" or handled ~= self.reqStatus then
+            -- Responder hasn't caught up with request
+            table.insert(chips, self.respFrom .. ":" .. (handled ~= "" and handled or "unseen"))
+        end
+    end
+    return chips
+end
+
+function Message:hasBookmarkLag()
+    return #self:bookmarkChips() > 0
+end
+
+function Message:noBookmarkLag()
+    return #self:bookmarkChips() == 0
+end
+
+function Message:bookmarkLabel()
+    local chips = self:bookmarkChips()
+    if #chips == 0 then return "" end
+    local parts = {}
+    for _, chip in ipairs(chips) do
+        table.insert(parts, '<span class="msg-bookmark-pill">' .. chip .. '</span>')
+    end
+    return table.concat(parts, "")
+end
+
 ------------------------------------------------------------------------
 -- Instance creation
 ------------------------------------------------------------------------
 
--- Local reference for child types (Source, Project, etc.) that need
--- the searching view. The global `ark` is the root shell.
-local searching
-
-if not session.reloading then
+if not session.reloading or not ark then
     ark = Ark:new()
-    searching = ark._searching
-else
-    -- On hot-reload, update the local reference
-    if ark and ark._searching then
-        searching = ark._searching
-    end
 end
+-- Update the forward-declared local (line 77) that all methods close over
+searching = ark._searching

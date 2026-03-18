@@ -1,5 +1,6 @@
 <template>
   <div class="msg-card" ui-event-click="openFile()">
+    <div class="msg-card-bookmark" ui-class-hidden="noBookmarkLag()" ui-html="bookmarkLabel()"></div>
     <div class="msg-card-projects" ui-value="projectLabel()"></div>
     <div class="msg-card-summary" ui-value="shortSummary()"></div>
     <div class="msg-card-response" ui-class-hidden="noResponse()">

@@ -437,10 +437,14 @@ func cmdInit(args []string) {
 
 	aliases := parseAliases(*aliasStr)
 
-	// Try reading seed tags.md from bundle
+	// Try reading seed files from bundle
 	var tagsSeed []byte
 	if data, err := cli.BundleReadFile("install/tags.md"); err == nil {
 		tagsSeed = data
+	}
+	var configSeed []byte
+	if data, err := cli.BundleReadFile("install/ark.toml"); err == nil {
+		configSeed = data
 	}
 
 	opts := ark.InitOpts{
@@ -449,6 +453,7 @@ func cmdInit(args []string) {
 		CaseInsensitive: *caseInsensitive,
 		Aliases:         aliases,
 		TagsSeed:        tagsSeed,
+		ConfigSeed:      configSeed,
 	}
 	if err := ark.Init(arkDir, opts); err != nil {
 		fatal(err)

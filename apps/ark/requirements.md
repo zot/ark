@@ -165,13 +165,34 @@ the Deck, not the 7-inch screen).
 Status columns (from ARK-MESSAGING.md):
 - Future, Open, Accepted, In-Progress, Completed, Denied
 
+### Filter Chips
+
+Two rows of chips above the kanban:
+
+- **Project chips** — one per project involved in any message. Click
+  cycles: all → to → from → none. Shows directional counts (to/from).
+- **Status chips** — one per status. Click toggles column visibility.
+
 ### Message Cards
+
+Each card represents a **conversation** — one request merged with its
+response(s). A request can have multiple responses (one per
+participating project).
 
 Each card shows:
 - Summary (from @issue tag)
 - From/To project names
 - Status badge
 - Click to open file via `mcp:open(path)`
+
+Column placement is driven by the **request's** `@status` — the
+requester owns the issue and decides its overall state.
+
+### Bookmark Lag
+
+Cards show stale bookmark chips when a participant's `@*-handled:`
+tag is behind the counterpart's `@status`. Format: `PROJECT:status`.
+A clean card means everyone is current. Chips mean someone owes work.
 
 ### Refresh
 
@@ -180,9 +201,7 @@ Manual refresh button. Real-time updates are V3 territory.
 ### What's NOT in scope
 
 - Status mutation from the UI
-- Response threading / conversation view
 - Cross-project file writes (never, by design)
-- Claude-in-the-loop card name polish (Phase 3, deferred)
 
 ## MCP Shell Integration
 
