@@ -48,25 +48,26 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K               int       // max results (default 20)
-	Scores          bool      // include scores in output
-	After           time.Time // only results newer than this (zero = no filter)
-	Before          time.Time // only results older than this (zero = no filter)
-	About           string    // semantic query (microvec)
-	Contains        string   // exact match query (microfts2)
-	Regex           []string // regex patterns (first drives SearchRegex, all are AND post-filters)
-	ExceptRegex     []string // regex subtract post-filters (any match rejects)
-	LikeFile        string   // file path — use content as FTS density query
-	Tags            bool     // output extracted tags instead of content
-	Filter          []string // content-based positive filters (FTS queries, intersect)
-	Except          []string // content-based negative filters (FTS queries, subtract)
-	FilterFiles     []string // path-based positive filters (glob patterns, intersect)
-	ExcludeFiles    []string // path-based negative filters (glob patterns, subtract)
-	FilterFileTags  []string // tag-based positive filters (tag names, intersect)
-	ExcludeFileTags []string // tag-based negative filters (tag names, subtract)
-	Score           string   // scoring strategy: "", "auto", "coverage", "density"
-	Multi           bool     // run all four strategies via SearchMulti
-	Proximity       bool     // enable proximity reranking
+	K               int                   // max results (default 20)
+	Scores          bool                  // include scores in output
+	After           time.Time             // only results newer than this (zero = no filter)
+	Before          time.Time             // only results older than this (zero = no filter)
+	About           string                // semantic query (microvec)
+	Contains        string                // exact match query (microfts2)
+	Regex           []string              // regex patterns (first drives SearchRegex, all are AND post-filters)
+	ExceptRegex     []string              // regex subtract post-filters (any match rejects)
+	LikeFile        string                // file path — use content as FTS density query
+	Tags            bool                  // output extracted tags instead of content
+	Filter          []string              // content-based positive filters (FTS queries, intersect)
+	Except          []string              // content-based negative filters (FTS queries, subtract)
+	FilterFiles     []string              // path-based positive filters (glob patterns, intersect)
+	ExcludeFiles    []string              // path-based negative filters (glob patterns, subtract)
+	FilterFileTags  []string              // tag-based positive filters (tag names, intersect)
+	ExcludeFileTags []string              // tag-based negative filters (tag names, subtract)
+	Score           string                // scoring strategy: "", "auto", "coverage", "density"
+	Multi           bool                  // run all four strategies via SearchMulti
+	Proximity       bool                  // enable proximity reranking
+	Cache           *microfts2.ChunkCache // R652: session-provided cache (nil = per-query)
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -628,12 +629,20 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 	return resolved, nil
 }
 
-// FillChunks reads chunk text for each result using the microfts2 ChunkCache.
-// The cache reads each file once and resolves chunks through the Chunker interface,
-// so format-specific extraction (e.g. chat-jsonl) is handled by the chunker itself.
-// CRC: crc-Searcher.md | R605
+// FillChunks reads chunk text for each result using a fresh per-query ChunkCache.
+// CRC: crc-Searcher.md | R605, R653
 func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
-	cache := s.fts.NewChunkCache()
+	return s.FillChunksUsing(results, nil)
+}
+
+// FillChunksUsing reads chunk text using the provided cache, or creates a
+// fresh per-query cache if cache is nil. The session path provides a non-nil
+// cache so that successive searches reuse cached file reads.
+// CRC: crc-Searcher.md | R652
+func (s *Searcher) FillChunksUsing(results []SearchResultEntry, cache *microfts2.ChunkCache) ([]SearchResultEntry, error) {
+	if cache == nil {
+		cache = s.fts.NewChunkCache()
+	}
 	for i := range results {
 		r := &results[i]
 		content, ok := cache.ChunkText(r.Path, r.Range)
@@ -943,7 +952,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 		return nil, err
 	}
 
-	results, err = s.FillChunks(results)
+	results, err = s.FillChunksUsing(results, opts.Cache)
 	if err != nil {
 		return nil, err
 	}

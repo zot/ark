@@ -959,3 +959,44 @@
 - **R637:** If a `[[chunker]]` name conflicts with a hardcoded strategy, the TOML config wins
 - **R638:** Existing hardcoded strategies (lines, markdown, chat-jsonl, lines-overlap, words-overlap) remain unchanged
 - **R639:** (inferred) Chunker strategies appear in `ark strategy list` alongside existing strategies
+
+## Feature: Sessions
+**Source:** specs/sessions.md
+
+### Session Actor
+
+- **R640:** A session is a named, server-side closure actor that carries state across commands
+- **R641:** Sessions are identified by name and autocreated on first use
+- **R642:** A session runs commands serially in its actor loop
+- **R643:** Each session holds a microfts2 ChunkCache as its state
+- **R644:** After each command, the session resets a TTL timer
+- **R645:** When the TTL fires, a closure is sent into the actor that evicts the cache
+- **R646:** The TTL is configured in ark.toml as `session_ttl` (duration string, default "30s")
+- **R647:** For search commands, if the new query is not a prefix of the previous query, the cache is evicted before running the search
+- **R648:** Sessions require a running server — they are server-side only
+
+### SearchCmd
+
+- **R649:** A SearchCmd struct captures the parameters for a search operation
+- **R650:** All three sources (CLI, HTTP, Lua) construct a SearchCmd
+- **R651:** A SearchCmd can run directly (no session) or be submitted to a named session
+- **R652:** When run within a session, SearchCmd uses the session's ChunkCache
+- **R653:** When run without a session, SearchCmd behaves identically to current search — fresh cache per query
+
+### CLI Integration
+
+- **R654:** `ark search` gains a `--session NAME` flag
+- **R655:** `--session` implies proxying to the server (server must be running)
+- **R656:** Without `--session`, search works as today — direct DB call or server proxy, no session
+
+### HTTP Integration
+
+- **R657:** Search HTTP handler accepts an optional `session` field in the JSON request body
+- **R658:** If `session` is present, the server looks up or creates the named session and submits the SearchCmd to it
+- **R659:** If `session` is absent, search runs immediately with no session
+
+### Lua Integration
+
+- **R660:** `mcp.search_grouped` accepts an optional `session` field in its opts table
+- **R661:** The UI app passes a fixed session name for interactive search so all keystrokes share one cache
+- **R662:** (inferred) The Lua function constructs a SearchCmd and submits it to the session

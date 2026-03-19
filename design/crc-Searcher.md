@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -38,10 +38,11 @@ Optionally retrieves chunk text or full file content.
   present in both result sets
 - FormatResults(results, opts): resolve fileids to paths and line
   ranges via microfts2.FileInfoByID, apply --scores and --after filters
-- FillChunks(results): for each result, retrieve chunk text via
-  microfts2 ChunkCache. Creates a per-query cache, calls ChunkText
-  per result. The chunker handles format-specific extraction (e.g.
-  chat-jsonl text extraction). Files are read once per query.
+- FillChunks(results, cache): for each result, retrieve chunk text via
+  microfts2 ChunkCache. If cache is nil, creates a per-query cache
+  (existing behavior). If non-nil, uses the provided cache (session
+  path). Calls ChunkText per result. The chunker handles
+  format-specific extraction (e.g. chat-jsonl text extraction).
 - FillFiles(results): deduplicate results by fileid, read full file
   content for each unique file. Best chunk score becomes file score.
 - SearchLikeFile(path, opts): read file content, use as FTS query

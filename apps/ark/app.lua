@@ -1392,11 +1392,34 @@ function Searching:buildFilterOpts()
         end
     end
 
-    -- Filter panel fields (one pattern per line)
+    -- Filter panel: user file patterns (one per line)
+    local userFilePatterns = {}
     for line in self.filterFiles:gmatch("[^\n]+") do
         local pat = line:match("^%s*(.-)%s*$")
         if pat and pat ~= "" then
-            table.insert(filter_files, pat)
+            table.insert(userFilePatterns, pat)
+        end
+    end
+
+    -- Intersect user file patterns with source patterns:
+    -- In positive filter mode, source patterns (e.g. ~/work/ark/**) are OR'd,
+    -- so appending user patterns directly makes them redundant. Instead,
+    -- cross-product: dir/** + *.go → dir/**/*.go for each combination.
+    -- In exclude mode, no competing positive patterns exist, so user patterns
+    -- work standalone.
+    if #userFilePatterns > 0 and #filter_files > 0 then
+        local combined = {}
+        for _, src in ipairs(filter_files) do
+            for _, upat in ipairs(userFilePatterns) do
+                -- Strip trailing ** from source, append **/<user pattern>
+                local base = src:match("^(.-)%*%*$") or (src .. "/")
+                table.insert(combined, base .. "**/" .. upat)
+            end
+        end
+        filter_files = combined
+    elseif #userFilePatterns > 0 then
+        for _, upat in ipairs(userFilePatterns) do
+            table.insert(filter_files, upat)
         end
     end
     for line in self.excludeFiles:gmatch("[^\n]+") do
@@ -1470,6 +1493,7 @@ function Searching:search()
     local opts = self:buildFilterOpts()
     opts.mode = self.searchMode
     opts.k = k
+    opts.session = "ui"
 
     local results, err = mcp.search_grouped(q, opts)
     self._searching = false

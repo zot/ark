@@ -135,6 +135,14 @@ Results grouped by file using `SearchFileGroup` type:
 Search uses `mcp:search_grouped()` (in-process Go function) with
 filter opts built from source filter buttons + filter panel fields.
 
+### Session Cache
+
+Search passes `session = "ui"` in the opts table to
+`mcp.search_grouped()`. This uses a server-side session that keeps
+the ChunkCache alive across keystrokes — successive queries that
+are prefixes of each other reuse cached file reads instead of
+re-reading from disk on every keystroke.
+
 ### Filter Panel
 
 Collapsible 2×2 grid above search bar:
@@ -143,7 +151,15 @@ Collapsible 2×2 grid above search bar:
 - Filter content (FTS queries, one per line)
 - Exclude content (FTS queries)
 
-All fields compose with source filter buttons.
+All fields compose with source filter buttons via intersection.
+
+**Filter file intersection:** When source buttons produce positive
+filter patterns (e.g. `~/work/ark/**`) and the user also provides
+file patterns (e.g. `*.go`), the two sets are ANDed — each source
+pattern is narrowed by each user pattern (`~/work/ark/**/*.go`).
+Without this, the broad source patterns would match everything and
+the user's pattern would be redundant (OR semantics). In exclude
+mode (no partial sources), user patterns work standalone.
 
 ## Status Bar
 

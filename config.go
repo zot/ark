@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -25,6 +26,7 @@ type Config struct {
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
+	SessionTTL      string            `toml:"session_ttl,omitempty"` // R646: duration string, default "30s"
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`
 }
@@ -146,6 +148,20 @@ func (c *Config) EffectivePatterns(src Source) (includes, excludes []string) {
 // HasErrors returns true if the config has validation errors.
 func (c *Config) HasErrors() bool {
 	return len(c.Errors) > 0
+}
+
+// ParseSessionTTL returns the session TTL as a duration.
+// Returns defaultSessionTTL if the field is empty or unparseable.
+// R646
+func (c *Config) ParseSessionTTL() time.Duration {
+	if c.SessionTTL == "" {
+		return defaultSessionTTL
+	}
+	d, err := time.ParseDuration(c.SessionTTL)
+	if err != nil || d <= 0 {
+		return defaultSessionTTL
+	}
+	return d
 }
 
 // validate checks for identical include/exclude strings.

@@ -154,6 +154,23 @@ in method definitions. Internal references to the global `ark` instance
 now navigate through `ark._searching` where needed, but most methods
 use `self` and are unaffected.
 
+Key method: `buildFilterOpts()` — builds the filter_files,
+exclude_files, filter, and except arrays for `mcp:search_grouped()`.
+
+**Session cache:** `onSearchInput()` passes `session = "ui"` in the
+opts table. This uses a server-side session that keeps the ChunkCache
+alive across keystrokes — successive prefix queries reuse cached file
+reads instead of re-reading from disk each time.
+
+**Filter file intersection:** Source buttons produce positive
+`filter_files` patterns in partial mode (`hasPartial`). User file
+patterns from the filter panel are collected separately, then
+cross-producted with the source patterns: `dir/** + *.go →
+dir/**/*.go`. This gives AND semantics (only files matching both
+the source scope AND the user pattern survive). In exclude mode
+(no partial sources), user patterns are appended directly as
+standalone positive filters.
+
 ### Ark.Messaging
 
 | Method | Description |

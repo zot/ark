@@ -65,6 +65,16 @@ Frictionless `/api/*` routes (via `flib.RegisterAPI`); the HTTP port
 to start, the ark API server continues — UI is optional. On shutdown,
 `flib.Shutdown()` runs before the LMDB env closes.
 
+### Sessions
+Named closure actors that carry state (currently a ChunkCache)
+across commands. Server-side only. Each session has a TTL
+(configurable via `session_ttl` in ark.toml, default 30s) — the
+cache is evicted on TTL expiry or when a search query diverges
+from the previous query (not a prefix). Sessions are autocreated
+on first use by any source (CLI `--session`, HTTP `session` field,
+Lua `session` opt). The session is the Closure Actor pattern
+applied to cross-query caching.
+
 ## Artifacts
 
 ### CRC Cards
@@ -76,8 +86,10 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
-- [ ] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
+- [x] crc-Session.md → `session.go`
+- [x] crc-SearchCmd.md → `server.go`, `session.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -91,6 +103,7 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
+- [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -141,3 +154,5 @@ to start, the ark API server continues — UI is optional. On shutdown,
 - [ ] O15: No unit tests for SearchMulti — needs test with mock microfts2 DB or integration test
 - [ ] O16: QueryTrigramCounts + BM25Func open two separate LMDB Views for overlapping data — could be one transaction with a BM25FuncFromQuery helper in microfts2
 - [ ] O17: --proximity only works with --multi currently — spec says it composes with any search mode (R597)
+- [ ] O18: No unit tests for Session actor — testable with injected clock/mock FTS
+- [ ] A16: SearchCmd has no separate code file — command object is implicit in session closures (server.go, session.go). CRC card documents the concept.

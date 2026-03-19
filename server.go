@@ -25,6 +25,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/frictionless/flib"
+	"github.com/zot/microfts2"
 	"github.com/zot/ui-engine/cli"
 )
 
@@ -41,6 +42,8 @@ type Server struct {
 	indexingMu      sync.Mutex
 	indexingSources []string // source dirs currently being indexed
 	uiPort          int      // HTTP port the ui-engine is listening on (0 if not started)
+	sessionsMu      sync.Mutex
+	sessions        map[string]*Session // R641: named sessions, autocreated on demand
 }
 
 // ServeOpts controls server behavior.
@@ -403,6 +406,7 @@ type searchRequest struct {
 	ExcludeFiles    []string `json:"excludeFiles"`
 	FilterFileTags  []string `json:"filterFileTags"`
 	ExcludeFileTags []string `json:"excludeFileTags"`
+	Session         string   `json:"session,omitempty"` // R657: optional session name
 }
 
 type addRequest struct {
@@ -456,6 +460,23 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 	return opts
 }
 
+// GetOrCreateSession returns the named session, creating it if needed.
+// R641, R648
+func (srv *Server) GetOrCreateSession(name string) *Session {
+	srv.sessionsMu.Lock()
+	defer srv.sessionsMu.Unlock()
+	if srv.sessions == nil {
+		srv.sessions = make(map[string]*Session)
+	}
+	s, ok := srv.sessions[name]
+	if !ok {
+		ttl := srv.db.Config().ParseSessionTTL()
+		s = NewSession(name, srv.db.FTS(), ttl)
+		srv.sessions[name] = s
+	}
+	return s
+}
+
 func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req searchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -470,6 +491,40 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	opts := buildSearchOpts(req)
 
+	// R657, R658, R659: session-scoped search
+	if req.Session != "" {
+		sess := srv.GetOrCreateSession(req.Session)
+		var results []SearchResultEntry
+		err := sess.RunSearch(req.Query, func(cache *microfts2.ChunkCache) error {
+			var searchErr error
+			if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
+				results, searchErr = srv.db.SearchSplit(opts)
+			} else {
+				results, searchErr = srv.db.SearchCombined(req.Query, opts)
+			}
+			if searchErr != nil {
+				return searchErr
+			}
+			if req.Tags || req.Chunks {
+				results, searchErr = srv.db.FillChunksUsing(results, cache)
+			} else if req.Files {
+				results, searchErr = srv.db.FillFiles(results)
+			}
+			return searchErr
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.Tags {
+			writeJSON(w, ExtractResultTags(results))
+		} else {
+			writeJSON(w, results)
+		}
+		return
+	}
+
+	// No session — existing per-query behavior
 	var results []SearchResultEntry
 	var err error
 	if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
@@ -945,7 +1000,28 @@ func (srv *Server) registerLuaFunctions() {
 				}
 			}
 
-			results, err := srv.db.SearchGrouped(query, opts)
+			// R660, R661: session-scoped search for UI
+			var sessionName string
+			if L.GetTop() >= 2 {
+				optsTable := L.CheckTable(2)
+				if v := optsTable.RawGetString("session"); v != lua.LNil {
+					sessionName = v.String()
+				}
+			}
+
+			var results []GroupedResult
+			var err error
+			if sessionName != "" {
+				sess := srv.GetOrCreateSession(sessionName)
+				err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {
+					opts.Cache = cache
+					var searchErr error
+					results, searchErr = srv.db.SearchGrouped(query, opts)
+					return searchErr
+				})
+			} else {
+				results, err = srv.db.SearchGrouped(query, opts)
+			}
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))

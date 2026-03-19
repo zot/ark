@@ -393,9 +393,19 @@ func (db *DB) IsIndexable(path string) bool {
 	return false
 }
 
+// FTS returns the microfts2 database (for creating ChunkCaches).
+func (db *DB) FTS() *microfts2.DB {
+	return db.fts
+}
+
 // FillChunks populates Text for each result with chunk content from disk.
 func (db *DB) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	return db.search.FillChunks(results)
+}
+
+// FillChunksUsing populates Text using an external cache (session path).
+func (db *DB) FillChunksUsing(results []SearchResultEntry, cache *microfts2.ChunkCache) ([]SearchResultEntry, error) {
+	return db.search.FillChunksUsing(results, cache)
 }
 
 // FillFiles deduplicates results by file and populates Text with full content.

@@ -607,6 +607,7 @@ func cmdSearch(args []string) {
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
 	multi := fs.Bool("multi", false, "run all four strategies (coverage, density, overlap, bm25)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
+	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("files", false, "emit full file content as JSONL")
@@ -663,8 +664,82 @@ func cmdSearch(args []string) {
 
 	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
 
-	// Always use local LMDB — mmap shares pages with server,
-	// and the server doesn't re-index before searching anyway.
+	// R654, R655: --session requires proxying to the server
+	if *session != "" {
+		client := serverClient(arkDir)
+		if client == nil {
+			fmt.Fprintln(os.Stderr, "error: --session requires a running server (ark serve)")
+			os.Exit(1)
+		}
+		req := struct {
+			Query           string   `json:"query"`
+			About           string   `json:"about,omitempty"`
+			Contains        string   `json:"contains,omitempty"`
+			Regex           []string `json:"regex,omitempty"`
+			ExceptRegex     []string `json:"exceptRegex,omitempty"`
+			LikeFile        string   `json:"likeFile,omitempty"`
+			K               int      `json:"k"`
+			Scores          bool     `json:"scores,omitempty"`
+			After           string   `json:"after,omitempty"`
+			Before          string   `json:"before,omitempty"`
+			Chunks          bool     `json:"chunks,omitempty"`
+			Files           bool     `json:"files,omitempty"`
+			Tags            bool     `json:"tags,omitempty"`
+			Filter          []string `json:"filter,omitempty"`
+			Except          []string `json:"except,omitempty"`
+			FilterFiles     []string `json:"filterFiles,omitempty"`
+			ExcludeFiles    []string `json:"excludeFiles,omitempty"`
+			FilterFileTags  []string `json:"filterFileTags,omitempty"`
+			ExcludeFileTags []string `json:"excludeFileTags,omitempty"`
+			Session         string   `json:"session"`
+		}{
+			Query:           strings.Join(fs.Args(), " "),
+			About:           *about,
+			Contains:        *contains,
+			Regex:           []string(regex),
+			ExceptRegex:     []string(exceptRegex),
+			LikeFile:        *likeFile,
+			K:               *k,
+			Scores:          *scores,
+			After:           *after,
+			Before:          *before,
+			Chunks:          *chunks,
+			Files:           *files,
+			Tags:            *tags,
+			Filter:          []string(filter),
+			Except:          []string(except),
+			FilterFiles:     []string(filterFiles),
+			ExcludeFiles:    []string(excludeFiles),
+			FilterFileTags:  []string(filterFileTags),
+			ExcludeFileTags: []string(excludeFileTags),
+			Session:         *session,
+		}
+		var results []ark.SearchResultEntry
+		if err := proxyDecode(client, "POST", "/search", req, &results); err != nil {
+			fatal(err)
+		}
+
+		// Determine query for preview extraction
+		var queryStr string
+		if *contains != "" {
+			queryStr = *contains
+		} else if *about != "" {
+			queryStr = *about
+		} else if len(regex) > 0 {
+			queryStr = regex[0]
+		} else {
+			queryStr = strings.Join(fs.Args(), " ")
+		}
+
+		if *tags {
+			printTagResults(results, *scores)
+		} else {
+			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+		}
+		return
+	}
+
+	// R656: no session — local LMDB path (mmap shares pages with server)
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
 			K:               *k,
