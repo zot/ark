@@ -43,6 +43,9 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 	if !sopts.Before.IsZero() {
 		opts = append(opts, microfts2.WithBefore(sopts.Before))
 	}
+	if sopts.NoTmp {
+		opts = append(opts, microfts2.WithNoTmp())
+	}
 	return opts
 }
 
@@ -67,6 +70,7 @@ type SearchOpts struct {
 	Score           string                // scoring strategy: "", "auto", "coverage", "density"
 	Multi           bool                  // run all four strategies via SearchMulti
 	Proximity       bool                  // enable proximity reranking
+	NoTmp           bool                  // R673: exclude tmp:// documents
 	Cache           *microfts2.ChunkCache // R652: session-provided cache (nil = per-query)
 }
 

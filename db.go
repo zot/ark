@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -39,7 +40,8 @@ type DB struct {
 	scanner *Scanner
 	search  *Searcher
 
-	dbPath string
+	dbPath   string
+	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
 }
 
 // InitOpts are options for creating a new ark database.
@@ -398,6 +400,53 @@ func (db *DB) FTS() *microfts2.DB {
 	return db.fts
 }
 
+// AddTmpFile indexes content in memory via the microfts2 overlay.
+// CRC: crc-DB.md | R663, R666, R667
+func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
+	fid, err := db.fts.AddTmpFile(path, strategy, content)
+	if err != nil {
+		return 0, err
+	}
+	if db.tmpPaths == nil {
+		db.tmpPaths = make(map[string]uint64)
+	}
+	db.tmpPaths[path] = fid
+	return fid, nil
+}
+
+// UpdateTmpFile replaces content of an existing tmp:// document.
+// CRC: crc-DB.md | R666
+func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
+	return db.fts.UpdateTmpFile(path, strategy, content)
+}
+
+// RemoveTmpFile removes a tmp:// document from the overlay.
+// CRC: crc-DB.md | R666
+func (db *DB) RemoveTmpFile(path string) error {
+	err := db.fts.RemoveTmpFile(path)
+	if err != nil {
+		return err
+	}
+	delete(db.tmpPaths, path)
+	return nil
+}
+
+// HasTmp returns true if any tmp:// documents exist.
+// CRC: crc-DB.md | R682
+func (db *DB) HasTmp() bool {
+	return db.fts.HasTmp()
+}
+
+// TmpFiles returns all tmp:// paths.
+// CRC: crc-DB.md | R664
+func (db *DB) TmpFiles() []string {
+	paths := make([]string, 0, len(db.tmpPaths))
+	for p := range db.tmpPaths {
+		paths = append(paths, p)
+	}
+	return paths
+}
+
 // FillChunks populates Text for each result with chunk content from disk.
 func (db *DB) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	return db.search.FillChunks(results)
@@ -640,6 +689,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		Strategies: strategies,
 		MapUsed:    mapUsed,
 		MapTotal:   mapTotal,
+		TmpFiles:   len(db.tmpPaths),
 	}, nil
 }
 
@@ -657,21 +707,26 @@ type StatusInfo struct {
 	Strategies map[string]int `json:"strategies"`
 	MapUsed    int64          `json:"mapUsed"`
 	MapTotal   int64          `json:"mapTotal"`
+	TmpFiles   int            `json:"tmpFiles,omitempty"` // R676: tmp:// document count
 	// UI fields — populated by server when ui-engine is running
 	UIRunning  bool `json:"uiRunning"`
 	UIPort     int  `json:"uiPort,omitempty"`
 	UIIndexing bool `json:"uiIndexing"`
 }
 
-// Files returns all indexed file paths.
+// Files returns all indexed file paths, including tmp:// documents.
+// R671
 func (db *DB) Files() ([]string, error) {
 	statuses, err := db.fts.StaleFiles()
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0, len(statuses))
+	paths := make([]string, 0, len(statuses)+len(db.tmpPaths))
 	for _, s := range statuses {
 		paths = append(paths, s.Path)
+	}
+	for p := range db.tmpPaths {
+		paths = append(paths, p)
 	}
 	return paths, nil
 }
@@ -724,6 +779,15 @@ func (db *DB) Resolve(patterns []string) error {
 // Fetch returns the full content of an indexed file.
 // The file must be known to microfts2 (in the index).
 func (db *DB) Fetch(path string) ([]byte, error) {
+	// R692: tmp:// paths read from overlay's stored content
+	if strings.HasPrefix(path, "tmp://") {
+		r, err := db.fts.TmpContent(path)
+		if err != nil {
+			return nil, err
+		}
+		return io.ReadAll(r)
+	}
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
@@ -851,7 +915,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		if !ok {
 			continue
 		}
-		if !showAll && (statusVal == "completed" || statusVal == "done" || statusVal == "denied") {
+		if !showAll && (statusVal == "completed" || statusVal == "denied") {
 			continue
 		}
 		if !includeArchived {

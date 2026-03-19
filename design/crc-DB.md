@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 microvec, and the ark subdatabase. Entry point for all operations.
@@ -47,6 +47,11 @@ microvec, and the ark subdatabase. Entry point for all operations.
   total size by summing FileLength from FileInfoByID per file. Counts
   files per strategy from StaleFiles.
 - QueryTrigramCounts(query): delegate to microfts2, returns trigram counts for CLI grams command
+- AddTmpFile(path, strategy, content): delegate to microfts2.AddTmpFile, extract tags from content, track in store
+- UpdateTmpFile(path, strategy, content): delegate to microfts2.UpdateTmpFile, re-extract tags
+- RemoveTmpFile(path): delegate to microfts2.RemoveTmpFile, remove tag tracking
+- HasTmp(): delegate to microfts2 overlay — true if any tmp:// docs exist
+- TmpFiles(): list all tmp:// paths from the overlay
 - Init seeding: if ark.toml exists, read case_insensitive/aliases from it
 - SourcesCheck(): delegate to Config.ResolveGlobs, add new sources, flag MIA, report orphans
 - IsIndexable(path): find which source the path belongs to, get effective

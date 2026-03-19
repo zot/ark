@@ -64,10 +64,10 @@ func TestParseNoBlankSeparator(t *testing.T) {
 func TestSetReplacesExisting(t *testing.T) {
 	input := "@status: open\n@issue: foo\n\nBody\n"
 	tb := ParseTagBlock([]byte(input))
-	tb.Set("status", "done")
+	tb.Set("status", "completed")
 
 	result := string(tb.Render())
-	expected := "@status: done\n@issue: foo\n\nBody\n"
+	expected := "@status: completed\n@issue: foo\n\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
@@ -187,7 +187,7 @@ func TestScanBodyStrayTag(t *testing.T) {
 }
 
 func TestScanBodyHeadingTag(t *testing.T) {
-	input := "@status: open\n\nBody\n## Status: done\nmore\n"
+	input := "@status: open\n\nBody\n## Status: completed\nmore\n"
 	tb := ParseTagBlock([]byte(input))
 	problems := tb.ScanBody()
 

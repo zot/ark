@@ -75,6 +75,16 @@ on first use by any source (CLI `--session`, HTTP `session` field,
 Lua `session` opt). The session is the Closure Actor pattern
 applied to cross-query caching.
 
+### Temporary Documents
+Ephemeral, in-memory documents with `tmp://` path prefix. Indexed
+alongside persistent files via microfts2's in-memory overlay.
+Search includes them by default; `--no-tmp` / `WithNoTmp()` opts out.
+CLI detects tmp:// prefix on add/remove and proxies to server.
+Search without `--session` uses `onlyIfTmp` to avoid proxying when
+no tmp docs exist (HTTP 204 = proceed locally). Tags extracted
+from tmp content using the same regex as persistent files.
+Lifetime = server lifetime.
+
 ## Artifacts
 
 ### CRC Cards
@@ -104,6 +114,7 @@ applied to cross-query caching.
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 - [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
+- [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -156,3 +167,6 @@ applied to cross-query caching.
 - [ ] O17: --proximity only works with --multi currently — spec says it composes with any search mode (R597)
 - [ ] O18: No unit tests for Session actor — testable with injected clock/mock FTS
 - [ ] A16: SearchCmd has no separate code file — command object is implicit in session closures (server.go, session.go). CRC card documents the concept.
+- [ ] O19: No unit tests for tmp:// operations — AddTmpFile, RemoveTmpFile, onlyIfTmp probe, --no-tmp flag
+- [x] O20: ark files does not yet list tmp:// documents (R671 — needs handleFiles update)
+- [x] O21: ark status does not yet report tmp:// document count (R676)

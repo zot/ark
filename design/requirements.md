@@ -728,7 +728,7 @@
 
 ### new-response
 - **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file
-- **R455:** Output file has tag block (`@ark-response`, `@from-project`, `@to-project`, `@status: done`) followed by blank line and `# RESP <id>` heading
+- **R455:** Output file has tag block (`@ark-response`, `@from-project`, `@to-project`, `@status: open`) followed by blank line and `# RESP <id>` heading
 - **R456:** Errors if FILE already exists
 - **R583:** If stdin is not a terminal, new-response reads body text from stdin until a lone `.` on a line
 - **R584:** Stdin body is appended after the `# RESP <id>` heading
@@ -1000,3 +1000,61 @@
 - **R660:** `mcp.search_grouped` accepts an optional `session` field in its opts table
 - **R661:** The UI app passes a fixed session name for interactive search so all keystrokes share one cache
 - **R662:** (inferred) The Lua function constructs a SearchCmd and submits it to the session
+
+## Feature: Temporary Documents
+**Source:** specs/tmp-documents.md
+
+### Core
+
+- **R663:** Temporary documents are ephemeral, in-memory content indexed alongside persistent files
+- **R664:** Tmp document paths use the `tmp://` prefix (e.g. `tmp://scoring-notes`)
+- **R665:** Tmp documents exist for the lifetime of the running server — server stops, they're gone
+- **R666:** Ark delegates tmp storage to microfts2's in-memory overlay (`AddTmpFile`, `UpdateTmpFile`, `RemoveTmpFile`)
+- **R667:** Tags are extracted from tmp document content using the same regex as persistent files
+- **R668:** (inferred) Tag counts for tmp documents are tracked in memory by the overlay, not in LMDB
+
+### Seamless CLI Integration
+
+- **R669:** `ark add tmp://name` indexes content in memory via `AddTmpFile`
+- **R694:** `ark add tmp://name --content "text"` takes inline content from the flag value
+- **R695:** `ark add tmp://name --from-file path` reads content from a file on disk
+- **R696:** Without `--content` or `--from-file`, `ark add tmp://name` reads content from stdin (default)
+- **R670:** `ark remove tmp://name` removes the document from the overlay
+- **R671:** `ark files` lists tmp:// files alongside persistent files
+- **R672:** `ark search` includes tmp:// results by default
+- **R673:** `ark search --no-tmp` excludes tmp:// results
+- **R674:** `ark tag files` includes tmp:// files carrying the queried tag
+- **R675:** `--filter-files` and `--exclude-files` glob patterns match tmp:// paths
+- **R676:** (inferred) `ark status` reports tmp:// document count when any exist
+
+### Search Proxy Optimization
+
+- **R677:** CLI search without `--session` asks the server if tmp files exist via an `onlyIfTmp` flag on the search request
+- **R678:** If no tmp files exist, server returns a specific HTTP status (no body) and CLI proceeds with local search
+- **R679:** If tmp files exist, server runs the search and returns results
+- **R680:** `--no-tmp` on the CLI skips the onlyIfTmp check and always searches locally
+- **R681:** `--session` always proxies to the server (unchanged behavior)
+- **R682:** `HasTmp()` returns true if any tmp:// documents exist in the overlay
+
+### microfts2 Search Options
+
+- **R683:** `WithNoTmp()` is a microfts2 search option that skips the overlay entirely
+- **R684:** `WithNoTmp()` is more efficient than `WithExcept(TmpFileIDs())` — avoids trigram intersection against overlay data
+
+### Server API
+
+- **R685:** Server exposes tmp:// operations through HTTP endpoints: add, update, remove, list
+- **R686:** (inferred) Server search handler checks `onlyIfTmp` flag and returns early with a status code if no tmp files exist
+- **R687:** (inferred) Server search handler applies `WithNoTmp()` when the request includes a `noTmp` field
+
+### Lua Integration
+
+- **R688:** `mcp.tmp_add(path, content, strategy)` adds a tmp:// document
+- **R689:** `mcp.tmp_update(path, content, strategy)` updates an existing tmp:// document
+- **R690:** `mcp.tmp_remove(path)` removes a tmp:// document
+- **R691:** `mcp.tmp_list()` lists all tmp:// paths
+
+### Content Retrieval
+
+- **R692:** `ark fetch tmp://name` returns full content from the overlay's stored bytes, not disk
+- **R693:** `ark chunks tmp://name` works via microfts2's GetChunks which handles tmp:// paths internally

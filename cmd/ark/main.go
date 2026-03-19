@@ -487,12 +487,49 @@ Options:`)
 		fs.PrintDefaults()
 	}
 	strategy := fs.String("strategy", "", "chunking strategy")
+	contentFlag := fs.String("content", "", "inline content for tmp:// documents")
+	fromFile := fs.String("from-file", "", "read content from file for tmp:// documents")
 	fs.Parse(args)
 
 	paths := fs.Args()
 	if len(paths) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no files or directories specified")
 		os.Exit(1)
+	}
+
+	// R669, R694, R695, R696: tmp:// paths are added via server overlay
+	if len(paths) == 1 && strings.HasPrefix(paths[0], "tmp://") {
+		client := serverClient(arkDir)
+		if client == nil {
+			fmt.Fprintln(os.Stderr, "error: tmp:// requires a running server")
+			os.Exit(1)
+		}
+		var content []byte
+		var err error
+		switch {
+		case *contentFlag != "":
+			content = []byte(*contentFlag)
+		case *fromFile != "":
+			content, err = os.ReadFile(*fromFile)
+			if err != nil {
+				fatal(err)
+			}
+		default:
+			content, err = io.ReadAll(os.Stdin)
+			if err != nil {
+				fatal(err)
+			}
+		}
+		strat := *strategy
+		if strat == "" {
+			strat = "lines"
+		}
+		if err := proxyOK(client, "POST", "/tmp/add", map[string]any{
+			"path": paths[0], "strategy": strat, "content": string(content),
+		}); err != nil {
+			fatal(err)
+		}
+		return
 	}
 
 	if client := serverClient(arkDir); client != nil {
@@ -522,6 +559,21 @@ func cmdRemove(args []string) {
 	if len(patterns) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no files or patterns specified")
 		os.Exit(1)
+	}
+
+	// R670: tmp:// paths are removed via server overlay
+	if len(patterns) == 1 && strings.HasPrefix(patterns[0], "tmp://") {
+		client := serverClient(arkDir)
+		if client == nil {
+			fmt.Fprintln(os.Stderr, "error: tmp:// requires a running server")
+			os.Exit(1)
+		}
+		if err := proxyOK(client, "POST", "/tmp/remove", map[string]any{
+			"path": patterns[0],
+		}); err != nil {
+			fatal(err)
+		}
+		return
 	}
 
 	if client := serverClient(arkDir); client != nil {
@@ -608,6 +660,7 @@ func cmdSearch(args []string) {
 	multi := fs.Bool("multi", false, "run all four strategies (coverage, density, overlap, bm25)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
+	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("files", false, "emit full file content as JSONL")
@@ -739,7 +792,80 @@ func cmdSearch(args []string) {
 		return
 	}
 
-	// R656: no session — local LMDB path (mmap shares pages with server)
+	// R677-R680: onlyIfTmp probe — if server has tmp docs, proxy the search
+	if !*noTmp {
+		if client := serverClient(arkDir); client != nil {
+			req := struct {
+				Query           string   `json:"query"`
+				About           string   `json:"about,omitempty"`
+				Contains        string   `json:"contains,omitempty"`
+				Regex           []string `json:"regex,omitempty"`
+				ExceptRegex     []string `json:"exceptRegex,omitempty"`
+				LikeFile        string   `json:"likeFile,omitempty"`
+				K               int      `json:"k"`
+				Scores          bool     `json:"scores,omitempty"`
+				After           string   `json:"after,omitempty"`
+				Before          string   `json:"before,omitempty"`
+				Chunks          bool     `json:"chunks,omitempty"`
+				Files           bool     `json:"files,omitempty"`
+				Tags            bool     `json:"tags,omitempty"`
+				Filter          []string `json:"filter,omitempty"`
+				Except          []string `json:"except,omitempty"`
+				FilterFiles     []string `json:"filterFiles,omitempty"`
+				ExcludeFiles    []string `json:"excludeFiles,omitempty"`
+				FilterFileTags  []string `json:"filterFileTags,omitempty"`
+				ExcludeFileTags []string `json:"excludeFileTags,omitempty"`
+				OnlyIfTmp       bool     `json:"onlyIfTmp"`
+			}{
+				Query:           strings.Join(fs.Args(), " "),
+				About:           *about,
+				Contains:        *contains,
+				Regex:           []string(regex),
+				ExceptRegex:     []string(exceptRegex),
+				LikeFile:        *likeFile,
+				K:               *k,
+				Scores:          *scores,
+				After:           *after,
+				Before:          *before,
+				Chunks:          *chunks,
+				Files:           *files,
+				Tags:            *tags,
+				Filter:          []string(filter),
+				Except:          []string(except),
+				FilterFiles:     []string(filterFiles),
+				ExcludeFiles:    []string(excludeFiles),
+				FilterFileTags:  []string(filterFileTags),
+				ExcludeFileTags: []string(excludeFileTags),
+				OnlyIfTmp:       true,
+			}
+			data, err := proxyRaw(client, "POST", "/search", req)
+			if err == nil && data != nil {
+				// Server had tmp files and returned results
+				var results []ark.SearchResultEntry
+				if err := json.Unmarshal(data, &results); err == nil {
+					var queryStr string
+					if *contains != "" {
+						queryStr = *contains
+					} else if *about != "" {
+						queryStr = *about
+					} else if len(regex) > 0 {
+						queryStr = regex[0]
+					} else {
+						queryStr = strings.Join(fs.Args(), " ")
+					}
+					if *tags {
+						printTagResults(results, *scores)
+					} else {
+						printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+					}
+					return
+				}
+			}
+			// 204 or error — fall through to local search
+		}
+	}
+
+	// R656, R680: local LMDB path (mmap shares pages with server)
 	withDB(func(d *ark.DB) {
 		opts := ark.SearchOpts{
 			K:               *k,
@@ -761,6 +887,7 @@ func cmdSearch(args []string) {
 			Score:           *score,
 			Multi:           *multi,
 			Proximity:       *proximity,
+			NoTmp:           *noTmp,
 		}
 
 		var results []ark.SearchResultEntry
@@ -914,6 +1041,9 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	fmt.Printf("files: %d (%s)\nstale: %d\nmissing: %d\nunresolved: %d\n",
 		status.Files, formatBytes(status.TotalSize), status.Stale, status.Missing, status.Unresolved)
 	fmt.Printf("chunks: %d\nsources: %d\n", status.Chunks, status.Sources)
+	if status.TmpFiles > 0 {
+		fmt.Printf("tmp files: %d\n", status.TmpFiles)
+	}
 	if len(status.Strategies) > 0 {
 		fmt.Print("strategies:")
 		for name, count := range status.Strategies {
@@ -1558,7 +1688,39 @@ func cmdFetch(args []string) {
 		os.Exit(1)
 	}
 
-	// Always use local LMDB — pure read, mmap shares pages with server.
+	// R692: tmp:// paths must proxy to server (content is in server memory)
+	hasTmp := false
+	for _, p := range paths {
+		if strings.HasPrefix(p, "tmp://") {
+			hasTmp = true
+			break
+		}
+	}
+
+	if hasTmp {
+		client := serverClient(arkDir)
+		if client == nil {
+			fmt.Fprintln(os.Stderr, "error: tmp:// requires a running server")
+			os.Exit(1)
+		}
+		for _, filePath := range paths {
+			data, err := proxyRaw(client, "POST", "/fetch", map[string]string{"path": filePath})
+			if err != nil {
+				fatal(err)
+			}
+			content := string(data)
+			if *wrap != "" {
+				fmt.Printf("<%s source=%q>\n", *wrap, filePath)
+				writeEscaped(os.Stdout, content, *wrap)
+				fmt.Printf("</%s>\n", *wrap)
+			} else {
+				os.Stdout.WriteString(content)
+			}
+		}
+		return
+	}
+
+	// Local LMDB — pure read, mmap shares pages with server.
 	withDB(func(d *ark.DB) {
 		for _, filePath := range paths {
 			data, err := d.Fetch(filePath)
@@ -3314,7 +3476,7 @@ func cmdMessageInbox(args []string) {
 	fs := flag.NewFlagSet("message inbox", flag.ExitOnError)
 	project := fs.String("project", "", "filter by to-project")
 	from := fs.String("from", "", "filter by from-project")
-	all := fs.Bool("all", false, "include completed/done/denied messages")
+	all := fs.Bool("all", false, "include completed/denied messages")
 	includeArchived := fs.Bool("include-archived", false, "include archived messages")
 	counts := fs.Bool("counts", false, "output status counts instead of rows")
 	fs.Parse(args)

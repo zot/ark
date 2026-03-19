@@ -27,8 +27,8 @@
 
 ## Test: Set replaces existing tag
 **Purpose:** In-place value replacement
-**Input:** Parse `@status: open\n@issue: foo\n\nBody`, Set("status", "done")
-**Expected:** Render produces `@status: done\n@issue: foo\n\nBody`
+**Input:** Parse `@status: open\n@issue: foo\n\nBody`, Set("status", "completed")
+**Expected:** Render produces `@status: completed\n@issue: foo\n\nBody`
 **Refs:** crc-TagBlock.md, R459
 
 ## Test: Set appends new tag
@@ -75,7 +75,7 @@
 
 ## Test: ScanBody finds stray tags
 **Purpose:** Detect misplaced tag-like patterns in body
-**Input:** `@status: open\n\nBody\n## Status: done\nmore`
+**Input:** `@status: open\n\nBody\n## Status: completed\nmore`
 **Expected:** ScanBody returns finding at the `## Status:` line
 **Refs:** crc-TagBlock.md, R472
 

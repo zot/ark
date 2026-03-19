@@ -206,6 +206,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
+	mux.HandleFunc("POST /tmp/add", srv.handleTmpAdd)
+	mux.HandleFunc("POST /tmp/update", srv.handleTmpUpdate)
+	mux.HandleFunc("POST /tmp/remove", srv.handleTmpRemove)
+	mux.HandleFunc("GET /tmp/list", srv.handleTmpList)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -406,7 +410,16 @@ type searchRequest struct {
 	ExcludeFiles    []string `json:"excludeFiles"`
 	FilterFileTags  []string `json:"filterFileTags"`
 	ExcludeFileTags []string `json:"excludeFileTags"`
-	Session         string   `json:"session,omitempty"` // R657: optional session name
+	Session         string   `json:"session,omitempty"`   // R657: optional session name
+	NoTmp           bool     `json:"noTmp,omitempty"`     // R687: exclude tmp:// documents
+	OnlyIfTmp       bool     `json:"onlyIfTmp,omitempty"` // R686: return 204 if no tmp files
+}
+
+// tmpRequest is the body for tmp:// add/update/remove endpoints.
+type tmpRequest struct {
+	Path     string `json:"path"`
+	Strategy string `json:"strategy,omitempty"`
+	Content  string `json:"content,omitempty"` // base64 or raw text
 }
 
 type addRequest struct {
@@ -446,6 +459,7 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		ExcludeFiles:    req.ExcludeFiles,
 		FilterFileTags:  req.FilterFileTags,
 		ExcludeFileTags: req.ExcludeFileTags,
+		NoTmp:           req.NoTmp,
 	}
 	if req.After != "" {
 		if t, err := ParseDate(req.After); err == nil {
@@ -486,6 +500,12 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	if req.Chunks && req.Files {
 		http.Error(w, "--chunks and --files are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+
+	// R686: onlyIfTmp — return 204 if no tmp files exist
+	if req.OnlyIfTmp && !srv.db.HasTmp() {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -907,6 +927,74 @@ func (srv *Server) setIndexing(sources []string) {
 	srv.indexingSources = append([]string{}, sources...)
 }
 
+// handleTmpAdd adds a tmp:// document.
+// CRC: crc-Server.md | R685
+func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
+	var req tmpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	strategy := req.Strategy
+	if strategy == "" {
+		strategy = "lines"
+	}
+	fid, err := srv.db.AddTmpFile(req.Path, strategy, []byte(req.Content))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, map[string]uint64{"fileid": fid})
+}
+
+// handleTmpUpdate updates an existing tmp:// document.
+// CRC: crc-Server.md | R685
+func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
+	var req tmpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	strategy := req.Strategy
+	if strategy == "" {
+		strategy = "lines"
+	}
+	if err := srv.db.UpdateTmpFile(req.Path, strategy, []byte(req.Content)); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleTmpRemove removes a tmp:// document.
+// CRC: crc-Server.md | R685
+func (srv *Server) handleTmpRemove(w http.ResponseWriter, r *http.Request) {
+	var req tmpRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := srv.db.RemoveTmpFile(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleTmpList lists all tmp:// paths.
+// CRC: crc-Server.md | R685
+func (srv *Server) handleTmpList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, srv.db.TmpFiles())
+}
+
 // registerLuaFunctions registers Go functions on the Lua mcp table
 // via the passive execution path (no UI update push).
 // CRC: crc-Server.md | Seq: seq-search.md
@@ -1133,6 +1221,72 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			L.Push(jsonToLua(L, data))
+			return 1
+		}))
+
+		// mcp.tmp_add(path, content, strategy) — add a tmp:// document
+		// R688
+		L.SetField(tbl, "tmp_add", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			content := L.CheckString(2)
+			strategy := "lines"
+			if L.GetTop() >= 3 {
+				if s := L.CheckString(3); s != "" {
+					strategy = s
+				}
+			}
+			fid, err := srv.db.AddTmpFile(path, strategy, []byte(content))
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LNumber(fid))
+			return 1
+		}))
+
+		// mcp.tmp_update(path, content, strategy) — update tmp:// document
+		// R689
+		L.SetField(tbl, "tmp_update", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			content := L.CheckString(2)
+			strategy := "lines"
+			if L.GetTop() >= 3 {
+				if s := L.CheckString(3); s != "" {
+					strategy = s
+				}
+			}
+			if err := srv.db.UpdateTmpFile(path, strategy, []byte(content)); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.tmp_remove(path) — remove tmp:// document
+		// R690
+		L.SetField(tbl, "tmp_remove", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			if err := srv.db.RemoveTmpFile(path); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.tmp_list() — list all tmp:// paths
+		// R691
+		L.SetField(tbl, "tmp_list", L.NewFunction(func(L *lua.LState) int {
+			paths := srv.db.TmpFiles()
+			result := L.NewTable()
+			for i, p := range paths {
+				result.RawSetInt(i+1, lua.LString(p))
+			}
+			L.Push(result)
 			return 1
 		}))
 
