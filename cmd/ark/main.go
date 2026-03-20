@@ -2980,6 +2980,14 @@ func cmdTagSet(args []string) {
 	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
 		fatal(err)
 	}
+
+	// Crank handle: remind about bookmark tags when setting handled tags
+	for i := 0; i < len(pairs); i += 2 {
+		if pairs[i] == "response-handled" || pairs[i] == "request-handled" {
+			fmt.Fprintf(os.Stderr, "hint: bookmark updated. When fully caught up, set status to reflect it.\n")
+			break
+		}
+	}
 }
 
 // CRC: crc-CLI.md | R608, R609
@@ -3414,6 +3422,8 @@ func cmdMessageNewRequest(args []string) {
 	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
 		fatal(err)
 	}
+	fmt.Fprintf(os.Stderr, "hint: when the response arrives, track your progress with @response-handled:\n")
+	fmt.Fprintf(os.Stderr, "  ~/.ark/ark tag set %s response-handled accepted\n", filePath)
 }
 
 func cmdMessageNewResponse(args []string) {
