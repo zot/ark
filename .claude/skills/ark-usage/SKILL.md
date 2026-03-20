@@ -80,30 +80,28 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
 # Check inbox
 ~/.ark/ark message inbox --project PROJECT
 
+# Unanswered requests (no matching response file)
+~/.ark/ark message inbox --project PROJECT --unmatched
+
 # Read a message
 ~/.ark/ark fetch --wrap knowledge /path/to/message.md
 
-# Acknowledge: create a response (response = ack)
-~/.ark/ark message new-response \
-  --from THIS-PROJECT --to SENDER-PROJECT \
-  --request REQUEST-ID \
-  requests/RESP-request-id.md
-# then set @status: accepted on it
-
 # Create a request (always write to YOUR project's requests/)
 # Use bare name; add -SESSION8 suffix only if name collides
+# Auto-sets @status-date: to today
 ~/.ark/ark message new-request \
   --from THIS-PROJECT --to TARGET-PROJECT \
   --issue "short description" \
   requests/short-name.md
 
-# Create a response
+# Create a response (response = ack, auto-sets @status-date:)
 ~/.ark/ark message new-response \
   --from THIS-PROJECT --to TARGET-PROJECT \
   --request ORIGINAL-ID \
   requests/RESP-original-id.md
 
 # Set tags on any file with a tag block
+# Setting "status" auto-sets @status-date: to today
 ~/.ark/ark tag set FILE status completed
 
 # Read tags
@@ -112,6 +110,16 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
 # Validate format (do this after creating/editing)
 ~/.ark/ark tag check FILE
 ```
+
+### Inbox output
+
+Default output is tab-separated:
+```
+status  to-project  from-project  summary  path  lag
+```
+
+The `lag` field shows bookmark lag (empty when current, otherwise
+`lag:PROJECT:STATUS` showing who is behind and what they haven't handled).
 
 ## Gotchas
 
@@ -125,6 +133,7 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
 - **Tag values are single-line** — everything from `@tag:` to newline
 - **Message cardinal rule** — always write to YOUR `requests/` directory
 - **`@status`** is the only lifecycle: open, accepted, in-progress, completed, denied, future
+- **`@status-date:`** is auto-set when status changes — never set it manually
 - **Response = ack** — create a response file, don't modify the request
 
 ## When to Use This vs Hermes

@@ -174,3 +174,4 @@ Lifetime = server lifetime.
 - [ ] A18: R704-R705 (bigrams on by default, rebuild needed) — microfts2 default, no ark code change
 - [ ] A19: R706 (ark rebuild recreates v3 format) — rebuild already works by recreating the DB, v3 is automatic
 - [ ] A20: R707 (index size impact) — informational, no design artifact needed
+- [ ] A21: R717 (--unmatched implies request-only) — inferred, behavior falls out of the filter logic naturally

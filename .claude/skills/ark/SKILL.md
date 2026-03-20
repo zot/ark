@@ -106,16 +106,14 @@ Hermes curates and reports honest misses.
 **Send in background** — sending is fire-and-forget, don't block the
 conversation. Inbox checks need the result, so run foreground.
 **Be explicit about direction.** Hermes is Haiku — it answers what
-you ask, not what you meant. "Requests for us without responses" is
-ambiguous (outbound awaiting reply? inbound awaiting our RESP file?).
-Say exactly what you need:
-- "inbound requests TO project with no RESP file" — unanswered work
+you ask, not what you meant. Say exactly what you need:
+- "unanswered requests to PROJECT" — `--unmatched` does this in one command now
 - "outbound requests FROM project still open" — waiting on others
 - "all messages involving project" — full picture
+- "messages with bookmark lag" — who needs to catch up
 ```
 Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a request from ark to microfts2 about chunker interface.")
-Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale.")
-Agent(subagent_type="ark-messenger", prompt="Find inbound requests TO microfts2 that have no RESP file in microfts2's requests/ directory.")
+Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale. Use --unmatched for unanswered items.")
 ```
 
 **Search** — spawn ark-searcher. Finding notes, exploring tags, retrieval.
@@ -152,6 +150,8 @@ Other tags in the block (`@from-project:`, `@to-project:`, `@status:`,
 `@issue:`) are generic — unambiguous once the discriminator is present.
 
 One lifecycle tag — `@status`: open, accepted, in-progress, completed, denied, future.
+
+**`@status-date:`** — set automatically when status changes or message is created. Format: `YYYY-MM-DD`. Never set manually.
 
 **`@issue:`** — short description, also used as card name in the dashboard.
 

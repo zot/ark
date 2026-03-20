@@ -2971,6 +2971,10 @@ func cmdTagSet(args []string) {
 	tb := ark.ParseTagBlock(data)
 	for i := 0; i < len(pairs); i += 2 {
 		tb.Set(pairs[i], pairs[i+1])
+		// R710, R711: auto-set status-date when setting status
+		if pairs[i] == "status" {
+			tb.Set("status-date", time.Now().Format("2006-01-02"))
+		}
 	}
 
 	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
@@ -3394,6 +3398,7 @@ func cmdMessageNewRequest(args []string) {
 	tb.Set("from-project", *from)
 	tb.Set("to-project", *to)
 	tb.Set("status", "open")
+	tb.Set("status-date", time.Now().Format("2006-01-02"))
 	tb.Set("issue", *issue)
 
 	var buf bytes.Buffer
@@ -3438,6 +3443,7 @@ func cmdMessageNewResponse(args []string) {
 	tb.Set("from-project", *from)
 	tb.Set("to-project", *to)
 	tb.Set("status", "accepted")
+	tb.Set("status-date", time.Now().Format("2006-01-02"))
 
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
@@ -3471,7 +3477,7 @@ func cmdMessageCheck(args []string) {
 	cmdTagCheck(args)
 }
 
-// CRC: crc-CLI.md | Seq: seq-message.md
+// CRC: crc-CLI.md | Seq: seq-message.md | R708, R709, R710, R713, R718
 func cmdMessageInbox(args []string) {
 	fs := flag.NewFlagSet("message inbox", flag.ExitOnError)
 	project := fs.String("project", "", "filter by to-project")
@@ -3479,6 +3485,7 @@ func cmdMessageInbox(args []string) {
 	all := fs.Bool("all", false, "include completed/denied messages")
 	includeArchived := fs.Bool("include-archived", false, "include archived messages")
 	counts := fs.Bool("counts", false, "output status counts instead of rows")
+	unmatched := fs.Bool("unmatched", false, "show only requests with no matching response")
 	fs.Parse(args)
 
 	printEntries := func(entries []ark.InboxEntry) {
@@ -3493,6 +3500,49 @@ func cmdMessageInbox(args []string) {
 			}
 			filtered = append(filtered, e)
 		}
+
+		// R714, R723: pair entries by requestId for unmatched and lag
+		type pair struct {
+			request  *ark.InboxEntry
+			response *ark.InboxEntry
+		}
+		byID := make(map[string]*pair)
+		for i := range filtered {
+			e := &filtered[i]
+			id := e.RequestID
+			if id == "" {
+				id = e.Path
+			}
+			p, ok := byID[id]
+			if !ok {
+				p = &pair{}
+				byID[id] = p
+			}
+			if e.Kind == "response" {
+				p.response = e
+			} else {
+				p.request = e
+			}
+		}
+
+		// R713, R716: --unmatched keeps only requests with no response
+		if *unmatched {
+			var um []ark.InboxEntry
+			for _, e := range filtered {
+				if e.Kind == "response" {
+					continue
+				}
+				id := e.RequestID
+				if id == "" {
+					id = e.Path
+				}
+				if p := byID[id]; p != nil && p.response == nil {
+					um = append(um, e)
+				}
+			}
+			filtered = um
+		}
+
 		if *counts {
 			statusCounts := make(map[string]int)
 			for _, e := range filtered {
@@ -3508,9 +3558,36 @@ func cmdMessageInbox(args []string) {
 			}
 			return
 		}
+
+		// R718, R719, R720, R721, R722: compute bookmark lag per entry
+		lagFor := func(e ark.InboxEntry) string {
+			id := e.RequestID
+			if id == "" {
+				id = e.Path
+			}
+			p := byID[id]
+			if p == nil {
+				return ""
+			}
+			if e.Kind != "response" && p.response != nil {
+				// Request side: is reqResponseHandled behind respStatus?
+				if p.response.Status != "" && e.ResponseHandled != p.response.Status {
+					return "lag:" + e.From + ":" + p.response.Status
+				}
+			}
+			if e.Kind == "response" && p.request != nil {
+				// Response side: is respRequestHandled behind reqStatus?
+				if p.request.Status != "" && e.RequestHandled != p.request.Status {
+					return "lag:" + e.From + ":" + p.request.Status
+				}
+			}
+			return ""
+		}
+
 		for _, e := range filtered {
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\n",
-				e.Status, e.To, e.From, e.Summary, e.Path)
+			lag := lagFor(e)
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
+				e.Status, e.To, e.From, e.Summary, e.Path, lag)
 		}
 	}
 

@@ -13,10 +13,12 @@ CLI ──> parse args: FILE, pairs of (TAG, VALUE)
          │
          ├──> for each (TAG, VALUE):
          │      TagBlock.Set(TAG, VALUE)
+         │      if TAG == "status":                        ← R710, R711
+         │        TagBlock.Set("status-date", today YYYY-MM-DD)
          │
          ├──> TagBlock.Render() → new file bytes
          │
-         └──> write FILE atomically (write tmp, rename)
+         └──> write FILE
 ```
 
 ## Flow: get-tags
@@ -53,6 +55,7 @@ CLI ──> parse flags: --from, --to, --issue, FILE
          │      Set("to-project", TO)
          │      Set("status", "open")
          │      Set("issue", ISSUE)
+         │      Set("status-date", today YYYY-MM-DD)       ← R708
          │
          ├──> Render() + append heading + issue body
          │
@@ -75,6 +78,7 @@ CLI ──> parse flags: --from, --to, --request, FILE
          │      Set("from-project", FROM)
          │      Set("to-project", TO)
          │      Set("status", "accepted")
+         │      Set("status-date", today YYYY-MM-DD)       ← R709
          │
          ├──> Render() + append "# RESP <ID>" heading
          │
@@ -112,26 +116,26 @@ CLI ──> parse args: FILE
 ## Flow: inbox
 
 ```
-CLI ──> parse flags: --project, --from, --all, --include-archived, --counts
+CLI ──> parse flags: --project, --from, --all, --include-archived,
+         │           --counts, --unmatched
          │
          ├──> withDB or server proxy:
-         │      DB.TagFiles(["status"]) → list of (path, size) entries
-         │      filter to paths containing /requests/
+         │      DB.Inbox(all, includeArchived) → []InboxEntry
          │
-         ├──> for each file path:
-         │      read file bytes
-         │      TagBlock.Parse(bytes)
-         │      Get("status"):
-         │        if not --all: skip if "completed", "done", or "denied"
-         │      Get("archived"):
-         │        if not --include-archived: skip if present
-         │      Get("to-project") → normalize comma-separated to first entry
-         │        skip if --project given and doesn't match
-         │      Get("from-project") → skip if --from given and doesn't match
-         │      Get("ark-request") or Get("ark-response") → requestID, kind
-         │        kind = "request" | "response" | "self" (same from/to)
-         │      Get("issue") → summary (fallback: "ark-response:<id>")
-         │      collect: status, to, from, summary, path, requestID, kind
+         ├──> CLI post-filters: --project, --from
+         │
+         ├──> pair entries by requestId:                    ← R714, R723
+         │      byId[requestId] = {request, response}
+         │
+         ├──> if --unmatched:                               ← R713, R716
+         │      keep only requests where byId[id] has no response
+         │
+         ├──> compute bookmark lag per pair:                 ← R719, R720, R721
+         │      for each paired entry:
+         │        if response exists and reqResponseHandled != respStatus
+         │          → lag on request side
+         │        if request exists and respRequestHandled != reqStatus
+         │          → lag on response side
          │
          ├──> sort: @status:open first, then by path
          │
@@ -139,5 +143,5 @@ CLI ──> parse flags: --project, --from, --all, --include-archived, --counts
          │      count entries per status value
          │      output tab-separated: status\tcount (sorted alphabetically)
          │    else:
-         │      output tab-separated lines (existing format)
+         │      output tab-separated lines + lag field      ← R718, R722
 ```

@@ -28,6 +28,11 @@ If the server is not running, start it with `~/.ark/ark serve`.
 ~/.ark/ark message inbox --project PROJECT --from PROJECT
 ```
 
+```bash
+# unanswered requests — requests with no matching response
+~/.ark/ark message inbox --project PROJECT --unmatched
+```
+
 ### Inbox Flags
 
 All flags compose (intersection when combined):
@@ -36,13 +41,18 @@ All flags compose (intersection when combined):
 - `--all` — include completed/done/denied (default: excluded)
 - `--include-archived` — include archived messages (default: excluded)
 - `--counts` — output `status\tcount` lines instead of individual rows
+- `--unmatched` — show only requests with no matching response (by requestId)
 
 ### Inbox Output
 
 Default: one tab-separated line per message:
 ```
-status	to-project	from-project	issue-or-response	path
+status	to-project	from-project	issue-or-response	path	lag
 ```
+
+The `lag` field (6th column) shows bookmark lag — when a participant
+hasn't handled the counterpart's current status. Format: `lag:PROJECT:STATUS`.
+Empty when bookmarks are current or no counterpart exists.
 
 With `--counts`: one tab-separated line per status:
 ```
@@ -103,7 +113,7 @@ Follow any fix commands it outputs.
 ## Managing Messages
 
 ```bash
-# Update status
+# Update status (auto-sets @status-date: to today)
 ~/.ark/ark tag set <path> status in-progress
 ~/.ark/ark tag set <path> status completed
 
@@ -116,6 +126,10 @@ Follow any fix commands it outputs.
 
 Never hand-edit tag blocks. Use `ark tag set` to change tags.
 The CLI enforces format that models get wrong.
+
+`@status-date:` is set automatically by `ark tag set` when
+changing `status`, and by `new-request`/`new-response` at creation.
+Format: `YYYY-MM-DD`. Never set it manually.
 
 ## Status Values
 

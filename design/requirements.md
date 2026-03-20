@@ -1084,3 +1084,31 @@
 ### Index Size
 
 - **R707:** (inferred) Bigram index adds ~44 MB to the ark corpus (~106 MB total, 1.7x increase)
+
+## Feature: Messaging Support Commands
+**Source:** specs/messaging-support.md
+
+### @status-date: automatic timestamps
+
+- **R708:** `ark message new-request` sets `@status-date: YYYY-MM-DD` in the tag block
+- **R709:** `ark message new-response` sets `@status-date: YYYY-MM-DD` in the tag block
+- **R710:** `ark tag set FILE status VALUE` also sets `@status-date:` to today's date
+- **R711:** The auto-set triggers only when the tag name being set is exactly `status`
+- **R712:** Date format is `YYYY-MM-DD` (local date, no time)
+
+### ark message inbox --unmatched
+
+- **R713:** `ark message inbox --unmatched` shows only requests with no matching response
+- **R714:** Matching groups inbox entries by `requestId` — a request is unmatched if no response shares its `requestId`
+- **R715:** `--unmatched` composes with `--project`, `--from`, `--all`, `--include-archived`
+- **R716:** The unmatched check applies after all other filtering
+- **R717:** (inferred) `--unmatched` implies request-only output — responses are never "unmatched"
+
+### Bookmark lag in CLI inbox
+
+- **R718:** CLI inbox output includes a lag field after existing tab-separated fields
+- **R719:** Lag is computed by pairing entries by `requestId`, then comparing each side's handled tag against the counterpart's status
+- **R720:** Empty handled tag with non-empty counterpart status counts as lag
+- **R721:** No lag when bookmarks are current or when no counterpart exists
+- **R722:** Lag field format: `lag:PROJECT:STATUS` showing who is behind and what they haven't handled; empty when no lag
+- **R723:** (inferred) Pairing logic is shared between `--unmatched` and lag computation
