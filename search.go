@@ -912,12 +912,12 @@ func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEnt
 }
 
 // buildStrategies creates the strategy map for SearchMulti.
-// CRC: crc-Searcher.md
-func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc, error) {
-	strategies := map[string]microfts2.ScoreFunc{
-		"coverage": microfts2.ScoreCoverage,
-		"density":  microfts2.ScoreDensityFunc,
-		"overlap":  microfts2.ScoreOverlap,
+// CRC: crc-Searcher.md | R697, R698, R699, R700, R701, R702
+func (s *Searcher) buildStrategies(query string) (map[string]microfts2.SearchStrategy, error) {
+	strategies := map[string]microfts2.SearchStrategy{
+		"coverage": microfts2.StrategyFunc(microfts2.ScoreCoverage),
+		"density":  microfts2.StrategyFunc(microfts2.ScoreDensityFunc),
+		"overlap":  microfts2.StrategyFunc(microfts2.ScoreOverlap),
 	}
 
 	// BM25 needs query trigrams for IDF computation
@@ -933,7 +933,12 @@ func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc
 	if err != nil {
 		return nil, fmt.Errorf("bm25 init: %w", err)
 	}
-	strategies["bm25"] = bm25
+	strategies["bm25"] = microfts2.StrategyFunc(bm25)
+
+	// Bigram strategy when available (R701, R702)
+	if queryBigrams := s.fts.QueryBigramCounts(query); queryBigrams != nil {
+		strategies["bigram"] = microfts2.StrategyBigramOverlap(queryBigrams)
+	}
 
 	return strategies, nil
 }

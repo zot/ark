@@ -657,7 +657,7 @@ func cmdSearch(args []string) {
 	fs.Var(&exceptRegex, "except-regex", "regex exclude filter (repeatable, any match rejects)")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
-	multi := fs.Bool("multi", false, "run all four strategies (coverage, density, overlap, bm25)")
+	multi := fs.Bool("multi", false, "run all strategies (coverage, density, overlap, bm25, bigram)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")

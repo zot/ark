@@ -1058,3 +1058,29 @@
 
 - **R692:** `ark fetch tmp://name` returns full content from the overlay's stored bytes, not disk
 - **R693:** `ark chunks tmp://name` works via microfts2's GetChunks which handles tmp:// paths internally
+
+## Feature: Bigram Search
+**Source:** specs/bigram-search.md
+
+### Strategy API Migration
+
+- **R697:** `buildStrategies` returns `map[string]microfts2.SearchStrategy` instead of `map[string]ScoreFunc`
+- **R698:** Existing score functions (coverage, density, overlap) are wrapped with `microfts2.StrategyFunc`
+- **R699:** BM25 score function is wrapped with `microfts2.StrategyFunc`
+
+### Bigram Strategy
+
+- **R700:** `buildStrategies` extracts query bigrams via `db.QueryBigramCounts(query)`
+- **R701:** When `db.Settings().BigramsEnabled` is true, `buildStrategies` adds a "bigram" strategy using `microfts2.StrategyBigramOverlap(queryBigrams)`
+- **R702:** When bigrams are not available (pre-rebuild databases), the bigram strategy is omitted — no error
+- **R703:** (inferred) `QueryBigramCounts` returns `map[uint16]int`; nil if bigrams disabled
+
+### DB Format
+
+- **R704:** microfts2 v3 enables bigrams by default — no change to `Init` or `Open` options needed
+- **R705:** Existing v2 databases gain bigram support after `ark rebuild`
+- **R706:** (inferred) `ark rebuild` recreates the database using microfts2 v3 format, which includes bigram indexing
+
+### Index Size
+
+- **R707:** (inferred) Bigram index adds ~44 MB to the ark corpus (~106 MB total, 1.7x increase)

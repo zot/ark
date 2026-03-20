@@ -170,3 +170,7 @@ Lifetime = server lifetime.
 - [ ] O19: No unit tests for tmp:// operations — AddTmpFile, RemoveTmpFile, onlyIfTmp probe, --no-tmp flag
 - [x] O20: ark files does not yet list tmp:// documents (R671 — needs handleFiles update)
 - [x] O21: ark status does not yet report tmp:// document count (R676)
+- [ ] A17: R703 (QueryBigramCounts return type) — microfts2 API detail, no ark design artifact needed
+- [ ] A18: R704-R705 (bigrams on by default, rebuild needed) — microfts2 default, no ark code change
+- [ ] A19: R706 (ark rebuild recreates v3 format) — rebuild already works by recreating the DB, v3 is automatic
+- [ ] A20: R707 (index size impact) — informational, no design artifact needed

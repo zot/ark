@@ -179,9 +179,6 @@ end
 
 function Ark:currentView()
     if self._viewMode == "messaging" then
-        if not self._messaging then
-            self._messaging = Messaging:new()
-        end
         return self._messaging
     end
     return self._searching
@@ -193,9 +190,6 @@ end
 
 function Ark:showMessaging()
     self._viewMode = "messaging"
-    if not self._messaging then
-        self._messaging = Messaging:new()
-    end
     self._messaging:refresh()
 end
 
@@ -224,7 +218,6 @@ Ark.Searching = session:prototype("Ark.Searching", {
     -- Search
     searchQuery = "",
     searchMode = "contains",
-    _searchResults = EMPTY,
     _searchGroups = EMPTY,
     _searching = false,
     _searchView = false,
@@ -420,9 +413,6 @@ local Node = Ark.Node
 ------------------------------------------------------------------------
 
 function Searching:mutate()
-    if self._searchResults == nil then
-        self._searchResults = {}
-    end
     if self._searchGroups == nil then
         self._searchGroups = {}
     end
@@ -678,13 +668,6 @@ local function resolveSlugName(slug)
         rest = rest:sub(2)
     end
 
-    -- Split on hyphens
-    local parts = {}
-    for part in rest:gmatch("[^%-]+") do
-        table.insert(parts, part)
-    end
-    if #parts == 0 then return rest end
-
     -- Handle double-dash (nested Claude project scope): take only before --
     local mainRest, scopeSuffix = rest:match("^([^%-].-)[%-][%-](.*)")
     mainRest = mainRest or rest
@@ -938,25 +921,12 @@ function Searching:upperSectionCount()
     return n
 end
 
-function Searching:lowerSectionCount()
-    local q = (self._projectSearchQuery or ""):lower()
-    local n = 0
-    for _, c in ipairs(self._projectCandidates or {}) do
-        if not c.selected and not c._wasConfigured then
-            if q == "" or c.name:lower():find(q, 1, true) or c.slug:lower():find(q, 1, true) then
-                n = n + 1
-            end
-        end
-    end
-    return n
-end
-
 function Searching:hideUpperSection()
     return self:upperSectionCount() == 0
 end
 
 function Searching:hideAvailableSection()
-    return self:lowerSectionCount() == 0
+    return self:projectAvailableCount() == 0
 end
 
 function Searching:resetProjectSelections()
@@ -1539,7 +1509,6 @@ end
 
 function Searching:clearSearch()
     self.searchQuery = ""
-    self._searchResults = {}
     if self._searchGroups then
         for i = #self._searchGroups, 1, -1 do
             table.remove(self._searchGroups, i)
@@ -2336,10 +2305,6 @@ function FilterChip:label()
     return self.mode .. ": " .. self.project .. counts
 end
 
-function FilterChip:isActive()
-    return self.mode ~= "none"
-end
-
 function FilterChip:chipClass()
     if self.mode == "none" then return "msg-chip msg-chip-inactive" end
     if self.matchCount == 0 then return "msg-chip msg-chip-empty" end
@@ -2662,15 +2627,9 @@ function MessageColumn:items()
 end
 
 function MessageColumn:statusLabel()
-    local labels = {
-        open = "Open",
-        accepted = "Accepted",
-        ["in-progress"] = "In Progress",
-        future = "Future",
-        completed = "Completed",
-        denied = "Denied",
-    }
-    return labels[self.status] or self.status
+    local l = STATUS_LABELS[self.status]
+    if l then return l:sub(1,1):upper() .. l:sub(2) end
+    return self.status
 end
 
 function MessageColumn:itemCount()
@@ -2678,13 +2637,7 @@ function MessageColumn:itemCount()
 end
 
 function MessageColumn:statusClass()
-    local s = self.status
-    if s == "open" then return "msg-status-open" end
-    if s == "accepted" or s == "in-progress" then return "msg-status-active" end
-    if s == "completed" or s == "done" then return "msg-status-done" end
-    if s == "denied" then return "msg-status-denied" end
-    if s == "future" then return "msg-status-future" end
-    return ""
+    return STATUS_CSS[self.status] or ""
 end
 
 -- The effective status determines column placement.
@@ -2732,65 +2685,11 @@ end
 
 function Message:responseStatusLabel()
     if not self._hasResponse then return "" end
-    local labels = {
-        accepted = "accepted",
-        ["in-progress"] = "in progress",
-        completed = "completed",
-        done = "completed",
-        denied = "denied",
-    }
-    return labels[self.respStatus] or self.respStatus
+    return STATUS_LABELS[self.respStatus] or self.respStatus
 end
 
 function Message:statusClass()
-    local s = self:effectiveStatus()
-    if s == "open" then return "msg-status-open" end
-    if s == "accepted" or s == "in-progress" then return "msg-status-active" end
-    if s == "completed" or s == "done" then return "msg-status-done" end
-    if s == "denied" then return "msg-status-denied" end
-    if s == "future" then return "msg-status-future" end
-    return ""
-end
-
--- Return stale bookmark chips as "PROJECT:status" strings.
--- Empty table when all bookmarks are current.
-function Message:bookmarkChips()
-    local chips = {}
-    -- Check request side: is reqResponseHandled behind respStatus?
-    if self._hasResponse and self.respStatus ~= "" then
-        local handled = self.reqResponseHandled
-        if handled == "" or handled ~= self.respStatus then
-            -- Requester hasn't caught up with response
-            table.insert(chips, self.reqFrom .. ":" .. (handled ~= "" and handled or "unseen"))
-        end
-    end
-    -- Check response side: is respRequestHandled behind reqStatus?
-    if self._hasResponse and self.reqStatus ~= "" then
-        local handled = self.respRequestHandled
-        if handled == "" or handled ~= self.reqStatus then
-            -- Responder hasn't caught up with request
-            table.insert(chips, self.respFrom .. ":" .. (handled ~= "" and handled or "unseen"))
-        end
-    end
-    return chips
-end
-
-function Message:hasBookmarkLag()
-    return #self:bookmarkChips() > 0
-end
-
-function Message:noBookmarkLag()
-    return #self:bookmarkChips() == 0
-end
-
-function Message:bookmarkLabel()
-    local chips = self:bookmarkChips()
-    if #chips == 0 then return "" end
-    local parts = {}
-    for _, chip in ipairs(chips) do
-        table.insert(parts, '<span class="msg-bookmark-pill">' .. chip .. '</span>')
-    end
-    return table.concat(parts, "")
+    return STATUS_CSS[self:effectiveStatus()] or ""
 end
 
 ------------------------------------------------------------------------

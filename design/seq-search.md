@@ -108,11 +108,13 @@ CLI ──> Searcher.SearchMulti(query, opts)
          │     └── (same as combined search)
          │
          ├──> buildStrategies(query)
-         │     ├── "coverage": scoreCoverage (static)
-         │     ├── "density":  scoreDensity (static)
-         │     ├── "overlap":  ScoreOverlap (static)
-         │     └── "bm25":    db.BM25Func(queryTrigrams)
-         │                     └── reads I record counters
+         │     ├── "coverage": StrategyFunc(ScoreCoverage)
+         │     ├── "density":  StrategyFunc(ScoreDensityFunc)
+         │     ├── "overlap":  StrategyFunc(ScoreOverlap)
+         │     ├── "bm25":     StrategyFunc(db.BM25Func(queryTrigrams))
+         │     │                └── reads I record counters
+         │     └── if db.Settings().BigramsEnabled:
+         │           └── "bigram": StrategyBigramOverlap(db.QueryBigramCounts(query))
          │
          ├──> if --proximity:
          │     └── append WithProximityRerank(2*k) to search opts
