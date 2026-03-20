@@ -252,10 +252,6 @@ func (srv *Server) startUIEngine(dbPath string) {
 		log.Printf("ui: engine started on %s (dir: %s)", url, dbPath)
 		// Register Go functions on the Lua mcp table (passive path)
 		srv.registerLuaFunctions()
-		// Auto-display the ark app so every new session starts with it
-		if _, err := rt.RunLua(`mcp:display("ark")`); err != nil {
-			log.Printf("ui: auto-display ark failed: %v", err)
-		}
 	}()
 }
 
@@ -316,9 +312,6 @@ func (srv *Server) ReloadUIEngine() error {
 
 	log.Printf("ui: reloaded on %s", url)
 	srv.registerLuaFunctions()
-	if _, err := rt.RunLua(`mcp:display("ark")`); err != nil {
-		log.Printf("ui: auto-display ark failed: %v", err)
-	}
 	return nil
 }
 
