@@ -616,6 +616,12 @@ func (db *DB) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, e
 	return db.search.SearchMulti(query, opts)
 }
 
+// SearchFuzzy runs a typo-tolerant search via microfts2.SearchFuzzy.
+// CRC: crc-Searcher.md | R745
+func (db *DB) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	return db.search.SearchFuzzy(query, opts)
+}
+
 // SearchGrouped runs a search and groups results by file with rendered previews.
 func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
 	return db.search.SearchGrouped(query, opts)

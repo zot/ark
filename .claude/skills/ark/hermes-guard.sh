@@ -8,7 +8,19 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 if [ "$TOOL" = Bash ]; then
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command')
     if echo "$CMD" | grep -q '^\s*~/.ark/ark\b\|^\s*\$HOME/.ark/ark\b\|^\s*/home/[^/]*/.ark/ark\b'; then
+        echo >> /tmp/allowed
+        echo "$INPUT" >> /tmp/allowed
       exit 0  # allow ark commands
+    fi
+fi
+
+# Allow Read/Write/Edit on requests/ paths
+if [ "$TOOL" = Read ] || [ "$TOOL" = Write ]; then
+    FPATH=$(echo "$INPUT" | jq -r '.tool_input.file_path')
+    if echo "$FPATH" | grep -q '/requests/'; then
+        echo >> /tmp/allowed
+        echo "$INPUT" >> /tmp/allowed
+        exit 0
     fi
 fi
 

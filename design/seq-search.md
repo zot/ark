@@ -108,13 +108,11 @@ CLI ──> Searcher.SearchMulti(query, opts)
          │     └── (same as combined search)
          │
          ├──> buildStrategies(query)
-         │     ├── "coverage": StrategyFunc(ScoreCoverage)
-         │     ├── "density":  StrategyFunc(ScoreDensityFunc)
-         │     ├── "overlap":  StrategyFunc(ScoreOverlap)
-         │     ├── "bm25":     StrategyFunc(db.BM25Func(queryTrigrams))
-         │     │                └── reads I record counters
-         │     └── if db.Settings().BigramsEnabled:
-         │           └── "bigram": StrategyBigramOverlap(db.QueryBigramCounts(query))
+         │     ├── "coverage": ScoreCoverage
+         │     ├── "density":  ScoreDensityFunc
+         │     ├── "overlap":  ScoreOverlap
+         │     └── "bm25":     db.BM25Func(queryTrigrams)
+         │                      └── reads I record counters
          │
          ├──> if --proximity:
          │     └── append WithProximityRerank(2*k) to search opts
@@ -129,6 +127,33 @@ CLI ──> Searcher.SearchMulti(query, opts)
          ├──> deduplicate by (fileid, chunknum)
          │     ├── keep best score per chunk across strategies
          │     └── track which strategy produced each result
+         │
+         ├──> apply -k limit
+         │
+         └──> filterAndResolve(results, opts)
+               └── (same as combined search)
+```
+
+## Flow: Fuzzy Search (--fuzzy)
+
+```
+CLI ──> Searcher.SearchFuzzy(query, opts)
+         │
+         ├──> ResolveFilters(opts)
+         │     └── (same as combined search)
+         │
+         ├──> defaultSearchOpts(filterOpt, "", opts)
+         │
+         ├──> if --proximity:
+         │     └── append WithProximityRerank(2*k) to search opts
+         │
+         ├──> microfts2.SearchFuzzy(query, k, ...ftsSearchOpts)
+         │     ├── Phase 1: OR-union of query trigrams (posting-list tally)
+         │     ├── Select top-k candidates by tally count
+         │     ├── Phase 2: re-score top-k from C records (ScoreCoverage)
+         │     └── returns *SearchResults (same type as Search)
+         │
+         ├──> convert to []SearchResultEntry (Strategy = "fuzzy")
          │
          ├──> apply -k limit
          │
@@ -157,8 +182,9 @@ Server ──> HandleSearchGrouped(req)
             │
             ├──> Searcher.SearchGrouped(query, opts)
             │     │
-            │     ├──> SearchWithConsistency(query, opts)
-            │     │     └── (same flow as combined search above)
+            │     ├──> if opts.Multi: SearchMulti(query, opts)
+            │     │    elif opts.Fuzzy: SearchFuzzy(query, opts)
+            │     │    else: SearchWithConsistency(query, opts)
             │     │
             │     ├──> FillChunks(results) — need text for previews
             │     │

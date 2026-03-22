@@ -69,6 +69,7 @@ type SearchOpts struct {
 	ExcludeFileTags []string              // tag-based negative filters (tag names, subtract)
 	Score           string                // scoring strategy: "", "auto", "coverage", "density"
 	Multi           bool                  // run all four strategies via SearchMulti
+	Fuzzy           bool                  // R744: typo-tolerant search via SearchFuzzy
 	Proximity       bool                  // enable proximity reranking
 	NoTmp           bool                  // R673: exclude tmp:// documents
 	Cache           *microfts2.ChunkCache // R652: session-provided cache (nil = per-query)
@@ -362,6 +363,18 @@ func validateSearchFlags(opts SearchOpts) error {
 	// R590: --multi is mutually exclusive with --score
 	if opts.Multi && opts.Score != "" {
 		return fmt.Errorf("--multi and --score are mutually exclusive")
+	}
+	// R740: --fuzzy is mutually exclusive with --multi, --score, split flags
+	if opts.Fuzzy {
+		if opts.Multi {
+			return fmt.Errorf("--fuzzy and --multi are mutually exclusive")
+		}
+		if opts.Score != "" {
+			return fmt.Errorf("--fuzzy and --score are mutually exclusive")
+		}
+		if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
+			return fmt.Errorf("--fuzzy is mutually exclusive with --about, --contains, --regex, --like-file")
+		}
 	}
 	return nil
 }
@@ -911,13 +924,13 @@ func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEnt
 	return s.filterAndResolve(results, opts)
 }
 
-// buildStrategies creates the strategy map for SearchMulti.
-// CRC: crc-Searcher.md | R697, R698, R699, R700, R701, R702
-func (s *Searcher) buildStrategies(query string) (map[string]microfts2.SearchStrategy, error) {
-	strategies := map[string]microfts2.SearchStrategy{
-		"coverage": microfts2.StrategyFunc(microfts2.ScoreCoverage),
-		"density":  microfts2.StrategyFunc(microfts2.ScoreDensityFunc),
-		"overlap":  microfts2.StrategyFunc(microfts2.ScoreOverlap),
+// buildStrategies creates the scorer map for SearchMulti.
+// CRC: crc-Searcher.md | R697, R698, R699, R700
+func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc, error) {
+	strategies := map[string]microfts2.ScoreFunc{
+		"coverage": microfts2.ScoreCoverage,
+		"density":  microfts2.ScoreDensityFunc,
+		"overlap":  microfts2.ScoreOverlap,
 	}
 
 	// BM25 needs query trigrams for IDF computation
@@ -933,14 +946,59 @@ func (s *Searcher) buildStrategies(query string) (map[string]microfts2.SearchStr
 	if err != nil {
 		return nil, fmt.Errorf("bm25 init: %w", err)
 	}
-	strategies["bm25"] = microfts2.StrategyFunc(bm25)
-
-	// Bigram strategy when available (R701, R702)
-	if queryBigrams := s.fts.QueryBigramCounts(query); queryBigrams != nil {
-		strategies["bigram"] = microfts2.StrategyBigramOverlap(queryBigrams)
-	}
+	strategies["bm25"] = bm25
 
 	return strategies, nil
+}
+
+// SearchFuzzy runs a typo-tolerant search via microfts2.SearchFuzzy.
+// Uses OR-union of trigrams with posting-list tally, then C-record re-scoring.
+// CRC: crc-Searcher.md | Seq: seq-search.md
+// R745, R746
+func (s *Searcher) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	if err := validateSearchFlags(opts); err != nil {
+		return nil, err
+	}
+	k := opts.K
+	if k == 0 {
+		k = 20
+	}
+
+	filterOpt, err := s.resolveFilters(opts)
+	if err != nil {
+		return nil, err
+	}
+	ftsSearchOpts := defaultSearchOpts(filterOpt, "", opts)
+
+	if opts.Proximity {
+		ftsSearchOpts = append(ftsSearchOpts, microfts2.WithProximityRerank(k*2))
+	}
+
+	fuzzyResults, err := s.fts.SearchFuzzy(query, k, ftsSearchOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("fuzzy search: %w", err)
+	}
+
+	cache := s.newFTSKeyCache()
+	results := make([]SearchResultEntry, 0, len(fuzzyResults.Results))
+	for _, r := range fuzzyResults.Results {
+		key, ok := cache.resolve(r)
+		if !ok {
+			continue
+		}
+		results = append(results, SearchResultEntry{
+			FileID:   key.FileID,
+			ChunkNum: key.ChunkNum,
+			FTSScore: r.Score,
+			Score:    r.Score,
+			Strategy: "fuzzy",
+		})
+	}
+
+	if len(results) > k {
+		results = results[:k]
+	}
+	return s.filterAndResolve(results, opts)
 }
 
 // SearchGrouped runs a search and groups results by file.
@@ -952,6 +1010,8 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 	var err error
 	if opts.Multi {
 		results, err = s.SearchMulti(query, opts)
+	} else if opts.Fuzzy {
+		results, err = s.SearchFuzzy(query, opts)
 	} else if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
 		results, err = s.SearchSplit(opts)
 	} else {

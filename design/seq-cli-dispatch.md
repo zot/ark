@@ -7,6 +7,18 @@ Covers how the CLI decides to proxy to the server or cold-start.
 - Server (running)
 - DB
 
+## Flow: Global Flag Parsing (before dispatch)
+
+```
+CLI ──> expandVerbosityFlags(os.Args)
+         └── -vvv → -v -v -v
+
+CLI ──> parse --dir and -v from expanded args
+         ├── --dir sets arkDir (default ~/.ark/)
+         ├── each -v increments verbosity counter
+         └── remaining args passed to subcommand
+```
+
 ## Flow: Server Running
 
 ```

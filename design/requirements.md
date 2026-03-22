@@ -1059,31 +1059,24 @@
 - **R692:** `ark fetch tmp://name` returns full content from the overlay's stored bytes, not disk
 - **R693:** `ark chunks tmp://name` works via microfts2's GetChunks which handles tmp:// paths internally
 
-## Feature: Bigram Search
+## Feature: Bigram Search (SUPERSEDED)
 **Source:** specs/bigram-search.md
 
-### Strategy API Migration
+Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
-- **R697:** `buildStrategies` returns `map[string]microfts2.SearchStrategy` instead of `map[string]ScoreFunc`
-- **R698:** Existing score functions (coverage, density, overlap) are wrapped with `microfts2.StrategyFunc`
-- **R699:** BM25 score function is wrapped with `microfts2.StrategyFunc`
+### Strategy API (reverted)
 
-### Bigram Strategy
-
-- **R700:** `buildStrategies` extracts query bigrams via `db.QueryBigramCounts(query)`
-- **R701:** When `db.Settings().BigramsEnabled` is true, `buildStrategies` adds a "bigram" strategy using `microfts2.StrategyBigramOverlap(queryBigrams)`
-- **R702:** When bigrams are not available (pre-rebuild databases), the bigram strategy is omitted — no error
-- **R703:** (inferred) `QueryBigramCounts` returns `map[uint16]int`; nil if bigrams disabled
-
-### DB Format
-
-- **R704:** microfts2 v3 enables bigrams by default — no change to `Init` or `Open` options needed
-- **R705:** Existing v2 databases gain bigram support after `ark rebuild`
-- **R706:** (inferred) `ark rebuild` recreates the database using microfts2 v3 format, which includes bigram indexing
-
-### Index Size
-
-- **R707:** (inferred) Bigram index adds ~44 MB to the ark corpus (~106 MB total, 1.7x increase)
+- **R697:** `buildStrategies` returns `map[string]microfts2.ScoreFunc` (reverted from SearchStrategy)
+- **R698:** (superseded) StrategyFunc wrappers removed — score functions passed directly
+- **R699:** (superseded) BM25 passed directly as ScoreFunc
+- **R700:** (superseded) Bigram strategy removed
+- **R701:** (superseded) Bigram strategy removed
+- **R702:** (superseded) Bigram strategy removed
+- **R703:** (superseded) QueryBigramCounts removed from microfts2
+- **R704:** (superseded) DB format reverted to v2
+- **R705:** (superseded) Bigram rebuild no longer needed
+- **R706:** (superseded) No v3 format
+- **R707:** (superseded) No bigram index size impact
 
 ## Feature: Messaging Support Commands
 **Source:** specs/messaging-support.md
@@ -1112,3 +1105,59 @@
 - **R721:** No lag when bookmarks are current or when no counterpart exists
 - **R722:** Lag field format: `lag:PROJECT:STATUS` showing who is behind and what they haven't handled; empty when no lag
 - **R723:** (inferred) Pairing logic is shared between `--unmatched` and lag computation
+
+## Feature: Verbose Flags
+**Source:** specs/verbose-flags.md
+
+### Global Flag Parsing
+
+- **R724:** `-v` through `-vvvv` set a global verbosity level (1–4) parsed before subcommand dispatch
+- **R725:** Both stacked (`-vvv`) and repeated (`-v -v -v`) forms work
+- **R726:** The expansion converts `-vvv` into three `-v` flags; a counter accumulates the total
+- **R727:** Verbosity is stripped from the argument list before subcommand dispatch, like `--dir`
+
+### Logging Helper
+
+- **R728:** A package-level `Logv(level int, format string, args ...any)` function emits log output when `verbosity >= level`
+- **R729:** Log format is `[vN] message` matching frictionless convention
+- **R730:** (inferred) `Logv` uses `log.Printf` so output goes through the existing MultiWriter when the server is running
+
+### Verbosity Levels
+
+- **R731:** Level 1: server lifecycle, connection events
+- **R732:** Level 2: HTTP requests, protocol messages
+- **R733:** Level 3: indexing detail, variable operations
+- **R734:** Level 4: full values, chunk content
+
+### Server Pass-through
+
+- **R735:** `ServeOpts` gains a `Verbosity int` field
+- **R736:** The server stores the verbosity level and uses it for `Logv` calls
+- **R737:** (inferred) When ark starts the embedded UI, the verbosity level is propagated to `cfg.Logging.Verbosity`
+
+## Feature: Fuzzy Search
+**Source:** specs/fuzzy-search.md
+
+### CLI Flag
+
+- **R738:** `ark search --fuzzy` runs typo-tolerant search via `microfts2.SearchFuzzy`
+- **R739:** `--fuzzy` takes a positional query (same as `--multi`)
+- **R740:** `--fuzzy` is mutually exclusive with `--multi`, `--score`, `--about`, `--regex`, `--like-file`, and `--contains`
+
+### Composable Flags
+
+- **R741:** `--fuzzy` composes with all filter flags (`--filter-files`, `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`, `--filter`, `--except`)
+- **R742:** `--fuzzy` composes with `--proximity` for reranking
+- **R743:** `--fuzzy` composes with `--no-tmp`, `-k`, `--chunks`, `--files`, `--tags`, `--scores`, `--wrap`, `--preview`, `--after`, `--before`
+
+### Go API
+
+- **R744:** `SearchOpts` gains a `Fuzzy bool` field
+- **R745:** `Searcher.SearchFuzzy(query, opts)` wraps `microfts2.SearchFuzzy(query, k, ...searchOpts)`
+- **R746:** `SearchFuzzy` resolves filters, applies proximity reranking if requested, and runs filterAndResolve
+- **R747:** `SearchGrouped` dispatches to `SearchFuzzy` when `opts.Fuzzy` is true
+
+### Server Proxy
+
+- **R748:** The search request JSON gains a `Fuzzy` field for server proxy
+- **R749:** (inferred) `handleSearch` dispatches to `SearchFuzzy` when the request has `Fuzzy: true`

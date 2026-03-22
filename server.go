@@ -48,7 +48,8 @@ type Server struct {
 
 // ServeOpts controls server behavior.
 type ServeOpts struct {
-	NoScan bool
+	NoScan    bool
+	Verbosity int // R735: verbose level (0–4)
 }
 
 // ServerAlreadyRunning is returned when `ark serve` finds an existing server.
@@ -86,6 +87,10 @@ func setupLogging(dbPath string) {
 
 // Serve starts the ark server: binds socket, opens DB, reconciles, serves.
 func Serve(dbPath string, opts ServeOpts) error {
+	// R736: Verbosity can be set via opts or pre-set via SetVerbosity
+	if opts.Verbosity > 0 {
+		SetVerbosity(opts.Verbosity)
+	}
 	setupLogging(dbPath)
 	socketPath := filepath.Join(dbPath, "ark.sock")
 
@@ -233,6 +238,8 @@ func (srv *Server) startUIEngine(dbPath string) {
 		log.Printf("ui: failed to create runtime: %v", err)
 		return
 	}
+	// R737: Propagate ark verbosity to ui-engine
+	rt.Cfg.Logging.Verbosity = verbosity
 	if err := rt.Configure(); err != nil {
 		log.Printf("ui: configure failed: %v", err)
 		return
@@ -404,6 +411,7 @@ type searchRequest struct {
 	FilterFileTags  []string `json:"filterFileTags"`
 	ExcludeFileTags []string `json:"excludeFileTags"`
 	Session         string   `json:"session,omitempty"`   // R657: optional session name
+	Fuzzy           bool     `json:"fuzzy,omitempty"`     // R748: typo-tolerant search
 	NoTmp           bool     `json:"noTmp,omitempty"`     // R687: exclude tmp:// documents
 	OnlyIfTmp       bool     `json:"onlyIfTmp,omitempty"` // R686: return 204 if no tmp files
 }
@@ -452,6 +460,7 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		ExcludeFiles:    req.ExcludeFiles,
 		FilterFileTags:  req.FilterFileTags,
 		ExcludeFileTags: req.ExcludeFileTags,
+		Fuzzy:           req.Fuzzy,
 		NoTmp:           req.NoTmp,
 	}
 	if req.After != "" {
@@ -510,7 +519,9 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		var results []SearchResultEntry
 		err := sess.RunSearch(req.Query, func(cache *microfts2.ChunkCache) error {
 			var searchErr error
-			if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
+			if req.Fuzzy {
+				results, searchErr = srv.db.SearchFuzzy(req.Query, opts)
+			} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
 				results, searchErr = srv.db.SearchSplit(opts)
 			} else {
 				results, searchErr = srv.db.SearchCombined(req.Query, opts)
@@ -540,7 +551,9 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// No session — existing per-query behavior
 	var results []SearchResultEntry
 	var err error
-	if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
+	if req.Fuzzy {
+		results, err = srv.db.SearchFuzzy(req.Query, opts)
+	} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
 		results, err = srv.db.SearchSplit(opts)
 	} else {
 		results, err = srv.db.SearchCombined(req.Query, opts)
@@ -1092,6 +1105,7 @@ func (srv *Server) registerLuaFunctions() {
 
 			var results []GroupedResult
 			var err error
+			opts.Multi = true
 			if sessionName != "" {
 				sess := srv.GetOrCreateSession(sessionName)
 				err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {

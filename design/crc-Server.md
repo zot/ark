@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -11,6 +11,7 @@ Optionally starts the embedded ui-engine alongside.
 - listener: net.Listener — Unix socket
 - pidPath: string — PID file location
 - noScan: bool — skip startup reconciliation
+- verbosity: int — verbose level (0–4), propagated to Logv and ui-engine
 - uiRuntime: *flib.Runtime — embedded Frictionless runtime (nil if UI disabled/failed)
 - watcher: *fsnotify.Watcher — filesystem watcher (nil if watching disabled)
 - reconcileCh: chan struct{} — triggers reconciliation (serialized)
@@ -21,7 +22,8 @@ Optionally starts the embedded ui-engine alongside.
 ## Does
 - Serve(dbPath, opts): bind socket (highlander lock), write PID file,
   open DB, ensure ~/.ark source, start watches, run Reconcile,
-  start ui-engine, start HTTP server
+  start ui-engine (propagate opts.Verbosity to cfg.Logging.Verbosity),
+  start HTTP server. Store opts.Verbosity for Logv calls.
 - Reconcile(): sources-check → scan → refresh. Idempotent. Runs in
   background goroutine. If already running, waits then runs again.
   Called by: startup, config mutation handlers, ark.toml fsnotify.

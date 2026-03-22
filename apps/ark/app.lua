@@ -75,6 +75,7 @@ end
 -- searching: child types (Source, Project, etc.) reference the
 -- searching view via this local. Assigned during instance creation.
 local searching
+local messaging
 -- Forward-declared so Ark:new/mutate can see them before their definitions
 local Searching, Messaging, MessageColumn, Message
 
@@ -2261,12 +2262,14 @@ Ark.Messaging = session:prototype("Ark.Messaging", {
     _loading = false,
     _chips = EMPTY,       -- Ark.FilterChip[] — one per project
     _statusChips = EMPTY, -- Ark.StatusChip[] — one per status
+    columns = EMPTY,      -- public: bound as data in viewdef, rebuilt on filter change
 })
 Messaging = Ark.Messaging
 
 Ark.MessageColumn = session:prototype("Ark.MessageColumn", {
     status = "",
-    _items = EMPTY,
+    count = 0,
+    items = EMPTY,
 })
 MessageColumn = Ark.MessageColumn
 
@@ -2291,10 +2294,12 @@ function FilterChip:cycle()
     for i, s in ipairs(states) do
         if s == self.mode then
             self.mode = states[(i % #states) + 1]
+            if messaging then messaging:rebuildColumns() end
             return
         end
     end
     self.mode = "all"
+    if messaging then messaging:rebuildColumns() end
 end
 
 function FilterChip:label()
@@ -2339,6 +2344,7 @@ local STATUS_CSS = {
 
 function StatusChip:toggle()
     self.visible = not self.visible
+    if messaging then messaging:rebuildColumns() end
 end
 
 function StatusChip:label()
@@ -2389,12 +2395,16 @@ function Messaging:new(instance)
     instance._messages = {}
     instance._chips = {}
     instance._statusChips = {}
+    instance.columns = {}
     return instance
 end
 
 function Messaging:mutate()
     if self._statusChips == nil then
         self._statusChips = {}
+    end
+    if self.columns == nil then
+        self.columns = {}
     end
     if self._chips == nil then
         self._chips = {}
@@ -2482,7 +2492,7 @@ function Messaging:refresh()
     for _, p in ipairs(projects) do
         local chip = session:create(FilterChip)
         chip.project = p
-        chip.mode = oldModes[p] or "all"
+        chip.mode = oldModes[p] or "none"
         table.insert(chips, chip)
     end
     self._chips = chips
@@ -2500,13 +2510,14 @@ function Messaging:refresh()
         table.insert(schips, sc)
     end
     self._statusChips = schips
+    self:rebuildColumns()
 end
 
 function Messaging:statusChips()
     return self._statusChips or {}
 end
 
-function Messaging:columns()
+function Messaging:rebuildColumns()
     -- Update chip match counts
     local msgs = self._messages or {}
     for _, chip in ipairs(self._chips or {}) do
@@ -2522,7 +2533,6 @@ function Messaging:columns()
         if mode == "to" then chip.matchCount = toC
         elseif mode == "from" then chip.matchCount = fromC
         elseif mode == "all" then
-            -- Count distinct messages (don't double-count self-messages)
             local allC = 0
             for _, m in ipairs(msgs) do
                 if m.reqTo == p or m.reqFrom == p then allC = allC + 1 end
@@ -2538,7 +2548,6 @@ function Messaging:columns()
     end
     local colOrder = {"open", "accepted", "in-progress", "future", "completed", "denied"}
     local filtered = self:filteredMessages()
-    -- Count items per status (for chip counts) and build visible columns
     local statusCounts = {}
     for _, m in ipairs(filtered) do
         local s = m:effectiveStatus()
@@ -2548,24 +2557,28 @@ function Messaging:columns()
     for _, sc in ipairs(self._statusChips or {}) do
         sc.count = statusCounts[sc.status] or 0
     end
-    local cols = {}
+    -- Rebuild columns with new objects (identity change triggers tracker update)
+    if not self.columns then self.columns = {} end
+    for i = #self.columns, 1, -1 do
+        table.remove(self.columns, i)
+    end
     for _, status in ipairs(colOrder) do
         if statusVisible[status] ~= false then
-            local items = {}
+            local colItems = {}
             for _, m in ipairs(filtered) do
                 if m:effectiveStatus() == status then
-                    table.insert(items, m)
+                    table.insert(colItems, m)
                 end
             end
-            if #items > 0 then
+            if #colItems > 0 then
                 local col = session:create(MessageColumn)
                 col.status = status
-                col._items = items
-                table.insert(cols, col)
+                col.count = #colItems
+                col.items = colItems
+                table.insert(self.columns, col)
             end
         end
     end
-    return cols
 end
 
 function Messaging:messageCount()
@@ -2622,10 +2635,6 @@ function Messaging:filteredMessages()
     return result
 end
 
-function MessageColumn:items()
-    return self._items or {}
-end
-
 function MessageColumn:statusLabel()
     local l = STATUS_LABELS[self.status]
     if l then return l:sub(1,1):upper() .. l:sub(2) end
@@ -2633,7 +2642,7 @@ function MessageColumn:statusLabel()
 end
 
 function MessageColumn:itemCount()
-    return #(self._items or {})
+    return self.count
 end
 
 function MessageColumn:statusClass()
@@ -2699,5 +2708,6 @@ end
 if not session.reloading or not ark then
     ark = Ark:new()
 end
--- Update the forward-declared local (line 77) that all methods close over
+-- Update the forward-declared locals that all methods close over
 searching = ark._searching
+messaging = ark._messaging

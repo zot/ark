@@ -67,44 +67,46 @@ another project's folder.
 **`@issue:` is the card name.** The `--issue` flag on `new-request`
 sets it at creation time. Keep it short (5-8 words) for dashboard display.
 
-**Use heredoc to include body content.** The command reads stdin until
-a lone `.` on a line or EOF. Write the body naturally — no quoting,
-no escaping needed.
+**Three steps: scaffold, read, write.** Do NOT use heredocs or stdin
+piping — they break permission patterns. Instead:
 
+1. Create the scaffold (tags + heading, no body):
 ```bash
-# Send a request with body
 ~/.ark/ark message new-request \
   --from this-project --to target-project \
   --issue "short description" \
-  requests/short-name.md <<'BODY'
-Detailed description goes here.
+  requests/short-name.md
+```
 
-Multiple paragraphs work. Use markdown freely.
+2. Read the scaffold to capture the tag block:
+```
+Read requests/short-name.md
+```
 
-## Subsections are fine
+3. Write the full file — tag block (unchanged) + body:
+```
+Write requests/short-name.md with the tag block from step 2
+followed by your message body in markdown.
+```
 
-Tables, lists, code blocks — whatever the message needs.
-.
-BODY
+**The tag block is the `@tag:` lines at the top of the file.**
+Preserve them exactly as created. After the tag block there must be
+a blank line, then `# heading`, then another blank line, then body.
+The blank lines are required — without them, tags and body merge.
 
-# Acknowledge a request with body
+For responses, same three steps:
+```bash
 ~/.ark/ark message new-response \
   --from this-project --to requesting-project \
   --request original-request-id \
-  requests/RESP-original-request-id.md <<'BODY'
-Response content here.
-.
-BODY
+  requests/RESP-original-request-id.md
 ```
-
-The `.` line ends the body. Everything between the heredoc markers
-becomes stdin. Without a heredoc, the command creates the scaffold
-with no body (tags + heading only).
+Then Read, then Write with body.
 
 Bare filenames: `requests/<short-name>.md`. Only add `-<session8>`
 suffix if the name collides.
 
-After creating, validate:
+After writing the body, validate:
 ```bash
 ~/.ark/ark tag check requests/the-file.md
 ```

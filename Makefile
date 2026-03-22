@@ -46,7 +46,7 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	@mkdir -p $(CACHE_DIR)/skills/ark $(CACHE_DIR)/skills/ui $(CACHE_DIR)/agents $(CACHE_DIR)/install
 	cp .claude/skills/ark/SKILL.md $(CACHE_DIR)/skills/ark/
 	cp .claude/skills/ui/SKILL.md $(CACHE_DIR)/skills/ui/
-	cp .claude/agents/ark.md $(CACHE_DIR)/agents/
+	cp .claude/agents/ark-franklin.md .claude/agents/ark-messenger.md .claude/agents/ark-searcher.md $(CACHE_DIR)/agents/
 	cp install/* $(CACHE_DIR)/install/
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"

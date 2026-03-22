@@ -46,20 +46,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Parse --dir globally before subcommand dispatch
+	// R724, R725, R726, R727: Parse --dir and -v globally before subcommand dispatch
+	expanded := cli.ExpandVerbosityFlags(os.Args[1:])
 	arkDir = defaultDB()
+	var verbosity int
 	var filtered []string
-	for i := 1; i < len(os.Args); i++ {
-		arg := os.Args[i]
-		if arg == "--dir" && i+1 < len(os.Args) {
-			arkDir = os.Args[i+1]
+	for i := 0; i < len(expanded); i++ {
+		arg := expanded[i]
+		if arg == "--dir" && i+1 < len(expanded) {
+			arkDir = expanded[i+1]
 			i++ // skip value
 		} else if strings.HasPrefix(arg, "--dir=") {
 			arkDir = strings.TrimPrefix(arg, "--dir=")
+		} else if arg == "-v" {
+			verbosity++
 		} else {
 			filtered = append(filtered, arg)
 		}
 	}
+	ark.SetVerbosity(verbosity)
 	if len(filtered) == 0 {
 		usage()
 		os.Exit(0)
@@ -179,7 +184,12 @@ Commands:
   stop        Stop the running server
   tag         Tag operations (list, counts, files, defs)
   ui          UI operations (run, display, event, checkpoint, ...)
-  unresolved  List unresolved files`)
+  unresolved  List unresolved files
+
+Global flags:
+  --dir PATH  Database directory (default ~/.ark/)
+  -v          Increase verbosity (up to -vvvv)`)
+
 }
 
 func defaultDB() string {
@@ -657,7 +667,8 @@ func cmdSearch(args []string) {
 	fs.Var(&exceptRegex, "except-regex", "regex exclude filter (repeatable, any match rejects)")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
-	multi := fs.Bool("multi", false, "run all strategies (coverage, density, overlap, bm25, bigram)")
+	multi := fs.Bool("multi", false, "run all strategies (coverage, density, overlap, bm25)")
+	fuzzy := fs.Bool("fuzzy", false, "typo-tolerant search (OR-union of trigrams with re-scoring)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
@@ -886,6 +897,7 @@ func cmdSearch(args []string) {
 			ExcludeFileTags: []string(excludeFileTags),
 			Score:           *score,
 			Multi:           *multi,
+			Fuzzy:           *fuzzy,
 			Proximity:       *proximity,
 			NoTmp:           *noTmp,
 		}
@@ -903,6 +915,14 @@ func cmdSearch(args []string) {
 				query = *contains
 			}
 			results, err = d.SearchMulti(query, opts)
+		} else if *fuzzy {
+			// R738: typo-tolerant search
+			query := strings.Join(fs.Args(), " ")
+			if query == "" {
+				fmt.Fprintln(os.Stderr, "error: no search query")
+				os.Exit(1)
+			}
+			results, err = d.SearchFuzzy(query, opts)
 		} else if isSplit {
 			results, err = d.SearchSplit(opts)
 		} else {
