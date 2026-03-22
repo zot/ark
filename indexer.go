@@ -18,7 +18,7 @@ import (
 	"github.com/zot/microvec"
 )
 
-var tagRegex = regexp.MustCompile(`(?:^|\n)@([a-zA-Z][\w.-]*):`)
+var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.
@@ -110,9 +110,9 @@ type refreshPrep struct {
 	strategy string
 	oldID    uint64
 	isAppend bool
-	data     []byte              // full file content
-	tags     map[string]uint32   // pre-extracted tags
-	defs     map[string]string   // pre-extracted tag defs
+	data     []byte            // full file content
+	tags     map[string]uint32 // pre-extracted tags
+	defs     map[string]string // pre-extracted tag defs
 	// Append-specific fields
 	newBytes []byte
 	baseLine int
@@ -152,8 +152,9 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 			fi, _ := os.Stat(path)
 			prep.fileSize = fi.Size()
 			prep.modTime = fi.ModTime().UnixNano()
-			prep.tags = ExtractTags(prep.newBytes)
-			prep.defs = ExtractTagDefs(prep.newBytes)
+			tagBytes := tagWindowForAppend(data, info.FileLength)
+			prep.tags = ExtractTags(tagBytes)
+			prep.defs = ExtractTagDefs(tagBytes)
 			return prep, nil
 		}
 	}
@@ -342,13 +343,14 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		return fmt.Errorf("vec add %s: %w", path, err)
 	}
 
-	// Tags and defs: incremental — only scan new content
+	// Tags and defs: incremental — scan from previous newline to catch boundary-split tags
 	if idx.store != nil {
-		tags := ExtractTags(newBytes)
+		tagBytes := tagWindowForAppend(data, info.FileLength)
+		tags := ExtractTags(tagBytes)
 		if err := idx.store.AppendTags(fileid, tags); err != nil {
 			return fmt.Errorf("append tags %s: %w", path, err)
 		}
-		defs := ExtractTagDefs(newBytes)
+		defs := ExtractTagDefs(tagBytes)
 		if err := idx.store.AppendTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
@@ -471,6 +473,17 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		log.Printf("refresh: %d file(s) had errors", errCount)
 	}
 	return missing, nil
+}
+
+// tagWindowForAppend returns a slice of data suitable for tag extraction
+// during an append. It backs up from the split point to the previous
+// newline to catch tags that straddle the boundary.
+func tagWindowForAppend(data []byte, splitPos int64) []byte {
+	start := splitPos
+	for start > 0 && data[start-1] != '\n' {
+		start--
+	}
+	return data[start:]
 }
 
 // ExtractTags scans content for @tag: patterns and returns tag counts.

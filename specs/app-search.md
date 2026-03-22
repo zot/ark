@@ -16,7 +16,7 @@ score (descending), chunks sorted by score within each file.
 
 `query` is the search string. `opts` is an optional Lua table:
 
-- `mode` — "contains", "about", or "combined" (default "combined")
+- `mode` — "contains", "about", "fuzzy", or "combined" (default "combined")
 - `k` — max results (default 20)
 - `filter_files` — glob pattern to restrict paths
 - `exclude_files` — glob pattern to exclude paths

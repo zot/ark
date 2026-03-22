@@ -116,7 +116,7 @@
           <sl-icon-button ui-attr-name="filterPanelIcon()" ui-event-click="toggleFilterPanel()" label="Filters" class="ark-funnel-btn" ui-class-ark-funnel-active="hasActiveFilters()"></sl-icon-button>
           <div class="ark-search-modes">
             <sl-button size="small" ui-event-click="setModeContains()" ui-class-ark-mode-active="modeIsContains()">contains</sl-button>
-            <sl-button size="small" ui-event-click="setModeAbout()" ui-class-ark-mode-active="modeIsAbout()">about</sl-button>
+            <sl-button size="small" ui-event-click="setModeFuzzy()" ui-class-ark-mode-active="modeIsFuzzy()">fuzzy</sl-button>
             <sl-button size="small" ui-event-click="setModeRegex()" ui-class-ark-mode-active="modeIsRegex()">regex</sl-button>
           </div>
           <sl-input class="ark-search-input" placeholder="Search the ark..." ui-value="searchQuery?keypress" ui-event-keypress-enter="search()" size="small">

@@ -643,7 +643,8 @@
 - **R406:** Preview rendering uses goldmark for markdown, JSON pretty-print for JSON (under a length threshold), plain text with HTML escaping otherwise
 - **R407:** Query tokens are highlighted with `<mark>` tags in all preview formats
 - **R408:** The file's chunking strategy determines which renderer to use
-- **R541:** `opts` table supports: `mode` (contains/about/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`
+- **R541:** `opts` table supports: `mode` (contains/about/fuzzy/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`
+- **R750:** `mode = "fuzzy"` sets `opts.Fuzzy = true` and dispatches to `SearchFuzzy` via `SearchGrouped`
 - **R542:** (inferred) Default mode is "combined", default k is 20, default preview is 0
 
 ### Click to Open — mcp:open()
@@ -1161,3 +1162,28 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R748:** The search request JSON gains a `Fuzzy` field for server proxy
 - **R749:** (inferred) `handleSearch` dispatches to `SearchFuzzy` when the request has `Fuzzy: true`
+
+## Feature: Tag Extraction Fixes
+**Source:** specs/tag-extraction-fixes.md
+
+### Inline Tags
+- **R751:** `tagRegex` matches `@tag:` anywhere in content, not just at line start
+- **R752:** `tagDefRegex` retains its line-start anchor — definitions are a structured format
+- **R753:** `tagPattern` (search.go) and tag-block regexes (tagblock.go) are unchanged
+
+### Append-Detection Tag Boundary
+- **R754:** During append detection, the tag extraction window backs up from the split point to the previous newline in the full file data
+- **R755:** The widened window applies to both `ExtractTags` and `ExtractTagDefs`
+- **R756:** The bytes sent to `AppendChunks` are not affected — only the tag scan window is widened
+- **R757:** (inferred) Full refresh path is unaffected — it scans the entire file
+
+## Feature: Table Sort
+**Source:** specs/table-sort.md
+
+- **R758:** `mcp:sort(table, property, isDate, descending)` sorts a Lua array of tables in place by a named field
+- **R759:** `property` is a string field name; the value at that key is used for comparison
+- **R760:** When `isDate` is true, values are compared as date strings (`YYYY-MM-DD` format); lexicographic comparison is sufficient
+- **R761:** When `isDate` is false, values are compared as case-insensitive strings
+- **R762:** When `descending` is true, sort order is reversed (largest/latest first)
+- **R763:** Items where the property is missing or nil sort to the end regardless of direction
+- **R764:** The function returns the input table (sorted in place)

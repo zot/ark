@@ -420,7 +420,7 @@ function Searching:mutate()
     if self.searchQuery == nil then
         self.searchQuery = ""
     end
-    if self.searchMode == nil then
+    if self.searchMode == nil or self.searchMode == "about" then
         self.searchMode = "contains"
     end
     if self._hitsPerFile == nil then
@@ -1518,20 +1518,23 @@ function Searching:clearSearch()
     self._searchView = false
 end
 
-function Searching:setModeAbout()
-    self.searchMode = "about"
+function Searching:setModeFuzzy()
+    self.searchMode = "fuzzy"
+    self:search()
 end
 
 function Searching:setModeContains()
     self.searchMode = "contains"
+    self:search()
 end
 
 function Searching:setModeRegex()
     self.searchMode = "regex"
+    self:search()
 end
 
-function Searching:modeIsAbout()
-    return self.searchMode == "about"
+function Searching:modeIsFuzzy()
+    return self.searchMode == "fuzzy"
 end
 
 function Searching:modeIsContains()

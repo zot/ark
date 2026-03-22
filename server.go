@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1071,6 +1072,8 @@ func (srv *Server) registerLuaFunctions() {
 					case "regex":
 						opts.Regex = []string{query}
 						query = ""
+					case "fuzzy":
+						opts.Fuzzy = true
 					}
 					// "combined" is the default — uses query as-is
 				}
@@ -1105,7 +1108,9 @@ func (srv *Server) registerLuaFunctions() {
 
 			var results []GroupedResult
 			var err error
-			opts.Multi = true
+			if !opts.Fuzzy {
+				opts.Multi = true
+			}
 			if sessionName != "" {
 				sess := srv.GetOrCreateSession(sessionName)
 				err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {
@@ -1194,6 +1199,58 @@ func (srv *Server) registerLuaFunctions() {
 				result.RawSetInt(i+1, row)
 			}
 			L.Push(result)
+			return 1
+		}))
+
+		// mcp:sort(table, property, isDate, descending) — sort Lua table in place
+		// R758-R764
+		L.SetField(tbl, "sort", L.NewFunction(func(L *lua.LState) int {
+			tbl := L.CheckTable(1)
+			property := L.CheckString(2)
+			isDate := false
+			if L.GetTop() >= 3 {
+				isDate = L.CheckBool(3)
+			}
+			descending := false
+			if L.GetTop() >= 4 {
+				descending = L.CheckBool(4)
+			}
+			_ = isDate // date format (YYYY-MM-DD) sorts correctly as string
+
+			// Collect array entries
+			n := tbl.Len()
+			entries := make([]lua.LValue, n)
+			for i := 1; i <= n; i++ {
+				entries[i-1] = tbl.RawGetInt(i)
+			}
+
+			// Sort
+			sort.SliceStable(entries, func(i, j int) bool {
+				vi := getField(entries[i], property)
+				vj := getField(entries[j], property)
+				// Nil/missing sort to end
+				if vi == "" && vj == "" {
+					return false
+				}
+				if vi == "" {
+					return false
+				}
+				if vj == "" {
+					return true
+				}
+				cmp := strings.Compare(strings.ToLower(vi), strings.ToLower(vj))
+				if descending {
+					return cmp > 0
+				}
+				return cmp < 0
+			})
+
+			// Write back
+			for i, v := range entries {
+				tbl.RawSetInt(i+1, v)
+			}
+
+			L.Push(tbl)
 			return 1
 		}))
 
@@ -1302,6 +1359,17 @@ func (srv *Server) registerLuaFunctions() {
 	if err != nil {
 		log.Printf("ui: register lua functions failed: %v", err)
 	}
+}
+
+// getField extracts a string field from a Lua table value.
+// Returns "" if the value is not a table or the field is nil.
+func getField(v lua.LValue, field string) string {
+	if tbl, ok := v.(*lua.LTable); ok {
+		if fv := tbl.RawGetString(field); fv != lua.LNil {
+			return fv.String()
+		}
+	}
+	return ""
 }
 
 // jsonToLua converts a Go value (from json.Unmarshal) to a Lua value.

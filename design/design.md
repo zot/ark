@@ -177,3 +177,6 @@ Lifetime = server lifetime.
 - [ ] A21: R717 (--unmatched implies request-only) — inferred, behavior falls out of the filter logic naturally
 - [x] O22: R737: flib.Config needs Verbosity field to propagate ark verbosity to ui-engine cfg.Logging.Verbosity — requires cross-project change to frictionless/flib
 - [ ] O23: No unit tests for SearchFuzzy — testable with mock microfts2 DB
+- [x] C1: search_grouped mode dispatch — added "fuzzy" case (opts.Fuzzy=true, query stays). UI replaces "about" button with "fuzzy".
+
+- [ ] A22: R753 (tagPattern/tagblock regexes unchanged) — verified by absence, no design artifact needed

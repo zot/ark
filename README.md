@@ -173,12 +173,21 @@ documents share `@decision: LMDB`" -- same clustering, but the
 dimensions have names you can read. And you can fix a wrong tag. You
 can't fix a wrong embedding.
 
+The graph is autonomously curated, not inferred. Every edge was placed
+by a human or by an agent whose output you can inspect and correct.
+Prospector agents comprehend conversation logs and write tagged
+documents -- creating edges that require understanding, not just
+proximity. Machine-generated edges enter as drafts (`@uncurated:`)
+and graduate through validation. The graph grows at scale but stays
+auditable at every edge.
+
 The inside-out principle: delete the index, rebuild it, same graph --
 because the tags are in the files. The graph survives because it was
 never stored in the index.
 
-See [GRAPH.md](GRAPH.md) for the full picture, including prospector
-agents that mine conversation logs and externalize structure as tags.
+See [GRAPH.md](GRAPH.md) for the full picture: autonomous curation,
+prospector agents, and why comprehension at Haiku prices beats
+embeddings.
 
 ## Agentic Patterns
 

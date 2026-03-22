@@ -53,6 +53,16 @@ func TestExtractTagsIgnoresEmailsAndMentions(t *testing.T) {
 	}
 }
 
+func TestExtractTagsAdjacentAt(t *testing.T) {
+	// @bar: after non-whitespace is still a valid tag — the @ sigil
+	// plus trailing colon is sufficient disambiguation
+	content := []byte("foo@bar: value")
+	tags := ExtractTags(content)
+	if tags["bar"] != 1 {
+		t.Errorf("expected bar=1, got %d", tags["bar"])
+	}
+}
+
 func TestExtractTagDefs(t *testing.T) {
 	content := []byte("@tag: decision A choice that was made\n@tag: pattern A recurring approach\nnot a @tag: inline mention\n@tag: x\n")
 	defs := ExtractTagDefs(content)
@@ -78,17 +88,51 @@ func TestExtractTagDefsWithSeparator(t *testing.T) {
 	}
 }
 
-func TestExtractTagsLineStartOnly(t *testing.T) {
+func TestExtractTagsInline(t *testing.T) {
 	content := []byte("some text @decision: mid-line\n@pattern: at-start\n  indented @status: not-start")
 	tags := ExtractTags(content)
-	if tags["decision"] != 0 {
-		t.Errorf("mid-line @decision: should not be extracted, got %d", tags["decision"])
+	if tags["decision"] != 1 {
+		t.Errorf("mid-line @decision: should be extracted, got %d", tags["decision"])
 	}
 	if tags["pattern"] != 1 {
 		t.Errorf("expected pattern=1, got %d", tags["pattern"])
 	}
-	if tags["status"] != 0 {
-		t.Errorf("indented @status: should not be extracted, got %d", tags["status"])
+	if tags["status"] != 1 {
+		t.Errorf("indented @status: should be extracted, got %d", tags["status"])
+	}
+}
+
+func TestExtractTagsCompound(t *testing.T) {
+	content := []byte("@ref: notes/ideas.md:42 @item: interesting concept")
+	tags := ExtractTags(content)
+	if tags["ref"] != 1 {
+		t.Errorf("expected ref=1, got %d", tags["ref"])
+	}
+	if tags["item"] != 1 {
+		t.Errorf("expected item=1, got %d", tags["item"])
+	}
+}
+
+func TestTagWindowForAppend(t *testing.T) {
+	data := []byte("line one\n@sta")
+	// Split at position 13 (mid-tag), should back up to after "line one\n"
+	w := tagWindowForAppend(data, 9)
+	if string(w) != "@sta" {
+		t.Errorf("expected backing up to line start, got %q", string(w))
+	}
+
+	// Boundary-split tag: old content ends mid-tag, new content completes it
+	full := []byte("first line\n@status: open\nmore text")
+	w = tagWindowForAppend(full, 14) // split inside "@status: open"
+	tags := ExtractTags(w)
+	if tags["status"] != 1 {
+		t.Errorf("boundary-split tag should be found, got %d", tags["status"])
+	}
+
+	// Split exactly at newline — no back-up needed
+	w = tagWindowForAppend(full, 11) // right after "first line\n"
+	if string(w) != "@status: open\nmore text" {
+		t.Errorf("expected no back-up at newline boundary, got %q", string(w))
 	}
 }
 

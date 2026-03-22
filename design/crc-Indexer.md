@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757
 
 Coordinates adding, removing, and refreshing files across both
 engines. microfts2 first, microvec second. Extracts tags from
@@ -33,12 +33,14 @@ file content and updates the Store.
 - AppendFile(path, fileid, strategy): read new bytes from FileLength
   to EOF, parse last ChunkRange for base line, call AppendChunks
   with WithBaseLine/WithContentHash/WithModTime/WithFileLength.
-  Remove+re-add vectors (full vector refresh). Extract tags and tag
-  defs from new bytes only, Store.AppendTags and Store.AppendTagDefs
-  for incremental update.
-- ExtractTags(content []byte): scan content with regex `(?:^|\n)@[a-zA-Z][\w.-]*:`,
+  Remove+re-add vectors (full vector refresh). For tag extraction,
+  back up from FileLength to previous newline to catch boundary-split
+  tags, then Extract tags and tag defs from that widened window.
+  Store.AppendTags and Store.AppendTagDefs for incremental update.
+- ExtractTags(content []byte): scan content with regex `@[a-zA-Z][\w.-]*:`,
   return map[string]uint32 of tagname → count. Tag name is the part
-  between @ and : (lowercase). Only matches at line start.
+  between @ and : (lowercase). Matches anywhere in content (inline tags
+  are valid).
 - ExtractTagDefs(content []byte): scan content for `@tag: <name> <description>`
   lines. First word after `@tag:` is the tag name, rest is description.
   Returns map[string]string (tagname → description).
