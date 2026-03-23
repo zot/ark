@@ -4,6 +4,10 @@
       <span class="panel-title">Messages</span>
       <div class="msg-header-actions">
         <span class="msg-count" ui-value="statusText()"></span>
+        <span class="msg-sort-control">
+          <span class="msg-sort-field" ui-value="sortLabel()" ui-event-click="cycleSortField()" title="Click to cycle sort field"></span>
+          <span class="msg-sort-dir" ui-value="sortDirLabel()" ui-event-click="toggleSortDir()" title="Click to toggle direction"></span>
+        </span>
         <sl-icon-button name="arrow-clockwise" ui-action="refresh()" label="Refresh"></sl-icon-button>
       </div>
     </div>
@@ -26,6 +30,64 @@
     <div class="msg-kanban">
       <div ui-view="columns?wrapper=lua.ViewList" ui-namespace="KANBAN"></div>
     </div>
+
+    <!-- Message detail dialog -->
+    <sl-dialog class="msg-detail-dialog" ui-attr-open="detail().isOpen()" ui-event-sl-request-close="detail().close()">
+      <span slot="label" ui-value="detail().title()"></span>
+
+      <div class="msg-detail-meta">
+        <span class="msg-detail-projects" ui-value="detail().projectLabel()"></span>
+        <span class="msg-detail-date" ui-class-hidden="detail().noDate()" ui-value="detail().dateLabel()"></span>
+      </div>
+
+      <div class="msg-detail-controls">
+        <div class="msg-detail-field">
+          <label class="msg-detail-label">Status</label>
+          <sl-select size="small" ui-value="detail().status" ui-event-sl-input="detail().onStatusChange()" hoist>
+            <sl-option value="open">Open</sl-option>
+            <sl-option value="accepted">Accepted</sl-option>
+            <sl-option value="in-progress">In Progress</sl-option>
+            <sl-option value="future">Future</sl-option>
+            <sl-option value="completed">Completed</sl-option>
+            <sl-option value="denied">Denied</sl-option>
+          </sl-select>
+        </div>
+        <div class="msg-detail-field">
+          <label class="msg-detail-label">Response handled</label>
+          <sl-select size="small" ui-value="detail().reqResponseHandled" ui-event-sl-input="detail().onReqResponseHandled()" hoist placeholder="—">
+            <sl-option value="">—</sl-option>
+            <sl-option value="completed">Completed</sl-option>
+            <sl-option value="acknowledged">Acknowledged</sl-option>
+          </sl-select>
+        </div>
+        <div class="msg-detail-field" ui-class-hidden="detail().noResponse()">
+          <label class="msg-detail-label">Request handled</label>
+          <sl-select size="small" ui-value="detail().respRequestHandled" ui-event-sl-input="detail().onRespRequestHandled()" hoist placeholder="—">
+            <sl-option value="">—</sl-option>
+            <sl-option value="completed">Completed</sl-option>
+            <sl-option value="acknowledged">Acknowledged</sl-option>
+          </sl-select>
+        </div>
+      </div>
+
+      <div class="msg-detail-tabs" ui-class-hidden="detail().noResponse()">
+        <span class="msg-detail-tab" ui-class-msg-detail-tab-active="detail().isRequestTab()" ui-event-click="detail().showRequest()">Request</span>
+        <span class="msg-detail-tab" ui-class-msg-detail-tab-active="detail().isResponseTab()" ui-event-click="detail().showResponse()">Response</span>
+      </div>
+
+      <div class="msg-detail-body" ui-html="detail().bodyHtml()"></div>
+
+      <div slot="footer" class="msg-detail-footer">
+        <sl-button size="small" variant="default" ui-action="detail().openInEditor()">
+          <sl-icon slot="prefix" name="pencil-square"></sl-icon>
+          Edit
+        </sl-button>
+        <sl-button size="small" variant="success" ui-action="detail().complete()">
+          <sl-icon slot="prefix" name="check-circle"></sl-icon>
+          Complete
+        </sl-button>
+      </div>
+    </sl-dialog>
   </div>
 
   <style>
@@ -101,6 +163,38 @@
     .msg-count {
       font-size: 11px;
       color: var(--term-text-dim, #8888a0);
+    }
+
+    .msg-sort-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      font-size: 11px;
+      color: var(--term-text-dim, #8888a0);
+    }
+
+    .msg-sort-field {
+      cursor: pointer;
+      padding: 1px 6px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .msg-sort-field:hover {
+      color: var(--term-text, #e0e0e8);
+      background: var(--term-bg-hover, #1a1a24);
+    }
+
+    .msg-sort-dir {
+      cursor: pointer;
+      padding: 1px 4px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .msg-sort-dir:hover {
+      color: var(--term-text, #e0e0e8);
+      background: var(--term-bg-hover, #1a1a24);
     }
 
     .msg-empty {
@@ -311,5 +405,135 @@
     .msg-status-done { color: #4ade80; }
     .msg-status-denied { color: #f87171; }
     .msg-status-future { color: var(--term-text-dim, #8888a0); }
+
+    /* Message detail dialog */
+    .msg-detail-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+
+    .msg-detail-projects {
+      font-weight: bold;
+      font-style: italic;
+      color: var(--term-text, #e0e0e8);
+    }
+
+    .msg-detail-date {
+      color: var(--term-text-dim, #8888a0);
+      font-size: 11px;
+    }
+
+    .msg-detail-controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .msg-detail-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 140px;
+    }
+
+    .msg-detail-field.hidden { display: none; }
+
+    .msg-detail-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--term-text-dim, #8888a0);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .msg-detail-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+    }
+
+    .msg-detail-tabs.hidden { display: none; }
+
+    .msg-detail-tab {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--term-text-dim, #8888a0);
+      padding: 6px 16px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .msg-detail-tab:hover {
+      color: var(--term-text, #e0e0e8);
+    }
+
+    .msg-detail-tab-active {
+      color: var(--term-accent, #E07A47);
+      border-bottom-color: var(--term-accent, #E07A47);
+    }
+
+    .msg-detail-body {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--term-text, #e0e0e8);
+      overflow-y: auto;
+    }
+
+    .msg-detail-body h1,
+    .msg-detail-body h2,
+    .msg-detail-body h3 {
+      margin-top: 12px;
+      margin-bottom: 6px;
+      color: var(--term-text, #e0e0e8);
+    }
+
+    .msg-detail-body h1 { font-size: 16px; }
+    .msg-detail-body h2 { font-size: 14px; }
+    .msg-detail-body h3 { font-size: 13px; }
+
+    .msg-detail-body p {
+      margin: 6px 0;
+    }
+
+    .msg-detail-body code {
+      background: var(--term-bg-elevated, #12121a);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+
+    .msg-detail-body pre {
+      background: var(--term-bg-elevated, #12121a);
+      padding: 8px 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 12px;
+      margin: 8px 0;
+    }
+
+    .msg-detail-body pre code {
+      background: none;
+      padding: 0;
+    }
+
+    .msg-detail-body ul, .msg-detail-body ol {
+      padding-left: 20px;
+      margin: 6px 0;
+    }
+
+    .msg-detail-footer {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      width: 100%;
+    }
   </style>
 </template>

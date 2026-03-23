@@ -30,3 +30,11 @@ flag exists to document intent and allow future format support.
 The messaging dashboard kanban columns need sorting by date
 (most recent first), to-project, from-project, or subject.
 The UI cycles sort order on column header click.
+
+## InboxEntry needs statusDate
+
+`mcp:inbox()` returns entries to Lua for the dashboard. For the
+dashboard to sort by date, each entry needs a `statusDate` field
+containing the `@status-date:` tag value. This is read from the
+file's tag block alongside the other fields already extracted
+(status, to, from, summary, etc.).

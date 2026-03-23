@@ -2125,6 +2125,7 @@ function Node:collapse()
     local source = searching.selectedSource
     if not source then return end
     source:removeDescendants(self)
+    self._childrenLoaded = false
     self.expanded = false
 end
 
@@ -2266,6 +2267,9 @@ Ark.Messaging = session:prototype("Ark.Messaging", {
     _chips = EMPTY,       -- Ark.FilterChip[] — one per project
     _statusChips = EMPTY, -- Ark.StatusChip[] — one per status
     columns = EMPTY,      -- public: bound as data in viewdef, rebuilt on filter change
+    _sortField = "date",  -- "date", "to", "from", "subject"
+    _sortDesc = true,     -- true = descending (newest/Z first)
+    _detail = EMPTY,      -- Ark.MessageDetail or nil
 })
 Messaging = Ark.Messaging
 
@@ -2384,6 +2388,7 @@ Ark.Message = session:prototype("Ark.Message", {
     -- Empty until Go inbox plumbing lands; UI is ready for them.
     reqResponseHandled = "",   -- request's @response-handled value
     respRequestHandled = "",   -- response's @request-handled value
+    statusDate = "",           -- @status-date for sorting ("1970-01-01" if missing)
 })
 Message = Ark.Message
 
@@ -2408,6 +2413,10 @@ function Messaging:mutate()
     end
     if self.columns == nil then
         self.columns = {}
+    end
+    if self._sortField == nil then
+        self._sortField = "date"
+        self._sortDesc = true
     end
     if self._chips == nil then
         self._chips = {}
@@ -2455,6 +2464,9 @@ function Messaging:refresh()
             m.reqSummary = req.summary
             m.reqPath = req.path
             m.reqResponseHandled = req.responseHandled or ""
+            local d = req.statusDate or ""
+            if d == "" then d = "1970-01-01" end
+            m.statusDate = d
         end
         if resp then
             m._hasResponse = true
@@ -2520,6 +2532,9 @@ function Messaging:statusChips()
     return self._statusChips or {}
 end
 
+local SORT_FIELDS = {"date", "to", "from", "subject"}
+local SORT_PROP = {date = "statusDate", to = "reqTo", from = "reqFrom", subject = "reqSummary"}
+
 function Messaging:rebuildColumns()
     -- Update chip match counts
     local msgs = self._messages or {}
@@ -2574,6 +2589,10 @@ function Messaging:rebuildColumns()
                 end
             end
             if #colItems > 0 then
+                -- Sort items within column
+                local prop = SORT_PROP[self._sortField] or "statusDate"
+                local isDate = (self._sortField == "date")
+                mcp.sort(colItems, prop, isDate, self._sortDesc)
                 local col = session:create(MessageColumn)
                 col.status = status
                 col.count = #colItems
@@ -2636,6 +2655,32 @@ function Messaging:filteredMessages()
         if matched then table.insert(result, m) end
     end
     return result
+end
+
+function Messaging:cycleSortField()
+    for i, f in ipairs(SORT_FIELDS) do
+        if f == self._sortField then
+            self._sortField = SORT_FIELDS[(i % #SORT_FIELDS) + 1]
+            self:rebuildColumns()
+            return
+        end
+    end
+    self._sortField = "date"
+    self:rebuildColumns()
+end
+
+function Messaging:toggleSortDir()
+    self._sortDesc = not self._sortDesc
+    self:rebuildColumns()
+end
+
+function Messaging:sortLabel()
+    return self._sortField or "date"
+end
+
+function Messaging:sortDirLabel()
+    if self._sortDesc then return "▼" end
+    return "▲"
 end
 
 function MessageColumn:statusLabel()
@@ -2702,6 +2747,206 @@ end
 
 function Message:statusClass()
     return STATUS_CSS[self:effectiveStatus()] or ""
+end
+
+function Message:showDetail()
+    if messaging then messaging:showDetail(self) end
+end
+
+------------------------------------------------------------------------
+-- Ark.MessageDetail (presenter for message detail view)
+------------------------------------------------------------------------
+
+Ark.MessageDetail = session:prototype("Ark.MessageDetail", {
+    _message = EMPTY,       -- the Ark.Message being viewed
+    _html = "",             -- rendered markdown body
+    _tags = EMPTY,          -- {name=value, ...} from tag block
+    _reqPath = "",          -- request file path
+    _respPath = "",         -- response file path
+    _respHtml = "",         -- rendered response body (if exists)
+    _respTags = EMPTY,      -- response tags
+    -- Editable fields (pre-populated from tags)
+    status = "",
+    reqResponseHandled = "",
+    respRequestHandled = "",
+    _open = false,          -- dialog visibility
+    _showResponse = false,  -- toggle: false=request, true=response
+})
+local MessageDetail = Ark.MessageDetail
+
+function MessageDetail:load(msg)
+    self._message = msg
+    self._reqPath = msg.reqPath
+    self._respPath = msg.respPath
+    self.status = msg:effectiveStatus()
+    self.reqResponseHandled = msg.reqResponseHandled or ""
+    self.respRequestHandled = msg.respRequestHandled or ""
+    -- Load request content
+    if msg.reqPath ~= "" then
+        local r = mcp.readMessage(msg.reqPath)
+        if r then
+            self._html = r.html or ""
+            self._tags = r.tags or {}
+        end
+    end
+    -- Load response content
+    if msg._hasResponse and msg.respPath ~= "" then
+        local r = mcp.readMessage(msg.respPath)
+        if r then
+            self._respHtml = r.html or ""
+            self._respTags = r.tags or {}
+        end
+    else
+        self._respHtml = ""
+        self._respTags = {}
+    end
+    self._showResponse = false
+    self._open = true
+end
+
+function MessageDetail:close()
+    self._open = false
+end
+
+function MessageDetail:isOpen()
+    return self._open
+end
+
+function MessageDetail:title()
+    local msg = self._message
+    if not msg then return "" end
+    return msg.reqSummary or msg.requestId or ""
+end
+
+function MessageDetail:projectLabel()
+    local msg = self._message
+    if not msg then return "" end
+    return (msg.reqFrom or "?") .. " → " .. (msg.reqTo or "?")
+end
+
+function MessageDetail:dateLabel()
+    local msg = self._message
+    if not msg then return "" end
+    local d = msg.statusDate
+    if d == "1970-01-01" or d == "" then return "" end
+    return d
+end
+
+function MessageDetail:hasDate()
+    return self:dateLabel() ~= ""
+end
+
+function MessageDetail:noDate()
+    return not self:hasDate()
+end
+
+function MessageDetail:hasResponse()
+    local msg = self._message
+    return msg and msg._hasResponse
+end
+
+function MessageDetail:noResponse()
+    return not self:hasResponse()
+end
+
+function MessageDetail:requestHtml()
+    return self._html
+end
+
+function MessageDetail:responseHtml()
+    return self._respHtml
+end
+
+function MessageDetail:bodyHtml()
+    if self._showResponse then return self._respHtml end
+    return self._html
+end
+
+function MessageDetail:showRequest()
+    self._showResponse = false
+end
+
+function MessageDetail:showResponse()
+    self._showResponse = true
+end
+
+function MessageDetail:isRequestTab()
+    return not self._showResponse
+end
+
+function MessageDetail:isResponseTab()
+    return self._showResponse
+end
+
+function MessageDetail:onStatusChange()
+    -- Called when status dropdown changes
+    local newStatus = self.status
+    if newStatus == "" or not self._reqPath or self._reqPath == "" then return end
+    local ok, err = mcp.setTags(self._reqPath, {status = newStatus})
+    if ok then
+        self._message.reqStatus = newStatus
+        messaging:refresh()
+    end
+end
+
+function MessageDetail:onReqResponseHandled()
+    if self._reqPath == "" then return end
+    local ok, err = mcp.setTags(self._reqPath, {["response-handled"] = self.reqResponseHandled})
+    if ok then
+        self._message.reqResponseHandled = self.reqResponseHandled
+        messaging:refresh()
+    end
+end
+
+function MessageDetail:onRespRequestHandled()
+    if not self._respPath or self._respPath == "" then return end
+    local ok, err = mcp.setTags(self._respPath, {["request-handled"] = self.respRequestHandled})
+    if ok then
+        self._message.respRequestHandled = self.respRequestHandled
+        messaging:refresh()
+    end
+end
+
+function MessageDetail:complete()
+    local tags = {status = "completed"}
+    if self._reqPath ~= "" then
+        tags["response-handled"] = "completed"
+        mcp.setTags(self._reqPath, tags)
+    end
+    if self._respPath and self._respPath ~= "" then
+        mcp.setTags(self._respPath, {["request-handled"] = "completed"})
+    end
+    self.status = "completed"
+    self.reqResponseHandled = "completed"
+    self.respRequestHandled = "completed"
+    self._open = false
+    messaging:refresh()
+end
+
+function MessageDetail:openInEditor()
+    local path = self._reqPath
+    if path == "" then path = self._respPath end
+    if path ~= "" then mcp.open(path) end
+end
+
+-- Messaging methods for detail view
+
+function Messaging:showDetail(msg)
+    if not self._detail then
+        self._detail = session:create(MessageDetail)
+    end
+    self._detail:load(msg)
+end
+
+function Messaging:detail()
+    if not self._detail then
+        self._detail = session:create(MessageDetail)
+    end
+    return self._detail
+end
+
+function Messaging:hasDetail()
+    return self._detail ~= nil and self._detail._open
 end
 
 ------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Ark Cross-Project Messaging
 
-## Version 3 2026-0318
+## Version 3 2026-03-18
 
 How ark projects communicate through tagged files that ark indexes
 and connects automatically.

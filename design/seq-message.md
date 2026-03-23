@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584, R617, R618, R619, R620
+**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584, R617, R618, R619, R620, R768-R777
 
 ## Flow: set-tags
 
@@ -137,6 +137,8 @@ CLI ──> parse flags: --project, --from, --all, --include-archived,
          │        if request exists and respRequestHandled != reqStatus
          │          → lag on response side
          │
+         ├──> read @status-date: from tag block → StatusDate   ← R766
+         │
          ├──> sort: @status:open first, then by path
          │
          ├──> if --counts:
@@ -144,4 +146,49 @@ CLI ──> parse flags: --project, --from, --all, --include-archived,
          │      output tab-separated: status\tcount (sorted alphabetically)
          │    else:
          │      output tab-separated lines + lag field      ← R718, R722
+```
+
+## Flow: mcp.setTags (Lua)
+
+```
+Lua ──> mcp.setTags(path, tagsTable)                        ← R768, R769
+         │
+         ├──> read file bytes from path                      ← R770
+         │
+         ├──> TagBlock.Parse(bytes)
+         │
+         ├──> iterate tagsTable (Lua ForEach):
+         │      TagBlock.Set(name, value)
+         │      if name == "status":                         ← R771
+         │        TagBlock.Set("status-date", today YYYY-MM-DD)
+         │
+         ├──> TagBlock.Render() → new bytes
+         │
+         ├──> write file                                     ← R772
+         │
+         └──> return true (or nil + error)
+```
+
+## Flow: mcp.readMessage (Lua)
+
+```
+Lua ──> mcp.readMessage(path)                                ← R773
+         │
+         ├──> read file bytes from path                      ← R774
+         │
+         ├──> TagBlock.Parse(bytes)
+         │
+         ├──> build tags table:                              ← R775, R776
+         │      for each tag in TagBlock.Tags():
+         │        tagsTable[tag.Name] = tag.Value
+         │
+         ├──> render body:
+         │      TagBlock.Body() → body bytes
+         │      goldmark.Convert(body) → HTML string
+         │
+         ├──> build result table:
+         │      result.tags = tagsTable
+         │      result.html = HTML string
+         │
+         └──> return result (or nil + error)                 ← R777
 ```

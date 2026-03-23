@@ -891,6 +891,7 @@ type InboxEntry struct {
 	Kind            string `json:"kind"`            // "request", "response", or "self"
 	ResponseHandled string `json:"responseHandled"` // @response-handled: tag value
 	RequestHandled  string `json:"requestHandled"`  // @request-handled: tag value
+	StatusDate      string `json:"statusDate"`      // @status-date: tag value (R765)
 }
 
 // Inbox returns cross-project messages from the tag index.
@@ -957,6 +958,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		}
 		responseHandled, _ := tb.Get("response-handled")
 		requestHandled, _ := tb.Get("request-handled")
+		statusDate, _ := tb.Get("status-date") // R766
 		entries = append(entries, InboxEntry{
 			Status:          statusVal,
 			To:              toVal,
@@ -967,6 +969,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			Kind:            kind,
 			ResponseHandled: responseHandled,
 			RequestHandled:  requestHandled,
+			StatusDate:      statusDate,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {

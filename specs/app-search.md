@@ -55,8 +55,9 @@ sources in the UI.
 ## Message inbox — `mcp:inbox(show_all)`
 
 Returns cross-project messages as a Lua table of tables. Each element
-is `{status, to, from, summary, path}`. Messages come from files in
-`requests/` directories that have an `@status:` tag.
+is `{status, to, from, summary, path, requestId, kind, responseHandled,
+requestHandled, statusDate}`. Messages come from files in `requests/`
+directories that have an `@status:` tag.
 
 `show_all` is an optional boolean (default false). When false,
 completed/done/denied messages are excluded. Archived messages are
@@ -82,6 +83,35 @@ Same conversion rules as `parseJson`. Combines `io.open` + `parseJson`
 in a single Go call — no temp variables in Lua.
 
 Returns nil + error string on read or parse failure.
+
+## Bulk tag write — `mcp.setTags(path, tags)`
+
+Sets multiple tags on a file in one call. `path` is the file path.
+`tags` is a Lua table of `{name = value}` pairs.
+
+Reads the file, parses the tag block, sets each tag via
+`TagBlock.Set`, then writes the file back. If the tag name is
+"status", also auto-sets "status-date" to today (YYYY-MM-DD),
+matching the CLI `ark tag set` behavior.
+
+Returns true on success, nil + error string on failure.
+
+Uses dot syntax (no self parameter).
+
+## Read message — `mcp.readMessage(path)`
+
+Reads a message file and returns its structured content as a Lua
+table. The file is parsed via `TagBlock.Parse`. The result table
+contains:
+
+- `tags` — a Lua table of tag name/value pairs from the tag block
+  only (not body content)
+- `html` — the body (everything after the tag block) rendered as
+  HTML via goldmark
+
+Returns nil + error string on read or parse failure.
+
+Uses dot syntax (no self parameter).
 
 ## HTTP endpoint removal
 

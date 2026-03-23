@@ -1187,3 +1187,29 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R762:** When `descending` is true, sort order is reversed (largest/latest first)
 - **R763:** Items where the property is missing or nil sort to the end regardless of direction
 - **R764:** The function returns the input table (sorted in place)
+
+### InboxEntry statusDate field
+**Source:** specs/table-sort.md
+
+- **R765:** `InboxEntry` includes a `StatusDate` field (`json:"statusDate"`) containing the `@status-date:` tag value
+- **R766:** `DB.Inbox()` reads the `@status-date:` tag from the file's tag block and populates `StatusDate`
+- **R767:** `mcp:inbox()` passes `statusDate` to Lua as a string field on each entry table
+
+## Feature: Message Tag Operations
+**Source:** specs/app-search.md
+
+### Bulk Tag Write — mcp.setTags()
+
+- **R768:** `mcp.setTags(path, tags)` is a Lua function on the mcp table (dot syntax, no self)
+- **R769:** `path` is the file path, `tags` is a Lua table of name/value string pairs
+- **R770:** The function reads the file, parses via `TagBlock.Parse`, calls `TagBlock.Set` for each pair, then writes via `TagBlock.Render`
+- **R771:** If a tag named "status" is set, "status-date" is auto-set to today (YYYY-MM-DD), matching CLI `ark tag set` behavior
+- **R772:** Returns true on success, nil + error string on failure
+
+### Read Message — mcp.readMessage()
+
+- **R773:** `mcp.readMessage(path)` is a Lua function on the mcp table (dot syntax, no self)
+- **R774:** The function reads the file and parses via `TagBlock.Parse`
+- **R775:** Returns a Lua table with `tags` (table of tag name/value pairs from the tag block only) and `html` (body rendered via goldmark)
+- **R776:** Tag values come exclusively from the tag block, not from body content
+- **R777:** Returns nil + error string on read or parse failure

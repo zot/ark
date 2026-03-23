@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Server.md | Seq: seq-server-startup.md, seq-reconcile.md, seq-file-change.md
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/yuin/goldmark"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/frictionless/flib"
 	"github.com/zot/microfts2"
@@ -1196,6 +1198,7 @@ func (srv *Server) registerLuaFunctions() {
 				L.SetField(row, "kind", lua.LString(e.Kind))
 				L.SetField(row, "responseHandled", lua.LString(e.ResponseHandled))
 				L.SetField(row, "requestHandled", lua.LString(e.RequestHandled))
+				L.SetField(row, "statusDate", lua.LString(e.StatusDate)) // R767
 				result.RawSetInt(i+1, row)
 			}
 			L.Push(result)
@@ -1285,6 +1288,72 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			L.Push(jsonToLua(L, data))
+			return 1
+		}))
+
+		// mcp.setTags(path, tags) — bulk tag write on a file
+		// CRC: crc-Server.md | Seq: seq-message.md | R768-R772
+		L.SetField(tbl, "setTags", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			tagsTable := L.CheckTable(2)
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+
+			tb := ParseTagBlock(data)
+			tagsTable.ForEach(func(k, v lua.LValue) {
+				name := k.String()
+				value := v.String()
+				tb.Set(name, value)
+				if name == "status" {
+					tb.Set("status-date", time.Now().Format("2006-01-02"))
+				}
+			})
+
+			if err := os.WriteFile(path, tb.Render(), 0644); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.readMessage(path) — read message file, return tags + rendered body
+		// CRC: crc-Server.md | Seq: seq-message.md | R773-R777
+		L.SetField(tbl, "readMessage", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+
+			tb := ParseTagBlock(data)
+
+			// Build tags table from tag block only (R776)
+			tagsResult := L.NewTable()
+			for _, tag := range tb.Tags() {
+				L.SetField(tagsResult, tag.Name, lua.LString(tag.Value))
+			}
+
+			// Render body via goldmark
+			var buf bytes.Buffer
+			body := tb.Body()
+			if body != nil {
+				goldmark.Convert(body, &buf)
+			}
+
+			result := L.NewTable()
+			L.SetField(result, "tags", tagsResult)
+			L.SetField(result, "html", lua.LString(buf.String()))
+			L.Push(result)
 			return 1
 		}))
 

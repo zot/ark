@@ -85,6 +85,8 @@ _projectCandidates, _showPatterns, _statusCounts, _serverRunning.
 | _loading | boolean | Refresh in progress |
 | _chips | Ark.FilterChip[] | One per project, cycles filter modes |
 | _statusChips | Ark.StatusChip[] | One per status, toggles column visibility |
+| _sortField | string | Current sort field: "date", "to", "from", "subject" |
+| _sortDesc | boolean | Sort direction: true = descending |
 
 ### Ark.Message
 
@@ -109,6 +111,7 @@ issue. One card per conversation, never duplicated.
 | _hasResponse | boolean | Whether a response file exists |
 | reqResponseHandled | string | Request's @response-handled value |
 | respRequestHandled | string | Response's @request-handled value |
+| statusDate | string | @status-date for sorting ("1970-01-01" if missing) |
 
 ### Ark.FilterChip
 
@@ -184,6 +187,13 @@ standalone positive filters.
 | messageCount() | Total message count |
 | filteredCount() | Count of messages passing current filter |
 | countLabel() | "N of M messages" display string |
+| cycleSortField() | Cycle sort field: date → to → from → subject |
+| toggleSortDir() | Toggle sort direction (asc/desc) |
+| sortLabel() | Current sort field name for display |
+| sortDirLabel() | "▼" or "▲" for current direction |
+| showDetail(msg) | Open message detail dialog |
+| detail() | Return current MessageDetail or nil |
+| hasDetail() | Whether detail dialog is open |
 
 ### Ark.FilterChip
 
@@ -223,6 +233,43 @@ standalone positive filters.
 | responseStatusLabel() | Human-readable response status |
 | statusClass() | CSS class for status badge color |
 | bookmarkChips() | Return stale bookmark chips as "PROJECT:status" strings. Empty when all bookmarks current. |
+| showDetail() | Open message detail view via messaging:showDetail(self) |
+
+### Ark.MessageDetail
+
+| Field | Type | Description |
+|-------|------|-------------|
+| _message | Ark.Message | The message being viewed |
+| _html | string | Rendered request markdown |
+| _tags | table | Request tag block as {name=value} |
+| _reqPath | string | Request file path |
+| _respPath | string | Response file path |
+| _respHtml | string | Rendered response markdown |
+| _respTags | table | Response tags |
+| status | string | Editable status (bound to dropdown) |
+| reqResponseHandled | string | Editable response-handled value |
+| respRequestHandled | string | Editable request-handled value |
+| _open | boolean | Dialog visibility |
+
+### Ark.MessageDetail Methods
+
+| Method | Description |
+|--------|-------------|
+| load(msg) | Load message content via mcp.readMessage(), populate fields |
+| close() | Close the dialog |
+| isOpen() | Whether dialog is visible |
+| title() | Message summary for dialog title |
+| projectLabel() | "from → to" formatted string |
+| dateLabel() | Status date or empty |
+| hasDate() | Whether date is present |
+| hasResponse() | Whether response exists |
+| requestHtml() | Rendered request body |
+| responseHtml() | Rendered response body |
+| onStatusChange() | Save status via mcp.setTags(), refresh |
+| onReqResponseHandled() | Save response-handled via mcp.setTags(), refresh |
+| onRespRequestHandled() | Save request-handled via mcp.setTags(), refresh |
+| complete() | Set status=completed + both handled=completed, close, refresh |
+| openInEditor() | Open file in editor via mcp:open() |
 
 ## ViewDefs
 
@@ -232,6 +279,7 @@ standalone positive filters.
 | Ark.Searching.DEFAULT.html | Ark.Searching | Full search/index UI (renamed from Ark.DEFAULT.html) |
 | Ark.Messaging.DEFAULT.html | Ark.Messaging | Kanban columns with message cards |
 | Ark.Message.list-item.html | Ark.Message | Card in kanban column |
+| Ark.MessageDetail.DETAIL.html | Ark.MessageDetail | Dialog with rendered markdown, controls, Complete button |
 | Ark.Source.list-item.html | Ark.Source | (unchanged) |
 | Ark.Project.list-item.html | Ark.Project | (unchanged) |
 | Ark.DataSource.list-item.html | Ark.DataSource | (unchanged) |

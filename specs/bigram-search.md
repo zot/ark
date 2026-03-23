@@ -1,4 +1,4 @@
-# Bigram Search
+# OBSOLETE: Bigram Search
 
 Character-level fuzzy matching via microfts2's bigram index.
 
