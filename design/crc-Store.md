@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -42,6 +42,32 @@ ark-level settings, and tag tracking.
 - ListTagDefs(tags []string): scan D prefix, return definitions.
   If tags is empty, return all. Otherwise filter to requested tags.
   Returns (tagname, description, fileid) triples.
+- WriteDayBuckets(fileid uint64, entries []DayBucketEntry): write
+  TD keys for each day spanned by each entry, write TF reverse index.
+  Cleans old entries first via ClearDayBuckets. (R866, R871, R872)
+- ClearDayBuckets(fileid uint64): read TF|fileid to get date list,
+  delete all TD|date|fileid|* entries, delete TF|fileid. (R871, R872)
+- QueryDayBuckets(startDate, endDate string) []DayBucketEntry: seek
+  TD|startDate, scan to TD|endDate, return all entries. (R867)
+- ParseAcks(content []byte, tag string) []AckEntry: extract @ack:
+  tags from the same chunk as the given tag, parse dates and ranges.
+  (R883, R884, R885, R886, R887, R888)
+
+### DayBucketEntry
+- Date: string — YYYYMMDD
+- Start: time.Time
+- End: time.Time
+- Tag: string
+- Summary: string — description text after date
+- Path: string
+- FileID: uint64
+- RecurringSpec: string — empty for one-shot
+- AllDay: bool
+
+### AckEntry
+- Start: time.Time — open for ..DATE entries
+- End: time.Time
+- Text: string — descriptive text after date
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern

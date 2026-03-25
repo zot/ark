@@ -100,6 +100,8 @@ Lifetime = server lifetime.
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
+- [x] crc-PubSub.md → `pubsub.go`
+- [x] crc-EventScheduler.md → `scheduler.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -115,6 +117,8 @@ Lifetime = server lifetime.
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 - [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
 - [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
+- [x] seq-pubsub.md → `pubsub.go`, `scheduler.go`, `server.go`, `indexer.go`, `cmd/ark/main.go`
+- [x] seq-scheduling.md → `scheduler.go`, `store.go`, `indexer.go`, `server.go`, `config.go`, `cmd/ark/main.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -180,3 +184,17 @@ Lifetime = server lifetime.
 - [x] C1: search_grouped mode dispatch — added "fuzzy" case (opts.Fuzzy=true, query stays). UI replaces "about" button with "fuzzy".
 
 - [ ] A22: R753 (tagPattern/tagblock regexes unchanged) — verified by absence, no design artifact needed
+- [ ] O24: Pubsub: SessionID on ScheduledEvent not used in fire() delivery — events fire to all sessions, not per-subscriber. Wire per-session filtering when needed.
+- [ ] O25: Pubsub: writerID always empty string — self-notification exclusion (R798) cannot trigger. Wire actual session ID through indexer when session-aware indexing exists.
+- [ ] O26: Pubsub: ExtractTagValues only matches first tag per line on compound tags — subsequent tags in compound lines won't fire subscriptions. Needs RE2-compatible non-greedy or two-pass approach.
+- [ ] O27: Pubsub: ErrorReporter uses nil — wire TmpErrorReporter when tmp:// append (ark add --append) lands.
+- [x] O28: Pubsub: Watchdog results not persisted — Watchdog() returns results but no caller writes them to tmp:// yet. Wire when tmp:// append lands.
+- [ ] O29: Pubsub: No unit tests for PubSub, EventScheduler, Watchdog, or CLI commands
+- [x] O30: Lua dead code: Source:makeNode() no longer called after mcp.listSource migration. Source._missingPaths also unused. Safe to remove.
+- [ ] O31: Inherited new() on ui-engine prototypes captures root prototype in closure — creates Object type instead of target type. Workaround: use rawget to detect type-specific new(), fall back to session:create. See R846-R848.
+- [ ] O32: No unit tests for mcp.listSource — testable with mock Config and DB.Missing()
+- [ ] O33: No unit tests for scheduling: ParseDateValue, day-bucket Store ops, log file read/write, EnsureUpcoming, ScanScheduleLogs, crankForward
+- [ ] O34: Store.WriteDayBuckets/QueryDayBuckets not yet called from indexer — wiring deferred until calendar UI (Lua API mcp:scheduled)
+- [ ] O35: Lua APIs not yet registered: mcp:scheduled, mcp:reschedule, mcp:tagComplete, mcp:fileStatus, mcp:subscribe (R893-R898)
+- [ ] O36: Event payload does not yet carry IsScheduledFire flag (R878) — publisher delivers same Event type for both scheduled fires and tag changes
+- [ ] O37: Gap detection (R890-R892) not implemented — comparing @ark-event-fired: in log vs @ack: in source file

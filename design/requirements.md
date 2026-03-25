@@ -726,6 +726,9 @@
 - **R580:** If stdin is not a terminal, new-request reads body text from stdin until a lone `.` on a line
 - **R581:** Stdin body is appended after the heading scaffold (after the issue text line)
 - **R582:** If stdin is a terminal or empty, the command produces the same output as before (no behavior change)
+- **R849:** `--content TEXT` flag provides body text as a command-line argument (alternative to stdin)
+- **R850:** If `--content` is set, stdin body reading is skipped
+- **R851:** `--content` body is appended after the heading scaffold, same position as stdin body
 
 ### new-response
 - **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file
@@ -733,6 +736,7 @@
 - **R456:** Errors if FILE already exists
 - **R583:** If stdin is not a terminal, new-response reads body text from stdin until a lone `.` on a line
 - **R584:** Stdin body is appended after the `# RESP <id>` heading
+- **R852:** `--content TEXT` flag provides body text for new-response (same behavior as R849-R851)
 
 ## Feature: Multisearch
 **Source:** specs/multisearch.md
@@ -1213,3 +1217,193 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R775:** Returns a Lua table with `tags` (table of tag name/value pairs from the tag block only) and `html` (body rendered via goldmark)
 - **R776:** Tag values come exclusively from the tag block, not from body content
 - **R777:** Returns nil + error string on read or parse failure
+
+## Feature: Tag Pubsub
+**Source:** specs/pubsub.md
+
+### Subscribe
+
+- **R778:** `ark subscribe --session ID --tag TAG` registers a tag subscription for the session
+- **R779:** `--value REGEX` optionally filters on tag content (Go RE2)
+- **R780:** No `--value` means match any value for that tag
+- **R781:** Multiple `--tag` flags create multiple independent subscriptions (OR semantics)
+- **R782:** `--filter-files GLOB` restricts matching to files matching the glob
+- **R783:** `--except-files GLOB` excludes files matching the glob from matching
+- **R784:** `--filter-files` and `--except-files` compose: filter sets the scope, except carves out exceptions
+- **R785:** File filters are checked at publish time before enqueue
+- **R786:** `--cancel` with no `--tag` cancels all subscriptions for the session
+- **R787:** `--cancel --tag TAG` cancels all subscriptions for that tag
+- **R788:** `--cancel --tag TAG --value VAL` cancels only subscriptions whose value regex would match VAL
+
+### Listen
+
+- **R789:** `ark listen --session ID` long-polls for queued notifications
+- **R790:** `--timeout N` sets the long-poll timeout in seconds (default 120)
+- **R791:** Output is markdown, not JSON — each event is a crank handle
+- **R792:** Events are separated by `---` dividers
+- **R793:** Each event contains a descriptive phrase and file references (`ark fetch` paths, `ark chunks` commands)
+- **R794:** After output, the queue is drained; the agent loops back to listen
+
+### Publish
+
+- **R795:** Publishing is implicit — happens in the existing tag extraction path during add, refresh, and append
+- **R796:** After tags are extracted, each tag is matched against the subscription registry
+- **R797:** On match: check value regex, check file filters, then enqueue
+- **R798:** A session does not receive notifications about its own writes by default
+
+### Subscription Registry
+
+- **R799:** The subscription registry is in-memory; it dies with the server
+- **R800:** Per-session data: subscription list, notification channel, last-listen timestamp
+- **R801:** Notification channel is bounded (default 100 events) and lossy — non-blocking send, drop if full
+- **R802:** If a session hasn't called listen within the TTL (default 10 minutes), its subscriptions and queue are dropped
+- **R803:** The listen call resets the TTL timer
+- **R804:** A reaper runs on a server ticker (once per minute) to drop stale sessions
+
+### Event Scheduler
+
+- **R805:** Ark maintains a priority queue sorted by next-fire time with a single `time.Timer`
+- **R806:** When the timer fires: deliver the event through listen, pop the entry, reset the timer to the new head
+- **R807:** If the fired event is recurring, compute the next occurrence and re-enqueue before resetting the timer
+- **R808:** ~~Scheduling is a subscription property, not a tag property~~ **Superseded by R853-R855:** scheduling is driven by ark.toml config + day-bucket indexing, not subscriptions
+- **R809:** Only the next occurrence of a recurring event lives in the queue
+- **R821:** One-shot (`--scheduled`) tag values: DATE formats `YYYY-MM-DD HH:MM`, `YYYY-MM-DD` (defaults 09:00), `MM-DD` (annual). Past one-shots ignored.
+- **R822:** Recurring (`--recurring`) tag values follow the grammar: `[starting [on|at] DATE] every [ORDINAL] PERIOD [at HH:MM] [ending [on|at] DATE] [DESCRIPTION]`
+- **R823:** Annual shorthand: a bare `MM-DD` value is treated as annually recurring
+- **R824:** Recurring PERIOD types: duration (Nm, Nh), day name (Monday-Sunday), day class (weekday, weekend, day), scope (of the week/month/year)
+- **R825:** `@ended: [REASON]` in the same chunk as a scheduled/recurring tag stops the event — scheduler skips chunks containing both
+- **R826:** ~~On subscribe with `--scheduled`/`--recurring`, scan existing tags via TagContext and populate the queue.~~ **Superseded by R868-R870:** scheduler reads day buckets at startup, not subscription-triggered
+- **R827:** ~~If no subscription declares a tag as scheduled/recurring, zero scheduling overhead~~ **Superseded by R853:** zero overhead unless tag is in ark.toml `[schedule]`
+- **R828:** ~~Scheduled events are per-subscription~~ **Superseded by R868:** scheduler fires to all listening sessions, not per-subscription
+
+### Muting
+
+- **R829:** `@mute: true` in a file silences all pubsub events from that file
+- **R830:** The mute check happens before subscription matching — no events fire, no watchdog findings
+- **R831:** Muted files are still indexed and searchable; only notifications are suppressed
+- **R810:** Quarter chimes: a built-in recurring event every 15 minutes with full date, day of week, time of day
+- **R811:** Push records: in-memory set of (event-id, session-id) pairs prevents duplicate delivery
+- **R812:** Server restart clears push records; startup re-scan fires anything due that hasn't been delivered
+- **R813:** A Lua function in init.lua computes variable-date holidays at startup and writes them to a tmp:// file with `@ark-event:` tags
+
+### List and Stats
+
+- **R814:** `ark subscribe --list` shows all active sessions and their subscriptions
+- **R815:** `ark subscribe --list --session ID` shows subscriptions for one session
+- **R816:** List output is tab-separated: session, tag, value_regex, filter_files, except_files, hits, drops
+- **R817:** `ark subscribe --stats` shows aggregate hit/drop counts across all sessions
+- **R818:** `ark subscribe --stats --session ID` shows stats for one session
+- **R819:** PubSub tracks per-subscription hit count (events enqueued) and drop count (events lost to full queue)
+- **R820:** Stats are in-memory, reset on server restart
+
+## Feature: app-source-tree
+**Source:** specs/app-source-tree.md
+
+### In-process directory listing
+
+- **R835:** `mcp:listSource(sourcePath, prototype)` is a Go function registered on the Lua mcp table via RegisterLuaFunctions
+- **R836:** sourcePath is an absolute directory path; the function lists one level of that directory
+- **R837:** (inferred) sourcePath must be within a configured source directory; returns empty table if not
+- **R838:** Each entry includes: name (basename), relPath (relative to source root), fullPath (absolute), isDir (boolean)
+- **R839:** Each entry is classified in-process using Config.ShowWhy logic: state (included/excluded/unresolved), whyPatterns, whySources, whyConflict
+- **R840:** Classification checks global and per-source include/exclude patterns plus .gitignore/.arkignore patterns
+- **R841:** Entries are sorted: directories first, then alphabetically by name
+- **R842:** Directory entries include hasIgnoreFile (boolean) — true when .gitignore or .arkignore exists in that directory
+- **R843:** Missing files (in index but not on disk) at the listed directory level are included with isMissing = true
+- **R844:** (inferred) Missing file detection uses the DB's existing missing list, not a separate scan
+
+### Prototype wiring
+
+- **R845:** When prototype argument is nil, entries are returned as bare Lua tables
+- **R846:** When prototype is non-nil, Go checks once at the start whether the prototype itself has a `new` method (rawget — inherited new() captures the wrong prototype)
+- **R847:** If type-specific `new` exists, each entry is created via `prototype:new(table)` — custom init
+- **R848:** If `new` does not exist, each entry is created via `session:create(prototype, table)` — mutation tracking without init. Falls back to metatable wiring if session:create unavailable.
+
+## Feature: scheduling
+**Source:** specs/scheduling.md
+
+### Schedule Tag Configuration
+
+- **R853:** ark.toml `[schedule]` section declares which tags carry date values; only listed tags are date-parsed at index time
+- **R854:** `[schedule.defaults]` maps tag names to default durations (e.g., `dentist = "1h"`, `standup = "15m"`, `birthday = "all-day"`)
+- **R855:** Tags not listed in `[schedule]` incur zero date-parsing or day-bucket overhead
+- **R856:** Adding or removing a tag from `[schedule]` triggers re-materialization of day-bucket entries for all files containing that tag
+
+### Date and Duration Parsing
+
+- **R857:** The `..` range operator expresses durations: `TIME..TIME` (same-day), `TIME..DATE TIME` (multi-day span)
+- **R858:** `DATE TIME` with no `..` uses the default duration from `[schedule.defaults]`; `DATE` alone is all-day
+- **R859:** No spaces around `..`; timestamps on both sides. Everything after the time portion is description text.
+- **R860:** Use itlightning/dateparse for structured date parsing — handles dozens of formats without format specification
+- **R861:** Token-trimming loop separates date from description text: parse progressively shorter prefixes until dateparse succeeds
+- **R862:** Anchored-only relative dates: `Feb 2..one week later` is allowed (relative to absolute start); bare `next Tuesday` is not (shifts on re-index)
+- **R863:** Relative vocabulary: `N days/weeks/months later` — arithmetic on the parsed start date, no NLP library
+- **R864:** The left side of `..` must be an absolute date; no relative-to-relative ranges
+- **R865:** Description text after the date portion is preserved on round-trip edits (reschedule)
+
+### Day-Bucket LMDB Indexing
+
+- **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value contains start, end, tag, summary, path, recurring_spec, allDay
+- **R867:** Calendar range query: seek `TD|start`, scan to `TD|end` — no post-filtering needed
+- **R868:** (inferred) Multi-day events produce one TD entry per day spanned
+- **R869:** (inferred) Day buckets for recurring events are derived from `@ark-event-upcoming:` entries in schedule log files, not materialized directly from the recurring spec
+- **R870:** Past events are indexed from `@ark-event-fired:` entries in schedule log files as day buckets — the calendar is a historical record
+
+### Reverse Index for Deletion
+
+- **R871:** `TF|fileid` key stores the list of all dates with day-bucket entries for that file
+- **R872:** On re-index: read `TF|fileid` (one read), delete each `TD|date|fileid|*`, delete `TF|fileid`, write new TD + TF from current content
+- **R873:** (inferred) File deletion follows the same TF-based cleanup path
+
+### Schedule Log
+
+- **R899:** `~/.ark/schedule/` directory holds schedule log files — one per source file containing schedule tags
+- **R900:** Each event definition gets a chunk in its log file with `@ark-event:`, `@ark-event-source:`, `@ark-event-spec:` tags identifying it
+- **R901:** `@ark-event-upcoming:` tags in the log represent concrete future instances; `@ark-event-fired:` tags represent past instances
+- **R902:** On index of a source file with a schedule tag, the scheduler ensures `@ark-event-upcoming:` entries exist through the forward window (default 6 months)
+- **R903:** Deleting an `@ark-event-upcoming:` line is a scheduling exception — that occurrence is skipped
+- **R904:** Editing an `@ark-event-upcoming:` date moves that occurrence — just a file edit, indexed normally
+- **R905:** Crank-forward checks for existing `@ark-event-upcoming:` before adding — no duplicates
+- **R906:** Log files are rotatable — old `@ark-event-fired:` entries can be archived; `@ack:` in source files is the durable human record
+- **R907:** Log files are regular ark files — tagged, indexed, searchable
+- **R908:** (inferred) `~/.ark/schedule/*.md` is included in the `~/.ark` source so log files are indexed automatically
+
+### Scheduler Integration
+
+- **R874:** Scheduler reads schedule log files at startup — not subscriptions, not LMDB registries
+- **R875:** On server startup: scan `~/.ark/schedule/` for `@ark-event-upcoming:` entries, populate the priority queue
+- **R876:** On startup: `@ark-event-upcoming:` entries in the past are converted to `@ark-event-fired:`, next occurrences computed and appended
+- **R877:** On recurring event fire: convert `@ark-event-upcoming:` → `@ark-event-fired:` in log, compute next occurrence, append `@ark-event-upcoming:` if none for that date, re-index log, re-enqueue
+- **R878:** Events delivered through the publisher carry their nature (scheduled fire vs tag-change notification) so receivers can distinguish
+
+### Remove Scheduling from Subscriptions
+
+- **R879:** Remove `--scheduled` and `--recurring` flags from `ark subscribe` CLI
+- **R880:** Remove `ScheduleMode` type, `ScheduleNone`/`ScheduleOneShot`/`ScheduleRecurring` constants, and `Schedule` field from `TagSub`
+- **R881:** Remove `ScanForSub` from EventScheduler — replaced by day-bucket startup scan (R875)
+- **R882:** (inferred) Remove `RemoveForSession` session-scoped event cleanup — events are no longer per-subscription
+
+### Acknowledgments
+
+- **R883:** `@ack:` tags in the same chunk as an event record acknowledgment
+- **R884:** `@ack: ..DATE [text]` — open start, first ack only ("covered from the beginning through DATE")
+- **R885:** `@ack: DATE [text]` — single date acknowledgment
+- **R886:** `@ack: DATE..DATE [text]` — closed range, both endpoints required
+- **R887:** Open ends (`DATE..`) are never allowed
+- **R888:** Multiple `@ack:` tags per chunk, no blank lines between them (same-chunk rule)
+- **R889:** Gaps between acknowledged dates = missed/unacknowledged occurrences (the staleness signal)
+
+### Gap Detection
+
+- **R890:** Compare event fire dates against `@ack:` entries in the chunk to find unacknowledged occurrences
+- **R891:** Lookback window (default 7 days) limits recent-miss detection on agent connect
+- **R892:** (inferred) Gap detection results are surfaceable via Lua API for Franklin's morning briefing
+
+### Lua APIs
+
+- **R893:** `mcp:scheduled(startDate, endDate)` returns items overlapping a date range from day-bucket index; each item has date, endDate, tag, summary, path, recurring, allDay
+- **R894:** `mcp:reschedule(path, tag, newDate, newEndDate)` rewrites the date in the tag value, preserves trailing description text, re-indexes
+- **R895:** `mcp:tagComplete(prefix)` returns tag name and value completions from the index
+- **R896:** `mcp:fileStatus(path)` returns whether the file is indexed, its tags, and schedule info
+- **R897:** `mcp:subscribe(opts, callback)` registers a UI-side tag-change subscription; callback fires on matching tag events
+- **R898:** `mcp:subscribe` supports tag, value (RE2 regex), filterFiles, exceptFiles — full parity with CLI minus removed scheduled/recurring flags

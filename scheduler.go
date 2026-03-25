@@ -1,0 +1,909 @@
+package ark
+
+// CRC: crc-EventScheduler.md | Seq: seq-pubsub.md
+
+import (
+	"bufio"
+	"container/heap"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/itlightning/dateparse"
+)
+
+const scheduleDateFmt = "2006-01-02 15:04"
+
+// isRecurringSpec returns true if the value looks like a recurring schedule spec.
+func isRecurringSpec(value string) bool {
+	return strings.Contains(strings.ToLower(value), "every ")
+}
+
+// dayNames maps day name strings to time.Weekday (package-level, allocated once).
+var dayNames = map[string]time.Weekday{
+	"sunday": time.Sunday, "sun": time.Sunday,
+	"monday": time.Monday, "mon": time.Monday,
+	"tuesday": time.Tuesday, "tue": time.Tuesday, "tues": time.Tuesday,
+	"wednesday": time.Wednesday, "wed": time.Wednesday,
+	"thursday": time.Thursday, "thu": time.Thursday, "thurs": time.Thursday,
+	"friday": time.Friday, "fri": time.Friday,
+	"saturday": time.Saturday, "sat": time.Saturday,
+}
+
+// ScheduledEvent is an entry in the event queue.
+type ScheduledEvent struct {
+	ID        string // derived from source path + tag + session
+	Tag       string
+	Value     string
+	Path      string
+	NextFire  time.Time
+	Recurring string // recurrence spec (empty = one-shot)
+	SessionID string // which session this fires for (empty = all, e.g. chimes)
+	index     int    // heap index
+}
+
+// eventHeap implements heap.Interface for ScheduledEvent.
+type eventHeap []*ScheduledEvent
+
+func (h eventHeap) Len() int           { return len(h) }
+func (h eventHeap) Less(i, j int) bool { return h[i].NextFire.Before(h[j].NextFire) }
+func (h eventHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].index = i; h[j].index = j }
+func (h *eventHeap) Push(x any) {
+	e := x.(*ScheduledEvent)
+	e.index = len(*h)
+	*h = append(*h, e)
+}
+func (h *eventHeap) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	e.index = -1
+	*h = old[:n-1]
+	return e
+}
+
+// ErrorReporter appends diagnostic errors to tmp:// files for visibility.
+// Subsystems call Report to surface non-fatal errors that would otherwise
+// be lost in log output. Each error becomes a tagged, searchable chunk.
+type ErrorReporter interface {
+	Report(subsystem, message string)
+}
+
+// EventScheduler manages time-based event delivery. R805, R806, R807
+// Reads schedule log files from ~/.ark/schedule/ at startup.
+// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md
+type EventScheduler struct {
+	queue       eventHeap
+	timer       *time.Timer
+	pubsub      *PubSub
+	pushed      map[string]bool // eventID → delivered this server lifetime
+	mu          sync.Mutex
+	stopCh      chan struct{}
+	reporter    ErrorReporter // nil = log only
+	scheduleDir string        // ~/.ark/schedule/
+	config      *Config       // schedule tag declarations
+}
+
+// NewEventScheduler creates a scheduler that delivers through the given PubSub.
+// scheduleDir is the path to ~/.ark/schedule/ (created if needed).
+// CRC: crc-EventScheduler.md
+func NewEventScheduler(pubsub *PubSub, reporter ErrorReporter, scheduleDir string, config *Config) *EventScheduler {
+	return &EventScheduler{
+		pubsub:      pubsub,
+		pushed:      make(map[string]bool),
+		stopCh:      make(chan struct{}),
+		reporter:    reporter,
+		scheduleDir: scheduleDir,
+		config:      config,
+	}
+}
+
+// reportError sends a diagnostic to the error reporter if available.
+func (es *EventScheduler) reportError(subsystem, message string) {
+	if es.reporter != nil {
+		es.reporter.Report(subsystem, message)
+	}
+}
+
+// --- Schedule log file operations ---
+
+// logChunk represents one event definition in a schedule log file.
+// CRC: crc-EventScheduler.md | R899, R900, R901
+type logChunk struct {
+	Event    string   // tag name (e.g., "standup")
+	Source   string   // source file path
+	Spec     string   // recurring spec (e.g., "every Monday at 09:00")
+	Fired    []string // @ark-event-fired: date strings
+	Upcoming []string // @ark-event-upcoming: date strings
+}
+
+// eventID builds a deterministic event identifier.
+func eventID(source, tag, dateStr string) string {
+	return fmt.Sprintf("%s:%s:%s", source, tag, dateStr)
+}
+
+// buildDateSet returns a set of date strings already in a chunk (upcoming + fired).
+func buildDateSet(c *logChunk) map[string]bool {
+	m := make(map[string]bool, len(c.Upcoming)+len(c.Fired))
+	for _, u := range c.Upcoming {
+		m[u] = true
+	}
+	for _, f := range c.Fired {
+		if fields := strings.Fields(f); len(fields) > 0 {
+			if t, err := time.Parse(scheduleDateFmt, fields[0]); err == nil {
+				m[t.Format(scheduleDateFmt)] = true
+			}
+		}
+	}
+	return m
+}
+
+// crankForward fills a chunk's Upcoming with dates through the forward window.
+// Returns the number of new entries added. Optionally enqueues events.
+func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool) int {
+	if !isRecurringSpec(c.Spec) {
+		return 0
+	}
+	windowEnd := now.AddDate(0, 6, 0)
+	existing := buildDateSet(c)
+	added := 0
+	next := computeNext(c.Spec, now)
+	for !next.IsZero() && next.Before(windowEnd) {
+		dateStr := next.Format(scheduleDateFmt)
+		if !existing[dateStr] {
+			c.Upcoming = append(c.Upcoming, dateStr)
+			existing[dateStr] = true
+			added++
+			if enqueue {
+				es.Add(&ScheduledEvent{
+					ID:       eventID(c.Source, c.Event, dateStr),
+					Tag:      c.Event,
+					Value:    dateStr,
+					Path:     c.Source,
+					NextFire: next,
+				})
+			}
+		}
+		next = computeNext(c.Spec, next)
+	}
+	return added
+}
+
+// logFilePath returns the schedule log path for a source file.
+// Uses a hash of the source path for uniqueness.
+func (es *EventScheduler) logFilePath(sourcePath string) string {
+	h := sha256.Sum256([]byte(sourcePath))
+	name := hex.EncodeToString(h[:8]) + ".md"
+	return filepath.Join(es.scheduleDir, name)
+}
+
+// ensureDir creates the schedule directory if needed.
+func (es *EventScheduler) ensureDir() error {
+	return os.MkdirAll(es.scheduleDir, 0755)
+}
+
+// readLogFile reads all chunks from a schedule log file.
+func readLogFile(path string) ([]logChunk, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var chunks []logChunk
+	var cur *logChunk
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "@ark-event:") {
+			if cur != nil {
+				chunks = append(chunks, *cur)
+			}
+			cur = &logChunk{Event: strings.TrimSpace(line[len("@ark-event:"):])}
+		} else if cur != nil {
+			switch {
+			case strings.HasPrefix(line, "@ark-event-source:"):
+				cur.Source = strings.TrimSpace(line[len("@ark-event-source:"):])
+			case strings.HasPrefix(line, "@ark-event-spec:"):
+				cur.Spec = strings.TrimSpace(line[len("@ark-event-spec:"):])
+			case strings.HasPrefix(line, "@ark-event-fired:"):
+				cur.Fired = append(cur.Fired, strings.TrimSpace(line[len("@ark-event-fired:"):]))
+			case strings.HasPrefix(line, "@ark-event-upcoming:"):
+				cur.Upcoming = append(cur.Upcoming, strings.TrimSpace(line[len("@ark-event-upcoming:"):]))
+			}
+		}
+	}
+	if cur != nil {
+		chunks = append(chunks, *cur)
+	}
+	return chunks, scanner.Err()
+}
+
+// writeLogFile writes chunks to a schedule log file.
+// Caller must ensure the directory exists (via ensureDir).
+func writeLogFile(path string, chunks []logChunk) error {
+	var buf strings.Builder
+	for i, c := range chunks {
+		if i > 0 {
+			buf.WriteString("\n---\n\n")
+		}
+		fmt.Fprintf(&buf, "@ark-event: %s\n", c.Event)
+		fmt.Fprintf(&buf, "@ark-event-source: %s\n", c.Source)
+		if c.Spec != "" {
+			fmt.Fprintf(&buf, "@ark-event-spec: %s\n", c.Spec)
+		}
+		buf.WriteString("\n")
+		for _, f := range c.Fired {
+			fmt.Fprintf(&buf, "@ark-event-fired: %s\n", f)
+		}
+		for _, u := range c.Upcoming {
+			fmt.Fprintf(&buf, "@ark-event-upcoming: %s\n", u)
+		}
+	}
+	return os.WriteFile(path, []byte(buf.String()), 0644)
+}
+
+// EnsureUpcoming ensures a schedule log chunk exists for an event with
+// @ark-event-upcoming: entries through the forward window.
+// Called from the indexer when a source file with a schedule tag is indexed.
+// CRC: crc-EventScheduler.md | R902, R905
+func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
+	if err := es.ensureDir(); err != nil {
+		return err
+	}
+	logPath := es.logFilePath(sourcePath)
+	chunks, _ := readLogFile(logPath)
+
+	// Find or create chunk
+	var chunk *logChunk
+	for i := range chunks {
+		if chunks[i].Event == tag && chunks[i].Source == sourcePath {
+			chunk = &chunks[i]
+			break
+		}
+	}
+	if chunk == nil {
+		chunks = append(chunks, logChunk{Event: tag, Source: sourcePath, Spec: value})
+		chunk = &chunks[len(chunks)-1]
+	} else {
+		chunk.Spec = value
+	}
+
+	now := time.Now()
+	modified := false
+
+	if isRecurringSpec(value) {
+		modified = es.crankForward(chunk, now, false) > 0
+	} else {
+		// One-shot: add one upcoming if in the future and not already present
+		dr, err := ParseDateValue(value, "", now.Location())
+		if err != nil {
+			return nil
+		}
+		if dr.Start.After(now) {
+			dateStr := dr.Start.Format(scheduleDateFmt)
+			existing := buildDateSet(chunk)
+			if !existing[dateStr] {
+				chunk.Upcoming = append(chunk.Upcoming, dateStr)
+				modified = true
+			}
+		}
+	}
+
+	if !modified {
+		return nil // R905: no-op write avoided
+	}
+	return writeLogFile(logPath, chunks)
+}
+
+// ScanScheduleLogs reads all log files in ~/.ark/schedule/ and populates
+// the scheduler queue. Converts past @ark-event-upcoming: to @ark-event-fired:
+// and cranks forward for recurring events.
+// CRC: crc-EventScheduler.md | R874, R875, R876
+func (es *EventScheduler) ScanScheduleLogs() error {
+	if es.scheduleDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(es.scheduleDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		logPath := filepath.Join(es.scheduleDir, entry.Name())
+		chunks, err := readLogFile(logPath)
+		if err != nil {
+			log.Printf("schedule: error reading %s: %v", logPath, err)
+			continue
+		}
+
+		modified := false
+		for i := range chunks {
+			c := &chunks[i]
+
+			// Partition upcoming into past (→fired) and future (→enqueue)
+			var futureUpcoming []string
+			for _, u := range c.Upcoming {
+				t, err := time.Parse(scheduleDateFmt, u)
+				if err != nil {
+					futureUpcoming = append(futureUpcoming, u)
+					continue
+				}
+				if t.Before(now) {
+					c.Fired = append(c.Fired, u)
+					modified = true
+				} else {
+					futureUpcoming = append(futureUpcoming, u)
+					es.Add(&ScheduledEvent{
+						ID:       eventID(c.Source, c.Event, u),
+						Tag:      c.Event,
+						Value:    u,
+						Path:     c.Source,
+						NextFire: t,
+					})
+				}
+			}
+			c.Upcoming = futureUpcoming
+
+			if es.crankForward(c, now, true) > 0 {
+				modified = true
+			}
+		}
+
+		if modified {
+			if err := writeLogFile(logPath, chunks); err != nil {
+				log.Printf("schedule: error writing %s: %v", logPath, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Add pushes an event onto the queue. Idempotent — same ID replaces. R808, R809
+func (es *EventScheduler) Add(event *ScheduledEvent) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	// Remove existing with same ID
+	for i, e := range es.queue {
+		if e.ID == event.ID {
+			heap.Remove(&es.queue, i)
+			break
+		}
+	}
+	heap.Push(&es.queue, event)
+	es.resetTimer()
+}
+
+// AddChime adds the quarter-chime recurring event. R810
+func (es *EventScheduler) AddChime() {
+	now := time.Now()
+	// Next quarter hour
+	minute := now.Minute()
+	nextQ := (minute/15 + 1) * 15
+	next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
+	next = next.Add(time.Duration(nextQ) * time.Minute)
+	if next.Before(now) {
+		next = next.Add(15 * time.Minute)
+	}
+	es.Add(&ScheduledEvent{
+		ID:        "chime:quarter",
+		Tag:       "chime",
+		Value:     "", // filled at fire time
+		NextFire:  next,
+		Recurring: "every 15m",
+	})
+}
+
+// Stop shuts down the scheduler.
+func (es *EventScheduler) Stop() {
+	close(es.stopCh)
+	es.mu.Lock()
+	if es.timer != nil {
+		es.timer.Stop()
+	}
+	es.mu.Unlock()
+}
+
+// resetTimer sets the timer to the head of the queue. Must hold mu.
+func (es *EventScheduler) resetTimer() {
+	if es.timer != nil {
+		es.timer.Stop()
+	}
+	if es.queue.Len() == 0 {
+		es.timer = nil
+		return
+	}
+	head := es.queue[0]
+	delay := max(time.Until(head.NextFire), 0)
+	es.timer = time.AfterFunc(delay, es.fire)
+}
+
+// fire delivers the head event and reschedules if recurring. R806, R807, R877
+// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md
+func (es *EventScheduler) fire() {
+	es.mu.Lock()
+	if es.queue.Len() == 0 {
+		es.mu.Unlock()
+		return
+	}
+	event := heap.Pop(&es.queue).(*ScheduledEvent)
+
+	if event.Tag == "chime" {
+		event.Value = time.Now().Format("2006-01-02 15:04 MST, Monday")
+	}
+
+	// Check push record. R811
+	if !es.pushed[event.ID] {
+		es.pushed[event.ID] = true
+		tags := []TagValue{{Tag: event.Tag, Value: event.Value}}
+		es.mu.Unlock()
+		es.pubsub.Publish("", event.Path, tags)
+		es.mu.Lock()
+	}
+
+	delete(es.pushed, event.ID)
+	isChime := event.Tag == "chime"
+	es.mu.Unlock()
+
+	// R877: mutate schedule log outside the mutex
+	if !isChime && event.Path != "" {
+		es.fireLogMutate(event)
+	}
+
+	es.mu.Lock()
+	es.resetTimer()
+	es.mu.Unlock()
+}
+
+// fireLogMutate converts @ark-event-upcoming: → @ark-event-fired: in the
+// log file and adds the next upcoming for recurring events. R877
+func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
+	logPath := es.logFilePath(event.Path)
+	chunks, err := readLogFile(logPath)
+	if err != nil {
+		log.Printf("schedule: cannot read log for fire: %v", err)
+		return
+	}
+
+	for i := range chunks {
+		c := &chunks[i]
+		if c.Event != event.Tag || c.Source != event.Path {
+			continue
+		}
+		// Move firedValue from upcoming to fired
+		var newUpcoming []string
+		for _, u := range c.Upcoming {
+			if u == event.Value {
+				c.Fired = append(c.Fired, event.Value)
+			} else {
+				newUpcoming = append(newUpcoming, u)
+			}
+		}
+		c.Upcoming = newUpcoming
+
+		// R877: single lookahead for the next occurrence (not full window)
+		if event.Recurring != "" {
+			now := time.Now()
+			next := computeNext(event.Recurring, now)
+			if !next.IsZero() {
+				dateStr := next.Format(scheduleDateFmt)
+				if !slices.Contains(c.Upcoming, dateStr) { // R905: exception check
+					c.Upcoming = append(c.Upcoming, dateStr)
+					es.Add(&ScheduledEvent{
+						ID:        eventID(event.Path, event.Tag, dateStr),
+						Tag:       event.Tag,
+						Value:     dateStr,
+						Path:      event.Path,
+						NextFire:  next,
+						Recurring: event.Recurring,
+					})
+				}
+			}
+		}
+		break
+	}
+
+	if err := writeLogFile(logPath, chunks); err != nil {
+		log.Printf("schedule: cannot write log for fire: %v", err)
+	}
+}
+
+// parseScheduledTime parses a one-shot date value. R821
+// Flexible: tries multiple formats, strips trailing description text.
+func parseScheduledTime(value string, now time.Time) time.Time {
+	value = strings.TrimSpace(value)
+	// Try each format, longest first
+	dateLayouts := []string{
+		"2006-01-02 15:04",
+		"2006/01/02 15:04",
+		"2006-01-02",
+		"2006/01/02",
+		"Jan 2, 2006 15:04",
+		"Jan 2, 2006",
+		"January 2, 2006 15:04",
+		"January 2, 2006",
+		"2 Jan 2006 15:04",
+		"2 Jan 2006",
+	}
+	for _, layout := range dateLayouts {
+		// Try parsing with progressively shorter prefixes
+		for end := len(value); end >= len(layout)-2; end-- {
+			if t, err := time.ParseInLocation(layout, strings.TrimSpace(value[:end]), now.Location()); err == nil {
+				if t.After(now) {
+					return t
+				}
+				return time.Time{} // Past one-shot
+			}
+		}
+	}
+	// "MM-DD" or "MM/DD" — annual, next occurrence. R823
+	for _, sep := range []string{"-", "/"} {
+		if len(value) >= 5 && value[2:3] == sep {
+			if t, err := time.Parse("01"+sep+"02", value[:5]); err == nil {
+				next := time.Date(now.Year(), t.Month(), t.Day(), 9, 0, 0, 0, now.Location())
+				if next.Before(now) {
+					next = next.AddDate(1, 0, 0)
+				}
+				return next
+			}
+		}
+	}
+	return time.Time{}
+}
+
+// computeNext computes the next occurrence of a recurring event after the given time.
+// All matching is case-insensitive.
+func computeNext(spec string, after time.Time) time.Time {
+	spec = strings.TrimSpace(spec)
+	// Strip description after " -- "
+	if idx := strings.Index(spec, " -- "); idx >= 0 {
+		spec = strings.TrimSpace(spec[:idx])
+	}
+	lower := strings.ToLower(spec)
+
+	// "every ..."
+	if rest, ok := strings.CutPrefix(lower, "every "); ok {
+		rest = strings.TrimSpace(rest)
+
+		// Strip optional "at HH:MM" from the end
+		hour, minute := 9, 0
+		if atIdx := strings.LastIndex(rest, " at "); atIdx >= 0 {
+			timeStr := strings.TrimSpace(rest[atIdx+4:])
+			if parts := strings.SplitN(timeStr, ":", 2); len(parts) == 2 {
+				hour, _ = strconv.Atoi(parts[0])
+				minute, _ = strconv.Atoi(parts[1])
+			}
+			rest = strings.TrimSpace(rest[:atIdx])
+		}
+
+		// "every WEEKDAY" — case-insensitive
+		if day, ok := parseDayName(rest); ok {
+			next := time.Date(after.Year(), after.Month(), after.Day(), hour, minute, 0, 0, after.Location())
+			for next.Weekday() != day || !next.After(after) {
+				next = next.AddDate(0, 0, 1)
+			}
+			return next
+		}
+
+		// "every weekday" / "every weekend"
+		if rest == "weekday" || rest == "weekend" {
+			isWeekday := rest == "weekday"
+			next := time.Date(after.Year(), after.Month(), after.Day(), hour, minute, 0, 0, after.Location())
+			if !next.After(after) {
+				next = next.AddDate(0, 0, 1)
+			}
+			for {
+				wd := next.Weekday()
+				match := isWeekday && wd >= time.Monday && wd <= time.Friday ||
+					!isWeekday && (wd == time.Saturday || wd == time.Sunday)
+				if match {
+					return next
+				}
+				next = next.AddDate(0, 0, 1)
+			}
+		}
+
+		// "every Nth of the month"
+		if n, ok := parseOrdinalPrefix(rest); ok {
+			if strings.Contains(rest, "of the month") {
+				next := time.Date(after.Year(), after.Month(), n, hour, minute, 0, 0, after.Location())
+				if !next.After(after) {
+					next = next.AddDate(0, 1, 0)
+				}
+				return next
+			}
+			// "every Nth WEEKDAY" — e.g. "every 3rd monday"
+			remaining := strings.TrimSpace(rest[strings.IndexByte(rest, ' ')+1:])
+			if day, ok := parseDayName(remaining); ok {
+				return nthWeekdayInMonth(after, n, day, hour, minute)
+			}
+		}
+
+		// "every Nm" / "every Nh" — duration intervals
+		if suffix, ok := strings.CutSuffix(rest, "m"); ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(suffix)); err == nil {
+				d := time.Duration(n) * time.Minute
+				startOfHour := time.Date(after.Year(), after.Month(), after.Day(), after.Hour(), 0, 0, 0, after.Location())
+				elapsed := after.Sub(startOfHour)
+				intervals := int(elapsed/d) + 1
+				return startOfHour.Add(time.Duration(intervals) * d)
+			}
+		}
+		if suffix, ok := strings.CutSuffix(rest, "h"); ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(suffix)); err == nil {
+				d := time.Duration(n) * time.Hour
+				startOfDay := time.Date(after.Year(), after.Month(), after.Day(), 0, 0, 0, 0, after.Location())
+				elapsed := after.Sub(startOfDay)
+				intervals := int(elapsed/d) + 1
+				return startOfDay.Add(time.Duration(intervals) * d)
+			}
+		}
+	}
+
+	// "MM-DD" or "MM/DD" — annual shorthand (same as parseScheduledTime)
+	if t := parseScheduledTime(spec, after); !t.IsZero() {
+		return t
+	}
+
+	// "annual" — next year same date
+	if lower == "annual" {
+		return after.AddDate(1, 0, 0)
+	}
+
+	return time.Time{}
+}
+
+// parseDayName matches a day name case-insensitively.
+func parseDayName(s string) (time.Weekday, bool) {
+	day, ok := dayNames[strings.TrimSpace(strings.ToLower(s))]
+	return day, ok
+}
+
+// parseOrdinalPrefix extracts an ordinal number from the start of a string.
+// Handles "1st", "2nd", "3rd", "4th"..."365th" and words "second" through "tenth".
+func parseOrdinalPrefix(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	words := map[string]int{
+		"second": 2, "third": 3, "fourth": 4, "fifth": 5,
+		"sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+	}
+	first := s
+	if idx := strings.IndexByte(s, ' '); idx >= 0 {
+		first = s[:idx]
+	}
+	if n, ok := words[first]; ok {
+		return n, true
+	}
+	// "1st", "2nd", "3rd", "4th"...
+	numStr := strings.TrimRight(first, "stndrh")
+	if n, err := strconv.Atoi(numStr); err == nil && n > 0 {
+		return n, true
+	}
+	return 0, false
+}
+
+// nthWeekdayInMonth returns the nth occurrence of a weekday in the next month
+// where it falls after the given time.
+func nthWeekdayInMonth(after time.Time, n int, day time.Weekday, hour, minute int) time.Time {
+	// Try this month first, then next
+	for monthOffset := 0; monthOffset <= 1; monthOffset++ {
+		y, m, _ := after.AddDate(0, monthOffset, 0).Date()
+		first := time.Date(y, m, 1, hour, minute, 0, 0, after.Location())
+		// Find first matching weekday
+		for first.Weekday() != day {
+			first = first.AddDate(0, 0, 1)
+		}
+		// Advance to nth occurrence
+		target := first.AddDate(0, 0, (n-1)*7)
+		if target.Month() == m && target.After(after) {
+			return target
+		}
+	}
+	return time.Time{}
+}
+
+// DateRange represents a parsed date/time range from a schedule tag value.
+// CRC: crc-EventScheduler.md | R857, R858, R859, R865
+type DateRange struct {
+	Start       time.Time
+	End         time.Time
+	Description string // text after the date portion
+	AllDay      bool
+}
+
+// ParseDateValue parses a schedule tag value including the .. duration operator.
+// Uses itlightning/dateparse with token-trimming for flexible date recognition.
+// Returns the parsed range and remaining description text.
+// CRC: crc-EventScheduler.md | R857, R858, R859, R860, R861, R865
+func ParseDateValue(value string, defaultDur string, loc *time.Location) (DateRange, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return DateRange{}, errEmptyValue
+	}
+
+	// Split on .. first (range/duration detection) R857
+	if idx := strings.Index(value, ".."); idx >= 0 {
+		leftStr := strings.TrimSpace(value[:idx])
+		rightStr := strings.TrimSpace(value[idx+2:])
+
+		// Parse left side (must be absolute date) R864
+		start, _, err := parseDateTrimming(leftStr, loc)
+		if err != nil {
+			return DateRange{}, err
+		}
+
+		// Right side: try relative duration first R862, R863
+		if end, ok := parseRelativeDuration(start, rightStr); ok {
+			desc := trimRelativePrefix(rightStr)
+			return DateRange{Start: start, End: end, Description: strings.TrimSpace(desc)}, nil
+		}
+
+		// Right side: try as time-only (same day) R857
+		if t, err := parseTimeOnly(rightStr); err == nil {
+			end := time.Date(start.Year(), start.Month(), start.Day(), t.Hour(), t.Minute(), 0, 0, loc)
+			desc := ""
+			if len(rightStr) > 5 {
+				desc = strings.TrimSpace(rightStr[5:])
+			}
+			return DateRange{Start: start, End: end, Description: desc}, nil
+		}
+
+		// Right side: try as full date R857
+		end, rightDesc, err := parseDateTrimming(rightStr, loc)
+		if err != nil {
+			return DateRange{}, err
+		}
+		return DateRange{Start: start, End: end, Description: strings.TrimSpace(rightDesc)}, nil
+	}
+
+	// No .. — single date/time R858
+	start, desc, err := parseDateTrimming(value, loc)
+	if err != nil {
+		return DateRange{}, err
+	}
+
+	allDay := isDateOnly(value)
+
+	end := start
+	if !allDay && defaultDur != "" {
+		if defaultDur == "all-day" {
+			allDay = true
+			end = time.Date(start.Year(), start.Month(), start.Day(), 23, 59, 59, 0, loc)
+		} else if d, derr := time.ParseDuration(defaultDur); derr == nil {
+			end = start.Add(d)
+		}
+	}
+
+	return DateRange{Start: start, End: end, Description: strings.TrimSpace(desc), AllDay: allDay}, nil
+}
+
+var errEmptyValue = &ParseError{"empty date value"}
+
+// ParseError is a date parsing error.
+type ParseError struct {
+	Msg string
+}
+
+func (e *ParseError) Error() string { return e.Msg }
+
+// parseDateTrimming uses dateparse with a token-trimming loop to separate
+// the date from trailing description text. R860, R861
+func parseDateTrimming(s string, loc *time.Location) (time.Time, string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, "", errEmptyValue
+	}
+	words := strings.Fields(s)
+	for end := len(words); end > 0; end-- {
+		candidate := strings.Join(words[:end], " ")
+		t, err := dateparse.ParseIn(candidate, loc)
+		if err == nil {
+			desc := strings.TrimSpace(strings.Join(words[end:], " "))
+			return t, desc, nil
+		}
+	}
+	return time.Time{}, "", &ParseError{"cannot parse date: " + s}
+}
+
+// parseTimeOnly parses HH:MM format.
+func parseTimeOnly(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if len(s) < 5 {
+		return time.Time{}, &ParseError{"too short for time"}
+	}
+	parts := strings.SplitN(s[:5], ":", 2)
+	if len(parts) != 2 {
+		return time.Time{}, &ParseError{"not HH:MM"}
+	}
+	h, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return time.Time{}, &ParseError{"invalid time"}
+	}
+	return time.Date(0, 1, 1, h, m, 0, 0, time.UTC), nil
+}
+
+// parseRelativeDuration parses anchored relative expressions like
+// "one week later", "3 days later". Matches the first 3 words:
+// N UNIT later [description...]. R862, R863
+func parseRelativeDuration(anchor time.Time, expr string) (time.Time, bool) {
+	words := strings.Fields(strings.TrimSpace(strings.ToLower(expr)))
+	if len(words) < 3 || words[2] != "later" {
+		return time.Time{}, false
+	}
+	n := parseWordNumber(words[0])
+	if n <= 0 {
+		return time.Time{}, false
+	}
+	unit := words[1]
+	switch {
+	case strings.HasPrefix(unit, "day"):
+		return anchor.AddDate(0, 0, n), true
+	case strings.HasPrefix(unit, "week"):
+		return anchor.AddDate(0, 0, n*7), true
+	case strings.HasPrefix(unit, "month"):
+		return anchor.AddDate(0, n, 0), true
+	case strings.HasPrefix(unit, "year"):
+		return anchor.AddDate(n, 0, 0), true
+	}
+	return time.Time{}, false
+}
+
+// trimRelativePrefix removes the "N unit later" prefix, returning remaining text.
+func trimRelativePrefix(s string) string {
+	words := strings.Fields(strings.TrimSpace(s))
+	if len(words) >= 3 && strings.ToLower(words[2]) == "later" {
+		if _, ok := parseRelativeDuration(time.Time{}, strings.Join(words[:3], " ")); ok {
+			if len(words) > 3 {
+				return strings.Join(words[3:], " ")
+			}
+			return ""
+		}
+	}
+	return s
+}
+
+// parseWordNumber converts word or digit numbers to int.
+func parseWordNumber(s string) int {
+	wordNums := map[string]int{
+		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+		"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+		"eleven": 11, "twelve": 12,
+	}
+	if n, ok := wordNums[s]; ok {
+		return n
+	}
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return n
+	}
+	return 0
+}
+
+// isDateOnly checks if a value has no time component (no colon in first tokens).
+func isDateOnly(s string) bool {
+	words := strings.Fields(strings.TrimSpace(s))
+	if len(words) == 0 {
+		return false
+	}
+	check := words[0]
+	if len(words) > 1 {
+		check += " " + words[1]
+	}
+	return !strings.Contains(check, ":")
+}

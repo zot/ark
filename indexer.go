@@ -23,9 +23,42 @@ var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.
 type Indexer struct {
-	fts   *microfts2.DB
-	vec   *microvec.DB
-	store *Store
+	fts       *microfts2.DB
+	vec       *microvec.DB
+	store     *Store
+	pubsub    *PubSub         // nil when running without server
+	scheduler *EventScheduler // nil when running without server
+	config    *Config         // for schedule tag checks
+}
+
+// SetPubSub injects the pubsub registry. Called by the server after
+// DB.Open — pubsub is a server-side concern, not a DB concern.
+func (idx *Indexer) SetPubSub(ps *PubSub) {
+	idx.pubsub = ps
+}
+
+// SetScheduler injects the event scheduler. Called by the server.
+// CRC: crc-Indexer.md | R866
+func (idx *Indexer) SetScheduler(sched *EventScheduler, config *Config) {
+	idx.scheduler = sched
+	idx.config = config
+}
+
+// writeDateIndex checks extracted tags against schedule config and
+// ensures upcoming entries exist in the schedule log.
+// Uses pre-extracted tag values to avoid re-parsing content.
+// CRC: crc-Indexer.md | R866, R869, R870, R872
+func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
+	if idx.scheduler == nil || idx.config == nil {
+		return
+	}
+	for _, tv := range tagValues {
+		if _, ok := idx.config.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
+			if err := idx.scheduler.EnsureUpcoming(tv.Tag, tv.Value, path); err != nil {
+				log.Printf("schedule: EnsureUpcoming error for @%s in %s: %v", tv.Tag, path, err)
+			}
+		}
+	}
 }
 
 // AddFile adds a file to both engines and extracts tags. microfts2
@@ -55,6 +88,12 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
 			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
 		}
+		// R795, R796: publish tag events to subscribers
+		if idx.pubsub != nil {
+			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(data))
+		}
+		// R866: write schedule log entries for schedule tags
+		idx.writeDateIndex(path, ExtractTagValues(data))
 	}
 
 	return fileid, nil
@@ -106,13 +145,14 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 // Workers populate this via prepareRefresh (file I/O + tag extraction).
 // The ChanSvc executes writes via executeRefresh (LMDB mutations).
 type refreshPrep struct {
-	path     string
-	strategy string
-	oldID    uint64
-	isAppend bool
-	data     []byte            // full file content
-	tags     map[string]uint32 // pre-extracted tags
-	defs     map[string]string // pre-extracted tag defs
+	path      string
+	strategy  string
+	oldID     uint64
+	isAppend  bool
+	data      []byte            // full file content
+	tags      map[string]uint32 // pre-extracted tags
+	defs      map[string]string // pre-extracted tag defs
+	tagValues []TagValue        // pre-extracted tag values for pubsub
 	// Append-specific fields
 	newBytes []byte
 	baseLine int
@@ -155,6 +195,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 			tagBytes := tagWindowForAppend(data, info.FileLength)
 			prep.tags = ExtractTags(tagBytes)
 			prep.defs = ExtractTagDefs(tagBytes)
+			prep.tagValues = ExtractTagValues(tagBytes)
 			return prep, nil
 		}
 	}
@@ -162,6 +203,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 	// Full refresh path
 	prep.tags = ExtractTags(data)
 	prep.defs = ExtractTagDefs(data)
+	prep.tagValues = ExtractTagValues(data)
 	return prep, nil
 }
 
@@ -196,6 +238,11 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			if err := idx.store.AppendTagDefs(prep.oldID, prep.defs); err != nil {
 				return fmt.Errorf("append tag defs %s: %w", prep.path, err)
 			}
+			// R795, R796: publish tag events from appended content
+			if idx.pubsub != nil {
+				idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
+			}
+			idx.writeDateIndex(prep.path, prep.tagValues)
 		}
 		return nil
 	}
@@ -239,6 +286,12 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
 		}
+		// R795, R796: publish tag events from refreshed content
+		if idx.pubsub != nil {
+			idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
+		}
+		// R866: write schedule log entries for schedule tags
+		idx.writeDateIndex(prep.path, prep.tagValues)
 	}
 
 	return nil
@@ -354,6 +407,12 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		if err := idx.store.AppendTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
+		// R795, R796: publish tag events from appended content
+		if idx.pubsub != nil {
+			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(tagBytes))
+		}
+		// R866: write schedule log entries for schedule tags
+		idx.writeDateIndex(path, ExtractTagValues(tagBytes))
 	}
 
 	return nil
@@ -500,6 +559,32 @@ func ExtractTags(content []byte) map[string]uint32 {
 		tags[name]++
 	}
 	return tags
+}
+
+// tagValueRegex matches @tag: followed by the value to end of line.
+// Note: for compound tags (@ref: path @item: body), the greedy [^\n]*
+// means only the first tag on a line gets matched — its value includes
+// the subsequent tags as text. ExtractTags (using tagRegex) correctly
+// counts all tags; ExtractTagValues returns one entry per line.
+// This means pubsub won't fire separately for @item: in compound lines.
+// Acceptable — compound tags are a V3 feature (see specs/pubsub.md).
+var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
+
+// ExtractTagValues scans content for @tag: patterns and returns name+value pairs.
+// Used by both tag counting (ExtractTags) and pubsub delivery.
+func ExtractTagValues(content []byte) []TagValue {
+	matches := tagValueRegex.FindAllSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	values := make([]TagValue, 0, len(matches))
+	for _, m := range matches {
+		values = append(values, TagValue{
+			Tag:   strings.ToLower(string(m[1])),
+			Value: strings.TrimSpace(string(m[2])),
+		})
+	}
+	return values
 }
 
 // tagDefRegex matches @tag: definitions at line start. First word after

@@ -7,6 +7,11 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
 if [ "$TOOL" = Bash ]; then
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command')
+    # Reject heredocs and pipes — even in ark commands
+    if echo "$CMD" | grep -q '<<\|[|]'; then
+        echo "BLOCKED: No heredocs or pipes. Use --content flag: ~/.ark/ark message new-request --from X --to Y --issue '...' --content 'body text' requests/file.md" >&2
+        exit 2
+    fi
     if echo "$CMD" | grep -q '^\s*~/.ark/ark\b\|^\s*\$HOME/.ark/ark\b\|^\s*/home/[^/]*/.ark/ark\b'; then
         echo >> /tmp/allowed
         echo "$INPUT" >> /tmp/allowed
@@ -14,10 +19,10 @@ if [ "$TOOL" = Bash ]; then
     fi
 fi
 
-# Allow Read/Write/Edit on requests/ paths
-if [ "$TOOL" = Read ] || [ "$TOOL" = Write ]; then
+# Allow Read on requests/ paths (Write removed — use --content flag instead)
+if [ "$TOOL" = Read ]; then
     FPATH=$(echo "$INPUT" | jq -r '.tool_input.file_path')
-    if echo "$FPATH" | grep -q '/requests/'; then
+    if echo "$FPATH" | grep -qE '/requests/|^requests/'; then
         echo >> /tmp/allowed
         echo "$INPUT" >> /tmp/allowed
         exit 0

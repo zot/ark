@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777, R789, R790, R799, R804, R805, R812, R813, R835, R836, R837, R838, R839, R840, R841, R842, R843, R844, R845, R846, R847, R848, R893, R894, R895, R896, R897, R898
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -18,6 +18,8 @@ Optionally starts the embedded ui-engine alongside.
 - ignoredPaths: map[string]struct{} — negative cache of non-indexable paths, cleared on config reload
 - uiPort: int — HTTP port the ui-engine is listening on (0 if not started)
 - sessions: map[string]*Session — named sessions, autocreated on demand (mutex-protected)
+- pubsub: *PubSub — subscription registry and notification delivery
+- scheduler: *EventScheduler — time-based event queue
 
 ## Does
 - Serve(dbPath, opts): bind socket (highlander lock), write PID file,
@@ -101,6 +103,27 @@ Optionally starts the embedded ui-engine alongside.
   - mcp.readMessage(path) — read message file. Returns Lua table
     with tags (name/value pairs from tag block only) and html (body
     rendered via goldmark). Dot syntax, no self.
+  - mcp:scheduled(startDate, endDate) — query day-bucket index for
+    items overlapping the date range. Returns Lua array of tables
+    with date, endDate, tag, summary, path, recurring, allDay. (R893)
+  - mcp:reschedule(path, tag, newDate, newEndDate) — rewrite date
+    in tag value, preserve trailing text, re-index. (R894)
+  - mcp:tagComplete(prefix) — tag name/value completions from
+    the index (D records + tag values). (R895)
+  - mcp:fileStatus(path) — indexed? tags? schedule info? (R896)
+  - mcp:subscribe(opts, callback) — UI-side tag-change subscription.
+    opts: tag, value (RE2), filterFiles, exceptFiles. Callback fires
+    on matching events. (R897, R898)
+  - mcp:listSource(sourcePath, prototype) — list one directory level
+    within a configured source. Returns Lua array of entry tables
+    with name, relPath, fullPath, isDir, state, whyPatterns,
+    whySources, whyConflict, isMissing, hasIgnoreFile. Classification
+    uses Config.ShowWhy logic in-process. Missing files from DB
+    included at listed level. If prototype is non-nil, all entries
+    go through session:create for mutation tracking. Checks once
+    for `new` in prototype chain: if present, calls
+    prototype:new(table) instead (session:create + init). Entries
+    sorted dirs-first then alphabetically.
 - currentlyIndexing(): returns []string of source dirs with active
   scan or refresh in progress. Read by HandleIndexing and the
   mcp:indexing() Lua function.
@@ -117,8 +140,15 @@ Optionally starts the embedded ui-engine alongside.
 - GetOrCreateSession(name): look up session by name, create if not
   found. Session receives DB reference and TTL from config. Mutex
   protects the map; session actor runs in its own goroutine.
-- Signal handling: catch SIGTERM, stop watcher, shut down ui-engine,
-  close listener, close DB, exit 0
+- HandleSubscribe: POST /subscribe — add or cancel subscriptions, delegates to PubSub
+- HandleListen: GET /listen — long-poll for notifications, delegates to PubSub.Listen + FormatMarkdown
+- StartPubSub(): create PubSub, start reaper ticker (1 minute)
+- StartScheduler(): create EventScheduler, call ScanDayBuckets to
+  read upcoming events from LMDB, crank forward any expired recurring
+  events, add quarter chime, fire overdue events, set timer to head.
+  (R874, R875, R876)
+- Signal handling: catch SIGTERM, stop watcher, stop scheduler,
+  shut down ui-engine, close listener, close DB, exit 0
 - Never remove PID file (stale PID is safe — stop verifies before kill)
 
 ## Collaborators
@@ -130,6 +160,8 @@ Optionally starts the embedded ui-engine alongside.
 - fsnotify: filesystem change detection
 - ui-engine (cli.Server): embedded UI server, started alongside ark API
 - flib.Runtime: WithLua for passive Lua function registration
+- PubSub: subscription registry and notification delivery
+- EventScheduler: time-based event queue
 - TagBlock: parse/set/render tag blocks for setTags and readMessage
 - goldmark: markdown→HTML rendering for readMessage body
 
@@ -138,3 +170,4 @@ Optionally starts the embedded ui-engine alongside.
 - seq-reconcile.md
 - seq-file-change.md
 - seq-session-search.md
+- seq-pubsub.md

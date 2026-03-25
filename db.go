@@ -420,6 +420,21 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 	return db.fts.UpdateTmpFile(path, strategy, content)
 }
 
+// AppendTmpFile appends content to a tmp:// document, creating it if needed.
+// Creates new chunks from the appended content without touching existing chunks.
+// CRC: crc-DB.md
+func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, error) {
+	fid, err := db.fts.AppendTmpFile(path, strategy, content)
+	if err != nil {
+		return 0, err
+	}
+	if db.tmpPaths == nil {
+		db.tmpPaths = make(map[string]uint64)
+	}
+	db.tmpPaths[path] = fid
+	return fid, nil
+}
+
 // RemoveTmpFile removes a tmp:// document from the overlay.
 // CRC: crc-DB.md | R666
 func (db *DB) RemoveTmpFile(path string) error {

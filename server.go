@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -47,6 +48,8 @@ type Server struct {
 	uiPort          int      // HTTP port the ui-engine is listening on (0 if not started)
 	sessionsMu      sync.Mutex
 	sessions        map[string]*Session // R641: named sessions, autocreated on demand
+	pubsub          *PubSub             // R799: subscription registry
+	scheduler       *EventScheduler     // R805: time-based event queue
 }
 
 // ServeOpts controls server behavior.
@@ -131,13 +134,34 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)
 	db.Config().EnsureArkSource()
 
+	// R799: Create pubsub and scheduler
+	ps := NewPubSub(10*time.Minute, 100)
+	schedDir := filepath.Join(dbPath, "schedule")
+	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
+
 	srv := &Server{
 		db:          db,
 		listener:    listener,
 		pidPath:     pidPath,
 		noScan:      opts.NoScan,
 		reconcileCh: make(chan struct{}, 1),
+		pubsub:      ps,
+		scheduler:   sched,
 	}
+
+	// Wire pubsub into the indexer so tag extraction publishes events
+	db.indexer.SetPubSub(ps)
+	db.indexer.SetScheduler(sched, db.Config())
+	ps.SetDB(db)
+
+	// R804: Start pubsub reaper ticker
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ps.Reap()
+		}
+	}()
 
 	// Reconciliation goroutine — serializes all reconcile requests.
 	// Buffered channel ensures at most one pending request queues
@@ -150,6 +174,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	go func() {
 		sig := <-sigCh
 		log.Printf("received %s, shutting down", sig)
+		if srv.scheduler != nil {
+			srv.scheduler.Stop()
+		}
 		if srv.watcher != nil {
 			srv.watcher.Close()
 		}
@@ -177,6 +204,13 @@ func Serve(dbPath string, opts ServeOpts) error {
 	if !opts.NoScan {
 		srv.reconcile()
 	}
+
+	// R874, R875, R876: Scan schedule logs and populate queue
+	if err := sched.ScanScheduleLogs(); err != nil {
+		log.Printf("schedule: scan error: %v", err)
+	}
+	// R810: Start quarter chime after reconciliation
+	sched.AddChime()
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -218,6 +252,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /tmp/update", srv.handleTmpUpdate)
 	mux.HandleFunc("POST /tmp/remove", srv.handleTmpRemove)
 	mux.HandleFunc("GET /tmp/list", srv.handleTmpList)
+	mux.HandleFunc("POST /tmp/append", srv.handleTmpAppend)
+	mux.HandleFunc("POST /subscribe", srv.handleSubscribe)
+	mux.HandleFunc("GET /listen", srv.handleListen)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -1004,6 +1041,113 @@ func (srv *Server) handleTmpList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, srv.db.TmpFiles())
 }
 
+// handleTmpAppend appends content to a tmp:// document (creating it if needed).
+// CRC: crc-Server.md | Seq: seq-pubsub.md
+func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path     string `json:"path"`
+		Strategy string `json:"strategy"`
+		Content  string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" || req.Content == "" {
+		http.Error(w, "path and content required", http.StatusBadRequest)
+		return
+	}
+	if req.Strategy == "" {
+		req.Strategy = "markdown"
+	}
+	if _, err := srv.db.AppendTmpFile(req.Path, req.Strategy, []byte(req.Content)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSubscribe processes subscribe/cancel/list/stats requests. R778-R788, R814-R820
+// CRC: crc-Server.md | Seq: seq-pubsub.md
+func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Session string `json:"session"`
+		Cancel  bool   `json:"cancel"`
+		List    bool   `json:"list"`
+		Stats   bool   `json:"stats"`
+		Subs    []struct {
+			Tag         string   `json:"tag"`
+			Value       string   `json:"value"`
+			FilterFiles []string `json:"filter_files"`
+			ExceptFiles []string `json:"except_files"`
+		} `json:"subs"`
+		// For cancel with specific tag/value
+		Tag   string `json:"tag"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.List {
+		writeJSON(w, srv.pubsub.List(req.Session))
+		return
+	}
+	if req.Stats {
+		writeJSON(w, srv.pubsub.Stats(req.Session))
+		return
+	}
+	if req.Cancel {
+		srv.pubsub.Cancel(req.Session, req.Tag, req.Value)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// Subscribe
+	var subs []*TagSub
+	for _, s := range req.Subs {
+		sub := &TagSub{
+			Tag:         s.Tag,
+			FilterFiles: s.FilterFiles,
+			ExceptFiles: s.ExceptFiles,
+		}
+		if s.Value != "" {
+			re, err := regexp.Compile(s.Value)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("bad value regex %q: %v", s.Value, err), http.StatusBadRequest)
+				return
+			}
+			sub.ValueRE = re
+		}
+		subs = append(subs, sub)
+	}
+	srv.pubsub.Subscribe(req.Session, subs)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleListen long-polls for notifications. R789-R794
+// CRC: crc-Server.md | Seq: seq-pubsub.md
+func (srv *Server) handleListen(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+	timeoutStr := r.URL.Query().Get("timeout")
+	timeout := 120 * time.Second
+	if timeoutStr != "" {
+		if secs, err := strconv.Atoi(timeoutStr); err == nil {
+			timeout = time.Duration(secs) * time.Second
+		}
+	}
+	events := srv.pubsub.Listen(session, timeout)
+	if len(events) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Write([]byte(FormatMarkdown(events)))
+}
+
 // registerLuaFunctions registers Go functions on the Lua mcp table
 // via the passive execution path (no UI update push).
 // CRC: crc-Server.md | Seq: seq-search.md
@@ -1419,6 +1563,203 @@ func (srv *Server) registerLuaFunctions() {
 			for i, p := range paths {
 				result.RawSetInt(i+1, lua.LString(p))
 			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:listSource(sourcePath, prototype) — list one directory level
+		// with in-process classification. Replaces per-node subprocess calls.
+		// CRC: crc-Server.md | R835-R848
+		L.SetField(tbl, "listSource", L.NewFunction(func(L *lua.LState) int {
+			sourcePath := L.CheckString(1)
+
+			// Find matching source in config
+			cfg := srv.db.Config()
+			var matchedSource *Source
+			for i := range cfg.Sources {
+				if cfg.Sources[i].Dir == sourcePath || strings.HasPrefix(sourcePath, cfg.Sources[i].Dir+"/") {
+					matchedSource = &cfg.Sources[i]
+					break
+				}
+			}
+			if matchedSource == nil {
+				L.Push(L.NewTable()) // R837: empty table if not in a source
+				return 1
+			}
+
+			// Check prototype argument (R845-R848)
+			var prototype *lua.LTable
+			var hasNew bool
+			var sessionCreate *lua.LFunction
+			if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+				proto, ok := L.Get(2).(*lua.LTable)
+				if !ok {
+					L.ArgError(2, "prototype must be a table")
+					return 0
+				}
+				prototype = proto
+				// Check for type-specific "new" method via rawget (only on
+				// the prototype itself). The inherited new() from the root
+				// prototype captures the wrong prototype in its closure,
+				// creating Object instances instead of the target type.
+				// Types with their own new() override this correctly.
+				newMethod := prototype.RawGetString("new")
+				hasNew = newMethod != lua.LNil && newMethod.Type() == lua.LTFunction
+				// Get session:create for the standard path
+				sessionGlobal := L.GetGlobal("session")
+				if sessionTbl, ok := sessionGlobal.(*lua.LTable); ok {
+					if createVal := L.GetField(sessionTbl, "create"); createVal.Type() == lua.LTFunction {
+						sessionCreate = createVal.(*lua.LFunction)
+					}
+				}
+			}
+
+			// wirePrototype applies prototype wiring to an entry table (R845-R848)
+			wirePrototype := func(entryTbl *lua.LTable) *lua.LTable {
+				if prototype == nil {
+					return entryTbl
+				}
+				if hasNew {
+					if err := L.CallByParam(lua.P{
+						Fn:      L.GetField(prototype, "new"),
+						NRet:    1,
+						Protect: true,
+					}, prototype, entryTbl); err != nil {
+						log.Printf("listSource: prototype:new() failed: %v", err)
+					} else {
+						entryTbl = L.CheckTable(-1)
+						L.Pop(1)
+					}
+				} else if sessionCreate != nil {
+					if err := L.CallByParam(lua.P{
+						Fn:      sessionCreate,
+						NRet:    1,
+						Protect: true,
+					}, L.GetGlobal("session"), prototype, entryTbl); err != nil {
+						log.Printf("listSource: session:create() failed: %v", err)
+					} else {
+						entryTbl = L.CheckTable(-1)
+						L.Pop(1)
+					}
+				} else {
+					L.SetMetatable(entryTbl, prototype)
+				}
+				return entryTbl
+			}
+
+			// Read directory entries (R836)
+			entries, err := os.ReadDir(sourcePath)
+			if err != nil {
+				L.Push(L.NewTable())
+				return 1
+			}
+
+			// Sort: dirs first, then alphabetically (R841)
+			sort.Slice(entries, func(i, j int) bool {
+				di, dj := entries[i].IsDir(), entries[j].IsDir()
+				if di != dj {
+					return di
+				}
+				return entries[i].Name() < entries[j].Name()
+			})
+
+			// Get missing files for this source (R843, R844)
+			missingPaths := make(map[string]bool)
+			missing, _ := srv.db.Missing()
+			for _, m := range missing {
+				// Only track missing files at the listed directory level
+				if strings.HasPrefix(m.Path, sourcePath+"/") {
+					rel := m.Path[len(sourcePath)+1:]
+					if !strings.Contains(rel, "/") {
+						missingPaths[m.Path] = true
+					}
+				}
+			}
+
+			result := L.NewTable()
+			idx := 0
+			seenNames := make(map[string]bool)
+
+			for _, entry := range entries {
+				name := entry.Name()
+				fullPath := filepath.Join(sourcePath, name)
+				isDir := entry.IsDir()
+
+				// Compute relPath from source root
+				relPath, _ := filepath.Rel(matchedSource.Dir, fullPath)
+
+				// Classify via ShowWhy (R839, R840)
+				why, err := cfg.ShowWhy(fullPath)
+				state := "unresolved"
+				var whyPatterns, whySources string
+				whyConflict := false
+				if err == nil && why != nil {
+					state = why.Status
+					whyPatterns = strings.Join(why.Patterns, ", ")
+					whySources = strings.Join(why.Sources, ", ")
+					whyConflict = why.Conflict
+				}
+
+				// Check for ignore files in directories (R842)
+				hasIgnoreFile := false
+				if isDir {
+					for _, ignName := range []string{".gitignore", ".arkignore"} {
+						if _, err := os.Stat(filepath.Join(fullPath, ignName)); err == nil {
+							hasIgnoreFile = true
+							break
+						}
+					}
+				}
+
+				// Check if missing (R843)
+				isMissing := missingPaths[fullPath]
+
+				// Build entry table (R838)
+				entryTbl := L.NewTable()
+				L.SetField(entryTbl, "name", lua.LString(name))
+				L.SetField(entryTbl, "relPath", lua.LString(relPath))
+				L.SetField(entryTbl, "fullPath", lua.LString(fullPath))
+				L.SetField(entryTbl, "isDir", lua.LBool(isDir))
+				L.SetField(entryTbl, "state", lua.LString(state))
+				L.SetField(entryTbl, "whyPatterns", lua.LString(whyPatterns))
+				L.SetField(entryTbl, "whySources", lua.LString(whySources))
+				L.SetField(entryTbl, "whyConflict", lua.LBool(whyConflict))
+				L.SetField(entryTbl, "isMissing", lua.LBool(isMissing))
+				L.SetField(entryTbl, "hasIgnoreFile", lua.LBool(hasIgnoreFile))
+
+				entryTbl = wirePrototype(entryTbl)
+
+				idx++
+				result.RawSetInt(idx, entryTbl)
+				seenNames[name] = true
+			}
+
+			// Add missing files not on disk at this directory level (R843)
+			for path := range missingPaths {
+				name := filepath.Base(path)
+				if seenNames[name] {
+					continue
+				}
+				relPath, _ := filepath.Rel(matchedSource.Dir, path)
+
+				entryTbl := L.NewTable()
+				L.SetField(entryTbl, "name", lua.LString(name))
+				L.SetField(entryTbl, "relPath", lua.LString(relPath))
+				L.SetField(entryTbl, "fullPath", lua.LString(path))
+				L.SetField(entryTbl, "isDir", lua.LBool(false))
+				L.SetField(entryTbl, "state", lua.LString("included"))
+				L.SetField(entryTbl, "whyPatterns", lua.LString(""))
+				L.SetField(entryTbl, "whySources", lua.LString(""))
+				L.SetField(entryTbl, "whyConflict", lua.LBool(false))
+				L.SetField(entryTbl, "isMissing", lua.LBool(true))
+				L.SetField(entryTbl, "hasIgnoreFile", lua.LBool(false))
+
+				entryTbl = wirePrototype(entryTbl)
+
+				idx++
+				result.RawSetInt(idx, entryTbl)
+			}
+
 			L.Push(result)
 			return 1
 		}))

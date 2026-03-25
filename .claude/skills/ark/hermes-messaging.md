@@ -67,41 +67,27 @@ another project's folder.
 **`@issue:` is the card name.** The `--issue` flag on `new-request`
 sets it at creation time. Keep it short (5-8 words) for dashboard display.
 
-**Three steps: scaffold, read, write.** Do NOT use heredocs or stdin
-piping — they break permission patterns. Instead:
+**One command creates the full message.** Use `--content` to pass the
+body text directly — no Read/Write tools, no heredocs, no stdin piping.
 
-1. Create the scaffold (tags + heading, no body):
 ```bash
 ~/.ark/ark message new-request \
   --from this-project --to target-project \
   --issue "short description" \
+  --content "Body text here.
+
+Multiline is fine — just use a quoted string." \
   requests/short-name.md
 ```
 
-2. Read the scaffold to capture the tag block:
-```
-Read requests/short-name.md
-```
-
-3. Write the full file — tag block (unchanged) + body:
-```
-Write requests/short-name.md with the tag block from step 2
-followed by your message body in markdown.
-```
-
-**The tag block is the `@tag:` lines at the top of the file.**
-Preserve them exactly as created. After the tag block there must be
-a blank line, then `# heading`, then another blank line, then body.
-The blank lines are required — without them, tags and body merge.
-
-For responses, same three steps:
+For responses:
 ```bash
 ~/.ark/ark message new-response \
   --from this-project --to requesting-project \
   --request original-request-id \
+  --content "Response body here." \
   requests/RESP-original-request-id.md
 ```
-Then Read, then Write with body.
 
 Bare filenames: `requests/<short-name>.md`. Only add `-<session8>`
 suffix if the name collides.

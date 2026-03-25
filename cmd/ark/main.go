@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,6 +137,10 @@ func main() {
 		cmdUIInstall(args)
 	case "message":
 		cmdMessage(args)
+	case "subscribe":
+		cmdSubscribe(args)
+	case "listen":
+		cmdListen(args)
 	case "ui":
 		cmdUI(args)
 	case "unresolved":
@@ -177,6 +182,8 @@ Commands:
   scan        Walk directories, index new files
   search      Search the index
   serve       Start the server
+  subscribe   Manage tag subscriptions (requires server)
+  listen      Long-poll for tag notifications (requires server)
   setup       Bootstrap ~/.ark/ (extract assets, install skills)
   sources     Manage source directories
   stale       List stale files
@@ -3341,7 +3348,8 @@ Subcommands:
   set-tags      Update or add tags in a file's tag block
   get-tags      Read tags from a file's tag block
   check         Validate file format
-  inbox         List non-completed messages`
+  inbox         List non-completed messages
+  dm            Send a direct message between agents (tmp://)`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, messageUsage)
@@ -3364,6 +3372,8 @@ Subcommands:
 		cmdMessageCheck(subArgs)
 	case "inbox":
 		cmdMessageInbox(subArgs)
+	case "dm":
+		cmdMessageDM(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown message subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, messageUsage)
@@ -3400,6 +3410,7 @@ func cmdMessageNewRequest(args []string) {
 	from := fs.String("from", "", "source project name (required)")
 	to := fs.String("to", "", "target project name (required)")
 	issue := fs.String("issue", "", "one-line issue description (required)")
+	content := fs.String("content", "", "body text (alternative to stdin)")
 	fs.Parse(args)
 
 	if *from == "" || *to == "" || *issue == "" {
@@ -3432,7 +3443,10 @@ func cmdMessageNewRequest(args []string) {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# %s\n\n%s\n", id, *issue)
-	if body := readStdinBody(); body != "" {
+	// R849-R851: --content flag preferred over stdin
+	if *content != "" {
+		fmt.Fprintf(&buf, "\n%s\n", *content)
+	} else if body := readStdinBody(); body != "" {
 		fmt.Fprintf(&buf, "\n%s", body)
 	}
 
@@ -3451,6 +3465,7 @@ func cmdMessageNewResponse(args []string) {
 	from := fs.String("from", "", "source project name (required)")
 	to := fs.String("to", "", "target project name (required)")
 	request := fs.String("request", "", "request ID being responded to (required)")
+	content := fs.String("content", "", "body text (alternative to stdin)")
 	fs.Parse(args)
 
 	if *from == "" || *to == "" || *request == "" {
@@ -3478,7 +3493,10 @@ func cmdMessageNewResponse(args []string) {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# RESP %s\n\n", *request)
-	if body := readStdinBody(); body != "" {
+	// R852: --content flag preferred over stdin
+	if *content != "" {
+		fmt.Fprintf(&buf, "%s\n", *content)
+	} else if body := readStdinBody(); body != "" {
 		buf.WriteString(body)
 	}
 
@@ -3628,4 +3646,197 @@ func cmdMessageInbox(args []string) {
 		}
 		printEntries(entries)
 	})
+}
+
+// CRC: crc-CLI.md | Seq: seq-pubsub.md
+func cmdMessageDM(args []string) {
+	fs := flag.NewFlagSet("message dm", flag.ExitOnError)
+	from := fs.String("from", "", "sender session ID (required)")
+	to := fs.String("to", "", "recipient session ID (required)")
+	ref := fs.String("ref", "", "reference ID (for threading replies)")
+	content := fs.String("content", "", "message content (markdown)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark message dm --from SESSION --to SESSION [--ref ID] --content CONTENT")
+		fmt.Fprintln(os.Stderr, "\nSend a direct message between agents via tmp:// files.")
+		fmt.Fprintln(os.Stderr, "Content can include newlines (bash allows them in quoted args).")
+		fmt.Fprintln(os.Stderr, "\nExample:")
+		fmt.Fprintln(os.Stderr, `  ark message dm --from abc123 --to def456 --content "Found 3 @decision: tags"`)
+		fmt.Fprintln(os.Stderr, `  ark message dm --from def456 --to abc123 --ref msg-1 --content "Yes, pull them"`)
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	if *from == "" || *to == "" || *content == "" {
+		fatal(fmt.Errorf("--from, --to, and --content are all required"))
+	}
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (dm requires server)"))
+	}
+
+	// Build the tagged chunk: blank line (chunk boundary) + tags + content
+	var buf strings.Builder
+	buf.WriteString("\n@dm: ")
+	buf.WriteString(*to)
+	buf.WriteString("\n@from: ")
+	buf.WriteString(*from)
+	if *ref != "" {
+		buf.WriteString("\n@ref: ")
+		buf.WriteString(*ref)
+	}
+	buf.WriteString("\n")
+	buf.WriteString(*content)
+	buf.WriteString("\n")
+
+	tmpPath := fmt.Sprintf("tmp://%s/dm-%s", *from, *to)
+	if err := proxyOK(client, "POST", "/tmp/append", map[string]any{
+		"path":     tmpPath,
+		"strategy": "markdown",
+		"content":  buf.String(),
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-pubsub.md
+func cmdSubscribe(args []string) {
+	fs := flag.NewFlagSet("subscribe", flag.ExitOnError)
+	session := fs.String("session", "", "session ID (required)")
+	cancel := fs.Bool("cancel", false, "cancel subscriptions")
+	list := fs.Bool("list", false, "list active subscriptions")
+	stats := fs.Bool("stats", false, "show hit/drop statistics")
+	tag := fs.String("tag", "", "tag name")
+	value := fs.String("value", "", "value regex filter")
+	var filterFiles, exceptFiles stringSlice
+	fs.Var(&filterFiles, "filter-files", "only match files matching glob (repeatable)")
+	fs.Var(&exceptFiles, "except-files", "exclude files matching glob (repeatable)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark subscribe [options]")
+		fmt.Fprintln(os.Stderr, "\nSubscribe to tag notifications, manage subscriptions.")
+		fmt.Fprintln(os.Stderr, "\n--value takes an RE2 regex matched against the tag value.")
+		fmt.Fprintln(os.Stderr, "Omit --value to match all values for that tag.")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status --value 'open|accepted'")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag to-project --value 'ark'")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag standup")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --cancel")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --list")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --stats")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (subscribe requires server)"))
+	}
+
+	if *list {
+		var infos []ark.SubInfo
+		if err := proxyDecode(client, "POST", "/subscribe", map[string]any{
+			"session": *session,
+			"list":    true,
+		}, &infos); err != nil {
+			fatal(err)
+		}
+		for _, info := range infos {
+			valStr := ""
+			if info.ValueRE != "" {
+				valStr = info.ValueRE
+			}
+			fmt.Printf("%s\t%s\t%s\t%d\t%d\n", info.SessionID, info.Tag, valStr, info.Hits, info.Drops)
+		}
+		return
+	}
+
+	if *stats {
+		var st []ark.SubStats
+		if err := proxyDecode(client, "POST", "/subscribe", map[string]any{
+			"session": *session,
+			"stats":   true,
+		}, &st); err != nil {
+			fatal(err)
+		}
+		for _, s := range st {
+			fmt.Printf("%s\t%d subs\t%d hits\t%d drops\n", s.SessionID, s.SubCount, s.Hits, s.Drops)
+		}
+		return
+	}
+
+	if *session == "" {
+		fatal(fmt.Errorf("--session is required"))
+	}
+
+	if *cancel {
+		if err := proxyOK(client, "POST", "/subscribe", map[string]any{
+			"session": *session,
+			"cancel":  true,
+			"tag":     *tag,
+			"value":   *value,
+		}); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	if *tag == "" {
+		fatal(fmt.Errorf("--tag is required for subscribe"))
+	}
+
+	sub := map[string]any{
+		"tag":   *tag,
+		"value": *value,
+	}
+	if len(filterFiles) > 0 {
+		sub["filter_files"] = []string(filterFiles)
+	}
+	if len(exceptFiles) > 0 {
+		sub["except_files"] = []string(exceptFiles)
+	}
+
+	if err := proxyOK(client, "POST", "/subscribe", map[string]any{
+		"session": *session,
+		"subs":    []any{sub},
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-pubsub.md
+func cmdListen(args []string) {
+	fs := flag.NewFlagSet("listen", flag.ExitOnError)
+	session := fs.String("session", "", "session ID (required)")
+	timeout := fs.Int("timeout", 120, "long-poll timeout in seconds")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark listen --session ID [--timeout N]")
+		fmt.Fprintln(os.Stderr, "\nLong-poll for tag notifications. Outputs markdown crank handles.")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	if *session == "" {
+		fatal(fmt.Errorf("--session is required"))
+	}
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (listen requires server)"))
+	}
+
+	path := fmt.Sprintf("/listen?session=%s&timeout=%d", url.QueryEscape(*session), *timeout)
+	data, err := proxyRaw(client, "GET", path, nil)
+	if err != nil {
+		// 204 No Content = timeout with no events, not an error
+		errMsg := err.Error()
+		if strings.HasPrefix(errMsg, "server error (204)") {
+			return
+		}
+		fatal(err)
+	}
+	fmt.Print(string(data))
 }

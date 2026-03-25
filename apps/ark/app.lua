@@ -251,7 +251,6 @@ Ark.Source = session:prototype("Ark.Source", {
     unresolvedCount = 0,
     _visibleNodes = EMPTY,
     _nodeMap = EMPTY,
-    _missingPaths = EMPTY,
     _loaded = false,
     _loading = false,
     _searchIncluded = true,
@@ -485,7 +484,6 @@ function Searching:loadConfig()
             s.strategy = strategy
             s._visibleNodes = {}
             s._nodeMap = {}
-            s._missingPaths = {}
             s._includePatterns = inc
             s._excludePatterns = exc
             s._fromGlob = fromGlob
@@ -1641,39 +1639,18 @@ function Source:loadRootNodes()
     self._visibleNodes = {}
     self._nodeMap = {}
 
-    -- Get missing files for this source
-    self._missingPaths = {}
-    local missing = arkJSON("missing")
-    if missing then
-        for _, m in ipairs(missing) do
-            local path = m.Path or m.path or ""
-            if path:sub(1, #self.dir) == self.dir then
-                self._missingPaths[path] = true
-            end
-        end
-    end
-
-    -- Walk root directory
-    local entries = listDir(self.dir)
+    -- Single in-process call replaces listDir + N applyWhy subprocesses
+    local nodes = mcp.listSource(self.dir, Node)
     local included, excluded, unresolved = 0, 0, 0
 
-    for _, entry in ipairs(entries) do
-        local node = self:makeNode(entry.name, entry.isDir, 0)
+    for _, node in ipairs(nodes) do
+        node.depth = 0
+        node._whyLoaded = true
+        self._nodeMap[node.relPath] = node
         table.insert(self._visibleNodes, node)
         if node.state == "included" then included = included + 1
         elseif node.state == "excluded" then excluded = excluded + 1
         else unresolved = unresolved + 1 end
-    end
-
-    -- Add missing files not on disk at root level
-    for path in pairs(self._missingPaths) do
-        local rel = path:sub(#self.dir + 2) -- strip source dir + /
-        if not rel:find("/") and not self._nodeMap[rel] then
-            local node = self:makeNode(rel:match("[^/]+$") or rel, false, 0)
-            node.isMissing = true
-            node.state = "included" -- missing files were indexed, so included
-            table.insert(self._visibleNodes, node)
-        end
     end
 
     self.includedCount = included
@@ -1683,67 +1660,19 @@ function Source:loadRootNodes()
     self._loading = false
 end
 
-function Source:makeNode(relPath, isDir, depth)
-    local fullPath = self.dir .. "/" .. relPath
-
-    local node = session:create(Node)
-    node.name = relPath:match("[^/]+$") or relPath
-    node.relPath = relPath
-    node.fullPath = fullPath
-    node.isDir = isDir
-    node.depth = depth
-
-    -- Classify via show-why
-    applyWhy(node)
-
-    -- Check for ignore files
-    if isDir then
-        for _, ignName in ipairs({".gitignore", ".arkignore"}) do
-            local fh = io.open(fullPath .. "/" .. ignName, "r")
-            if fh then
-                fh:close()
-                node.hasIgnoreFile = true
-                break
-            end
-        end
-    end
-
-    -- Check if missing
-    if self._missingPaths[fullPath] then
-        node.isMissing = true
-    end
-
-    self._nodeMap[relPath] = node
-    return node
-end
 
 function Source:loadChildren(parentNode)
     if parentNode._childrenLoaded then return end
 
-    local entries = listDir(parentNode.fullPath)
+    -- Single in-process call for this directory level
+    local entries = mcp.listSource(parentNode.fullPath, Node)
     local nodes = {}
 
-    for _, entry in ipairs(entries) do
-        local relPath = parentNode.relPath .. "/" .. entry.name
-        local node = self:makeNode(relPath, entry.isDir, parentNode.depth + 1)
+    for _, node in ipairs(entries) do
+        node.depth = parentNode.depth + 1
+        node._whyLoaded = true
+        self._nodeMap[node.relPath] = node
         table.insert(nodes, node)
-    end
-
-    -- Add missing files in this directory not on disk
-    local prefix = parentNode.fullPath .. "/"
-    for path in pairs(self._missingPaths) do
-        if path:sub(1, #prefix) == prefix then
-            local rel = path:sub(#prefix + 1)
-            if not rel:find("/") then
-                local relPath = parentNode.relPath .. "/" .. rel
-                if not self._nodeMap[relPath] then
-                    local node = self:makeNode(relPath, false, parentNode.depth + 1)
-                    node.isMissing = true
-                    node.state = "included"
-                    table.insert(nodes, node)
-                end
-            end
-        end
     end
 
     -- Find parent index and insert children after it

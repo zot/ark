@@ -58,6 +58,34 @@ In code, inside block comments so the tag starts on its own line:
 */
 ```
 
+### Tag Techniques
+
+**Cross-file linking.** Use a shared tag to connect related sections
+across files. Tag each relevant section with the same tag name, then
+search finds all the linked pieces. In prose, refer to the tag
+without markup to avoid false indexing: "see the franklin-schedule
+tag for details." The agent or reader then searches for that tag.
+
+Better than static connection tags — the tag names the
+*relationship*, not just "these are related." Design tag names
+so they describe *what kind* of relationship. A tag like
+franklin-schedule is better than a generic "related" because a
+future agent searching for Franklin's scheduling dependencies
+finds exactly what it needs.
+
+**Inline search hints.** When a file references another via tags,
+include a natural-language pointer: "see the franklin-schedule tag
+for overlaps with PLAN-FRANKLIN.md." The reader knows what to
+search for without needing the exact command.
+
+**Compound tags for structured values.** Tag values can carry
+key=value data using TOML inline table syntax (curlies omitted):
+```
+@schedule-tag: name = standup, duration = "15m"
+```
+The parser wraps the value in `{}` and parses as TOML. Simple values
+(`@status: open`) are unchanged.
+
 ## Project Setup
 
 To install ark UI support in a particular project, run:

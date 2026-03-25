@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
@@ -60,6 +61,8 @@ const (
 	prefixTagTotal   = 'T'
 	prefixTagFile    = 'F'
 	prefixTagDef     = 'D'
+	prefixDayBucket  = 'E' // R866: Event day bucket (TD in spec)
+	prefixDayReverse = 'V' // R871: reVerse index for day bucket cleanup (TF in spec)
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -563,6 +566,162 @@ func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
 			})
 			return nil
 		})
+	})
+	return results, err
+}
+
+// --- Day-bucket operations (scheduling) ---
+
+// DayBucketEntry is one day's slice of an event for the calendar index.
+// CRC: crc-Store.md | R866, R867
+type DayBucketEntry struct {
+	Date          string    `json:"date"` // YYYYMMDD
+	Start         time.Time `json:"start"`
+	End           time.Time `json:"end"`
+	Tag           string    `json:"tag"`
+	Summary       string    `json:"summary"`
+	Path          string    `json:"path"`
+	FileID        uint64    `json:"file_id"`
+	RecurringSpec string    `json:"recurring_spec,omitempty"`
+	AllDay        bool      `json:"all_day,omitempty"`
+}
+
+// AckEntry represents a parsed @ack: tag.
+// CRC: crc-Store.md | R883, R884, R885, R886
+type AckEntry struct {
+	Start time.Time // zero for open-start (..DATE)
+	End   time.Time
+	Text  string
+}
+
+// dayBucketKey builds an E-prefix key: E|YYYYMMDD|fileid(8)|tag
+func dayBucketKey(date string, fileid uint64, tag string) []byte {
+	k := make([]byte, 1+8+8+len(tag))
+	k[0] = byte(prefixDayBucket)
+	copy(k[1:9], []byte(date))
+	binary.BigEndian.PutUint64(k[9:17], fileid)
+	copy(k[17:], []byte(tag))
+	return k
+}
+
+// dayReverseKey builds a V-prefix key: V|fileid(8)
+func dayReverseKey(fileid uint64) []byte {
+	k := make([]byte, 9)
+	k[0] = byte(prefixDayReverse)
+	binary.BigEndian.PutUint64(k[1:], fileid)
+	return k
+}
+
+// clearDayBucketsInTxn removes all day-bucket entries for a file within an existing txn.
+func (s *Store) clearDayBucketsInTxn(txn *lmdb.Txn, fileid uint64) error {
+	rk := dayReverseKey(fileid)
+	v, err := txn.Get(s.dbi, rk)
+	if lmdb.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for i := 0; i+8 <= len(v); i += 8 {
+		date := string(v[i : i+8])
+		prefix := make([]byte, 17)
+		prefix[0] = byte(prefixDayBucket)
+		copy(prefix[1:9], []byte(date))
+		binary.BigEndian.PutUint64(prefix[9:17], fileid)
+		if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
+		}
+	}
+	return txn.Del(s.dbi, rk, nil)
+}
+
+// ClearDayBuckets removes all day-bucket entries for a file.
+// CRC: crc-Store.md | R871, R872
+func (s *Store) ClearDayBuckets(fileid uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return s.clearDayBucketsInTxn(txn, fileid)
+	})
+}
+
+// WriteDayBuckets writes day-bucket entries for a file.
+// Clears old entries first, then writes new E and V keys.
+// CRC: crc-Store.md | R866, R871, R872
+func (s *Store) WriteDayBuckets(fileid uint64, entries []DayBucketEntry) error {
+	if len(entries) == 0 {
+		return s.ClearDayBuckets(fileid)
+	}
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		if err := s.clearDayBucketsInTxn(txn, fileid); err != nil {
+			return err
+		}
+
+		// Write new entries and collect unique dates
+		dateSet := make(map[string]bool)
+		for _, e := range entries {
+			k := dayBucketKey(e.Date, fileid, e.Tag)
+			val, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := txn.Put(s.dbi, k, val, 0); err != nil {
+				return err
+			}
+			dateSet[e.Date] = true
+		}
+
+		// Write reverse index (sorted concatenated dates)
+		dates := make([]string, 0, len(dateSet))
+		for d := range dateSet {
+			dates = append(dates, d)
+		}
+		slices.Sort(dates)
+		rv := make([]byte, len(dates)*8)
+		for i, d := range dates {
+			copy(rv[i*8:], []byte(d))
+		}
+		return txn.Put(s.dbi, dayReverseKey(fileid), rv, 0)
+	})
+}
+
+// QueryDayBuckets returns all day-bucket entries overlapping a date range.
+// startDate and endDate are YYYYMMDD strings.
+// CRC: crc-Store.md | R867
+func (s *Store) QueryDayBuckets(startDate, endDate string) ([]DayBucketEntry, error) {
+	var results []DayBucketEntry
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		cur, err := txn.OpenCursor(s.dbi)
+		if err != nil {
+			return err
+		}
+		defer cur.Close()
+
+		// Seek to E|startDate
+		seekKey := make([]byte, 9)
+		seekKey[0] = byte(prefixDayBucket)
+		copy(seekKey[1:], []byte(startDate))
+
+		k, v, err := cur.Get(seekKey, nil, lmdb.SetRange)
+		for err == nil {
+			if k[0] != byte(prefixDayBucket) {
+				break // past the E prefix
+			}
+			// Extract date from key
+			if len(k) < 9 {
+				break
+			}
+			date := string(k[1:9])
+			if date > endDate {
+				break // past the end date
+			}
+			var entry DayBucketEntry
+			if jerr := json.Unmarshal(v, &entry); jerr == nil {
+				results = append(results, entry)
+			}
+			k, v, err = cur.Get(nil, nil, lmdb.Next)
+		}
+		return nil
 	})
 	return results, err
 }

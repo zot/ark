@@ -27,8 +27,16 @@ type Config struct {
 	Sources         []Source          `toml:"source"`
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
 	SessionTTL      string            `toml:"session_ttl,omitempty"` // R646: duration string, default "30s"
+	Schedule        ScheduleConfig    `toml:"schedule"`              // R853, R854
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`
+}
+
+// ScheduleConfig declares which tags carry date values and their defaults.
+// CRC: crc-Config.md | R853, R854, R855
+type ScheduleConfig struct {
+	Tags     []string          `toml:"tags"`
+	Defaults map[string]string `toml:"defaults"`
 }
 
 // ChunkerConfig defines a language chunker from [[chunker]] in ark.toml.
@@ -162,6 +170,29 @@ func (c *Config) ParseSessionTTL() time.Duration {
 		return defaultSessionTTL
 	}
 	return d
+}
+
+// IsScheduleTag checks if a tag is declared as a schedule tag.
+// Returns the default duration and true if found. R853, R855
+// CRC: crc-Config.md
+func (c *Config) IsScheduleTag(tag string) (defaultDur string, ok bool) {
+	for _, t := range c.Schedule.Tags {
+		if t == tag {
+			dur := c.Schedule.Defaults[tag]
+			return dur, true
+		}
+	}
+	return "", false
+}
+
+// ScheduleTags returns the full schedule tag map (tag → default duration).
+// CRC: crc-Config.md | R853
+func (c *Config) ScheduleTags() map[string]string {
+	m := make(map[string]string, len(c.Schedule.Tags))
+	for _, t := range c.Schedule.Tags {
+		m[t] = c.Schedule.Defaults[t]
+	}
+	return m
 }
 
 // validate checks for identical include/exclude strings.
