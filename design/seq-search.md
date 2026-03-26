@@ -183,8 +183,11 @@ Server ──> HandleSearchGrouped(req)
             ├──> Searcher.SearchGrouped(query, opts)
             │     │
             │     ├──> if opts.Multi: SearchMulti(query, opts)
+            │     │    elif opts.Contains/About/Regex: SearchSplit(query, opts)
             │     │    elif opts.Fuzzy: SearchFuzzy(query, opts)
             │     │    else: SearchWithConsistency(query, opts)
+            │     │    NOTE: MCP bridge sets Multi only when no split-mode
+            │     │    field is active (contains/about/regex)
             │     │
             │     ├──> FillChunks(results) — need text for previews
             │     │

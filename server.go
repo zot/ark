@@ -1514,7 +1514,9 @@ func (srv *Server) registerLuaFunctions() {
 
 			var results []GroupedResult
 			var err error
-			if !opts.Fuzzy {
+			// Multi-strategy only for combined queries; split modes
+			// (contains/about/regex) need SearchSplit, not SearchMulti.
+			if !opts.Fuzzy && opts.Contains == "" && opts.About == "" && len(opts.Regex) == 0 {
 				opts.Multi = true
 			}
 			if sessionName != "" {
