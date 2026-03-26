@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -52,17 +52,29 @@ ark-level settings, and tag tracking.
 - ParseAcks(content []byte, tag string) []AckEntry: extract @ack:
   tags from the same chunk as the given tag, parse dates and ranges.
   (R883, R884, R885, R886, R887, R888)
+- WriteDayBucketsWithAcks(fileid uint64, entries []DayBucketEntry,
+  acks []AckEntry): same as WriteDayBuckets but cross-references
+  ack entries against event dates, setting Acked/AckText on matching
+  DayBucketEvents before writing. (R933, R934, R935)
+- GetScheduleConfig() string: read stored [schedule] section from
+  settings record (I prefix). (R927, R928)
+- PutScheduleConfig(serialized string): write [schedule] section to
+  settings record. (R927, R932)
 
-### DayBucketEntry
-- Date: string — YYYYMMDD
+### DayBucketEvent (R911, R912)
 - Start: time.Time
 - End: time.Time
-- Tag: string
 - Summary: string — description text after date
+- AllDay: bool
+- Acked: bool — true if @ack: covers this date
+- AckText: string — descriptive text from the @ack: entry
+
+### DayBucketEntry (R866, R911)
+- Date: string — YYYYMMDD
+- Tag: string
 - Path: string
 - FileID: uint64
-- RecurringSpec: string — empty for one-shot
-- AllDay: bool
+- Events: []DayBucketEvent — JSON array, multiple per day
 
 ### AckEntry
 - Start: time.Time — open for ..DATE entries

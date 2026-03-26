@@ -28,6 +28,11 @@ ark subscribe --session $ID --tag status \
 Each `--tag` is one subscription entry. Optional `--value REGEX`
 filters on the tag's content. No `--value` means match any value.
 
+Tag names are normalized: a leading `@` and trailing `:` are
+stripped so that `--tag @status:`, `--tag @status`, and `--tag status`
+all resolve to the tag name `status`. Users naturally type the
+`@tag:` form they see in files — the CLI shouldn't punish that.
+
 Multiple `--tag` flags in one command create multiple subscriptions
 (OR — any match fires). Each subscription is independent.
 

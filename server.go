@@ -205,6 +205,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 		srv.reconcile()
 	}
 
+	// R927-R932: Check for schedule config changes, re-materialize if needed
+	srv.CheckScheduleConfig()
+
 	// R874, R875, R876: Scan schedule logs and populate queue
 	if err := sched.ScanScheduleLogs(); err != nil {
 		log.Printf("schedule: scan error: %v", err)
@@ -255,6 +258,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /tmp/append", srv.handleTmpAppend)
 	mux.HandleFunc("POST /subscribe", srv.handleSubscribe)
 	mux.HandleFunc("GET /listen", srv.handleListen)
+	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
+	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -994,6 +999,9 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	if srv.pubsub != nil {
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
+	}
 	writeJSON(w, map[string]uint64{"fileid": fid})
 }
 
@@ -1016,6 +1024,9 @@ func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := srv.db.UpdateTmpFile(req.Path, strategy, []byte(req.Content)); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
+	}
+	if srv.pubsub != nil {
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1063,6 +1074,9 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 	if _, err := srv.db.AppendTmpFile(req.Path, req.Strategy, []byte(req.Content)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if srv.pubsub != nil {
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1150,6 +1164,222 @@ func (srv *Server) handleListen(w http.ResponseWriter, r *http.Request) {
 
 // registerLuaFunctions registers Go functions on the Lua mcp table
 // via the passive execution path (no UI update push).
+// handleScheduleSearch queries day buckets for a date range. R914-R920
+// CRC: crc-Server.md | Seq: seq-scheduling.md
+func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Start string `json:"start"`
+		End   string `json:"end"`
+		Tag   string `json:"tag"`
+		Gaps  bool   `json:"gaps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Parse flexible dates into YYYYMMDD R915
+	loc := time.Now().Location()
+	startDate, err := parseDateToYMD(req.Start, loc)
+	if err != nil {
+		http.Error(w, "bad start date: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	endDate, err := parseDateToYMD(req.End, loc)
+	if err != nil {
+		http.Error(w, "bad end date: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	entries, err := srv.db.store.QueryDayBuckets(startDate, endDate)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// R918: filter by tag
+	if req.Tag != "" {
+		var filtered []DayBucketEntry
+		for _, e := range entries {
+			if e.Tag == req.Tag {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+	}
+
+	// R919: gaps mode — only past events with acked=false
+	if req.Gaps {
+		now := time.Now()
+		var gapped []DayBucketEntry
+		for _, e := range entries {
+			var unacked []DayBucketEvent
+			for _, ev := range e.Events {
+				if ev.Start.Before(now) && !ev.Acked {
+					unacked = append(unacked, ev)
+				}
+			}
+			if len(unacked) > 0 {
+				entry := e
+				entry.Events = unacked
+				gapped = append(gapped, entry)
+			}
+		}
+		entries = gapped
+	}
+
+	writeJSON(w, entries)
+}
+
+// handleScheduleChange rewrites a date in a schedule tag value. R921-R925
+// CRC: crc-Server.md | Seq: seq-scheduling.md
+func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path     string `json:"path"`
+		Tag      string `json:"tag"`
+		NewStart string `json:"new_start"`
+		NewEnd   string `json:"new_end"`
+		DryRun   bool   `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" || req.Tag == "" || req.NewStart == "" {
+		http.Error(w, "path, tag, and new_start are required", http.StatusBadRequest)
+		return
+	}
+
+	// Read the file
+	content, err := os.ReadFile(req.Path)
+	if err != nil {
+		http.Error(w, "read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the tag line and rewrite the date portion R922
+	prefix := "@" + req.Tag + ":"
+	lines := strings.Split(string(content), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		pos := strings.Index(trimmed, prefix)
+		if pos < 0 {
+			continue
+		}
+		oldValue := strings.TrimSpace(trimmed[pos+len(prefix):])
+		// Parse old value to extract description text
+		loc := time.Now().Location()
+		dr, err := ParseDateValue(oldValue, "", loc)
+		if err != nil {
+			continue
+		}
+
+		// Build new value: newStart [..newEnd] description
+		newValue := req.NewStart
+		if req.NewEnd != "" {
+			newValue += ".." + req.NewEnd
+		}
+		if dr.Description != "" {
+			newValue += " " + dr.Description
+		}
+
+		if req.DryRun {
+			writeJSON(w, map[string]string{
+				"old": oldValue,
+				"new": newValue,
+			})
+			return
+		}
+
+		// Replace the line
+		newLine := strings.Replace(line, oldValue, newValue, 1)
+		lines[i] = newLine
+		found = true
+		break
+	}
+
+	if !found {
+		http.Error(w, "tag not found in file", http.StatusNotFound)
+		return
+	}
+
+	// Write back and re-index R923
+	if err := os.WriteFile(req.Path, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Trigger re-index via reconcile
+	select {
+	case srv.reconcileCh <- struct{}{}:
+	default:
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// parseDateToYMD parses a flexible date string into YYYYMMDD format.
+func parseDateToYMD(s string, loc *time.Location) (string, error) {
+	s = strings.TrimSpace(s)
+	if len(s) == 8 {
+		// Already YYYYMMDD
+		if _, err := time.Parse("20060102", s); err == nil {
+			return s, nil
+		}
+	}
+	t, _, err := parseDateTrimming(s, loc)
+	if err != nil {
+		return "", err
+	}
+	return t.Format("20060102"), nil
+}
+
+// CheckScheduleConfig compares current [schedule] config with stored version.
+// If different, re-materializes day buckets for affected tags. R927-R932
+// CRC: crc-Server.md
+func (srv *Server) CheckScheduleConfig() {
+	cfg := srv.db.Config()
+	current := serializeScheduleConfig(cfg)
+
+	stored, err := srv.db.store.GetScheduleConfig()
+	if err != nil {
+		log.Printf("schedule: cannot read stored config: %v", err)
+		stored = ""
+	}
+
+	if current == stored {
+		return
+	}
+
+	log.Printf("schedule: config changed, triggering reconcile")
+
+	// R932: Store updated config
+	if err := srv.db.store.PutScheduleConfig(current); err != nil {
+		log.Printf("schedule: cannot store config: %v", err)
+	}
+
+	// Trigger full reconcile to pick up changes
+	select {
+	case srv.reconcileCh <- struct{}{}:
+	default:
+	}
+}
+
+// serializeScheduleConfig produces a deterministic string from the schedule config.
+func serializeScheduleConfig(cfg *Config) string {
+	tags := cfg.ScheduleTags()
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, k+"="+tags[k])
+	}
+	return strings.Join(parts, ",")
+}
+
 // CRC: crc-Server.md | Seq: seq-search.md
 func (srv *Server) registerLuaFunctions() {
 	if srv.uiRuntime == nil {

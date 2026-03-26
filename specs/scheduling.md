@@ -138,8 +138,14 @@ one-shot events directly from source files).
 
 ```
 Key:   TD|20260415|fileid|tag
-Value: {start, end, tag, summary, path, allDay}
+Value: [{start, end, summary, allDay, acked, ackText}, ...]
 ```
+
+The value is a JSON array of events — multiple occurrences per day
+per file/tag (e.g., two standups rescheduled to the same day).
+Each event carries its ack status, parsed from `@ack:` tags in the
+same chunk at index time. The calendar view gets everything in one
+range scan — no second pass to check acknowledgments.
 
 A 3-day event spanning Apr 15-17 gets 3 entries. Calendar query for
 March = seek `TD|20260301`, scan to `TD|20260331`. No post-filtering.
@@ -231,6 +237,81 @@ source file. Unacknowledged fired dates within a lookback window
 (default 7 days) are surfaced as recent misses. Franklin's morning
 briefing data — "You had a dentist appointment Saturday, did it
 happen?"
+
+## Schedule CLI
+
+`ark schedule` subcommand exposes scheduling to agents and the
+console. Franklin shells out to these; the calendar UI calls the
+equivalent Lua APIs.
+
+### ark schedule search
+
+```
+ark schedule search START END [--tag TAG] [--gaps] [--json]
+```
+
+Query day buckets for events overlapping the date range. START and
+END are dates (YYYY-MM-DD or flexible formats via dateparse).
+
+Output is markdown by default (crank-handle style), JSON with
+`--json`. Each event includes ack status from the day-bucket record.
+
+`--tag` filters to a specific schedule tag. `--gaps` shows only
+events that fired but have no matching `@ack:` — Franklin's
+"what did you miss?" query.
+
+### ark schedule change
+
+```
+ark schedule change PATH TAG NEWSTART [NEWEND] [--dry-run]
+```
+
+Rewrite the date in a schedule tag value, preserving trailing
+description text. Re-indexes the file after modification. PATH is
+the source file, TAG is the schedule tag name, NEWSTART/NEWEND are
+the new dates.
+
+`--dry-run` shows what would change without writing.
+
+For recurring events in the schedule log, updates the corresponding
+`@ark-event-upcoming:` entry. For one-shot events, rewrites the tag
+value directly.
+
+## Config Change Detection
+
+When ark.toml's `[schedule]` section changes (tags added/removed,
+defaults changed), the server must re-materialize day buckets for
+affected files.
+
+Detection: store the serialized `[schedule]` section in the LMDB
+settings record (I prefix). On config reload (startup, ark.toml
+fsnotify), compare current vs stored. If different:
+- Tags added: scan files with the new tag, write day buckets
+- Tags removed: clear day buckets for files with that tag
+- Defaults changed: re-materialize with new durations
+
+## Acknowledgment Indexing
+
+`@ack:` tags are parsed at index time (not query time). When a file
+containing a schedule tag is indexed, the indexer:
+1. Finds `@ack:` tags in the same chunk as each schedule tag
+2. Parses each `@ack:` date/range
+3. For each day bucket being written, checks if any `@ack:` covers
+   that date and embeds `acked: true` + `ackText` in the event
+
+This means the calendar view and `ark schedule search` get ack
+status in one range scan — no second pass against source files.
+
+## Gap Detection
+
+Compare `@ark-event-fired:` entries in the log against `@ack:` entries in the
+source file. Unacknowledged fired dates within a lookback window
+(default 7 days) are surfaced as recent misses. Franklin's morning
+briefing data — "You had a dentist appointment Saturday, did it
+happen?"
+
+`ark schedule search --gaps` is the CLI surface for this. It reads
+day buckets with `acked: false` for events whose date is in the past.
 
 ## Lua APIs
 

@@ -117,6 +117,8 @@ func main() {
 		cmdResolve(args)
 	case "scan":
 		cmdScan(args)
+	case "schedule":
+		cmdSchedule(args)
 	case "search":
 		cmdSearch(args)
 	case "serve":
@@ -180,6 +182,7 @@ Commands:
   remove      Remove files from the index
   resolve     Dismiss unresolved files by pattern
   scan        Walk directories, index new files
+  schedule    Query and modify scheduled events (requires server)
   search      Search the index
   serve       Start the server
   subscribe   Manage tag subscriptions (requires server)
@@ -495,10 +498,10 @@ func cmdRebuild(args []string) {
 func cmdAdd(args []string) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark add [options] [PATH...]
+		fmt.Fprintln(os.Stderr, `Usage: ark add [options] PATH...
 
-Add files to the index. If paths given, adds those files.
-If no paths, walks configured source directories.
+Add files to the index. For tmp:// paths, content comes from
+--content, --from-file, or stdin.
 
 Options:`)
 		fs.PrintDefaults()
@@ -506,6 +509,7 @@ Options:`)
 	strategy := fs.String("strategy", "", "chunking strategy")
 	contentFlag := fs.String("content", "", "inline content for tmp:// documents")
 	fromFile := fs.String("from-file", "", "read content from file for tmp:// documents")
+	appendFlag := fs.Bool("append", false, "append to existing tmp:// document instead of replacing") // R909, R910
 	fs.Parse(args)
 
 	paths := fs.Args()
@@ -541,7 +545,11 @@ Options:`)
 		if strat == "" {
 			strat = "lines"
 		}
-		if err := proxyOK(client, "POST", "/tmp/add", map[string]any{
+		endpoint := "/tmp/add" // R910: --append routes to /tmp/append
+		if *appendFlag {
+			endpoint = "/tmp/append"
+		}
+		if err := proxyOK(client, "POST", endpoint, map[string]any{
 			"path": paths[0], "strategy": strat, "content": string(content),
 		}); err != nil {
 			fatal(err)
@@ -1735,7 +1743,11 @@ func cmdFetch(args []string) {
 			if err != nil {
 				fatal(err)
 			}
-			content := string(data)
+			var resp struct{ Content string }
+			if err := json.Unmarshal(data, &resp); err != nil {
+				fatal(fmt.Errorf("decode fetch response: %w", err))
+			}
+			content := resp.Content
 			if *wrap != "" {
 				fmt.Printf("<%s source=%q>\n", *wrap, filePath)
 				writeEscaped(os.Stdout, content, *wrap)
@@ -3701,6 +3713,7 @@ func cmdMessageDM(args []string) {
 }
 
 // CRC: crc-CLI.md | Seq: seq-pubsub.md
+// CRC: crc-CLI.md | R937
 func cmdSubscribe(args []string) {
 	fs := flag.NewFlagSet("subscribe", flag.ExitOnError)
 	session := fs.String("session", "", "session ID (required)")
@@ -3729,6 +3742,14 @@ func cmdSubscribe(args []string) {
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
+
+	// R937: normalize tag name — strip leading @ and trailing :
+	if *tag != "" {
+		t := *tag
+		t = strings.TrimPrefix(t, "@")
+		t = strings.TrimSuffix(t, ":")
+		*tag = t
+	}
 
 	client := serverClient(arkDir)
 	if client == nil {
@@ -3839,4 +3860,170 @@ func cmdListen(args []string) {
 		fatal(err)
 	}
 	fmt.Print(string(data))
+}
+
+// CRC: crc-CLI.md | Seq: seq-scheduling.md | R926
+func cmdSchedule(args []string) {
+	scheduleUsage := `Usage: ark schedule <subcommand> [options]
+
+Subcommands:
+  search    Query scheduled events in a date range
+  change    Modify a scheduled event's date`
+
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, scheduleUsage)
+		os.Exit(0)
+	}
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "search":
+		cmdScheduleSearch(subArgs)
+	case "change":
+		cmdScheduleChange(subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown schedule subcommand: %s\n", sub)
+		fmt.Fprintln(os.Stderr, scheduleUsage)
+		os.Exit(1)
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-scheduling.md | R914-R920
+func cmdScheduleSearch(args []string) {
+	fs := flag.NewFlagSet("schedule search", flag.ExitOnError)
+	tag := fs.String("tag", "", "filter to a specific schedule tag")
+	gaps := fs.Bool("gaps", false, "show only past events with no acknowledgment")
+	jsonOut := fs.Bool("json", false, "output JSON instead of markdown")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark schedule search START END [options]")
+		fmt.Fprintln(os.Stderr, "\nQuery scheduled events in a date range.")
+		fmt.Fprintln(os.Stderr, "START and END are dates (YYYY-MM-DD or flexible formats).")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31 --tag standup")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31 --gaps")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	// Reorder so flags can come after positional args
+	args = reorderArgs(args)
+	fs.Parse(args)
+
+	if fs.NArg() < 2 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	start := fs.Arg(0)
+	end := fs.Arg(1)
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (schedule requires server)"))
+	}
+
+	reqBody := map[string]any{
+		"start": start,
+		"end":   end,
+	}
+	if *tag != "" {
+		reqBody["tag"] = *tag
+	}
+	if *gaps {
+		reqBody["gaps"] = true
+	}
+
+	if *jsonOut {
+		data, err := proxyRaw(client, "POST", "/schedule/search", reqBody)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Println(string(data))
+		return
+	}
+
+	// Decode and format as markdown R916
+	var entries []ark.DayBucketEntry
+	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &entries); err != nil {
+		fatal(err)
+	}
+	for _, e := range entries {
+		fmt.Printf("## %s — @%s: (%s)\n\n", e.Date, e.Tag, e.Path)
+		for _, ev := range e.Events {
+			ackMark := ""
+			if ev.Acked {
+				ackMark = " [acked"
+				if ev.AckText != "" {
+					ackMark += ": " + ev.AckText
+				}
+				ackMark += "]"
+			}
+			if ev.AllDay {
+				fmt.Printf("- all day: %s%s\n", ev.Summary, ackMark)
+			} else {
+				fmt.Printf("- %s–%s: %s%s\n",
+					ev.Start.Format("15:04"),
+					ev.End.Format("15:04"),
+					ev.Summary, ackMark)
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-scheduling.md | R921-R925
+func cmdScheduleChange(args []string) {
+	fs := flag.NewFlagSet("schedule change", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "show what would change without writing")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark schedule change PATH TAG NEWSTART [NEWEND] [options]")
+		fmt.Fprintln(os.Stderr, "\nRewrite the date in a schedule tag value.")
+		fmt.Fprintln(os.Stderr, "Trailing description text is preserved.")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
+		fmt.Fprintln(os.Stderr, "  ark schedule change ~/notes/appts.md dentist '2026-05-01 09:00'")
+		fmt.Fprintln(os.Stderr, "  ark schedule change ~/notes/appts.md dentist '2026-05-01 09:00' '10:30'")
+		fmt.Fprintln(os.Stderr, "  ark schedule change ~/notes/appts.md dentist '2026-05-01 09:00' --dry-run")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	args = reorderArgs(args)
+	fs.Parse(args)
+
+	if fs.NArg() < 3 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	path := fs.Arg(0)
+	tagName := fs.Arg(1)
+	newStart := fs.Arg(2)
+	newEnd := ""
+	if fs.NArg() > 3 {
+		newEnd = fs.Arg(3)
+	}
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (schedule requires server)"))
+	}
+
+	reqBody := map[string]any{
+		"path":      path,
+		"tag":       tagName,
+		"new_start": newStart,
+	}
+	if newEnd != "" {
+		reqBody["new_end"] = newEnd
+	}
+	if *dryRun {
+		reqBody["dry_run"] = true
+		var result map[string]string
+		if err := proxyDecode(client, "POST", "/schedule/change", reqBody, &result); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("old: %s\nnew: %s\n", result["old"], result["new"])
+		return
+	}
+
+	if err := proxyOK(client, "POST", "/schedule/change", reqBody); err != nil {
+		fatal(err)
+	}
 }

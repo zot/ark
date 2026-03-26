@@ -42,6 +42,11 @@ Existing commands handle `tmp://` paths naturally:
   - `--content "text"` — inline content from the flag value
   - `--from-file path` — read content from a file on disk
   - stdin (default) — read until EOF
+- `ark add --append tmp://my-notes` — appends content to an
+  existing tmp:// document without replacing it. Creates the
+  document if it doesn't exist. New chunks are created from the
+  appended content. Used by agent DMs, error reporters, and any
+  accumulative tmp:// pattern.
 - `ark remove tmp://my-notes` — removes from the overlay
 - `ark files` — lists tmp:// files alongside persistent files
 - `ark search` — includes tmp:// results by default

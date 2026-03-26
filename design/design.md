@@ -187,7 +187,7 @@ Lifetime = server lifetime.
 - [ ] O24: Pubsub: SessionID on ScheduledEvent not used in fire() delivery — events fire to all sessions, not per-subscriber. Wire per-session filtering when needed.
 - [ ] O25: Pubsub: writerID always empty string — self-notification exclusion (R798) cannot trigger. Wire actual session ID through indexer when session-aware indexing exists.
 - [ ] O26: Pubsub: ExtractTagValues only matches first tag per line on compound tags — subsequent tags in compound lines won't fire subscriptions. Needs RE2-compatible non-greedy or two-pass approach.
-- [ ] O27: Pubsub: ErrorReporter uses nil — wire TmpErrorReporter when tmp:// append (ark add --append) lands.
+- [ ] O27: Pubsub: ErrorReporter uses nil — tmp:// append now available (R909), wire TmpErrorReporter to use it.
 - [x] O28: Pubsub: Watchdog results not persisted — Watchdog() returns results but no caller writes them to tmp:// yet. Wire when tmp:// append lands.
 - [ ] O29: Pubsub: No unit tests for PubSub, EventScheduler, Watchdog, or CLI commands
 - [x] O30: Lua dead code: Source:makeNode() no longer called after mcp.listSource migration. Source._missingPaths also unused. Safe to remove.
@@ -198,3 +198,5 @@ Lifetime = server lifetime.
 - [ ] O35: Lua APIs not yet registered: mcp:scheduled, mcp:reschedule, mcp:tagComplete, mcp:fileStatus, mcp:subscribe (R893-R898)
 - [ ] O36: Event payload does not yet carry IsScheduledFire flag (R878) — publisher delivers same Event type for both scheduled fires and tag changes
 - [ ] O37: Gap detection (R890-R892) not implemented — comparing @ark-event-fired: in log vs @ack: in source file
+- [ ] O38: No unit tests for: ParseAcks, AckCoversDate, WriteDayBucketsForFile, handleScheduleSearch, handleScheduleChange, CheckScheduleConfig, cmdSchedule
+- [ ] O39: handleScheduleChange uses strings.Replace matching trimmed value in untrimmed line — fragile for lines with unusual leading content

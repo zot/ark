@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935
 
 Coordinates adding, removing, and refreshing files across both
 engines. microfts2 first, microvec second. Extracts tags from
@@ -45,12 +45,14 @@ file content and updates the Store.
 - ExtractTagDefs(content []byte): scan content for `@tag: <name> <description>`
   lines. First word after `@tag:` is the tag name, rest is description.
   Returns map[string]string (tagname → description).
-- WriteDateIndex(fileid uint64, path string, content []byte, config *Config):
-  for each tag in content that matches a schedule tag in config, parse the
-  date value via EventScheduler.ParseDateValue, discretize into day buckets,
-  write via Store.WriteDayBuckets. Also parses @ack: entries in the same
-  chunk and writes past-event day buckets. Called from AddFile and
-  RefreshFile after tag extraction. (R866, R868, R869, R870, R872)
+- WriteDateIndex(path string, tagValues []TagValue): for each tag value
+  matching a schedule tag in config, call EnsureUpcoming on the scheduler.
+  Called from AddFile, RefreshFile, AppendFile after tag extraction.
+  (R866, R868, R869, R870, R872)
+- WriteDayBucketsForFile(fileid uint64, path string, content []byte):
+  for each schedule tag in content, parse the date value, discretize into
+  day buckets, parse @ack: entries in the same chunk, write via
+  Store.WriteDayBucketsWithAcks. (R933, R934, R935, R866)
 
 ## Collaborators
 - microfts2.DB: file identity, trigram indexing, staleness detection

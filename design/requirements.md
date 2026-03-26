@@ -1024,6 +1024,8 @@
 - **R694:** `ark add tmp://name --content "text"` takes inline content from the flag value
 - **R695:** `ark add tmp://name --from-file path` reads content from a file on disk
 - **R696:** Without `--content` or `--from-file`, `ark add tmp://name` reads content from stdin (default)
+- **R909:** `ark add --append tmp://name` appends content to an existing tmp:// document without replacing it; creates the document if it doesn't exist
+- **R910:** (inferred) `--append` routes to `/tmp/append` server endpoint instead of `/tmp/add`
 - **R670:** `ark remove tmp://name` removes the document from the overlay
 - **R671:** `ark files` lists tmp:// files alongside persistent files
 - **R672:** `ark search` includes tmp:// results by default
@@ -1234,6 +1236,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R786:** `--cancel` with no `--tag` cancels all subscriptions for the session
 - **R787:** `--cancel --tag TAG` cancels all subscriptions for that tag
 - **R788:** `--cancel --tag TAG --value VAL` cancels only subscriptions whose value regex would match VAL
+- **R937:** `--tag` values are normalized: leading `@` and trailing `:` are stripped so `@status:`, `@status`, and `status` all resolve to `status`
 
 ### Listen
 
@@ -1343,8 +1346,43 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Day-Bucket LMDB Indexing
 
-- **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value contains start, end, tag, summary, path, recurring_spec, allDay
+- **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag
 - **R867:** Calendar range query: seek `TD|start`, scan to `TD|end` — no post-filtering needed
+- **R911:** TD value is a JSON array — multiple events per day per file/tag (e.g., rescheduled occurrences)
+- **R912:** Each event in the array carries ack status (acked bool, ackText string), parsed from `@ack:` tags in the same chunk at index time
+- **R913:** (inferred) Calendar view gets events + ack status in one range scan, no second pass
+
+### Schedule CLI
+
+- **R914:** `ark schedule search START END` queries day buckets for events overlapping the date range
+- **R915:** START and END accept flexible date formats via dateparse
+- **R916:** Output is markdown by default (crank-handle style for agents)
+- **R917:** `--json` flag outputs JSON array
+- **R918:** `--tag TAG` filters to a specific schedule tag
+- **R919:** `--gaps` shows only past events with `acked: false` — Franklin's missed-event query
+- **R920:** Each event in output includes ack status from the day-bucket record
+- **R921:** `ark schedule change PATH TAG NEWSTART [NEWEND]` rewrites the date in a schedule tag value
+- **R922:** Description text after the date is preserved on rewrite
+- **R923:** File is re-indexed after modification
+- **R924:** For recurring events, updates the corresponding `@ark-event-upcoming:` entry in the schedule log
+- **R925:** `--dry-run` shows what would change without writing
+- **R926:** (inferred) `ark schedule` with no subcommand or `--help` shows usage
+
+### Config Change Detection
+
+- **R927:** Store serialized `[schedule]` section in LMDB settings record (I prefix) on server startup
+- **R928:** On config reload (startup, ark.toml fsnotify), compare current `[schedule]` vs stored
+- **R929:** Tags added: scan files with the new tag, write day buckets
+- **R930:** Tags removed: clear day buckets for files with that tag
+- **R931:** Defaults changed: re-materialize affected day buckets with new durations
+- **R932:** (inferred) After re-materialization, update the stored `[schedule]` in LMDB
+
+### Acknowledgment Indexing
+
+- **R933:** When indexing a file with schedule tags, parse `@ack:` tags in the same chunk
+- **R934:** For each day bucket being written, check if any `@ack:` covers that date
+- **R935:** Embed `acked: true` and `ackText` in the DayBucketEvent when covered
+- **R936:** `@ack:` parsing uses the same date formats as schedule tag parsing (dateparse)
 - **R868:** (inferred) Multi-day events produce one TD entry per day spanned
 - **R869:** (inferred) Day buckets for recurring events are derived from `@ark-event-upcoming:` entries in schedule log files, not materialized directly from the recurring spec
 - **R870:** Past events are indexed from `@ark-event-fired:` entries in schedule log files as day buckets — the calendar is a historical record

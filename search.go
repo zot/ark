@@ -525,7 +525,18 @@ func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []micro
 	m := make(map[chunkKey]*SearchResultEntry)
 	cache := s.newFTSKeyCache()
 
+	var tmpResults []SearchResultEntry
 	for _, r := range ftsResults {
+		// Overlay results (tmp://) can't merge with vec — collect separately.
+		if strings.HasPrefix(r.Path, "tmp://") {
+			tmpResults = append(tmpResults, SearchResultEntry{
+				Path:     r.Path,
+				Range:    r.Range,
+				FTSScore: r.Score,
+				Score:    r.Score,
+			})
+			continue
+		}
 		key, ok := cache.resolve(r)
 		if !ok {
 			continue
@@ -554,11 +565,12 @@ func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []micro
 		entry.VecScore = r.Score
 	}
 
-	results := make([]SearchResultEntry, 0, len(m))
+	results := make([]SearchResultEntry, 0, len(m)+len(tmpResults))
 	for _, entry := range m {
 		entry.Score = entry.FTSScore + entry.VecScore
 		results = append(results, *entry)
 	}
+	results = append(results, tmpResults...)
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
@@ -613,6 +625,16 @@ func (s *Searcher) ftsOnly(ftsResults []microfts2.SearchResult) []SearchResultEn
 	cache := s.newFTSKeyCache()
 	var results []SearchResultEntry
 	for _, r := range ftsResults {
+		// Overlay results (tmp://) carry Path and Range directly.
+		if strings.HasPrefix(r.Path, "tmp://") {
+			results = append(results, SearchResultEntry{
+				Path:     r.Path,
+				Range:    r.Range,
+				FTSScore: r.Score,
+				Score:    r.Score,
+			})
+			continue
+		}
 		key, ok := cache.resolve(r)
 		if !ok {
 			continue
@@ -632,6 +654,11 @@ func (s *Searcher) ftsOnly(ftsResults []microfts2.SearchResult) []SearchResultEn
 func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts) ([]SearchResultEntry, error) {
 	var resolved []SearchResultEntry
 	for _, r := range results {
+		// Overlay results already have Path and Range resolved.
+		if r.Path != "" {
+			resolved = append(resolved, r)
+			continue
+		}
 		info, err := s.fts.FileInfoByID(r.FileID)
 		if err != nil {
 			continue

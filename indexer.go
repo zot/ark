@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zot/microfts2"
 
@@ -61,6 +62,77 @@ func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 	}
 }
 
+// WriteDayBucketsForFile parses schedule tags and @ack: entries from
+// content, discretizes into day buckets with ack status, and writes.
+// Called unconditionally — clears stale buckets when no schedule tags remain.
+// CRC: crc-Indexer.md | R933, R934, R935, R866
+func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content []byte) {
+	if idx.config == nil || idx.store == nil {
+		return
+	}
+	type bucketKey struct{ date, tag string }
+	entryIndex := make(map[bucketKey]int)
+	var allEntries []DayBucketEntry
+	var allAcks []AckEntry
+	loc := time.Now().Location()
+
+	for tag, defaultDur := range idx.config.ScheduleTags() {
+		acks := ParseAcks(content, tag)
+		allAcks = append(allAcks, acks...)
+
+		prefix := "@" + tag + ":"
+		for _, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(line)
+			pos := strings.Index(trimmed, prefix)
+			if pos < 0 {
+				continue
+			}
+			value := strings.TrimSpace(trimmed[pos+len(prefix):])
+			if value == "" {
+				continue
+			}
+
+			dr, err := ParseDateValue(value, defaultDur, loc)
+			if err != nil {
+				continue
+			}
+
+			start := dr.Start
+			end := dr.End
+			if end.Before(start) {
+				end = start
+			}
+			ev := DayBucketEvent{
+				Start:   dr.Start,
+				End:     dr.End,
+				Summary: dr.Description,
+				AllDay:  dr.AllDay,
+			}
+			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+				dateStr := d.Format("20060102")
+				key := bucketKey{dateStr, tag}
+				if i, ok := entryIndex[key]; ok {
+					allEntries[i].Events = append(allEntries[i].Events, ev)
+				} else {
+					entryIndex[key] = len(allEntries)
+					allEntries = append(allEntries, DayBucketEntry{
+						Date:   dateStr,
+						Tag:    tag,
+						Path:   path,
+						FileID: fileid,
+						Events: []DayBucketEvent{ev},
+					})
+				}
+			}
+		}
+	}
+
+	// Write unconditionally — WriteDayBuckets clears stale entries when empty
+	if err := idx.store.WriteDayBucketsWithAcks(fileid, allEntries, allAcks); err != nil {
+		log.Printf("schedule: WriteDayBuckets error for %s: %v", path, err)
+	}
+}
+
 // AddFile adds a file to both engines and extracts tags. microfts2
 // first (gets fileid and chunk offsets), then reads chunks and adds
 // to microvec, then extracts and stores tags.
@@ -92,8 +164,9 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(data))
 		}
-		// R866: write schedule log entries for schedule tags
+		// R866: write schedule log entries + day buckets
 		idx.writeDateIndex(path, ExtractTagValues(data))
+		idx.WriteDayBucketsForFile(fileid, path, data)
 	}
 
 	return fileid, nil
@@ -243,6 +316,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 				idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
 			}
 			idx.writeDateIndex(prep.path, prep.tagValues)
+			idx.WriteDayBucketsForFile(prep.oldID, prep.path, prep.data)
 		}
 		return nil
 	}
@@ -290,8 +364,9 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
 		}
-		// R866: write schedule log entries for schedule tags
+		// R866: write schedule log entries + day buckets
 		idx.writeDateIndex(prep.path, prep.tagValues)
+		idx.WriteDayBucketsForFile(fileid, prep.path, data)
 	}
 
 	return nil
@@ -411,8 +486,9 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(tagBytes))
 		}
-		// R866: write schedule log entries for schedule tags
+		// R866: write schedule log entries + day buckets
 		idx.writeDateIndex(path, ExtractTagValues(tagBytes))
+		idx.WriteDayBucketsForFile(fileid, path, data)
 	}
 
 	return nil

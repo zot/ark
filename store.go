@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
@@ -37,7 +38,8 @@ type UnresolvedRecord struct {
 
 // ArkSettings stores ark-level configuration in LMDB.
 type ArkSettings struct {
-	Dotfiles bool `json:"dotfiles"`
+	Dotfiles bool              `json:"dotfiles"`
+	Extra    map[string]string `json:"extra,omitempty"`
 }
 
 // TagFileRecord is a per-file tag count returned by TagFiles.
@@ -572,18 +574,26 @@ func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
 
 // --- Day-bucket operations (scheduling) ---
 
-// DayBucketEntry is one day's slice of an event for the calendar index.
-// CRC: crc-Store.md | R866, R867
+// DayBucketEvent is one event occurrence within a day bucket. R911, R912
+// CRC: crc-Store.md
+type DayBucketEvent struct {
+	Start   time.Time `json:"start"`
+	End     time.Time `json:"end"`
+	Summary string    `json:"summary"`
+	AllDay  bool      `json:"all_day,omitempty"`
+	Acked   bool      `json:"acked,omitempty"`
+	AckText string    `json:"ack_text,omitempty"`
+}
+
+// DayBucketEntry is one day's TD record. Value is a JSON array of events —
+// handles multiple occurrences per day per file/tag, with ack status. R866, R911
+// CRC: crc-Store.md
 type DayBucketEntry struct {
-	Date          string    `json:"date"` // YYYYMMDD
-	Start         time.Time `json:"start"`
-	End           time.Time `json:"end"`
-	Tag           string    `json:"tag"`
-	Summary       string    `json:"summary"`
-	Path          string    `json:"path"`
-	FileID        uint64    `json:"file_id"`
-	RecurringSpec string    `json:"recurring_spec,omitempty"`
-	AllDay        bool      `json:"all_day,omitempty"`
+	Date   string           `json:"date"` // YYYYMMDD
+	Tag    string           `json:"tag"`
+	Path   string           `json:"path"`
+	FileID uint64           `json:"file_id"`
+	Events []DayBucketEvent `json:"events"`
 }
 
 // AckEntry represents a parsed @ack: tag.
@@ -592,6 +602,86 @@ type AckEntry struct {
 	Start time.Time // zero for open-start (..DATE)
 	End   time.Time
 	Text  string
+}
+
+// ParseAcks extracts @ack: tags from content that are in the same chunk
+// as the given schedule tag. Returns parsed date entries.
+// CRC: crc-Store.md | R883, R884, R885, R886, R887, R888, R936
+func ParseAcks(content []byte, tag string) []AckEntry {
+	lines := strings.Split(string(content), "\n")
+	var acks []AckEntry
+	inChunk := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "---" {
+			inChunk = false
+			continue
+		}
+		if strings.Contains(trimmed, "@"+tag+":") {
+			inChunk = true
+		}
+		if inChunk && strings.HasPrefix(trimmed, "@ack:") {
+			value := strings.TrimSpace(trimmed[len("@ack:"):])
+			entry := parseAckValue(value)
+			if !entry.End.IsZero() {
+				acks = append(acks, entry)
+			}
+		}
+	}
+	return acks
+}
+
+// parseAckValue parses a single @ack: value into an AckEntry.
+func parseAckValue(value string) AckEntry {
+	// ..DATE [text] — open start
+	if strings.HasPrefix(value, "..") {
+		rest := strings.TrimSpace(value[2:])
+		end, text := parseDateAndText(rest)
+		return AckEntry{End: end, Text: text}
+	}
+	// DATE..DATE [text] — closed range
+	if idx := strings.Index(value, ".."); idx > 0 {
+		left := strings.TrimSpace(value[:idx])
+		right := strings.TrimSpace(value[idx+2:])
+		start, _ := parseDateAndText(left)
+		end, text := parseDateAndText(right)
+		return AckEntry{Start: start, End: end, Text: text}
+	}
+	// DATE [text] — single date
+	t, text := parseDateAndText(value)
+	return AckEntry{Start: t, End: t, Text: text}
+}
+
+// parseDateAndText splits a string into a date and trailing text.
+// Delegates to parseDateTrimming (scheduler.go) for consistent parsing.
+func parseDateAndText(s string) (time.Time, string) {
+	t, text, err := parseDateTrimming(strings.TrimSpace(s), time.Now().Location())
+	if err != nil {
+		return time.Time{}, s
+	}
+	return t, text
+}
+
+// AckCoversDate checks if any ack entry covers the given date.
+// Returns the matching ack text if found.
+// CRC: crc-Store.md | R934
+func AckCoversDate(acks []AckEntry, date time.Time) (bool, string) {
+	d := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	for _, a := range acks {
+		aEnd := time.Date(a.End.Year(), a.End.Month(), a.End.Day(), 0, 0, 0, 0, a.End.Location())
+		if a.Start.IsZero() {
+			// Open start: covers everything up to End
+			if !d.After(aEnd) {
+				return true, a.Text
+			}
+		} else {
+			aStart := time.Date(a.Start.Year(), a.Start.Month(), a.Start.Day(), 0, 0, 0, 0, a.Start.Location())
+			if !d.Before(aStart) && !d.After(aEnd) {
+				return true, a.Text
+			}
+		}
+	}
+	return false, ""
 }
 
 // dayBucketKey builds an E-prefix key: E|YYYYMMDD|fileid(8)|tag
@@ -724,4 +814,47 @@ func (s *Store) QueryDayBuckets(startDate, endDate string) ([]DayBucketEntry, er
 		return nil
 	})
 	return results, err
+}
+
+// WriteDayBucketsWithAcks writes day-bucket entries with ack cross-referencing.
+// For each event, checks if any ack covers that date and sets Acked/AckText.
+// CRC: crc-Store.md | R933, R934, R935
+func (s *Store) WriteDayBucketsWithAcks(fileid uint64, entries []DayBucketEntry, acks []AckEntry) error {
+	for i := range entries {
+		for j := range entries[i].Events {
+			ev := &entries[i].Events[j]
+			if acked, text := AckCoversDate(acks, ev.Start); acked {
+				ev.Acked = true
+				ev.AckText = text
+			}
+		}
+	}
+	return s.WriteDayBuckets(fileid, entries)
+}
+
+// scheduleConfigKey is the LMDB key for storing the [schedule] config hash.
+const scheduleConfigKey = "schedule_config"
+
+// GetScheduleConfig reads the stored [schedule] config string from settings.
+// CRC: crc-Store.md | R927, R928
+func (s *Store) GetScheduleConfig() (string, error) {
+	settings, err := s.GetSettings()
+	if err != nil {
+		return "", err
+	}
+	return settings.Extra[scheduleConfigKey], nil
+}
+
+// PutScheduleConfig writes the [schedule] config string to settings.
+// CRC: crc-Store.md | R927, R932
+func (s *Store) PutScheduleConfig(serialized string) error {
+	settings, err := s.GetSettings()
+	if err != nil {
+		return err
+	}
+	if settings.Extra == nil {
+		settings.Extra = make(map[string]string)
+	}
+	settings.Extra[scheduleConfigKey] = serialized
+	return s.PutSettings(settings)
 }
