@@ -84,6 +84,23 @@ arithmetic on the parsed start date — no NLP library needed.
 truth for event instances. One log file per source file that contains
 schedule tags. Rotatable without touching the zettelkasten.
 
+### Log file naming
+
+Log file name is derived from the source file's path (first path
+name in the fileid entry's list, after tilde contraction):
+
+- Replace each `_` with `__`
+- Replace each `-` with `_-`
+- Replace each `/` with `-`
+
+So `~/notes/schedule.md` → `~-notes-schedule.md`,
+`~/work/my-project/cal.md` → `~-work-my_-project-cal.md`.
+
+Reversible: `__` is always a literal underscore, `_-` is always
+a literal hyphen, bare `-` is always a path separator. Tilde
+contraction (`/home/user/` → `~/`) happens before encoding,
+keeping the names compact and readable.
+
 ### Log format
 
 Each event definition gets a chunk in its log file:

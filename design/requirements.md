@@ -1427,6 +1427,49 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R907:** Log files are regular ark files — tagged, indexed, searchable
 - **R908:** (inferred) `~/.ark/schedule/*.md` is included in the `~/.ark` source so log files are indexed automatically
 
+## Feature: Schedule Lifecycle
+**Source:** specs/schedule-lifecycle.md
+
+### Schedule Filtering
+- **R953:** `filter_files` in `[schedule]` restricts which files are scanned for schedule tags (glob patterns, tilde expanded)
+- **R954:** `exclude_files` in `[schedule]` excludes files from schedule scanning (glob patterns, tilde expanded)
+- **R955:** `filter_files` and `exclude_files` use the same narrow/carve semantics as search — filter sets scope, exclude carves exceptions
+- **R956:** When both are absent, all indexed files are eligible for schedule scanning
+- **R957:** `lifecycle_include` controls which schedule tags get the full lifecycle (log entries, check-gap, gap detection). Default `"*"`.
+- **R958:** `lifecycle_exclude` carves exceptions from `lifecycle_include`
+- **R959:** Tags outside the lifecycle still fire through pubsub — they just don't get logged or monitored
+- **R960:** (inferred) Lifecycle include/exclude use glob patterns on tag names
+
+### EnsureArkSource Scoping
+- **R961:** The hardcoded `~/.ark` source sets `include = ["ark.toml", "schedule/**", "apps/**", "storage/**"]`
+- **R962:** Directories outside the include list (data.mdb, lock files, logs) are not indexed
+- **R963:** (inferred) Archived schedule logs in `~/.ark/schedule-archive/` are unindexed — rotated logs leave the index automatically
+
+### Log Writing on Fire
+- **R964:** When a lifecycle event fires, convert `@ark-event-upcoming: DATE` to `@ark-event-fired: DATE` in the schedule log
+- **R965:** Append `@check-gap: DATE` in the same paragraph as `@ark-event-fired:` — same chunk after markdown chunking
+- **R966:** Compute next occurrence, append `@ark-event-upcoming: NEXT` if no exception exists for that date
+- **R967:** Re-index the log file after modification so day buckets update
+- **R968:** For non-lifecycle tags, fire through pubsub but skip log writing (no fired tag, no check-gap)
+
+### Check-Gap and Ack Resolution
+- **R969:** `@check-gap: DATE` in a schedule log chunk means the event fired but hasn't been acknowledged
+- **R970:** The lifecycle subscribes to `@ack:` tag changes in source files
+- **R971:** When an ack arrives covering a fired date, remove the corresponding `@check-gap:` line and re-index the log file
+- **R972:** On startup, scan schedule logs for unresolved `@check-gap:` entries within the lookback window (default 7 days)
+- **R973:** Unresolved check-gaps within the lookback window are appended to `tmp://watchdog/missed-events`
+- **R974:** (inferred) No polling — ack resolution is subscription-driven. Check-gap presence = unresolved, absence = handled.
+
+### Config Change Re-materialization
+- **R975:** Schedule filtering config (`filter_files`, `exclude_files`, `lifecycle_include`, `lifecycle_exclude`) is included in the stored `[schedule]` hash
+- **R976:** Filter changes trigger re-evaluation: files newly in scope get schedule log entries written; files out of scope get log entries and day buckets removed
+- **R977:** (inferred) Lifecycle filter changes re-evaluate which tags get check-gap monitoring — newly excluded tags have their check-gaps removed
+
+### Materialization Strategy
+- **R978:** Only the next occurrence of a recurring event is materialized in the schedule log
+- **R979:** On startup, compute missed occurrences between last-fired and now, surface as missed events, then materialize just the next one
+- **R980:** (inferred) Calendar UI computes virtual recurring items on the fly from recurrence specs — deferred to Lua/UI work
+
 ### Scheduler Integration
 
 - **R874:** Scheduler reads schedule log files at startup — not subscriptions, not LMDB registries

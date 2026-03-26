@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979
 
 Priority queue of time-tagged events with a single timer. Reads day
 buckets from LMDB at startup and on crank-forward. Delivers events
@@ -33,6 +33,10 @@ indexer writes day buckets, the scheduler reads them.
   sessions via PubSub (check push records, skip duplicates).
   Event carries IsScheduledFire=true so receivers distinguish
   scheduled fires from tag-change notifications. (R806, R878)
+  If lifecycle tag (Config.IsLifecycleTag): convert upcoming→fired,
+  append @check-gap: DATE in same paragraph, compute next upcoming,
+  re-index log file. (R964, R965, R966, R967) If non-lifecycle:
+  fire through pubsub only, skip log writing. (R968)
   If recurring: crank forward — compute next occurrence,
   materialize new day-bucket entry via Store.WriteDayBuckets,
   re-enqueue. (R807, R877) Reset timer to new head.
@@ -54,6 +58,11 @@ indexer writes day buckets, the scheduler reads them.
   @ark-event-fired: and the next occurrence is computed from
   @ark-event-spec: and appended (checking for duplicates first).
   Re-index the log file after mutations. (R874, R875, R876)
+  Also scan for unresolved @check-gap: entries within lookback
+  window — append to tmp://watchdog/missed-events. (R972, R973, R979)
+- ResolveCheckGap(tag, sourcePath, date): called when an @ack:
+  covering the fired date is detected via subscription. Removes
+  the @check-gap: line from the log chunk, re-indexes. (R969, R970, R971)
 - EnsureUpcoming(logPath, event): called when a source file with a
   schedule tag is indexed. Ensure the log chunk exists with
   @ark-event-upcoming: entries through the forward window. Create

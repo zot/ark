@@ -35,10 +35,14 @@ type Config struct {
 }
 
 // ScheduleConfig declares which tags carry date values and their defaults.
-// CRC: crc-Config.md | R853, R854, R855
+// CRC: crc-Config.md | R853, R854, R855, R953-R960
 type ScheduleConfig struct {
-	Tags     []string          `toml:"tags"`
-	Defaults map[string]string `toml:"defaults"`
+	Tags             []string          `toml:"tags"`
+	Defaults         map[string]string `toml:"defaults"`
+	FilterFiles      []string          `toml:"filter_files,omitempty"`      // R953: restrict schedule scanning to matching files
+	ExcludeFiles     []string          `toml:"exclude_files,omitempty"`     // R954: exclude files from schedule scanning
+	LifecycleInclude []string          `toml:"lifecycle_include,omitempty"` // R957: tags that get full lifecycle (default "*")
+	LifecycleExclude []string          `toml:"lifecycle_exclude,omitempty"` // R958: tags excluded from lifecycle
 }
 
 // ChunkerConfig defines a language chunker from [[chunker]] in ark.toml.
@@ -99,6 +103,8 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.GlobalInclude = ExpandTildeSlice(cfg.GlobalInclude)
 	cfg.GlobalExclude = ExpandTildeSlice(cfg.GlobalExclude)
 	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
+	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
+	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
 	for i := range cfg.Sources {
 		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
 		cfg.Sources[i].Include = ExpandTildeSlice(cfg.Sources[i].Include)
@@ -135,7 +141,8 @@ exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 
 // EnsureArkSource adds the database directory as an in-memory source
 // if not already present. This source is hardcoded — it does not appear
-// in ark.toml and cannot be removed.
+// in ark.toml and cannot be removed. Scoped to content directories only.
+// CRC: crc-Config.md | R961, R962
 func (c *Config) EnsureArkSource() {
 	if c.dbPath == "" {
 		return
@@ -145,7 +152,10 @@ func (c *Config) EnsureArkSource() {
 			return
 		}
 	}
-	c.Sources = append(c.Sources, Source{Dir: c.dbPath})
+	c.Sources = append(c.Sources, Source{
+		Dir:     c.dbPath,
+		Include: []string{"ark.toml", "schedule/**", "apps/**", "storage/**"},
+	})
 }
 
 // EffectivePatterns returns the combined global + per-source patterns.
@@ -200,6 +210,60 @@ func (c *Config) ScheduleTags() map[string]string {
 		m[t] = c.Schedule.Defaults[t]
 	}
 	return m
+}
+
+// IsLifecycleTag returns true if a schedule tag participates in the full
+// lifecycle (log writing, check-gap, gap detection).
+// CRC: crc-Config.md | R957, R958, R960
+func (c *Config) IsLifecycleTag(tag string) bool {
+	inc := c.Schedule.LifecycleInclude
+	if len(inc) == 0 {
+		inc = []string{"*"} // default: all tags
+	}
+	matched := false
+	for _, pat := range inc {
+		if ok, _ := filepath.Match(pat, tag); ok {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false
+	}
+	for _, pat := range c.Schedule.LifecycleExclude {
+		if ok, _ := filepath.Match(pat, tag); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// MatchesScheduleFilter returns true if a file path passes the schedule
+// filter_files/exclude_files. When both are absent, all files pass.
+// CRC: crc-Config.md | R953, R954, R955, R956
+func (c *Config) MatchesScheduleFilter(path string) bool {
+	if len(c.Schedule.FilterFiles) == 0 && len(c.Schedule.ExcludeFiles) == 0 {
+		return true
+	}
+	m := &Matcher{Dotfiles: true}
+	if len(c.Schedule.FilterFiles) > 0 {
+		matched := false
+		for _, pat := range c.Schedule.FilterFiles {
+			if m.Match(pat, path, false) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, pat := range c.Schedule.ExcludeFiles {
+		if m.Match(pat, path, false) {
+			return false
+		}
+	}
+	return true
 }
 
 // ExpandTilde expands ~ and ~user at the start of a path.
@@ -270,7 +334,6 @@ func (c *Config) checkDuplicates(includes, excludes []string, context string) {
 		}
 	}
 }
-
 
 // SaveConfig writes the current config state to an ark.toml file.
 func (c *Config) SaveConfig(path string) error {

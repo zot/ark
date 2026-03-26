@@ -48,9 +48,13 @@ func (idx *Indexer) SetScheduler(sched *EventScheduler, config *Config) {
 // writeDateIndex checks extracted tags against schedule config and
 // ensures upcoming entries exist in the schedule log.
 // Uses pre-extracted tag values to avoid re-parsing content.
+// R953, R954, R956: skips files outside schedule filter scope.
 // CRC: crc-Indexer.md | R866, R869, R870, R872
 func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 	if idx.scheduler == nil || idx.config == nil {
+		return
+	}
+	if !idx.config.MatchesScheduleFilter(path) {
 		return
 	}
 	for _, tv := range tagValues {
@@ -65,9 +69,14 @@ func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 // WriteDayBucketsForFile parses schedule tags and @ack: entries from
 // content, discretizes into day buckets with ack status, and writes.
 // Called unconditionally — clears stale buckets when no schedule tags remain.
+// R953, R954: skips files outside schedule filter scope (except schedule log
+// files which are always eligible — they contain materialized events).
 // CRC: crc-Indexer.md | R933, R934, R935, R866
 func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content []byte) {
 	if idx.config == nil || idx.store == nil {
+		return
+	}
+	if !strings.HasPrefix(path, idx.config.dbPath+"/schedule/") && !idx.config.MatchesScheduleFilter(path) {
 		return
 	}
 	type bucketKey struct{ date, tag string }
@@ -130,6 +139,11 @@ func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content [
 	// Write unconditionally — WriteDayBuckets clears stale entries when empty
 	if err := idx.store.WriteDayBucketsWithAcks(fileid, allEntries, allAcks); err != nil {
 		log.Printf("schedule: WriteDayBuckets error for %s: %v", path, err)
+	}
+
+	// R970, R971: resolve check-gaps when acks cover fired dates
+	if idx.scheduler != nil && len(allAcks) > 0 {
+		idx.scheduler.ResolveCheckGapsFromAcks(path, allAcks)
 	}
 }
 
@@ -638,16 +652,16 @@ func ExtractTags(content []byte) map[string]uint32 {
 }
 
 // tagValueRegex matches @tag: followed by the value to end of line.
-// Note: for compound tags (@ref: path @item: body), the greedy [^\n]*
-// means only the first tag on a line gets matched — its value includes
-// the subsequent tags as text. ExtractTags (using tagRegex) correctly
-// counts all tags; ExtractTagValues returns one entry per line.
-// This means pubsub won't fire separately for @item: in compound lines.
-// Acceptable — compound tags are a V3 feature (see specs/pubsub.md).
+// For compound tags (@ref: path @topic: body), the greedy [^\n]* captures
+// everything — the outer tag's value includes subsequent tags as text.
+// The loop in ExtractTagValues peels embedded tags from the value,
+// so all tags fire for pubsub. Outer values are preserved intact.
 var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
 
 // ExtractTagValues scans content for @tag: patterns and returns name+value pairs.
 // Used by both tag counting (ExtractTags) and pubsub delivery.
+// Compound tags on a single line produce entries for each embedded tag,
+// with outer tags keeping their full value. (Resolves O26.)
 func ExtractTagValues(content []byte) []TagValue {
 	matches := tagValueRegex.FindAllSubmatch(content, -1)
 	if len(matches) == 0 {
@@ -655,10 +669,18 @@ func ExtractTagValues(content []byte) []TagValue {
 	}
 	values := make([]TagValue, 0, len(matches))
 	for _, m := range matches {
+		val := m[2]
 		values = append(values, TagValue{
 			Tag:   strings.ToLower(string(m[1])),
-			Value: strings.TrimSpace(string(m[2])),
+			Value: strings.TrimSpace(string(val)),
 		})
+		for sub := tagValueRegex.FindSubmatch(val); sub != nil; sub = tagValueRegex.FindSubmatch(val) {
+			val = sub[2]
+			values = append(values, TagValue{
+				Tag:   strings.ToLower(string(sub[1])),
+				Value: strings.TrimSpace(string(val)),
+			})
+		}
 	}
 	return values
 }

@@ -212,6 +212,11 @@ func Serve(dbPath string, opts ServeOpts) error {
 	if err := sched.ScanScheduleLogs(); err != nil {
 		log.Printf("schedule: scan error: %v", err)
 	}
+	// R972, R973: scan for unresolved check-gaps on startup
+	if missed := sched.ScanCheckGaps(7); len(missed) > 0 && srv.db != nil {
+		content := strings.Join(missed, "")
+		srv.db.AppendTmpFile("tmp://watchdog/missed-events", "markdown", []byte(content))
+	}
 	// R810: Start quarter chime after reconciliation
 	sched.AddChime()
 
@@ -1371,6 +1376,7 @@ func (srv *Server) CheckScheduleConfig() {
 }
 
 // serializeScheduleConfig produces a deterministic string from the schedule config.
+// R975: includes filter/lifecycle fields so changes trigger re-materialization.
 func serializeScheduleConfig(cfg *Config) string {
 	tags := cfg.ScheduleTags()
 	keys := make([]string, 0, len(tags))
@@ -1382,6 +1388,25 @@ func serializeScheduleConfig(cfg *Config) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+tags[k])
 	}
+	s := cfg.Schedule
+	ff := make([]string, len(s.FilterFiles))
+	copy(ff, s.FilterFiles)
+	sort.Strings(ff)
+	ef := make([]string, len(s.ExcludeFiles))
+	copy(ef, s.ExcludeFiles)
+	sort.Strings(ef)
+	li := make([]string, len(s.LifecycleInclude))
+	copy(li, s.LifecycleInclude)
+	sort.Strings(li)
+	le := make([]string, len(s.LifecycleExclude))
+	copy(le, s.LifecycleExclude)
+	sort.Strings(le)
+	parts = append(parts,
+		"ff:"+strings.Join(ff, ";"),
+		"ef:"+strings.Join(ef, ";"),
+		"li:"+strings.Join(li, ";"),
+		"le:"+strings.Join(le, ";"),
+	)
 	return strings.Join(parts, ",")
 }
 

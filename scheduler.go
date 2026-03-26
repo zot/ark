@@ -119,11 +119,12 @@ func (es *EventScheduler) reportError(subsystem, message string) {
 // logChunk represents one event definition in a schedule log file.
 // CRC: crc-EventScheduler.md | R899, R900, R901
 type logChunk struct {
-	Event    string   // tag name (e.g., "standup")
-	Source   string   // source file path
-	Spec     string   // recurring spec (e.g., "every Monday at 09:00")
-	Fired    []string // @ark-event-fired: date strings
-	Upcoming []string // @ark-event-upcoming: date strings
+	Event     string   // tag name (e.g., "standup")
+	Source    string   // source file path
+	Spec      string   // recurring spec (e.g., "every Monday at 09:00")
+	Fired     []string // @ark-event-fired: date strings
+	Upcoming  []string // @ark-event-upcoming: date strings
+	CheckGaps []string // @check-gap: date strings — unresolved fired events (R965, R969)
 }
 
 // eventID builds a deterministic event identifier.
@@ -219,6 +220,8 @@ func readLogFile(path string) ([]logChunk, error) {
 				cur.Fired = append(cur.Fired, strings.TrimSpace(line[len("@ark-event-fired:"):]))
 			case strings.HasPrefix(line, "@ark-event-upcoming:"):
 				cur.Upcoming = append(cur.Upcoming, strings.TrimSpace(line[len("@ark-event-upcoming:"):]))
+			case strings.HasPrefix(line, "@check-gap:"):
+				cur.CheckGaps = append(cur.CheckGaps, strings.TrimSpace(line[len("@check-gap:"):]))
 			}
 		}
 	}
@@ -247,6 +250,9 @@ func writeLogFile(path string, chunks []logChunk) error {
 		}
 		for _, u := range c.Upcoming {
 			fmt.Fprintf(&buf, "@ark-event-upcoming: %s\n", u)
+		}
+		for _, g := range c.CheckGaps {
+			fmt.Fprintf(&buf, "@check-gap: %s\n", g)
 		}
 	}
 	return os.WriteFile(path, []byte(buf.String()), 0644)
@@ -461,8 +467,8 @@ func (es *EventScheduler) fire() {
 	isChime := event.Tag == "chime"
 	es.mu.Unlock()
 
-	// R877: mutate schedule log outside the mutex
-	if !isChime && event.Path != "" {
+	// R877, R964-R968: mutate schedule log for lifecycle tags only
+	if !isChime && event.Path != "" && es.config != nil && es.config.IsLifecycleTag(event.Tag) {
 		es.fireLogMutate(event)
 	}
 
@@ -486,11 +492,15 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 		if c.Event != event.Tag || c.Source != event.Path {
 			continue
 		}
-		// Move firedValue from upcoming to fired
+		// Move firedValue from upcoming to fired, append check-gap
 		var newUpcoming []string
 		for _, u := range c.Upcoming {
 			if u == event.Value {
 				c.Fired = append(c.Fired, event.Value)
+				// R965: append @check-gap: in same chunk
+				if !slices.Contains(c.CheckGaps, event.Value) {
+					c.CheckGaps = append(c.CheckGaps, event.Value)
+				}
 			} else {
 				newUpcoming = append(newUpcoming, u)
 			}
@@ -522,6 +532,114 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 	if err := writeLogFile(logPath, chunks); err != nil {
 		log.Printf("schedule: cannot write log for fire: %v", err)
 	}
+}
+
+// ResolveCheckGap removes a @check-gap: entry for a tag+source when an
+// @ack: covering that date is detected. Called from the ack subscription path.
+// CRC: crc-EventScheduler.md | R969, R970, R971
+func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
+	logPath := es.logFilePath(sourcePath)
+	chunks, err := readLogFile(logPath)
+	if err != nil {
+		return // log file might not exist (non-lifecycle tag)
+	}
+	modified := false
+	for i := range chunks {
+		c := &chunks[i]
+		if c.Event != tag || c.Source != sourcePath {
+			continue
+		}
+		var kept []string
+		for _, g := range c.CheckGaps {
+			if g != date {
+				kept = append(kept, g)
+			} else {
+				modified = true
+			}
+		}
+		c.CheckGaps = kept
+		break
+	}
+	if modified {
+		if err := writeLogFile(logPath, chunks); err != nil {
+			log.Printf("schedule: cannot write log for check-gap resolve: %v", err)
+		}
+	}
+}
+
+// ResolveCheckGapsFromAcks removes check-gaps covered by any ack entry.
+// Iterates all schedule log chunks for the source path and removes check-gaps
+// whose date falls within any ack's date range.
+// CRC: crc-EventScheduler.md | R970, R971
+func (es *EventScheduler) ResolveCheckGapsFromAcks(sourcePath string, acks []AckEntry) {
+	logPath := es.logFilePath(sourcePath)
+	chunks, err := readLogFile(logPath)
+	if err != nil {
+		return
+	}
+	modified := false
+	for i := range chunks {
+		c := &chunks[i]
+		if c.Source != sourcePath {
+			continue
+		}
+		var kept []string
+		for _, g := range c.CheckGaps {
+			t := parseScheduledTime(g, time.Now())
+			if t.IsZero() {
+				kept = append(kept, g)
+				continue
+			}
+			covered, _ := AckCoversDate(acks, t)
+			if covered {
+				modified = true
+			} else {
+				kept = append(kept, g)
+			}
+		}
+		c.CheckGaps = kept
+	}
+	if modified {
+		if err := writeLogFile(logPath, chunks); err != nil {
+			log.Printf("schedule: cannot write log for ack resolve: %v", err)
+		}
+	}
+}
+
+// ScanCheckGaps scans all schedule logs for unresolved @check-gap: entries
+// within the lookback window and appends them to tmp://watchdog/missed-events.
+// Called at startup. CRC: crc-EventScheduler.md | R972, R973
+func (es *EventScheduler) ScanCheckGaps(lookbackDays int) []string {
+	if es.scheduleDir == "" {
+		return nil
+	}
+	cutoff := time.Now().AddDate(0, 0, -lookbackDays)
+	entries, err := os.ReadDir(es.scheduleDir)
+	if err != nil {
+		return nil
+	}
+	var missed []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		chunks, err := readLogFile(filepath.Join(es.scheduleDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, c := range chunks {
+			for _, g := range c.CheckGaps {
+				t := parseScheduledTime(g, time.Now())
+				if t.IsZero() {
+					continue
+				}
+				if t.After(cutoff) {
+					missed = append(missed, fmt.Sprintf("@watchdog: missed @%s: %s in %s\n", c.Event, g, c.Source))
+				}
+			}
+		}
+	}
+	return missed
 }
 
 // parseScheduledTime parses a one-shot date value. R821
