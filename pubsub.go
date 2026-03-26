@@ -17,12 +17,12 @@ import (
 // TagSub is a single subscription entry.
 // CRC: crc-PubSub.md | R879, R880: scheduling removed from subscriptions
 type TagSub struct {
-	Tag         string
-	ValueRE     *regexp.Regexp // nil = match any value
-	FilterFiles []string       // only match these path globs (nil = all)
-	ExceptFiles []string       // exclude these path globs
-	Hits        atomic.Uint64  // R819: events successfully enqueued
-	Drops       atomic.Uint64  // R819: events lost to full queue
+	Tag          string
+	ValueRE      *regexp.Regexp // nil = match any value
+	FilterFiles  []string       // only match these path globs (nil = all)
+	ExcludeFiles []string       // exclude these path globs
+	Hits         atomic.Uint64  // R819: events successfully enqueued
+	Drops        atomic.Uint64  // R819: events lost to full queue
 }
 
 // Event is a notification produced by Publish.
@@ -169,7 +169,7 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 				if sub.ValueRE != nil && !sub.ValueRE.MatchString(tv.Value) {
 					continue
 				}
-				if !matchFileFilters(path, sub.FilterFiles, sub.ExceptFiles) {
+				if !matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles) {
 					continue
 				}
 				// Non-blocking send — drop if full. R801, R819
@@ -263,13 +263,13 @@ func FormatMarkdown(events []Event) string {
 
 // SubInfo describes a subscription for listing. R814, R815, R816
 type SubInfo struct {
-	SessionID   string
-	Tag         string
-	ValueRE     string // regex string or ""
-	FilterFiles []string
-	ExceptFiles []string
-	Hits        uint64
-	Drops       uint64
+	SessionID    string
+	Tag          string
+	ValueRE      string // regex string or ""
+	FilterFiles  []string
+	ExcludeFiles []string
+	Hits         uint64
+	Drops        uint64
 }
 
 // List returns subscription details. Empty sessionID returns all. R814, R815, R816
@@ -283,12 +283,12 @@ func (ps *PubSub) List(sessionID string) []SubInfo {
 		}
 		for _, s := range subs {
 			info := SubInfo{
-				SessionID:   sid,
-				Tag:         s.Tag,
-				FilterFiles: s.FilterFiles,
-				ExceptFiles: s.ExceptFiles,
-				Hits:        s.Hits.Load(),
-				Drops:       s.Drops.Load(),
+				SessionID:    sid,
+				Tag:          s.Tag,
+				FilterFiles:  s.FilterFiles,
+				ExcludeFiles: s.ExcludeFiles,
+				Hits:         s.Hits.Load(),
+				Drops:        s.Drops.Load(),
 			}
 			if s.ValueRE != nil {
 				info.ValueRE = s.ValueRE.String()

@@ -1090,10 +1090,10 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		List    bool   `json:"list"`
 		Stats   bool   `json:"stats"`
 		Subs    []struct {
-			Tag         string   `json:"tag"`
-			Value       string   `json:"value"`
-			FilterFiles []string `json:"filter_files"`
-			ExceptFiles []string `json:"except_files"`
+			Tag          string   `json:"tag"`
+			Value        string   `json:"value"`
+			FilterFiles  []string `json:"filter_files"`
+			ExcludeFiles []string `json:"exclude_files"`
 		} `json:"subs"`
 		// For cancel with specific tag/value
 		Tag   string `json:"tag"`
@@ -1119,10 +1119,15 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	// Subscribe
 	var subs []*TagSub
 	for _, s := range req.Subs {
+		// R941, R942: inherit search_exclude when no explicit file filters
+		excludeFiles := s.ExcludeFiles
+		if len(s.FilterFiles) == 0 && len(s.ExcludeFiles) == 0 && len(srv.db.config.SearchExclude) > 0 {
+			excludeFiles = srv.db.config.SearchExclude
+		}
 		sub := &TagSub{
-			Tag:         s.Tag,
-			FilterFiles: s.FilterFiles,
-			ExceptFiles: s.ExceptFiles,
+			Tag:          s.Tag,
+			FilterFiles:  s.FilterFiles,
+			ExcludeFiles: excludeFiles,
 		}
 		if s.Value != "" {
 			re, err := regexp.Compile(s.Value)
@@ -1454,10 +1459,10 @@ func (srv *Server) registerLuaFunctions() {
 					// "combined" is the default — uses query as-is
 				}
 				if v := optsTable.RawGetString("filter_files"); v != lua.LNil {
-					opts.FilterFiles = luaStringSlice(v)
+					opts.FilterFiles = ExpandTildeSlice(luaStringSlice(v))
 				}
 				if v := optsTable.RawGetString("exclude_files"); v != lua.LNil {
-					opts.ExcludeFiles = luaStringSlice(v)
+					opts.ExcludeFiles = ExpandTildeSlice(luaStringSlice(v))
 				}
 				if v := optsTable.RawGetString("filter_file_tags"); v != lua.LNil {
 					opts.FilterFileTags = luaStringSlice(v)

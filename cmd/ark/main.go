@@ -858,8 +858,8 @@ func cmdSearch(args []string) {
 				Tags:            *tags,
 				Filter:          []string(filter),
 				Except:          []string(except),
-				FilterFiles:     []string(filterFiles),
-				ExcludeFiles:    []string(excludeFiles),
+				FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
+				ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
 				FilterFileTags:  []string(filterFileTags),
 				ExcludeFileTags: []string(excludeFileTags),
 				OnlyIfTmp:       true,
@@ -906,8 +906,8 @@ func cmdSearch(args []string) {
 			Tags:            *tags,
 			Filter:          []string(filter),
 			Except:          []string(except),
-			FilterFiles:     []string(filterFiles),
-			ExcludeFiles:    []string(excludeFiles),
+			FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
+			ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
 			FilterFileTags:  []string(filterFileTags),
 			ExcludeFileTags: []string(excludeFileTags),
 			Score:           *score,
@@ -3722,9 +3722,9 @@ func cmdSubscribe(args []string) {
 	stats := fs.Bool("stats", false, "show hit/drop statistics")
 	tag := fs.String("tag", "", "tag name")
 	value := fs.String("value", "", "value regex filter")
-	var filterFiles, exceptFiles stringSlice
+	var filterFiles, excludeFiles stringSlice
 	fs.Var(&filterFiles, "filter-files", "only match files matching glob (repeatable)")
-	fs.Var(&exceptFiles, "except-files", "exclude files matching glob (repeatable)")
+	fs.Var(&excludeFiles, "exclude-files", "exclude files matching glob (repeatable)") // R944: renamed from --except-files
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: ark subscribe [options]")
 		fmt.Fprintln(os.Stderr, "\nSubscribe to tag notifications, manage subscriptions.")
@@ -3813,10 +3813,10 @@ func cmdSubscribe(args []string) {
 		"value": *value,
 	}
 	if len(filterFiles) > 0 {
-		sub["filter_files"] = []string(filterFiles)
+		sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
 	}
-	if len(exceptFiles) > 0 {
-		sub["except_files"] = []string(exceptFiles)
+	if len(excludeFiles) > 0 {
+		sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
 	}
 
 	if err := proxyOK(client, "POST", "/subscribe", map[string]any{

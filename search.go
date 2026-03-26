@@ -384,6 +384,10 @@ func validateSearchFlags(opts SearchOpts) error {
 // Path filters first (cheap), then content filters. Positives intersect,
 // negatives subtract. Returns nil if no filtering is requested.
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
+	// R939, R940: inject search_exclude defaults when no explicit file filters
+	if len(opts.FilterFiles) == 0 && len(opts.ExcludeFiles) == 0 && s.config != nil && len(s.config.SearchExclude) > 0 {
+		opts.ExcludeFiles = s.config.SearchExclude
+	}
 	hasFilters := len(opts.Filter) > 0 || len(opts.Except) > 0 ||
 		len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 ||
 		len(opts.FilterFileTags) > 0 || len(opts.ExcludeFileTags) > 0

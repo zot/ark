@@ -82,6 +82,43 @@ Examples:
 Quoting and backslash escaping supported (handles paths with spaces).
 Works with combined search, split search, and tag search.
 
+## Default search excludes
+
+Some content is indexed for tags and pubsub but shouldn't appear
+in search results by default. Conversation logs (`~/.claude/projects/**`),
+JSONL files, schedule logs (`~/.ark/schedule/**`) — useful for
+subscriptions and tag extraction, noise in search.
+
+`search_exclude` in ark.toml is a top-level list of glob patterns:
+
+```toml
+search_exclude = [
+  "~/.claude/projects/**",
+  "~/.ark/schedule/**",
+]
+```
+
+These patterns are applied as `--exclude-files` defaults. They are
+**not applied** when the user provides explicit `--filter-files` or
+`--exclude-files` flags — those replace the default scope entirely.
+When the caller has narrowed to an explicit file set, the global
+excludes are irrelevant.
+
+Subscriptions should respect `search_exclude` too, via
+`--except-files` defaults. A subscription without explicit file
+filters inherits `search_exclude` as its except-files list.
+A subscription with explicit `--filter-files` or `--except-files`
+uses those instead.
+
+### Naming normalization
+
+Pubsub uses `--except-files` and `ExceptFiles` while search uses
+`--exclude-files` and `ExcludeFiles`. Normalize to `exclude-files`
+and `ExcludeFiles` everywhere. The pubsub CLI flag becomes
+`--exclude-files` (rename from `--except-files`). The internal
+struct field becomes `ExcludeFiles`. JSON wire format becomes
+`exclude_files`.
+
 ## Server API
 
 Filter fields pass through the server proxy via searchRequest JSON:

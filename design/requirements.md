@@ -385,6 +385,19 @@
 - **R228:** Search filtering works with SearchCombined, SearchSplit, and tag search
 - **R229:** (inferred) Filter fields pass through the server proxy via searchRequest JSON
 
+### Default Search Excludes
+- **R938:** `search_exclude` is a top-level list of glob patterns in ark.toml
+- **R939:** `search_exclude` patterns are applied as `--exclude-files` defaults when the user provides no explicit `--filter-files` or `--exclude-files`
+- **R940:** When the user provides explicit `--filter-files` or `--exclude-files`, `search_exclude` is not applied — explicit flags replace the default scope entirely
+- **R941:** Subscriptions without explicit file filters inherit `search_exclude` as their exclude-files list
+- **R942:** Subscriptions with explicit `--filter-files` or `--exclude-files` use those instead of `search_exclude`
+- **R943:** (inferred) `search_exclude` is loaded from config at startup and on config reload
+
+### Naming Normalization
+- **R944:** Pubsub `--except-files` CLI flag is renamed to `--exclude-files` for consistency with search
+- **R945:** Pubsub `ExceptFiles` struct field is renamed to `ExcludeFiles`
+- **R946:** Pubsub JSON wire format `except_files` is renamed to `exclude_files`
+
 ### Replaces Source Filtering
 - **R230:** `--source` and `--not-source` flags are removed — replaced by `--filter-files` and `--exclude-files`
 - **R231:** (inferred) No backward compatibility shim needed — flags are not in use outside testing
@@ -705,6 +718,14 @@
 - **R440:** `ark ui status` reports indexing state (true/false)
 - **R441:** (inferred) Status information is available both as CLI output and via `GET /status` JSON
 - **R442:** (inferred) When the UI is not running, `ark ui status` outputs "ui: not available"
+
+### Tilde expansion
+- **R947:** `~` at the start of a path expands to the current user's home directory (`os.UserHomeDir()`)
+- **R948:** `~user` at the start of a path expands to the named user's home directory
+- **R949:** `~user` first tries the OS user database (`os/user.Lookup`); if that fails, falls back to `filepath.Join(filepath.Dir(homeDir), user)`
+- **R950:** Tilde expansion applies to all path-accepting fields: ark.toml (include, exclude, search_exclude, source dir), CLI flags (--filter-files, --exclude-files), glob arguments, and Lua API path parameters (mcp:search_grouped opts, etc.)
+- **R951:** (inferred) Expansion happens once at the boundary — config load and CLI flag parsing — before paths reach the matcher or search engine
+- **R952:** (inferred) After expansion, all paths are absolute; internal code never sees `~`
 
 ## Feature: Messaging
 **Source:** specs/messaging.md

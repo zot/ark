@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880
+**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -16,7 +16,7 @@ long-poll for markdown crank-handle notifications.
 - Tag: string — exact tag name to match
 - ValueRE: *regexp.Regexp — optional, nil = match any value
 - FilterFiles: []doublestar.Pattern — only match these paths (nil = all)
-- ExceptFiles: []doublestar.Pattern — exclude these paths
+- ExcludeFiles: []doublestar.Pattern — exclude these paths (R945, renamed from ExceptFiles)
 - Hits: uint64 — events successfully enqueued (atomic)
 - Drops: uint64 — events lost to full queue (atomic)
 - (R879, R880) Schedule field removed — scheduling driven by ark.toml + day buckets, not subscriptions

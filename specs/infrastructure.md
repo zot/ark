@@ -92,3 +92,24 @@ When no UI is running:
 ```
 ui: not available
 ```
+
+## Tilde expansion in paths
+
+`~` and `~user` are expanded wherever ark accepts path patterns:
+ark.toml fields (include, exclude, search_exclude, source dirs),
+CLI flags (--filter-files, --exclude-files, --except-files), and
+any other glob or path argument.
+
+`~` expands to the current user's home directory.
+
+`~user` expands to another user's home directory. First tries
+the OS user database (`os/user.Lookup`). If that fails (user not
+in passwd, Windows without domain, etc.), falls back to
+`~/../user` — the sibling directory heuristic that works across
+platforms when home directories share a common parent.
+
+Expansion happens once at the boundary — config load and CLI
+flag parsing — before paths reach the matcher or search engine.
+After expansion, all paths are absolute. The `~` form is a
+convenience for humans writing config; internal code always sees
+expanded paths.

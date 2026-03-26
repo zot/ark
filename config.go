@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,8 +27,9 @@ type Config struct {
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
-	SessionTTL      string            `toml:"session_ttl,omitempty"` // R646: duration string, default "30s"
-	Schedule        ScheduleConfig    `toml:"schedule"`              // R853, R854
+	SessionTTL      string            `toml:"session_ttl,omitempty"`    // R646: duration string, default "30s"
+	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
+	Schedule        ScheduleConfig    `toml:"schedule"`                 // R853, R854
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`
 }
@@ -93,9 +95,14 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.validate()
-	// Expand ~ in source directory paths
+	// R950, R951: expand tilde in all path fields at load time
+	cfg.GlobalInclude = ExpandTildeSlice(cfg.GlobalInclude)
+	cfg.GlobalExclude = ExpandTildeSlice(cfg.GlobalExclude)
+	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
 	for i := range cfg.Sources {
-		cfg.Sources[i].Dir = expandHome(cfg.Sources[i].Dir)
+		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
+		cfg.Sources[i].Include = ExpandTildeSlice(cfg.Sources[i].Include)
+		cfg.Sources[i].Exclude = ExpandTildeSlice(cfg.Sources[i].Exclude)
 	}
 	return &cfg, nil
 }
@@ -195,6 +202,50 @@ func (c *Config) ScheduleTags() map[string]string {
 	return m
 }
 
+// ExpandTilde expands ~ and ~user at the start of a path.
+// ~ → os.UserHomeDir(). ~user → os/user.Lookup first, ~/../user fallback.
+// CRC: crc-Config.md | R947, R948, R949
+func ExpandTilde(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	// ~ alone or ~/...
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[1:])
+	}
+	// ~user or ~user/...
+	var username, rest string
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		username = path[1:idx]
+		rest = path[idx:]
+	} else {
+		username = path[1:]
+	}
+	// Try OS user database first
+	if u, err := user.Lookup(username); err == nil {
+		return filepath.Join(u.HomeDir, rest)
+	}
+	// Fallback: ~/../user
+	return filepath.Join(filepath.Dir(home), username, rest)
+}
+
+// ExpandTildeSlice expands tilde in each element of a string slice.
+// CRC: crc-Config.md | R950
+func ExpandTildeSlice(paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = ExpandTilde(p)
+	}
+	return out
+}
+
 // validate checks for identical include/exclude strings.
 func (c *Config) validate() {
 	c.Errors = nil
@@ -220,16 +271,6 @@ func (c *Config) checkDuplicates(includes, excludes []string, context string) {
 	}
 }
 
-func expandHome(path string) string {
-	if len(path) >= 2 && path[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return filepath.Join(home, path[2:])
-	}
-	return path
-}
 
 // SaveConfig writes the current config state to an ark.toml file.
 func (c *Config) SaveConfig(path string) error {
@@ -249,7 +290,7 @@ func IsGlob(dir string) bool {
 // AddSource adds a new source directory. Glob patterns (containing *, ?, [)
 // are stored as-is without validation. Concrete paths are validated to exist.
 func (c *Config) AddSource(dir string) error {
-	dir = expandHome(dir)
+	dir = ExpandTilde(dir)
 	for _, src := range c.Sources {
 		if src.Dir == dir {
 			return fmt.Errorf("source %q already configured", dir)
@@ -273,7 +314,7 @@ func (c *Config) AddSource(dir string) error {
 // if the source is a concrete dir managed by a glob pattern or if
 // the directory is the ark database directory (hardcoded source).
 func (c *Config) RemoveSource(dir string) error {
-	dir = expandHome(dir)
+	dir = ExpandTilde(dir)
 	if c.dbPath != "" && dir == c.dbPath {
 		return fmt.Errorf("cannot remove %s — hardcoded source", dir)
 	}
@@ -499,7 +540,7 @@ type WhyResult struct {
 // ShowWhy explains why a file is included, excluded, or unresolved.
 // It checks config patterns and ignore files (.gitignore, .arkignore).
 func (c *Config) ShowWhy(filePath string) (*WhyResult, error) {
-	filePath = expandHome(filePath)
+	filePath = ExpandTilde(filePath)
 	m := &Matcher{Dotfiles: c.Dotfiles}
 
 	info, statErr := os.Stat(filePath)
@@ -620,7 +661,7 @@ func parseIgnoreFile(path string) ([]string, error) {
 }
 
 func (c *Config) findSource(dir string) (*Source, error) {
-	dir = expandHome(dir)
+	dir = ExpandTilde(dir)
 	for i := range c.Sources {
 		if c.Sources[i].Dir == dir {
 			return &c.Sources[i], nil
