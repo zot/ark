@@ -395,18 +395,18 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 		return nil, nil
 	}
 
-	// Get all indexed files for path matching and ID resolution
-	statuses, err := s.fts.StaleFiles()
+	// Get all indexed files for path matching and ID resolution.
+	// Uses FileIDPaths (N records, ~318 KB) instead of StaleFiles
+	// (F records, ~26 MB) — we only need fileid↔path mapping here.
+	pathIndex, err := s.fts.FileIDPaths()
 	if err != nil {
 		return nil, fmt.Errorf("resolve filters: %w", err)
 	}
 
 	// Start with all file IDs (will narrow down)
-	allIDs := make(map[uint64]struct{}, len(statuses))
-	pathIndex := make(map[uint64]string, len(statuses)) // fileID → path
-	for _, fs := range statuses {
-		allIDs[fs.FileID] = struct{}{}
-		pathIndex[fs.FileID] = fs.Path
+	allIDs := make(map[uint64]struct{}, len(pathIndex))
+	for id := range pathIndex {
+		allIDs[id] = struct{}{}
 	}
 
 	// Track whether we have any positive filters (which means "only these")

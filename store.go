@@ -858,3 +858,32 @@ func (s *Store) PutScheduleConfig(serialized string) error {
 	settings.Extra[scheduleConfigKey] = serialized
 	return s.PutSettings(settings)
 }
+
+// RecordCounts scans all keys in the ark subdatabase and returns
+// stats grouped by prefix byte. CRC: crc-Store.md | R907
+func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
+	counts := make(map[byte]RecordStats)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		cur, err := txn.OpenCursor(s.dbi)
+		if err != nil {
+			return err
+		}
+		defer cur.Close()
+		k, v, err := cur.Get(nil, nil, lmdb.First)
+		for err == nil {
+			if len(k) > 0 {
+				s := counts[k[0]]
+				s.Count++
+				s.KeyBytes += int64(len(k))
+				s.ValueBytes += int64(len(v))
+				counts[k[0]] = s
+			}
+			k, v, err = cur.Get(nil, nil, lmdb.Next)
+		}
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+	return counts, err
+}

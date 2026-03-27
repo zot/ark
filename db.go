@@ -616,6 +616,12 @@ func (db *DB) Refresh(patterns []string) error {
 	return nil
 }
 
+// NewSearchCache enables FRecord caching in microfts2 for the duration
+// of a search operation. Call the returned function to release the cache.
+func (db *DB) NewSearchCache() func() {
+	return db.fts.NewSearchCache()
+}
+
 // SearchCombined performs a combined search across both engines.
 func (db *DB) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchCombined(query, opts)
@@ -714,6 +720,29 @@ func (db *DB) Status() (*StatusInfo, error) {
 	}, nil
 }
 
+// RecordCount is one line in the --db output.
+type RecordCount struct {
+	Prefix     string `json:"prefix"`
+	Purpose    string `json:"purpose"`
+	Count      int64  `json:"count"`
+	KeyBytes   int64  `json:"keyBytes"`
+	ValueBytes int64  `json:"valueBytes"`
+}
+
+// RecordStats holds aggregate statistics for one record prefix.
+// Matches microfts2.RecordStats so Store can return the same shape.
+type RecordStats struct {
+	Count      int64
+	KeyBytes   int64
+	ValueBytes int64
+}
+
+// DBRecordCounts holds per-subdatabase record counts.
+type DBRecordCounts struct {
+	Microfts2 []RecordCount `json:"microfts2"`
+	Ark       []RecordCount `json:"ark"`
+}
+
 // StatusInfo holds database status counts and LMDB map usage.
 type StatusInfo struct {
 	Version    string         `json:"version"`
@@ -733,6 +762,72 @@ type StatusInfo struct {
 	UIRunning  bool `json:"uiRunning"`
 	UIPort     int  `json:"uiPort,omitempty"`
 	UIIndexing bool `json:"uiIndexing"`
+}
+
+// StatusDB returns per-prefix record counts for both subdatabases.
+// CRC: crc-DB.md | R899, R904, R905
+func (db *DB) StatusDB() (*DBRecordCounts, error) {
+	ftsLabels := map[byte]string{
+		'C': "chunks",
+		'F': "files",
+		'H': "hashes",
+		'I': "config",
+		'N': "paths",
+		'T': "trigrams",
+		'W': "tokens",
+	}
+	arkLabels := map[byte]string{
+		'D': "tag-defs",
+		'E': "day-buckets",
+		'F': "file-tags",
+		'I': "settings",
+		'M': "missing",
+		'T': "tag-totals",
+		'U': "unresolved",
+		'V': "day-reverse",
+	}
+
+	result := &DBRecordCounts{}
+
+	// microfts2 records
+	ftsCounts, err := db.fts.RecordCounts()
+	if err != nil {
+		return nil, fmt.Errorf("microfts2 record counts: %w", err)
+	}
+	ftsStats := make(map[byte]RecordStats)
+	for k, v := range ftsCounts {
+		ftsStats[k] = RecordStats{Count: v.Count, KeyBytes: v.KeyBytes, ValueBytes: v.ValueBytes}
+	}
+	result.Microfts2 = buildRecordCounts(ftsStats, ftsLabels)
+
+	// ark records
+	arkCounts, err := db.store.RecordCounts()
+	if err != nil {
+		return nil, fmt.Errorf("ark record counts: %w", err)
+	}
+	result.Ark = buildRecordCounts(arkCounts, arkLabels)
+
+	return result, nil
+}
+
+// buildRecordCounts converts raw prefix stats into sorted RecordCount slices.
+func buildRecordCounts(stats map[byte]RecordStats, labels map[byte]string) []RecordCount {
+	var recs []RecordCount
+	// Include all known labels, even if count is 0
+	for prefix, label := range labels {
+		s := stats[prefix]
+		recs = append(recs, RecordCount{
+			Prefix:     string([]byte{prefix}),
+			Purpose:    label,
+			Count:      s.Count,
+			KeyBytes:   s.KeyBytes,
+			ValueBytes: s.ValueBytes,
+		})
+	}
+	sort.Slice(recs, func(i, j int) bool {
+		return recs[i].Prefix < recs[j].Prefix
+	})
+	return recs
 }
 
 // Files returns all indexed file paths, including tmp:// documents.

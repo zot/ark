@@ -17,6 +17,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"strconv"
 	"strings"
@@ -692,6 +695,9 @@ func cmdSearch(args []string) {
 	files := fs.Bool("files", false, "emit full file content as JSONL")
 	preview := fs.Int("preview", 0, "with --chunks: extract N-char preview window around match")
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")
+	cpuProfile := fs.String("cpuprofile", "", "write CPU profile to file")
+	memProfile := fs.String("memprofile", "", "write memory profile to file")
+	traceFile := fs.String("trace", "", "write execution trace to file (view with go tool trace or Chrome DevTools)")
 	var filter, except, filterFiles, excludeFiles, filterFileTags, excludeFileTags stringSlice
 	fs.Var(&filter, "filter", "content-based positive filter (repeatable, FTS query)")
 	fs.Var(&except, "except", "content-based negative filter (repeatable, FTS query)")
@@ -700,6 +706,41 @@ func cmdSearch(args []string) {
 	fs.Var(&filterFileTags, "filter-file-tags", "tag-based positive filter (repeatable, tag name)")
 	fs.Var(&excludeFileTags, "exclude-file-tags", "tag-based negative filter (repeatable, tag name)")
 	fs.Parse(args)
+
+	// CRC: crc-CLI.md | R981, R982, R985
+	if *traceFile != "" {
+		f, err := os.Create(*traceFile)
+		if err != nil {
+			fatal(err)
+		}
+		trace.Start(f)
+		defer func() {
+			trace.Stop()
+			f.Close()
+		}()
+	}
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
+	if *memProfile != "" {
+		defer func() {
+			f, err := os.Create(*memProfile)
+			if err != nil {
+				fatal(err)
+			}
+			runtime.GC()
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}()
+	}
 
 	if *chunks && *files {
 		fmt.Fprintln(os.Stderr, "error: --chunks and --files are mutually exclusive")
@@ -743,13 +784,9 @@ func cmdSearch(args []string) {
 
 	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
 
-	// R654, R655: --session requires proxying to the server
-	if *session != "" {
-		client := serverClient(arkDir)
-		if client == nil {
-			fmt.Fprintln(os.Stderr, "error: --session requires a running server (ark serve)")
-			os.Exit(1)
-		}
+	// Server-first: proxy to server if available, fall back to local.
+	// Server keeps caches warm (file name map, LMDB pages).
+	if client := serverClient(arkDir); client != nil {
 		req := struct {
 			Query           string   `json:"query"`
 			About           string   `json:"about,omitempty"`
@@ -770,7 +807,8 @@ func cmdSearch(args []string) {
 			ExcludeFiles    []string `json:"excludeFiles,omitempty"`
 			FilterFileTags  []string `json:"filterFileTags,omitempty"`
 			ExcludeFileTags []string `json:"excludeFileTags,omitempty"`
-			Session         string   `json:"session"`
+			Session         string   `json:"session,omitempty"`
+			NoTmp           bool     `json:"noTmp,omitempty"`
 		}{
 			Query:           strings.Join(fs.Args(), " "),
 			About:           *about,
@@ -787,112 +825,39 @@ func cmdSearch(args []string) {
 			Tags:            *tags,
 			Filter:          []string(filter),
 			Except:          []string(except),
-			FilterFiles:     []string(filterFiles),
-			ExcludeFiles:    []string(excludeFiles),
+			FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
+			ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
 			FilterFileTags:  []string(filterFileTags),
 			ExcludeFileTags: []string(excludeFileTags),
 			Session:         *session,
+			NoTmp:           *noTmp,
 		}
 		var results []ark.SearchResultEntry
-		if err := proxyDecode(client, "POST", "/search", req, &results); err != nil {
-			fatal(err)
+		if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
+			var queryStr string
+			if *contains != "" {
+				queryStr = *contains
+			} else if *about != "" {
+				queryStr = *about
+			} else if len(regex) > 0 {
+				queryStr = regex[0]
+			} else {
+				queryStr = strings.Join(fs.Args(), " ")
+			}
+			if *tags {
+				printTagResults(results, *scores)
+			} else {
+				printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+			}
+			return
 		}
-
-		// Determine query for preview extraction
-		var queryStr string
-		if *contains != "" {
-			queryStr = *contains
-		} else if *about != "" {
-			queryStr = *about
-		} else if len(regex) > 0 {
-			queryStr = regex[0]
-		} else {
-			queryStr = strings.Join(fs.Args(), " ")
-		}
-
-		if *tags {
-			printTagResults(results, *scores)
-		} else {
-			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
-		}
-		return
+		// Server proxy failed — fall through to local search
 	}
 
-	// R677-R680: onlyIfTmp probe — if server has tmp docs, proxy the search
-	if !*noTmp {
-		if client := serverClient(arkDir); client != nil {
-			req := struct {
-				Query           string   `json:"query"`
-				About           string   `json:"about,omitempty"`
-				Contains        string   `json:"contains,omitempty"`
-				Regex           []string `json:"regex,omitempty"`
-				ExceptRegex     []string `json:"exceptRegex,omitempty"`
-				LikeFile        string   `json:"likeFile,omitempty"`
-				K               int      `json:"k"`
-				Scores          bool     `json:"scores,omitempty"`
-				After           string   `json:"after,omitempty"`
-				Before          string   `json:"before,omitempty"`
-				Chunks          bool     `json:"chunks,omitempty"`
-				Files           bool     `json:"files,omitempty"`
-				Tags            bool     `json:"tags,omitempty"`
-				Filter          []string `json:"filter,omitempty"`
-				Except          []string `json:"except,omitempty"`
-				FilterFiles     []string `json:"filterFiles,omitempty"`
-				ExcludeFiles    []string `json:"excludeFiles,omitempty"`
-				FilterFileTags  []string `json:"filterFileTags,omitempty"`
-				ExcludeFileTags []string `json:"excludeFileTags,omitempty"`
-				OnlyIfTmp       bool     `json:"onlyIfTmp"`
-			}{
-				Query:           strings.Join(fs.Args(), " "),
-				About:           *about,
-				Contains:        *contains,
-				Regex:           []string(regex),
-				ExceptRegex:     []string(exceptRegex),
-				LikeFile:        *likeFile,
-				K:               *k,
-				Scores:          *scores,
-				After:           *after,
-				Before:          *before,
-				Chunks:          *chunks,
-				Files:           *files,
-				Tags:            *tags,
-				Filter:          []string(filter),
-				Except:          []string(except),
-				FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
-				ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
-				FilterFileTags:  []string(filterFileTags),
-				ExcludeFileTags: []string(excludeFileTags),
-				OnlyIfTmp:       true,
-			}
-			data, err := proxyRaw(client, "POST", "/search", req)
-			if err == nil && data != nil {
-				// Server had tmp files and returned results
-				var results []ark.SearchResultEntry
-				if err := json.Unmarshal(data, &results); err == nil {
-					var queryStr string
-					if *contains != "" {
-						queryStr = *contains
-					} else if *about != "" {
-						queryStr = *about
-					} else if len(regex) > 0 {
-						queryStr = regex[0]
-					} else {
-						queryStr = strings.Join(fs.Args(), " ")
-					}
-					if *tags {
-						printTagResults(results, *scores)
-					} else {
-						printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
-					}
-					return
-				}
-			}
-			// 204 or error — fall through to local search
-		}
-	}
-
-	// R656, R680: local LMDB path (mmap shares pages with server)
+	// Local LMDB path (fallback when server not running)
 	withDB(func(d *ark.DB) {
+		done := d.NewSearchCache()
+		defer done()
 		opts := ark.SearchOpts{
 			K:               *k,
 			Scores:          *scores,
@@ -1099,6 +1064,33 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	}
 }
 
+// CRC: crc-CLI.md | R899, R900, R901, R902
+func printDBCounts(counts *ark.DBRecordCounts, mapUsed, mapTotal int64) {
+	var totalRecs int64
+	var totalKeys, totalVals int64
+	printRecordSection("microfts2", counts.Microfts2, &totalRecs, &totalKeys, &totalVals)
+	printRecordSection("ark", counts.Ark, &totalRecs, &totalKeys, &totalVals)
+	data := totalKeys + totalVals
+	fmt.Printf("\ndb total: %d records, %s keys, %s vals (%s data",
+		totalRecs, formatBytes(totalKeys), formatBytes(totalVals), formatBytes(data))
+	if mapUsed > 0 {
+		fmt.Printf(" in %s map", formatBytes(mapUsed))
+	}
+	fmt.Println(")")
+}
+
+func printRecordSection(name string, recs []ark.RecordCount, totalRecs *int64, totalKeys, totalVals *int64) {
+	fmt.Printf("\ndb: %s\n", name)
+	for _, r := range recs {
+		fmt.Printf("  %s %-14s %7d  keys %-10s  vals %s\n",
+			r.Prefix, r.Purpose, r.Count,
+			formatBytes(r.KeyBytes), formatBytes(r.ValueBytes))
+		*totalRecs += r.Count
+		*totalKeys += r.KeyBytes
+		*totalVals += r.ValueBytes
+	}
+}
+
 func formatBytes(b int64) string {
 	switch {
 	case b >= 1<<30:
@@ -1154,17 +1146,28 @@ func printLines(lines []string) {
 
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	showDB := fs.Bool("db", false, "show LMDB record counts by type")
 	fs.Parse(args)
 
 	if client := serverClient(arkDir); client != nil {
-		var status ark.StatusInfo
-		if err := proxyDecode(client, "GET", "/status", nil, &status); err != nil {
+		path := "/status"
+		if *showDB {
+			path = "/status?db=true"
+		}
+		var resp struct {
+			ark.StatusInfo
+			DB *ark.DBRecordCounts `json:"db"`
+		}
+		if err := proxyDecode(client, "GET", path, nil, &resp); err != nil {
 			fatal(err)
 		}
-		printStatus(&status, true)
-		if status.Version != ark.Version {
+		printStatus(&resp.StatusInfo, true)
+		if resp.DB != nil {
+			printDBCounts(resp.DB, resp.MapUsed, resp.MapTotal)
+		}
+		if resp.Version != ark.Version {
 			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
-				status.Version, ark.Version)
+				resp.Version, ark.Version)
 		}
 		return
 	}
@@ -1175,6 +1178,13 @@ func cmdStatus(args []string) {
 			fatal(err)
 		}
 		printStatus(status, false)
+		if *showDB {
+			dbCounts, err := d.StatusDB()
+			if err != nil {
+				fatal(err)
+			}
+			printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
+		}
 	})
 }
 

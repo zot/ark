@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R498, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R547, R548, R549, R550, R551, R552, R553, R554, R555, R556, R557, R558, R559, R560, R561, R562, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R498, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R547, R548, R549, R550, R551, R552, R553, R554, R555, R556, R557, R558, R559, R560, R561, R562, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R899, R900, R901, R902, R903, R906, R981, R982, R983, R984, R985
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -43,7 +43,17 @@ dispatches operations via proxy or cold-start.
   Config subcommands with positional args + optional flags use
   reorderArgs() to ensure flags are parsed before positional args
   (Go's flag package stops at first non-flag argument).
-- cmdSearch: adds --session NAME flag (implies server proxy),
+- cmdSearch: --cpuprofile FILE writes pprof CPU profile wrapping the
+  full command. --memprofile FILE writes heap profile post-GC on exit.
+  --trace FILE writes runtime/trace execution trace (goroutines,
+  syscalls, GC, blocked time). All optional and independent.
+  (R981, R982, R983, R984, R985)
+  Server-first dispatch: always tries proxy to running server first,
+  falls back to local LMDB search if server unavailable or proxy fails.
+  Server keeps caches warm (file name map, LMDB pages), avoiding
+  cold-start DB open cost. All flags sent in one request struct.
+  --session NAME included in the server request (no longer requires
+  special dispatch — just another field).
   --chunks and --files flags (mutually exclusive),
   outputs JSONL when either is set. --wrap <name> wraps output in
   XML tags of that name. --like-file <path> uses file content as
@@ -64,11 +74,7 @@ dispatches operations via proxy or cold-start.
   --filter-files/--exclude-files for path-based filtering,
   --filter-file-tags/--exclude-file-tags for tag-based filtering.
   Replaces --source/--not-source.
-  --no-tmp excludes tmp:// documents from results and skips the
-  onlyIfTmp server check (always searches locally).
-  Without --no-tmp or --session: sends onlyIfTmp probe to server.
-  If server returns 204 (no tmp docs), searches locally. If server
-  returns results, uses those.
+  --no-tmp excludes tmp:// documents from results.
 - --wrap: parameterized context wrapper. Escapes closing tag in content.
   Convention: "memory" for experience, "knowledge" for facts.
 - cmdTag: dispatches to list/counts/files/defs/set/get/check sub-subcommands,
@@ -88,6 +94,9 @@ dispatches operations via proxy or cold-start.
   optional -before/-after counts. Calls microfts2.GetChunks() via
   withDB. Outputs JSONL (one object per chunk: path, range, content,
   index). Supports --wrap for XML wrapping.
+- cmdStatus: --db flag triggers DB.StatusDB() and prints record counts
+  per subdatabase. Without --db, unchanged. When proxied, sets
+  ?db=true query parameter. (R899, R900, R901, R902, R903, R906)
 - cmdServe: if server already running, print message to stderr, exit 0
 - cmdStop: read PID file, verify process is ark, send SIGTERM (or
   SIGKILL with -f), poll until exit. Exit 1 on timeout.

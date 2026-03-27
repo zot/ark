@@ -1509,3 +1509,26 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R896:** `mcp:fileStatus(path)` returns whether the file is indexed, its tags, and schedule info
 - **R897:** `mcp:subscribe(opts, callback)` registers a UI-side tag-change subscription; callback fires on matching tag events
 - **R898:** `mcp:subscribe` supports tag, value (RE2 regex), filterFiles, exceptFiles — full parity with CLI minus removed scheduled/recurring flags
+
+## Feature: Status DB Records
+**Source:** specs/status-db.md
+
+- **R899:** `ark status --db` shows LMDB record counts grouped by subdatabase (microfts2, ark)
+- **R900:** Each record type displays prefix letter, purpose label, and count
+- **R901:** Record types are sorted alphabetically within each subdatabase
+- **R902:** Counts are right-aligned for readability
+- **R903:** Without `--db`, status output is unchanged
+- **R904:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
+- **R905:** ark record types: D (tag-defs), E (day-buckets), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved), V (day-reverse)
+- **R906:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
+- **R907:** (inferred) Store needs a RecordCounts method to count ark subdatabase records by prefix
+- **R908:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
+
+## Feature: Search Profiling
+**Source:** specs/search-profiling.md
+
+- **R981:** `ark search --cpuprofile FILE` writes a Go pprof CPU profile covering the full search operation
+- **R982:** `ark search --memprofile FILE` writes a Go pprof heap profile after search completes (post-GC)
+- **R983:** All three flags are optional and independent
+- **R984:** (inferred) Profiling wraps the entire cmdSearch scope — DB open through result output
+- **R985:** `ark search --trace FILE` writes a Go execution trace (runtime/trace) covering the full search operation

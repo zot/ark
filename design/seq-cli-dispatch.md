@@ -60,9 +60,35 @@ CLI ──> CLI.DetectServer(dbPath)
                └── DB.Close()
 ```
 
+## Flow: Search (server-first)
+
+```
+CLI ──> cmdSearch: parse flags, build request struct
+         │
+         ├──> CLI.DetectServer(dbPath)
+         │     └── try Unix socket connect
+         │
+         ├── [server running]
+         │    └──> proxyDecode(POST /search, request)
+         │          ├── success → print results, return
+         │          └── error → fall through to local
+         │
+         └── [no server, or proxy failed]
+              └──> ColdStart(dbPath)
+                    ├── DB.Open
+                    ├── execute search locally
+                    └── DB.Close
+```
+
+Search always tries the server first because the server keeps
+caches warm (file name map, LMDB pages, session chunk caches).
+The server path avoids the cold-start DB open cost entirely.
+If the server is unavailable or the proxy fails, local search
+is the fallback.
+
 ## Notes
 
-Cold-start pays the embedding model load cost on every invocation.
+Cold-start pays the DB open cost on every invocation.
 For search-heavy workflows, `ark serve` amortizes this. For
 occasional maintenance commands (status, files, config), cold-start
-is fine — those don't need the embedding model.
+is fine.

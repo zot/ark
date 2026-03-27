@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -60,6 +60,8 @@ ark-level settings, and tag tracking.
   settings record (I prefix). (R927, R928)
 - PutScheduleConfig(serialized string): write [schedule] section to
   settings record. (R927, R932)
+- RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
+  return map[byte]int64. Single LMDB View transaction. (R907)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time

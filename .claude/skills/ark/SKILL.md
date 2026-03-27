@@ -134,10 +134,11 @@ Hermes curates and reports honest misses.
 **Send in background** — sending is fire-and-forget, don't block the
 conversation. Inbox checks need the result, so run foreground.
 **Describe content, not format.** Tell the messenger *what to
-communicate* and *who it's from/to*. Do NOT specify filenames, tag
-blocks, or file structure — the messenger knows the ark message
-format and will scaffold, read, and write correctly. Overriding
-these produces malformed messages.
+communicate* and *who it's from/to*. Do NOT specify filenames, file
+paths, tag blocks, or file structure — the messenger knows the ark
+message format, the correct `requests/` directory, and will scaffold,
+read, and write correctly. Overriding these produces malformed or
+misplaced messages.
 **Be explicit about direction.** Hermes is Haiku — it answers what
 you ask, not what you meant. Say exactly what you need:
 - "unanswered requests to PROJECT" — `--unmatched` does this in one command now

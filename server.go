@@ -561,6 +561,9 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	done := srv.db.NewSearchCache()
+	defer done()
+
 	opts := buildSearchOpts(req)
 
 	// R657, R658, R659: session-scoped search
@@ -694,6 +697,20 @@ func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status.UIPort = srv.uiPort
 	}
 	status.UIIndexing = len(srv.currentlyIndexing()) > 0
+
+	// R906: --db record counts
+	if r.URL.Query().Get("db") == "true" {
+		dbCounts, err := srv.db.StatusDB()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, struct {
+			*StatusInfo
+			DB *DBRecordCounts `json:"db"`
+		}{status, dbCounts})
+		return
+	}
 	writeJSON(w, status)
 }
 

@@ -76,16 +76,22 @@ Session.loop() ──> timer fires
 ## Flow: CLI with --session
 
 ```
-CLI ──> cmdSearch parses --session NAME
+CLI ──> cmdSearch builds request (Session field included)
          │
-         ├──> --session present → force proxy to server
-         │     (server must be running, error if not)
-         │
-         └──> proxy searchRequest{..., Session: NAME}
+         └──> server-first dispatch (see seq-cli-dispatch.md)
                │
-               └──> Server.handleSearch receives session field
-                     └──> (same as "Search with Session" above)
+               ├── [server running]
+               │    └──> proxy POST /search with session field
+               │          └──> Server.handleSearch receives session
+               │                └──> (same as "Search with Session" above)
+               │
+               └── [no server]
+                    └──> local search (session ignored — no actor)
 ```
+
+Note: --session no longer requires a running server. It is passed
+in the normal server-first flow. If the server is unavailable, the
+search runs locally without session caching.
 
 ## Flow: Lua search_grouped with session
 
