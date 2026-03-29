@@ -1365,6 +1365,26 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R864:** The left side of `..` must be an absolute date; no relative-to-relative ranges
 - **R865:** Description text after the date portion is preserved on round-trip edits (reschedule)
 
+### Date Keyword Stripping
+
+- **R996:** `parseDateTrimming` strips recognized start keywords from the front of a date expression before passing to dateparse: `from`, `starting`, `beginning`, `after`, `on`
+- **R997:** `parseDateTrimming` strips recognized end keywords from the front of a date expression before passing to dateparse: `to`, `until`, `through`, `ending`, `before`, `by`
+- **R998:** Keywords are only stripped when followed by a parseable date — `"on time"` does not lose its `on`
+- **R999:** Keyword stripping benefits all date parsing (one-shot events, durations, bounds), not just bounded recurrences
+
+### Bounded Recurring Events
+
+- **R1000:** Recurring events can have a start bound, an end bound, or both
+- **R1001:** Bounds can appear before or after the recurrence spec: `from March 1 to May 30 every Monday at 5pm` and `every Monday at 5pm from March 1 to May 30` are equivalent
+- **R1002:** The `..` range form works for bounds in either order: `2026-03-01..2026-05-30 every Monday at 09:00`
+- **R1003:** Start-only bound: no end, materialize through forward window. `every Sat at 9:30am starting Mar 2 2026`
+- **R1004:** End-only bound: start from first occurrence after now. `every Monday at 5pm until May 30`
+- **R1005:** `computeNext` gains `notBefore` and `notAfter` parameters; returns zero time when next occurrence exceeds `notAfter`
+- **R1006:** Materialization stops at `min(endDate, now + forwardWindow)`
+- **R1007:** Schedule log records parsed bounds as `@ark-event-start:` and `@ark-event-end:` tags so the scheduler reads them directly on startup
+- **R1008:** (inferred) Crank-forward on startup respects bounds — does not create `@ark-event-upcoming:` entries beyond `@ark-event-end:`
+- **R1009:** (inferred) `writeDateIndex` skips schedule log files (`~/.ark/schedule/*`) to prevent cascade — log writes trigger watcher, watcher re-indexes, re-index calls EnsureUpcoming, which writes again
+
 ### Day-Bucket LMDB Indexing
 
 - **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag
@@ -1412,7 +1432,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R871:** `TF|fileid` key stores the list of all dates with day-bucket entries for that file
 - **R872:** On re-index: read `TF|fileid` (one read), delete each `TD|date|fileid|*`, delete `TF|fileid`, write new TD + TF from current content
-- **R873:** (inferred) File deletion follows the same TF-based cleanup path
+- **R873:** File removal (`RemoveFile`, `RemoveByID`) clears TD/TF day bucket records via `Store.ClearDayBuckets`
 
 ### Schedule Log
 
@@ -1532,3 +1552,17 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R983:** All three flags are optional and independent
 - **R984:** (inferred) Profiling wraps the entire cmdSearch scope — DB open through result output
 - **R985:** `ark search --trace FILE` writes a Go execution trace (runtime/trace) covering the full search operation
+
+## Feature: DB Concurrency
+**Source:** specs/db-concurrency.md
+
+- **R986:** All DB operations are serialized through a closure actor (ChanSvc) on `ark.DB`
+- **R987:** Watcher file change operations (reindex, remove) use fire-and-forget (Svc)
+- **R988:** HTTP handler operations use synchronous calls (SvcSync) to return results and status codes
+- **R989:** CLI search operations use synchronous calls (SvcSync) to return results
+- **R990:** The existing reconcileLoop merges into the DB actor — no separate reconcile goroutine
+- **R991:** Watcher batches specific changed/removed paths during throttle window, sends one closure on expiry
+- **R992:** Full reconcile still runs on config change and startup
+- **R993:** (inferred) Session → DB call direction is always one-way; no SvcSync from DB actor back to session actor
+- **R994:** (inferred) Lua source-add operations use fire-and-forget through the Lua session's closure actor
+- **R995:** (inferred) Go-side caches (pathCache, pathToID, frecordCache) are safe by construction — only accessed inside the actor

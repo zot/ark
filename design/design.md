@@ -17,6 +17,17 @@ Tags + FTS give fully functional recall on any hardware.
 
 ## Cross-cutting Concerns
 
+### DB Concurrency (Closure Actor)
+All DB operations are serialized through a closure actor (ChanSvc)
+on `ark.DB`. Three concurrent accessors — watcher goroutine, HTTP
+handler goroutines, Lua/UI goroutine — send closures to the actor
+instead of calling DB methods directly. LMDB handles its own
+concurrency via MVCC; the actor protects the Go-side caches above
+it (pathCache, pathToID, frecordCache). Watcher mutations use
+fire-and-forget (Svc). HTTP/CLI operations use synchronous calls
+(SvcSync). The former reconcileLoop merges into the actor.
+Call direction is always session → DB, never the reverse.
+
 ### LMDB Lifecycle
 microfts2 owns the LMDB environment. Ark opens microfts2 first
 (which creates the env), passes the env to microvec, then opens its

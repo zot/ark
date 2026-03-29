@@ -52,15 +52,77 @@ preserved on edits.
 
 ### Parsing strategy
 
-1. Split on `..` first (range/duration detection)
-2. Parse each side with itlightning/dateparse (token-trimming loop
+1. Strip date keywords (see below) before parsing
+2. Split on `..` first (range/duration detection)
+3. Parse each side with itlightning/dateparse (token-trimming loop
    to separate date from description text)
-3. Existing `computeNext` handles recurring specs
-4. Remainder after date = description text (preserved on round-trip)
+4. Existing `computeNext` handles recurring specs
+5. Remainder after date = description text (preserved on round-trip)
 
 Use itlightning/dateparse — actively maintained fork of
 araddon/dateparse. Handles dozens of date formats without specifying
 which: ISO 8601, `Apr 15 2026`, `4/15/26`, etc.
+
+### Date keyword stripping
+
+`dateparse` handles date formats but not English prepositions.
+Before passing to dateparse, recognized keywords are stripped from
+the front of a date expression:
+
+- start keywords: `from`, `starting`, `beginning`, `after`, `on`
+- end keywords: `to`, `until`, `through`, `ending`, `before`, `by`
+
+This benefits all date parsing, not just bounded recurrences:
+
+```
+@dentist: on April 15 at 9am cleaning
+@vacation: from June 1..June 14
+@review: by March 30 submit feedback
+```
+
+Keywords are only stripped when followed by a parseable date —
+`"on time"` doesn't lose its `on`. The stripping is a single
+pass before `parseDateTrimming`, not embedded in the trimming
+loop.
+
+### Bounded recurring events
+
+Recurring events can have start bounds, end bounds, or both.
+Either order is accepted — bounds can appear before or after the
+recurrence spec:
+
+```
+@standup: every Sat at 9:30am starting Mar 2 2026
+@standup: every Monday at 5pm until May 30
+@standup: from March 1 to May 30 every Monday at 5pm
+@standup: every Monday at 5pm from March 1 to May 30
+```
+
+The `..` range form also works for bounds in either order:
+
+```
+@standup: 2026-03-01..2026-05-30 every Monday at 09:00
+@standup: every Monday at 09:00 2026-03-01..2026-05-30
+```
+
+Semantics:
+- Start-only = no end bound, materialize through forward window
+- End-only = start from first occurrence after now
+- Both = bounded window, either can be omitted independently
+- Materialization stops at `min(endDate, now + forwardWindow)`
+
+`computeNext` gains `notBefore` and `notAfter` parameters. It
+returns zero time when the next occurrence exceeds `notAfter`.
+
+The schedule log records parsed bounds as explicit tags so the
+scheduler reads them directly on startup without re-parsing
+natural language from the source file:
+
+```markdown
+@ark-event-spec: every Monday at 09:00
+@ark-event-start: 2026-03-01
+@ark-event-end: 2026-05-30
+```
 
 ### Anchored-only natural language
 

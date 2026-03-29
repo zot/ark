@@ -30,6 +30,13 @@ type Indexer struct {
 	pubsub    *PubSub         // nil when running without server
 	scheduler *EventScheduler // nil when running without server
 	config    *Config         // for schedule tag checks
+
+	pendingSchedule []scheduleItem // accumulated during scan, drained after
+}
+
+// scheduleItem is a deferred EnsureUpcoming call.
+type scheduleItem struct {
+	tag, value, path string
 }
 
 // SetPubSub injects the pubsub registry. Called by the server after
@@ -54,16 +61,29 @@ func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 	if idx.scheduler == nil || idx.config == nil {
 		return
 	}
+	// Schedule log files are output, not input — skip to prevent cascade.
+	if strings.HasPrefix(path, idx.config.dbPath+"/schedule/") {
+		return
+	}
 	if !idx.config.MatchesScheduleFilter(path) {
 		return
 	}
 	for _, tv := range tagValues {
 		if _, ok := idx.config.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
-			if err := idx.scheduler.EnsureUpcoming(tv.Tag, tv.Value, path); err != nil {
-				log.Printf("schedule: EnsureUpcoming error for @%s in %s: %v", tv.Tag, path, err)
-			}
+			idx.pendingSchedule = append(idx.pendingSchedule, scheduleItem{
+				tag: tv.Tag, value: tv.Value, path: path,
+			})
 		}
 	}
+}
+
+// DrainSchedule returns and clears accumulated schedule items.
+// Called after scan/refresh completes so EnsureUpcoming I/O
+// doesn't block the actor during indexing.
+func (idx *Indexer) DrainSchedule() []scheduleItem {
+	items := idx.pendingSchedule
+	idx.pendingSchedule = nil
+	return items
 }
 
 // WriteDayBucketsForFile parses schedule tags and @ack: entries from
@@ -79,58 +99,65 @@ func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content [
 	if !strings.HasPrefix(path, idx.config.dbPath+"/schedule/") && !idx.config.MatchesScheduleFilter(path) {
 		return
 	}
-	type bucketKey struct{ date, tag string }
-	entryIndex := make(map[bucketKey]int)
+	entryIndex := make(map[bucketMapKey]int)
 	var allEntries []DayBucketEntry
 	var allAcks []AckEntry
 	loc := time.Now().Location()
 
-	for tag, defaultDur := range idx.config.ScheduleTags() {
-		acks := ParseAcks(content, tag)
-		allAcks = append(allAcks, acks...)
+	isScheduleLog := strings.HasPrefix(path, idx.config.dbPath+"/schedule/")
 
-		prefix := "@" + tag + ":"
-		for _, line := range strings.Split(string(content), "\n") {
-			trimmed := strings.TrimSpace(line)
-			pos := strings.Index(trimmed, prefix)
-			if pos < 0 {
-				continue
-			}
-			value := strings.TrimSpace(trimmed[pos+len(prefix):])
-			if value == "" {
-				continue
-			}
+	if isScheduleLog {
+		// R869, R870: schedule log files — parse @ark-event-upcoming: and @ark-event-fired:
+		idx.dayBucketsFromLogFile(fileid, path, content, loc, entryIndex, &allEntries)
+	} else {
+		// Source files — parse @tag: lines for schedule tags
+		for tag, defaultDur := range idx.config.ScheduleTags() {
+			acks := ParseAcks(content, tag)
+			allAcks = append(allAcks, acks...)
 
-			dr, err := ParseDateValue(value, defaultDur, loc)
-			if err != nil {
-				continue
-			}
+			prefix := "@" + tag + ":"
+			for _, line := range strings.Split(string(content), "\n") {
+				trimmed := strings.TrimSpace(line)
+				pos := strings.Index(trimmed, prefix)
+				if pos < 0 {
+					continue
+				}
+				value := strings.TrimSpace(trimmed[pos+len(prefix):])
+				if value == "" {
+					continue
+				}
 
-			start := dr.Start
-			end := dr.End
-			if end.Before(start) {
-				end = start
-			}
-			ev := DayBucketEvent{
-				Start:   dr.Start,
-				End:     dr.End,
-				Summary: dr.Description,
-				AllDay:  dr.AllDay,
-			}
-			for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-				dateStr := d.Format("20060102")
-				key := bucketKey{dateStr, tag}
-				if i, ok := entryIndex[key]; ok {
-					allEntries[i].Events = append(allEntries[i].Events, ev)
-				} else {
-					entryIndex[key] = len(allEntries)
-					allEntries = append(allEntries, DayBucketEntry{
-						Date:   dateStr,
-						Tag:    tag,
-						Path:   path,
-						FileID: fileid,
-						Events: []DayBucketEvent{ev},
-					})
+				dr, err := ParseDateValue(value, defaultDur, loc)
+				if err != nil {
+					continue
+				}
+
+				start := dr.Start
+				end := dr.End
+				if end.Before(start) {
+					end = start
+				}
+				ev := DayBucketEvent{
+					Start:   dr.Start,
+					End:     dr.End,
+					Summary: dr.Description,
+					AllDay:  dr.AllDay,
+				}
+				for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+					dateStr := d.Format("20060102")
+					key := bucketMapKey{dateStr, tag}
+					if i, ok := entryIndex[key]; ok {
+						allEntries[i].Events = append(allEntries[i].Events, ev)
+					} else {
+						entryIndex[key] = len(allEntries)
+						allEntries = append(allEntries, DayBucketEntry{
+							Date:   dateStr,
+							Tag:    tag,
+							Path:   path,
+							FileID: fileid,
+							Events: []DayBucketEvent{ev},
+						})
+					}
 				}
 			}
 		}
@@ -142,8 +169,67 @@ func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content [
 	}
 
 	// R970, R971: resolve check-gaps when acks cover fired dates
-	if idx.scheduler != nil && len(allAcks) > 0 {
+	if idx.scheduler != nil && !isScheduleLog && len(allAcks) > 0 {
 		idx.scheduler.ResolveCheckGapsFromAcks(path, allAcks)
+	}
+}
+
+// dayBucketsFromLogFile parses a schedule log file and creates day bucket entries
+// from @ark-event-upcoming: and @ark-event-fired: tags. The event's tag name comes
+// from @ark-event: in each chunk.
+// CRC: crc-Indexer.md | R869, R870
+type bucketMapKey struct{ date, tag string }
+
+func (idx *Indexer) dayBucketsFromLogFile(fileid uint64, path string, content []byte, loc *time.Location, entryIndex map[bucketMapKey]int, allEntries *[]DayBucketEntry) {
+	var curTag string
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "@ark-event:") {
+			curTag = strings.TrimSpace(trimmed[len("@ark-event:"):])
+			continue
+		}
+		if curTag == "" {
+			continue
+		}
+		var dateStr string
+		if strings.HasPrefix(trimmed, "@ark-event-upcoming:") {
+			dateStr = strings.TrimSpace(trimmed[len("@ark-event-upcoming:"):])
+		} else if strings.HasPrefix(trimmed, "@ark-event-fired:") {
+			dateStr = strings.TrimSpace(trimmed[len("@ark-event-fired:"):])
+		} else {
+			continue
+		}
+		t, err := ParseDate(dateStr)
+		if err != nil {
+			continue
+		}
+		dayStr := t.Format("20060102")
+		ev := DayBucketEvent{
+			Start: t,
+			End:   t,
+		}
+		// Apply default duration if known
+		if defaultDur, ok := idx.config.IsScheduleTag(curTag); ok && defaultDur != "" {
+			if defaultDur == "all-day" {
+				ev.AllDay = true
+				ev.End = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, loc)
+			} else if d, derr := time.ParseDuration(defaultDur); derr == nil {
+				ev.End = t.Add(d)
+			}
+		}
+		key := bucketMapKey{dayStr, curTag}
+		if i, ok := entryIndex[key]; ok {
+			(*allEntries)[i].Events = append((*allEntries)[i].Events, ev)
+		} else {
+			entryIndex[key] = len(*allEntries)
+			*allEntries = append(*allEntries, DayBucketEntry{
+				Date:   dayStr,
+				Tag:    curTag,
+				Path:   path,
+				FileID: fileid,
+				Events: []DayBucketEvent{ev},
+			})
+		}
 	}
 }
 
@@ -204,6 +290,10 @@ func (idx *Indexer) RemoveFile(path string) error {
 			return fmt.Errorf("remove tags %s: %w", path, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
+		// Clean up day bucket entries (TD/TF records)
+		if err := idx.store.ClearDayBuckets(fileid); err != nil {
+			return fmt.Errorf("clear day buckets %s: %w", path, err)
+		}
 	}
 	return nil
 }
@@ -224,6 +314,10 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 			return fmt.Errorf("remove tags %d: %w", fileid, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
+		// Clean up day bucket entries (TD/TF records)
+		if err := idx.store.ClearDayBuckets(fileid); err != nil {
+			return fmt.Errorf("clear day buckets %d: %w", fileid, err)
+		}
 	}
 	return nil
 }

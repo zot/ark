@@ -28,7 +28,8 @@ import (
 var Version = "dev"
 
 // DB is the main ark facade. It coordinates microfts2, microvec,
-// and the ark subdatabase.
+// and the ark subdatabase. All operations are serialized through a
+// closure actor (svc channel). CRC: crc-DB.md | R986
 type DB struct {
 	fts     *microfts2.DB
 	vec     *microvec.DB
@@ -42,6 +43,7 @@ type DB struct {
 
 	dbPath   string
 	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
+	svc      chan func()       // R986: closure actor channel
 }
 
 // InitOpts are options for creating a new ark database.
@@ -262,12 +264,39 @@ func Open(dbPath string) (*DB, error) {
 		scanner: &Scanner{config: config, matcher: matcher, fts: fts},
 		search:  &Searcher{fts: fts, vec: vec, store: store, config: config},
 		dbPath:  dbPath,
+		svc:     make(chan func(), 8),
 	}
+	runSvc(db.svc)
 	return db, nil
 }
 
-// Close closes the database in reverse order.
+// Do sends a fire-and-forget operation to the DB actor.
+// Used by the watcher for file changes and reconcile. R987
+func (db *DB) Do(fn func(*DB)) {
+	svc(db.svc, func() { fn(db) })
+}
+
+// Sync sends an operation to the DB actor and blocks until it completes.
+// Used by HTTP handlers and CLI for operations that return results. R988, R989
+func Sync[T any](db *DB, fn func(*DB) (T, error)) (T, error) {
+	return svcSync(db.svc, func() (T, error) {
+		return fn(db)
+	})
+}
+
+// SyncVoid sends a void operation to the DB actor and blocks until it completes.
+func SyncVoid(db *DB, fn func(*DB) error) error {
+	return svcSyncVoid(db.svc, func() error {
+		return fn(db)
+	})
+}
+
+// Close stops the actor and closes the database in reverse order.
 func (db *DB) Close() error {
+	if db.svc != nil {
+		close(db.svc)
+		db.svc = nil
+	}
 	// store doesn't need explicit close (shares env with fts)
 	if err := db.vec.Close(); err != nil {
 		return err
@@ -372,6 +401,7 @@ func (db *DB) ReloadConfig() error {
 	db.config = cfg
 	db.scanner.config = cfg
 	db.search.config = cfg
+	db.indexer.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
 	return nil
 }

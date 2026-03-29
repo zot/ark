@@ -27,6 +27,136 @@ func isRecurringSpec(value string) bool {
 	return strings.Contains(strings.ToLower(value), "every ")
 }
 
+// dateStartKeywords are stripped from the front of a date expression before parsing.
+// CRC: crc-EventScheduler.md | R996, R999
+var dateStartKeywords = []string{"from", "starting", "beginning", "after", "on"}
+
+// dateEndKeywords are stripped from the front of a date expression before parsing.
+// CRC: crc-EventScheduler.md | R997, R999
+var dateEndKeywords = []string{"to", "until", "through", "ending", "before", "by"}
+
+// allDateKeywords is the combined list, allocated once.
+var allDateKeywords = append(append([]string{}, dateStartKeywords...), dateEndKeywords...)
+
+// stripDateKeyword removes a recognized date keyword from the front of s.
+// Returns the stripped string and the keyword found (empty if none).
+// Only strips when the remainder parses as a date.
+// CRC: crc-EventScheduler.md | R996, R997, R998
+func stripDateKeyword(s string, loc *time.Location) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	for _, kw := range allDateKeywords {
+		if rest, ok := strings.CutPrefix(lower, kw+" "); ok {
+			rest = strings.TrimSpace(rest)
+			// Only strip if remainder starts with something dateparse can handle.
+			_, _, err := parseDateTrimmingRaw(rest, loc)
+			if err == nil {
+				// Return from original string to preserve case of remainder.
+				return strings.TrimSpace(s[len(kw)+1:]), kw
+			}
+		}
+	}
+	return s, ""
+}
+
+// extractBounds extracts start/end bounds from a recurring event value.
+// Looks for keyword+date pairs or DATE..DATE adjacent to "every".
+// Returns zero times for missing bounds, and the pure recurrence spec as remainder.
+// CRC: crc-EventScheduler.md | R1000, R1001, R1002, R1003, R1004
+func extractBounds(value string, loc *time.Location) (notBefore, notAfter time.Time, remainder string) {
+	value = strings.TrimSpace(value)
+
+	// Find "every" to split the string.
+	lower := strings.ToLower(value)
+	everyIdx := strings.Index(lower, "every ")
+	if everyIdx < 0 {
+		return time.Time{}, time.Time{}, value
+	}
+
+	before := strings.TrimSpace(value[:everyIdx])
+	after := strings.TrimSpace(value[everyIdx:])
+
+	// Try DATE..DATE form on the non-"every" side first, then trailing.
+	notBefore, notAfter, before = tryDotDotBounds(before, loc)
+	if notBefore.IsZero() && notAfter.IsZero() {
+		// DATE..DATE might trail after the recurrence: "every Mon at 9 2026-03-01..2026-05-30"
+		// Find the last space-separated token containing ".." in after.
+		if dotIdx := strings.LastIndex(after, ".."); dotIdx > 0 {
+			// Find the start of the date range by walking back to a space.
+			rangeStart := strings.LastIndex(after[:dotIdx], " ")
+			if rangeStart >= 0 {
+				recurrence := strings.TrimSpace(after[:rangeStart])
+				dateRange := strings.TrimSpace(after[rangeStart:])
+				nb, na, rem := tryDotDotBounds(dateRange, loc)
+				if !nb.IsZero() || !na.IsZero() {
+					notBefore, notAfter = nb, na
+					after = strings.TrimSpace(recurrence + " " + rem)
+				}
+			}
+		}
+	}
+
+	// Try keyword+date on both sides.
+	if notBefore.IsZero() {
+		notBefore, before = tryKeywordDate(before, dateStartKeywords, loc)
+	}
+	if notAfter.IsZero() {
+		notAfter, before = tryKeywordDate(before, dateEndKeywords, loc)
+	}
+	if notBefore.IsZero() {
+		notBefore, after = tryKeywordDate(after, dateStartKeywords, loc)
+	}
+	if notAfter.IsZero() {
+		notAfter, after = tryKeywordDate(after, dateEndKeywords, loc)
+	}
+
+	remainder = strings.TrimSpace(before + " " + after)
+	return
+}
+
+// tryDotDotBounds looks for DATE..DATE in s and extracts both dates.
+func tryDotDotBounds(s string, loc *time.Location) (start, end time.Time, remainder string) {
+	dotIdx := strings.Index(s, "..")
+	if dotIdx < 0 {
+		return time.Time{}, time.Time{}, s
+	}
+	leftStr := strings.TrimSpace(s[:dotIdx])
+	rightStr := strings.TrimSpace(s[dotIdx+2:])
+
+	startT, _, err1 := parseDateTrimmingRaw(leftStr, loc)
+	endT, endDesc, err2 := parseDateTrimmingRaw(rightStr, loc)
+	if err1 != nil || err2 != nil {
+		return time.Time{}, time.Time{}, s
+	}
+	return startT, endT, strings.TrimSpace(endDesc)
+}
+
+// tryKeywordDate looks for any keyword from the list followed by a date in s.
+// Returns the parsed date and s with the keyword+date removed.
+func tryKeywordDate(s string, keywords []string, loc *time.Location) (time.Time, string) {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	for _, kw := range keywords {
+		// Try keyword at the start of s.
+		if rest, ok := strings.CutPrefix(lower, kw+" "); ok {
+			rest = strings.TrimSpace(rest)
+			t, desc, err := parseDateTrimmingRaw(rest, loc)
+			if err == nil {
+				return t, strings.TrimSpace(desc)
+			}
+		}
+		// Try keyword in the middle/end of s.
+		needle := " " + kw + " "
+		if idx := strings.Index(lower, needle); idx >= 0 {
+			before := strings.TrimSpace(s[:idx])
+			after := strings.TrimSpace(s[idx+len(needle):])
+			t, desc, err := parseDateTrimmingRaw(after, loc)
+			if err == nil {
+				return t, strings.TrimSpace(before + " " + desc)
+			}
+		}
+	}
+	return time.Time{}, s
+}
+
 // dayNames maps day name strings to time.Weekday (package-level, allocated once).
 var dayNames = map[string]time.Weekday{
 	"sunday": time.Sunday, "sun": time.Sunday,
@@ -119,12 +249,14 @@ func (es *EventScheduler) reportError(subsystem, message string) {
 // logChunk represents one event definition in a schedule log file.
 // CRC: crc-EventScheduler.md | R899, R900, R901
 type logChunk struct {
-	Event     string   // tag name (e.g., "standup")
-	Source    string   // source file path
-	Spec      string   // recurring spec (e.g., "every Monday at 09:00")
-	Fired     []string // @ark-event-fired: date strings
-	Upcoming  []string // @ark-event-upcoming: date strings
-	CheckGaps []string // @check-gap: date strings — unresolved fired events (R965, R969)
+	Event     string    // tag name (e.g., "standup")
+	Source    string    // source file path
+	Spec      string    // recurring spec (e.g., "every Monday at 09:00")
+	NotBefore time.Time // R1007: @ark-event-start: bound (zero = no bound)
+	NotAfter  time.Time // R1007: @ark-event-end: bound (zero = no bound)
+	Fired     []string  // @ark-event-fired: date strings
+	Upcoming  []string  // @ark-event-upcoming: date strings
+	CheckGaps []string  // @check-gap: date strings — unresolved fired events (R965, R969)
 }
 
 // eventID builds a deterministic event identifier.
@@ -157,7 +289,7 @@ func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool)
 	windowEnd := now.AddDate(0, 6, 0)
 	existing := buildDateSet(c)
 	added := 0
-	next := computeNext(c.Spec, now)
+	next := computeNext(c.Spec, now, c.NotAfter)
 	for !next.IsZero() && next.Before(windowEnd) {
 		dateStr := next.Format(scheduleDateFmt)
 		if !existing[dateStr] {
@@ -174,7 +306,7 @@ func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool)
 				})
 			}
 		}
-		next = computeNext(c.Spec, next)
+		next = computeNext(c.Spec, next, c.NotAfter)
 	}
 	return added
 }
@@ -216,6 +348,14 @@ func readLogFile(path string) ([]logChunk, error) {
 				cur.Source = strings.TrimSpace(line[len("@ark-event-source:"):])
 			case strings.HasPrefix(line, "@ark-event-spec:"):
 				cur.Spec = strings.TrimSpace(line[len("@ark-event-spec:"):])
+			case strings.HasPrefix(line, "@ark-event-start:"):
+				if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-start:"):])); err == nil {
+					cur.NotBefore = t
+				}
+			case strings.HasPrefix(line, "@ark-event-end:"):
+				if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-end:"):])); err == nil {
+					cur.NotAfter = t
+				}
 			case strings.HasPrefix(line, "@ark-event-fired:"):
 				cur.Fired = append(cur.Fired, strings.TrimSpace(line[len("@ark-event-fired:"):]))
 			case strings.HasPrefix(line, "@ark-event-upcoming:"):
@@ -243,6 +383,12 @@ func writeLogFile(path string, chunks []logChunk) error {
 		fmt.Fprintf(&buf, "@ark-event-source: %s\n", c.Source)
 		if c.Spec != "" {
 			fmt.Fprintf(&buf, "@ark-event-spec: %s\n", c.Spec)
+		}
+		if !c.NotBefore.IsZero() {
+			fmt.Fprintf(&buf, "@ark-event-start: %s\n", c.NotBefore.Format("2006-01-02"))
+		}
+		if !c.NotAfter.IsZero() {
+			fmt.Fprintf(&buf, "@ark-event-end: %s\n", c.NotAfter.Format("2006-01-02"))
 		}
 		buf.WriteString("\n")
 		for _, f := range c.Fired {
@@ -510,7 +656,7 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 		// R877: single lookahead for the next occurrence (not full window)
 		if event.Recurring != "" {
 			now := time.Now()
-			next := computeNext(event.Recurring, now)
+			next := computeNext(event.Recurring, now, time.Time{})
 			if !next.IsZero() {
 				dateStr := next.Format(scheduleDateFmt)
 				if !slices.Contains(c.Upcoming, dateStr) { // R905: exception check
@@ -686,8 +832,10 @@ func parseScheduledTime(value string, now time.Time) time.Time {
 }
 
 // computeNext computes the next occurrence of a recurring event after the given time.
+// If notAfter is non-zero, returns zero time when the next occurrence exceeds it.
 // All matching is case-insensitive.
-func computeNext(spec string, after time.Time) time.Time {
+// CRC: crc-EventScheduler.md | R822, R823, R824, R1005
+func computeNext(spec string, after time.Time, notAfter time.Time) time.Time {
 	spec = strings.TrimSpace(spec)
 	// Strip description after " -- "
 	if idx := strings.Index(spec, " -- "); idx >= 0 {
@@ -716,7 +864,7 @@ func computeNext(spec string, after time.Time) time.Time {
 			for next.Weekday() != day || !next.After(after) {
 				next = next.AddDate(0, 0, 1)
 			}
-			return next
+			return boundCheck(next, notAfter)
 		}
 
 		// "every weekday" / "every weekend"
@@ -731,7 +879,7 @@ func computeNext(spec string, after time.Time) time.Time {
 				match := isWeekday && wd >= time.Monday && wd <= time.Friday ||
 					!isWeekday && (wd == time.Saturday || wd == time.Sunday)
 				if match {
-					return next
+					return boundCheck(next, notAfter)
 				}
 				next = next.AddDate(0, 0, 1)
 			}
@@ -744,12 +892,12 @@ func computeNext(spec string, after time.Time) time.Time {
 				if !next.After(after) {
 					next = next.AddDate(0, 1, 0)
 				}
-				return next
+				return boundCheck(next, notAfter)
 			}
 			// "every Nth WEEKDAY" — e.g. "every 3rd monday"
 			remaining := strings.TrimSpace(rest[strings.IndexByte(rest, ' ')+1:])
 			if day, ok := parseDayName(remaining); ok {
-				return nthWeekdayInMonth(after, n, day, hour, minute)
+				return boundCheck(nthWeekdayInMonth(after, n, day, hour, minute), notAfter)
 			}
 		}
 
@@ -760,7 +908,7 @@ func computeNext(spec string, after time.Time) time.Time {
 				startOfHour := time.Date(after.Year(), after.Month(), after.Day(), after.Hour(), 0, 0, 0, after.Location())
 				elapsed := after.Sub(startOfHour)
 				intervals := int(elapsed/d) + 1
-				return startOfHour.Add(time.Duration(intervals) * d)
+				return boundCheck(startOfHour.Add(time.Duration(intervals)*d), notAfter)
 			}
 		}
 		if suffix, ok := strings.CutSuffix(rest, "h"); ok {
@@ -769,22 +917,33 @@ func computeNext(spec string, after time.Time) time.Time {
 				startOfDay := time.Date(after.Year(), after.Month(), after.Day(), 0, 0, 0, 0, after.Location())
 				elapsed := after.Sub(startOfDay)
 				intervals := int(elapsed/d) + 1
-				return startOfDay.Add(time.Duration(intervals) * d)
+				return boundCheck(startOfDay.Add(time.Duration(intervals)*d), notAfter)
 			}
 		}
 	}
 
 	// "MM-DD" or "MM/DD" — annual shorthand (same as parseScheduledTime)
 	if t := parseScheduledTime(spec, after); !t.IsZero() {
-		return t
+		return boundCheck(t, notAfter)
 	}
 
 	// "annual" — next year same date
 	if lower == "annual" {
-		return after.AddDate(1, 0, 0)
+		return boundCheck(after.AddDate(1, 0, 0), notAfter)
 	}
 
 	return time.Time{}
+}
+
+// boundCheck returns zero time if t exceeds notAfter (when notAfter is non-zero).
+func boundCheck(t time.Time, notAfter time.Time) time.Time {
+	if t.IsZero() || notAfter.IsZero() {
+		return t
+	}
+	if t.After(notAfter) {
+		return time.Time{}
+	}
+	return t
 }
 
 // parseDayName matches a day name case-insensitively.
@@ -921,8 +1080,20 @@ type ParseError struct {
 func (e *ParseError) Error() string { return e.Msg }
 
 // parseDateTrimming uses dateparse with a token-trimming loop to separate
-// the date from trailing description text. R860, R861
+// the date from trailing description text. Strips date keywords first.
+// CRC: crc-EventScheduler.md | R860, R861, R996, R997, R998, R999
 func parseDateTrimming(s string, loc *time.Location) (time.Time, string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, "", errEmptyValue
+	}
+	// Strip date keyword if present (R996, R997, R998).
+	stripped, _ := stripDateKeyword(s, loc)
+	return parseDateTrimmingRaw(stripped, loc)
+}
+
+// parseDateTrimmingRaw is the core trimming loop without keyword stripping.
+func parseDateTrimmingRaw(s string, loc *time.Location) (time.Time, string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, "", errEmptyValue

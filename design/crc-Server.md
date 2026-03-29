@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777, R789, R790, R799, R804, R805, R812, R813, R835, R836, R837, R838, R839, R840, R841, R842, R843, R844, R845, R846, R847, R848, R893, R894, R895, R896, R897, R898, R914, R917, R919, R920, R921, R923, R927, R928, R929, R930, R931, R932, R961, R962, R963, R975, R976, R977, R906
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777, R789, R790, R799, R804, R805, R812, R813, R835, R836, R837, R838, R839, R840, R841, R842, R843, R844, R845, R846, R847, R848, R893, R894, R895, R896, R897, R898, R914, R917, R919, R920, R921, R923, R927, R928, R929, R930, R931, R932, R961, R962, R963, R975, R976, R977, R906, R990, R991, R992, R994
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -14,7 +14,7 @@ Optionally starts the embedded ui-engine alongside.
 - verbosity: int — verbose level (0–4), propagated to Logv and ui-engine
 - uiRuntime: *flib.Runtime — embedded Frictionless runtime (nil if UI disabled/failed)
 - watcher: *fsnotify.Watcher — filesystem watcher (nil if watching disabled)
-- reconcileCh: chan struct{} — triggers reconciliation (serialized)
+- reconcileCh: removed — reconcile closures go through DB actor (R990)
 - ignoredPaths: map[string]struct{} — negative cache of non-indexable paths, cleared on config reload
 - uiPort: int — HTTP port the ui-engine is listening on (0 if not started)
 - sessions: map[string]*Session — named sessions, autocreated on demand (mutex-protected)
@@ -34,9 +34,10 @@ Optionally starts the embedded ui-engine alongside.
   throttled event loop goroutine.
 - StopWatching(dirs): remove fsnotify watches for removed sources
 - handleFileEvent(path): throttled on-notify — immediate index on
-  first event, then throttle window. Events during window ignored.
-  Window expiry triggers single re-index of current state. Max wait
-  ceiling prevents starvation.
+  first event, then throttle window. During window, accumulates
+  specific changed/removed paths. Window expiry sends one closure
+  to DB actor processing only those paths (R991). Max wait ceiling
+  prevents starvation. Full reconcile on config change/startup (R992).
 - isIgnored(path): check negative cache, then DB.IsIndexable if miss.
   Non-indexable paths are cached. Directory events and ark.toml bypass.
 - clearIgnoredPaths(): reset the negative cache — called on config reload

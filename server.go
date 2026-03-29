@@ -41,7 +41,6 @@ type Server struct {
 	noScan          bool
 	uiRuntime       *flib.Runtime
 	watcher         *fsnotify.Watcher
-	reconcileCh     chan struct{}
 	ignoredPaths    map[string]struct{} // negative cache: non-indexable paths
 	indexingMu      sync.Mutex
 	indexingSources []string // source dirs currently being indexed
@@ -140,13 +139,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
 
 	srv := &Server{
-		db:          db,
-		listener:    listener,
-		pidPath:     pidPath,
-		noScan:      opts.NoScan,
-		reconcileCh: make(chan struct{}, 1),
-		pubsub:      ps,
-		scheduler:   sched,
+		db:        db,
+		listener:  listener,
+		pidPath:   pidPath,
+		noScan:    opts.NoScan,
+		pubsub:    ps,
+		scheduler: sched,
 	}
 
 	// Wire pubsub into the indexer so tag extraction publishes events
@@ -163,10 +161,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		}
 	}()
 
-	// Reconciliation goroutine — serializes all reconcile requests.
-	// Buffered channel ensures at most one pending request queues
-	// behind a running reconciliation.
-	go srv.reconcileLoop()
+	// Reconciliation goes through the DB actor via srv.reconcile() (R990)
 
 	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
 	sigCh := make(chan os.Signal, 1)
@@ -215,7 +210,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// R972, R973: scan for unresolved check-gaps on startup
 	if missed := sched.ScanCheckGaps(7); len(missed) > 0 && srv.db != nil {
 		content := strings.Join(missed, "")
-		srv.db.AppendTmpFile("tmp://watchdog/missed-events", "markdown", []byte(content))
+		SyncVoid(srv.db, func(db *DB) error {
+			_, err := db.AppendTmpFile("tmp://watchdog/missed-events", "markdown", []byte(content))
+			return err
+		})
 	}
 	// R810: Start quarter chime after reconciliation
 	sched.AddChime()
@@ -372,30 +370,23 @@ func (srv *Server) ReloadUIEngine() error {
 	return nil
 }
 
-// reconcileLoop processes reconciliation requests serially.
-// Each request triggers a full sources-check → scan → refresh cycle.
-func (srv *Server) reconcileLoop() {
-	for range srv.reconcileCh {
-		srv.doReconcile()
-	}
-}
-
-// reconcile requests a reconciliation cycle. Non-blocking — if a
-// reconciliation is already running, the request queues (buffer of 1).
-// If the buffer is full, the request is a no-op since a pending
-// reconciliation will pick up the latest state anyway.
+// reconcile sends a reconciliation cycle through the DB actor.
+// Fire-and-forget — the watcher doesn't need the result. R987, R990
 func (srv *Server) reconcile() {
-	select {
-	case srv.reconcileCh <- struct{}{}:
-	default:
-		// Already one queued — filesystem state will be current when it runs
-	}
+	srv.db.Do(func(db *DB) {
+		srv.doReconcile(db)
+		pending := db.indexer.DrainSchedule()
+		if len(pending) > 0 {
+			go srv.processScheduleItems(pending)
+		}
+	})
 }
 
 // doReconcile runs the actual reconciliation: sources-check, scan, refresh.
 // After sources-check, updates watches for any new/removed sources (R351).
-func (srv *Server) doReconcile() {
-	if result, err := srv.db.SourcesCheck(); err != nil {
+// Called inside the DB actor.
+func (srv *Server) doReconcile(db *DB) {
+	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
 	} else {
 		if len(result.Added) > 0 {
@@ -410,21 +401,65 @@ func (srv *Server) doReconcile() {
 	}
 	// Collect source dirs for indexing state
 	var sourceDirs []string
-	for _, src := range srv.db.Config().Sources {
+	for _, src := range db.Config().Sources {
 		sourceDirs = append(sourceDirs, src.Dir)
 	}
 	srv.setIndexing(sourceDirs)
 	defer srv.setIndexing(nil)
 
 	log.Println("reconcile: scanning...")
-	if _, err := srv.db.Scan(); err != nil {
+	if _, err := db.Scan(); err != nil {
 		log.Printf("reconcile: scan error: %v", err)
 	}
 	log.Println("reconcile: refreshing...")
-	if err := srv.db.Refresh(nil); err != nil {
+	if err := db.Refresh(nil); err != nil {
 		log.Printf("reconcile: refresh error: %v", err)
 	}
 	log.Println("reconcile: complete")
+}
+
+// processScheduleItems runs EnsureUpcoming for accumulated schedule items
+// outside the DB actor so file I/O doesn't block indexing.
+func (srv *Server) processScheduleItems(items []scheduleItem) {
+	if len(items) == 0 || srv.scheduler == nil {
+		return
+	}
+	log.Printf("schedule: processing %d deferred items", len(items)) // TODO: remove after testing
+	for _, item := range items {
+		if err := srv.scheduler.EnsureUpcoming(item.tag, item.value, item.path); err != nil {
+			log.Printf("schedule: EnsureUpcoming error for @%s in %s: %v", item.tag, item.path, err)
+		}
+	}
+	// Scan picks up new log files, then write day buckets directly
+	// from the log content. We don't rely on refresh because the file
+	// was just created — it's not stale.
+	SyncVoid(srv.db, func(db *DB) error {
+		if _, err := db.Scan(); err != nil {
+			log.Printf("schedule: post-scan error: %v", err)
+		}
+		// Write day buckets for each schedule log file
+		schedDir := db.dbPath + "/schedule/"
+		entries, err := os.ReadDir(schedDir)
+		if err != nil {
+			return nil // no schedule dir yet
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := schedDir + entry.Name()
+			status, err := db.fts.CheckFile(path)
+			if err != nil {
+				continue // not indexed yet
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			db.indexer.WriteDayBucketsForFile(status.FileID, path, content)
+		}
+		return nil
+	})
 }
 
 func PidFilePath(dbPath string) string {
@@ -543,6 +578,7 @@ func (srv *Server) GetOrCreateSession(name string) *Session {
 	return s
 }
 
+// CRC: crc-Server.md | R986, R988
 func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req searchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -555,15 +591,6 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// R686: onlyIfTmp — return 204 if no tmp files exist
-	if req.OnlyIfTmp && !srv.db.HasTmp() {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	done := srv.db.NewSearchCache()
-	defer done()
-
 	opts := buildSearchOpts(req)
 
 	// R657, R658, R659: session-scoped search
@@ -571,23 +598,25 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		sess := srv.GetOrCreateSession(req.Session)
 		var results []SearchResultEntry
 		err := sess.RunSearch(req.Query, func(cache *microfts2.ChunkCache) error {
-			var searchErr error
-			if req.Fuzzy {
-				results, searchErr = srv.db.SearchFuzzy(req.Query, opts)
-			} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
-				results, searchErr = srv.db.SearchSplit(opts)
-			} else {
-				results, searchErr = srv.db.SearchCombined(req.Query, opts)
-			}
-			if searchErr != nil {
+			return SyncVoid(srv.db, func(db *DB) error {
+				var searchErr error
+				if req.Fuzzy {
+					results, searchErr = db.SearchFuzzy(req.Query, opts)
+				} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
+					results, searchErr = db.SearchSplit(opts)
+				} else {
+					results, searchErr = db.SearchCombined(req.Query, opts)
+				}
+				if searchErr != nil {
+					return searchErr
+				}
+				if req.Tags || req.Chunks {
+					results, searchErr = db.FillChunksUsing(results, cache)
+				} else if req.Files {
+					results, searchErr = db.FillFiles(results)
+				}
 				return searchErr
-			}
-			if req.Tags || req.Chunks {
-				results, searchErr = srv.db.FillChunksUsing(results, cache)
-			} else if req.Files {
-				results, searchErr = srv.db.FillFiles(results)
-			}
-			return searchErr
+			})
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -601,28 +630,44 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No session — existing per-query behavior
-	var results []SearchResultEntry
-	var err error
-	if req.Fuzzy {
-		results, err = srv.db.SearchFuzzy(req.Query, opts)
-	} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
-		results, err = srv.db.SearchSplit(opts)
-	} else {
-		results, err = srv.db.SearchCombined(req.Query, opts)
-	}
+	// No session — direct through DB actor
+	results, err := Sync(srv.db, func(db *DB) ([]SearchResultEntry, error) {
+		// R686: onlyIfTmp — return 204 if no tmp files exist
+		if req.OnlyIfTmp && !db.HasTmp() {
+			return nil, nil // sentinel: caller checks
+		}
+
+		done := db.NewSearchCache()
+		defer done()
+
+		var results []SearchResultEntry
+		var err error
+		if req.Fuzzy {
+			results, err = db.SearchFuzzy(req.Query, opts)
+		} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
+			results, err = db.SearchSplit(opts)
+		} else {
+			results, err = db.SearchCombined(req.Query, opts)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if req.Tags || req.Chunks {
+			results, err = db.FillChunks(results)
+		} else if req.Files {
+			results, err = db.FillFiles(results)
+		}
+		return results, err
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if req.Tags || req.Chunks {
-		results, err = srv.db.FillChunks(results)
-	} else if req.Files {
-		results, err = srv.db.FillFiles(results)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// onlyIfTmp sentinel
+	if req.OnlyIfTmp && results == nil {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -639,7 +684,9 @@ func (srv *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.Add(req.Paths, req.Strategy); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.Add(req.Paths, req.Strategy)
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -652,7 +699,9 @@ func (srv *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.Remove(req.Patterns); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.Remove(req.Patterns)
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -660,14 +709,25 @@ func (srv *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleScan(w http.ResponseWriter, r *http.Request) {
-	results, err := srv.db.Scan()
+	type scanResult struct {
+		results *ScanResults
+		pending []scheduleItem
+	}
+	sr, err := Sync(srv.db, func(db *DB) (scanResult, error) {
+		results, err := db.Scan()
+		pending := db.indexer.DrainSchedule()
+		return scanResult{results, pending}, err
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if len(sr.pending) > 0 {
+		go srv.processScheduleItems(sr.pending)
+	}
 	writeJSON(w, map[string]any{
-		"newFiles":      len(results.NewFiles),
-		"newUnresolved": len(results.NewUnresolved),
+		"newFiles":      len(sr.results.NewFiles),
+		"newUnresolved": len(sr.results.NewUnresolved),
 	})
 }
 
@@ -677,45 +737,69 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.Refresh(req.Patterns); err != nil {
+	var pending []scheduleItem
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		err := db.Refresh(req.Patterns)
+		pending = db.indexer.DrainSchedule()
+		return err
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if len(pending) > 0 {
+		go srv.processScheduleItems(pending)
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // CRC: crc-Server.md
 func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := srv.db.Status()
+	wantDB := r.URL.Query().Get("db") == "true"
+
+	type statusResult struct {
+		status   *StatusInfo
+		dbCounts *DBRecordCounts
+	}
+	result, err := Sync(srv.db, func(db *DB) (statusResult, error) {
+		status, err := db.Status()
+		if err != nil {
+			return statusResult{}, err
+		}
+		var dbCounts *DBRecordCounts
+		if wantDB {
+			dbCounts, err = db.StatusDB()
+			if err != nil {
+				return statusResult{}, err
+			}
+		}
+		return statusResult{status, dbCounts}, nil
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// R437-R441: Enrich with UI fields
-	if srv.uiRuntime != nil {
-		status.UIRunning = true
-		status.UIPort = srv.uiPort
-	}
-	status.UIIndexing = len(srv.currentlyIndexing()) > 0
 
-	// R906: --db record counts
-	if r.URL.Query().Get("db") == "true" {
-		dbCounts, err := srv.db.StatusDB()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// R437-R441: Enrich with UI fields (not DB state — safe outside actor)
+	if srv.uiRuntime != nil {
+		result.status.UIRunning = true
+		result.status.UIPort = srv.uiPort
+	}
+	result.status.UIIndexing = len(srv.currentlyIndexing()) > 0
+
+	if result.dbCounts != nil {
 		writeJSON(w, struct {
 			*StatusInfo
 			DB *DBRecordCounts `json:"db"`
-		}{status, dbCounts})
+		}{result.status, result.dbCounts})
 		return
 	}
-	writeJSON(w, status)
+	writeJSON(w, result.status)
 }
 
 func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
-	files, err := srv.db.Files()
+	files, err := Sync(srv.db, func(db *DB) ([]string, error) {
+		return db.Files()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -724,7 +808,9 @@ func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleStale(w http.ResponseWriter, r *http.Request) {
-	stale, err := srv.db.Stale()
+	stale, err := Sync(srv.db, func(db *DB) ([]string, error) {
+		return db.Stale()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -733,7 +819,9 @@ func (srv *Server) handleStale(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleMissing(w http.ResponseWriter, r *http.Request) {
-	missing, err := srv.db.Missing()
+	missing, err := Sync(srv.db, func(db *DB) ([]MissingRecord, error) {
+		return db.Missing()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -747,7 +835,9 @@ func (srv *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.Dismiss(req.Patterns); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.Dismiss(req.Patterns)
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -755,11 +845,16 @@ func (srv *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, srv.db.Config())
+	cfg, _ := Sync(srv.db, func(db *DB) (*Config, error) {
+		return db.Config(), nil
+	})
+	writeJSON(w, cfg)
 }
 
 func (srv *Server) handleUnresolved(w http.ResponseWriter, r *http.Request) {
-	unresolved, err := srv.db.Unresolved()
+	unresolved, err := Sync(srv.db, func(db *DB) ([]UnresolvedRecord, error) {
+		return db.Unresolved()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -773,7 +868,9 @@ func (srv *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.Resolve(req.Patterns); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.Resolve(req.Patterns)
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -786,7 +883,9 @@ type tagRequest struct {
 }
 
 func (srv *Server) handleTags(w http.ResponseWriter, r *http.Request) {
-	tags, err := srv.db.TagList()
+	tags, err := Sync(srv.db, func(db *DB) ([]TagCount, error) {
+		return db.TagList()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -800,7 +899,9 @@ func (srv *Server) handleTagCounts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	counts, err := srv.db.TagCounts(req.Tags)
+	counts, err := Sync(srv.db, func(db *DB) ([]TagCount, error) {
+		return db.TagCounts(req.Tags)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -816,7 +917,9 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Context {
-		entries, err := srv.db.TagContext(req.Tags)
+		entries, err := Sync(srv.db, func(db *DB) ([]TagContextEntry, error) {
+			return db.TagContext(req.Tags)
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -825,7 +928,9 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files, err := srv.db.TagFiles(req.Tags)
+	files, err := Sync(srv.db, func(db *DB) ([]TagFileInfo, error) {
+		return db.TagFiles(req.Tags)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -839,7 +944,9 @@ func (srv *Server) handleTagDefs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defs, err := srv.db.TagDefs(req.Tags)
+	defs, err := Sync(srv.db, func(db *DB) ([]TagDefInfo, error) {
+		return db.TagDefs(req.Tags)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -862,19 +969,20 @@ type configWhyRequest struct {
 	Path string `json:"path"`
 }
 
-// configMutate decodes a request, applies a config mutation, saves,
-// and triggers reconciliation so the index reflects the new config.
-func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func() error) {
+// configMutate decodes a request, applies a config mutation inside the
+// DB actor, saves, and triggers reconciliation.
+func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func(*DB) error) {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := fn(); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		if err := fn(db); err != nil {
+			return err
+		}
+		return db.SaveConfig()
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := srv.db.SaveConfig(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	srv.reconcile()
@@ -883,27 +991,27 @@ func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, f
 
 func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddSource(req.Dir) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddSource(req.Dir) })
 }
 
 func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().RemoveSource(req.Dir) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemoveSource(req.Dir) })
 }
 
 func (srv *Server) handleConfigAddInclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddInclude(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddInclude(req.Pattern, req.Source) })
 }
 
 func (srv *Server) handleConfigAddExclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddExclude(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddExclude(req.Pattern, req.Source) })
 }
 
 func (srv *Server) handleConfigRemovePattern(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().RemovePattern(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemovePattern(req.Pattern, req.Source) })
 }
 
 type configStrategyRequest struct {
@@ -913,7 +1021,7 @@ type configStrategyRequest struct {
 
 func (srv *Server) handleConfigAddStrategy(w http.ResponseWriter, r *http.Request) {
 	var req configStrategyRequest
-	srv.configMutate(w, r, &req, func() error { return srv.db.Config().AddStrategy(req.Pattern, req.Strategy) })
+	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddStrategy(req.Pattern, req.Strategy) })
 }
 
 func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
@@ -922,7 +1030,9 @@ func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := srv.db.Config().ShowWhy(req.Path)
+	result, err := Sync(srv.db, func(db *DB) (*WhyResult, error) {
+		return db.Config().ShowWhy(req.Path)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -940,7 +1050,9 @@ func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	data, err := srv.db.Fetch(req.Path)
+	data, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+		return db.Fetch(req.Path)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -949,7 +1061,9 @@ func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleSourcesCheck(w http.ResponseWriter, r *http.Request) {
-	result, err := srv.db.SourcesCheck()
+	result, err := Sync(srv.db, func(db *DB) (*SourcesCheckResult, error) {
+		return db.SourcesCheck()
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1016,7 +1130,9 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = "lines"
 	}
-	fid, err := srv.db.AddTmpFile(req.Path, strategy, []byte(req.Content))
+	fid, err := Sync(srv.db, func(db *DB) (uint64, error) {
+		return db.AddTmpFile(req.Path, strategy, []byte(req.Content))
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -1043,7 +1159,9 @@ func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = "lines"
 	}
-	if err := srv.db.UpdateTmpFile(req.Path, strategy, []byte(req.Content)); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.UpdateTmpFile(req.Path, strategy, []byte(req.Content))
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -1061,7 +1179,9 @@ func (srv *Server) handleTmpRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := srv.db.RemoveTmpFile(req.Path); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		return db.RemoveTmpFile(req.Path)
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -1071,7 +1191,10 @@ func (srv *Server) handleTmpRemove(w http.ResponseWriter, r *http.Request) {
 // handleTmpList lists all tmp:// paths.
 // CRC: crc-Server.md | R685
 func (srv *Server) handleTmpList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, srv.db.TmpFiles())
+	paths, _ := Sync(srv.db, func(db *DB) ([]string, error) {
+		return db.TmpFiles(), nil
+	})
+	writeJSON(w, paths)
 }
 
 // handleTmpAppend appends content to a tmp:// document (creating it if needed).
@@ -1093,7 +1216,10 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 	if req.Strategy == "" {
 		req.Strategy = "markdown"
 	}
-	if _, err := srv.db.AppendTmpFile(req.Path, req.Strategy, []byte(req.Content)); err != nil {
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		_, err := db.AppendTmpFile(req.Path, req.Strategy, []byte(req.Content))
+		return err
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1143,8 +1269,13 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	for _, s := range req.Subs {
 		// R941, R942: inherit search_exclude when no explicit file filters
 		excludeFiles := s.ExcludeFiles
-		if len(s.FilterFiles) == 0 && len(s.ExcludeFiles) == 0 && len(srv.db.config.SearchExclude) > 0 {
-			excludeFiles = srv.db.config.SearchExclude
+		if len(s.FilterFiles) == 0 && len(s.ExcludeFiles) == 0 {
+			defaultExcl, _ := Sync(srv.db, func(db *DB) ([]string, error) {
+				return db.Config().SearchExclude, nil
+			})
+			if len(defaultExcl) > 0 {
+				excludeFiles = defaultExcl
+			}
 		}
 		sub := &TagSub{
 			Tag:          s.Tag,
@@ -1217,7 +1348,9 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	entries, err := srv.db.store.QueryDayBuckets(startDate, endDate)
+	entries, err := Sync(srv.db, func(db *DB) ([]DayBucketEntry, error) {
+		return db.store.QueryDayBuckets(startDate, endDate)
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1337,10 +1470,7 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Trigger re-index via reconcile
-	select {
-	case srv.reconcileCh <- struct{}{}:
-	default:
-	}
+	srv.reconcile()
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -1365,30 +1495,28 @@ func parseDateToYMD(s string, loc *time.Location) (string, error) {
 // If different, re-materializes day buckets for affected tags. R927-R932
 // CRC: crc-Server.md
 func (srv *Server) CheckScheduleConfig() {
-	cfg := srv.db.Config()
-	current := serializeScheduleConfig(cfg)
+	changed, _ := Sync(srv.db, func(db *DB) (bool, error) {
+		cfg := db.Config()
+		current := serializeScheduleConfig(cfg)
 
-	stored, err := srv.db.store.GetScheduleConfig()
-	if err != nil {
-		log.Printf("schedule: cannot read stored config: %v", err)
-		stored = ""
-	}
+		stored, err := db.store.GetScheduleConfig()
+		if err != nil {
+			log.Printf("schedule: cannot read stored config: %v", err)
+			stored = ""
+		}
 
-	if current == stored {
-		return
-	}
+		if current == stored {
+			return false, nil
+		}
 
-	log.Printf("schedule: config changed, triggering reconcile")
-
-	// R932: Store updated config
-	if err := srv.db.store.PutScheduleConfig(current); err != nil {
-		log.Printf("schedule: cannot store config: %v", err)
-	}
-
-	// Trigger full reconcile to pick up changes
-	select {
-	case srv.reconcileCh <- struct{}{}:
-	default:
+		log.Printf("schedule: config changed, triggering reconcile")
+		if err := db.store.PutScheduleConfig(current); err != nil {
+			log.Printf("schedule: cannot store config: %v", err)
+		}
+		return true, nil
+	})
+	if changed {
+		srv.reconcile()
 	}
 }
 
@@ -1539,13 +1667,17 @@ func (srv *Server) registerLuaFunctions() {
 			if sessionName != "" {
 				sess := srv.GetOrCreateSession(sessionName)
 				err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {
-					opts.Cache = cache
-					var searchErr error
-					results, searchErr = srv.db.SearchGrouped(query, opts)
-					return searchErr
+					return SyncVoid(srv.db, func(db *DB) error {
+						opts.Cache = cache
+						var searchErr error
+						results, searchErr = db.SearchGrouped(query, opts)
+						return searchErr
+					})
 				})
 			} else {
-				results, err = srv.db.SearchGrouped(query, opts)
+				results, err = Sync(srv.db, func(db *DB) ([]GroupedResult, error) {
+					return db.SearchGrouped(query, opts)
+				})
 			}
 			if err != nil {
 				L.Push(lua.LNil)
@@ -1576,7 +1708,10 @@ func (srv *Server) registerLuaFunctions() {
 		// mcp:open(path) — open indexed file with system viewer
 		L.SetField(tbl, "open", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
-			if !srv.db.IsIndexed(path) {
+			indexed, _ := Sync(srv.db, func(db *DB) (bool, error) {
+				return db.IsIndexed(path), nil
+			})
+			if !indexed {
 				L.Push(lua.LNil)
 				L.Push(lua.LString("file not indexed"))
 				return 2
@@ -1603,7 +1738,9 @@ func (srv *Server) registerLuaFunctions() {
 			if L.GetTop() >= 1 {
 				showAll = L.ToBool(1)
 			}
-			entries, err := srv.db.Inbox(showAll, false)
+			entries, err := Sync(srv.db, func(db *DB) ([]InboxEntry, error) {
+				return db.Inbox(showAll, false)
+			})
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -1791,7 +1928,9 @@ func (srv *Server) registerLuaFunctions() {
 					strategy = s
 				}
 			}
-			fid, err := srv.db.AddTmpFile(path, strategy, []byte(content))
+			fid, err := Sync(srv.db, func(db *DB) (uint64, error) {
+				return db.AddTmpFile(path, strategy, []byte(content))
+			})
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -1812,7 +1951,9 @@ func (srv *Server) registerLuaFunctions() {
 					strategy = s
 				}
 			}
-			if err := srv.db.UpdateTmpFile(path, strategy, []byte(content)); err != nil {
+			if err := SyncVoid(srv.db, func(db *DB) error {
+				return db.UpdateTmpFile(path, strategy, []byte(content))
+			}); err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
 				return 2
@@ -1825,7 +1966,9 @@ func (srv *Server) registerLuaFunctions() {
 		// R690
 		L.SetField(tbl, "tmp_remove", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
-			if err := srv.db.RemoveTmpFile(path); err != nil {
+			if err := SyncVoid(srv.db, func(db *DB) error {
+				return db.RemoveTmpFile(path)
+			}); err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
 				return 2
@@ -1837,7 +1980,9 @@ func (srv *Server) registerLuaFunctions() {
 		// mcp.tmp_list() — list all tmp:// paths
 		// R691
 		L.SetField(tbl, "tmp_list", L.NewFunction(func(L *lua.LState) int {
-			paths := srv.db.TmpFiles()
+			paths, _ := Sync(srv.db, func(db *DB) ([]string, error) {
+				return db.TmpFiles(), nil
+			})
 			result := L.NewTable()
 			for i, p := range paths {
 				result.RawSetInt(i+1, lua.LString(p))
@@ -1853,7 +1998,9 @@ func (srv *Server) registerLuaFunctions() {
 			sourcePath := L.CheckString(1)
 
 			// Find matching source in config
-			cfg := srv.db.Config()
+			cfg, _ := Sync(srv.db, func(db *DB) (*Config, error) {
+				return db.Config(), nil
+			})
 			var matchedSource *Source
 			for i := range cfg.Sources {
 				if cfg.Sources[i].Dir == sourcePath || strings.HasPrefix(sourcePath, cfg.Sources[i].Dir+"/") {
@@ -1944,7 +2091,9 @@ func (srv *Server) registerLuaFunctions() {
 
 			// Get missing files for this source (R843, R844)
 			missingPaths := make(map[string]bool)
-			missing, _ := srv.db.Missing()
+			missing, _ := Sync(srv.db, func(db *DB) ([]MissingRecord, error) {
+				return db.Missing()
+			})
 			for _, m := range missing {
 				// Only track missing files at the listed directory level
 				if strings.HasPrefix(m.Path, sourcePath+"/") {

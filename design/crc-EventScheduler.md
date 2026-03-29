@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008
 
 Priority queue of time-tagged events with a single timer. Reads day
 buckets from LMDB at startup and on crank-forward. Delivers events
@@ -40,21 +40,35 @@ indexer writes day buckets, the scheduler reads them.
   If recurring: crank forward — compute next occurrence,
   materialize new day-bucket entry via Store.WriteDayBuckets,
   re-enqueue. (R807, R877) Reset timer to new head.
-- computeNext(recurring string, after time.Time) time.Time: parse
-  recurrence spec, return next occurrence after the given time.
+- computeNext(recurring string, after time.Time, notAfter time.Time) time.Time:
+  parse recurrence spec, return next occurrence after the given time.
+  Returns zero time if next occurrence exceeds notAfter (zero notAfter = no bound).
   Supports: "every Xm", "every Xh", "every WEEKDAY HH:MM",
-  "YYYY-MM-DD HH:MM" (one-shot), "MM-DD" (annual). (R822, R823, R824)
+  "YYYY-MM-DD HH:MM" (one-shot), "MM-DD" (annual). (R822, R823, R824, R1005)
+- stripDateKeyword(s string) (stripped string, keyword string): strip a
+  recognized date keyword from the front of a string. Start keywords:
+  from, starting, beginning, after, on. End keywords: to, until, through,
+  ending, before, by. Returns empty keyword if no match. Only strips when
+  remainder parses as a date. (R996, R997, R998, R999)
+- extractBounds(value string) (notBefore, notAfter time.Time, remainder string):
+  extract start/end bounds from a schedule tag value. Looks for keyword+date
+  pairs (from/to/starting/until/etc) or DATE..DATE adjacent to "every".
+  Returns zero times for missing bounds. Remainder is the pure recurrence
+  spec. (R1000, R1001, R1002, R1003, R1004)
 - ParseDateValue(value string, defaultDur string) (start, end time.Time,
   description string, err error): parse a schedule tag value including
   `..` duration operator. Uses itlightning/dateparse with token-trimming
-  loop. Returns start, end (using defaultDur if no `..`), and remaining
-  description text. (R857, R858, R859, R860, R861, R865)
+  loop. Calls stripDateKeyword before dateparse. Returns start, end
+  (using defaultDur if no `..`), and remaining description text.
+  (R857, R858, R859, R860, R861, R865, R999)
 - ParseRelativeDuration(anchor time.Time, expr string) time.Time: parse
   anchored relative expressions like "one week later", "3 days later".
   (R862, R863, R864)
 - ScanScheduleLogs(): called at startup. Scan ~/.ark/schedule/ for
   log files. Read @ark-event-upcoming: entries, populate the priority
-  queue. Any @ark-event-upcoming: in the past gets converted to
+  queue. Respects @ark-event-start:/@ark-event-end: bounds — does not
+  create upcoming entries beyond end bound. (R1007, R1008)
+  Any @ark-event-upcoming: in the past gets converted to
   @ark-event-fired: and the next occurrence is computed from
   @ark-event-spec: and appended (checking for duplicates first).
   Re-index the log file after mutations. (R874, R875, R876)
@@ -64,9 +78,11 @@ indexer writes day buckets, the scheduler reads them.
   covering the fired date is detected via subscription. Removes
   the @check-gap: line from the log chunk, re-indexes. (R969, R970, R971)
 - EnsureUpcoming(logPath, event): called when a source file with a
-  schedule tag is indexed. Ensure the log chunk exists with
-  @ark-event-upcoming: entries through the forward window. Create
-  log file and chunk if needed. (R902)
+  schedule tag is indexed. Calls extractBounds on the tag value.
+  Writes @ark-event-start:/@ark-event-end: tags in the log chunk
+  when bounds are present. Ensures @ark-event-upcoming: entries
+  through min(endDate, forward window). Create log file and chunk
+  if needed. (R902, R1006, R1007)
 - AddChime(): add the quarter-chime recurring event (every 15m). (R810)
 
 ## Collaborators
