@@ -1431,6 +1431,17 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1042:** @obsolete-req: R870 -- @ark-event-fired: entries in log no longer needed for gap detection
 - **R1043:** `ark schedule search --gaps` computes unacked past occurrences from spec vs @ack: dates
 
+## Feature: Chat Transcript
+**Source:** specs/chat-transcript.md
+
+- **R1044:** `ark chats GLOB` reads Claude Code JSONL logs and renders human-readable transcripts
+- **R1045:** User turns introduced with `❯`, assistant turns with `●`, continuation lines indented 2 spaces
+- **R1046:** Text word-wrapped at `--line-length` (default 100)
+- **R1047:** `--with-tools` shows tool calls inline as `⚙ ToolName summary`
+- **R1048:** `--wrap NAME` surrounds output with `<NAME>...</NAME>` tags
+- **R1049:** Sidechain messages (subagent traffic) filtered out
+- **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
+
 ### Day-Bucket LMDB Indexing
 
 - **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag

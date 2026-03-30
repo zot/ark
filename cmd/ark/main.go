@@ -94,6 +94,8 @@ func main() {
 		cmdChunks(args)
 	case "config":
 		cmdConfig(args)
+	case "chats":
+		cmdChats(args)
 	case "cp":
 		cmdBundleCp(args)
 	case "dismiss":
@@ -166,6 +168,7 @@ Commands:
   add         Add files to the index
   bundle      Graft a directory onto a binary as a zip appendix (build-time)
   cat         Print an embedded file to stdout
+  chats       Show conversation transcripts from JSONL logs
   chunks      Show chunks around a search hit (context expansion)
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
