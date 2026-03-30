@@ -65,11 +65,11 @@ func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 	if strings.HasPrefix(path, idx.config.dbPath+"/schedule/") {
 		return
 	}
-	if !idx.config.MatchesScheduleFilter(path) {
-		return
-	}
 	for _, tv := range tagValues {
 		if _, ok := idx.config.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
+			if !idx.config.MatchesScheduleFilterForTag(path, tv.Tag) {
+				continue
+			}
 			idx.pendingSchedule = append(idx.pendingSchedule, scheduleItem{
 				tag: tv.Tag, value: tv.Value, path: path,
 			})
@@ -96,15 +96,24 @@ func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content [
 	if idx.config == nil || idx.store == nil {
 		return
 	}
-	if !strings.HasPrefix(path, idx.config.dbPath+"/schedule/") && !idx.config.MatchesScheduleFilter(path) {
-		return
+	isScheduleLog := strings.HasPrefix(path, idx.config.dbPath+"/schedule/")
+	if !isScheduleLog && !idx.config.MatchesScheduleFilter(path) {
+		// Quick check: does any per-tag filter match this file?
+		anyTagMatch := false
+		for tag := range idx.config.Schedule.TagConfig {
+			if idx.config.MatchesScheduleFilterForTag(path, tag) {
+				anyTagMatch = true
+				break
+			}
+		}
+		if !anyTagMatch {
+			return
+		}
 	}
 	entryIndex := make(map[bucketMapKey]int)
 	var allEntries []DayBucketEntry
 	var allAcks []AckEntry
 	loc := time.Now().Location()
-
-	isScheduleLog := strings.HasPrefix(path, idx.config.dbPath+"/schedule/")
 
 	if isScheduleLog {
 		// R869, R870: schedule log files — parse @ark-event-upcoming: and @ark-event-fired:
@@ -112,6 +121,9 @@ func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content [
 	} else {
 		// Source files — parse @tag: lines for schedule tags
 		for tag, defaultDur := range idx.config.ScheduleTags() {
+			if !idx.config.MatchesScheduleFilterForTag(path, tag) {
+				continue
+			}
 			acks := ParseAcks(content, tag)
 			allAcks = append(allAcks, acks...)
 

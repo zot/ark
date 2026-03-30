@@ -37,12 +37,19 @@ type Config struct {
 // ScheduleConfig declares which tags carry date values and their defaults.
 // CRC: crc-Config.md | R853, R854, R855, R953-R960
 type ScheduleConfig struct {
-	Tags             []string          `toml:"tags"`
-	Defaults         map[string]string `toml:"defaults"`
-	FilterFiles      []string          `toml:"filter_files,omitempty"`      // R953: restrict schedule scanning to matching files
-	ExcludeFiles     []string          `toml:"exclude_files,omitempty"`     // R954: exclude files from schedule scanning
-	LifecycleInclude []string          `toml:"lifecycle_include,omitempty"` // R957: tags that get full lifecycle (default "*")
-	LifecycleExclude []string          `toml:"lifecycle_exclude,omitempty"` // R958: tags excluded from lifecycle
+	Tags             []string                     `toml:"tags"`
+	Defaults         map[string]string            `toml:"defaults"`
+	FilterFiles      []string                     `toml:"filter_files,omitempty"`      // R953: restrict schedule scanning to matching files
+	ExcludeFiles     []string                     `toml:"exclude_files,omitempty"`     // R954: exclude files from schedule scanning
+	LifecycleInclude []string                     `toml:"lifecycle_include,omitempty"` // R957: tags that get full lifecycle (default "*")
+	LifecycleExclude []string                     `toml:"lifecycle_exclude,omitempty"` // R958: tags excluded from lifecycle
+	TagConfig        map[string]TagScheduleConfig `toml:"tag"`                         // per-tag filter overrides
+}
+
+// TagScheduleConfig holds per-tag schedule filtering overrides.
+type TagScheduleConfig struct {
+	FilterFiles  []string `toml:"filter_files,omitempty"`
+	ExcludeFiles []string `toml:"exclude_files,omitempty"`
 }
 
 // ChunkerConfig defines a language chunker from [[chunker]] in ark.toml.
@@ -105,6 +112,11 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
+	for k, tc := range cfg.Schedule.TagConfig {
+		tc.FilterFiles = ExpandTildeSlice(tc.FilterFiles)
+		tc.ExcludeFiles = ExpandTildeSlice(tc.ExcludeFiles)
+		cfg.Schedule.TagConfig[k] = tc
+	}
 	for i := range cfg.Sources {
 		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
 		cfg.Sources[i].Include = ExpandTildeSlice(cfg.Sources[i].Include)
@@ -242,13 +254,35 @@ func (c *Config) IsLifecycleTag(tag string) bool {
 // filter_files/exclude_files. When both are absent, all files pass.
 // CRC: crc-Config.md | R953, R954, R955, R956
 func (c *Config) MatchesScheduleFilter(path string) bool {
-	if len(c.Schedule.FilterFiles) == 0 && len(c.Schedule.ExcludeFiles) == 0 {
+	return matchesFilterExclude(path, c.Schedule.FilterFiles, c.Schedule.ExcludeFiles)
+}
+
+// MatchesScheduleFilterForTag returns true if a file path passes the schedule
+// filter for a specific tag. Checks per-tag overrides first, falls back to global.
+func (c *Config) MatchesScheduleFilterForTag(path, tag string) bool {
+	if tc, ok := c.Schedule.TagConfig[tag]; ok {
+		hasOverride := len(tc.FilterFiles) > 0 || len(tc.ExcludeFiles) > 0
+		if hasOverride {
+			// Per-tag filter: still apply global excludes, then tag-specific filters
+			if !matchesFilterExclude(path, nil, c.Schedule.ExcludeFiles) {
+				return false
+			}
+			return matchesFilterExclude(path, tc.FilterFiles, tc.ExcludeFiles)
+		}
+	}
+	// No per-tag override — use global
+	return c.MatchesScheduleFilter(path)
+}
+
+// matchesFilterExclude checks a path against filter/exclude glob lists.
+func matchesFilterExclude(path string, filterFiles, excludeFiles []string) bool {
+	if len(filterFiles) == 0 && len(excludeFiles) == 0 {
 		return true
 	}
 	m := &Matcher{Dotfiles: true}
-	if len(c.Schedule.FilterFiles) > 0 {
+	if len(filterFiles) > 0 {
 		matched := false
-		for _, pat := range c.Schedule.FilterFiles {
+		for _, pat := range filterFiles {
 			if m.Match(pat, path, false) {
 				matched = true
 				break
@@ -258,7 +292,7 @@ func (c *Config) MatchesScheduleFilter(path string) bool {
 			return false
 		}
 	}
-	for _, pat := range c.Schedule.ExcludeFiles {
+	for _, pat := range excludeFiles {
 		if m.Match(pat, path, false) {
 			return false
 		}

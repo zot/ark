@@ -3877,8 +3877,10 @@ func cmdSchedule(args []string) {
 	scheduleUsage := `Usage: ark schedule <subcommand> [options]
 
 Subcommands:
-  search    Query scheduled events in a date range
-  change    Modify a scheduled event's date`
+  search    Query scheduled events
+  change    Modify a scheduled event's date
+  tags      Show configured schedule tags
+  parse     Parse a date expression and show the result`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, scheduleUsage)
@@ -3891,6 +3893,10 @@ Subcommands:
 		cmdScheduleSearch(subArgs)
 	case "change":
 		cmdScheduleChange(subArgs)
+	case "tags":
+		cmdScheduleTags(subArgs)
+	case "parse":
+		cmdScheduleParse(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown schedule subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, scheduleUsage)
@@ -3905,13 +3911,16 @@ func cmdScheduleSearch(args []string) {
 	gaps := fs.Bool("gaps", false, "show only past events with no acknowledgment")
 	jsonOut := fs.Bool("json", false, "output JSON instead of markdown")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark schedule search START END [options]")
-		fmt.Fprintln(os.Stderr, "\nQuery scheduled events in a date range.")
-		fmt.Fprintln(os.Stderr, "START and END are dates (YYYY-MM-DD or flexible formats).")
+		fmt.Fprintln(os.Stderr, "Usage: ark schedule search DATE [options]")
+		fmt.Fprintln(os.Stderr, "\nQuery scheduled events. DATE uses the same format as schedule tags:")
+		fmt.Fprintln(os.Stderr, "  Single date:  2026-04-15 or \"April 15 2026\"")
+		fmt.Fprintln(os.Stderr, "  Date range:   2026-04-01..2026-06-30")
+		fmt.Fprintln(os.Stderr, "  With text:    2026-04-01..2026-06-30 (trailing text ignored)")
 		fmt.Fprintln(os.Stderr, "\nExamples:")
-		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31")
-		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31 --tag standup")
-		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01 2026-03-31 --gaps")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-04-15")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01..2026-06-30")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01..2026-06-30 --tag standup")
+		fmt.Fprintln(os.Stderr, "  ark schedule search 2026-03-01..2026-06-30 --gaps")
 		fmt.Fprintln(os.Stderr)
 		fs.PrintDefaults()
 	}
@@ -3919,12 +3928,12 @@ func cmdScheduleSearch(args []string) {
 	args = reorderArgs(args)
 	fs.Parse(args)
 
-	if fs.NArg() < 2 {
+	if fs.NArg() < 1 {
 		fs.Usage()
 		os.Exit(1)
 	}
-	start := fs.Arg(0)
-	end := fs.Arg(1)
+	// Join all positional args — allows "April 15 2026" as separate words
+	dateArg := strings.Join(fs.Args(), " ")
 
 	client := serverClient(arkDir)
 	if client == nil {
@@ -3932,8 +3941,7 @@ func cmdScheduleSearch(args []string) {
 	}
 
 	reqBody := map[string]any{
-		"start": start,
-		"end":   end,
+		"date": dateArg,
 	}
 	if *tag != "" {
 		reqBody["tag"] = *tag
@@ -4035,5 +4043,103 @@ func cmdScheduleChange(args []string) {
 
 	if err := proxyOK(client, "POST", "/schedule/change", reqBody); err != nil {
 		fatal(err)
+	}
+}
+
+func cmdScheduleTags(args []string) {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(os.Stderr, `Usage: ark schedule tags
+
+Show configured schedule tags and their default durations.`)
+		os.Exit(0)
+	}
+	withDB(func(db *ark.DB) {
+		tags := db.Config().ScheduleTags()
+		if len(tags) == 0 {
+			fmt.Println("no schedule tags configured")
+			fmt.Println("add tags to [schedule] in ark.toml")
+			return
+		}
+		cfg := db.Config()
+		for _, t := range cfg.Schedule.Tags {
+			def := tags[t]
+			lifecycle := cfg.IsLifecycleTag(t)
+			line := "@" + t + ":"
+			if def != "" {
+				line += " (default " + def + ")"
+			}
+			if !lifecycle {
+				line += " [no-lifecycle]"
+			}
+			if tc, ok := cfg.Schedule.TagConfig[t]; ok {
+				if len(tc.FilterFiles) > 0 {
+					line += " filter=" + strings.Join(tc.FilterFiles, ",")
+				}
+				if len(tc.ExcludeFiles) > 0 {
+					line += " exclude=" + strings.Join(tc.ExcludeFiles, ",")
+				}
+			}
+			fmt.Println(line)
+		}
+		if len(cfg.Schedule.ExcludeFiles) > 0 {
+			fmt.Printf("\nexclude: %s\n", strings.Join(cfg.Schedule.ExcludeFiles, ", "))
+		}
+		if len(cfg.Schedule.FilterFiles) > 0 {
+			fmt.Printf("filter: %s\n", strings.Join(cfg.Schedule.FilterFiles, ", "))
+		}
+	})
+}
+
+func cmdScheduleParse(args []string) {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, `Usage: ark schedule parse DATE
+
+Parse a date expression and show the result. Uses the same format as
+schedule tag values: single dates, ranges with .., keyword prefixes.
+
+Examples:
+  ark schedule parse 2026-04-15
+  ark schedule parse "April 15 2026"
+  ark schedule parse 2026-04-01..2026-06-30
+  ark schedule parse "on April 15 2026 dentist"
+  ark schedule parse "every Monday at 9am starting March 1 to June 30"`)
+		os.Exit(0)
+	}
+	input := strings.Join(args, " ")
+	loc := time.Now().Location()
+
+	// Check for recurring with bounds
+	if ark.IsRecurringSpec(input) {
+		nb, na, spec := ark.ExtractBounds(input, loc)
+		fmt.Printf("recurring: %s\n", spec)
+		if !nb.IsZero() {
+			fmt.Printf("start:     %s\n", nb.Format("2006-01-02"))
+		}
+		if !na.IsZero() {
+			fmt.Printf("end:       %s\n", na.Format("2006-01-02"))
+		}
+		next := ark.ComputeNext(spec, time.Now(), na)
+		if !next.IsZero() {
+			fmt.Printf("next:      %s\n", next.Format("2006-01-02 15:04"))
+		} else {
+			fmt.Println("next:      (none — past end bound)")
+		}
+		return
+	}
+
+	dr, err := ark.ParseDateValue(input, "", loc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("start:     %s\n", dr.Start.Format("2006-01-02 15:04"))
+	if dr.End != dr.Start {
+		fmt.Printf("end:       %s\n", dr.End.Format("2006-01-02 15:04"))
+	}
+	if dr.AllDay {
+		fmt.Println("all-day:   true")
+	}
+	if dr.Description != "" {
+		fmt.Printf("text:      %s\n", dr.Description)
 	}
 }

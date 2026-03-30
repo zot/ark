@@ -14,16 +14,45 @@ ark.toml declares which tags carry dates:
 ```toml
 [schedule]
 tags = ["dentist", "standup", "birthday", "release", "review"]
+exclude_files = ["*.jsonl", "~/.claude/**"]
 
 [schedule.defaults]
 dentist = "1h"
 standup = "15m"
 birthday = "all-day"
+
+[schedule.tag.dentist]
+filter_files = ["~/notes/**"]
+
+[schedule.tag.standup]
+exclude_files = ["~/work/ark/specs/**"]
 ```
 
 Tags listed in `[schedule]` are parsed for dates at index time. Tags
 not listed are never date-parsed — zero overhead. Default durations
 apply when a tag value has no explicit `..` duration.
+
+### Per-tag filtering
+
+Each tag can override the global filter/exclude with `[schedule.tag.NAME]`.
+A tag with no override inherits the global filter. Global excludes
+always apply — per-tag filters narrow further, they don't bypass
+global excludes.
+
+### tmp:// schedule logs
+
+Schedule tags in tmp:// files produce tmp:// schedule logs
+(`tmp://schedule/HASH.md`) instead of disk logs. Server restart
+kills both the tmp:// file and its schedule state — no orphaned
+log files.
+
+### Deferred schedule processing
+
+Schedule item processing (EnsureUpcoming) is deferred outside the
+DB closure actor. During indexing, schedule items are accumulated.
+After scan/refresh completes, they are drained and processed in a
+goroutine. This prevents file I/O from blocking the actor during
+indexing. The `handleScan` and `handleRefresh` endpoints also drain.
 
 Adding or removing a tag from the schedule config triggers
 re-materialization of day-bucket entries for all files containing
@@ -261,12 +290,23 @@ On server start, scan `~/.ark/schedule/` for log files. Read
 `@ark-event-upcoming:` in the past gets converted to `@ark-event-fired:` and the next
 occurrence is computed and appended.
 
+### Single upcoming entry
+
+The schedule log maintains exactly one `@ark-event-upcoming:` entry per
+recurring event — the next occurrence. The calendar UI computes future
+dates from `@ark-event-spec:`. No forward window materialization.
+
+After server downtime, crank-forward converts all past upcoming
+entries to fired, then writes one new upcoming for the next
+occurrence. Multiple fired entries may be written (catch-up), but
+only one upcoming exists at a time.
+
 ### Crank-forward on fire
 
 When a recurring event fires:
 1. Convert `@ark-event-upcoming:` → `@ark-event-fired:` in the log file
 2. Compute next occurrence
-3. Append `@ark-event-upcoming:` if none exists for that date (exception check)
+3. Write one `@ark-event-upcoming:` if the event hasn't ended
 4. Re-index the log file (new day-bucket entries written)
 5. Re-enqueue in the priority queue
 
@@ -326,11 +366,19 @@ equivalent Lua APIs.
 ### ark schedule search
 
 ```
-ark schedule search START END [--tag TAG] [--gaps] [--json]
+ark schedule search DATE [--tag TAG] [--gaps] [--json]
 ```
 
-Query day buckets for events overlapping the date range. START and
-END are dates (YYYY-MM-DD or flexible formats via dateparse).
+Query day buckets for events. DATE uses the same format as schedule
+tag values: single date, range with `..`, keyword prefixes. Trailing
+text is ignored.
+
+```
+ark schedule search 2026-04-15
+ark schedule search 2026-04-01..2026-06-30
+ark schedule search "April 2026"
+ark schedule search 2026-04-01..2026-06-30 --tag standup
+```
 
 Output is markdown by default (crank-handle style), JSON with
 `--json`. Each event includes ack status from the day-bucket record.
@@ -338,6 +386,26 @@ Output is markdown by default (crank-handle style), JSON with
 `--tag` filters to a specific schedule tag. `--gaps` shows only
 events that fired but have no matching `@ack:` — Franklin's
 "what did you miss?" query.
+
+### ark schedule parse
+
+```
+ark schedule parse DATE
+```
+
+Parse a date expression and show the result. Diagnostic tool for
+verifying how schedule tag values are interpreted. Shows start, end,
+description text, and for recurring specs: the recurrence pattern,
+bounds, and next occurrence.
+
+### ark schedule tags
+
+```
+ark schedule tags
+```
+
+Show configured schedule tags, default durations, lifecycle status,
+and per-tag filter/exclude patterns.
 
 ### ark schedule change
 

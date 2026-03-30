@@ -108,21 +108,21 @@ func TestExtractBounds(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		nb, na, rem := extractBounds(tt.input, loc)
+		nb, na, rem := ExtractBounds(tt.input, loc)
 		if tt.wantBefore && nb.IsZero() {
-			t.Errorf("extractBounds(%q): expected notBefore, got zero", tt.input)
+			t.Errorf("ExtractBounds(%q): expected notBefore, got zero", tt.input)
 		}
 		if !tt.wantBefore && !nb.IsZero() {
-			t.Errorf("extractBounds(%q): unexpected notBefore %v", tt.input, nb)
+			t.Errorf("ExtractBounds(%q): unexpected notBefore %v", tt.input, nb)
 		}
 		if tt.wantAfter && na.IsZero() {
-			t.Errorf("extractBounds(%q): expected notAfter, got zero", tt.input)
+			t.Errorf("ExtractBounds(%q): expected notAfter, got zero", tt.input)
 		}
 		if !tt.wantAfter && !na.IsZero() {
-			t.Errorf("extractBounds(%q): unexpected notAfter %v", tt.input, na)
+			t.Errorf("ExtractBounds(%q): unexpected notAfter %v", tt.input, na)
 		}
 		if rem != tt.wantRemainder {
-			t.Errorf("extractBounds(%q): remainder = %q, want %q", tt.input, rem, tt.wantRemainder)
+			t.Errorf("ExtractBounds(%q): remainder = %q, want %q", tt.input, rem, tt.wantRemainder)
 		}
 	}
 }
@@ -131,7 +131,7 @@ func TestComputeNextWithNotAfter(t *testing.T) {
 	after := time.Date(2026, 3, 1, 0, 0, 0, 0, time.Local)
 
 	// Without bound — should find next Monday.
-	next := computeNext("every Monday at 09:00", after, time.Time{})
+	next := ComputeNext("every Monday at 09:00", after, time.Time{})
 	if next.IsZero() {
 		t.Fatal("expected non-zero next")
 	}
@@ -141,14 +141,14 @@ func TestComputeNextWithNotAfter(t *testing.T) {
 
 	// With bound before the next occurrence — should return zero.
 	tightBound := after.Add(1 * time.Hour) // March 1 at 1am — before next Monday
-	next2 := computeNext("every Monday at 09:00", after, tightBound)
+	next2 := ComputeNext("every Monday at 09:00", after, tightBound)
 	if !next2.IsZero() {
 		t.Errorf("expected zero with tight bound, got %v", next2)
 	}
 
 	// With bound after the next occurrence — should return normally.
 	looseBound := time.Date(2026, 6, 1, 0, 0, 0, 0, time.Local)
-	next3 := computeNext("every Monday at 09:00", after, looseBound)
+	next3 := ComputeNext("every Monday at 09:00", after, looseBound)
 	if next3.IsZero() {
 		t.Fatal("expected non-zero with loose bound")
 	}

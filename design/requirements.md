@@ -1384,6 +1384,19 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1007:** Schedule log records parsed bounds as `@ark-event-start:` and `@ark-event-end:` tags so the scheduler reads them directly on startup
 - **R1008:** (inferred) Crank-forward on startup respects bounds — does not create `@ark-event-upcoming:` entries beyond `@ark-event-end:`
 - **R1009:** (inferred) `writeDateIndex` skips schedule log files (`~/.ark/schedule/*`) to prevent cascade — log writes trigger watcher, watcher re-indexes, re-index calls EnsureUpcoming, which writes again
+- **R1010:** Schedule log maintains exactly one `@ark-event-upcoming:` per recurring event. Calendar UI computes future dates from `@ark-event-spec:`.
+- **R1011:** After downtime, crank-forward converts all past upcoming to fired, then writes one new upcoming
+- **R1012:** Per-tag schedule filtering via `[schedule.tag.NAME]` in ark.toml with `filter_files`/`exclude_files`. Global excludes always apply; per-tag filters narrow further.
+- **R1013:** tmp:// source files produce tmp:// schedule logs (`tmp://schedule/HASH.md`), not disk logs
+- **R1014:** Schedule processing deferred outside DB actor — items accumulated during indexing, drained after scan/refresh, processed in goroutine
+- **R1015:** `ark schedule search DATE` uses same date grammar as schedule tags (single date, `..` range, keyword prefixes)
+- **R1016:** `ark schedule parse DATE` diagnostic — shows parsed start, end, description, recurrence spec, bounds, next occurrence
+- **R1017:** `ark schedule tags` shows configured tags, defaults, lifecycle status, per-tag filters
+- **R1018:** `RemoveFile`/`RemoveByID` clears TD/TF day bucket records via `ClearDayBuckets`
+- **R1019:** `WriteDayBucketsForFile` handles schedule log files via `dayBucketsFromLogFile` — parses `@ark-event-upcoming:`/`@ark-event-fired:` entries
+- **R1020:** `ParseDate` handles `2006-01-02 15:04` format (space-separated date+time)
+- **R1021:** `ReloadConfig` updates `indexer.config` (was stale after ark.toml reload)
+- **R1022:** Indexer config set at DB open time, not only when scheduler is wired — enables day bucket writes during rebuild
 
 ### Day-Bucket LMDB Indexing
 

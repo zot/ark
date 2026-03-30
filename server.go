@@ -424,12 +424,22 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 	if len(items) == 0 || srv.scheduler == nil {
 		return
 	}
-	log.Printf("schedule: processing %d deferred items", len(items)) // TODO: remove after testing
+	// Wire tmp:// log writer so EnsureUpcoming can write ephemeral schedule logs
+	srv.scheduler.WriteTmpLog = func(path string, content []byte) error {
+		return SyncVoid(srv.db, func(db *DB) error {
+			err := db.UpdateTmpFile(path, "markdown", content)
+			if err != nil {
+				_, err = db.AddTmpFile(path, "markdown", content)
+			}
+			return err
+		})
+	}
 	for _, item := range items {
 		if err := srv.scheduler.EnsureUpcoming(item.tag, item.value, item.path); err != nil {
 			log.Printf("schedule: EnsureUpcoming error for @%s in %s: %v", item.tag, item.path, err)
 		}
 	}
+	srv.scheduler.WriteTmpLog = nil // clean up
 	// Scan picks up new log files, then write day buckets directly
 	// from the log content. We don't rely on refresh because the file
 	// was just created — it's not stale.
@@ -1137,8 +1147,22 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	tagValues := ExtractTagValues([]byte(req.Content))
 	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
+		srv.pubsub.PublishAndWatch("", req.Path, tagValues)
+	}
+	// Schedule processing for tmp:// files with schedule tags
+	if srv.scheduler != nil {
+		var pending []scheduleItem
+		cfg := srv.db.Config()
+		for _, tv := range tagValues {
+			if _, ok := cfg.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
+				pending = append(pending, scheduleItem{tag: tv.Tag, value: tv.Value, path: req.Path})
+			}
+		}
+		if len(pending) > 0 {
+			go srv.processScheduleItems(pending)
+		}
 	}
 	writeJSON(w, map[string]uint64{"fileid": fid})
 }
@@ -1326,26 +1350,25 @@ func (srv *Server) handleListen(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | Seq: seq-scheduling.md
 func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Start string `json:"start"`
-		End   string `json:"end"`
-		Tag   string `json:"tag"`
-		Gaps  bool   `json:"gaps"`
+		Date string `json:"date"`
+		Tag  string `json:"tag"`
+		Gaps bool   `json:"gaps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Parse flexible dates into YYYYMMDD R915
+	// Parse using same grammar as schedule tags R915
 	loc := time.Now().Location()
-	startDate, err := parseDateToYMD(req.Start, loc)
+	dr, err := ParseDateValue(req.Date, "", loc)
 	if err != nil {
-		http.Error(w, "bad start date: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad date: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	endDate, err := parseDateToYMD(req.End, loc)
-	if err != nil {
-		http.Error(w, "bad end date: "+err.Error(), http.StatusBadRequest)
-		return
+	startDate := dr.Start.Format("20060102")
+	endDate := dr.End.Format("20060102")
+	if startDate == endDate {
+		// Single date — search just that day
 	}
 
 	entries, err := Sync(srv.db, func(db *DB) ([]DayBucketEntry, error) {
@@ -1476,20 +1499,6 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseDateToYMD parses a flexible date string into YYYYMMDD format.
-func parseDateToYMD(s string, loc *time.Location) (string, error) {
-	s = strings.TrimSpace(s)
-	if len(s) == 8 {
-		// Already YYYYMMDD
-		if _, err := time.Parse("20060102", s); err == nil {
-			return s, nil
-		}
-	}
-	t, _, err := parseDateTrimming(s, loc)
-	if err != nil {
-		return "", err
-	}
-	return t.Format("20060102"), nil
-}
 
 // CheckScheduleConfig compares current [schedule] config with stored version.
 // If different, re-materializes day buckets for affected tags. R927-R932

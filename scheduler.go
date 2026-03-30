@@ -23,7 +23,8 @@ import (
 const scheduleDateFmt = "2006-01-02 15:04"
 
 // isRecurringSpec returns true if the value looks like a recurring schedule spec.
-func isRecurringSpec(value string) bool {
+// IsRecurringSpec returns true if the value looks like a recurring schedule spec.
+func IsRecurringSpec(value string) bool {
 	return strings.Contains(strings.ToLower(value), "every ")
 }
 
@@ -62,7 +63,8 @@ func stripDateKeyword(s string, loc *time.Location) (string, string) {
 // Looks for keyword+date pairs or DATE..DATE adjacent to "every".
 // Returns zero times for missing bounds, and the pure recurrence spec as remainder.
 // CRC: crc-EventScheduler.md | R1000, R1001, R1002, R1003, R1004
-func extractBounds(value string, loc *time.Location) (notBefore, notAfter time.Time, remainder string) {
+// ExtractBounds extracts start/end bounds from a recurring event value.
+func ExtractBounds(value string, loc *time.Location) (notBefore, notAfter time.Time, remainder string) {
 	value = strings.TrimSpace(value)
 
 	// Find "every" to split the string.
@@ -218,9 +220,10 @@ type EventScheduler struct {
 	pushed      map[string]bool // eventID → delivered this server lifetime
 	mu          sync.Mutex
 	stopCh      chan struct{}
-	reporter    ErrorReporter // nil = log only
-	scheduleDir string        // ~/.ark/schedule/
-	config      *Config       // schedule tag declarations
+	reporter    ErrorReporter                           // nil = log only
+	scheduleDir string                                  // ~/.ark/schedule/
+	config      *Config                                 // schedule tag declarations
+	WriteTmpLog func(path string, content []byte) error // set by caller for tmp:// log writes
 }
 
 // NewEventScheduler creates a scheduler that delivers through the given PubSub.
@@ -283,19 +286,41 @@ func buildDateSet(c *logChunk) map[string]bool {
 // crankForward fills a chunk's Upcoming with dates through the forward window.
 // Returns the number of new entries added. Optionally enqueues events.
 func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool) int {
-	if !isRecurringSpec(c.Spec) {
+	if !IsRecurringSpec(c.Spec) {
 		return 0
 	}
-	windowEnd := now.AddDate(0, 6, 0)
-	existing := buildDateSet(c)
-	added := 0
-	next := computeNext(c.Spec, now, c.NotAfter)
-	for !next.IsZero() && next.Before(windowEnd) {
-		dateStr := next.Format(scheduleDateFmt)
-		if !existing[dateStr] {
+	// R1003: start from notBefore if it's after now
+	startAfter := now
+	if !c.NotBefore.IsZero() && c.NotBefore.After(now) {
+		startAfter = c.NotBefore.Add(-1 * time.Second) // computeNext returns strictly after
+	}
+
+	modified := 0
+
+	// Convert past upcoming entries to fired (catch-up after downtime).
+	var futureUpcoming []string
+	for _, u := range c.Upcoming {
+		t, err := ParseDate(u)
+		if err != nil {
+			futureUpcoming = append(futureUpcoming, u)
+			continue
+		}
+		if t.Before(now) {
+			c.Fired = append(c.Fired, u)
+			modified++
+		} else {
+			futureUpcoming = append(futureUpcoming, u)
+		}
+	}
+	c.Upcoming = futureUpcoming
+
+	// Ensure exactly one future upcoming entry exists.
+	if len(c.Upcoming) == 0 {
+		next := ComputeNext(c.Spec, startAfter, c.NotAfter)
+		if !next.IsZero() {
+			dateStr := next.Format(scheduleDateFmt)
 			c.Upcoming = append(c.Upcoming, dateStr)
-			existing[dateStr] = true
-			added++
+			modified++
 			if enqueue {
 				es.Add(&ScheduledEvent{
 					ID:       eventID(c.Source, c.Event, dateStr),
@@ -306,17 +331,19 @@ func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool)
 				})
 			}
 		}
-		next = computeNext(c.Spec, next, c.NotAfter)
 	}
-	return added
+	return modified
+}
+
+// logFileHash returns a stable hash string for a source path.
+func logFileHash(sourcePath string) string {
+	h := sha256.Sum256([]byte(sourcePath))
+	return hex.EncodeToString(h[:8])
 }
 
 // logFilePath returns the schedule log path for a source file.
-// Uses a hash of the source path for uniqueness.
 func (es *EventScheduler) logFilePath(sourcePath string) string {
-	h := sha256.Sum256([]byte(sourcePath))
-	name := hex.EncodeToString(h[:8]) + ".md"
-	return filepath.Join(es.scheduleDir, name)
+	return filepath.Join(es.scheduleDir, logFileHash(sourcePath)+".md")
 }
 
 // ensureDir creates the schedule directory if needed.
@@ -373,7 +400,8 @@ func readLogFile(path string) ([]logChunk, error) {
 
 // writeLogFile writes chunks to a schedule log file.
 // Caller must ensure the directory exists (via ensureDir).
-func writeLogFile(path string, chunks []logChunk) error {
+// formatLogChunks renders log chunks as markdown bytes.
+func formatLogChunks(chunks []logChunk) []byte {
 	var buf strings.Builder
 	for i, c := range chunks {
 		if i > 0 {
@@ -401,7 +429,11 @@ func writeLogFile(path string, chunks []logChunk) error {
 			fmt.Fprintf(&buf, "@check-gap: %s\n", g)
 		}
 	}
-	return os.WriteFile(path, []byte(buf.String()), 0644)
+	return []byte(buf.String())
+}
+
+func writeLogFile(path string, chunks []logChunk) error {
+	return os.WriteFile(path, formatLogChunks(chunks), 0644)
 }
 
 // EnsureUpcoming ensures a schedule log chunk exists for an event with
@@ -409,11 +441,20 @@ func writeLogFile(path string, chunks []logChunk) error {
 // Called from the indexer when a source file with a schedule tag is indexed.
 // CRC: crc-EventScheduler.md | R902, R905
 func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
-	if err := es.ensureDir(); err != nil {
-		return err
+	isTmp := strings.HasPrefix(sourcePath, "tmp://")
+	var logPath string
+	var chunks []logChunk
+	if isTmp {
+		logPath = "tmp://schedule/" + logFileHash(sourcePath) + ".md"
+		// tmp:// logs don't persist on disk — read from WriteTmpLog content if available
+		// For now, start fresh each time (tmp:// is ephemeral)
+	} else {
+		if err := es.ensureDir(); err != nil {
+			return err
+		}
+		logPath = es.logFilePath(sourcePath)
+		chunks, _ = readLogFile(logPath)
 	}
-	logPath := es.logFilePath(sourcePath)
-	chunks, _ := readLogFile(logPath)
 
 	// Find or create chunk
 	var chunk *logChunk
@@ -423,17 +464,27 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 			break
 		}
 	}
-	if chunk == nil {
-		chunks = append(chunks, logChunk{Event: tag, Source: sourcePath, Spec: value})
-		chunk = &chunks[len(chunks)-1]
-	} else {
-		chunk.Spec = value
+	now := time.Now()
+
+	// R1000-R1004: extract bounds from recurring values
+	spec := value
+	var notBefore, notAfter time.Time
+	if IsRecurringSpec(value) {
+		notBefore, notAfter, spec = ExtractBounds(value, now.Location())
 	}
 
-	now := time.Now()
+	if chunk == nil {
+		chunks = append(chunks, logChunk{Event: tag, Source: sourcePath, Spec: spec, NotBefore: notBefore, NotAfter: notAfter})
+		chunk = &chunks[len(chunks)-1]
+	} else {
+		chunk.Spec = spec
+		chunk.NotBefore = notBefore
+		chunk.NotAfter = notAfter
+	}
+
 	modified := false
 
-	if isRecurringSpec(value) {
+	if IsRecurringSpec(spec) {
 		modified = es.crankForward(chunk, now, false) > 0
 	} else {
 		// One-shot: add one upcoming if in the future and not already present
@@ -453,6 +504,10 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 
 	if !modified {
 		return nil // R905: no-op write avoided
+	}
+	if isTmp && es.WriteTmpLog != nil {
+		content := formatLogChunks(chunks)
+		return es.WriteTmpLog(logPath, content)
 	}
 	return writeLogFile(logPath, chunks)
 }
@@ -656,7 +711,7 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 		// R877: single lookahead for the next occurrence (not full window)
 		if event.Recurring != "" {
 			now := time.Now()
-			next := computeNext(event.Recurring, now, time.Time{})
+			next := ComputeNext(event.Recurring, now, time.Time{})
 			if !next.IsZero() {
 				dateStr := next.Format(scheduleDateFmt)
 				if !slices.Contains(c.Upcoming, dateStr) { // R905: exception check
@@ -835,7 +890,7 @@ func parseScheduledTime(value string, now time.Time) time.Time {
 // If notAfter is non-zero, returns zero time when the next occurrence exceeds it.
 // All matching is case-insensitive.
 // CRC: crc-EventScheduler.md | R822, R823, R824, R1005
-func computeNext(spec string, after time.Time, notAfter time.Time) time.Time {
+func ComputeNext(spec string, after time.Time, notAfter time.Time) time.Time {
 	spec = strings.TrimSpace(spec)
 	// Strip description after " -- "
 	if idx := strings.Index(spec, " -- "); idx >= 0 {

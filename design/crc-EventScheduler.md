@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017
 
 Priority queue of time-tagged events with a single timer. Reads day
 buckets from LMDB at startup and on crank-forward. Delivers events
@@ -37,10 +37,10 @@ indexer writes day buckets, the scheduler reads them.
   append @check-gap: DATE in same paragraph, compute next upcoming,
   re-index log file. (R964, R965, R966, R967) If non-lifecycle:
   fire through pubsub only, skip log writing. (R968)
-  If recurring: crank forward — compute next occurrence,
-  materialize new day-bucket entry via Store.WriteDayBuckets,
-  re-enqueue. (R807, R877) Reset timer to new head.
-- computeNext(recurring string, after time.Time, notAfter time.Time) time.Time:
+  If recurring: crank forward — convert past upcoming to fired,
+  write one new upcoming entry, re-enqueue. (R807, R877, R1010, R1011)
+  Reset timer to new head.
+- ComputeNext(recurring string, after time.Time, notAfter time.Time) time.Time:
   parse recurrence spec, return next occurrence after the given time.
   Returns zero time if next occurrence exceeds notAfter (zero notAfter = no bound).
   Supports: "every Xm", "every Xh", "every WEEKDAY HH:MM",
@@ -50,7 +50,7 @@ indexer writes day buckets, the scheduler reads them.
   from, starting, beginning, after, on. End keywords: to, until, through,
   ending, before, by. Returns empty keyword if no match. Only strips when
   remainder parses as a date. (R996, R997, R998, R999)
-- extractBounds(value string) (notBefore, notAfter time.Time, remainder string):
+- ExtractBounds(value string) (notBefore, notAfter time.Time, remainder string):
   extract start/end bounds from a schedule tag value. Looks for keyword+date
   pairs (from/to/starting/until/etc) or DATE..DATE adjacent to "every".
   Returns zero times for missing bounds. Remainder is the pure recurrence
