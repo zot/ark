@@ -440,33 +440,10 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 		}
 	}
 	srv.scheduler.WriteTmpLog = nil // clean up
-	// Scan picks up new log files, then write day buckets directly
-	// from the log content. We don't rely on refresh because the file
-	// was just created — it's not stale.
+	// Scan picks up new schedule log files for indexing.
 	SyncVoid(srv.db, func(db *DB) error {
 		if _, err := db.Scan(); err != nil {
 			log.Printf("schedule: post-scan error: %v", err)
-		}
-		// Write day buckets for each schedule log file
-		schedDir := db.dbPath + "/schedule/"
-		entries, err := os.ReadDir(schedDir)
-		if err != nil {
-			return nil // no schedule dir yet
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			path := schedDir + entry.Name()
-			status, err := db.fts.CheckFile(path)
-			if err != nil {
-				continue // not indexed yet
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			db.indexer.WriteDayBucketsForFile(status.FileID, path, content)
 		}
 		return nil
 	})
@@ -1365,52 +1342,9 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "bad date: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	startDate := dr.Start.Format("20060102")
-	endDate := dr.End.Format("20060102")
-	if startDate == endDate {
-		// Single date — search just that day
-	}
-
-	entries, err := Sync(srv.db, func(db *DB) ([]DayBucketEntry, error) {
-		return db.store.QueryDayBuckets(startDate, endDate)
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// R918: filter by tag
-	if req.Tag != "" {
-		var filtered []DayBucketEntry
-		for _, e := range entries {
-			if e.Tag == req.Tag {
-				filtered = append(filtered, e)
-			}
-		}
-		entries = filtered
-	}
-
-	// R919: gaps mode — only past events with acked=false
-	if req.Gaps {
-		now := time.Now()
-		var gapped []DayBucketEntry
-		for _, e := range entries {
-			var unacked []DayBucketEvent
-			for _, ev := range e.Events {
-				if ev.Start.Before(now) && !ev.Acked {
-					unacked = append(unacked, ev)
-				}
-			}
-			if len(unacked) > 0 {
-				entry := e
-				entry.Events = unacked
-				gapped = append(gapped, entry)
-			}
-		}
-		entries = gapped
-	}
-
-	writeJSON(w, entries)
+	// R1027: compute events from schedule logs
+	events := srv.scheduler.QueryRange(dr.Start, dr.End, req.Tag, req.Gaps)
+	writeJSON(w, events)
 }
 
 // handleScheduleChange rewrites a date in a schedule tag value. R921-R925

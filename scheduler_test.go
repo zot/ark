@@ -164,7 +164,7 @@ func TestLogChunkBoundsRoundTrip(t *testing.T) {
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.Local)
 	end := time.Date(2026, 5, 30, 0, 0, 0, 0, time.Local)
 
-	chunks := []logChunk{
+	chunks := []LogChunk{
 		{
 			Event:     "standup",
 			Source:    "~/notes/schedule.md",
@@ -175,11 +175,11 @@ func TestLogChunkBoundsRoundTrip(t *testing.T) {
 		},
 	}
 
-	if err := writeLogFile(path, chunks); err != nil {
+	if err := WriteLogFile(path, chunks); err != nil {
 		t.Fatal(err)
 	}
 
-	parsed, err := readLogFile(path)
+	parsed, err := ReadLogFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}

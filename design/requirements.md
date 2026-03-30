@@ -1398,6 +1398,39 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1021:** `ReloadConfig` updates `indexer.config` (was stale after ark.toml reload)
 - **R1022:** Indexer config set at DB open time, not only when scheduler is wired — enables day bucket writes during rebuild
 
+### Month Buckets (replaces Day Buckets)
+
+- **R1023:** Remove LMDB day bucket records (TD/TF). Replace with in-memory month buckets computed from schedule log specs.
+- **R1024:** One month bucket entry per month per recurring event — the first occurrence in that month
+- **R1025:** Query: find month bucket at or before range start, crank forward to generate all events in range
+- **R1026:** Month buckets computed on startup from schedule log files. Recomputable on restart.
+- **R1027:** `ark schedule search` computes events from specs and month buckets — works without a running server
+- **R1028:** @obsolete-req: R866 -- day bucket LMDB indexing replaced by month buckets
+- **R1029:** @obsolete-req: R871 -- TF reverse index for deletion no longer needed
+- **R1030:** @obsolete-req: R911 -- TD JSON array no longer needed
+- **R1031:** @obsolete-req: R912 -- ack status embedded in day buckets no longer needed
+- **R1032:** @obsolete-req: R1019 -- dayBucketsFromLogFile no longer needed
+
+### Schedule Tags --values
+
+- **R1033:** `ark schedule tags --values` shows tag values from source files and next upcoming date from schedule logs
+- **R1034:** Reads schedule log files directly — no server dependency
+
+### Scheduling Exceptions
+
+- **R1035:** `@remove: DATE [text]` in the same chunk as a schedule tag skips that occurrence
+- **R1036:** `@add: DATE [text]` in the same chunk as a schedule tag adds an extra occurrence
+- **R1037:** Exception tags use short names scoped by the event chunk (not @ark-event- prefix)
+- **R1038:** Exceptions parsed at index time and stored in the event struct
+- **R1039:** crankForward, month bucket generation, and schedule search all respect exceptions
+- **R1040:** Source file is the authority — schedule log upcoming entry reflects the computed result after exceptions
+
+### Gap Detection (revised)
+
+- **R1041:** Gap detection compares recurrence spec against @ack: dates — no fired records needed
+- **R1042:** @obsolete-req: R870 -- @ark-event-fired: entries in log no longer needed for gap detection
+- **R1043:** `ark schedule search --gaps` computes unacked past occurrences from spec vs @ack: dates
+
 ### Day-Bucket LMDB Indexing
 
 - **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag

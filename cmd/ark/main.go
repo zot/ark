@@ -3960,29 +3960,26 @@ func cmdScheduleSearch(args []string) {
 	}
 
 	// Decode and format as markdown R916
-	var entries []ark.DayBucketEntry
-	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &entries); err != nil {
+	var events []ark.ScheduleEvent
+	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &events); err != nil {
 		fatal(err)
 	}
-	for _, e := range entries {
-		fmt.Printf("## %s — @%s: (%s)\n\n", e.Date, e.Tag, e.Path)
-		for _, ev := range e.Events {
-			ackMark := ""
-			if ev.Acked {
-				ackMark = " [acked"
-				if ev.AckText != "" {
-					ackMark += ": " + ev.AckText
-				}
-				ackMark += "]"
+	lastDate := ""
+	for _, ev := range events {
+		if ev.Date != lastDate {
+			if lastDate != "" {
+				fmt.Println()
 			}
-			if ev.AllDay {
-				fmt.Printf("- all day: %s%s\n", ev.Summary, ackMark)
-			} else {
-				fmt.Printf("- %s–%s: %s%s\n",
-					ev.Start.Format("15:04"),
-					ev.End.Format("15:04"),
-					ev.Summary, ackMark)
-			}
+			fmt.Printf("## %s — @%s: (%s)\n\n", ev.Date, ev.Tag, ev.Source)
+			lastDate = ev.Date
+		}
+		if ev.AllDay {
+			fmt.Printf("- all day: %s\n", ev.Summary)
+		} else {
+			fmt.Printf("- %s–%s: %s\n",
+				ev.Start.Format("15:04"),
+				ev.End.Format("15:04"),
+				ev.Summary)
 		}
 		fmt.Println()
 	}
@@ -4047,12 +4044,15 @@ func cmdScheduleChange(args []string) {
 }
 
 func cmdScheduleTags(args []string) {
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(os.Stderr, `Usage: ark schedule tags
+	fs := flag.NewFlagSet("schedule tags", flag.ExitOnError)
+	values := fs.Bool("values", false, "show tag values and next upcoming dates")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark schedule tags [--values]
 
-Show configured schedule tags and their default durations.`)
-		os.Exit(0)
+Show configured schedule tags and their default durations.
+With --values: also show tag values and next upcoming dates from schedule logs.`)
 	}
+	fs.Parse(args)
 	withDB(func(db *ark.DB) {
 		tags := db.Config().ScheduleTags()
 		if len(tags) == 0 {
@@ -4086,6 +4086,32 @@ Show configured schedule tags and their default durations.`)
 		}
 		if len(cfg.Schedule.FilterFiles) > 0 {
 			fmt.Printf("filter: %s\n", strings.Join(cfg.Schedule.FilterFiles, ", "))
+		}
+		// R1033, R1034: show values and upcoming from schedule logs
+		if *values {
+			schedDir := filepath.Join(arkDir, "schedule")
+			entries, err := os.ReadDir(schedDir)
+			if err != nil {
+				return
+			}
+			fmt.Println()
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				chunks, err := ark.ReadLogFile(filepath.Join(schedDir, entry.Name()))
+				if err != nil {
+					continue
+				}
+				for _, c := range chunks {
+					upcoming := "(none)"
+					if len(c.Upcoming) > 0 {
+						upcoming = c.Upcoming[0]
+					}
+					fmt.Printf("@%s: %s\n  source: %s\n  next: %s\n",
+						c.Event, c.Spec, c.Source, upcoming)
+				}
+			}
 		}
 	})
 }

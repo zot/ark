@@ -159,6 +159,207 @@ func tryKeywordDate(s string, keywords []string, loc *time.Location) (time.Time,
 	return time.Time{}, s
 }
 
+// ScheduleEvent is a computed event occurrence for schedule search results.
+// R1025, R1027
+type ScheduleEvent struct {
+	Date    string    `json:"date"` // YYYYMMDD
+	Tag     string    `json:"tag"`
+	Start   time.Time `json:"start"`
+	End     time.Time `json:"end"`
+	Summary string    `json:"summary,omitempty"`
+	AllDay  bool      `json:"allDay,omitempty"`
+	Source  string    `json:"source"` // source file path
+	Spec    string    `json:"spec"`   // recurrence spec or one-shot value
+}
+
+// QueryRange computes all events between start and end by reading schedule
+// logs and cranking forward from specs. Optionally filters by tag name.
+// If gaps is true, only returns past events without matching @ack: entries.
+// R1025, R1027, R1041, R1043
+func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool) []ScheduleEvent {
+	var events []ScheduleEvent
+	if es.scheduleDir == "" {
+		return events
+	}
+	entries, err := os.ReadDir(es.scheduleDir)
+	if err != nil {
+		return events
+	}
+	loc := start.Location()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		logPath := filepath.Join(es.scheduleDir, entry.Name())
+		chunks, err := ReadLogFile(logPath)
+		if err != nil {
+			continue
+		}
+		for i := range chunks {
+			c := &chunks[i]
+			if tag != "" && c.Event != tag {
+				continue
+			}
+			// R1038: load exceptions from source file
+			if c.Source != "" && len(c.Removes) == 0 && len(c.Adds) == 0 {
+				if content, err := os.ReadFile(c.Source); err == nil {
+					c.Removes, c.Adds = ParseExceptions(content, c.Event)
+				}
+			}
+			if IsRecurringSpec(c.Spec) {
+				// Crank forward through the range
+				startAfter := start.Add(-1 * time.Second)
+				if !c.NotBefore.IsZero() && c.NotBefore.After(startAfter) {
+					startAfter = c.NotBefore.Add(-1 * time.Second)
+				}
+				notAfter := end
+				if !c.NotAfter.IsZero() && c.NotAfter.Before(notAfter) {
+					notAfter = c.NotAfter
+				}
+				next := ComputeNext(c.Spec, startAfter, notAfter)
+				for !next.IsZero() && !next.After(end) {
+					// R1039: skip @remove: exceptions
+					if removed, _ := isRemoved(next, c.Removes); !removed {
+						ev := ScheduleEvent{
+							Date:   next.Format("20060102"),
+							Tag:    c.Event,
+							Start:  next,
+							End:    next,
+							Source: c.Source,
+							Spec:   c.Spec,
+						}
+						if def, ok := es.config.IsScheduleTag(c.Event); ok {
+							applyDefaultDuration(&ev, def, loc)
+						}
+						events = append(events, ev)
+					}
+					next = ComputeNext(c.Spec, next, notAfter)
+				}
+				// R1036: add @add: exceptions that fall in range
+				for _, add := range c.Adds {
+					if !add.Date.Before(start) && !add.Date.After(end) {
+						ev := ScheduleEvent{
+							Date:    add.Date.Format("20060102"),
+							Tag:     c.Event,
+							Start:   add.Date,
+							End:     add.Date,
+							Summary: add.Text,
+							Source:  c.Source,
+							Spec:    c.Spec,
+						}
+						if def, ok := es.config.IsScheduleTag(c.Event); ok {
+							applyDefaultDuration(&ev, def, loc)
+						}
+						events = append(events, ev)
+					}
+				}
+			} else {
+				// One-shot: parse the spec as a date
+				dr, err := ParseDateValue(c.Spec, "", loc)
+				if err != nil {
+					continue
+				}
+				if def, ok := es.config.IsScheduleTag(c.Event); ok && dr.End == dr.Start {
+					if def == "all-day" {
+						dr.AllDay = true
+						dr.End = time.Date(dr.Start.Year(), dr.Start.Month(), dr.Start.Day(), 23, 59, 59, 0, loc)
+					} else if d, derr := time.ParseDuration(def); derr == nil {
+						dr.End = dr.Start.Add(d)
+					}
+				}
+				if !dr.Start.Before(start) && !dr.Start.After(end) {
+					events = append(events, ScheduleEvent{
+						Date:    dr.Start.Format("20060102"),
+						Tag:     c.Event,
+						Start:   dr.Start,
+						End:     dr.End,
+						Summary: dr.Description,
+						AllDay:  dr.AllDay,
+						Source:  c.Source,
+						Spec:    c.Spec,
+					})
+				}
+			}
+		}
+	}
+	// R1041, R1043: gap detection — filter to unacked past events
+	if gaps {
+		now := time.Now()
+		var gapped []ScheduleEvent
+		// Group acks by source file
+		ackCache := make(map[string][]AckEntry)
+		for _, ev := range events {
+			if ev.Start.After(now) {
+				continue // future event, skip
+			}
+			acks, ok := ackCache[ev.Source+":"+ev.Tag]
+			if !ok {
+				if content, err := os.ReadFile(ev.Source); err == nil {
+					acks = ParseAcks(content, ev.Tag)
+				}
+				ackCache[ev.Source+":"+ev.Tag] = acks
+			}
+			if acked, _ := AckCoversDate(acks, ev.Start); !acked {
+				gapped = append(gapped, ev)
+			}
+		}
+		return gapped
+	}
+	return events
+}
+
+// applyDefaultDuration sets the end time based on the tag's default duration.
+func applyDefaultDuration(ev *ScheduleEvent, def string, loc *time.Location) {
+	if def == "all-day" {
+		ev.AllDay = true
+		ev.End = time.Date(ev.Start.Year(), ev.Start.Month(), ev.Start.Day(), 23, 59, 59, 0, loc)
+	} else if d, err := time.ParseDuration(def); err == nil {
+		ev.End = ev.Start.Add(d)
+	}
+}
+
+// ParseExceptions extracts @remove: and @add: tags from the same chunk as
+// a schedule tag in a source file. R1035, R1036, R1037, R1038
+func ParseExceptions(content []byte, tag string) (removes, adds []DateException) {
+	lines := strings.Split(string(content), "\n")
+	inChunk := false
+	loc := time.Now().Location()
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "---" {
+			inChunk = false
+			continue
+		}
+		if strings.Contains(trimmed, "@"+tag+":") {
+			inChunk = true
+		}
+		if !inChunk {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "@remove:") {
+			value := strings.TrimSpace(trimmed[len("@remove:"):])
+			if de := parseDateException(value, loc); !de.Date.IsZero() {
+				removes = append(removes, de)
+			}
+		} else if strings.HasPrefix(trimmed, "@add:") {
+			value := strings.TrimSpace(trimmed[len("@add:"):])
+			if de := parseDateException(value, loc); !de.Date.IsZero() {
+				adds = append(adds, de)
+			}
+		}
+	}
+	return
+}
+
+// parseDateException parses "DATE [text]" into a DateException.
+func parseDateException(value string, loc *time.Location) DateException {
+	t, desc, err := parseDateTrimmingRaw(value, loc)
+	if err != nil {
+		return DateException{}
+	}
+	return DateException{Date: t, Text: desc}
+}
+
 // dayNames maps day name strings to time.Weekday (package-level, allocated once).
 var dayNames = map[string]time.Weekday{
 	"sunday": time.Sunday, "sun": time.Sunday,
@@ -249,17 +450,36 @@ func (es *EventScheduler) reportError(subsystem, message string) {
 
 // --- Schedule log file operations ---
 
-// logChunk represents one event definition in a schedule log file.
+// LogChunk represents one event definition in a schedule log file.
 // CRC: crc-EventScheduler.md | R899, R900, R901
-type logChunk struct {
-	Event     string    // tag name (e.g., "standup")
-	Source    string    // source file path
-	Spec      string    // recurring spec (e.g., "every Monday at 09:00")
-	NotBefore time.Time // R1007: @ark-event-start: bound (zero = no bound)
-	NotAfter  time.Time // R1007: @ark-event-end: bound (zero = no bound)
-	Fired     []string  // @ark-event-fired: date strings
-	Upcoming  []string  // @ark-event-upcoming: date strings
-	CheckGaps []string  // @check-gap: date strings — unresolved fired events (R965, R969)
+type LogChunk struct {
+	Event     string          // tag name (e.g., "standup")
+	Source    string          // source file path
+	Spec      string          // recurring spec (e.g., "every Monday at 09:00")
+	NotBefore time.Time       // R1007: @ark-event-start: bound (zero = no bound)
+	NotAfter  time.Time       // R1007: @ark-event-end: bound (zero = no bound)
+	Fired     []string        // @ark-event-fired: date strings
+	Upcoming  []string        // @ark-event-upcoming: date strings
+	CheckGaps []string        // @check-gap: date strings — unresolved fired events (R965, R969)
+	Removes   []DateException // R1035: @remove: exceptions from source file
+	Adds      []DateException // R1036: @add: exceptions from source file
+}
+
+// DateException is a parsed @remove: or @add: tag from a source file.
+// R1035, R1036, R1037
+type DateException struct {
+	Date time.Time
+	Text string // optional descriptive text after the date
+}
+
+// isRemoved returns true if the given time matches any @remove: exception (same day).
+func isRemoved(t time.Time, removes []DateException) (bool, string) {
+	for _, r := range removes {
+		if t.Year() == r.Date.Year() && t.YearDay() == r.Date.YearDay() {
+			return true, r.Text
+		}
+	}
+	return false, ""
 }
 
 // eventID builds a deterministic event identifier.
@@ -268,7 +488,7 @@ func eventID(source, tag, dateStr string) string {
 }
 
 // buildDateSet returns a set of date strings already in a chunk (upcoming + fired).
-func buildDateSet(c *logChunk) map[string]bool {
+func buildDateSet(c *LogChunk) map[string]bool {
 	m := make(map[string]bool, len(c.Upcoming)+len(c.Fired))
 	for _, u := range c.Upcoming {
 		m[u] = true
@@ -285,7 +505,7 @@ func buildDateSet(c *logChunk) map[string]bool {
 
 // crankForward fills a chunk's Upcoming with dates through the forward window.
 // Returns the number of new entries added. Optionally enqueues events.
-func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool) int {
+func (es *EventScheduler) crankForward(c *LogChunk, now time.Time, enqueue bool) int {
 	if !IsRecurringSpec(c.Spec) {
 		return 0
 	}
@@ -314,9 +534,16 @@ func (es *EventScheduler) crankForward(c *logChunk, now time.Time, enqueue bool)
 	}
 	c.Upcoming = futureUpcoming
 
-	// Ensure exactly one future upcoming entry exists.
+	// Ensure exactly one future upcoming entry exists, skipping removed dates.
 	if len(c.Upcoming) == 0 {
 		next := ComputeNext(c.Spec, startAfter, c.NotAfter)
+		// R1039: skip @remove: exceptions
+		for !next.IsZero() {
+			if removed, _ := isRemoved(next, c.Removes); !removed {
+				break
+			}
+			next = ComputeNext(c.Spec, next, c.NotAfter)
+		}
 		if !next.IsZero() {
 			dateStr := next.Format(scheduleDateFmt)
 			c.Upcoming = append(c.Upcoming, dateStr)
@@ -351,16 +578,16 @@ func (es *EventScheduler) ensureDir() error {
 	return os.MkdirAll(es.scheduleDir, 0755)
 }
 
-// readLogFile reads all chunks from a schedule log file.
-func readLogFile(path string) ([]logChunk, error) {
+// ReadLogFile reads all chunks from a schedule log file.
+func ReadLogFile(path string) ([]LogChunk, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var chunks []logChunk
-	var cur *logChunk
+	var chunks []LogChunk
+	var cur *LogChunk
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -368,7 +595,7 @@ func readLogFile(path string) ([]logChunk, error) {
 			if cur != nil {
 				chunks = append(chunks, *cur)
 			}
-			cur = &logChunk{Event: strings.TrimSpace(line[len("@ark-event:"):])}
+			cur = &LogChunk{Event: strings.TrimSpace(line[len("@ark-event:"):])}
 		} else if cur != nil {
 			switch {
 			case strings.HasPrefix(line, "@ark-event-source:"):
@@ -398,10 +625,10 @@ func readLogFile(path string) ([]logChunk, error) {
 	return chunks, scanner.Err()
 }
 
-// writeLogFile writes chunks to a schedule log file.
+// WriteLogFile writes chunks to a schedule log file.
 // Caller must ensure the directory exists (via ensureDir).
 // formatLogChunks renders log chunks as markdown bytes.
-func formatLogChunks(chunks []logChunk) []byte {
+func formatLogChunks(chunks []LogChunk) []byte {
 	var buf strings.Builder
 	for i, c := range chunks {
 		if i > 0 {
@@ -432,7 +659,7 @@ func formatLogChunks(chunks []logChunk) []byte {
 	return []byte(buf.String())
 }
 
-func writeLogFile(path string, chunks []logChunk) error {
+func WriteLogFile(path string, chunks []LogChunk) error {
 	return os.WriteFile(path, formatLogChunks(chunks), 0644)
 }
 
@@ -443,7 +670,7 @@ func writeLogFile(path string, chunks []logChunk) error {
 func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 	isTmp := strings.HasPrefix(sourcePath, "tmp://")
 	var logPath string
-	var chunks []logChunk
+	var chunks []LogChunk
 	if isTmp {
 		logPath = "tmp://schedule/" + logFileHash(sourcePath) + ".md"
 		// tmp:// logs don't persist on disk — read from WriteTmpLog content if available
@@ -453,11 +680,11 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 			return err
 		}
 		logPath = es.logFilePath(sourcePath)
-		chunks, _ = readLogFile(logPath)
+		chunks, _ = ReadLogFile(logPath)
 	}
 
 	// Find or create chunk
-	var chunk *logChunk
+	var chunk *LogChunk
 	for i := range chunks {
 		if chunks[i].Event == tag && chunks[i].Source == sourcePath {
 			chunk = &chunks[i]
@@ -473,13 +700,23 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 		notBefore, notAfter, spec = ExtractBounds(value, now.Location())
 	}
 
+	// R1035, R1036: parse scheduling exceptions from source file
+	var removes, adds []DateException
+	if !isTmp {
+		if content, err := os.ReadFile(sourcePath); err == nil {
+			removes, adds = ParseExceptions(content, tag)
+		}
+	}
+
 	if chunk == nil {
-		chunks = append(chunks, logChunk{Event: tag, Source: sourcePath, Spec: spec, NotBefore: notBefore, NotAfter: notAfter})
+		chunks = append(chunks, LogChunk{Event: tag, Source: sourcePath, Spec: spec, NotBefore: notBefore, NotAfter: notAfter, Removes: removes, Adds: adds})
 		chunk = &chunks[len(chunks)-1]
 	} else {
 		chunk.Spec = spec
 		chunk.NotBefore = notBefore
 		chunk.NotAfter = notAfter
+		chunk.Removes = removes
+		chunk.Adds = adds
 	}
 
 	modified := false
@@ -509,7 +746,7 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 		content := formatLogChunks(chunks)
 		return es.WriteTmpLog(logPath, content)
 	}
-	return writeLogFile(logPath, chunks)
+	return WriteLogFile(logPath, chunks)
 }
 
 // ScanScheduleLogs reads all log files in ~/.ark/schedule/ and populates
@@ -534,7 +771,7 @@ func (es *EventScheduler) ScanScheduleLogs() error {
 			continue
 		}
 		logPath := filepath.Join(es.scheduleDir, entry.Name())
-		chunks, err := readLogFile(logPath)
+		chunks, err := ReadLogFile(logPath)
 		if err != nil {
 			log.Printf("schedule: error reading %s: %v", logPath, err)
 			continue
@@ -574,7 +811,7 @@ func (es *EventScheduler) ScanScheduleLogs() error {
 		}
 
 		if modified {
-			if err := writeLogFile(logPath, chunks); err != nil {
+			if err := WriteLogFile(logPath, chunks); err != nil {
 				log.Printf("schedule: error writing %s: %v", logPath, err)
 			}
 		}
@@ -682,7 +919,7 @@ func (es *EventScheduler) fire() {
 // log file and adds the next upcoming for recurring events. R877
 func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 	logPath := es.logFilePath(event.Path)
-	chunks, err := readLogFile(logPath)
+	chunks, err := ReadLogFile(logPath)
 	if err != nil {
 		log.Printf("schedule: cannot read log for fire: %v", err)
 		return
@@ -730,7 +967,7 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 		break
 	}
 
-	if err := writeLogFile(logPath, chunks); err != nil {
+	if err := WriteLogFile(logPath, chunks); err != nil {
 		log.Printf("schedule: cannot write log for fire: %v", err)
 	}
 }
@@ -740,7 +977,7 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 // CRC: crc-EventScheduler.md | R969, R970, R971
 func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
 	logPath := es.logFilePath(sourcePath)
-	chunks, err := readLogFile(logPath)
+	chunks, err := ReadLogFile(logPath)
 	if err != nil {
 		return // log file might not exist (non-lifecycle tag)
 	}
@@ -762,7 +999,7 @@ func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
 		break
 	}
 	if modified {
-		if err := writeLogFile(logPath, chunks); err != nil {
+		if err := WriteLogFile(logPath, chunks); err != nil {
 			log.Printf("schedule: cannot write log for check-gap resolve: %v", err)
 		}
 	}
@@ -774,7 +1011,7 @@ func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
 // CRC: crc-EventScheduler.md | R970, R971
 func (es *EventScheduler) ResolveCheckGapsFromAcks(sourcePath string, acks []AckEntry) {
 	logPath := es.logFilePath(sourcePath)
-	chunks, err := readLogFile(logPath)
+	chunks, err := ReadLogFile(logPath)
 	if err != nil {
 		return
 	}
@@ -801,7 +1038,7 @@ func (es *EventScheduler) ResolveCheckGapsFromAcks(sourcePath string, acks []Ack
 		c.CheckGaps = kept
 	}
 	if modified {
-		if err := writeLogFile(logPath, chunks); err != nil {
+		if err := WriteLogFile(logPath, chunks); err != nil {
 			log.Printf("schedule: cannot write log for ack resolve: %v", err)
 		}
 	}
@@ -824,7 +1061,7 @@ func (es *EventScheduler) ScanCheckGaps(lookbackDays int) []string {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		chunks, err := readLogFile(filepath.Join(es.scheduleDir, entry.Name()))
+		chunks, err := ReadLogFile(filepath.Join(es.scheduleDir, entry.Name()))
 		if err != nil {
 			continue
 		}

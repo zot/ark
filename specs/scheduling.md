@@ -238,45 +238,61 @@ Old `@ark-event-fired:` entries accumulate. The log directory is designed for
 rotation — archive or delete old log files. The source file's `@ack:`
 entries are the durable human record; the log is the machine record.
 
-## Day-Bucket LMDB Indexing
+## Month Buckets (in-memory)
 
-A 1D quadtree at day granularity. Day buckets are derived from
-`@ark-event-upcoming:` and `@ark-event-fired:` entries in the schedule log (plus
-one-shot events directly from source files).
+Replace LMDB day buckets (TD/TF records) with in-memory month
+buckets. The scheduler fires from log file upcoming entries.
+Calendar and CLI compute events from recurrence specs. Month
+buckets are the skip list for fast range queries.
+
+Computed on startup from schedule log specs. One entry per month
+per recurring event — the first occurrence in that month. Query
+flow:
+
+1. Find the month bucket at or before the range start
+2. Crank forward from that point to generate all events in range
+3. Apply scheduling exceptions (@remove:, @add:)
+4. Merge ack status from source file @ack: tags
+
+A 10-year overview is 120 buckets per event, milliseconds to
+compute. In-memory only — derived from specs, recomputable on
+restart. No LMDB storage needed.
+
+Enables `ark schedule search` without a running server: open the
+DB, read schedule log files, build month buckets, compute the
+query. Same code path, no server dependency.
+
+Remove: Store.WriteDayBuckets, QueryDayBuckets, ClearDayBuckets,
+WriteDayBucketsForFile, dayBucketsFromLogFile, TD/TF LMDB records.
+
+## Scheduling Exceptions
+
+Cancel or reschedule individual occurrences without changing the
+recurrence spec. Exception tags live in the same chunk as the
+event in the source file:
 
 ```
-Key:   TD|20260415|fileid|tag
-Value: [{start, end, summary, allDay, acked, ackText}, ...]
+@standup: every Monday at 09:00
+@ack: ..Mar 24 2026
+@remove: 2026-03-31 snow day
+@add: 2026-04-01 moved after snow day
 ```
 
-The value is a JSON array of events — multiple occurrences per day
-per file/tag (e.g., two standups rescheduled to the same day).
-Each event carries its ack status, parsed from `@ack:` tags in the
-same chunk at index time. The calendar view gets everything in one
-range scan — no second pass to check acknowledgments.
+Short names (`@remove:`, `@add:`, `@ack:`) are scoped by the
+event chunk — no `@ark-event-` prefix needed in source files.
+See tags.md "Tag scoping" for the naming convention.
 
-A 3-day event spanning Apr 15-17 gets 3 entries. Calendar query for
-March = seek `TD|20260301`, scan to `TD|20260331`. No post-filtering.
+Exception tags carry a date and optional trailing description text,
+same format as schedule tag values. Parsed at index time and stored
+in the event struct alongside the recurrence spec.
 
-Worst case is bounded by human scheduling density — a week-long
-vacation is 7 entries, a year of weekly standups is ~52 in the
-materialization window.
+When computing occurrences (month bucket generation, schedule
+search, crank-forward):
+- `@remove: DATE` — skip that date, don't generate an occurrence
+- `@add: DATE` — include an extra occurrence on that date
 
-### Reverse index for deletion
-
-On re-index, old day-bucket entries must be cleaned up (tags removed,
-dates changed, file deleted). Single reverse-index key per file:
-
-```
-Key:   TF|fileid
-Value: [20260415, 20260416, 20260417]
-```
-
-Re-index flow:
-1. Get `TF|fileid` — one read, all dates
-2. For each date, delete `TD|date|fileid|*`
-3. Delete `TF|fileid`
-4. Write new TD + TF from current file content
+The source file is the authority. The schedule log reflects the
+computed result — its upcoming entry accounts for exceptions.
 
 ## Scheduler Integration
 
@@ -381,11 +397,13 @@ ark schedule search 2026-04-01..2026-06-30 --tag standup
 ```
 
 Output is markdown by default (crank-handle style), JSON with
-`--json`. Each event includes ack status from the day-bucket record.
+`--json`. Events are computed from recurrence specs and month
+buckets — no LMDB day buckets needed. Works without a running
+server.
 
 `--tag` filters to a specific schedule tag. `--gaps` shows only
-events that fired but have no matching `@ack:` — Franklin's
-"what did you miss?" query.
+events with unacknowledged occurrences — computed by comparing
+the recurrence spec against `@ack:` dates in the source file.
 
 ### ark schedule parse
 
@@ -401,11 +419,15 @@ bounds, and next occurrence.
 ### ark schedule tags
 
 ```
-ark schedule tags
+ark schedule tags [--values]
 ```
 
 Show configured schedule tags, default durations, lifecycle status,
 and per-tag filter/exclude patterns.
+
+With `--values`: also show each tag's current values from source
+files and next upcoming date from schedule logs. Reads log files
+directly — no server needed.
 
 ### ark schedule change
 
@@ -433,32 +455,24 @@ affected files.
 Detection: store the serialized `[schedule]` section in the LMDB
 settings record (I prefix). On config reload (startup, ark.toml
 fsnotify), compare current vs stored. If different:
-- Tags added: scan files with the new tag, write day buckets
-- Tags removed: clear day buckets for files with that tag
-- Defaults changed: re-materialize with new durations
-
-## Acknowledgment Indexing
-
-`@ack:` tags are parsed at index time (not query time). When a file
-containing a schedule tag is indexed, the indexer:
-1. Finds `@ack:` tags in the same chunk as each schedule tag
-2. Parses each `@ack:` date/range
-3. For each day bucket being written, checks if any `@ack:` covers
-   that date and embeds `acked: true` + `ackText` in the event
-
-This means the calendar view and `ark schedule search` get ack
-status in one range scan — no second pass against source files.
+- Tags added: scan files with the new tag, write schedule log entries
+- Tags removed: remove schedule log chunks for that tag
+- Defaults changed: re-compute month buckets with new durations
 
 ## Gap Detection
 
-Compare `@ark-event-fired:` entries in the log against `@ack:` entries in the
-source file. Unacknowledged fired dates within a lookback window
-(default 7 days) are surfaced as recent misses. Franklin's morning
-briefing data — "You had a dentist appointment Saturday, did it
-happen?"
+Gaps are computed from the recurrence spec and `@ack:` dates in the
+source file — no fired records needed. Compare what *should* have
+happened (crank the spec from the last ack date to now) against
+what *was* acknowledged. Unacknowledged past occurrences within a
+lookback window (default 7 days) are recent misses.
 
-`ark schedule search --gaps` is the CLI surface for this. It reads
-day buckets with `acked: false` for events whose date is in the past.
+Franklin's morning briefing: "You had a dentist appointment
+Saturday, did it happen?"
+
+`ark schedule search --gaps` computes this: for each event in the
+query range, check if an `@ack:` in the source file covers that
+date. Past events without acks are gaps.
 
 ## Lua APIs
 

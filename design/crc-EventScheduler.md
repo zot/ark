@@ -1,17 +1,15 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043
 
-Priority queue of time-tagged events with a single timer. Reads day
-buckets from LMDB at startup and on crank-forward. Delivers events
-as crank handles through PubSub's listen channel. No dependency on
-subscriptions for scheduling — ark.toml declares schedule tags, the
-indexer writes day buckets, the scheduler reads them.
+Priority queue of time-tagged events with a single timer. Reads
+schedule logs at startup. Delivers events as crank handles through
+PubSub's listen channel. In-memory month buckets serve range queries.
 
 ## Knows
 - queue: heap of ScheduledEvent — sorted by NextFire
 - timer: *time.Timer — set to the head of the queue
 - pushed: map[string]bool — eventID → delivered this server lifetime
-- store: *Store — reads day buckets from LMDB
+- monthBuckets: map[eventKey][]MonthEntry — skip list for range queries (R1023, R1024)
 - config: *Config — knows which tags are schedule tags
 - scheduleDir: string — ~/.ark/schedule/
 - mu: sync.Mutex — protects queue and timer
@@ -84,10 +82,19 @@ indexer writes day buckets, the scheduler reads them.
   through min(endDate, forward window). Create log file and chunk
   if needed. (R902, R1006, R1007)
 - AddChime(): add the quarter-chime recurring event (every 15m). (R810)
+- BuildMonthBuckets(): compute month buckets from all schedule log specs.
+  One entry per month per event — first occurrence in that month. Called
+  on startup after ScanScheduleLogs. (R1023, R1024, R1026)
+- QueryRange(start, end time.Time, exceptions []Exception) []Event:
+  find month bucket at or before start, crank forward to generate all
+  events in range, apply @remove:/@add: exceptions, merge @ack: status.
+  Used by schedule search CLI and calendar UI. (R1025, R1039, R1041)
+- ComputeGaps(start, end time.Time, acks []AckEntry) []Event:
+  compare spec occurrences against ack dates, return unacked past
+  events. (R1041, R1043)
 
 ## Collaborators
 - PubSub: delivers events through listen channels
-- Store: reads day buckets, writes new buckets on crank-forward
 - Config: knows which tags are schedule tags and default durations
 - Server: owns the scheduler, starts it after reconciliation
 

@@ -5,6 +5,7 @@ package ark
 import (
 	"crypto/sha256"
 	"fmt"
+	"github.com/zot/microfts2"
 	"io"
 	"log"
 	"os"
@@ -12,9 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/zot/microfts2"
 
 	"github.com/zot/microvec"
 )
@@ -37,6 +35,8 @@ type Indexer struct {
 // scheduleItem is a deferred EnsureUpcoming call.
 type scheduleItem struct {
 	tag, value, path string
+	removes          []DateException // R1035: @remove: from source chunk
+	adds             []DateException // R1036: @add: from source chunk
 }
 
 // SetPubSub injects the pubsub registry. Called by the server after
@@ -86,165 +86,6 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 	return items
 }
 
-// WriteDayBucketsForFile parses schedule tags and @ack: entries from
-// content, discretizes into day buckets with ack status, and writes.
-// Called unconditionally — clears stale buckets when no schedule tags remain.
-// R953, R954: skips files outside schedule filter scope (except schedule log
-// files which are always eligible — they contain materialized events).
-// CRC: crc-Indexer.md | R933, R934, R935, R866
-func (idx *Indexer) WriteDayBucketsForFile(fileid uint64, path string, content []byte) {
-	if idx.config == nil || idx.store == nil {
-		return
-	}
-	isScheduleLog := strings.HasPrefix(path, idx.config.dbPath+"/schedule/")
-	if !isScheduleLog && !idx.config.MatchesScheduleFilter(path) {
-		// Quick check: does any per-tag filter match this file?
-		anyTagMatch := false
-		for tag := range idx.config.Schedule.TagConfig {
-			if idx.config.MatchesScheduleFilterForTag(path, tag) {
-				anyTagMatch = true
-				break
-			}
-		}
-		if !anyTagMatch {
-			return
-		}
-	}
-	entryIndex := make(map[bucketMapKey]int)
-	var allEntries []DayBucketEntry
-	var allAcks []AckEntry
-	loc := time.Now().Location()
-
-	if isScheduleLog {
-		// R869, R870: schedule log files — parse @ark-event-upcoming: and @ark-event-fired:
-		idx.dayBucketsFromLogFile(fileid, path, content, loc, entryIndex, &allEntries)
-	} else {
-		// Source files — parse @tag: lines for schedule tags
-		for tag, defaultDur := range idx.config.ScheduleTags() {
-			if !idx.config.MatchesScheduleFilterForTag(path, tag) {
-				continue
-			}
-			acks := ParseAcks(content, tag)
-			allAcks = append(allAcks, acks...)
-
-			prefix := "@" + tag + ":"
-			for _, line := range strings.Split(string(content), "\n") {
-				trimmed := strings.TrimSpace(line)
-				pos := strings.Index(trimmed, prefix)
-				if pos < 0 {
-					continue
-				}
-				value := strings.TrimSpace(trimmed[pos+len(prefix):])
-				if value == "" {
-					continue
-				}
-
-				dr, err := ParseDateValue(value, defaultDur, loc)
-				if err != nil {
-					continue
-				}
-
-				start := dr.Start
-				end := dr.End
-				if end.Before(start) {
-					end = start
-				}
-				ev := DayBucketEvent{
-					Start:   dr.Start,
-					End:     dr.End,
-					Summary: dr.Description,
-					AllDay:  dr.AllDay,
-				}
-				for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-					dateStr := d.Format("20060102")
-					key := bucketMapKey{dateStr, tag}
-					if i, ok := entryIndex[key]; ok {
-						allEntries[i].Events = append(allEntries[i].Events, ev)
-					} else {
-						entryIndex[key] = len(allEntries)
-						allEntries = append(allEntries, DayBucketEntry{
-							Date:   dateStr,
-							Tag:    tag,
-							Path:   path,
-							FileID: fileid,
-							Events: []DayBucketEvent{ev},
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Write unconditionally — WriteDayBuckets clears stale entries when empty
-	if err := idx.store.WriteDayBucketsWithAcks(fileid, allEntries, allAcks); err != nil {
-		log.Printf("schedule: WriteDayBuckets error for %s: %v", path, err)
-	}
-
-	// R970, R971: resolve check-gaps when acks cover fired dates
-	if idx.scheduler != nil && !isScheduleLog && len(allAcks) > 0 {
-		idx.scheduler.ResolveCheckGapsFromAcks(path, allAcks)
-	}
-}
-
-// dayBucketsFromLogFile parses a schedule log file and creates day bucket entries
-// from @ark-event-upcoming: and @ark-event-fired: tags. The event's tag name comes
-// from @ark-event: in each chunk.
-// CRC: crc-Indexer.md | R869, R870
-type bucketMapKey struct{ date, tag string }
-
-func (idx *Indexer) dayBucketsFromLogFile(fileid uint64, path string, content []byte, loc *time.Location, entryIndex map[bucketMapKey]int, allEntries *[]DayBucketEntry) {
-	var curTag string
-	for _, line := range strings.Split(string(content), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "@ark-event:") {
-			curTag = strings.TrimSpace(trimmed[len("@ark-event:"):])
-			continue
-		}
-		if curTag == "" {
-			continue
-		}
-		var dateStr string
-		if strings.HasPrefix(trimmed, "@ark-event-upcoming:") {
-			dateStr = strings.TrimSpace(trimmed[len("@ark-event-upcoming:"):])
-		} else if strings.HasPrefix(trimmed, "@ark-event-fired:") {
-			dateStr = strings.TrimSpace(trimmed[len("@ark-event-fired:"):])
-		} else {
-			continue
-		}
-		t, err := ParseDate(dateStr)
-		if err != nil {
-			continue
-		}
-		dayStr := t.Format("20060102")
-		ev := DayBucketEvent{
-			Start: t,
-			End:   t,
-		}
-		// Apply default duration if known
-		if defaultDur, ok := idx.config.IsScheduleTag(curTag); ok && defaultDur != "" {
-			if defaultDur == "all-day" {
-				ev.AllDay = true
-				ev.End = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, loc)
-			} else if d, derr := time.ParseDuration(defaultDur); derr == nil {
-				ev.End = t.Add(d)
-			}
-		}
-		key := bucketMapKey{dayStr, curTag}
-		if i, ok := entryIndex[key]; ok {
-			(*allEntries)[i].Events = append((*allEntries)[i].Events, ev)
-		} else {
-			entryIndex[key] = len(*allEntries)
-			*allEntries = append(*allEntries, DayBucketEntry{
-				Date:   dayStr,
-				Tag:    curTag,
-				Path:   path,
-				FileID: fileid,
-				Events: []DayBucketEvent{ev},
-			})
-		}
-	}
-}
-
 // AddFile adds a file to both engines and extracts tags. microfts2
 // first (gets fileid and chunk offsets), then reads chunks and adds
 // to microvec, then extracts and stores tags.
@@ -276,9 +117,8 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(data))
 		}
-		// R866: write schedule log entries + day buckets
+		// R866: write schedule log entries
 		idx.writeDateIndex(path, ExtractTagValues(data))
-		idx.WriteDayBucketsForFile(fileid, path, data)
 	}
 
 	return fileid, nil
@@ -302,10 +142,6 @@ func (idx *Indexer) RemoveFile(path string) error {
 			return fmt.Errorf("remove tags %s: %w", path, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
-		// Clean up day bucket entries (TD/TF records)
-		if err := idx.store.ClearDayBuckets(fileid); err != nil {
-			return fmt.Errorf("clear day buckets %s: %w", path, err)
-		}
 	}
 	return nil
 }
@@ -326,10 +162,6 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 			return fmt.Errorf("remove tags %d: %w", fileid, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
-		// Clean up day bucket entries (TD/TF records)
-		if err := idx.store.ClearDayBuckets(fileid); err != nil {
-			return fmt.Errorf("clear day buckets %d: %w", fileid, err)
-		}
 	}
 	return nil
 }
@@ -436,7 +268,6 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 				idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
 			}
 			idx.writeDateIndex(prep.path, prep.tagValues)
-			idx.WriteDayBucketsForFile(prep.oldID, prep.path, prep.data)
 		}
 		return nil
 	}
@@ -484,9 +315,8 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
 		}
-		// R866: write schedule log entries + day buckets
+		// R866: write schedule log entries
 		idx.writeDateIndex(prep.path, prep.tagValues)
-		idx.WriteDayBucketsForFile(fileid, prep.path, data)
 	}
 
 	return nil
@@ -606,9 +436,8 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(tagBytes))
 		}
-		// R866: write schedule log entries + day buckets
+		// R866: write schedule log entries
 		idx.writeDateIndex(path, ExtractTagValues(tagBytes))
-		idx.WriteDayBucketsForFile(fileid, path, data)
 	}
 
 	return nil
