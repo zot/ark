@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 microvec, and the ark subdatabase. Entry point for all operations.
@@ -20,6 +20,8 @@ operations complete) document this on the API. (R986, R993, R995)
 - config: *Config — parsed source configuration
 - dbPath: string — database directory path
 - svc: ChanSvc — closure actor channel, serializes all DB access
+- writeQueue: []func() — queued write closures, drained one at a time (R1053)
+- writing: bool — true while a write goroutine is in flight (R1067)
 
 ## Does
 - Init(path, opts): create new database — open microfts2, pass env to
@@ -74,6 +76,21 @@ operations complete) document this on the API. (R986, R993, R995)
   by Server on startup, or by CLI for cold-start operations. (R986)
 - StopActor(): close the ChanSvc channel. Actor goroutine exits on
   channel drain. Called before Close(). (R986)
+- enqueueWrite(fn): append write closure to writeQueue. If queue was
+  empty and not currently writing, call startWrite(). Called from
+  inside the actor only. (R1053)
+- startWrite(): dequeue head of writeQueue, set writing=true, spawn
+  goroutine. Goroutine calls fts.Copy() to get a cache-less DB copy,
+  executes the write closure (file I/O off the actor), then sends a
+  reconcile closure back to the actor channel. (R1054, R1055, R1056)
+- reconcileWrite(err): called inside the actor from the reconcile
+  closure. On success: fts.InvalidateCaches(), commit transaction,
+  set writing=false. If writeQueue not empty, call startWrite()
+  (continuation). On error: log, skip batch, set writing=false,
+  continue with next. (R1057, R1058, R1060, R1061)
+- classifyForWrite(paths): partition file list into config files
+  (ark.toml) vs content files. Config files processed synchronously
+  in the actor; content files queued via enqueueWrite. (R1052, R1062)
 
 ## Collaborators
 - Config: loads and validates ark.toml
@@ -86,3 +103,4 @@ operations complete) document this on the API. (R986, R993, R995)
 ## Sequences
 - seq-add.md
 - seq-search.md
+- seq-write-actor.md

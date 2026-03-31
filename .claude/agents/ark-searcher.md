@@ -6,6 +6,11 @@ model: haiku
 color: yellow
 memory: local
 hooks:
+  SessionStart:
+    - matcher: startup
+      hooks:
+        - type: prompt
+          prompt: "run this command exactly: `~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md`"
   PreToolUse:
     - matcher: "Bash|Read|Grep|Glob|Search|Write"
       hooks:

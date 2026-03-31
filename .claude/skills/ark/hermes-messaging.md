@@ -45,12 +45,19 @@ All flags compose (intersection when combined):
 
 ### Inbox Output
 
-Default: one tab-separated line per message:
+First line is a date header: `# inbox YYYY-MM-DD`
+
+Then one tab-separated line per message, sorted by date descending
+(most recent first, undated entries last):
 ```
-status	to-project	from-project	issue-or-response	path	lag
+date	status	to-project	from-project	issue-or-response	path	lag
 ```
 
-The `lag` field (6th column) shows bookmark lag — when a participant
+The `date` column (1st) is the most recent `@status-date:` from
+either the request or its paired response. Shows `-` if neither
+has a date.
+
+The `lag` field (7th column) shows bookmark lag — when a participant
 hasn't handled the counterpart's current status. Format: `lag:PROJECT:STATUS`.
 Empty when bookmarks are current or no counterpart exists.
 

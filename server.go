@@ -374,7 +374,12 @@ func (srv *Server) ReloadUIEngine() error {
 // Fire-and-forget — the watcher doesn't need the result. R987, R990
 func (srv *Server) reconcile() {
 	srv.db.Do(func(db *DB) {
+		// Wire schedule callback for async write goroutines
+		db.onWriteComplete = func(items []scheduleItem) {
+			go srv.processScheduleItems(items)
+		}
 		srv.doReconcile(db)
+		// Drain any schedule items from synchronous config indexing
 		pending := db.indexer.DrainSchedule()
 		if len(pending) > 0 {
 			go srv.processScheduleItems(pending)
@@ -405,17 +410,24 @@ func (srv *Server) doReconcile(db *DB) {
 		sourceDirs = append(sourceDirs, src.Dir)
 	}
 	srv.setIndexing(sourceDirs)
-	defer srv.setIndexing(nil)
 
 	log.Println("reconcile: scanning...")
-	if _, err := db.Scan(); err != nil {
+	if _, err := db.ScanAsync(); err != nil {
 		log.Printf("reconcile: scan error: %v", err)
 	}
 	log.Println("reconcile: refreshing...")
-	if err := db.Refresh(nil); err != nil {
+	if err := db.RefreshAsync(); err != nil {
 		log.Printf("reconcile: refresh error: %v", err)
 	}
-	log.Println("reconcile: complete")
+
+	// Clear indexing state after all queued writes complete. R1058
+	db.enqueueWrite(func(_ *microfts2.DB) {
+		svc(db.svc, func() {
+			srv.setIndexing(nil)
+			log.Println("reconcile: complete")
+		})
+	})
+	log.Println("reconcile: queued")
 }
 
 // processScheduleItems runs EnsureUpcoming for accumulated schedule items

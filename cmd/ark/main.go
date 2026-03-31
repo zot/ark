@@ -3657,10 +3657,50 @@ func cmdMessageInbox(args []string) {
 			return ""
 		}
 
-		for _, e := range filtered {
-			lag := lagFor(e)
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n",
-				e.Status, e.To, e.From, e.Summary, e.Path, lag)
+		// Pre-compute display date: most recent status-date from paired request/response
+		type dated struct {
+			entry ark.InboxEntry
+			date  string
+		}
+		datedEntries := make([]dated, len(filtered))
+		for i, e := range filtered {
+			id := e.RequestID
+			if id == "" {
+				id = e.Path
+			}
+			best := e.StatusDate
+			if p := byID[id]; p != nil {
+				if p.request != nil && p.request.StatusDate > best {
+					best = p.request.StatusDate
+				}
+				if p.response != nil && p.response.StatusDate > best {
+					best = p.response.StatusDate
+				}
+			}
+			datedEntries[i] = dated{entry: e, date: best}
+		}
+
+		// Sort by display date descending (most recent first, empty last)
+		sort.SliceStable(datedEntries, func(i, j int) bool {
+			di, dj := datedEntries[i].date, datedEntries[j].date
+			if di == "" && dj != "" {
+				return false
+			}
+			if di != "" && dj == "" {
+				return true
+			}
+			return di > dj
+		})
+
+		fmt.Printf("# inbox %s\n", time.Now().Format("2006-01-02"))
+		for _, d := range datedEntries {
+			lag := lagFor(d.entry)
+			date := d.date
+			if date == "" {
+				date = "-"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				date, d.entry.Status, d.entry.To, d.entry.From, d.entry.Summary, d.entry.Path, lag)
 		}
 	}
 

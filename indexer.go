@@ -39,6 +39,21 @@ type scheduleItem struct {
 	adds             []DateException // R1036: @add: from source chunk
 }
 
+// CRC: crc-Indexer.md | Seq: seq-write-actor.md | R1054, R1065
+// withFTS returns a shallow copy of the Indexer using a different
+// microfts2.DB (typically from Copy()). Used by the write actor to
+// run indexing off the main actor.
+func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
+	return &Indexer{
+		fts:       fts,
+		vec:       idx.vec,
+		store:     idx.store,
+		pubsub:    idx.pubsub,
+		scheduler: idx.scheduler,
+		config:    idx.config,
+	}
+}
+
 // SetPubSub injects the pubsub registry. Called by the server after
 // DB.Open — pubsub is a server-side concern, not a DB concern.
 func (idx *Indexer) SetPubSub(ps *PubSub) {
@@ -557,6 +572,78 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		log.Printf("refresh: %d file(s) had errors", errCount)
 	}
 	return missing, nil
+}
+
+// CRC: crc-Indexer.md | Seq: seq-write-actor.md | R1053, R1055
+// refreshBatch re-indexes a list of stale files using parallel workers
+// for prep and sequential writes. Designed to run in the write goroutine
+// (off the main actor).
+func (idx *Indexer) refreshBatch(stale []microfts2.FileStatus) {
+	if len(stale) == 0 {
+		return
+	}
+
+	// Single file: skip goroutine overhead
+	if len(stale) == 1 {
+		s := stale[0]
+		prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
+		if err != nil {
+			log.Printf("refresh: skip %s: %v", s.Path, err)
+			return
+		}
+		if err := idx.executeRefresh(prep); err != nil {
+			log.Printf("refresh: %s: %v", s.Path, err)
+		}
+		return
+	}
+
+	// Parallel prep, sequential write (same pattern as RefreshStale)
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(stale) {
+		numWorkers = len(stale)
+	}
+
+	jobCh := make(chan microfts2.FileStatus, len(stale))
+	writeCh := make(chan func() error, numWorkers)
+
+	// Sequential writer
+	var writeWg sync.WaitGroup
+	writeWg.Add(1)
+	go func() {
+		defer writeWg.Done()
+		for fn := range writeCh {
+			if err := fn(); err != nil {
+				log.Printf("refresh: %v", err)
+			}
+		}
+	}()
+
+	// Parallel workers
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func() {
+			defer workerWg.Done()
+			for s := range jobCh {
+				prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
+				if err != nil {
+					log.Printf("refresh: skip %s: %v", s.Path, err)
+					continue
+				}
+				writeCh <- func() error {
+					return idx.executeRefresh(prep)
+				}
+			}
+		}()
+	}
+
+	for _, s := range stale {
+		jobCh <- s
+	}
+	close(jobCh)
+	workerWg.Wait()
+	close(writeCh)
+	writeWg.Wait()
 }
 
 // tagWindowForAppend returns a slice of data suitable for tag extraction

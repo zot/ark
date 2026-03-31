@@ -44,6 +44,11 @@ type DB struct {
 	dbPath   string
 	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
 	svc      chan func()       // R986: closure actor channel
+
+	// Write actor: read/write path separation. R1051-R1068
+	writeQueue      []func(*microfts2.DB) // queued write closures
+	writing         bool                  // true while a write goroutine is in flight
+	onWriteComplete func([]scheduleItem)  // callback for schedule items from write goroutines
 }
 
 // InitOpts are options for creating a new ark database.
@@ -289,6 +294,69 @@ func SyncVoid(db *DB, fn func(*DB) error) error {
 	return svcSyncVoid(db.svc, func() error {
 		return fn(db)
 	})
+}
+
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R1053
+// enqueueWrite appends a write closure to the write queue. If no write
+// is in flight and the queue was empty, starts the write goroutine.
+// Must be called from inside the actor.
+func (db *DB) enqueueWrite(fn func(ftsCopy *microfts2.DB)) {
+	db.writeQueue = append(db.writeQueue, fn)
+	if !db.writing && len(db.writeQueue) == 1 {
+		db.startNextWrite()
+	}
+}
+
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R1054, R1055, R1056, R1059
+// startNextWrite dequeues the head of the write queue and runs it in
+// a goroutine using a cache-less copy of the FTS database.
+func (db *DB) startNextWrite() {
+	if len(db.writeQueue) == 0 {
+		return
+	}
+	fn := db.writeQueue[0]
+	db.writeQueue = db.writeQueue[1:]
+	db.writing = true
+
+	ftsCopy := db.fts.Copy()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("write actor: panic: %v", r)
+				// R1059: send error closure back to actor
+				svc(db.svc, func() {
+					db.writing = false
+					if len(db.writeQueue) > 0 {
+						db.startNextWrite()
+					}
+				})
+			}
+		}()
+
+		// Execute the write closure off the actor (file I/O here). R1055
+		fn(ftsCopy)
+
+		// R1056: send reconcile closure back to actor
+		svc(db.svc, func() {
+			db.fts.InvalidateCaches() // R1057, R1064
+			db.writing = false
+			if len(db.writeQueue) > 0 {
+				db.startNextWrite() // R1058: continuation
+			}
+		})
+	}()
+}
+
+// drainWriteSchedule drains accumulated schedule items from a write
+// goroutine's indexer copy and sends them to the callback if set.
+// Called from inside write goroutines (off the actor).
+func (db *DB) drainWriteSchedule(idx *Indexer) {
+	if db.onWriteComplete == nil {
+		return
+	}
+	if items := idx.DrainSchedule(); len(items) > 0 {
+		db.onWriteComplete(items)
+	}
 }
 
 // Close stops the actor and closes the database in reverse order.
@@ -646,6 +714,121 @@ func (db *DB) Refresh(patterns []string) error {
 	return nil
 }
 
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R1051, R1052, R1062
+// ScanAsync walks directories and queues new file indexing through the
+// write actor. Config files (ark.toml) are indexed synchronously in
+// the actor; content files are batched into the write queue.
+// Returns scan results (new files found) immediately; indexing
+// continues in the background.
+func (db *DB) ScanAsync() (*ScanResults, error) {
+	if db.config.HasErrors() {
+		return nil, fmt.Errorf("config errors: %v", db.config.Errors)
+	}
+
+	results, err := db.scanner.Scan()
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle unresolved synchronously (small metadata writes)
+	for _, u := range results.NewUnresolved {
+		if err := db.store.AddUnresolved(u.Path, u.Dir); err != nil {
+			return results, fmt.Errorf("track unresolved %s: %w", u.Path, err)
+		}
+	}
+	if err := db.store.CleanUnresolved(); err != nil {
+		return results, err
+	}
+
+	if len(results.NewFiles) == 0 {
+		return results, nil
+	}
+
+	// R1052: config files indexed synchronously in the actor
+	var contentFiles []FileEntry
+	for _, f := range results.NewFiles {
+		if filepath.Base(f.Path) == "ark.toml" {
+			if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
+				if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, microfts2.ErrAlreadyIndexed) && !errors.Is(err, os.ErrNotExist) {
+					log.Printf("scan: config add %s: %v", f.Path, err)
+				}
+			}
+		} else {
+			contentFiles = append(contentFiles, f)
+		}
+	}
+
+	if len(contentFiles) == 0 {
+		return results, nil
+	}
+
+	// R1053: queue content files for write goroutine
+	files := contentFiles // capture for closure
+	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		idx := db.indexer.withFTS(ftsCopy)
+		for _, f := range files {
+			if _, err := idx.AddFile(f.Path, f.Strategy); err != nil {
+				if errors.Is(err, microfts2.ErrNoChunks) || errors.Is(err, microfts2.ErrAlreadyIndexed) {
+					continue
+				}
+				if errors.Is(err, os.ErrNotExist) {
+					log.Printf("scan: skipping %s: %v", f.Path, err)
+					continue
+				}
+				log.Printf("scan: add %s: %v", f.Path, err)
+			}
+		}
+		db.drainWriteSchedule(idx)
+	})
+	return results, nil
+}
+
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R1051, R1053
+// RefreshAsync finds stale files and queues their re-indexing through the
+// write actor. The stale file check (LMDB read) happens synchronously;
+// the actual re-indexing happens in the write goroutine.
+func (db *DB) RefreshAsync() error {
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return fmt.Errorf("stale files: %w", err)
+	}
+
+	// Partition into missing and stale
+	var missing []microfts2.FileStatus
+	var stale []microfts2.FileStatus
+	for _, s := range statuses {
+		if s.Status == "missing" {
+			missing = append(missing, s)
+		} else if s.Status == "stale" {
+			stale = append(stale, s)
+		}
+	}
+
+	// Track missing files synchronously (small metadata writes)
+	for _, m := range missing {
+		info, err := db.fts.FileInfoByID(m.FileID)
+		if err != nil {
+			continue
+		}
+		if err := db.store.AddMissing(m.FileID, info.Names[0], timeNow()); err != nil {
+			return err
+		}
+	}
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	// R1053: queue refresh work for write goroutine
+	files := stale // capture for closure
+	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		idx := db.indexer.withFTS(ftsCopy)
+		idx.refreshBatch(files)
+		db.drainWriteSchedule(idx)
+	})
+	return nil
+}
+
 // NewSearchCache enables FRecord caching in microfts2 for the duration
 // of a search operation. Call the returned function to release the cache.
 func (db *DB) NewSearchCache() func() {
@@ -808,13 +991,11 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 	}
 	arkLabels := map[byte]string{
 		'D': "tag-defs",
-		'E': "day-buckets",
 		'F': "file-tags",
 		'I': "settings",
 		'M': "missing",
 		'T': "tag-totals",
 		'U': "unresolved",
-		'V': "day-reverse",
 	}
 
 	result := &DBRecordCounts{}

@@ -1596,7 +1596,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R902:** Counts are right-aligned for readability
 - **R903:** Without `--db`, status output is unchanged
 - **R904:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
-- **R905:** ark record types: D (tag-defs), E (day-buckets), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved), V (day-reverse)
+- **R905:** ark record types: D (tag-defs), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved)
 - **R906:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
 - **R907:** (inferred) Store needs a RecordCounts method to count ark subdatabase records by prefix
 - **R908:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
@@ -1623,3 +1623,25 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R993:** (inferred) Session → DB call direction is always one-way; no SvcSync from DB actor back to session actor
 - **R994:** (inferred) Lua source-add operations use fire-and-forget through the Lua session's closure actor
 - **R995:** (inferred) Go-side caches (pathCache, pathToID, frecordCache) are safe by construction — only accessed inside the actor
+
+## Feature: DB Write Actor
+**Source:** specs/db-write-actor.md
+
+- **R1051:** Reads execute directly in the main actor and return immediately — LMDB MVCC ensures consistent snapshots during writes
+- **R1052:** Config files (ark.toml) are indexed in-place in the main actor, synchronously, before any normal writes that depend on them
+- **R1053:** Normal file writes are queued as closures; if the queue was empty, the first closure is dequeued and run in a goroutine
+- **R1054:** The write goroutine calls `db.Copy()` to get a shallow copy sharing the LMDB env but with nil caches
+- **R1055:** The write goroutine opens a write transaction on the copy and indexes the batch (file I/O off the actor)
+- **R1056:** After indexing, the goroutine sends a reconcile closure back to the main actor channel
+- **R1057:** The reconcile closure calls `InvalidateCaches()`, commits the write transaction, and dequeues the next write if available
+- **R1058:** Each write goroutine runs one batch and dies — the main actor decides whether to start the next (continuation pattern)
+- **R1059:** On goroutine panic: defer/recover sends an error closure to the main actor; the batch is dropped
+- **R1060:** On reconcile error: log the failure, skip the batch, dequeue next — system self-heals on next write request
+- **R1061:** Errors must be logged visibly — silent drops cause confusion about why files aren't indexed
+- **R1062:** When a scan produces N files: partition into config files vs content files, process config first (synchronous), then queue content as write batches
+- **R1063:** microfts2 needs `Copy() *DB` — shallow copy sharing LMDB env, overlay pointer shared (has its own mutex), caches set to nil, chunker registry shared (read-only)
+- **R1064:** microfts2 needs `InvalidateCaches()` — nils pathCache, pathToID, frecordCache, forcing lazy reload on next access
+- **R1065:** The write actor is a goroutine, not a separate ChanSvc — no lifetime management, no second channel
+- **R1066:** (inferred) The deferred-schedule pattern (pendingSchedule / DrainSchedule / processScheduleItems) can be removed once schedule I/O moves into the write goroutine
+- **R1067:** (inferred) No more than one write goroutine runs at a time — serialized by the main actor's dequeue-after-commit pattern
+- **R1068:** (inferred) The public API (db.Search, db.AddFile, etc.) is unchanged — the write queue is an internal optimization

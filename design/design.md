@@ -28,6 +28,14 @@ fire-and-forget (Svc). HTTP/CLI operations use synchronous calls
 (SvcSync). The former reconcileLoop merges into the actor.
 Call direction is always session → DB, never the reverse.
 
+**Read/Write Separation:** Reads execute directly in the actor and
+return immediately (LMDB MVCC provides consistent snapshots). Writes
+are queued and processed one at a time in a goroutine: Copy() creates
+a cache-less DB copy, the goroutine indexes off the actor, then sends
+a reconcile closure back. The actor invalidates caches, commits, and
+dequeues the next write. Config files (ark.toml) bypass the queue and
+index synchronously in the actor. See seq-write-actor.md.
+
 ### LMDB Lifecycle
 microfts2 owns the LMDB environment. Ark opens microfts2 first
 (which creates the env), passes the env to microvec, then opens its
@@ -130,6 +138,7 @@ Lifetime = server lifetime.
 - [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
 - [x] seq-pubsub.md → `pubsub.go`, `scheduler.go`, `server.go`, `indexer.go`, `cmd/ark/main.go`
 - [x] seq-scheduling.md → `scheduler.go`, `store.go`, `indexer.go`, `server.go`, `config.go`, `cmd/ark/main.go`
+- [x] seq-write-actor.md → `db.go`, `svc.go`, `indexer.go`, `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -212,3 +221,5 @@ Lifetime = server lifetime.
 - [ ] O38: No unit tests for: ParseAcks, AckCoversDate, WriteDayBucketsForFile, handleScheduleSearch, handleScheduleChange, CheckScheduleConfig, cmdSchedule
 - [ ] O39: handleScheduleChange uses strings.Replace matching trimmed value in untrimmed line — fragile for lines with unusual leading content
 - [ ] A23: R980 (calendar virtual items from recurrence specs) — deferred to Lua/UI work
+- [ ] O40: No unit tests for write actor: enqueueWrite, startNextWrite, ScanAsync, RefreshAsync
+- [ ] O41: R1066: deferred-schedule pattern (pendingSchedule/DrainSchedule) not yet removed — schedule I/O still deferred rather than running in write goroutine
