@@ -62,6 +62,7 @@ const (
 	prefixTagTotal   = 'T'
 	prefixTagFile    = 'F'
 	prefixTagDef     = 'D'
+	prefixTagValue   = 'V'
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -567,6 +568,209 @@ func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
 		})
 	})
 	return results, err
+}
+
+// --- Tag value index (V records) ---
+
+// TagValueCount is a tag value with its file count.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1102
+type TagValueCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// tagValueKey builds a V record key: V[tagname]\x00[value]
+func tagValueKey(tag, value string) []byte {
+	key := make([]byte, 1+len(tag)+1+len(value))
+	key[0] = byte(prefixTagValue)
+	copy(key[1:], tag)
+	key[1+len(tag)] = 0
+	copy(key[2+len(tag):], value)
+	return key
+}
+
+// tagValuePrefix builds the scan prefix: V[tagname]\x00[prefix]
+func tagValuePrefix(tag, prefix string) []byte {
+	p := make([]byte, 1+len(tag)+1+len(prefix))
+	p[0] = byte(prefixTagValue)
+	copy(p[1:], tag)
+	p[1+len(tag)] = 0
+	copy(p[2+len(tag):], prefix)
+	return p
+}
+
+// encodeVarint appends a uint64 as unsigned LEB128.
+func encodeVarint(buf []byte, v uint64) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v)|0x80)
+		v >>= 7
+	}
+	return append(buf, byte(v))
+}
+
+// decodeVarints decodes all unsigned LEB128 values from a byte slice.
+func decodeVarints(data []byte) []uint64 {
+	var result []uint64
+	i := 0
+	for i < len(data) {
+		var v uint64
+		var shift uint
+		for i < len(data) {
+			b := data[i]
+			i++
+			v |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+			shift += 7
+		}
+		result = append(result, v)
+	}
+	return result
+}
+
+// removeVarint removes a specific value from a varint-encoded blob.
+// Returns the new blob and whether the value was found.
+func removeVarint(data []byte, target uint64) ([]byte, bool) {
+	var result []byte
+	found := false
+	i := 0
+	for i < len(data) {
+		start := i
+		var v uint64
+		var shift uint
+		for i < len(data) {
+			b := data[i]
+			i++
+			v |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+			shift += 7
+		}
+		if v == target {
+			found = true
+		} else {
+			result = append(result, data[start:i]...)
+		}
+	}
+	return result, found
+}
+
+// UpdateTagValues replaces all V records for a fileid with new values.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1099, R1100, R1101, R1103
+func (s *Store) UpdateTagValues(fileid uint64, values []TagValue) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		// Remove fileid from all existing V records
+		if err := s.removeFileidFromAllV(txn, fileid); err != nil {
+			return err
+		}
+		// Add new V records
+		return s.addFileidToV(txn, fileid, values)
+	})
+}
+
+// AppendTagValues adds V records without removing — append path.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1104
+func (s *Store) AppendTagValues(fileid uint64, values []TagValue) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return s.addFileidToV(txn, fileid, values)
+	})
+}
+
+// RemoveTagValues removes a fileid from all V records.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1105
+func (s *Store) RemoveTagValues(fileid uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return s.removeFileidFromAllV(txn, fileid)
+	})
+}
+
+// QueryTagValues returns values for a tag, optionally filtered by prefix.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1108, R1109
+func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
+	scanKey := tagValuePrefix(tag, prefix)
+	var results []TagValueCount
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
+			// Key format: V[tag]\x00[value] — extract value after the null separator
+			tagEnd := bytes.IndexByte(k[1:], 0)
+			if tagEnd < 0 {
+				return nil
+			}
+			value := string(k[1+tagEnd+1:])
+			count := len(decodeVarints(v))
+			if count > 0 {
+				results = append(results, TagValueCount{Value: value, Count: count})
+			}
+			return nil
+		})
+	})
+	return results, err
+}
+
+// TagValueFiles returns fileids for a specific (tag, value) pair.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110
+func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
+	key := tagValueKey(tag, value)
+	var ids []uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, key)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ids = decodeVarints(v)
+		return nil
+	})
+	return ids, err
+}
+
+// removeFileidFromAllV scans all V keys and removes the fileid from value blobs.
+func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
+	prefix := []byte{byte(prefixTagValue)}
+	return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
+		newV, found := removeVarint(v, fileid)
+		if !found {
+			return nil
+		}
+		if len(newV) == 0 {
+			return cur.Del(0)
+		}
+		return txn.Put(s.dbi, k, newV, 0)
+	})
+}
+
+// addFileidToV appends the fileid to V records for each (tag, value).
+func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) error {
+	for _, tv := range values {
+		if tv.Value == "" {
+			continue
+		}
+		key := tagValueKey(tv.Tag, tv.Value)
+		existing, err := txn.Get(s.dbi, key)
+		if lmdb.IsNotFound(err) {
+			existing = nil
+		} else if err != nil {
+			return err
+		}
+		// Check if fileid already present
+		for _, id := range decodeVarints(existing) {
+			if id == fileid {
+				goto next
+			}
+		}
+		{
+			blob := encodeVarint(bytes.Clone(existing), fileid)
+			if err := txn.Put(s.dbi, key, blob, 0); err != nil {
+				return err
+			}
+		}
+	next:
+	}
+	return nil
 }
 
 // --- Day-bucket operations (scheduling) ---

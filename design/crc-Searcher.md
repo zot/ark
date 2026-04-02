@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -61,10 +61,13 @@ Optionally retrieves chunk text or full file content.
   results by fileid. Returns tuple array: [[filepath, [chunk, ...]]]
   where files are sorted by best chunk score (descending) and chunks
   within each file are sorted by score (descending). Each chunk
-  includes range, score, and preview (pre-rendered HTML). Highlight
-  tokens derived from the effective query — falls back to
-  opts.Contains, opts.About, or opts.Regex[0] when mode extraction
-  clears the query string.
+  includes range, score, content (raw text), contentType
+  (strategy-derived: "markdown"|"text"|"json"|"code"), and preview
+  (pre-rendered HTML). ContentType mapping: "markdown" strategy →
+  "markdown", "chat-jsonl" → "json", "bracket"/"indent" → "code",
+  everything else → "text". Highlight tokens derived from the
+  effective query — falls back to opts.Contains, opts.About, or
+  opts.Regex[0] when mode extraction clears the query string.
 - RenderPreview(chunk, strategy, queryTokens): render chunk text as
   HTML for app display. Strategy determines renderer: goldmark for
   markdown, JSON pretty-print for JSON (under length threshold),

@@ -8,10 +8,14 @@ FRICTIONLESS_BIN := $(FRICTIONLESS_DIR)/build/frictionless
 
 CACHE_DIR := cache
 
-.PHONY: build install test clean cache cache-clean cache-refresh
+.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor
 
 # Default: deps, cache, build+bundle
-all: cache build
+all: cache markdown-editor build
+
+# Build markdown editor JS bundle
+markdown-editor:
+	@$(MAKE) -C markdown-editor build
 
 # Build Go binary and graft cached assets
 build:
@@ -48,6 +52,9 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	cp .claude/skills/ui/SKILL.md $(CACHE_DIR)/skills/ui/
 	cp .claude/agents/ark-franklin.md .claude/agents/ark-messenger.md .claude/agents/ark-searcher.md $(CACHE_DIR)/agents/
 	cp install/* $(CACHE_DIR)/install/
+	@echo "Layering markdown editor..."
+	@mkdir -p $(CACHE_DIR)/html
+	@if [ -d markdown-editor/dist ]; then cp markdown-editor/dist/* $(CACHE_DIR)/html/; fi
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"
 

@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -62,6 +62,21 @@ ark-level settings, and tag tracking.
   settings record. (R927, R932)
 - RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
   return map[byte]int64. Single LMDB View transaction. (R907)
+- UpdateTagValues(fileid, values []TagValue): replace V records for
+  fileid. Within one LMDB txn: scan all V keys, remove fileid from
+  any value blobs, delete empty keys. Then for each new (tag, value),
+  append fileid varint to the value blob (or create new key).
+  (R1099, R1100, R1101, R1103)
+- AppendTagValues(fileid, values []TagValue): add V records without
+  removing — append path. For each (tag, value), append fileid varint
+  to existing value blob or create new key. (R1104)
+- RemoveTagValues(fileid): scan all V keys, remove fileid from any
+  value blobs, delete keys whose blob becomes empty. (R1105)
+- QueryTagValues(tag, prefix string) []TagValueCount: prefix scan
+  V[tag]\x00[prefix], decode varint count from each value blob.
+  Return {value, count} pairs. (R1108, R1109)
+- TagValueFiles(tag, value string) []uint64: direct key lookup
+  V[tag]\x00[value], decode varints. (R1110)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time

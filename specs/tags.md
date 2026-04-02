@@ -35,6 +35,15 @@ Storage: `D` [tagname] [fileid: 8] -> description bytes. One record
 per definition per source file. When a file is re-indexed, its D
 records are removed and re-extracted (same lifecycle as F records).
 
+## Tag values
+
+Tag values are indexed in LMDB for fast completion. See
+specs/tag-value-index.md for the V record design.
+
+Storage: `V` [tagname] `\x00` [value] -> packed varint fileids.
+One LMDB entry per unique (tag, value) pair. Updated alongside
+T, F, and D records during index/refresh/append/remove.
+
 ## CLI
 
 - `ark tag list` — all known tags with counts

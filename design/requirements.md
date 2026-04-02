@@ -1645,3 +1645,75 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1066:** (inferred) The deferred-schedule pattern (pendingSchedule / DrainSchedule / processScheduleItems) can be removed once schedule I/O moves into the write goroutine
 - **R1067:** (inferred) No more than one write goroutine runs at a time — serialized by the main actor's dequeue-after-commit pattern
 - **R1068:** (inferred) The public API (db.Search, db.AddFile, etc.) is unchanged — the write queue is an internal optimization
+
+## Feature: Editor HTTP Endpoints
+**Source:** specs/editor-endpoints.md
+
+### Grouped Search Endpoint
+- **R1069:** `POST /search/grouped` accepts JSON body with query, mode, k, session, filter_files, exclude_files, filter_file_tags, exclude_file_tags, filter, except
+- **R1070:** Response is a JSON array of `{path, strategy, chunks}` groups, sorted by best chunk score descending
+- **R1071:** Each chunk includes `range`, `score`, `content` (raw text), `contentType`, and `preview` (rendered HTML)
+- **R1072:** `contentType` is derived from the indexing strategy: "markdown" for markdown, "json" for chat-jsonl, "code" for bracket/indent, "text" for everything else
+- **R1073:** `mode` field selects search mode: "combined" (default), "contains", "about", "fuzzy"
+- **R1074:** `session` field enables session-scoped search with chunk caching (same as existing handleSearch)
+- **R1075:** Uses existing `SearchGrouped` — no new search logic, only HTTP exposure + enhanced chunk fields
+
+### Tag Completion Endpoint
+- **R1076:** `POST /tags/complete` accepts JSON body with `prefix` string
+- **R1077:** Returns JSON array of `{name, description}` objects matching the prefix
+- **R1078:** Matches D (definition) records by tag name prefix, case-insensitive
+- **R1079:** When multiple files define the same tag, use the first description found (deduplicate by name)
+- **R1080:** Empty prefix returns all known tag names (from T records) with descriptions from D records where available
+
+### Tag Value Completion Endpoint
+- **R1081:** `POST /tags/values` accepts JSON body with `tag` and `prefix` strings
+- **R1082:** Returns JSON array of `{value, count}` objects for known values of the tag
+- **R1083:** Values are extracted by scanning files that have the tag (via F records for file IDs)
+- **R1084:** Results are filtered by prefix (case-insensitive) and sorted by count descending
+- **R1085:** (inferred) Count reflects how many files have that tag+value combination
+
+### File Save Endpoint
+- **R1086:** `POST /save` accepts JSON body with `path` and `content` strings
+- **R1087:** Path must be within an indexed source directory — reject with 403 if not
+- **R1088:** Writes file content, then triggers single-file refresh for immediate re-indexing
+- **R1089:** (inferred) The watcher will also notice the change, but explicit refresh avoids debounce delay
+
+### Set Tags Endpoint
+- **R1090:** `POST /set-tags` accepts JSON body with `path` and `tags` (object of name→value pairs)
+- **R1091:** Reads file, parses tag block, sets each tag via TagBlock.Set, writes file back
+- **R1092:** When setting `status`, auto-sets `status-date` to today (YYYY-MM-DD) — same as Lua mcp.setTags and CLI `ark tag set`
+- **R1093:** (inferred) The watcher picks up the file change for re-indexing
+
+### GroupedChunk Enhancement
+- **R1094:** Add `Content` (raw chunk text) and `ContentType` (strategy-derived type string) fields to `GroupedChunk` struct
+- **R1095:** `SearchGrouped` populates `Content` from the already-available `SearchResultEntry.Text`
+- **R1096:** `SearchGrouped` populates `ContentType` by mapping strategy name to type string (R1072 mapping)
+- **R1097:** Existing Lua `search_grouped` gains `content` and `contentType` fields in chunk tables
+
+### CORS
+- **R1098:** (inferred) Editor endpoints share the same origin as the HTTP port UI — no explicit CORS headers needed unless serving from file:// origin
+
+## Feature: Tag Value Index
+**Source:** specs/tag-value-index.md
+
+### V Record Structure
+- **R1099:** V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
+- **R1100:** V record value: packed varint-encoded fileids (unsigned LEB128)
+- **R1101:** One LMDB entry per unique (tag, value) pair — fileids accumulate in the value
+- **R1102:** Count of files with a given (tag, value) = number of varints decoded from the value
+
+### V Record Lifecycle
+- **R1103:** On index/refresh: remove all V entries for the file's old fileids, then add V entries from freshly extracted tag values
+- **R1104:** On append: add V entries for newly extracted tag values (no removal — appended tags are additive)
+- **R1105:** On remove: remove the fileid from all V entries; delete the key if fileid list becomes empty
+- **R1106:** `ExtractTagValues` (already called during index/refresh/append) provides the source data — no new extraction logic needed
+- **R1107:** (inferred) V records are rebuilt from scratch by `ark rebuild`, same as T/F/D records
+
+### V Record Queries
+- **R1108:** Prefix scan `V[tagname]\x00` returns all values for a tag with counts
+- **R1109:** Prefix scan `V[tagname]\x00[prefix]` filters values by prefix — LMDB sorted keys make this a range scan
+- **R1110:** Direct key lookup `V[tagname]\x00[value]` returns fileids for a specific (tag, value) pair
+
+### Endpoint Integration
+- **R1111:** `POST /tags/values` switches from file-reading to V record queries — O(1) LMDB lookup instead of O(files) disk reads
+- **R1112:** (inferred) Lua `mcp:tagComplete` should also use V records for value completion when wired

@@ -863,10 +863,28 @@ type GroupedResult struct {
 }
 
 // GroupedChunk is a single chunk in a grouped search result.
+// CRC: crc-Searcher.md | Seq: seq-editor-endpoints.md
 type GroupedChunk struct {
-	Range   string  `json:"range"`
-	Score   float64 `json:"score"`
-	Preview string  `json:"preview"`
+	Range       string  `json:"range"`
+	Score       float64 `json:"score"`
+	Content     string  `json:"content"`
+	ContentType string  `json:"contentType"`
+	Preview     string  `json:"preview"`
+}
+
+// StrategyToContentType maps an indexing strategy to a content type string.
+// CRC: crc-Searcher.md | R1072, R1094
+func StrategyToContentType(strategy string) string {
+	switch strategy {
+	case "markdown":
+		return "markdown"
+	case "chat-jsonl":
+		return "json"
+	case "bracket", "indent":
+		return "code"
+	default:
+		return "text"
+	}
 }
 
 // SearchMulti runs a query through all four scoring strategies (coverage, density,
@@ -1095,9 +1113,11 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 		}
 		preview := RenderPreview(r.Text, g.strategy, tokenPatterns)
 		g.chunks = append(g.chunks, GroupedChunk{
-			Range:   r.Range,
-			Score:   r.Score,
-			Preview: preview,
+			Range:       r.Range,
+			Score:       r.Score,
+			Content:     r.Text,
+			ContentType: StrategyToContentType(g.strategy),
+			Preview:     preview,
 		})
 		if r.Score > g.best {
 			g.best = r.Score

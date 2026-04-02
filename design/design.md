@@ -139,6 +139,8 @@ Lifetime = server lifetime.
 - [x] seq-pubsub.md → `pubsub.go`, `scheduler.go`, `server.go`, `indexer.go`, `cmd/ark/main.go`
 - [x] seq-scheduling.md → `scheduler.go`, `store.go`, `indexer.go`, `server.go`, `config.go`, `cmd/ark/main.go`
 - [x] seq-write-actor.md → `db.go`, `svc.go`, `indexer.go`, `server.go`
+- [x] seq-editor-endpoints.md → `server.go`, `search.go`
+- [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -223,3 +225,11 @@ Lifetime = server lifetime.
 - [ ] A23: R980 (calendar virtual items from recurrence specs) — deferred to Lua/UI work
 - [ ] O40: No unit tests for write actor: enqueueWrite, startNextWrite, ScanAsync, RefreshAsync
 - [ ] O41: R1066: deferred-schedule pattern (pendingSchedule/DrainSchedule) not yet removed — schedule I/O still deferred rather than running in write goroutine
+- [ ] O42: No unit tests for editor endpoints: handleSearchGrouped, handleTagComplete, handleTagValues, handleSave, handleSetTags
+- [x] O43: handleTagValues reads files to extract values — O(files) I/O on each completion request. Store tag values in LMDB during indexing for O(1) lookup when this becomes slow.
+- [ ] O44: handleSave allows writing to any indexed file — no authorization check. Acceptable for local use; revisit if ark ever serves untrusted clients.
+- [ ] A24: R1098 (CORS) — same-origin, no explicit headers needed for localhost. Revisit if editor loaded from file:// origin.
+- [ ] O45: No unit tests for V record Store methods: UpdateTagValues, AppendTagValues, RemoveTagValues, QueryTagValues, TagValueFiles
+- [ ] O46: RemoveTagValues scans all V keys to find one fileid — O(total V records). Add reverse index (VF prefix) if profiling shows this is slow.
+- [ ] A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
+- [ ] A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented

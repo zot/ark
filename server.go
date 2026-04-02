@@ -263,6 +263,11 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
+	mux.HandleFunc("POST /search/grouped", srv.handleSearchGrouped)
+	mux.HandleFunc("POST /tags/complete", srv.handleTagComplete)
+	mux.HandleFunc("POST /tags/values", srv.handleTagValues)
+	mux.HandleFunc("POST /save", srv.handleSave)
+	mux.HandleFunc("POST /set-tags", srv.handleSetTags)
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -1444,6 +1449,265 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleSearchGrouped serves grouped search results for the standalone editor.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1069-R1075
+func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Query           string   `json:"query"`
+		Mode            string   `json:"mode"`
+		K               int      `json:"k"`
+		Session         string   `json:"session"`
+		FilterFiles     []string `json:"filter_files"`
+		ExcludeFiles    []string `json:"exclude_files"`
+		FilterFileTags  []string `json:"filter_file_tags"`
+		ExcludeFileTags []string `json:"exclude_file_tags"`
+		Filter          []string `json:"filter"`
+		Except          []string `json:"except"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	opts := SearchOpts{K: req.K}
+	if opts.K == 0 {
+		opts.K = 20
+	}
+	opts.FilterFiles = req.FilterFiles
+	opts.ExcludeFiles = req.ExcludeFiles
+	opts.FilterFileTags = req.FilterFileTags
+	opts.ExcludeFileTags = req.ExcludeFileTags
+	opts.Filter = req.Filter
+	opts.Except = req.Except
+
+	query := req.Query
+	switch req.Mode {
+	case "contains":
+		opts.Contains = query
+		query = ""
+	case "about":
+		opts.About = query
+		query = ""
+	case "fuzzy":
+		opts.Fuzzy = true
+	}
+
+	// Multi-strategy for combined queries
+	if !opts.Fuzzy && opts.Contains == "" && opts.About == "" {
+		opts.Multi = true
+	}
+
+	var results []GroupedResult
+	var err error
+	if req.Session != "" {
+		sess := srv.GetOrCreateSession(req.Session)
+		err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {
+			return SyncVoid(srv.db, func(db *DB) error {
+				opts.Cache = cache
+				var searchErr error
+				results, searchErr = db.SearchGrouped(query, opts)
+				return searchErr
+			})
+		})
+	} else {
+		results, err = Sync(srv.db, func(db *DB) ([]GroupedResult, error) {
+			return db.SearchGrouped(query, opts)
+		})
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, results)
+}
+
+// handleTagComplete returns tag name completions matching a prefix.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1076-R1080
+func (srv *Server) handleTagComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prefix string `json:"prefix"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	type completion struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+	}
+
+	prefix := strings.ToLower(req.Prefix)
+
+	// Get all D records for descriptions
+	defs, err := Sync(srv.db, func(db *DB) ([]TagDefInfo, error) {
+		return db.TagDefs(nil)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Build description map (first description wins)
+	descMap := make(map[string]string)
+	for _, d := range defs {
+		if _, ok := descMap[d.Tag]; !ok {
+			descMap[d.Tag] = d.Description
+		}
+	}
+
+	if prefix == "" {
+		// Return all tags with descriptions
+		tags, err := Sync(srv.db, func(db *DB) ([]TagCount, error) {
+			return db.TagList()
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		result := make([]completion, 0, len(tags))
+		for _, t := range tags {
+			result = append(result, completion{
+				Name:        t.Tag,
+				Description: descMap[t.Tag],
+			})
+		}
+		writeJSON(w, result)
+		return
+	}
+
+	// Filter D records by prefix, deduplicate
+	seen := make(map[string]bool)
+	var result []completion
+	for _, d := range defs {
+		if strings.HasPrefix(d.Tag, prefix) && !seen[d.Tag] {
+			seen[d.Tag] = true
+			result = append(result, completion{
+				Name:        d.Tag,
+				Description: d.Description,
+			})
+		}
+	}
+	writeJSON(w, result)
+}
+
+// handleTagValues returns known values for a tag, optionally filtered by prefix.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md, seq-tag-value-index.md | R1081-R1085, R1111
+func (srv *Server) handleTagValues(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag    string `json:"tag"`
+		Prefix string `json:"prefix"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Tag == "" {
+		http.Error(w, "tag is required", http.StatusBadRequest)
+		return
+	}
+
+	tag := strings.ToLower(req.Tag)
+	prefix := strings.ToLower(req.Prefix)
+
+	results, err := Sync(srv.db, func(db *DB) ([]TagValueCount, error) {
+		return db.store.QueryTagValues(tag, prefix)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Count > results[j].Count
+	})
+	writeJSON(w, results)
+}
+
+// handleSave writes file content and triggers re-indexing.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1086-R1089
+func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	req.Path = filepath.Clean(req.Path)
+
+	// Verify path is within an indexed source
+	indexed, _ := Sync(srv.db, func(db *DB) (bool, error) {
+		return db.IsIndexed(req.Path), nil
+	})
+	if !indexed {
+		http.Error(w, "path not within indexed source", http.StatusForbidden)
+		return
+	}
+
+	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Trigger single-file refresh for immediate re-indexing.
+	// Look up the existing strategy from the index.
+	SyncVoid(srv.db, func(db *DB) error {
+		strategy := ""
+		if info, err := db.fts.CheckFile(req.Path); err == nil {
+			if finfo, err := db.fts.FileInfoByID(info.FileID); err == nil {
+				strategy = finfo.Strategy
+			}
+		}
+		return db.indexer.RefreshFile(req.Path, strategy)
+	})
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSetTags atomically updates tags in a file's tag block.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1090-R1093
+func (srv *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string            `json:"path"`
+		Tags map[string]string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" || len(req.Tags) == 0 {
+		http.Error(w, "path and tags are required", http.StatusBadRequest)
+		return
+	}
+	req.Path = filepath.Clean(req.Path)
+
+	data, err := os.ReadFile(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	tb := ParseTagBlock(data)
+	for name, value := range req.Tags {
+		tb.Set(name, value)
+		if name == "status" {
+			tb.Set("status-date", time.Now().Format("2006-01-02"))
+		}
+	}
+
+	if err := os.WriteFile(req.Path, tb.Render(), 0644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // parseDateToYMD parses a flexible date string into YYYYMMDD format.
 
 // CheckScheduleConfig compares current [schedule] config with stored version.
@@ -1650,6 +1914,8 @@ func (srv *Server) registerLuaFunctions() {
 					chunkTable := L.NewTable()
 					L.SetField(chunkTable, "range", lua.LString(chunk.Range))
 					L.SetField(chunkTable, "score", lua.LNumber(chunk.Score))
+					L.SetField(chunkTable, "content", lua.LString(chunk.Content))
+					L.SetField(chunkTable, "contentType", lua.LString(chunk.ContentType))
 					L.SetField(chunkTable, "preview", lua.LString(chunk.Preview))
 					chunksTable.RawSetInt(j+1, chunkTable)
 				}

@@ -128,12 +128,17 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
 			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
 		}
+		tagValues := ExtractTagValues(data)
+		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1103, R1106
+		if err := idx.store.UpdateTagValues(fileid, tagValues); err != nil {
+			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
+		}
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(data))
+			idx.pubsub.PublishAndWatch("", path, tagValues)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(path, ExtractTagValues(data))
+		idx.writeDateIndex(path, tagValues)
 	}
 
 	return fileid, nil
@@ -157,6 +162,8 @@ func (idx *Indexer) RemoveFile(path string) error {
 			return fmt.Errorf("remove tags %s: %w", path, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
+		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1105
+		idx.store.RemoveTagValues(fileid)
 	}
 	return nil
 }
@@ -177,6 +184,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 			return fmt.Errorf("remove tags %d: %w", fileid, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
+		idx.store.RemoveTagValues(fileid)
 	}
 	return nil
 }
@@ -278,6 +286,10 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			if err := idx.store.AppendTagDefs(prep.oldID, prep.defs); err != nil {
 				return fmt.Errorf("append tag defs %s: %w", prep.path, err)
 			}
+			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1104
+			if err := idx.store.AppendTagValues(prep.oldID, prep.tagValues); err != nil {
+				return fmt.Errorf("append tag values %s: %w", prep.path, err)
+			}
 			// R795, R796: publish tag events from appended content
 			if idx.pubsub != nil {
 				idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
@@ -310,6 +322,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if fileid != prep.oldID {
 			idx.store.RemoveTags(prep.oldID)
 			idx.store.RemoveTagDefs(prep.oldID)
+			idx.store.RemoveTagValues(prep.oldID)
 		}
 		// Use pre-extracted tags if available, otherwise extract from content
 		tags := prep.tags
@@ -326,12 +339,20 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
 		}
+		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1103
+		tagValues := prep.tagValues
+		if tagValues == nil {
+			tagValues = ExtractTagValues(data)
+		}
+		if err := idx.store.UpdateTagValues(fileid, tagValues); err != nil {
+			return fmt.Errorf("update tag values %s: %w", prep.path, err)
+		}
 		// R795, R796: publish tag events from refreshed content
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", prep.path, prep.tagValues)
+			idx.pubsub.PublishAndWatch("", prep.path, tagValues)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(prep.path, prep.tagValues)
+		idx.writeDateIndex(prep.path, tagValues)
 	}
 
 	return nil
@@ -447,12 +468,17 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		if err := idx.store.AppendTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
+		tagValues := ExtractTagValues(tagBytes)
+		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1104
+		if err := idx.store.AppendTagValues(fileid, tagValues); err != nil {
+			return fmt.Errorf("append tag values %s: %w", path, err)
+		}
 		// R795, R796: publish tag events from appended content
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", path, ExtractTagValues(tagBytes))
+			idx.pubsub.PublishAndWatch("", path, tagValues)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(path, ExtractTagValues(tagBytes))
+		idx.writeDateIndex(path, tagValues)
 	}
 
 	return nil

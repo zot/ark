@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777, R789, R790, R799, R804, R805, R812, R813, R835, R836, R837, R838, R839, R840, R841, R842, R843, R844, R845, R846, R847, R848, R893, R894, R895, R896, R897, R898, R914, R917, R919, R920, R921, R923, R927, R928, R929, R930, R931, R932, R961, R962, R963, R975, R976, R977, R906, R990, R991, R992, R994, R1014, R1015
+**Requirements:** R4, R61, R62, R63, R64, R65, R66, R67, R68, R69, R70, R89, R90, R91, R92, R93, R94, R95, R96, R97, R98, R99, R100, R101, R102, R132, R133, R134, R152, R153, R154, R155, R156, R160, R164, R170, R171, R175, R176, R177, R165, R202, R204, R210, R211, R212, R213, R229, R257, R264, R265, R266, R267, R268, R269, R270, R271, R272, R261, R262, R263, R338, R339, R342, R343, R344, R345, R346, R347, R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R393, R394, R395, R410, R411, R412, R414, R415, R416, R417, R419, R420, R437, R438, R440, R441, R439, R541, R542, R543, R544, R545, R546, R563, R564, R565, R566, R567, R568, R569, R570, R571, R620, R623, R641, R648, R657, R658, R659, R660, R661, R662, R685, R686, R687, R688, R689, R690, R691, R735, R736, R737, R748, R749, R750, R758, R759, R760, R761, R762, R763, R764, R767, R768, R769, R770, R771, R772, R773, R774, R775, R776, R777, R789, R790, R799, R804, R805, R812, R813, R835, R836, R837, R838, R839, R840, R841, R842, R843, R844, R845, R846, R847, R848, R893, R894, R895, R896, R897, R898, R914, R917, R919, R920, R921, R923, R927, R928, R929, R930, R931, R932, R961, R962, R963, R975, R976, R977, R906, R990, R991, R992, R994, R1014, R1015, R1069, R1070, R1071, R1072, R1073, R1074, R1075, R1076, R1077, R1078, R1079, R1080, R1081, R1082, R1083, R1084, R1085, R1086, R1087, R1088, R1089, R1090, R1091, R1092, R1093, R1098, R1111, R1112
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -159,6 +159,23 @@ Optionally starts the embedded ui-engine alongside.
   read upcoming events from LMDB, crank forward any expired recurring
   events, add quarter chime, fire overdue events, set timer to head.
   (R874, R875, R876)
+- HandleSearchGrouped: POST /search/grouped — grouped search with
+  content + contentType + preview in each chunk. Accepts query, mode,
+  k, session, filter/exclude options. Delegates to SearchGrouped.
+  (R1069-R1075)
+- HandleTagComplete: POST /tags/complete — tag name completion from
+  D records. Accepts prefix, returns {name, description} array.
+  Empty prefix returns all tags from T records with D descriptions.
+  Deduplicates by tag name. (R1076-R1080)
+- HandleTagValues: POST /tags/values — tag value completion. Accepts
+  tag + prefix, returns {value, count} array. Delegates to
+  Store.QueryTagValues for O(1) LMDB lookup. (R1081-R1085, R1111)
+- HandleSave: POST /save — write file + re-index. Validates path
+  is within indexed source. Writes content, triggers single-file
+  refresh. (R1086-R1089)
+- HandleSetTags: POST /set-tags — atomic tag block update via HTTP.
+  Same logic as Lua mcp.setTags: read file, parse tag block, set
+  tags, auto-set status-date, write back. (R1090-R1093)
 - Signal handling: catch SIGTERM, stop watcher, stop scheduler,
   shut down ui-engine, close listener, close DB, exit 0
 - Never remove PID file (stale PID is safe — stop verifies before kill)
@@ -183,3 +200,4 @@ Optionally starts the embedded ui-engine alongside.
 - seq-file-change.md
 - seq-session-search.md
 - seq-pubsub.md
+- seq-editor-endpoints.md
