@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -706,6 +707,10 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 			return nil
 		})
 	})
+	// R1129: sort by count descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Count > results[j].Count
+	})
 	return results, err
 }
 
@@ -743,6 +748,11 @@ func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
 	})
 }
 
+// maxVKeyLen is the maximum V record key length. LMDB default max key is 511 bytes.
+// Values that would push the key past this limit are skipped — long values
+// aren't useful for completion.
+const maxVKeyLen = 511
+
 // addFileidToV appends the fileid to V records for each (tag, value).
 func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) error {
 	for _, tv := range values {
@@ -750,6 +760,9 @@ func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) er
 			continue
 		}
 		key := tagValueKey(tv.Tag, tv.Value)
+		if len(key) > maxVKeyLen {
+			continue
+		}
 		existing, err := txn.Get(s.dbi, key)
 		if lmdb.IsNotFound(err) {
 			existing = nil

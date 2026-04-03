@@ -28,6 +28,24 @@ Use /ark to query the knowledge base or write tagged content.
 
 See [ACCESSING-FRICTIONLESS.md](ACCESSING-FRICTIONLESS.md) for how ark registers Go functions in Lua (type chain, session model, active vs passive execution).
 
+## Repo Layout
+
+```
+cmd/ark/main.go        CLI entry point, all subcommands
+*.go                   Core library: db, store, indexer, search, server, config, etc.
+design/                Mini-spec: requirements.md, crc-*, seq-*, test-*, design.md
+specs/                 Human-readable feature specs (input to mini-spec)
+apps/ark/              Frictionless UI app (Lua + viewdefs, also in Fossil)
+markdown-editor/       CM6 markdown editor (TypeScript, esbuild)
+  src/                 index.ts, ark-tag-parser, tag-widget, tag-completion, etc.
+  dist/                ark-markdown-editor.js (~1.1 MB, bundles full CodeMirror 6)
+franklin/              Personal assistant agent design
+requests/              Cross-project ark messages (messaging protocol)
+knowledge/             Ark knowledge base files
+librarian/             Librarian search module
+cache/                 Build cache (Makefile asset pipeline)
+```
+
 ## Code Changes
 
 **Go changes must go through mini-spec.** Load `/mini-spec` and update the design (requirements, CRC cards, sequences) before modifying any Go files. Unanchored Go changes — code not tracked by the spec — can silently drift or disappear in future sessions. The spec is the anchor.

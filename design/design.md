@@ -233,3 +233,4 @@ Lifetime = server lifetime.
 - [ ] O46: RemoveTagValues scans all V keys to find one fileid — O(total V records). Add reverse index (VF prefix) if profiling shows this is slow.
 - [ ] A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
 - [ ] A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
+- [ ] O47: R1115: WithAppendChunkCallback not yet wired in append paths — tags still extracted from tagWindowForAppend (R1127). Wire when microvec supports incremental chunk updates

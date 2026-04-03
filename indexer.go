@@ -19,6 +19,34 @@ import (
 
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
+// chunkAccumulator collects chunk text and extracts tags via callback.
+// CRC: crc-Indexer.md | R1116, R1117, R1118, R1120, R1121, R1122
+type chunkAccumulator struct {
+	chunks    [][]byte
+	tagValues []TagValue
+	tags      map[string]uint32
+	defs      map[string]string
+}
+
+func (a *chunkAccumulator) callback(chunkText string) {
+	b := []byte(chunkText)
+	a.chunks = append(a.chunks, b)
+	tv := ExtractTagValues(b)
+	a.tagValues = append(a.tagValues, tv...)
+	for k, v := range TagCountsFromValues(tv) {
+		if a.tags == nil {
+			a.tags = make(map[string]uint32)
+		}
+		a.tags[k] += v
+	}
+	for k, v := range ExtractTagDefs(b) {
+		if a.defs == nil {
+			a.defs = make(map[string]string)
+		}
+		a.defs[k] = v
+	}
+}
+
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.
 type Indexer struct {
@@ -101,44 +129,39 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 	return items
 }
 
-// AddFile adds a file to both engines and extracts tags. microfts2
-// first (gets fileid and chunk offsets), then reads chunks and adds
-// to microvec, then extracts and stores tags.
+// AddFile adds a file to both engines and extracts tags. Uses
+// WithChunkCallback to accumulate clean chunk text for microvec
+// and tag extraction, eliminating the splitChunks double-read.
+// CRC: crc-Indexer.md | R1113, R1123
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
-	fileid, content, err := idx.fts.AddFileWithContent(path, strategy)
+	var acc chunkAccumulator
+	fileid, _, err := idx.fts.AddFileWithContent(path, strategy,
+		microfts2.WithChunkCallback(acc.callback))
 	if err != nil {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
 	}
 
-	data, chunks, err := splitChunks(content, fileid, idx.fts)
-	if err != nil {
-		return fileid, fmt.Errorf("read chunks %s: %w", path, err)
-	}
-
-	if err := idx.vec.AddFile(fileid, chunks); err != nil {
+	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
 		return fileid, fmt.Errorf("vec add %s: %w", path, err)
 	}
 
 	if idx.store != nil {
-		tags := ExtractTags(data)
-		if err := idx.store.UpdateTags(fileid, tags); err != nil {
+		if err := idx.store.UpdateTags(fileid, acc.tags); err != nil {
 			return fileid, fmt.Errorf("update tags %s: %w", path, err)
 		}
-		defs := ExtractTagDefs(data)
-		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
+		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
 			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
 		}
-		tagValues := ExtractTagValues(data)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1103, R1106
-		if err := idx.store.UpdateTagValues(fileid, tagValues); err != nil {
+		if err := idx.store.UpdateTagValues(fileid, acc.tagValues); err != nil {
 			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
 		}
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", path, tagValues)
+			idx.pubsub.PublishAndWatch("", path, acc.tagValues)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(path, tagValues)
+		idx.writeDateIndex(path, acc.tagValues)
 	}
 
 	return fileid, nil
@@ -241,17 +264,14 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 			prep.fileSize = fi.Size()
 			prep.modTime = fi.ModTime().UnixNano()
 			tagBytes := tagWindowForAppend(data, info.FileLength)
-			prep.tags = ExtractTags(tagBytes)
-			prep.defs = ExtractTagDefs(tagBytes)
 			prep.tagValues = ExtractTagValues(tagBytes)
+			prep.tags = TagCountsFromValues(prep.tagValues)
+			prep.defs = ExtractTagDefs(tagBytes)
 			return prep, nil
 		}
 	}
 
-	// Full refresh path
-	prep.tags = ExtractTags(data)
-	prep.defs = ExtractTagDefs(data)
-	prep.tagValues = ExtractTagValues(data)
+	// Full refresh path: tags extracted in executeFullRefresh via callback (R1126)
 	return prep, nil
 }
 
@@ -301,20 +321,20 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 	return idx.executeFullRefresh(prep)
 }
 
-// executeFullRefresh does a complete reindex using pre-extracted tags.
+// executeFullRefresh does a complete reindex. For full refresh, tags
+// are extracted from clean chunk text via callback (R1114, R1124, R1126).
+// For append prep with pre-extracted tags, those are used instead.
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
-	fileid, content, err := idx.fts.ReindexWithContent(prep.path, prep.strategy)
+	var acc chunkAccumulator
+	fileid, _, err := idx.fts.ReindexWithContent(prep.path, prep.strategy,
+		microfts2.WithChunkCallback(acc.callback))
 	if err != nil {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
 	}
 
 	idx.vec.RemoveFile(prep.oldID)
 
-	data, chunks, err := splitChunks(content, fileid, idx.fts)
-	if err != nil {
-		return fmt.Errorf("read chunks %s: %w", prep.path, err)
-	}
-	if err := idx.vec.AddFile(fileid, chunks); err != nil {
+	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
 		return fmt.Errorf("vec add %s: %w", prep.path, err)
 	}
 
@@ -324,26 +344,26 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemoveTagValues(prep.oldID)
 		}
-		// Use pre-extracted tags if available, otherwise extract from content
+		// Use pre-extracted values (append prep) or callback-extracted values
+		tagValues := prep.tagValues
+		if tagValues == nil {
+			tagValues = acc.tagValues
+		}
 		tags := prep.tags
 		if tags == nil {
-			tags = ExtractTags(data)
+			tags = acc.tags
 		}
 		if err := idx.store.UpdateTags(fileid, tags); err != nil {
 			return fmt.Errorf("update tags %s: %w", prep.path, err)
 		}
 		defs := prep.defs
 		if defs == nil {
-			defs = ExtractTagDefs(data)
+			defs = acc.defs
 		}
 		if err := idx.store.UpdateTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
 		}
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1103
-		tagValues := prep.tagValues
-		if tagValues == nil {
-			tagValues = ExtractTagValues(data)
-		}
 		if err := idx.store.UpdateTagValues(fileid, tagValues); err != nil {
 			return fmt.Errorf("update tag values %s: %w", prep.path, err)
 		}
@@ -460,15 +480,14 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	// Tags and defs: incremental — scan from previous newline to catch boundary-split tags
 	if idx.store != nil {
 		tagBytes := tagWindowForAppend(data, info.FileLength)
-		tags := ExtractTags(tagBytes)
-		if err := idx.store.AppendTags(fileid, tags); err != nil {
+		tagValues := ExtractTagValues(tagBytes)
+		if err := idx.store.AppendTags(fileid, TagCountsFromValues(tagValues)); err != nil {
 			return fmt.Errorf("append tags %s: %w", path, err)
 		}
 		defs := ExtractTagDefs(tagBytes)
 		if err := idx.store.AppendTagDefs(fileid, defs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
-		tagValues := ExtractTagValues(tagBytes)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1104
 		if err := idx.store.AppendTagValues(fileid, tagValues); err != nil {
 			return fmt.Errorf("append tag values %s: %w", path, err)
@@ -681,6 +700,19 @@ func tagWindowForAppend(data []byte, splitPos int64) []byte {
 		start--
 	}
 	return data[start:]
+}
+
+// TagCountsFromValues derives tag counts from extracted tag values.
+// This avoids running a second regex pass over the same content.
+func TagCountsFromValues(values []TagValue) map[string]uint32 {
+	if len(values) == 0 {
+		return nil
+	}
+	tags := make(map[string]uint32)
+	for _, tv := range values {
+		tags[tv.Tag]++
+	}
+	return tags
 }
 
 // ExtractTags scans content for @tag: patterns and returns tag counts.

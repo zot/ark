@@ -996,6 +996,7 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 		'M': "missing",
 		'T': "tag-totals",
 		'U': "unresolved",
+		'V': "tag-values",
 	}
 
 	result := &DBRecordCounts{}
@@ -1325,6 +1326,47 @@ func (db *DB) TagDefs(tags []string) ([]TagDefInfo, error) {
 			Tag:         rec.Tag,
 			Description: rec.Description,
 			Path:        info.Names[0],
+		})
+	}
+	return results, nil
+}
+
+// TagValues returns values for a tag, optionally filtered by prefix, with counts.
+func (db *DB) TagValues(tag, prefix string) ([]TagValueCount, error) {
+	return db.store.QueryTagValues(tag, prefix)
+}
+
+// TagValueFileInfo is a (tag, value) pair with the files that have it.
+type TagValueFileInfo struct {
+	Value string   `json:"value"`
+	Count int      `json:"count"`
+	Files []string `json:"files,omitempty"`
+}
+
+// TagValuesWithFiles returns values for a tag with resolved file paths.
+func (db *DB) TagValuesWithFiles(tag, prefix string) ([]TagValueFileInfo, error) {
+	values, err := db.store.QueryTagValues(tag, prefix)
+	if err != nil {
+		return nil, err
+	}
+	var results []TagValueFileInfo
+	for _, v := range values {
+		ids, err := db.store.TagValueFiles(tag, v.Value)
+		if err != nil {
+			continue
+		}
+		var paths []string
+		for _, id := range ids {
+			info, err := db.fts.FileInfoByID(id)
+			if err != nil {
+				continue
+			}
+			paths = append(paths, info.Names[0])
+		}
+		results = append(results, TagValueFileInfo{
+			Value: v.Value,
+			Count: v.Count,
+			Files: paths,
 		})
 	}
 	return results, nil

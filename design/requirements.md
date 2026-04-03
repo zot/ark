@@ -1591,15 +1591,16 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 **Source:** specs/status-db.md
 
 - **R899:** `ark status --db` shows LMDB record counts grouped by subdatabase (microfts2, ark)
-- **R900:** Each record type displays prefix letter, purpose label, and count
+- **R900:** Each record type displays prefix letter, purpose label, count, key bytes, and value bytes
 - **R901:** Record types are sorted alphabetically within each subdatabase
 - **R902:** Counts are right-aligned for readability
 - **R903:** Without `--db`, status output is unchanged
 - **R904:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
-- **R905:** ark record types: D (tag-defs), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved)
+- **R905:** ark record types: D (tag-defs), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved), V (tag-values)
 - **R906:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
 - **R907:** (inferred) Store needs a RecordCounts method to count ark subdatabase records by prefix
 - **R908:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
+- **R1130:** A total summary line shows aggregate record count, key bytes, value bytes, and proportion of LMDB map
 
 ## Feature: Search Profiling
 **Source:** specs/search-profiling.md
@@ -1717,3 +1718,48 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Endpoint Integration
 - **R1111:** `POST /tags/values` switches from file-reading to V record queries — O(1) LMDB lookup instead of O(files) disk reads
 - **R1112:** (inferred) Lua `mcp:tagComplete` should also use V records for value completion when wired
+
+## Feature: Chunk Callback Tag Extraction
+**Source:** specs/chunk-callback.md
+
+### Callback Wiring
+- **R1113:** Indexer passes `WithChunkCallback` to `AddFileWithContent` to receive clean chunk text during indexing
+- **R1114:** Indexer passes `WithChunkCallback` to `ReindexWithContent` during full refresh
+- **R1115:** Indexer passes `WithAppendChunkCallback` to `AppendChunks` during append refresh
+- **R1116:** The callback accumulates chunk text slices for microvec embedding
+- **R1117:** The callback extracts tag values from each chunk's clean text via `ExtractTagValues`
+- **R1118:** The callback extracts tag defs from each chunk's clean text via `ExtractTagDefs`
+- **R1119:** (inferred) The callback extracts tag counts via `TagCountsFromValues` on accumulated tag values
+
+### Tag Merging
+- **R1120:** Tag counts from multiple chunks are summed for the same tag name
+- **R1121:** Tag values from multiple chunks are collected; Store deduplicates by fileid
+- **R1122:** Tag defs from multiple chunks use last-writer-wins per tag name
+
+### splitChunks Elimination
+- **R1123:** `splitChunks` is removed from `AddFile` — callback provides chunk text
+- **R1124:** `splitChunks` is removed from `executeFullRefresh` — callback provides chunk text
+- **R1125:** `splitChunks` is retained in the append microvec path (needs all chunks for re-embedding)
+
+### Prep/Execute Restructure
+- **R1126:** `prepareRefresh` no longer extracts tags for full refresh — tags come from callback in `executeRefresh`
+- **R1127:** `prepareRefresh` still extracts tags for append path using `tagWindowForAppend` (unchanged)
+- **R1128:** (inferred) `refreshPrep.tags`, `.defs`, `.tagValues` fields are nil for full refresh, populated for append
+
+### Tag Value Sort
+- **R1129:** `ark tag values` output sorts by count descending (high-count values first)
+
+## Feature: Tag Value File Filtering
+**Source:** specs/tag-value-filtering.md
+
+### Flags
+- **R1131:** `ark tag values` accepts `--filter-files GLOB` (repeatable) to include only matching files
+- **R1132:** `ark tag values` accepts `--exclude-files GLOB` (repeatable) to exclude matching files
+- **R1133:** Both flags are composable: filter narrows first, exclude removes from the result
+- **R1134:** Without either flag, behavior is unchanged
+
+### Filtering Behavior
+- **R1135:** When filtering is active, fileids are resolved to paths and matched against the globs
+- **R1136:** Counts are recomputed from matching files only
+- **R1137:** Values with zero matching files after filtering are omitted from output
+- **R1138:** The `-files` flag composes with filtering — only files that passed the filter are shown

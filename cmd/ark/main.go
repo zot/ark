@@ -2752,6 +2752,7 @@ Subcommands:
   list              List all known tags with counts
   counts <tag>...   Show count for each specified tag
   files <tag>...    Show files containing specified tags
+  values <tag>...   Show known values for tags
   defs [TAG...]     Show tag definitions (from tags.md)
   set FILE TAG VAL  Update or add tags in a file's tag block
   get FILE [TAG...] Read tags from a file's tag block
@@ -2772,6 +2773,8 @@ Subcommands:
 		cmdTagCounts(subArgs)
 	case "files":
 		cmdTagFiles(subArgs)
+	case "values":
+		cmdTagValues(subArgs)
 	case "defs":
 		cmdTagDefs(subArgs)
 	case "set":
@@ -2892,6 +2895,8 @@ func cmdTagFiles(args []string) {
 
 // matchPath returns true if a path passes the include/exclude filters.
 func matchPath(path string, include, exclude []string) bool {
+	include = ark.ExpandTildeSlice(include)
+	exclude = ark.ExpandTildeSlice(exclude)
 	m := &ark.Matcher{Dotfiles: true}
 	if len(include) > 0 {
 		matched := false
@@ -2911,6 +2916,67 @@ func matchPath(path string, include, exclude []string) bool {
 		}
 	}
 	return true
+}
+
+// R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138
+func cmdTagValues(args []string) {
+	fs := flag.NewFlagSet("tag values", flag.ExitOnError)
+	files := fs.Bool("files", false, "show file paths for each value")
+	var filterFiles, excludeFiles stringSlice
+	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
+	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark tag values [-files] [-filter-files GLOB] [-exclude-files GLOB] <tag>...")
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	tags := fs.Args()
+	if len(tags) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no tags specified")
+		os.Exit(1)
+	}
+
+	filtering := len(filterFiles) > 0 || len(excludeFiles) > 0
+
+	withDB(func(d *ark.DB) {
+		for _, tag := range tags {
+			if *files || filtering {
+				values, err := d.TagValuesWithFiles(tag, "")
+				if err != nil {
+					fatal(err)
+				}
+				for _, v := range values {
+					matched := v.Files
+					if filtering {
+						matched = nil
+						for _, f := range v.Files {
+							if matchPath(f, filterFiles, excludeFiles) {
+								matched = append(matched, f)
+							}
+						}
+						if len(matched) == 0 {
+							continue
+						}
+					}
+					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, len(matched))
+					if *files {
+						for _, f := range matched {
+							fmt.Printf("\t%s\n", f)
+						}
+					}
+				}
+			} else {
+				values, err := d.TagValues(tag, "")
+				if err != nil {
+					fatal(err)
+				}
+				for _, v := range values {
+					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, v.Count)
+				}
+			}
+		}
+	})
 }
 
 func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
