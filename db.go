@@ -1217,81 +1217,112 @@ type InboxEntry struct {
 }
 
 // Inbox returns cross-project messages from the tag index.
-// CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617, R618, R619, R621, R622
+// CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617-R622, R1145-R1150
+// Uses V records for tag values — no file reads.
 // If showAll is false, completed/done/denied messages are excluded.
 // If includeArchived is false, archived messages are excluded.
 func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
-	files, err := db.TagFiles([]string{"status"})
+	// R1145: get candidate fileids with @status: tag
+	records, err := db.store.TagFiles([]string{"status"})
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]bool)
+
+	// R1148: build exclusion set for completed/denied when !showAll
+	var excludeIDs map[uint64]bool
+	if !showAll {
+		excludeIDs = make(map[uint64]bool)
+		for _, status := range []string{"completed", "denied"} {
+			ids, err := db.store.TagValueFiles("status", status)
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range ids {
+				excludeIDs[id] = true
+			}
+		}
+	}
+
+	inboxTags := []string{
+		"status", "archived", "to-project", "from-project",
+		"ark-request", "ark-response", "issue",
+		"response-handled", "request-handled", "status-date",
+	}
+
+	seen := make(map[uint64]bool)
 	var entries []InboxEntry
-	for _, f := range files {
-		if seen[f.Path] {
+	for _, rec := range records {
+		if seen[rec.FileID] {
 			continue
 		}
-		seen[f.Path] = true
-		if !strings.Contains(f.Path, "/requests/") {
+		seen[rec.FileID] = true
+
+		// R1148: skip excluded statuses early
+		if excludeIDs != nil && excludeIDs[rec.FileID] {
 			continue
 		}
-		data, err := os.ReadFile(f.Path)
+
+		// R1146: filter to /requests/ paths
+		info, err := db.fts.FileInfoByID(rec.FileID)
 		if err != nil {
 			continue
 		}
-		tb := ParseTagBlock(data)
-		statusVal, ok := tb.Get("status")
-		if !ok {
+		path := info.Names[0]
+		if !strings.Contains(path, "/requests/") {
 			continue
 		}
-		if !showAll && (statusVal == "completed" || statusVal == "denied") {
+
+		// R1147: get tag values from V records — no file reads
+		tv, err := db.store.FileTagValues(rec.FileID, inboxTags)
+		if err != nil {
 			continue
 		}
-		if !includeArchived {
-			if _, archived := tb.Get("archived"); archived {
-				continue
-			}
+
+		statusVal := tv["status"]
+		if statusVal == "" {
+			continue
 		}
-		toVal, _ := tb.Get("to-project")
-		// Handle comma-separated multi-target: take first project
+		if !includeArchived && tv["archived"] != "" {
+			continue
+		}
+
+		// R1149: build InboxEntry from indexed values
+		toVal := tv["to-project"]
 		if i := strings.IndexByte(toVal, ','); i >= 0 {
 			toVal = strings.TrimSpace(toVal[:i])
 		}
-		fromVal, _ := tb.Get("from-project")
+		fromVal := tv["from-project"]
 		var summary, requestID, kind string
-		if v, ok := tb.Get("ark-request"); ok {
+		if v := tv["ark-request"]; v != "" {
 			requestID = v
 			if toVal == fromVal {
 				kind = "self"
 			} else {
 				kind = "request"
 			}
-			if iss, ok := tb.Get("issue"); ok {
+			if iss := tv["issue"]; iss != "" {
 				summary = iss
 			}
-		} else if v, ok := tb.Get("ark-response"); ok {
+		} else if v := tv["ark-response"]; v != "" {
 			requestID = v
 			kind = "response"
-			if iss, ok := tb.Get("issue"); ok {
+			if iss := tv["issue"]; iss != "" {
 				summary = iss
 			} else {
 				summary = "ark-response:" + v
 			}
 		}
-		responseHandled, _ := tb.Get("response-handled")
-		requestHandled, _ := tb.Get("request-handled")
-		statusDate, _ := tb.Get("status-date") // R766
 		entries = append(entries, InboxEntry{
 			Status:          statusVal,
 			To:              toVal,
 			From:            fromVal,
 			Summary:         summary,
-			Path:            f.Path,
+			Path:            path,
 			RequestID:       requestID,
 			Kind:            kind,
-			ResponseHandled: responseHandled,
-			RequestHandled:  requestHandled,
-			StatusDate:      statusDate,
+			ResponseHandled: tv["response-handled"],
+			RequestHandled:  tv["request-handled"],
+			StatusDate:      tv["status-date"],
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {

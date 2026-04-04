@@ -733,6 +733,40 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 	return ids, err
 }
 
+// FileTagValues returns the first value found per tag for a given fileid by scanning V records.
+// CRC: crc-Store.md | R1142, R1143
+func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, error) {
+	result := make(map[string]string, len(tags))
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		for _, tag := range tags {
+			prefix := tagValuePrefix(tag, "")
+			err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+				// Key format: V[tag]\x00[value]
+				tagEnd := bytes.IndexByte(k[1:], 0)
+				if tagEnd < 0 {
+					return nil
+				}
+				ids := decodeVarints(v)
+				for _, id := range ids {
+					if id == fileid {
+						result[tag] = string(k[1+tagEnd+1:])
+						return errStopScan
+					}
+				}
+				return nil
+			})
+			if err != nil && err != errStopScan {
+				return err
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
+// errStopScan is a sentinel to break out of scanPrefix early.
+var errStopScan = fmt.Errorf("stop scan")
+
 // removeFileidFromAllV scans all V keys and removes the fileid from value blobs.
 func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
 	prefix := []byte{byte(prefixTagValue)}

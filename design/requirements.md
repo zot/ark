@@ -1763,3 +1763,27 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1136:** Counts are recomputed from matching files only
 - **R1137:** Values with zero matching files after filtering are omitted from output
 - **R1138:** The `-files` flag composes with filtering — only files that passed the filter are shown
+
+## Feature: Chunk Cache Threading
+**Source:** specs/chunk-cache-threading.md
+
+### Cache in Search Options
+- **R1139:** When `SearchOpts.Cache` is non-nil, `defaultSearchOpts` appends `microfts2.WithChunkCache(opts.Cache)` to the search options slice
+- **R1140:** When `SearchOpts.Cache` is nil, no `WithChunkCache` option is appended — microfts2 auto-creates a per-search cache internally (backwards compatible)
+- **R1141:** (inferred) All search paths that call `defaultSearchOpts` — SearchCombined, SearchSplit, SearchMulti, SearchFuzzy — gain cache threading without signature changes
+
+## Feature: Inbox from V Records
+**Source:** specs/inbox-v-records.md
+
+### New Store Method
+- **R1142:** `Store.FileTagValues(fileid uint64, tags []string) (map[string]string, error)` returns the first value found per tag by scanning V records for the fileid
+- **R1143:** For each requested tag, scans V record prefix `V[tag]\x00` entries checking if fileid is in the varint list
+- **R1144:** (inferred) Returns empty string for tags with no value for the fileid — callers treat missing values as absent, not errors
+
+### Inbox Rewrite
+- **R1145:** `DB.Inbox` uses `TagFiles(["status"])` for candidate fileids and path resolution (unchanged)
+- **R1146:** `DB.Inbox` filters to `/requests/` paths before per-file tag lookup (unchanged)
+- **R1147:** `DB.Inbox` calls `Store.FileTagValues` instead of `os.ReadFile` + `ParseTagBlock` for each candidate
+- **R1148:** When `showAll` is false, `DB.Inbox` uses `TagValueFiles("status", "completed")` and `TagValueFiles("status", "denied")` to build an exclusion set before per-file tag lookup
+- **R1149:** (inferred) InboxEntry fields are populated from the map returned by `FileTagValues` — same field mapping as current code
+- **R1150:** (inferred) Existing Inbox output, sort order, and filtering behavior are preserved — this is a performance change, not a behavior change

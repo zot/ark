@@ -46,6 +46,11 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 	if sopts.NoTmp {
 		opts = append(opts, microfts2.WithNoTmp())
 	}
+	// R1139: thread session cache into microfts2 search so post-filters
+	// (verify, regex) share cached file reads instead of re-reading from disk
+	if sopts.Cache != nil {
+		opts = append(opts, microfts2.WithChunkCache(sopts.Cache))
+	}
 	return opts
 }
 
