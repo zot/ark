@@ -1218,7 +1218,8 @@ type InboxEntry struct {
 
 // Inbox returns cross-project messages from the tag index.
 // CRC: crc-DB.md | Seq: seq-message.md | R563-R568, R617-R622, R1145-R1150
-// Uses V records for tag values — no file reads.
+// V records filter candidates (status, archived); ParseTagBlock on survivors
+// gives precise header values. Hybrid: cheap LMDB filtering, correct file reads.
 // If showAll is false, completed/done/denied messages are excluded.
 // If includeArchived is false, archived messages are excluded.
 func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
@@ -1228,7 +1229,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		return nil, err
 	}
 
-	// R1148: build exclusion set for completed/denied when !showAll
+	// R1148: build exclusion set from V records for cheap filtering
 	var excludeIDs map[uint64]bool
 	if !showAll {
 		excludeIDs = make(map[uint64]bool)
@@ -1242,11 +1243,17 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			}
 		}
 	}
-
-	inboxTags := []string{
-		"status", "archived", "to-project", "from-project",
-		"ark-request", "ark-response", "issue",
-		"response-handled", "request-handled", "status-date",
+	if !includeArchived {
+		ids, err := db.store.TagValueFiles("archived", "true")
+		if err != nil {
+			return nil, err
+		}
+		if excludeIDs == nil {
+			excludeIDs = make(map[uint64]bool)
+		}
+		for _, id := range ids {
+			excludeIDs[id] = true
+		}
 	}
 
 	seen := make(map[uint64]bool)
@@ -1257,7 +1264,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		}
 		seen[rec.FileID] = true
 
-		// R1148: skip excluded statuses early
+		// Skip excluded files (completed/denied/archived) via V records
 		if excludeIDs != nil && excludeIDs[rec.FileID] {
 			continue
 		}
@@ -1272,46 +1279,45 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			continue
 		}
 
-		// R1147: get tag values from V records — no file reads
-		tv, err := db.store.FileTagValues(rec.FileID, inboxTags)
+		// Read only survivors — ParseTagBlock for precise header values
+		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-
-		statusVal := tv["status"]
-		if statusVal == "" {
-			continue
-		}
-		if !includeArchived && tv["archived"] != "" {
+		tb := ParseTagBlock(data)
+		statusVal, ok := tb.Get("status")
+		if !ok {
 			continue
 		}
 
-		// R1149: build InboxEntry from indexed values
-		toVal := tv["to-project"]
+		toVal, _ := tb.Get("to-project")
 		if i := strings.IndexByte(toVal, ','); i >= 0 {
 			toVal = strings.TrimSpace(toVal[:i])
 		}
-		fromVal := tv["from-project"]
+		fromVal, _ := tb.Get("from-project")
 		var summary, requestID, kind string
-		if v := tv["ark-request"]; v != "" {
+		if v, ok := tb.Get("ark-request"); ok {
 			requestID = v
 			if toVal == fromVal {
 				kind = "self"
 			} else {
 				kind = "request"
 			}
-			if iss := tv["issue"]; iss != "" {
+			if iss, ok := tb.Get("issue"); ok {
 				summary = iss
 			}
-		} else if v := tv["ark-response"]; v != "" {
+		} else if v, ok := tb.Get("ark-response"); ok {
 			requestID = v
 			kind = "response"
-			if iss := tv["issue"]; iss != "" {
+			if iss, ok := tb.Get("issue"); ok {
 				summary = iss
 			} else {
 				summary = "ark-response:" + v
 			}
 		}
+		responseHandled, _ := tb.Get("response-handled")
+		requestHandled, _ := tb.Get("request-handled")
+		statusDate, _ := tb.Get("status-date")
 		entries = append(entries, InboxEntry{
 			Status:          statusVal,
 			To:              toVal,
@@ -1320,9 +1326,9 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			Path:            path,
 			RequestID:       requestID,
 			Kind:            kind,
-			ResponseHandled: tv["response-handled"],
-			RequestHandled:  tv["request-handled"],
-			StatusDate:      tv["status-date"],
+			ResponseHandled: responseHandled,
+			RequestHandled:  requestHandled,
+			StatusDate:      statusDate,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
