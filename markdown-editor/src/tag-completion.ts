@@ -21,7 +21,7 @@ export function arkTagCompletionSource(api: HostAPI) {
       if (parsed) {
         const tagName = parsed[1];
         const prefix = parsed[2];
-        const items = await api.tagValueComplete(tagName, prefix);
+        const items = await api.tagValueComplete(tagName, prefix) || [];
         return {
           from: valueMatch.from + valueMatch.text.indexOf(parsed[2]),
           options: items.map((item) => ({
@@ -36,7 +36,7 @@ export function arkTagCompletionSource(api: HostAPI) {
     const nameMatch = context.matchBefore(/@[\w][\w-]*/);
     if (nameMatch) {
       const prefix = nameMatch.text.slice(1); // strip @
-      const items = await api.tagComplete(prefix);
+      const items = await api.tagComplete(prefix) || [];
       return {
         from: nameMatch.from,
         options: items.map((item) => ({
@@ -48,7 +48,7 @@ export function arkTagCompletionSource(api: HostAPI) {
 
     // Check for bare @ (trigger)
     if (context.matchBefore(/@/)) {
-      const items = await api.tagComplete("");
+      const items = await api.tagComplete("") || [];
       return {
         from: context.pos - 1,
         options: items.map((item) => ({

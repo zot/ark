@@ -19,6 +19,11 @@ type ViewMode = "both" | "results" | "src";
 const DEFAULT_MODES: ViewMode[] = ["both", "results", "src"];
 const RESULT_DEFAULT_MODES: ViewMode[] = ["src", "both", "results"];
 
+/** CSS to hide original fenced code block lines when widget is active. */
+const hideLineStyle = EditorView.baseTheme({
+  ".ark-search-hidden-line": { display: "none" },
+});
+
 /** Parse mode= attribute from fence info string. */
 function parseModes(info: string): ViewMode[] {
   const match = info.match(/mode=([\w,]+)/);
@@ -38,7 +43,7 @@ interface BlockState {
   loading: boolean;
 }
 
-/** Widget that replaces an ark-search code block. */
+/** Widget that renders an ark-search code block. */
 class ArkSearchWidget extends WidgetType {
   private container: HTMLElement | null = null;
 
@@ -119,8 +124,10 @@ export function arkSearchBlockExtension(
 ) {
   // Key by query content for stability across edits
   const blockStates = new Map<string, BlockState>();
+  // Track pending initial searches to fire after view is ready
+  const pendingSearches: Array<{ key: string; query: string }> = [];
 
-  return ViewPlugin.fromClass(
+  const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       view: EditorView;
@@ -128,25 +135,32 @@ export function arkSearchBlockExtension(
       constructor(view: EditorView) {
         this.view = view;
         this.decorations = this.build(view);
+        // Fire deferred searches after EditorView is fully constructed
+        if (pendingSearches.length > 0) {
+          const searches = pendingSearches.splice(0);
+          setTimeout(() => {
+            for (const { key, query } of searches) {
+              this.executeSearch(key, query);
+            }
+          }, 0);
+        }
       }
 
       executeSearch(key: string, query: string) {
         const state = blockStates.get(key);
         if (!state || state.loading) return;
         state.loading = true;
-        // Force redraw to show loading state
         this.view.dispatch({});
         api.search(query).then((results) => {
           state.results = results;
           state.loading = false;
-          // Dispatch to trigger redecoration with results
           this.view.dispatch({});
         });
       }
 
       build(view: EditorView): DecorationSet {
-        const isEditing = view.state.field(editMode);
-        const widgets: Range<Decoration>[] = [];
+        const isEditing = view.state.field(editMode, false);
+        const decos: Range<Decoration>[] = [];
         const tree = syntaxTree(view.state);
         const seenKeys = new Set<string>();
 
@@ -167,7 +181,6 @@ export function arkSearchBlockExtension(
               query += (query ? "\n" : "") + line.text;
             }
 
-            // Key by query content — stable across position shifts
             const key = query;
             seenKeys.add(key);
 
@@ -185,24 +198,35 @@ export function arkSearchBlockExtension(
                 loading: false,
               });
               if (defaultModes[0] !== "src") {
-                this.executeSearch(key, query);
+                pendingSearches.push({ key, query });
               }
             }
 
             const state = blockStates.get(key)!;
             state.modes = isEditing ? DEFAULT_MODES : defaultModes;
 
-            const widget = new ArkSearchWidget(state, api, (mode) => {
-              state.currentMode = mode;
-              if ((mode === "both" || mode === "results") && !state.results) {
-                this.executeSearch(key, state.query);
+            if (!isEditing) {
+              // Hide each line of the original fenced code block
+              for (let ln = firstLine.number; ln <= lastLine.number; ln++) {
+                const line = view.state.doc.line(ln);
+                decos.push(
+                  Decoration.line({ class: "ark-search-hidden-line" }).range(line.from),
+                );
               }
-              view.dispatch({});
-            });
 
-            widgets.push(
-              Decoration.replace({ widget }).range(node.from, node.to),
-            );
+              // Place the widget after the last line of the block
+              const widget = new ArkSearchWidget(state, api, (mode) => {
+                state.currentMode = mode;
+                if ((mode === "both" || mode === "results") && !state.results) {
+                  this.executeSearch(key, state.query);
+                }
+                view.dispatch({});
+              });
+
+              decos.push(
+                Decoration.widget({ widget, side: 1 }).range(lastLine.to),
+              );
+            }
           },
         });
 
@@ -211,7 +235,7 @@ export function arkSearchBlockExtension(
           if (!seenKeys.has(key)) blockStates.delete(key);
         }
 
-        return Decoration.set(widgets, true);
+        return Decoration.set(decos, true);
       }
 
       update(update: ViewUpdate) {
@@ -222,4 +246,6 @@ export function arkSearchBlockExtension(
     },
     { decorations: (v) => v.decorations },
   );
+
+  return [plugin, hideLineStyle];
 }

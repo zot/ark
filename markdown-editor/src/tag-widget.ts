@@ -94,7 +94,7 @@ function buildTagDecorations(
   api: HostAPI,
   path: string,
 ): DecorationSet {
-  const isEditing = view.state.field(editMode);
+  const isEditing = view.state.field(editMode, false);
   if (isEditing) return Decoration.none;
 
   const widgets: Range<Decoration>[] = [];

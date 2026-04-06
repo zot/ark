@@ -1719,7 +1719,14 @@ func (srv *Server) registerContentRoutes() {
 	srv.uiRuntime.UIHandleFunc("GET /fetch/", srv.handleContentFetch)
 	srv.uiRuntime.UIHandleFunc("GET /content/", srv.handleContentView)
 	srv.uiRuntime.UIHandleFunc("GET /raw/", srv.handleContentRaw)
-	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/)")
+	// Mirror editor endpoints on the UI server so browser JS can reach them.
+	// These are the same handlers registered on the unix socket API mux.
+	srv.uiRuntime.UIHandleFunc("POST /search/grouped", srv.handleSearchGrouped)
+	srv.uiRuntime.UIHandleFunc("POST /tags/complete", srv.handleTagComplete)
+	srv.uiRuntime.UIHandleFunc("POST /tags/values", srv.handleTagValues)
+	srv.uiRuntime.UIHandleFunc("POST /file/save", srv.handleSave)
+	srv.uiRuntime.UIHandleFunc("POST /tags/set", srv.handleSetTags)
+	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints)")
 	// NOTE: /content/ markdown shell references /ark-markdown-editor.js.
 	// The UI server serves from ~/.ark/html/ — the Makefile must copy
 	// the built bundle there (see O48 in design.md gaps).
@@ -1837,13 +1844,13 @@ const api = {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({tag, prefix}),
   }).then(r => r.json()),
-  save: (p, c) => fetch('/save', {
+  save: (p, c) => fetch('/file/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({path: p, content: c}),
   }),
   navigate: (p) => { window.location.href = '/content' + p; },
-  setTags: (p, tags) => fetch('/set-tags', {
+  setTags: (p, tags) => fetch('/tags/set', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({path: p, tags}),

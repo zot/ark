@@ -10,3 +10,4 @@ checkpoint.fossil
 /requests/
 /PLAN.md
 node_modules
+/markdown-editor/dist
