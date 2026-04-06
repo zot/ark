@@ -1787,3 +1787,33 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1148:** When `showAll` is false, `DB.Inbox` uses `TagValueFiles("status", "completed")` and `TagValueFiles("status", "denied")` to build an exclusion set before per-file tag lookup
 - **R1149:** (inferred) InboxEntry fields are populated from the map returned by `FileTagValues` — same field mapping as current code
 - **R1150:** (inferred) Existing Inbox output, sort order, and filtering behavior are preserved — this is a performance change, not a behavior change
+
+## Feature: Content Fetching
+**Source:** specs/content-fetching.md
+
+### Route Registration
+- **R1151:** Routes are registered on the UI server (HTTP port) via `Runtime.UIHandleFunc()` after the UI engine starts
+- **R1152:** Handlers need access to the DB actor for `IsIndexed` checks and file content reads
+- **R1153:** (inferred) Routes are only available when the UI engine is running — no fallback on the unix socket API mux
+
+### Path Validation
+- **R1154:** All three routes validate that the requested path is within an indexed source directory (not that the file itself is indexed — non-indexed assets like images are allowed)
+- **R1155:** Paths are cleaned via `filepath.Clean` and must be absolute
+- **R1156:** Paths outside all configured source directories return 403, missing files return 404
+
+### JSON Content Retrieval — `/fetch/PATH`
+- **R1157:** `GET /fetch/PATH` returns file content as JSON with `path`, `content`, and `contentType` fields
+- **R1158:** `contentType` is derived from the file's indexing strategy using the same mapping as editor endpoints (markdown, text, json, code)
+- **R1159:** (inferred) This is the programmatic access point — JavaScript/HostAPI code fetches content without POST body encoding
+
+### Rich Presentation — `/content/PATH`
+- **R1160:** `GET /content/PATH` returns an HTML page that presents the file based on its content type
+- **R1161:** Markdown files return an HTML shell that loads the CM6 editor bundle (`ark-markdown-editor.js`)
+- **R1162:** The shell fetches content from `/fetch/PATH` and creates an ArkEditor with a HostAPI wired to the editor HTTP endpoints
+- **R1163:** Non-markdown files return a minimal HTML page with raw content in a `<pre>` block
+- **R1164:** (inferred) Response Content-Type is `text/html` for all `/content/` responses
+
+### Raw Content — `/raw/PATH`
+- **R1165:** `GET /raw/PATH` returns file content verbatim with an appropriate Content-Type header
+- **R1166:** Content-Type is mapped from file extension (text/markdown, text/plain, application/json, etc.)
+- **R1167:** (inferred) No wrapping, no JSON encoding — raw bytes suitable for download, curl, or iframe embedding

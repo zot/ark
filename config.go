@@ -170,6 +170,17 @@ func (c *Config) EnsureArkSource() {
 	})
 }
 
+// IsInSource returns true if path falls under any configured source directory.
+// CRC: crc-Config.md | R1154
+func (c *Config) IsInSource(path string) bool {
+	for _, src := range c.Sources {
+		if strings.HasPrefix(path, src.Dir+string(filepath.Separator)) || path == src.Dir {
+			return true
+		}
+	}
+	return false
+}
+
 // EffectivePatterns returns the combined global + per-source patterns.
 func (c *Config) EffectivePatterns(src Source) (includes, excludes []string) {
 	includes = make([]string, 0, len(c.GlobalInclude)+len(src.Include))

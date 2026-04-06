@@ -141,6 +141,7 @@ Lifetime = server lifetime.
 - [x] seq-write-actor.md → `db.go`, `svc.go`, `indexer.go`, `server.go`
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
+- [x] seq-content-fetching.md → `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -234,3 +235,6 @@ Lifetime = server lifetime.
 - [ ] A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
 - [ ] A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
 - [ ] O47: R1115: WithAppendChunkCallback not yet wired in append paths — tags still extracted from tagWindowForAppend (R1127). Wire when microvec supports incremental chunk updates
+- [ ] O48: Editor JS bundle not in release pipeline — Makefile must copy ark-markdown-editor.js to zip-graft for ark install
+- [ ] O49: No unit tests for content fetching: handleContentFetch, handleContentView, handleContentRaw, contentPath
+- [ ] A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared

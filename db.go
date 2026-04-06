@@ -1130,6 +1130,39 @@ func (db *DB) Fetch(path string) ([]byte, error) {
 	return data, nil
 }
 
+// ReadSourceFile reads any file within a configured source directory.
+// Unlike Fetch, this does not require the file to be indexed — it only
+// checks that the path falls under a source directory.
+// CRC: crc-DB.md | R1154, R1156
+func (db *DB) ReadSourceFile(path string) ([]byte, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+	if !db.config.IsInSource(absPath) {
+		return nil, fmt.Errorf("not in source: %s", absPath)
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return data, nil
+}
+
+// FileStrategy returns the indexing strategy for a file, or "" if not indexed.
+// CRC: crc-DB.md | R1158
+func (db *DB) FileStrategy(path string) string {
+	info, err := db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return ""
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil {
+		return ""
+	}
+	return finfo.Strategy
+}
+
 // IsIndexed returns true if the given file path is in the index.
 func (db *DB) IsIndexed(path string) bool {
 	absPath, err := filepath.Abs(path)
