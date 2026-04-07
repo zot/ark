@@ -1,5 +1,5 @@
 # TagBlock
-**Requirements:** R443, R444, R445, R446, R447, R448, R449, R478, R459, R460, R461, R463, R465, R472, R473, R474, R475, R476, R611
+**Requirements:** R443, R444, R445, R446, R447, R448, R449, R478, R459, R460, R461, R463, R465, R472, R473, R474, R475, R476, R611, R1190, R1191, R1192
 
 Parses and manipulates the tag block at the top of a markdown file.
 The tag block is consecutive `@tag: value` lines starting from line 1.

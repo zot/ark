@@ -29,6 +29,10 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/frictionless/flib"
 	"github.com/zot/microfts2"
@@ -1653,7 +1657,8 @@ func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {
+	content := NormalizeTagLines([]byte(req.Content)) // R1193
+	if err := os.WriteFile(req.Path, content, 0644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1775,8 +1780,9 @@ func (srv *Server) handleContentFetch(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleContentView returns an HTML page that presents the file richly.
-// Markdown files get an HTML shell with the CM6 editor; others get <pre>.
-// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1160-R1164
+// Markdown: goldmark-rendered HTML with pencil/eye toggle to ink-mde editor.
+// Other types: <pre> block.
+// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1160-R1164, R1168-R1189
 func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	path, data, ok := srv.contentPath(w, r, "/content")
 	if !ok {
@@ -1788,9 +1794,20 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if StrategyToContentType(strategy) == "markdown" || strings.HasSuffix(path, ".md") {
-		fmt.Fprintf(w, contentShellMarkdown, path)
+		tmpl, err := srv.loadContentTemplate("content-markdown.html")
+		if err != nil {
+			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rendered := renderMarkdownForContent(data, path)
+		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(rendered)})
 	} else {
-		fmt.Fprintf(w, contentShellPlain, path, template.HTMLEscapeString(string(data)))
+		tmpl, err := srv.loadContentTemplate("content-plain.html")
+		if err != nil {
+			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(template.HTMLEscapeString(string(data)))})
 	}
 }
 
@@ -1809,78 +1826,78 @@ func (srv *Server) handleContentRaw(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// contentShellMarkdown is the HTML shell for markdown files served at /content/.
-// It loads the CM6 editor bundle and wires it to the editor HTTP endpoints.
-const contentShellMarkdown = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>%s</title>
-<style>
-  body { margin: 0; font-family: system-ui, sans-serif; }
-  #editor { height: 100vh; }
-</style>
-</head>
-<body>
-<div id="editor"></div>
-<script type="module">
-import {createArkEditor} from '/ark-markdown-editor.js';
-const path = location.pathname.replace(/^\/content/, '');
-const resp = await fetch('/fetch' + path);
-const {content} = await resp.json();
-const api = {
-  search: (query) => fetch('/search/grouped', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({query}),
-  }).then(r => r.json()),
-  tagComplete: (prefix) => fetch('/tags/complete', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({prefix}),
-  }).then(r => r.json()),
-  tagValueComplete: (tag, prefix) => fetch('/tags/values', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tag, prefix}),
-  }).then(r => r.json()),
-  save: (p, c) => fetch('/file/save', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: p, content: c}),
-  }),
-  navigate: (p) => { window.location.href = '/content' + p; },
-  setTags: (p, tags) => fetch('/tags/set', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: p, tags}),
-  }),
-};
-createArkEditor({
-  parent: document.getElementById('editor'),
-  doc: content,
-  path: path,
-  api: api,
-});
-</script>
-</body>
-</html>`
+// contentLinkRewriter rewrites relative links and images in goldmark AST.
+// Images: relative src → /raw/BASEDIR/src
+// Links: relative .md href → /content/BASEDIR/href
+// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1170-R1173
+type contentLinkRewriter struct {
+	baseDir string
+}
 
-// contentShellPlain is the HTML shell for non-markdown files served at /content/.
-const contentShellPlain = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>%s</title>
-<style>
-  body { margin: 1em; font-family: system-ui, sans-serif; }
-  pre { white-space: pre-wrap; word-wrap: break-word; }
-</style>
-</head>
-<body>
-<pre>%s</pre>
-</body>
-</html>`
+func isRelativeURL(s string) bool {
+	return s != "" && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://")
+}
+
+func (lr *contentLinkRewriter) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *ast.Image:
+			if dest := string(v.Destination); isRelativeURL(dest) {
+				v.Destination = []byte("/raw" + lr.baseDir + "/" + dest)
+			}
+		case *ast.Link:
+			if dest := string(v.Destination); isRelativeURL(dest) && strings.HasSuffix(dest, ".md") {
+				v.Destination = []byte("/content" + lr.baseDir + "/" + dest)
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+// renderMarkdownForContent renders markdown to HTML with link/image rewriting
+// for the /content/ route. R1168-R1173
+func renderMarkdownForContent(data []byte, filePath string) string {
+	baseDir := filepath.Dir(filePath)
+	// R1194: Normalize tag lines so they render as line breaks even if the file
+	// on disk lacks trailing spaces (hand-edited files).
+	data = NormalizeTagLines(data)
+	md := goldmark.New(
+		goldmark.WithParserOptions(
+			parser.WithASTTransformers(
+				util.Prioritized(&contentLinkRewriter{baseDir: baseDir}, 100),
+			),
+		),
+	)
+	var buf bytes.Buffer
+	if err := md.Convert(data, &buf); err != nil {
+		return template.HTMLEscapeString(string(data))
+	}
+	return buf.String()
+}
+
+// contentShellData holds the template data for content HTML shells.
+type contentShellData struct {
+	Title   string
+	Content template.HTML // raw HTML, not escaped
+}
+
+// loadContentTemplate reads an HTML template from the html/ dir under dbPath.
+// Templates are read from disk on each request so CSS edits take effect immediately.
+// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1196-R1199
+func (srv *Server) loadContentTemplate(name string) (*template.Template, error) {
+	dbPath, _ := Sync(srv.db, func(db *DB) (string, error) {
+		return db.Path(), nil
+	})
+	path := filepath.Join(dbPath, "html", name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return template.New(name).Parse(string(data))
+}
 
 // parseDateToYMD parses a flexible date string into YYYYMMDD format.
 

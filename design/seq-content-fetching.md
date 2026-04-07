@@ -1,5 +1,5 @@
 # Sequence: Content Fetching
-**Requirements:** R1151-R1167
+**Requirements:** R1151-R1189
 
 HTTP GET routes on the UI server for serving indexed file content
 to the browser.
@@ -47,26 +47,56 @@ Browser         UI Server           DB Actor
   |<--200 JSON {path,content,contentType}
 ```
 
-## GET /content/PATH — rich HTML (R1160-R1164)
+## GET /content/PATH — rich HTML (R1160-R1164, R1168-R1189)
+
+### Read View (default, server-rendered)
 
 ```
-Browser         UI Server           DB Actor
-  |                |                    |
-  |--GET /content/abs/path.md--------->|
-  |                |                    |
+Browser         UI Server           DB Actor        goldmark
+  |                |                    |               |
+  |--GET /content/abs/path.md--------->|               |
+  |                |                    |               |
   |                |  (same path validation + fetch as /fetch/)
-  |                |                    |
-  |  [markdown?]   |                    |
-  |  yes:          |                    |
-  |<--200 HTML shell with:              |
-  |    <script src="ark-markdown-editor.js">
-  |    fetch("/fetch/PATH") → createArkEditor()
-  |    HostAPI wired to /search/grouped,
-  |    /tags/complete, /tags/values,
-  |    /save, /set-tags                 |
-  |                |                    |
-  |  no:           |                    |
-  |<--200 HTML <pre>content</pre>-------|
+  |                |                    |               |
+  |  [markdown?]   |                    |               |
+  |  yes:          |                    |               |
+  |                |--goldmark.Convert->|-------------->|
+  |                |  (rewrite relative |               |
+  |                |   img src→/raw/DIR/src             |
+  |                |   .md href→/content/DIR/href       |
+  |                |   abs/external unchanged)          |
+  |                |<--HTML-------------|---------------|
+  |<--200 HTML page with:              |               |
+  |    rendered markdown in content div |               |
+  |    pencil button (upper right)     |               |
+  |    <script src="ark-markdown-editor.js">            |
+  |                |                    |               |
+  |  no:           |                    |               |
+  |<--200 HTML <pre>content</pre>------|               |
+```
+
+### Edit View (client-side toggle)
+
+```
+Browser                          UI Server
+  |                                  |
+  |  [user clicks pencil]           |
+  |--GET /fetch/PATH--------------->|
+  |<--{path,content,contentType}----|
+  |                                  |
+  |  createInkArkEditor({           |
+  |    parent, doc, path, api       |
+  |  })                              |
+  |  hide rendered div               |
+  |  show editor div                 |
+  |  pencil → eye icon               |
+  |                                  |
+  |  [user clicks eye]              |
+  |  [dirty?]                        |
+  |  yes: prompt Save/Discard       |
+  |    Save: api.save() → reload    |
+  |    Discard: reload              |
+  |  no: reload                      |
 ```
 
 ## GET /raw/PATH — raw content (R1165-R1167)

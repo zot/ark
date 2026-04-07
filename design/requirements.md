@@ -1817,3 +1817,50 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1165:** `GET /raw/PATH` returns file content verbatim with an appropriate Content-Type header
 - **R1166:** Content-Type is mapped from file extension (text/markdown, text/plain, application/json, etc.)
 - **R1167:** (inferred) No wrapping, no JSON encoding — raw bytes suitable for download, curl, or iframe embedding
+
+## Feature: content-view-edit
+**Source:** specs/content-view-edit.md
+
+### Read View (default)
+- **R1168:** `/content/PATH` for markdown files renders HTML via goldmark on the server (supersedes R1161-R1162 for `/content/` route)
+- **R1169:** Rendered HTML appears in a scrollable content area within the page
+- **R1170:** Relative image `src` attributes are rewritten to `/raw/BASEDIR/src`
+- **R1171:** Relative link `href` attributes ending in `.md` are rewritten to `/content/BASEDIR/href`
+- **R1172:** Absolute paths and external URLs in links/images are left unchanged
+- **R1173:** BASEDIR is the directory portion of the requested file's absolute path
+- **R1174:** A pencil icon button is positioned at the upper right of the page
+- **R1175:** Clicking the pencil button switches to Edit View
+
+### Edit View
+- **R1176:** On pencil click, raw markdown is fetched from `/fetch/PATH`
+- **R1177:** An ink-mde editor instance is created with ark extensions (tag parser, tag widgets, tag completion, search blocks)
+- **R1178:** The editor replaces the rendered content area
+- **R1179:** The pencil button becomes an eye icon
+- **R1180:** The editor wires to the same HostAPI endpoints as the existing CM6 shell (`/search/grouped`, `/tags/complete`, `/tags/values`, `/file/save`, `/tags/set`)
+- **R1181:** Ctrl+S saves via the HostAPI
+
+### Returning to Read View
+- **R1182:** Clicking the eye button checks whether the document has been modified since last save
+- **R1183:** If dirty, a prompt offers Save / Discard options
+- **R1184:** Save: saves via HostAPI, then reloads the page for fresh goldmark rendering
+- **R1185:** Discard: reloads the page without saving
+- **R1186:** If not dirty: reloads the page
+
+### Bundle Changes
+- **R1187:** The `ark-markdown-editor.js` bundle exports `createInkArkEditor` alongside the existing `createArkEditor`
+- **R1188:** The `/content/` HTML shell loads the bundle and calls `createInkArkEditor` on pencil click
+- **R1189:** (inferred) Non-markdown `/content/` behavior is unchanged (R1163 still applies)
+
+### Tag Line Rendering
+- **R1190:** `TagBlock.Render()` emits two trailing spaces before newline on each tag line for markdown line-break rendering
+- **R1191:** `ParseTagBlock` trims trailing spaces from tag values to prevent accumulation on round-trip
+- **R1192:** `NormalizeTagLines` rewrites any `@tag: value` line in content to end with exactly two trailing spaces
+- **R1193:** `handleSave` normalizes tag lines before writing to disk
+- **R1194:** `renderMarkdownForContent` normalizes tag lines before goldmark rendering (safety net for hand-edited files)
+- **R1195:** The editor JS normalizes tag lines before loading into ink-mde and sets dirty state if content changed
+
+### Content Template Externalization
+- **R1196:** Content HTML shells are loaded from `~/.ark/html/` at request time, not compiled into the binary
+- **R1197:** `content-markdown.html` and `content-plain.html` are Go `html/template` files with `{{.Title}}` and `{{.Content}}` placeholders
+- **R1198:** (inferred) CSS edits to content templates take effect on browser reload without rebuilding the binary
+- **R1199:** Content templates include the current theme CSS (base + all theme files) and set the active theme class from localStorage

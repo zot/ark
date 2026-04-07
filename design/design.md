@@ -238,3 +238,4 @@ Lifetime = server lifetime.
 - [ ] O48: Editor JS bundle not in release pipeline — Makefile must copy ark-markdown-editor.js to zip-graft for ark install
 - [ ] O49: No unit tests for content fetching: handleContentFetch, handleContentView, handleContentRaw, contentPath
 - [ ] A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared
+- [ ] O50: No unit tests for content view/edit toggle: renderMarkdownForContent, contentLinkRewriter, ink-mde integration

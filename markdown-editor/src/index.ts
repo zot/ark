@@ -12,6 +12,8 @@ import { modeToggleExtension } from "./mode-toggle";
 
 export type { HostAPI, SearchResultGroup, SearchChunk } from "./host-api";
 export { toggleMode, editMode } from "./mode-toggle";
+export { createInkArkEditor } from "./ink-spike";
+export type { InkArkConfig } from "./ink-spike";
 
 export interface ArkEditorConfig {
   parent: HTMLElement;

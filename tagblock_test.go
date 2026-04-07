@@ -67,7 +67,7 @@ func TestSetReplacesExisting(t *testing.T) {
 	tb.Set("status", "completed")
 
 	result := string(tb.Render())
-	expected := "@status: completed\n@issue: foo\n\nBody\n"
+	expected := "@status: completed  \n@issue: foo  \n\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
@@ -79,7 +79,7 @@ func TestSetAppendsNew(t *testing.T) {
 	tb.Set("priority", "high")
 
 	result := string(tb.Render())
-	expected := "@status: open\n@priority: high\n\nBody\n"
+	expected := "@status: open  \n@priority: high  \n\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
@@ -91,7 +91,7 @@ func TestSetOnTaglessFile(t *testing.T) {
 	tb.Set("status", "open")
 
 	result := string(tb.Render())
-	expected := "@status: open\n\n# Heading\nBody\n"
+	expected := "@status: open  \n\n# Heading\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}
@@ -209,7 +209,7 @@ func TestMultipleSetPreservesOrder(t *testing.T) {
 	tb.Set("d", "4")
 
 	result := string(tb.Render())
-	expected := "@a: 1\n@b: X\n@c: 3\n@d: 4\n\nBody\n"
+	expected := "@a: 1  \n@b: X  \n@c: 3  \n@d: 4  \n\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
 	}

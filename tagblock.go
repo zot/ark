@@ -13,6 +13,28 @@ import (
 // tagLineRegex matches a well-formed tag line: @name: value
 var tagLineRegex = regexp.MustCompile(`^@([a-zA-Z][\w.-]*): (.*)$`)
 
+// NormalizeTagLines ensures every @tag: line in content ends with two
+// trailing spaces for proper markdown line-break rendering.
+// CRC: crc-TagBlock.md | R1192
+func NormalizeTagLines(data []byte) []byte {
+	lines := bytes.Split(data, []byte("\n"))
+	changed := false
+	for i, line := range lines {
+		if tagLineRegex.Match(line) {
+			trimmed := bytes.TrimRight(line, " ")
+			normalized := append(trimmed, ' ', ' ')
+			if !bytes.Equal(line, normalized) {
+				lines[i] = normalized
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return data
+	}
+	return bytes.Join(lines, []byte("\n"))
+}
+
 // strayTagRegex matches tag-like patterns in the body
 var strayTagRegex = regexp.MustCompile(`^@([a-zA-Z][\w.-]*):`)
 
@@ -57,7 +79,7 @@ func ParseTagBlock(data []byte) *TagBlock {
 		}
 		tb.tags = append(tb.tags, Tag{
 			Name:  string(m[1]),
-			Value: string(m[2]),
+			Value: strings.TrimRight(string(m[2]), " "),
 		})
 		pos = nextPos
 	}
@@ -119,10 +141,11 @@ func (tb *TagBlock) Body() []byte {
 }
 
 // Render emits the tag block followed by a blank separator and the body.
+// R1190: tag lines end with two trailing spaces for markdown line breaks.
 func (tb *TagBlock) Render() []byte {
 	var buf bytes.Buffer
 	for _, t := range tb.tags {
-		fmt.Fprintf(&buf, "@%s: %s\n", t.Name, t.Value)
+		fmt.Fprintf(&buf, "@%s: %s  \n", t.Name, t.Value)
 	}
 	if len(tb.tags) > 0 {
 		buf.WriteByte('\n')
