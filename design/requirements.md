@@ -1864,3 +1864,53 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1197:** `content-markdown.html` and `content-plain.html` are Go `html/template` files with `{{.Title}}` and `{{.Content}}` placeholders
 - **R1198:** (inferred) CSS edits to content templates take effect on browser reload without rebuilding the binary
 - **R1199:** Content templates include the current theme CSS (base + all theme files) and set the active theme class from localStorage
+
+## Feature: tag-search-panel
+**Source:** specs/tag-search-panel.md
+
+### Query Bar
+- **R1200:** Clicking ▶ on a tag widget opens a search panel inline below the tag line
+- **R1201:** Clicking ▶ on a tag with an already-open panel closes it (toggle)
+- **R1202:** The query bar contains three parts: tag name field, regex toggle, value field
+- **R1203:** The tag name field is pre-filled with the clicked tag name and is editable
+- **R1204:** The tag name field supports autocompletion from the tag index
+- **R1205:** The regex toggle button shows `.*` when regex mode is active, plain text icon otherwise
+- **R1206:** The value field filters tag content — typing narrows results (spectral narrowing)
+- **R1207:** Search fires on Enter or after a short debounce as the user types
+- **R1208:** The search query is constructed as `@tag: value` for literal mode
+- **R1209:** (inferred) In regex mode, the search uses regex matching on tag values
+
+### Results Area
+- **R1210:** Results appear below the query bar in a scrollable area
+- **R1211:** Results are grouped by file, styled like search engine results
+- **R1212:** Each file group shows the file path as a clickable link navigating to `/content/PATH`
+- **R1213:** Each file group has a "show location" button (folder icon) that opens the native file manager
+- **R1214:** Chunk previews are rendered as HTML — markdown chunks via goldmark, code as `<pre>`
+- **R1215:** The panel is resizable by dragging its bottom edge
+
+### Show in Folder
+- **R1216:** A new HostAPI method `showInFolder(path)` calls `POST /file/show`
+- **R1217:** `POST /file/show` opens the native file manager with the file selected
+- **R1218:** Linux: uses `gdbus call` with `org.freedesktop.FileManager1.ShowItems`
+- **R1219:** macOS: uses `open -R <path>`
+- **R1220:** Windows: uses `explorer.exe /select,"<path>"`
+- **R1221:** The endpoint validates the path is within an indexed source
+
+### Integration
+- **R1222:** The search panel component is a standalone TypeScript module usable in both CM6 and ink-mde
+- **R1223:** `TagSearchWidget` in `tag-widget.ts` creates/toggles the search panel instead of fire-and-forget search
+- **R1224:** (inferred) The search panel reuses the existing `renderSearchResults` for result display
+
+### Search Precision
+- **R1225:** Tag search always uses regex mode — constructs `@tag:\s*value` pattern for precise tag-value matching
+- **R1226:** Literal mode escapes the value with regexp.QuoteMeta equivalent before constructing the regex
+- **R1227:** Invalid tag names in literal mode show a red border and tooltip error
+- **R1228:** `handleSearchGrouped` supports `mode: "regex"` routing to `opts.Regex` / `SearchRegex`
+- **R1229:** Multi-strategy search guard excludes regex queries (`len(opts.Regex) == 0`)
+- **R1230:** Regex search highlights use the raw pattern directly instead of tokenize-and-escape
+
+### Performance and Infrastructure
+- **R1231:** `loadContentTemplate` calls `srv.db.Path()` directly, not through the DB actor (immutable value)
+- **R1232:** Content templates are patched on disk at startup by `flib.InjectAllThemeBlocks` — no per-request theme injection
+- **R1233:** JS bundle imports use cache-busting `?v=mtime` query parameter via `{{.BundleHash}}` template field
+- **R1234:** `install/html/` contains canonical content templates with `<!-- #frictionless -->` markers, copied to cache by Makefile

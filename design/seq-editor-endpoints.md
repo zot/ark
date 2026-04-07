@@ -1,5 +1,5 @@
 # Sequence: Editor HTTP Endpoints
-**Requirements:** R1069-R1098
+**Requirements:** R1069-R1098, R1216-R1221
 
 HTTP endpoints serving the standalone markdown editor's HostAPI.
 
@@ -106,3 +106,29 @@ Browser         Server              TagBlock        Disk
 ```
 
 Watcher picks up the file change and triggers re-indexing.
+
+## Show in Folder (R1216-R1221)
+
+```
+Browser         Server              OS
+  |                |                 |
+  |--POST /file/show--------------->|
+  |  {path}        |                 |
+  |                |--IsInSource---->|
+  |                |<--bool----------|
+  |  [not in source: 403]           |
+  |                |                 |
+  |                |  [Linux:]       |
+  |                |--gdbus call --->|
+  |                |  FileManager1.  |
+  |                |  ShowItems      |
+  |                |                 |
+  |                |  [macOS:]       |
+  |                |--open -R path-->|
+  |                |                 |
+  |                |  [Windows:]     |
+  |                |--explorer.exe-->|
+  |                |  /select,path   |
+  |                |                 |
+  |<--200 OK-------|                 |
+```

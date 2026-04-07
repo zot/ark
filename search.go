@@ -1092,7 +1092,15 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			highlightQuery = opts.Regex[0]
 		}
 	}
-	tokenPatterns := compileTokenPatterns(highlightQuery)
+	var tokenPatterns []*regexp.Regexp
+	if len(opts.Regex) > 0 {
+		// R1230: Regex mode: use the pattern directly for highlighting
+		if re, err := regexp.Compile("(?i)(" + highlightQuery + ")"); err == nil {
+			tokenPatterns = []*regexp.Regexp{re}
+		}
+	} else {
+		tokenPatterns = compileTokenPatterns(highlightQuery)
+	}
 
 	// Group by file
 	type fileGroup struct {

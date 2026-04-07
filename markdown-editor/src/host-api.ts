@@ -35,10 +35,11 @@ export interface TagValueCompletionItem {
  * for testing.
  */
 export interface HostAPI {
-  search(query: string): Promise<SearchResultGroup[]>;
+  search(query: string, mode?: string): Promise<SearchResultGroup[]>;
   tagComplete(prefix: string): Promise<TagCompletionItem[]>;
   tagValueComplete(tag: string, prefix: string): Promise<TagValueCompletionItem[]>;
   save(path: string, content: string): Promise<void>;
   navigate(path: string): void;
   setTags(path: string, tags: Record<string, string>): Promise<void>;
+  showInFolder?(path: string): Promise<void>;
 }

@@ -239,3 +239,5 @@ Lifetime = server lifetime.
 - [ ] O49: No unit tests for content fetching: handleContentFetch, handleContentView, handleContentRaw, contentPath
 - [ ] A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared
 - [ ] O50: No unit tests for content view/edit toggle: renderMarkdownForContent, contentLinkRewriter, ink-mde integration
+- [ ] A28: R1200-R1215, R1222-R1224 (tag search panel UI) — TypeScript-only, no Go CRC card. Traced to specs/tag-search-panel.md
+- [ ] O51: No unit tests for handleShowInFolder endpoint

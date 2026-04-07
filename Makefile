@@ -51,10 +51,11 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	cp .claude/skills/ark/SKILL.md $(CACHE_DIR)/skills/ark/
 	cp .claude/skills/ui/SKILL.md $(CACHE_DIR)/skills/ui/
 	cp .claude/agents/ark-franklin.md .claude/agents/ark-messenger.md .claude/agents/ark-searcher.md $(CACHE_DIR)/agents/
-	cp install/* $(CACHE_DIR)/install/
-	@echo "Layering markdown editor..."
+	cp -r install/* $(CACHE_DIR)/install/
+	@echo "Layering markdown editor and content templates..."
 	@mkdir -p $(CACHE_DIR)/html
 	@if [ -d markdown-editor/dist ]; then cp markdown-editor/dist/* $(CACHE_DIR)/html/; fi
+	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"
 

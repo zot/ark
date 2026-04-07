@@ -316,6 +316,10 @@ func (srv *Server) startUIEngine(dbPath string) {
 			srv.uiPort = p
 		}
 		log.Printf("ui: engine started on %s (dir: %s)", url, dbPath)
+		// Inject theme blocks into all HTML files with frictionless markers
+		if err := flib.InjectAllThemeBlocks(dbPath); err != nil {
+			log.Printf("ui: theme injection: %v", err)
+		}
 		// Register Go functions on the Lua mcp table (passive path)
 		srv.registerLuaFunctions()
 		// Register content fetching routes on the UI HTTP server
@@ -1496,12 +1500,15 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	case "about":
 		opts.About = query
 		query = ""
+	case "regex": // R1228
+		opts.Regex = []string{query}
+		query = ""
 	case "fuzzy":
 		opts.Fuzzy = true
 	}
 
-	// Multi-strategy for combined queries
-	if !opts.Fuzzy && opts.Contains == "" && opts.About == "" {
+	// Multi-strategy for combined queries — exclude regex (R1229)
+	if !opts.Fuzzy && opts.Contains == "" && opts.About == "" && len(opts.Regex) == 0 {
 		opts.Multi = true
 	}
 
@@ -1717,6 +1724,51 @@ func (srv *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleShowInFolder opens the native file manager with the file selected.
+// CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1216-R1221
+func (srv *Server) handleShowInFolder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	req.Path = filepath.Clean(req.Path)
+
+	// Validate path is within an indexed source
+	inSource, _ := Sync(srv.db, func(db *DB) (bool, error) {
+		return db.Config().IsInSource(req.Path), nil
+	})
+	if !inSource {
+		http.Error(w, "path not within indexed source", http.StatusForbidden)
+		return
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", "-R", req.Path)
+	case "windows":
+		cmd = exec.Command("explorer.exe", "/select,"+req.Path)
+	default: // Linux
+		cmd = exec.Command("gdbus", "call", "--session",
+			"--dest", "org.freedesktop.FileManager1",
+			"--object-path", "/org/freedesktop/FileManager1",
+			"--method", "org.freedesktop.FileManager1.ShowItems",
+			fmt.Sprintf("['file://%s']", req.Path), "")
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "show in folder: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // registerContentRoutes registers GET routes on the UI server for serving
 // indexed file content to the browser.
 // CRC: crc-Server.md | Seq: seq-content-fetching.md | R1151-R1153
@@ -1731,6 +1783,7 @@ func (srv *Server) registerContentRoutes() {
 	srv.uiRuntime.UIHandleFunc("POST /tags/values", srv.handleTagValues)
 	srv.uiRuntime.UIHandleFunc("POST /file/save", srv.handleSave)
 	srv.uiRuntime.UIHandleFunc("POST /tags/set", srv.handleSetTags)
+	srv.uiRuntime.UIHandleFunc("POST /file/show", srv.handleShowInFolder)
 	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints)")
 	// NOTE: /content/ markdown shell references /ark-markdown-editor.js.
 	// The UI server serves from ~/.ark/html/ — the Makefile must copy
@@ -1792,6 +1845,13 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		return db.FileStrategy(path), nil
 	})
 
+	// Cache-busting hash for JS bundle
+	dbPath := srv.db.Path()
+	bundleHash := ""
+	if info, err := os.Stat(filepath.Join(dbPath, "html", "ark-markdown-editor.js")); err == nil {
+		bundleHash = fmt.Sprintf("?v=%d", info.ModTime().Unix())
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if StrategyToContentType(strategy) == "markdown" || strings.HasSuffix(path, ".md") {
 		tmpl, err := srv.loadContentTemplate("content-markdown.html")
@@ -1800,7 +1860,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rendered := renderMarkdownForContent(data, path)
-		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(rendered)})
+		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(rendered), BundleHash: bundleHash})
 	} else {
 		tmpl, err := srv.loadContentTemplate("content-plain.html")
 		if err != nil {
@@ -1880,22 +1940,24 @@ func renderMarkdownForContent(data []byte, filePath string) string {
 
 // contentShellData holds the template data for content HTML shells.
 type contentShellData struct {
-	Title   string
-	Content template.HTML // raw HTML, not escaped
+	Title      string
+	Content    template.HTML // raw HTML, not escaped
+	BundleHash string        // cache-busting query param for JS bundle
 }
 
 // loadContentTemplate reads an HTML template from the html/ dir under dbPath.
 // Templates are read from disk on each request so CSS edits take effect immediately.
+// Injects the frictionless theme block between <!-- #frictionless --> markers.
 // CRC: crc-Server.md | Seq: seq-content-fetching.md | R1196-R1199
 func (srv *Server) loadContentTemplate(name string) (*template.Template, error) {
-	dbPath, _ := Sync(srv.db, func(db *DB) (string, error) {
-		return db.Path(), nil
-	})
+	dbPath := srv.db.Path()
 	path := filepath.Join(dbPath, "html", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	// Theme block is already injected on disk at startup by InjectAllThemeBlocks.
+	// No per-request injection needed.
 	return template.New(name).Parse(string(data))
 }
 
