@@ -108,9 +108,9 @@ Lifetime = server lifetime.
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`
-- [x] crc-Config.md → `config.go`
+- [ ] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
-- [x] crc-Store.md → `store.go`
+- [ ] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
@@ -142,8 +142,9 @@ Lifetime = server lifetime.
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
-- [x] crc-Librarian.md → `librarian.go`
+- [ ] crc-Librarian.md → `librarian.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
+- [ ] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`

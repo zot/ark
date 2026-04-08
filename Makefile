@@ -1,10 +1,14 @@
 VERSION := $(shell grep -oP 'Version: \K[0-9]+\.[0-9]+\.[0-9]+' README.md)
 LDFLAGS := -ldflags "-X ark.Version=$(VERSION)"
 BUILDFLAGS := -buildvcs=false
+GOTAGS := -tags vulkan
+# Link Vulkan; rpath finds gollama shared libs at ~/.ark/lib at runtime
+CGO_LDFLAGS := -lvulkan -Wl,-rpath,$(HOME)/.ark/lib
 
 # Sibling project locations (adjust if needed)
 FRICTIONLESS_DIR ?= ../frictionless
 FRICTIONLESS_BIN := $(FRICTIONLESS_DIR)/build/frictionless
+GOLLAMA_DIR ?= ../gollama
 
 CACHE_DIR := cache
 
@@ -18,19 +22,41 @@ markdown-editor:
 	@$(MAKE) -C markdown-editor build
 
 # Build Go binary and graft cached assets
-build:
-	go build $(BUILDFLAGS) $(LDFLAGS) -o bin/ark ./cmd/ark
+build: gollama
+	CGO_LDFLAGS="$(CGO_LDFLAGS)" go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o bin/ark ./cmd/ark
 	@rm -f $(CACHE_DIR)/.cached
 	bin/ark bundle -o bin/ark.bundled $(CACHE_DIR)
 	@touch $(CACHE_DIR)/.cached
 	mv bin/ark.bundled bin/ark
 
+# Install shared libs to ~/.ark/lib/ (gollama + Vulkan)
+install-libs:
+	@mkdir -p ~/.ark/lib
+	cp -a $(GOLLAMA_DIR)/prebuilt/linux_amd64/*.so* ~/.ark/lib/
+
 # Install bundled binary to ~/.ark/
-install: build
+install: build install-libs
 	@mkdir -p ~/.ark
 	@if [ -L ~/.ark/ark ] || [ ! bin/ark -ef ~/.ark/ark ]; then \
 		cp -f bin/ark ~/.ark/ark; \
 	fi
+
+# Build gollama with Vulkan support (needed for embedding on Zen 2 / Steam Deck)
+# The go workspace resolves gollama from GOLLAMA_DIR.
+gollama: $(GOLLAMA_DIR)/libbinding.a
+
+$(GOLLAMA_DIR)/libbinding.a:
+	@echo "Building gollama with Vulkan..."
+	cd $(GOLLAMA_DIR) && rm -rf build && mkdir build && \
+		/usr/bin/cmake -S llama.cpp -B build \
+			-DGGML_VULKAN=ON \
+			-DBUILD_SHARED_LIBS=OFF \
+			-DLLAMA_BUILD_EXAMPLES=OFF \
+			-DLLAMA_BUILD_TESTS=OFF \
+			-DLLAMA_BUILD_SERVER=OFF && \
+		/usr/bin/cmake --build build --config Release -j$$(nproc) && \
+		make libbinding.a
+	@echo "gollama Vulkan build complete"
 
 # Cache: extract frictionless assets, layer ark's own app on top
 cache: $(CACHE_DIR)/.cached
@@ -65,7 +91,7 @@ cache-clean:
 	rm -rf $(CACHE_DIR)
 
 test:
-	go test $(BUILDFLAGS) ./...
+	go test $(BUILDFLAGS) $(GOTAGS) ./...
 
 clean:
 	rm -rf bin $(CACHE_DIR)

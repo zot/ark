@@ -146,7 +146,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
 
 	// R1235, R1248: Create librarian for spectral search (nil if claude not on PATH)
-	lib := NewLibrarian(db)
+	lib := NewLibrarian(db, dbPath)
 	if lib != nil {
 		log.Printf("spectral search: claude available, librarian started")
 	}

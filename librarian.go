@@ -7,16 +7,21 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+	llama "github.com/godeps/gollama"
 )
 
 // Librarian manages the expansion request queue for spectral search.
@@ -33,6 +38,13 @@ type Librarian struct {
 
 	// Result store
 	results map[string]*ExpandResult // requestID → result
+
+	// Embedding model (R1277, R1278)
+	model      *llama.Model
+	modelCtx   *llama.Context
+	modelPath  string // full path to GGUF file
+	modelTimer *time.Timer
+	modelTTL   time.Duration
 }
 
 // ExpandRequest is a queued expansion request.
@@ -66,17 +78,26 @@ type TagMatch struct {
 }
 
 // NewLibrarian creates a Librarian. Returns nil if claude is not on PATH.
-// R1248, R1250
-func NewLibrarian(db *DB) *Librarian {
+// R1248, R1250, R1274
+func NewLibrarian(db *DB, dbPath string) *Librarian {
 	_, err := exec.LookPath("claude")
 	if err != nil {
 		return nil
 	}
-	return &Librarian{
+	l := &Librarian{
 		available: true,
 		db:        db,
 		results:   make(map[string]*ExpandResult),
+		modelTTL:  5 * time.Minute,
 	}
+	// R1274: resolve tag_model path
+	if tagModel := db.Config().TagModel; tagModel != "" {
+		modelPath := filepath.Join(dbPath, tagModel)
+		if _, err := os.Stat(modelPath); err == nil {
+			l.modelPath = modelPath
+		}
+	}
+	return l
 }
 
 // Available returns whether spectral search is possible.
@@ -401,6 +422,169 @@ func matchesAnyGlob(path string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// --- Embedding (R1296-R1301) ---
+
+// EmbeddingAvailable returns whether the embedding model is configured.
+func (l *Librarian) EmbeddingAvailable() bool {
+	return l != nil && l.modelPath != ""
+}
+
+// EmbedQuery embeds a text string using the warm model.
+// Loads the model on first call. Resets TTL.
+// R1296
+func (l *Librarian) EmbedQuery(text string) ([]float32, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.modelPath == "" {
+		return nil, fmt.Errorf("embedding model not configured")
+	}
+	if err := l.ensureModel(); err != nil {
+		return nil, err
+	}
+	l.resetModelTimer()
+
+	vec, err := l.modelCtx.GetEmbeddings(text)
+	if err != nil {
+		return nil, fmt.Errorf("embed: %w", err)
+	}
+	return vec, nil
+}
+
+// EmbedSimilarTagValues embeds the query and cosine-scans EV records.
+// Returns top-K similar tag-value compounds with paths resolved.
+// R1297, R1298
+func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, error) {
+	queryVec, err := l.EmbedQuery(query)
+	if err != nil {
+		return nil, err
+	}
+
+	evs, err := l.db.store.ScanTagValueEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan EV records: %w", err)
+	}
+
+	// Cosine similarity against all EV records
+	type scored struct {
+		tvid  uint64
+		score float64
+	}
+	var scores []scored
+	for tvid, vec := range evs {
+		s := cosineSimilarity(queryVec, vec)
+		if s > 0.3 {
+			scores = append(scores, scored{tvid, s})
+		}
+	}
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i].score > scores[j].score
+	})
+	if len(scores) > k {
+		scores = scores[:k]
+	}
+
+	// Resolve tvid → tag, value, paths
+	// TODO: need a reverse lookup from tvid to tag+value.
+	// For now, scan V records to build the mapping.
+	var matches []TagMatch
+	tagValues := l.buildTvidMap()
+	for _, s := range scores {
+		tv, ok := tagValues[s.tvid]
+		if !ok {
+			continue
+		}
+		paths := l.resolveTagValuePaths(tv.Tag, tv.Value)
+		if len(paths) == 0 {
+			continue
+		}
+		matches = append(matches, TagMatch{
+			Tag:   tv.Tag,
+			Value: tv.Value,
+			Count: len(paths),
+			Score: s.score,
+			Paths: paths,
+		})
+	}
+	return matches, nil
+}
+
+// buildTvidMap scans V records to build tvid → TagAlt mapping.
+// This is needed until we store tvid→tag+value in a reverse index.
+func (l *Librarian) buildTvidMap() map[uint64]TagAlt {
+	// TODO: implement by scanning V records and reading appended tvid.
+	// For now return empty — this will be filled in when V records
+	// gain the appended tvid.
+	return nil
+}
+
+func (l *Librarian) ensureModel() error {
+	if l.model != nil {
+		return nil
+	}
+	model, err := llama.LoadModel(l.modelPath)
+	if err != nil {
+		return fmt.Errorf("load model %s: %w", l.modelPath, err)
+	}
+	ctx, err := model.NewContext(
+		llama.WithEmbeddings(),
+		llama.WithContext(2048),
+	)
+	if err != nil {
+		model.Close()
+		return fmt.Errorf("create context: %w", err)
+	}
+	l.model = model
+	l.modelCtx = ctx
+	log.Printf("librarian: loaded embedding model %s", filepath.Base(l.modelPath))
+	return nil
+}
+
+func (l *Librarian) resetModelTimer() {
+	if l.modelTimer != nil {
+		l.modelTimer.Stop()
+	}
+	l.modelTimer = time.AfterFunc(l.modelTTL, func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.unloadModel()
+	})
+}
+
+func (l *Librarian) unloadModel() {
+	if l.modelCtx != nil {
+		l.modelCtx.Close()
+		l.modelCtx = nil
+	}
+	if l.model != nil {
+		l.model.Close()
+		l.model = nil
+		log.Printf("librarian: unloaded embedding model")
+	}
+	if l.modelTimer != nil {
+		l.modelTimer.Stop()
+		l.modelTimer = nil
+	}
+}
+
+// cosineSimilarity computes cosine similarity between two float32 vectors.
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
 }
 
 // --- Helpers ---

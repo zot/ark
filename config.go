@@ -29,6 +29,7 @@ type Config struct {
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
 	SessionTTL      string            `toml:"session_ttl,omitempty"`    // R646: duration string, default "30s"
 	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
+	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
 	Schedule        ScheduleConfig    `toml:"schedule"`                 // R853, R854
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`

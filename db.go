@@ -452,6 +452,7 @@ func (db *DB) Path() string { return db.dbPath }
 
 // Config returns the current configuration.
 func (db *DB) Config() *Config { return db.config }
+func (db *DB) Store() *Store   { return db.store }
 
 // ConfigPath returns the path to ark.toml.
 func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") }
@@ -993,6 +994,7 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 	}
 	arkLabels := map[byte]string{
 		'D': "tag-defs",
+		'E': "embeddings",
 		'F': "file-tags",
 		'I': "settings",
 		'M': "missing",

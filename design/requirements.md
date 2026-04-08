@@ -1970,3 +1970,57 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Content Template Scrolling
 - **R1266:** `content-markdown.html` sets `overflow: auto !important` on `html, body` to override theme `overflow: hidden`
 - **R1267:** (inferred) Theme CSS sets `overflow: hidden` on `html, body` for the Frictionless single-page app; standalone pages like `/content/` need to opt out
+
+## Feature: Tag Value Embeddings
+**Source:** specs/tag-embeddings.md
+
+### Model Configuration
+- **R1274:** `tag_model` field in ark.toml specifies the GGUF embedding model filename
+- **R1275:** The path is relative to the database directory (`~/.ark/`)
+- **R1276:** If `tag_model` is empty or the file doesn't exist, embedding is disabled — trigram fuzzy is the fallback
+- **R1277:** The model is loaded by the Librarian on first embedding query
+- **R1278:** The model stays warm in memory; unloaded on TTL expiry with no queries
+- **R1279:** (inferred) Next query after TTL expiry reloads the model
+
+### Tag Value IDs
+- **R1280:** Each unique (tag, value) pair gets a sequential tag-value-id (varint)
+- **R1281:** The tag-value-id is appended to the V record value after the packed fileids
+- **R1282:** The ID counter (`next_tvid`) is stored as an ark LMDB setting (`I` prefix)
+- **R1283:** The tag-value-id is stable: assigned on first index, reused if the same (tag, value) pair persists
+- **R1284:** (inferred) On rebuild, tag-value-ids are reassigned from 1
+
+### What Gets Embedded
+- **R1285:** Tag names are embedded with hyphens converted to spaces (`design-decision` → "design decision")
+- **R1286:** Tag-value compounds are embedded as `"tagname: value"` with colon preserved and hyphens in tag name converted to spaces
+- **R1287:** Tag names are identified by tag-name-id (sequential varint, counter in `I` prefix as `next_tnid`)
+- **R1288:** (inferred) Tag-name-ids are assigned from T records during embedding batch
+
+### Embedding Storage
+- **R1289:** ET records store tag name embeddings: key `ET[tag_name_id: varint]`, value raw float32 vector (768 × 4 = 3072 bytes)
+- **R1290:** EV records store tag-value compound embeddings: key `EV[tag_value_id: varint]`, value raw float32 vector (3072 bytes)
+- **R1291:** (inferred) ET and EV use two-byte prefixes ("ET", "EV") to avoid collision with existing single-byte prefixes
+
+### Embedding Lifecycle
+- **R1292:** Batch embed after reconcile: scan V and T records that lack corresponding E records, embed in the write goroutine
+- **R1293:** Incremental: new V records created during indexing are queued for embedding; the next reconcile batch picks them up
+- **R1294:** `ark rebuild` drops and regenerates all ET and EV records alongside V records
+- **R1295:** (inferred) The embedding batch runs in the write goroutine to avoid blocking the main actor
+
+### Query Path
+- **R1296:** Embed the query string with the warm model (~50ms)
+- **R1297:** Brute-force cosine scan all EV records, return top-K (tag, value, score) tuples
+- **R1298:** Results have the same shape as FuzzyMatchTags output — drops into the existing Librarian pipeline
+- **R1299:** The Librarian offers both trigram fuzzy (no model) and embedding similarity (with model)
+- **R1300:** The `--fuzzy` CLI flag gains an `--embed` counterpart; the HTTP fuzzy endpoint accepts a `mode` parameter
+- **R1301:** (inferred) When both are available, embedding is the default with trigram as fallback
+
+### CLI
+- **R1302:** `ark embed TEXT` embeds a text string and prints the vector as JSON
+- **R1303:** `ark embed --bench tags` embeds all tag values, reports per-value and total timing
+- **R1304:** `ark embed --bench chunks` reads chunks from random indexed files, embeds them, reports timing
+- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
+
+### Build
+- **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
+- **R1307:** The go workspace includes a local gollama with Vulkan-compiled llama.cpp
+- **R1308:** (inferred) For non-Zen 2 platforms, the standard CPU gollama build should work without Vulkan

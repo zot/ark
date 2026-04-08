@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1289, R1275, R1276, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1290, R1291, R1292, R1293, R1294, R1295
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -102,6 +102,23 @@ ark-level settings, and tag tracking.
 - End: time.Time
 - Text: string — descriptive text after date
 
+### Tag Value ID Allocation (R1280-R1284)
+- AllocTagValueID() uint64: atomically increment and return the
+  next tag-value-id from `I` prefix (`next_tvid` setting).
+- AllocTagNameID() uint64: atomically increment and return the
+  next tag-name-id from `I` prefix (`next_tnid` setting).
+
+### Embedding Records (R1289-R1294)
+- WriteTagNameEmbedding(tnid uint64, vec []float32): write ET record
+- WriteTagValueEmbedding(tvid uint64, vec []float32): write EV record
+- ReadTagNameEmbedding(tnid uint64) ([]float32, error): read ET record
+- ReadTagValueEmbedding(tvid uint64) ([]float32, error): read EV record
+- ScanTagNameEmbeddings() (map[uint64][]float32, error): scan all ET records
+- ScanTagValueEmbeddings() (map[uint64][]float32, error): scan all EV records
+- MissingTagNameEmbeddings() []uint64: T records with IDs lacking ET records
+- MissingTagValueEmbeddings() []uint64: V records with IDs lacking EV records
+- DropEmbeddings(): delete all ET and EV records (for rebuild)
+
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern
 
@@ -109,3 +126,4 @@ ark-level settings, and tag tracking.
 - seq-add.md
 - seq-search.md
 - seq-server-startup.md
+- seq-tag-embed.md

@@ -117,6 +117,8 @@ func main() {
 		cmdBundleCp(args)
 	case "dismiss":
 		cmdDismiss(args)
+	case "embed":
+		cmdEmbed(args)
 	case "fetch":
 		cmdFetch(args)
 	case "files":
@@ -192,6 +194,7 @@ Commands:
               remove-pattern, show-why, add-strategy
   cp          Extract embedded files matching a glob pattern
   dismiss     Dismiss missing files
+  embed       Embed text or benchmark embedding model
   fetch       Return full contents of an indexed file
   files       List indexed files
   grams       Show trigrams for a query (active/inactive, frequency)
@@ -1236,6 +1239,89 @@ Options:`)
 		fmt.Print(pretty.String())
 	}
 	fmt.Println()
+}
+
+// CRC: crc-CLI.md | R1302-R1305
+func cmdEmbed(args []string) {
+	fs := flag.NewFlagSet("embed", flag.ExitOnError)
+	bench := fs.String("bench", "", "benchmark mode: tags or chunks")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark embed [options] <text>
+
+Embed text using the configured tag model. Prints the vector as JSON.
+
+Options:
+  --bench tags     Embed all tag values, report timing
+  --bench chunks   Embed random file chunks, report timing`)
+		fs.PrintDefaults()
+	}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fs.Usage()
+		os.Exit(0)
+	}
+	fs.Parse(args)
+
+	withDB(func(db *ark.DB) {
+		lib := ark.NewLibrarian(db, arkDir)
+		if lib == nil {
+			fatal(fmt.Errorf("claude not on PATH"))
+		}
+		if !lib.EmbeddingAvailable() {
+			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
+		}
+
+		if *bench == "tags" {
+			// Benchmark: embed all tag values
+			tags, err := db.TagList()
+			if err != nil {
+				fatal(err)
+			}
+			var totalValues int
+			start := time.Now()
+			for _, tc := range tags {
+				values, err := db.Store().QueryTagValues(tc.Tag, "")
+				if err != nil {
+					continue
+				}
+				for _, v := range values {
+					text := strings.ReplaceAll(tc.Tag, "-", " ") + ": " + v.Value
+					_, err := lib.EmbedQuery(text)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "error embedding @%s: %s: %v\n", tc.Tag, v.Value[:min(30, len(v.Value))], err)
+						continue
+					}
+					totalValues++
+				}
+			}
+			elapsed := time.Since(start)
+			fmt.Printf("embedded %d tag values in %v (%.1f ms/value)\n",
+				totalValues, elapsed, float64(elapsed.Milliseconds())/float64(max(totalValues, 1)))
+			return
+		}
+
+		if *bench == "chunks" {
+			fmt.Println("chunk benchmarking not yet implemented")
+			return
+		}
+
+		// Single text embedding
+		rest := fs.Args()
+		if len(rest) < 1 {
+			fs.Usage()
+			os.Exit(1)
+		}
+		text := strings.Join(rest, " ")
+		vec, err := lib.EmbedQuery(text)
+		if err != nil {
+			fatal(err)
+		}
+		out, err := json.Marshal(vec)
+		if err != nil {
+			fatal(err)
+		}
+		os.Stdout.Write(out)
+		fmt.Fprintln(os.Stdout)
+	})
 }
 
 func cmdServe(args []string) {

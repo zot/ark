@@ -7,8 +7,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +66,8 @@ const (
 	prefixTagFile    = 'F'
 	prefixTagDef     = 'D'
 	prefixTagValue   = 'V'
+	prefixEmbedTag   = "ET" // R1289: tag name embeddings
+	prefixEmbedValue = "EV" // R1290: tag-value compound embeddings
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -964,4 +968,166 @@ func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
 		return err
 	})
 	return counts, err
+}
+
+// --- Tag Value ID allocation (R1280-R1284) ---
+
+const nextTvidKey = "next_tvid"
+const nextTnidKey = "next_tnid"
+
+// AllocTagValueID atomically increments and returns the next tag-value-id.
+// CRC: crc-Store.md | R1280, R1282
+func (s *Store) AllocTagValueID() (uint64, error) {
+	return s.allocID(nextTvidKey)
+}
+
+// AllocTagNameID atomically increments and returns the next tag-name-id.
+// CRC: crc-Store.md | R1287
+func (s *Store) AllocTagNameID() (uint64, error) {
+	return s.allocID(nextTnidKey)
+}
+
+func (s *Store) allocID(settingsKey string) (uint64, error) {
+	settings, err := s.GetSettings()
+	if err != nil {
+		return 0, err
+	}
+	idStr := settings.Extra[settingsKey]
+	var id uint64
+	if idStr != "" {
+		id, _ = strconv.ParseUint(idStr, 10, 64)
+	}
+	id++
+	if settings.Extra == nil {
+		settings.Extra = make(map[string]string)
+	}
+	settings.Extra[settingsKey] = strconv.FormatUint(id, 10)
+	if err := s.PutSettings(settings); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// --- Embedding records (R1289-R1294) ---
+
+func embedTagKey(tnid uint64) []byte {
+	key := []byte(prefixEmbedTag)
+	return encodeVarint(key, tnid)
+}
+
+func embedValueKey(tvid uint64) []byte {
+	key := []byte(prefixEmbedValue)
+	return encodeVarint(key, tvid)
+}
+
+// WriteTagNameEmbedding writes an ET record.
+// CRC: crc-Store.md | R1289
+func (s *Store) WriteTagNameEmbedding(tnid uint64, vec []float32) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, embedTagKey(tnid), float32ToBytes(vec), 0)
+	})
+}
+
+// WriteTagValueEmbedding writes an EV record.
+// CRC: crc-Store.md | R1290
+func (s *Store) WriteTagValueEmbedding(tvid uint64, vec []float32) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, embedValueKey(tvid), float32ToBytes(vec), 0)
+	})
+}
+
+// ReadTagNameEmbedding reads an ET record.
+func (s *Store) ReadTagNameEmbedding(tnid uint64) ([]float32, error) {
+	var vec []float32
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, embedTagKey(tnid))
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		vec = bytesToFloat32(v)
+		return nil
+	})
+	return vec, err
+}
+
+// ReadTagValueEmbedding reads an EV record.
+func (s *Store) ReadTagValueEmbedding(tvid uint64) ([]float32, error) {
+	var vec []float32
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, embedValueKey(tvid))
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		vec = bytesToFloat32(v)
+		return nil
+	})
+	return vec, err
+}
+
+// ScanTagNameEmbeddings returns all ET records as tnid → vector.
+func (s *Store) ScanTagNameEmbeddings() (map[uint64][]float32, error) {
+	return s.scanEmbeddings([]byte(prefixEmbedTag))
+}
+
+// ScanTagValueEmbeddings returns all EV records as tvid → vector.
+func (s *Store) ScanTagValueEmbeddings() (map[uint64][]float32, error) {
+	return s.scanEmbeddings([]byte(prefixEmbedValue))
+}
+
+func (s *Store) scanEmbeddings(prefix []byte) (map[uint64][]float32, error) {
+	result := make(map[uint64][]float32)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) <= len(prefix) {
+				return nil
+			}
+			id, _ := binary.Uvarint(k[len(prefix):])
+			if id > 0 {
+				result[id] = bytesToFloat32(v)
+			}
+			return nil
+		})
+	})
+	return result, err
+}
+
+// DropEmbeddings deletes all ET and EV records.
+// CRC: crc-Store.md | R1294
+func (s *Store) DropEmbeddings() error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		for _, prefix := range [][]byte{[]byte(prefixEmbedTag), []byte(prefixEmbedValue)} {
+			// Delete all keys with this prefix
+			if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+				return cur.Del(0)
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// --- float32 ↔ bytes conversion ---
+
+func float32ToBytes(vec []float32) []byte {
+	buf := make([]byte, len(vec)*4)
+	for i, f := range vec {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
+
+func bytesToFloat32(b []byte) []float32 {
+	n := len(b) / 4
+	vec := make([]float32, n)
+	for i := range n {
+		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return vec
 }
