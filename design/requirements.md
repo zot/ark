@@ -1914,3 +1914,59 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1232:** Content templates are patched on disk at startup by `flib.InjectAllThemeBlocks` — no per-request theme injection
 - **R1233:** JS bundle imports use cache-busting `?v=mtime` query parameter via `{{.BundleHash}}` template field
 - **R1234:** `install/html/` contains canonical content templates with `<!-- #frictionless -->` markers, copied to cache by Makefile
+
+## Feature: Spectral Search
+**Source:** specs/spectral-search.md
+
+### Haiku Session
+- **R1235:** The server manages Haiku interactions via `claude --print --model haiku --output-format json` invocations
+- **R1236:** Each invocation uses `--system-prompt-file ~/.ark/searching/CLAUDE.md --tools ""`
+- **R1268:** `--system-prompt-file` replaces all default Claude Code instructions — the Librarian is a specialized oracle, not a general assistant
+- **R1269:** `--tools ""` disables all tool access — the Librarian only generates text responses
+- **R1237:** Conversation context persists via `--resume SESSION_ID` — the session ID from the first invocation is stored and reused
+- **R1238:** Two spawns per expansion: one for expand (step 1), one for curate (step 3). Claude's prompt caching pays system prompt tokens once per session.
+- **R1239:** The session ID expires after a TTL with no requests — next expansion starts a fresh conversation
+- **R1240:** (inferred) A fresh session creates a new conversation context, paying cache creation tokens again
+- **R1241:** (inferred) If a claude invocation fails, the session ID is cleared and the next request starts fresh
+- **R1242:** (inferred) The Librarian is managed by a closure actor to serialize access from concurrent HTTP handlers
+
+### Expansion Pipeline
+- **R1243:** `POST /search/expand` accepts JSON body with `mode`, `tag`, `value` fields
+- **R1244:** Returns JSON `{results: [{path, strategy, chunks, source: "expansion"}]}` — curated search results marked as expansion-sourced
+- **R1245:** The pipeline runs server-side in three steps: Haiku expands → search → Haiku curates
+- **R1246:** For tag mode (Phase A): step 2 is trigram fuzzy matching against V records (tag-value index in LMDB)
+- **R1270:** Haiku expand step: given user's tag name and value, suggests alternative tag names and values
+- **R1271:** Fuzzy match step: each alternative is fuzzy-matched against V records, producing (tag, value, count, score) tuples
+- **R1272:** Haiku curate step: sees matched tag/value pairs with scores, prunes false positives, returns curated subset
+- **R1273:** Server fetches actual search results for the curated tags before returning to the client
+- **R1247:** (inferred) If the co-process is unavailable (not on PATH, spawn failure), the endpoint returns 503
+
+### Availability
+- **R1248:** Server checks for `claude` on PATH at startup
+- **R1249:** `GET /status` includes `spectral: true/false` capability flag
+- **R1250:** (inferred) The check is a one-time `exec.LookPath("claude")` at startup, not per-request
+
+### Searching Directory
+- **R1251:** `~/.ark/searching/CLAUDE.md` contains the system prompt for the Haiku expansion session
+- **R1252:** `ark init` creates `~/.ark/searching/` and writes a default `CLAUDE.md` if the directory doesn't exist
+- **R1253:** The CLAUDE.md file is read at co-process spawn time via the `--system-prompt-file` flag
+- **R1254:** (inferred) Changes to CLAUDE.md take effect on next co-process spawn (after TTL expiry or crash)
+
+### Two-Phase Results (UI)
+- **R1255:** Phase 1: literal search fires immediately on user input (existing behavior, ~300ms debounce)
+- **R1256:** Phase 2: when spectral mode is on, an expansion request fires after a longer debounce (~1-2 seconds)
+- **R1257:** Phase 2 results are interspersed among Phase 1 results, not shown in a separate section
+- **R1258:** Phase 2 results are visually highlighted (accent color border or background tint) to distinguish from literal matches
+- **R1259:** Phase 2 results height-transition in to avoid jarring layout shifts
+- **R1260:** If expansion returns no new results beyond what Phase 1 found, no visual change occurs
+- **R1261:** A new keystroke cancels any in-flight expansion request
+
+### Toggle
+- **R1262:** A button in the search bar toggles spectral expansion on/off
+- **R1263:** Default state is off
+- **R1264:** Toggle state persists in localStorage
+- **R1265:** If `spectral: false` in server status, the toggle button is hidden
+
+### Content Template Scrolling
+- **R1266:** `content-markdown.html` sets `overflow: auto !important` on `html, body` to override theme `overflow: hidden`
+- **R1267:** (inferred) Theme CSS sets `overflow: hidden` on `html, body` for the Frictionless single-page app; standalone pages like `/content/` need to opt out

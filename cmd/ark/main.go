@@ -35,6 +35,23 @@ import (
 // arkDir is the ark directory, set from --dir flag (global, parsed before subcommand).
 var arkDir string
 
+// R1251, R1252: Default system prompt for spectral search expansion.
+const defaultSearchPrompt = `You are a search expansion oracle for a tag-based knowledge system.
+
+When given a tag name and value, suggest alternative tag names and values
+that a human might search for when looking for related content.
+
+Rules:
+- Return ONLY a JSON array of objects with "tag" and "value" fields
+- Suggest 3-8 alternatives
+- Include synonyms, related concepts, broader/narrower terms
+- Tag names are lowercase, hyphenated (e.g., "design", "architecture", "decision")
+- Values can be any text
+
+When given a numbered list of matches and asked which are relevant,
+return ONLY a JSON array of numbers (e.g., [1, 3, 5]).
+`
+
 // stringSlice is a flag.Value that accumulates repeated flag values.
 type stringSlice []string
 
@@ -189,7 +206,7 @@ Commands:
   resolve     Dismiss unresolved files by pattern
   scan        Walk directories, index new files
   schedule    Query and modify scheduled events (requires server)
-  search      Search the index
+  search      Search the index (subcommands: expand)
   serve       Start the server
   subscribe   Manage tag subscriptions (requires server)
   listen      Long-poll for tag notifications (requires server)
@@ -484,6 +501,15 @@ func cmdInit(args []string) {
 	if err := ark.Init(arkDir, opts); err != nil {
 		fatal(err)
 	}
+
+	// R1252: Create ~/.ark/searching/ with default CLAUDE.md
+	searchDir := filepath.Join(arkDir, "searching")
+	claudeFile := filepath.Join(searchDir, "CLAUDE.md")
+	if _, err := os.Stat(claudeFile); os.IsNotExist(err) {
+		os.MkdirAll(searchDir, 0755)
+		os.WriteFile(claudeFile, []byte(defaultSearchPrompt), 0644)
+	}
+
 	fmt.Printf("initialized ark database at %s\n", arkDir)
 }
 
@@ -676,6 +702,11 @@ func cmdRefresh(args []string) {
 }
 
 func cmdSearch(args []string) {
+	// Subcommand dispatch
+	if len(args) > 0 && args[0] == "expand" {
+		cmdSearchExpand(args[1:])
+		return
+	}
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	k := fs.Int("k", 20, "max results")
 	scores := fs.Bool("scores", false, "show scores")
@@ -1015,6 +1046,196 @@ func printTagResultsDirect(tags []ark.TagResult, scores bool) {
 			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
 		}
 	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-spectral-expand.md | R1243
+func cmdSearchExpand(args []string) {
+	fs := flag.NewFlagSet("search expand", flag.ExitOnError)
+	wait := fs.Bool("wait", false, "lotto tube: block until expansion requests arrive, print as JSON")
+	fuzzy := fs.String("fuzzy", "", "fuzzy match: JSON array of {tag,value} alternatives")
+	search := fs.String("search", "", "search: JSON array of {tag,value} pairs, return chunk results")
+	resultFlag := fs.String("result", "", "post result: REQUEST_ID (result JSON as second arg)")
+	errorFlag := fs.String("error", "", "post error: REQUEST_ID=ERROR_MESSAGE")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark search expand [options] <tag> [value]
+
+Expand a tag search via spectral search (Haiku-powered query expansion).
+Requires a running server with claude on PATH.
+
+Subcommands (for sidecar agent use):
+  --wait              Lotto tube: block until expansion requests arrive
+  --fuzzy JSON        Fuzzy match: JSON array of {tag,value} alternatives
+  --search JSON       Search: JSON array of curated {tag,value} pairs, return chunks
+  --result ID JSON    Post result JSON for request ID (JSON as trailing arg)
+  --error ID=MESSAGE  Post error for request ID
+
+Options:`)
+		fs.PrintDefaults()
+	}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fs.Usage()
+		os.Exit(0)
+	}
+	fs.Parse(args)
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+
+	if *wait {
+		// Lotto tube: block until requests arrive
+		data, err := proxyRaw(client, "GET", "/search/expand/wait", nil)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *fuzzy != "" {
+		// Fuzzy match alternatives against V records
+		var alts []struct {
+			Tag   string `json:"tag"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(*fuzzy), &alts); err != nil {
+			fatal(fmt.Errorf("parsing fuzzy JSON: %w", err))
+		}
+		data, err := proxyRaw(client, "POST", "/search/expand/fuzzy", alts)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *search != "" {
+		// Search curated tag/value pairs, return chunk-level results
+		var alts []struct {
+			Tag   string `json:"tag"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(*search), &alts); err != nil {
+			fatal(fmt.Errorf("parsing search JSON: %w", err))
+		}
+		data, err := proxyRaw(client, "POST", "/search/expand/search", alts)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *resultFlag != "" {
+		// Search curated pairs and post result for request ID in one step
+		rest := fs.Args()
+		if len(rest) == 0 {
+			fatal(fmt.Errorf("--result requires curated JSON as trailing argument"))
+		}
+		// Search the curated pairs
+		var alts []struct {
+			Tag   string `json:"tag"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(rest[0]), &alts); err != nil {
+			fatal(fmt.Errorf("parsing curated JSON: %w", err))
+		}
+		searchData, err := proxyRaw(client, "POST", "/search/expand/search", alts)
+		if err != nil {
+			// Post error if search fails
+			proxyOK(client, "POST", "/search/expand/result", map[string]any{
+				"id":    *resultFlag,
+				"error": err.Error(),
+			})
+			fatal(err)
+		}
+		// Post search results
+		err = proxyOK(client, "POST", "/search/expand/result", map[string]any{
+			"id":      *resultFlag,
+			"results": json.RawMessage(searchData),
+		})
+		if err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	if *errorFlag != "" {
+		// Post error for a request ID: --error ID=MESSAGE
+		parts := strings.SplitN(*errorFlag, "=", 2)
+		id := parts[0]
+		msg := "unknown error"
+		if len(parts) > 1 {
+			msg = parts[1]
+		}
+		err := proxyOK(client, "POST", "/search/expand/result", map[string]any{
+			"id":    id,
+			"error": msg,
+		})
+		if err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	// Interactive: queue expansion and wait for result
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	tag := rest[0]
+	value := ""
+	if len(rest) > 1 {
+		value = strings.Join(rest[1:], " ")
+	}
+
+	// Queue the request
+	var queued struct {
+		RequestID string `json:"requestId"`
+	}
+	err := proxyDecode(client, "POST", "/search/expand", map[string]string{
+		"tag":   tag,
+		"value": value,
+	}, &queued)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Fprintf(os.Stderr, "queued expansion %s — waiting for sidecar agent...\n", queued.RequestID)
+
+	// Stubbornly poll for result — retry until done, like the lotto tube
+	var result struct {
+		ID      string          `json:"id"`
+		Results json.RawMessage `json:"results"`
+		Error   string          `json:"error,omitempty"`
+		Done    bool            `json:"done"`
+	}
+	for {
+		err = proxyDecode(client, "GET", "/search/expand/result/"+queued.RequestID, nil, &result)
+		if err != nil {
+			// Server may have restarted — sleep and retry
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		if result.Done {
+			break
+		}
+		// Not done yet — the server-side WaitForResult timed out.
+		// Sleep briefly and retry.
+		time.Sleep(250 * time.Millisecond)
+	}
+	if result.Error != "" {
+		fatal(fmt.Errorf("expansion failed: %s", result.Error))
+	}
+	// Pretty-print the result
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, result.Results, "", "  "); err != nil {
+		fmt.Print(string(result.Results))
+	} else {
+		fmt.Print(pretty.String())
+	}
+	fmt.Println()
 }
 
 func cmdServe(args []string) {

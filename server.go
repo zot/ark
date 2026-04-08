@@ -55,6 +55,7 @@ type Server struct {
 	sessions        map[string]*Session // R641: named sessions, autocreated on demand
 	pubsub          *PubSub             // R799: subscription registry
 	scheduler       *EventScheduler     // R805: time-based event queue
+	librarian       *Librarian          // R1235: Haiku co-process for spectral search
 }
 
 // ServeOpts controls server behavior.
@@ -144,6 +145,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 	schedDir := filepath.Join(dbPath, "schedule")
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
 
+	// R1235, R1248: Create librarian for spectral search (nil if claude not on PATH)
+	lib := NewLibrarian(db)
+	if lib != nil {
+		log.Printf("spectral search: claude available, librarian started")
+	}
+
 	srv := &Server{
 		db:        db,
 		listener:  listener,
@@ -151,6 +158,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		noScan:    opts.NoScan,
 		pubsub:    ps,
 		scheduler: sched,
+		librarian: lib,
 	}
 
 	// Wire pubsub into the indexer so tag extraction publishes events
@@ -274,6 +282,14 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /tags/values", srv.handleTagValues)
 	mux.HandleFunc("POST /save", srv.handleSave)
 	mux.HandleFunc("POST /set-tags", srv.handleSetTags)
+	if srv.librarian != nil {
+		mux.HandleFunc("POST /search/expand", srv.librarian.HandleExpand)
+		mux.HandleFunc("GET /search/expand/wait", srv.librarian.HandleExpandWait)
+		mux.HandleFunc("POST /search/expand/result", srv.librarian.HandleExpandResult)
+		mux.HandleFunc("GET /search/expand/result/{id}", srv.librarian.HandleExpandGet)
+		mux.HandleFunc("POST /search/expand/fuzzy", srv.librarian.HandleFuzzyMatch)
+		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
+	}
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
@@ -801,6 +817,7 @@ func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		result.status.UIPort = srv.uiPort
 	}
 	result.status.UIIndexing = len(srv.currentlyIndexing()) > 0
+	result.status.Spectral = srv.librarian.Available()
 
 	if result.dbCounts != nil {
 		writeJSON(w, struct {

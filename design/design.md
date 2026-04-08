@@ -114,7 +114,7 @@ Lifetime = server lifetime.
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
-- [x] crc-Server.md → `server.go`, `watcher.go`
+- [ ] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
@@ -142,6 +142,8 @@ Lifetime = server lifetime.
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
+- [x] crc-Librarian.md → `librarian.go`
+- [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -240,4 +242,7 @@ Lifetime = server lifetime.
 - [ ] A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared
 - [ ] O50: No unit tests for content view/edit toggle: renderMarkdownForContent, contentLinkRewriter, ink-mde integration
 - [ ] A28: R1200-R1215, R1222-R1224 (tag search panel UI) — TypeScript-only, no Go CRC card. Traced to specs/tag-search-panel.md
+- [ ] A29: R1255-R1265 (spectral search UI — two-phase results, toggle, throttling) — TypeScript-only, no Go CRC card. Traced to specs/spectral-search.md
 - [ ] O51: No unit tests for handleShowInFolder endpoint
+- [ ] O52: No unit tests for Librarian: QueueExpand, DrainPending, WaitForRequest, WaitForResult, FuzzyMatchTags, fuzzyMatch, fuzzyMatchWords, trigrams
+- [ ] O53: No unit tests for expansion CLI subcommands: --wait, --fuzzy, --search, --result, --error

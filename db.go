@@ -975,6 +975,8 @@ type StatusInfo struct {
 	UIRunning  bool `json:"uiRunning"`
 	UIPort     int  `json:"uiPort,omitempty"`
 	UIIndexing bool `json:"uiIndexing"`
+	// R1249: spectral search availability
+	Spectral bool `json:"spectral"`
 }
 
 // StatusDB returns per-prefix record counts for both subdatabases.
