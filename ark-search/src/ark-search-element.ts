@@ -569,7 +569,12 @@ export class ArkSearchElement extends HTMLElement {
 
     // Saved chips R1450-R1451
     const presets = loadPresets();
-    for (const [name, preset] of Object.entries(presets)) {
+    const entries = Object.entries(presets);
+    const MAX_VISIBLE = 3;
+    const visible = entries.slice(0, MAX_VISIBLE);
+    const overflow = entries.slice(MAX_VISIBLE);
+
+    const makeChip = (name: string, preset: FilterPreset): HTMLElement => {
       const chip = document.createElement("span");
       chip.className = "ark-search-chip";
 
@@ -578,7 +583,6 @@ export class ArkSearchElement extends HTMLElement {
       label.textContent = name;
       label.title = `Load "${name}" filters`;
       label.addEventListener("click", () => {
-        // R1450, R1453: restore filter groups, reassign IDs
         this.filterGroups = preset.groups.map(g => ({
           ...g,
           id: nextFilterId++,
@@ -602,7 +606,35 @@ export class ArkSearchElement extends HTMLElement {
 
       chip.appendChild(label);
       chip.appendChild(removeBtn);
-      this.chipBar.appendChild(chip);
+      return chip;
+    };
+
+    for (const [name, preset] of visible) {
+      this.chipBar.appendChild(makeChip(name, preset));
+    }
+
+    // Overflow dropdown
+    if (overflow.length > 0) {
+      const moreBtn = document.createElement("button");
+      moreBtn.className = "ark-search-chip-more";
+      moreBtn.textContent = "\u2026";
+      moreBtn.title = `${overflow.length} more saved filters`;
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "ark-search-chip-dropdown";
+      dropdown.style.display = "none";
+      for (const [name, preset] of overflow) {
+        dropdown.appendChild(makeChip(name, preset));
+      }
+
+      moreBtn.addEventListener("click", () => {
+        const show = dropdown.style.display === "none";
+        dropdown.style.display = show ? "flex" : "none";
+        moreBtn.classList.toggle("active", show);
+      });
+
+      this.chipBar.appendChild(moreBtn);
+      this.chipBar.appendChild(dropdown);
     }
   }
 
