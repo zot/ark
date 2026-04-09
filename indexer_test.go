@@ -54,12 +54,17 @@ func TestExtractTagsIgnoresEmailsAndMentions(t *testing.T) {
 }
 
 func TestExtractTagsAdjacentAt(t *testing.T) {
-	// @bar: after non-whitespace is still a valid tag — the @ sigil
-	// plus trailing colon is sufficient disambiguation
+	// R1320: @bar: after non-whitespace is NOT a tag — embedded in larger token
 	content := []byte("foo@bar: value")
 	tags := ExtractTags(content)
+	if tags["bar"] != 0 {
+		t.Errorf("expected bar=0 (mention, no preceding space), got %d", tags["bar"])
+	}
+	// But with preceding space it IS a tag
+	content = []byte("foo @bar: value")
+	tags = ExtractTags(content)
 	if tags["bar"] != 1 {
-		t.Errorf("expected bar=1, got %d", tags["bar"])
+		t.Errorf("expected bar=1 (preceded by space), got %d", tags["bar"])
 	}
 }
 
@@ -110,6 +115,71 @@ func TestExtractTagsCompound(t *testing.T) {
 	}
 	if tags["item"] != 1 {
 		t.Errorf("expected item=1, got %d", tags["item"])
+	}
+}
+
+func TestExtractTagsMentionQuotes(t *testing.T) {
+	// R1321: tags inside backticks are mentions
+	content := []byte("see `@decision: use LMDB` for details")
+	tags := ExtractTags(content)
+	if tags["decision"] != 0 {
+		t.Errorf("backtick-quoted @decision: should be skipped, got %d", tags["decision"])
+	}
+	// R1321: tags inside double quotes are mentions
+	content = []byte(`she said "@note: important" today`)
+	tags = ExtractTags(content)
+	if tags["note"] != 0 {
+		t.Errorf("double-quoted @note: should be skipped, got %d", tags["note"])
+	}
+	// Unquoted on same line is fine
+	content = []byte("the `example` shows @decision: use LMDB")
+	tags = ExtractTags(content)
+	if tags["decision"] != 1 {
+		t.Errorf("even-quote @decision: should be extracted, got %d", tags["decision"])
+	}
+}
+
+func TestExtractTagValuesMentionFenced(t *testing.T) {
+	// R1322: tags inside fenced code blocks are mentions (markdown only)
+	content := []byte("text\n```\n@decision: use LMDB\n```\n@status: open\n")
+	values := ExtractTagValues(content, "markdown")
+	found := map[string]bool{}
+	for _, v := range values {
+		found[v.Tag] = true
+	}
+	if found["decision"] {
+		t.Error("@decision inside fenced code should be skipped in markdown strategy")
+	}
+	if !found["status"] {
+		t.Error("@status outside fence should be extracted")
+	}
+	// Non-markdown strategy ignores fences
+	values = ExtractTagValues(content, "lines")
+	found = map[string]bool{}
+	for _, v := range values {
+		found[v.Tag] = true
+	}
+	if !found["decision"] {
+		t.Error("@decision inside fence should be extracted for non-markdown strategy")
+	}
+}
+
+func TestExtractTagValuesMentionIndented(t *testing.T) {
+	// R1323: indented code blocks in markdown
+	content := []byte("normal\n    @code: example\n\t@tab: indented\n@real: tag\n")
+	values := ExtractTagValues(content, "markdown")
+	found := map[string]bool{}
+	for _, v := range values {
+		found[v.Tag] = true
+	}
+	if found["code"] {
+		t.Error("4-space-indented @code: should be skipped in markdown")
+	}
+	if found["tab"] {
+		t.Error("tab-indented @tab: should be skipped in markdown")
+	}
+	if !found["real"] {
+		t.Error("@real at line start should be extracted")
 	}
 }
 

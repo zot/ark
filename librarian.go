@@ -385,6 +385,37 @@ func (l *Librarian) HandleExpandSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
+// HandleEmbedMatch runs embedding similarity search for tag values.
+// POST /search/expand/embed
+// CRC: crc-Librarian.md | R1297, R1300
+func (l *Librarian) HandleEmbedMatch(w http.ResponseWriter, r *http.Request) {
+	if !l.EmbeddingAvailable() {
+		http.Error(w, "embedding model not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+		K     int    `json:"k"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Query == "" {
+		http.Error(w, "query is required", http.StatusBadRequest)
+		return
+	}
+	if req.K <= 0 {
+		req.K = 20
+	}
+	matches, err := l.EmbedSimilarTagValues(req.Query, req.K)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, matches)
+}
+
 // resolveTagValuePaths resolves V record fileids to file paths,
 // filtering out paths that match the default search exclude patterns.
 func (l *Librarian) resolveTagValuePaths(tag, value string) []string {
@@ -474,30 +505,73 @@ func (l *Librarian) EmbedBatch(texts []string) ([][]float32, error) {
 	return vecs, nil
 }
 
-// EmbedSimilarTagValues embeds the query and cosine-scans EV records.
-// Returns top-K similar tag-value compounds with paths resolved.
-// R1297, R1298
+// EmbedSimilarTagValues does two-step narrowing: cosine scan T record
+// embeddings to find top-K tags, then cosine scan EV records only for
+// those tags. Single query embedding for both steps (hybrid approach).
+// Multiply tag × value scores. R1297, R1298, R1315, R1316
 func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, error) {
 	queryVec, err := l.EmbedQuery(query)
 	if err != nil {
 		return nil, err
 	}
 
+	// Step 1: cosine scan T record embeddings (~270 tags)
+	tagEmbeds, err := l.db.store.ScanTagNameEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan T embeddings: %w", err)
+	}
+	type tagScored struct {
+		tag   string
+		score float64
+	}
+	var tagScores []tagScored
+	for tag, vec := range tagEmbeds {
+		s := cosineSimilarity(queryVec, vec)
+		if s > 0.2 {
+			tagScores = append(tagScores, tagScored{tag, s})
+		}
+	}
+	sort.Slice(tagScores, func(i, j int) bool {
+		return tagScores[i].score > tagScores[j].score
+	})
+	// Keep top tags for narrowing (generous limit — actual filtering is by combined score)
+	maxTags := max(k*3, 20)
+	if len(tagScores) > maxTags {
+		tagScores = tagScores[:maxTags]
+	}
+	matchedTags := make(map[string]float64, len(tagScores))
+	for _, ts := range tagScores {
+		matchedTags[ts.tag] = ts.score
+	}
+
+	// Step 2: cosine scan EV records only for matched tags
 	evs, err := l.db.store.ScanTagValueEmbeddings()
 	if err != nil {
 		return nil, fmt.Errorf("scan EV records: %w", err)
 	}
+	tagValues, err := l.db.store.ScanVRecordTvids()
+	if err != nil {
+		return nil, fmt.Errorf("scan V record tvids: %w", err)
+	}
 
-	// Cosine similarity against all EV records
 	type scored struct {
 		tvid  uint64
 		score float64
 	}
 	var scores []scored
 	for tvid, vec := range evs {
-		s := cosineSimilarity(queryVec, vec)
-		if s > 0.3 {
-			scores = append(scores, scored{tvid, s})
+		tv, ok := tagValues[tvid]
+		if !ok {
+			continue
+		}
+		tagScore, inSet := matchedTags[tv.Tag]
+		if !inSet {
+			continue
+		}
+		valScore := cosineSimilarity(queryVec, vec)
+		combined := tagScore * valScore // R1316
+		if combined > 0.1 {
+			scores = append(scores, scored{tvid, combined})
 		}
 	}
 	sort.Slice(scores, func(i, j int) bool {
@@ -508,10 +582,6 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 	}
 
 	// Resolve tvid → tag, value, paths
-	tagValues, err := l.db.store.ScanVRecordTvids()
-	if err != nil {
-		return nil, fmt.Errorf("scan V record tvids: %w", err)
-	}
 	var matches []TagMatch
 	for _, s := range scores {
 		tv, ok := tagValues[s.tvid]
@@ -531,6 +601,90 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 		})
 	}
 	return matches, nil
+}
+
+// BatchEmbed scans for missing tag name and tag value embeddings,
+// embeds them in batches, and writes the results to LMDB.
+// Called post-reconcile from the write goroutine. R1292, R1293, R1295
+func (l *Librarian) BatchEmbed() error {
+	if !l.EmbeddingAvailable() {
+		return nil
+	}
+
+	// Scan for missing embeddings
+	missingTags, err := l.db.store.MissingTagNameEmbeddings()
+	if err != nil {
+		return fmt.Errorf("scan missing tag embeddings: %w", err)
+	}
+	missingTvids, err := l.db.store.MissingTagValueEmbeddings()
+	if err != nil {
+		return fmt.Errorf("scan missing value embeddings: %w", err)
+	}
+	if len(missingTags) == 0 && len(missingTvids) == 0 {
+		return nil
+	}
+	log.Printf("librarian: embedding %d tag names + %d tag values", len(missingTags), len(missingTvids))
+
+	// Resolve tvids to text for embedding
+	var tvidMap map[uint64]TagAlt
+	if len(missingTvids) > 0 {
+		tvidMap, err = l.db.store.ScanVRecordTvids()
+		if err != nil {
+			return fmt.Errorf("scan V record tvids: %w", err)
+		}
+	}
+
+	// Batch embed tag names (hyphens → spaces)
+	batchSize := 50
+	for i := 0; i < len(missingTags); i += batchSize {
+		end := min(i+batchSize, len(missingTags))
+		batch := missingTags[i:end]
+		texts := make([]string, len(batch))
+		for j, tag := range batch {
+			texts[j] = strings.ReplaceAll(tag, "-", " ")
+		}
+		vecs, err := l.EmbedBatch(texts)
+		if err != nil {
+			return fmt.Errorf("embed tag names batch: %w", err)
+		}
+		for j, tag := range batch {
+			if err := l.db.store.WriteTagNameEmbedding(tag, vecs[j]); err != nil {
+				log.Printf("librarian: write tag embedding %q: %v", tag, err)
+			}
+		}
+	}
+
+	// Batch embed tag values ("tag: value" with hyphens → spaces in tag)
+	for i := 0; i < len(missingTvids); i += batchSize {
+		end := min(i+batchSize, len(missingTvids))
+		batch := missingTvids[i:end]
+		texts := make([]string, 0, len(batch))
+		validTvids := make([]uint64, 0, len(batch))
+		for _, tvid := range batch {
+			tv, ok := tvidMap[tvid]
+			if !ok {
+				continue
+			}
+			text := strings.ReplaceAll(tv.Tag, "-", " ") + ": " + tv.Value
+			texts = append(texts, text)
+			validTvids = append(validTvids, tvid)
+		}
+		if len(texts) == 0 {
+			continue
+		}
+		vecs, err := l.EmbedBatch(texts)
+		if err != nil {
+			return fmt.Errorf("embed tag values batch: %w", err)
+		}
+		for j, tvid := range validTvids {
+			if err := l.db.store.WriteTagValueEmbedding(tvid, vecs[j]); err != nil {
+				log.Printf("librarian: write value embedding tvid=%d: %v", tvid, err)
+			}
+		}
+	}
+
+	log.Printf("librarian: embedding complete")
+	return nil
 }
 
 func (l *Librarian) ensureModel() error {

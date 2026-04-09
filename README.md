@@ -56,6 +56,50 @@ auto-querying on every message in a conversation.
   index across every Claude session on your machine. CLI commands
   proxy automatically.
 
+## What Is a Tag
+
+A tag is `@name:` followed by a value that runs to the end of the
+line. The `@` must be at the start of a line or preceded by a space --
+anything else (like an email address) is ignored.
+
+```
+@decision: use LMDB for the index
+@status: open
+@pattern: closure-actor
+```
+
+Tags can appear anywhere in a file and will be indexed. Some
+features have stricter requirements: messaging reads only the tag
+block at the top of the file, and scheduled events need `@ack:`
+in the same chunk as the event tag. For simple annotation, tags
+work anywhere.
+
+**Compound tags** put multiple tags on one line. Each tag captures
+everything to the end of line, but embedded tags are also extracted
+individually:
+
+```
+@ref: notes/ideas.md @topic: actor model
+```
+
+This produces two entries: `ref: notes/ideas.md @topic: actor model`
+and `topic: actor model`.
+
+**Tag definitions** use the special `@tag:` tag to document your
+vocabulary:
+
+```
+@tag: decision A choice that was made and the reasoning behind it
+@tag: pattern A recurring approach worth naming
+```
+
+These show up in `ark tag defs` and in the search UI's tag completion.
+
+**What gets filtered out.** Tags inside backtick or double-quote
+pairs are treated as mentions (someone discussing a tag, not using
+it) and are not indexed. In markdown files, tags inside fenced code
+blocks or indented code blocks are also skipped.
+
 ## Install
 
 ```

@@ -289,6 +289,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /search/expand/result/{id}", srv.librarian.HandleExpandGet)
 		mux.HandleFunc("POST /search/expand/fuzzy", srv.librarian.HandleFuzzyMatch)
 		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
+		mux.HandleFunc("POST /search/expand/embed", srv.librarian.HandleEmbedMatch)
 	}
 
 	log.Printf("ark server listening on %s", socketPath)
@@ -460,6 +461,14 @@ func (srv *Server) doReconcile(db *DB) {
 			log.Println("reconcile: complete")
 		})
 	})
+	// Batch embed missing tag embeddings after reconcile. R1292, R1295
+	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() {
+		db.enqueueWrite(func(_ *microfts2.DB) {
+			if err := srv.librarian.BatchEmbed(); err != nil {
+				log.Printf("reconcile: batch embed error: %v", err)
+			}
+		})
+	}
 	log.Println("reconcile: queued")
 }
 
@@ -1170,7 +1179,7 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	tagValues := ExtractTagValues([]byte(req.Content))
+	tagValues := ExtractTagValues([]byte(req.Content), strategy)
 	if srv.pubsub != nil {
 		srv.pubsub.PublishAndWatch("", req.Path, tagValues)
 	}
@@ -1213,7 +1222,7 @@ func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content), strategy))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1271,7 +1280,7 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content)))
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content), req.Strategy))
 	}
 	w.WriteHeader(http.StatusOK)
 }

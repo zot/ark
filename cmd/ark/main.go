@@ -529,6 +529,11 @@ func cmdRebuild(args []string) {
 	// scan to re-index all sources
 	cmdScan(nil)
 	fmt.Println("rebuild complete")
+	// R1294: embeddings regenerate on next server start (batch embed post-reconcile)
+	cfg, _ := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+	if cfg != nil && cfg.TagModel != "" {
+		fmt.Println("tag embeddings will regenerate on next 'ark serve'")
+	}
 }
 
 func cmdAdd(args []string) {

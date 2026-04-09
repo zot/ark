@@ -127,6 +127,8 @@ ark-level settings, and tag tracking.
 - ScanVRecordTvids() (map[uint64]TagAlt, error): scan V prefix, parse tvid
   from each key's trailing bytes. Returns tvid → {tag, value} mapping. (R1310)
 - MissingTagNameEmbeddings() []string: T records where len(value) == 4
+- MissingTagValueEmbeddings() []uint64: scan V records for tvids, return
+  those without corresponding EV records. (R1292)
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
   EV records (for rebuild)
 

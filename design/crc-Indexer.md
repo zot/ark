@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325
 
 Coordinates adding, removing, and refreshing files across both
 engines. microfts2 first, microvec second. Extracts tags from
@@ -50,6 +50,14 @@ file content and updates the Store.
   return map[string]uint32 of tagname → count. Tag name is the part
   between @ and : (lowercase). Matches anywhere in content (inline tags
   are valid).
+- isMention(content []byte, atPos int, markdown bool): check whether a
+  tag match at the given byte offset is a mention (not a real tag).
+  Four heuristics in order: (1) no preceding whitespace and not at line
+  start → mention. (2) Odd quote count (backtick + double-quote) before
+  `@` on the same line → mention. (3) markdown only: inside fenced code
+  block (track ``` / ~~~ fence delimiters above the line) → mention.
+  (4) markdown only: line starts with 4+ spaces or tab → mention.
+  (R1317-R1325)
 - ExtractTagDefs(content []byte): scan content for `@tag: <name> <description>`
   lines. First word after `@tag:` is the tag name, rest is description.
   Returns map[string]string (tagname → description).

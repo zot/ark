@@ -2028,7 +2028,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1302:** `ark embed TEXT` embeds a text string and prints the vector as JSON
 - **R1303:** `ark embed --bench tags` embeds all tag values, reports per-value and total timing
 - **R1304:** `ark embed --bench chunks` reads chunks from random indexed files, embeds them, reports timing
-- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
+n- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
 
 ### Build
 - **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
@@ -2036,8 +2036,12 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1308:** (inferred) For non-Zen 2 platforms, the standard CPU gollama build should work without Vulkan
 
 ### Use vs Mention Filtering
-- **R1309:** Tags inside matched quotes (backtick or double-quote) are mentions — not indexed at all (no V, T, F, or EV records)
-- **R1310:** Heuristic: count matching quote characters before the `@` on the same line; odd count = mention, even/zero = annotation
-- **R1311:** (supersedes prior) Mentioned tags are skipped entirely during extraction — they are prose about tags, not tags
-- **R1312:** Only annotation (non-mentioned) tags produce V, T, F, and EV records
-- **R1313:** (inferred) The check runs during tag extraction in ExtractTags and ExtractTagValues
+- **R1317:** Mentioned tags are skipped entirely during extraction — no V, T, F, or EV records
+- **R1318:** Only annotation (non-mentioned) tags produce V, T, F, and EV records
+- **R1319:** The check runs during tag extraction in ExtractTags and ExtractTagValues
+- **R1320:** Heuristic 1 (all strategies): a `@` not at line start and not preceded by whitespace is not a tag (embedded in a larger token, e.g. email address)
+- **R1321:** Heuristic 2 (all strategies): count backtick and double-quote characters before the `@` on the same line; odd count = mention (inside quotes), even/zero = annotation
+- **R1322:** Heuristic 3 (markdown strategy only): tags inside fenced code blocks (``` or ~~~) are mentions. Track fence state across lines within the chunk.
+- **R1323:** Heuristic 4 (markdown strategy only): lines starting with 4+ spaces or a tab are indented code blocks; tags on these lines are mentions
+- **R1324:** (inferred) Heuristics are applied in order; if any matches, the tag is skipped
+- **R1325:** (inferred) Heuristics 1 and 2 apply to all indexing strategies; heuristics 3 and 4 apply only to the markdown strategy

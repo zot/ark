@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Indexer.md
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"github.com/zot/microfts2"
@@ -26,12 +27,13 @@ type chunkAccumulator struct {
 	tagValues []TagValue
 	tags      map[string]uint32
 	defs      map[string]string
+	strategy  string
 }
 
 func (a *chunkAccumulator) callback(chunkText string) {
 	b := []byte(chunkText)
 	a.chunks = append(a.chunks, b)
-	tv := ExtractTagValues(b)
+	tv := ExtractTagValues(b, a.strategy)
 	a.tagValues = append(a.tagValues, tv...)
 	for k, v := range TagCountsFromValues(tv) {
 		if a.tags == nil {
@@ -134,7 +136,7 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 // and tag extraction, eliminating the splitChunks double-read.
 // CRC: crc-Indexer.md | R1113, R1123
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
-	var acc chunkAccumulator
+	acc := chunkAccumulator{strategy: strategy}
 	fileid, _, err := idx.fts.AddFileWithContent(path, strategy,
 		microfts2.WithChunkCallback(acc.callback))
 	if err != nil {
@@ -264,7 +266,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 			prep.fileSize = fi.Size()
 			prep.modTime = fi.ModTime().UnixNano()
 			tagBytes := tagWindowForAppend(data, info.FileLength)
-			prep.tagValues = ExtractTagValues(tagBytes)
+			prep.tagValues = ExtractTagValues(tagBytes, prep.strategy)
 			prep.tags = TagCountsFromValues(prep.tagValues)
 			prep.defs = ExtractTagDefs(tagBytes)
 			return prep, nil
@@ -325,7 +327,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 // are extracted from clean chunk text via callback (R1114, R1124, R1126).
 // For append prep with pre-extracted tags, those are used instead.
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
-	var acc chunkAccumulator
+	acc := chunkAccumulator{strategy: prep.strategy}
 	fileid, _, err := idx.fts.ReindexWithContent(prep.path, prep.strategy,
 		microfts2.WithChunkCallback(acc.callback))
 	if err != nil {
@@ -480,7 +482,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	// Tags and defs: incremental — scan from previous newline to catch boundary-split tags
 	if idx.store != nil {
 		tagBytes := tagWindowForAppend(data, info.FileLength)
-		tagValues := ExtractTagValues(tagBytes)
+		tagValues := ExtractTagValues(tagBytes, strategy)
 		if err := idx.store.AppendTags(fileid, TagCountsFromValues(tagValues)); err != nil {
 			return fmt.Errorf("append tags %s: %w", path, err)
 		}
@@ -717,16 +719,24 @@ func TagCountsFromValues(values []TagValue) map[string]uint32 {
 
 // ExtractTags scans content for @tag: patterns and returns tag counts.
 // Tag names are stored lowercase. The colon is required (disambiguates
-// from emails and mentions).
+// from emails and mentions). Skips mentioned tags per R1317-R1325.
 func ExtractTags(content []byte) map[string]uint32 {
-	matches := tagRegex.FindAllSubmatch(content, -1)
-	if len(matches) == 0 {
+	locs := tagRegex.FindAllSubmatchIndex(content, -1)
+	if len(locs) == 0 {
 		return nil
 	}
+	markdown := false // ExtractTags doesn't know strategy; callers use ExtractTagValues
 	tags := make(map[string]uint32)
-	for _, m := range matches {
-		name := strings.ToLower(string(m[1]))
+	for _, loc := range locs {
+		atPos := loc[0] // byte offset of '@'
+		if isMention(content, atPos, markdown) {
+			continue
+		}
+		name := strings.ToLower(string(content[loc[2]:loc[3]]))
 		tags[name]++
+	}
+	if len(tags) == 0 {
+		return nil
 	}
 	return tags
 }
@@ -739,21 +749,30 @@ func ExtractTags(content []byte) map[string]uint32 {
 var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
 
 // ExtractTagValues scans content for @tag: patterns and returns name+value pairs.
-// Used by both tag counting (ExtractTags) and pubsub delivery.
+// Used by both tag counting and pubsub delivery. Skips mentioned tags
+// per R1317-R1325. Strategy controls whether markdown-specific heuristics
+// (fenced/indented code) apply.
 // Compound tags on a single line produce entries for each embedded tag,
 // with outer tags keeping their full value. (Resolves O26.)
-func ExtractTagValues(content []byte) []TagValue {
-	matches := tagValueRegex.FindAllSubmatch(content, -1)
-	if len(matches) == 0 {
+func ExtractTagValues(content []byte, strategy string) []TagValue {
+	markdown := strategy == "markdown"
+	locs := tagValueRegex.FindAllSubmatchIndex(content, -1)
+	if len(locs) == 0 {
 		return nil
 	}
-	values := make([]TagValue, 0, len(matches))
-	for _, m := range matches {
-		val := m[2]
+	values := make([]TagValue, 0, len(locs))
+	for _, loc := range locs {
+		atPos := loc[0]
+		if isMention(content, atPos, markdown) {
+			continue
+		}
+		tag := strings.ToLower(string(content[loc[2]:loc[3]]))
+		val := content[loc[4]:loc[5]]
 		values = append(values, TagValue{
-			Tag:   strings.ToLower(string(m[1])),
+			Tag:   tag,
 			Value: strings.TrimSpace(string(val)),
 		})
+		// Peel compound tags from the value portion
 		for sub := tagValueRegex.FindSubmatch(val); sub != nil; sub = tagValueRegex.FindSubmatch(val) {
 			val = sub[2]
 			values = append(values, TagValue{
@@ -763,6 +782,77 @@ func ExtractTagValues(content []byte) []TagValue {
 		}
 	}
 	return values
+}
+
+// isMention checks whether a tag at the given byte offset is a mention
+// (not a real annotation). Four heuristics applied in order.
+// CRC: crc-Indexer.md | R1317-R1325
+func isMention(content []byte, atPos int, markdown bool) bool {
+	// R1320: no preceding whitespace and not at line start → embedded in token
+	if atPos > 0 {
+		prev := content[atPos-1]
+		if prev != ' ' && prev != '\t' && prev != '\n' {
+			return true
+		}
+	}
+
+	// R1321: odd quote count before @ on same line → inside quotes
+	quotes := 0
+	for i := atPos - 1; i >= 0 && content[i] != '\n'; i-- {
+		if content[i] == '`' || content[i] == '"' {
+			quotes++
+		}
+	}
+	if quotes%2 != 0 {
+		return true
+	}
+
+	if !markdown {
+		return false
+	}
+
+	// R1322: inside fenced code block → mention
+	// Count fence delimiters (``` or ~~~) in lines above atPos
+	fences := 0
+	i := 0
+	for i < atPos {
+		// Find start of next line
+		lineStart := i
+		lineEnd := bytes.IndexByte(content[i:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(content)
+		} else {
+			lineEnd += i
+		}
+		if lineStart >= atPos {
+			break
+		}
+		line := content[lineStart:lineEnd]
+		trimmed := bytes.TrimLeft(line, " \t")
+		if bytes.HasPrefix(trimmed, []byte("```")) || bytes.HasPrefix(trimmed, []byte("~~~")) {
+			fences++
+		}
+		i = lineEnd + 1
+	}
+	if fences%2 != 0 {
+		return true
+	}
+
+	// R1323: indented code block (4+ spaces or tab at line start)
+	lineStart := atPos
+	for lineStart > 0 && content[lineStart-1] != '\n' {
+		lineStart--
+	}
+	if atPos-lineStart >= 4 {
+		prefix := content[lineStart : lineStart+4]
+		if prefix[0] == '\t' || (prefix[0] == ' ' && prefix[1] == ' ' && prefix[2] == ' ' && prefix[3] == ' ') {
+			return true
+		}
+	} else if lineStart < len(content) && content[lineStart] == '\t' {
+		return true
+	}
+
+	return false
 }
 
 // tagDefRegex matches @tag: definitions at line start. First word after

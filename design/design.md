@@ -247,5 +247,5 @@ Lifetime = server lifetime.
 - [ ] O51: No unit tests for handleShowInFolder endpoint
 - [ ] O52: No unit tests for Librarian: QueueExpand, DrainPending, WaitForRequest, WaitForResult, FuzzyMatchTags, fuzzyMatch, fuzzyMatchWords, trigrams
 - [ ] O53: No unit tests for expansion CLI subcommands: --wait, --fuzzy, --search, --result, --error
-- [x] D7: R1309-R1313 (use vs mention filtering for tag embeddings) — designed in spec and requirements but not yet implemented in ExtractTagValues or EV record writing
-- [ ] D8: R1309-R1313 (use vs mention filtering) — skip mentioned tags entirely during extraction. Affects ExtractTags, ExtractTagValues, and all downstream records (T, F, V, EV)
+- [x] D7: R1317-R1325 (use vs mention filtering for tag embeddings) — designed in spec and requirements but not yet implemented in ExtractTagValues or EV record writing
+- [x] D8: R1317-R1325 (use vs mention filtering) — four heuristics: no preceding space, odd quote count (all strategies), fenced code blocks, indented code (markdown only). Skip mentioned tags during extraction — no V, T, F, or EV records.

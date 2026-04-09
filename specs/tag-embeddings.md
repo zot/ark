@@ -162,24 +162,56 @@ content.
 
 ## Use vs Mention Filtering
 
-Tags that appear inside quotes (backtick or double-quote) are
-mentions — someone discussing the tag, not using it. These should
-be indexed as V records (exact search still finds them) but
-excluded from EV embedding (semantic search ignores them).
+Tags that are mentioned (discussed, quoted, exemplified) rather
+than used (annotating content) should be skipped during extraction.
+Mentioned tags produce no V, T, F, or EV records — they are prose
+about tags, not tags.
 
-Heuristic: count matching quote characters before the `@` on
-the same line. If odd, the tag is inside a quote — it's a
-mention. Even or zero — it's a use (annotation).
+Four heuristics, applied in order. If any matches, the tag is a
+mention and is skipped.
 
-Examples:
-- `@decision: use LMDB` at line start → annotation → embed
-- `` `@decision: use LMDB` `` in backticks → mention → skip EV
-- `"@decision: use LMDB"` in quotes → mention → skip EV
-- `@note: remember this` mid-paragraph, unquoted → annotation → embed
+### 1. No preceding space (all strategies)
 
-The check runs during tag extraction (ExtractTags and
-ExtractTagValues). Mentioned tags are skipped entirely — no V,
-T, F, or EV records. They are prose about tags, not tags.
+A `@` that is not at the start of a line and not preceded by
+whitespace is part of a larger token — an email address, a
+compound identifier, etc. Not a tag. Since tag values capture
+to end of line, tags inside punctuation like `(@tag: value)`
+produce malformed values anyway.
+
+- `user@domain:` → not a tag (no space before `@`)
+- `foo@note: bar` → not a tag
+- `(@note: value)` → not a tag (value would include `)`)
+- `@note: bar` at line start → tag
+- `see @note: bar` after space → tag
+
+### 2. Odd quote count (all strategies)
+
+Count backtick and double-quote characters before the `@` on
+the same line. If the count is odd, the tag is inside a quote —
+it's a mention.
+
+- `@decision: use LMDB` → annotation (zero quotes before)
+- `` `@decision: use LMDB` `` → mention (one backtick before)
+- `"@decision: use LMDB"` → mention (one double-quote before)
+
+### 3. Fenced code block (markdown strategy only)
+
+Tags inside fenced code blocks (``` or ~~~) are examples or
+documentation, not annotations. Track fence state across lines
+within the chunk: count fence delimiters above the current line,
+odd = inside fence.
+
+### 4. Indented code block (markdown strategy only)
+
+Lines starting with 4+ spaces or a tab (in markdown context)
+are code blocks. Tags on these lines are mentions.
+
+### Interaction with strategies
+
+Heuristics 1 and 2 apply to all indexing strategies (markdown,
+lines, chat-jsonl, bracket, indent). Heuristics 3 and 4 apply
+only to the markdown strategy — indentation and fences have no
+special meaning in code files or chat logs.
 
 ## Build
 

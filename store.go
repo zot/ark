@@ -1307,6 +1307,43 @@ func (s *Store) MissingTagNameEmbeddings() ([]string, error) {
 	return missing, err
 }
 
+// MissingTagValueEmbeddings returns tvids from V records that lack EV records.
+// CRC: crc-Store.md | R1292
+func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
+	var missing []uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		// Collect all tvids from V records
+		tvids := make(map[uint64]bool)
+		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagValue)}, func(_ *lmdb.Cursor, k, _ []byte) error {
+			_, _, tvid, ok := parseVKey(k)
+			if ok && tvid > 0 {
+				tvids[tvid] = true
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		// Remove tvids that already have EV records
+		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(_ *lmdb.Cursor, k, _ []byte) error {
+			if len(k) > len(prefixEmbedValue) {
+				id, _ := binary.Uvarint(k[len(prefixEmbedValue):])
+				if id > 0 {
+					delete(tvids, id)
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		// What remains is missing
+		for tvid := range tvids {
+			missing = append(missing, tvid)
+		}
+		return nil
+	})
+	return missing, err
+}
+
 // ScanVRecordTvids scans all V records and returns tvid → {tag, value} mapping.
 // CRC: crc-Store.md | R1310
 func (s *Store) ScanVRecordTvids() (map[uint64]TagAlt, error) {
