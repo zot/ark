@@ -1,4 +1,4 @@
-// CRC: crc-HostAPI.md
+// CRC: crc-HostAPI.md | R1326-R1328
 
 /** A single chunk within a search result group. */
 export interface SearchChunk {

@@ -2045,3 +2045,44 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1323:** Heuristic 4 (markdown strategy only): lines starting with 4+ spaces or a tab are indented code blocks; tags on these lines are mentions
 - **R1324:** (inferred) Heuristics are applied in order; if any matches, the tag is skipped
 - **R1325:** (inferred) Heuristics 1 and 2 apply to all indexing strategies; heuristics 3 and 4 apply only to the markdown strategy
+
+## Feature: Markdown Viewer/Editor Component
+**Source:** specs/viewer.md
+
+### Host Integration
+- **R1326:** The viewer is a standalone CM6 component with no dependency on Frictionless or host view framework
+- **R1327:** The host passes an API object at construction with: search, tagComplete, tagValueComplete, save, navigate, setTags
+- **R1328:** The viewer never calls ark directly — the host adapts its own transport (HTTP or in-process Lua) to the API interface
+- **R1329:** Built assets (JS bundle, CSS) are placed in ~/.ark/html/ — no npm runtime dependency
+
+### Tag Parsing
+- **R1330:** Tags (`@word: value`) in the document are detected by a Lezer markdown parser extension and produce typed AST nodes
+- **R1331:** (inferred) The tag parser must not conflict with email addresses or other `@` usage — the `@word:` pattern (word chars + colon) is the disambiguator
+
+### Tag Widgets
+- **R1332:** Any tag: click opens a search panel below the line, search field shows the full tag text pre-selected, user can read results or type to refine
+- **R1333:** Schedule tags: date picker widget for the value
+- **R1334:** Status tags: dropdown with known values (open, accepted, in-progress, completed, denied, future)
+- **R1335:** Ack tags: gap-detection helpers
+- **R1336:** Widgets render inline or as line decorations using CM6 WidgetType
+
+### Tag Completion
+- **R1337:** `@` at the start of a word triggers tag name completion from the index (D records via tagComplete)
+- **R1338:** After the colon in `@tagname:`, triggers value completion from the tag index (via tagValueComplete)
+
+### ark-search Code Blocks
+- **R1339:** Fenced code blocks with `ark-search` language tag render as live search result panels
+- **R1340:** Three view modes cycle on click: both (source + results), results only, src only
+- **R1341:** Default mode order is both,results,src — initial display is the first in the list. ark-search blocks inside search results default to src,both,results (source first, no search fires until user clicks through)
+- **R1342:** Code fence accepts optional `mode=` attribute to restrict and order available modes (e.g. `mode=results` for read-only search)
+- **R1343:** Edit mode always enables all three modes regardless of the mode attribute
+- **R1344:** Markdown results render in read-only CM6 instances with tag widgets active; non-markdown results use pre-rendered HTML
+- **R1345:** Search results include complete raw chunk content (full indexed chunk, not hit context), content type, and pre-rendered HTML
+- **R1346:** Click a result to navigate (via host navigate call)
+- **R1347:** Edit the query in both/src mode, results update live
+
+### Read/Edit Mode
+- **R1348:** Default mode is read-only with markdown rendered and widgets active
+- **R1349:** Toggle to edit mode for full text editing
+- **R1350:** On save: call save(path, content), host re-indexes
+- **R1351:** Tag edits can use setTags for atomic tag block updates

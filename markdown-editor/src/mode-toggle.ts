@@ -1,4 +1,4 @@
-// CRC: crc-ModeToggle.md | Seq: seq-mode-toggle.md, seq-save.md
+// CRC: crc-ModeToggle.md | Seq: seq-mode-toggle.md, seq-save.md | R1348-R1351
 import { StateField, StateEffect } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import type { HostAPI } from "./host-api";

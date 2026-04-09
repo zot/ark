@@ -1,5 +1,5 @@
 # HostAPI
-**Requirements:** R1, R2, R3
+**Requirements:** R1326, R1327, R1328
 
 TypeScript interface defining the contract between the viewer and
 its host. The viewer receives an implementation at construction

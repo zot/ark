@@ -104,6 +104,21 @@ no tmp docs exist (HTTP 204 = proceed locally). Tags extracted
 from tmp content using the same regex as persistent files.
 Lifetime = server lifetime.
 
+### Host API Boundary (TypeScript — Markdown Editor)
+All ark communication flows through the HostAPI interface (R1326–R1328).
+The viewer imports nothing from ark or Frictionless. Every CRC card
+that needs ark data receives it via HostAPI injection at construction.
+
+### Packaging (R1329)
+Built assets (JS bundle, CSS) are placed in ~/.ark/html/ by the
+build process. No npm runtime dependency. This is a build/install
+concern, not a runtime component — no CRC card needed.
+
+### Read/Edit Mode (TypeScript — Markdown Editor)
+A shared EditorState field tracks the current mode (R1348–R1349). All
+extensions that produce interactive widgets check this field —
+widgets are active in read mode, standard CM6 editing in edit mode.
+
 ## Artifacts
 
 ### CRC Cards
@@ -145,6 +160,22 @@ Lifetime = server lifetime.
 - [x] crc-Librarian.md → `librarian.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
+
+### CRC Cards (TypeScript — Markdown Editor)
+- [x] crc-ArkTagParser.md → `markdown-editor/src/ark-tag-parser.ts`
+- [x] crc-TagWidget.md → `markdown-editor/src/tag-widget.ts`
+- [x] crc-TagCompletion.md → `markdown-editor/src/tag-completion.ts`
+- [x] crc-ArkSearchBlock.md → `markdown-editor/src/ark-search-block.ts`
+- [x] crc-SearchResultView.md → `markdown-editor/src/search-result-view.ts`
+- [x] crc-HostAPI.md → `markdown-editor/src/host-api.ts`
+- [x] crc-ModeToggle.md → `markdown-editor/src/mode-toggle.ts`
+
+### Sequences (TypeScript — Markdown Editor)
+- [x] seq-tag-click.md → `markdown-editor/src/tag-widget.ts`, `markdown-editor/src/search-result-view.ts`
+- [x] seq-tag-completion.md → `markdown-editor/src/tag-completion.ts`
+- [x] seq-ark-search-render.md → `markdown-editor/src/ark-search-block.ts`, `markdown-editor/src/search-result-view.ts`
+- [x] seq-mode-toggle.md → `markdown-editor/src/mode-toggle.ts`, `markdown-editor/src/ark-search-block.ts`
+- [x] seq-save.md → `markdown-editor/src/mode-toggle.ts`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -249,3 +280,7 @@ Lifetime = server lifetime.
 - [ ] O53: No unit tests for expansion CLI subcommands: --wait, --fuzzy, --search, --result, --error
 - [x] D7: R1317-R1325 (use vs mention filtering for tag embeddings) — designed in spec and requirements but not yet implemented in ExtractTagValues or EV record writing
 - [x] D8: R1317-R1325 (use vs mention filtering) — four heuristics: no preceding space, odd quote count (all strategies), fenced code blocks, indented code (markdown only). Skip mentioned tags during extraction — no V, T, F, or EV records.
+- [ ] O54: Tag search panel UI not yet implemented (TagSearchWidget fires search but has no panel to display results)
+- [ ] O55: innerHTML for non-markdown previews — sanitize if content is untrusted
+- [ ] O56: No search deduplication/cancellation for in-flight requests
+- [ ] A30: R1329 (packaging) is a build concern — documented in design.md cross-cutting, no CRC card needed

@@ -1,5 +1,5 @@
 # TagWidget
-**Requirements:** R7, R8, R9, R10, R11
+**Requirements:** R1332, R1333, R1334, R1335, R1336
 
 CM6 ViewPlugin that finds ArkTag nodes in the syntax tree and
 places interactive decorations on them. Different tag types get

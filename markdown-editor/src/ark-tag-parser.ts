@@ -1,4 +1,4 @@
-// CRC: crc-ArkTagParser.md
+// CRC: crc-ArkTagParser.md | R1330, R1331
 import { tags as t } from "@lezer/highlight";
 import type { MarkdownConfig, InlineContext } from "@lezer/markdown";
 

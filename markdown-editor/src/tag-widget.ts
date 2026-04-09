@@ -1,4 +1,4 @@
-// CRC: crc-TagWidget.md | Seq: seq-tag-click.md
+// CRC: crc-TagWidget.md | Seq: seq-tag-click.md | R1332-R1336
 // R1200-R1215, R1222-R1224
 import {
   EditorView,

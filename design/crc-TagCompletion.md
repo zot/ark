@@ -1,5 +1,5 @@
 # TagCompletion
-**Requirements:** R12, R13
+**Requirements:** R1337, R1338
 
 CM6 completion source that provides tag name and tag value
 autocompletion while editing.

@@ -1,4 +1,4 @@
-// CRC: crc-ArkSearchBlock.md | Seq: seq-ark-search-render.md, seq-mode-toggle.md
+// CRC: crc-ArkSearchBlock.md | Seq: seq-ark-search-render.md, seq-mode-toggle.md | R1339-R1343, R1347
 import {
   EditorView,
   Decoration,

@@ -1,5 +1,5 @@
 # SearchResultView
-**Requirements:** R19, R20, R21
+**Requirements:** R1344, R1345, R1346
 
 Renders search results from HostAPI.search(). Chooses rendering
 strategy based on content type: markdown chunks get a read-only

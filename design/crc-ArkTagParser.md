@@ -1,5 +1,5 @@
 # ArkTagParser
-**Requirements:** R5, R6
+**Requirements:** R1330, R1331
 
 Lezer markdown parser extension that recognizes `@word: value`
 patterns in document text and produces typed ArkTag AST nodes.

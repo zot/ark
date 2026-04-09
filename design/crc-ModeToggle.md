@@ -1,5 +1,5 @@
 # ModeToggle
-**Requirements:** R23, R24, R25, R26
+**Requirements:** R1348, R1349, R1350, R1351
 
 Manages the document-level read/edit mode state and the toggle
 action. Provides a StateField that other extensions check.

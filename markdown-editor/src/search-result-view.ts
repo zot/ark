@@ -1,4 +1,4 @@
-// CRC: crc-SearchResultView.md | Seq: seq-tag-click.md, seq-ark-search-render.md
+// CRC: crc-SearchResultView.md | Seq: seq-tag-click.md, seq-ark-search-render.md | R1344-R1346
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";

@@ -1,4 +1,4 @@
-// CRC: crc-TagCompletion.md | Seq: seq-tag-completion.md
+// CRC: crc-TagCompletion.md | Seq: seq-tag-completion.md | R1337, R1338
 import type {
   CompletionContext,
   CompletionResult,

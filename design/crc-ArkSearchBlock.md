@@ -1,5 +1,5 @@
 # ArkSearchBlock
-**Requirements:** R14, R15, R16, R17, R18, R22
+**Requirements:** R1339, R1340, R1341, R1342, R1343, R1347
 
 CM6 extension that manages ark-search fenced code blocks. Handles
 the three-mode cycle, mode attribute parsing, and coordinates
