@@ -51,33 +51,36 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 	if sopts.Cache != nil {
 		opts = append(opts, microfts2.WithChunkCache(sopts.Cache))
 	}
+	opts = append(opts, sopts.extraOpts...)
 	return opts
 }
 
 // SearchOpts controls search behavior.
 type SearchOpts struct {
-	K               int                   // max results (default 20)
-	Scores          bool                  // include scores in output
-	After           time.Time             // only results newer than this (zero = no filter)
-	Before          time.Time             // only results older than this (zero = no filter)
-	About           string                // semantic query (microvec)
-	Contains        string                // exact match query (microfts2)
-	Regex           []string              // regex patterns (first drives SearchRegex, all are AND post-filters)
-	ExceptRegex     []string              // regex subtract post-filters (any match rejects)
-	LikeFile        string                // file path — use content as FTS density query
-	Tags            bool                  // output extracted tags instead of content
-	Filter          []string              // content-based positive filters (FTS queries, intersect)
-	Except          []string              // content-based negative filters (FTS queries, subtract)
-	FilterFiles     []string              // path-based positive filters (glob patterns, intersect)
-	ExcludeFiles    []string              // path-based negative filters (glob patterns, subtract)
-	FilterFileTags  []string              // tag-based positive filters (tag names, intersect)
-	ExcludeFileTags []string              // tag-based negative filters (tag names, subtract)
-	Score           string                // scoring strategy: "", "auto", "coverage", "density"
-	Multi           bool                  // run all four strategies via SearchMulti
-	Fuzzy           bool                  // R744: typo-tolerant search via SearchFuzzy
-	Proximity       bool                  // enable proximity reranking
-	NoTmp           bool                  // R673: exclude tmp:// documents
-	Cache           *microfts2.ChunkCache // R652: session-provided cache (nil = per-query)
+	K               int                      // max results (default 20)
+	Scores          bool                     // include scores in output
+	After           time.Time                // only results newer than this (zero = no filter)
+	Before          time.Time                // only results older than this (zero = no filter)
+	About           string                   // semantic query (microvec)
+	Contains        string                   // exact match query (microfts2)
+	Regex           []string                 // regex patterns (first drives SearchRegex, all are AND post-filters)
+	ExceptRegex     []string                 // regex subtract post-filters (any match rejects)
+	LikeFile        string                   // file path — use content as FTS density query
+	Tags            bool                     // output extracted tags instead of content
+	Filter          []string                 // content-based positive filters (FTS queries, intersect)
+	Except          []string                 // content-based negative filters (FTS queries, subtract)
+	FilterFiles     []string                 // path-based positive filters (glob patterns, intersect)
+	ExcludeFiles    []string                 // path-based negative filters (glob patterns, subtract)
+	FilterFileTags  []string                 // tag-based positive filters (tag names, intersect)
+	ExcludeFileTags []string                 // tag-based negative filters (tag names, subtract)
+	Score           string                   // scoring strategy: "", "auto", "coverage", "density"
+	Multi           bool                     // run all four strategies via SearchMulti
+	Fuzzy           bool                     // R744: typo-tolerant search via SearchFuzzy
+	Proximity       bool                     // enable proximity reranking
+	NoTmp           bool                     // R673: exclude tmp:// documents
+	Cache           *microfts2.ChunkCache    // R652: session-provided cache (nil = per-query)
+	ChunkFilters    []ChunkFilterRow         // R1402: stacked filter rows for chunk-level filtering
+	extraOpts       []microfts2.SearchOption // built from ChunkFilters at search time
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -382,6 +385,156 @@ func validateSearchFlags(opts SearchOpts) error {
 		}
 	}
 	return nil
+}
+
+// --- Chunk-level filter closures ---
+// CRC: crc-Searcher.md | R1395-R1401
+
+// ChunkFilterRow describes a single stacked filter row from the UI.
+type ChunkFilterRow struct {
+	Polarity string `json:"polarity"` // "with" or "without"
+	Mode     string `json:"mode"`     // "contains", "fuzzy", "tag"
+	Query    string `json:"query"`
+}
+
+// resolveChunkLocation resolves a CRecord to (path, range) using the fileIDPaths map. R1395
+func resolveChunkLocation(crec microfts2.CRecord, paths map[uint64]string) (string, string, bool) {
+	if len(crec.FileIDs) == 0 {
+		return "", "", false
+	}
+	fileid := crec.FileIDs[0]
+	path, ok := paths[fileid]
+	if !ok {
+		return "", "", false
+	}
+	frec, err := crec.FileRecord(fileid)
+	if err != nil {
+		return "", "", false
+	}
+	for _, entry := range frec.Chunks {
+		if entry.ChunkID == crec.ChunkID {
+			return path, entry.Location, true
+		}
+	}
+	return "", "", false
+}
+
+// chunkText reads chunk text using the cache, returning nil on miss. R1401
+func chunkText(crec microfts2.CRecord, cache *microfts2.ChunkCache, paths map[uint64]string) []byte {
+	path, loc, ok := resolveChunkLocation(crec, paths)
+	if !ok {
+		return nil
+	}
+	text, ok := cache.ChunkText(path, loc)
+	if !ok {
+		return nil
+	}
+	return text
+}
+
+// ContainsChunkFilter returns a ChunkFilter that substring-matches chunk text. R1397
+func ContainsChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uint64]string) microfts2.ChunkFilter {
+	lower := strings.ToLower(term)
+	return func(crec microfts2.CRecord) bool {
+		text := chunkText(crec, cache, paths)
+		if text == nil {
+			return true // R1401: can't verify → keep
+		}
+		return strings.Contains(strings.ToLower(string(text)), lower)
+	}
+}
+
+// FuzzyChunkFilter returns a ChunkFilter that fuzzy-matches chunk text. R1398
+func FuzzyChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uint64]string) microfts2.ChunkFilter {
+	return func(crec microfts2.CRecord) bool {
+		text := chunkText(crec, cache, paths)
+		if text == nil {
+			return true // R1401: can't verify → keep
+		}
+		results := fuzzyMatch(term, []string{string(text)}, 0.01)
+		return len(results) > 0 && results[0].score > 0
+	}
+}
+
+// TagChunkFilter returns a ChunkFilter that matches by extracted tags. R1399
+// Mode: "exact", "regex", or "fuzzy".
+func TagChunkFilter(tag, value, mode string, cache *microfts2.ChunkCache, paths map[uint64]string) microfts2.ChunkFilter {
+	return func(crec microfts2.CRecord) bool {
+		text := chunkText(crec, cache, paths)
+		if text == nil {
+			return true // R1401: can't verify → keep
+		}
+		tvs := ExtractTagValues(text, "")
+		for _, tv := range tvs {
+			if !matchTag(tv.Tag, tag, mode) {
+				continue
+			}
+			if value == "" {
+				return true // tag present, any value
+			}
+			if matchTag(tv.Value, value, mode) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// matchTag compares a candidate against a pattern using the given mode.
+func matchTag(candidate, pattern, mode string) bool {
+	switch mode {
+	case "regex":
+		re, err := regexp.Compile("(?i)" + pattern)
+		if err != nil {
+			return candidate == pattern
+		}
+		return re.MatchString(candidate)
+	case "fuzzy":
+		results := fuzzyMatch(pattern, []string{candidate}, 0.3)
+		return len(results) > 0 && results[0].score > 0
+	default: // exact
+		return strings.EqualFold(candidate, pattern)
+	}
+}
+
+// BuildChunkFilters converts UI filter rows into microfts2 search options. R1403
+func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths map[uint64]string) []microfts2.SearchOption {
+	var opts []microfts2.SearchOption
+	for _, row := range rows {
+		if row.Query == "" {
+			continue
+		}
+		// Regex mode uses dedicated microfts2 options (more efficient). R1404
+		if row.Mode == "regex" {
+			if row.Polarity == "without" {
+				opts = append(opts, microfts2.WithExceptRegex(row.Query))
+			} else {
+				opts = append(opts, microfts2.WithRegexFilter(row.Query))
+			}
+			continue
+		}
+		var filter microfts2.ChunkFilter
+		switch row.Mode {
+		case "contains":
+			filter = ContainsChunkFilter(row.Query, cache, paths)
+		case "fuzzy":
+			filter = FuzzyChunkFilter(row.Query, cache, paths)
+		case "tag":
+			// tag mode query: "tagname:value" or just "tagname"
+			tag, value, _ := strings.Cut(row.Query, ":")
+			tag = strings.TrimSpace(tag)
+			value = strings.TrimSpace(value)
+			filter = TagChunkFilter(tag, value, "exact", cache, paths)
+		default:
+			continue
+		}
+		if row.Polarity == "without" { // R1400
+			orig := filter
+			filter = func(crec microfts2.CRecord) bool { return !orig(crec) }
+		}
+		opts = append(opts, microfts2.WithChunkFilter(filter))
+	}
+	return opts
 }
 
 // CRC: crc-Searcher.md
@@ -1060,6 +1213,14 @@ func (s *Searcher) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEnt
 // sorted by score (descending). Each chunk includes a pre-rendered HTML preview.
 // CRC: crc-Searcher.md
 func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
+	// R1402-R1403: build chunk filter options from stacked filter rows
+	if len(opts.ChunkFilters) > 0 && opts.Cache != nil {
+		paths, pathErr := s.fts.FileIDPaths()
+		if pathErr == nil { // R1396: computed once per search
+			opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(opts.ChunkFilters, opts.Cache, paths)...)
+		}
+	}
+
 	var results []SearchResultEntry
 	var err error
 	if opts.Multi {

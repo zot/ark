@@ -1491,16 +1491,17 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 // CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1069-R1075
 func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Query           string   `json:"query"`
-		Mode            string   `json:"mode"`
-		K               int      `json:"k"`
-		Session         string   `json:"session"`
-		FilterFiles     []string `json:"filter_files"`
-		ExcludeFiles    []string `json:"exclude_files"`
-		FilterFileTags  []string `json:"filter_file_tags"`
-		ExcludeFileTags []string `json:"exclude_file_tags"`
-		Filter          []string `json:"filter"`
-		Except          []string `json:"except"`
+		Query           string           `json:"query"`
+		Mode            string           `json:"mode"`
+		K               int              `json:"k"`
+		Session         string           `json:"session"`
+		FilterFiles     []string         `json:"filter_files"`
+		ExcludeFiles    []string         `json:"exclude_files"`
+		FilterFileTags  []string         `json:"filter_file_tags"`
+		ExcludeFileTags []string         `json:"exclude_file_tags"`
+		Filter          []string         `json:"filter"`
+		Except          []string         `json:"except"`
+		ChunkFilters    []ChunkFilterRow `json:"chunk_filters"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1517,6 +1518,7 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	opts.ExcludeFileTags = req.ExcludeFileTags
 	opts.Filter = req.Filter
 	opts.Except = req.Except
+	opts.ChunkFilters = req.ChunkFilters
 
 	query := req.Query
 	switch req.Mode {

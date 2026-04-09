@@ -2146,3 +2146,23 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1392:** Each result group tracks its source phase for visual treatment
 - **R1393:** Phase 2 candidates shown with muted color and a border/icon indicating candidate status
 - **R1394:** Phase 3 promoted results change to full color; rejected results get strike-through but remain visible
+
+## Feature: Chunk-Level Filter Closures
+**Source:** specs/chunk-filters.md
+
+### resolveChunkLocation
+- **R1395:** `resolveChunkLocation` resolves a CRecord to (path, range) using a pre-computed fileIDPaths map
+- **R1396:** The fileIDPaths map is computed once per search from FileIDPaths(), not per-chunk
+
+### Filter Constructors
+- **R1397:** `ContainsChunkFilter(term, cache, paths)` returns a ChunkFilter that substring-matches chunk text (case-insensitive)
+- **R1398:** `FuzzyChunkFilter(term, cache, paths)` returns a ChunkFilter that fuzzy-matches chunk text (typo-tolerant)
+- **R1399:** `TagChunkFilter(tag, value, mode, cache, paths)` returns a ChunkFilter that extracts tags from chunk text and matches by tag/value
+- **R1400:** `without` polarity negates the filter: `func(c) { return !filter(c) }`
+- **R1401:** If chunk text cannot be read (cache miss), the filter returns true (keep — can't verify, don't reject)
+
+### Endpoint Integration
+- **R1402:** `handleSearchGrouped` gains a `chunk_filters` request field: array of `{polarity, mode, query}` objects
+- **R1403:** Each chunk filter row becomes a `WithChunkFilter` search option; multiple filters AND together
+- **R1404:** Regex-mode chunk filters use `WithRegexFilter`/`WithExceptRegex` instead of ChunkFilter (more efficient)
+- **R1405:** Files-mode filters continue to use the existing `resolveFilters` path (ID-level, not chunk-level)

@@ -129,7 +129,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
-- [ ] crc-Server.md → `server.go`, `watcher.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
