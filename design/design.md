@@ -161,6 +161,10 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 
+### CRC Cards (TypeScript — Ark Search Component)
+- [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
+- [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`
+
 ### CRC Cards (TypeScript — Markdown Editor)
 - [x] crc-ArkTagParser.md → `markdown-editor/src/ark-tag-parser.ts`
 - [x] crc-TagWidget.md → `markdown-editor/src/tag-widget.ts`
@@ -171,7 +175,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-ModeToggle.md → `markdown-editor/src/mode-toggle.ts`
 
 ### Sequences (TypeScript — Markdown Editor)
-- [x] seq-tag-click.md → `markdown-editor/src/tag-widget.ts`, `markdown-editor/src/search-result-view.ts`
+- [x] seq-tag-click.md → `markdown-editor/src/tag-widget.ts`, `markdown-editor/src/search-result-view.ts`, `ark-search/src/ark-search-element.ts`
 - [x] seq-tag-completion.md → `markdown-editor/src/tag-completion.ts`
 - [x] seq-ark-search-render.md → `markdown-editor/src/ark-search-block.ts`, `markdown-editor/src/search-result-view.ts`
 - [x] seq-mode-toggle.md → `markdown-editor/src/mode-toggle.ts`, `markdown-editor/src/ark-search-block.ts`
@@ -284,3 +288,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O55: innerHTML for non-markdown previews — sanitize if content is untrusted
 - [ ] O56: No search deduplication/cancellation for in-flight requests
 - [ ] A30: R1329 (packaging) is a build concern — documented in design.md cross-cutting, no CRC card needed
+
+- [ ] A31: R1368-R1371 (package structure) — build/config concern, no CRC card needed
+- [ ] A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed

@@ -1,4 +1,4 @@
-// CRC: crc-TagWidget.md | Seq: seq-tag-click.md | R1332-R1336
+// CRC: crc-TagWidget.md | Seq: seq-tag-click.md | R1332-R1336, R1377
 // R1200-R1215, R1222-R1224
 import {
   EditorView,
@@ -11,8 +11,12 @@ import {
 import { StateEffect, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { Range } from "@codemirror/state";
-import type { HostAPI, SearchResultGroup } from "./host-api";
+import type { HostAPI } from "./host-api";
+import { ArkSearchElement } from "../../ark-search/src/ark-search-element";
 import { editMode, toggleModeEffect } from "./mode-toggle";
+
+// Ensure ArkSearchElement is registered (side-effect import)
+void ArkSearchElement;
 
 const STATUS_VALUES = [
   "open", "accepted", "in-progress", "completed", "denied", "future",
@@ -33,8 +37,6 @@ const toggleSearchPanel = StateEffect.define<TogglePayload>();
 interface PanelState {
   tagName: string;
   tagValue: string;
-  results: SearchResultGroup[] | null;
-  loading: boolean;
 }
 
 /** State field tracking which tags have open search panels.
@@ -52,8 +54,6 @@ function createOpenSearchPanels(api: HostAPI) {
             next.set(effect.value.tagName, {
               tagName: effect.value.tagName,
               tagValue: effect.value.tagValue,
-              results: null,
-              loading: true,
             });
           }
           return next;
@@ -131,7 +131,8 @@ class TagSearchWidget extends WidgetType {
   }
 }
 
-/** Block widget rendering the search panel inline below a tag line. */
+/** Block widget rendering the search panel inline below a tag line.
+ *  Delegates to the `<ark-search>` custom element. R1377 */
 class TagSearchPanelWidget extends WidgetType {
   constructor(
     private readonly state: PanelState,
@@ -141,177 +142,26 @@ class TagSearchPanelWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const panel = document.createElement("div");
-    panel.className = "ark-tag-search-panel";
-    // Prevent CM from intercepting events inside the panel
-    for (const evt of ["mousedown", "keydown", "keyup", "keypress", "focus", "input"] as const) {
-      panel.addEventListener(evt, (e) => e.stopPropagation());
-    }
-
-    // Query bar
-    const bar = document.createElement("div");
-    bar.className = "ark-tag-search-bar";
-
-    const atSign = document.createElement("span");
-    atSign.className = "ark-tag-search-at";
-    atSign.textContent = "@";
-
-    const tagInput = document.createElement("input");
-    tagInput.className = "ark-tag-search-tag";
-    tagInput.type = "text";
-    tagInput.value = this.state.tagName;
-    tagInput.placeholder = "tag";
-    tagInput.size = Math.max(this.state.tagName.length + 2, 8);
-    tagInput.addEventListener("input", () => {
-      tagInput.size = Math.max(tagInput.value.length + 2, 8);
-    });
-
-    const colonSpace = document.createElement("span");
-    colonSpace.className = "ark-tag-search-colon";
-    colonSpace.textContent = ": ";
-
-    let useRegex = false;
-    const regexBtn = document.createElement("button");
-    regexBtn.className = "ark-tag-search-regex";
-    regexBtn.textContent = "Aa";
-    regexBtn.title = "Toggle regex mode";
-    regexBtn.addEventListener("click", () => {
-      useRegex = !useRegex;
-      regexBtn.textContent = useRegex ? ".*" : "Aa";
-      regexBtn.classList.toggle("active", useRegex);
-      doSearch();
-    });
-
-    const valueInput = document.createElement("input");
-    valueInput.className = "ark-tag-search-value";
-    valueInput.type = "text";
-    valueInput.value = this.state.tagValue.trim();
-    valueInput.placeholder = "value filter...";
-
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "ark-tag-search-close";
-    closeBtn.textContent = "\u00d7";
-    closeBtn.title = "Close";
-    closeBtn.addEventListener("click", () => {
-      view.dispatch({ effects: toggleSearchPanel.of({ tagName: this.state.tagName, tagValue: this.state.tagValue }) });
-    });
-
-    bar.appendChild(atSign);
-    bar.appendChild(tagInput);
-    bar.appendChild(colonSpace);
-    bar.appendChild(regexBtn);
-    bar.appendChild(valueInput);
-    bar.appendChild(closeBtn);
-
-    // Results area
-    const results = document.createElement("div");
-    results.className = "ark-tag-search-results";
-
-    // Resize handle
-    const resizeHandle = document.createElement("div");
-    resizeHandle.className = "ark-tag-search-resize";
-    let startY = 0, startH = 0;
-    resizeHandle.addEventListener("mousedown", (e) => {
-      startY = e.clientY;
-      startH = results.offsetHeight;
-      const onMove = (ev: MouseEvent) => {
-        results.style.height = Math.max(100, startH + ev.clientY - startY) + "px";
-      };
-      const onUp = () => {
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    });
-
-    panel.appendChild(bar);
-    panel.appendChild(results);
-    panel.appendChild(resizeHandle);
-
-    // Search logic
-    const api = this.api;
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Validate tag name: must match @tag: pattern (letters, digits, hyphens, dots)
-    const validTagName = /^[a-zA-Z][\w.-]*$/;
-
-    // Escape string for use in regex
-    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-    const doSearch = () => {
-      const tag = tagInput.value.trim();
-      if (!tag) {
-        results.innerHTML = "";
-        return;
-      }
-
-      // Validate tag name (regex mode allows anything)
-      if (!useRegex && !validTagName.test(tag)) {
-        tagInput.style.borderColor = "var(--term-danger, #f87171)";
-        tagInput.title = "Invalid tag name — must start with a letter, then letters/digits/hyphens/dots";
-        return;
-      }
-      tagInput.style.borderColor = "";
-      tagInput.title = "";
-
-      const value = valueInput.value.trim();
-      let query: string;
-      if (useRegex) {
-        // Regex mode: tag name and value are raw regex
-        query = value ? `@${tag}:\\s*${value}` : `@${tag}:`;
-      } else {
-        // Literal mode: escape the value for safe regex matching
-        query = value ? `@${tag}:\\s*${escapeRegex(value)}` : `@${tag}:`;
-      }
-
-      // Keep existing results visible while loading — avoids flicker
-      // from height changes during CM block widget relayout
-      api.search(query, "regex").then((groups) => {
-        results.innerHTML = "";
-        if (groups.length === 0) {
-          results.innerHTML = '<div class="ark-tag-search-empty">No results</div>';
-          return;
-        }
-        renderTagSearchResults(results, groups, api);
+    const el = document.createElement("ark-search") as ArkSearchElement;
+    el.api = this.api;
+    el.tag = this.state.tagName;
+    el.value = this.state.tagValue.trim();
+    el.addEventListener("close", () => {
+      view.dispatch({
+        effects: toggleSearchPanel.of({
+          tagName: this.state.tagName,
+          tagValue: this.state.tagValue,
+        }),
       });
-    };
-
-    const debouncedSearch = () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(doSearch, 300);
-    };
-
-    valueInput.addEventListener("input", debouncedSearch);
-    valueInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        doSearch();
-      }
     });
-    tagInput.addEventListener("input", debouncedSearch);
-    tagInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        doSearch();
-      }
-    });
-
-    // Initial search — show loading state first
-    results.innerHTML = '<div class="ark-tag-search-loading">Searching\u2026</div>';
-    doSearch();
-    setTimeout(() => valueInput.focus(), 0);
-
-    return panel;
+    return el;
   }
 
   eq(other: TagSearchPanelWidget): boolean {
-    // Same tag = same widget — CM preserves the DOM
     return this.state === other.state;
   }
 
   updateDOM(): boolean {
-    // Never replace the DOM — the panel manages its own state
     return true;
   }
 
@@ -443,55 +293,3 @@ export function tagWidgetExtension(api: HostAPI, path: string) {
   ];
 }
 
-// --- Result rendering ---
-
-/** Render search results with show-location buttons. R1211-R1214 */
-function renderTagSearchResults(
-  container: HTMLElement,
-  groups: SearchResultGroup[],
-  api: HostAPI,
-): void {
-  for (const group of groups) {
-    const groupEl = document.createElement("div");
-    groupEl.className = "ark-tag-search-group";
-
-    const header = document.createElement("div");
-    header.className = "ark-tag-search-group-header";
-
-    const pathLink = document.createElement("a");
-    pathLink.className = "ark-tag-search-path";
-    pathLink.textContent = group.path;
-    pathLink.href = "/content" + group.path;
-    pathLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      api.navigate(group.path);
-    });
-    header.appendChild(pathLink);
-
-    if (api.showInFolder) {
-      const folderBtn = document.createElement("button");
-      folderBtn.className = "ark-tag-search-folder";
-      folderBtn.innerHTML = "&#128193;";
-      folderBtn.title = "Show in file manager";
-      folderBtn.addEventListener("click", () => api.showInFolder!(group.path));
-      header.appendChild(folderBtn);
-    }
-
-    groupEl.appendChild(header);
-
-    for (const chunk of group.chunks) {
-      const chunkEl = document.createElement("div");
-      chunkEl.className = "ark-tag-search-chunk";
-      if (chunk.preview) {
-        chunkEl.innerHTML = chunk.preview;
-      } else {
-        const pre = document.createElement("pre");
-        pre.textContent = chunk.content.slice(0, 200);
-        chunkEl.appendChild(pre);
-      }
-      groupEl.appendChild(chunkEl);
-    }
-
-    container.appendChild(groupEl);
-  }
-}

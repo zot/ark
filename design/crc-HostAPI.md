@@ -1,23 +1,22 @@
 # HostAPI
-**Requirements:** R1326, R1327, R1328
+**Requirements:** R1326, R1327, R1328, R1353
 
 TypeScript interface defining the contract between the viewer and
-its host. The viewer receives an implementation at construction
-and never imports ark or Frictionless directly.
+its host. Extends SearchAPI with CM6-specific methods. The viewer
+receives an implementation at construction and never imports ark
+or Frictionless directly.
 
 ## Knows
 - nothing — it is an interface, not a class
 
 ## Does
-- search(query): returns grouped results with raw chunk content, content type, and pre-rendered HTML
-- tagComplete(prefix): returns tag name completions from D records
-- tagValueComplete(tag, prefix): returns value completions for a tag
+- (inherited from SearchAPI) search, tagComplete, tagValueComplete, navigate, showInFolder
 - save(path, content): writes file, triggers re-index
-- navigate(path): asks host to open a different file
 - setTags(path, tags): atomic tag block update
 
 ## Collaborators
-- Every other component depends on this interface
+- SearchAPI: HostAPI extends this interface
+- Every other markdown-editor component depends on this interface
 
 ## Sequences
 - seq-tag-click.md

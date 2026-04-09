@@ -1,45 +1,22 @@
-// CRC: crc-HostAPI.md | R1326-R1328
+// CRC: crc-HostAPI.md | R1326-R1328, R1353
 
-/** A single chunk within a search result group. */
-export interface SearchChunk {
-  range: string;
-  score: number;
-  content: string;
-  contentType: "markdown" | "text" | "json" | "code";
-  preview: string;
-}
+export type {
+  SearchAPI,
+  SearchChunk,
+  SearchResultGroup,
+  TagCompletionItem,
+  TagValueCompletionItem,
+} from "../../ark-search/src/search-api";
 
-/** A group of search results for one file. */
-export interface SearchResultGroup {
-  path: string;
-  strategy: string;
-  chunks: SearchChunk[];
-}
-
-/** Tag completion entry. */
-export interface TagCompletionItem {
-  name: string;
-  description?: string;
-}
-
-/** Value completion entry. */
-export interface TagValueCompletionItem {
-  value: string;
-  count?: number;
-}
+import type { SearchAPI } from "../../ark-search/src/search-api";
 
 /**
- * Contract between the viewer and its host. The host implements
- * this interface using whatever transport is available — HTTP
- * calls to ark's server, in-process Lua mcp calls, or a mock
- * for testing.
+ * Contract between the viewer and its host. Extends SearchAPI
+ * with CM6-specific methods. The host implements this interface
+ * using whatever transport is available — HTTP calls to ark's
+ * server, in-process Lua mcp calls, or a mock for testing.
  */
-export interface HostAPI {
-  search(query: string, mode?: string): Promise<SearchResultGroup[]>;
-  tagComplete(prefix: string): Promise<TagCompletionItem[]>;
-  tagValueComplete(tag: string, prefix: string): Promise<TagValueCompletionItem[]>;
+export interface HostAPI extends SearchAPI {
   save(path: string, content: string): Promise<void>;
-  navigate(path: string): void;
   setTags(path: string, tags: Record<string, string>): Promise<void>;
-  showInFolder?(path: string): Promise<void>;
 }

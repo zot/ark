@@ -2086,3 +2086,42 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1349:** Toggle to edit mode for full text editing
 - **R1350:** On save: call save(path, content), host re-indexes
 - **R1351:** Tag edits can use setTags for atomic tag block updates
+
+## Feature: Ark Search Component
+**Source:** specs/ark-search.md
+
+### SearchAPI Interface
+- **R1352:** SearchAPI is the search-relevant subset of HostAPI: search, tagComplete, tagValueComplete, navigate, showInFolder
+- **R1353:** HostAPI extends SearchAPI with CM6-specific methods (save, setTags)
+- **R1354:** The search component depends only on SearchAPI, not HostAPI
+- **R1355:** SearchAPI and shared types (SearchResultGroup, SearchChunk, TagCompletionItem, TagValueCompletionItem) live in ark-search, not markdown-editor
+
+### Custom Element
+- **R1356:** `<ark-search>` is a standard custom element (HTMLElement, no shadow DOM)
+- **R1357:** The element accepts configuration via properties: api (SearchAPI), tag (string), value (string)
+- **R1358:** The element initializes on connectedCallback if api is set, or defers until api is assigned
+- **R1359:** The element renders a query bar with tag field, regex toggle, value field, and close button
+- **R1360:** The element renders a scrollable results area below the query bar
+- **R1361:** The element renders a drag-to-resize handle below the results area
+- **R1362:** Value input and tag input changes trigger debounced search (300ms)
+- **R1363:** Enter key in either input triggers immediate search
+
+### Result Rendering
+- **R1364:** Results are rendered as plain HTML — file path link, optional show-in-folder button, chunk previews
+- **R1365:** Chunk previews use the pre-rendered HTML from SearchChunk.preview (no CM6 dependency)
+- **R1366:** Click on a result path calls api.navigate(path)
+- **R1367:** Show-in-folder button appears when api.showInFolder is defined
+
+### Package Structure
+- **R1368:** ark-search/ is a sibling directory to markdown-editor/ with its own package.json and tsconfig.json
+- **R1369:** ark-search has no runtime dependencies (pure DOM)
+- **R1370:** markdown-editor imports SearchAPI types and the element from ark-search via relative path
+- **R1371:** The final bundle is still one esbuild output from markdown-editor — no separate ark-search bundle
+
+### Extraction Scope
+- **R1372:** TagSearchPanelWidget rendering logic moves from tag-widget.ts to the custom element
+- **R1373:** renderTagSearchResults moves from tag-widget.ts to the custom element
+- **R1374:** Tag decoration code (TagSearchWidget, StatusWidget, createOpenSearchPanels, buildTagDecorations, needsRedecoration, toggleSearchPanel) stays in markdown-editor/tag-widget.ts
+- **R1375:** search-result-view.ts stays in markdown-editor (CM6-specific rendering)
+- **R1376:** ark-search-block.ts stays in markdown-editor (CM6 ViewPlugin)
+- **R1377:** tag-widget.ts creates an `<ark-search>` element when a tag panel opens, instead of rendering the panel inline
