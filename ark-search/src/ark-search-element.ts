@@ -32,6 +32,13 @@ interface FilterRow {
   tagMatchMode: TagMatchMode;
 }
 
+/** OR group: one or more rows with OR semantics. R1438 */
+interface FilterGroup {
+  id: number;
+  polarity: Polarity;
+  rows: FilterRow[];
+}
+
 /** Source type toggle state. */
 interface SourceToggle {
   name: string;
@@ -49,16 +56,21 @@ function escapeRegex(s: string): string {
 }
 
 let nextFilterId = 1;
-function newFilterRow(): FilterRow {
+function newFilterRow(mode: FilterMode = "contains", polarity: Polarity = "with"): FilterRow {
   return {
     id: nextFilterId++,
-    polarity: "with",
-    mode: "contains",
+    polarity,
+    mode,
     query: "",
     tagName: "",
     tagValue: "",
     tagMatchMode: "exact",
   };
+}
+
+/** Create an OR group from a list of rows. R1438 */
+function newFilterGroup(polarity: Polarity, rows: FilterRow[]): FilterGroup {
+  return { id: nextFilterId++, polarity, rows };
 }
 
 /**
@@ -82,8 +94,8 @@ export class ArkSearchElement extends HTMLElement {
   private queryInput!: HTMLInputElement;
   private modeSelect!: HTMLSelectElement;
 
-  // Filter rows
-  private filterRows: FilterRow[] = [];
+  // Filter groups (each group has 1+ rows with OR semantics) R1438
+  private filterGroups: FilterGroup[] = [];
   private filtersContainer!: HTMLElement;
 
   // Source-type bar
@@ -237,8 +249,9 @@ export class ArkSearchElement extends HTMLElement {
     addBtn.className = "ark-search-add-filter";
     addBtn.textContent = "+ add filter";
     addBtn.addEventListener("click", () => {
-      this.filterRows.push(newFilterRow());
-      this.renderFilterRows();
+      const row = newFilterRow();
+      this.filterGroups.push(newFilterGroup(row.polarity, [row]));
+      this.renderFilterGroups();
     });
 
     // === Source-type bar R1419 ===
@@ -322,15 +335,37 @@ export class ArkSearchElement extends HTMLElement {
 
   // === Filter Row Rendering R1410-R1415 ===
 
-  private renderFilterRows(): void {
+  /** Flatten all groups into individual rows (for collection methods). */
+  private allFilterRows(): FilterRow[] {
+    return this.filterGroups.flatMap(g => g.rows);
+  }
+
+  private renderFilterGroups(): void {
     this.filtersContainer.innerHTML = "";
-    for (const row of this.filterRows) {
-      this.filtersContainer.appendChild(this.createFilterRowEl(row));
+    for (const group of this.filterGroups) {
+      if (group.rows.length === 1) {
+        // Single row — render flat with expand button
+        this.filtersContainer.appendChild(this.createFilterRowEl(group.rows[0], group));
+      } else {
+        // OR group — visual grouping R1442
+        const groupEl = document.createElement("div");
+        groupEl.className = "ark-search-or-group";
+
+        const label = document.createElement("span");
+        label.className = "ark-search-or-label";
+        label.textContent = "OR";
+        groupEl.appendChild(label);
+
+        for (const row of group.rows) {
+          groupEl.appendChild(this.createFilterRowEl(row, group));
+        }
+        this.filtersContainer.appendChild(groupEl);
+      }
     }
     this.updateSourceBarState();
   }
 
-  private createFilterRowEl(row: FilterRow): HTMLElement {
+  private createFilterRowEl(row: FilterRow, group: FilterGroup): HTMLElement {
     const el = document.createElement("div");
     el.className = "ark-search-filter-row";
 
@@ -361,7 +396,7 @@ export class ArkSearchElement extends HTMLElement {
     }
     modeSel.addEventListener("change", () => {
       row.mode = modeSel.value as FilterMode;
-      this.renderFilterRows(); // re-render to switch input type
+      this.renderFilterGroups(); // re-render to switch input type
       this.debouncedSearch();
     });
 
@@ -440,14 +475,28 @@ export class ArkSearchElement extends HTMLElement {
       el.appendChild(input);
     }
 
-    // Remove button
+    // Expand button R1433-R1436
+    const canExpand = (row.mode === "tag" || row.mode === "fuzzy") && this._api?.embedMatch;
+    if (canExpand && group.rows.length === 1) {
+      const expandBtn = document.createElement("button");
+      expandBtn.className = "ark-search-filter-expand";
+      expandBtn.textContent = "\u21bb";
+      expandBtn.title = "Expand to OR group";
+      expandBtn.addEventListener("click", () => this.expandRow(row, group));
+      el.appendChild(expandBtn);
+    }
+
+    // Remove button R1440-R1441
     const removeBtn = document.createElement("button");
     removeBtn.className = "ark-search-filter-remove";
     removeBtn.textContent = "\u00d7";
     removeBtn.title = "Remove filter";
     removeBtn.addEventListener("click", () => {
-      this.filterRows = this.filterRows.filter(r => r.id !== row.id);
-      this.renderFilterRows();
+      group.rows = group.rows.filter(r => r.id !== row.id);
+      if (group.rows.length === 0) {
+        this.filterGroups = this.filterGroups.filter(g => g.id !== group.id);
+      }
+      this.renderFilterGroups();
       this.debouncedSearch();
     });
     el.appendChild(removeBtn);
@@ -474,8 +523,42 @@ export class ArkSearchElement extends HTMLElement {
 
   /** R1421-R1422: gray out source bar when user has files filter rows. */
   private updateSourceBarState(): void {
-    const hasFileRows = this.filterRows.some(r => r.mode === "files" && r.query.trim());
+    const hasFileRows = this.allFilterRows().some(r => r.mode === "files" && r.query.trim());
     this.sourceBar.classList.toggle("ark-search-source-overridden", hasFileRows);
+  }
+
+  // === Query Expansion R1434-R1435 ===
+
+  private expandRow(row: FilterRow, group: FilterGroup): void {
+    const api = this._api;
+    if (!api?.embedMatch) return;
+
+    const query = row.mode === "tag"
+      ? (row.tagValue ? `${row.tagName} ${row.tagValue}` : row.tagName)
+      : row.query;
+
+    if (!query.trim()) return;
+
+    api.embedMatch(query).then((matches) => {
+      if (matches.length === 0) return;
+
+      // Replace the original row with concrete exact-match rows R1435
+      const newRows: FilterRow[] = matches.map(m => {
+        const r = newFilterRow(row.mode, group.polarity);
+        if (row.mode === "tag") {
+          r.tagName = m.tag;
+          r.tagValue = m.value;
+          r.tagMatchMode = "exact";
+        } else {
+          r.query = `${m.tag}: ${m.value}`;
+        }
+        return r;
+      });
+
+      group.rows = newRows;
+      this.renderFilterGroups();
+      this.debouncedSearch();
+    });
   }
 
   // === Search Execution ===
@@ -491,7 +574,7 @@ export class ArkSearchElement extends HTMLElement {
     const excludeFiles: string[] = [];
 
     // R1421: if user has files rows, they replace source bar entirely
-    const fileRows = this.filterRows.filter(r => r.mode === "files" && r.query.trim());
+    const fileRows = this.allFilterRows().filter(r => r.mode === "files" && r.query.trim());
     if (fileRows.length > 0) {
       for (const row of fileRows) {
         const patterns = row.query.split(",").map(s => s.trim()).filter(Boolean);
@@ -512,25 +595,47 @@ export class ArkSearchElement extends HTMLElement {
     return { filterFiles, excludeFiles };
   }
 
-  /** Collect chunk-level filters from filter rows. R1416-R1417 */
+  /** Collect chunk-level filters from filter groups. R1416-R1417, R1443-R1446 */
   private collectChunkFilters(): ChunkFilterParam[] {
     const filters: ChunkFilterParam[] = [];
-    for (const row of this.filterRows) {
-      if (row.mode === "files") continue; // handled by collectFileFilters
-      if (row.mode === "tag") {
-        if (!row.tagName.trim()) continue;
-        // Build tag query: "tagname:value" for the server's TagChunkFilter
-        const q = row.tagValue.trim()
-          ? `${row.tagName.trim()}:${row.tagValue.trim()}`
-          : row.tagName.trim();
-        filters.push({ polarity: row.polarity, mode: "tag", query: q });
+    for (const group of this.filterGroups) {
+      const rows = group.rows.filter(r => r.mode !== "files");
+      if (rows.length === 0) continue;
+
+      if (rows.length === 1) {
+        // Single row — send as-is
+        const row = rows[0];
+        if (row.mode === "tag") {
+          if (!row.tagName.trim()) continue;
+          const q = row.tagValue.trim()
+            ? `${row.tagName.trim()}:${row.tagValue.trim()}`
+            : row.tagName.trim();
+          filters.push({ polarity: group.polarity, mode: "tag", query: q });
+        } else {
+          if (!row.query.trim()) continue;
+          filters.push({
+            polarity: group.polarity,
+            mode: row.mode as "contains" | "fuzzy" | "regex",
+            query: row.query.trim(),
+          });
+        }
       } else {
-        if (!row.query.trim()) continue;
-        filters.push({
-          polarity: row.polarity,
-          mode: row.mode as "contains" | "fuzzy" | "regex",
-          query: row.query.trim(),
-        });
+        // OR group — serialize as regex R1443-R1445
+        const alts: string[] = [];
+        for (const row of rows) {
+          if (row.mode === "tag") {
+            if (!row.tagName.trim()) continue;
+            const name = escapeRegex(row.tagName.trim());
+            const val = row.tagValue.trim() ? escapeRegex(row.tagValue.trim()) : "";
+            alts.push(val ? `@${name}:\\s*${val}` : `@${name}:`);
+          } else {
+            if (!row.query.trim()) continue;
+            alts.push(escapeRegex(row.query.trim()));
+          }
+        }
+        if (alts.length === 0) continue;
+        const regex = alts.length === 1 ? alts[0] : `(${alts.join("|")})`;
+        filters.push({ polarity: group.polarity, mode: "regex", query: regex });
       }
     }
     return filters;

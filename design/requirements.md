@@ -2213,3 +2213,26 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 ### Auto-Height for Iframes
 - **R1431:** When loaded in an iframe, the content page posts body height via postMessage({type: 'ark-content-height', height: N})
 - **R1432:** Height is posted on load and on resize
+
+## Feature: Query Expansion and OR Groups
+**Source:** specs/ark-search.md
+
+### Expand Button
+- **R1433:** Filter rows with tag or fuzzy mode show an expand button when api.embedMatch is available
+- **R1434:** Clicking expand calls embedMatch with the filter term, producing TagMatch[] alternatives
+- **R1435:** The original row is replaced by an OR group of exact-match rows, one per alternative
+- **R1436:** Regex and files mode rows do not show an expand button
+- **R1437:** Contains mode expansion is deferred (needs Librarian endpoint)
+
+### OR Group Model
+- **R1438:** An OR group is a visual grouping of filter rows with OR semantics — any row matching includes the result
+- **R1439:** The group inherits the original row's polarity (with/without)
+- **R1440:** Individual rows within an OR group can be removed
+- **R1441:** Removing all rows in an OR group collapses it (removes the group)
+- **R1442:** OR groups are visually distinguished with a border and "OR" label
+
+### Serialization
+- **R1443:** OR groups serialize as a single regex chunk_filter that ORs the alternatives
+- **R1444:** Tag OR groups serialize as `@(name1|name2):\s*value` regex
+- **R1445:** Contains OR groups serialize as `(term1|term2|term3)` regex
+- **R1446:** The polarity maps to the existing with/without regex filter path

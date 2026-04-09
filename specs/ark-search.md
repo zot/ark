@@ -165,6 +165,46 @@ replace the source-type bar's file filters. The source bar
 grays out (or shows "overridden"). Remove all `[files]` rows
 and the source bar comes back.
 
+## Query Expansion and OR Groups
+
+Any filter row can have an expand button. Clicking it runs a
+mode-appropriate expansion and replaces the single row with an
+OR group of concrete exact-match rows.
+
+### Expand Mechanism
+
+- **tag/fuzzy mode**: calls `embedMatch` with the filter term,
+  gets back `TagMatch[]`, creates one exact-match row per result
+- **regex mode**: no expansion (already precise)
+- **contains mode**: deferred (needs Librarian/Haiku endpoint)
+- **files mode**: no expansion
+
+The expand button appears when `embedMatch` is available on the
+API. Otherwise hidden.
+
+### OR Group Model
+
+A filter group replaces a single filter row:
+
+```
+┌─ OR ─────────────────────────────────────────────┐
+│ [with ▾] [tag ▾] @[decision]: [LMDB________] [x] │
+│ [with ▾] [tag ▾] @[direction]: [LMDB________] [x] │
+└──────────────────────────────────────────────────┘
+```
+
+- The group inherits the original row's polarity
+- Individual rows can be removed; removing all collapses the group
+- The group border and "OR" label distinguish it from regular rows
+
+### Serialization
+
+OR groups serialize as a single regex `chunk_filter` that ORs
+the alternatives. For tag groups: `@(decision|direction):\s*LMDB`.
+For contains groups: `(term1|term2|term3)`. This maps to the
+existing `WithRegexFilter` / `WithExceptRegex` path without Go
+changes.
+
 ## Result Rendering
 
 The element renders results as plain HTML:
