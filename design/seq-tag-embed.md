@@ -1,8 +1,8 @@
 # Sequence: Tag Value Embedding
 
-**Requirements:** R1274-R1301
+**Requirements:** R1274-R1301, R1315, R1316
 
-## Query Path (warm model)
+## Query Path (warm model, two-step narrowing)
 
 ```
 Browser/CLI       Server           Librarian              Store/LMDB
@@ -13,8 +13,14 @@ Browser/CLI       Server           Librarian              Store/LMDB
   |                  |                  |--EmbedQuery(text)     |
   |                  |                  |  model.Embed() ~50ms  |
   |                  |                  |                      |
+  |                  |                  |  Step 1: narrow tags  |
+  |                  |                  |--ScanTagNameEmbed---->|
+  |                  |                  |  cosine ~270 T recs   |
+  |                  |                  |<--top-K tags----------|
+  |                  |                  |                      |
+  |                  |                  |  Step 2: scan values  |
   |                  |                  |--scan EV records----->|
-  |                  |                  |  cosine similarity    |
+  |                  |                  |  only for matched tags|
   |                  |                  |<--top-K (tvid,score)--|
   |                  |                  |                      |
   |                  |                  |--resolve tvid→tag,val |
@@ -63,19 +69,31 @@ Server              DB Actor            Store           Librarian
   |                    |  goroutine)       |                |
   |                    |                   |                |
   |                    |  (write goroutine)|                |
-  |                    |--scan T records-->|                |
-  |                    |  missing ET recs  |                |
-  |                    |<--tag names-------|                |
+  |                    |--MissingTagName-->|                |
+  |                    |  Embeddings()     |                |
+  |                    |<--[]string tags---|                |
   |                    |                   |                |
-  |                    |--scan V records-->|                |
-  |                    |  missing EV recs  |                |
-  |                    |<--tag+value pairs-|                |
+  |                    |--MissingTagValue->|                |
+  |                    |  Embeddings()     |                |
+  |                    |<--[]uint64 tvids--|                |
   |                    |                   |                |
+  |                    |--ScanVRecordTvids |                |
+  |                    |<--tvid→{tag,val}--|                |
+  |                    |                   |                |
+  |                    |  for each missing tag:             |
   |                    |--EmbedQuery()-----|--------------->|
-  |                    |  (for each        |                |
-  |                    |   missing entry)  |                |
-  |                    |<--vectors---------|----------------|
+  |                    |  "tag name"       |   (hyphens→    |
+  |                    |  (spaces)         |    spaces)     |
+  |                    |<--vector----------|----------------|
+  |                    |--WriteTagNameEmb->|                |
+  |                    |  (tag, vec)       |                |
   |                    |                   |                |
-  |                    |--write ET/EV----->|                |
-  |                    |  records          |                |
+  |                    |  for each missing tvid:            |
+  |                    |  resolve tvid→tag+value            |
+  |                    |--EmbedQuery()-----|--------------->|
+  |                    |  "tag: value"     |   (hyphens→    |
+  |                    |  (spaces)         |    spaces)     |
+  |                    |<--vector----------|----------------|
+  |                    |--WriteTagValueEmb>|                |
+  |                    |  (tvid, vec)      |                |
 ```

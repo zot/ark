@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -35,11 +35,11 @@ loads on first embedding query and stays warm until TTL expiry.
 ### Embeddings
 - EmbedQuery(text string) ([]float32, error): embed a query string
   using the warm model. Loads model on first call. Resets TTL.
-- EmbedSimilarTags(query string, k int) ([]TagMatch, error): embed
-  query, cosine scan ET records, return top-K similar tag names.
 - EmbedSimilarTagValues(query string, k int) ([]TagMatch, error):
-  embed query, cosine scan EV records, return top-K similar
-  tag-value compounds. Same result shape as FuzzyMatchTags.
+  two-step narrowing — cosine scan T record embeddings (~270) to
+  find top-K tags, then cosine scan EV records only for those tags.
+  Returns top-K similar tag-value compounds. Same result shape as
+  FuzzyMatchTags. (R1297, R1315)
 - loadModel(): load GGUF model from modelPath, create context
   with embeddings enabled. Start TTL timer.
 - unloadModel(): close context and model, nil them. Called on
@@ -60,7 +60,7 @@ loads on first embedding query and stays warm until TTL expiry.
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
 - Store: V record queries, ET/EV record reads for cosine scan,
-  tag-value-id allocation
+  tag-value-id allocation, ScanVRecordTvids for reverse lookup
 - Searcher: fetch grouped results for curated tags
 - gollama: model loading and embedding computation
 - Config: tag_model path, search_exclude patterns

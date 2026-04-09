@@ -36,53 +36,77 @@ where to download it. Auto-download is a future enhancement.
 
 ## Model Lifecycle
 
-The model loads in the Librarian on first embedding query. It stays
-warm in memory for subsequent queries. The Librarian's TTL governs
-unloading — if no queries arrive within the TTL, the model is
-unloaded to free memory. Next query reloads it.
+The model loads eagerly after reconcile to batch-embed any V/T
+records missing ET/EV records. This amortizes the load cost into
+startup rather than penalizing the first query. After the batch
+completes, the model stays warm — the TTL timer starts from the
+end of the batch, so a query arriving shortly after startup hits
+a warm model. If no queries arrive within the TTL, the model
+unloads to free memory. Next query reloads it.
+
+If deferred to first query, users who query infrequently would
+always hit cold-start latency, driving them to query even less.
 
 ## Tag Value IDs
 
 Each unique (tag, value) pair gets a sequential ID (varint). The
-ID is appended to the V record value:
+ID is part of the V record key:
 
 ```
-V[tag]\x00[value] → packed_fileids + tag_value_id (varint)
+V[tag]\x00[value]\x00[tvid: varint] → packed_fileids
 ```
 
 The tag-value-id is stable: assigned on first index, reused on
 re-index if the same (tag, value) pair persists. The ID counter
 is stored as an ark LMDB setting (`I` prefix, key: `next_tvid`).
 
+Forward lookup: prefix scan `V[tag]\x00[value]\x00` returns one
+record with the tvid in the key suffix. Reverse lookup: scan V
+prefix, parse tvid from each key.
+
+## F Records Carry TVIDs
+
+F records track which tags appear in a file. The value is extended
+to include tvids:
+
+```
+F[fileid:8][tag] → count:4bytes + packed tvid varints
+```
+
+On file removal or re-index, read F records for the fileid to get
+all tvids, then remove the fileid from exactly those V records.
+This replaces the current full-scan approach in `removeFileidFromAllV`.
+
 ## What Gets Embedded
 
-Both tag names and tag-value compounds are embedded:
+Both tag names and tag-value compounds are embedded. Hyphens in
+tag names are converted to spaces in all embedding contexts — this
+lets the model leverage individual word semantics instead of treating
+hyphenated compounds as opaque tokens.
 
-- **Tag names**: hyphens converted to spaces before embedding.
-  `design-decision` → embed "design decision". Enables tag-name
-  similarity search ("show me tags like 'decision'").
-- **Tag-value compounds**: `"tagname: value"` embedded with the
-  colon preserved. `decision: use LMDB` → embed "decision: use LMDB".
-  The colon signals label-value structure to the model. Hyphens
-  in the tag name are converted to spaces:
+- **Tag names**: `design-decision` → embed "design decision".
+  Enables tag-name similarity search ("show me tags like 'decision'").
+- **Tag-value compounds**: `"tagname: value"` with colon preserved.
   `design-decision: use LMDB` → embed "design decision: use LMDB".
-
-Tag names are identified by tag-name-id (from T records, stored
-as an ark LMDB setting). Tag-value compounds use the tag-value-id
-from V records.
+  The colon signals label-value structure to the model.
 
 ## Embedding Storage
 
-Embeddings are stored in new LMDB prefixes:
+Tag name embeddings are stored inline in T records. Tag-value
+compound embeddings use a separate EV prefix:
 
 ```
-ET[tag_name_id: varint] → float32 vector (768 × 4 = 3072 bytes)
-EV[tag_value_id: varint] → float32 vector (3072 bytes)
+T[tag_name] → count:4bytes + optional float32 vector (3072 bytes)
+EV[tvid: varint] → float32 vector (3072 bytes)
 ```
 
-ET records embed tag names (~270 entries). EV records embed
-tag-value compounds (~3857 entries). Keys are compact (2 prefix
-bytes + 1-5 varint bytes). Values are raw float32 arrays.
+T records already exist for every tag. The embedding vector is
+appended to the count — if `len(value) == 4`, no embedding yet;
+if `len(value) == 4+3072`, embedding is present. ~270 tags × 3082
+bytes ≈ 810KB total. No separate ET prefix needed.
+
+EV records use the compact numeric tvid from V records (~3857
+entries). Values are raw float32 arrays.
 
 ## Embedding Lifecycle
 
@@ -100,12 +124,21 @@ alongside V records.
 
 ## Query Path
 
+Two-step narrowing — tags first, then values:
+
 ```
-query value → embed with nomic (warm model, ~50ms)
-            → brute-force cosine scan all E records (~1ms for 3857)
-            → return top-K (tag, value, score) tuples
-            → same shape as FuzzyMatchTags result
+query → embed with nomic (warm model, ~50ms)
+      → cosine scan T record embeddings (~270 tags, <1ms)
+      → top-K matching tags
+      → cosine scan EV records only for those tags (~50-100 values)
+      → return top-K (tag, value, score) tuples
+      → same shape as FuzzyMatchTags result
 ```
+
+This avoids scanning all ~3857 EV records. Tag-level narrowing
+reduces the search space by ~10x. The tag embedding score can also
+weight the final result — a value match under a weakly-matching
+tag is less interesting than one under a strongly-matching tag.
 
 The Librarian offers both paths: trigram fuzzy (no model, instant)
 and embedding similarity (with model, ~50ms). The `--fuzzy` CLI
@@ -127,11 +160,41 @@ Shows per-value and total time.
 embed them, report timing. Benchmarks the model on realistic
 content.
 
+## Use vs Mention Filtering
+
+Tags that appear inside quotes (backtick or double-quote) are
+mentions — someone discussing the tag, not using it. These should
+be indexed as V records (exact search still finds them) but
+excluded from EV embedding (semantic search ignores them).
+
+Heuristic: count matching quote characters before the `@` on
+the same line. If odd, the tag is inside a quote — it's a
+mention. Even or zero — it's a use (annotation).
+
+Examples:
+- `@decision: use LMDB` at line start → annotation → embed
+- `` `@decision: use LMDB` `` in backticks → mention → skip EV
+- `"@decision: use LMDB"` in quotes → mention → skip EV
+- `@note: remember this` mid-paragraph, unquoted → annotation → embed
+
+The check runs during tag extraction (ExtractTags and
+ExtractTagValues). Mentioned tags are skipped entirely — no V,
+T, F, or EV records. They are prose about tags, not tags.
+
 ## Build
 
-The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck).
-The go workspace includes a local gollama with Vulkan-compiled
-llama.cpp. For other platforms, the standard CPU build should work
-without Vulkan. The build dependency needs refinement for
-distribution — document what's required and test whether Vulkan
-is strictly necessary or just a Zen 2 workaround.
+Two build issues resolved:
+
+1. **GGML_NATIVE=OFF** — llama.cpp's `-march=native` enables
+   instructions that Zen 2 reports but can't execute (SIGILL).
+   Disabling native detection and using explicit AVX/AVX2 flags
+   fixes the crash on all platforms.
+
+2. **Vulkan GPU acceleration** — offloads embedding compute to
+   the GPU. 45ms/chunk on GPU vs 235ms/chunk on CPU (5x). The
+   binary is larger (69MB vs 28MB) due to SPIR-V shader blobs,
+   but the performance gain justifies it. Only runtime dependency
+   is `libvulkan.so.1` (standard on GPU-capable systems).
+
+The gollama build is statically linked (BUILD_SHARED_LIBS=OFF)
+so the ark binary is self-contained — no shared lib management.

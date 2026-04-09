@@ -453,6 +453,27 @@ func (l *Librarian) EmbedQuery(text string) ([]float32, error) {
 	return vec, nil
 }
 
+// EmbedBatch embeds multiple texts in one GPU dispatch.
+// Much more efficient than calling EmbedQuery repeatedly.
+func (l *Librarian) EmbedBatch(texts []string) ([][]float32, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.modelPath == "" {
+		return nil, fmt.Errorf("embedding model not configured")
+	}
+	if err := l.ensureModel(); err != nil {
+		return nil, err
+	}
+	l.resetModelTimer()
+
+	vecs, err := l.modelCtx.GetEmbeddingsBatch(texts)
+	if err != nil {
+		return nil, fmt.Errorf("embed batch: %w", err)
+	}
+	return vecs, nil
+}
+
 // EmbedSimilarTagValues embeds the query and cosine-scans EV records.
 // Returns top-K similar tag-value compounds with paths resolved.
 // R1297, R1298
@@ -487,10 +508,11 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 	}
 
 	// Resolve tvid → tag, value, paths
-	// TODO: need a reverse lookup from tvid to tag+value.
-	// For now, scan V records to build the mapping.
+	tagValues, err := l.db.store.ScanVRecordTvids()
+	if err != nil {
+		return nil, fmt.Errorf("scan V record tvids: %w", err)
+	}
 	var matches []TagMatch
-	tagValues := l.buildTvidMap()
 	for _, s := range scores {
 		tv, ok := tagValues[s.tvid]
 		if !ok {
@@ -509,15 +531,6 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 		})
 	}
 	return matches, nil
-}
-
-// buildTvidMap scans V records to build tvid → TagAlt mapping.
-// This is needed until we store tvid→tag+value in a reverse index.
-func (l *Librarian) buildTvidMap() map[uint64]TagAlt {
-	// TODO: implement by scanning V records and reading appended tvid.
-	// For now return empty — this will be filled in when V records
-	// gain the appended tvid.
-	return nil
 }
 
 func (l *Librarian) ensureModel() error {

@@ -110,7 +110,7 @@ Lifetime = server lifetime.
 - [x] crc-DB.md → `db.go`
 - [ ] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
-- [ ] crc-Store.md → `store.go`
+- [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
@@ -142,9 +142,9 @@ Lifetime = server lifetime.
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
-- [ ] crc-Librarian.md → `librarian.go`
+- [x] crc-Librarian.md → `librarian.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
-- [ ] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
+- [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -247,3 +247,5 @@ Lifetime = server lifetime.
 - [ ] O51: No unit tests for handleShowInFolder endpoint
 - [ ] O52: No unit tests for Librarian: QueueExpand, DrainPending, WaitForRequest, WaitForResult, FuzzyMatchTags, fuzzyMatch, fuzzyMatchWords, trigrams
 - [ ] O53: No unit tests for expansion CLI subcommands: --wait, --fuzzy, --search, --result, --error
+- [x] D7: R1309-R1313 (use vs mention filtering for tag embeddings) — designed in spec and requirements but not yet implemented in ExtractTagValues or EV record writing
+- [ ] D8: R1309-R1313 (use vs mention filtering) — skip mentioned tags entirely during extraction. Affects ExtractTags, ExtractTagValues, and all downstream records (T, F, V, EV)

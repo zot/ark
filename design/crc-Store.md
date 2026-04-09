@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1289, R1275, R1276, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1290, R1291, R1292, R1293, R1294, R1295
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -63,24 +63,32 @@ ark-level settings, and tag tracking.
 - RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
   return map[byte]int64. Single LMDB View transaction. (R907)
 - UpdateTagValues(fileid, values []TagValue): replace V records for
-  fileid. Within one LMDB txn: scan all V keys, remove fileid from
-  any value blobs, delete empty keys. Then for each new (tag, value),
-  append fileid varint to the value blob (or create new key).
-  (R1099, R1100, R1101, R1103)
+  fileid. Within one LMDB txn: read F records for fileid to get
+  existing tvids, remove fileid from exactly those V records (targeted
+  cleanup via R1312-R1314), delete empty V keys. Then for each new
+  (tag, value), look up existing V record by prefix scan
+  V[tag]\x00[value]\x00 to get tvid, or allocate new tvid if none
+  exists. Write V[tag]\x00[value]\x00[tvid] with fileid appended.
+  Update F record with new tvids. (R1099, R1100, R1101, R1103, R1281,
+  R1309, R1311, R1312, R1313)
 - AppendTagValues(fileid, values []TagValue): add V records without
-  removing — append path. For each (tag, value), append fileid varint
-  to existing value blob or create new key. (R1104)
-- RemoveTagValues(fileid): scan all V keys, remove fileid from any
-  value blobs, delete keys whose blob becomes empty. (R1105)
+  removing — append path. For each (tag, value), prefix scan to find
+  existing tvid or allocate new. Append fileid varint to value blob.
+  Append tvids to F record value. (R1104, R1281, R1311)
+- RemoveTagValues(fileid): read F records for fileid to get tvids,
+  remove fileid from exactly those V records. Delete V keys whose
+  blob becomes empty. (R1105, R1312, R1313, R1314)
 - QueryTagValues(tag, prefix string) []TagValueCount: prefix scan
-  V[tag]\x00[prefix], decode varint count from each value blob.
-  Return {value, count} pairs. (R1108, R1109)
-- TagValueFiles(tag, value string) []uint64: direct key lookup
-  V[tag]\x00[value], decode varints. (R1110)
+  V[tag]\x00[prefix], parse key to extract value (between first and
+  last null separators) and tvid (after last null). Decode varint
+  count from value blob. Return {value, count} pairs. (R1108, R1109)
+- TagValueFiles(tag, value string) []uint64: prefix scan
+  V[tag]\x00[value]\x00, decode varints from value blob of the one
+  matching record. (R1110, R1309)
 - FileTagValues(fileid uint64, tags []string) map[string]string:
-  for each requested tag, scan V[tag]\x00 entries, check if fileid
-  is in the varint list, return first matching value per tag.
-  (R1142, R1143)
+  for each requested tag, scan V[tag]\x00 entries, parse value from
+  key (between first and last null), check if fileid is in the varint
+  list, return first matching value per tag. (R1142, R1143)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
@@ -105,19 +113,22 @@ ark-level settings, and tag tracking.
 ### Tag Value ID Allocation (R1280-R1284)
 - AllocTagValueID() uint64: atomically increment and return the
   next tag-value-id from `I` prefix (`next_tvid` setting).
-- AllocTagNameID() uint64: atomically increment and return the
-  next tag-name-id from `I` prefix (`next_tnid` setting).
 
 ### Embedding Records (R1289-R1294)
-- WriteTagNameEmbedding(tnid uint64, vec []float32): write ET record
-- WriteTagValueEmbedding(tvid uint64, vec []float32): write EV record
-- ReadTagNameEmbedding(tnid uint64) ([]float32, error): read ET record
+- WriteTagNameEmbedding(tag string, vec []float32): append embedding
+  vector to T record value (count:4 + vector). (R1289)
+- WriteTagValueEmbedding(tvid uint64, vec []float32): write EV[tvid] record
+- ReadTagNameEmbedding(tag string) ([]float32, error): read vector from
+  T record (nil if len(value) == 4, i.e. count only)
 - ReadTagValueEmbedding(tvid uint64) ([]float32, error): read EV record
-- ScanTagNameEmbeddings() (map[uint64][]float32, error): scan all ET records
-- ScanTagValueEmbeddings() (map[uint64][]float32, error): scan all EV records
-- MissingTagNameEmbeddings() []uint64: T records with IDs lacking ET records
-- MissingTagValueEmbeddings() []uint64: V records with IDs lacking EV records
-- DropEmbeddings(): delete all ET and EV records (for rebuild)
+- ScanTagNameEmbeddings() (map[string][]float32, error): scan T records
+  with len(value) > 4, return tag → vector
+- ScanTagValueEmbeddings() (map[uint64][]float32, error): scan EV records
+- ScanVRecordTvids() (map[uint64]TagAlt, error): scan V prefix, parse tvid
+  from each key's trailing bytes. Returns tvid → {tag, value} mapping. (R1310)
+- MissingTagNameEmbeddings() []string: T records where len(value) == 4
+- DropEmbeddings(): strip vectors from T records (keep count), delete all
+  EV records (for rebuild)
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern

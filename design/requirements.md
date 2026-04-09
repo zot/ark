@@ -1984,21 +1984,29 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Tag Value IDs
 - **R1280:** Each unique (tag, value) pair gets a sequential tag-value-id (varint)
-- **R1281:** The tag-value-id is appended to the V record value after the packed fileids
+- **R1281:** The tag-value-id is part of the V record key: `V[tag]\x00[value]\x00[tvid: varint]` → packed fileids
 - **R1282:** The ID counter (`next_tvid`) is stored as an ark LMDB setting (`I` prefix)
 - **R1283:** The tag-value-id is stable: assigned on first index, reused if the same (tag, value) pair persists
 - **R1284:** (inferred) On rebuild, tag-value-ids are reassigned from 1
+- **R1309:** Forward lookup: prefix scan `V[tag]\x00[value]\x00` returns one record with tvid in key suffix
+- **R1310:** Reverse lookup: scan V prefix, parse tvid from trailing bytes of each key
+
+### F Record TVIDs
+- **R1311:** F record value is extended: `count:4bytes + packed tvid varints` for all tag-value pairs of that tag in that file
+- **R1312:** On file removal or re-index, read F records for the fileid to get all tvids
+- **R1313:** Remove fileid from exactly those V records identified by F-record tvids (targeted cleanup)
+- **R1314:** (inferred) Targeted V cleanup replaces the current full-scan approach in `removeFileidFromAllV`
 
 ### What Gets Embedded
 - **R1285:** Tag names are embedded with hyphens converted to spaces (`design-decision` → "design decision")
 - **R1286:** Tag-value compounds are embedded as `"tagname: value"` with colon preserved and hyphens in tag name converted to spaces
-- **R1287:** Tag names are identified by tag-name-id (sequential varint, counter in `I` prefix as `next_tnid`)
-- **R1288:** (inferred) Tag-name-ids are assigned from T records during embedding batch
+- **R1287:** (revised) Tag names are keyed directly by name in ET records — no tag-name-id needed
+- **R1288:** (revised) Hyphens→spaces conversion applies to both ET and EV embedding text for word-level semantics
 
 ### Embedding Storage
-- **R1289:** ET records store tag name embeddings: key `ET[tag_name_id: varint]`, value raw float32 vector (768 × 4 = 3072 bytes)
-- **R1290:** EV records store tag-value compound embeddings: key `EV[tag_value_id: varint]`, value raw float32 vector (3072 bytes)
-- **R1291:** (inferred) ET and EV use two-byte prefixes ("ET", "EV") to avoid collision with existing single-byte prefixes
+- **R1289:** (revised) Tag name embeddings are stored inline in T records: `T[tag_name]` → `count:4bytes + optional float32 vector (3072 bytes)`. No separate ET prefix.
+- **R1290:** EV records store tag-value compound embeddings: key `EV[tvid: varint]`, value raw float32 vector (3072 bytes)
+- **R1291:** (revised) Only EV uses a two-byte prefix. Tag name embeddings are inline in the existing T prefix.
 
 ### Embedding Lifecycle
 - **R1292:** Batch embed after reconcile: scan V and T records that lack corresponding E records, embed in the write goroutine
@@ -2008,7 +2016,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Query Path
 - **R1296:** Embed the query string with the warm model (~50ms)
-- **R1297:** Brute-force cosine scan all EV records, return top-K (tag, value, score) tuples
+- **R1297:** (revised) Two-step query: cosine scan T record embeddings (~270) to find top-K tags, then cosine scan EV records only for those tags to find top-K (tag, value, score) tuples
+- **R1315:** Tag-level narrowing reduces EV scan from ~3857 to ~50-100 records
+- **R1316:** (inferred) Tag embedding score can weight the final tag-value result
 - **R1298:** Results have the same shape as FuzzyMatchTags output — drops into the existing Librarian pipeline
 - **R1299:** The Librarian offers both trigram fuzzy (no model) and embedding similarity (with model)
 - **R1300:** The `--fuzzy` CLI flag gains an `--embed` counterpart; the HTTP fuzzy endpoint accepts a `mode` parameter
@@ -2024,3 +2034,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
 - **R1307:** The go workspace includes a local gollama with Vulkan-compiled llama.cpp
 - **R1308:** (inferred) For non-Zen 2 platforms, the standard CPU gollama build should work without Vulkan
+
+### Use vs Mention Filtering
+- **R1309:** Tags inside matched quotes (backtick or double-quote) are mentions — not indexed at all (no V, T, F, or EV records)
+- **R1310:** Heuristic: count matching quote characters before the `@` on the same line; odd count = mention, even/zero = annotation
+- **R1311:** (supersedes prior) Mentioned tags are skipped entirely during extraction — they are prose about tags, not tags
+- **R1312:** Only annotation (non-mentioned) tags produce V, T, F, and EV records
+- **R1313:** (inferred) The check runs during tag extraction in ExtractTags and ExtractTagValues

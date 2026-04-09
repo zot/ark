@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,7 +67,6 @@ const (
 	prefixTagFile    = 'F'
 	prefixTagDef     = 'D'
 	prefixTagValue   = 'V'
-	prefixEmbedTag   = "ET" // R1289: tag name embeddings
 	prefixEmbedValue = "EV" // R1290: tag-value compound embeddings
 )
 
@@ -298,14 +298,19 @@ func (s *Store) AppendTags(fileid uint64, tags map[string]uint32) error {
 		for tag, count := range tags {
 			fk := tagFileKey(fileid, tag)
 			var existing uint32
+			var existingTvids []byte
 			v, err := txn.Get(s.dbi, fk)
-			if err == nil && len(v) == 4 {
-				existing = binary.BigEndian.Uint32(v)
+			if err == nil && len(v) >= 4 {
+				existing = binary.BigEndian.Uint32(v[:4])
+				if len(v) > 4 {
+					existingTvids = bytes.Clone(v[4:])
+				}
 			} else if !lmdb.IsNotFound(err) && err != nil {
 				return err
 			}
-			val := make([]byte, 4)
+			val := make([]byte, 4, 4+len(existingTvids))
 			binary.BigEndian.PutUint32(val, existing+count)
+			val = append(val, existingTvids...)
 			if err := txn.Put(s.dbi, fk, val, 0); err != nil {
 				return err
 			}
@@ -322,8 +327,8 @@ func (s *Store) ListTags() ([]TagCount, error) {
 	var tags []TagCount
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
-			if len(k) >= 2 && len(v) == 4 {
-				count := binary.BigEndian.Uint32(v)
+			if len(k) >= 2 && len(v) >= 4 {
+				count := binary.BigEndian.Uint32(v[:4])
 				if count > 0 {
 					tags = append(tags, TagCount{Tag: string(k[1:]), Count: count})
 				}
@@ -348,10 +353,10 @@ func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
 			if err != nil {
 				return err
 			}
-			if len(v) == 4 {
+			if len(v) >= 4 {
 				results = append(results, TagCount{
 					Tag:   tag,
-					Count: binary.BigEndian.Uint32(v),
+					Count: binary.BigEndian.Uint32(v[:4]),
 				})
 			}
 		}
@@ -370,13 +375,13 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 	var records []TagFileRecord
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
-			if len(k) >= 10 && len(v) == 4 {
+			if len(k) >= 10 && len(v) >= 4 {
 				tag := string(k[9:])
 				if tagSet[tag] {
 					records = append(records, TagFileRecord{
 						FileID: binary.BigEndian.Uint64(k[1:9]),
 						Tag:    tag,
-						Count:  binary.BigEndian.Uint32(v),
+						Count:  binary.BigEndian.Uint32(v[:4]),
 					})
 				}
 			}
@@ -394,8 +399,8 @@ func (s *Store) fileTagsInTxn(txn *lmdb.Txn, fileid uint64) (map[string]uint32, 
 	binary.BigEndian.PutUint64(prefix[1:], fileid)
 
 	err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
-		if len(k) >= 10 && len(v) == 4 {
-			tags[string(k[9:])] = binary.BigEndian.Uint32(v)
+		if len(k) >= 10 && len(v) >= 4 {
+			tags[string(k[9:])] = binary.BigEndian.Uint32(v[:4])
 		}
 		return nil
 	})
@@ -406,22 +411,27 @@ func (s *Store) fileTagsInTxn(txn *lmdb.Txn, fileid uint64) (map[string]uint32, 
 func (s *Store) adjustTagTotal(txn *lmdb.Txn, tag string, delta int64) error {
 	tk := tagTotalKey(tag)
 	var current uint32
+	var trailing []byte // preserves embedding vector if present
 	v, err := txn.Get(s.dbi, tk)
-	if err == nil && len(v) == 4 {
-		current = binary.BigEndian.Uint32(v)
+	if err == nil && len(v) >= 4 {
+		current = binary.BigEndian.Uint32(v[:4])
+		if len(v) > 4 {
+			trailing = v[4:]
+		}
 	} else if !lmdb.IsNotFound(err) && err != nil {
 		return err
 	}
 
 	newVal := int64(current) + delta
 	if newVal <= 0 {
-		// Remove the T record entirely
+		// Remove the T record entirely (including any embedding)
 		txn.Del(s.dbi, tk, nil)
 		return nil
 	}
 
-	val := make([]byte, 4)
+	val := make([]byte, 4, 4+len(trailing))
 	binary.BigEndian.PutUint32(val, uint32(newVal))
+	val = append(val, trailing...)
 	return txn.Put(s.dbi, tk, val, 0)
 }
 
@@ -584,14 +594,56 @@ type TagValueCount struct {
 	Count int    `json:"count"`
 }
 
-// tagValueKey builds a V record key: V[tagname]\x00[value]
-func tagValueKey(tag, value string) []byte {
-	key := make([]byte, 1+len(tag)+1+len(value))
+// tagValueScanKey builds a V record scan prefix: V[tagname]\x00[value]\x00
+// Used for prefix scan to find the one record with tvid appended.
+// CRC: crc-Store.md | R1309
+func tagValueScanKey(tag, value string) []byte {
+	key := make([]byte, 1+len(tag)+1+len(value)+1)
 	key[0] = byte(prefixTagValue)
 	copy(key[1:], tag)
 	key[1+len(tag)] = 0
 	copy(key[2+len(tag):], value)
+	key[2+len(tag)+len(value)] = 0
 	return key
+}
+
+// tagValueFullKey builds a V record key with tvid: V[tagname]\x00[value]\x00[tvid varint]
+// CRC: crc-Store.md | R1281
+func tagValueFullKey(tag, value string, tvid uint64) []byte {
+	base := make([]byte, 1+len(tag)+1+len(value)+1)
+	base[0] = byte(prefixTagValue)
+	copy(base[1:], tag)
+	base[1+len(tag)] = 0
+	copy(base[2+len(tag):], value)
+	base[2+len(tag)+len(value)] = 0
+	return encodeVarint(base, tvid)
+}
+
+// parseVKey extracts tag, value, and tvid from a V record key.
+// Key format: V[tag]\x00[value]\x00[tvid varint]
+// CRC: crc-Store.md | R1281, R1310
+func parseVKey(k []byte) (tag, value string, tvid uint64, ok bool) {
+	if len(k) < 3 || k[0] != byte(prefixTagValue) {
+		return "", "", 0, false
+	}
+	// Find first null (tag/value separator)
+	firstNull := bytes.IndexByte(k[1:], 0)
+	if firstNull < 0 {
+		return "", "", 0, false
+	}
+	firstNull++ // adjust for k[1:] offset
+	// Find last null (value/tvid separator)
+	lastNull := bytes.LastIndexByte(k, 0)
+	if lastNull <= firstNull {
+		// Old format without tvid — treat as tvid=0
+		tag = string(k[1:firstNull])
+		value = string(k[firstNull+1:])
+		return tag, value, 0, true
+	}
+	tag = string(k[1:firstNull])
+	value = string(k[firstNull+1 : lastNull])
+	tvid, _ = binary.Uvarint(k[lastNull+1:])
+	return tag, value, tvid, true
 }
 
 // tagValuePrefix builds the scan prefix: V[tagname]\x00[prefix]
@@ -663,32 +715,75 @@ func removeVarint(data []byte, target uint64) ([]byte, bool) {
 }
 
 // UpdateTagValues replaces all V records for a fileid with new values.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1099, R1100, R1101, R1103
+// Also updates F records with tvids for targeted cleanup.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1099, R1100, R1101, R1103, R1281, R1311, R1312, R1313
 func (s *Store) UpdateTagValues(fileid uint64, values []TagValue) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		// Remove fileid from all existing V records
-		if err := s.removeFileidFromAllV(txn, fileid); err != nil {
+		// Remove fileid from existing V records using targeted cleanup
+		if err := s.removeFileidByTvids(txn, fileid); err != nil {
 			return err
 		}
-		// Add new V records
-		return s.addFileidToV(txn, fileid, values)
+		// Add new V records, get tvids per tag
+		tagTvids, err := s.addFileidToV(txn, fileid, values)
+		if err != nil {
+			return err
+		}
+		// Update F records with tvids (replace old tvids)
+		return s.updateFRecordTvids(txn, fileid, tagTvids, true)
 	})
 }
 
 // AppendTagValues adds V records without removing — append path.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1104
+// Also appends tvids to F records.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1104, R1281, R1311
 func (s *Store) AppendTagValues(fileid uint64, values []TagValue) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return s.addFileidToV(txn, fileid, values)
+		tagTvids, err := s.addFileidToV(txn, fileid, values)
+		if err != nil {
+			return err
+		}
+		return s.updateFRecordTvids(txn, fileid, tagTvids, false)
 	})
 }
 
-// RemoveTagValues removes a fileid from all V records.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1105
+// RemoveTagValues removes a fileid from V records identified by F-record tvids.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1105, R1312, R1313, R1314
 func (s *Store) RemoveTagValues(fileid uint64) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return s.removeFileidFromAllV(txn, fileid)
+		return s.removeFileidByTvids(txn, fileid)
 	})
+}
+
+// updateFRecordTvids writes tvids to F records for a fileid.
+// If replace is true, existing tvids are replaced (keeps count only).
+// If replace is false, new tvids are appended to existing ones.
+// CRC: crc-Store.md | R1311
+func (s *Store) updateFRecordTvids(txn *lmdb.Txn, fileid uint64, tagTvids map[string][]uint64, replace bool) error {
+	for tag, tvids := range tagTvids {
+		fk := tagFileKey(fileid, tag)
+		existing, err := txn.Get(s.dbi, fk)
+		if lmdb.IsNotFound(err) || len(existing) < 4 {
+			existing = nil
+		} else if err != nil {
+			return err
+		}
+		var val []byte
+		if existing == nil {
+			val = make([]byte, 4)
+		} else if replace {
+			val = make([]byte, 4)
+			copy(val, existing[:4])
+		} else {
+			val = bytes.Clone(existing)
+		}
+		for _, tvid := range tvids {
+			val = encodeVarint(val, tvid)
+		}
+		if err := txn.Put(s.dbi, fk, val, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // QueryTagValues returns values for a tag, optionally filtered by prefix.
@@ -698,12 +793,11 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 	var results []TagValueCount
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
-			// Key format: V[tag]\x00[value] — extract value after the null separator
-			tagEnd := bytes.IndexByte(k[1:], 0)
-			if tagEnd < 0 {
+			// Key format: V[tag]\x00[value]\x00[tvid] — parse with two null separators
+			_, value, _, ok := parseVKey(k)
+			if !ok {
 				return nil
 			}
-			value := string(k[1+tagEnd+1:])
 			count := len(decodeVarints(v))
 			if count > 0 {
 				results = append(results, TagValueCount{Value: value, Count: count})
@@ -719,21 +813,20 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 }
 
 // TagValueFiles returns fileids for a specific (tag, value) pair.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110
+// Uses prefix scan since V key includes tvid suffix.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110, R1309
 func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
-	key := tagValueKey(tag, value)
+	scanKey := tagValueScanKey(tag, value)
 	var ids []uint64
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, key)
-		if lmdb.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		ids = decodeVarints(v)
-		return nil
+		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, _, v []byte) error {
+			ids = decodeVarints(v)
+			return errStopScan
+		})
 	})
+	if err == errStopScan {
+		err = nil
+	}
 	return ids, err
 }
 
@@ -745,17 +838,15 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 		for _, tag := range tags {
 			prefix := tagValuePrefix(tag, "")
 			err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
-				// Key format: V[tag]\x00[value]
-				tagEnd := bytes.IndexByte(k[1:], 0)
-				if tagEnd < 0 {
+				// Key format: V[tag]\x00[value]\x00[tvid]
+				_, value, _, ok := parseVKey(k)
+				if !ok {
 					return nil
 				}
 				ids := decodeVarints(v)
-				for _, id := range ids {
-					if id == fileid {
-						result[tag] = string(k[1+tagEnd+1:])
-						return errStopScan
-					}
+				if slices.Contains(ids, fileid) {
+					result[tag] = value
+					return errStopScan
 				}
 				return nil
 			})
@@ -771,7 +862,51 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 // errStopScan is a sentinel to break out of scanPrefix early.
 var errStopScan = fmt.Errorf("stop scan")
 
+// removeFileidByTvids removes fileid from specific V records identified by tvids.
+// Reads F records for the fileid to get tvids, then uses ScanVRecordTvids-style
+// scan to find and update/delete those V records.
+// CRC: crc-Store.md | R1312, R1313, R1314
+func (s *Store) removeFileidByTvids(txn *lmdb.Txn, fileid uint64) error {
+	// Read all F records for this fileid to collect tvids
+	tvids := make(map[uint64]bool)
+	fPrefix := make([]byte, 9)
+	fPrefix[0] = byte(prefixTagFile)
+	binary.BigEndian.PutUint64(fPrefix[1:], fileid)
+	if err := scanPrefix(txn, s.dbi, fPrefix, func(_ *lmdb.Cursor, _, v []byte) error {
+		// F value: count:4bytes + packed tvid varints
+		if len(v) > 4 {
+			for _, id := range decodeVarints(v[4:]) {
+				tvids[id] = true
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(tvids) == 0 {
+		// No tvids recorded — fall back to full scan for old-format records
+		return s.removeFileidFromAllV(txn, fileid)
+	}
+	// Scan V prefix, find records with matching tvids, remove fileid
+	prefix := []byte{byte(prefixTagValue)}
+	return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
+		_, _, tvid, ok := parseVKey(k)
+		if !ok || !tvids[tvid] {
+			return nil
+		}
+		newV, found := removeVarint(v, fileid)
+		if !found {
+			return nil
+		}
+		if len(newV) == 0 {
+			return cur.Del(0)
+		}
+		return txn.Put(s.dbi, k, newV, 0)
+	})
+}
+
 // removeFileidFromAllV scans all V keys and removes the fileid from value blobs.
+// Fallback for old-format V records that lack tvids in F records.
 func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
 	prefix := []byte{byte(prefixTagValue)}
 	return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
@@ -791,37 +926,62 @@ func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
 // aren't useful for completion.
 const maxVKeyLen = 511
 
+// findVRecord looks up an existing V record for (tag, value) by prefix scan.
+// Returns the full key, existing value blob, and tvid. If not found, returns nil key and tvid 0.
+func (s *Store) findVRecord(txn *lmdb.Txn, tag, value string) (fullKey, existing []byte, tvid uint64, err error) {
+	scanKey := tagValueScanKey(tag, value)
+	err = scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
+		fullKey = bytes.Clone(k)
+		existing = bytes.Clone(v)
+		_, _, tvid, _ = parseVKey(k)
+		return errStopScan
+	})
+	if err == errStopScan {
+		err = nil
+	}
+	return
+}
+
 // addFileidToV appends the fileid to V records for each (tag, value).
-func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) error {
+// Returns a map of tag → []tvid for F record storage.
+// CRC: crc-Store.md | R1281, R1309, R1311
+func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) (map[string][]uint64, error) {
+	tagTvids := make(map[string][]uint64)
 	for _, tv := range values {
 		if tv.Value == "" {
 			continue
 		}
-		key := tagValueKey(tv.Tag, tv.Value)
-		if len(key) > maxVKeyLen {
+		// Check key length (estimate without tvid)
+		if 1+len(tv.Tag)+1+len(tv.Value)+1+10 > maxVKeyLen {
 			continue
 		}
-		existing, err := txn.Get(s.dbi, key)
-		if lmdb.IsNotFound(err) {
-			existing = nil
-		} else if err != nil {
-			return err
+		fullKey, existing, tvid, err := s.findVRecord(txn, tv.Tag, tv.Value)
+		if err != nil {
+			return nil, err
 		}
-		// Check if fileid already present
-		for _, id := range decodeVarints(existing) {
-			if id == fileid {
-				goto next
+		if fullKey == nil {
+			// New (tag, value) pair — allocate tvid
+			tvid, err = s.allocIDInTxn(txn, nextTvidKey)
+			if err != nil {
+				return nil, fmt.Errorf("alloc tvid: %w", err)
+			}
+			fullKey = tagValueFullKey(tv.Tag, tv.Value, tvid)
+			blob := encodeVarint(nil, fileid)
+			if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			// Existing record — check if fileid already present
+			if !slices.Contains(decodeVarints(existing), fileid) {
+				blob := encodeVarint(bytes.Clone(existing), fileid)
+				if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+					return nil, err
+				}
 			}
 		}
-		{
-			blob := encodeVarint(bytes.Clone(existing), fileid)
-			if err := txn.Put(s.dbi, key, blob, 0); err != nil {
-				return err
-			}
-		}
-	next:
+		tagTvids[tv.Tag] = append(tagTvids[tv.Tag], tvid)
 	}
-	return nil
+	return tagTvids, nil
 }
 
 // --- Day-bucket operations (scheduling) ---
@@ -973,7 +1133,6 @@ func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
 // --- Tag Value ID allocation (R1280-R1284) ---
 
 const nextTvidKey = "next_tvid"
-const nextTnidKey = "next_tnid"
 
 // AllocTagValueID atomically increments and returns the next tag-value-id.
 // CRC: crc-Store.md | R1280, R1282
@@ -981,16 +1140,28 @@ func (s *Store) AllocTagValueID() (uint64, error) {
 	return s.allocID(nextTvidKey)
 }
 
-// AllocTagNameID atomically increments and returns the next tag-name-id.
-// CRC: crc-Store.md | R1287
-func (s *Store) AllocTagNameID() (uint64, error) {
-	return s.allocID(nextTnidKey)
+func (s *Store) allocID(settingsKey string) (uint64, error) {
+	var id uint64
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		var err error
+		id, err = s.allocIDInTxn(txn, settingsKey)
+		return err
+	})
+	return id, err
 }
 
-func (s *Store) allocID(settingsKey string) (uint64, error) {
-	settings, err := s.GetSettings()
-	if err != nil {
+// allocIDInTxn increments and returns the next ID within an existing write txn.
+func (s *Store) allocIDInTxn(txn *lmdb.Txn, settingsKey string) (uint64, error) {
+	key := []byte{byte(prefixInfo)}
+	var settings ArkSettings
+	val, err := txn.Get(s.dbi, key)
+	if err != nil && !lmdb.IsNotFound(err) {
 		return 0, err
+	}
+	if val != nil {
+		if err := json.Unmarshal(val, &settings); err != nil {
+			return 0, err
+		}
 	}
 	idStr := settings.Extra[settingsKey]
 	var id uint64
@@ -1002,7 +1173,11 @@ func (s *Store) allocID(settingsKey string) (uint64, error) {
 		settings.Extra = make(map[string]string)
 	}
 	settings.Extra[settingsKey] = strconv.FormatUint(id, 10)
-	if err := s.PutSettings(settings); err != nil {
+	newVal, err := json.Marshal(settings)
+	if err != nil {
+		return 0, err
+	}
+	if err := txn.Put(s.dbi, key, newVal, 0); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -1010,21 +1185,32 @@ func (s *Store) allocID(settingsKey string) (uint64, error) {
 
 // --- Embedding records (R1289-R1294) ---
 
-func embedTagKey(tnid uint64) []byte {
-	key := []byte(prefixEmbedTag)
-	return encodeVarint(key, tnid)
-}
-
 func embedValueKey(tvid uint64) []byte {
 	key := []byte(prefixEmbedValue)
 	return encodeVarint(key, tvid)
 }
 
-// WriteTagNameEmbedding writes an ET record.
+// WriteTagNameEmbedding appends an embedding vector to a T record.
+// T record value: count:4bytes + float32 vector (3072 bytes).
 // CRC: crc-Store.md | R1289
-func (s *Store) WriteTagNameEmbedding(tnid uint64, vec []float32) error {
+func (s *Store) WriteTagNameEmbedding(tag string, vec []float32) error {
+	tk := tagTotalKey(tag)
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, embedTagKey(tnid), float32ToBytes(vec), 0)
+		v, err := txn.Get(s.dbi, tk)
+		if lmdb.IsNotFound(err) {
+			// Tag doesn't exist — write count=0 + vector
+			val := make([]byte, 4)
+			val = append(val, float32ToBytes(vec)...)
+			return txn.Put(s.dbi, tk, val, 0)
+		}
+		if err != nil {
+			return err
+		}
+		// Preserve count, replace/add vector
+		val := make([]byte, 4)
+		copy(val, v[:4])
+		val = append(val, float32ToBytes(vec)...)
+		return txn.Put(s.dbi, tk, val, 0)
 	})
 }
 
@@ -1036,18 +1222,22 @@ func (s *Store) WriteTagValueEmbedding(tvid uint64, vec []float32) error {
 	})
 }
 
-// ReadTagNameEmbedding reads an ET record.
-func (s *Store) ReadTagNameEmbedding(tnid uint64) ([]float32, error) {
+// ReadTagNameEmbedding reads the embedding vector from a T record.
+// Returns nil if no embedding is present.
+func (s *Store) ReadTagNameEmbedding(tag string) ([]float32, error) {
+	tk := tagTotalKey(tag)
 	var vec []float32
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, embedTagKey(tnid))
+		v, err := txn.Get(s.dbi, tk)
 		if lmdb.IsNotFound(err) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		vec = bytesToFloat32(v)
+		if len(v) > 4 {
+			vec = bytesToFloat32(v[4:])
+		}
 		return nil
 	})
 	return vec, err
@@ -1070,24 +1260,29 @@ func (s *Store) ReadTagValueEmbedding(tvid uint64) ([]float32, error) {
 	return vec, err
 }
 
-// ScanTagNameEmbeddings returns all ET records as tnid → vector.
-func (s *Store) ScanTagNameEmbeddings() (map[uint64][]float32, error) {
-	return s.scanEmbeddings([]byte(prefixEmbedTag))
+// ScanTagNameEmbeddings returns all T records that have embeddings as tag → vector.
+func (s *Store) ScanTagNameEmbeddings() (map[string][]float32, error) {
+	result := make(map[string][]float32)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) >= 2 && len(v) > 4 {
+				result[string(k[1:])] = bytesToFloat32(v[4:])
+			}
+			return nil
+		})
+	})
+	return result, err
 }
 
 // ScanTagValueEmbeddings returns all EV records as tvid → vector.
 func (s *Store) ScanTagValueEmbeddings() (map[uint64][]float32, error) {
-	return s.scanEmbeddings([]byte(prefixEmbedValue))
-}
-
-func (s *Store) scanEmbeddings(prefix []byte) (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
-			if len(k) <= len(prefix) {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) <= len(prefixEmbedValue) {
 				return nil
 			}
-			id, _ := binary.Uvarint(k[len(prefix):])
+			id, _ := binary.Uvarint(k[len(prefixEmbedValue):])
 			if id > 0 {
 				result[id] = bytesToFloat32(v)
 			}
@@ -1097,19 +1292,56 @@ func (s *Store) scanEmbeddings(prefix []byte) (map[uint64][]float32, error) {
 	return result, err
 }
 
-// DropEmbeddings deletes all ET and EV records.
+// MissingTagNameEmbeddings returns tag names from T records that lack embeddings.
+func (s *Store) MissingTagNameEmbeddings() ([]string, error) {
+	var missing []string
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) >= 2 && len(v) >= 4 && len(v) == 4 {
+				// Has count but no embedding
+				missing = append(missing, string(k[1:]))
+			}
+			return nil
+		})
+	})
+	return missing, err
+}
+
+// ScanVRecordTvids scans all V records and returns tvid → {tag, value} mapping.
+// CRC: crc-Store.md | R1310
+func (s *Store) ScanVRecordTvids() (map[uint64]TagAlt, error) {
+	result := make(map[uint64]TagAlt)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagValue)}, func(_ *lmdb.Cursor, k, _ []byte) error {
+			tag, value, tvid, ok := parseVKey(k)
+			if ok && tvid > 0 {
+				result[tvid] = TagAlt{Tag: tag, Value: value}
+			}
+			return nil
+		})
+	})
+	return result, err
+}
+
+// DropEmbeddings strips embedding vectors from T records and deletes all EV records.
 // CRC: crc-Store.md | R1294
 func (s *Store) DropEmbeddings() error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		for _, prefix := range [][]byte{[]byte(prefixEmbedTag), []byte(prefixEmbedValue)} {
-			// Delete all keys with this prefix
-			if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-				return cur.Del(0)
-			}); err != nil {
-				return err
+		// Strip vectors from T records (keep count)
+		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(v) > 4 {
+				val := make([]byte, 4)
+				copy(val, v[:4])
+				return txn.Put(s.dbi, k, val, 0)
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
+		// Delete all EV records
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		})
 	})
 }
 

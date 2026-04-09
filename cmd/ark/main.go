@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -1271,36 +1272,141 @@ Options:
 		}
 
 		if *bench == "tags" {
-			// Benchmark: embed all tag values
+			// Benchmark: embed all tag values (batch vs single)
 			tags, err := db.TagList()
 			if err != nil {
 				fatal(err)
 			}
-			var totalValues int
-			start := time.Now()
+			var texts []string
 			for _, tc := range tags {
 				values, err := db.Store().QueryTagValues(tc.Tag, "")
 				if err != nil {
 					continue
 				}
 				for _, v := range values {
-					text := strings.ReplaceAll(tc.Tag, "-", " ") + ": " + v.Value
-					_, err := lib.EmbedQuery(text)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "error embedding @%s: %s: %v\n", tc.Tag, v.Value[:min(30, len(v.Value))], err)
-						continue
-					}
-					totalValues++
+					texts = append(texts, strings.ReplaceAll(tc.Tag, "-", " ")+": "+v.Value)
 				}
 			}
-			elapsed := time.Since(start)
-			fmt.Printf("embedded %d tag values in %v (%.1f ms/value)\n",
-				totalValues, elapsed, float64(elapsed.Milliseconds())/float64(max(totalValues, 1)))
+			fmt.Printf("collected %d tag values\n", len(texts))
+
+			// Batch benchmark
+			batchSize := 50
+			start := time.Now()
+			var batchTotal int
+			for i := 0; i < len(texts); i += batchSize {
+				end := min(i+batchSize, len(texts))
+				vecs, err := lib.EmbedBatch(texts[i:end])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "batch error at %d: %v\n", i, err)
+					continue
+				}
+				batchTotal += len(vecs)
+			}
+			batchElapsed := time.Since(start)
+			fmt.Printf("batch(%d): embedded %d values in %v (%.1f ms/value)\n",
+				batchSize, batchTotal, batchElapsed,
+				float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
+
+			// Single benchmark
+			start = time.Now()
+			var singleTotal int
+			for _, text := range texts {
+				if _, err := lib.EmbedQuery(text); err != nil {
+					continue
+				}
+				singleTotal++
+			}
+			singleElapsed := time.Since(start)
+			fmt.Printf("single:    embedded %d values in %v (%.1f ms/value)\n",
+				singleTotal, singleElapsed,
+				float64(singleElapsed.Milliseconds())/float64(max(singleTotal, 1)))
+
+			fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
 			return
 		}
 
 		if *bench == "chunks" {
-			fmt.Println("chunk benchmarking not yet implemented")
+			// Sample 200 real chunks using the chunker, then benchmark batch vs single
+			files, err := db.Files()
+			if err != nil {
+				fatal(err)
+			}
+			if len(files) == 0 {
+				fmt.Println("no indexed files")
+				return
+			}
+
+			// Sample 200 chunks: pick file at random, read its chunks, pick one.
+			// File-first sampling prevents large files (JSONL) from dominating.
+			const sampleSize = 200
+			fileChunkCache := make(map[string][]string)
+			var chunks []string
+
+			for len(chunks) < sampleSize {
+				// Pick a random file
+				fpath := files[rand.Intn(len(files))]
+				cached, ok := fileChunkCache[fpath]
+				if !ok {
+					// Read file content and split into ~512-byte chunks
+					// (approximates real chunker boundaries)
+					data, err := os.ReadFile(fpath)
+					if err != nil || len(data) == 0 {
+						fileChunkCache[fpath] = nil
+						continue
+					}
+					text := string(data)
+					for i := 0; i < len(text); i += 512 {
+						end := min(i+512, len(text))
+						cached = append(cached, text[i:end])
+					}
+					fileChunkCache[fpath] = cached
+				}
+				if len(cached) == 0 {
+					continue
+				}
+				chunks = append(chunks, cached[rand.Intn(len(cached))])
+			}
+
+			// Stats
+			var totalBytes int
+			for _, c := range chunks {
+				totalBytes += len(c)
+			}
+			fmt.Printf("sampled %d chunks from %d files (avg %d bytes/chunk)\n",
+				len(chunks), len(fileChunkCache), totalBytes/max(len(chunks), 1))
+
+			// Batch benchmark
+			batchSize := 50
+			start := time.Now()
+			var batchTotal int
+			for i := 0; i < len(chunks); i += batchSize {
+				end := min(i+batchSize, len(chunks))
+				vecs, err := lib.EmbedBatch(chunks[i:end])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "batch error at %d: %v\n", i, err)
+					continue
+				}
+				batchTotal += len(vecs)
+			}
+			batchElapsed := time.Since(start)
+			fmt.Printf("batch(%d): embedded %d chunks in %v (%.1f ms/chunk)\n",
+				batchSize, batchTotal, batchElapsed,
+				float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
+
+			// Single benchmark
+			start = time.Now()
+			var embedded int
+			for _, c := range chunks {
+				if _, err := lib.EmbedQuery(c); err != nil {
+					continue
+				}
+				embedded++
+			}
+			singleElapsed := time.Since(start)
+			fmt.Printf("single:    embedded %d chunks in %v (%.1f ms/chunk)\n",
+				embedded, singleElapsed,
+				float64(singleElapsed.Milliseconds())/float64(max(embedded, 1)))
+			fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
 			return
 		}
 
