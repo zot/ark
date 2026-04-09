@@ -1094,7 +1094,7 @@ Options:`)
 
 	if *wait {
 		// Lotto tube: block until requests arrive
-		data, err := proxyRaw(client, "GET", "/search/expand/wait", nil)
+		data, err := proxyRaw(client, "GET", "/search/curate/wait", nil)
 		if err != nil {
 			fatal(err)
 		}
@@ -1153,14 +1153,14 @@ Options:`)
 		searchData, err := proxyRaw(client, "POST", "/search/expand/search", alts)
 		if err != nil {
 			// Post error if search fails
-			proxyOK(client, "POST", "/search/expand/result", map[string]any{
+			proxyOK(client, "POST", "/search/curate/result", map[string]any{
 				"id":    *resultFlag,
 				"error": err.Error(),
 			})
 			fatal(err)
 		}
 		// Post search results
-		err = proxyOK(client, "POST", "/search/expand/result", map[string]any{
+		err = proxyOK(client, "POST", "/search/curate/result", map[string]any{
 			"id":      *resultFlag,
 			"results": json.RawMessage(searchData),
 		})
@@ -1178,7 +1178,7 @@ Options:`)
 		if len(parts) > 1 {
 			msg = parts[1]
 		}
-		err := proxyOK(client, "POST", "/search/expand/result", map[string]any{
+		err := proxyOK(client, "POST", "/search/curate/result", map[string]any{
 			"id":    id,
 			"error": msg,
 		})
@@ -1204,7 +1204,7 @@ Options:`)
 	var queued struct {
 		RequestID string `json:"requestId"`
 	}
-	err := proxyDecode(client, "POST", "/search/expand", map[string]string{
+	err := proxyDecode(client, "POST", "/search/curate", map[string]string{
 		"tag":   tag,
 		"value": value,
 	}, &queued)
@@ -1221,7 +1221,7 @@ Options:`)
 		Done    bool            `json:"done"`
 	}
 	for {
-		err = proxyDecode(client, "GET", "/search/expand/result/"+queued.RequestID, nil, &result)
+		err = proxyDecode(client, "GET", "/search/curate/result/"+queued.RequestID, nil, &result)
 		if err != nil {
 			// Server may have restarted — sleep and retry
 			time.Sleep(250 * time.Millisecond)

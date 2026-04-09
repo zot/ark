@@ -1,17 +1,19 @@
 # Sequence: Spectral Expand (Tag Search)
 
-**Requirements:** R1235-R1247, R1268-R1273
+**Requirements:** R1235-R1247, R1268-R1273, R1378-R1383
 
-Browser sends POST /search/expand. Server delegates to Librarian
-actor, which runs the three-step pipeline: expand → fuzzy match
-→ curate → fetch results.
+Browser sends POST /search/curate (was /search/expand). Server
+delegates to Librarian actor, which runs the three-step pipeline:
+expand → fuzzy match → curate → fetch results. Curation endpoints
+use /search/curate prefix; expansion/matching endpoints remain
+under /search/expand/.
 
 ## Happy Path
 
 ```
 Browser        Server           Librarian(actor)    Store/V-records   claude(co-process)
   |               |                  |                    |                  |
-  |--POST expand->|                  |                    |                  |
+  |--POST curate->|                  |                    |                  |
   |               |--ExpandTags()--->|                    |                  |
   |               |                  |                    |                  |
   |               |                  |--- Step 1: Expand -|---------------->|
@@ -54,7 +56,7 @@ Browser        Server           Librarian(actor)    Store/V-records   claude(co-
 ```
 Browser        Server           Librarian(actor)      claude
   |               |                  |                    |
-  |--POST expand->|                  |                    |
+  |--POST curate->|                  |                    |
   |               |--ExpandTags()--->|                    |
   |               |                  |--spawn()           |
   |               |                  |  exec.Command(     |
@@ -87,7 +89,7 @@ Browser        Server           Librarian(actor)      claude
 ```
 Browser        Server           Librarian(actor)      claude
   |               |                  |                    |
-  |--POST expand->|                  |                    |
+  |--POST curate->|                  |                    |
   |               |--ExpandTags()--->|                    |
   |               |                  |--sendMessage()---->|
   |               |                  |<--stdout EOF/error |
@@ -104,7 +106,7 @@ Browser        Server           Librarian(actor)      claude
 ```
 Browser        Server           Librarian
   |               |                  |
-  |--POST expand->|                  |
+  |--POST curate->|                  |
   |               |--ExpandTags()--->|
   |               |<--err: unavail---|
   |<--503---------|                  |

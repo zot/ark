@@ -1941,6 +1941,14 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1273:** Server fetches actual search results for the curated tags before returning to the client
 - **R1247:** (inferred) If the co-process is unavailable (not on PATH, spawn failure), the endpoint returns 503
 
+### Curation Endpoint Rename
+- **R1378:** Curation endpoints are renamed from `/search/expand` to `/search/curate` — curation is now a separate step from expansion
+- **R1379:** `POST /search/curate` queues a curation request (replaces `POST /search/expand`)
+- **R1380:** `GET /search/curate/wait` is the lotto tube for the sidecar (replaces `GET /search/expand/wait`)
+- **R1381:** `POST /search/curate/result` receives sidecar results (replaces `POST /search/expand/result`)
+- **R1382:** `GET /search/curate/result/{id}` polls for a curation result (replaces `GET /search/expand/result/{id}`)
+- **R1383:** Expansion and matching endpoints remain under `/search/expand/`: fuzzy, embed, search
+
 ### Availability
 - **R1248:** Server checks for `claude` on PATH at startup
 - **R1249:** `GET /status` includes `spectral: true/false` capability flag

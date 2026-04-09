@@ -84,15 +84,25 @@ adapts:
 The mechanism is the same — expand, search, curate — but the
 search step uses the full-text index instead of V records.
 
-### Endpoint
+### Endpoints
 
-`POST /search/expand` accepts `{mode, tag, value}` and returns
-`{results: [{path, strategy, chunks, source: "expansion"}]}`.
+Curation is separated from expansion and matching. The client
+(or sidecar) runs expand + match first, then sends candidates
+to the curation endpoint for Haiku to judge.
 
-Results look like regular search results but are marked as
-expansion-sourced. The full expand→search→curate pipeline runs
-server-side. The client just displays them interspersed with
-literal results.
+`POST /search/curate` accepts `{tag, value, candidates}` and
+queues a curation request. Returns `{requestId}`.
+
+`GET /search/curate/result/{id}` blocks until the curation
+completes, returns the curated subset.
+
+The sidecar picks up work via `GET /search/curate/wait` (lotto
+tube) and posts results via `POST /search/curate/result`.
+
+Expansion and matching endpoints remain under `/search/expand/`:
+- `POST /search/expand/fuzzy` — trigram fuzzy match
+- `POST /search/expand/embed` — embedding similarity
+- `POST /search/expand/search` — grouped search on curated tags
 
 ## Two-Phase Results
 

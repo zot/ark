@@ -279,8 +279,8 @@ func (l *Librarian) FuzzyMatchTags(alternatives []TagAlt) []TagMatch {
 
 // --- HTTP Handlers (called from Server) ---
 
-// HandleExpand queues an expansion request and returns the request ID.
-// POST /search/expand
+// HandleExpand queues a curation request and returns the request ID.
+// POST /search/curate
 func (l *Librarian) HandleExpand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Tag   string `json:"tag"`
@@ -299,7 +299,7 @@ func (l *Librarian) HandleExpand(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleExpandWait is the lotto tube — blocks until requests are available.
-// GET /search/expand/wait
+// GET /search/curate/wait
 func (l *Librarian) HandleExpandWait(w http.ResponseWriter, r *http.Request) {
 	timeout := 120 * time.Second
 	if l.WaitForRequest(timeout) {
@@ -311,7 +311,7 @@ func (l *Librarian) HandleExpandWait(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleExpandResult receives results from the sidecar agent.
-// POST /search/expand/result
+// POST /search/curate/result
 func (l *Librarian) HandleExpandResult(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID      string `json:"id"`
@@ -327,7 +327,7 @@ func (l *Librarian) HandleExpandResult(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleExpandGet retrieves the result for a request ID, blocking until ready.
-// GET /search/expand/result/{id}
+// GET /search/curate/result/{id}
 func (l *Librarian) HandleExpandGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
