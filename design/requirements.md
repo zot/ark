@@ -2236,3 +2236,14 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1444:** Tag OR groups serialize as `@(name1|name2):\s*value` regex
 - **R1445:** Contains OR groups serialize as `(term1|term2|term3)` regex
 - **R1446:** The polarity maps to the existing with/without regex filter path
+
+## Feature: Filter Persistence
+**Source:** specs/ark-search.md
+
+- **R1447:** Filters persist across searches within a session (element state) — already implemented
+- **R1448:** A chip bar below the filter rows shows saved filter presets
+- **R1449:** `[+ save]` button prompts for a name and saves current filter groups to localStorage
+- **R1450:** Clicking a chip loads the saved filter configuration into the element
+- **R1451:** `x` button on a chip removes it from localStorage
+- **R1452:** Saved presets stored in localStorage under key `ark-search-filters` as JSON
+- **R1453:** Chips serialize FilterGroup arrays — restore recreates the group/row state

@@ -205,6 +205,30 @@ For contains groups: `(term1|term2|term3)`. This maps to the
 existing `WithRegexFilter` / `WithExceptRegex` path without Go
 changes.
 
+## Filter Persistence
+
+Filters persist across searches within a session (element state).
+Named filter stacks can be saved and loaded via a chip bar.
+
+### Chip Bar
+
+```
+[+ save] | [ark project x] [no jsonl x] [...]
+```
+
+- `[+ save]` prompts for a name and saves the current filter
+  groups to localStorage under key `ark-search-filters`
+- Each chip loads the saved filter configuration on click
+- `x` removes the chip
+- `[...]` is a dropdown for overflow when there are many chips
+- Chips are JSON arrays of serialized FilterGroup objects
+
+### Storage
+
+`localStorage` key: `ark-search-filters` — JSON object mapping
+chip name to serialized filter groups. Works in both standalone
+and Frictionless contexts.
+
 ## Result Rendering
 
 The element renders results as plain HTML:

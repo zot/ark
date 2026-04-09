@@ -55,6 +55,26 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// --- Filter persistence R1448-R1453 ---
+
+const STORAGE_KEY = "ark-search-filters";
+
+/** Serializable filter preset. */
+interface FilterPreset {
+  groups: FilterGroup[];
+}
+
+function loadPresets(): Record<string, FilterPreset> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function savePresets(presets: Record<string, FilterPreset>): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+}
+
 let nextFilterId = 1;
 function newFilterRow(mode: FilterMode = "contains", polarity: Polarity = "with"): FilterRow {
   return {
@@ -106,6 +126,7 @@ export class ArkSearchElement extends HTMLElement {
     { name: "chats", pattern: "**/*.jsonl", active: true },
   ];
   private sourceBar!: HTMLElement;
+  private chipBar!: HTMLElement;
 
   // Results
   private resultsEl!: HTMLElement;
@@ -259,6 +280,11 @@ export class ArkSearchElement extends HTMLElement {
     this.sourceBar.className = "ark-search-source-bar";
     this.renderSourceBar();
 
+    // === Chip bar for saved filter presets R1448 ===
+    this.chipBar = document.createElement("div");
+    this.chipBar.className = "ark-search-chip-bar";
+    this.renderChipBar();
+
     // === Iframe lazy loading + auto-height ===
     this.lazyObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -317,6 +343,7 @@ export class ArkSearchElement extends HTMLElement {
       this.appendChild(this.filtersContainer);
       this.appendChild(addBtn);
       this.appendChild(this.sourceBar);
+      this.appendChild(this.chipBar);
     }
     this.appendChild(this.resultsEl);
     if (!this._hideBar) {
@@ -518,6 +545,64 @@ export class ArkSearchElement extends HTMLElement {
         this.debouncedSearch();
       });
       this.sourceBar.appendChild(btn);
+    }
+  }
+
+  // === Chip Bar R1448-R1453 ===
+
+  private renderChipBar(): void {
+    this.chipBar.innerHTML = "";
+
+    // [+ save] button R1449
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "ark-search-chip-save";
+    saveBtn.textContent = "+ save";
+    saveBtn.addEventListener("click", () => {
+      const name = prompt("Filter preset name:");
+      if (!name?.trim()) return;
+      const presets = loadPresets();
+      presets[name.trim()] = { groups: this.filterGroups };
+      savePresets(presets);
+      this.renderChipBar();
+    });
+    this.chipBar.appendChild(saveBtn);
+
+    // Saved chips R1450-R1451
+    const presets = loadPresets();
+    for (const [name, preset] of Object.entries(presets)) {
+      const chip = document.createElement("span");
+      chip.className = "ark-search-chip";
+
+      const label = document.createElement("span");
+      label.className = "ark-search-chip-label";
+      label.textContent = name;
+      label.title = `Load "${name}" filters`;
+      label.addEventListener("click", () => {
+        // R1450, R1453: restore filter groups, reassign IDs
+        this.filterGroups = preset.groups.map(g => ({
+          ...g,
+          id: nextFilterId++,
+          rows: g.rows.map(r => ({ ...r, id: nextFilterId++ })),
+        }));
+        this.renderFilterGroups();
+        this.debouncedSearch();
+      });
+
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "ark-search-chip-remove";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.title = `Remove "${name}"`;
+      removeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const p = loadPresets();
+        delete p[name];
+        savePresets(p);
+        this.renderChipBar();
+      });
+
+      chip.appendChild(label);
+      chip.appendChild(removeBtn);
+      this.chipBar.appendChild(chip);
     }
   }
 
