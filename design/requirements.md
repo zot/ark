@@ -2194,3 +2194,22 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1420:** Each source type maps to path patterns fed to `filter_files`/`exclude_files`
 - **R1421:** If the user adds any `[files]` filter rows, the source-type bar grays out — user file filters replace source-type filters entirely
 - **R1422:** Removing all `[files]` filter rows restores the source-type bar
+
+## Feature: Content Iframe Previews
+**Source:** specs/content-iframe.md
+
+### Content Endpoint Query Params
+- **R1423:** `/content/PATH` gains `range` query param — serves only the chunk identified by the range label
+- **R1424:** Range resolution uses microfts2's chunk cache (same opaque range strings as SearchChunk.range)
+- **R1425:** If range is invalid or unresolvable, falls back to serving the full file
+- **R1426:** `toggle=false` hides the pencil/eye toggle button in the HTML template
+- **R1427:** `edit=true` auto-loads the CM6 editor in read mode on page load (skips static goldmark view)
+
+### Template Changes
+- **R1428:** contentShellData gains HideToggle, AutoEdit, IsChunk boolean fields
+- **R1429:** Template conditionally hides #toggle-btn when HideToggle is true
+- **R1430:** Template auto-loads CM6 editor when AutoEdit is true (hide #content, show #editor, load on DOMContentLoaded)
+
+### Auto-Height for Iframes
+- **R1431:** When loaded in an iframe, the content page posts body height via postMessage({type: 'ark-content-height', height: N})
+- **R1432:** Height is posted on load and on resize

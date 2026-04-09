@@ -203,14 +203,16 @@
     </style>
 </head>
 <body>
-<button id="toggle-btn" title="Edit (pencil) / View (eye)">&#9998;</button>
-<div id="content">{{.Content}}</div>
-<div id="editor"></div>
+{{if not .HideToggle}}<button id="toggle-btn" title="Edit (pencil) / View (eye)">&#9998;</button>{{end}}
+<div id="content"{{if .AutoEdit}} style="display:none"{{end}}>{{.Content}}</div>
+<div id="editor"{{if .AutoEdit}} style="display:block;min-height:100vh"{{end}}></div>
 <script type="module">
 const path = location.pathname.replace(/^\/content/, '');
 const btn = document.getElementById('toggle-btn');
 const contentDiv = document.getElementById('content');
 const editorDiv = document.getElementById('editor');
+const isChunk = {{if .IsChunk}}true{{else}}false{{end}};
+const autoEdit = {{if .AutoEdit}}true{{else}}false{{end}};
 let editor = null;
 let savedContent = null;
 
@@ -293,6 +295,37 @@ document.addEventListener('keydown', (e) => {
     if (editor) api.save(path, editor.getDoc());
   }
 });
+
+// R1427, R1430: auto-load CM6 editor on page load
+if (autoEdit) {
+  (async () => {
+    const resp = await fetch('/fetch' + path + location.search);
+    const data = await resp.json();
+    const raw = data.content;
+    const normalized = normalizeTagLines(raw);
+    const { createInkArkEditor } = await import('/ark-markdown-editor.js{{.BundleHash}}');
+    editor = await createInkArkEditor({
+      parent: editorDiv,
+      doc: normalized,
+      path: path,
+      api: api,
+    });
+    savedContent = raw;
+    if (btn) { btn.innerHTML = '&#128065;'; btn.title = 'Back to reading view'; }
+    postHeight();
+  })();
+}
+
+// R1431-R1432: post height to parent iframe
+function postHeight() {
+  if (window === window.parent) return;
+  const h = document.documentElement.scrollHeight;
+  window.parent.postMessage({ type: 'ark-content-height', height: h, src: location.href }, '*');
+}
+if (window !== window.parent) {
+  window.addEventListener('load', postHeight);
+  new ResizeObserver(postHeight).observe(document.body);
+}
 </script>
 </body>
 </html>

@@ -1167,6 +1167,18 @@ func (db *DB) FileStrategy(path string) string {
 	return finfo.Strategy
 }
 
+// ChunkText resolves a chunk range label to its text content.
+// Uses a one-off chunk cache. Returns nil if the range is unresolvable.
+// CRC: crc-DB.md | R1424
+func (db *DB) ChunkText(path, rangeLabel string) []byte {
+	cache := db.fts.NewChunkCache()
+	text, ok := cache.ChunkText(path, rangeLabel)
+	if !ok {
+		return nil
+	}
+	return text
+}
+
 // IsIndexed returns true if the given file path is in the index.
 func (db *DB) IsIndexed(path string) bool {
 	absPath, err := filepath.Abs(path)

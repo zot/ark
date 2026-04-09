@@ -1850,6 +1850,15 @@ func (srv *Server) handleContentFetch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// R1423: resolve chunk range if specified
+	if rangeParam := r.URL.Query().Get("range"); rangeParam != "" {
+		chunkData, _ := Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.ChunkText(path, rangeParam), nil
+		})
+		if chunkData != nil {
+			data = chunkData
+		}
+	}
 	strategy, _ := Sync(srv.db, func(db *DB) (string, error) {
 		return db.FileStrategy(path), nil
 	})
@@ -1869,6 +1878,25 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// R1423-R1427: query params for iframe previews
+	rangeParam := r.URL.Query().Get("range")
+	hideToggle := r.URL.Query().Get("toggle") == "false"
+	autoEdit := r.URL.Query().Get("edit") == "true"
+	isChunk := false
+
+	// R1423-R1425: resolve chunk range if specified
+	if rangeParam != "" {
+		chunkData, _ := Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.ChunkText(path, rangeParam), nil
+		})
+		if chunkData != nil {
+			data = chunkData
+			isChunk = true
+		}
+		// R1425: if range invalid, fall back to full file (data unchanged)
+	}
+
 	strategy, _ := Sync(srv.db, func(db *DB) (string, error) {
 		return db.FileStrategy(path), nil
 	})
@@ -1880,6 +1908,14 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		bundleHash = fmt.Sprintf("?v=%d", info.ModTime().Unix())
 	}
 
+	shell := contentShellData{
+		Title:      path,
+		BundleHash: bundleHash,
+		HideToggle: hideToggle,
+		AutoEdit:   autoEdit,
+		IsChunk:    isChunk,
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if StrategyToContentType(strategy) == "markdown" || strings.HasSuffix(path, ".md") {
 		tmpl, err := srv.loadContentTemplate("content-markdown.html")
@@ -1888,14 +1924,16 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rendered := renderMarkdownForContent(data, path)
-		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(rendered), BundleHash: bundleHash})
+		shell.Content = template.HTML(rendered)
+		tmpl.Execute(w, shell)
 	} else {
 		tmpl, err := srv.loadContentTemplate("content-plain.html")
 		if err != nil {
 			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tmpl.Execute(w, contentShellData{Title: path, Content: template.HTML(template.HTMLEscapeString(string(data)))})
+		shell.Content = template.HTML(template.HTMLEscapeString(string(data)))
+		tmpl.Execute(w, shell)
 	}
 }
 
@@ -1971,6 +2009,9 @@ type contentShellData struct {
 	Title      string
 	Content    template.HTML // raw HTML, not escaped
 	BundleHash string        // cache-busting query param for JS bundle
+	HideToggle bool          // R1426, R1429: hide pencil/eye toggle button
+	AutoEdit   bool          // R1427, R1430: auto-load CM6 editor on page load
+	IsChunk    bool          // R1423: serving a chunk range, not full file
 }
 
 // loadContentTemplate reads an HTML template from the html/ dir under dbPath.
