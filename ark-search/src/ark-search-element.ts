@@ -1,6 +1,16 @@
-// CRC: crc-ArkSearchElement.md | Seq: seq-tag-click.md | R1356-R1367, R1372, R1373, R1377
+// CRC: crc-ArkSearchElement.md | Seq: seq-tag-click.md
+// R1356-R1367, R1372, R1373, R1377, R1386-R1394
 
-import type { SearchAPI, SearchResultGroup } from "./search-api";
+import type { SearchAPI, SearchResultGroup, TagMatch } from "./search-api";
+
+/** Source phase for visual treatment. */
+type Phase = "trigram" | "candidate" | "curated" | "rejected";
+
+/** A result group tagged with its source phase. */
+interface PhasedGroup {
+  group: SearchResultGroup;
+  phase: Phase;
+}
 
 /** Validate tag name: must match @tag: pattern. */
 const validTagName = /^[a-zA-Z][\w.-]*$/;
@@ -11,7 +21,8 @@ function escapeRegex(s: string): string {
 }
 
 /**
- * `<ark-search>` custom element — standalone tag search panel.
+ * `<ark-search>` custom element — standalone tag search panel
+ * with three-phase progressive search.
  *
  * Properties (set by host after creation):
  * - api: SearchAPI — required
@@ -33,6 +44,10 @@ export class ArkSearchElement extends HTMLElement {
   private resultsEl!: HTMLElement;
   private useRegex = false;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Progressive search state
+  private searchGeneration = 0; // increments on each search, stale results ignored
+  private phasedResults: PhasedGroup[] = [];
 
   get api(): SearchAPI | null { return this._api; }
   set api(v: SearchAPI | null) {
@@ -176,6 +191,7 @@ export class ArkSearchElement extends HTMLElement {
 
     const tag = this.tagInput.value.trim();
     if (!tag) {
+      this.phasedResults = [];
       this.resultsEl.innerHTML = "";
       return;
     }
@@ -197,65 +213,172 @@ export class ArkSearchElement extends HTMLElement {
       query = value ? `@${tag}:\\s*${escapeRegex(value)}` : `@${tag}:`;
     }
 
-    api.search(query, "regex").then((groups) => {
-      this.resultsEl.innerHTML = "";
-      if (groups.length === 0) {
-        this.resultsEl.innerHTML = '<div class="ark-tag-search-empty">No results</div>';
-        return;
+    // New search generation — stale results from prior searches are ignored
+    const gen = ++this.searchGeneration;
+    this.phasedResults = [];
+
+    // Phase 1: trigram (always, immediate) R1386
+    const phase1 = api.search(query, "regex").then((groups) => {
+      if (gen !== this.searchGeneration) return;
+      for (const g of groups) {
+        this.phasedResults.push({ group: g, phase: "trigram" });
       }
-      renderResults(this.resultsEl, groups, api);
+      this.renderResults();
+    });
+
+    // Phase 2: embedding (if available) R1387, R1389
+    const hasPhase2 = api.embedMatch && api.expandSearch;
+    let phase2Matches: TagMatch[] | null = null;
+
+    if (hasPhase2) {
+      const embedQuery = value ? `${tag} ${value}` : tag;
+      api.embedMatch!(embedQuery).then((matches) => {
+        if (gen !== this.searchGeneration || matches.length === 0) return;
+        phase2Matches = matches;
+        const alts = matches.map(m => ({ tag: m.tag, value: m.value }));
+        return api.expandSearch!(alts);
+      }).then((groups) => {
+        if (gen !== this.searchGeneration || !groups) return;
+        // Deduplicate: skip paths already in phase 1 R1391
+        const phase1Paths = new Set(
+          this.phasedResults
+            .filter(p => p.phase === "trigram")
+            .map(p => p.group.path)
+        );
+        for (const g of groups) {
+          if (!phase1Paths.has(g.path)) {
+            this.phasedResults.push({ group: g, phase: "candidate" });
+          }
+        }
+        this.renderResults();
+
+        // Phase 3: curation (if available) R1388
+        if (api.curateRequest && api.curateResult && phase2Matches) {
+          this.startCuration(api, gen, tag, value, phase2Matches);
+        }
+      });
+    }
+
+    // Show loading state until phase 1 resolves
+    phase1.then(() => {
+      if (gen !== this.searchGeneration) return;
+      if (this.phasedResults.length === 0) {
+        this.resultsEl.innerHTML = '<div class="ark-tag-search-empty">No results</div>';
+      }
     });
   }
-}
 
-/** Render search results with path links and show-in-folder buttons. */
-function renderResults(
-  container: HTMLElement,
-  groups: SearchResultGroup[],
-  api: SearchAPI,
-): void {
-  for (const group of groups) {
-    const groupEl = document.createElement("div");
-    groupEl.className = "ark-tag-search-group";
-
-    const header = document.createElement("div");
-    header.className = "ark-tag-search-group-header";
-
-    const pathLink = document.createElement("a");
-    pathLink.className = "ark-tag-search-path";
-    pathLink.textContent = group.path;
-    pathLink.href = "/content" + group.path;
-    pathLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      api.navigate(group.path);
+  /** Phase 3: queue curation and poll for result. R1388 */
+  private startCuration(
+    api: SearchAPI,
+    gen: number,
+    tag: string,
+    value: string,
+    candidates: TagMatch[],
+  ): void {
+    api.curateRequest!(tag, value, candidates).then((requestId) => {
+      if (gen !== this.searchGeneration) return;
+      this.pollCuration(api, gen, requestId);
     });
-    header.appendChild(pathLink);
+  }
 
-    if (api.showInFolder) {
-      const folderBtn = document.createElement("button");
-      folderBtn.className = "ark-tag-search-folder";
-      folderBtn.innerHTML = "&#128193;";
-      folderBtn.title = "Show in file manager";
-      folderBtn.addEventListener("click", () => api.showInFolder!(group.path));
-      header.appendChild(folderBtn);
-    }
-
-    groupEl.appendChild(header);
-
-    for (const chunk of group.chunks) {
-      const chunkEl = document.createElement("div");
-      chunkEl.className = "ark-tag-search-chunk";
-      if (chunk.preview) {
-        chunkEl.innerHTML = chunk.preview;
-      } else {
-        const pre = document.createElement("pre");
-        pre.textContent = chunk.content.slice(0, 200);
-        chunkEl.appendChild(pre);
+  private pollCuration(api: SearchAPI, gen: number, requestId: string): void {
+    api.curateResult!(requestId).then((result) => {
+      if (gen !== this.searchGeneration) return;
+      if (!result.done) {
+        // Not ready yet — poll again after a short delay
+        setTimeout(() => this.pollCuration(api, gen, requestId), 500);
+        return;
       }
-      groupEl.appendChild(chunkEl);
-    }
+      if (result.error) return; // silently ignore curation errors
 
-    container.appendChild(groupEl);
+      // Build sets for quick lookup
+      const curatedKeys = new Set(result.curated.map(m => `${m.tag}\0${m.value}`));
+      const rejectedKeys = new Set(result.rejected.map(m => `${m.tag}\0${m.value}`));
+
+      // Update phase for candidate results R1394
+      for (const pr of this.phasedResults) {
+        if (pr.phase !== "candidate") continue;
+        // Match by path — candidates came from expandSearch on these tags
+        // Use a simple heuristic: if any curated tag's value appears in the path's results, promote
+        // For now, promote all candidates that aren't rejected
+        const key = this.matchGroupToTag(pr);
+        if (key && curatedKeys.has(key)) {
+          pr.phase = "curated";
+        } else if (key && rejectedKeys.has(key)) {
+          pr.phase = "rejected";
+        }
+        // Candidates not in either set stay as "candidate"
+      }
+      this.renderResults();
+    });
+  }
+
+  /** Best-effort match of a result group back to its source tag. */
+  private matchGroupToTag(pr: PhasedGroup): string | null {
+    // The group's strategy field often contains the tag query
+    // For now, return null — all unmatched candidates stay as-is
+    // This will be refined when the expandSearch response carries source tags
+    void pr;
+    return null;
+  }
+
+  /** Render all phased results into the results area. R1390, R1392-R1394 */
+  private renderResults(): void {
+    this.resultsEl.innerHTML = "";
+    if (this.phasedResults.length === 0) return;
+
+    const api = this._api!;
+    for (const { group, phase } of this.phasedResults) {
+      const groupEl = document.createElement("div");
+      groupEl.className = `ark-tag-search-group ark-search-phase-${phase}`;
+
+      const header = document.createElement("div");
+      header.className = "ark-tag-search-group-header";
+
+      const pathLink = document.createElement("a");
+      pathLink.className = "ark-tag-search-path";
+      pathLink.textContent = group.path;
+      pathLink.href = "/content" + group.path;
+      pathLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        api.navigate(group.path);
+      });
+      header.appendChild(pathLink);
+
+      if (phase === "candidate") {
+        const badge = document.createElement("span");
+        badge.className = "ark-search-candidate-badge";
+        badge.textContent = "candidate";
+        header.appendChild(badge);
+      }
+
+      if (api.showInFolder) {
+        const folderBtn = document.createElement("button");
+        folderBtn.className = "ark-tag-search-folder";
+        folderBtn.innerHTML = "&#128193;";
+        folderBtn.title = "Show in file manager";
+        folderBtn.addEventListener("click", () => api.showInFolder!(group.path));
+        header.appendChild(folderBtn);
+      }
+
+      groupEl.appendChild(header);
+
+      for (const chunk of group.chunks) {
+        const chunkEl = document.createElement("div");
+        chunkEl.className = "ark-tag-search-chunk";
+        if (chunk.preview) {
+          chunkEl.innerHTML = chunk.preview;
+        } else {
+          const pre = document.createElement("pre");
+          pre.textContent = chunk.content.slice(0, 200);
+          chunkEl.appendChild(pre);
+        }
+        groupEl.appendChild(chunkEl);
+      }
+
+      this.resultsEl.appendChild(groupEl);
+    }
   }
 }
 

@@ -26,9 +26,35 @@ interface — the search-relevant subset of HostAPI:
 HostAPI extends SearchAPI with CM6-specific methods (`save`,
 `setTags`). The search component depends only on SearchAPI.
 
-Future methods for three-phase search (`embedMatch`,
-`expandRequest`, `expandResult`) will be added to SearchAPI
-when those features land. This extraction does not add them.
+### Three-Phase Progressive Search Methods
+
+Optional methods on SearchAPI enable progressive search. If
+absent, the element falls back to trigram-only (phase 1).
+
+- `embedMatch?(query, k?)` — embedding similarity search,
+  returns `TagMatch[]` (tag, value, count, score)
+- `expandSearch?(tags)` — search for file results matching
+  tag/value pairs, returns `SearchResultGroup[]`
+- `curateRequest?(tag, value, candidates)` — queue Haiku
+  curation of TagMatch candidates, returns requestId
+- `curateResult?(id)` — poll for curation result, returns
+  the curated TagMatch subset plus rejected list
+
+The element checks for method existence and activates phases
+accordingly:
+- Phase 1 (trigram): always — `search()` fires immediately
+- Phase 2 (embedding): if `embedMatch` and `expandSearch`
+  exist — fires in parallel with phase 1, results from
+  `expandSearch` shown muted/bordered
+- Phase 3 (curation): if `curateRequest` and `curateResult`
+  exist — fires after phase 2 completes, promotes chosen
+  results to full color, strikes through rejected ones
+
+Client-side merge: each phase is a separate response. The
+element merges results progressively as they arrive. Phase 2
+results that duplicate phase 1 paths are deduplicated — the
+phase 1 result takes precedence for display, the phase 2
+result is dropped.
 
 ## Custom Element
 

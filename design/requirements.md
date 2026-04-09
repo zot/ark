@@ -2133,3 +2133,16 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1375:** search-result-view.ts stays in markdown-editor (CM6-specific rendering)
 - **R1376:** ark-search-block.ts stays in markdown-editor (CM6 ViewPlugin)
 - **R1377:** tag-widget.ts creates an `<ark-search>` element when a tag panel opens, instead of rendering the panel inline
+
+### Three-Phase Progressive Search
+- **R1384:** SearchAPI gains optional methods: embedMatch, expandSearch, curateRequest, curateResult
+- **R1385:** If embedMatch and expandSearch are absent, the element uses trigram-only search (phase 1)
+- **R1386:** Phase 1 (trigram): fires search() immediately, results shown with normal styling
+- **R1387:** Phase 2 (embedding): fires embedMatch() in parallel with phase 1, then expandSearch() for file results, shown muted/bordered
+- **R1388:** Phase 3 (curation): fires curateRequest() after phase 2 completes, polls curateResult(), promotes chosen results to full color, strikes through rejected
+- **R1389:** Phases 1 and 2 fire in parallel; phase 3 fires after phase 2 completes
+- **R1390:** Client-side merge: each phase is a separate response, the element merges progressively
+- **R1391:** Phase 2 results that duplicate phase 1 paths are deduplicated — phase 1 takes precedence
+- **R1392:** Each result group tracks its source phase for visual treatment
+- **R1393:** Phase 2 candidates shown with muted color and a border/icon indicating candidate status
+- **R1394:** Phase 3 promoted results change to full color; rejected results get strike-through but remain visible

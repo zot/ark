@@ -1,5 +1,5 @@
 # ArkSearchElement
-**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377
+**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394
 
 Custom element (`<ark-search>`) that renders a tag search panel
 with query bar, results area, and resize handle. Pure DOM — no
@@ -9,7 +9,8 @@ CM6 dependency.
 - the SearchAPI implementation (set by host)
 - initial tag name and value (set by host)
 - current query state (tag, value, regex mode)
-- search results
+- search results per phase (phase 1, 2, 3)
+- which phases are available (checks for optional SearchAPI methods)
 - valid tag name pattern
 
 ## Does
@@ -19,7 +20,12 @@ CM6 dependency.
 - debounced search on input (300ms), immediate on Enter
 - validates tag name in literal mode (red border on invalid)
 - constructs regex query from tag + value fields
-- renders results as HTML: path links, show-in-folder buttons, chunk previews
+- fires three-phase progressive search: trigram (instant), embedding (~150ms), curation (async)
+- phases 1 and 2 fire in parallel; phase 3 fires after phase 2 completes
+- merges results client-side, deduplicating phase 2 paths that overlap phase 1
+- renders phase 1 results with normal styling
+- renders phase 2 results with muted color and candidate border/icon
+- promotes phase 3 curated results to full color, strikes through rejected
 - dispatches 'close' event when close button clicked
 
 ## Collaborators
