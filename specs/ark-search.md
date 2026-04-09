@@ -115,6 +115,56 @@ HostAPI extends SearchAPI. The final bundle is still one esbuild
 output from `markdown-editor/` — ark-search has no separate
 bundle.
 
+## Stacked Filter Rows
+
+Below the base query bar, the element renders stackable filter
+rows. Each row narrows or excludes results from the base query.
+
+### Base Query Bar
+
+```
+[contains ▾] [search query________________________] [x erase]
+  [+ add filter]
+```
+
+The mode dropdown selects: contains, fuzzy, regex. The base
+query drives scoring and ranking.
+
+When opened from a tag click (tag/value properties set), the
+base query is pre-filled as `@tag: value` in regex mode. The
+tag-specific `@[name]: [value]` bar is sugar for this — it
+constructs the regex query and sets the mode to regex.
+
+### Filter Rows
+
+Each row: `[with/without ▾] [mode ▾] [query input] [x remove]`
+
+Modes: contains, fuzzy, regex, tag, files.
+
+- **contains/fuzzy/regex**: free text input
+- **tag**: structured `@[name]: [value]` with match mode toggle
+  (exact / `.*` regex / `~` fuzzy). Empty value = tag present.
+- **files**: comma-separated glob patterns
+
+Filter rows are sent to the server as `chunk_filters` for
+contains/fuzzy/tag modes (chunk-level filtering via
+ChunkFilter). Regex uses WithRegexFilter/WithExceptRegex.
+Files uses the existing path-level resolveFilters.
+
+### Source-Type Bar
+
+The source-type bar (data/project/memory/chats) is a permanent
+filter row with specialized presentation — icon toggles instead
+of text input. It feeds `filter_files`/`exclude_files` with
+path patterns for each source type.
+
+### Precedence Rule
+
+If the user adds any `[files]` filter rows, they entirely
+replace the source-type bar's file filters. The source bar
+grays out (or shows "overridden"). Remove all `[files]` rows
+and the source bar comes back.
+
 ## Result Rendering
 
 The element renders results as plain HTML:

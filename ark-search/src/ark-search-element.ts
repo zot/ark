@@ -1,7 +1,12 @@
 // CRC: crc-ArkSearchElement.md | Seq: seq-tag-click.md
-// R1356-R1367, R1372, R1373, R1377, R1386-R1394
+// R1356-R1367, R1372, R1373, R1377, R1386-R1394, R1406-R1422
 
-import type { SearchAPI, SearchResultGroup, TagMatch } from "./search-api";
+import type {
+  SearchAPI,
+  SearchResultGroup,
+  TagMatch,
+  ChunkFilterParam,
+} from "./search-api";
 
 /** Source phase for visual treatment. */
 type Phase = "trigram" | "candidate" | "curated" | "rejected";
@@ -12,24 +17,60 @@ interface PhasedGroup {
   phase: Phase;
 }
 
-/** Validate tag name: must match @tag: pattern. */
-const validTagName = /^[a-zA-Z][\w.-]*$/;
+type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "files";
+type Polarity = "with" | "without";
+type TagMatchMode = "exact" | "regex" | "fuzzy";
 
-/** Escape string for use in regex. */
+/** Internal filter row state. */
+interface FilterRow {
+  id: number;
+  polarity: Polarity;
+  mode: FilterMode;
+  query: string;
+  tagName: string;
+  tagValue: string;
+  tagMatchMode: TagMatchMode;
+}
+
+/** Source type toggle state. */
+interface SourceToggle {
+  name: string;
+  pattern: string;
+  active: boolean;
+}
+
+const SEARCH_MODES = ["contains", "fuzzy", "regex"] as const;
+const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files"];
+const TAG_MATCH_LABELS: Record<TagMatchMode, string> = { exact: "Aa", regex: ".*", fuzzy: "~" };
+const TAG_MATCH_CYCLE: TagMatchMode[] = ["exact", "regex", "fuzzy"];
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+let nextFilterId = 1;
+function newFilterRow(): FilterRow {
+  return {
+    id: nextFilterId++,
+    polarity: "with",
+    mode: "contains",
+    query: "",
+    tagName: "",
+    tagValue: "",
+    tagMatchMode: "exact",
+  };
+}
+
 /**
- * `<ark-search>` custom element — standalone tag search panel
- * with three-phase progressive search.
+ * `<ark-search>` custom element — search panel with stacked
+ * filter rows and three-phase progressive search.
  *
  * Properties (set by host after creation):
  * - api: SearchAPI — required
- * - tag: string — initial tag name
+ * - tag: string — initial tag name (sets base query to regex tag search)
  * - value: string — initial value filter
  *
- * Dispatches 'close' CustomEvent when the close button is clicked.
+ * Dispatches 'close' CustomEvent when close button clicked.
  */
 export class ArkSearchElement extends HTMLElement {
   private _api: SearchAPI | null = null;
@@ -37,16 +78,29 @@ export class ArkSearchElement extends HTMLElement {
   private _value = "";
   private _initialized = false;
 
-  // DOM refs
-  private tagInput!: HTMLInputElement;
-  private valueInput!: HTMLInputElement;
-  private regexBtn!: HTMLButtonElement;
+  // Base query bar
+  private queryInput!: HTMLInputElement;
+  private modeSelect!: HTMLSelectElement;
+
+  // Filter rows
+  private filterRows: FilterRow[] = [];
+  private filtersContainer!: HTMLElement;
+
+  // Source-type bar
+  private sourceToggles: SourceToggle[] = [
+    { name: "data", pattern: "", active: true },
+    { name: "project", pattern: "*.md", active: true },
+    { name: "memory", pattern: "**/knowledge/**", active: true },
+    { name: "chats", pattern: "**/*.jsonl", active: true },
+  ];
+  private sourceBar!: HTMLElement;
+
+  // Results
   private resultsEl!: HTMLElement;
-  private useRegex = false;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Progressive search state
-  private searchGeneration = 0; // increments on each search, stale results ignored
+  private searchGeneration = 0;
   private phasedResults: PhasedGroup[] = [];
 
   get api(): SearchAPI | null { return this._api; }
@@ -58,16 +112,23 @@ export class ArkSearchElement extends HTMLElement {
   get tag(): string { return this._tag; }
   set tag(v: string) {
     this._tag = v;
-    if (this.tagInput) {
-      this.tagInput.value = v;
-      this.tagInput.size = Math.max(v.length + 2, 8);
+    if (this.queryInput && v) {
+      // R1408: pre-fill as regex tag search
+      this.modeSelect.value = "regex";
+      const val = this._value.trim();
+      this.queryInput.value = val ? `@${v}:\\s*${escapeRegex(val)}` : `@${v}:`;
     }
   }
 
   get value(): string { return this._value; }
   set value(v: string) {
     this._value = v;
-    if (this.valueInput) this.valueInput.value = v;
+    if (this.queryInput && this._tag) {
+      const val = v.trim();
+      this.queryInput.value = val
+        ? `@${this._tag}:\\s*${escapeRegex(val)}`
+        : `@${this._tag}:`;
+    }
   }
 
   connectedCallback(): void {
@@ -83,73 +144,83 @@ export class ArkSearchElement extends HTMLElement {
       this.addEventListener(evt, (e) => e.stopPropagation());
     }
 
-    // Query bar
+    // === Base query bar R1406 ===
     const bar = document.createElement("div");
-    bar.className = "ark-tag-search-bar";
+    bar.className = "ark-search-bar";
 
-    const atSign = document.createElement("span");
-    atSign.className = "ark-tag-search-at";
-    atSign.textContent = "@";
+    this.modeSelect = document.createElement("select");
+    this.modeSelect.className = "ark-search-mode";
+    for (const m of SEARCH_MODES) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      this.modeSelect.appendChild(opt);
+    }
+    this.modeSelect.addEventListener("change", () => this.debouncedSearch());
 
-    this.tagInput = document.createElement("input");
-    this.tagInput.className = "ark-tag-search-tag";
-    this.tagInput.type = "text";
-    this.tagInput.value = this._tag;
-    this.tagInput.placeholder = "tag";
-    this.tagInput.size = Math.max(this._tag.length + 2, 8);
-    this.tagInput.addEventListener("input", () => {
-      this.tagInput.size = Math.max(this.tagInput.value.length + 2, 8);
-      this.debouncedSearch();
-    });
-    this.tagInput.addEventListener("keydown", (e) => {
+    this.queryInput = document.createElement("input");
+    this.queryInput.className = "ark-search-query";
+    this.queryInput.type = "text";
+    this.queryInput.placeholder = "search query...";
+    this.queryInput.addEventListener("input", () => this.debouncedSearch());
+    this.queryInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.doSearch();
     });
 
-    const colonSpace = document.createElement("span");
-    colonSpace.className = "ark-tag-search-colon";
-    colonSpace.textContent = ": ";
+    // R1408: pre-fill from tag/value if set
+    if (this._tag) {
+      this.modeSelect.value = "regex";
+      const val = this._value.trim();
+      this.queryInput.value = val
+        ? `@${this._tag}:\\s*${escapeRegex(val)}`
+        : `@${this._tag}:`;
+    }
 
-    this.regexBtn = document.createElement("button");
-    this.regexBtn.className = "ark-tag-search-regex";
-    this.regexBtn.textContent = "Aa";
-    this.regexBtn.title = "Toggle regex mode";
-    this.regexBtn.addEventListener("click", () => {
-      this.useRegex = !this.useRegex;
-      this.regexBtn.textContent = this.useRegex ? ".*" : "Aa";
-      this.regexBtn.classList.toggle("active", this.useRegex);
-      this.doSearch();
-    });
-
-    this.valueInput = document.createElement("input");
-    this.valueInput.className = "ark-tag-search-value";
-    this.valueInput.type = "text";
-    this.valueInput.value = this._value.trim();
-    this.valueInput.placeholder = "value filter...";
-    this.valueInput.addEventListener("input", () => this.debouncedSearch());
-    this.valueInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") this.doSearch();
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "ark-search-clear";
+    clearBtn.textContent = "\u00d7";
+    clearBtn.title = "Clear query";
+    clearBtn.addEventListener("click", () => {
+      this.queryInput.value = "";
+      this.phasedResults = [];
+      this.resultsEl.innerHTML = "";
     });
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "ark-tag-search-close";
-    closeBtn.textContent = "\u00d7";
+    closeBtn.textContent = "\u2715";
     closeBtn.title = "Close";
     closeBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("close", { bubbles: true }));
     });
 
-    bar.appendChild(atSign);
-    bar.appendChild(this.tagInput);
-    bar.appendChild(colonSpace);
-    bar.appendChild(this.regexBtn);
-    bar.appendChild(this.valueInput);
+    bar.appendChild(this.modeSelect);
+    bar.appendChild(this.queryInput);
+    bar.appendChild(clearBtn);
     bar.appendChild(closeBtn);
 
-    // Results area
+    // === Filter rows R1409 ===
+    this.filtersContainer = document.createElement("div");
+    this.filtersContainer.className = "ark-search-filters";
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "ark-search-add-filter";
+    addBtn.textContent = "+ add filter";
+    addBtn.addEventListener("click", () => {
+      this.filterRows.push(newFilterRow());
+      this.renderFilterRows();
+    });
+
+    // === Source-type bar R1419 ===
+    this.sourceBar = document.createElement("div");
+    this.sourceBar.className = "ark-search-source-bar";
+    this.renderSourceBar();
+
+    // === Results area ===
     this.resultsEl = document.createElement("div");
     this.resultsEl.className = "ark-tag-search-results";
 
-    // Resize handle
+    // === Resize handle ===
     const resizeHandle = document.createElement("div");
     resizeHandle.className = "ark-tag-search-resize";
     let startY = 0, startH = 0;
@@ -168,78 +239,296 @@ export class ArkSearchElement extends HTMLElement {
     });
 
     this.appendChild(bar);
+    this.appendChild(this.filtersContainer);
+    this.appendChild(addBtn);
+    this.appendChild(this.sourceBar);
     this.appendChild(this.resultsEl);
     this.appendChild(resizeHandle);
 
     // Initial search
-    this.resultsEl.innerHTML = '<div class="ark-tag-search-loading">Searching\u2026</div>';
-    this.doSearch();
-    setTimeout(() => this.valueInput.focus(), 0);
+    if (this.queryInput.value) {
+      this.resultsEl.innerHTML = '<div class="ark-tag-search-loading">Searching\u2026</div>';
+      this.doSearch();
+    }
+    setTimeout(() => this.queryInput.focus(), 0);
   }
+
+  // === Filter Row Rendering R1410-R1415 ===
+
+  private renderFilterRows(): void {
+    this.filtersContainer.innerHTML = "";
+    for (const row of this.filterRows) {
+      this.filtersContainer.appendChild(this.createFilterRowEl(row));
+    }
+    this.updateSourceBarState();
+  }
+
+  private createFilterRowEl(row: FilterRow): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "ark-search-filter-row";
+
+    // Polarity: with/without
+    const polaritySel = document.createElement("select");
+    polaritySel.className = "ark-search-filter-polarity";
+    for (const p of ["with", "without"] as const) {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      opt.selected = p === row.polarity;
+      polaritySel.appendChild(opt);
+    }
+    polaritySel.addEventListener("change", () => {
+      row.polarity = polaritySel.value as Polarity;
+      this.debouncedSearch();
+    });
+
+    // Mode
+    const modeSel = document.createElement("select");
+    modeSel.className = "ark-search-filter-mode";
+    for (const m of FILTER_MODES) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      opt.selected = m === row.mode;
+      modeSel.appendChild(opt);
+    }
+    modeSel.addEventListener("change", () => {
+      row.mode = modeSel.value as FilterMode;
+      this.renderFilterRows(); // re-render to switch input type
+      this.debouncedSearch();
+    });
+
+    el.appendChild(polaritySel);
+    el.appendChild(modeSel);
+
+    // Mode-specific inputs
+    if (row.mode === "tag") {
+      // R1413: structured tag fields
+      const at = document.createElement("span");
+      at.className = "ark-search-filter-at";
+      at.textContent = "@";
+
+      const nameInput = document.createElement("input");
+      nameInput.className = "ark-search-filter-tag-name";
+      nameInput.type = "text";
+      nameInput.value = row.tagName;
+      nameInput.placeholder = "tag";
+      nameInput.size = Math.max(row.tagName.length + 2, 8);
+      nameInput.addEventListener("input", () => {
+        row.tagName = nameInput.value;
+        nameInput.size = Math.max(nameInput.value.length + 2, 8);
+        this.debouncedSearch();
+      });
+      nameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.doSearch();
+      });
+
+      const colon = document.createElement("span");
+      colon.textContent = ": ";
+
+      const matchBtn = document.createElement("button");
+      matchBtn.className = "ark-search-filter-tag-match";
+      matchBtn.textContent = TAG_MATCH_LABELS[row.tagMatchMode];
+      matchBtn.title = `Match mode: ${row.tagMatchMode}`;
+      matchBtn.addEventListener("click", () => {
+        const idx = TAG_MATCH_CYCLE.indexOf(row.tagMatchMode);
+        row.tagMatchMode = TAG_MATCH_CYCLE[(idx + 1) % TAG_MATCH_CYCLE.length];
+        matchBtn.textContent = TAG_MATCH_LABELS[row.tagMatchMode];
+        matchBtn.title = `Match mode: ${row.tagMatchMode}`;
+        this.debouncedSearch();
+      });
+
+      const valInput = document.createElement("input");
+      valInput.className = "ark-search-filter-tag-value";
+      valInput.type = "text";
+      valInput.value = row.tagValue;
+      valInput.placeholder = "value...";
+      valInput.addEventListener("input", () => {
+        row.tagValue = valInput.value;
+        this.debouncedSearch();
+      });
+      valInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.doSearch();
+      });
+
+      el.appendChild(at);
+      el.appendChild(nameInput);
+      el.appendChild(colon);
+      el.appendChild(matchBtn);
+      el.appendChild(valInput);
+    } else {
+      // R1412, R1415: free text or glob input
+      const input = document.createElement("input");
+      input.className = "ark-search-filter-query";
+      input.type = "text";
+      input.value = row.query;
+      input.placeholder = row.mode === "files" ? "*.md, **/*.jsonl" : "filter...";
+      input.addEventListener("input", () => {
+        row.query = input.value;
+        this.debouncedSearch();
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.doSearch();
+      });
+      el.appendChild(input);
+    }
+
+    // Remove button
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "ark-search-filter-remove";
+    removeBtn.textContent = "\u00d7";
+    removeBtn.title = "Remove filter";
+    removeBtn.addEventListener("click", () => {
+      this.filterRows = this.filterRows.filter(r => r.id !== row.id);
+      this.renderFilterRows();
+      this.debouncedSearch();
+    });
+    el.appendChild(removeBtn);
+
+    return el;
+  }
+
+  // === Source-Type Bar R1419-R1422 ===
+
+  private renderSourceBar(): void {
+    this.sourceBar.innerHTML = "";
+    for (const src of this.sourceToggles) {
+      const btn = document.createElement("button");
+      btn.className = `ark-search-source-toggle${src.active ? " active" : ""}`;
+      btn.textContent = src.name;
+      btn.addEventListener("click", () => {
+        src.active = !src.active;
+        btn.classList.toggle("active", src.active);
+        this.debouncedSearch();
+      });
+      this.sourceBar.appendChild(btn);
+    }
+  }
+
+  /** R1421-R1422: gray out source bar when user has files filter rows. */
+  private updateSourceBarState(): void {
+    const hasFileRows = this.filterRows.some(r => r.mode === "files" && r.query.trim());
+    this.sourceBar.classList.toggle("ark-search-source-overridden", hasFileRows);
+  }
+
+  // === Search Execution ===
 
   private debouncedSearch(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.doSearch(), 300);
   }
 
+  /** Collect file filters from filter rows + source bar. R1418-R1422 */
+  private collectFileFilters(): { filterFiles: string[]; excludeFiles: string[] } {
+    const filterFiles: string[] = [];
+    const excludeFiles: string[] = [];
+
+    // R1421: if user has files rows, they replace source bar entirely
+    const fileRows = this.filterRows.filter(r => r.mode === "files" && r.query.trim());
+    if (fileRows.length > 0) {
+      for (const row of fileRows) {
+        const patterns = row.query.split(",").map(s => s.trim()).filter(Boolean);
+        if (row.polarity === "with") {
+          filterFiles.push(...patterns);
+        } else {
+          excludeFiles.push(...patterns);
+        }
+      }
+    } else {
+      // Source-type bar active: inactive sources become exclude patterns
+      for (const src of this.sourceToggles) {
+        if (!src.active && src.pattern) {
+          excludeFiles.push(src.pattern);
+        }
+      }
+    }
+    return { filterFiles, excludeFiles };
+  }
+
+  /** Collect chunk-level filters from filter rows. R1416-R1417 */
+  private collectChunkFilters(): ChunkFilterParam[] {
+    const filters: ChunkFilterParam[] = [];
+    for (const row of this.filterRows) {
+      if (row.mode === "files") continue; // handled by collectFileFilters
+      if (row.mode === "tag") {
+        if (!row.tagName.trim()) continue;
+        // Build tag query: "tagname:value" for the server's TagChunkFilter
+        const q = row.tagValue.trim()
+          ? `${row.tagName.trim()}:${row.tagValue.trim()}`
+          : row.tagName.trim();
+        filters.push({ polarity: row.polarity, mode: "tag", query: q });
+      } else {
+        if (!row.query.trim()) continue;
+        filters.push({
+          polarity: row.polarity,
+          mode: row.mode as "contains" | "fuzzy" | "regex",
+          query: row.query.trim(),
+        });
+      }
+    }
+    return filters;
+  }
+
   private doSearch(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.debounceTimer = null;
+    this.updateSourceBarState();
 
     const api = this._api;
     if (!api) return;
 
-    const tag = this.tagInput.value.trim();
-    if (!tag) {
+    const query = this.queryInput.value.trim();
+    if (!query) {
       this.phasedResults = [];
       this.resultsEl.innerHTML = "";
       return;
     }
 
-    // Validate tag name in literal mode
-    if (!this.useRegex && !validTagName.test(tag)) {
-      this.tagInput.style.borderColor = "var(--term-danger, #f87171)";
-      this.tagInput.title = "Invalid tag name — must start with a letter, then letters/digits/hyphens/dots";
-      return;
-    }
-    this.tagInput.style.borderColor = "";
-    this.tagInput.title = "";
-
-    const value = this.valueInput.value.trim();
-    let query: string;
-    if (this.useRegex) {
-      query = value ? `@${tag}:\\s*${value}` : `@${tag}:`;
-    } else {
-      query = value ? `@${tag}:\\s*${escapeRegex(value)}` : `@${tag}:`;
-    }
-
-    // New search generation — stale results from prior searches are ignored
+    const mode = this.modeSelect.value;
     const gen = ++this.searchGeneration;
     this.phasedResults = [];
 
-    // Phase 1: trigram (always, immediate) R1386
-    const phase1 = api.search(query, "regex").then((groups) => {
-      if (gen !== this.searchGeneration) return;
-      for (const g of groups) {
-        this.phasedResults.push({ group: g, phase: "trigram" });
-      }
-      this.renderResults();
-    });
+    const chunkFilters = this.collectChunkFilters();
+    const { filterFiles, excludeFiles } = this.collectFileFilters();
+    const hasFilters = chunkFilters.length > 0 || filterFiles.length > 0 || excludeFiles.length > 0;
 
-    // Phase 2: embedding (if available) R1387, R1389
+    // Phase 1: trigram search R1386
+    let phase1: Promise<void>;
+    if (hasFilters && api.searchFiltered) {
+      phase1 = api.searchFiltered(query, {
+        mode,
+        chunkFilters: chunkFilters.length > 0 ? chunkFilters : undefined,
+        filterFiles: filterFiles.length > 0 ? filterFiles : undefined,
+        excludeFiles: excludeFiles.length > 0 ? excludeFiles : undefined,
+      }).then((groups) => {
+        if (gen !== this.searchGeneration) return;
+        for (const g of groups) {
+          this.phasedResults.push({ group: g, phase: "trigram" });
+        }
+        this.renderResults();
+      });
+    } else {
+      phase1 = api.search(query, mode).then((groups) => {
+        if (gen !== this.searchGeneration) return;
+        for (const g of groups) {
+          this.phasedResults.push({ group: g, phase: "trigram" });
+        }
+        this.renderResults();
+      });
+    }
+
+    // Phase 2: embedding (if available) R1387
     const hasPhase2 = api.embedMatch && api.expandSearch;
     let phase2Matches: TagMatch[] | null = null;
 
     if (hasPhase2) {
-      const embedQuery = value ? `${tag} ${value}` : tag;
-      api.embedMatch!(embedQuery).then((matches) => {
+      api.embedMatch!(query).then((matches) => {
         if (gen !== this.searchGeneration || matches.length === 0) return;
         phase2Matches = matches;
         const alts = matches.map(m => ({ tag: m.tag, value: m.value }));
         return api.expandSearch!(alts);
       }).then((groups) => {
         if (gen !== this.searchGeneration || !groups) return;
-        // Deduplicate: skip paths already in phase 1 R1391
         const phase1Paths = new Set(
           this.phasedResults
             .filter(p => p.phase === "trigram")
@@ -252,14 +541,15 @@ export class ArkSearchElement extends HTMLElement {
         }
         this.renderResults();
 
-        // Phase 3: curation (if available) R1388
         if (api.curateRequest && api.curateResult && phase2Matches) {
+          const tag = this._tag || query;
+          const value = this._value || "";
           this.startCuration(api, gen, tag, value, phase2Matches);
         }
       });
     }
 
-    // Show loading state until phase 1 resolves
+    // Show empty state after phase 1
     phase1.then(() => {
       if (gen !== this.searchGeneration) return;
       if (this.phasedResults.length === 0) {
@@ -268,13 +558,10 @@ export class ArkSearchElement extends HTMLElement {
     });
   }
 
-  /** Phase 3: queue curation and poll for result. R1388 */
+  // === Phase 3: Curation R1388 ===
+
   private startCuration(
-    api: SearchAPI,
-    gen: number,
-    tag: string,
-    value: string,
-    candidates: TagMatch[],
+    api: SearchAPI, gen: number, tag: string, value: string, candidates: TagMatch[],
   ): void {
     api.curateRequest!(tag, value, candidates).then((requestId) => {
       if (gen !== this.searchGeneration) return;
@@ -286,44 +573,34 @@ export class ArkSearchElement extends HTMLElement {
     api.curateResult!(requestId).then((result) => {
       if (gen !== this.searchGeneration) return;
       if (!result.done) {
-        // Not ready yet — poll again after a short delay
         setTimeout(() => this.pollCuration(api, gen, requestId), 500);
         return;
       }
-      if (result.error) return; // silently ignore curation errors
+      if (result.error) return;
 
-      // Build sets for quick lookup
       const curatedKeys = new Set(result.curated.map(m => `${m.tag}\0${m.value}`));
       const rejectedKeys = new Set(result.rejected.map(m => `${m.tag}\0${m.value}`));
 
-      // Update phase for candidate results R1394
       for (const pr of this.phasedResults) {
         if (pr.phase !== "candidate") continue;
-        // Match by path — candidates came from expandSearch on these tags
-        // Use a simple heuristic: if any curated tag's value appears in the path's results, promote
-        // For now, promote all candidates that aren't rejected
         const key = this.matchGroupToTag(pr);
         if (key && curatedKeys.has(key)) {
           pr.phase = "curated";
         } else if (key && rejectedKeys.has(key)) {
           pr.phase = "rejected";
         }
-        // Candidates not in either set stay as "candidate"
       }
       this.renderResults();
     });
   }
 
-  /** Best-effort match of a result group back to its source tag. */
   private matchGroupToTag(pr: PhasedGroup): string | null {
-    // The group's strategy field often contains the tag query
-    // For now, return null — all unmatched candidates stay as-is
-    // This will be refined when the expandSearch response carries source tags
     void pr;
     return null;
   }
 
-  /** Render all phased results into the results area. R1390, R1392-R1394 */
+  // === Result Rendering R1364-R1367, R1392-R1394 ===
+
   private renderResults(): void {
     this.resultsEl.innerHTML = "";
     if (this.phasedResults.length === 0) return;

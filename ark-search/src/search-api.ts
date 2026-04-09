@@ -74,4 +74,22 @@ export interface SearchAPI {
   curateRequest?(tag: string, value: string, candidates: TagMatch[]): Promise<string>;
   /** Phase 3: poll for curation result. */
   curateResult?(id: string): Promise<CurateResult>;
+
+  /** Extended search with chunk-level and file-level filters. R1416-R1418 */
+  searchFiltered?(query: string, request: FilteredSearchRequest): Promise<SearchResultGroup[]>;
+}
+
+/** Parameters for a chunk-level filter row. R1416 */
+export interface ChunkFilterParam {
+  polarity: "with" | "without";
+  mode: "contains" | "fuzzy" | "regex" | "tag";
+  query: string;
+}
+
+/** Full search request with filters. R1416-R1418 */
+export interface FilteredSearchRequest {
+  mode?: string;
+  chunkFilters?: ChunkFilterParam[];
+  filterFiles?: string[];
+  excludeFiles?: string[];
 }

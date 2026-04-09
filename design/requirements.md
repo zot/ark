@@ -2166,3 +2166,31 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1403:** Each chunk filter row becomes a `WithChunkFilter` search option; multiple filters AND together
 - **R1404:** Regex-mode chunk filters use `WithRegexFilter`/`WithExceptRegex` instead of ChunkFilter (more efficient)
 - **R1405:** Files-mode filters continue to use the existing `resolveFilters` path (ID-level, not chunk-level)
+
+## Feature: Stacked Filter Row UI
+**Source:** specs/ark-search.md
+
+### Base Query Bar
+- **R1406:** The base query bar has a mode dropdown (contains, fuzzy, regex) and a text input
+- **R1407:** The base query drives scoring and ranking; filter rows only narrow/exclude
+- **R1408:** When tag/value properties are set (tag click), the base query is pre-filled as `@tag: value` in regex mode
+
+### Filter Row Model
+- **R1409:** Filter rows are stackable: a `[+ add filter]` button adds new rows
+- **R1410:** Each row has: polarity dropdown (with/without), mode dropdown, query input, remove button
+- **R1411:** Filter modes: contains, fuzzy, regex, tag, files
+- **R1412:** Contains/fuzzy/regex rows have a free text input
+- **R1413:** Tag rows have structured `@[name]: [value]` fields with a match mode toggle (exact / `.*` / `~`)
+- **R1414:** Tag rows with empty value match any value (tag must be present)
+- **R1415:** Files rows have a comma-separated glob pattern input
+
+### Server Integration
+- **R1416:** Contains/fuzzy/tag filter rows are sent as `chunk_filters` JSON array to handleSearchGrouped
+- **R1417:** Regex filter rows are sent as `chunk_filters` with mode "regex" (uses WithRegexFilter/WithExceptRegex)
+- **R1418:** Files filter rows are sent as `filter_files`/`exclude_files` (path-level, existing resolveFilters)
+
+### Source-Type Bar
+- **R1419:** The source-type bar is a permanent row of icon toggles (data/project/memory/chats)
+- **R1420:** Each source type maps to path patterns fed to `filter_files`/`exclude_files`
+- **R1421:** If the user adds any `[files]` filter rows, the source-type bar grays out — user file filters replace source-type filters entirely
+- **R1422:** Removing all `[files]` filter rows restores the source-type bar
