@@ -98,16 +98,35 @@ export class ArkSearchElement extends HTMLElement {
   // Results
   private resultsEl!: HTMLElement;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lazyObserver: IntersectionObserver | null = null;
+  private heightListener: ((e: MessageEvent) => void) | null = null;
 
   // Progressive search state
   private searchGeneration = 0;
   private phasedResults: PhasedGroup[] = [];
+
+  /** If set, use this query directly and hide the query bar. */
+  private _query = "";
+  /** Hide the query bar (for embedded use, e.g. ark-search code blocks). */
+  private _hideBar = false;
 
   get api(): SearchAPI | null { return this._api; }
   set api(v: SearchAPI | null) {
     this._api = v;
     if (v && this.isConnected && !this._initialized) this.init();
   }
+
+  get query(): string { return this._query; }
+  set query(v: string) {
+    this._query = v;
+    if (this.queryInput) {
+      this.queryInput.value = v;
+      if (this._initialized) this.doSearch();
+    }
+  }
+
+  get hideBar(): boolean { return this._hideBar; }
+  set hideBar(v: boolean) { this._hideBar = v; }
 
   get tag(): string { return this._tag; }
   set tag(v: string) {
@@ -133,6 +152,17 @@ export class ArkSearchElement extends HTMLElement {
 
   connectedCallback(): void {
     if (this._api && !this._initialized) this.init();
+  }
+
+  disconnectedCallback(): void {
+    if (this.lazyObserver) {
+      this.lazyObserver.disconnect();
+      this.lazyObserver = null;
+    }
+    if (this.heightListener) {
+      window.removeEventListener("message", this.heightListener);
+      this.heightListener = null;
+    }
   }
 
   private init(): void {
@@ -216,6 +246,32 @@ export class ArkSearchElement extends HTMLElement {
     this.sourceBar.className = "ark-search-source-bar";
     this.renderSourceBar();
 
+    // === Iframe lazy loading + auto-height ===
+    this.lazyObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const iframe = entry.target as HTMLIFrameElement;
+        const src = iframe.dataset.src;
+        if (src) {
+          iframe.src = src;
+          delete iframe.dataset.src;
+          this.lazyObserver!.unobserve(iframe);
+        }
+      }
+    }, { root: null, rootMargin: "200px" });
+
+    this.heightListener = (e: MessageEvent) => {
+      if (!e.data || e.data.type !== "ark-content-height") return;
+      const iframes = this.resultsEl.querySelectorAll<HTMLIFrameElement>("iframe.ark-search-chunk-iframe");
+      for (const iframe of iframes) {
+        if (iframe.contentWindow === e.source) {
+          iframe.style.height = e.data.height + "px";
+          break;
+        }
+      }
+    };
+    window.addEventListener("message", this.heightListener);
+
     // === Results area ===
     this.resultsEl = document.createElement("div");
     this.resultsEl.className = "ark-tag-search-results";
@@ -238,19 +294,30 @@ export class ArkSearchElement extends HTMLElement {
       document.addEventListener("mouseup", onUp);
     });
 
-    this.appendChild(bar);
-    this.appendChild(this.filtersContainer);
-    this.appendChild(addBtn);
-    this.appendChild(this.sourceBar);
+    // R1408: pre-fill from query property if set
+    if (this._query) {
+      this.queryInput.value = this._query;
+    }
+
+    if (!this._hideBar) {
+      this.appendChild(bar);
+      this.appendChild(this.filtersContainer);
+      this.appendChild(addBtn);
+      this.appendChild(this.sourceBar);
+    }
     this.appendChild(this.resultsEl);
-    this.appendChild(resizeHandle);
+    if (!this._hideBar) {
+      this.appendChild(resizeHandle);
+    }
 
     // Initial search
     if (this.queryInput.value) {
       this.resultsEl.innerHTML = '<div class="ark-tag-search-loading">Searching\u2026</div>';
       this.doSearch();
     }
-    setTimeout(() => this.queryInput.focus(), 0);
+    if (!this._hideBar) {
+      setTimeout(() => this.queryInput.focus(), 0);
+    }
   }
 
   // === Filter Row Rendering R1410-R1415 ===
@@ -644,13 +711,28 @@ export class ArkSearchElement extends HTMLElement {
       for (const chunk of group.chunks) {
         const chunkEl = document.createElement("div");
         chunkEl.className = "ark-tag-search-chunk";
-        if (chunk.preview) {
-          chunkEl.innerHTML = chunk.preview;
-        } else {
-          const pre = document.createElement("pre");
-          pre.textContent = chunk.content.slice(0, 200);
-          chunkEl.appendChild(pre);
+
+        // Iframe preview: /content/ with range, edit, toggle params
+        const params = new URLSearchParams();
+        if (chunk.range) params.set("range", chunk.range);
+        params.set("edit", "true");
+        params.set("toggle", "false");
+        const iframeSrc = `/content${group.path}?${params}`;
+
+        const iframe = document.createElement("iframe");
+        iframe.className = "ark-search-chunk-iframe";
+        iframe.style.width = "100%";
+        iframe.style.height = "150px"; // initial, resized by postMessage
+        iframe.style.border = "none";
+        iframe.style.overflow = "hidden";
+        iframe.dataset.src = iframeSrc; // lazy load
+        iframe.title = `${group.path} ${chunk.range}`;
+
+        if (this.lazyObserver) {
+          this.lazyObserver.observe(iframe);
         }
+
+        chunkEl.appendChild(iframe);
         groupEl.appendChild(chunkEl);
       }
 

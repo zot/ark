@@ -9,10 +9,13 @@ import {
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { Range } from "@codemirror/state";
-import type { HostAPI, SearchResultGroup } from "./host-api";
+import type { HostAPI } from "./host-api";
+import { ArkSearchElement } from "../../ark-search/src/ark-search-element";
 import { editMode } from "./mode-toggle";
 import { needsRedecoration } from "./tag-widget";
-import { renderSearchResults } from "./search-result-view";
+
+// Ensure ArkSearchElement is registered
+void ArkSearchElement;
 
 type ViewMode = "both" | "results" | "src";
 
@@ -39,11 +42,10 @@ interface BlockState {
   query: string;
   modes: ViewMode[];
   currentMode: ViewMode;
-  results: SearchResultGroup[] | null;
-  loading: boolean;
 }
 
-/** Widget that renders an ark-search code block. */
+/** Widget that renders an ark-search code block.
+ *  Delegates result rendering to the `<ark-search>` element. */
 class ArkSearchWidget extends WidgetType {
   private container: HTMLElement | null = null;
 
@@ -91,24 +93,19 @@ class ArkSearchWidget extends WidgetType {
     }
 
     if (mode === "both" || mode === "results") {
-      const resultsEl = document.createElement("div");
-      resultsEl.className = "ark-search-results";
-
-      if (this.state.loading) {
-        resultsEl.textContent = "Searching\u2026";
-      } else if (this.state.results) {
-        renderSearchResults(resultsEl, this.state.results, this.api);
-      }
-      this.container.appendChild(resultsEl);
+      // Delegate to <ark-search> element with hidden bar
+      const el = document.createElement("ark-search") as ArkSearchElement;
+      el.hideBar = true;
+      el.query = this.state.query;
+      el.api = this.api;
+      this.container.appendChild(el);
     }
   }
 
   eq(other: ArkSearchWidget): boolean {
     return (
       this.state.query === other.state.query &&
-      this.state.currentMode === other.state.currentMode &&
-      this.state.loading === other.state.loading &&
-      this.state.results === other.state.results
+      this.state.currentMode === other.state.currentMode
     );
   }
 }
@@ -124,38 +121,13 @@ export function arkSearchBlockExtension(
 ) {
   // Key by query content for stability across edits
   const blockStates = new Map<string, BlockState>();
-  // Track pending initial searches to fire after view is ready
-  const pendingSearches: Array<{ key: string; query: string }> = [];
 
   const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
-      view: EditorView;
 
       constructor(view: EditorView) {
-        this.view = view;
         this.decorations = this.build(view);
-        // Fire deferred searches after EditorView is fully constructed
-        if (pendingSearches.length > 0) {
-          const searches = pendingSearches.splice(0);
-          setTimeout(() => {
-            for (const { key, query } of searches) {
-              this.executeSearch(key, query);
-            }
-          }, 0);
-        }
-      }
-
-      executeSearch(key: string, query: string) {
-        const state = blockStates.get(key);
-        if (!state || state.loading) return;
-        state.loading = true;
-        this.view.dispatch({});
-        api.search(query).then((results) => {
-          state.results = results;
-          state.loading = false;
-          this.view.dispatch({});
-        });
       }
 
       build(view: EditorView): DecorationSet {
@@ -194,12 +166,7 @@ export function arkSearchBlockExtension(
                 query,
                 modes: defaultModes,
                 currentMode: defaultModes[0],
-                results: null,
-                loading: false,
               });
-              if (defaultModes[0] !== "src") {
-                pendingSearches.push({ key, query });
-              }
             }
 
             const state = blockStates.get(key)!;
@@ -217,9 +184,6 @@ export function arkSearchBlockExtension(
               // Place the widget after the last line of the block
               const widget = new ArkSearchWidget(state, api, (mode) => {
                 state.currentMode = mode;
-                if ((mode === "both" || mode === "results") && !state.results) {
-                  this.executeSearch(key, state.query);
-                }
                 view.dispatch({});
               });
 
