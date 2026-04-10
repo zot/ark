@@ -37,7 +37,8 @@ where to download it. Auto-download is a future enhancement.
 ## Model Lifecycle
 
 The model loads eagerly after reconcile to batch-embed any V/T
-records missing ET/EV records. This amortizes the load cost into
+records missing embeddings (T records without inline vectors, V
+records without EV records). This amortizes the load cost into
 startup rather than penalizing the first query. After the batch
 completes, the model stays warm — the TTL timer starts from the
 end of the batch, so a query arriving shortly after startup hits

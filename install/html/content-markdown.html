@@ -52,95 +52,383 @@
      }
      #editor { display: none; min-height: 100vh; }
 
-     /* Tag search panel */
+     /* ========== <ark-search> element theming ========== */
+     /* Uses --term-* variables from the injected theme block. */
+
      .ark-tag-search-panel {
-       margin: 0.5em 0;
-       border: 1px solid var(--term-border, #ddd);
-       border-radius: 6px;
-       background: var(--term-bg-panel, #1e1e1e);
+       margin: 0.75em 0;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 8px;
+       background: var(--term-bg-panel, #0d0d14);
        overflow: hidden;
+       font-family: var(--term-mono, 'JetBrains Mono', monospace);
+       font-size: 0.85em;
+       color: var(--term-text, #e0e0e8);
      }
-     .ark-tag-search-bar {
+
+     /* --- Top bar --- */
+     .ark-search-bar {
        display: flex;
        align-items: center;
-       gap: 0.25em;
-       padding: 0.4em 0.6em;
-       background: var(--term-bg-elevated, #242424);
-       border-bottom: 1px solid var(--term-border, #ddd);
-       font-family: var(--term-mono, monospace);
-       font-size: 0.9em;
+       flex-wrap: wrap;
+       gap: 0.5em;
+       padding: 0.55em 0.75em;
+       background: var(--term-bg-elevated, #12121a);
+       border-bottom: 1px solid var(--term-border, #2a2a3a);
      }
-     .ark-tag-search-at {
-       color: var(--term-accent-bright, #ff9966);
-       font-weight: bold;
-     }
-     .ark-tag-search-tag,
-     .ark-tag-search-value {
+
+     .ark-search-mode {
        background: var(--term-bg, #0a0a0f);
-       color: var(--term-text, #e0e0e0);
-       border: 1px solid var(--term-border, #3a3a3a);
-       border-radius: 3px;
-       padding: 0.2em 0.4em;
-       font-family: var(--term-mono, monospace);
-       font-size: 1em;
-       outline: none;
-       caret-color: var(--term-text, #e0e0e0);
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.35em 2em 0.35em 0.75em;
+       font-family: inherit;
+       font-size: 0.9em;
+       cursor: pointer;
+       appearance: none;
+       -webkit-appearance: none;
+       /* Custom orange chevron */
+       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23ff9966' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1l5 5 5-5'/></svg>");
+       background-repeat: no-repeat;
+       background-position: right 0.6em center;
+       background-size: 0.7em;
+       transition: border-color 0.12s, box-shadow 0.15s;
      }
-     .ark-tag-search-tag:focus,
-     .ark-tag-search-value:focus {
+     .ark-search-mode:hover {
+       border-color: var(--term-accent-dim, rgba(224,122,71,0.35));
+     }
+     .ark-search-mode:focus {
+       outline: none;
        border-color: var(--term-accent, #E07A47);
        box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
      }
-     .ark-tag-search-value { flex: 1; }
-     .ark-tag-search-colon { color: var(--term-text-dim, #888); }
-     .ark-tag-search-regex,
-     .ark-tag-search-close {
+     .ark-search-mode option {
+       background: var(--term-bg-elevated, #12121a);
+       color: var(--term-text, #e0e0e8);
+     }
+
+     /* Inline status dropdown (StatusWidget in markdown-editor) — same look. */
+     .ark-status-dropdown {
        background: var(--term-bg, #0a0a0f);
-       color: var(--term-text-dim, #888);
-       border: 1px solid var(--term-border, #3a3a3a);
-       border-radius: 3px;
-       padding: 0.2em 0.5em;
-       cursor: pointer;
-       font-family: var(--term-mono, monospace);
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.15em 1.7em 0.15em 0.55em;
+       font-family: var(--term-mono, 'JetBrains Mono', monospace);
        font-size: 0.9em;
+       cursor: pointer;
+       appearance: none;
+       -webkit-appearance: none;
+       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23ff9966' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1l5 5 5-5'/></svg>");
+       background-repeat: no-repeat;
+       background-position: right 0.5em center;
+       background-size: 0.65em;
+       transition: border-color 0.12s, box-shadow 0.15s;
      }
-     .ark-tag-search-regex:hover,
-     .ark-tag-search-close:hover {
+     .ark-status-dropdown:hover {
+       border-color: var(--term-accent-dim, rgba(224,122,71,0.35));
+     }
+     .ark-status-dropdown:focus {
+       outline: none;
        border-color: var(--term-accent, #E07A47);
-       color: var(--term-text, #e0e0e0);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
      }
-     .ark-tag-search-regex.active {
+     .ark-status-dropdown option {
+       background: var(--term-bg-elevated, #12121a);
+       color: var(--term-text, #e0e0e8);
+     }
+
+     .ark-search-bar-inputs {
+       display: flex;
+       align-items: center;
+       gap: 0.4em;
+       flex: 1;
+       min-width: 12em;
+     }
+
+     .ark-search-bar-at,
+     .ark-search-filter-at {
+       color: var(--term-accent-bright, #ff9966);
+       font-weight: 600;
+       font-family: inherit;
+     }
+     .ark-search-bar-colon {
+       color: var(--term-text-muted, #5a5a70);
+       margin: 0 -0.1em;
+     }
+
+     /* --- Text inputs (base query, tag fields, filter rows) --- */
+     .ark-search-query,
+     .ark-search-bar-tag-name,
+     .ark-search-bar-tag-value,
+     .ark-search-filter-query,
+     .ark-search-filter-tag-name,
+     .ark-search-filter-tag-value {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text, #e0e0e8);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.35em 0.65em;
+       font-family: inherit;
+       font-size: 1em;
+       outline: none;
+       caret-color: var(--term-accent-bright, #ff9966);
+     }
+     .ark-search-query { flex: 1; min-width: 8em; }
+     .ark-search-bar-tag-value { flex: 1; min-width: 6em; }
+     .ark-search-filter-query { flex: 1; }
+     .ark-search-filter-tag-value { flex: 1; }
+
+     .ark-search-query:focus,
+     .ark-search-bar-tag-name:focus,
+     .ark-search-bar-tag-value:focus,
+     .ark-search-filter-query:focus,
+     .ark-search-filter-tag-name:focus,
+     .ark-search-filter-tag-value:focus {
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-query::placeholder,
+     .ark-search-bar-tag-name::placeholder,
+     .ark-search-bar-tag-value::placeholder,
+     .ark-search-filter-query::placeholder,
+     .ark-search-filter-tag-name::placeholder,
+     .ark-search-filter-tag-value::placeholder {
+       color: var(--term-text-muted, #5a5a70);
+     }
+
+     /* --- Small pill buttons (match-mode, clear, close, expand, remove, save) --- */
+     .ark-search-bar-tag-match,
+     .ark-search-filter-tag-match,
+     .ark-search-clear,
+     .ark-tag-search-close,
+     .ark-search-filter-expand,
+     .ark-search-filter-remove,
+     .ark-search-add-filter,
+     .ark-search-chip-save,
+     .ark-search-chip-more {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text-dim, #8888a0);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.3em 0.6em;
+       font-family: inherit;
+       font-size: 0.85em;
+       cursor: pointer;
+       transition: border-color 0.12s, color 0.12s, box-shadow 0.15s;
+     }
+     .ark-search-bar-tag-match:hover,
+     .ark-search-filter-tag-match:hover,
+     .ark-search-clear:hover,
+     .ark-tag-search-close:hover,
+     .ark-search-filter-expand:hover,
+     .ark-search-filter-remove:hover,
+     .ark-search-add-filter:hover,
+     .ark-search-chip-save:hover,
+     .ark-search-chip-more:hover {
        color: var(--term-accent-bright, #ff9966);
        border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
      }
+     .ark-search-bar-tag-match,
+     .ark-search-filter-tag-match {
+       color: var(--term-accent-bright, #ff9966);
+       border-color: var(--term-accent-dim, rgba(224,122,71,0.2));
+       min-width: 2.4em;
+       text-align: center;
+     }
+     .ark-search-clear,
+     .ark-tag-search-close {
+       padding: 0.25em 0.55em;
+       font-size: 1em;
+       line-height: 1;
+     }
+
+     /* --- Filter rows --- */
+     .ark-search-filters {
+       display: flex;
+       flex-direction: column;
+       gap: 0.4em;
+       padding: 0.55em 0.75em 0;
+     }
+     .ark-search-filter-row {
+       display: flex;
+       align-items: center;
+       gap: 0.4em;
+       flex-wrap: wrap;
+     }
+     .ark-search-filter-polarity,
+     .ark-search-filter-mode {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text, #e0e0e8);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.3em 0.5em;
+       font-family: inherit;
+       font-size: 0.85em;
+       cursor: pointer;
+     }
+     .ark-search-filter-polarity:focus,
+     .ark-search-filter-mode:focus {
+       outline: none;
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-add-filter {
+       align-self: flex-start;
+       margin: 0.55em 0.75em 0;
+     }
+
+     /* --- OR groups --- */
+     .ark-search-or-group {
+       display: flex;
+       flex-direction: column;
+       gap: 0.35em;
+       padding: 0.45em 0.55em;
+       border: 1px dashed var(--term-accent-dim, rgba(224,122,71,0.35));
+       border-radius: 6px;
+       position: relative;
+     }
+     .ark-search-or-label {
+       position: absolute;
+       top: -0.6em;
+       left: 0.7em;
+       padding: 0 0.4em;
+       background: var(--term-bg-panel, #0d0d14);
+       color: var(--term-accent-bright, #ff9966);
+       font-size: 0.75em;
+       font-weight: 600;
+       letter-spacing: 0.1em;
+     }
+
+     /* --- Source-type bar --- */
+     .ark-search-source-bar {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 0.35em;
+       padding: 0.55em 0.75em 0;
+       transition: opacity 0.15s;
+     }
+     .ark-search-source-bar.ark-search-source-overridden {
+       opacity: 0.4;
+     }
+     .ark-search-source-toggle {
+       background: transparent;
+       color: var(--term-text-dim, #8888a0);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 999px;
+       padding: 0.3em 0.85em;
+       font-family: inherit;
+       font-size: 0.8em;
+       cursor: pointer;
+       transition: color 0.12s, border-color 0.12s, box-shadow 0.15s;
+     }
+     .ark-search-source-toggle:hover {
+       color: var(--term-text, #e0e0e8);
+     }
+     .ark-search-source-toggle.active {
+       color: var(--term-accent-bright, #ff9966);
+       border-color: var(--term-accent, #E07A47);
+       background: var(--term-accent-dim, rgba(224,122,71,0.2));
+     }
+
+     /* --- Chip bar (saved filter presets) --- */
+     .ark-search-chip-bar {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 0.35em;
+       padding: 0.55em 0.75em 0.75em;
+       position: relative;
+     }
+     .ark-search-chip {
+       display: inline-flex;
+       align-items: center;
+       gap: 0.3em;
+       padding: 0.25em 0.55em;
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 999px;
+       font-size: 0.8em;
+     }
+     .ark-search-chip-label {
+       cursor: pointer;
+     }
+     .ark-search-chip-label:hover {
+       text-decoration: underline;
+     }
+     .ark-search-chip-remove {
+       background: none;
+       color: var(--term-text-muted, #5a5a70);
+       border: none;
+       padding: 0;
+       cursor: pointer;
+       font-size: 1em;
+       line-height: 1;
+     }
+     .ark-search-chip-remove:hover {
+       color: var(--term-danger, #f87171);
+     }
+     .ark-search-chip-dropdown {
+       position: absolute;
+       top: 100%;
+       right: 0.75em;
+       z-index: 10;
+       display: flex;
+       flex-direction: column;
+       gap: 0.35em;
+       padding: 0.55em;
+       background: var(--term-bg-elevated, #12121a);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 8px;
+       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+     }
+
+     /* --- Results area --- */
      .ark-tag-search-results {
-       max-height: 400px;
+       max-height: 500px;
        overflow-y: auto;
-       padding: 0.5em;
+       padding: 0.6em 0.75em;
      }
      .ark-tag-search-loading,
      .ark-tag-search-empty {
-       color: var(--term-text-dim, #888);
-       padding: 1em;
+       color: var(--term-text-muted, #5a5a70);
+       padding: 1.2em;
        text-align: center;
        font-style: italic;
      }
      .ark-tag-search-group {
-       margin-bottom: 0.75em;
-       border-bottom: 1px solid var(--term-border, #3a3a3a);
-       padding-bottom: 0.5em;
+       margin-bottom: 0.8em;
+       padding: 0.5em 0.6em;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       background: var(--term-bg, #0a0a0f);
+       transition: border-color 0.15s, opacity 0.15s;
      }
-     .ark-tag-search-group:last-child { border-bottom: none; }
+     .ark-search-phase-candidate {
+       border-style: dashed;
+       opacity: 0.72;
+     }
+     .ark-search-phase-curated {
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 1px var(--term-accent-glow, rgba(224,122,71,0.4));
+       opacity: 1;
+     }
+     .ark-search-phase-rejected {
+       opacity: 0.35;
+       text-decoration: line-through;
+     }
      .ark-tag-search-group-header {
        display: flex;
        align-items: center;
        gap: 0.5em;
-       margin-bottom: 0.3em;
+       margin-bottom: 0.35em;
      }
      .ark-tag-search-path {
        color: var(--term-accent-bright, #ff9966);
        text-decoration: none;
-       font-family: var(--term-mono, monospace);
+       font-family: inherit;
        font-size: 0.85em;
        overflow: hidden;
        text-overflow: ellipsis;
@@ -148,32 +436,52 @@
        flex: 1;
      }
      .ark-tag-search-path:hover { text-decoration: underline; }
+     .ark-search-candidate-badge {
+       padding: 0.1em 0.5em;
+       background: var(--term-accent-dim, rgba(224,122,71,0.2));
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-accent, #E07A47);
+       border-radius: 999px;
+       font-size: 0.7em;
+       text-transform: uppercase;
+       letter-spacing: 0.08em;
+     }
      .ark-tag-search-folder {
        background: none;
        border: none;
        cursor: pointer;
        font-size: 1em;
        padding: 0 0.2em;
-       opacity: 0.6;
+       opacity: 0.55;
+       color: var(--term-text-dim, #8888a0);
      }
      .ark-tag-search-folder:hover { opacity: 1; }
      .ark-tag-search-chunk {
        font-size: 0.85em;
-       color: var(--term-text-dim, #aaa);
+       color: var(--term-text-dim, #8888a0);
        padding: 0.3em 0;
-       line-height: 1.4;
+       line-height: 1.5;
      }
-     .ark-tag-search-chunk pre {
-       background: var(--term-accent-dim, rgba(0,0,0,0.1));
-       padding: 0.5em;
-       border-radius: 3px;
-       overflow-x: auto;
-       font-size: 0.9em;
+     .ark-search-chunk-iframe {
+       width: 100%;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 4px;
+       background: var(--term-bg, #0a0a0f);
+       /* R1465: fade in when the iframe page posts ark-content-ready. */
+       transition: opacity 0.2s ease-in;
+     }
+
+     /* Highlight marks applied by the highlight-extension inside CM6. */
+     .ark-search-highlight {
+       background: var(--term-accent-dim, rgba(224,122,71,0.35));
+       color: var(--term-accent-bright, #ff9966);
+       border-radius: 2px;
+       box-shadow: 0 0 0 1px var(--term-accent, #E07A47);
      }
      .ark-tag-search-resize {
        height: 6px;
        cursor: ns-resize;
-       background: var(--term-border, #3a3a3a);
+       background: var(--term-border, #2a2a3a);
        opacity: 0.5;
      }
      .ark-tag-search-resize:hover { opacity: 1; }
@@ -213,6 +521,8 @@ const contentDiv = document.getElementById('content');
 const editorDiv = document.getElementById('editor');
 const isChunk = {{if .IsChunk}}true{{else}}false{{end}};
 const autoEdit = {{if .AutoEdit}}true{{else}}false{{end}};
+// R1454: highlight regexes passed by <ark-search> in iframe preview URLs.
+const highlights = new URL(location.href).searchParams.getAll('highlight');
 let editor = null;
 let savedContent = null;
 
@@ -255,7 +565,7 @@ function normalizeTagLines(text) {
   return text.replace(/^(@[a-zA-Z][\w.-]*: .*?) *$/gm, '$1  ');
 }
 
-btn.addEventListener('click', async () => {
+if (btn) btn.addEventListener('click', async () => {
   if (!editor) {
     // Switch to edit mode
     const resp = await fetch('/fetch' + path);
@@ -268,6 +578,7 @@ btn.addEventListener('click', async () => {
       doc: normalized,
       path: path,
       api: api,
+      highlights: highlights,
     });
     // If normalization changed the content, it's already dirty
     savedContent = raw;
@@ -309,20 +620,38 @@ if (autoEdit) {
       doc: normalized,
       path: path,
       api: api,
+      highlights: highlights,
     });
     savedContent = raw;
     if (btn) { btn.innerHTML = '&#128065;'; btn.title = 'Back to reading view'; }
     postHeight();
+    // R1465: signal the parent iframe host that this preview is ready
+    // to show — lets <ark-search> fade the iframe in instead of
+    // exposing a gray loading state.
+    if (window !== window.parent) {
+      window.parent.postMessage({ type: 'ark-content-ready', src: location.href }, '*');
+    }
   })();
 }
 
 // R1431-R1432: post height to parent iframe
+// Use body.scrollHeight rather than documentElement.scrollHeight — `<html>`
+// is always at least the iframe's viewport size, so reading its scrollHeight
+// creates a monotonic feedback loop (iframe grows once, html.scrollHeight
+// can never report a smaller value, iframe never shrinks back).
 function postHeight() {
   if (window === window.parent) return;
-  const h = document.documentElement.scrollHeight;
+  const h = document.body.scrollHeight;
   window.parent.postMessage({ type: 'ark-content-height', height: h, src: location.href }, '*');
 }
 if (window !== window.parent) {
+  // In a parent iframe, the standalone `min-height: 100vh` on #editor would
+  // freeze the container at whatever viewport size the iframe was last grown
+  // to — causing empty space to linger after a nested block widget (e.g. a
+  // tag-click search panel) closes. Release the constraint so the editor can
+  // shrink with its content and the ResizeObserver can report the smaller
+  // height back to the parent.
+  if (editorDiv) editorDiv.style.minHeight = '0';
   window.addEventListener('load', postHeight);
   new ResizeObserver(postHeight).observe(document.body);
 }

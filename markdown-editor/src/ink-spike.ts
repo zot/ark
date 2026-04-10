@@ -6,6 +6,7 @@ import { arkTagExtension } from "./ark-tag-parser";
 import { tagWidgetExtension } from "./tag-widget";
 import { arkTagCompletionSource } from "./tag-completion";
 import { arkSearchBlockExtension } from "./ark-search-block";
+import { highlightExtension } from "./highlight-extension";
 
 export type { HostAPI, SearchResultGroup, SearchChunk } from "./host-api";
 
@@ -14,11 +15,14 @@ export interface InkArkConfig {
   doc: string;
   path: string;
   api: HostAPI;
+  /** Regex patterns to highlight inside the editor. Used by iframe
+   *  chunk previews to surface the search match in context. */
+  highlights?: string[];
 }
 
 /** Create an ink-mde editor with ark extensions injected. */
 export function createInkArkEditor(config: InkArkConfig) {
-  const { parent, doc, path, api } = config;
+  const { parent, doc, path, api, highlights } = config;
 
   return ink(parent, {
     doc,
@@ -51,6 +55,14 @@ export function createInkArkEditor(config: InkArkConfig) {
         type: pluginTypes.completion,
         value: arkTagCompletionSource(api),
       }),
+      // Highlight regex matches (iframe chunk previews use this to
+      // surface the search hit in context).
+      ...(highlights && highlights.length > 0
+        ? [definePlugin({
+            type: pluginTypes.default,
+            value: highlightExtension(highlights),
+          })]
+        : []),
     ],
   });
 }

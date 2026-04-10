@@ -68,7 +68,7 @@ loads on first embedding query and stays warm until TTL expiry.
 
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
-- Store: V record queries, ET/EV record reads for cosine scan,
+- Store: V record queries, T inline vectors + EV record reads for cosine scan,
   tag-value-id allocation, ScanVRecordTvids for reverse lookup
 - Searcher: fetch grouped results for curated tags
 - gollama: model loading and embedding computation

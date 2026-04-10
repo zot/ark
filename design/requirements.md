@@ -2008,8 +2008,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### What Gets Embedded
 - **R1285:** Tag names are embedded with hyphens converted to spaces (`design-decision` → "design decision")
 - **R1286:** Tag-value compounds are embedded as `"tagname: value"` with colon preserved and hyphens in tag name converted to spaces
-- **R1287:** (revised) Tag names are keyed directly by name in ET records — no tag-name-id needed
-- **R1288:** (revised) Hyphens→spaces conversion applies to both ET and EV embedding text for word-level semantics
+- **R1287:** (revised) Tag name embeddings are inline in T records — no separate ET prefix or tag-name-id needed
+- **R1288:** (revised) Hyphens→spaces conversion applies to both T (tag name) and EV (tag value) embedding text for word-level semantics
 
 ### Embedding Storage
 - **R1289:** (revised) Tag name embeddings are stored inline in T records: `T[tag_name]` → `count:4bytes + optional float32 vector (3072 bytes)`. No separate ET prefix.
@@ -2017,9 +2017,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1291:** (revised) Only EV uses a two-byte prefix. Tag name embeddings are inline in the existing T prefix.
 
 ### Embedding Lifecycle
-- **R1292:** Batch embed after reconcile: scan V and T records that lack corresponding E records, embed in the write goroutine
+- **R1292:** Batch embed after reconcile: scan T records without inline vectors and V records without EV records, embed in the write goroutine
 - **R1293:** Incremental: new V records created during indexing are queued for embedding; the next reconcile batch picks them up
-- **R1294:** `ark rebuild` drops and regenerates all ET and EV records alongside V records
+- **R1294:** `ark rebuild` drops T record inline vectors and EV records, regenerates alongside V records
 - **R1295:** (inferred) The embedding batch runs in the write goroutine to avoid blocking the main actor
 
 ### Query Path
@@ -2171,9 +2171,9 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 **Source:** specs/ark-search.md
 
 ### Base Query Bar
-- **R1406:** The base query bar has a mode dropdown (contains, fuzzy, regex) and a text input
+- **R1406:** The base query bar has a mode dropdown (`tag`, `contains`, `fuzzy`, `regex`) and a swappable inputs area
 - **R1407:** The base query drives scoring and ranking; filter rows only narrow/exclude
-- **R1408:** When tag/value properties are set (tag click), the base query is pre-filled as `@tag: value` in regex mode
+- **R1408:** `tag` is the default mode for the interactive bar. In `tag` mode the inputs area shows structured fields (`@ name : [match] value`) mirroring the filter-row tag UI; the element translates them to a regex query before calling the server (no `tag` mode exists on `/search/grouped`). When tag/value properties are set programmatically (tag click), the bar enters `tag` mode with those fields pre-filled. Bar-hidden code-block usage defaults to `contains` so programmatic `query` strings work as free text.
 
 ### Filter Row Model
 - **R1409:** Filter rows are stackable: a `[+ add filter]` button adds new rows
@@ -2247,3 +2247,22 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1451:** `x` button on a chip removes it from localStorage
 - **R1452:** Saved presets stored in localStorage under key `ark-search-filters` as JSON
 - **R1453:** Chips serialize FilterGroup arrays — restore recreates the group/row state
+
+### Tag Name Matching (Base Query + Filter Rows)
+- **R1454:** Tag mode has a name match toggle cycling between `contains` (`~`) and `exact` (`=`). The toggle renders between `@` and the name input on both the base query bar and tag filter rows.
+- **R1455:** `contains` (default for user-typed queries) builds the name regex as `(^|\s)@[\w.-]*NAME[\w.-]*:` so `project` matches `project`, `to-project`, `from-project`. `exact` builds `(^|\s)@NAME:`. The `(^|\s)` boundary heuristic avoids matching tags deep inside quoted strings — good enough for practical use, per the ark tag definition that tag names are preceded by start of line or whitespace.
+- **R1456:** The play-button path (`set tag()` from a tag click) forces the name match mode to `exact` — the user is exploring "that one tag". Concrete rows produced by `expandRow` (embedMatch results) also default to `exact`.
+- **R1457:** Tag value input is tokenized on whitespace; tokens are OR'd in the built regex so word order doesn't matter. `@ project: ark component` matches any tag line whose value contains `ark` OR `component`.
+- **R1458:** Contains-name tag filter rows serialize as `regex` chunk filters (the server's tag chunk filter matches names literally). Exact-name rows continue to use the fast `tag` chunk filter path. Follow-up: enhance the Go tag filter to accept regex for the name so contains-name can use the tag index.
+
+### Match Highlighting (Iframe Chunk Previews)
+- **R1459:** `<ark-search>` appends `highlight=<regex>` query params to each iframe preview URL, one per regex. For tag mode: one regex for the name prefix plus one per value token so each token highlights independently. For contains/regex modes: one regex (escaped literal or raw). Fuzzy mode emits no highlight (no clean regex translation).
+- **R1460:** `content-markdown.html` parses `highlight` params via `URLSearchParams.getAll('highlight')` and passes them to `createInkArkEditor({ highlights: ... })`.
+- **R1461:** The `highlight-extension` CM6 ViewPlugin compiles the regex strings, walks `view.visibleRanges`, and applies `Decoration.mark({class: "ark-search-highlight"})` for every hit. Updates on `docChanged` or `viewportChanged`.
+- **R1462:** On first render with non-empty highlights, the extension dispatches `EditorView.scrollIntoView(firstMatch, {y: "center"})` in a microtask so the iframe opens scrolled to the first match.
+- **R1463:** `.ark-search-highlight` CSS lives in `content-markdown.html` alongside the other `ark-search-*` theme rules, using `--term-accent-dim` fill, `--term-accent-bright` text, and `--term-accent` ring so highlights read as part of the panel palette.
+
+### Results Flicker Elimination (path-keyed diffing, ready signal, live highlights)
+- **R1464:** `<ark-search>` caches result group elements in a path-keyed map (`resultEls`) with a chunk signature, a highlight signature, and the current phase. `renderResults` reuses matching cache entries in place: same path + same chunk signature = same DOM subtree, iframes included. Orphan paths are removed from both the cache and the DOM. Reordering uses `insertBefore` on already-attached nodes so iframes keep their `contentWindow` and never reload. Phase 1 → Phase 2 → Phase 3 transitions for the same search are visually silent.
+- **R1465:** The `/content/` page posts `{type: 'ark-content-ready', src}` to its parent once the CM6 editor has finished loading, highlights have been applied, and `postHeight()` has fired. New iframes built by `<ark-search>` start at `opacity: 0` with a CSS `transition: opacity 0.2s ease-in`; the element's `message` listener flips the matching iframe to `opacity: 1` on the ready signal. This hides the gray "iframe loading" state behind an invisible element and swaps the finished preview in cleanly.
+- **R1466:** When the user edits the query in a way that changes only the highlight patterns (same result path, same chunks), `<ark-search>` calls `updateGroupHighlights` instead of rebuilding. Loaded iframes receive a `{type: 'ark-set-highlights', patterns}` postMessage; lazy-unloaded iframes get their `dataset.src` URL rewritten. Inside the iframe, the `highlightExtension` ViewPlugin has a message listener that dispatches a `setHighlightPatternsEffect` on its own `EditorView`; a `StateField` recompiles the regex list and the plugin rebuilds only the decoration marks — no iframe reload, no DOM churn, no flicker.

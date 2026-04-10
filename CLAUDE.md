@@ -55,3 +55,5 @@ cache/                 Build cache (Makefile asset pipeline)
 Go files use tabs for indentation. The Read tool displays them as spaces, so the Edit tool's `old_string` often fails on the first attempt. Use `cat -A` to see the actual whitespace when an edit doesn't match.
 
 Don't forget about gofmt -- no need to sed your way into poverty!
+
+@CLAUDE.local.md

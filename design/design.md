@@ -173,6 +173,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-SearchResultView.md → `markdown-editor/src/search-result-view.ts`
 - [x] crc-HostAPI.md → `markdown-editor/src/host-api.ts`
 - [x] crc-ModeToggle.md → `markdown-editor/src/mode-toggle.ts`
+- [x] crc-HighlightExtension.md → `markdown-editor/src/highlight-extension.ts`
 
 ### Sequences (TypeScript — Markdown Editor)
 - [x] seq-tag-click.md → `markdown-editor/src/tag-widget.ts`, `markdown-editor/src/search-result-view.ts`, `ark-search/src/ark-search-element.ts`

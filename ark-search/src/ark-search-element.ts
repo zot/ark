@@ -20,6 +20,7 @@ interface PhasedGroup {
 type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "files";
 type Polarity = "with" | "without";
 type TagMatchMode = "exact" | "regex" | "fuzzy";
+type TagNameMatch = "contains" | "exact";
 
 /** Internal filter row state. */
 interface FilterRow {
@@ -30,6 +31,7 @@ interface FilterRow {
   tagName: string;
   tagValue: string;
   tagMatchMode: TagMatchMode;
+  tagNameMatch: TagNameMatch;
 }
 
 /** OR group: one or more rows with OR semantics. R1438 */
@@ -46,10 +48,33 @@ interface SourceToggle {
   active: boolean;
 }
 
-const SEARCH_MODES = ["contains", "fuzzy", "regex"] as const;
+const SEARCH_MODES = ["tag", "contains", "fuzzy", "regex"] as const;
+type SearchMode = (typeof SEARCH_MODES)[number];
 const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files"];
 const TAG_MATCH_LABELS: Record<TagMatchMode, string> = { exact: "Aa", regex: ".*", fuzzy: "~" };
 const TAG_MATCH_CYCLE: TagMatchMode[] = ["exact", "regex", "fuzzy"];
+const TAG_NAME_MATCH_LABELS: Record<TagNameMatch, string> = { contains: "~", exact: "=" };
+const TAG_NAME_MATCH_CYCLE: TagNameMatch[] = ["contains", "exact"];
+
+/** Tag name characters per ark's tag parser — start is letter, then
+ *  word chars plus `.` and `-`. Used to anchor contains-name regexes. */
+const TAG_NAME_CHARS = "[\\w.-]";
+
+/** Tokenize a tag value on whitespace — word order doesn't matter,
+ *  each token matches independently and highlights separately. */
+function tokenizeValue(raw: string): string[] {
+  return raw.split(/\s+/).filter(Boolean);
+}
+
+/** Build the `@name:` prefix regex, respecting contains vs exact
+ *  name match and the tag boundary heuristic `(^|\s)@NAME:`. */
+function tagPrefixRegex(name: string, match: TagNameMatch): string {
+  const escaped = escapeRegex(name);
+  const pat = match === "contains"
+    ? `${TAG_NAME_CHARS}*${escaped}${TAG_NAME_CHARS}*`
+    : escaped;
+  return `(^|\\s)@${pat}:`;
+}
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -85,6 +110,7 @@ function newFilterRow(mode: FilterMode = "contains", polarity: Polarity = "with"
     tagName: "",
     tagValue: "",
     tagMatchMode: "exact",
+    tagNameMatch: "contains",
   };
 }
 
@@ -113,6 +139,14 @@ export class ArkSearchElement extends HTMLElement {
   // Base query bar
   private queryInput!: HTMLInputElement;
   private modeSelect!: HTMLSelectElement;
+  private barInputs!: HTMLElement;
+  private _searchMode: SearchMode = "tag";
+
+  // Base tag mode state (when _searchMode === "tag")
+  private _baseTagName = "";
+  private _baseTagValue = "";
+  private _baseTagMatch: TagMatchMode = "exact";
+  private _baseTagNameMatch: TagNameMatch = "contains";
 
   // Filter groups (each group has 1+ rows with OR semantics) R1438
   private filterGroups: FilterGroup[] = [];
@@ -133,6 +167,19 @@ export class ArkSearchElement extends HTMLElement {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lazyObserver: IntersectionObserver | null = null;
   private heightListener: ((e: MessageEvent) => void) | null = null;
+
+  // Cache of group elements keyed by path — lets us reuse existing
+  // iframes across phase updates and between searches that share paths,
+  // instead of clearing and rebuilding the whole results DOM. R1464.
+  //
+  // The signature is split so we can detect "same chunks, only highlights
+  // changed" (e.g. the user edited the value in a tag search that still
+  // returns the same file) and update the iframes in place via postMessage
+  // instead of rebuilding them. R1466
+  private resultEls = new Map<
+    string,
+    { el: HTMLElement; chunkSig: string; highlightSig: string; phase: Phase }
+  >();
 
   // Progressive search state
   private searchGeneration = 0;
@@ -164,22 +211,23 @@ export class ArkSearchElement extends HTMLElement {
   get tag(): string { return this._tag; }
   set tag(v: string) {
     this._tag = v;
-    if (this.queryInput && v) {
-      // R1408: pre-fill as regex tag search
-      this.modeSelect.value = "regex";
-      const val = this._value.trim();
-      this.queryInput.value = val ? `@${v}:\\s*${escapeRegex(val)}` : `@${v}:`;
+    this._baseTagName = v;
+    // Play-button path: exploring "that one tag" — lock name to exact.
+    this._baseTagNameMatch = "exact";
+    if (this._initialized && v) {
+      // R1408: pre-fill as structured tag-mode search
+      this._searchMode = "tag";
+      this.modeSelect.value = "tag";
+      this.renderBarInputs();
     }
   }
 
   get value(): string { return this._value; }
   set value(v: string) {
     this._value = v;
-    if (this.queryInput && this._tag) {
-      const val = v.trim();
-      this.queryInput.value = val
-        ? `@${this._tag}:\\s*${escapeRegex(val)}`
-        : `@${this._tag}:`;
+    this._baseTagValue = v;
+    if (this._initialized && this._tag) {
+      this.renderBarInputs();
     }
   }
 
@@ -211,6 +259,7 @@ export class ArkSearchElement extends HTMLElement {
     const bar = document.createElement("div");
     bar.className = "ark-search-bar";
 
+    // Mode dropdown
     this.modeSelect = document.createElement("select");
     this.modeSelect.className = "ark-search-mode";
     for (const m of SEARCH_MODES) {
@@ -219,25 +268,38 @@ export class ArkSearchElement extends HTMLElement {
       opt.textContent = m;
       this.modeSelect.appendChild(opt);
     }
-    this.modeSelect.addEventListener("change", () => this.debouncedSearch());
+    this.modeSelect.addEventListener("change", () => {
+      this._searchMode = this.modeSelect.value as SearchMode;
+      this.renderBarInputs();
+      this.debouncedSearch();
+    });
 
+    // Swappable inputs area — structured tag fields OR single text input
+    this.barInputs = document.createElement("div");
+    this.barInputs.className = "ark-search-bar-inputs";
+
+    // Persistent text-query input (attached only in non-tag modes)
     this.queryInput = document.createElement("input");
     this.queryInput.className = "ark-search-query";
     this.queryInput.type = "text";
-    this.queryInput.placeholder = "search query...";
+    this.queryInput.placeholder = "search\u2026";
     this.queryInput.addEventListener("input", () => this.debouncedSearch());
     this.queryInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.doSearch();
     });
 
-    // R1408: pre-fill from tag/value if set
-    if (this._tag) {
-      this.modeSelect.value = "regex";
-      const val = this._value.trim();
-      this.queryInput.value = val
-        ? `@${this._tag}:\\s*${escapeRegex(val)}`
-        : `@${this._tag}:`;
+    // R1408: default mode — "tag" for interactive bar, "contains" for
+    // bar-hidden code-block usage where the query is set programmatically.
+    if (this._hideBar) {
+      this._searchMode = "contains";
+    } else if (this._tag) {
+      this._searchMode = "tag";
+      this._baseTagName = this._tag;
+      this._baseTagValue = this._value;
     }
+
+    this.modeSelect.value = this._searchMode;
+    this.renderBarInputs();
 
     const clearBtn = document.createElement("button");
     clearBtn.className = "ark-search-clear";
@@ -245,8 +307,11 @@ export class ArkSearchElement extends HTMLElement {
     clearBtn.title = "Clear query";
     clearBtn.addEventListener("click", () => {
       this.queryInput.value = "";
+      this._baseTagName = "";
+      this._baseTagValue = "";
+      if (this._searchMode === "tag") this.renderBarInputs();
       this.phasedResults = [];
-      this.resultsEl.innerHTML = "";
+      this.clearResults();
     });
 
     const closeBtn = document.createElement("button");
@@ -258,7 +323,7 @@ export class ArkSearchElement extends HTMLElement {
     });
 
     bar.appendChild(this.modeSelect);
-    bar.appendChild(this.queryInput);
+    bar.appendChild(this.barInputs);
     bar.appendChild(clearBtn);
     bar.appendChild(closeBtn);
 
@@ -300,7 +365,19 @@ export class ArkSearchElement extends HTMLElement {
     }, { root: null, rootMargin: "200px" });
 
     this.heightListener = (e: MessageEvent) => {
-      if (!e.data || e.data.type !== "ark-content-height") return;
+      if (!e.data) return;
+      // R1465: iframe page finished rendering — fade it in.
+      if (e.data.type === "ark-content-ready") {
+        const iframes = this.resultsEl.querySelectorAll<HTMLIFrameElement>("iframe.ark-search-chunk-iframe");
+        for (const iframe of iframes) {
+          if (iframe.contentWindow === e.source) {
+            iframe.style.opacity = "1";
+            break;
+          }
+        }
+        return;
+      }
+      if (e.data.type !== "ark-content-height") return;
       const iframes = this.resultsEl.querySelectorAll<HTMLIFrameElement>("iframe.ark-search-chunk-iframe");
       for (const iframe of iframes) {
         if (iframe.contentWindow === e.source) {
@@ -350,13 +427,22 @@ export class ArkSearchElement extends HTMLElement {
       this.appendChild(resizeHandle);
     }
 
-    // Initial search
-    if (this.queryInput.value) {
-      this.resultsEl.innerHTML = '<div class="ark-tag-search-loading">Searching\u2026</div>';
+    // Initial search — tag mode uses structured fields; other modes use queryInput.
+    const hasInitialQuery = this._searchMode === "tag"
+      ? this._baseTagName.trim().length > 0
+      : this.queryInput.value.length > 0;
+    if (hasInitialQuery) {
+      const loading = document.createElement("div");
+      loading.className = "ark-tag-search-loading";
+      loading.textContent = "Searching\u2026";
+      this.clearResults(loading);
       this.doSearch();
     }
     if (!this._hideBar) {
-      setTimeout(() => this.queryInput.focus(), 0);
+      setTimeout(() => {
+        const first = this.barInputs.querySelector<HTMLInputElement>("input");
+        (first || this.queryInput).focus();
+      }, 0);
     }
   }
 
@@ -437,6 +523,19 @@ export class ArkSearchElement extends HTMLElement {
       at.className = "ark-search-filter-at";
       at.textContent = "@";
 
+      // Name match toggle (contains ~ / exact =)
+      const nameMatchBtn = document.createElement("button");
+      nameMatchBtn.className = "ark-search-filter-tag-name-match";
+      nameMatchBtn.textContent = TAG_NAME_MATCH_LABELS[row.tagNameMatch];
+      nameMatchBtn.title = `Name match: ${row.tagNameMatch}`;
+      nameMatchBtn.addEventListener("click", () => {
+        const idx = TAG_NAME_MATCH_CYCLE.indexOf(row.tagNameMatch);
+        row.tagNameMatch = TAG_NAME_MATCH_CYCLE[(idx + 1) % TAG_NAME_MATCH_CYCLE.length];
+        nameMatchBtn.textContent = TAG_NAME_MATCH_LABELS[row.tagNameMatch];
+        nameMatchBtn.title = `Name match: ${row.tagNameMatch}`;
+        this.debouncedSearch();
+      });
+
       const nameInput = document.createElement("input");
       nameInput.className = "ark-search-filter-tag-name";
       nameInput.type = "text";
@@ -458,12 +557,12 @@ export class ArkSearchElement extends HTMLElement {
       const matchBtn = document.createElement("button");
       matchBtn.className = "ark-search-filter-tag-match";
       matchBtn.textContent = TAG_MATCH_LABELS[row.tagMatchMode];
-      matchBtn.title = `Match mode: ${row.tagMatchMode}`;
+      matchBtn.title = `Value match: ${row.tagMatchMode}`;
       matchBtn.addEventListener("click", () => {
         const idx = TAG_MATCH_CYCLE.indexOf(row.tagMatchMode);
         row.tagMatchMode = TAG_MATCH_CYCLE[(idx + 1) % TAG_MATCH_CYCLE.length];
         matchBtn.textContent = TAG_MATCH_LABELS[row.tagMatchMode];
-        matchBtn.title = `Match mode: ${row.tagMatchMode}`;
+        matchBtn.title = `Value match: ${row.tagMatchMode}`;
         this.debouncedSearch();
       });
 
@@ -481,6 +580,7 @@ export class ArkSearchElement extends HTMLElement {
       });
 
       el.appendChild(at);
+      el.appendChild(nameMatchBtn);
       el.appendChild(nameInput);
       el.appendChild(colon);
       el.appendChild(matchBtn);
@@ -586,7 +686,12 @@ export class ArkSearchElement extends HTMLElement {
         this.filterGroups = preset.groups.map(g => ({
           ...g,
           id: nextFilterId++,
-          rows: g.rows.map(r => ({ ...r, id: nextFilterId++ })),
+          rows: g.rows.map(r => ({
+            ...r,
+            // Older presets may lack tagNameMatch — default to contains.
+            tagNameMatch: (r.tagNameMatch ?? "contains") as TagNameMatch,
+            id: nextFilterId++,
+          })),
         }));
         this.renderFilterGroups();
         this.debouncedSearch();
@@ -638,6 +743,132 @@ export class ArkSearchElement extends HTMLElement {
     }
   }
 
+  // === Base Query Bar Rendering (tag mode inputs) R1408 ===
+
+  private renderBarInputs(): void {
+    this.barInputs.innerHTML = "";
+
+    if (this._searchMode === "tag") {
+      const at = document.createElement("span");
+      at.className = "ark-search-bar-at";
+      at.textContent = "@";
+
+      const nameInput = document.createElement("input");
+      nameInput.className = "ark-search-bar-tag-name";
+      nameInput.type = "text";
+      nameInput.value = this._baseTagName;
+      nameInput.placeholder = "tag";
+      nameInput.size = Math.max(this._baseTagName.length + 2, 8);
+      nameInput.addEventListener("input", () => {
+        this._baseTagName = nameInput.value;
+        nameInput.size = Math.max(nameInput.value.length + 2, 8);
+        this.debouncedSearch();
+      });
+      nameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.doSearch();
+      });
+
+      // Name match toggle (contains ~ / exact =). Default contains for
+      // user-typed queries; set tag() flips it to exact on play-button open.
+      const nameMatchBtn = document.createElement("button");
+      nameMatchBtn.className = "ark-search-bar-tag-name-match";
+      nameMatchBtn.textContent = TAG_NAME_MATCH_LABELS[this._baseTagNameMatch];
+      nameMatchBtn.title = `Name match: ${this._baseTagNameMatch}`;
+      nameMatchBtn.addEventListener("click", () => {
+        const idx = TAG_NAME_MATCH_CYCLE.indexOf(this._baseTagNameMatch);
+        this._baseTagNameMatch = TAG_NAME_MATCH_CYCLE[(idx + 1) % TAG_NAME_MATCH_CYCLE.length];
+        nameMatchBtn.textContent = TAG_NAME_MATCH_LABELS[this._baseTagNameMatch];
+        nameMatchBtn.title = `Name match: ${this._baseTagNameMatch}`;
+        this.debouncedSearch();
+      });
+
+      const colon = document.createElement("span");
+      colon.className = "ark-search-bar-colon";
+      colon.textContent = ":";
+
+      const matchBtn = document.createElement("button");
+      matchBtn.className = "ark-search-bar-tag-match";
+      matchBtn.textContent = TAG_MATCH_LABELS[this._baseTagMatch];
+      matchBtn.title = `Value match: ${this._baseTagMatch}`;
+      matchBtn.addEventListener("click", () => {
+        const idx = TAG_MATCH_CYCLE.indexOf(this._baseTagMatch);
+        this._baseTagMatch = TAG_MATCH_CYCLE[(idx + 1) % TAG_MATCH_CYCLE.length];
+        matchBtn.textContent = TAG_MATCH_LABELS[this._baseTagMatch];
+        matchBtn.title = `Value match: ${this._baseTagMatch}`;
+        this.debouncedSearch();
+      });
+
+      const valInput = document.createElement("input");
+      valInput.className = "ark-search-bar-tag-value";
+      valInput.type = "text";
+      valInput.value = this._baseTagValue;
+      valInput.placeholder = "value\u2026";
+      valInput.addEventListener("input", () => {
+        this._baseTagValue = valInput.value;
+        this.debouncedSearch();
+      });
+      valInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.doSearch();
+      });
+
+      this.barInputs.appendChild(at);
+      this.barInputs.appendChild(nameMatchBtn);
+      this.barInputs.appendChild(nameInput);
+      this.barInputs.appendChild(colon);
+      this.barInputs.appendChild(matchBtn);
+      this.barInputs.appendChild(valInput);
+    } else {
+      this.barInputs.appendChild(this.queryInput);
+    }
+  }
+
+  /** Translate base tag-mode state into a regex query (server has no
+   *  tag mode on /search/grouped). Name respects contains/exact; value
+   *  is tokenized and OR'd so word order doesn't matter. */
+  private buildTagQuery(): string {
+    const rawName = this._baseTagName.trim();
+    const rawVal = this._baseTagValue.trim();
+    const prefix = tagPrefixRegex(rawName, this._baseTagNameMatch);
+
+    if (!rawVal) return prefix;
+
+    // Regex value-match passes through raw (no tokenization — user authored).
+    if (this._baseTagMatch === "regex") return `${prefix}\\s*${rawVal}`;
+
+    const tokens = tokenizeValue(rawVal).map(escapeRegex);
+    if (tokens.length === 0) return prefix;
+    // `[^\n]*` lets tokens appear anywhere on the tag's value line.
+    const alt = tokens.length === 1 ? tokens[0] : `(${tokens.join("|")})`;
+    return `${prefix}[^\\n]*${alt}`;
+  }
+
+  /** Regex patterns to highlight inside iframe chunk previews. For
+   *  tag mode: one regex for the name prefix plus one per value token
+   *  (so each token lights up separately). For text modes: the escaped
+   *  query or raw regex. Fuzzy returns [] — no clean regex translation. */
+  private buildHighlightRegexes(): string[] {
+    if (this._searchMode === "tag") {
+      const rawName = this._baseTagName.trim();
+      if (!rawName) return [];
+      const out: string[] = [tagPrefixRegex(rawName, this._baseTagNameMatch)];
+      const rawVal = this._baseTagValue.trim();
+      if (rawVal) {
+        if (this._baseTagMatch === "regex") {
+          out.push(rawVal);
+        } else {
+          for (const tok of tokenizeValue(rawVal)) out.push(escapeRegex(tok));
+        }
+      }
+      return out;
+    }
+
+    const raw = this.queryInput.value.trim();
+    if (!raw) return [];
+    if (this._searchMode === "regex") return [raw];
+    if (this._searchMode === "fuzzy") return [];
+    return [escapeRegex(raw)];
+  }
+
   /** R1421-R1422: gray out source bar when user has files filter rows. */
   private updateSourceBarState(): void {
     const hasFileRows = this.allFilterRows().some(r => r.mode === "files" && r.query.trim());
@@ -666,6 +897,7 @@ export class ArkSearchElement extends HTMLElement {
           r.tagName = m.tag;
           r.tagValue = m.value;
           r.tagMatchMode = "exact";
+          r.tagNameMatch = "exact";
         } else {
           r.query = `${m.tag}: ${m.value}`;
         }
@@ -712,6 +944,21 @@ export class ArkSearchElement extends HTMLElement {
     return { filterFiles, excludeFiles };
   }
 
+  /** Build a regex for a single filter tag row — same rules as the base
+   *  query: contains/exact name, tokenized OR'd value. Used both for OR
+   *  group serialization and for emitting contains-name rows as regex
+   *  chunk filters (the server's tag mode matches names literally). */
+  private tagRowRegex(row: FilterRow): string {
+    const prefix = tagPrefixRegex(row.tagName.trim(), row.tagNameMatch);
+    const rawVal = row.tagValue.trim();
+    if (!rawVal) return prefix;
+    if (row.tagMatchMode === "regex") return `${prefix}\\s*${rawVal}`;
+    const tokens = tokenizeValue(rawVal).map(escapeRegex);
+    if (tokens.length === 0) return prefix;
+    const alt = tokens.length === 1 ? tokens[0] : `(${tokens.join("|")})`;
+    return `${prefix}[^\\n]*${alt}`;
+  }
+
   /** Collect chunk-level filters from filter groups. R1416-R1417, R1443-R1446 */
   private collectChunkFilters(): ChunkFilterParam[] {
     const filters: ChunkFilterParam[] = [];
@@ -724,10 +971,22 @@ export class ArkSearchElement extends HTMLElement {
         const row = rows[0];
         if (row.mode === "tag") {
           if (!row.tagName.trim()) continue;
-          const q = row.tagValue.trim()
-            ? `${row.tagName.trim()}:${row.tagValue.trim()}`
-            : row.tagName.trim();
-          filters.push({ polarity: group.polarity, mode: "tag", query: q });
+          // Contains-name must go through the regex path — the server's
+          // tag filter matches names literally. Exact-name stays on the
+          // fast tag path. Follow-up: enhance the Go tag filter to accept
+          // regex for the name so we can use the tag index in both cases.
+          if (row.tagNameMatch === "contains") {
+            filters.push({
+              polarity: group.polarity,
+              mode: "regex",
+              query: this.tagRowRegex(row),
+            });
+          } else {
+            const q = row.tagValue.trim()
+              ? `${row.tagName.trim()}:${row.tagValue.trim()}`
+              : row.tagName.trim();
+            filters.push({ polarity: group.polarity, mode: "tag", query: q });
+          }
         } else {
           if (!row.query.trim()) continue;
           filters.push({
@@ -742,9 +1001,7 @@ export class ArkSearchElement extends HTMLElement {
         for (const row of rows) {
           if (row.mode === "tag") {
             if (!row.tagName.trim()) continue;
-            const name = escapeRegex(row.tagName.trim());
-            const val = row.tagValue.trim() ? escapeRegex(row.tagValue.trim()) : "";
-            alts.push(val ? `@${name}:\\s*${val}` : `@${name}:`);
+            alts.push(this.tagRowRegex(row));
           } else {
             if (!row.query.trim()) continue;
             alts.push(escapeRegex(row.query.trim()));
@@ -766,14 +1023,28 @@ export class ArkSearchElement extends HTMLElement {
     const api = this._api;
     if (!api) return;
 
-    const query = this.queryInput.value.trim();
-    if (!query) {
-      this.phasedResults = [];
-      this.resultsEl.innerHTML = "";
-      return;
+    // R1408: in tag mode, translate structured fields into a regex query.
+    // Server has no "tag" base-query mode, so we send effective mode=regex.
+    let query: string;
+    let mode: string;
+    if (this._searchMode === "tag") {
+      if (!this._baseTagName.trim()) {
+        this.phasedResults = [];
+        this.clearResults();
+        return;
+      }
+      query = this.buildTagQuery();
+      mode = "regex";
+    } else {
+      query = this.queryInput.value.trim();
+      if (!query) {
+        this.phasedResults = [];
+        this.clearResults();
+        return;
+      }
+      mode = this._searchMode;
     }
 
-    const mode = this.modeSelect.value;
     const gen = ++this.searchGeneration;
     this.phasedResults = [];
 
@@ -842,7 +1113,10 @@ export class ArkSearchElement extends HTMLElement {
     phase1.then(() => {
       if (gen !== this.searchGeneration) return;
       if (this.phasedResults.length === 0) {
-        this.resultsEl.innerHTML = '<div class="ark-tag-search-empty">No results</div>';
+        const empty = document.createElement("div");
+        empty.className = "ark-tag-search-empty";
+        empty.textContent = "No results";
+        this.clearResults(empty);
       }
     });
   }
@@ -888,77 +1162,226 @@ export class ArkSearchElement extends HTMLElement {
     return null;
   }
 
-  // === Result Rendering R1364-R1367, R1392-R1394 ===
+  // === Result Rendering R1364-R1367, R1392-R1394, R1464-R1465 ===
+
+  /** Drop the result cache and replace the results DOM with the given
+   *  content (or nothing). Use this wherever results need to go away —
+   *  never touch `resultsEl.innerHTML` directly, or the cache will
+   *  point at detached nodes. */
+  private clearResults(placeholder: Node | null = null): void {
+    this.resultEls.clear();
+    if (placeholder) this.resultsEl.replaceChildren(placeholder);
+    else this.resultsEl.replaceChildren();
+  }
+
+  /** Signature of the chunk layout alone — if this changes we must
+   *  rebuild the DOM (new iframes with new range params). */
+  private chunkSignature(group: SearchResultGroup): string {
+    return group.chunks.map(c => c.range || "").join("|");
+  }
+
+  /** Signature of the highlight regex list — if only this changes we
+   *  can update iframes in place via postMessage (R1466). */
+  private highlightSignature(highlights: string[]): string {
+    return highlights.join("||");
+  }
+
+  /** Push an updated highlight list into every iframe of an existing
+   *  group element, without reloading. Loaded iframes receive a
+   *  postMessage; iframes still waiting on lazy load get their
+   *  `dataset.src` URL rewritten so they load with the fresh params. */
+  private updateGroupHighlights(groupEl: HTMLElement, highlights: string[]): void {
+    const iframes = groupEl.querySelectorAll<HTMLIFrameElement>("iframe.ark-search-chunk-iframe");
+    for (const iframe of iframes) {
+      if (iframe.dataset.src) {
+        // Not yet loaded by the lazy observer — rewrite the pending URL.
+        try {
+          const url = new URL(iframe.dataset.src, location.origin);
+          url.searchParams.delete("highlight");
+          for (const h of highlights) url.searchParams.append("highlight", h);
+          // Preserve the path-relative form the rest of the code uses.
+          iframe.dataset.src = url.pathname + url.search;
+        } catch {
+          // Malformed URL — leave it alone.
+        }
+      } else if (iframe.contentWindow) {
+        // Loaded — swap highlights live without reload. R1466
+        iframe.contentWindow.postMessage(
+          { type: "ark-set-highlights", patterns: highlights },
+          "*",
+        );
+      }
+    }
+  }
+
+  /** Build a single group element from scratch. Used for both new
+   *  paths and signature-changed paths (where reuse isn't safe). */
+  private buildGroupEl(
+    group: SearchResultGroup,
+    phase: Phase,
+    highlights: string[],
+    api: SearchAPI,
+  ): HTMLElement {
+    const groupEl = document.createElement("div");
+    groupEl.className = `ark-tag-search-group ark-search-phase-${phase}`;
+
+    const header = document.createElement("div");
+    header.className = "ark-tag-search-group-header";
+
+    const pathLink = document.createElement("a");
+    pathLink.className = "ark-tag-search-path";
+    pathLink.textContent = group.path;
+    pathLink.href = "/content" + group.path;
+    pathLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      api.navigate(group.path);
+    });
+    header.appendChild(pathLink);
+
+    if (phase === "candidate") {
+      const badge = document.createElement("span");
+      badge.className = "ark-search-candidate-badge";
+      badge.textContent = "candidate";
+      header.appendChild(badge);
+    }
+
+    if (api.showInFolder) {
+      const folderBtn = document.createElement("button");
+      folderBtn.className = "ark-tag-search-folder";
+      folderBtn.innerHTML = "&#128193;";
+      folderBtn.title = "Show in file manager";
+      folderBtn.addEventListener("click", () => api.showInFolder!(group.path));
+      header.appendChild(folderBtn);
+    }
+
+    groupEl.appendChild(header);
+
+    for (const chunk of group.chunks) {
+      const chunkEl = document.createElement("div");
+      chunkEl.className = "ark-tag-search-chunk";
+
+      // Iframe preview: /content/ with range, edit, toggle, highlight params
+      const params = new URLSearchParams();
+      if (chunk.range) params.set("range", chunk.range);
+      params.set("edit", "true");
+      params.set("toggle", "false");
+      for (const h of highlights) params.append("highlight", h);
+      const iframeSrc = `/content${group.path}?${params}`;
+
+      const iframe = document.createElement("iframe");
+      iframe.className = "ark-search-chunk-iframe";
+      iframe.style.width = "100%";
+      iframe.style.height = "150px"; // initial, resized by postMessage
+      iframe.style.border = "none";
+      iframe.style.overflow = "hidden";
+      iframe.style.opacity = "0"; // fades in on ark-content-ready — R1465
+      iframe.dataset.src = iframeSrc; // lazy load
+      iframe.title = `${group.path} ${chunk.range}`;
+
+      if (this.lazyObserver) {
+        this.lazyObserver.observe(iframe);
+      }
+
+      chunkEl.appendChild(iframe);
+      groupEl.appendChild(chunkEl);
+    }
+
+    return groupEl;
+  }
+
+  /** Update only the phase class and candidate badge of an existing
+   *  group element — used when the phase changes but everything else
+   *  (chunks, highlights) is unchanged. Leaves iframes untouched. */
+  private updateGroupPhase(groupEl: HTMLElement, phase: Phase): void {
+    groupEl.className = `ark-tag-search-group ark-search-phase-${phase}`;
+    const header = groupEl.querySelector(".ark-tag-search-group-header");
+    if (!header) return;
+    const existingBadge = header.querySelector(".ark-search-candidate-badge");
+    if (phase === "candidate" && !existingBadge) {
+      const badge = document.createElement("span");
+      badge.className = "ark-search-candidate-badge";
+      badge.textContent = "candidate";
+      const folder = header.querySelector(".ark-tag-search-folder");
+      header.insertBefore(badge, folder || null);
+    } else if (phase !== "candidate" && existingBadge) {
+      existingBadge.remove();
+    }
+  }
 
   private renderResults(): void {
-    this.resultsEl.innerHTML = "";
-    if (this.phasedResults.length === 0) return;
+    if (this.phasedResults.length === 0) {
+      this.clearResults();
+      return;
+    }
 
     const api = this._api!;
+    const highlights = this.buildHighlightRegexes();
+    const highlightSig = this.highlightSignature(highlights);
+    const seen = new Set<string>();
+    const desired: HTMLElement[] = [];
+
+    // Pass 1: reuse or (re)build group elements, keyed by path.
+    // First-seen phase wins for a path — later phases of the same
+    // path (e.g. a candidate duplicate) are skipped.
     for (const { group, phase } of this.phasedResults) {
-      const groupEl = document.createElement("div");
-      groupEl.className = `ark-tag-search-group ark-search-phase-${phase}`;
+      if (seen.has(group.path)) continue;
+      seen.add(group.path);
 
-      const header = document.createElement("div");
-      header.className = "ark-tag-search-group-header";
+      const chunkSig = this.chunkSignature(group);
+      let entry = this.resultEls.get(group.path);
 
-      const pathLink = document.createElement("a");
-      pathLink.className = "ark-tag-search-path";
-      pathLink.textContent = group.path;
-      pathLink.href = "/content" + group.path;
-      pathLink.addEventListener("click", (e) => {
-        e.preventDefault();
-        api.navigate(group.path);
-      });
-      header.appendChild(pathLink);
-
-      if (phase === "candidate") {
-        const badge = document.createElement("span");
-        badge.className = "ark-search-candidate-badge";
-        badge.textContent = "candidate";
-        header.appendChild(badge);
-      }
-
-      if (api.showInFolder) {
-        const folderBtn = document.createElement("button");
-        folderBtn.className = "ark-tag-search-folder";
-        folderBtn.innerHTML = "&#128193;";
-        folderBtn.title = "Show in file manager";
-        folderBtn.addEventListener("click", () => api.showInFolder!(group.path));
-        header.appendChild(folderBtn);
-      }
-
-      groupEl.appendChild(header);
-
-      for (const chunk of group.chunks) {
-        const chunkEl = document.createElement("div");
-        chunkEl.className = "ark-tag-search-chunk";
-
-        // Iframe preview: /content/ with range, edit, toggle params
-        const params = new URLSearchParams();
-        if (chunk.range) params.set("range", chunk.range);
-        params.set("edit", "true");
-        params.set("toggle", "false");
-        const iframeSrc = `/content${group.path}?${params}`;
-
-        const iframe = document.createElement("iframe");
-        iframe.className = "ark-search-chunk-iframe";
-        iframe.style.width = "100%";
-        iframe.style.height = "150px"; // initial, resized by postMessage
-        iframe.style.border = "none";
-        iframe.style.overflow = "hidden";
-        iframe.dataset.src = iframeSrc; // lazy load
-        iframe.title = `${group.path} ${chunk.range}`;
-
-        if (this.lazyObserver) {
-          this.lazyObserver.observe(iframe);
+      if (!entry) {
+        // New path — build from scratch.
+        const el = this.buildGroupEl(group, phase, highlights, api);
+        entry = { el, chunkSig, highlightSig, phase };
+        this.resultEls.set(group.path, entry);
+      } else if (entry.chunkSig !== chunkSig) {
+        // Chunks differ — must rebuild to get new iframe URLs.
+        const newEl = this.buildGroupEl(group, phase, highlights, api);
+        entry.el.replaceWith(newEl);
+        entry.el = newEl;
+        entry.chunkSig = chunkSig;
+        entry.highlightSig = highlightSig;
+        entry.phase = phase;
+      } else {
+        // Same chunks. Handle highlight and phase updates in place.
+        if (entry.highlightSig !== highlightSig) {
+          this.updateGroupHighlights(entry.el, highlights);
+          entry.highlightSig = highlightSig;
         }
-
-        chunkEl.appendChild(iframe);
-        groupEl.appendChild(chunkEl);
+        if (entry.phase !== phase) {
+          this.updateGroupPhase(entry.el, phase);
+          entry.phase = phase;
+        }
       }
+      desired.push(entry.el);
+    }
 
-      this.resultsEl.appendChild(groupEl);
+    // Pass 2: drop cached entries whose paths are no longer present.
+    for (const [path, entry] of this.resultEls) {
+      if (!seen.has(path)) {
+        entry.el.remove();
+        this.resultEls.delete(path);
+      }
+    }
+
+    // Pass 3: drop any untracked children (loading / empty placeholders
+    // left over from previous states) so they don't stick around next to
+    // the real results.
+    const tracked = new Set<Element>(desired);
+    for (let i = this.resultsEl.children.length - 1; i >= 0; i--) {
+      const child = this.resultsEl.children[i];
+      if (!tracked.has(child)) child.remove();
+    }
+
+    // Pass 4: reorder in place. insertBefore on an existing child of
+    // the same parent moves it without detaching — iframes keep their
+    // contentWindow and are not reloaded.
+    for (let i = 0; i < desired.length; i++) {
+      const el = desired[i];
+      if (this.resultsEl.children[i] !== el) {
+        this.resultsEl.insertBefore(el, this.resultsEl.children[i] || null);
+      }
     }
   }
 }
