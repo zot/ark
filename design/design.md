@@ -164,6 +164,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
 - [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`
+- [x] crc-ArkTagElement.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### CRC Cards (TypeScript — Markdown Editor)
 - [x] crc-ArkTagParser.md → `markdown-editor/src/ark-tag-parser.ts`
@@ -181,6 +182,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-search-render.md → `markdown-editor/src/ark-search-block.ts`, `markdown-editor/src/search-result-view.ts`
 - [x] seq-mode-toggle.md → `markdown-editor/src/mode-toggle.ts`, `markdown-editor/src/ark-search-block.ts`
 - [x] seq-save.md → `markdown-editor/src/mode-toggle.ts`
+- [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
 - [x] test-Config.md → `config_test.go`
@@ -295,3 +297,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O57: No unit tests for Store.MatchTagNames, Store.MatchTagValues
 - [ ] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters
 - [ ] O59: No integration test for resolveTagContainsQuery end-to-end (structured tag query → regex search)
+- [ ] O60: No unit tests for wrapTagElements — tag pattern matching, idempotency, HTML attribute avoidance
+- [ ] O61: ark-search-element.js symlink not in install/release pipeline — must be added to Makefile like ark-markdown-editor.js

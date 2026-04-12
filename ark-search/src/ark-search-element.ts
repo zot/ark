@@ -1386,5 +1386,8 @@ export class ArkSearchElement extends HTMLElement {
   }
 }
 
-// Register the custom element
-customElements.define("ark-search", ArkSearchElement);
+// Register the custom element (guarded for double-import — the standalone
+// ark-search-element.js and the full ark-markdown-editor.js both include this).
+if (!customElements.get("ark-search")) {
+  customElements.define("ark-search", ArkSearchElement);
+}

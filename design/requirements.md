@@ -2279,3 +2279,40 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1473:** On the client, `collectChunkFilters()` sends `mode: "tag-contains"` with `query: "token1 token2:value1 value2"` for contains-name filter rows, replacing the `mode: "regex"` fallback. Exact-name filter rows continue to use `mode: "tag"`.
 - **R1474:** Supersedes R1455 (client-side regex for contains-name) and R1458 (regex chunk filter fallback). The contains-name path now goes through the server's T/V record index.
 - **R1475:** Highlight regexes (`buildHighlightRegexes`, `tagRowRegex`) continue to build client-side regexes from the name and value tokens — these are for iframe rendering, not search.
+
+## Feature: ark-tag-element
+**Source:** specs/ark-tag-element.md
+
+### Component
+
+- **R1476:** `<ark-tag>` is a custom element (no shadow DOM) that renders an interactive tag widget in read-only content. It inherits the host page's theme CSS.
+- **R1477:** Markup structure: `<ark-tag><name>TAG</name> <value>VALUE</value></ark-tag>`. The `<name>` and `<value>` child elements carry only the semantic parts — no punctuation in the markup.
+- **R1478:** CSS `content` generates the `@` prefix on `name::before` and `:` suffix on `name::after`. Punctuation color uses `--term-text`. Tag name color uses `--term-accent-bright`. Tag value color uses `--term-success`.
+- **R1479:** Without JavaScript loaded, the element degrades to readable plain text: `TAG VALUE`.
+- **R1480:** Hover cursor indicates clickability.
+
+### Click and Inline Search
+
+- **R1481:** Clicking an `<ark-tag>` element toggles an inline `<ark-search>` panel in the document flow, inserted after the tag's parent block element. The panel is pre-filled with the tag's name and value.
+- **R1482:** Only one inline `<ark-search>` panel may be open at a time per content page. Opening a new one closes the previous.
+- **R1483:** The `<ark-tag>` element locates a `SearchAPI` instance via `document.arkSearchAPI` to pass to the created `<ark-search>` element.
+- **R1484:** Clicking the element also dispatches a bubbling `ark-tag-click` custom event with `detail: { name, value }` for external listeners.
+
+### Server-Side Post-Processing
+
+- **R1485:** A Go function wraps `@tag: value` patterns in `<ark-tag>` elements. Input is rendered HTML; output is HTML with tag patterns replaced. Tag names follow ark's definition: `[a-zA-Z][\w.-]*`.
+- **R1486:** The post-processing matches tag values to end of line (or `<br>` / `<br />` in goldmark output). Values are trimmed of leading whitespace.
+- **R1487:** Tags already inside an `<ark-tag>` element are not re-wrapped (idempotency).
+- **R1488:** The post-processing must not match tag patterns inside HTML attributes or element tag names.
+- **R1489:** `handleContentView` applies post-processing to the goldmark-rendered HTML for markdown files (after `renderMarkdownForContent`) and to the HTML-escaped text for plain-text files (after `HTMLEscapeString`).
+
+### Content Page Integration
+
+- **R1490:** `content-markdown.html` sets `document.arkSearchAPI` to the page's `api` object. The `<ark-search>` element and its CSS are already loaded on this page.
+- **R1491:** `content-plain.html` loads the `<ark-search>` element script (as a module import) and sets `document.arkSearchAPI` so inline search panels work for plain-text files.
+- **R1492:** The `<ark-tag>` component definition is inlined in both HTML templates — it is small enough that a separate bundle is unnecessary.
+
+### Scope Boundary
+
+- **R1493:** `<ark-tag>` must never appear inside the CM6 editor. The server applies post-processing only to the read-view content (`#content` div for markdown, `<pre>` for plain text). The CM6 editor manages its own tag decorations via `tag-widget.ts`.
+- **R1494:** The CM6 tag system (`TagSearchWidget`, `StatusWidget`, completion) and the `<ark-tag>` element are independent — they share no code or state.

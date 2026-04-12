@@ -1,3 +1,4 @@
+<!-- CRC: crc-ArkTagElement.md | Seq: seq-ark-tag-click.md | R1476-R1494 -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -27,21 +28,446 @@
        border-radius: 2px;
        box-shadow: 0 0 0 1px var(--term-accent, #E07A47);
      }
+
+     /* ========== <ark-tag> element ========== */
+     /* R1476-R1480: interactive tag widget for read views. */
+     ark-tag {
+       display: inline;
+     }
+     ark-tag .ark-tag-action {
+       cursor: pointer;
+       opacity: 0.5;
+       font-size: 0.75em;
+       margin-right: 0.1em;
+       display: inline-block;
+       transition: transform 0.15s ease;
+     }
+     ark-tag .ark-tag-action.open {
+       transform: rotate(90deg);
+     }
+     ark-tag .ark-tag-action:hover {
+       opacity: 1;
+     }
+     ark-tag name {
+       color: var(--term-accent-bright, #ff9966);
+     }
+     ark-tag name::before {
+       content: '@';
+       color: var(--term-text, #e0e0e8);
+     }
+     ark-tag name::after {
+       content: ':';
+       color: var(--term-text, #e0e0e8);
+     }
+     ark-tag value {
+       color: var(--term-success, #4ade80);
+     }
+
+     /* ========== <ark-search> element theming ========== */
+     /* Uses --term-* variables from the injected theme block. */
+
+     .ark-tag-search-panel {
+       margin: 0.75em 0;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 8px;
+       background: var(--term-bg-panel, #0d0d14);
+       overflow: hidden;
+       font-family: var(--term-mono, 'JetBrains Mono', monospace);
+       font-size: 0.85em;
+       color: var(--term-text, #e0e0e8);
+     }
+
+     /* --- Top bar --- */
+     .ark-search-bar {
+       display: flex;
+       align-items: center;
+       flex-wrap: wrap;
+       gap: 0.5em;
+       padding: 0.55em 0.75em;
+       background: var(--term-bg-elevated, #12121a);
+       border-bottom: 1px solid var(--term-border, #2a2a3a);
+     }
+
+     .ark-search-mode {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.35em 2em 0.35em 0.75em;
+       font-family: inherit;
+       font-size: 0.9em;
+       cursor: pointer;
+       appearance: none;
+       -webkit-appearance: none;
+       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23ff9966' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1l5 5 5-5'/></svg>");
+       background-repeat: no-repeat;
+       background-position: right 0.6em center;
+       background-size: 0.7em;
+       transition: border-color 0.12s, box-shadow 0.15s;
+     }
+     .ark-search-mode:hover {
+       border-color: var(--term-accent-dim, rgba(224,122,71,0.35));
+     }
+     .ark-search-mode:focus {
+       outline: none;
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-mode option {
+       background: var(--term-bg-elevated, #12121a);
+       color: var(--term-text, #e0e0e8);
+     }
+
+     .ark-search-bar-inputs {
+       display: flex;
+       align-items: center;
+       gap: 0.4em;
+       flex: 1;
+       min-width: 12em;
+     }
+
+     .ark-search-bar-at,
+     .ark-search-filter-at {
+       color: var(--term-accent-bright, #ff9966);
+       font-weight: 600;
+       font-family: inherit;
+     }
+     .ark-search-bar-colon {
+       color: var(--term-text-muted, #5a5a70);
+       margin: 0 -0.1em;
+     }
+
+     /* --- Text inputs (base query, tag fields, filter rows) --- */
+     .ark-search-query,
+     .ark-search-bar-tag-name,
+     .ark-search-bar-tag-value,
+     .ark-search-filter-query,
+     .ark-search-filter-tag-name,
+     .ark-search-filter-tag-value {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text, #e0e0e8);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.35em 0.65em;
+       font-family: inherit;
+       font-size: 1em;
+       outline: none;
+       caret-color: var(--term-accent-bright, #ff9966);
+     }
+     .ark-search-query { flex: 1; min-width: 8em; }
+     .ark-search-bar-tag-value { flex: 1; min-width: 6em; }
+     .ark-search-filter-query { flex: 1; }
+     .ark-search-filter-tag-value { flex: 1; }
+
+     .ark-search-query:focus,
+     .ark-search-bar-tag-name:focus,
+     .ark-search-bar-tag-value:focus,
+     .ark-search-filter-query:focus,
+     .ark-search-filter-tag-name:focus,
+     .ark-search-filter-tag-value:focus {
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-query::placeholder,
+     .ark-search-bar-tag-name::placeholder,
+     .ark-search-bar-tag-value::placeholder,
+     .ark-search-filter-query::placeholder,
+     .ark-search-filter-tag-name::placeholder,
+     .ark-search-filter-tag-value::placeholder {
+       color: var(--term-text-muted, #5a5a70);
+     }
+
+     /* --- Small pill buttons --- */
+     .ark-search-bar-tag-match,
+     .ark-search-filter-tag-match,
+     .ark-search-clear,
+     .ark-tag-search-close,
+     .ark-search-filter-expand,
+     .ark-search-filter-remove,
+     .ark-search-add-filter,
+     .ark-search-chip-save,
+     .ark-search-chip-more {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text-dim, #8888a0);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.3em 0.6em;
+       font-family: inherit;
+       font-size: 0.85em;
+       cursor: pointer;
+       transition: border-color 0.12s, color 0.12s, box-shadow 0.15s;
+     }
+     .ark-search-bar-tag-match:hover,
+     .ark-search-filter-tag-match:hover,
+     .ark-search-clear:hover,
+     .ark-tag-search-close:hover,
+     .ark-search-filter-expand:hover,
+     .ark-search-filter-remove:hover,
+     .ark-search-add-filter:hover,
+     .ark-search-chip-save:hover,
+     .ark-search-chip-more:hover {
+       color: var(--term-accent-bright, #ff9966);
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-bar-tag-match,
+     .ark-search-filter-tag-match {
+       color: var(--term-accent-bright, #ff9966);
+       border-color: var(--term-accent-dim, rgba(224,122,71,0.2));
+       min-width: 2.4em;
+       text-align: center;
+     }
+     .ark-search-clear,
+     .ark-tag-search-close {
+       padding: 0.25em 0.55em;
+       font-size: 1em;
+       line-height: 1;
+     }
+
+     /* --- Filter rows --- */
+     .ark-search-filters {
+       display: flex;
+       flex-direction: column;
+       gap: 0.4em;
+       padding: 0.55em 0.75em 0;
+     }
+     .ark-search-filter-row {
+       display: flex;
+       align-items: center;
+       gap: 0.4em;
+       flex-wrap: wrap;
+     }
+     .ark-search-filter-polarity,
+     .ark-search-filter-mode {
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-text, #e0e0e8);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       padding: 0.3em 0.5em;
+       font-family: inherit;
+       font-size: 0.85em;
+       cursor: pointer;
+     }
+     .ark-search-filter-polarity:focus,
+     .ark-search-filter-mode:focus {
+       outline: none;
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 2px var(--term-accent-glow, rgba(224,122,71,0.4));
+     }
+     .ark-search-add-filter {
+       align-self: flex-start;
+       margin: 0.55em 0.75em 0;
+     }
+
+     /* --- OR groups --- */
+     .ark-search-or-group {
+       display: flex;
+       flex-direction: column;
+       gap: 0.35em;
+       padding: 0.45em 0.55em;
+       border: 1px dashed var(--term-accent-dim, rgba(224,122,71,0.35));
+       border-radius: 6px;
+       position: relative;
+     }
+     .ark-search-or-label {
+       position: absolute;
+       top: -0.6em;
+       left: 0.7em;
+       padding: 0 0.4em;
+       background: var(--term-bg-panel, #0d0d14);
+       color: var(--term-accent-bright, #ff9966);
+       font-size: 0.75em;
+       font-weight: 600;
+       letter-spacing: 0.1em;
+     }
+
+     /* --- Source-type bar --- */
+     .ark-search-source-bar {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 0.35em;
+       padding: 0.55em 0.75em 0;
+       transition: opacity 0.15s;
+     }
+     .ark-search-source-bar.ark-search-source-overridden {
+       opacity: 0.4;
+     }
+     .ark-search-source-toggle {
+       background: transparent;
+       color: var(--term-text-dim, #8888a0);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 999px;
+       padding: 0.3em 0.85em;
+       font-family: inherit;
+       font-size: 0.8em;
+       cursor: pointer;
+       transition: color 0.12s, border-color 0.12s, box-shadow 0.15s;
+     }
+     .ark-search-source-toggle:hover {
+       color: var(--term-text, #e0e0e8);
+     }
+     .ark-search-source-toggle.active {
+       color: var(--term-accent-bright, #ff9966);
+       border-color: var(--term-accent, #E07A47);
+       background: var(--term-accent-dim, rgba(224,122,71,0.2));
+     }
+
+     /* --- Chip bar (saved filter presets) --- */
+     .ark-search-chip-bar {
+       display: flex;
+       flex-wrap: wrap;
+       gap: 0.35em;
+       padding: 0.55em 0.75em 0.75em;
+       position: relative;
+     }
+     .ark-search-chip {
+       display: inline-flex;
+       align-items: center;
+       gap: 0.3em;
+       padding: 0.25em 0.55em;
+       background: var(--term-bg, #0a0a0f);
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 999px;
+       font-size: 0.8em;
+     }
+     .ark-search-chip-label {
+       cursor: pointer;
+     }
+     .ark-search-chip-label:hover {
+       text-decoration: underline;
+     }
+     .ark-search-chip-remove {
+       background: none;
+       color: var(--term-text-muted, #5a5a70);
+       border: none;
+       padding: 0;
+       cursor: pointer;
+       font-size: 1em;
+       line-height: 1;
+     }
+     .ark-search-chip-remove:hover {
+       color: var(--term-danger, #f87171);
+     }
+     .ark-search-chip-dropdown {
+       position: absolute;
+       top: 100%;
+       right: 0.75em;
+       z-index: 10;
+       display: flex;
+       flex-direction: column;
+       gap: 0.35em;
+       padding: 0.55em;
+       background: var(--term-bg-elevated, #12121a);
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 8px;
+       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+     }
+
+     /* --- Results area --- */
+     .ark-tag-search-results {
+       max-height: 500px;
+       overflow-y: auto;
+       padding: 0.6em 0.75em;
+     }
+     .ark-tag-search-loading,
+     .ark-tag-search-empty {
+       color: var(--term-text-muted, #5a5a70);
+       padding: 1.2em;
+       text-align: center;
+       font-style: italic;
+     }
+     .ark-tag-search-group {
+       margin-bottom: 0.8em;
+       padding: 0.5em 0.6em;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 6px;
+       background: var(--term-bg, #0a0a0f);
+       transition: border-color 0.15s, opacity 0.15s;
+     }
+     .ark-search-phase-candidate {
+       border-style: dashed;
+       opacity: 0.72;
+     }
+     .ark-search-phase-curated {
+       border-color: var(--term-accent, #E07A47);
+       box-shadow: 0 0 0 1px var(--term-accent-glow, rgba(224,122,71,0.4));
+       opacity: 1;
+     }
+     .ark-search-phase-rejected {
+       opacity: 0.35;
+       text-decoration: line-through;
+     }
+     .ark-tag-search-group-header {
+       display: flex;
+       align-items: center;
+       gap: 0.5em;
+       margin-bottom: 0.35em;
+     }
+     .ark-tag-search-path {
+       color: var(--term-accent-bright, #ff9966);
+       text-decoration: none;
+       font-family: inherit;
+       font-size: 0.85em;
+       overflow: hidden;
+       text-overflow: ellipsis;
+       white-space: nowrap;
+       flex: 1;
+     }
+     .ark-tag-search-path:hover { text-decoration: underline; }
+     .ark-search-candidate-badge {
+       padding: 0.1em 0.5em;
+       background: var(--term-accent-dim, rgba(224,122,71,0.2));
+       color: var(--term-accent-bright, #ff9966);
+       border: 1px solid var(--term-accent, #E07A47);
+       border-radius: 999px;
+       font-size: 0.7em;
+       text-transform: uppercase;
+       letter-spacing: 0.08em;
+     }
+     .ark-tag-search-folder {
+       background: none;
+       border: none;
+       cursor: pointer;
+       font-size: 1em;
+       padding: 0 0.2em;
+       opacity: 0.55;
+       color: var(--term-text-dim, #8888a0);
+     }
+     .ark-tag-search-folder:hover { opacity: 1; }
+     .ark-tag-search-chunk {
+       font-size: 0.85em;
+       color: var(--term-text-dim, #8888a0);
+       padding: 0.3em 0;
+       line-height: 1.5;
+     }
+     .ark-search-chunk-iframe {
+       width: 100%;
+       border: 1px solid var(--term-border, #2a2a3a);
+       border-radius: 4px;
+       background: var(--term-bg, #0a0a0f);
+       transition: opacity 0.2s ease-in;
+     }
+     .ark-tag-search-resize {
+       height: 6px;
+       cursor: ns-resize;
+       background: var(--term-border, #2a2a3a);
+       opacity: 0.5;
+     }
+     .ark-tag-search-resize:hover { opacity: 1; }
     </style>
 </head>
 <body>
 <pre id="content">{{.Content}}</pre>
-<script>
+<script type="module">
 const highlights = new URL(location.href).searchParams.getAll('highlight');
 
-// R1459-R1463: highlight regex matches in plain-text previews.
-// Mirrors the capture-group logic from highlight-extension.ts:
-// if group 1 exists, highlight only the group (tag-value tokens);
-// otherwise highlight the full match.
+// R1459-R1463, R1476: highlight regex matches in plain-text previews.
+// Two paths: <ark-tag> elements get a highlight class on matching children;
+// bare text nodes get <mark> wrappers via DOM splitting (preserves elements).
 function applyHighlights(patterns) {
   const pre = document.getElementById('content');
-  const text = pre.textContent;
-  if (!patterns.length || !text) return;
+  if (!patterns.length) return;
 
   const regexes = [];
   for (const p of patterns) {
@@ -49,47 +475,72 @@ function applyHighlights(patterns) {
   }
   if (!regexes.length) return;
 
-  // Collect non-overlapping [start, end) spans, sorted by start.
-  const spans = [];
-  for (const re of regexes) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      if (m[0].length === 0) { re.lastIndex++; continue; }
-      const hasGroup = m[1] !== undefined;
-      const gLen = hasGroup ? m[1].length : m[0].length;
-      const gOffset = hasGroup ? m[0].length - m[1].length : 0;
-      spans.push([m.index + gOffset, m.index + gOffset + gLen]);
-    }
-  }
-  if (!spans.length) return;
-
-  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
-  // Merge overlapping spans.
-  const merged = [spans[0]];
-  for (let i = 1; i < spans.length; i++) {
-    const prev = merged[merged.length - 1];
-    if (spans[i][0] <= prev[1]) {
-      prev[1] = Math.max(prev[1], spans[i][1]);
-    } else {
-      merged.push(spans[i]);
+  // Highlight <ark-tag> elements: reconstruct the full tag text
+  // (@name: value) and test each regex against it.
+  const HL = 'ark-search-highlight';
+  for (const tag of pre.querySelectorAll('ark-tag')) {
+    const nameEl = tag.querySelector('name');
+    const valueEl = tag.querySelector('value');
+    if (!nameEl) continue;
+    const full = '@' + nameEl.textContent + ': ' + (valueEl ? valueEl.textContent : '');
+    for (const re of regexes) {
+      re.lastIndex = 0;
+      const m = re.exec(full);
+      if (!m) continue;
+      // No capture group → highlight the whole tag (name match).
+      // Capture group → highlight the value element (token match).
+      if (m[1] !== undefined && valueEl) {
+        valueEl.classList.add(HL);
+      } else {
+        nameEl.classList.add(HL);
+      }
     }
   }
 
-  // Rebuild <pre> content with <mark> wrappers.
-  const parts = [];
-  let pos = 0;
-  for (const [s, e] of merged) {
-    if (s > pos) parts.push(escHtml(text.slice(pos, s)));
-    parts.push('<mark class="ark-search-highlight">' + escHtml(text.slice(s, e)) + '</mark>');
-    pos = e;
-  }
-  if (pos < text.length) parts.push(escHtml(text.slice(pos)));
-  pre.innerHTML = parts.join('');
-}
+  // Highlight bare text nodes: walk non-ark-tag text, split at matches.
+  const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement.closest('ark-tag') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
 
-function escHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  for (const node of textNodes) {
+    const text = node.nodeValue;
+    const spans = [];
+    for (const re of regexes) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m[0].length === 0) { re.lastIndex++; continue; }
+        const hasGroup = m[1] !== undefined;
+        const gLen = hasGroup ? m[1].length : m[0].length;
+        const gOff = hasGroup ? m[0].length - m[1].length : 0;
+        spans.push([m.index + gOff, m.index + gOff + gLen]);
+      }
+    }
+    if (!spans.length) continue;
+    spans.sort((a, b) => a[0] - b[0]);
+    // Merge overlapping.
+    const merged = [spans[0]];
+    for (let i = 1; i < spans.length; i++) {
+      const prev = merged[merged.length - 1];
+      if (spans[i][0] <= prev[1]) prev[1] = Math.max(prev[1], spans[i][1]);
+      else merged.push(spans[i]);
+    }
+    // Split text node at match boundaries, wrap matches in <mark>.
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    for (const [s, e] of merged) {
+      if (s > pos) frag.appendChild(document.createTextNode(text.slice(pos, s)));
+      const mark = document.createElement('mark');
+      mark.className = HL;
+      mark.textContent = text.slice(s, e);
+      frag.appendChild(mark);
+      pos = e;
+    }
+    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+    node.parentNode.replaceChild(frag, node);
+  }
 }
 
 applyHighlights(highlights);
@@ -100,6 +551,117 @@ window.addEventListener('message', (e) => {
     applyHighlights(e.data.patterns);
   }
 });
+
+// R1491: load <ark-search> element for inline search panels.
+const { ArkSearchElement } = await import('/ark-search-element.js{{.BundleHash}}');
+
+// R1483, R1491: SearchAPI for <ark-tag> inline panels.
+const api = {
+  search: (query, mode) => fetch('/search/grouped', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query, mode}),
+  }).then(r => r.json()),
+  searchFiltered: (query, request) => fetch('/search/grouped', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      query,
+      mode: request.mode,
+      chunk_filters: request.chunkFilters,
+      filter_files: request.filterFiles,
+      exclude_files: request.excludeFiles,
+      name_tokens: request.nameTokens,
+      value_tokens: request.valueTokens,
+      name_match: request.nameMatch,
+    }),
+  }).then(r => r.json()),
+  tagComplete: (prefix) => fetch('/tags/complete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prefix}),
+  }).then(r => r.json()),
+  tagValueComplete: (tag, prefix) => fetch('/tags/values', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tag, prefix}),
+  }).then(r => r.json()),
+  navigate: (p) => { window.location.href = '/content' + p; },
+};
+document.arkSearchAPI = api;
+
+// R1476-R1484, R1492: <ark-tag> custom element — interactive tag widgets.
+if (!customElements.get('ark-tag')) {
+  let activePanel = null;
+  let activePanelOwner = null;
+  customElements.define('ark-tag', class extends HTMLElement {
+    _btn = null;
+    _isOpen = false;
+    connectedCallback() {
+      this._btn = document.createElement('span');
+      this._btn.className = 'ark-tag-action';
+      this._btn.textContent = '\u25B6'; // ▶
+      this._btn.title = 'Search this tag';
+      this._btn.addEventListener('click', this._onToggle);
+      this.prepend(this._btn);
+    }
+    _setOpen(open) {
+      this._isOpen = open;
+      this._btn.classList.toggle('open', open);
+      this._btn.title = open ? 'Close search' : 'Search this tag';
+    }
+    _onToggle = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const nameEl = this.querySelector('name');
+      const valueEl = this.querySelector('value');
+      const name = nameEl ? nameEl.textContent : '';
+      const value = valueEl ? valueEl.textContent : '';
+
+      // R1484: dispatch event for external listeners.
+      this.dispatchEvent(new CustomEvent('ark-tag-click', {
+        bubbles: true, detail: { name, value }
+      }));
+
+      // R1482: toggle — if this tag's panel is open, close it.
+      if (activePanelOwner === this && activePanel) {
+        activePanel.remove();
+        activePanel = null;
+        this._setOpen(false);
+        activePanelOwner = null;
+        return;
+      }
+      // Close any other open panel.
+      if (activePanelOwner && activePanelOwner !== this) {
+        activePanel.remove();
+        activePanelOwner._setOpen(false);
+        activePanel = null;
+        activePanelOwner = null;
+      }
+
+      // R1481, R1483: create inline <ark-search> panel.
+      if (!document.arkSearchAPI) return;
+      const search = document.createElement('ark-search');
+      search.api = document.arkSearchAPI;
+      search.tag = name;
+      search.value = value;
+      search.addEventListener('close', () => {
+        search.remove();
+        if (activePanelOwner === this) {
+          this._setOpen(false);
+          activePanel = null;
+          activePanelOwner = null;
+        }
+      });
+
+      // Insert right after this tag element.
+      this.after(search);
+      activePanel = search;
+      activePanelOwner = this;
+      this._setOpen(true);
+    };
+  });
+}
 
 // R1465: signal the parent iframe host that this content is ready to show.
 if (window !== window.parent) {

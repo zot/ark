@@ -401,6 +401,7 @@ func (srv *Server) ReloadUIEngine() error {
 
 	log.Printf("ui: reloaded on %s", url)
 	srv.registerLuaFunctions()
+	srv.registerContentRoutes()
 	return nil
 }
 
@@ -2013,7 +2014,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rendered := renderMarkdownForContent(data, path)
-		shell.Content = template.HTML(rendered)
+		shell.Content = template.HTML(wrapTagElements(rendered))
 		tmpl.Execute(w, shell)
 	} else {
 		tmpl, err := srv.loadContentTemplate("content-plain.html")
@@ -2021,7 +2022,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		shell.Content = template.HTML(template.HTMLEscapeString(string(data)))
+		shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
 		tmpl.Execute(w, shell)
 	}
 }
@@ -2091,6 +2092,29 @@ func renderMarkdownForContent(data []byte, filePath string) string {
 		return template.HTMLEscapeString(string(data))
 	}
 	return buf.String()
+}
+
+// wrapTagElements post-processes rendered HTML to wrap @tag: value patterns
+// in <ark-tag> elements for interactive tag widgets in read views.
+// CRC: crc-Server.md | Seq: seq-ark-tag-click.md | R1485-R1489
+var arkTagRe = regexp.MustCompile(`(?m)@([a-zA-Z][\w.-]*):[ \t]*([^\n<]*)`)
+
+func wrapTagElements(html string) string {
+	return arkTagRe.ReplaceAllStringFunc(html, func(match string) string {
+		m := arkTagRe.FindStringSubmatch(match)
+		if m == nil {
+			return match
+		}
+		name := m[1]
+		value := strings.TrimRight(m[2], " \t")
+		// name and value are already HTML-safe: goldmark escapes text nodes,
+		// and the plain-text path runs HTMLEscapeString before this function.
+		// Tag names ([a-zA-Z][\w.-]*) never need escaping.
+		if value == "" {
+			return `<ark-tag><name>` + name + `</name></ark-tag>`
+		}
+		return `<ark-tag><name>` + name + `</name> <value>` + value + `</value></ark-tag>`
+	})
 }
 
 // contentShellData holds the template data for content HTML shells.

@@ -1,3 +1,4 @@
+<!-- CRC: crc-ArkTagElement.md | Seq: seq-ark-tag-click.md, seq-content-fetching.md | R1476-R1494 -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -508,6 +509,40 @@
        background: var(--term-bg-hover, #f0f0f0);
        box-shadow: 0 0 0 3px var(--term-accent-glow, rgba(0,0,0,0.1));
      }
+
+     /* ========== <ark-tag> element ========== */
+     /* R1476-R1480: interactive tag widget for read views. */
+     ark-tag {
+       display: inline;
+     }
+     ark-tag .ark-tag-action {
+       cursor: pointer;
+       opacity: 0.5;
+       font-size: 0.75em;
+       margin-right: 0.1em;
+       display: inline-block;
+       transition: transform 0.15s ease;
+     }
+     ark-tag .ark-tag-action.open {
+       transform: rotate(90deg);
+     }
+     ark-tag .ark-tag-action:hover {
+       opacity: 1;
+     }
+     ark-tag name {
+       color: var(--term-accent-bright, #ff9966);
+     }
+     ark-tag name::before {
+       content: '@';
+       color: var(--term-text, #e0e0e8);
+     }
+     ark-tag name::after {
+       content: ':';
+       color: var(--term-text, #e0e0e8);
+     }
+     ark-tag value {
+       color: var(--term-success, #4ade80);
+     }
     </style>
 </head>
 <body>
@@ -515,6 +550,9 @@
 <div id="content"{{if .AutoEdit}} style="display:none"{{end}}>{{.Content}}</div>
 <div id="editor"{{if .AutoEdit}} style="display:block;min-height:100vh"{{end}}></div>
 <script type="module">
+// R1490: eagerly register <ark-search> for inline tag panels.
+await import('/ark-search-element.js{{.BundleHash}}');
+
 const path = location.pathname.replace(/^\/content/, '');
 const btn = document.getElementById('toggle-btn');
 const contentDiv = document.getElementById('content');
@@ -573,6 +611,82 @@ const api = {
     body: JSON.stringify({path: p}),
   }).then(() => {}),
 };
+
+// R1483, R1490: make SearchAPI available to <ark-tag> elements.
+document.arkSearchAPI = api;
+
+// R1476-R1484, R1492: <ark-tag> custom element — interactive tag widgets.
+if (!customElements.get('ark-tag')) {
+  let activePanel = null;
+  let activePanelOwner = null;
+  customElements.define('ark-tag', class extends HTMLElement {
+    _btn = null;
+    _isOpen = false;
+    connectedCallback() {
+      this._btn = document.createElement('span');
+      this._btn.className = 'ark-tag-action';
+      this._btn.textContent = '\u25B6'; // ▶
+      this._btn.title = 'Search this tag';
+      this._btn.addEventListener('click', this._onToggle);
+      this.prepend(this._btn);
+    }
+    _setOpen(open) {
+      this._isOpen = open;
+      this._btn.classList.toggle('open', open);
+      this._btn.title = open ? 'Close search' : 'Search this tag';
+    }
+    _onToggle = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const nameEl = this.querySelector('name');
+      const valueEl = this.querySelector('value');
+      const name = nameEl ? nameEl.textContent : '';
+      const value = valueEl ? valueEl.textContent : '';
+
+      // R1484: dispatch event for external listeners.
+      this.dispatchEvent(new CustomEvent('ark-tag-click', {
+        bubbles: true, detail: { name, value }
+      }));
+
+      // R1482: toggle — if this tag's panel is open, close it.
+      if (activePanelOwner === this && activePanel) {
+        activePanel.remove();
+        activePanel = null;
+        this._setOpen(false);
+        activePanelOwner = null;
+        return;
+      }
+      // Close any other open panel.
+      if (activePanelOwner && activePanelOwner !== this) {
+        activePanel.remove();
+        activePanelOwner._setOpen(false);
+        activePanel = null;
+        activePanelOwner = null;
+      }
+
+      // R1481, R1483: create inline <ark-search> panel.
+      if (!document.arkSearchAPI) return;
+      const search = document.createElement('ark-search');
+      search.api = document.arkSearchAPI;
+      search.tag = name;
+      search.value = value;
+      search.addEventListener('close', () => {
+        search.remove();
+        if (activePanelOwner === this) {
+          this._setOpen(false);
+          activePanel = null;
+          activePanelOwner = null;
+        }
+      });
+
+      // Insert right after this tag element.
+      this.after(search);
+      activePanel = search;
+      activePanelOwner = this;
+      this._setOpen(true);
+    };
+  });
+}
 
 // Normalize @tag: lines to end with two trailing spaces for markdown line breaks.
 function normalizeTagLines(text) {
