@@ -8,12 +8,13 @@ require (
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godeps/gollama v0.1.8
+	github.com/itlightning/dateparse v0.2.1
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/gopher-lua v1.1.1
-	github.com/zot/frictionless v0.0.0
-	github.com/zot/microfts2 v0.0.0
-	github.com/zot/microvec v0.0.0
-	github.com/zot/ui-engine v0.20.0
+	github.com/zot/frictionless v0.29.0
+	github.com/zot/microfts2 v0.2.0
+	github.com/zot/microvec v0.1.0
+	github.com/zot/ui-engine v0.21.0
 )
 
 require (
@@ -23,7 +24,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
-	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/layeh/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mark3labs/mcp-go v0.43.2 // indirect
@@ -33,13 +33,7 @@ require (
 	github.com/zot/change-tracker v1.4.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/tools v0.40.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-)
-
-replace (
-	github.com/godeps/gollama => ../gollama
-	github.com/zot/frictionless => ../frictionless
-	github.com/zot/microfts2 => ../microfts2
-	github.com/zot/microvec => ../microvec
-	github.com/zot/ui-engine => ../ui-engine
 )
