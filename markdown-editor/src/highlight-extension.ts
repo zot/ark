@@ -120,8 +120,16 @@ export function highlightExtension(initialPatterns: string[]) {
                 re.lastIndex++;
                 continue;
               }
-              const start = from + m.index;
-              const end = start + m[0].length;
+              // If a capture group exists, highlight only the group;
+              // otherwise highlight the full match. This lets tag-value
+              // regexes anchor to the tag prefix but highlight only the
+              // value token: `@NAME:[^\n]*?(TOKEN)`. The group is at
+              // the end of the match, so offset = full length - group length.
+              const hasGroup = m[1] !== undefined;
+              const gLen = hasGroup ? m[1].length : m[0].length;
+              const gOffset = hasGroup ? m[0].length - m[1].length : 0;
+              const start = from + m.index + gOffset;
+              const end = start + gLen;
               ranges.push(highlightMark.range(start, end));
             }
           }
@@ -137,8 +145,10 @@ export function highlightExtension(initialPatterns: string[]) {
         for (const re of regexes) {
           re.lastIndex = 0;
           const m = re.exec(text);
-          if (m && (earliest === -1 || m.index < earliest)) {
-            earliest = m.index;
+          if (m) {
+            const gOff = m[1] !== undefined ? m[0].length - m[1].length : 0;
+            const pos = m.index + gOff;
+            if (earliest === -1 || pos < earliest) earliest = pos;
           }
         }
         return earliest;

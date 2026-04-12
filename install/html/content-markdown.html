@@ -532,6 +532,20 @@ const api = {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({query, mode}),
   }).then(r => r.json()),
+  searchFiltered: (query, request) => fetch('/search/grouped', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      query,
+      mode: request.mode,
+      chunk_filters: request.chunkFilters,
+      filter_files: request.filterFiles,
+      exclude_files: request.excludeFiles,
+      name_tokens: request.nameTokens,
+      value_tokens: request.valueTokens,
+      name_match: request.nameMatch,
+    }),
+  }).then(r => r.json()),
   tagComplete: (prefix) => fetch('/tags/complete', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},

@@ -6,16 +6,111 @@
     <!-- #frictionless -->
     <!-- /frictionless -->
     <style>
+     html, body {
+       margin: 0;
+       overflow: auto !important;
+     }
      body {
-       margin: 1em;
        font-family: var(--term-mono, monospace);
        background: var(--term-bg, #fff);
        color: var(--term-text, #1a1a1a);
      }
-     pre { white-space: pre-wrap; word-wrap: break-word; }
+     pre {
+       white-space: pre-wrap;
+       word-wrap: break-word;
+       margin: 0;
+       padding: 0.5em 1em;
+     }
+     .ark-search-highlight {
+       background: var(--term-accent-dim, rgba(224,122,71,0.35));
+       color: var(--term-accent-bright, #ff9966);
+       border-radius: 2px;
+       box-shadow: 0 0 0 1px var(--term-accent, #E07A47);
+     }
     </style>
 </head>
 <body>
-<pre>{{.Content}}</pre>
+<pre id="content">{{.Content}}</pre>
+<script>
+const highlights = new URL(location.href).searchParams.getAll('highlight');
+
+// R1459-R1463: highlight regex matches in plain-text previews.
+// Mirrors the capture-group logic from highlight-extension.ts:
+// if group 1 exists, highlight only the group (tag-value tokens);
+// otherwise highlight the full match.
+function applyHighlights(patterns) {
+  const pre = document.getElementById('content');
+  const text = pre.textContent;
+  if (!patterns.length || !text) return;
+
+  const regexes = [];
+  for (const p of patterns) {
+    try { regexes.push(new RegExp(p, 'gm')); } catch {}
+  }
+  if (!regexes.length) return;
+
+  // Collect non-overlapping [start, end) spans, sorted by start.
+  const spans = [];
+  for (const re of regexes) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[0].length === 0) { re.lastIndex++; continue; }
+      const hasGroup = m[1] !== undefined;
+      const gLen = hasGroup ? m[1].length : m[0].length;
+      const gOffset = hasGroup ? m[0].length - m[1].length : 0;
+      spans.push([m.index + gOffset, m.index + gOffset + gLen]);
+    }
+  }
+  if (!spans.length) return;
+
+  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  // Merge overlapping spans.
+  const merged = [spans[0]];
+  for (let i = 1; i < spans.length; i++) {
+    const prev = merged[merged.length - 1];
+    if (spans[i][0] <= prev[1]) {
+      prev[1] = Math.max(prev[1], spans[i][1]);
+    } else {
+      merged.push(spans[i]);
+    }
+  }
+
+  // Rebuild <pre> content with <mark> wrappers.
+  const parts = [];
+  let pos = 0;
+  for (const [s, e] of merged) {
+    if (s > pos) parts.push(escHtml(text.slice(pos, s)));
+    parts.push('<mark class="ark-search-highlight">' + escHtml(text.slice(s, e)) + '</mark>');
+    pos = e;
+  }
+  if (pos < text.length) parts.push(escHtml(text.slice(pos)));
+  pre.innerHTML = parts.join('');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+applyHighlights(highlights);
+
+// R1466: live highlight updates from parent window.
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'ark-set-highlights' && Array.isArray(e.data.patterns)) {
+    applyHighlights(e.data.patterns);
+  }
+});
+
+// R1465: signal the parent iframe host that this content is ready to show.
+if (window !== window.parent) {
+  function postHeight() {
+    window.parent.postMessage({ type: 'ark-content-height', height: document.body.scrollHeight, src: location.href }, '*');
+  }
+  window.parent.postMessage({ type: 'ark-content-ready', src: location.href }, '*');
+  postHeight();
+  window.addEventListener('load', postHeight);
+  new ResizeObserver(postHeight).observe(document.body);
+}
+</script>
 </body>
 </html>

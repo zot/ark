@@ -1502,6 +1502,10 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 		Filter          []string         `json:"filter"`
 		Except          []string         `json:"except"`
 		ChunkFilters    []ChunkFilterRow `json:"chunk_filters"`
+		// R1469: structured tag query for T/V record resolution
+		NameTokens  []string `json:"name_tokens"`
+		ValueTokens []string `json:"value_tokens"`
+		NameMatch   string   `json:"name_match"` // "exact" or "contains" (default)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1521,18 +1525,25 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	opts.ChunkFilters = req.ChunkFilters
 
 	query := req.Query
-	switch req.Mode {
-	case "contains":
-		opts.Contains = query
-		query = ""
-	case "about":
-		opts.About = query
-		query = ""
-	case "regex": // R1228
-		opts.Regex = []string{query}
-		query = ""
-	case "fuzzy":
-		opts.Fuzzy = true
+
+	// R1469: resolve structured tag query from T/V records.
+	// Skip the mode switch — resolveTagContainsQuery sets opts.Regex directly.
+	if len(req.NameTokens) > 0 {
+		query, opts = srv.resolveTagContainsQuery(req.NameTokens, req.ValueTokens, req.NameMatch, opts)
+	} else {
+		switch req.Mode {
+		case "contains":
+			opts.Contains = query
+			query = ""
+		case "about":
+			opts.About = query
+			query = ""
+		case "regex": // R1228
+			opts.Regex = []string{query}
+			query = ""
+		case "fuzzy":
+			opts.Fuzzy = true
+		}
 	}
 
 	// Multi-strategy for combined queries — exclude regex (R1229)
@@ -1562,6 +1573,84 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, results)
+}
+
+// resolveTagContainsQuery resolves structured tag name/value tokens against
+// T and V records, building a regex query and optional file ID prefilter.
+// Runs Store lookups through the closure actor (LMDB reads are fast, no write queue).
+// CRC: crc-Server.md | R1469
+func (srv *Server) resolveTagContainsQuery(nameTokens, valueTokens []string, nameMatch string, opts SearchOpts) (string, SearchOpts) {
+	type resolved struct {
+		query string
+		opts  SearchOpts
+	}
+	res, err := Sync(srv.db, func(db *DB) (resolved, error) {
+		var matchedNames []string
+		var err error
+		if nameMatch == "exact" && len(nameTokens) == 1 {
+			// Exact mode: verify the tag exists in T records
+			counts, cErr := db.store.TagCounts(nameTokens)
+			if cErr != nil || len(counts) == 0 || counts[0].Count == 0 {
+				return resolved{query: "(?!)", opts: opts}, nil
+			}
+			matchedNames = []string{nameTokens[0]}
+		} else {
+			matchedNames, err = db.store.MatchTagNames(nameTokens)
+			if err != nil || len(matchedNames) == 0 {
+				return resolved{query: "(?!)", opts: opts}, nil
+			}
+		}
+
+		if len(valueTokens) == 0 {
+			// Name-only: build regex, prefilter by file IDs from F records
+			fileIDs := make(map[uint64]struct{})
+			var parts []string
+			for _, name := range matchedNames {
+				parts = append(parts, regexp.QuoteMeta(name))
+				recs, _ := db.store.TagFiles([]string{name})
+				for _, r := range recs {
+					fileIDs[r.FileID] = struct{}{}
+				}
+			}
+			query := `(^|\s)@(` + strings.Join(parts, "|") + `):`
+			opts.Regex = []string{query}
+			if len(fileIDs) > 0 {
+				opts.extraOpts = append(opts.extraOpts, microfts2.WithOnly(fileIDs))
+			}
+			return resolved{query: "", opts: opts}, nil
+		}
+
+		// Name + value: resolve V records, prefilter by file IDs
+		fileIDs := make(map[uint64]struct{})
+		var queryParts []string
+		for _, name := range matchedNames {
+			matches, mErr := db.store.MatchTagValues(name, valueTokens)
+			if mErr != nil || len(matches) == 0 {
+				continue
+			}
+			nameEsc := regexp.QuoteMeta(name)
+			for _, m := range matches {
+				valEsc := regexp.QuoteMeta(m.Value)
+				queryParts = append(queryParts, `(^|\s)@`+nameEsc+`:\s*`+valEsc)
+				for _, fid := range m.FileIDs {
+					fileIDs[fid] = struct{}{}
+				}
+			}
+		}
+		if len(queryParts) == 0 {
+			return resolved{query: "(?!)", opts: opts}, nil
+		}
+		query := strings.Join(queryParts, "|")
+		opts.Regex = []string{query}
+		if len(fileIDs) > 0 {
+			opts.extraOpts = append(opts.extraOpts, microfts2.WithOnly(fileIDs))
+		}
+		return resolved{query: "", opts: opts}, nil
+	})
+	if err != nil {
+		return "(?!)", opts
+	}
+	return res.query, res.opts
 }
 
 // handleTagComplete returns tag name completions matching a prefix.

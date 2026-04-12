@@ -1,5 +1,5 @@
 # ArkSearchElement
-**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466
+**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466, R1472, R1473, R1474, R1475
 
 Custom element (`<ark-search>`) that renders a tag search panel
 with query bar, results area, and resize handle. Pure DOM — no
@@ -22,8 +22,8 @@ CM6 dependency.
 - renders scrollable results area with grouped results
 - renders drag-to-resize handle
 - debounced search on input (300ms), immediate on Enter
-- builds a regex query from tag state: contains-name wraps `[\w.-]*` around the escaped name; value is tokenized on whitespace and OR'd
-- emits contains-name filter rows as `regex` chunk filters (server's tag filter matches names literally)
+- for contains-name base queries, sends structured fields (name_tokens, value_tokens, name_match, value_match) so the server resolves T/V records; for exact-name, builds a regex query string as before (R1472, R1474)
+- for contains-name filter rows, sends `mode: "tag-contains"` with tokenized query instead of `mode: "regex"` fallback (R1473, R1474)
 - computes a list of highlight regexes (one for the tag name prefix, one per value token) and appends them to iframe preview URLs as repeated `highlight=` query params
 - play-button path (`set tag()`) forces name match to exact — exploring "that one tag"
 - fires three-phase progressive search: trigram (instant), embedding (~150ms), curation (async)

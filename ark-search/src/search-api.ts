@@ -82,14 +82,20 @@ export interface SearchAPI {
 /** Parameters for a chunk-level filter row. R1416 */
 export interface ChunkFilterParam {
   polarity: "with" | "without";
-  mode: "contains" | "fuzzy" | "regex" | "tag";
+  mode: "contains" | "fuzzy" | "regex" | "tag" | "tag-contains";
   query: string;
 }
 
-/** Full search request with filters. R1416-R1418 */
+/** Full search request with filters. R1416-R1418, R1469 */
 export interface FilteredSearchRequest {
   mode?: string;
   chunkFilters?: ChunkFilterParam[];
   filterFiles?: string[];
   excludeFiles?: string[];
+  /** R1469: structured tag query — name tokens for T record resolution */
+  nameTokens?: string[];
+  /** R1469: structured tag query — value tokens for V record resolution */
+  valueTokens?: string[];
+  /** R1469: name match mode — "exact" or "contains" */
+  nameMatch?: "exact" | "contains";
 }

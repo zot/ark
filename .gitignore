@@ -11,3 +11,6 @@ checkpoint.fossil
 /PLAN.md
 node_modules
 /markdown-editor/dist
+/ark-search/dist/
+/cache/
+/ark

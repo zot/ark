@@ -129,7 +129,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
-- [ ] crc-Server.md → `server.go`, `watcher.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
@@ -292,3 +292,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 - [ ] A31: R1368-R1371 (package structure) — build/config concern, no CRC card needed
 - [ ] A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed
+- [ ] O57: No unit tests for Store.MatchTagNames, Store.MatchTagValues
+- [ ] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters
+- [ ] O59: No integration test for resolveTagContainsQuery end-to-end (structured tag query → regex search)

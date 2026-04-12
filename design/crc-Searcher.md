@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -93,11 +93,21 @@ Optionally retrieves chunk text or full file content.
   trigrams with posting-list tally, then C-record re-scoring. Resolves
   filters, applies proximity reranking if requested, runs the standard
   filterAndResolve pipeline. Sets Strategy to "fuzzy" on all results.
+- TagChunkFilter(tag, value, mode, store): resolve file IDs from
+  T/V records at construction time, return a ChunkFilter that checks
+  file ID set membership. No chunk text reads. (R1399)
+- TagContainsChunkFilter(nameTokens, valueTokens, store): resolve
+  matching tag names from Store.MatchTagNames and file IDs from
+  Store.TagFiles/MatchTagValues at construction time, return a
+  ChunkFilter that checks file ID set membership. (R1470)
+- BuildChunkFilters(rows, cache, paths, store): convert UI filter rows
+  into microfts2 search options. Tag modes use Store for T/V record
+  resolution (no chunk text reads). (R1471)
 
 ## Collaborators
 - microfts2.DB: trigram search, file info resolution, ChunkCache for chunk text retrieval
 - microvec.DB: vector search
-- Store: LMDB tag index (TagFiles queries for tag-based filtering)
+- Store: LMDB tag index (TagFiles queries for tag-based filtering, MatchTagNames/MatchTagValues for contains-tokens)
 - Indexer: re-index stale files during consistent search
 - goldmark: markdown → HTML rendering for previews
 

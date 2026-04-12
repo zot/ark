@@ -859,6 +859,79 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 	return result, err
 }
 
+// TagValueMatch is a tag value with its file ID list, returned by MatchTagValues.
+// CRC: crc-Store.md | R1468
+type TagValueMatch struct {
+	Value   string   `json:"value"`
+	FileIDs []uint64 `json:"file_ids"`
+}
+
+// MatchTagNames scans T records and returns tag names where every token
+// appears as a case-insensitive substring. Linear scan — the T record
+// set is small (hundreds to low thousands).
+// CRC: crc-Store.md | R1467
+func (s *Store) MatchTagNames(tokens []string) ([]string, error) {
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	lower := make([]string, len(tokens))
+	for i, t := range tokens {
+		lower[i] = strings.ToLower(t)
+	}
+	var matched []string
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 2 || len(v) < 4 {
+				return nil
+			}
+			name := strings.ToLower(string(k[1:]))
+			for _, tok := range lower {
+				if !strings.Contains(name, tok) {
+					return nil
+				}
+			}
+			matched = append(matched, string(k[1:]))
+			return nil
+		})
+	})
+	return matched, err
+}
+
+// MatchTagValues scans V records for a given tag name and returns values
+// where every token appears as a case-insensitive substring. Each result
+// includes the value string and its file ID list.
+// CRC: crc-Store.md | R1468
+func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, error) {
+	lower := make([]string, len(tokens))
+	for i, t := range tokens {
+		lower[i] = strings.ToLower(t)
+	}
+	prefix := tagValuePrefix(tag, "")
+	var results []TagValueMatch
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			_, value, _, ok := parseVKey(k)
+			if !ok {
+				return nil
+			}
+			if len(tokens) > 0 {
+				lv := strings.ToLower(value)
+				for _, tok := range lower {
+					if !strings.Contains(lv, tok) {
+						return nil
+					}
+				}
+			}
+			results = append(results, TagValueMatch{
+				Value:   value,
+				FileIDs: decodeVarints(v),
+			})
+			return nil
+		})
+	})
+	return results, err
+}
+
 // errStopScan is a sentinel to break out of scanPrefix early.
 var errStopScan = fmt.Errorf("stop scan")
 

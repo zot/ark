@@ -73,7 +73,7 @@ function tagPrefixRegex(name: string, match: TagNameMatch): string {
   const pat = match === "contains"
     ? `${TAG_NAME_CHARS}*${escaped}${TAG_NAME_CHARS}*`
     : escaped;
-  return `(^|\\s)@${pat}:`;
+  return `(?:(?<=\\s)|^)@${pat}:`;
 }
 
 function escapeRegex(s: string): string {
@@ -825,23 +825,6 @@ export class ArkSearchElement extends HTMLElement {
   /** Translate base tag-mode state into a regex query (server has no
    *  tag mode on /search/grouped). Name respects contains/exact; value
    *  is tokenized and OR'd so word order doesn't matter. */
-  private buildTagQuery(): string {
-    const rawName = this._baseTagName.trim();
-    const rawVal = this._baseTagValue.trim();
-    const prefix = tagPrefixRegex(rawName, this._baseTagNameMatch);
-
-    if (!rawVal) return prefix;
-
-    // Regex value-match passes through raw (no tokenization — user authored).
-    if (this._baseTagMatch === "regex") return `${prefix}\\s*${rawVal}`;
-
-    const tokens = tokenizeValue(rawVal).map(escapeRegex);
-    if (tokens.length === 0) return prefix;
-    // `[^\n]*` lets tokens appear anywhere on the tag's value line.
-    const alt = tokens.length === 1 ? tokens[0] : `(${tokens.join("|")})`;
-    return `${prefix}[^\\n]*${alt}`;
-  }
-
   /** Regex patterns to highlight inside iframe chunk previews. For
    *  tag mode: one regex for the name prefix plus one per value token
    *  (so each token lights up separately). For text modes: the escaped
@@ -850,16 +833,18 @@ export class ArkSearchElement extends HTMLElement {
     if (this._searchMode === "tag") {
       const rawName = this._baseTagName.trim();
       if (!rawName) return [];
-      const out: string[] = [tagPrefixRegex(rawName, this._baseTagNameMatch)];
+      const prefix = tagPrefixRegex(rawName, this._baseTagNameMatch);
       const rawVal = this._baseTagValue.trim();
-      if (rawVal) {
-        if (this._baseTagMatch === "regex") {
-          out.push(rawVal);
-        } else {
-          for (const tok of tokenizeValue(rawVal)) out.push(escapeRegex(tok));
-        }
+      if (!rawVal) return [prefix];
+      // Anchor value tokens to the tag line using a capture group.
+      // The full match includes the tag prefix (for anchoring), but
+      // the highlight extension only decorates group 1 (the token).
+      if (this._baseTagMatch === "regex") {
+        return [prefix, `${prefix}[^\\n]*?(${rawVal})`];
       }
-      return out;
+      return [prefix, ...tokenizeValue(rawVal).map(
+        tok => `${prefix}[^\\n]*?(${escapeRegex(tok)})`
+      )];
     }
 
     const raw = this.queryInput.value.trim();
@@ -944,10 +929,11 @@ export class ArkSearchElement extends HTMLElement {
     return { filterFiles, excludeFiles };
   }
 
-  /** Build a regex for a single filter tag row — same rules as the base
-   *  query: contains/exact name, tokenized OR'd value. Used both for OR
-   *  group serialization and for emitting contains-name rows as regex
-   *  chunk filters (the server's tag mode matches names literally). */
+  /** Build a regex for a single filter tag row. Used for OR group
+   *  serialization (sent to server as regex chunk filter — must be
+   *  RE2-compatible, no lookaheads). Value tokens are OR'd here since
+   *  RE2 can't express AND; the T/V record path handles AND precision
+   *  for single-row filters. */
   private tagRowRegex(row: FilterRow): string {
     const prefix = tagPrefixRegex(row.tagName.trim(), row.tagNameMatch);
     const rawVal = row.tagValue.trim();
@@ -955,7 +941,7 @@ export class ArkSearchElement extends HTMLElement {
     if (row.tagMatchMode === "regex") return `${prefix}\\s*${rawVal}`;
     const tokens = tokenizeValue(rawVal).map(escapeRegex);
     if (tokens.length === 0) return prefix;
-    const alt = tokens.length === 1 ? tokens[0] : `(${tokens.join("|")})`;
+    const alt = tokens.length === 1 ? tokens[0] : `(?:${tokens.join("|")})`;
     return `${prefix}[^\\n]*${alt}`;
   }
 
@@ -971,15 +957,18 @@ export class ArkSearchElement extends HTMLElement {
         const row = rows[0];
         if (row.mode === "tag") {
           if (!row.tagName.trim()) continue;
-          // Contains-name must go through the regex path — the server's
-          // tag filter matches names literally. Exact-name stays on the
-          // fast tag path. Follow-up: enhance the Go tag filter to accept
-          // regex for the name so we can use the tag index in both cases.
+          // R1473: contains-name uses tag-contains mode for server-side
+          // T/V record resolution. Exact-name stays on the fast tag path.
           if (row.tagNameMatch === "contains") {
+            const nameTokens = row.tagName.trim().split(/\s+/).filter(Boolean);
+            const valueTokens = row.tagValue.trim().split(/\s+/).filter(Boolean);
+            const q = valueTokens.length > 0
+              ? `${nameTokens.join(" ")}:${valueTokens.join(" ")}`
+              : nameTokens.join(" ");
             filters.push({
               polarity: group.polarity,
-              mode: "regex",
-              query: this.tagRowRegex(row),
+              mode: "tag-contains",
+              query: q,
             });
           } else {
             const q = row.tagValue.trim()
@@ -1023,18 +1012,26 @@ export class ArkSearchElement extends HTMLElement {
     const api = this._api;
     if (!api) return;
 
-    // R1408: in tag mode, translate structured fields into a regex query.
-    // Server has no "tag" base-query mode, so we send effective mode=regex.
+    // R1408, R1472: in tag mode, send structured tokens for server-side
+    // T/V record resolution. Both exact and contains name modes use the
+    // same path — the server handles both via MatchTagNames/MatchTagValues.
     let query: string;
     let mode: string;
+    let nameTokens: string[] | undefined;
+    let valueTokens: string[] | undefined;
+    let nameMatch: "exact" | "contains" | undefined;
     if (this._searchMode === "tag") {
       if (!this._baseTagName.trim()) {
         this.phasedResults = [];
         this.clearResults();
         return;
       }
-      query = this.buildTagQuery();
-      mode = "regex";
+      nameTokens = this._baseTagName.trim().split(/\s+/).filter(Boolean);
+      nameMatch = this._baseTagNameMatch;
+      const rawVal = this._baseTagValue.trim();
+      if (rawVal) valueTokens = rawVal.split(/\s+/).filter(Boolean);
+      query = ""; // server builds the query from tokens
+      mode = "regex"; // result is a regex search
     } else {
       query = this.queryInput.value.trim();
       if (!query) {
@@ -1050,7 +1047,7 @@ export class ArkSearchElement extends HTMLElement {
 
     const chunkFilters = this.collectChunkFilters();
     const { filterFiles, excludeFiles } = this.collectFileFilters();
-    const hasFilters = chunkFilters.length > 0 || filterFiles.length > 0 || excludeFiles.length > 0;
+    const hasFilters = chunkFilters.length > 0 || filterFiles.length > 0 || excludeFiles.length > 0 || !!nameTokens;
 
     // Phase 1: trigram search R1386
     let phase1: Promise<void>;
@@ -1060,6 +1057,9 @@ export class ArkSearchElement extends HTMLElement {
         chunkFilters: chunkFilters.length > 0 ? chunkFilters : undefined,
         filterFiles: filterFiles.length > 0 ? filterFiles : undefined,
         excludeFiles: excludeFiles.length > 0 ? excludeFiles : undefined,
+        nameTokens,
+        valueTokens,
+        nameMatch,
       }).then((groups) => {
         if (gen !== this.searchGeneration) return;
         for (const g of groups) {

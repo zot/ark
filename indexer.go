@@ -772,11 +772,24 @@ func ExtractTagValues(content []byte, strategy string) []TagValue {
 			Tag:   tag,
 			Value: strings.TrimSpace(string(val)),
 		})
-		// Peel compound tags from the value portion
-		for sub := tagValueRegex.FindSubmatch(val); sub != nil; sub = tagValueRegex.FindSubmatch(val) {
-			val = sub[2]
+		// Peel compound tags from the value portion.
+		// valBase tracks the offset of val within content so we can
+		// call isMention with absolute positions. R1317-R1325
+		valBase := loc[4]
+		for {
+			subIdx := tagValueRegex.FindSubmatchIndex(val)
+			if subIdx == nil {
+				break
+			}
+			subAtPos := valBase + subIdx[0]
+			subTag := strings.ToLower(string(val[subIdx[2]:subIdx[3]]))
+			val = val[subIdx[4]:subIdx[5]]
+			valBase += subIdx[4]
+			if isMention(content, subAtPos, markdown) {
+				continue
+			}
 			values = append(values, TagValue{
-				Tag:   strings.ToLower(string(sub[1])),
+				Tag:   subTag,
 				Value: strings.TrimSpace(string(val)),
 			})
 		}

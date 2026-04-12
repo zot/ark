@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -89,6 +89,13 @@ ark-level settings, and tag tracking.
   for each requested tag, scan V[tag]\x00 entries, parse value from
   key (between first and last null), check if fileid is in the varint
   list, return first matching value per tag. (R1142, R1143)
+- MatchTagNames(tokens []string) []string: scan T records, return
+  tag names where every token is a case-insensitive substring of the
+  name. Linear scan — T record set is small. (R1467)
+- MatchTagValues(tag string, tokens []string) []TagValueMatch: scan
+  V records for a given tag name, return values where every token is
+  a case-insensitive substring. Each result includes the value string
+  and its file ID list. (R1468)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
