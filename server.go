@@ -30,6 +30,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
@@ -2022,17 +2023,23 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// R1495-R1496, R1499: render chunks as divs for non-markdown files.
-		// Falls back to raw <pre> if no chunks exist.
-		chunks, _ := Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
-			return db.AllChunks(path), nil
-		})
+		// R1495-R1496, R1499, R1501: render chunks as divs for non-markdown files.
+		// Single-chunk views (isChunk) use the already-resolved data.
+		// Full-file views use AllChunks. Falls back to raw <pre> if no chunks.
+		var chunks []microfts2.ChunkResult
+		if !isChunk {
+			chunks, _ = Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
+				return db.AllChunks(path), nil
+			})
+		}
 		if len(chunks) > 0 {
 			shell.IsChunked = true
 			// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
 			// render through goldmark. Other strategies stay pre-wrapped.
 			useMarkdown := strategy == "chat-jsonl"
 			var buf strings.Builder
+			prevRole := ""
+			groupOpen := false
 			for _, ch := range chunks {
 				var rendered string
 				if useMarkdown {
@@ -2040,15 +2047,58 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				} else {
 					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content))
 				}
+				// R1509-R1512: role grouping for chat-jsonl chunks.
+				role, _ := microfts2.PairGet(ch.Attrs, "role")
+				roleStr := string(role)
+				if roleStr != "" && roleStr != prevRole {
+					if groupOpen {
+						// Close skill details if needed.
+						if prevRole == "skill" {
+							buf.WriteString("</details>")
+						}
+						buf.WriteString("</div>\n")
+					}
+					buf.WriteString(`<div class="ark-role-group ark-role-`)
+					buf.WriteString(roleStr)
+					buf.WriteString(`">`)
+					switch roleStr {
+					case "skill":
+						skillName, _ := microfts2.PairGet(ch.Attrs, "skill")
+						buf.WriteString(`<details><summary class="ark-role-header">📋 `)
+						if len(skillName) > 0 {
+							buf.WriteString(template.HTMLEscapeString(string(skillName)))
+						} else {
+							buf.WriteString("skill")
+						}
+						buf.WriteString("</summary>")
+					case "human":
+						buf.WriteString(`<div class="ark-role-header">👤</div>`)
+					case "assistant":
+						buf.WriteString(`<div class="ark-role-header">🤖</div>`)
+					}
+					groupOpen = true
+					prevRole = roleStr
+				}
 				buf.WriteString(`<div class="ark-chunk" data-range="`)
 				buf.WriteString(template.HTMLEscapeString(ch.Range))
 				buf.WriteString(`">`)
 				buf.WriteString(rendered)
 				buf.WriteString("</div>\n")
 			}
+			if groupOpen {
+				if prevRole == "skill" {
+					buf.WriteString("</details>")
+				}
+				buf.WriteString("</div>\n")
+			}
 			shell.Content = template.HTML(buf.String())
 		} else {
-			shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+			// Single chunk or unchunked file — render through goldmark for JSONL.
+			if strategy == "chat-jsonl" {
+				shell.Content = template.HTML(wrapTagElements(renderMarkdownForContent(data, path)))
+			} else {
+				shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+			}
 		}
 		tmpl.Execute(w, shell)
 	}
@@ -2108,7 +2158,13 @@ func renderMarkdownForContent(data []byte, filePath string) string {
 	// on disk lacks trailing spaces (hand-edited files).
 	data = NormalizeTagLines(data)
 	md := goldmark.New(
+		goldmark.WithExtensions(
+			extension.GFM,
+			extension.Typographer,
+			extension.DefinitionList,
+		),
 		goldmark.WithParserOptions(
+			parser.WithAttribute(),
 			parser.WithASTTransformers(
 				util.Prioritized(&contentLinkRewriter{baseDir: baseDir}, 100),
 			),
@@ -2142,8 +2198,9 @@ func wrapTagElements(html string) string {
 			continue
 		}
 		// Skip if inside a <code> element (scan backward for unclosed <code>).
+		// Match "<code" to catch both <code> and <code class="...">.
 		prefix := html[:start]
-		lastOpen := strings.LastIndex(prefix, "<code>")
+		lastOpen := strings.LastIndex(prefix, "<code")
 		lastClose := strings.LastIndex(prefix, "</code>")
 		if lastOpen > lastClose {
 			continue

@@ -2343,3 +2343,13 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1505:** For files with strategy `chat-jsonl`, each chunk's extracted text is rendered through goldmark (same as the markdown content path). The extracted content is markdown written by humans and AI assistants — goldmark gives proper headings, code blocks, lists, and inline formatting.
 - **R1506:** For other non-markdown strategies (bracket, indent, lines), chunk text is HTML-escaped as pre-wrapped text.
+
+### Chat-JSONL Role Rendering
+
+- **R1507:** `extractJSONLTextFast` extracts the `type` and `isMeta` fields from the JSONL line and stores a `role` chunk attr: `human` (type=user, no isMeta), `skill` (type=user, isMeta=true), or `assistant` (type=assistant). Uses the existing microfts2 chunk `Attrs` mechanism.
+- **R1508:** For skill chunks, `extractJSONLTextFast` parses the `Base directory for this skill: PATH` first line and stores the last path component as a `skill` attr (e.g. `ark`, `mini-spec`).
+- **R1509:** In the full-file content view, the server groups consecutive same-role chunks into a wrapper `<div class="ark-role-group ark-role-ROLE">`. A new group starts when the role changes. Chunks without a role attr render as ungrouped standalone divs.
+- **R1510:** Each human/assistant role group contains a header `<div class="ark-role-header">` with a role icon: 👤 for human, 🤖 for assistant. The header has `position: sticky; top: 0` so the icon stays pinned at the viewport top while scrolling. `background: inherit` keeps the header opaque.
+- **R1511:** Skill groups use `<details>/<summary>` and are collapsed by default. The summary shows a 📋 icon and the skill name from the `skill` attr. Click to expand.
+- **R1512:** Each role group has a left border in a role-specific theme color: `--term-text-dim` for human, `--term-accent-bright` for assistant, `--term-border` for skill. The border runs the full height of the group.
+- **R1513:** In single-chunk views (`range=` parameter), the chunk renders with the role's left border color and a small icon but no sticky header and no grouping.

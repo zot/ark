@@ -7,7 +7,10 @@
     <!-- #frictionless -->
     <!-- /frictionless -->
     <style>
-     html, body {
+     html {
+       margin: 0;
+     }
+     body {
        margin: 0;
        overflow: auto !important;
      }
@@ -31,6 +34,36 @@
      }
      .ark-chunk:last-child {
        border-bottom: none;
+     }
+     /* R1509-R1512: role groups for chat-jsonl */
+     .ark-role-group {
+       position: relative;
+       border-left: 3px solid transparent;
+     }
+     .ark-role-human {
+       border-left-color: var(--term-text-dim, #8888a0);
+     }
+     .ark-role-assistant {
+       border-left-color: var(--term-accent-bright, #ff9966);
+     }
+     .ark-role-skill {
+       border-left-color: var(--term-border, #2a2a3a);
+     }
+     .ark-role-header {
+       position: sticky;
+       top: 0;
+       text-align: right;
+       padding: 0.3em 0.75em;
+       font-size: 1.2em;
+       z-index: 5;
+       background: var(--term-bg, #fff);
+     }
+     .ark-role-skill summary {
+       cursor: pointer;
+       color: var(--term-text-muted, #5a5a70);
+       font-size: 0.85em;
+       padding: 0.3em 0.75em;
+       text-align: right;
      }
      .ark-search-highlight {
        background: var(--term-accent-dim, rgba(224,122,71,0.35));

@@ -232,6 +232,17 @@ From each JSONL record's `message.content` array:
 From records with `"content":"string"` (simple text content):
 - The string value directly
 
+### Chunk metadata (attrs)
+
+Each chunk carries metadata as key-value attrs:
+- `role` — derived from the record's top-level `type` and `isMeta`
+  fields: `human` (type=user, no isMeta), `assistant` (type=assistant),
+  or `skill` (type=user, isMeta=true). Used by the content view to
+  render conversation structure with role indicators.
+- `skill` — for skill chunks only, the last path component from the
+  `Base directory for this skill: PATH` line (e.g. `ark`, `mini-spec`).
+- `timestamp` — the record's `timestamp` field, if present.
+
 ### Skipped record types
 
 Entire records are skipped for these `type` values:

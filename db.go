@@ -1589,6 +1589,7 @@ func (cc *chunkCache) wrap(fn microfts2.ChunkFunc) microfts2.ChunkFunc {
 			cp := microfts2.Chunk{
 				Range:   append([]byte{}, c.Range...),
 				Content: append([]byte{}, c.Content...),
+				Attrs:   microfts2.CopyPairs(c.Attrs),
 			}
 			chunks = append(chunks, cp)
 			return true
@@ -1658,9 +1659,20 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 
 		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
 		chunk := microfts2.Chunk{Range: []byte(r), Content: text}
+		// R1507-R1508: extract role and skill attrs from JSONL metadata.
+		var attrs []microfts2.Pair
 		if ts := extractJSONLTimestamp(line); ts != nil {
-			chunk.Attrs = []microfts2.Pair{{Key: []byte("timestamp"), Value: ts}}
+			attrs = append(attrs, microfts2.Pair{Key: []byte("timestamp"), Value: ts})
 		}
+		if role := extractJSONLRole(line); role != "" {
+			attrs = append(attrs, microfts2.Pair{Key: []byte("role"), Value: []byte(role)})
+			if role == "skill" {
+				if name := extractSkillName(text); name != "" {
+					attrs = append(attrs, microfts2.Pair{Key: []byte("skill"), Value: []byte(name)})
+				}
+			}
+		}
+		chunk.Attrs = attrs
 		if !yield(chunk) {
 			return nil
 		}
@@ -1726,6 +1738,89 @@ func extractJSONLTimestamp(line []byte) []byte {
 // Scans for the "content" key, then handles two cases:
 //   - string value: the entire string is the chunk text
 //   - array value: extracts "text" and "thinking" fields from blocks
+//
+// extractJSONLRole derives a role from the JSONL record's top-level
+// "type" and "isMeta" fields. Returns "human", "assistant", "skill", or "".
+// Uses depth-aware scanning because nested content blocks also have
+// "type" keys (e.g. "type":"text") that would shadow the top-level one.
+// CRC: crc-DB.md | R1507
+func extractJSONLRole(line []byte) string {
+	typ := findTopLevelString(line, `"type":`)
+	switch typ {
+	case "assistant":
+		return "assistant"
+	case "user":
+		// isMeta is always top-level, but a simple contains check is safe
+		// because no nested object uses this key.
+		if bytes.Contains(line, []byte(`"isMeta":true`)) {
+			return "skill"
+		}
+		return "human"
+	default:
+		return ""
+	}
+}
+
+// findTopLevelString finds a key at brace depth 1 and returns its string value.
+// The key must include the colon, e.g. `"type":`. Returns "" if not found.
+func findTopLevelString(line []byte, key string) string {
+	keyBytes := []byte(key)
+	depth := 0
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case '"':
+			if depth == 1 && bytes.HasPrefix(line[i:], keyBytes) {
+				// Found at top level — extract the string value after the key.
+				valStart := i + len(keyBytes)
+				if valStart < len(line) && line[valStart] == '"' {
+					valStart++ // skip opening quote
+					valEnd := scanStringEnd(line, valStart)
+					if valEnd >= 0 {
+						return string(line[valStart:valEnd])
+					}
+				}
+				return ""
+			}
+			// Skip past this string.
+			end := scanStringEnd(line, i+1)
+			if end < 0 {
+				return ""
+			}
+			i = end // loop increments past closing quote
+		case '[':
+			depth++
+		case ']':
+			depth--
+		}
+	}
+	return ""
+}
+
+// extractSkillName parses the skill name from extracted chunk text.
+// Looks for "Base directory for this skill: PATH" and returns the
+// last path component.
+// CRC: crc-DB.md | R1508
+func extractSkillName(text []byte) string {
+	prefix := []byte("Base directory for this skill: ")
+	if !bytes.HasPrefix(text, prefix) {
+		return ""
+	}
+	rest := text[len(prefix):]
+	end := bytes.IndexByte(rest, '\n')
+	if end < 0 {
+		end = len(rest)
+	}
+	path := string(bytes.TrimRight(rest[:end], " \t\r"))
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
 func extractJSONLTextFast(line []byte) []byte {
 	// Quick skip: check for known non-message types before full scan.
 	if bytes.Contains(line, []byte(`"type":"progress"`)) ||
