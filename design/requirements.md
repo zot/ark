@@ -2316,3 +2316,30 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1493:** `<ark-tag>` must never appear inside the CM6 editor. The server applies post-processing only to the read-view content (`#content` div for markdown, `<pre>` for plain text). The CM6 editor manages its own tag decorations via `tag-widget.ts`.
 - **R1494:** The CM6 tag system (`TagSearchWidget`, `StatusWidget`, completion) and the `<ark-tag>` element are independent — they share no code or state.
+
+## Feature: chunked-content-view
+**Source:** specs/chunked-content-view.md
+
+### Chunk Rendering
+
+- **R1495:** `handleContentView` for non-markdown files renders chunk-extracted text instead of raw file content. Each chunk from the index becomes a `<div class="ark-chunk" data-range="RANGE">` containing the chunk's extracted text.
+- **R1496:** Chunk text is HTML-escaped, then `wrapTagElements` runs on each chunk independently. Tags in the extracted text are real tags — the chunker's use/mention filtering is already applied.
+- **R1497:** Chunks are separated by a subtle visual border (`border-bottom` on `.ark-chunk`, none on the last child).
+- **R1498:** `.ark-chunk` uses `white-space: pre-wrap` and `word-wrap: break-word` for text formatting — no nested `<pre>` element.
+- **R1499:** If the file has no chunks in the index (unindexed or newly added), fall back to the current raw `<pre>` rendering.
+
+### Unchanged Paths
+
+- **R1500:** Markdown files continue through the goldmark rendering path — no change.
+- **R1501:** The `range=` query parameter for single-chunk views continues to work (iframe previews use this). Chunk resolution runs before the full-file chunk rendering.
+- **R1502:** `/raw/` serves the unprocessed file — unchanged.
+- **R1503:** The `/fetch` endpoint returns raw content — unchanged. The CM6 `autoEdit` path is unaffected.
+
+### Chunk Access
+
+- **R1504:** The server uses the DB's `ChunkCache` to read all chunks for the file. The cache handles reading the file and running the appropriate chunker (determined by the file's strategy).
+
+### Markdown Rendering for JSONL Chunks
+
+- **R1505:** For files with strategy `chat-jsonl`, each chunk's extracted text is rendered through goldmark (same as the markdown content path). The extracted content is markdown written by humans and AI assistants — goldmark gives proper headings, code blocks, lists, and inline formatting.
+- **R1506:** For other non-markdown strategies (bracket, indent, lines), chunk text is HTML-escaped as pre-wrapped text.

@@ -2022,7 +2022,34 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+		// R1495-R1496, R1499: render chunks as divs for non-markdown files.
+		// Falls back to raw <pre> if no chunks exist.
+		chunks, _ := Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
+			return db.AllChunks(path), nil
+		})
+		if len(chunks) > 0 {
+			shell.IsChunked = true
+			// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
+			// render through goldmark. Other strategies stay pre-wrapped.
+			useMarkdown := strategy == "chat-jsonl"
+			var buf strings.Builder
+			for _, ch := range chunks {
+				var rendered string
+				if useMarkdown {
+					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path))
+				} else {
+					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content))
+				}
+				buf.WriteString(`<div class="ark-chunk" data-range="`)
+				buf.WriteString(template.HTMLEscapeString(ch.Range))
+				buf.WriteString(`">`)
+				buf.WriteString(rendered)
+				buf.WriteString("</div>\n")
+			}
+			shell.Content = template.HTML(buf.String())
+		} else {
+			shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+		}
 		tmpl.Execute(w, shell)
 	}
 }
@@ -2096,25 +2123,43 @@ func renderMarkdownForContent(data []byte, filePath string) string {
 
 // wrapTagElements post-processes rendered HTML to wrap @tag: value patterns
 // in <ark-tag> elements for interactive tag widgets in read views.
+// Skips tags preceded by backtick (code context) or inside <code> elements.
 // CRC: crc-Server.md | Seq: seq-ark-tag-click.md | R1485-R1489
 var arkTagRe = regexp.MustCompile(`(?m)@([a-zA-Z][\w.-]*):[ \t]*([^\n<]*)`)
 
 func wrapTagElements(html string) string {
-	return arkTagRe.ReplaceAllStringFunc(html, func(match string) string {
-		m := arkTagRe.FindStringSubmatch(match)
-		if m == nil {
-			return match
+	matches := arkTagRe.FindAllStringSubmatchIndex(html, -1)
+	if len(matches) == 0 {
+		return html
+	}
+	var buf strings.Builder
+	buf.Grow(len(html) + len(matches)*40)
+	prev := 0
+	for _, m := range matches {
+		start := m[0]
+		// Skip if preceded by backtick (mentioned in code context).
+		if start > 0 && html[start-1] == '`' {
+			continue
 		}
-		name := m[1]
-		value := strings.TrimRight(m[2], " \t")
-		// name and value are already HTML-safe: goldmark escapes text nodes,
-		// and the plain-text path runs HTMLEscapeString before this function.
-		// Tag names ([a-zA-Z][\w.-]*) never need escaping.
+		// Skip if inside a <code> element (scan backward for unclosed <code>).
+		prefix := html[:start]
+		lastOpen := strings.LastIndex(prefix, "<code>")
+		lastClose := strings.LastIndex(prefix, "</code>")
+		if lastOpen > lastClose {
+			continue
+		}
+		buf.WriteString(html[prev:start])
+		name := html[m[2]:m[3]]
+		value := strings.TrimRight(html[m[4]:m[5]], " \t")
 		if value == "" {
-			return `<ark-tag><name>` + name + `</name></ark-tag>`
+			buf.WriteString(`<ark-tag><name>` + name + `</name></ark-tag>`)
+		} else {
+			buf.WriteString(`<ark-tag><name>` + name + `</name> <value>` + value + `</value></ark-tag>`)
 		}
-		return `<ark-tag><name>` + name + `</name> <value>` + value + `</value></ark-tag>`
-	})
+		prev = m[1]
+	}
+	buf.WriteString(html[prev:])
+	return buf.String()
 }
 
 // contentShellData holds the template data for content HTML shells.
@@ -2125,6 +2170,7 @@ type contentShellData struct {
 	HideToggle bool          // R1426, R1429: hide pencil/eye toggle button
 	AutoEdit   bool          // R1427, R1430: auto-load CM6 editor on page load
 	IsChunk    bool          // R1423: serving a chunk range, not full file
+	IsChunked  bool          // R1495: content is chunk divs, not raw text
 }
 
 // loadContentTemplate reads an HTML template from the html/ dir under dbPath.

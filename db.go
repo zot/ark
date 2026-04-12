@@ -1179,6 +1179,28 @@ func (db *DB) ChunkText(path, rangeLabel string) []byte {
 	return text
 }
 
+// AllChunks returns all chunk texts for a file, in order.
+// Uses the FRecord to find the first range, then GetChunks with a large window.
+// Returns nil if the file is not indexed or has no chunks.
+// CRC: crc-DB.md | R1504
+func (db *DB) AllChunks(path string) []microfts2.ChunkResult {
+	info, err := db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return nil
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil || len(finfo.Chunks) == 0 {
+		return nil
+	}
+	cache := db.fts.NewChunkCache()
+	firstRange := finfo.Chunks[0].Location
+	chunks, err := cache.GetChunks(path, firstRange, 0, len(finfo.Chunks))
+	if err != nil {
+		return nil
+	}
+	return chunks
+}
+
 // IsIndexed returns true if the given file path is in the index.
 func (db *DB) IsIndexed(path string) bool {
 	absPath, err := filepath.Abs(path)

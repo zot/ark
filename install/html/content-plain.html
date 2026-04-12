@@ -22,6 +22,16 @@
        margin: 0;
        padding: 0.5em 1em;
      }
+     /* R1495-R1498: chunked content view */
+     .ark-chunk {
+       white-space: pre-wrap;
+       word-wrap: break-word;
+       padding: 0.5em 1em;
+       border-bottom: 1px solid var(--term-border, #2a2a3a);
+     }
+     .ark-chunk:last-child {
+       border-bottom: none;
+     }
      .ark-search-highlight {
        background: var(--term-accent-dim, rgba(224,122,71,0.35));
        color: var(--term-accent-bright, #ff9966);
@@ -458,7 +468,7 @@
     </style>
 </head>
 <body>
-<pre id="content">{{.Content}}</pre>
+{{if .IsChunked}}<div id="content">{{.Content}}</div>{{else}}<pre id="content">{{.Content}}</pre>{{end}}
 <script type="module">
 const highlights = new URL(location.href).searchParams.getAll('highlight');
 

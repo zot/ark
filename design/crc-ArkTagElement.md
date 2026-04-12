@@ -1,5 +1,5 @@
 # ArkTagElement
-**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494
+**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498
 
 Custom element (`<ark-tag>`) that renders an interactive tag widget
 in read-only content (goldmark HTML and plain-text `<pre>` blocks).

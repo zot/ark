@@ -299,3 +299,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O59: No integration test for resolveTagContainsQuery end-to-end (structured tag query → regex search)
 - [ ] O60: No unit tests for wrapTagElements — tag pattern matching, idempotency, HTML attribute avoidance
 - [ ] O61: ark-search-element.js symlink not in install/release pipeline — must be added to Makefile like ark-markdown-editor.js
+- [ ] A33: R1500 (markdown path unchanged) — verified by absence, no design artifact needed
+- [ ] A34: R1502 (/raw/ unchanged) — verified by absence, no design artifact needed
+- [ ] A35: R1503 (/fetch unchanged) — verified by absence, no design artifact needed
+- [ ] O62: No unit tests for DB.AllChunks
+- [ ] O63: No unit tests for chunked content rendering in handleContentView
