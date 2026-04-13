@@ -687,6 +687,62 @@ func (l *Librarian) BatchEmbed() error {
 	return nil
 }
 
+// Tokenizer wraps a llama model+context for tokenization only.
+// CRC: crc-Librarian.md | R1529, R1530
+type Tokenizer struct {
+	model     *llama.Model
+	ctx       *llama.Context
+	modelPath string
+}
+
+// NewTokenizer loads a GGUF model and creates a minimal context for
+// tokenization only (no embeddings, tiny KV cache).
+// Caller must call Close() when done.
+// CRC: crc-Librarian.md | R1529, R1530
+func NewTokenizer(modelPath string) (*Tokenizer, error) {
+	if modelPath == "" {
+		return nil, fmt.Errorf("no embedding model configured (tag_model)")
+	}
+	model, err := llama.LoadModel(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("load model %s: %w", modelPath, err)
+	}
+	ctx, err := model.NewContext(llama.WithContext(64))
+	if err != nil {
+		model.Close()
+		return nil, fmt.Errorf("create tokenizer context: %w", err)
+	}
+	return &Tokenizer{model: model, ctx: ctx, modelPath: modelPath}, nil
+}
+
+// CountTokens returns the number of tokens in text.
+func (t *Tokenizer) CountTokens(text string) int {
+	tokens, err := t.ctx.Tokenize(text)
+	if err != nil {
+		return 0
+	}
+	return len(tokens)
+}
+
+// Close releases the tokenizer's model and context.
+func (t *Tokenizer) Close() {
+	if t.ctx != nil {
+		t.ctx.Close()
+	}
+	if t.model != nil {
+		t.model.Close()
+	}
+}
+
+// ModelName returns the base filename of the model (without extension).
+func (t *Tokenizer) ModelName() string {
+	base := filepath.Base(t.modelPath)
+	if ext := filepath.Ext(base); ext != "" {
+		base = base[:len(base)-len(ext)]
+	}
+	return base
+}
+
 func (l *Librarian) ensureModel() error {
 	if l.model != nil {
 		return nil

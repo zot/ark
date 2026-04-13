@@ -1565,11 +1565,24 @@ func printLines(lines []string) {
 	}
 }
 
+// CRC: crc-CLI.md | R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	showDB := fs.Bool("db", false, "show LMDB record counts by type")
+	showChunks := fs.Bool("chunks", false, "show chunk size statistics")
+	tokenize := fs.Bool("tokenize", false, "measure in tokens (requires tag_model)")
+	var filterFiles, excludeFiles stringSlice
+	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
+	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark status [options]")
+		fmt.Fprintln(os.Stderr, "\nShow database status. With --chunks, show chunk size statistics.")
+		fmt.Fprintln(os.Stderr, "\nOptions:")
+		fs.PrintDefaults()
+	}
 	fs.Parse(args)
 
+	proxied := false
 	if client := serverClient(arkDir); client != nil {
 		path := "/status"
 		if *showDB {
@@ -1590,23 +1603,118 @@ func cmdStatus(args []string) {
 			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
 				resp.Version, ark.Version)
 		}
-		return
+		if !*showChunks {
+			return
+		}
+		proxied = true
 	}
 
 	withDB(func(d *ark.DB) {
-		status, err := d.Status()
-		if err != nil {
-			fatal(err)
-		}
-		printStatus(status, false)
-		if *showDB {
-			dbCounts, err := d.StatusDB()
+		if !proxied {
+			status, err := d.Status()
 			if err != nil {
 				fatal(err)
 			}
-			printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
+			printStatus(status, false)
+			if *showDB {
+				dbCounts, err := d.StatusDB()
+				if err != nil {
+					fatal(err)
+				}
+				printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
+			}
+			if !*showChunks {
+				return
+			}
 		}
+
+		// Chunk stats
+		ff := ark.ExpandTildeSlice([]string(filterFiles))
+		ef := ark.ExpandTildeSlice([]string(excludeFiles))
+
+		sizeFn := func(content string) int { return len(content) }
+		unit := "bytes"
+		modelName := ""
+
+		if *tokenize {
+			tagModel := d.Config().TagModel
+			if tagModel == "" {
+				fatal(fmt.Errorf("--tokenize requires tag_model in ark.toml"))
+			}
+			modelPath := filepath.Join(arkDir, tagModel)
+			tok, err := ark.NewTokenizer(modelPath)
+			if err != nil {
+				fatal(err)
+			}
+			defer tok.Close()
+			sizeFn = tok.CountTokens
+			unit = "tokens"
+			modelName = tok.ModelName()
+		}
+
+		result, err := d.ChunkStats(ff, ef, sizeFn)
+		if err != nil {
+			fatal(err)
+		}
+		if len(result.Rows) == 0 {
+			fmt.Println("no chunks found")
+			return
+		}
+
+		printChunkStats(result, unit, modelName)
 	})
+}
+
+func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {
+	if modelName != "" {
+		fmt.Printf("chunk sizes (%s, %s):\n", unit, modelName)
+	} else {
+		fmt.Printf("chunk sizes (%s):\n", unit)
+	}
+
+	// Compute column widths
+	headers := []string{"strategy", "count", "min", "max", "mean", "median", "p90", "p95", "p99"}
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+
+	type rowStrings [9]string
+	rows := make([]rowStrings, len(result.Rows))
+	for i, r := range result.Rows {
+		rows[i] = rowStrings{
+			r.Strategy,
+			fmt.Sprintf("%d", r.Count),
+			fmt.Sprintf("%d", r.Min),
+			fmt.Sprintf("%d", r.Max),
+			fmt.Sprintf("%d", r.Mean),
+			fmt.Sprintf("%d", r.Median),
+			fmt.Sprintf("%d", r.P90),
+			fmt.Sprintf("%d", r.P95),
+			fmt.Sprintf("%d", r.P99),
+		}
+		for j, s := range rows[i] {
+			if len(s) > widths[j] {
+				widths[j] = len(s)
+			}
+		}
+	}
+
+	// Print header (strategy left-aligned, rest right-aligned)
+	fmt.Printf("%-*s", widths[0], headers[0])
+	for j := 1; j < len(headers); j++ {
+		fmt.Printf("  %*s", widths[j], headers[j])
+	}
+	fmt.Println()
+
+	// Print rows
+	for _, r := range rows {
+		fmt.Printf("%-*s", widths[0], r[0])
+		for j := 1; j < len(r); j++ {
+			fmt.Printf("  %*s", widths[j], r[j])
+		}
+		fmt.Println()
+	}
 }
 
 func cmdFiles(args []string) {

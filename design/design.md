@@ -304,3 +304,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] A35: R1503 (/fetch unchanged) — verified by absence, no design artifact needed
 - [ ] O62: No unit tests for DB.AllChunks
 - [ ] O63: No unit tests for chunked content rendering in handleContentView
+- [ ] O64: No unit tests for ChunkStats, NewTokenizer, printChunkStats
+- [ ] O65: Embedding model not tracked in DB — switching tag_model in ark.toml silently mixes vectors from different models. Store model filename in LMDB, detect mismatches on startup.

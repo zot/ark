@@ -2353,3 +2353,39 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1511:** Skill groups use `<details>/<summary>` and are collapsed by default. The summary shows a 📋 icon and the skill name from the `skill` attr. Click to expand.
 - **R1512:** Each role group has a left border in a role-specific theme color: `--term-text-dim` for human, `--term-accent-bright` for assistant, `--term-border` for skill. The border runs the full height of the group.
 - **R1513:** In single-chunk views (`range=` parameter), the chunk renders with the role's left border color and a small icon but no sticky header and no grouping.
+
+## Feature: chunk-stats
+**Source:** specs/chunk-stats.md
+
+### Activation
+
+- **R1514:** `ark status --chunks` activates chunk size statistics. Without `--chunks`, behavior is unchanged.
+- **R1515:** `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) scope the file set for chunk stats. Same semantics as search filtering.
+- **R1516:** When neither filter flag is specified, all indexed files are included.
+
+### Data Collection
+
+- **R1517:** For each file in scope, use `DB.AllChunks(path)` to read chunk content from disk.
+- **R1518:** Byte size is `len(chunk.Content)`. Token count (when `--tokenize`) is `len(ctx.Tokenize(chunk.Content))`.
+- **R1519:** Files that fail to read are skipped silently (they appear in the normal missing count).
+- **R1520:** Strategy for each file comes from the FTS FileStatus record.
+
+### Statistics
+
+- **R1521:** Compute: count, min, max, mean, median, P90, P95, P99 for the chunk sizes.
+- **R1522:** Compute overall stats across all chunks ("all" row) and per-strategy stats.
+
+### Output Format
+
+- **R1523:** Output is a right-aligned table with columns: strategy, count, min, max, mean, median, p90, p95, p99.
+- **R1524:** First row is "all" (aggregate). Subsequent rows are per-strategy, sorted alphabetically.
+- **R1525:** Header line above the table labels the unit: "chunk sizes (bytes):" or "chunk sizes (tokens, MODEL):" where MODEL is the model filename stem.
+- **R1526:** Columns are right-aligned, padded to the widest value in each column. Strategy column is left-aligned.
+- **R1527:** Zero chunks after filtering: print "no chunks found" instead of the table.
+
+### Tokenization
+
+- **R1528:** `--tokenize` loads the configured embedding model and counts tokens per chunk instead of bytes.
+- **R1529:** Create a minimal llama context (small `n_ctx`, no `WithEmbeddings()`) for tokenization only — no KV cache or embedding overhead.
+- **R1530:** Use the `tag_model` path from ark.toml as the model path.
+- **R1531:** `--tokenize` without a configured `tag_model`: print error and exit.

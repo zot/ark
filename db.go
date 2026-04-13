@@ -872,6 +872,129 @@ func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error)
 	return db.fts.QueryTrigramCounts(query)
 }
 
+// ChunkStatsRow holds statistics for one strategy (or "all").
+// CRC: crc-DB.md | R1521, R1522
+type ChunkStatsRow struct {
+	Strategy string
+	Count    int
+	Min      int
+	Max      int
+	Mean     int
+	Median   int
+	P90      int
+	P95      int
+	P99      int
+}
+
+// ChunkStatsResult holds overall and per-strategy chunk size stats.
+// CRC: crc-DB.md | R1517, R1518, R1519, R1520, R1521, R1522
+type ChunkStatsResult struct {
+	Rows []ChunkStatsRow // first is "all", rest per-strategy alphabetically
+}
+
+// ChunkStats collects chunk size statistics across indexed files.
+// filterFiles/excludeFiles scope the file set. sizeFn returns the size
+// of a chunk's content (len for bytes, tokenize for tokens).
+// CRC: crc-DB.md | R1517, R1518, R1519, R1520, R1521, R1522
+func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string) int) (*ChunkStatsResult, error) {
+	stale, err := db.fts.StaleFiles()
+	if err != nil {
+		return nil, err
+	}
+
+	matcher := &Matcher{Dotfiles: true}
+	hasFilter := len(filterFiles) > 0 || len(excludeFiles) > 0
+
+	// Collect sizes per strategy
+	stratSizes := make(map[string][]int)
+	var allSizes []int
+
+	for _, s := range stale {
+		if hasFilter {
+			if len(filterFiles) > 0 {
+				matched := false
+				for _, pat := range filterFiles {
+					if matcher.Match(pat, s.Path, false) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			excluded := false
+			for _, pat := range excludeFiles {
+				if matcher.Match(pat, s.Path, false) {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
+
+		chunks := db.AllChunks(s.Path)
+		if chunks == nil {
+			continue
+		}
+		for _, c := range chunks {
+			size := sizeFn(c.Content)
+			allSizes = append(allSizes, size)
+			stratSizes[s.Strategy] = append(stratSizes[s.Strategy], size)
+		}
+	}
+
+	if len(allSizes) == 0 {
+		return &ChunkStatsResult{}, nil
+	}
+
+	result := &ChunkStatsResult{}
+	result.Rows = append(result.Rows, computeStatsRow("all", allSizes))
+
+	// Per-strategy rows, sorted alphabetically
+	strats := make([]string, 0, len(stratSizes))
+	for k := range stratSizes {
+		strats = append(strats, k)
+	}
+	sort.Strings(strats)
+	for _, s := range strats {
+		result.Rows = append(result.Rows, computeStatsRow(s, stratSizes[s]))
+	}
+
+	return result, nil
+}
+
+func computeStatsRow(strategy string, sizes []int) ChunkStatsRow {
+	sort.Ints(sizes)
+	n := len(sizes)
+	sum := 0
+	for _, s := range sizes {
+		sum += s
+	}
+	return ChunkStatsRow{
+		Strategy: strategy,
+		Count:    n,
+		Min:      sizes[0],
+		Max:      sizes[n-1],
+		Mean:     sum / n,
+		Median:   percentile(sizes, 50),
+		P90:      percentile(sizes, 90),
+		P95:      percentile(sizes, 95),
+		P99:      percentile(sizes, 99),
+	}
+}
+
+func percentile(sorted []int, p int) int {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	idx := (p * (n - 1)) / 100
+	return sorted[idx]
+}
+
 // Status returns database status counts.
 func (db *DB) Status() (*StatusInfo, error) {
 	stale, err := db.fts.StaleFiles()

@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -49,6 +49,10 @@ loads on first embedding query and stays warm until TTL expiry.
   through DB actor. Hyphens→spaces for tag names, "tag: value" format
   for compounds. Called post-reconcile from the write goroutine. (R1292,
   R1293, R1295)
+- NewTokenizer() (*Tokenizer, error): load model, create minimal
+  context (WithContext(64), no WithEmbeddings) for tokenization only.
+  Returns a Tokenizer that wraps the context. Caller must Close().
+  Uses modelPath from config. (R1529, R1530)
 - loadModel(): load GGUF model from modelPath, create context
   with embeddings enabled. Start TTL timer.
 - unloadModel(): close context and model, nil them. Called on
