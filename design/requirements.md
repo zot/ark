@@ -2460,3 +2460,32 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1570:** The old `ArkSettings` struct and single-blob I record format are removed.
 - **R1571:** `GetSettings`/`PutSettings` are replaced by per-field `iGet`/`iPut` calls.
 - **R1572:** The `Extra` map entries (schedule config, ID counters) become their own I record keys.
+
+## Feature: files-status
+**Source:** specs/files-status.md
+
+### Filtering
+
+- **R1573:** `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) set the base file set on `ark files`. Same semantics as search filtering.
+- **R1574:** Positional glob arguments further narrow the result within the base set.
+- **R1575:** When neither `--filter-files` nor positional patterns are given, all indexed files are included.
+
+### Status Output
+
+- **R1576:** `--status` shows bytes, chunk count, and path per file in addition to G/S/M status.
+- **R1577:** Columns: status, bytes, chunks, path. Numeric columns are right-aligned.
+- **R1578:** Missing files show 0 for bytes and chunks.
+- **R1579:** File bytes come from `os.Stat` (actual file size on disk).
+- **R1580:** Chunk count and chunk content come from `DB.AllChunks(path)`.
+
+### Verbose Mode
+
+- **R1581:** `-v` shows per-file chunk size statistics as an indented detail line after the summary line.
+- **R1582:** Verbose stats: min, max, mean, median, p90, p95. Compact single-line format, indented two spaces.
+- **R1583:** Missing and zero-chunk files skip the verbose line.
+- **R1584:** Chunk sizes are `len(chunk.Content)` in bytes (or tokens with `--tokenize`).
+
+### Tokenize
+
+- **R1585:** `--tokenize` loads the embedding model tokenizer and counts tokens instead of bytes for chunk size stats.
+- **R1586:** `--tokenize` without a configured `tag_model`: print error and exit.

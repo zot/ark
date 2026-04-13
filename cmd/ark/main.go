@@ -1728,11 +1728,26 @@ func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {
 	}
 }
 
+// CRC: crc-CLI.md | R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586
 func cmdFiles(args []string) {
 	fs := flag.NewFlagSet("files", flag.ExitOnError)
-	showStatus := fs.Bool("status", false, "show file status (G/S/M)")
+	showStatus := fs.Bool("status", false, "show file status, bytes, and chunk count")
+	verbose := fs.Bool("detail", false, "show per-file chunk size stats (with --status)")
+	tokenize := fs.Bool("tokenize", false, "measure chunk sizes in tokens (requires tag_model)")
+	var filterFiles, excludeFiles stringSlice
+	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
+	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark files [options] [pattern...]")
+		fmt.Fprintln(os.Stderr, "\nList indexed files. Positional patterns narrow the result.")
+		fmt.Fprintln(os.Stderr, "\nOptions:")
+		fs.PrintDefaults()
+	}
 	fs.Parse(args)
 	patterns := fs.Args()
+
+	ff := ark.ExpandTildeSlice([]string(filterFiles))
+	ef := ark.ExpandTildeSlice([]string(excludeFiles))
 
 	if !*showStatus {
 		// Simple path: just list files
@@ -1741,7 +1756,7 @@ func cmdFiles(args []string) {
 			if err := proxyDecode(client, "GET", "/files", nil, &files); err != nil {
 				fatal(err)
 			}
-			printLines(filterPaths(files, patterns))
+			printLines(filterPaths(matchBaseSet(files, ff, ef), patterns))
 			return
 		}
 		withDB(func(d *ark.DB) {
@@ -1749,62 +1764,161 @@ func cmdFiles(args []string) {
 			if err != nil {
 				fatal(err)
 			}
-			printLines(filterPaths(files, patterns))
+			printLines(filterPaths(matchBaseSet(files, ff, ef), patterns))
 		})
 		return
 	}
 
-	// --status: need files + stale + missing to compute status
-	var files, stale []string
-	var missing []ark.MissingRecord
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyDecode(client, "GET", "/files", nil, &files); err != nil {
+	// --status: need DB access for chunk data
+	withDB(func(d *ark.DB) {
+		files, err := d.Files()
+		if err != nil {
 			fatal(err)
 		}
-		if err := proxyDecode(client, "GET", "/stale", nil, &stale); err != nil {
+		staleList, err := d.Stale()
+		if err != nil {
 			fatal(err)
 		}
-		if err := proxyDecode(client, "GET", "/missing", nil, &missing); err != nil {
+		missingList, err := d.Missing()
+		if err != nil {
 			fatal(err)
 		}
-	} else {
-		withDB(func(d *ark.DB) {
-			var err error
-			files, err = d.Files()
-			if err != nil {
-				fatal(err)
-			}
-			stale, err = d.Stale()
-			if err != nil {
-				fatal(err)
-			}
-			missing, err = d.Missing()
-			if err != nil {
-				fatal(err)
-			}
-		})
-	}
 
-	staleSet := make(map[string]bool, len(stale))
-	for _, s := range stale {
-		staleSet[s] = true
-	}
-	missingSet := make(map[string]bool, len(missing))
-	for _, m := range missing {
-		missingSet[m.Path] = true
-	}
+		staleSet := make(map[string]bool, len(staleList))
+		for _, s := range staleList {
+			staleSet[s] = true
+		}
+		missingSet := make(map[string]bool, len(missingList))
+		for _, m := range missingList {
+			missingSet[m.Path] = true
+		}
 
-	files = filterPaths(files, patterns)
-	for _, f := range files {
-		switch {
-		case missingSet[f]:
-			fmt.Printf("M %s\n", f)
-		case staleSet[f]:
-			fmt.Printf("S %s\n", f)
-		default:
-			fmt.Printf("G %s\n", f)
+		files = filterPaths(matchBaseSet(files, ff, ef), patterns)
+
+		sizeFn := func(content string) int { return len(content) }
+		if *tokenize {
+			tagModel := d.Config().TagModel
+			if tagModel == "" {
+				fatal(fmt.Errorf("--tokenize requires tag_model in ark.toml"))
+			}
+			modelPath := filepath.Join(arkDir, tagModel)
+			tok, err := ark.NewTokenizer(modelPath)
+			if err != nil {
+				fatal(err)
+			}
+			defer tok.Close()
+			sizeFn = tok.CountTokens
+		}
+
+		// Compute column widths
+		type fileRow struct {
+			status string
+			bytes  string
+			chunks string
+			path   string
+			sizes  []int // for verbose
+		}
+		rows := make([]fileRow, 0, len(files))
+		maxBytes, maxChunks := len("bytes"), len("chunks")
+
+		for _, f := range files {
+			status := "G"
+			if missingSet[f] {
+				status = "M"
+			} else if staleSet[f] {
+				status = "S"
+			}
+
+			var fileBytes int64
+			var chunkCount int
+			var sizes []int
+
+			if !missingSet[f] {
+				if fi, err := os.Stat(f); err == nil {
+					fileBytes = fi.Size()
+				}
+				if chunks := d.AllChunks(f); chunks != nil {
+					chunkCount = len(chunks)
+					if *verbose {
+						sizes = make([]int, len(chunks))
+						for i, c := range chunks {
+							sizes[i] = sizeFn(c.Content)
+						}
+					}
+				}
+			}
+
+			bStr := fmt.Sprintf("%d", fileBytes)
+			cStr := fmt.Sprintf("%d", chunkCount)
+			if len(bStr) > maxBytes {
+				maxBytes = len(bStr)
+			}
+			if len(cStr) > maxChunks {
+				maxChunks = len(cStr)
+			}
+			rows = append(rows, fileRow{status, bStr, cStr, f, sizes})
+		}
+
+		for _, r := range rows {
+			fmt.Printf("%s  %*s  %*s  %s\n", r.status, maxBytes, r.bytes, maxChunks, r.chunks, r.path)
+			if *verbose && len(r.sizes) > 0 {
+				sort.Ints(r.sizes)
+				n := len(r.sizes)
+				sum := 0
+				for _, s := range r.sizes {
+					sum += s
+				}
+				fmt.Printf("  min: %d  max: %d  mean: %d  median: %d  p90: %d  p95: %d\n",
+					r.sizes[0], r.sizes[n-1], sum/n,
+					percentileInts(r.sizes, 50),
+					percentileInts(r.sizes, 90),
+					percentileInts(r.sizes, 95))
+			}
+		}
+	})
+}
+
+// matchBaseSet applies --filter-files/--exclude-files to get the base set.
+func matchBaseSet(paths []string, include, exclude []string) []string {
+	if len(include) == 0 && len(exclude) == 0 {
+		return paths
+	}
+	m := &ark.Matcher{Dotfiles: true}
+	var out []string
+	for _, p := range paths {
+		if len(include) > 0 {
+			matched := false
+			for _, pat := range include {
+				if m.Match(pat, p, false) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		excluded := false
+		for _, pat := range exclude {
+			if m.Match(pat, p, false) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			out = append(out, p)
 		}
 	}
+	return out
+}
+
+func percentileInts(sorted []int, p int) int {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	idx := (p * (n - 1)) / 100
+	return sorted[idx]
 }
 
 func cmdStale(args []string) {

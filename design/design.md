@@ -307,3 +307,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O64: No unit tests for ChunkStats, NewTokenizer, printChunkStats
 - [x] O65: Embedding model not tracked in DB — switching tag_model in ark.toml silently mixes vectors from different models. Store model filename in LMDB, detect mismatches on startup.
 - [ ] O66: No unit tests for DiffConfig, ApplyConfigChanges, config recover, server startup gate
+- [ ] O67: No unit tests for cmdFiles --status, --detail, matchBaseSet, percentileInts
