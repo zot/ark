@@ -22,6 +22,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	llama "github.com/godeps/gollama"
+	"github.com/zot/microfts2"
 )
 
 // Librarian manages the expansion request queue for spectral search.
@@ -39,12 +40,15 @@ type Librarian struct {
 	// Result store
 	results map[string]*ExpandResult // requestID → result
 
-	// Embedding model (R1277, R1278)
+	// Embedding model (R1277, R1278, R1593, R1594)
 	model      *llama.Model
-	modelCtx   *llama.Context
-	modelPath  string // full path to GGUF file
+	modelCtx   *llama.Context // default context for tags/queries (2048/8)
+	tiers      []EmbedTier    // sorted by byte limit ascending
+	modelPath  string         // full path to GGUF file
 	modelTimer *time.Timer
 	modelTTL   time.Duration
+	ctxSize    int // embedding context window size override (bench only) R1587
+	parallel   int // parallel sequences override (bench only) R1587
 }
 
 // ExpandRequest is a queued expansion request.
@@ -84,14 +88,17 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 	if err != nil {
 		return nil
 	}
+	cfg := db.Config()
 	l := &Librarian{
 		available: true,
 		db:        db,
 		results:   make(map[string]*ExpandResult),
 		modelTTL:  5 * time.Minute,
+		ctxSize:   2048,
+		tiers:     cfg.EmbedTiers, // R1594: sorted at config load
 	}
 	// R1274: resolve tag_model path
-	if tagModel := db.Config().TagModel; tagModel != "" {
+	if tagModel := cfg.TagModel; tagModel != "" {
 		modelPath := filepath.Join(dbPath, tagModel)
 		if _, err := os.Stat(modelPath); err == nil {
 			l.modelPath = modelPath
@@ -99,6 +106,12 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 	}
 	return l
 }
+
+// SetCtxSize sets the embedding context window size. R1587
+func (l *Librarian) SetCtxSize(n int) { l.ctxSize = n }
+
+// SetParallel sets the number of parallel sequences per batch. R1587
+func (l *Librarian) SetParallel(n int) { l.parallel = n }
 
 // Available returns whether spectral search is possible.
 // R1249
@@ -687,6 +700,307 @@ func (l *Librarian) BatchEmbed() error {
 	return nil
 }
 
+// embedWithCtx embeds a batch using the given context. R1614
+func (l *Librarian) embedWithCtx(ctx *llama.Context, texts []string) ([][]float32, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.resetModelTimer()
+	vecs, err := ctx.GetEmbeddingsBatch(texts)
+	if err != nil {
+		return nil, fmt.Errorf("embed batch: %w", err)
+	}
+	return vecs, nil
+}
+
+// createTierCtx creates a temporary context for one embedding tier.
+// Caller must Close() when done. R1594
+func (l *Librarian) createTierCtx(tier EmbedTier) (*llama.Context, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.model == nil {
+		return nil, fmt.Errorf("model not loaded")
+	}
+	return l.model.NewContext(
+		llama.WithEmbeddings(),
+		llama.WithContext(tier.Ctx),
+		llama.WithBatch(tier.Ctx),
+		llama.WithParallel(tier.Parallel),
+	)
+}
+
+// BatchEmbedChunks embeds all chunks missing EC records, using tier
+// contexts for adaptive batching. Called post-reconcile after BatchEmbed.
+// CRC: crc-Librarian.md | R1609-R1617
+func (l *Librarian) BatchEmbedChunks() error {
+	if !l.EmbeddingAvailable() || len(l.tiers) == 0 {
+		return nil
+	}
+
+	// Ensure model and tier contexts are loaded
+	l.mu.Lock()
+	err := l.ensureModel()
+	l.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("load embedding model: %w", err)
+	}
+
+	// Collect all indexed file paths
+	files, err := l.db.Files()
+	if err != nil {
+		return fmt.Errorf("list files: %w", err)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Priority sort R1611: tag-bearing files first, then non-JSONL, then JSONL.
+	// Build tag-bearing file ID set from F records.
+	tagFileIDs := make(map[uint64]bool)
+	allTags, err := l.db.TagList()
+	if err != nil {
+		log.Printf("librarian: chunk embed: tag list: %v", err)
+	}
+	tagNames := make([]string, len(allTags))
+	for i, tc := range allTags {
+		tagNames[i] = tc.Tag
+	}
+	if len(tagNames) > 0 {
+		recs, err := l.db.store.TagFiles(tagNames)
+		if err != nil {
+			log.Printf("librarian: chunk embed: tag files: %v", err)
+		}
+		for _, r := range recs {
+			tagFileIDs[r.FileID] = true
+		}
+	}
+
+	// Classify and sort files by priority, stash fileID to avoid redundant lookups
+	type filePriority struct {
+		path     string
+		fileID   uint64
+		priority int // 0 = tag-bearing, 1 = non-JSONL, 2 = JSONL
+	}
+	var sorted []filePriority
+	excludePatterns := l.db.Config().SearchExclude
+	for _, fpath := range files {
+		if matchesAnyGlob(fpath, excludePatterns) {
+			continue
+		}
+		info, err := l.db.fts.CheckFile(fpath)
+		if err != nil || info.FileID == 0 {
+			continue
+		}
+		pri := 1
+		if strings.HasSuffix(fpath, ".jsonl") {
+			pri = 2
+		}
+		if tagFileIDs[info.FileID] {
+			pri = 0
+		}
+		sorted = append(sorted, filePriority{path: fpath, fileID: info.FileID, priority: pri})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].priority < sorted[j].priority
+	})
+
+	// --- Pass 1: classify chunks into tier buckets (refs only) ---
+
+	// Per-file centroid accumulators R1616, R1618
+	type centroidAcc struct {
+		sum   []float32
+		count uint32
+	}
+	centroids := make(map[uint64]*centroidAcc)
+	addToCentroid := func(fileID uint64, vec []float32) {
+		if len(vec) == 0 {
+			return
+		}
+		acc := centroids[fileID]
+		if acc == nil {
+			acc = &centroidAcc{sum: make([]float32, len(vec))}
+			centroids[fileID] = acc
+		}
+		if len(acc.sum) != len(vec) {
+			acc.sum = make([]float32, len(vec))
+			acc.count = 0
+		}
+		for i, v := range vec {
+			acc.sum[i] += v
+		}
+		acc.count++
+	}
+
+	// chunkRef is a lightweight reference — content read later per tier.
+	type chunkRef struct {
+		fileID   uint64
+		chunkIdx int
+		path     string
+	}
+	tierRefs := make([][]chunkRef, len(l.tiers))
+	var totalSkipped int
+
+	for _, fp := range sorted {
+		fileID := fp.fileID
+
+		// Chunk byte lengths from LMDB — no disk I/O
+		chunkLens, err := l.db.fts.ChunkContentLens(fileID)
+		if err != nil || len(chunkLens) == 0 {
+			continue
+		}
+
+		// Fast skip: EF count matches chunk count → fully embedded.
+		efSum, efCount, _ := l.db.store.ReadFileCentroid(fileID)
+		if efCount > 0 && int(efCount) == len(chunkLens) {
+			continue
+		}
+
+		// Invalidate on disk for crash safety, seed centroid from memory.
+		if efCount > 0 {
+			l.db.store.WriteFileCentroid(fileID, nil, 0)
+			if len(efSum) > 1 {
+				acc := centroids[fileID]
+				if acc == nil {
+					acc = &centroidAcc{sum: make([]float32, len(efSum))}
+					centroids[fileID] = acc
+				}
+				copy(acc.sum, efSum)
+				acc.count = efCount
+			}
+		}
+
+		fileChunksProcessed := 0
+		for chunkIdx, chunkLen := range chunkLens {
+			existing, _ := l.db.store.ReadChunkEmbedding(fileID, chunkIdx)
+			if existing != nil {
+				fileChunksProcessed++
+				if efCount == 0 {
+					addToCentroid(fileID, existing)
+				}
+				continue
+			}
+
+			if chunkLen == 0 {
+				continue
+			}
+
+			// Route to smallest fitting tier by byte length R1612
+			placed := false
+			for i, tier := range l.tiers {
+				if chunkLen <= tier.ByteLimit() {
+					tierRefs[i] = append(tierRefs[i], chunkRef{
+						fileID: fileID, chunkIdx: chunkIdx, path: fp.path,
+					})
+					fileChunksProcessed++
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				totalSkipped++
+				Logv(2, "chunk embed: skip %s chunk %d (%d bytes, exceeds all tiers)", fp.path, chunkIdx, chunkLen)
+			}
+		}
+
+		// Mark all-skipped files so we don't re-scan every reconcile.
+		if fileChunksProcessed == 0 && len(chunkLens) > 0 {
+			l.db.store.WriteFileCentroid(fileID, make([]float32, 1), uint32(len(chunkLens)))
+		}
+	}
+
+	// --- Pass 2: embed one tier at a time (one context alive at a time) ---
+
+	var totalEmbedded int
+	for tierIdx, refs := range tierRefs {
+		if len(refs) == 0 {
+			continue
+		}
+		tier := l.tiers[tierIdx]
+
+		// Sort by fileID so consecutive refs come from the same file,
+		// allowing us to hold only one file's chunks in memory at a time.
+		sort.Slice(refs, func(i, j int) bool {
+			if refs[i].fileID != refs[j].fileID {
+				return refs[i].fileID < refs[j].fileID
+			}
+			return refs[i].chunkIdx < refs[j].chunkIdx
+		})
+
+		ctx, err := l.createTierCtx(tier)
+		if err != nil {
+			log.Printf("librarian: skip tier %d/%d: %v", tier.Ctx, tier.Parallel, err)
+			totalSkipped += len(refs)
+			continue
+		}
+		log.Printf("librarian: embedding %d chunks via tier %d/%d", len(refs), tier.Ctx, tier.Parallel)
+
+		// Process in batches of tier.Parallel.
+		// Refs are sorted by fileID — one file cached at a time.
+		var cachedFileID uint64
+		var cachedChunks []microfts2.ChunkResult
+		chunkCache := l.db.fts.NewChunkCache()
+		for i := 0; i < len(refs); i += tier.Parallel {
+			end := min(i+tier.Parallel, len(refs))
+			batch := refs[i:end]
+
+			texts := make([]string, 0, len(batch))
+			valid := make([]chunkRef, 0, len(batch))
+			for _, ref := range batch {
+				if ref.fileID != cachedFileID {
+					cachedChunks = nil
+					finfo, err := l.db.fts.FileInfoByID(ref.fileID)
+					if err == nil && len(finfo.Chunks) > 0 {
+						cachedChunks, _ = chunkCache.GetChunks(ref.path, finfo.Chunks[0].Location, 0, len(finfo.Chunks))
+					}
+					cachedFileID = ref.fileID
+				}
+				if ref.chunkIdx < len(cachedChunks) && cachedChunks[ref.chunkIdx].Content != "" {
+					texts = append(texts, cachedChunks[ref.chunkIdx].Content)
+					valid = append(valid, ref)
+				}
+			}
+			if len(texts) == 0 {
+				continue
+			}
+
+			vecs, err := l.embedWithCtx(ctx, texts)
+			if err != nil {
+				log.Printf("librarian: embed tier %d/%d batch: %v", tier.Ctx, tier.Parallel, err)
+				continue
+			}
+
+			cvs := make([]ChunkVec, len(valid))
+			for j, ref := range valid {
+				cvs[j] = ChunkVec{FileID: ref.fileID, ChunkIdx: ref.chunkIdx, Vec: vecs[j]}
+			}
+			if err := l.db.store.WriteChunkEmbeddingBatch(cvs); err != nil {
+				log.Printf("librarian: write EC batch: %v", err)
+				continue
+			}
+			for j, ref := range valid {
+				addToCentroid(ref.fileID, vecs[j])
+			}
+			totalEmbedded += len(valid)
+		}
+
+		ctx.Close()
+	}
+
+	// Write all file centroids R1616
+	for fileID, acc := range centroids {
+		if acc.count > 0 {
+			if err := l.db.store.WriteFileCentroid(fileID, acc.sum, acc.count); err != nil {
+				log.Printf("librarian: write centroid fileID=%d: %v", fileID, err)
+			}
+		}
+	}
+
+	if totalEmbedded > 0 || totalSkipped > 0 {
+		log.Printf("librarian: chunk embed: %d embedded, %d skipped", totalEmbedded, totalSkipped)
+	}
+	return nil
+}
+
+// flushBucket embeds all chunks in a bucket and writes EC records. R1614, R1615
 // Tokenizer wraps a llama model+context for tokenization only.
 // CRC: crc-Librarian.md | R1529, R1530
 type Tokenizer struct {
@@ -751,9 +1065,20 @@ func (l *Librarian) ensureModel() error {
 	if err != nil {
 		return fmt.Errorf("load model %s: %w", l.modelPath, err)
 	}
+	// Default context for tags/queries (or bench override) R1595, R1597
+	ctxSize := l.ctxSize
+	if ctxSize <= 0 {
+		ctxSize = 2048
+	}
+	par := l.parallel
+	if par <= 0 {
+		par = 8
+	}
 	ctx, err := model.NewContext(
 		llama.WithEmbeddings(),
-		llama.WithContext(2048),
+		llama.WithContext(ctxSize),
+		llama.WithBatch(ctxSize),
+		llama.WithParallel(par),
 	)
 	if err != nil {
 		model.Close()
@@ -761,7 +1086,9 @@ func (l *Librarian) ensureModel() error {
 	}
 	l.model = model
 	l.modelCtx = ctx
-	log.Printf("librarian: loaded embedding model %s", filepath.Base(l.modelPath))
+
+	log.Printf("librarian: loaded embedding model %s (%d embed tiers configured)",
+		filepath.Base(l.modelPath), len(l.tiers))
 	return nil
 }
 

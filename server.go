@@ -511,11 +511,14 @@ func (srv *Server) doReconcile(db *DB) {
 			log.Println("reconcile: complete")
 		})
 	})
-	// Batch embed missing tag embeddings after reconcile. R1292, R1295
+	// Batch embed missing embeddings after reconcile. R1292, R1295, R1609
 	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() {
 		db.enqueueWrite(func(_ *microfts2.DB) {
 			if err := srv.librarian.BatchEmbed(); err != nil {
-				log.Printf("reconcile: batch embed error: %v", err)
+				log.Printf("reconcile: batch embed tags: %v", err)
+			}
+			if err := srv.librarian.BatchEmbedChunks(); err != nil {
+				log.Printf("reconcile: batch embed chunks: %v", err)
 			}
 		})
 	}

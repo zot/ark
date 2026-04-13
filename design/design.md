@@ -123,7 +123,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`
-- [ ] crc-Config.md → `config.go`
+- [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
@@ -160,6 +160,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Librarian.md → `librarian.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
+- [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -308,3 +309,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O65: Embedding model not tracked in DB — switching tag_model in ark.toml silently mixes vectors from different models. Store model filename in LMDB, detect mismatches on startup.
 - [ ] O66: No unit tests for DiffConfig, ApplyConfigChanges, config recover, server startup gate
 - [ ] O67: No unit tests for cmdFiles --status, --detail, matchBaseSet, percentileInts
+- [ ] O68: No unit tests for Store EC/EF record methods: WriteChunkEmbedding, WriteChunkEmbeddingBatch, ReadChunkEmbedding, WriteFileCentroid, ReadFileCentroid, ScanFileCentroids, RemoveFileChunkEmbeddings, DropChunkEmbeddings
+- [ ] O69: No unit tests for Librarian BatchEmbedChunks, embedWithTierCtx, flushBucket, multi-context ensureModel/unloadModel
+- [x] O70: Crash-orphan centroid drift: if EC records are written but EF centroid write is interrupted, the centroid will be stale on next run. The seeded-from-EF path trusts efCount, missing any orphan EC records beyond that count
+- [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) LMDB reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
+- [ ] O72: AllChunks internally calls CheckFile — a variant accepting pre-resolved fileID would eliminate one redundant lookup per file in BatchEmbedChunks

@@ -189,6 +189,7 @@ func (idx *Indexer) RemoveFile(path string) error {
 		idx.store.RemoveTagDefs(fileid)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1105
 		idx.store.RemoveTagValues(fileid)
+		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
 	}
 	return nil
 }
@@ -210,6 +211,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 		}
 		idx.store.RemoveTagDefs(fileid)
 		idx.store.RemoveTagValues(fileid)
+		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
 	}
 	return nil
 }
@@ -345,6 +347,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTags(prep.oldID)
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemoveTagValues(prep.oldID)
+			idx.store.RemoveFileChunkEmbeddings(prep.oldID) // R1607
 		}
 		// Use pre-extracted values (append prep) or callback-extracted values
 		tagValues := prep.tagValues

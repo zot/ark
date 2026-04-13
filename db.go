@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -319,7 +320,7 @@ func (db *DB) startNextWrite() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("write actor: panic: %v", r)
+				log.Printf("write actor: panic: %v\n%s", r, debug.Stack())
 				// R1059: send error closure back to actor
 				svc(db.svc, func() {
 					db.writing = false
@@ -970,6 +971,7 @@ func (db *DB) DiffConfig() ([]ConfigChange, error) {
 	checkJSON(IFieldChunkers, stored.Chunkers, db.config.Chunkers)
 	checkJSON(IFieldSearchExclude, stored.SearchExclude, db.config.SearchExclude)
 	checkJSON(IFieldSchedule, stored.Schedule, db.config.Schedule)
+	checkJSON(IFieldEmbedTiers, stored.EmbedTiers, db.config.EmbedTiers)
 
 	// Check for catastrophe: all sources gone
 	if len(stored.Sources) > 0 && len(db.config.Sources) == 0 {
@@ -995,6 +997,7 @@ func (db *DB) ApplyConfigChanges(changes []ConfigChange) []ConfigChange {
 			if c.Field == IFieldTagModel {
 				log.Printf("config: tag_model changed from %q to %q — dropping embeddings", c.OldValue, c.NewValue)
 				db.store.DropEmbeddings()
+				db.store.DropChunkEmbeddings() // R1620
 				db.store.IPut(c.Field, c.NewValue)
 			}
 		case ActionDefer:

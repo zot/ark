@@ -2035,7 +2035,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### CLI
 - **R1302:** `ark embed TEXT` embeds a text string and prints the vector as JSON
 - **R1303:** `ark embed --bench tags` embeds all tag values, reports per-value and total timing
-- **R1304:** `ark embed --bench chunks` reads chunks from random indexed files, embeds them, reports timing
+- **R1304:** `ark embed --bench chunks` reads real chunks from random indexed files via AllChunks (real chunker boundaries, not fixed-size slices), embeds them, reports timing
+- **R1587:** `ark embed --bench` accepts `--ctx N` to set the embedding context window size (default 2048). Passed through to Librarian model loading for benchmarking different context sizes.
 n- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
 
 ### Build
@@ -2489,3 +2490,62 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1585:** `--tokenize` loads the embedding model tokenizer and counts tokens instead of bytes for chunk size stats.
 - **R1586:** `--tokenize` without a configured `tag_model`: print error and exit.
+
+## Feature: Chunk Embeddings
+**Source:** specs/chunk-embeddings.md
+
+### Configuration
+
+- **R1588:** `ark.toml` accepts an `[[embed_tiers]]` array. Each entry has `ctx` (context window tokens) and `parallel` (sequences per batch).
+- **R1589:** Tokens-per-sequence is derived: `ctx / parallel`. Byte limit is derived: `tokens_per_seq * 3`.
+- **R1590:** Tiers are sorted by byte limit ascending at load time. Chunks route to the smallest tier that fits.
+- **R1591:** When `embed_tiers` is absent but `tag_model` is set, default tiers are used (1024/32, 2048/16, 2048/8, 16384/12, 16384/8).
+- **R1592:** (inferred) Invalid tier configs (ctx <= 0, parallel <= 0, parallel > ctx) are rejected at config load.
+
+### Model and Context Lifecycle
+
+- **R1593:** One embedding model is loaded from `tag_model`, shared across all tier contexts.
+- **R1594:** All tier contexts are pre-allocated from the loaded model on first embedding use (lazy).
+- **R1595:** Each context is created with `WithEmbeddings()`, `WithContext(ctx)`, `WithBatch(ctx)`, and `WithParallel(parallel)`.
+- **R1596:** The model TTL timer unloads the model and all contexts when the embedding queue is idle.
+- **R1597:** Tag and query embedding use the tier with 256 tokens/seq (2048/8 default).
+
+### LMDB Records
+
+- **R1598:** EC records store chunk vectors. Key: `EC` + varint(fileID) + varint(chunkIdx). Value: float32 vector (768 dims).
+- **R1599:** EF records store file centroids. Key: `EF` + varint(fileID). Value: float32 running sum (768 dims) + uint32 chunk count.
+- **R1600:** `WriteChunkEmbedding(fileID, chunkIdx, vec)` writes one EC record.
+- **R1601:** `ReadChunkEmbedding(fileID, chunkIdx)` reads one EC record.
+- **R1602:** `WriteFileCentroid(fileID, sum, count)` writes one EF record (running sum + count).
+- **R1603:** `ReadFileCentroid(fileID)` reads one EF record, returns sum and count.
+- **R1604:** `MissingChunkEmbeddings()` returns chunks with C records in microfts2 but no EC record in ark store.
+- **R1605:** `ScanFileCentroids()` returns all EF records as a map.
+- **R1606:** `DropChunkEmbeddings()` deletes all EC and EF records (for rebuild or model mismatch).
+- **R1607:** EC records for a file are deleted when the file is re-indexed.
+- **R1608:** (inferred) EF centroid is recomputed from scratch when a file is fully re-indexed.
+
+### Batch Embedding Pipeline
+
+- **R1609:** `BatchEmbedChunks()` runs post-reconcile after `BatchEmbed()` (tag embeddings).
+- **R1610:** Scans for missing EC records, reads chunk content via `AllChunks(path)`.
+- **R1611:** Priority sort: tag-bearing files first, then non-JSONL authored content, then JSONL. Files matching `search_exclude` are skipped.
+- **R1612:** Each chunk routes to the smallest tier whose byte limit fits `len(content)`.
+- **R1613:** Chunks exceeding all tiers' byte limits are skipped (logged at verbose level).
+- **R1614:** When a tier's bucket reaches its `parallel` count, the batch is dispatched through that tier's context via `EmbedBatch`.
+- **R1615:** EC records are written to LMDB through the DB actor (GPU compute happens off-actor).
+- **R1616:** After all chunks for a file are embedded, the EF centroid is updated (running sum approach).
+- **R1617:** When all files are processed, all buckets are flushed — no embedded content is left in a partial bucket.
+
+### Incremental Centroid Updates
+
+- **R1618:** File centroids use running sum for O(1) updates: add chunk adds vec to sum and increments count, remove chunk subtracts vec and decrements count.
+- **R1619:** Centroid at query time is `sum / count`.
+
+### Model Mismatch
+
+- **R1620:** If `tag_model` changes, all EC and EF records are stale and dropped on next reconcile (extends existing E condition mismatch detection).
+
+### Benchmark
+
+- **R1621:** `ark embed --bench chunks` accepts `--parallel N` to set sequences per batch (default 8).
+- **R1622:** Bench output reports context size, parallel count, tokens/seq, batch vs single throughput, skip rate, and chunk size distribution (min/max/avg).

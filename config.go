@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ type Config struct {
 	SessionTTL      string            `toml:"session_ttl,omitempty"`    // R646: duration string, default "30s"
 	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
 	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
+	EmbedTiers      []EmbedTier       `toml:"embed_tiers,omitempty"`    // R1588: ctx/parallel per tier
 	Schedule        ScheduleConfig    `toml:"schedule"`                 // R853, R854
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`
@@ -51,6 +53,30 @@ type ScheduleConfig struct {
 type TagScheduleConfig struct {
 	FilterFiles  []string `toml:"filter_files,omitempty"`
 	ExcludeFiles []string `toml:"exclude_files,omitempty"`
+}
+
+// EmbedTier defines a context/parallel pair for chunk embedding.
+// CRC: crc-Config.md | R1588, R1589
+type EmbedTier struct {
+	Ctx      int `toml:"ctx"`
+	Parallel int `toml:"parallel"`
+}
+
+// ByteLimit returns the max chunk byte size this tier can handle.
+// ~3 bytes/token for BERT WordPiece. R1589
+func (t EmbedTier) ByteLimit() int {
+	return (t.Ctx / t.Parallel) * 3
+}
+
+// DefaultEmbedTiers returns the default tiers tuned for Steam Deck Vulkan GPU. R1591
+func DefaultEmbedTiers() []EmbedTier {
+	return []EmbedTier{
+		{Ctx: 1024, Parallel: 32},
+		{Ctx: 2048, Parallel: 16},
+		{Ctx: 2048, Parallel: 8},
+		{Ctx: 16384, Parallel: 12},
+		{Ctx: 16384, Parallel: 8},
+	}
 }
 
 // ChunkerConfig defines a language chunker from [[chunker]] in ark.toml.
@@ -107,6 +133,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.validate()
+	cfg.initEmbedTiers() // R1590, R1591
 	// R950, R951: expand tilde in all path fields at load time
 	cfg.GlobalInclude = ExpandTildeSlice(cfg.GlobalInclude)
 	cfg.GlobalExclude = ExpandTildeSlice(cfg.GlobalExclude)
@@ -379,6 +406,27 @@ func (c *Config) checkDuplicates(includes, excludes []string, context string) {
 				"pattern %q appears in both include and exclude (%s)", inc, context))
 		}
 	}
+}
+
+// initEmbedTiers applies defaults and sorts tiers by byte limit. R1590, R1591, R1592
+func (c *Config) initEmbedTiers() {
+	if len(c.EmbedTiers) == 0 && c.TagModel != "" {
+		c.EmbedTiers = DefaultEmbedTiers()
+	}
+	valid := c.EmbedTiers[:0]
+	for _, t := range c.EmbedTiers {
+		if t.Ctx > 0 && t.Parallel > 0 && t.Parallel <= t.Ctx {
+			valid = append(valid, t)
+		} else {
+			c.Errors = append(c.Errors, fmt.Sprintf(
+				"embed_tiers: invalid tier ctx=%d parallel=%d (need ctx>0, 0<parallel<=ctx)", t.Ctx, t.Parallel))
+		}
+	}
+	c.EmbedTiers = valid
+	// Sort by byte limit ascending
+	sort.Slice(c.EmbedTiers, func(i, j int) bool {
+		return c.EmbedTiers[i].ByteLimit() < c.EmbedTiers[j].ByteLimit()
+	})
 }
 
 // SaveConfig writes the current config state to an ark.toml file.

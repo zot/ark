@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1598, R1599, R1600, R1601, R1602, R1603, R1604, R1605, R1606, R1607, R1608, R1618, R1619, R1620
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -150,6 +150,22 @@ ark-level settings, and tag tracking.
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
   EV records (for rebuild)
 
+### Chunk Embedding Records (R1598-R1608)
+- WriteChunkEmbedding(fileID, chunkIdx uint64, vec []float32): write
+  EC[fileID][chunkIdx] record. Key: `EC` + varint(fileID) + varint(chunkIdx).
+  Value: float32 vector.
+- ReadChunkEmbedding(fileID, chunkIdx uint64) ([]float32, error): read one EC record.
+- WriteFileCentroid(fileID uint64, sum []float32, count uint32): write
+  EF[fileID] record. Key: `EF` + varint(fileID). Value: float32 running sum + uint32 count.
+- ReadFileCentroid(fileID uint64) (sum []float32, count uint32, err error): read one EF record.
+- MissingChunkEmbeddings() ([]ChunkEmbedRef, error): cross-reference C records
+  in microfts2 against EC records, return chunks with no embedding.
+- ScanFileCentroids() (map[uint64][]float32, error): scan EF prefix, return
+  fileID → centroid vector (sum / count).
+- DropChunkEmbeddings(): delete all EC and EF prefix records. (R1606)
+- RemoveFileChunkEmbeddings(fileID uint64): delete all EC records for fileID
+  and the EF centroid. Called when a file is re-indexed. (R1607)
+
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern
 
@@ -158,3 +174,4 @@ ark-level settings, and tag tracking.
 - seq-search.md
 - seq-server-startup.md
 - seq-tag-embed.md
+- seq-chunk-embed.md

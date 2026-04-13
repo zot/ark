@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -14,7 +14,9 @@ loads on first embedding query and stays warm until TTL expiry.
 - waiters: []chan struct{} — signaled when a request is queued
 - results: map[string]*ExpandResult — requestID → result
 - model: *llama.Model — warm embedding model (nil when unloaded)
-- modelCtx: *llama.Context — embedding context
+- modelCtx: *llama.Context — default embedding context (2048/8, for tags/queries)
+- tierCtxs: []*llama.Context — per-tier contexts for chunk embedding (R1594)
+- tiers: []EmbedTier — sorted by byte limit ascending (from Config)
 - modelPath: string — path to GGUF file from config
 - modelTimer: *time.Timer — TTL for model unloading
 
@@ -53,10 +55,18 @@ loads on first embedding query and stays warm until TTL expiry.
   context (WithContext(64), no WithEmbeddings) for tokenization only.
   Returns a Tokenizer that wraps the context. Caller must Close().
   Uses modelPath from config. (R1529, R1530)
-- loadModel(): load GGUF model from modelPath, create context
-  with embeddings enabled. Start TTL timer.
-- unloadModel(): close context and model, nil them. Called on
-  TTL expiry.
+- BatchEmbedChunks(): scan MissingChunkEmbeddings, priority sort, read
+  chunk content via AllChunks, route to tier buckets by byte size, flush
+  each bucket at its parallel count via EmbedBatch through the tier's
+  context. Write EC records through DB actor. Update EF centroids after
+  each file completes. Final flush at end of queue. Called post-reconcile
+  after BatchEmbed. (R1609-R1617)
+- SetCtxSize(n int): set embedding context window (bench only). (R1587)
+- SetParallel(n int): set parallel sequences (bench only). (R1587)
+- loadModel(): load GGUF model from modelPath, create default context
+  and all tier contexts. Start TTL timer. (R1593, R1594, R1595)
+- unloadModel(): close all tier contexts, default context, and model.
+  Called on TTL expiry. (R1596)
 - Available() bool: whether claude is on PATH (spectral search)
 - EmbeddingAvailable() bool: whether tag_model is configured and
   the GGUF file exists
@@ -72,12 +82,15 @@ loads on first embedding query and stays warm until TTL expiry.
 
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
-- Store: V record queries, T inline vectors + EV record reads for cosine scan,
+- Store: V record queries, T/EV/EC/EF record reads and writes,
   tag-value-id allocation, ScanVRecordTvids for reverse lookup
+- DB: AllChunks for chunk content retrieval, enqueueWrite for actor writes
 - Searcher: fetch grouped results for curated tags
-- gollama: model loading and embedding computation
-- Config: tag_model path, search_exclude patterns
+- gollama: model loading, multi-context creation, embedding computation
+- Config: tag_model path, embed_tiers, search_exclude patterns
 
 ## Sequences
 - seq-spectral-expand.md
+- seq-tag-embed.md
+- seq-chunk-embed.md
 - seq-tag-embed.md

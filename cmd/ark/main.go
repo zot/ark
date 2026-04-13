@@ -532,7 +532,7 @@ func cmdRebuild(args []string) {
 	// R1294: embeddings regenerate on next server start (batch embed post-reconcile)
 	cfg, _ := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
 	if cfg != nil && cfg.TagModel != "" {
-		fmt.Println("tag embeddings will regenerate on next 'ark serve'")
+		fmt.Println("embeddings (tags + chunks) will regenerate on next 'ark serve'")
 	}
 }
 
@@ -1251,6 +1251,8 @@ Options:`)
 func cmdEmbed(args []string) {
 	fs := flag.NewFlagSet("embed", flag.ExitOnError)
 	bench := fs.String("bench", "", "benchmark mode: tags or chunks")
+	ctxSize := fs.Int("ctx", 2048, "embedding context window size in tokens")
+	parallel := fs.Int("parallel", 8, "number of parallel sequences per batch")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, `Usage: ark embed [options] <text>
 
@@ -1258,7 +1260,9 @@ Embed text using the configured tag model. Prints the vector as JSON.
 
 Options:
   --bench tags     Embed all tag values, report timing
-  --bench chunks   Embed random file chunks, report timing`)
+  --bench chunks   Embed random file chunks, report timing
+  --ctx N          Embedding context window size (default 2048)
+  --parallel N     Parallel sequences per batch (default 8)`)
 		fs.PrintDefaults()
 	}
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
@@ -1275,6 +1279,8 @@ Options:
 		if !lib.EmbeddingAvailable() {
 			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
 		}
+		lib.SetCtxSize(*ctxSize)   // R1587
+		lib.SetParallel(*parallel) // R1587
 
 		if *bench == "tags" {
 			// Benchmark: embed all tag values (batch vs single)
@@ -1331,7 +1337,7 @@ Options:
 		}
 
 		if *bench == "chunks" {
-			// Sample 200 real chunks using the chunker, then benchmark batch vs single
+			// R1304: sample real chunks via AllChunks (real chunker boundaries)
 			files, err := db.Files()
 			if err != nil {
 				fatal(err)
@@ -1341,35 +1347,37 @@ Options:
 				return
 			}
 
-			// Sample 200 chunks: pick file at random, read its chunks, pick one.
+			// Sample 200 chunks: pick file at random, get its real chunks, pick one.
 			// File-first sampling prevents large files (JSONL) from dominating.
 			const sampleSize = 200
 			fileChunkCache := make(map[string][]string)
 			var chunks []string
+			var minBytes, maxBytes int
 
 			for len(chunks) < sampleSize {
-				// Pick a random file
 				fpath := files[rand.Intn(len(files))]
 				cached, ok := fileChunkCache[fpath]
 				if !ok {
-					// Read file content and split into ~512-byte chunks
-					// (approximates real chunker boundaries)
-					data, err := os.ReadFile(fpath)
-					if err != nil || len(data) == 0 {
-						fileChunkCache[fpath] = nil
-						continue
-					}
-					text := string(data)
-					for i := 0; i < len(text); i += 512 {
-						end := min(i+512, len(text))
-						cached = append(cached, text[i:end])
+					results := db.AllChunks(fpath)
+					for _, cr := range results {
+						if cr.Content != "" {
+							cached = append(cached, cr.Content)
+						}
 					}
 					fileChunkCache[fpath] = cached
 				}
 				if len(cached) == 0 {
 					continue
 				}
-				chunks = append(chunks, cached[rand.Intn(len(cached))])
+				c := cached[rand.Intn(len(cached))]
+				chunks = append(chunks, c)
+				n := len(c)
+				if minBytes == 0 || n < minBytes {
+					minBytes = n
+				}
+				if n > maxBytes {
+					maxBytes = n
+				}
 			}
 
 			// Stats
@@ -1377,31 +1385,61 @@ Options:
 			for _, c := range chunks {
 				totalBytes += len(c)
 			}
-			fmt.Printf("sampled %d chunks from %d files (avg %d bytes/chunk)\n",
-				len(chunks), len(fileChunkCache), totalBytes/max(len(chunks), 1))
+			fmt.Printf("sampled %d chunks from %d files (avg %d bytes, min %d, max %d)\n",
+				len(chunks), len(fileChunkCache), totalBytes/max(len(chunks), 1), minBytes, maxBytes)
+			fmt.Printf("context: %d tokens, parallel: %d, tokens/seq: %d\n",
+				*ctxSize, *parallel, *ctxSize / *parallel)
 
-			// Batch benchmark
-			batchSize := 50
+			// Batch benchmark: gollama wrapper auto-flushes at n_batch
+			// and n_seq_max. With WithBatch(ctxSize), n_batch and
+			// n_ubatch both equal ctxSize. Each sequence gets up to
+			// n_ctx_seq = ctxSize/parallel tokens; wrapper truncates
+			// if exceeded. ~3 bytes/token for BERT WordPiece.
+			seqMax := *parallel
+			seqTokens := *ctxSize / seqMax
+			seqBytes := seqTokens * 3
 			start := time.Now()
-			var batchTotal int
-			for i := 0; i < len(chunks); i += batchSize {
-				end := min(i+batchSize, len(chunks))
-				vecs, err := lib.EmbedBatch(chunks[i:end])
+			var batchTotal, batchCount, skipped int
+			var batch []string
+			flushBatch := func() {
+				if len(batch) == 0 {
+					return
+				}
+				vecs, err := lib.EmbedBatch(batch)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "batch error at %d: %v\n", i, err)
+					fmt.Fprintf(os.Stderr, "batch error (%d items): %v\n", len(batch), err)
+				} else {
+					batchTotal += len(vecs)
+				}
+				batchCount++
+				batch = batch[:0]
+			}
+			for _, c := range chunks {
+				if len(c) > seqBytes {
+					skipped++
 					continue
 				}
-				batchTotal += len(vecs)
+				batch = append(batch, c)
+				if len(batch) >= seqMax {
+					flushBatch()
+				}
 			}
+			flushBatch()
 			batchElapsed := time.Since(start)
-			fmt.Printf("batch(%d): embedded %d chunks in %v (%.1f ms/chunk)\n",
-				batchSize, batchTotal, batchElapsed,
+			fmt.Printf("batch(%d): embedded %d chunks in %d dispatches, %v (%.1f ms/chunk)\n",
+				seqMax, batchTotal, batchCount, batchElapsed,
 				float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
+			if skipped > 0 {
+				fmt.Printf("           skipped %d chunks exceeding %d-byte seq limit\n", skipped, seqBytes)
+			}
 
-			// Single benchmark
+			// Single benchmark (same chunks that batch used)
 			start = time.Now()
 			var embedded int
 			for _, c := range chunks {
+				if len(c) > seqBytes {
+					continue
+				}
 				if _, err := lib.EmbedQuery(c); err != nil {
 					continue
 				}
