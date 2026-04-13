@@ -1036,6 +1036,7 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 
 	matcher := &Matcher{Dotfiles: true}
 	hasFilter := len(filterFiles) > 0 || len(excludeFiles) > 0
+	useContentLens := sizeFn == nil // nil sizeFn = use CRecord ContentLen (fast path)
 
 	// Collect sizes per strategy
 	stratSizes := make(map[string][]int)
@@ -1067,15 +1068,27 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 			}
 		}
 
-		chunks := db.AllChunks(s.Path)
-		if chunks == nil {
-			continue
+		var sizes []int
+		if useContentLens {
+			// Fast path: read ContentLen from C records, no disk I/O
+			lens, err := db.fts.ChunkContentLens(s.FileID)
+			if err != nil || len(lens) == 0 {
+				continue
+			}
+			sizes = lens
+		} else {
+			// Slow path: read content for tokenization
+			chunks := db.AllChunks(s.Path)
+			if chunks == nil {
+				continue
+			}
+			sizes = make([]int, len(chunks))
+			for i, c := range chunks {
+				sizes[i] = sizeFn(c.Content)
+			}
 		}
-		for _, c := range chunks {
-			size := sizeFn(c.Content)
-			allSizes = append(allSizes, size)
-			stratSizes[s.Strategy] = append(stratSizes[s.Strategy], size)
-		}
+		allSizes = append(allSizes, sizes...)
+		stratSizes[s.Strategy] = append(stratSizes[s.Strategy], sizes...)
 	}
 
 	if len(allSizes) == 0 {
@@ -1454,6 +1467,20 @@ func (db *DB) AllChunks(path string) []microfts2.ChunkResult {
 		return nil
 	}
 	return chunks
+}
+
+// ChunkSizes returns byte sizes for all chunks of a file from CRecord ContentLen.
+// No disk I/O — reads directly from the index. Returns nil if not indexed.
+func (db *DB) ChunkSizes(path string) []int {
+	info, err := db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return nil
+	}
+	lens, err := db.fts.ChunkContentLens(info.FileID)
+	if err != nil {
+		return nil
+	}
+	return lens
 }
 
 // IsIndexed returns true if the given file path is in the index.

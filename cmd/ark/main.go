@@ -1643,7 +1643,7 @@ func cmdStatus(args []string) {
 		ff := ark.ExpandTildeSlice([]string(filterFiles))
 		ef := ark.ExpandTildeSlice([]string(excludeFiles))
 
-		sizeFn := func(content string) int { return len(content) }
+		var sizeFn func(string) int // nil = use CRecord ContentLen (fast path)
 		unit := "bytes"
 		modelName := ""
 
@@ -1795,7 +1795,7 @@ func cmdFiles(args []string) {
 
 		files = filterPaths(matchBaseSet(files, ff, ef), patterns)
 
-		sizeFn := func(content string) int { return len(content) }
+		var tokenizeFn func(string) int
 		if *tokenize {
 			tagModel := d.Config().TagModel
 			if tagModel == "" {
@@ -1807,7 +1807,7 @@ func cmdFiles(args []string) {
 				fatal(err)
 			}
 			defer tok.Close()
-			sizeFn = tok.CountTokens
+			tokenizeFn = tok.CountTokens
 		}
 
 		// Compute column widths
@@ -1837,12 +1837,23 @@ func cmdFiles(args []string) {
 				if fi, err := os.Stat(f); err == nil {
 					fileBytes = fi.Size()
 				}
-				if chunks := d.AllChunks(f); chunks != nil {
-					chunkCount = len(chunks)
-					if *verbose {
-						sizes = make([]int, len(chunks))
-						for i, c := range chunks {
-							sizes[i] = sizeFn(c.Content)
+				if tokenizeFn != nil {
+					// Slow path: need content for tokenization
+					if chunks := d.AllChunks(f); chunks != nil {
+						chunkCount = len(chunks)
+						if *verbose {
+							sizes = make([]int, len(chunks))
+							for i, c := range chunks {
+								sizes[i] = tokenizeFn(c.Content)
+							}
+						}
+					}
+				} else {
+					// Fast path: CRecord ContentLen, no disk I/O
+					if lens := d.ChunkSizes(f); lens != nil {
+						chunkCount = len(lens)
+						if *verbose {
+							sizes = lens
 						}
 					}
 				}
