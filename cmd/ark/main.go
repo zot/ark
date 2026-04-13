@@ -1438,9 +1438,10 @@ Options:
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	noScan := fs.Bool("no-scan", false, "skip startup reconciliation")
+	force := fs.Bool("force", false, "accept config changes, clear error conditions")
 	fs.Parse(args)
 
-	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan})
+	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan, Force: *force})
 	if errors.Is(err, ark.ServerAlreadyRunning) {
 		fmt.Fprintln(os.Stderr, "ark server already running")
 		os.Exit(0)
@@ -1623,9 +1624,19 @@ func cmdStatus(args []string) {
 				}
 				printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
 			}
-			if !*showChunks {
-				return
+		}
+
+		// CRC: crc-CLI.md | R1565, R1566, R1567
+		eRecords, _ := d.Store().ReadERecords()
+		if len(eRecords) > 0 {
+			fmt.Println("warnings:")
+			for name, payload := range eRecords {
+				fmt.Printf("  %s: %s\n", name, string(payload))
 			}
+		}
+
+		if !*showChunks {
+			return
 		}
 
 		// Chunk stats
@@ -1902,10 +1913,37 @@ func cmdConfig(args []string) {
 		cmdConfigShowWhy(args[1:])
 	case "add-strategy":
 		cmdConfigAddStrategy(args[1:])
+	case "recover":
+		cmdConfigRecover(args[1:])
 	default:
 		// No sub-subcommand — treat as flags for "show"
 		cmdConfigShow(args)
 	}
+}
+
+// CRC: crc-CLI.md | R1569
+func cmdConfigRecover(args []string) {
+	fs := flag.NewFlagSet("config recover", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark config recover")
+		fmt.Fprintln(os.Stderr, "\nRecover ark.toml from stored config in database.")
+	}
+	fs.Parse(args)
+
+	withDB(func(d *ark.DB) {
+		stored, err := d.Store().ReadConfig()
+		if err != nil {
+			fatal(err)
+		}
+		if stored == nil {
+			fatal(fmt.Errorf("no stored config found in database"))
+		}
+		configPath := filepath.Join(arkDir, "ark.toml")
+		if err := stored.SaveConfig(configPath); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("recovered config written to %s\n", configPath)
+	})
 }
 
 func cmdConfigShow(args []string) {

@@ -39,11 +39,34 @@ type UnresolvedRecord struct {
 	Dir       string `json:"dir"`
 }
 
-// ArkSettings stores ark-level configuration in LMDB.
-type ArkSettings struct {
-	Dotfiles bool              `json:"dotfiles"`
-	Extra    map[string]string `json:"extra,omitempty"`
-}
+// I record field names — pseudo-enum for known config and operational fields.
+// CRC: crc-Store.md | R1532, R1533
+const (
+	IFieldDotfiles        = "dotfiles"
+	IFieldCaseInsensitive = "case_insensitive"
+	IFieldEmbedCmd        = "embed_cmd"
+	IFieldQueryCmd        = "query_cmd"
+	IFieldTagModel        = "tag_model"
+	IFieldGlobalInclude   = "global_include"
+	IFieldGlobalExclude   = "global_exclude"
+	IFieldStrategies      = "strategies"
+	IFieldSources         = "sources"
+	IFieldChunkers        = "chunkers"
+	IFieldSessionTTL      = "session_ttl"
+	IFieldSearchExclude   = "search_exclude"
+	IFieldSchedule        = "schedule"
+	// Operational fields
+	IFieldNextTvid       = "next_tvid"
+	IFieldScheduleConfig = "schedule_config"
+)
+
+// E record condition names.
+// CRC: crc-Store.md | R1546
+const (
+	ECondModelMismatch     = "model_mismatch"
+	ECondIndexStale        = "index_stale"
+	ECondConfigCatastrophe = "config_catastrophe"
+)
 
 // TagFileRecord is a per-file tag count returned by TagFiles.
 type TagFileRecord struct {
@@ -68,6 +91,7 @@ const (
 	prefixTagDef     = 'D'
 	prefixTagValue   = 'V'
 	prefixEmbedValue = "EV" // R1290: tag-value compound embeddings
+	prefixError      = 'E'  // R1543: persistent error conditions (E + name → JSON)
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -218,32 +242,257 @@ func (s *Store) ResolveByPattern(patterns []string, matcher *Matcher) error {
 	})
 }
 
-// GetSettings reads ark-level settings from the subdatabase.
-func (s *Store) GetSettings() (ArkSettings, error) {
-	var settings ArkSettings
+// --- I record helpers (per-field config storage) ---
+// CRC: crc-Store.md | R1537, R1538
+
+func makeIKey(name string) []byte {
+	key := make([]byte, 1+len(name))
+	key[0] = byte(prefixInfo)
+	copy(key[1:], name)
+	return key
+}
+
+// IGet reads a single I record string value. Returns "" if not found.
+func (s *Store) IGet(name string) (string, error) {
+	var val string
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		key := []byte{byte(prefixInfo)}
-		val, err := txn.Get(s.dbi, key)
+		v, err := txn.Get(s.dbi, makeIKey(name))
 		if err != nil {
 			return err
 		}
-		return json.Unmarshal(val, &settings)
+		val = string(v)
+		return nil
 	})
 	if lmdb.IsNotFound(err) {
-		return ArkSettings{Dotfiles: true}, nil
+		return "", nil
 	}
-	return settings, err
+	return val, err
 }
 
-// PutSettings writes ark-level settings to the subdatabase.
-func (s *Store) PutSettings(settings ArkSettings) error {
-	val, err := json.Marshal(settings)
+// IPut writes a single I record string value.
+func (s *Store) IPut(name, value string) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, makeIKey(name), []byte(value), 0)
+	})
+}
+
+// IDel deletes a single I record.
+func (s *Store) IDel(name string) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, makeIKey(name), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// IGetCounter reads a uint64 counter I record. Returns 0 if not found.
+func (s *Store) IGetCounter(name string) (uint64, error) {
+	var val uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, makeIKey(name))
+		if err != nil {
+			return err
+		}
+		val, _ = strconv.ParseUint(string(v), 10, 64)
+		return nil
+	})
+	if lmdb.IsNotFound(err) {
+		return 0, nil
+	}
+	return val, err
+}
+
+// WriteConfig writes all Config fields to per-name I records.
+// CRC: crc-Store.md | R1532, R1534, R1535, R1539
+func (s *Store) WriteConfig(cfg *Config) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		put := func(name, value string) error {
+			return txn.Put(s.dbi, makeIKey(name), []byte(value), 0)
+		}
+		putJSON := func(name string, v any) error {
+			data, err := json.Marshal(v)
+			if err != nil {
+				return err
+			}
+			return put(name, string(data))
+		}
+
+		if err := put(IFieldDotfiles, strconv.FormatBool(cfg.Dotfiles)); err != nil {
+			return err
+		}
+		if err := put(IFieldCaseInsensitive, strconv.FormatBool(cfg.CaseInsensitive)); err != nil {
+			return err
+		}
+		if err := put(IFieldEmbedCmd, cfg.EmbedCmd); err != nil {
+			return err
+		}
+		if err := put(IFieldQueryCmd, cfg.QueryCmd); err != nil {
+			return err
+		}
+		if err := put(IFieldTagModel, cfg.TagModel); err != nil {
+			return err
+		}
+		if err := put(IFieldSessionTTL, cfg.SessionTTL); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldGlobalInclude, cfg.GlobalInclude); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldGlobalExclude, cfg.GlobalExclude); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldStrategies, cfg.Strategies); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldSources, cfg.Sources); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldChunkers, cfg.Chunkers); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldSearchExclude, cfg.SearchExclude); err != nil {
+			return err
+		}
+		return putJSON(IFieldSchedule, cfg.Schedule)
+	})
+}
+
+// ReadConfig reads all known I record names and reconstructs a Config.
+// Returns nil if no I records exist (fresh DB before Init).
+// CRC: crc-Store.md | R1532, R1540
+func (s *Store) ReadConfig() (*Config, error) {
+	var cfg Config
+	found := false
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		get := func(name string) string {
+			v, err := txn.Get(s.dbi, makeIKey(name))
+			if err != nil {
+				return ""
+			}
+			found = true
+			return string(v)
+		}
+		getJSON := func(name string, dest any) {
+			v := get(name)
+			if v != "" {
+				json.Unmarshal([]byte(v), dest)
+			}
+		}
+
+		cfg.Dotfiles, _ = strconv.ParseBool(get(IFieldDotfiles))
+		cfg.CaseInsensitive, _ = strconv.ParseBool(get(IFieldCaseInsensitive))
+		cfg.EmbedCmd = get(IFieldEmbedCmd)
+		cfg.QueryCmd = get(IFieldQueryCmd)
+		cfg.TagModel = get(IFieldTagModel)
+		cfg.SessionTTL = get(IFieldSessionTTL)
+		getJSON(IFieldGlobalInclude, &cfg.GlobalInclude)
+		getJSON(IFieldGlobalExclude, &cfg.GlobalExclude)
+		getJSON(IFieldStrategies, &cfg.Strategies)
+		getJSON(IFieldSources, &cfg.Sources)
+		getJSON(IFieldChunkers, &cfg.Chunkers)
+		getJSON(IFieldSearchExclude, &cfg.SearchExclude)
+		getJSON(IFieldSchedule, &cfg.Schedule)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return &cfg, nil
+}
+
+// --- E record helpers (persistent error conditions) ---
+// CRC: crc-Store.md | R1543, R1544, R1545
+
+func makeEKey(name string) []byte {
+	// E prefix is shared with EV, so use "E:" + name to avoid collision
+	key := make([]byte, 2+len(name))
+	key[0] = byte(prefixError)
+	key[1] = ':'
+	copy(key[2:], name)
+	return key
+}
+
+// WriteERecord writes a persistent error condition.
+func (s *Store) WriteERecord(name string, payload any) error {
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	key := []byte{byte(prefixInfo)}
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, val, 0)
+		return txn.Put(s.dbi, makeEKey(name), data, 0)
+	})
+}
+
+// ReadERecords scans all E: prefix records.
+func (s *Store) ReadERecords() (map[string]json.RawMessage, error) {
+	result := make(map[string]json.RawMessage)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		cursor, err := txn.OpenCursor(s.dbi)
+		if err != nil {
+			return err
+		}
+		defer cursor.Close()
+
+		prefix := []byte{byte(prefixError), ':'}
+		k, v, err := cursor.Get(prefix, nil, lmdb.SetRange)
+		for err == nil {
+			if len(k) < 2 || k[0] != byte(prefixError) || k[1] != ':' {
+				break
+			}
+			name := string(k[2:])
+			cp := make([]byte, len(v))
+			copy(cp, v)
+			result[name] = json.RawMessage(cp)
+			k, v, err = cursor.Get(nil, nil, lmdb.Next)
+		}
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+	return result, err
+}
+
+// DeleteERecord removes one E record.
+func (s *Store) DeleteERecord(name string) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, makeEKey(name), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// ClearERecords deletes all E: prefix records.
+func (s *Store) ClearERecords() error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		cursor, err := txn.OpenCursor(s.dbi)
+		if err != nil {
+			return err
+		}
+		defer cursor.Close()
+
+		prefix := []byte{byte(prefixError), ':'}
+		k, _, err := cursor.Get(prefix, nil, lmdb.SetRange)
+		for err == nil {
+			if len(k) < 2 || k[0] != byte(prefixError) || k[1] != ':' {
+				break
+			}
+			if err := cursor.Del(0); err != nil {
+				return err
+			}
+			k, _, err = cursor.Get(nil, nil, lmdb.Next)
+		}
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
 	})
 }
 
@@ -1034,7 +1283,7 @@ func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) (m
 		}
 		if fullKey == nil {
 			// New (tag, value) pair — allocate tvid
-			tvid, err = s.allocIDInTxn(txn, nextTvidKey)
+			tvid, err = s.allocIDInTxn(txn, IFieldNextTvid)
 			if err != nil {
 				return nil, fmt.Errorf("alloc tvid: %w", err)
 			}
@@ -1147,31 +1396,16 @@ func AckCoversDate(acks []AckEntry, date time.Time) (bool, string) {
 	return false, ""
 }
 
-// scheduleConfigKey is the LMDB key for storing the [schedule] config hash.
-const scheduleConfigKey = "schedule_config"
-
-// GetScheduleConfig reads the stored [schedule] config string from settings.
-// CRC: crc-Store.md | R927, R928
+// GetScheduleConfig reads the stored [schedule] config string from I records.
+// CRC: crc-Store.md | R927, R928, R1572
 func (s *Store) GetScheduleConfig() (string, error) {
-	settings, err := s.GetSettings()
-	if err != nil {
-		return "", err
-	}
-	return settings.Extra[scheduleConfigKey], nil
+	return s.IGet(IFieldScheduleConfig)
 }
 
-// PutScheduleConfig writes the [schedule] config string to settings.
-// CRC: crc-Store.md | R927, R932
+// PutScheduleConfig writes the [schedule] config string to I records.
+// CRC: crc-Store.md | R927, R932, R1572
 func (s *Store) PutScheduleConfig(serialized string) error {
-	settings, err := s.GetSettings()
-	if err != nil {
-		return err
-	}
-	if settings.Extra == nil {
-		settings.Extra = make(map[string]string)
-	}
-	settings.Extra[scheduleConfigKey] = serialized
-	return s.PutSettings(settings)
+	return s.IPut(IFieldScheduleConfig, serialized)
 }
 
 // RecordCounts scans all keys in the ark subdatabase and returns
@@ -1205,52 +1439,35 @@ func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
 
 // --- Tag Value ID allocation (R1280-R1284) ---
 
-const nextTvidKey = "next_tvid"
-
 // AllocTagValueID atomically increments and returns the next tag-value-id.
-// CRC: crc-Store.md | R1280, R1282
+// CRC: crc-Store.md | R1280, R1282, R1536, R1572
 func (s *Store) AllocTagValueID() (uint64, error) {
-	return s.allocID(nextTvidKey)
+	return s.allocID(IFieldNextTvid)
 }
 
-func (s *Store) allocID(settingsKey string) (uint64, error) {
+func (s *Store) allocID(iFieldName string) (uint64, error) {
 	var id uint64
 	err := s.env.Update(func(txn *lmdb.Txn) error {
 		var err error
-		id, err = s.allocIDInTxn(txn, settingsKey)
+		id, err = s.allocIDInTxn(txn, iFieldName)
 		return err
 	})
 	return id, err
 }
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
-func (s *Store) allocIDInTxn(txn *lmdb.Txn, settingsKey string) (uint64, error) {
-	key := []byte{byte(prefixInfo)}
-	var settings ArkSettings
+func (s *Store) allocIDInTxn(txn *lmdb.Txn, iFieldName string) (uint64, error) {
+	key := makeIKey(iFieldName)
+	var id uint64
 	val, err := txn.Get(s.dbi, key)
 	if err != nil && !lmdb.IsNotFound(err) {
 		return 0, err
 	}
 	if val != nil {
-		if err := json.Unmarshal(val, &settings); err != nil {
-			return 0, err
-		}
-	}
-	idStr := settings.Extra[settingsKey]
-	var id uint64
-	if idStr != "" {
-		id, _ = strconv.ParseUint(idStr, 10, 64)
+		id, _ = strconv.ParseUint(string(val), 10, 64)
 	}
 	id++
-	if settings.Extra == nil {
-		settings.Extra = make(map[string]string)
-	}
-	settings.Extra[settingsKey] = strconv.FormatUint(id, 10)
-	newVal, err := json.Marshal(settings)
-	if err != nil {
-		return 0, err
-	}
-	if err := txn.Put(s.dbi, key, newVal, 0); err != nil {
+	if err := txn.Put(s.dbi, key, []byte(strconv.FormatUint(id, 10)), 0); err != nil {
 		return 0, err
 	}
 	return id, nil

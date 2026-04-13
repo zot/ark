@@ -2389,3 +2389,74 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1529:** Create a minimal llama context (small `n_ctx`, no `WithEmbeddings()`) for tokenization only — no KV cache or embedding overhead.
 - **R1530:** Use the `tag_model` path from ark.toml as the model path.
 - **R1531:** `--tokenize` without a configured `tag_model`: print error and exit.
+
+## Feature: config-tracking
+**Source:** specs/config-tracking.md
+
+### I Records: Config Storage
+
+- **R1532:** Each Config struct field is stored as a separate I record with key `I` + field name.
+- **R1533:** Known I record names are Go string constants (pseudo-enum).
+- **R1534:** Scalar config fields (dotfiles, case_insensitive, etc.) store their string representation as the I record value.
+- **R1535:** Compound config fields (sources, chunkers, global_include, etc.) store JSON as the I record value.
+- **R1536:** Operational fields (next_tvid counter, etc.) also use I records, same key format.
+- **R1537:** `makeIKey(name)` builds the LMDB key: `I` prefix byte + name bytes. Same pattern as microfts2.
+- **R1538:** `iGet`/`iPut`/`iDel` helpers for string values. `iGetCounter`/`iSetCounter` for uint64 counters.
+
+### I Record Lifecycle
+
+- **R1539:** Init writes all config fields from ark.toml to I records.
+- **R1540:** Open reads I records and diffs against loaded ark.toml. Classifies changes by field.
+- **R1541:** Config mutations (`ark config add-source`, etc.) write ark.toml. The next Open or watcher reload diffs and updates I records.
+- **R1542:** Rebuild clears all I and E records, writes fresh config from ark.toml.
+
+### E Records: Error Conditions
+
+- **R1543:** E records use key `E` + condition name → JSON payload.
+- **R1544:** E records persist across restarts and are surfaced in `ark status`.
+- **R1545:** E records are auto-cleared when the condition resolves (config changed back, rebuild, or manual fix).
+- **R1546:** Known E conditions: `model_mismatch`, `index_stale`, `config_catastrophe`.
+- **R1547:** `model_mismatch` payload: `{"stored":"old_model","current":"new_model"}`.
+- **R1548:** `index_stale` payload: names the changed field (case_insensitive, chunkers).
+- **R1549:** `config_catastrophe` payload: stored config summary for recovery.
+
+### Change Classification
+
+- **R1550:** `case_insensitive` change is classified as deferred (option 1).
+- **R1551:** `chunkers` change is classified as deferred (option 1).
+- **R1552:** All sources removed is classified as deferred (option 1) — likely accidental config wipe.
+- **R1553:** `tag_model` change is classified as fix-minimal (option 2): delete all T vector and EV embedding records, update I record to new model.
+- **R1554:** `sources` add/remove, `global_include`/`global_exclude`, `dotfiles`, `search_exclude`, `session_ttl`, `schedule`, `strategies`, `embed_cmd`/`query_cmd` are classified as benign.
+- **R1555:** Benign changes update I records immediately and proceed normally.
+
+### Startup Behavior
+
+- **R1556:** On `ark serve` startup, load ark.toml and diff against stored I records.
+- **R1557:** If deferred changes or unresolved E records are detected, error out with diagnostic showing stored vs current values. Suggest `ark rebuild` or `--force`.
+- **R1558:** `--force` on `ark serve` clears E records, accepts current config, updates all I records, applies fix-minimal where applicable.
+- **R1559:** Fix-minimal changes at startup: apply fix, update I records, log warning, proceed.
+- **R1560:** Benign changes at startup: update I records silently, proceed.
+
+### Runtime Behavior (Watcher Reload)
+
+- **R1561:** On watcher config reload, diff new config against I records.
+- **R1562:** Deferred changes at runtime: write E record, log error, keep running with stored config for those fields.
+- **R1563:** Fix-minimal changes at runtime: apply fix, update I records, log warning.
+- **R1564:** Benign changes at runtime: update I records, proceed.
+
+### Status Display
+
+- **R1565:** `ark status` prints E record conditions after normal output under a "warnings:" header.
+- **R1566:** Each E record condition prints its name, a human-readable description, and remediation advice.
+- **R1567:** When no E records exist, nothing extra is printed.
+
+### Recovery
+
+- **R1568:** `ark rebuild` clears all E records (database is recreated with fresh I records from ark.toml).
+- **R1569:** `ark config recover` (new command) reads stored config from I records and writes ark.toml. Disaster recovery for corrupted/missing config.
+
+### ArkSettings Removal
+
+- **R1570:** The old `ArkSettings` struct and single-blob I record format are removed.
+- **R1571:** `GetSettings`/`PutSettings` are replaced by per-field `iGet`/`iPut` calls.
+- **R1572:** The `Extra` map entries (schedule config, ID counters) become their own I record keys.

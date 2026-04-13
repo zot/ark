@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 microvec, and the ark subdatabase. Entry point for all operations.
@@ -29,10 +29,19 @@ operations complete) document this on the API. (R986, R993, R995)
   func strategies (lines, chat-jsonl, markdown), register chunker
   strategies from ark.toml [[chunker]] entries, create starter tags.md.
   Seed ark.toml from install/ark.toml via BundleReadFile if not present.
+  Write full config to I records via Store.WriteConfig. (R1539)
 - Open(path): open existing database — same sequence, read config.
   Registers func strategies (lines, chat-jsonl, markdown). Registers
   chunker strategies from ark.toml [[chunker]] entries. Passes store
-  to Indexer for tag tracking.
+  to Indexer for tag tracking. Diffs loaded config against stored I
+  records via DiffConfig. (R1540)
+- DiffConfig(loaded, stored *Config) []ConfigChange: compare each field,
+  return list of changes with field name, classification (defer,
+  fix-minimal, benign), and old/new values. (R1540, R1550-R1555)
+- ApplyConfigChanges(changes []ConfigChange): process classified changes.
+  Benign: update I records. Fix-minimal: apply fix (e.g. drop embeddings
+  for tag_model), update I record. Deferred: write E record, do not
+  update I record. (R1553, R1554, R1555)
 - registerChunkers(cfg): iterate cfg.Chunkers, construct BracketLang
   from TOML fields, call AddChunker with BracketChunker or IndentChunker
   based on type field. Warn and skip on invalid configs.

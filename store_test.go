@@ -187,18 +187,80 @@ func TestResolveByPattern(t *testing.T) {
 	}
 }
 
-func TestSettingsRoundTrip(t *testing.T) {
+func TestConfigRoundTrip(t *testing.T) {
 	s := testStore(t)
-	settings := ArkSettings{Dotfiles: true}
-	if err := s.PutSettings(settings); err != nil {
+	cfg := &Config{Dotfiles: true, TagModel: "nomic.gguf"}
+	if err := s.WriteConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.GetSettings()
+	got, err := s.ReadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got == nil {
+		t.Fatal("ReadConfig returned nil")
+	}
 	if got.Dotfiles != true {
 		t.Error("expected dotfiles=true")
+	}
+	if got.TagModel != "nomic.gguf" {
+		t.Errorf("expected tag_model=nomic.gguf, got %q", got.TagModel)
+	}
+}
+
+func TestIRecordRoundTrip(t *testing.T) {
+	s := testStore(t)
+	if err := s.IPut("test_key", "test_value"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.IGet("test_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "test_value" {
+		t.Errorf("expected test_value, got %q", got)
+	}
+
+	// Delete
+	if err := s.IDel("test_key"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.IGet("test_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("expected empty after delete, got %q", got)
+	}
+}
+
+func TestERecordRoundTrip(t *testing.T) {
+	s := testStore(t)
+	payload := map[string]string{"stored": "old", "current": "new"}
+	if err := s.WriteERecord("model_mismatch", payload); err != nil {
+		t.Fatal(err)
+	}
+	records, err := s.ReadERecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 E record, got %d", len(records))
+	}
+	if _, ok := records["model_mismatch"]; !ok {
+		t.Error("expected model_mismatch E record")
+	}
+
+	// Clear
+	if err := s.ClearERecords(); err != nil {
+		t.Fatal(err)
+	}
+	records, err = s.ReadERecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Errorf("expected 0 E records after clear, got %d", len(records))
 	}
 }
 

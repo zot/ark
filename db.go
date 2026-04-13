@@ -148,11 +148,6 @@ func Init(dbPath string, opts InitOpts) error {
 		}
 	}
 
-	// Write default settings
-	if err := store.PutSettings(ArkSettings{Dotfiles: true}); err != nil {
-		return fmt.Errorf("write settings: %w", err)
-	}
-
 	// Write default config only if none exists (configPath declared above for seeding)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if err := WriteDefaultConfig(configPath, opts.ConfigSeed); err != nil {
@@ -168,6 +163,16 @@ func Init(dbPath string, opts InitOpts) error {
 				return fmt.Errorf("write tags.md: %w", err)
 			}
 		}
+	}
+
+	// CRC: crc-DB.md | R1539
+	// Write full config to I records
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load config for I records: %w", err)
+	}
+	if err := store.WriteConfig(cfg); err != nil {
+		return fmt.Errorf("write config I records: %w", err)
 	}
 
 	return nil
@@ -226,15 +231,7 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("open ark store: %w", err)
 	}
 
-	// Read settings for matcher config
-	settings, err := store.GetSettings()
-	if err != nil {
-		vec.Close()
-		fts.Close()
-		return nil, fmt.Errorf("read settings: %w", err)
-	}
-
-	matcher := &Matcher{Dotfiles: settings.Dotfiles}
+	matcher := &Matcher{Dotfiles: config.Dotfiles}
 
 	// CRC: crc-DB.md | R382
 	// Register built-in func strategies (must happen on every Open,
@@ -460,7 +457,9 @@ func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") 
 // SaveConfig writes the current config to disk and re-validates.
 func (db *DB) SaveConfig() error { return db.config.SaveConfig(db.ConfigPath()) }
 
-// ReloadConfig re-reads ark.toml from disk and propagates to components.
+// ReloadConfig re-reads ark.toml from disk, diffs against stored I records,
+// applies changes, and propagates to components.
+// CRC: crc-DB.md | R1561, R1562, R1563, R1564
 func (db *DB) ReloadConfig() error {
 	cfg, err := LoadConfig(db.ConfigPath())
 	if err != nil {
@@ -472,6 +471,25 @@ func (db *DB) ReloadConfig() error {
 	db.search.config = cfg
 	db.indexer.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
+
+	// Diff and apply config changes
+	changes, err := db.DiffConfig()
+	if err != nil {
+		log.Printf("config diff on reload: %v", err)
+		return nil
+	}
+	if len(changes) > 0 {
+		deferred := db.ApplyConfigChanges(changes)
+		for _, c := range deferred {
+			log.Printf("ERROR: config change deferred — %s: %q → %q (restart required)",
+				c.Field, c.OldValue, c.NewValue)
+			db.store.WriteERecord(ECondIndexStale, map[string]string{
+				"field":   c.Field,
+				"stored":  c.OldValue,
+				"current": c.NewValue,
+			})
+		}
+	}
 	return nil
 }
 
@@ -870,6 +888,120 @@ func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microft
 // QueryTrigramCounts returns trigram counts for a query string.
 func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
 	return db.fts.QueryTrigramCounts(query)
+}
+
+// ConfigChangeAction classifies how a config field change is handled.
+// CRC: crc-DB.md | R1550, R1551, R1552, R1553, R1554, R1555
+type ConfigChangeAction int
+
+const (
+	ActionBenign     ConfigChangeAction = iota // update I records, proceed
+	ActionDefer                                // write E record, defer to restart
+	ActionFixMinimal                           // apply targeted fix, update I records
+)
+
+// ConfigChange describes one changed config field.
+type ConfigChange struct {
+	Field    string
+	Action   ConfigChangeAction
+	OldValue string
+	NewValue string
+}
+
+// classifyField returns the action for a changed config field.
+func classifyField(field string) ConfigChangeAction {
+	switch field {
+	case IFieldCaseInsensitive, IFieldChunkers:
+		return ActionDefer
+	case IFieldTagModel:
+		return ActionFixMinimal
+	default:
+		return ActionBenign
+	}
+}
+
+// DiffConfig compares loaded config against stored I records.
+// Returns nil if no stored config exists (first run after rebuild).
+// CRC: crc-DB.md | R1540, R1550-R1555
+func (db *DB) DiffConfig() ([]ConfigChange, error) {
+	stored, err := db.store.ReadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		// No stored config — first run, write current config
+		return nil, db.store.WriteConfig(db.config)
+	}
+
+	var changes []ConfigChange
+	check := func(field, oldVal, newVal string) {
+		if oldVal != newVal {
+			changes = append(changes, ConfigChange{
+				Field:    field,
+				Action:   classifyField(field),
+				OldValue: oldVal,
+				NewValue: newVal,
+			})
+		}
+	}
+	checkJSON := func(field string, oldVal, newVal any) {
+		oldJSON, _ := json.Marshal(oldVal)
+		newJSON, _ := json.Marshal(newVal)
+		if string(oldJSON) != string(newJSON) {
+			changes = append(changes, ConfigChange{
+				Field:    field,
+				Action:   classifyField(field),
+				OldValue: string(oldJSON),
+				NewValue: string(newJSON),
+			})
+		}
+	}
+
+	check(IFieldDotfiles, strconv.FormatBool(stored.Dotfiles), strconv.FormatBool(db.config.Dotfiles))
+	check(IFieldCaseInsensitive, strconv.FormatBool(stored.CaseInsensitive), strconv.FormatBool(db.config.CaseInsensitive))
+	check(IFieldEmbedCmd, stored.EmbedCmd, db.config.EmbedCmd)
+	check(IFieldQueryCmd, stored.QueryCmd, db.config.QueryCmd)
+	check(IFieldTagModel, stored.TagModel, db.config.TagModel)
+	check(IFieldSessionTTL, stored.SessionTTL, db.config.SessionTTL)
+	checkJSON(IFieldGlobalInclude, stored.GlobalInclude, db.config.GlobalInclude)
+	checkJSON(IFieldGlobalExclude, stored.GlobalExclude, db.config.GlobalExclude)
+	checkJSON(IFieldStrategies, stored.Strategies, db.config.Strategies)
+	checkJSON(IFieldSources, stored.Sources, db.config.Sources)
+	checkJSON(IFieldChunkers, stored.Chunkers, db.config.Chunkers)
+	checkJSON(IFieldSearchExclude, stored.SearchExclude, db.config.SearchExclude)
+	checkJSON(IFieldSchedule, stored.Schedule, db.config.Schedule)
+
+	// Check for catastrophe: all sources gone
+	if len(stored.Sources) > 0 && len(db.config.Sources) == 0 {
+		changes = append(changes, ConfigChange{
+			Field:  "sources_catastrophe",
+			Action: ActionDefer,
+		})
+	}
+
+	return changes, nil
+}
+
+// ApplyConfigChanges processes classified changes.
+// Returns deferred changes (caller decides how to handle).
+// CRC: crc-DB.md | R1553, R1554, R1555
+func (db *DB) ApplyConfigChanges(changes []ConfigChange) []ConfigChange {
+	var deferred []ConfigChange
+	for _, c := range changes {
+		switch c.Action {
+		case ActionBenign:
+			db.store.IPut(c.Field, c.NewValue)
+		case ActionFixMinimal:
+			if c.Field == IFieldTagModel {
+				log.Printf("config: tag_model changed from %q to %q — dropping embeddings", c.OldValue, c.NewValue)
+				db.store.DropEmbeddings()
+				db.store.IPut(c.Field, c.NewValue)
+			}
+		case ActionDefer:
+			deferred = append(deferred, c)
+		}
+	}
+	return deferred
 }
 
 // ChunkStatsRow holds statistics for one strategy (or "all").

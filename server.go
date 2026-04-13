@@ -62,7 +62,8 @@ type Server struct {
 // ServeOpts controls server behavior.
 type ServeOpts struct {
 	NoScan    bool
-	Verbosity int // R735: verbose level (0–4)
+	Verbosity int  // R735: verbose level (0–4)
+	Force     bool // R1558: accept config changes, clear E records
 }
 
 // ServerAlreadyRunning is returned when `ark serve` finds an existing server.
@@ -136,6 +137,53 @@ func Serve(dbPath string, opts ServeOpts) error {
 	if err != nil {
 		listener.Close()
 		return fmt.Errorf("open database: %w", err)
+	}
+
+	// CRC: crc-Server.md | R1556, R1557, R1558, R1559, R1560
+	// Config tracking: diff loaded config against stored I records
+	changes, err := db.DiffConfig()
+	if err != nil {
+		log.Printf("config diff: %v", err)
+	}
+	if len(changes) > 0 {
+		deferred := db.ApplyConfigChanges(changes)
+		if len(deferred) > 0 {
+			// Check for existing E records too
+			eRecords, _ := db.store.ReadERecords()
+			if !opts.Force {
+				listener.Close()
+				db.Close()
+				msg := "config changes require --force or ark rebuild:\n"
+				for _, c := range deferred {
+					msg += fmt.Sprintf("  %s: %q → %q\n", c.Field, c.OldValue, c.NewValue)
+				}
+				for name := range eRecords {
+					msg += fmt.Sprintf("  unresolved: %s\n", name)
+				}
+				return errors.New(msg)
+			}
+			// --force: accept all changes, clear E records
+			log.Printf("--force: accepting deferred config changes")
+			for _, c := range deferred {
+				db.store.IPut(c.Field, c.NewValue)
+			}
+			db.store.ClearERecords()
+		}
+	} else {
+		// No config changes — check for leftover E records
+		eRecords, _ := db.store.ReadERecords()
+		if len(eRecords) > 0 && !opts.Force {
+			listener.Close()
+			db.Close()
+			msg := "unresolved error conditions (use --force or ark rebuild):\n"
+			for name, payload := range eRecords {
+				msg += fmt.Sprintf("  %s: %s\n", name, string(payload))
+			}
+			return errors.New(msg)
+		}
+		if opts.Force && len(eRecords) > 0 {
+			db.store.ClearERecords()
+		}
 	}
 
 	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)

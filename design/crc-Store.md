@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -19,8 +19,19 @@ ark-level settings, and tag tracking.
 - CleanUnresolved(): remove entries for files no longer on disk
 - DismissByPattern(patterns): remove missing records matching patterns
 - ResolveByPattern(patterns): remove unresolved records matching patterns
-- GetSettings(): read ark settings (I key)
-- PutSettings(settings): write ark settings
+- iGet(name): read a single I record string value. Returns "" if not found. (R1537, R1538)
+- iPut(name, value): write a single I record string value. (R1537, R1538)
+- iDel(name): delete a single I record. (R1537)
+- iGetCounter(name): read a uint64 counter I record. Returns 0 if not found. (R1538)
+- iSetCounter(name, value): write a uint64 counter I record. (R1538)
+- WriteConfig(cfg *Config): write all Config fields to per-name I records.
+  Scalars as strings, compounds as JSON. (R1532, R1534, R1535, R1539)
+- ReadConfig(): read all known I record names, reconstruct a Config struct.
+  Returns nil if no I records exist (fresh DB). (R1532, R1540)
+- WriteERecord(name string, payload any): write E + name → JSON payload. (R1543)
+- ReadERecords(): scan E prefix, return map[name]json.RawMessage. (R1544)
+- DeleteERecord(name string): remove one E record. (R1545)
+- ClearERecords(): delete all E prefix records. (R1542, R1545)
 - UpdateTags(fileid, tags): replace all F records for fileid, recompute T totals.
   tags is map[string]uint32 (tagname → count in file).
   Within one LMDB txn: delete old F records for fileid, write new F records,
@@ -56,10 +67,10 @@ ark-level settings, and tag tracking.
   acks []AckEntry): same as WriteDayBuckets but cross-references
   ack entries against event dates, setting Acked/AckText on matching
   DayBucketEvents before writing. (R933, R934, R935)
-- GetScheduleConfig() string: read stored [schedule] section from
-  settings record (I prefix). (R927, R928)
-- PutScheduleConfig(serialized string): write [schedule] section to
-  settings record. (R927, R932)
+- GetScheduleConfig() string: read stored schedule config from
+  I record "schedule_config". (R927, R928, R1572)
+- PutScheduleConfig(serialized string): write schedule config to
+  I record "schedule_config". (R927, R932, R1572)
 - RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
   return map[byte]int64. Single LMDB View transaction. (R907)
 - UpdateTagValues(fileid, values []TagValue): replace V records for
@@ -119,7 +130,7 @@ ark-level settings, and tag tracking.
 
 ### Tag Value ID Allocation (R1280-R1284)
 - AllocTagValueID() uint64: atomically increment and return the
-  next tag-value-id from `I` prefix (`next_tvid` setting).
+  next tag-value-id from I record "next_tvid" counter. (R1536, R1572)
 
 ### Embedding Records (R1289-R1294)
 - WriteTagNameEmbedding(tag string, vec []float32): append embedding
