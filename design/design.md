@@ -158,9 +158,11 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
 - [x] crc-Librarian.md → `librarian.go`
+- [x] crc-PDFChunker.md → `pdfchunker.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 - [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
+- [x] seq-pdf-chunk.md → `pdfchunker.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`

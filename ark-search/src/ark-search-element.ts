@@ -48,7 +48,7 @@ interface SourceToggle {
   active: boolean;
 }
 
-const SEARCH_MODES = ["tag", "contains", "fuzzy", "regex"] as const;
+const SEARCH_MODES = ["contains", "fuzzy", "regex", "tag"] as const;
 type SearchMode = (typeof SEARCH_MODES)[number];
 const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files"];
 const TAG_MATCH_LABELS: Record<TagMatchMode, string> = { exact: "Aa", regex: ".*", fuzzy: "~" };
@@ -140,7 +140,7 @@ export class ArkSearchElement extends HTMLElement {
   private queryInput!: HTMLInputElement;
   private modeSelect!: HTMLSelectElement;
   private barInputs!: HTMLElement;
-  private _searchMode: SearchMode = "tag";
+  private _searchMode: SearchMode = "contains";
 
   // Base tag mode state (when _searchMode === "tag")
   private _baseTagName = "";

@@ -10,14 +10,18 @@ GOLLAMA_DIR ?= ../gollama
 
 CACHE_DIR := cache
 
-.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor
+.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search
 
 # Default: deps, cache, build+bundle
-all: cache markdown-editor build
+all: cache markdown-editor ark-search build
 
 # Build markdown editor JS bundle
 markdown-editor:
 	@$(MAKE) -C markdown-editor build
+
+# Build ark-search element JS bundle + CSS
+ark-search:
+	@$(MAKE) -C ark-search build
 
 # Build Go binary and graft cached assets
 build: gollama
@@ -78,6 +82,7 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	@echo "Layering markdown editor and content templates..."
 	@mkdir -p $(CACHE_DIR)/html
 	@if [ -d markdown-editor/dist ]; then cp markdown-editor/dist/* $(CACHE_DIR)/html/; fi
+	@if [ -d ark-search/dist ]; then cp ark-search/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"

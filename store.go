@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"slices"
@@ -1823,6 +1824,7 @@ func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 
 // RemoveFileChunkEmbeddings deletes all EC records for a file and its EF centroid. R1607
 func (s *Store) RemoveFileChunkEmbeddings(fileID uint64) error {
+	log.Printf("librarian: removing EC records for fileID=%d", fileID)
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		// EC records keyed by fileID prefix
 		prefix := []byte(prefixEmbedChunk)

@@ -5,6 +5,7 @@ package ark
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -297,6 +298,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /refresh", srv.handleRefresh)
 	mux.HandleFunc("GET /status", srv.handleStatus)
 	mux.HandleFunc("GET /files", srv.handleFiles)
+	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
 	mux.HandleFunc("GET /stale", srv.handleStale)
 	mux.HandleFunc("GET /missing", srv.handleMissing)
 	mux.HandleFunc("POST /dismiss", srv.handleDismiss)
@@ -599,7 +601,17 @@ type searchRequest struct {
 type tmpRequest struct {
 	Path     string `json:"path"`
 	Strategy string `json:"strategy,omitempty"`
-	Content  string `json:"content,omitempty"` // base64 or raw text
+	Content  string `json:"content,omitempty"`
+	Encoding string `json:"encoding,omitempty"` // "base64" for binary content
+}
+
+// contentBytes returns the decoded content. If Encoding is "base64",
+// the content is base64-decoded; otherwise returned as raw bytes.
+func (r *tmpRequest) contentBytes() ([]byte, error) {
+	if r.Encoding == "base64" {
+		return base64.StdEncoding.DecodeString(r.Content)
+	}
+	return []byte(r.Content), nil
 }
 
 type addRequest struct {
@@ -900,6 +912,167 @@ func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, files)
+}
+
+// fileStatusEntry is the JSON response for /files/status.
+type fileStatusEntry struct {
+	Path       string `json:"path"`
+	Status     string `json:"status"` // G=good, S=stale, M=missing, T=tmp
+	Bytes      int64  `json:"bytes"`
+	ChunkCount int    `json:"chunk_count"`
+	ChunkSizes []int  `json:"chunk_sizes,omitempty"`
+}
+
+// chunkEntry is the JSON response for /files/chunks.
+type chunkEntry struct {
+	Path     string `json:"path"`
+	Location string `json:"location"`
+	Size     int    `json:"size"`
+}
+
+func (srv *Server) handleFilesStatus(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Patterns []string `json:"patterns"`
+		Chunks   bool     `json:"chunks"` // if true, return per-chunk detail instead
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Chunks {
+		srv.handleFilesChunks(w, req.Patterns)
+		return
+	}
+
+	type result struct {
+		entries []fileStatusEntry
+		err     error
+	}
+	res, err := Sync(srv.db, func(db *DB) ([]fileStatusEntry, error) {
+		files, err := db.Files()
+		if err != nil {
+			return nil, err
+		}
+		staleList, _ := db.Stale()
+		missingList, _ := db.Missing()
+		staleSet := make(map[string]bool, len(staleList))
+		for _, s := range staleList {
+			staleSet[s] = true
+		}
+		missingSet := make(map[string]bool, len(missingList))
+		for _, m := range missingList {
+			missingSet[m.Path] = true
+		}
+
+		// Build tmp lookup
+		tmpInfos := make(map[string]microfts2.TmpFileInfo)
+		for _, ti := range db.fts.TmpFileInfos() {
+			tmpInfos[ti.Path] = ti
+		}
+
+		var entries []fileStatusEntry
+		for _, f := range files {
+			if len(req.Patterns) > 0 && !matchAny(f, req.Patterns) {
+				continue
+			}
+			if ti, ok := tmpInfos[f]; ok {
+				entries = append(entries, fileStatusEntry{
+					Path:       ti.Path,
+					Status:     "T",
+					Bytes:      int64(ti.ContentLen),
+					ChunkCount: ti.ChunkCount,
+					ChunkSizes: ti.ChunkSizes,
+				})
+				continue
+			}
+			status := "G"
+			if missingSet[f] {
+				status = "M"
+			} else if staleSet[f] {
+				status = "S"
+			}
+			var fileBytes int64
+			if fi, err := os.Stat(f); err == nil {
+				fileBytes = fi.Size()
+			}
+			sizes := db.ChunkSizes(f)
+			entries = append(entries, fileStatusEntry{
+				Path:       f,
+				Status:     status,
+				Bytes:      fileBytes,
+				ChunkCount: len(sizes),
+				ChunkSizes: sizes,
+			})
+		}
+		return entries, nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, res)
+}
+
+func (srv *Server) handleFilesChunks(w http.ResponseWriter, patterns []string) {
+	res, err := Sync(srv.db, func(db *DB) ([]chunkEntry, error) {
+		files, err := db.Files()
+		if err != nil {
+			return nil, err
+		}
+		// Build tmp lookup for fast path
+		tmpInfos := make(map[string]microfts2.TmpFileInfo)
+		for _, ti := range db.fts.TmpFileInfos() {
+			tmpInfos[ti.Path] = ti
+		}
+
+		var entries []chunkEntry
+		for _, f := range files {
+			if len(patterns) > 0 && !matchAny(f, patterns) {
+				continue
+			}
+			// tmp files: use overlay info directly
+			if ti, ok := tmpInfos[f]; ok {
+				for _, ci := range ti.Chunks {
+					entries = append(entries, chunkEntry{Path: f, Location: ci.Location, Size: ci.Size})
+				}
+				continue
+			}
+			// persistent files: use FTS index
+			info, err := db.fts.CheckFile(f)
+			if err != nil || info.FileID == 0 {
+				continue
+			}
+			finfo, err := db.fts.FileInfoByID(info.FileID)
+			if err != nil {
+				continue
+			}
+			lens, err := db.fts.ChunkContentLens(info.FileID)
+			if err != nil {
+				continue
+			}
+			for i, fce := range finfo.Chunks {
+				sz := 0
+				if i < len(lens) {
+					sz = lens[i]
+				}
+				entries = append(entries, chunkEntry{Path: f, Location: fce.Location, Size: sz})
+			}
+		}
+		return entries, nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, res)
+}
+
+// matchAny checks if path matches any of the patterns (glob or substring).
+func matchAny(path string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.Contains(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (srv *Server) handleStale(w http.ResponseWriter, r *http.Request) {
@@ -1225,14 +1398,20 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = "lines"
 	}
+	content, err := req.contentBytes()
+	if err != nil {
+		http.Error(w, "invalid base64 content: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("tmp add: path=%s encoding=%q content_len=%d raw_len=%d", req.Path, req.Encoding, len(content), len(req.Content))
 	fid, err := Sync(srv.db, func(db *DB) (uint64, error) {
-		return db.AddTmpFile(req.Path, strategy, []byte(req.Content))
+		return db.AddTmpFile(req.Path, strategy, content)
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	tagValues := ExtractTagValues([]byte(req.Content), strategy)
+	tagValues := ExtractTagValues(content, strategy)
 	if srv.pubsub != nil {
 		srv.pubsub.PublishAndWatch("", req.Path, tagValues)
 	}
@@ -1268,14 +1447,19 @@ func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = "lines"
 	}
+	content, err := req.contentBytes()
+	if err != nil {
+		http.Error(w, "invalid base64 content: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := SyncVoid(srv.db, func(db *DB) error {
-		return db.UpdateTmpFile(req.Path, strategy, []byte(req.Content))
+		return db.UpdateTmpFile(req.Path, strategy, content)
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content), strategy))
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues(content, strategy))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1309,11 +1493,7 @@ func (srv *Server) handleTmpList(w http.ResponseWriter, r *http.Request) {
 // handleTmpAppend appends content to a tmp:// document (creating it if needed).
 // CRC: crc-Server.md | Seq: seq-pubsub.md
 func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path     string `json:"path"`
-		Strategy string `json:"strategy"`
-		Content  string `json:"content"`
-	}
+	var req tmpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1325,15 +1505,20 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 	if req.Strategy == "" {
 		req.Strategy = "markdown"
 	}
+	content, err := req.contentBytes()
+	if err != nil {
+		http.Error(w, "invalid base64 content: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := SyncVoid(srv.db, func(db *DB) error {
-		_, err := db.AppendTmpFile(req.Path, req.Strategy, []byte(req.Content))
+		_, err := db.AppendTmpFile(req.Path, req.Strategy, content)
 		return err
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues([]byte(req.Content), req.Strategy))
+		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues(content, req.Strategy))
 	}
 	w.WriteHeader(http.StatusOK)
 }

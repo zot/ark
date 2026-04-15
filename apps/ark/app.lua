@@ -216,20 +216,6 @@ Ark.Searching = session:prototype("Ark.Searching", {
     _dbPath = DB_PATH,
     _serverRunning = false,
     _statusCounts = EMPTY,
-    -- Search
-    searchQuery = "",
-    searchMode = "contains",
-    _searchGroups = EMPTY,
-    _searching = false,
-    _searchView = false,
-    _lastSearchedQuery = "",
-    _hitsPerFile = "1",
-    -- Filter panel
-    _showFilterPanel = false,
-    filterFiles = "",
-    excludeFiles = "",
-    filterContent = "",
-    excludeContent = "",
     -- Display grouping
     _displayItems = EMPTY,
     _projects = EMPTY,
@@ -262,99 +248,6 @@ Ark.Source = session:prototype("Ark.Source", {
     _patternError = "",
 })
 local Source = Ark.Source
-
-Ark.SearchFileGroup = session:prototype("Ark.SearchFileGroup", {
-    path = "",
-    _chunks = EMPTY,
-    _expanded = false,
-    topScore = 0,
-    _rank = 0,
-})
-local SearchFileGroup = Ark.SearchFileGroup
-
-function SearchFileGroup:displayPath()
-    return compressPath(self.path)
-end
-
-function SearchFileGroup:scoreText()
-    if self.topScore == 0 then return "" end
-    return string.format("%.2f", self.topScore)
-end
-
-function SearchFileGroup:chunkCountText()
-    local n = self._chunks and #self._chunks or 0
-    if n <= 1 then return "" end
-    if self._expanded then return "" end
-    return "+" .. tostring(n - 1) .. " more"
-end
-
-function SearchFileGroup:visibleChunks()
-    if not self._chunks or #self._chunks == 0 then return {} end
-    if self._expanded then return self._chunks end
-    return { self._chunks[1] }
-end
-
-function SearchFileGroup:toggleExpand()
-    self._expanded = not self._expanded
-end
-
-function SearchFileGroup:expandIcon()
-    if not self._chunks or #self._chunks <= 1 then return "dot" end
-    if self._expanded then return "chevron-down" end
-    return "chevron-right"
-end
-
-function SearchFileGroup:isExpandable()
-    return self._chunks and #self._chunks > 1
-end
-
-function SearchFileGroup:notExpandable()
-    return not self:isExpandable()
-end
-
-Ark.SearchResult = session:prototype("Ark.SearchResult", {
-    path = "",
-    score = 0,
-    snippet = "",
-    text = "",
-    range = "",
-    _rank = 0,
-})
-local SearchResult = Ark.SearchResult
-
-function SearchResult:displayPath()
-    return compressPath(self.path)
-end
-
-function SearchResult:scoreText()
-    if self.score == 0 then return "" end
-    return string.format("%.2f", self.score)
-end
-
-function SearchResult:lineRange()
-    if not self.range or self.range == "" then return "" end
-    local s, e = self.range:match("^(%d+)-(%d+)$")
-    if not s then return "L" .. self.range end
-    if s == e then return "L" .. s end
-    return "L" .. s .. "-" .. e
-end
-
-function SearchResult:previewText()
-    if not self.text or self.text == "" then return "" end
-    local t = self.text
-    if #t > 400 then
-        t = t:sub(1, 400) .. "…"
-    end
-    return t
-end
-
-function SearchResult:hasPreview()
-    return self.text ~= nil and self.text ~= ""
-end
-
-function SearchResult:hidePreview()
-    return not self:hasPreview()
-end
 
 Ark.Project = session:prototype("Ark.Project", {
     name = "",
@@ -413,23 +306,6 @@ local Node = Ark.Node
 ------------------------------------------------------------------------
 
 function Searching:mutate()
-    if self._searchGroups == nil then
-        self._searchGroups = {}
-    end
-    if self.searchQuery == nil then
-        self.searchQuery = ""
-    end
-    if self.searchMode == nil or self.searchMode == "about" then
-        self.searchMode = "contains"
-    end
-    if self._hitsPerFile == nil then
-        self._hitsPerFile = "1"
-    end
-    if self.filterFiles == nil then self.filterFiles = "" end
-    if self.excludeFiles == nil then self.excludeFiles = "" end
-    if self.filterContent == nil then self.filterContent = "" end
-    if self.excludeContent == nil then self.excludeContent = "" end
-    if self._showFilterPanel == nil then self._showFilterPanel = false end
     if self._displayItems == nil then
         self._displayItems = {}
         self._projects = {}
@@ -510,7 +386,6 @@ end
 function Searching:selectSource(source)
     self.selectedSource = source
     self.showAddForm = false
-    self._searchView = false
     if not source._loaded and not source._loading then
         source:loadRootNodes()
     end
@@ -609,7 +484,7 @@ function Searching:visibleNodes()
 end
 
 function Searching:showSourceDetail()
-    return self.selectedSource ~= nil and not self.showAddForm and not self._searchView
+    return self.selectedSource ~= nil and not self.showAddForm
 end
 
 function Searching:hideSourceDetail()
@@ -617,7 +492,7 @@ function Searching:hideSourceDetail()
 end
 
 function Searching:showPlaceholder()
-    return self.selectedSource == nil and not self.showAddForm and not self._searchView
+    return self.selectedSource == nil and not self.showAddForm
 end
 
 function Searching:hidePlaceholder()
@@ -1247,11 +1122,8 @@ function Searching:invertFilters()
     self:refilterSearch()
 end
 
--- Re-run search if active
+-- No-op: element picks up new sidebar filters on next search via JS bridge
 function Searching:refilterSearch()
-    if self._searchView and self.searchQuery ~= "" then
-        self:search()
-    end
 end
 
 -- Filter bar icon methods (filled = on, outline = off/mixed)
@@ -1292,20 +1164,16 @@ function Searching:filterChatsTooltip()
     return "Chat logs (" .. self:computeFilterState("chats") .. ") — double-click to solo"
 end
 
--- Build filter opts table from source filter buttons + filter panel fields.
--- Returns a table with filter_files, exclude_files, filter, except arrays
--- suitable for passing to mcp:search_grouped().
-function Searching:buildFilterOpts()
+-- Build sidebar filter arrays as JSON for the <ark-search> JS bridge.
+-- Returns a JSON string with filter_files and exclude_files arrays
+-- derived from sidebar source buttons and per-source toggles.
+function Searching:searchFiltersJSON()
     local filter_files = {}
     local exclude_files = {}
-    local filter = {}
-    local except = {}
 
     -- Source filter: uses filter_files when any source needs sub-filtering,
     -- otherwise uses exclude_files for fully disabled sources.
-    -- Because filter_files is a positive filter (only matching paths survive),
-    -- ALL enabled sources must be listed when any filter_files is emitted.
-    local hasPartial = false  -- any Claude source with only memory or only chats
+    local hasPartial = false
 
     for _, p in ipairs(self._projects or {}) do
         if p._claudeSource then
@@ -1317,7 +1185,6 @@ function Searching:buildFilterOpts()
     end
 
     if hasPartial then
-        -- Positive filter mode: list every enabled source explicitly
         for _, p in ipairs(self._projects or {}) do
             if p._fileSource and p.filesOn then
                 table.insert(filter_files, p._fileSource.dir .. "/**")
@@ -1332,17 +1199,14 @@ function Searching:buildFilterOpts()
                     table.insert(filter_files, cdir .. "/**")
                     table.insert(exclude_files, cdir .. "/memory/**")
                 end
-                -- Both off: omit → filtered out
             end
         end
-
         for _, d in ipairs(self._dataSources or {}) do
             if d.dataOn then
                 table.insert(filter_files, d._source.dir .. "/**")
             end
         end
     else
-        -- Simple exclude mode: only fully disabled sources
         for _, p in ipairs(self._projects or {}) do
             if p._fileSource and not p.filesOn then
                 table.insert(exclude_files, p._fileSource.dir .. "/**")
@@ -1353,7 +1217,6 @@ function Searching:buildFilterOpts()
                 end
             end
         end
-
         for _, d in ipairs(self._dataSources or {}) do
             if not d.dataOn then
                 table.insert(exclude_files, d._source.dir .. "/**")
@@ -1361,253 +1224,7 @@ function Searching:buildFilterOpts()
         end
     end
 
-    -- Filter panel: user file patterns (one per line)
-    local userFilePatterns = {}
-    for line in self.filterFiles:gmatch("[^\n]+") do
-        local pat = line:match("^%s*(.-)%s*$")
-        if pat and pat ~= "" then
-            table.insert(userFilePatterns, pat)
-        end
-    end
-
-    -- Intersect user file patterns with source patterns:
-    -- In positive filter mode, source patterns (e.g. ~/work/ark/**) are OR'd,
-    -- so appending user patterns directly makes them redundant. Instead,
-    -- cross-product: dir/** + *.go → dir/**/*.go for each combination.
-    -- In exclude mode, no competing positive patterns exist, so user patterns
-    -- work standalone.
-    if #userFilePatterns > 0 and #filter_files > 0 then
-        local combined = {}
-        for _, src in ipairs(filter_files) do
-            for _, upat in ipairs(userFilePatterns) do
-                -- Strip trailing ** from source, append **/<user pattern>
-                local base = src:match("^(.-)%*%*$") or (src .. "/")
-                table.insert(combined, base .. "**/" .. upat)
-            end
-        end
-        filter_files = combined
-    elseif #userFilePatterns > 0 then
-        for _, upat in ipairs(userFilePatterns) do
-            table.insert(filter_files, upat)
-        end
-    end
-    for line in self.excludeFiles:gmatch("[^\n]+") do
-        local pat = line:match("^%s*(.-)%s*$")
-        if pat and pat ~= "" then
-            table.insert(exclude_files, pat)
-        end
-    end
-    for line in self.filterContent:gmatch("[^\n]+") do
-        local q = line:match("^%s*(.-)%s*$")
-        if q and q ~= "" then
-            table.insert(filter, q)
-        end
-    end
-    for line in self.excludeContent:gmatch("[^\n]+") do
-        local q = line:match("^%s*(.-)%s*$")
-        if q and q ~= "" then
-            table.insert(except, q)
-        end
-    end
-
-    local opts = {}
-    if #filter_files > 0 then opts.filter_files = filter_files end
-    if #exclude_files > 0 then opts.exclude_files = exclude_files end
-    if #filter > 0 then opts.filter = filter end
-    if #except > 0 then opts.except = except end
-    return opts
-end
-
--- Search: incremental via variable check cycle.
--- onSearchInput() runs on every variable check when searchQuery changes.
--- If the query changed, has 3+ chars, and no search is pending → fire search.
--- mcp:search_grouped blocks Lua, so keystrokes naturally compress during search.
-local MIN_QUERY_LEN = 3
-
-function Searching:onSearchInput()
-    local q = self.searchQuery
-    if q == self._lastSearchedQuery then return "" end
-
-    if q == "" then
-        self:clearSearch()
-        return ""
-    end
-
-    if #q < MIN_QUERY_LEN then return "" end
-
-    self:search()
-    return ""
-end
-
-function Searching:search()
-    local q = (self.searchQuery:match("^%s*(.-)%s*$") or "")
-    if q == "" then return end
-    self._lastSearchedQuery = self.searchQuery
-    self._searching = true
-    -- Clear in-place to preserve table reference for ViewList diffing
-    if self._searchGroups then
-        for i = #self._searchGroups, 1, -1 do
-            table.remove(self._searchGroups, i)
-        end
-    else
-        self._searchGroups = {}
-    end
-
-    -- Determine k: if grouping, ask for more chunks to fill groups
-    local hpf = tonumber(self._hitsPerFile) or 1
-    local k = hpf == 0 and 100 or 20 * hpf
-    if k > 100 then k = 100 end
-
-    -- Build opts for mcp:search_grouped
-    local opts = self:buildFilterOpts()
-    opts.mode = self.searchMode
-    opts.k = k
-    opts.session = "ui"
-
-    local results, err = mcp.search_grouped(q, opts)
-    self._searching = false
-
-    if not results then
-        self._searchView = true
-        return
-    end
-
-    -- Results are already grouped by file, sorted by best score.
-    -- Each group: {path, strategy, chunks={range, score, preview}}
-    for rank, group in ipairs(results) do
-        local g = session:create(SearchFileGroup)
-        g.path = group.path
-        g._rank = rank
-        g._expanded = false
-
-        local topScore = 0
-        local chunks = {}
-        for _, chunk in ipairs(group.chunks) do
-            local r = session:create(SearchResult)
-            r.path = group.path
-            r.score = chunk.score
-            r.range = chunk.range
-            r.text = chunk.preview
-            if group.path:sub(1, #HOME) == HOME then
-                r.snippet = "~" .. group.path:sub(#HOME + 1)
-            else
-                r.snippet = group.path
-            end
-            table.insert(chunks, r)
-            if chunk.score > topScore then
-                topScore = chunk.score
-            end
-        end
-        g.topScore = topScore
-        g._chunks = chunks
-        table.insert(self._searchGroups, g)
-    end
-
-    self._searchView = true
-end
-
-function Searching:clearSearch()
-    self.searchQuery = ""
-    if self._searchGroups then
-        for i = #self._searchGroups, 1, -1 do
-            table.remove(self._searchGroups, i)
-        end
-    end
-    self._searchView = false
-end
-
-function Searching:setModeFuzzy()
-    self.searchMode = "fuzzy"
-    self:search()
-end
-
-function Searching:setModeContains()
-    self.searchMode = "contains"
-    self:search()
-end
-
-function Searching:setModeRegex()
-    self.searchMode = "regex"
-    self:search()
-end
-
-function Searching:modeIsFuzzy()
-    return self.searchMode == "fuzzy"
-end
-
-function Searching:modeIsContains()
-    return self.searchMode == "contains"
-end
-
-function Searching:modeIsRegex()
-    return self.searchMode == "regex"
-end
-
-function Searching:searchResults()
-    return self._searchGroups or {}
-end
-
-function Searching:hideSearchResults()
-    return not self._searchView
-end
-
-function Searching:searchResultCount()
-    local groups = self._searchGroups or {}
-    local nFiles = #groups
-    local nChunks = 0
-    for _, g in ipairs(groups) do
-        nChunks = nChunks + (g._chunks and #g._chunks or 0)
-    end
-    if nFiles == 0 and self._searchView then return "No results" end
-    if nChunks == nFiles then
-        if nFiles == 1 then return "1 result" end
-        return tostring(nFiles) .. " results"
-    end
-    return tostring(nChunks) .. " hits across " .. tostring(nFiles) .. " files"
-end
-
--- Filter panel toggle
-function Searching:toggleFilterPanel()
-    self._showFilterPanel = not self._showFilterPanel
-end
-
-function Searching:hideFilterPanel()
-    return not self._showFilterPanel
-end
-
-function Searching:filterPanelIcon()
-    if self._showFilterPanel then return "funnel-fill" end
-    -- Show filled funnel if any filter is active
-    if self.filterFiles ~= "" or self.excludeFiles ~= ""
-        or self.filterContent ~= "" or self.excludeContent ~= "" then
-        return "funnel-fill"
-    end
-    return "funnel"
-end
-
-function Searching:hasActiveFilters()
-    return self.filterFiles ~= "" or self.excludeFiles ~= ""
-        or self.filterContent ~= "" or self.excludeContent ~= ""
-end
-
--- Hits per file
-function Searching:hitsPerFileText()
-    if self._hitsPerFile == "0" then return "all" end
-    return self._hitsPerFile
-end
-
-function Searching:cycleHitsPerFile()
-    if self._hitsPerFile == "1" then
-        self._hitsPerFile = "3"
-    elseif self._hitsPerFile == "3" then
-        self._hitsPerFile = "0"
-    else
-        self._hitsPerFile = "1"
-    end
-    -- Re-search to apply new grouping
-    if self._searchView and self.searchQuery ~= "" then
-        self:search()
-    end
+    return json.encode({filter_files = filter_files, exclude_files = exclude_files})
 end
 
 ------------------------------------------------------------------------
@@ -2635,7 +2252,6 @@ function Message:effectiveStatus()
 end
 
 function Message:openFile()
-    -- Open the request file (primary); response can be opened separately
     local path = self.reqPath
     if path == "" then path = self.respPath end
     mcp.open(path)

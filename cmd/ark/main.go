@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -591,7 +592,9 @@ Options:`)
 			endpoint = "/tmp/append"
 		}
 		if err := proxyOK(client, "POST", endpoint, map[string]any{
-			"path": paths[0], "strategy": strat, "content": string(content),
+			"path": paths[0], "strategy": strat,
+			"content":  base64.StdEncoding.EncodeToString(content),
+			"encoding": "base64",
 		}); err != nil {
 			fatal(err)
 		}
@@ -1771,7 +1774,6 @@ func cmdFiles(args []string) {
 	fs := flag.NewFlagSet("files", flag.ExitOnError)
 	showStatus := fs.Bool("status", false, "show file status, bytes, and chunk count")
 	verbose := fs.Bool("detail", false, "show per-file chunk size stats (with --status)")
-	tokenize := fs.Bool("tokenize", false, "measure chunk sizes in tokens (requires tag_model)")
 	var filterFiles, excludeFiles stringSlice
 	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
 	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
@@ -1807,124 +1809,105 @@ func cmdFiles(args []string) {
 		return
 	}
 
-	// --status: need DB access for chunk data
-	withDB(func(d *ark.DB) {
-		files, err := d.Files()
-		if err != nil {
+	// --status: proxy to server (includes tmp files) or fall back to local DB
+	type fileStatusEntry struct {
+		Path       string `json:"path"`
+		Status     string `json:"status"`
+		Bytes      int64  `json:"bytes"`
+		ChunkCount int    `json:"chunk_count"`
+		ChunkSizes []int  `json:"chunk_sizes,omitempty"`
+	}
+
+	var entries []fileStatusEntry
+	if client := serverClient(arkDir); client != nil {
+		if err := proxyDecode(client, "POST", "/files/status", map[string]any{
+			"patterns": patterns,
+		}, &entries); err != nil {
 			fatal(err)
 		}
-		staleList, err := d.Stale()
-		if err != nil {
-			fatal(err)
-		}
-		missingList, err := d.Missing()
-		if err != nil {
-			fatal(err)
-		}
-
-		staleSet := make(map[string]bool, len(staleList))
-		for _, s := range staleList {
-			staleSet[s] = true
-		}
-		missingSet := make(map[string]bool, len(missingList))
-		for _, m := range missingList {
-			missingSet[m.Path] = true
-		}
-
-		files = filterPaths(matchBaseSet(files, ff, ef), patterns)
-
-		var tokenizeFn func(string) int
-		if *tokenize {
-			tagModel := d.Config().TagModel
-			if tagModel == "" {
-				fatal(fmt.Errorf("--tokenize requires tag_model in ark.toml"))
+		// Apply filter-files/exclude-files
+		filtered := make([]fileStatusEntry, 0, len(entries))
+		for _, e := range entries {
+			paths := matchBaseSet([]string{e.Path}, ff, ef)
+			if len(paths) > 0 {
+				filtered = append(filtered, e)
 			}
-			modelPath := filepath.Join(arkDir, tagModel)
-			tok, err := ark.NewTokenizer(modelPath)
+		}
+		entries = filtered
+	} else {
+		withDB(func(d *ark.DB) {
+			files, err := d.Files()
 			if err != nil {
 				fatal(err)
 			}
-			defer tok.Close()
-			tokenizeFn = tok.CountTokens
-		}
-
-		// Compute column widths
-		type fileRow struct {
-			status string
-			bytes  string
-			chunks string
-			path   string
-			sizes  []int // for verbose
-		}
-		rows := make([]fileRow, 0, len(files))
-		maxBytes, maxChunks := len("bytes"), len("chunks")
-
-		for _, f := range files {
-			status := "G"
-			if missingSet[f] {
-				status = "M"
-			} else if staleSet[f] {
-				status = "S"
+			staleList, _ := d.Stale()
+			missingList, _ := d.Missing()
+			staleSet := make(map[string]bool, len(staleList))
+			for _, s := range staleList {
+				staleSet[s] = true
 			}
-
-			var fileBytes int64
-			var chunkCount int
-			var sizes []int
-
-			if !missingSet[f] {
+			missingSet := make(map[string]bool, len(missingList))
+			for _, m := range missingList {
+				missingSet[m.Path] = true
+			}
+			files = filterPaths(matchBaseSet(files, ff, ef), patterns)
+			for _, f := range files {
+				status := "G"
+				if missingSet[f] {
+					status = "M"
+				} else if staleSet[f] {
+					status = "S"
+				}
+				var fileBytes int64
 				if fi, err := os.Stat(f); err == nil {
 					fileBytes = fi.Size()
 				}
-				if tokenizeFn != nil {
-					// Slow path: need content for tokenization
-					if chunks := d.AllChunks(f); chunks != nil {
-						chunkCount = len(chunks)
-						if *verbose {
-							sizes = make([]int, len(chunks))
-							for i, c := range chunks {
-								sizes[i] = tokenizeFn(c.Content)
-							}
-						}
-					}
-				} else {
-					// Fast path: CRecord ContentLen, no disk I/O
-					if lens := d.ChunkSizes(f); lens != nil {
-						chunkCount = len(lens)
-						if *verbose {
-							sizes = lens
-						}
-					}
-				}
+				sizes := d.ChunkSizes(f)
+				entries = append(entries, fileStatusEntry{
+					Path: f, Status: status, Bytes: fileBytes,
+					ChunkCount: len(sizes), ChunkSizes: sizes,
+				})
 			}
+		})
+	}
 
-			bStr := fmt.Sprintf("%d", fileBytes)
-			cStr := fmt.Sprintf("%d", chunkCount)
-			if len(bStr) > maxBytes {
-				maxBytes = len(bStr)
-			}
-			if len(cStr) > maxChunks {
-				maxChunks = len(cStr)
-			}
-			rows = append(rows, fileRow{status, bStr, cStr, f, sizes})
+	// Compute column widths and print
+	type fileRow struct {
+		status string
+		bytes  string
+		chunks string
+		path   string
+		sizes  []int
+	}
+	rows := make([]fileRow, 0, len(entries))
+	maxBytes, maxChunks := len("bytes"), len("chunks")
+	for _, e := range entries {
+		bStr := fmt.Sprintf("%d", e.Bytes)
+		cStr := fmt.Sprintf("%d", e.ChunkCount)
+		if len(bStr) > maxBytes {
+			maxBytes = len(bStr)
 		}
-
-		for _, r := range rows {
-			fmt.Printf("%s  %*s  %*s  %s\n", r.status, maxBytes, r.bytes, maxChunks, r.chunks, r.path)
-			if *verbose && len(r.sizes) > 0 {
-				sort.Ints(r.sizes)
-				n := len(r.sizes)
-				sum := 0
-				for _, s := range r.sizes {
-					sum += s
-				}
-				fmt.Printf("  min: %d  max: %d  mean: %d  median: %d  p90: %d  p95: %d\n",
-					r.sizes[0], r.sizes[n-1], sum/n,
-					percentileInts(r.sizes, 50),
-					percentileInts(r.sizes, 90),
-					percentileInts(r.sizes, 95))
-			}
+		if len(cStr) > maxChunks {
+			maxChunks = len(cStr)
 		}
-	})
+		rows = append(rows, fileRow{e.Status, bStr, cStr, e.Path, e.ChunkSizes})
+	}
+	for _, r := range rows {
+		fmt.Printf("%s  %*s  %*s  %s\n", r.status, maxBytes, r.bytes, maxChunks, r.chunks, r.path)
+		if *verbose && len(r.sizes) > 0 {
+			sort.Ints(r.sizes)
+			n := len(r.sizes)
+			sum := 0
+			for _, s := range r.sizes {
+				sum += s
+			}
+			fmt.Printf("  min: %d  max: %d  mean: %d  median: %d  p90: %d  p95: %d\n",
+				r.sizes[0], r.sizes[n-1], sum/n,
+				percentileInts(r.sizes, 50),
+				percentileInts(r.sizes, 90),
+				percentileInts(r.sizes, 95))
+		}
+	}
 }
 
 // matchBaseSet applies --filter-files/--exclude-files to get the base set.
@@ -2526,7 +2509,22 @@ func cmdChunks(args []string) {
 	before := fs.Int("before", 0, "number of chunks before target")
 	after := fs.Int("after", 0, "number of chunks after target")
 	wrap := fs.String("wrap", "", "wrap output in XML tags")
+	showStatus := fs.Bool("status", false, "show SIZE FILE:LOCATION for all chunks matching patterns")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark chunks [options] <path> <range>
+       ark chunks -status [pattern...]
+
+Show chunk content, or list chunks with sizes.
+
+Options:`)
+		fs.PrintDefaults()
+	}
 	fs.Parse(reorderArgs(args))
+
+	if *showStatus {
+		cmdChunksStatus(fs.Args())
+		return
+	}
 
 	posArgs := fs.Args()
 	if len(posArgs) < 2 {
@@ -2554,6 +2552,50 @@ func cmdChunks(args []string) {
 			}
 		}
 	})
+}
+
+func cmdChunksStatus(patterns []string) {
+	type chunkEntry struct {
+		Path     string `json:"path"`
+		Location string `json:"location"`
+		Size     int    `json:"size"`
+	}
+
+	var entries []chunkEntry
+	if client := serverClient(arkDir); client != nil {
+		if err := proxyDecode(client, "POST", "/files/status", map[string]any{
+			"patterns": patterns,
+			"chunks":   true,
+		}, &entries); err != nil {
+			fatal(err)
+		}
+	} else {
+		withDB(func(d *ark.DB) {
+			files, err := d.Files()
+			if err != nil {
+				fatal(err)
+			}
+			files = filterPaths(files, patterns)
+			for _, f := range files {
+				chunks := d.AllChunks(f)
+				for _, c := range chunks {
+					entries = append(entries, chunkEntry{Path: f, Location: c.Range, Size: len(c.Content)})
+				}
+			}
+		})
+	}
+
+	// Print SIZE FILE:LOCATION
+	maxSize := len("size")
+	for _, e := range entries {
+		s := fmt.Sprintf("%d", e.Size)
+		if len(s) > maxSize {
+			maxSize = len(s)
+		}
+	}
+	for _, e := range entries {
+		fmt.Printf("%*d  %s:%s\n", maxSize, e.Size, e.Path, e.Location)
+	}
 }
 
 func cmdStop(args []string) {

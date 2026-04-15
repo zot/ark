@@ -116,50 +116,35 @@ Minimum 180px, maximum 50% of viewport width.
 
 ## Search
 
-### Search Bar
+### `<ark-search>` Component
 
-Always visible at top of right panel. Contains:
-- Filter panel toggle (funnel icon, fills when active)
-- Mode selector: contains / about / regex
-- Search input with live search (fires on 3+ chars, Enter for immediate)
-- Clear button (visible when results showing)
+The right panel hosts an `<ark-search>` custom element (from
+`ark-search/`) that provides the full search UI:
+- Search bar with mode selector (tag / contains / fuzzy / regex)
+- Stackable filter rows with OR groups
+- Source-type toggle bar (hidden — sidebar handles this)
+- Saved filter presets (chips)
+- Progressive results with iframe chunk previews
+- Three-phase search (trigram → embedding → curation) when available
 
-### Search Results
+The element talks to the ark server via HTTP endpoints registered
+on the UI server (`/search/grouped`, `/tags/complete`, `/tags/values`).
+A JS `SearchAPI` adapter wires the element to these endpoints.
 
-Results grouped by file using `SearchFileGroup` type:
-- File header: compressed path (accent color), top score, "+N more" count
-- Expandable: click to show/hide additional chunks
-- Each chunk: line range, score, preview text (HTML with highlights)
-- Hits per file: cycle button (1 / 3 / all) re-searches with adjusted k
+### Sidebar Filter Integration
 
-Search uses `mcp:search_grouped()` (in-process Go function) with
-filter opts built from source filter buttons + filter panel fields.
+Sidebar filter buttons (data/projects/memory/chats) and per-source
+toggles produce filter_files/exclude_files arrays. These are passed
+to the `<ark-search>` element as default search scope:
 
-### Session Cache
+- **Default:** searches use the sidebar's filter settings
+- **Override:** if the user adds `[files]` filter rows in the
+  element, sidebar settings are ignored entirely
+- The element's built-in source toggle bar is hidden (CSS) since
+  the sidebar already provides source filtering
 
-Search passes `session = "ui"` in the opts table to
-`mcp.search_grouped()`. This uses a server-side session that keeps
-the ChunkCache alive across keystrokes — successive queries that
-are prefixes of each other reuse cached file reads instead of
-re-reading from disk on every keystroke.
-
-### Filter Panel
-
-Collapsible 2×2 grid above search bar:
-- Filter files (glob patterns, one per line)
-- Exclude files (glob patterns)
-- Filter content (FTS queries, one per line)
-- Exclude content (FTS queries)
-
-All fields compose with source filter buttons via intersection.
-
-**Filter file intersection:** When source buttons produce positive
-filter patterns (e.g. `~/work/ark/**`) and the user also provides
-file patterns (e.g. `*.go`), the two sets are ANDed — each source
-pattern is narrowed by each user pattern (`~/work/ark/**/*.go`).
-Without this, the broad source patterns would match everything and
-the user's pattern would be redundant (OR semantics). In exclude
-mode (no partial sources), user patterns work standalone.
+This is a temporary JS bridge (SearchAPI reads a hidden span).
+A proper `filters` attribute on the element is planned (see PLAN.md).
 
 ## Status Bar
 
@@ -210,13 +195,28 @@ Cards show stale bookmark chips when a participant's `@*-handled:`
 tag is behind the counterpart's `@status`. Format: `PROJECT:status`.
 A clean card means everyone is current. Chips mean someone owes work.
 
+### Sort Controls
+
+Sort field cycles: date → to → from → subject. Direction toggles
+ascending/descending. Sorting applies within each column.
+
+### Message Detail
+
+Clicking a card opens a detail dialog showing:
+- Project label (from → to) and status date
+- Status dropdown (editable, saves via `mcp.setTags`)
+- Response-handled / Request-handled dropdowns
+- Request/Response tab switcher (when response exists)
+- Rendered markdown body
+- Footer: Edit (opens in editor) and Complete (sets all statuses
+  to completed, closes dialog, refreshes)
+
 ### Refresh
 
 Manual refresh button. Real-time updates are V3 territory.
 
 ### What's NOT in scope
 
-- Status mutation from the UI
 - Cross-project file writes (never, by design)
 
 ## MCP Shell Integration

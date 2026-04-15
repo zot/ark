@@ -807,8 +807,9 @@ func (l *Librarian) BatchEmbedChunks() error {
 
 	// Per-file centroid accumulators R1616, R1618
 	type centroidAcc struct {
-		sum   []float32
-		count uint32
+		sum         []float32
+		count       uint32
+		totalChunks uint32 // set when file is fully processed R1623
 	}
 	centroids := make(map[uint64]*centroidAcc)
 	addToCentroid := func(fileID uint64, vec []float32) {
@@ -837,6 +838,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 		path     string
 	}
 	tierRefs := make([][]chunkRef, len(l.tiers))
+	fileChunkTotals := make(map[uint64]uint32) // fileID → len(chunkLens) for queued files R1623
 	var totalSkipped int
 
 	for _, fp := range sorted {
@@ -853,6 +855,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 		if efCount > 0 && int(efCount) == len(chunkLens) {
 			continue
 		}
+		Logv(1, "chunk embed: no fast-skip %s (efCount=%d, chunks=%d)", fp.path, efCount, len(chunkLens))
 
 		// Invalidate on disk for crash safety, seed centroid from memory.
 		if efCount > 0 {
@@ -869,6 +872,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 		}
 
 		fileChunksProcessed := 0
+		fileOversized := 0 // chunks exceeding all tiers R1623
 		for chunkIdx, chunkLen := range chunkLens {
 			existing, _ := l.db.store.ReadChunkEmbedding(fileID, chunkIdx)
 			if existing != nil {
@@ -897,13 +901,38 @@ func (l *Librarian) BatchEmbedChunks() error {
 			}
 			if !placed {
 				totalSkipped++
+				fileOversized++
 				Logv(2, "chunk embed: skip %s chunk %d (%d bytes, exceeds all tiers)", fp.path, chunkIdx, chunkLen)
 			}
 		}
 
-		// Mark all-skipped files so we don't re-scan every reconcile.
-		if fileChunksProcessed == 0 && len(chunkLens) > 0 {
-			l.db.store.WriteFileCentroid(fileID, make([]float32, 1), uint32(len(chunkLens)))
+		// Log per-file breakdown for diagnosis
+		fileExisting := 0
+		for ci := range chunkLens {
+			if ec, _ := l.db.store.ReadChunkEmbedding(fileID, ci); ec != nil {
+				fileExisting++
+			}
+		}
+		fileQueued := fileChunksProcessed - fileExisting
+		fileZero := len(chunkLens) - fileChunksProcessed - fileOversized
+		Logv(1, "chunk embed: file %s (id=%d): existing=%d, queued=%d, oversized=%d, zero=%d, total=%d",
+			fp.path, fileID, fileExisting, fileQueued, fileOversized, fileZero, len(chunkLens))
+
+		// If no new chunks queued, file is fully processed — write
+		// sentinel directly so fast-skip works next cycle. R1623
+		// Covers all unembeddable categories: oversized, zero-length,
+		// content unreadable, and stale centroids from prior code.
+		if fileQueued == 0 && len(chunkLens) > 0 {
+			acc := centroids[fileID]
+			if acc != nil {
+				acc.totalChunks = uint32(len(chunkLens))
+			} else {
+				// No centroid accumulator — file had no embeddable chunks
+				// or all were already accounted for. Write sentinel directly.
+				l.db.store.WriteFileCentroid(fileID, make([]float32, 1), uint32(len(chunkLens)))
+			}
+		} else if fileQueued > 0 {
+			fileChunkTotals[fileID] = uint32(len(chunkLens))
 		}
 	}
 
@@ -985,10 +1014,28 @@ func (l *Librarian) BatchEmbedChunks() error {
 		ctx.Close()
 	}
 
-	// Write all file centroids R1616
+	// After pass 2: mark files that had queued chunks as fully processed. R1623
+	// Even if some chunks failed to embed (empty content, GPU error), the
+	// file won't succeed on retry — stop the loop.
+	for fileID, total := range fileChunkTotals {
+		acc := centroids[fileID]
+		if acc == nil {
+			// All queued chunks failed (empty content) — no centroid exists.
+			// Write sentinel directly.
+			l.db.store.WriteFileCentroid(fileID, make([]float32, 1), total)
+		} else {
+			acc.totalChunks = total
+		}
+	}
+
+	// Write all file centroids R1616, R1623
 	for fileID, acc := range centroids {
-		if acc.count > 0 {
-			if err := l.db.store.WriteFileCentroid(fileID, acc.sum, acc.count); err != nil {
+		count := acc.count
+		if acc.totalChunks > 0 {
+			count = acc.totalChunks // fully processed — use sentinel R1623
+		}
+		if count > 0 {
+			if err := l.db.store.WriteFileCentroid(fileID, acc.sum, count); err != nil {
 				log.Printf("librarian: write centroid fileID=%d: %v", fileID, err)
 			}
 		}

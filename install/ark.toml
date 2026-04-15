@@ -10,6 +10,7 @@ exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 [strategies]
 "*.md" = "markdown"
 "*.jsonl" = "chat-jsonl"
+"*.pdf" = "pdf"
 
 # Sources — directories to watch
 # [[source]]

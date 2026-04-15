@@ -15,6 +15,9 @@ require (
 	github.com/zot/microfts2 v0.2.0
 	github.com/zot/microvec v0.1.0
 	github.com/zot/ui-engine v0.21.0
+	seehuhn.de/go/geom v0.7.1
+	seehuhn.de/go/pdf v0.7.1
+	seehuhn.de/go/postscript v0.7.1
 )
 
 require (
@@ -29,11 +32,15 @@ require (
 	github.com/mark3labs/mcp-go v0.43.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zot/change-tracker v1.4.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/tools v0.40.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
+	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	seehuhn.de/go/dag v0.0.0-20250630092703-dd0e13308cb3 // indirect
+	seehuhn.de/go/icc v0.7.1-0.20260326065957-ea5a1dd01da2 // indirect
+	seehuhn.de/go/sfnt v0.7.1 // indirect
+	seehuhn.de/go/xmp v0.7.1 // indirect
 )

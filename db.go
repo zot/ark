@@ -257,6 +257,11 @@ func Open(dbPath string) (*DB, error) {
 	// Register chunker strategies from ark.toml [[chunker]] entries
 	registerChunkers(fts, config)
 
+	// CRC: crc-PDFChunker.md | R1641
+	if err := fts.AddChunker("pdf", &PDFChunker{}); err != nil {
+		log.Printf("warning: register pdf chunker: %v", err)
+	}
+
 	db := &DB{
 		fts:     fts,
 		vec:     vec,

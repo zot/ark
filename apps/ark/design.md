@@ -20,15 +20,15 @@ message dashboard). A thin root object routes between them via
 ### Searching View (existing)
 ```
 +-------------------+------------------------------------------+
-| Sources [⇄][⟳]    | [⫰] [contains][about][regex] [🔍____] [✕] |
-|  filter bar       |------------------------------------------|
-|-------------------|  Filter panel (collapsible 2×2)           |
-| > project-name    |------------------------------------------|
-|   [📄][🧠][💬]     | File groups with chunk previews           |
-|   data-source     |                                          |
-|   [📊]            |                                          |
-|-------------------|                                          |
-| [✏️ Choose Projects]|                                         |
+| Sources [⇄][⟳]    | <ark-search>                             |
+|  filter bar       |   [tag v] [@ ~ name : Aa value] [×][✕]  |
+|-------------------|   [+ add filter]                         |
+| > project-name    |   [+ save]                               |
+|   [📄][🧠][💬]     |   ┌─────────────────────────────────┐    |
+|   data-source     |   │ file.md              [📁]        │    |
+|   [📊]            |   │ ┌─ iframe preview ────────────┐  │    |
+|-------------------|   │ │  chunk content with highlights│ │    |
+| [✏️ Choose Projects]│ └───────────────────────────────┘  │    |
 +-------------------+------------------------------------------+
 | ✓ 1929 | ✗ 1 | ? 2625 | Server: ●                           |
 +--------------------------------------------------------------|
@@ -67,15 +67,18 @@ theme class. Click card → `mcp:open(path)`.
 
 ### Ark.Searching (renamed from Ark)
 
-All existing fields and methods from the previous Ark type. No changes
-to behavior — only the type name changes. See previous design for the
-full field list.
+All existing fields and methods from the previous Ark type, minus
+the old search UI state. Search is now handled by the `<ark-search>`
+web component in the right panel.
 
-Key fields: _sources, selectedSource, searchQuery, searchMode,
-_searchGroups, _searchView, _hitsPerFile, _showFilterPanel,
-filterFiles, excludeFiles, filterContent, excludeContent,
+Key fields: _sources, selectedSource, _searchView,
 _displayItems, _projects, _dataSources, _projectSearchOpen,
 _projectCandidates, _showPatterns, _statusCounts, _serverRunning.
+
+Removed fields (now in `<ark-search>` element):
+searchQuery, searchMode, _searchGroups, _hitsPerFile,
+_showFilterPanel, filterFiles, excludeFiles, filterContent,
+excludeContent.
 
 ### Ark.Messaging
 
@@ -151,28 +154,21 @@ issue. One card per conversation, never duplicated.
 
 ### Ark.Searching
 
-All existing methods unchanged. The type name changes from `Ark` to
-`Ark.Searching`; the local shortcut `Searching` replaces bare `Ark`
-in method definitions. Internal references to the global `ark` instance
-now navigate through `ark._searching` where needed, but most methods
-use `self` and are unaffected.
+Source management, file tree, project editor unchanged. Search UI
+is now the `<ark-search>` web component — Lua no longer does search.
 
-Key method: `buildFilterOpts()` — builds the filter_files,
-exclude_files, filter, and except arrays for `mcp:search_grouped()`.
+Key method: `searchFiltersJSON()` — builds filter_files and
+exclude_files arrays from sidebar buttons, returns JSON string.
+Read by JS SearchAPI via hidden span bridge.
 
-**Session cache:** `onSearchInput()` passes `session = "ui"` in the
-opts table. This uses a server-side session that keeps the ChunkCache
-alive across keystrokes — successive prefix queries reuse cached file
-reads instead of re-reading from disk each time.
+Removed methods (now in `<ark-search>` element):
+onSearchInput, search, buildFilterOpts (replaced by searchFiltersJSON),
+searchResults, searchResultCount, clearSearch, hideSearchResults,
+setModeContains, setModeFuzzy, setModeRegex, modeIsContains,
+modeIsFuzzy, modeIsRegex, cycleHitsPerFile, hitsPerFileText,
+toggleFilterPanel, filterPanelIcon, hasActiveFilters, hideFilterPanel.
 
-**Filter file intersection:** Source buttons produce positive
-`filter_files` patterns in partial mode (`hasPartial`). User file
-patterns from the filter panel are collected separately, then
-cross-producted with the source patterns: `dir/** + *.go →
-dir/**/*.go`. This gives AND semantics (only files matching both
-the source scope AND the user pattern survive). In exclude mode
-(no partial sources), user patterns are appended directly as
-standalone positive filters.
+Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 
 ### Ark.Messaging
 
@@ -276,7 +272,7 @@ standalone positive filters.
 | File | Type | Purpose |
 |------|------|---------|
 | Ark.DEFAULT.html | Ark | Thin shell: `ui-view="currentView()"` |
-| Ark.Searching.DEFAULT.html | Ark.Searching | Full search/index UI (renamed from Ark.DEFAULT.html) |
+| Ark.Searching.DEFAULT.html | Ark.Searching | Sidebar + `<ark-search>` element + JS SearchAPI bridge |
 | Ark.Messaging.DEFAULT.html | Ark.Messaging | Kanban columns with message cards |
 | Ark.Message.list-item.html | Ark.Message | Card in kanban column |
 | Ark.MessageDetail.DETAIL.html | Ark.MessageDetail | Dialog with rendered markdown, controls, Complete button |
@@ -284,8 +280,6 @@ standalone positive filters.
 | Ark.Project.list-item.html | Ark.Project | (unchanged) |
 | Ark.DataSource.list-item.html | Ark.DataSource | (unchanged) |
 | Ark.Node.list-item.html | Ark.Node | (unchanged) |
-| Ark.SearchFileGroup.list-item.html | Ark.SearchFileGroup | (unchanged) |
-| Ark.SearchResult.list-item.html | Ark.SearchResult | (unchanged) |
 | Ark.ProjectCandidate.list-item.html | Ark.ProjectCandidate | (unchanged) |
 
 ## MCP Shell Changes

@@ -2540,6 +2540,7 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1618:** File centroids use running sum for O(1) updates: add chunk adds vec to sum and increments count, remove chunk subtracts vec and decrements count.
 - **R1619:** Centroid at query time is `sum / count`.
+- **R1623:** EF centroid count includes permanently-skipped (oversized) chunks so the fast-skip sentinel (`efCount == len(chunkLens)`) terminates correctly for files with chunks exceeding all tier byte limits. Oversized count is only added for fresh centroids; seeded centroids from prior runs already include it.
 
 ### Model Mismatch
 
@@ -2549,3 +2550,50 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1621:** `ark embed --bench chunks` accepts `--parallel N` to set sequences per batch (default 8).
 - **R1622:** Bench output reports context size, parallel count, tokens/seq, batch vs single throughput, skip rate, and chunk size distribution (min/max/avg).
+
+## Feature: PDF Chunker
+**Source:** specs/pdf-chunker.md
+
+### Text Extraction
+
+- **R1624:** PDF chunker opens a PDF file, iterates pages, and extracts text spans with position (X, Y in PDF points), font size, and text content using seehuhn.de/go/pdf.
+- **R1625:** Text spans on the same line (similar Y coordinate, within font-height tolerance) are merged left-to-right into positioned lines with bounding boxes.
+
+### Table Detection
+
+- **R1626:** Detect tables via drawn rules: horizontal and vertical line-drawing operations in the PDF content stream (path operators `re`, `m`, `l`). A grid of ≥2 rows and ≥2 columns is a table.
+- **R1627:** Detect tables via column alignment: cluster text spans by Y (rows); if multiple rows share ≥2 aligned X positions (within tolerance proportional to dominant font size), the region is a table.
+- **R1628:** Drawn-rule detection takes priority over column-alignment detection.
+- **R1629:** Table chunk content is text spans inside the table region, concatenated row by row.
+- **R1630:** Table chunks use location `PAGE/table/N` (1-indexed per page).
+
+### Heading Detection
+
+- **R1631:** Text spans whose font size exceeds the page's dominant (most common) font size by ≥20% are headings.
+- **R1632:** A heading and the body text following it (up to the next heading or structural boundary) form a heading chunk.
+- **R1633:** Heading chunks use location `PAGE/heading/N`.
+
+### Paragraph Detection
+
+- **R1634:** Remaining text (not in tables or headings) is grouped into paragraphs by vertical gap detection: a gap >1.5× the dominant line spacing signals a paragraph boundary.
+- **R1635:** Paragraph chunks use location `PAGE/para/N`.
+
+### Page-Level Fallback
+
+- **R1636:** If a page has no detected structure (fewer than 2 text spans, or all text in a single undifferentiated block), the entire page is one chunk with location `PAGE`.
+
+### Chunk Attributes
+
+- **R1637:** Every chunk carries a `page` attribute (page number as string).
+- **R1638:** Every chunk carries a `rect` attribute: bounding box as `x,y,w,h` in PDF points (origin = bottom-left per PDF spec).
+- **R1639:** Heading chunks carry a `font_size` attribute (dominant font size in the chunk).
+
+### Chunk Location Format
+
+- **R1640:** Chunk locations use path-style hierarchy: `PAGE/TYPE/N`. Page and chunk numbers are 1-indexed.
+
+### Registration
+
+- **R1641:** PDF chunker registers as strategy `"pdf"` via `microfts2.AddChunker`.
+- **R1642:** PDF chunker implements `FileChunker` (indexed files — owns file read, hash-based skip) and `Chunker` (tmp documents — receives raw bytes).
+- **R1643:** Strategy assignment via ark.toml `[strategies]` section: `"*.pdf" = "pdf"`. No `[[chunker]]` block needed.

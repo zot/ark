@@ -89,58 +89,11 @@
       <!-- Right panel: File tree or placeholder -->
       <div class="content-panel ark-detail">
 
-        <!-- Filter panel — above search bar because it limits what's below -->
-        <div class="ark-filter-panel" ui-class-hidden="hideFilterPanel()">
-          <div class="ark-filter-grid">
-            <div class="ark-filter-field">
-              <label class="ark-filter-label">Filter files</label>
-              <sl-textarea size="small" rows="2" placeholder="*.md&#10;~/work/proj/*" ui-value="filterFiles" class="ark-filter-input"></sl-textarea>
-            </div>
-            <div class="ark-filter-field">
-              <label class="ark-filter-label">Exclude files</label>
-              <sl-textarea size="small" rows="2" placeholder="*.jsonl&#10;*.tmp" ui-value="excludeFiles" class="ark-filter-input"></sl-textarea>
-            </div>
-            <div class="ark-filter-field">
-              <label class="ark-filter-label">Filter content</label>
-              <sl-textarea size="small" rows="2" placeholder="@project: ark" ui-value="filterContent" class="ark-filter-input"></sl-textarea>
-            </div>
-            <div class="ark-filter-field">
-              <label class="ark-filter-label">Exclude content</label>
-              <sl-textarea size="small" rows="2" placeholder="tool_result" ui-value="excludeContent" class="ark-filter-input"></sl-textarea>
-            </div>
-          </div>
-        </div>
+        <!-- Search: <ark-search> web component -->
+        <ark-search id="ark-search-el" class="ark-search-component"></ark-search>
 
-        <!-- Search bar — always visible -->
-        <div class="ark-search-bar">
-          <sl-icon-button ui-attr-name="filterPanelIcon()" ui-event-click="toggleFilterPanel()" label="Filters" class="ark-funnel-btn" ui-class-ark-funnel-active="hasActiveFilters()"></sl-icon-button>
-          <div class="ark-search-modes">
-            <sl-button size="small" ui-event-click="setModeContains()" ui-class-ark-mode-active="modeIsContains()">contains</sl-button>
-            <sl-button size="small" ui-event-click="setModeFuzzy()" ui-class-ark-mode-active="modeIsFuzzy()">fuzzy</sl-button>
-            <sl-button size="small" ui-event-click="setModeRegex()" ui-class-ark-mode-active="modeIsRegex()">regex</sl-button>
-          </div>
-          <sl-input class="ark-search-input" placeholder="Search the ark..." ui-value="searchQuery?keypress" ui-event-keypress-enter="search()" size="small">
-            <sl-icon slot="prefix" name="search"></sl-icon>
-          </sl-input>
-          <sl-icon-button name="x-lg" ui-action="clearSearch()" label="Clear search" ui-class-hidden="hideSearchResults()"></sl-icon-button>
-          <span class="hidden" ui-value="onSearchInput()?priority=high"></span>
-        </div>
-
-        <!-- Search results -->
-        <div class="ark-search-results" ui-class-hidden="hideSearchResults()">
-          <div class="ark-search-meta">
-            <span ui-value="searchResultCount()"></span>
-            <sl-tooltip content="Hits per file: click to cycle 1 / 3 / all">
-              <sl-button size="small" class="ark-hits-btn" ui-event-click="cycleHitsPerFile()">
-                <sl-icon slot="prefix" name="layers"></sl-icon>
-                <span ui-value="hitsPerFileText()"></span>
-              </sl-button>
-            </sl-tooltip>
-          </div>
-          <div class="ark-results-list">
-            <div ui-view="searchResults()?wrapper=lua.ViewList"></div>
-          </div>
-        </div>
+        <!-- Sidebar filter bridge: JS reads this on each search call -->
+        <span class="hidden" id="ark-filter-bridge" ui-value="searchFiltersJSON()"></span>
 
         <!-- Placeholder when nothing selected -->
         <div class="ark-placeholder" ui-class-hidden="hidePlaceholder()">
@@ -210,6 +163,94 @@
       <span ui-value="serverStatusText()" ui-class-server-running="_serverRunning"></span>
     </div>
     </div>
+
+    <script>
+    // Load <ark-search> custom element + theme CSS (idempotent)
+    if (!customElements.get('ark-search')) {
+      var s = document.createElement('script');
+      s.type = 'module';
+      s.src = '/ark-search-element.js';
+      document.head.appendChild(s);
+      var c = document.createElement('link');
+      c.rel = 'stylesheet';
+      c.href = '/ark-search-element.css';
+      document.head.appendChild(c);
+    }
+
+    // Wire SearchAPI to ark HTTP endpoints once the element is ready
+    (function wireArkSearch() {
+      var el = document.getElementById('ark-search-el');
+      if (!el) return;
+
+      function getSidebarFilters() {
+        var bridge = document.getElementById('ark-filter-bridge');
+        if (!bridge) return {};
+        try { return JSON.parse(bridge.textContent || '{}'); } catch(e) { return {}; }
+      }
+
+      var api = {
+        search: function(query, mode) {
+          var sidebar = getSidebarFilters();
+          return fetch('/search/grouped', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              query: query,
+              mode: mode,
+              filter_files: sidebar.filter_files,
+              exclude_files: sidebar.exclude_files,
+            }),
+          }).then(function(r) { return r.json(); });
+        },
+        searchFiltered: function(query, request) {
+          var sidebar = getSidebarFilters();
+          var ff = request.filterFiles && request.filterFiles.length ? request.filterFiles : sidebar.filter_files;
+          var ef = request.excludeFiles && request.excludeFiles.length ? request.excludeFiles : sidebar.exclude_files;
+          return fetch('/search/grouped', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              query: query,
+              mode: request.mode,
+              chunk_filters: request.chunkFilters,
+              filter_files: ff,
+              exclude_files: ef,
+              name_tokens: request.nameTokens,
+              value_tokens: request.valueTokens,
+              name_match: request.nameMatch,
+            }),
+          }).then(function(r) { return r.json(); });
+        },
+        tagComplete: function(prefix) {
+          return fetch('/tags/complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prefix: prefix}),
+          }).then(function(r) { return r.json(); });
+        },
+        tagValueComplete: function(tag, prefix) {
+          return fetch('/tags/values', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({tag: tag, prefix: prefix}),
+          }).then(function(r) { return r.json(); });
+        },
+        navigate: function(path) {
+          window.open('/content' + path, '_blank');
+        },
+      };
+
+      // Retry until the element is defined and ready
+      function tryWire() {
+        if (el.api !== undefined) {
+          el.api = api;
+        } else {
+          setTimeout(tryWire, 100);
+        }
+      }
+      tryWire();
+    })();
+    </script>
   </div>
 
   <style>
@@ -683,212 +724,19 @@
       opacity: 0.5;
     }
 
-    /* Search */
-    .ark-search-bar {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--term-border, #2a2a3a);
-    }
-
-    .ark-search-modes {
-      display: flex;
-      gap: 2px;
-      flex-shrink: 0;
-    }
-
-    .ark-search-modes sl-button::part(base) {
-      font-size: 11px;
-      padding: 2px 8px;
-      min-height: 24px;
-      opacity: 0.5;
-    }
-
-    .ark-search-modes sl-button.ark-mode-active::part(base) {
-      opacity: 1;
-      color: var(--term-accent, #E07A47);
-      border-color: var(--term-accent, #E07A47);
-    }
-
-    .ark-search-input {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .ark-search-results {
-      flex: 1;
+    /* <ark-search> element — layout in this app */
+    #ark-search-el {
       display: flex;
       flex-direction: column;
       min-height: 0;
-    }
-
-    .ark-search-results.hidden { display: none; }
-
-    .ark-search-meta {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 12px;
-      font-size: 11px;
-      color: var(--term-text-dim, #8888a0);
-      border-bottom: 1px solid var(--term-border, #2a2a3a);
-    }
-
-    .ark-hits-btn {
-      font-size: 11px;
-    }
-
-    .ark-results-list {
       flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-    }
-
-    .ark-results-list > .view-list {
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Filter panel */
-    .ark-filter-panel {
-      border-bottom: 1px solid var(--term-border, #2a2a3a);
-      background: var(--term-bg-elevated, #12121a);
-      padding: 8px 12px;
-    }
-
-    .ark-filter-panel.hidden { display: none; }
-
-    .ark-filter-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-
-    .ark-filter-field {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .ark-filter-label {
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--term-text-dim, #8888a0);
-      opacity: 0.7;
-    }
-
-    .ark-filter-input {
+      overflow: hidden;
       font-family: var(--term-mono, 'JetBrains Mono', monospace);
-      font-size: 12px;
-    }
-
-    .ark-funnel-btn {
-      opacity: 0.5;
-      transition: opacity 0.15s, color 0.15s;
-      flex-shrink: 0;
-    }
-
-    .ark-funnel-btn:hover {
-      opacity: 0.8;
-    }
-
-    .ark-funnel-btn.ark-funnel-active {
-      opacity: 1;
-      color: var(--term-accent, #E07A47);
-    }
-
-    /* File group results */
-    .ark-file-group {
-      border-bottom: 1px solid var(--term-border, #2a2a3a);
-    }
-
-    .ark-file-header {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 12px;
-      cursor: pointer;
       font-size: 13px;
-      transition: background 0.1s;
-    }
-
-    .ark-file-header:hover {
-      background: var(--term-bg-hover, #1a1a24);
-    }
-
-    .ark-file-expand {
-      font-size: 12px;
-      color: var(--term-text-dim, #8888a0);
-      flex-shrink: 0;
-      width: 16px;
-    }
-
-    .ark-file-path {
-      flex: 1;
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      color: var(--term-accent, #E07A47);
-    }
-
-    .ark-file-score {
-      font-size: 11px;
-      color: var(--term-text-dim, #8888a0);
-      flex-shrink: 0;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .ark-file-more {
-      font-size: 11px;
-      color: var(--term-text-dim, #8888a0);
-      opacity: 0.6;
-      flex-shrink: 0;
-    }
-
-    /* Chunk items under file groups */
-    .ark-chunk-item {
-      padding: 4px 12px 8px 34px;
-    }
-
-    .ark-chunk-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11px;
-      color: var(--term-text-dim, #8888a0);
-      margin-bottom: 2px;
-    }
-
-    .ark-chunk-lines {
-      font-variant-numeric: tabular-nums;
-      opacity: 0.7;
-    }
-
-    .ark-chunk-score {
-      font-variant-numeric: tabular-nums;
-      opacity: 0.5;
-    }
-
-    .ark-chunk-preview {
-      font-size: 12px;
-      line-height: 1.5;
       color: var(--term-text, #e0e0e8);
-      opacity: 0.7;
-      white-space: pre-wrap;
-      word-break: break-word;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
     }
-    .ark-chunk-preview mark {
-      font-weight: bold;
-      background: transparent;
-      color: inherit;
-    }
+    /* Hide source toggle bar — sidebar handles source filtering */
+    #ark-search-el .ark-search-source-bar { display: none; }
 
     /* Filter bar */
     .ark-filter-bar {
