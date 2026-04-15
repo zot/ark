@@ -316,3 +316,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O70: Crash-orphan centroid drift: if EC records are written but EF centroid write is interrupted, the centroid will be stale on next run. The seeded-from-EF path trusts efCount, missing any orphan EC records beyond that count
 - [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) LMDB reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
 - [ ] O72: AllChunks internally calls CheckFile — a variant accepting pre-resolved fileID would eliminate one redundant lookup per file in BatchEmbedChunks
+- [ ] O73: PDF chunker: paragraph gap threshold (1.5x) too strict for tightly-spaced documents like cover letters
+- [ ] O74: PDF chunker: CJK text extraction unverified with seehuhn library
+- [ ] O75: PDF chunker: no test design (test-PDFChunker.md)
+- [ ] O76: Overlay search broken for all tmp:// documents (pre-existing, not PDF-specific)

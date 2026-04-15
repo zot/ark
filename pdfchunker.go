@@ -66,7 +66,7 @@ type pdfTableRegion struct {
 // PDFChunker extracts text from PDF files with structure detection. R1641
 type PDFChunker struct{}
 
-// Chunks implements microfts2.Chunker for tmp documents. R1642
+// Chunks implements microfts2.Chunker for tmp documents.
 // CRC: crc-PDFChunker.md | R1642
 func (c *PDFChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
 	r, err := pdf.NewReader(bytes.NewReader(content), int64(len(content)), nil)
@@ -77,7 +77,7 @@ func (c *PDFChunker) Chunks(path string, content []byte, yield func(microfts2.Ch
 	return c.extractChunks(r, yield)
 }
 
-// ChunkText implements microfts2.Chunker for single-chunk retrieval. R1642
+// ChunkText implements microfts2.Chunker for single-chunk retrieval.
 // CRC: crc-PDFChunker.md | R1642
 func (c *PDFChunker) ChunkText(path string, content []byte, rangeLabel string) ([]byte, bool) {
 	var result []byte
@@ -94,7 +94,7 @@ func (c *PDFChunker) ChunkText(path string, content []byte, rangeLabel string) (
 	return result, found
 }
 
-// FileChunks implements microfts2.FileChunker for indexed files. R1642
+// FileChunks implements microfts2.FileChunker for indexed files.
 // CRC: crc-PDFChunker.md | R1642
 func (c *PDFChunker) FileChunks(path string, oldHash [32]byte, yield func(microfts2.Chunk) bool) ([32]byte, error) {
 	data, err := os.ReadFile(path)
@@ -157,7 +157,6 @@ func (c *PDFChunker) extractChunks(doc *pdf.Reader, yield func(microfts2.Chunk) 
 func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, error) {
 	var spans []pdfSpan
 	var rules []pdfRule
-	var curX, curY float64
 	var pathStartX, pathStartY float64
 	var pathPoints [][2]float64 // accumulated path points
 	inPath := false
@@ -195,16 +194,13 @@ func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, erro
 		switch op {
 		case "m": // moveto
 			if len(args) >= 2 {
-				curX, curY = pdfFloat(args[0]), pdfFloat(args[1])
-				pathStartX, pathStartY = curX, curY
-				pathPoints = [][2]float64{{curX, curY}}
+				pathStartX, pathStartY = pdfFloat(args[0]), pdfFloat(args[1])
+				pathPoints = [][2]float64{{pathStartX, pathStartY}}
 				inPath = true
 			}
 		case "l": // lineto
 			if len(args) >= 2 && inPath {
-				x, y := pdfFloat(args[0]), pdfFloat(args[1])
-				pathPoints = append(pathPoints, [2]float64{x, y})
-				curX, curY = x, y
+				pathPoints = append(pathPoints, [2]float64{pdfFloat(args[0]), pdfFloat(args[1])})
 			}
 		case "re": // rectangle
 			if len(args) >= 4 {
@@ -556,13 +552,8 @@ func detectTablesFromAlignment(lines []pdfLine) []pdfTableRegion {
 		return nil
 	}
 
-	// Table region is the bounding box of all aligned rows
-	rect := boundingRect(lines)
-	var tblLines []pdfLine
-	for _, l := range lines {
-		tblLines = append(tblLines, l)
-	}
-	return []pdfTableRegion{{rect: rect, lines: tblLines}}
+	// Table region is the bounding box of all lines
+	return []pdfTableRegion{{rect: boundingRect(lines), lines: lines}}
 }
 
 // tableText concatenates table lines row by row. R1629
