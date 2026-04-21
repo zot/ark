@@ -163,11 +163,19 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 - [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
 - [x] seq-pdf-chunk.md → `pdfchunker.go`
+- [x] seq-empty-file-skip.md → `scanner.go`, `db.go`, `emptyfiles.go`
+- [x] seq-pdf-salvage.md → `pdfsalvage.go`, `pdfchunker.go`
+- [x] seq-pdf-chunk-retrieval.md → `pdfchunker.go`, `store.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
 - [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`
 - [x] crc-ArkTagElement.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
+- [x] crc-PdfChunkElement.md → `pdf-chunk/src/pdf-chunk-element.ts`
+
+### Sequences (TypeScript — PDF Chunk Element)
+- [x] seq-pdf-chunk-render.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
+- [x] seq-pdf-slice.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
 
 ### CRC Cards (TypeScript — Markdown Editor)
 - [x] crc-ArkTagParser.md → `markdown-editor/src/ark-tag-parser.ts`
@@ -316,7 +324,10 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O70: Crash-orphan centroid drift: if EC records are written but EF centroid write is interrupted, the centroid will be stale on next run. The seeded-from-EF path trusts efCount, missing any orphan EC records beyond that count
 - [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) LMDB reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
 - [ ] O72: AllChunks internally calls CheckFile — a variant accepting pre-resolved fileID would eliminate one redundant lookup per file in BatchEmbedChunks
-- [ ] O73: PDF chunker: paragraph gap threshold (1.5x) too strict for tightly-spaced documents like cover letters
+- [x] O73: PDF chunker: paragraph gap threshold (1.5x) too strict for tightly-spaced documents like cover letters
 - [ ] O74: PDF chunker: CJK text extraction unverified with seehuhn library
 - [ ] O75: PDF chunker: no test design (test-PDFChunker.md)
 - [ ] O76: Overlay search broken for all tmp:// documents (pre-existing, not PDF-specific)
+- [x] O77: PDF chunker: truncated PDFs with recoverable xref tables fail seehuhn's strict xref parser (error: 'xref: table at byte N: strconv.ParseInt: parsing "trailer <<"'). pdftotext and other tolerant parsers recover these. Currently surfaced as one log line per scan via FileChunks; the empty-file-set doesn't help because the files are non-empty. Needs a fallback parser strategy.
+- [ ] O78: PDF chunker: contiguous heading lines produce separate heading chunks instead of being merged into one. Resumes with multi-line section titles fragment.
+- [ ] O79: PDF chunker: heading + following paragraph should merge into one chunk (spec R1632/R1633 says 'a heading and the body text following it form a heading chunk' but the implementation splits on heading/body transition). Search UX suffers when many short heading-only chunks surface as long, thin result rows.

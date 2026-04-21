@@ -96,6 +96,7 @@ const (
 	prefixEmbedChunk    = "EC" // R1598: chunk-level embeddings
 	prefixEmbedFileCent = "EF" // R1599: file centroid (running sum + count)
 	prefixError         = 'E'  // R1543: persistent error conditions (E + name → JSON)
+	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -1840,6 +1841,48 @@ func (s *Store) RemoveFileChunkEmbeddings(fileID uint64) error {
 			return nil
 		}
 		return err
+	})
+}
+
+// pageContentKey builds the PC[fileID][page] key. R1720
+func pageContentKey(fileID uint64, page uint32) []byte {
+	key := []byte(prefixPageContent)
+	key = encodeVarint(key, fileID)
+	return encodeVarint(key, uint64(page))
+}
+
+// WritePageContent stores a per-page compressed chunk-text blob. R1720, R1721, R1722
+func (s *Store) WritePageContent(fileID uint64, page uint32, blob []byte) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, pageContentKey(fileID, page), blob, 0)
+	})
+}
+
+// ReadPageContent fetches a stored page blob. Returns (nil, nil) when absent.
+func (s *Store) ReadPageContent(fileID uint64, page uint32) ([]byte, error) {
+	var out []byte
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, pageContentKey(fileID, page))
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out = append(out[:0], v...)
+		return nil
+	})
+	return out, err
+}
+
+// RemovePageContents deletes every PC record for a file. R1724, R1725
+func (s *Store) RemovePageContents(fileID uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		prefix := []byte(prefixPageContent)
+		prefix = encodeVarint(prefix, fileID)
+		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		})
 	})
 }
 

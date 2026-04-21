@@ -25,6 +25,11 @@
        margin: 0;
        padding: 0.5em 1em;
      }
+     /* PDF chunks render as positioned canvas regions — the <pre>
+        wrapper's text padding adds phantom scrollbars. */
+     pre:has(> pdf-chunk) {
+       padding: 0;
+     }
      /* R1495-R1498: chunked content view */
      .ark-chunk {
        white-space: pre-wrap;
@@ -505,6 +510,13 @@
 <script type="module">
 const highlights = new URL(location.href).searchParams.getAll('highlight');
 
+// Hand highlight patterns to any <pdf-chunk> children. The element uses
+// PDF.js getTextContent() to locate matches and overlays boxes at their
+// positions.
+for (const pc of document.querySelectorAll('pdf-chunk')) {
+  if (highlights.length) pc.setAttribute('highlight', highlights.join('\n'));
+}
+
 // R1459-R1463, R1476: highlight regex matches in plain-text previews.
 // Two paths: <ark-tag> elements get a highlight class on matching children;
 // bare text nodes get <mark> wrappers via DOM splitting (preserves elements).
@@ -597,6 +609,8 @@ window.addEventListener('message', (e) => {
 
 // R1491: load <ark-search> element for inline search panels.
 const { ArkSearchElement } = await import('/ark-search-element.js{{.BundleHash}}');
+// R1709: register <pdf-chunk> so PDF search results render as page regions.
+await import('/pdf-chunk-element.js{{.BundleHash}}');
 
 // R1483, R1491: SearchAPI for <ark-tag> inline panels.
 const api = {

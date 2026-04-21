@@ -552,6 +552,8 @@
 <script type="module">
 // R1490: eagerly register <ark-search> for inline tag panels.
 await import('/ark-search-element.js{{.BundleHash}}');
+// R1709: register <pdf-chunk> so PDF search results render as page regions.
+await import('/pdf-chunk-element.js{{.BundleHash}}');
 
 const path = location.pathname.replace(/^\/content/, '');
 const btn = document.getElementById('toggle-btn');

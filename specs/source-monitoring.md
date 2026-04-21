@@ -136,6 +136,44 @@ The `chat-jsonl` strategy extracts chat-specific data (speaker,
 tool use). Renamed from `jsonl`. A generic JSONL strategy should
 also exist for non-chat JSONL files.
 
+## Empty Files
+
+A file with size zero yields no chunks from any chunker. Attempting to
+index it wastes time, and — because microfts2 returns `ErrNoChunks`
+without recording the file — every subsequent scan re-attempts the
+same empty file. For a zero-byte PDF in particular, the chunker prints
+a parse-error line each time, flooding the log.
+
+The scanner maintains an in-memory **empty-file set** keyed by path
+with the file's mtime as the value. During Scan():
+
+1. If the file's size is zero and it is already in the set with the
+   current mtime, skip — do not flag as new, do not call the
+   indexer.
+2. If the file's size is zero and it is not in the set (or its mtime
+   has changed), record it in the set and report it separately from
+   new files. The caller removes the path from the index via
+   `fts.RemoveFile(path)` so microfts2 can update its own
+   refcounting — chunks may be shared with other paths, so ark never
+   deletes chunks directly.
+3. Any non-zero-size file goes through the normal CheckFile flow
+   unchanged.
+
+The set lives only for the process lifetime. On restart, each empty
+file gets re-checked once — then the set absorbs it again. This is
+acceptable: a single size-zero `os.Stat` per broken file per restart
+is cheap, and we avoid persisting state that can drift from disk.
+
+Access to the set is serialized through the DB actor: Scanner.Scan()
+runs on the actor goroutine, so writes to the set are single-threaded.
+Evictions that touch LMDB are routed through the write queue
+(`enqueueWrite`) in async scan paths, so they serialize behind any
+in-flight write transaction instead of contending with it on the
+actor. Synchronous scans (e.g. `ark add` of a directory) run the
+eviction in the actor since the rest of their indexing also runs
+there. Either way, no mutex is needed — the actor model does the
+serialization.
+
 ## Search Consistency
 
 Searches may return results from stale files. The search path handles

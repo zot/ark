@@ -38,9 +38,10 @@ type DB struct {
 	config  *Config
 	matcher *Matcher
 
-	indexer *Indexer
-	scanner *Scanner
-	search  *Searcher
+	indexer    *Indexer
+	scanner    *Scanner
+	search     *Searcher
+	pdfChunker *PDFChunker // CRC: crc-PDFChunker.md | R1720, R1726
 
 	dbPath   string
 	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
@@ -257,10 +258,9 @@ func Open(dbPath string) (*DB, error) {
 	// Register chunker strategies from ark.toml [[chunker]] entries
 	registerChunkers(fts, config)
 
-	// CRC: crc-PDFChunker.md | R1641
-	if err := fts.AddChunker("pdf", &PDFChunker{}); err != nil {
-		log.Printf("warning: register pdf chunker: %v", err)
-	}
+	// R1644, R1651: in-memory set of zero-byte files shared by Scanner
+	// and the Indexer copies made via withFTS.
+	emptyFiles := NewEmptyFiles()
 
 	db := &DB{
 		fts:     fts,
@@ -268,12 +268,19 @@ func Open(dbPath string) (*DB, error) {
 		store:   store,
 		config:  config,
 		matcher: matcher,
-		indexer: &Indexer{fts: fts, vec: vec, store: store, config: config},
-		scanner: &Scanner{config: config, matcher: matcher, fts: fts},
+		scanner: &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
 		search:  &Searcher{fts: fts, vec: vec, store: store, config: config},
 		dbPath:  dbPath,
 		svc:     make(chan func(), 8),
 	}
+	// CRC: crc-PDFChunker.md | R1641, R1720, R1726
+	// PDFChunker holds a reference to ark.DB so it can stage per-page
+	// blobs during FileChunks and resolve path→fileid in GetChunk.
+	db.pdfChunker = NewPDFChunker(db)
+	if err := fts.AddChunker("pdf", db.pdfChunker); err != nil {
+		log.Printf("warning: register pdf chunker: %v", err)
+	}
+	db.indexer = &Indexer{fts: fts, vec: vec, store: store, config: config, pdfChunker: db.pdfChunker}
 	runSvc(db.svc)
 	return db, nil
 }
@@ -634,6 +641,7 @@ func (db *DB) addDirectory(dir string) error {
 	if err != nil {
 		return err
 	}
+	evictEmpty(db.fts, results.EmptyFiles) // R1648
 
 	absDir, _ := filepath.Abs(dir)
 	for _, f := range results.NewFiles {
@@ -667,6 +675,27 @@ func (db *DB) addDirectory(dir string) error {
 	return nil
 }
 
+// evictEmpty drops any previously-indexed path entries for empty
+// files reported by Scanner. microfts2 owns chunk refcounting, so
+// we only remove the path — chunks may still be referenced by other
+// paths sharing the same content hash. The fts handle is a parameter
+// so synchronous callers pass db.fts while async callers pass the
+// write-goroutine's ftsCopy. R1648
+func evictEmpty(fts *microfts2.DB, paths []string) {
+	for _, p := range paths {
+		status, err := fts.CheckFile(p)
+		if err != nil {
+			continue
+		}
+		if status.Status != "fresh" && status.Status != "stale" && status.Status != "missing" {
+			continue
+		}
+		if err := fts.RemoveFile(p); err != nil {
+			log.Printf("evict empty %s: %v", p, err)
+		}
+	}
+}
+
 // Remove removes files from both engines. Accepts paths or glob patterns.
 func (db *DB) Remove(patterns []string) error {
 	// Get all indexed files to match patterns against
@@ -697,6 +726,7 @@ func (db *DB) Scan() (*ScanResults, error) {
 	if err != nil {
 		return nil, err
 	}
+	evictEmpty(db.fts, results.EmptyFiles) // R1648
 
 	for _, f := range results.NewFiles {
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
@@ -765,10 +795,6 @@ func (db *DB) ScanAsync() (*ScanResults, error) {
 		return results, err
 	}
 
-	if len(results.NewFiles) == 0 {
-		return results, nil
-	}
-
 	// R1052: config files indexed synchronously in the actor
 	var contentFiles []FileEntry
 	for _, f := range results.NewFiles {
@@ -783,13 +809,18 @@ func (db *DB) ScanAsync() (*ScanResults, error) {
 		}
 	}
 
-	if len(contentFiles) == 0 {
+	// Nothing to queue if neither evictions nor content adds remain
+	if len(contentFiles) == 0 && len(results.EmptyFiles) == 0 {
 		return results, nil
 	}
 
-	// R1053: queue content files for write goroutine
-	files := contentFiles // capture for closure
+	// R1053, R1648: queue evictions + content adds for the write goroutine
+	// so LMDB writes serialize behind any in-flight write, and the actor
+	// returns immediately.
+	files := contentFiles         // capture for closure
+	empties := results.EmptyFiles // capture for closure
 	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		evictEmpty(ftsCopy, empties)
 		idx := db.indexer.withFTS(ftsCopy)
 		for _, f := range files {
 			if _, err := idx.AddFile(f.Path, f.Strategy); err != nil {
@@ -1441,6 +1472,18 @@ func (db *DB) FileStrategy(path string) string {
 		return ""
 	}
 	return finfo.Strategy
+}
+
+// ChunkAttrs returns the attrs slice for a single chunk. Uses a fresh
+// ChunkCache (same as ChunkText). Returns nil on lookup failure.
+// CRC: crc-DB.md | R1705
+func (db *DB) ChunkAttrs(path, rangeLabel string) []microfts2.Pair {
+	cache := db.fts.NewChunkCache()
+	chunks, err := cache.GetChunks(path, rangeLabel, 0, 0)
+	if err != nil || len(chunks) == 0 {
+		return nil
+	}
+	return chunks[0].Attrs
 }
 
 // ChunkText resolves a chunk range label to its text content.

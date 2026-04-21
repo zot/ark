@@ -16,16 +16,21 @@ type FileEntry struct {
 }
 
 // ScanResults holds the output of a directory scan.
+// EmptyFiles lists size-zero paths newly observed (or observed with
+// a changed mtime) in this scan. R1647
 type ScanResults struct {
 	NewFiles      []FileEntry
 	NewUnresolved []UnresolvedRecord
+	EmptyFiles    []string
 }
 
 // Scanner walks configured source directories and classifies files.
+// R1644
 type Scanner struct {
-	config  *Config
-	matcher *Matcher
-	fts     *microfts2.DB
+	config     *Config
+	matcher    *Matcher
+	fts        *microfts2.DB
+	emptyFiles *EmptyFiles
 }
 
 // Scan walks all configured source directories and returns new files
@@ -69,6 +74,24 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 			cls := sc.matcher.Classify(includes, excludes, relPath, false)
 			switch cls {
 			case Included:
+				// R1645, R1646, R1647: detect empty files (size == 0) up front —
+				// any chunker would yield nothing, so we record and report the
+				// path separately. The caller evicts prior index entries.
+				if sc.emptyFiles != nil {
+					info, infoErr := d.Info()
+					if infoErr == nil && info.Size() == 0 {
+						mtime := info.ModTime()
+						if sc.emptyFiles.Has(path, mtime) {
+							return nil
+						}
+						sc.emptyFiles.Record(path, mtime)
+						results.EmptyFiles = append(results.EmptyFiles, path)
+						return nil
+					}
+					// Non-empty file: forget any prior empty record so a later
+					// truncation is re-detected.
+					sc.emptyFiles.Forget(path)
+				}
 				// Check if already indexed (fresh or stale — both mean it's known;
 				// stale files are handled by Refresh, not re-added as new)
 				status, err := sc.fts.CheckFile(path)

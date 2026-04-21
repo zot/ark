@@ -52,12 +52,13 @@ func (a *chunkAccumulator) callback(chunkText string) {
 // Indexer coordinates adding, removing, and refreshing files across
 // both microfts2 and microvec. Extracts tags from file content.
 type Indexer struct {
-	fts       *microfts2.DB
-	vec       *microvec.DB
-	store     *Store
-	pubsub    *PubSub         // nil when running without server
-	scheduler *EventScheduler // nil when running without server
-	config    *Config         // for schedule tag checks
+	fts        *microfts2.DB
+	vec        *microvec.DB
+	store      *Store
+	pubsub     *PubSub         // nil when running without server
+	scheduler  *EventScheduler // nil when running without server
+	config     *Config         // for schedule tag checks
+	pdfChunker *PDFChunker     // R1720: flushes per-page blobs after microfts2 assigns fileids
 
 	pendingSchedule []scheduleItem // accumulated during scan, drained after
 }
@@ -75,12 +76,13 @@ type scheduleItem struct {
 // run indexing off the main actor.
 func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
 	return &Indexer{
-		fts:       fts,
-		vec:       idx.vec,
-		store:     idx.store,
-		pubsub:    idx.pubsub,
-		scheduler: idx.scheduler,
-		config:    idx.config,
+		fts:        fts,
+		vec:        idx.vec,
+		store:      idx.store,
+		pubsub:     idx.pubsub,
+		scheduler:  idx.scheduler,
+		config:     idx.config,
+		pdfChunker: idx.pdfChunker,
 	}
 }
 
@@ -143,6 +145,12 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
 	}
 
+	if idx.pdfChunker != nil {
+		if err := idx.pdfChunker.FlushBlobs(path, fileid); err != nil {
+			log.Printf("pdf: flush blobs %s: %v", path, err)
+		}
+	}
+
 	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
 		return fileid, fmt.Errorf("vec add %s: %w", path, err)
 	}
@@ -190,6 +198,7 @@ func (idx *Indexer) RemoveFile(path string) error {
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1105
 		idx.store.RemoveTagValues(fileid)
 		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
+		idx.store.RemovePageContents(fileid)        // R1725
 	}
 	return nil
 }
@@ -212,6 +221,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 		idx.store.RemoveTagDefs(fileid)
 		idx.store.RemoveTagValues(fileid)
 		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
+		idx.store.RemovePageContents(fileid)        // R1725
 	}
 	return nil
 }
@@ -336,6 +346,12 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
 	}
 
+	if idx.pdfChunker != nil {
+		if err := idx.pdfChunker.FlushBlobs(prep.path, fileid); err != nil {
+			log.Printf("pdf: flush blobs %s: %v", prep.path, err)
+		}
+	}
+
 	idx.vec.RemoveFile(prep.oldID)
 
 	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
@@ -348,6 +364,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemoveTagValues(prep.oldID)
 			idx.store.RemoveFileChunkEmbeddings(prep.oldID) // R1607
+			idx.store.RemovePageContents(prep.oldID)        // R1725
 		}
 		// Use pre-extracted values (append prep) or callback-extracted values
 		tagValues := prep.tagValues

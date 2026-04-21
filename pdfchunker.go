@@ -2,16 +2,21 @@ package ark
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"seehuhn.de/go/geom/matrix"
+	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf"
 	"seehuhn.de/go/pdf/font/textextract"
 	"seehuhn.de/go/pdf/pagetree"
@@ -22,6 +27,19 @@ import (
 )
 
 // CRC: crc-PDFChunker.md | Seq: seq-pdf-chunk.md | R1624-R1643
+
+// attrContentOffset and attrContentLen locate a chunk's text inside
+// its page's compressed blob. R1719
+const (
+	attrContentOffset = "content_offset"
+	attrContentLen    = "content_len"
+)
+
+// pendingPageBlob is one page's compressed text awaiting a fileid. R1720
+type pendingPageBlob struct {
+	page uint32
+	blob []byte
+}
 
 // pdfSpan is a positioned text fragment extracted from a PDF page.
 type pdfSpan struct {
@@ -64,34 +82,32 @@ type pdfTableRegion struct {
 }
 
 // PDFChunker extracts text from PDF files with structure detection. R1641
-type PDFChunker struct{}
+//
+// Holds a reference to ark.DB so FileChunks can stage per-page text blobs
+// (flushed once microfts2 has allocated a fileid) and GetChunk can read
+// them back at retrieval time. R1720, R1726
+type PDFChunker struct {
+	db      *DB
+	mu      sync.Mutex
+	pending map[string][]pendingPageBlob
+}
+
+// NewPDFChunker constructs a chunker bound to ark's DB.
+func NewPDFChunker(db *DB) *PDFChunker {
+	return &PDFChunker{db: db, pending: make(map[string][]pendingPageBlob)}
+}
 
 // Chunks implements microfts2.Chunker for tmp documents.
-// CRC: crc-PDFChunker.md | R1642
+// CRC: crc-PDFChunker.md | R1642, R1652, R1660
 func (c *PDFChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
 	r, err := pdf.NewReader(bytes.NewReader(content), int64(len(content)), nil)
 	if err != nil {
-		return fmt.Errorf("pdf parse %s: %w", path, err)
+		log.Printf("pdf: salvage %s: %v", path, err)
+		c.salvage(path, content, yield, false)
+		return nil
 	}
 	defer r.Close()
-	return c.extractChunks(r, yield)
-}
-
-// ChunkText implements microfts2.Chunker for single-chunk retrieval.
-// CRC: crc-PDFChunker.md | R1642
-func (c *PDFChunker) ChunkText(path string, content []byte, rangeLabel string) ([]byte, bool) {
-	var result []byte
-	var found bool
-	c.Chunks(path, content, func(ch microfts2.Chunk) bool {
-		if string(ch.Range) == rangeLabel {
-			result = make([]byte, len(ch.Content))
-			copy(result, ch.Content)
-			found = true
-			return false
-		}
-		return true
-	})
-	return result, found
+	return c.extractChunks(path, r, yield, false)
 }
 
 // FileChunks implements microfts2.FileChunker for indexed files.
@@ -105,28 +121,23 @@ func (c *PDFChunker) FileChunks(path string, oldHash [32]byte, yield func(microf
 	if hash == oldHash {
 		return hash, nil // unchanged, skip
 	}
+	c.resetPending(path)
 	r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)), nil)
 	if err != nil {
-		log.Printf("pdf: skip %s: %v", path, err)
-		return hash, nil // unparseable PDF — yield no chunks, don't block indexer
+		// R1652, R1660: fall back to byte-level salvage for malformed PDFs
+		log.Printf("pdf: salvage %s: %v", path, err)
+		c.salvage(path, data, yield, true)
+		return hash, nil
 	}
 	defer r.Close()
-	return hash, c.extractChunks(r, yield)
+	return hash, c.extractChunks(path, r, yield, true)
 }
 
-// FileChunkText implements microfts2.FileChunker for single-chunk retrieval.
-// CRC: crc-PDFChunker.md | R1642
-func (c *PDFChunker) FileChunkText(path string, rangeLabel string) ([]byte, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
-	}
-	return c.ChunkText(path, data, rangeLabel)
-}
-
-// extractChunks iterates all pages and yields chunks.
+// extractChunks iterates all pages, seals each page's blob, and yields chunks.
+// When persist is true, sealed blobs are staged in c.pending[path] for
+// FlushBlobs to write once the fileid is known. R1720, R1721
 // CRC: crc-PDFChunker.md | R1624
-func (c *PDFChunker) extractChunks(doc *pdf.Reader, yield func(microfts2.Chunk) bool) error {
+func (c *PDFChunker) extractChunks(path string, doc *pdf.Reader, yield func(microfts2.Chunk) bool, persist bool) error {
 	iter := pagetree.NewIterator(doc)
 	pageNum := 0
 	for _, pageDict := range iter.All() {
@@ -141,6 +152,11 @@ func (c *PDFChunker) extractChunks(doc *pdf.Reader, yield func(microfts2.Chunk) 
 			continue
 		}
 		chunks := buildPageChunks(pageNum, lines, rules)
+		if persist {
+			if blob := sealPageBlob(chunks); blob != nil {
+				c.pushPending(path, uint32(pageNum), blob)
+			}
+		}
 		for _, ch := range chunks {
 			if !yield(ch) {
 				return nil
@@ -151,6 +167,226 @@ func (c *PDFChunker) extractChunks(doc *pdf.Reader, yield func(microfts2.Chunk) 
 		return fmt.Errorf("pdf page iteration: %w", iter.Err)
 	}
 	return nil
+}
+
+// salvage dispatches to salvageText and optionally seals the salvage
+// chunks into the per-file page-0 blob. R1723
+func (c *PDFChunker) salvage(path string, content []byte, yield func(microfts2.Chunk) bool, persist bool) {
+	chunks := salvageChunks(content)
+	if len(chunks) == 0 {
+		return
+	}
+	if persist {
+		if blob := sealPageBlob(chunks); blob != nil {
+			c.pushPending(path, 0, blob)
+		}
+	}
+	for _, ch := range chunks {
+		if !yield(ch) {
+			return
+		}
+	}
+}
+
+// resetPending clears any half-built staging state for this path so a
+// retry doesn't inherit data from a failed prior pass. R1724
+func (c *PDFChunker) resetPending(path string) {
+	c.mu.Lock()
+	delete(c.pending, path)
+	c.mu.Unlock()
+}
+
+// pushPending appends one sealed page blob to the staging area.
+func (c *PDFChunker) pushPending(path string, page uint32, blob []byte) {
+	c.mu.Lock()
+	c.pending[path] = append(c.pending[path], pendingPageBlob{page: page, blob: blob})
+	c.mu.Unlock()
+}
+
+// FlushBlobs writes staged page blobs for path under fileid, replacing
+// any previously stored blobs for the same file. R1720, R1724
+// CRC: crc-PDFChunker.md | R1720, R1724
+func (c *PDFChunker) FlushBlobs(path string, fileid uint64) error {
+	c.mu.Lock()
+	blobs := c.pending[path]
+	delete(c.pending, path)
+	c.mu.Unlock()
+	if c.db == nil || c.db.store == nil || len(blobs) == 0 {
+		return nil
+	}
+	if err := c.db.store.RemovePageContents(fileid); err != nil {
+		return fmt.Errorf("pdf: clear page contents %d: %w", fileid, err)
+	}
+	for _, pb := range blobs {
+		if err := c.db.store.WritePageContent(fileid, pb.page, pb.blob); err != nil {
+			return fmt.Errorf("pdf: write page content %d/%d: %w", fileid, pb.page, err)
+		}
+	}
+	return nil
+}
+
+// sealPageBlob concatenates each chunk's text (null-byte separated),
+// records each chunk's offset/length in its Attrs, and returns the
+// zlib-compressed blob. Returns nil on compression failure. R1719, R1721, R1722
+func sealPageBlob(chunks []microfts2.Chunk) []byte {
+	if len(chunks) == 0 {
+		return nil
+	}
+	var raw bytes.Buffer
+	for i := range chunks {
+		if i > 0 {
+			raw.WriteByte(0)
+		}
+		offset := raw.Len()
+		raw.Write(chunks[i].Content)
+		chunks[i].Attrs = append(chunks[i].Attrs,
+			microfts2.Pair{Key: []byte(attrContentOffset), Value: []byte(strconv.Itoa(offset))},
+			microfts2.Pair{Key: []byte(attrContentLen), Value: []byte(strconv.Itoa(len(chunks[i].Content)))},
+		)
+	}
+	var out bytes.Buffer
+	w := zlib.NewWriter(&out)
+	if _, err := w.Write(raw.Bytes()); err != nil {
+		return nil
+	}
+	if err := w.Close(); err != nil {
+		return nil
+	}
+	return out.Bytes()
+}
+
+// GetChunk implements microfts2.RandomAccessChunker. Reads the chunk's
+// content_offset/content_len from Attrs, loads the page blob from Store
+// (decompressing once per page via customData), and slices. Falls back
+// to a streaming FileChunks pass when any step reports missing data.
+// R1726, R1727, R1728
+// CRC: crc-PDFChunker.md | Seq: seq-pdf-chunk-retrieval.md | R1726
+func (c *PDFChunker) GetChunk(path string, _ []byte, customData *any, chunk *microfts2.Chunk) error {
+	if text, ok := c.fastRetrieve(path, customData, chunk); ok {
+		chunk.Content = text
+		return nil
+	}
+	text, ok := c.streamingRetrieve(path, string(chunk.Range))
+	if !ok {
+		return fmt.Errorf("pdf: chunk %s/%s not found", path, chunk.Range)
+	}
+	chunk.Content = text
+	return nil
+}
+
+// fastRetrieve reads Attrs, fetches/decompresses the page blob, and
+// slices the requested chunk text. Returns false on any missing step.
+func (c *PDFChunker) fastRetrieve(path string, customData *any, chunk *microfts2.Chunk) ([]byte, bool) {
+	if c.db == nil || c.db.store == nil {
+		return nil, false
+	}
+	page, offset, length, ok := parseContentAttrs(chunk.Attrs)
+	if !ok {
+		return nil, false
+	}
+	info, err := c.db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return nil, false
+	}
+	cache := customDataPageCache(customData)
+	decompressed, ok := cache[page]
+	if !ok {
+		blob, err := c.db.store.ReadPageContent(info.FileID, page)
+		if err != nil || blob == nil {
+			return nil, false
+		}
+		text, err := zlibDecompress(blob)
+		if err != nil {
+			return nil, false
+		}
+		cache[page] = text
+		decompressed = text
+	}
+	if offset+length > len(decompressed) {
+		return nil, false
+	}
+	out := make([]byte, length)
+	copy(out, decompressed[offset:offset+length])
+	return out, true
+}
+
+// streamingRetrieve runs the non-persisting chunker path until it finds
+// the target range and returns its content. Used as fallback when
+// fastRetrieve can't. Does not stage any pending blobs — retrieval must
+// not masquerade as indexing. R1728
+func (c *PDFChunker) streamingRetrieve(path, rangeLabel string) ([]byte, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var result []byte
+	var found bool
+	_ = c.Chunks(path, data, func(ch microfts2.Chunk) bool {
+		if string(ch.Range) == rangeLabel {
+			result = append(result[:0], ch.Content...)
+			found = true
+			return false
+		}
+		return true
+	})
+	return result, found
+}
+
+// parseContentAttrs extracts (page, offset, length) from chunk attrs.
+func parseContentAttrs(attrs []microfts2.Pair) (page uint32, offset, length int, ok bool) {
+	var pageStr, offStr, lenStr string
+	for _, a := range attrs {
+		switch string(a.Key) {
+		case "page":
+			pageStr = string(a.Value)
+		case attrContentOffset:
+			offStr = string(a.Value)
+		case attrContentLen:
+			lenStr = string(a.Value)
+		}
+	}
+	if offStr == "" || lenStr == "" {
+		return 0, 0, 0, false
+	}
+	p64, err := strconv.ParseUint(pageStr, 10, 32)
+	if err != nil && pageStr != "" {
+		return 0, 0, 0, false
+	}
+	off, err := strconv.Atoi(offStr)
+	if err != nil || off < 0 {
+		return 0, 0, 0, false
+	}
+	ln, err := strconv.Atoi(lenStr)
+	if err != nil || ln < 0 {
+		return 0, 0, 0, false
+	}
+	return uint32(p64), off, ln, true
+}
+
+// customDataPageCache returns (and lazily initializes) the decompressed-
+// page-blob cache inside microfts2's per-file customData. R1727
+func customDataPageCache(customData *any) map[uint32][]byte {
+	if *customData == nil {
+		cache := make(map[uint32][]byte)
+		*customData = cache
+		return cache
+	}
+	if cache, ok := (*customData).(map[uint32][]byte); ok {
+		return cache
+	}
+	cache := make(map[uint32][]byte)
+	*customData = cache
+	return cache
+}
+
+// zlibDecompress reads a zlib-compressed blob and returns the raw bytes.
+func zlibDecompress(blob []byte) ([]byte, error) {
+	zr, err := zlib.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	return io.ReadAll(zr)
 }
 
 // extractPage extracts text spans and drawn rules from one page. R1624, R1626
@@ -165,6 +401,18 @@ func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, erro
 	rdr := reader.New(ext)
 
 	glyphCache := make(map[interface{}]map[cid.CID]string)
+	// TextEvent fires TextEventSpace when a TJ positional adjustment
+	// is ≥ 0.3× space width — seehuhn's own signal that the PDF
+	// intended a word break (via kerning-style positioning rather than
+	// an explicit space glyph). Prepend a space to the next Character
+	// call so mergeSpans sees the break in the stream, independent of
+	// our gap heuristic.
+	var pendingSpace bool
+	rdr.TextEvent = func(event reader.TextEvent, _ float64) {
+		if event == reader.TextEventSpace {
+			pendingSpace = true
+		}
+	}
 
 	rdr.Character = func(c cid.CID, text string) error {
 		if text == "" {
@@ -177,7 +425,12 @@ func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, erro
 			text = cidMap[c]
 		}
 		if text == "" {
+			pendingSpace = false
 			return nil
+		}
+		if pendingSpace {
+			text = " " + text
+			pendingSpace = false
 		}
 		x, y := rdr.GetTextPositionDevice()
 		fontSize := rdr.State.GState.TextFontSize
@@ -189,26 +442,35 @@ func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, erro
 		return nil
 	}
 
-	// Track path operations for table rule detection. R1626
+	// Track path operations for table rule detection. Path operator args
+	// are in pre-CTM user space; we transform to device coords so rules
+	// share the coordinate system of text spans (post-CTM). R1626
+	applyCTM := func(x, y float64) (float64, float64) {
+		v := rdr.State.GState.CTM.Apply(vec.Vec2{X: x, Y: y})
+		return v.X, v.Y
+	}
 	rdr.EveryOp = func(op string, args []pdf.Object) error {
 		switch op {
 		case "m": // moveto
 			if len(args) >= 2 {
-				pathStartX, pathStartY = pdfFloat(args[0]), pdfFloat(args[1])
+				pathStartX, pathStartY = applyCTM(pdfFloat(args[0]), pdfFloat(args[1]))
 				pathPoints = [][2]float64{{pathStartX, pathStartY}}
 				inPath = true
 			}
 		case "l": // lineto
 			if len(args) >= 2 && inPath {
-				pathPoints = append(pathPoints, [2]float64{pdfFloat(args[0]), pdfFloat(args[1])})
+				lx, ly := applyCTM(pdfFloat(args[0]), pdfFloat(args[1]))
+				pathPoints = append(pathPoints, [2]float64{lx, ly})
 			}
 		case "re": // rectangle
 			if len(args) >= 4 {
-				rx, ry := pdfFloat(args[0]), pdfFloat(args[1])
-				rw, rh := pdfFloat(args[2]), pdfFloat(args[3])
+				rx0, ry0 := applyCTM(pdfFloat(args[0]), pdfFloat(args[1]))
+				rx1, ry1 := applyCTM(pdfFloat(args[0])+pdfFloat(args[2]), pdfFloat(args[1])+pdfFloat(args[3]))
+				rw := math.Abs(rx1 - rx0)
+				rh := math.Abs(ry1 - ry0)
 				// Thin rectangles are rules
-				if math.Abs(rh) < 2 || math.Abs(rw) < 2 {
-					rules = append(rules, pdfRule{rx, ry, rx + rw, ry + rh})
+				if rh < 2 || rw < 2 {
+					rules = append(rules, pdfRule{rx0, ry0, rx1, ry1})
 				}
 			}
 		case "h": // closepath
@@ -236,12 +498,34 @@ func extractPage(doc *pdf.Reader, pageDict pdf.Dict) ([]pdfSpan, []pdfRule, erro
 	return spans, rules, err
 }
 
-// mergeSpans combines spans on the same line into pdfLines. R1625
+// filterBlankLines returns lines whose text contains at least one
+// non-whitespace rune. Some PDFs encode paragraph separators as
+// single-space lines at a fresh Y; these need to be stripped before
+// gap-based structure detection so the real gap between paragraphs
+// becomes visible. R1661, R1662
+func filterBlankLines(lines []pdfLine) []pdfLine {
+	out := lines[:0:0]
+	for _, l := range lines {
+		if strings.TrimSpace(l.Text) != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// mergeSpans combines spans on the same line into pdfLines. R1625.
+//
+// Word-break detection uses the gap between the previous span's
+// estimated right edge and the next span's left edge. The estimate
+// (fontSize * 0.6 * charCount) is imperfect, especially for wide
+// glyphs like `@`, so we post-process the merged text to collapse
+// the common false-positive pattern `@ name:` → `@name:` (tag
+// grammar) — matching spans that are really `@tag:` rendered with
+// a wider-than-estimated `@` glyph.
 func mergeSpans(spans []pdfSpan) []pdfLine {
 	if len(spans) == 0 {
 		return nil
 	}
-	// Sort by Y descending (top of page first), then X ascending
 	sort.Slice(spans, func(i, j int) bool {
 		if math.Abs(spans[i].Y-spans[j].Y) > spans[i].FontSize*0.3 {
 			return spans[i].Y > spans[j].Y
@@ -260,9 +544,7 @@ func mergeSpans(spans []pdfSpan) []pdfLine {
 
 	for i := 1; i < len(spans); i++ {
 		s := spans[i]
-		// Same line if Y is within tolerance
 		if math.Abs(s.Y-cur.Y) < cur.FontSize*0.3 {
-			// Gap between spans — insert space if needed
 			gap := s.X - (cur.X + cur.Width)
 			if gap > cur.FontSize*0.3 {
 				cur.Text += " "
@@ -274,23 +556,44 @@ func mergeSpans(spans []pdfSpan) []pdfLine {
 				cur.Height = s.FontSize
 			}
 		} else {
+			cur.Text = tightenTagPrefixes(cur.Text)
 			lines = append(lines, cur)
 			cur = pdfLine{
 				X: s.X, Y: s.Y,
 				FontSize: s.FontSize,
 				Text:     s.Text,
-				Width:    s.Width,
+				Width:    s.FontSize,
 				Height:   s.FontSize,
 			}
 		}
 	}
+	cur.Text = tightenTagPrefixes(cur.Text)
 	lines = append(lines, cur)
 	return lines
 }
 
-// buildPageChunks detects structure and emits chunks for one page. R1626-R1636
+// tightenTagPrefixes collapses `@ name:` back to `@name:` when the
+// span-gap heuristic inserted a spurious space between the `@` glyph
+// and the tag name. The `@` glyph is wider than the chunker's width
+// estimate, so any tag in a Chrome/Skia-generated PDF shows up split
+// unless we glue it back here.
+var tightenTagPrefixRe = regexp.MustCompile(`@\s+([a-zA-Z][\w.-]*\s*:)`)
+
+func tightenTagPrefixes(s string) string {
+	return tightenTagPrefixRe.ReplaceAllString(s, "@$1")
+}
+
+// buildPageChunks detects structure and emits chunks for one page. R1626-R1636, R1661-R1664
 func buildPageChunks(pageNum int, lines []pdfLine, rules []pdfRule) []microfts2.Chunk {
 	page := strconv.Itoa(pageNum)
+	pageSize := observedPageSize(lines)
+
+	// R1661, R1662, R1663, R1664: drop whitespace-only lines so structure
+	// detection sees only content-bearing lines. ONLYOFFICE-style PDFs
+	// encode paragraph separators as single-space lines at a fresh Y;
+	// without this filter they fill the Y-gap that gap-based paragraph
+	// detection relies on, and the page collapses to one paragraph.
+	lines = filterBlankLines(lines)
 
 	// Page-level fallback. R1636
 	if len(lines) < 2 {
@@ -301,8 +604,8 @@ func buildPageChunks(pageNum int, lines []pdfLine, rules []pdfRule) []microfts2.
 		rect := boundingRect(lines)
 		return []microfts2.Chunk{{
 			Range:   []byte(page),
-			Content: []byte(strings.TrimSpace(text)),
-			Attrs:   chunkAttrs(page, rect, 0),
+			Content: []byte(strings.TrimRight(text, "\n")),
+			Attrs:   chunkAttrs(page, clampRectToPage(rect, pageSize), 0, lines, pageSize),
 		}}
 	}
 
@@ -364,8 +667,8 @@ func buildPageChunks(pageNum int, lines []pdfLine, rules []pdfRule) []microfts2.
 		rect := tbl.rect
 		chunks = append(chunks, microfts2.Chunk{
 			Range:   []byte(fmt.Sprintf("%s/table/%d", page, i+1)),
-			Content: []byte(strings.TrimSpace(text)),
-			Attrs:   chunkAttrs(page, rect, 0),
+			Content: []byte(strings.TrimRight(text, "\n")),
+			Attrs:   chunkAttrs(page, clampRectToPage(rect, pageSize), 0, tbl.lines, pageSize),
 		})
 	}
 
@@ -378,19 +681,20 @@ func buildPageChunks(pageNum int, lines []pdfLine, rules []pdfRule) []microfts2.
 			text += l.Text + "\n"
 		}
 		rect := boundingRect(g.lines)
+		clampedRect := clampRectToPage(rect, pageSize)
 		if g.isHeading {
 			headingN++
 			chunks = append(chunks, microfts2.Chunk{
 				Range:   []byte(fmt.Sprintf("%s/heading/%d", page, headingN)),
-				Content: []byte(strings.TrimSpace(text)),
-				Attrs:   chunkAttrs(page, rect, g.lines[0].FontSize),
+				Content: []byte(strings.TrimRight(text, "\n")),
+				Attrs:   chunkAttrs(page, clampedRect, g.lines[0].FontSize, g.lines, pageSize),
 			})
 		} else {
 			paraN++
 			chunks = append(chunks, microfts2.Chunk{
 				Range:   []byte(fmt.Sprintf("%s/para/%d", page, paraN)),
-				Content: []byte(strings.TrimSpace(text)),
-				Attrs:   chunkAttrs(page, rect, 0),
+				Content: []byte(strings.TrimRight(text, "\n")),
+				Attrs:   chunkAttrs(page, clampedRect, 0, g.lines, pageSize),
 			})
 		}
 	}
@@ -626,6 +930,11 @@ func dominantLineSpacing(lines []pdfLine) float64 {
 }
 
 // boundingRect computes the bounding box of a set of lines.
+// boundingRect unions the bounding boxes of a group of lines.
+// pdfLine.Y is the glyph baseline and pdfLine.Height is the font size
+// (ascender height). The bottom of a line (bottom of descenders) is
+// ≈0.25×height below the baseline; the top of a line (top of ascenders)
+// is ≈1.0×height above the baseline.
 func boundingRect(lines []pdfLine) pdfRect {
 	if len(lines) == 0 {
 		return pdfRect{}
@@ -634,9 +943,9 @@ func boundingRect(lines []pdfLine) pdfRect {
 	maxX, maxY := math.Inf(-1), math.Inf(-1)
 	for _, l := range lines {
 		minX = math.Min(minX, l.X)
-		minY = math.Min(minY, l.Y-l.Height)
+		minY = math.Min(minY, l.Y-l.Height*0.25)
 		maxX = math.Max(maxX, l.X+l.Width)
-		maxY = math.Max(maxY, l.Y)
+		maxY = math.Max(maxY, l.Y+l.Height)
 	}
 	return pdfRect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
 }
@@ -648,8 +957,8 @@ func lineInRect(l pdfLine, r pdfRect) bool {
 	return mx >= r.X && mx <= r.X+r.W && my >= r.Y && my <= r.Y+r.H
 }
 
-// chunkAttrs builds the Attrs slice for a chunk. R1637, R1638, R1639
-func chunkAttrs(page string, rect pdfRect, fontSize float64) []microfts2.Pair {
+// chunkAttrs builds the Attrs slice for a chunk. R1637, R1638, R1639, R1665
+func chunkAttrs(page string, rect pdfRect, fontSize float64, lines []pdfLine, pageSize [2]float64) []microfts2.Pair {
 	attrs := []microfts2.Pair{
 		{Key: []byte("page"), Value: []byte(page)},
 		{Key: []byte("rect"), Value: []byte(rect.String())},
@@ -660,7 +969,145 @@ func chunkAttrs(page string, rect pdfRect, fontSize float64) []microfts2.Pair {
 			Value: []byte(fmt.Sprintf("%.1f", fontSize)),
 		})
 	}
+	if pageSize[0] > 0 && pageSize[1] > 0 {
+		attrs = append(attrs, microfts2.Pair{
+			Key:   []byte("page_size"),
+			Value: []byte(fmt.Sprintf("%s,%s", formatPdfFloat(pageSize[0]), formatPdfFloat(pageSize[1]))),
+		})
+	}
+	if tr := extractTagRects(lines); tr != "" {
+		attrs = append(attrs, microfts2.Pair{
+			Key:   []byte("tag_rects"),
+			Value: []byte(tr),
+		})
+	}
 	return attrs
+}
+
+// observedPageSize returns the chunker's view of the page extent —
+// max (x+width) and max (y+height) across all lines on the page.
+// Used as the page's dimensions in the chunker's coord system so the
+// <pdf-chunk> element can map between chunker coords and PDF.js's
+// viewport regardless of any CTM/TextMatrix quirks in the source PDF.
+func observedPageSize(lines []pdfLine) [2]float64 {
+	var maxX, maxY float64
+	for _, l := range lines {
+		if rx := l.X + l.Width; rx > maxX {
+			maxX = rx
+		}
+		if ry := l.Y + l.Height; ry > maxY {
+			maxY = ry
+		}
+	}
+	return [2]float64{maxX, maxY}
+}
+
+// clampRectToPage keeps a chunk rect within the observed page extent.
+// Chrome/Skia PDFs occasionally emit path operators at coordinates far
+// outside the page (negative, or tall beyond the page bottom) — the
+// visual region of interest is still the intersection with the page.
+// Returns the original rect when pageSize is empty.
+func clampRectToPage(r pdfRect, pageSize [2]float64) pdfRect {
+	pageW, pageH := pageSize[0], pageSize[1]
+	if pageW <= 0 || pageH <= 0 {
+		return r
+	}
+	x0, y0 := r.X, r.Y
+	x1, y1 := r.X+r.W, r.Y+r.H
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+	if x1 > pageW {
+		x1 = pageW
+	}
+	if y1 > pageH {
+		y1 = pageH
+	}
+	if x1 <= x0 || y1 <= y0 {
+		return r // degenerate after clamp — keep original so downstream can still inspect
+	}
+	return pdfRect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
+}
+
+// tagRectPattern matches ark tag grammar — must mirror the generic
+// regex in tagblock.go so rects only record tags that ark's generic
+// extraction will also index (R1676).
+var tagRectPattern = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
+
+// extractTagRects scans a chunk's lines for @name: value tag patterns
+// and returns the compact `tag_rects` chunk attribute — one
+// "name=value@x,y,w,h" entry per tag, semicolon-separated. Empty
+// when the chunk has no tags. R1669-R1674.
+//
+// Coordinates are in PDF points, origin bottom-left (same convention
+// as the chunk-level rect). The tag's x extent is interpolated from
+// the pdfLine's Width using byte offsets of the match — the chunker
+// already estimates line Width by summing span widths, so the same
+// proportionality applies to tags inside them. First-line-only for
+// wrapped tag values falls out naturally because each pdfLine carries
+// one visual line's text.
+func extractTagRects(lines []pdfLine) string {
+	var entries []string
+	for _, l := range lines {
+		if l.Width <= 0 || l.Text == "" {
+			continue
+		}
+		total := len(l.Text)
+		for _, m := range tagRectPattern.FindAllStringSubmatchIndex(l.Text, -1) {
+			if len(m) < 6 {
+				continue
+			}
+			start, end := m[0], m[1]
+			name := l.Text[m[2]:m[3]]
+			value := strings.TrimSpace(l.Text[m[4]:m[5]])
+			xStart := l.X + l.Width*float64(start)/float64(total)
+			xEnd := l.X + l.Width*float64(end)/float64(total)
+			entries = append(entries, fmt.Sprintf(
+				"%s=%s@%s,%s,%s,%s",
+				encodeTagRectField(name),
+				encodeTagRectField(value),
+				formatPdfFloat(xStart),
+				formatPdfFloat(l.Y),
+				formatPdfFloat(xEnd-xStart),
+				formatPdfFloat(l.Height),
+			))
+		}
+	}
+	return strings.Join(entries, ";")
+}
+
+// encodeTagRectField percent-encodes the four structural delimiters
+// (`=`, `@`, `;`, `,`) and the percent sign itself so names and values
+// survive round-trip through the compact tag_rects format. R1672.
+func encodeTagRectField(s string) string {
+	needsEncode := false
+	for _, r := range s {
+		if r == '=' || r == '@' || r == ';' || r == ',' || r == '%' {
+			needsEncode = true
+			break
+		}
+	}
+	if !needsEncode {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '=', '@', ';', ',', '%':
+			fmt.Fprintf(&b, "%%%02X", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func formatPdfFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', 2, 64)
 }
 
 // parseRectY extracts the Y coordinate from a chunk's rect attribute for sorting.

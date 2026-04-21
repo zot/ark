@@ -1,5 +1,5 @@
 # ArkTagElement
-**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498, R1512
+**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498, R1512, R1668
 
 Custom element (`<ark-tag>`) that renders an interactive tag widget
 in read-only content (goldmark HTML and plain-text `<pre>` blocks).
@@ -10,6 +10,11 @@ No shadow DOM — inherits host theme CSS.
 - tag value (from `<value>` child element text)
 - whether an inline search panel is currently open
 - the currently open panel element (static, shared across all instances)
+- optional `rect` attribute (`x,y,w,h`) supplied when the element
+  is a child of `<pdf-chunk>` — positional metadata used by the
+  parent for overlay placement. Ignored by `<ark-tag>` itself;
+  standalone behavior (styling, click, dispatch) is unchanged
+  (R1668)
 
 ## Does
 - renders styled tag: CSS `content` generates `@` on `name::before` and `:` on `name::after`; name colored `--term-accent-bright`, value colored `--term-success`, punctuation colored `--term-text`

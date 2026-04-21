@@ -630,6 +630,16 @@
 - **R385:** (inferred) Append detection derives boundary cleanliness from last chunk end vs file length — no chunker reporting needed
 - **R386:** (inferred) Until O12 back-seek is implemented, append detection falls back to full reindex for markdown-strategy files
 
+### Empty Files
+- **R1644:** The Scanner maintains an in-memory empty-file set, keyed by path with mtime as the value
+- **R1645:** A file is "empty" when its size on disk is zero; any chunker would yield no chunks for it
+- **R1646:** During Scan(), if a file's size is zero and the path is already in the set with the current mtime, skip — do not flag as new, do not invoke the indexer
+- **R1647:** During Scan(), if a file's size is zero and the path is not in the set (or its mtime has changed), record the path with current mtime in the set and report the path in a separate EmptyFiles result list
+- **R1648:** The caller of Scan() removes the path from the index by calling `microfts2.RemoveFile(path)`; microfts2 handles chunk refcounting (multiple paths may share a fileid, so the chunks must not be forcibly deleted at the ark level)
+- **R1649:** Non-zero-size files go through the normal CheckFile flow unchanged
+- **R1650:** The empty-file set is process-lifetime only — not persisted across restarts
+- **R1651:** Access to the empty-file set is serialized through the DB actor (Scanner.Scan runs on the actor goroutine); LMDB evictions from ScanAsync are routed through the write queue (`enqueueWrite`), so no mutex is needed
+
 ## Feature: Cluster 1 — Config/CLI Fixes
 **Source:** specs/main.md
 
@@ -2587,6 +2597,20 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1637:** Every chunk carries a `page` attribute (page number as string).
 - **R1638:** Every chunk carries a `rect` attribute: bounding box as `x,y,w,h` in PDF points (origin = bottom-left per PDF spec).
 - **R1639:** Heading chunks carry a `font_size` attribute (dominant font size in the chunk).
+- **R1665:** Chunks carry an optional `tag_rects` attribute: per-tag bounding boxes for `@name: value` patterns found in the chunk's positioned text spans. Absent when the chunk has no tags; absent on salvage chunks. Format spec: PDF Chunk Element feature (R1669–R1674).
+- **R1719:** Every chunk carries `content_offset` and `content_len` attributes locating its text within the page's cached text blob (byte offset and byte length, decimal strings).
+
+### Chunk Text Cache
+
+- **R1720:** At index time, the PDF chunker writes each page's extracted chunk text into a compressed blob stored in ark's LMDB subdatabase, keyed by `(fileid, page)`.
+- **R1721:** Each page's blob contains the concatenated text of every chunk on that page, in emission order, separated by a single null byte.
+- **R1722:** Blobs are compressed with zstd.
+- **R1723:** Salvage chunks share a single per-file blob indexed as page 0 (salvage chunks have no real page number and arrive in small counts per file).
+- **R1724:** Before writing new blobs for a file, the chunker removes all existing blobs for that fileid so stale pages cannot outlive a re-indexed document with fewer pages.
+- **R1725:** On file removal, the file's page-content blobs are removed alongside other per-file Store records.
+- **R1726:** PDFChunker implements `microfts2.RandomAccessChunker`. `GetChunk` reads `content_offset`/`content_len` from the chunk's Attrs, loads the corresponding page blob from the Store, decompresses, and slices to fill `chunk.Content`.
+- **R1727:** `GetChunk` caches decompressed page blobs in `customData` (a `map[page][]byte`) keyed by page number. Because customData lifetime is bounded by the ChunkCache's TTL (minutes), no eviction policy is required.
+- **R1728:** If a chunk's Attrs lack `content_offset`/`content_len`, or the page blob is missing from the Store, `GetChunk` falls back to the streaming parse path (run `FileChunks` until the target range is found).
 
 ### Chunk Location Format
 
@@ -2597,3 +2621,117 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1641:** PDF chunker registers as strategy `"pdf"` via `microfts2.AddChunker`.
 - **R1642:** PDF chunker implements `FileChunker` (indexed files — owns file read, hash-based skip) and `Chunker` (tmp documents — receives raw bytes).
 - **R1643:** Strategy assignment via ark.toml `[strategies]` section: `"*.pdf" = "pdf"`. No `[[chunker]]` block needed.
+
+### Blank-Line Filtering
+
+- **R1661:** Before any per-page structure detection (tables, headings, paragraphs), lines whose text is entirely whitespace are removed from the line set
+- **R1662:** Rationale: some PDF generators (notably ONLYOFFICE) emit blank visual lines as real text lines containing only a space glyph; without filtering, gap-based paragraph detection sees consistent line spacing and produces a single paragraph chunk for the entire page
+- **R1663:** Dropping blank lines causes paragraph-separator gaps to double (two normal gaps collapse into one doubled gap once the blank between them is removed), so the existing 1.5× dominant-spacing threshold fires naturally
+- **R1664:** The filter also benefits table detection: blank "rows" with no aligned X positions previously diluted the column-alignment signal
+
+### Fallback Text Salvage
+
+- **R1652:** When `pdf.NewReader` returns any error, the chunker invokes a best-effort salvage pass over the raw bytes instead of returning an error
+- **R1653:** Salvage scans the raw bytes for `stream\n ... \nendstream` pairs, treating each as a candidate content stream
+- **R1654:** Salvage inspects the object dictionary immediately preceding the stream for a `/Filter` entry; if `/FlateDecode`, the stream is decompressed with `compress/zlib`; if no filter, the stream bytes are used as-is; other filters cause the stream to be skipped
+- **R1655:** Within a decoded stream, salvage extracts the text-string argument from the text-showing operators `Tj`, `'`, `"`, and the array form `TJ` (numbers inside `TJ` arrays are kerning and are ignored)
+- **R1656:** PDF string literals inside the extracted text respect the standard escape sequences: `\(`, `\)`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, and three-digit octal `\ddd`
+- **R1657:** Salvage emits one chunk per content stream with location `salvage/N` (1-indexed). Salvage chunks omit the `rect` attribute because coordinates were not consulted
+- **R1658:** Salvage chunks carry a `page` attribute set to `"1"` and (inferred) no `font_size`; structure detection (tables, headings, paragraphs) is not attempted
+- **R1659:** If salvage extracts no text from any stream, the chunker yields nothing — the file takes the standard FileChunker "log once, empty result" path and is skipped on subsequent scans with matching hash
+- **R1660:** (inferred) Salvage is invoked from both the byte-input `Chunks` (tmp documents) and the file-input `FileChunks` paths, so tmp PDFs and indexed PDFs both benefit
+
+## Feature: PDF Chunk Element
+**Source:** specs/pdf-chunk-element.md
+
+### The Primitive
+
+- **R1666:** `<pdf-chunk>` is a custom HTMLElement (no shadow DOM; inherits host theme CSS) that renders one PDF chunk's page region as pixels — no viewer UI, no page navigation.
+- **R1667:** Attributes: `src` (URL returning raw PDF bytes), `page` (1-indexed page number), `rect` (chunk bounding box as `x,y,w,h` in PDF points, origin bottom-left).
+- **R1668:** Children are `<ark-tag>` elements (standard element used in markdown and plain-text pages), each with an additional `rect="x,y,w,h"` attribute giving the tag's bounding box in the same coordinate system. Without JavaScript or before the canvas renders, these children appear as normal clickable tag widgets.
+
+### Tag Rects From The Chunker
+
+- **R1669:** The PDF chunker scans each chunk's positioned text spans for the tag pattern `@([a-zA-Z][\w.-]*):\s*([^\n]*)` — identical to ark's generic tag grammar — and records a bounding box for each match.
+- **R1670:** Recorded tag rects are emitted as the chunk attribute `tag_rects` (see PDF Chunker R1665).
+- **R1671:** `tag_rects` encoding is a semicolon-separated list: `name=value@x,y,w,h;name=value@x,y,w,h;…`.
+- **R1672:** Tag `name` and `value` URL-encode `=`, `@`, `;`, `,` when those characters appear literally inside them.
+- **R1673:** Coordinates are floats in PDF points, origin bottom-left — same convention as chunk-level `rect` (R1638).
+- **R1674:** When a tag's value wraps across multiple lines in the PDF layout, only the first line's rect is recorded; wrapped tails are not emitted.
+- **R1675:** Salvage chunks (R1657) produce no `tag_rects` — no coordinates exist to record.
+- **R1676:** Generic tag extraction — T/F/V/D LMDB records — continues unchanged for all PDF chunks including salvage. `tag_rects` is a presentation enrichment, not a replacement for tag indexing.
+
+### Source URL
+
+- **R1677:** `src` resolves to `/raw/PATH` (raw file bytes), not `/content/PATH` (template-wrapped shell). PDF.js requires unadorned bytes.
+
+### PDF Rendering
+
+- **R1678:** Rendering uses PDF.js `getDocument`, `getPage`, and render APIs. The viewer UI is not used.
+- **R1679:** The element is an overflow-hidden container; its single visible child during rendering is an `<img>` element sized to the full rendered page and absolutely positioned so the chunk's rect sits at local origin `(0, 0)`.
+- **R1680:** Coordinate transform from PDF points to CSS pixels uses the standard origin flip: `y_css = (pageHeight_pdf - y_pdf - h_pdf) * scale`.
+
+### Host-Owned Caches
+
+- **R1681:** `<pdf-chunk>` does not own caches. It resolves documents and page images through its nearest ancestor host element. For v1 the host is `<ark-search>`.
+- **R1682:** The host element carries three properties: `docCache: Map<src, Promise<PDFDocumentProxy>>`, `pageCache: Map<srcPageScaleBandKey, Promise<{url, w, h}>>`, and `blobUrls: string[]`. These are element properties, not closure-captured variables.
+- **R1683:** The host exposes `getDocument(src)`: returns cached `PDFDocumentProxy` on hit, otherwise calls `pdfjs.getDocument(src)` and caches the promise.
+- **R1684:** The host exposes `getPageImage(src, page, scaleBand)`: returns cached `{url, w, h}` on hit, otherwise renders the page to canvas at the band's scale, converts to a blob URL via `canvas.toBlob()` + `URL.createObjectURL()`, pushes the URL to `blobUrls`, and caches the result.
+- **R1685:** `scaleBand` is the render scale bucketed to ±10%. Resize within a band is a CSS-only update (no new image). Crossing a band rebuilds the blob URL once; every sibling `<img>` src updates together.
+
+### Blob URL Lifecycle
+
+- **R1686:** `URL.createObjectURL()` allocates memory that the browser does not reclaim while any URL handle exists. Each created URL must be explicitly `URL.revokeObjectURL()`'d.
+- **R1687:** Cleanup is host-scoped. The host's `disconnectedCallback` walks `blobUrls` revoking each URL, calls `doc.destroy()` on each cached document, and clears all three maps.
+- **R1688:** No refcounting and no grace windows. Slice-and-insert does not churn because both slice halves read from the host's still-live `pageCache`.
+- **R1689:** A page-level `beforeunload` handler walks every `<ark-search>` in the document and runs the host cleanup as a safety net for tab close and navigation.
+- **R1690:** Cross-panel page-image deduplication is not implemented in v1. Same-tag drill-down is the anticipated motivator for a future ID-keyed registry on a higher shared owner.
+
+### Error States
+
+- **R1691:** `src` fetch failure: element shows fallback children (the `<ark-tag>` widgets) plus a small error indicator.
+- **R1692:** `page` out of range for the document: fallback children only.
+- **R1693:** `rect` missing or invalid: fallback children only.
+
+### Tag Overlay Rendering
+
+- **R1694:** For each `<ark-tag rect="…">` child, the element creates or reparents that child as an absolutely-positioned overlay over the rendered canvas at the transformed CSS coordinates.
+- **R1695:** Overlay styling inherits the standard `<ark-tag>` rules (colors, `@` and `:` pseudo-elements, cursor). An opaque background (default page color, overridable via CSS variable) covers the PDF's rendering of the tag text beneath.
+- **R1696:** Each overlay's `font-size` tracks the tag rect's CSS height: `font-size: calc(var(--pdf-tag-h) * 1px)`, with `line-height: 1`, zero vertical padding, `width: calc(var(--pdf-tag-w) * 1px)`, and `overflow: hidden` to clip rather than spill.
+- **R1697:** A scoped rule `pdf-chunk > ark-tag { … }` in the page stylesheet carries these overrides so standalone `<ark-tag>` behavior is not affected.
+- **R1698:** A clipped or obscured tag value remains fully recoverable — the click handler opens the `<ark-search>` panel with the complete name and value from the element's DOM, regardless of what fits on screen.
+
+### Slice-And-Insert On Tag Click
+
+- **R1699:** When an `<ark-tag>` overlay dispatches `ark-tag-click`, the enclosing `<pdf-chunk>` intercepts the event (bubble phase) and reshapes its own DOM position.
+- **R1700:** The element replaces itself in the DOM with three siblings: a top `<pdf-chunk>` (same src/page/x/width, rect height trimmed to just above the clicked tag's top edge, tag-rect children restricted to those above the slice), an `<ark-search>` panel (tag and value pre-filled from the clicked tag), and a bottom `<pdf-chunk>` (same src/page/x/width, rect starting just below the sliced tag's line, tag-rect children restricted to those below the slice and remapped to the new local coord space).
+- **R1701:** Closing the `<ark-search>` panel re-merges the three siblings back into a single `<pdf-chunk>` with the original rect and full tag-rect child list.
+- **R1702:** Clicking a tag in a slice recurses — that slice splits again. Only one `<ark-search>` panel per container is open at a time; opening a new one closes the previous (matches existing `<ark-tag>` / `<ark-search>` convention).
+
+### Server-Side Emission
+
+- **R1703:** The server generates `<pdf-chunk>` elements in search result previews for chunks with strategy `pdf` that carry a `rect` attribute.
+- **R1704:** Emission uses direct structured output from chunk metadata — not a `wrapTagElements`-style post-processing pass on rendered text.
+- **R1705:** The preview renderer receives the chunk's file path (for `src="/raw/PATH"`, URL-encoded), `page`, `rect`, and `tag_rects`. The file path is already on `SearchResultEntry.Path`; `page`, `rect`, and `tag_rects` are chunk attributes that must flow through `SearchResultEntry` and `GroupedChunk` — a structural change since today neither carries chunk attrs.
+- **R1706:** A PDF chunk with `tag_rects` emits one `<ark-tag rect="…"><name>…</name> <value>…</value></ark-tag>` child per recorded tag rect.
+- **R1707:** A PDF chunk with no `tag_rects` emits a childless `<pdf-chunk>`.
+- **R1708:** PDF chunks without a `rect` attribute (salvage chunks, R1657) fall through to the existing text-preview path (`<pre>`-escaped text with `wrapTagElements` applied); no `<pdf-chunk>` wrapper is emitted for these.
+
+### Script Loading
+
+- **R1709:** `<pdf-chunk>` ships as a single bundled JS file with PDF.js embedded. The bundle registers the custom element on load.
+- **R1710:** PDF.js is bundled locally, not loaded from a CDN (consistent with ark's offline-first stance; matches markdown-editor and ark-search packaging).
+
+### Package Structure
+
+- **R1711:** New `pdf-chunk/` directory, sibling to `markdown-editor/` and `ark-search/`, containing `src/pdf-chunk-element.ts`, `src/index.ts`, `package.json` (pdfjs-dist as bundled dep), and `tsconfig.json`.
+- **R1712:** Build output installed to `~/.ark/html/pdf-chunk-element.js` via the same pattern used for `ark-search-element.js` and `ark-markdown-editor.js`.
+- **R1713:** (inferred) The Makefile asset pipeline handles the build-and-copy; build output is checked into the install/release pipeline the same way as the other bundles.
+
+### Out Of Scope (v1)
+
+- **R1714:** (negative) No PDF.js text layer for selection/copy — deferred to v2.
+- **R1715:** (negative) No sub-hit token-level highlighting — deferred to v2.
+- **R1716:** (negative) No server-side rendering of PDF pages (no `/pdf/FID/page/N.png`) — browser-only for v1.
+- **R1717:** (negative) No form fields, annotations, or encrypted-PDF handling beyond what `getDocument` handles natively.
+- **R1718:** (negative) No `<pdf-chunk>`-based pagination viewer — deferred; will later compose from the primitive.

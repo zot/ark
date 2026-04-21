@@ -2329,10 +2329,22 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			}
 			shell.Content = template.HTML(buf.String())
 		} else {
-			// Single chunk or unchunked file — render through goldmark for JSONL.
-			if strategy == "chat-jsonl" {
+			// Single chunk or unchunked file — render through goldmark for JSONL,
+			// as <pdf-chunk> for PDF chunks with a rect, plain-text fallback
+			// otherwise. R1703-R1708
+			switch {
+			case strategy == "chat-jsonl":
 				shell.Content = template.HTML(wrapTagElements(renderMarkdownForContent(data, path)))
-			} else {
+			case strategy == "pdf" && isChunk:
+				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
+					return db.ChunkAttrs(path, rangeParam), nil
+				})
+				if pdfHTML, ok := renderPdfPreview(attrs, path); ok {
+					shell.Content = template.HTML(pdfHTML)
+				} else {
+					shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+				}
+			default:
 				shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
 			}
 		}

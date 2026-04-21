@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"html/template"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -92,8 +94,9 @@ type SearchResultEntry struct {
 	Score    float64
 	FileID   uint64
 	ChunkNum uint64
-	Text     string // populated by FillChunks or FillFiles
-	Strategy string // which scoring strategy produced this result (multi-search only)
+	Text     string           // populated by FillChunks or FillFiles
+	Attrs    []microfts2.Pair // populated by FillChunks for pdf strategy (R1705)
+	Strategy string           // which scoring strategy produced this result (multi-search only)
 }
 
 // ChunkResult is the JSONL output for --chunks.
@@ -930,6 +933,14 @@ func (s *Searcher) FillChunksUsing(results []SearchResultEntry, cache *microfts2
 			continue
 		}
 		r.Text = string(content)
+		// R1705: for PDF chunks, also populate Attrs so RenderPreview can
+		// emit <pdf-chunk> elements with tag_rects-derived overlays. We
+		// gate on strategy to avoid the extra cost for non-PDF files.
+		if info, err := s.fts.FileInfoByID(r.FileID); err == nil && info.Strategy == "pdf" {
+			if chunks, err := cache.GetChunks(r.Path, r.Range, 0, 0); err == nil && len(chunks) == 1 {
+				r.Attrs = chunks[0].Attrs
+			}
+		}
 	}
 	return results, nil
 }
@@ -1359,7 +1370,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			groups[r.FileID] = g
 			order = append(order, r.FileID)
 		}
-		preview := RenderPreview(r.Text, g.strategy, tokenPatterns)
+		preview := RenderPreview(r.Text, g.strategy, tokenPatterns, r.Attrs, r.Path)
 		g.chunks = append(g.chunks, GroupedChunk{
 			Range:       r.Range,
 			Score:       r.Score,
@@ -1396,10 +1407,17 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 // RenderPreview renders chunk text as HTML for app display.
 // Strategy determines the renderer: goldmark for markdown,
 // JSON pretty-print for JSON (under a length threshold),
+// <pdf-chunk> element for PDF chunks with a rect attribute,
 // plain text with HTML escaping otherwise.
-// Query tokens are highlighted with <mark> tags in all formats.
-// CRC: crc-Searcher.md
-func RenderPreview(text, strategy string, patterns []*regexp.Regexp) string {
+// Query tokens are highlighted with <mark> tags in text formats.
+// CRC: crc-Searcher.md | R1703-R1708
+func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []microfts2.Pair, path string) string {
+	if strategy == "pdf" {
+		if html, ok := renderPdfPreview(attrs, path); ok {
+			return html
+		}
+		// Salvage chunks (no rect) fall through to the plain-text path. R1708
+	}
 	var rendered string
 	switch strategy {
 	case "markdown":
@@ -1422,6 +1440,104 @@ func RenderPreview(text, strategy string, patterns []*regexp.Regexp) string {
 		}
 	}
 	return highlightTokens(rendered, patterns)
+}
+
+// renderPdfPreview emits a <pdf-chunk> element with <ark-tag> children
+// for any tags recorded in the chunk's tag_rects attribute. Returns
+// ("", false) when the chunk lacks a rect attribute (salvage chunks
+// per R1708) so the caller can fall through to the text preview path.
+// R1703-R1707.
+func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
+	rect, hasRect := microfts2.PairGet(attrs, "rect")
+	if !hasRect || len(rect) == 0 {
+		return "", false
+	}
+	page, _ := microfts2.PairGet(attrs, "page")
+	if len(page) == 0 {
+		page = []byte("1")
+	}
+	tagRects, _ := microfts2.PairGet(attrs, "tag_rects")
+	pageSize, _ := microfts2.PairGet(attrs, "page_size")
+
+	var b strings.Builder
+	b.WriteString(`<pdf-chunk src="`)
+	b.WriteString(template.HTMLEscapeString(rawURLFor(path)))
+	b.WriteString(`" page="`)
+	b.WriteString(template.HTMLEscapeString(string(page)))
+	b.WriteString(`" rect="`)
+	b.WriteString(template.HTMLEscapeString(string(rect)))
+	b.WriteString(`"`)
+	if len(pageSize) > 0 {
+		b.WriteString(` page-size="`)
+		b.WriteString(template.HTMLEscapeString(string(pageSize)))
+		b.WriteString(`"`)
+	}
+	b.WriteString(`>`)
+	writePdfTagChildren(&b, string(tagRects))
+	b.WriteString(`</pdf-chunk>`)
+	return b.String(), true
+}
+
+// rawURLFor builds the `/raw/PATH` URL for a file path. Paths are
+// URL-path-encoded so spaces and other special characters survive.
+func rawURLFor(path string) string {
+	if path == "" {
+		return ""
+	}
+	// Preserve the leading `/` so we produce "/raw/home/..." rather than
+	// "/raw%2Fhome/...".
+	u := &url.URL{Path: "/raw" + path}
+	return u.String()
+}
+
+// writePdfTagChildren parses the chunk's tag_rects attribute and emits
+// one `<ark-tag rect="…"><name>…</name> <value>…</value></ark-tag>`
+// child per entry. Format: `name=value@x,y,w,h;…` (R1671, R1672).
+func writePdfTagChildren(b *strings.Builder, tagRects string) {
+	if tagRects == "" {
+		return
+	}
+	for _, entry := range strings.Split(tagRects, ";") {
+		if entry == "" {
+			continue
+		}
+		at := strings.LastIndex(entry, "@")
+		if at < 0 {
+			continue
+		}
+		nameValue := entry[:at]
+		rect := entry[at+1:]
+		eq := strings.Index(nameValue, "=")
+		if eq < 0 {
+			continue
+		}
+		name := decodeTagRectField(nameValue[:eq])
+		value := decodeTagRectField(nameValue[eq+1:])
+		if rect == "" || name == "" {
+			continue
+		}
+		b.WriteString(`<ark-tag rect="`)
+		b.WriteString(template.HTMLEscapeString(rect))
+		b.WriteString(`"><name>`)
+		b.WriteString(template.HTMLEscapeString(name))
+		b.WriteString(`</name> <value>`)
+		b.WriteString(template.HTMLEscapeString(value))
+		b.WriteString(`</value></ark-tag>`)
+	}
+}
+
+// decodeTagRectField reverses the percent-encoding that the chunker
+// applies to the four structural delimiters (`=`, `@`, `;`, `,`) and
+// `%`. R1672.
+func decodeTagRectField(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	decoded, err := url.QueryUnescape(strings.ReplaceAll(s, "+", "%2B"))
+	if err != nil {
+		return s
+	}
+	return decoded
 }
 
 func preEscaped(text string) string {

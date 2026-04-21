@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -76,6 +76,19 @@ Optionally retrieves chunk text or full file content.
   markdown, JSON pretty-print for JSON (under length threshold),
   plain text with HTML escaping otherwise. Query tokens highlighted
   with <mark> tags in all formats.
+  The `pdf` strategy emits a `<pdf-chunk>` element wrapping one
+  `<ark-tag rect="…"><name>…</name> <value>…</value></ark-tag>`
+  child per entry in the chunk's `tag_rects` attribute. `src` is
+  constructed as `/raw/PATH` (URL-encoded file path). A PDF chunk
+  with no `tag_rects` yields a childless `<pdf-chunk>`. A `pdf`
+  chunk that lacks a `rect` attribute (salvage chunk) falls through
+  to the plain-text preview path with `wrapTagElements` applied —
+  no `<pdf-chunk>` wrapper. (R1703, R1704, R1706, R1707, R1708)
+- SearchResultEntry and GroupedChunk carry a chunk attributes field
+  populated from microfts2.CRecord.Attrs so the pdf case of
+  RenderPreview can read `page`, `rect`, and `tag_rects` without
+  an extra LMDB read. FillChunks propagates the attrs alongside
+  chunk text. (R1705)
 - SearchMulti(query, opts): run query through all four strategies
   (coverage, density, overlap, bm25) via a single microfts2
   SearchMulti call. Resolves filters, initializes BM25 from index

@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1598, R1599, R1600, R1601, R1602, R1603, R1604, R1605, R1606, R1607, R1608, R1618, R1619, R1620
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1598, R1599, R1600, R1601, R1602, R1603, R1604, R1605, R1606, R1607, R1608, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -165,6 +165,18 @@ ark-level settings, and tag tracking.
 - DropChunkEmbeddings(): delete all EC and EF prefix records. (R1606)
 - RemoveFileChunkEmbeddings(fileID uint64): delete all EC records for fileID
   and the EF centroid. Called when a file is re-indexed. (R1607)
+
+### Page Content Records (R1720-R1725)
+- WritePageContent(fileID uint64, page uint32, blob []byte): write
+  PC[fileID][page] record. Key: `PC` + varint(fileID) + varint(page).
+  Value: zstd-compressed concatenation of chunk texts on that page
+  (null-byte separated). (R1720, R1721, R1722)
+- ReadPageContent(fileID uint64, page uint32) ([]byte, error): read one PC
+  record. Returns ErrNotFound semantics via (nil, nil) when the record
+  is absent so callers can detect missing-blob and fall back.
+- RemovePageContents(fileID uint64): prefix-scan PC + varint(fileID),
+  delete all matching records. Called before re-indexing a file
+  (R1724) and from the file-removal path (R1725).
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern

@@ -231,7 +231,17 @@ export class ArkSearchElement extends HTMLElement {
     }
   }
 
+  // PDF host storage — shared by descendant <pdf-chunk> elements. See
+  // crc-ArkSearchElement.md, R1681-R1690. These are plain element
+  // properties so devtools can inspect them; they're pdfjs-free, so
+  // the pdf-chunk bundle carries the rendering code and ark-search
+  // just holds the state.
+  pdfDocCache: Map<string, Promise<unknown>> = new Map();
+  pdfPageCache: Map<string, Promise<{ url: string; pageW: number; pageH: number }>> = new Map();
+  pdfBlobUrls: string[] = [];
+
   connectedCallback(): void {
+    this.setAttribute("data-pdf-host", "");
     if (this._api && !this._initialized) this.init();
   }
 
@@ -244,6 +254,25 @@ export class ArkSearchElement extends HTMLElement {
       window.removeEventListener("message", this.heightListener);
       this.heightListener = null;
     }
+    this.cleanupPdfHost();
+  }
+
+  // R1687: revoke blob URLs, destroy cached PDF documents, clear maps.
+  // No refcounting, no grace window — slice-and-insert both halves
+  // read from the still-live pageCache.
+  cleanupPdfHost(): void {
+    for (const url of this.pdfBlobUrls) URL.revokeObjectURL(url);
+    this.pdfBlobUrls.length = 0;
+    for (const dp of this.pdfDocCache.values()) {
+      dp
+        .then((doc) => {
+          const d = doc as { destroy?: () => void };
+          if (typeof d.destroy === "function") d.destroy();
+        })
+        .catch(() => {});
+    }
+    this.pdfDocCache.clear();
+    this.pdfPageCache.clear();
   }
 
   private init(): void {
