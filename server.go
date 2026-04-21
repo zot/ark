@@ -2270,6 +2270,15 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(chunks) > 0 {
 			shell.IsChunked = true
+			// R1739, R1740: PDFs use page-level aggregation — one <pdf-chunk>
+			// per page covering the full page, carrying every tag_rects
+			// entry from every chunk on that page. Block rects alone would
+			// leave gaps between text regions.
+			if strategy == "pdf" {
+				shell.Content = template.HTML(renderPdfChunksByPage(chunks, path))
+				tmpl.Execute(w, shell)
+				return
+			}
 			// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
 			// render through goldmark. Other strategies stay pre-wrapped.
 			useMarkdown := strategy == "chat-jsonl"

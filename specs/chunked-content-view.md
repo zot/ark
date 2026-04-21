@@ -39,6 +39,24 @@ through goldmark — the extracted content is markdown written by
 humans and AI assistants. This gives proper headings, code blocks,
 lists, and inline formatting instead of raw markdown syntax.
 
+For PDF files (strategy `pdf`), chunks are **grouped by page** and
+each page emits one `<pdf-chunk>` element covering the whole page.
+Per-block rects would leave visible gaps (padding, images,
+unclassified regions), so the full-file view uses page granularity
+instead of Block granularity. All `tag_rects` from every chunk on
+a given page are concatenated (semicolon-separated) and attached
+to the page-level `<pdf-chunk>`, producing one set of positioned
+`<ark-tag>` overlays on the rendered page.
+
+The page-level `rect` is `0,0,PAGE_W,PAGE_H` — the full page, as
+reported by any chunk's `page_size` attribute (all chunks on the
+same page carry the same `page_size`). Search result previews are
+unaffected and continue to render one `<pdf-chunk>` per matched
+Block (the narrower scope suits a single hit). Salvage chunks (no
+`rect` attribute) contribute only their `tag_rects` (if any) to
+the page overlay; if a page has no `page_size`-carrying chunks,
+the page falls through to the HTML-escaped pre-wrapped path.
+
 For other file types, chunk text is HTML-escaped (pre-wrapped text).
 
 In both cases, `wrapTagElements` runs on each chunk's rendered

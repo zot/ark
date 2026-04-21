@@ -164,7 +164,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
 - [x] seq-pdf-chunk.md → `pdfchunker.go`
 - [x] seq-empty-file-skip.md → `scanner.go`, `db.go`, `emptyfiles.go`
-- [x] seq-pdf-salvage.md → `pdfsalvage.go`, `pdfchunker.go`
 - [x] seq-pdf-chunk-retrieval.md → `pdfchunker.go`, `store.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
@@ -325,9 +324,14 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) LMDB reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
 - [ ] O72: AllChunks internally calls CheckFile — a variant accepting pre-resolved fileID would eliminate one redundant lookup per file in BatchEmbedChunks
 - [x] O73: PDF chunker: paragraph gap threshold (1.5x) too strict for tightly-spaced documents like cover letters
-- [ ] O74: PDF chunker: CJK text extraction unverified with seehuhn library
+- [x] O74: PDF chunker: CJK text extraction unverified with seehuhn library
 - [ ] O75: PDF chunker: no test design (test-PDFChunker.md)
 - [ ] O76: Overlay search broken for all tmp:// documents (pre-existing, not PDF-specific)
 - [x] O77: PDF chunker: truncated PDFs with recoverable xref tables fail seehuhn's strict xref parser (error: 'xref: table at byte N: strconv.ParseInt: parsing "trailer <<"'). pdftotext and other tolerant parsers recover these. Currently surfaced as one log line per scan via FileChunks; the empty-file-set doesn't help because the files are non-empty. Needs a fallback parser strategy.
-- [ ] O78: PDF chunker: contiguous heading lines produce separate heading chunks instead of being merged into one. Resumes with multi-line section titles fragment.
-- [ ] O79: PDF chunker: heading + following paragraph should merge into one chunk (spec R1632/R1633 says 'a heading and the body text following it form a heading chunk' but the implementation splits on heading/body transition). Search UX suffers when many short heading-only chunks surface as long, thin result rows.
+- [x] O78: PDF chunker: contiguous heading lines produce separate heading chunks instead of being merged into one. Resumes with multi-line section titles fragment.
+- [x] O79: PDF chunker: heading + following paragraph should merge into one chunk (spec R1632/R1633 says 'a heading and the body text following it form a heading chunk' but the implementation splits on heading/body transition). Search UX suffers when many short heading-only chunks surface as long, thin result rows.
+- [ ] A36: R1624, R1625, R1626, R1627, R1628, R1629, R1631, R1632, R1634, R1636 (PDF span-level extraction and structure detection) — superseded by pdftext. R1624 → R1729 (library swap); R1625–R1634, R1636 → R1730 (pdftext's Blocks replace our in-house structure detection)
+- [ ] A37: R1652, R1653, R1654, R1655, R1656, R1657, R1658, R1660 (byte-stream salvage codepath) — superseded by R1734 (pdftext emits Salvage as a BlockKind inline with structured blocks; no separate in-ark salvage path)
+- [ ] A38: R1661, R1662, R1663, R1664 (blank-line filtering for ONLYOFFICE-style PDFs) — superseded by R1729 (line-level layout handling is pdftext's responsibility)
+- [ ] A39: R1669, R1674 (tag rect from line spans, first-line-only for wraps) — superseded by R1735, R1736 (tag scan uses Block.Chars; rect unions all covered glyph BBoxes including wrapped lines)
+- [ ] A40: R1723, R1657, R1658 (salvage at page 0 with no rect) — superseded by R1737 (salvage keyed at actual page, carries Block.BBox)

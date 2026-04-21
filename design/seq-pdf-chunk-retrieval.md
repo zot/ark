@@ -1,7 +1,7 @@
 # Sequence: PDF Chunk Retrieval
 
-**Requirements:** R1719, R1720, R1721, R1722, R1723, R1724, R1725,
-R1726, R1727, R1728
+**Requirements:** R1719, R1720, R1721, R1722, R1724, R1725,
+R1726, R1727, R1728, R1737
 
 Triggered by search fill-content. microfts2's ChunkCache dispatches
 GetChunk on the PDFChunker; the chunker reads the page blob from
@@ -83,8 +83,7 @@ ChunkCache                 PDFChunker
   populates lazily on first miss per page. Lifetime = ChunkCache
   TTL (session, minutes), so no eviction needed. (R1727)
 - The Store write at index time is the companion to the reads
-  shown here — see seq-pdf-chunk.md and seq-pdf-salvage.md for
-  the write paths.
-- Salvage chunks use page=0 and hit the per-file salvage blob.
-  Retrieval path is identical; only the `page` attribute
-  differs. (R1723)
+  shown here — see seq-pdf-chunk.md for the write path.
+- Salvage blocks now carry their true page number and ride in the
+  same page blob as structured blocks from that page; retrieval
+  is identical, no special case. (R1737)

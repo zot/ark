@@ -1478,6 +1478,86 @@ func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
 	return b.String(), true
 }
 
+// renderPdfChunksByPage groups PDF chunks by their `page` attribute
+// and emits one `<pdf-chunk>` per page covering the full page area.
+// All `tag_rects` from chunks on the same page are concatenated
+// (semicolon-separated) so every tag overlays the rendered page.
+// Pages without a `page_size` attribute fall through to an HTML-
+// escaped pre-wrapped block. R1739, R1740
+// CRC: crc-Server.md | R1739, R1740
+func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
+	type pageAgg struct {
+		page     string
+		pageSize string
+		tagRects []string
+		salvage  []microfts2.ChunkResult // only used when pageSize stays empty
+	}
+	var order []string
+	pages := make(map[string]*pageAgg)
+	for _, ch := range chunks {
+		pageVal, _ := microfts2.PairGet(ch.Attrs, "page")
+		pageStr := string(pageVal)
+		if pageStr == "" {
+			pageStr = "1"
+		}
+		agg := pages[pageStr]
+		if agg == nil {
+			agg = &pageAgg{page: pageStr}
+			pages[pageStr] = agg
+			order = append(order, pageStr)
+		}
+		if ps, ok := microfts2.PairGet(ch.Attrs, "page_size"); ok && len(ps) > 0 && agg.pageSize == "" {
+			agg.pageSize = string(ps)
+		}
+		if tr, ok := microfts2.PairGet(ch.Attrs, "tag_rects"); ok && len(tr) > 0 {
+			agg.tagRects = append(agg.tagRects, string(tr))
+		}
+		if _, hasRect := microfts2.PairGet(ch.Attrs, "rect"); !hasRect {
+			agg.salvage = append(agg.salvage, ch)
+		}
+	}
+
+	var buf strings.Builder
+	for _, pageStr := range order {
+		agg := pages[pageStr]
+		if agg.pageSize == "" {
+			// R1740: no page_size anywhere on the page → render salvage
+			// chunks as HTML-escaped pre-wrapped text.
+			for _, ch := range agg.salvage {
+				buf.WriteString(`<div class="ark-chunk">`)
+				buf.WriteString(wrapTagElements(template.HTMLEscapeString(ch.Content)))
+				buf.WriteString("</div>\n")
+			}
+			continue
+		}
+		pw, ph := parsePageSize(agg.pageSize)
+		buf.WriteString(`<pdf-chunk src="`)
+		buf.WriteString(template.HTMLEscapeString(rawURLFor(path)))
+		buf.WriteString(`" page="`)
+		buf.WriteString(template.HTMLEscapeString(agg.page))
+		buf.WriteString(`" rect="0,0,`)
+		buf.WriteString(pw)
+		buf.WriteString(`,`)
+		buf.WriteString(ph)
+		buf.WriteString(`" page-size="`)
+		buf.WriteString(template.HTMLEscapeString(agg.pageSize))
+		buf.WriteString(`">`)
+		writePdfTagChildren(&buf, strings.Join(agg.tagRects, ";"))
+		buf.WriteString(`</pdf-chunk>` + "\n")
+	}
+	return buf.String()
+}
+
+// parsePageSize splits a "W,H" string into its two components,
+// returning them verbatim (already in PDF point units).
+func parsePageSize(ps string) (string, string) {
+	parts := strings.SplitN(ps, ",", 2)
+	if len(parts) != 2 {
+		return "0", "0"
+	}
+	return parts[0], parts[1]
+}
+
 // rawURLFor builds the `/raw/PATH` URL for a file path. Paths are
 // URL-path-encoded so spaces and other special characters survive.
 func rawURLFor(path string) string {

@@ -2354,6 +2354,8 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1505:** For files with strategy `chat-jsonl`, each chunk's extracted text is rendered through goldmark (same as the markdown content path). The extracted content is markdown written by humans and AI assistants — goldmark gives proper headings, code blocks, lists, and inline formatting.
 - **R1506:** For other non-markdown strategies (bracket, indent, lines), chunk text is HTML-escaped as pre-wrapped text.
+- **R1739:** For files with strategy `pdf`, chunks are grouped by their `page` attribute and each page emits one `<pdf-chunk>` element covering the full page (rect `0,0,PAGE_W,PAGE_H`, taken from the chunks' shared `page_size` attribute). All `tag_rects` from every chunk on that page are concatenated (semicolon-separated) and attached to the page-level `<pdf-chunk>` so every tag on the page overlays the rendered page. Per-Block `<pdf-chunk>` elements are not used in this view because Block rects leave visible gaps between text regions. Search result previews (R1703–R1707) remain per-Block — the narrower scope suits a single hit.
+- **R1740:** Pages with no chunks carrying a `page_size` attribute fall through to the HTML-escaped pre-wrapped path. Salvage chunks (no `rect`) contribute their `tag_rects` to the page overlay when they share a page with structured chunks; they do not force the page to fall back on their own.
 
 ### Chat-JSONL Role Rendering
 
@@ -2566,30 +2568,40 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 ### Text Extraction
 
+- @obsolete-req: R1624 -- superseded by R1729 (pdftext replaces seehuhn)
 - **R1624:** PDF chunker opens a PDF file, iterates pages, and extracts text spans with position (X, Y in PDF points), font size, and text content using seehuhn.de/go/pdf.
+- @obsolete-req: R1625 -- superseded by R1729 (pdftext merges glyphs into Block.Text internally)
 - **R1625:** Text spans on the same line (similar Y coordinate, within font-height tolerance) are merged left-to-right into positioned lines with bounding boxes.
 
 ### Table Detection
 
+- @obsolete-req: R1626 -- superseded by R1730 (table detection is pdftext's responsibility)
 - **R1626:** Detect tables via drawn rules: horizontal and vertical line-drawing operations in the PDF content stream (path operators `re`, `m`, `l`). A grid of ≥2 rows and ≥2 columns is a table.
+- @obsolete-req: R1627 -- superseded by R1730
 - **R1627:** Detect tables via column alignment: cluster text spans by Y (rows); if multiple rows share ≥2 aligned X positions (within tolerance proportional to dominant font size), the region is a table.
+- @obsolete-req: R1628 -- superseded by R1730
 - **R1628:** Drawn-rule detection takes priority over column-alignment detection.
+- @obsolete-req: R1629 -- superseded by R1730 (Block.Text already carries pdftext's row-structured table text)
 - **R1629:** Table chunk content is text spans inside the table region, concatenated row by row.
 - **R1630:** Table chunks use location `PAGE/table/N` (1-indexed per page).
 
 ### Heading Detection
 
+- @obsolete-req: R1631 -- superseded by R1730 (heading classification is pdftext's responsibility)
 - **R1631:** Text spans whose font size exceeds the page's dominant (most common) font size by ≥20% are headings.
+- @obsolete-req: R1632 -- superseded by R1730 (pdftext Heading Block stands alone; body follows as its own Block)
 - **R1632:** A heading and the body text following it (up to the next heading or structural boundary) form a heading chunk.
 - **R1633:** Heading chunks use location `PAGE/heading/N`.
 
 ### Paragraph Detection
 
+- @obsolete-req: R1634 -- superseded by R1730 (paragraph grouping is pdftext's responsibility)
 - **R1634:** Remaining text (not in tables or headings) is grouped into paragraphs by vertical gap detection: a gap >1.5× the dominant line spacing signals a paragraph boundary.
 - **R1635:** Paragraph chunks use location `PAGE/para/N`.
 
 ### Page-Level Fallback
 
+- @obsolete-req: R1636 -- superseded by R1733 (pages with no blocks emit no chunks)
 - **R1636:** If a page has no detected structure (fewer than 2 text spans, or all text in a single undifferentiated block), the entire page is one chunk with location `PAGE`.
 
 ### Chunk Attributes
@@ -2597,6 +2609,7 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1637:** Every chunk carries a `page` attribute (page number as string).
 - **R1638:** Every chunk carries a `rect` attribute: bounding box as `x,y,w,h` in PDF points (origin = bottom-left per PDF spec).
 - **R1639:** Heading chunks carry a `font_size` attribute (dominant font size in the chunk).
+- @obsolete-req: R1665 -- partially superseded by R1735 (tag rect source moved from line spans to Block.Chars; tag_rects is also emitted on Salvage blocks now that they carry position info)
 - **R1665:** Chunks carry an optional `tag_rects` attribute: per-tag bounding boxes for `@name: value` patterns found in the chunk's positioned text spans. Absent when the chunk has no tags; absent on salvage chunks. Format spec: PDF Chunk Element feature (R1669–R1674).
 - **R1719:** Every chunk carries `content_offset` and `content_len` attributes locating its text within the page's cached text blob (byte offset and byte length, decimal strings).
 
@@ -2605,6 +2618,7 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1720:** At index time, the PDF chunker writes each page's extracted chunk text into a compressed blob stored in ark's LMDB subdatabase, keyed by `(fileid, page)`.
 - **R1721:** Each page's blob contains the concatenated text of every chunk on that page, in emission order, separated by a single null byte.
 - **R1722:** Blobs are compressed with zstd.
+- @obsolete-req: R1723 -- superseded by R1737 (salvage blocks keyed at their actual page alongside structured blocks)
 - **R1723:** Salvage chunks share a single per-file blob indexed as page 0 (salvage chunks have no real page number and arrive in small counts per file).
 - **R1724:** Before writing new blobs for a file, the chunker removes all existing blobs for that fileid so stale pages cannot outlive a re-indexed document with fewer pages.
 - **R1725:** On file removal, the file's page-content blobs are removed alongside other per-file Store records.
@@ -2624,22 +2638,47 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 ### Blank-Line Filtering
 
+- @obsolete-req: R1661 -- superseded by R1729 (layout-aware line handling is pdftext's responsibility)
 - **R1661:** Before any per-page structure detection (tables, headings, paragraphs), lines whose text is entirely whitespace are removed from the line set
+- @obsolete-req: R1662 -- superseded by R1729
 - **R1662:** Rationale: some PDF generators (notably ONLYOFFICE) emit blank visual lines as real text lines containing only a space glyph; without filtering, gap-based paragraph detection sees consistent line spacing and produces a single paragraph chunk for the entire page
+- @obsolete-req: R1663 -- superseded by R1729
 - **R1663:** Dropping blank lines causes paragraph-separator gaps to double (two normal gaps collapse into one doubled gap once the blank between them is removed), so the existing 1.5× dominant-spacing threshold fires naturally
+- @obsolete-req: R1664 -- superseded by R1729
 - **R1664:** The filter also benefits table detection: blank "rows" with no aligned X positions previously diluted the column-alignment signal
 
 ### Fallback Text Salvage
 
+- @obsolete-req: R1652 -- superseded by R1734 (graceful degradation is pdftext's responsibility, inline via Salvage BlockKind)
 - **R1652:** When `pdf.NewReader` returns any error, the chunker invokes a best-effort salvage pass over the raw bytes instead of returning an error
+- @obsolete-req: R1653 -- superseded by R1734
 - **R1653:** Salvage scans the raw bytes for `stream\n ... \nendstream` pairs, treating each as a candidate content stream
+- @obsolete-req: R1654 -- superseded by R1734
 - **R1654:** Salvage inspects the object dictionary immediately preceding the stream for a `/Filter` entry; if `/FlateDecode`, the stream is decompressed with `compress/zlib`; if no filter, the stream bytes are used as-is; other filters cause the stream to be skipped
+- @obsolete-req: R1655 -- superseded by R1734
 - **R1655:** Within a decoded stream, salvage extracts the text-string argument from the text-showing operators `Tj`, `'`, `"`, and the array form `TJ` (numbers inside `TJ` arrays are kerning and are ignored)
+- @obsolete-req: R1656 -- superseded by R1734
 - **R1656:** PDF string literals inside the extracted text respect the standard escape sequences: `\(`, `\)`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, and three-digit octal `\ddd`
+- @obsolete-req: R1657 -- superseded by R1737 (salvage now keyed at actual page, location PAGE/salvage/N)
 - **R1657:** Salvage emits one chunk per content stream with location `salvage/N` (1-indexed). Salvage chunks omit the `rect` attribute because coordinates were not consulted
+- @obsolete-req: R1658 -- superseded by R1737 (salvage blocks carry their true page and Block.BBox)
 - **R1658:** Salvage chunks carry a `page` attribute set to `"1"` and (inferred) no `font_size`; structure detection (tables, headings, paragraphs) is not attempted
 - **R1659:** If salvage extracts no text from any stream, the chunker yields nothing — the file takes the standard FileChunker "log once, empty result" path and is skipped on subsequent scans with matching hash
+- @obsolete-req: R1660 -- superseded by R1734 (no separate in-ark salvage path to share)
 - **R1660:** (inferred) Salvage is invoked from both the byte-input `Chunks` (tmp documents) and the file-input `FileChunks` paths, so tmp PDFs and indexed PDFs both benefit
+
+### pdftext Migration
+
+- **R1729:** PDF chunker uses `github.com/zot/pdftext` for document opening, page iteration, and structure detection. pdftext is pure-Go, MIT-licensed, purpose-built for ark.
+- **R1730:** Each pdftext `Block` returned by `page.Blocks()` maps to one ark chunk. `BlockKind` determines the location suffix: `Paragraph` and `Irregular` → `para`, `Heading` → `heading`, `Table` → `table`, `List` → `list`, `Salvage` → `salvage`. `Image` blocks are skipped (no indexable text).
+- **R1731:** `Block.Caption` (present on List and Table blocks) is prepended to `Block.Text` with a separating newline in the chunk's content so search matches the caption together with the body. Empty captions are a no-op.
+- **R1732:** `Block.Text` and `Block.Caption` arrive NFKC-normalized (ligatures decomposed, fullwidth Latin normalized); ark indexes the normalized form directly and performs no additional normalization.
+- **R1733:** Pages with no blocks (image-only, scanner output, etc.) emit no chunks. No whole-page fallback chunk is produced.
+- **R1734:** Graceful degradation for malformed pages is delegated to pdftext via `BlockKind=Salvage` inline with structured blocks. Ark does not implement a separate byte-stream salvage codepath. If `pdftext.Open` itself returns a hard error, the chunker yields nothing and the file takes microfts2's standard log-once path.
+- **R1735:** Tag rect extraction scans `Block.Text` (and `Block.Caption` when present) for the ark tag pattern `@name: value`. Each match's bounding box is the union of the `Block.Chars` (or `Block.CaptionChars`) BBoxes whose byte ranges overlap the match, giving per-glyph precision. When one source glyph expanded to multiple Unicode runes (ligature decomposition), every expansion byte carries the same originating-glyph BBox.
+- **R1736:** A tag value that wraps across multiple lines within a block contributes all covered glyph BBoxes to the union, producing one rect that spans every wrapped line. (supersedes R1674's first-line-only rule — pdftext consolidates multi-line prose into a single `Block.Text`.)
+- **R1737:** Salvage chunks are keyed at their source page number, with location `PAGE/salvage/N` (1-indexed per page). Salvage text is written to that page's blob alongside any structured blocks from the same page. (supersedes R1723's page-0 consolidation.)
+- **R1738:** Location `N` per kind is 1-indexed per page. Each block kind (`para`, `heading`, `table`, `list`, `salvage`) counts independently: a page with two paragraphs and one table emits `PAGE/para/1`, `PAGE/para/2`, `PAGE/table/1`.
 
 ## Feature: PDF Chunk Element
 **Source:** specs/pdf-chunk-element.md
@@ -2652,11 +2691,13 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 ### Tag Rects From The Chunker
 
+- @obsolete-req: R1669 -- superseded by R1735 (tag pattern scan now runs on Block.Text with per-glyph BBoxes from Block.Chars)
 - **R1669:** The PDF chunker scans each chunk's positioned text spans for the tag pattern `@([a-zA-Z][\w.-]*):\s*([^\n]*)` — identical to ark's generic tag grammar — and records a bounding box for each match.
 - **R1670:** Recorded tag rects are emitted as the chunk attribute `tag_rects` (see PDF Chunker R1665).
 - **R1671:** `tag_rects` encoding is a semicolon-separated list: `name=value@x,y,w,h;name=value@x,y,w,h;…`.
 - **R1672:** Tag `name` and `value` URL-encode `=`, `@`, `;`, `,` when those characters appear literally inside them.
 - **R1673:** Coordinates are floats in PDF points, origin bottom-left — same convention as chunk-level `rect` (R1638).
+- @obsolete-req: R1674 -- superseded by R1736 (pdftext consolidates wrapped lines into one Block.Text; the rect now unions all covered glyph BBoxes)
 - **R1674:** When a tag's value wraps across multiple lines in the PDF layout, only the first line's rect is recorded; wrapped tails are not emitted.
 - **R1675:** Salvage chunks (R1657) produce no `tag_rects` — no coordinates exist to record.
 - **R1676:** Generic tag extraction — T/F/V/D LMDB records — continues unchanged for all PDF chunks including salvage. `tag_rects` is a presentation enrichment, not a replacement for tag indexing.
