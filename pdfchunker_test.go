@@ -22,7 +22,7 @@ func TestPageChunksLocationMapping(t *testing.T) {
 		{Kind: pdftext.Salvage, Text: "degraded text"},
 		{Kind: pdftext.Image, Text: ""},
 	}
-	got := chunkRanges(pageChunks(3, blocks))
+	got := chunkRanges(pageChunks(3, blocks, [2]float64{612, 792}))
 	want := []string{
 		"3/heading/1",
 		"3/para/1",
@@ -50,7 +50,7 @@ func TestPageChunksCaptionConcatenation(t *testing.T) {
 		{Kind: pdftext.List, Caption: "Steps", Text: "first\nsecond"},
 		{Kind: pdftext.Paragraph, Caption: "", Text: "plain paragraph"},
 	}
-	chunks := pageChunks(1, blocks)
+	chunks := pageChunks(1, blocks, [2]float64{612, 792})
 	if got := string(chunks[0].Content); got != "Quarterly revenue\nQ1\t100\nQ2\t120" {
 		t.Errorf("table content: got %q", got)
 	}
@@ -64,10 +64,10 @@ func TestPageChunksCaptionConcatenation(t *testing.T) {
 
 // R1733: pages that produce no mappable blocks emit no chunks.
 func TestPageChunksEmptyPageYieldsNothing(t *testing.T) {
-	if got := pageChunks(5, nil); got != nil {
+	if got := pageChunks(5, nil, [2]float64{612, 792}); got != nil {
 		t.Errorf("nil blocks: expected nil, got %v", chunkRanges(got))
 	}
-	if got := pageChunks(5, []pdftext.Block{{Kind: pdftext.Image}}); got != nil {
+	if got := pageChunks(5, []pdftext.Block{{Kind: pdftext.Image}}, [2]float64{612, 792}); got != nil {
 		t.Errorf("image-only page: expected nil, got %v", chunkRanges(got))
 	}
 }
@@ -134,7 +134,7 @@ func TestPageChunksSalvageAtActualPage(t *testing.T) {
 		{Kind: pdftext.Salvage, Text: "degraded", Confidence: 0.5},
 		{Kind: pdftext.Salvage, Text: "more degraded", Confidence: 0.4},
 	}
-	got := chunkRanges(pageChunks(7, blocks))
+	got := chunkRanges(pageChunks(7, blocks, [2]float64{612, 792}))
 	want := []string{"7/para/1", "7/salvage/1", "7/salvage/2"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)

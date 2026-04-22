@@ -227,11 +227,13 @@ Format rules:
 **Upon completion**, run `~/.claude/bin/minispec phase design` to verify coverage, then offer Implementation Phase. Do not jump to Gaps.
 
 4. Implementation Phase
-Add traceability comments:
+Add traceability comments with optional inline requirement refs:
 ```
-// CRC: crc-Store.md | Seq: seq-crud.md
+// CRC: crc-Store.md | Seq: seq-crud.md | R4, R5
 add(data): Item {
 ```
+
+The third `| Rn, Rn` section is optional but recommended — it links specific code locations directly to requirements, enabling implementation coverage validation.
 
 **Block-comment languages:** The `minispec query comment-patterns` output lists any `comment_closers`. If a closer exists for the file extension, you MUST append it to every traceability comment. An unclosed block comment silently swallows all subsequent code. See `config-reference.md` (in this skill directory) if you need to configure closers for a new language.
 
@@ -259,12 +261,14 @@ Run `~/.claude/bin/minispec phase gaps` to validate the gaps section, then run `
 
 1. **Specs ↔ Requirements:** Each spec item maps to exactly one requirement in `requirements.md`
 2. **Requirements ↔ Design:** Each requirement is referenced by at least one design artifact
+3. **Requirements ↔ Code:** Each requirement appears as an inline Rn ref in at least one code file
 
-`design.md` Gaps section tracks (use S1/R1/D1/C1/O1/A1 numbering):
+`design.md` Gaps section tracks (use S1/R1/D1/C1/I1/O1/A1 numbering):
 - **Spec→Requirements (Sn):** Spec items not captured in requirements.md
 - **Requirements→Design (Rn):** Requirements without design artifacts referencing them
 - **Design→Code (Dn):** Designed features without code
 - **Code→Design (Cn):** Code without design artifacts
+- **Implementation (In):** Requirements with design coverage but no inline Rn ref in any code file
 - **Oversights (On):** Missing tests, tech debt, enhancements, security concerns, etc.
 - **Approved (An):** Approved gap, never checked off to ensure they stay in place
 

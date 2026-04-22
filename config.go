@@ -32,6 +32,7 @@ type Config struct {
 	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
 	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
 	EmbedTiers      []EmbedTier       `toml:"embed_tiers,omitempty"`    // R1588: ctx/parallel per tier
+	PdfPreviewZoom  float64           `toml:"pdf_preview_zoom,omitempty"`
 	Schedule        ScheduleConfig    `toml:"schedule"`                 // R853, R854
 	Errors          []string          `toml:"-"`
 	dbPath          string            `toml:"-"`

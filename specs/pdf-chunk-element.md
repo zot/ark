@@ -241,40 +241,256 @@ variable) covers the PDF's own rendering of the tag text. The
 result is visual continuity with markdown and plain-text
 rendering: tags look like tags, everywhere.
 
-### Font-Size Matching
+A clipped or otherwise hidden tag value is fully recoverable —
+clicking opens the `<ark-search>` panel, which pre-fills the
+complete tag name and value from the element's DOM regardless
+of what's actually visible on screen.
 
-The overlay's apparent size must track the PDF's font. The
-chunker's tag rect `h` is effectively the glyph-box height in
-PDF points; scaled to CSS pixels that becomes the target
-`font-size`. Each overlay carries this as an inline style (or
-CSS custom property) set per-instance:
+### Text-Layer Tag Rendering
+
+The chunker's `tag_rects` give one rect per tag, but PDF.js
+rasterizes tag text in the PDF's own embedded fonts — not
+ark's. Any HTML overlay on top of that raster, or any
+canvas-drawn replacement text we paint in ark's font, leaves
+a seam: browser glyph metrics, hinting, and antialiasing
+never quite match the rasterizer's. Two text renderers
+sharing a pixel space can't agree.
+
+`<pdf-chunk>` closes the seam by letting PDF.js render the
+text in its native fidelity, then **recoloring** those
+rasterized pixels in place. The glyph shapes, widths, and
+edges all come from the PDF; only the ink color changes.
+The `<ark-tag>` child becomes a transparent hit region —
+no visible text, no background, just a click target. PDF.js's
+text layer rides on top for selection.
+
+#### Exact Bounds From The Chunker
+
+For a recolor to land pixels precisely into `@`, name, `:`,
+and value regions, the element needs per-segment bounds at
+glyph fidelity. The chunker owns per-glyph BBoxes
+(`Block.Chars[].BBox`), so it emits a parallel
+`tag_segments` attribute aligned with `tag_rects`:
 
 ```
-font-size: calc(var(--pdf-tag-h) * 1px);
-line-height: 1;
-padding: 0;
-width: calc(var(--pdf-tag-w) * 1px);
-background: var(--pdf-tag-bg, white);
+tag_segments = "atRect|nameRect|colonRect|valRect1|valRect2|…;nextTag…"
 ```
 
-`<ark-tag>`'s baseline CSS rules need small adjustments so they
-don't fight this: `line-height: inherit` or explicit `1`, no
-vertical padding, no minimum sizes. A single scoped rule
-`pdf-chunk > ark-tag { ... }` in the page stylesheet keeps these
-overrides out of `<ark-tag>`'s standalone behavior.
+Each rect is `x,y,w,h` in PDF points (same coords as
+`tag_rects`). The first three rects — `@`, name, `:` — are
+single-line. The value is a list: one rect per physical line
+in the PDF, for wrapped values. Chunker line-splits by
+grouping glyphs whose baseline Y differs from the running
+average by more than half a glyph height.
 
-Width mismatch between our rendered text and the PDF's glyph
-widths is unavoidable — different fonts, different metrics. The
-opaque background is sized to the chunker's `w` so the PDF's
-tag pixels stay hidden even if our text is narrower. If our text
-overflows, `overflow: hidden` on the overlay clips rather than
-spilling into neighboring glyphs. Pixel-perfect alignment is not
-a goal; "recognizably a tag in roughly the right spot" is.
+Salvage chunks (no `rect`) also produce no `tag_segments`.
+Generic tag extraction — T/F/V/D LMDB records — is unchanged;
+this attribute is a presentation enrichment only.
 
-A clipped value in the overlay is fully recoverable — clicking
-opens the `<ark-search>` panel, which pre-fills the complete tag
-name and value from the element's DOM regardless of what fits
-on screen.
+The server emits the corresponding `segments="…"` attribute
+on each `<ark-tag>` child it writes, index-aligned with the
+existing `rect` attribute. The element parses `segments` into
+a descriptor — name, value, per-segment rects — used to
+drive the recolor.
+
+#### Flow — Per Page
+
+When a chunk asks the host for a page image at a given scale
+band (cold cache):
+
+1. PDF.js renders the page to an offscreen canvas at the band's
+   scale (existing R1684 path).
+2. The host samples the page's background color from a corner
+   pixel of the rendered canvas (falls back to the theme bg
+   if sampling fails).
+3. The host collects all segment-based tag descriptors from
+   every `<pdf-chunk>` on the page (each contributes its own
+   `<ark-tag>`'s `segments` attribute).
+4. The **recolor pass** walks each tag's region and replaces
+   the raster glyph ink with ark's theme colors, behind a
+   blurred bg-colored halo (§Recolor). Chunker-supplied
+   segments are the source of truth for per-segment bounds;
+   PDF.js `getTextContent()` detection remains the fallback
+   for chunks that somehow arrive without segments.
+5. The canvas converts to a blob URL and is cached by
+   `(src, page, scaleBand)`.
+
+Each `<pdf-chunk>` that lands on the page then uses the
+(now-recolored) blob URL for its clipped `<img>`, positions
+its `<ark-tag>` children as invisible hit regions, and
+mounts a PDF.js text layer for selection.
+
+#### Recolor
+
+The recolor runs per page in two phases:
+
+**Phase 1 — Geometry and snapshots.** For each tag, compute:
+
+- The tag's region on the canvas: the union of all four
+  segment rects plus pad — an ascender pad above (up to 30%
+  of glyph height, clamped by the gap to the line above),
+  a descender pad below (up to 40% of glyph height, clamped
+  by the gap to the line below), and a blur pad (~3× the
+  blur radius) on all sides so the glow has room to fade.
+- Per-segment runBoxes on the canvas — one per segment rect,
+  plus a clamped ascender/descender extension so each
+  runBox covers its glyph including ascenders/descenders but
+  never reaches a neighbor line's glyph. Each runBox carries
+  its `start`/`end` offsets into the canonical match string
+  (so pixel-to-color classification can read the segment
+  type from a charIdx).
+- A snapshot `ImageData` of the region, captured before any
+  writes. Because later compositing can extend past a tag's
+  own bounds (via the blur pad), all snapshots must be taken
+  before any tag writes — otherwise a neighbor's partial
+  write contaminates the next snapshot.
+
+**Phase 2 — Composite.** For each tag, in bottom-up order:
+
+- Build a **glow tile** the size of the region. For every
+  snapshot pixel that's a text pixel (luminance distinctly
+  darker than page bg) and lies inside one of this tag's
+  runBoxes, paint the theme bg color at `alpha = textness *
+  255`. Elsewhere in the tile, transparent.
+- Build a **text tile** the same way, except paint the
+  target color for the pixel's segment (punctuation, name,
+  or value) based on the runBox it's in and its position
+  inside that runBox.
+- Build a **combined** offscreen: apply `ctx.filter =
+  blur(blurPx)` when drawing the glow tile (turns the
+  text-shape into a soft halo), then draw the sharp text
+  tile on top unfiltered.
+- Draw `combined` onto the main canvas **clipped to the
+  runBox union** — a canvas `ctx.clip()` path built from
+  each runBox rect. Outside the runBoxes, main's pixels
+  are untouched. This is the key to avoiding dark bands:
+  the generous region gives blur room internally, but the
+  copy onto main only touches the runBox area, so two
+  adjacent tags' halos never stack.
+
+Bottom-up ordering means top-of-page tags composite last —
+any neighbor-edge pixels they overwrite are theirs to own.
+
+#### Text-Detection Threshold
+
+Text pixels are identified by luminance distance from the
+sampled page background:
+
+```
+textness = clamp(1 - pLum / bgLum, 0, 1)
+```
+
+Pixels with `textness < 0.05` are treated as background and
+skipped. The alpha poured into the glow and text tiles at a
+text pixel is `round(textness * 255)` — so antialiased edge
+pixels come through at proportional alpha, preserving the
+PDF's native glyph smoothing.
+
+For pure-black-on-white PDFs this works cleanly. For colored
+or textured page backgrounds, the fallback pageBg sampling
+may mis-identify some text; the recolor degrades gracefully
+(pixels stay as their PDF originals where classification
+fails).
+
+#### Color Sampling
+
+A small helper mounts a hidden `<ark-tag>` element at load
+time, reads its computed colors, and caches them on the host:
+
+```js
+const probe = document.createElement('ark-tag');
+probe.innerHTML = '<name>x</name> <value>y</value>';
+probe.style.position = 'absolute';
+probe.style.visibility = 'hidden';
+document.body.appendChild(probe);
+
+const nameEl = probe.querySelector('name');
+const valueEl = probe.querySelector('value');
+const colors = {
+  name:        getComputedStyle(nameEl).color,
+  value:       getComputedStyle(valueEl).color,
+  punctuation: getComputedStyle(nameEl, '::before').color,
+  fontFamily:  getComputedStyle(nameEl).fontFamily, // retained for fallback path
+  bg:          getComputedStyle(document.documentElement)
+                 .getPropertyValue('--term-bg').trim() || '#ffffff',
+};
+
+probe.remove();
+```
+
+Cached on the host; theme-change invalidation (flush
+`pageCache` on theme switch) is deferred.
+
+The glow color is `theme.bg` (ark's UI background), chosen
+for contrast against the name and value colors, not against
+the PDF's page color. The result: the tag's halo looks like
+an ark element no matter what the PDF's page color happens to
+be.
+
+#### Fallback — No Segments
+
+If an `<ark-tag>` child arrives without a `segments` attribute
+(server skipped emission, chunker couldn't resolve per-glyph
+bounds), the element falls back to a PDF.js-driven scan:
+
+1. Call `page.getTextContent()` and build flat-string +
+   offsets (cached per `(src, page)`).
+2. Run the tag regex across the flat string.
+3. For each match, use the contributing text items' rects
+   as an approximation of per-segment bounds.
+
+The per-segment precision is coarser than the chunker's
+(PDF.js items don't always split on punctuation boundaries),
+but the recolor pipeline is otherwise identical.
+
+When `getTextContent()` also fails (encrypted page, malformed
+stream, OCR-less scan), no recolor runs — the raster text
+appears in its original PDF colors and `<ark-tag>` children
+fall back to the chunker-rect visible-overlay treatment
+(R1745).
+
+#### Text Selection Layer
+
+PDF.js exposes `renderTextLayer(parameters)` (or the
+`TextLayer` class in newer builds). The element mounts a
+text layer over each `<pdf-chunk>`'s visible region,
+consuming the same cached `getTextContent()` result. Text
+spans are transparent; browser selection highlights them via
+`::selection` styling. Selection spans across tags because
+the underlying text items are still present in the layer —
+the rendered image carries recolored tag ink, but the text
+content is the original PDF text.
+
+`<ark-tag>` hit regions sit below the text layer with
+`pointer-events: none`. The `<pdf-chunk>` capture-phase
+click handler hit-tests click coordinates against the tag
+rects (translated into chunk-local CSS pixels) to decide
+whether to slice or let the click pass through to the text
+layer's selection handling.
+
+#### Scope
+
+Everything in §Text-Layer Tag Rendering applies only to
+`<ark-tag>` elements that are direct children of
+`<pdf-chunk>` — `pdf-chunk > ark-tag` in CSS terms.
+`<ark-tag>` is a shared element used in markdown read
+views, plain-text pages, and other non-editable contexts,
+where it renders as a visible, clickable tag widget with
+its own `::before`/`::after` punctuation. None of the
+transparent-hit-region, canvas-recoloring, or
+`pointer-events: none` behavior touches those standalone
+uses. The pdf-chunk context is a scoped override carried
+by a `pdf-chunk > ark-tag` CSS rule and by logic inside
+the `<pdf-chunk>` element itself.
+
+#### No-JS Path
+
+When JavaScript is disabled, the `<pdf-chunk>` element does
+nothing — no canvas rendering, no recolor, no text layer.
+The `<ark-tag>` children fall through to their normal
+standalone rendering (HTML-rendered, styled by CSS,
+clickable). The move to canvas recoloring does not change
+this.
 
 ### Slice-And-Insert On Click
 
@@ -423,8 +639,11 @@ display PDF content include `<script src="/pdf-chunk-element.js">`:
 
 ## What This Does NOT Cover (v2 and later)
 
-- **Text layer overlay** — invisible PDF.js text spans over the
-  chunk for selection + copy. Deferred to v2.
+- **Text layer overlay (selection/copy)** — invisible PDF.js
+  text spans over the whole chunk for selection + copy.
+  Deferred to v2. (v1.5 uses `getTextContent()` for tag and
+  highlight positioning — see §Text-Layer Tag Positioning —
+  but does not surface a selectable text layer for prose.)
 - **Sub-hit highlighting** — query-token boxes painted at text
   coordinates. Deferred to v2.
 - **Per-page render cache** — two chunks from the same page

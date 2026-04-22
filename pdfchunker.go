@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -90,7 +91,8 @@ func (c *PDFChunker) extractDoc(path string, doc *pdftext.Doc, yield func(microf
 	for page := range doc.Pages() {
 		pageNum := page.Number()
 		blocks := page.Blocks()
-		chunks := pageChunks(pageNum, blocks)
+		cb := page.CropBox()
+		chunks := pageChunks(pageNum, blocks, [2]float64{cb.X + cb.W, cb.Y + cb.H})
 		Logv(1, "pdf: page %d: %d blocks, %d chunks", pageNum, len(blocks), len(chunks))
 		if len(chunks) == 0 {
 			continue // R1733: empty page emits nothing
@@ -111,12 +113,12 @@ func (c *PDFChunker) extractDoc(path string, doc *pdftext.Doc, yield func(microf
 // pageChunks maps a page's Blocks to ark chunks, assigning
 // per-kind 1-indexed locations (PAGE/para/N, PAGE/heading/N, etc.).
 // Returns nil when the page has no indexable blocks. R1730, R1733, R1738
-func pageChunks(pageNum int, blocks []pdftext.Block) []microfts2.Chunk {
+func pageChunks(pageNum int, blocks []pdftext.Block, cropExtent [2]float64) []microfts2.Chunk {
 	if len(blocks) == 0 {
 		return nil
 	}
 	pageStr := strconv.Itoa(pageNum)
-	pageSize := observedPageSize(blocks)
+	pageSize := cropExtent
 	counters := make(map[string]int)
 	var chunks []microfts2.Chunk
 	for i := range blocks {
@@ -387,21 +389,7 @@ func (r pdfRect) String() string {
 	return fmt.Sprintf("%.0f,%.0f,%.0f,%.0f", r.X, r.Y, r.W, r.H)
 }
 
-// observedPageSize returns max (x+width), max (y+height) across all
-// blocks on the page. Used so the <pdf-chunk> element can map
-// chunker coords to PDF.js's viewport regardless of CTM quirks.
-func observedPageSize(blocks []pdftext.Block) [2]float64 {
-	var maxX, maxY float64
-	for _, b := range blocks {
-		if rx := b.BBox.X + b.BBox.W; rx > maxX {
-			maxX = rx
-		}
-		if ry := b.BBox.Y + b.BBox.H; ry > maxY {
-			maxY = ry
-		}
-	}
-	return [2]float64{maxX, maxY}
-}
+
 
 // clampRectToPage keeps a chunk rect within the observed page extent.
 // Degenerate rects (collapsed after clamp) fall back to the original.
@@ -453,6 +441,12 @@ func chunkAttrs(page string, rect pdfRect, fontSize float64, pageSize [2]float64
 			Key:   []byte("tag_rects"),
 			Value: []byte(tr),
 		})
+		if ts := extractTagSegments(b); ts != "" {
+			attrs = append(attrs, microfts2.Pair{
+				Key:   []byte("tag_segments"),
+				Value: []byte(ts),
+			})
+		}
 	}
 	return attrs
 }
@@ -502,6 +496,140 @@ func appendTagRectEntries(entries []string, text string, chars []pdftext.Char) [
 		))
 	}
 	return entries
+}
+
+// extractTagSegments emits the `tag_segments` attribute: per-tag
+// bounds split into @ / name / : / value segments, index-aligned
+// with tag_rects. The value segment is a list of rects — one per
+// physical line — so wrapped values carry precise per-line bounds.
+// Format: `atRect|nameRect|colonRect|valRect1|valRect2|...;nextTag…`
+// (each rect = `x,y,w,h`). Tags whose sub-segments fail produce an
+// empty entry so alignment with tag_rects is preserved. R1758-R1761
+func extractTagSegments(b *pdftext.Block) string {
+	var entries []string
+	entries = appendTagSegmentEntries(entries, b.Text, b.Chars)
+	entries = appendTagSegmentEntries(entries, b.Caption, b.CaptionChars)
+	for _, e := range entries {
+		if e != "" {
+			return strings.Join(entries, ";")
+		}
+	}
+	return ""
+}
+
+func appendTagSegmentEntries(entries []string, text string, chars []pdftext.Char) []string {
+	if text == "" || len(chars) == 0 {
+		return entries
+	}
+	for _, m := range tagRectPattern.FindAllStringSubmatchIndex(text, -1) {
+		if len(m) < 6 {
+			continue
+		}
+		// Gate on the same union check that extractTagRects uses so
+		// skipping here stays aligned with skipping there.
+		if _, ok := charRangeRect(chars, m[0], m[1]); !ok {
+			continue
+		}
+		atRect, okAt := charRangeRect(chars, m[0], m[0]+1)
+		nameRect, okN := charRangeRect(chars, m[2], m[3])
+		colonRect, okC := charRangeRect(chars, m[3], m[3]+1)
+		valueEnd := m[5]
+		// Trim trailing ASCII whitespace from the value byte range so
+		// the line-split rects don't include padding beyond the last
+		// glyph.
+		for valueEnd > m[4] {
+			c := text[valueEnd-1]
+			if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+				valueEnd--
+				continue
+			}
+			break
+		}
+		valueRects := charRangeRectsByLine(chars, m[4], valueEnd)
+		if !okAt || !okN || !okC || len(valueRects) == 0 {
+			entries = append(entries, "")
+			continue
+		}
+		parts := make([]string, 0, 3+len(valueRects))
+		parts = append(parts, encodeTagSegment(atRect))
+		parts = append(parts, encodeTagSegment(nameRect))
+		parts = append(parts, encodeTagSegment(colonRect))
+		for _, r := range valueRects {
+			parts = append(parts, encodeTagSegment(r))
+		}
+		entries = append(entries, strings.Join(parts, "|"))
+	}
+	return entries
+}
+
+func encodeTagSegment(r pdfRect) string {
+	return fmt.Sprintf(
+		"%s,%s,%s,%s",
+		formatPdfFloat(r.X),
+		formatPdfFloat(r.Y),
+		formatPdfFloat(r.W),
+		formatPdfFloat(r.H),
+	)
+}
+
+// charRangeRectsByLine splits a byte range into one union rect per
+// physical line. Chars are grouped by baseline Y with a tolerance of
+// half the running average glyph height — when Y drops outside that
+// window the previous group closes and a new one starts. Handles
+// wrapped tag values. R1761
+func charRangeRectsByLine(chars []pdftext.Char, start, end int) []pdfRect {
+	if start < 0 || end > len(chars) || start >= end {
+		return nil
+	}
+	var out []pdfRect
+	var cur pdfRect
+	var have bool
+	var avgH float64
+	var count int
+	extend := func(c pdftext.Char) {
+		if c.BBox.X < cur.X {
+			cur.W = cur.X + cur.W - c.BBox.X
+			cur.X = c.BBox.X
+		}
+		if rx := c.BBox.X + c.BBox.W; rx > cur.X+cur.W {
+			cur.W = rx - cur.X
+		}
+		if c.BBox.Y < cur.Y {
+			cur.H = cur.Y + cur.H - c.BBox.Y
+			cur.Y = c.BBox.Y
+		}
+		if ry := c.BBox.Y + c.BBox.H; ry > cur.Y+cur.H {
+			cur.H = ry - cur.Y
+		}
+	}
+	for i := start; i < end; i++ {
+		c := chars[i]
+		if c.Rune == pdftext.NoRune {
+			continue
+		}
+		if !have {
+			cur = pdfRect{X: c.BBox.X, Y: c.BBox.Y, W: c.BBox.W, H: c.BBox.H}
+			avgH = c.BBox.H
+			count = 1
+			have = true
+			continue
+		}
+		tol := avgH * 0.5
+		if math.Abs(c.BBox.Y-cur.Y) > tol {
+			out = append(out, cur)
+			cur = pdfRect{X: c.BBox.X, Y: c.BBox.Y, W: c.BBox.W, H: c.BBox.H}
+			avgH = c.BBox.H
+			count = 1
+			continue
+		}
+		extend(c)
+		avgH = (avgH*float64(count) + c.BBox.H) / float64(count+1)
+		count++
+	}
+	if have {
+		out = append(out, cur)
+	}
+	return out
 }
 
 // charRangeRect returns the union of Char.BBoxes covering the byte

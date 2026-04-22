@@ -1,14 +1,16 @@
 # Sequence: PDF Chunk Render
 
 First `<pdf-chunk>` for a (src, page, scaleBand) triggers the
-document fetch and page render; subsequent siblings reuse the
-cached blob URL.
+document fetch, page render, segment collection, and canvas
+recolor pass. The resulting blob URL carries raster PDF glyphs
+with their ink recolored to theme values; subsequent siblings
+reuse it.
 
 ## Participants
 - `<pdf-chunk>` (crc-PdfChunkElement.md) — the element being rendered
-- `<ark-search>` host (crc-ArkSearchElement.md) — owns caches and cleanup
-- PDF.js library — document parse and page render
-- `<ark-tag>` overlay children (crc-ArkTagElement.md)
+- `<ark-search>` host (crc-ArkSearchElement.md) — owns caches, theme sample, recolor pass
+- PDF.js library — document parse, page render, text layer
+- `<ark-tag segments>` hit-region children (transparent; pdf-chunk scope only)
 
 ## Flow — Initial Render (Cold)
 
@@ -21,26 +23,126 @@ cached blob URL.
   |--getDocument(src)----->|                        |
   |                        |--pdfjs.getDocument---->|
   |                        |<--PDFDocumentProxy-----|
-  |                        |  (cache in docCache)   |
+  |                        |  cache in docCache     |
   |<---PDFDocumentProxy----|                        |
+  |                                                 |
+  |--getThemeColors()---->|                         |
+  |                        |  mount hidden <ark-tag>|
+  |                        |  probe; read computed  |
+  |                        |  styles (name/value/   |
+  |                        |  ::before/::after/--term-bg)
+  |                        |  remove probe; cache   |
+  |<---{name, value, punctuation, fontFamily, bg}---|
   |                                                 |
   |--getPageImage(src, page, band)-->|              |
   |                        |--doc.getPage---------->|
   |                        |<--PDFPageProxy---------|
   |                        |--page.render(canvas)-->|
   |                        |<--render complete------|
+  |                        |                        |
+  |                        |--samplePageBg(ctx, canvas)
+  |                        |  sample corner pixels, |
+  |                        |  take most common color|
+  |                        |  fallback to theme.bg  |
+  |                        |                        |
+  |                        |--collectSegmentDescriptors(src, page)
+  |                        |  DOM-walk <pdf-chunk[src=page]>
+  |                        |  parse each <ark-tag segments>
+  |                        |  build TagDescriptors with per-segment
+  |                        |  rects; fall back to getTextContent
+  |                        |  scan if no segments present
+  |                        |                        |
+  |                        |--recolorTagsInCanvas:  |
+  |                        |  Phase 1 per tag:      |
+  |                        |    compute region      |
+  |                        |    (runBox-union + asc/|
+  |                        |     desc pad, clamped  |
+  |                        |     by neighbor gap,   |
+  |                        |     + blur pad)        |
+  |                        |    snapshot ImageData  |
+  |                        |    compute runBoxes    |
+  |                        |  Phase 2 per tag       |
+  |                        |    (bottom-up order):  |
+  |                        |    build glow tile     |
+  |                        |     (bg-color text     |
+  |                        |      shape, α=textness)|
+  |                        |    build text tile     |
+  |                        |     (target color per  |
+  |                        |      segment, α=       |
+  |                        |      textness)         |
+  |                        |    combined = blur(    |
+  |                        |      glow) + text      |
+  |                        |    ctx.save, clip to   |
+  |                        |      runBox union,     |
+  |                        |    drawImage(combined) |
+  |                        |    ctx.restore         |
+  |                        |                        |
   |                        |--canvas.toBlob-------->|
   |                        |  + createObjectURL     |
   |                        |  push URL to blobUrls  |
   |                        |  cache {url, w, h}     |
   |<---{url, w, h}---------|                        |
   |                                                 |
+  |--getPageTextContent(src, page)-->|              |
+  |                        |--page.getTextContent-->|
+  |                        |<--text items-----------|
+  |                        |  build items + joined  |
+  |                        |  + offsets; cache      |
+  |<---pageTextContent------|                        |
+  |  (used for text layer +                         |
+  |   highlight rects only                          |
+  |   when segments drive                           |
+  |   recolor; fallback scan                        |
+  |   if no segments)                               |
+  |                                                 |
   |--build <img src=url>-->                         |
   |  position at (-chunkX, -chunkY) scaled          |
   |                                                 |
-  |--for each <ark-tag rect="..."> child:           |
-  |  absolutely position at transformed coords      |
-  |  apply scoped styling (font-size, width, bg)    |
+  |--positionHitRegions: for each <ark-tag> child,  |
+  |  parse segments="..." into TagDescriptor;       |
+  |  position at segments-union rect,               |
+  |  pointer-events:none, no visible content;       |
+  |  fallback to chunker rect (R1745) if no         |
+  |  segments and no text-content match             |
+  |                                                 |
+  |--mountTextLayer (PDF.js renderTextLayer)        |
+  |  consuming cached getTextContent result         |
+  |  positioned over the clipped chunk region       |
+  |                                                 |
+  |--resolveHighlightRects (reads cached items)     |
+  |  position highlight overlay divs                |
+```
+
+## Flow — Sibling On Same Page (Warm)
+
+```
+<pdf-chunk>            <ark-search> host
+  |                        |
+  |--getPageTextContent(src, page)-->
+  |                        |  cache HIT
+  |<---pageTextContent-----|
+  |                        |
+  |--getPageImage(src, page, band)-->
+  |                        |  cache HIT (baked already)
+  |<---{url, w, h}---------|
+  |  (no PDF.js calls — one scan + one bake
+  |   per (src, page, band); every sibling shares)
+```
+
+## Flow — Click Dispatch
+
+```
+  user click on <pdf-chunk>
+  |
+  |--capture-phase handler on <pdf-chunk>
+  |  compute click (cx, cy) in chunk-local CSS px
+  |  for each <ark-tag rect-positioned> child:
+  |    if (cx, cy) inside child's positioned rect:
+  |      preventDefault, stopPropagation,
+  |      call sliceAtTag (existing R1699-R1702 path)
+  |      return
+  |  miss: let event propagate → PDF.js text layer
+  |        handles text selection normally
 ```
 
 ## Flow — Sibling On Same Page (Warm)

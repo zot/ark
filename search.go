@@ -1370,7 +1370,11 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			groups[r.FileID] = g
 			order = append(order, r.FileID)
 		}
-		preview := RenderPreview(r.Text, g.strategy, tokenPatterns, r.Attrs, r.Path)
+		pdfZoom := s.config.PdfPreviewZoom
+		if pdfZoom <= 0 {
+			pdfZoom = 1.5
+		}
+		preview := RenderPreview(r.Text, g.strategy, tokenPatterns, r.Attrs, r.Path, pdfZoom)
 		g.chunks = append(g.chunks, GroupedChunk{
 			Range:       r.Range,
 			Score:       r.Score,
@@ -1411,9 +1415,9 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 // plain text with HTML escaping otherwise.
 // Query tokens are highlighted with <mark> tags in text formats.
 // CRC: crc-Searcher.md | R1703-R1708
-func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []microfts2.Pair, path string) string {
+func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []microfts2.Pair, path string, pdfZoom float64) string {
 	if strategy == "pdf" {
-		if html, ok := renderPdfPreview(attrs, path); ok {
+		if html, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
 			return html
 		}
 		// Salvage chunks (no rect) fall through to the plain-text path. R1708
@@ -1447,7 +1451,7 @@ func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []mic
 // ("", false) when the chunk lacks a rect attribute (salvage chunks
 // per R1708) so the caller can fall through to the text preview path.
 // R1703-R1707.
-func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
+func renderPdfPreview(attrs []microfts2.Pair, path string, pdfZoom float64) (string, bool) {
 	rect, hasRect := microfts2.PairGet(attrs, "rect")
 	if !hasRect || len(rect) == 0 {
 		return "", false
@@ -1457,6 +1461,7 @@ func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
 		page = []byte("1")
 	}
 	tagRects, _ := microfts2.PairGet(attrs, "tag_rects")
+	tagSegments, _ := microfts2.PairGet(attrs, "tag_segments")
 	pageSize, _ := microfts2.PairGet(attrs, "page_size")
 
 	var b strings.Builder
@@ -1472,8 +1477,11 @@ func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
 		b.WriteString(template.HTMLEscapeString(string(pageSize)))
 		b.WriteString(`"`)
 	}
+	if pdfZoom > 0 {
+		fmt.Fprintf(&b, ` zoom="%g"`, pdfZoom)
+	}
 	b.WriteString(`>`)
-	writePdfTagChildren(&b, string(tagRects))
+	writePdfTagChildren(&b, string(tagRects), string(tagSegments))
 	b.WriteString(`</pdf-chunk>`)
 	return b.String(), true
 }
@@ -1487,10 +1495,11 @@ func renderPdfPreview(attrs []microfts2.Pair, path string) (string, bool) {
 // CRC: crc-Server.md | R1739, R1740
 func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
 	type pageAgg struct {
-		page     string
-		pageSize string
-		tagRects []string
-		salvage  []microfts2.ChunkResult // only used when pageSize stays empty
+		page        string
+		pageSize    string
+		tagRects    []string
+		tagSegments []string
+		salvage     []microfts2.ChunkResult // only used when pageSize stays empty
 	}
 	var order []string
 	pages := make(map[string]*pageAgg)
@@ -1511,6 +1520,8 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
 		}
 		if tr, ok := microfts2.PairGet(ch.Attrs, "tag_rects"); ok && len(tr) > 0 {
 			agg.tagRects = append(agg.tagRects, string(tr))
+			ts, _ := microfts2.PairGet(ch.Attrs, "tag_segments")
+			agg.tagSegments = append(agg.tagSegments, string(ts))
 		}
 		if _, hasRect := microfts2.PairGet(ch.Attrs, "rect"); !hasRect {
 			agg.salvage = append(agg.salvage, ch)
@@ -1542,7 +1553,7 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
 		buf.WriteString(`" page-size="`)
 		buf.WriteString(template.HTMLEscapeString(agg.pageSize))
 		buf.WriteString(`">`)
-		writePdfTagChildren(&buf, strings.Join(agg.tagRects, ";"))
+		writePdfTagChildren(&buf, strings.Join(agg.tagRects, ";"), strings.Join(agg.tagSegments, ";"))
 		buf.WriteString(`</pdf-chunk>` + "\n")
 	}
 	return buf.String()
@@ -1571,13 +1582,22 @@ func rawURLFor(path string) string {
 }
 
 // writePdfTagChildren parses the chunk's tag_rects attribute and emits
-// one `<ark-tag rect="…"><name>…</name> <value>…</value></ark-tag>`
-// child per entry. Format: `name=value@x,y,w,h;…` (R1671, R1672).
-func writePdfTagChildren(b *strings.Builder, tagRects string) {
+// one `<ark-tag rect="…" segments="…"><name>…</name> <value>…</value></ark-tag>`
+// child per entry. tag_rects format: `name=value@x,y,w,h;…` (R1671,
+// R1672). tag_segments is index-aligned with tag_rects — per-tag
+// `@|name|colon|valRect1|valRect2…` (R1758-R1761). When tagSegments
+// is empty or a tag's entry is empty, the `segments` attribute is
+// omitted and the element falls back to approximate mapping.
+func writePdfTagChildren(b *strings.Builder, tagRects, tagSegments string) {
 	if tagRects == "" {
 		return
 	}
-	for _, entry := range strings.Split(tagRects, ";") {
+	rectEntries := strings.Split(tagRects, ";")
+	var segEntries []string
+	if tagSegments != "" {
+		segEntries = strings.Split(tagSegments, ";")
+	}
+	for i, entry := range rectEntries {
 		if entry == "" {
 			continue
 		}
@@ -1596,8 +1616,16 @@ func writePdfTagChildren(b *strings.Builder, tagRects string) {
 		if rect == "" || name == "" {
 			continue
 		}
+		var segs string
+		if i < len(segEntries) {
+			segs = segEntries[i]
+		}
 		b.WriteString(`<ark-tag rect="`)
 		b.WriteString(template.HTMLEscapeString(rect))
+		if segs != "" {
+			b.WriteString(`" segments="`)
+			b.WriteString(template.HTMLEscapeString(segs))
+		}
 		b.WriteString(`"><name>`)
 		b.WriteString(template.HTMLEscapeString(name))
 		b.WriteString(`</name> <value>`)

@@ -1,5 +1,5 @@
 # ArkSearchElement
-**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466, R1472, R1473, R1474, R1475, R1682, R1683, R1684, R1685, R1686, R1687, R1688, R1689, R1690
+**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466, R1472, R1473, R1474, R1475, R1682, R1683, R1684, R1685, R1686, R1687, R1688, R1689, R1690, R1746, R1748, R1750, R1751, R1752, R1753, R1754
 
 Custom element (`<ark-search>`) that renders a tag search panel
 with query bar, results area, and resize handle. Pure DOM — no
@@ -18,6 +18,8 @@ CM6 dependency.
 - `docCache: Map<src, Promise<PDFDocumentProxy>>` — shared document cache for descendant `<pdf-chunk>` elements (R1682)
 - `pageCache: Map<string, Promise<{url, w, h}>>` keyed by `src|page|scaleBand` — shared page-image cache (R1682)
 - `blobUrls: string[]` — every `createObjectURL` value, used for cleanup (R1682)
+- `textContentCache: Map<string, Promise<TextContentResult>>` keyed by `src|page` — shared PDF.js text-content cache so chunks sharing a page share the scan (R1748). Carries `{items, joined, offsets, tagRects}` — tag detection runs once and is cached with the scan (R1741)
+- `themeColors` — cached `{name, value, punctuation, fontFamily, bg}` descriptor sampled from a hidden representative `<ark-tag>` element (R1750)
 
 ## Does
 - renders query bar: mode dropdown, swappable inputs (structured tag fields or free text input), clear, close
@@ -40,8 +42,12 @@ CM6 dependency.
 - promotes phase 3 curated results to full color, strikes through rejected
 - dispatches 'close' event when close button clicked
 - getDocument(src): returns cached `PDFDocumentProxy` on hit, otherwise calls `pdfjs.getDocument(src)` and caches the promise (R1683)
-- getPageImage(src, page, scaleBand): returns cached `{url, w, h}` on hit, otherwise renders the page to an offscreen canvas at the band's scale, converts with `canvas.toBlob()` + `URL.createObjectURL()`, pushes the URL to `blobUrls`, and caches the result. `scaleBand` buckets the render scale to ±10% so small resizes stay within a band (R1684, R1685)
-- disconnectedCallback(): walks `blobUrls` revoking each URL, destroys every cached document, clears `docCache`, `pageCache`, and `blobUrls`. No refcounting, no grace window — both slice halves read from the still-live `pageCache` during slice-and-insert, so nothing churns (R1687, R1688)
+- getPageImage(src, page, scaleBand): returns cached `{url, w, h}` on hit, otherwise renders the page to an offscreen canvas at the band's scale, samples the page bg color, collects segment-based tag descriptors from every `<pdf-chunk>` on the page, runs the recolor pass (R1751–R1754) so the canvas ink for tag text shifts to theme colors, converts with `canvas.toBlob()` + `URL.createObjectURL()`, pushes the URL to `blobUrls`, and caches the result. `scaleBand` buckets the render scale to ±10% so small resizes stay within a band (R1684, R1685, R1746)
+- getPageTextContent(src, page): returns cached text-content scan — items + flat string + offset table + tag rects — on hit, otherwise calls PDF.js `getTextContent()` on the page, builds the structure, runs tag detection against the flat string (R1741), and caches everything together. Scale-independent; one cache entry per `(src, page)` (R1748). Used by the recolor fallback path (R1763) and for highlight rect computation (R1749).
+- getThemeColors(): returns cached `themeColors` descriptor on hit, otherwise mounts a hidden `<ark-tag>` probe in the document, reads computed colors from `<name>`, `<value>`, `::before`/`::after`, and `--term-bg`, stores the result, and removes the probe. Invoked once on first page render (R1750)
+- samplePageBg(ctx, canvas, fallback): reads pixels from several corner points of the rendered canvas, picks the most common non-transparent color as the page bg, falls back to theme bg on failure (R1751)
+- recolorTagsInCanvas(ctx, canvas, tagDescriptors, theme, bandScale, pageH, pageBg): two-phase in-place ink recolor. Phase 1 computes per-tag region + runBoxes + pristine ImageData snapshot for every descriptor (R1754). Phase 2 iterates bottom-up: builds a bg-colored text-shape tile (blurred on composite), a sharp recolored text tile, draws both into a combined offscreen, then drawImages onto main clipped to the runBox union (R1751–R1769)
+- disconnectedCallback(): walks `blobUrls` revoking each URL, destroys every cached document, clears `docCache`, `pageCache`, `textContentCache`, and `blobUrls`. No refcounting, no grace window — both slice halves read from the still-live `pageCache` during slice-and-insert, so nothing churns (R1687, R1688)
 - a page-level `beforeunload` handler walks every `<ark-search>` in the document and runs the same cleanup as a safety net for tab close and navigation (R1689)
 
 ## Collaborators

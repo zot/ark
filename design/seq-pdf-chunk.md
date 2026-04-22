@@ -30,7 +30,9 @@ microfts2                PDFChunker              pdftext              Store
    |                         |    content = Caption + "\n" + Text R1731  |
    |                         |    (already NFKC-normalized) R1732        |
    |                         |    Attrs: page, rect=Block.BBox, fontSize,|
-   |                         |           tag_rects from Block.Chars      |
+   |                         |           tag_rects from Block.Chars,     |
+   |                         |           tag_segments (per-segment rects,|
+   |                         |             index-aligned) R1758-R1760    |
    |                         |                                           |
    |<----yield(chunk)--------|                                           |
    |                         |                                           |
@@ -76,6 +78,34 @@ whose byte ranges overlap `[start:end]`. Because pdftext aligns
 every expansion byte (e.g., ligature `ﬁ` → `f`+`i`) back to the
 same originating-glyph BBox, hits on either the NFKC or the
 pre-normalization form resolve to the same on-page region.
+
+## Tag Segments (R1758-R1760)
+
+Parallel to `tag_rects`, each tag also emits a `tag_segments`
+entry carrying per-segment rects at glyph fidelity — the shape
+needed by `<pdf-chunk>` to recolor `@`, name, `:`, and value
+ink regions independently.
+
+Per tag, four or more rects separated by `|`:
+
+```
+atRect|nameRect|colonRect|valRect1|valRect2…
+```
+
+- `atRect` unions Chars BBoxes over byte range `[m[0], m[0]+1)`
+- `nameRect` over `[m[2], m[3])`
+- `colonRect` over `[m[3], m[3]+1)`
+- `valRect*` — value chars over `[m[4], valueEnd)` with trailing
+  ASCII whitespace trimmed, split into one rect per physical
+  line by grouping Chars whose baseline Y differs from the
+  running average glyph height by more than half an average
+  height
+
+Tags separated by `;`; empty entry between `;`s means the segment
+computation failed but tag_rects' corresponding entry is still
+valid — pdf-chunk falls back to PDF.js detection for that tag.
+
+Salvage chunks (no `rect`) produce no `tag_segments`.
 
 ## Hard Errors (R1734)
 

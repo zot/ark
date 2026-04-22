@@ -2241,6 +2241,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		HideToggle: hideToggle,
 		AutoEdit:   autoEdit,
 		IsChunk:    isChunk,
+		IsSearch:   r.URL.Query().Get("highlight") != "",
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -2348,7 +2349,11 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
 					return db.ChunkAttrs(path, rangeParam), nil
 				})
-				if pdfHTML, ok := renderPdfPreview(attrs, path); ok {
+				pdfZoom := srv.db.config.PdfPreviewZoom
+				if pdfZoom <= 0 {
+					pdfZoom = 1.5
+				}
+				if pdfHTML, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
 					shell.Content = template.HTML(pdfHTML)
 				} else {
 					shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
@@ -2485,6 +2490,7 @@ type contentShellData struct {
 	AutoEdit   bool          // R1427, R1430: auto-load CM6 editor on page load
 	IsChunk    bool          // R1423: serving a chunk range, not full file
 	IsChunked  bool          // R1495: content is chunk divs, not raw text
+	IsSearch   bool          // highlight query params present
 }
 
 // loadContentTemplate reads an HTML template from the html/ dir under dbPath.
