@@ -2047,7 +2047,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1303:** `ark embed --bench tags` embeds all tag values, reports per-value and total timing
 - **R1304:** `ark embed --bench chunks` reads real chunks from random indexed files via AllChunks (real chunker boundaries, not fixed-size slices), embeds them, reports timing
 - **R1587:** `ark embed --bench` accepts `--ctx N` to set the embedding context window size (default 2048). Passed through to Librarian model loading for benchmarking different context sizes.
-n- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
+- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
 
 ### Build
 - **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
@@ -2861,3 +2861,88 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 
 - **R1788:** `ark search --help` groups options by purpose: output format, scoring/analysis, and profiling. Filter stack syntax and examples appear above the grouped options.
 - **R1789:** Help text includes concrete examples showing bare terms, polarity toggles, mixed modes, and `-parse` usage.
+
+## Feature: Embed Subcommands
+**Source:** specs/embed-subcommands.md
+
+### Subcommand Structure
+
+- **R1790:** `ark embed` dispatches to subcommands: `text`, `bench`, `validate`. Running `ark embed` with no subcommand prints usage and exits 0.
+- **R1791:** `ark embed text TEXT...` embeds text using the configured tag model, prints the vector as JSON. Supersedes R1302 (`ark embed TEXT`).
+- **R1792:** `ark embed bench MODE` benchmarks embedding performance. MODE is `tags` or `chunks`. Supersedes R1303, R1304, R1621, R1622 (the `--bench` flag).
+- **R1793:** `ark embed bench` accepts `--ctx N` (default 2048) and `--parallel N` (default 8). Supersedes R1587.
+- **R1794:** `ark embed validate` cross-references embedding records (EC/EF) against FTS chunk data to find orphans, mismatches, and gaps.
+
+### embed text
+
+- **R1795:** Requires `tag_model` configured in ark.toml.
+- **R1796:** Joins all positional args with spaces.
+- **R1797:** Output is a JSON array of float32 to stdout.
+
+### embed bench tags
+
+- **R1798:** Collects all tag values from LMDB, embeds via batch and single paths, reports timing comparison and speedup ratio.
+
+### embed bench chunks
+
+- **R1799:** Samples 200 chunks from indexed files using file-first random sampling (prevents JSONL domination).
+- **R1800:** Embeds via batch and single paths, reports timing comparison and speedup ratio.
+- **R1801:** Reports context size, parallel count, tokens/seq, chunk size distribution (min/max/avg), and skip rate.
+
+### embed validate — Checks
+
+- **R1802:** Orphan EC records: EC records whose fileID does not exist in the FTS index, or whose chunkIdx exceeds the file's actual chunk count.
+- **R1803:** EF/EC count mismatch: EF centroid's stored count does not match the actual number of EC records for that file.
+- **R1804:** Missing EC records: files with chunks in the FTS index but no EC records (or fewer EC records than chunks).
+- **R1805:** Orphan EF records: EF records whose fileID has no corresponding EC records or no FTS entry.
+- **R1806:** Dimension consistency: all EC vectors should have the same dimension. Reports the distribution of dimensions found (count per dimension). Flags any that differ from the majority.
+
+### embed validate — Options
+
+- **R1807:** `--fix` deletes orphan EC records, orphan EF records, and EC records with wrong dimensions.
+- **R1808:** `--fix` does not re-embed missing chunks — that requires a running server with a warm model.
+- **R1809:** `--verbose` / `-v` shows per-file detail instead of summary counts only.
+
+### embed validate — Output
+
+- **R1810:** Summary line per check category with count of problems found.
+- **R1811:** Exit 0 if clean, exit 1 if any problems detected.
+- **R1812:** With `--verbose`, lists each problem file/record.
+- **R1813:** With `--fix`, reports what was deleted (count per category).
+
+### Remove ark vec
+
+- **R1814:** Remove the `vec` case from the CLI command dispatcher.
+- **R1815:** Delete `cmd/ark/vecbench.go`.
+- **R1816:** R547-R562 (ark vec bench, ark vec bench-search) are superseded by R1791-R1801.
+
+## Feature: Embed Deduplication
+**Source:** specs/embed-dedup.md
+
+### Tracking State
+
+- **R1817:** The Librarian maintains an in-memory map of `fileID → {count, lastChunkID}` representing the chunk state when a file was last successfully embedded.
+- **R1818:** `count` is the number of chunks in the file at last embed time.
+- **R1819:** `lastChunkID` is the microfts2 ChunkID (from the F-record) of the final chunk at last embed time.
+- **R1820:** The map resets on server restart. The first post-startup embed pass does a full scan (acceptable cold-start cost).
+- **R1821:** Stale entries for removed files are harmless and cleaned on restart. No explicit removal needed during runtime.
+
+### Skip Logic
+
+- **R1822:** When `BatchEmbedChunks` processes a file, it reads the file's FTS chunk list to get the current count and last chunkID.
+- **R1823:** If `count == len(chunks) && lastChunkID == chunks[last].ChunkID`: skip entirely. Nothing changed since the last embed pass.
+- **R1824:** If `count == len(chunks) && lastChunkID != chunks[last].ChunkID`: the last chunk was re-indexed (append boundary case). Re-embed only the last chunk at index `count-1`.
+- **R1825:** If `count < len(chunks) && lastChunkID == chunks[count-1].ChunkID`: clean append. Embed from index `count` onward. Skip all chunks before `count`.
+- **R1826:** If `count < len(chunks) && lastChunkID != chunks[count-1].ChunkID`: boundary chunk changed. Embed from index `count-1` onward (re-embed boundary chunk plus new chunks).
+- **R1827:** After a successful embed pass for a file, update the tracking map with the new count and last chunkID.
+
+### Centroid Handling
+
+- **R1828:** When skipping known-good chunks (R1823-R1826), the existing EF centroid is preserved — no invalidation. The centroid accumulator is seeded from the stored EF sum/count.
+- **R1829:** When re-embedding a boundary chunk (R1824, R1826), subtract the old EC vector from the centroid sum before adding the new vector. Read the existing EC record for the old vector.
+- **R1830:** (invariant) EF centroids are written only after every tier bucket for that file has been flushed. Tier processing is sequential — a fast-bucket chunk must not trigger an early EF write while slow-bucket chunks for the same file are pending.
+- **R1831:** The write queue serializes embed passes across reconcile cycles. No two `BatchEmbedChunks` calls run concurrently.
+
+### FTS Access
+
+- **R1832:** `BatchEmbedChunks` needs the last chunk's ChunkID from the FTS F-record. Add a DB method or extend the existing call path to expose this.

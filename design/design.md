@@ -130,7 +130,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Indexer.md → `indexer.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/vecbench.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -166,6 +166,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-pdf-chunk.md → `pdfchunker.go`
 - [x] seq-empty-file-skip.md → `scanner.go`, `db.go`, `emptyfiles.go`
 - [x] seq-pdf-chunk-retrieval.md → `pdfchunker.go`, `store.go`
+- [x] seq-embed-validate.md → `cmd/ark/main.go`, `store.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -341,3 +342,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] A41: -about as chunk filter (AboutChunkFilter) not yet implemented — requires embedding model in filter path. -about works as primary search only.
 - [x] O82: About chunk filter requires configured embed_cmd/query_cmd in ark.toml — currently tag_model is set (Librarian path) but query-time embedding path is not. vec.Search fails silently.
 - [ ] O83: About filter in CLI local path (no server) silently skips — Librarian only available when server is running
+- [ ] A42: R547-R562 (ark vec bench) superseded by R1790-R1801 (ark embed subcommands)
+- [ ] A43: R1302-R1305, R1587 (ark embed flat flags) superseded by R1790-R1801 (ark embed subcommands)

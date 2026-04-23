@@ -1535,6 +1535,37 @@ func (db *DB) ChunkSizes(path string) []int {
 	return lens
 }
 
+// FileChunkCounts returns fileID → chunk count for all indexed files.
+// CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1802
+func (db *DB) FileChunkCounts() (map[uint64]int, error) {
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uint64]int, len(statuses))
+	for _, s := range statuses {
+		lens, err := db.fts.ChunkContentLens(s.FileID)
+		if err != nil {
+			continue
+		}
+		result[s.FileID] = len(lens)
+	}
+	return result, nil
+}
+
+// LastChunkID returns the ChunkID of the final chunk in the FTS F-record.
+// CRC: crc-DB.md | Seq: seq-chunk-embed.md | R1832
+func (db *DB) LastChunkID(fileID uint64) (uint64, error) {
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil {
+		return 0, err
+	}
+	if len(info.Chunks) == 0 {
+		return 0, nil
+	}
+	return info.Chunks[len(info.Chunks)-1].ChunkID, nil
+}
+
 // IsIndexed returns true if the given file path is in the index.
 func (db *DB) IsIndexed(path string) bool {
 	absPath, err := filepath.Abs(path)

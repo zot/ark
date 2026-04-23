@@ -1844,6 +1844,81 @@ func (s *Store) RemoveFileChunkEmbeddings(fileID uint64) error {
 	})
 }
 
+// CRC: crc-Store.md | R1802
+// ChunkEmbedInfo holds per-file embedding data from a prefix scan.
+type ChunkEmbedInfo struct {
+	ChunkIndices []int
+	Dims         []int // vector dimension per chunk (len(vec))
+}
+
+// ScanChunkEmbeddingKeys scans all EC records, returning per-file chunk indices and dimensions.
+func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]*ChunkEmbedInfo, error) {
+	result := make(map[uint64]*ChunkEmbedInfo)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
+			rest := k[len(prefixEmbedChunk):]
+			vals := decodeVarints(rest)
+			if len(vals) < 2 {
+				return nil
+			}
+			fileID := vals[0]
+			chunkIdx := int(vals[1])
+			dim := len(v) / 4 // float32 = 4 bytes
+			info := result[fileID]
+			if info == nil {
+				info = &ChunkEmbedInfo{}
+				result[fileID] = info
+			}
+			info.ChunkIndices = append(info.ChunkIndices, chunkIdx)
+			info.Dims = append(info.Dims, dim)
+			return nil
+		})
+	})
+	return result, err
+}
+
+// ScanFileCentroidCounts scans all EF records, returning fileID → stored count.
+func (s *Store) ScanFileCentroidCounts() (map[uint64]uint32, error) {
+	result := make(map[uint64]uint32)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(_ *lmdb.Cursor, k, v []byte) error {
+			rest := k[len(prefixEmbedFileCent):]
+			fileID, _ := binary.Uvarint(rest)
+			data := make([]byte, len(v))
+			copy(data, v)
+			if len(data) < 4 {
+				return nil
+			}
+			count := binary.LittleEndian.Uint32(data[len(data)-4:])
+			result[fileID] = count
+			return nil
+		})
+	})
+	return result, err
+}
+
+// DeleteChunkEmbedding deletes one EC record.
+func (s *Store) DeleteChunkEmbedding(fileID uint64, chunkIdx int) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, chunkEmbedKey(fileID, chunkIdx), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// DeleteFileCentroid deletes one EF record.
+func (s *Store) DeleteFileCentroid(fileID uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
 // pageContentKey builds the PC[fileID][page] key. R1720
 func pageContentKey(fileID uint64, page uint32) []byte {
 	key := []byte(prefixPageContent)

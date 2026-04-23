@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1817, R1818, R1819, R1820, R1821, R1822, R1823, R1824, R1825, R1826, R1827, R1828, R1829, R1830, R1831, R1832
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -19,6 +19,7 @@ loads on first embedding query and stays warm until TTL expiry.
 - tiers: []EmbedTier — sorted by byte limit ascending (from Config)
 - modelPath: string — path to GGUF file from config
 - modelTimer: *time.Timer — TTL for model unloading
+- lastEmbedded: map[uint64]embedState — per-file high-water mark for dedup (R1817)
 
 ## Does
 ### Expansion Queue (Sidecar Pattern)
@@ -55,12 +56,15 @@ loads on first embedding query and stays warm until TTL expiry.
   context (WithContext(64), no WithEmbeddings) for tokenization only.
   Returns a Tokenizer that wraps the context. Caller must Close().
   Uses modelPath from config. (R1529, R1530)
-- BatchEmbedChunks(): scan MissingChunkEmbeddings, priority sort, read
-  chunk content via AllChunks, route to tier buckets by byte size, flush
-  each bucket at its parallel count via EmbedBatch through the tier's
-  context. Write EC records through DB actor. Update EF centroids after
-  each file completes. Final flush at end of queue. Called post-reconcile
-  after BatchEmbed. (R1609-R1617)
+- BatchEmbedChunks(): scan files for missing/changed embeddings using
+  lastEmbedded high-water tracking (R1817-R1827). Four cases per file:
+  (1) unchanged → skip entirely, (2) last chunk re-indexed → re-embed
+  last only, (3) clean append → embed from high-water onward, (4) boundary
+  changed → re-embed from high-water-1 onward. Centroid seeded from
+  existing EF, not invalidated (R1828). Boundary re-embed subtracts old
+  vector before adding new (R1829). Priority sort, tier bucket dispatch,
+  EC writes, EF centroids written once after all tiers flush (R1830).
+  Called post-reconcile after BatchEmbed. (R1609-R1617, R1817-R1832)
 - SetCtxSize(n int): set embedding context window (bench only). (R1587)
 - SetParallel(n int): set parallel sequences (bench only). (R1587)
 - loadModel(): load GGUF model from modelPath, create default context

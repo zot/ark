@@ -41,14 +41,21 @@ type Librarian struct {
 	results map[string]*ExpandResult // requestID → result
 
 	// Embedding model (R1277, R1278, R1593, R1594)
-	model      *llama.Model
-	modelCtx   *llama.Context // default context for tags/queries (2048/8)
-	tiers      []EmbedTier    // sorted by byte limit ascending
-	modelPath  string         // full path to GGUF file
-	modelTimer *time.Timer
-	modelTTL   time.Duration
-	ctxSize    int // embedding context window size override (bench only) R1587
-	parallel   int // parallel sequences override (bench only) R1587
+	model        *llama.Model
+	modelCtx     *llama.Context // default context for tags/queries (2048/8)
+	tiers        []EmbedTier    // sorted by byte limit ascending
+	modelPath    string         // full path to GGUF file
+	modelTimer   *time.Timer
+	modelTTL     time.Duration
+	ctxSize      int                   // embedding context window size override (bench only) R1587
+	parallel     int                   // parallel sequences override (bench only) R1587
+	lastEmbedded map[uint64]embedState // CRC: crc-Librarian.md | R1817
+}
+
+// embedState tracks per-file high-water mark for chunk embedding dedup. R1817-R1819
+type embedState struct {
+	count       int
+	lastChunkID uint64
 }
 
 // ExpandRequest is a queued expansion request.
@@ -90,12 +97,13 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 	}
 	cfg := db.Config()
 	l := &Librarian{
-		available: true,
-		db:        db,
-		results:   make(map[string]*ExpandResult),
-		modelTTL:  5 * time.Minute,
-		ctxSize:   2048,
-		tiers:     cfg.EmbedTiers, // R1594: sorted at config load
+		available:    true,
+		db:           db,
+		results:      make(map[string]*ExpandResult),
+		modelTTL:     5 * time.Minute,
+		ctxSize:      2048,
+		tiers:        cfg.EmbedTiers,              // R1594: sorted at config load
+		lastEmbedded: make(map[uint64]embedState), // R1817, R1820
 	}
 	// R1274: resolve tag_model path
 	if tagModel := cfg.TagModel; tagModel != "" {
@@ -696,7 +704,7 @@ func (l *Librarian) BatchEmbed() error {
 		}
 	}
 
-	log.Printf("librarian: embedding complete")
+	log.Printf("librarian: tag embedding complete (%d names, %d values)", len(missingTags), len(missingTvids))
 	return nil
 }
 
@@ -839,6 +847,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 	}
 	tierRefs := make([][]chunkRef, len(l.tiers))
 	fileChunkTotals := make(map[uint64]uint32) // fileID → len(chunkLens) for queued files R1623
+	fileLastChunkID := make(map[uint64]uint64) // fileID → curLastChunkID for R1827 update
 	var totalSkipped int
 
 	for _, fp := range sorted {
@@ -850,37 +859,90 @@ func (l *Librarian) BatchEmbedChunks() error {
 			continue
 		}
 
-		// Fast skip: EF count matches chunk count → fully embedded.
-		efSum, efCount, _ := l.db.store.ReadFileCentroid(fileID)
-		if efCount > 0 && int(efCount) == len(chunkLens) {
-			continue
-		}
-		Logv(1, "chunk embed: no fast-skip %s (efCount=%d, chunks=%d)", fp.path, efCount, len(chunkLens))
+		// R1822: get current last chunkID for high-water comparison
+		curLastChunkID, _ := l.db.LastChunkID(fileID)
+		curCount := len(chunkLens)
 
-		// Invalidate on disk for crash safety, seed centroid from memory.
-		if efCount > 0 {
-			l.db.store.WriteFileCentroid(fileID, nil, 0)
-			if len(efSum) > 1 {
-				acc := centroids[fileID]
-				if acc == nil {
-					acc = &centroidAcc{sum: make([]float32, len(efSum))}
-					centroids[fileID] = acc
+		// R1823-R1826: determine startIdx using high-water tracking
+		prev, hasPrev := l.lastEmbedded[fileID]
+		startIdx := 0
+		subtractBoundary := false
+		if hasPrev {
+			if prev.count == curCount && prev.lastChunkID == curLastChunkID {
+				// R1823: nothing changed — skip entirely
+				continue
+			}
+			if prev.count == curCount && prev.lastChunkID != curLastChunkID {
+				// R1824: last chunk re-indexed (boundary case)
+				startIdx = curCount - 1
+				subtractBoundary = true
+			} else if prev.count < curCount {
+				if prev.count > 0 && prev.lastChunkID == curLastChunkID {
+					// Edge: count grew but lastChunkID unchanged — shouldn't happen
+					// (new chunks would be last), fall through to safe path
+					startIdx = prev.count
+				} else if prev.count > 0 {
+					ftsInfo, err := l.db.fts.FileInfoByID(fileID)
+					if err == nil && prev.count-1 < len(ftsInfo.Chunks) &&
+						ftsInfo.Chunks[prev.count-1].ChunkID == prev.lastChunkID {
+						// R1825: clean append — boundary chunk unchanged
+						startIdx = prev.count
+					} else {
+						// R1826: boundary chunk changed
+						startIdx = max(prev.count-1, 0)
+						subtractBoundary = true
+					}
 				}
-				copy(acc.sum, efSum)
-				acc.count = efCount
+			}
+			// prev.count > curCount: file was re-indexed with fewer chunks, full scan
+		}
+
+		// R1828: seed centroid from existing EF — no invalidation
+		efSum, efCount, _ := l.db.store.ReadFileCentroid(fileID)
+		if efCount > 0 && len(efSum) > 1 {
+			acc := centroids[fileID]
+			if acc == nil {
+				acc = &centroidAcc{sum: make([]float32, len(efSum))}
+				centroids[fileID] = acc
+			}
+			copy(acc.sum, efSum)
+			acc.count = efCount
+		}
+
+		// R1829: subtract old vector for boundary chunk before re-embedding
+		if subtractBoundary && startIdx < curCount {
+			oldVec, _ := l.db.store.ReadChunkEmbedding(fileID, startIdx)
+			if oldVec != nil {
+				acc := centroids[fileID]
+				if acc != nil && len(acc.sum) == len(oldVec) {
+					for i, v := range oldVec {
+						acc.sum[i] -= v
+					}
+					if acc.count > 0 {
+						acc.count--
+					}
+				}
 			}
 		}
 
-		fileChunksProcessed := 0
-		fileOversized := 0 // chunks exceeding all tiers R1623
-		for chunkIdx, chunkLen := range chunkLens {
-			existing, _ := l.db.store.ReadChunkEmbedding(fileID, chunkIdx)
-			if existing != nil {
-				fileChunksProcessed++
-				if efCount == 0 {
-					addToCentroid(fileID, existing)
+		Logv(1, "chunk embed: %s (id=%d): startIdx=%d, total=%d, hasPrev=%v",
+			fp.path, fileID, startIdx, curCount, hasPrev)
+
+		fileChunksProcessed := startIdx // chunks before startIdx are known good
+		fileOversized := 0
+		for chunkIdx := startIdx; chunkIdx < curCount; chunkIdx++ {
+			chunkLen := chunkLens[chunkIdx]
+
+			// Skip chunks that already have EC records (for startIdx=0 cold path)
+			if !hasPrev || chunkIdx > startIdx || !subtractBoundary {
+				existing, _ := l.db.store.ReadChunkEmbedding(fileID, chunkIdx)
+				if existing != nil {
+					fileChunksProcessed++
+					if efCount == 0 {
+						addToCentroid(fileID, existing)
+					}
+					continue
 				}
-				continue
 			}
 
 			if chunkLen == 0 {
@@ -906,33 +968,23 @@ func (l *Librarian) BatchEmbedChunks() error {
 			}
 		}
 
-		// Log per-file breakdown for diagnosis
-		fileExisting := 0
-		for ci := range chunkLens {
-			if ec, _ := l.db.store.ReadChunkEmbedding(fileID, ci); ec != nil {
-				fileExisting++
-			}
-		}
-		fileQueued := fileChunksProcessed - fileExisting
-		fileZero := len(chunkLens) - fileChunksProcessed - fileOversized
-		Logv(1, "chunk embed: file %s (id=%d): existing=%d, queued=%d, oversized=%d, zero=%d, total=%d",
-			fp.path, fileID, fileExisting, fileQueued, fileOversized, fileZero, len(chunkLens))
+		fileQueued := fileChunksProcessed - startIdx
+		Logv(1, "chunk embed: file %s (id=%d): skipped=%d, queued=%d, oversized=%d, total=%d",
+			fp.path, fileID, startIdx, fileQueued, fileOversized, curCount)
 
-		// If no new chunks queued, file is fully processed — write
-		// sentinel directly so fast-skip works next cycle. R1623
-		// Covers all unembeddable categories: oversized, zero-length,
-		// content unreadable, and stale centroids from prior code.
-		if fileQueued == 0 && len(chunkLens) > 0 {
+		// R1623: if no new chunks queued, file is fully processed
+		if fileQueued == 0 && curCount > 0 {
 			acc := centroids[fileID]
 			if acc != nil {
-				acc.totalChunks = uint32(len(chunkLens))
+				acc.totalChunks = uint32(curCount)
 			} else {
-				// No centroid accumulator — file had no embeddable chunks
-				// or all were already accounted for. Write sentinel directly.
-				l.db.store.WriteFileCentroid(fileID, make([]float32, 1), uint32(len(chunkLens)))
+				l.db.store.WriteFileCentroid(fileID, make([]float32, 1), uint32(curCount))
 			}
+			// R1827: update high-water even when nothing queued
+			l.lastEmbedded[fileID] = embedState{count: curCount, lastChunkID: curLastChunkID}
 		} else if fileQueued > 0 {
-			fileChunkTotals[fileID] = uint32(len(chunkLens))
+			fileChunkTotals[fileID] = uint32(curCount)
+			fileLastChunkID[fileID] = curLastChunkID
 		}
 	}
 
@@ -1038,6 +1090,14 @@ func (l *Librarian) BatchEmbedChunks() error {
 			if err := l.db.store.WriteFileCentroid(fileID, acc.sum, count); err != nil {
 				log.Printf("librarian: write centroid fileID=%d: %v", fileID, err)
 			}
+		}
+	}
+
+	// R1827: update high-water marks for files that were processed in Pass 2
+	for fileID, total := range fileChunkTotals {
+		l.lastEmbedded[fileID] = embedState{
+			count:       int(total),
+			lastChunkID: fileLastChunkID[fileID],
 		}
 	}
 

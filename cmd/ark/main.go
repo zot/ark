@@ -173,8 +173,6 @@ func main() {
 		cmdUI(args)
 	case "unresolved":
 		cmdUnresolved(args)
-	case "vec":
-		cmdVec(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
@@ -196,7 +194,7 @@ Commands:
               remove-pattern, show-why, add-strategy
   cp          Extract embedded files matching a glob pattern
   dismiss     Dismiss missing files
-  embed       Embed text or benchmark embedding model
+  embed       Embedding operations (text, bench, validate)
   fetch       Return full contents of an indexed file
   files       List indexed files
   grams       Show trigrams for a query (active/inactive, frequency)
@@ -1430,29 +1428,51 @@ Options:`)
 }
 
 // CRC: crc-CLI.md | R1302-R1305
+// CRC: crc-CLI.md | Seq: seq-cli-dispatch.md | R1790
 func cmdEmbed(args []string) {
-	fs := flag.NewFlagSet("embed", flag.ExitOnError)
-	bench := fs.String("bench", "", "benchmark mode: tags or chunks")
-	ctxSize := fs.Int("ctx", 2048, "embedding context window size in tokens")
-	parallel := fs.Int("parallel", 8, "number of parallel sequences per batch")
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stderr, `Usage: ark embed <command> [options]
+
+Commands:
+  text       Embed text, print vector as JSON
+  bench      Benchmark embedding performance (tags or chunks)
+  validate   Cross-reference embedding records against FTS chunks`)
+		os.Exit(0)
+	}
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "text":
+		cmdEmbedText(subArgs)
+	case "bench":
+		cmdEmbedBench(subArgs)
+	case "validate":
+		cmdEmbedValidate(subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown embed subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+// CRC: crc-CLI.md | R1791, R1795, R1796, R1797
+func cmdEmbedText(args []string) {
+	fs := flag.NewFlagSet("embed text", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark embed [options] <text>
+		fmt.Fprintln(os.Stderr, `Usage: ark embed text TEXT...
 
-Embed text using the configured tag model. Prints the vector as JSON.
-
-Options:
-  --bench tags     Embed all tag values, report timing
-  --bench chunks   Embed random file chunks, report timing
-  --ctx N          Embedding context window size (default 2048)
-  --parallel N     Parallel sequences per batch (default 8)`)
-		fs.PrintDefaults()
+Embed text using the configured tag model. Prints the vector as JSON.`)
 	}
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		fs.Usage()
 		os.Exit(0)
 	}
 	fs.Parse(args)
-
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	text := strings.Join(rest, " ")
 	withDB(func(db *ark.DB) {
 		lib := ark.NewLibrarian(db, arkDir)
 		if lib == nil {
@@ -1461,187 +1481,6 @@ Options:
 		if !lib.EmbeddingAvailable() {
 			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
 		}
-		lib.SetCtxSize(*ctxSize)   // R1587
-		lib.SetParallel(*parallel) // R1587
-
-		if *bench == "tags" {
-			// Benchmark: embed all tag values (batch vs single)
-			tags, err := db.TagList()
-			if err != nil {
-				fatal(err)
-			}
-			var texts []string
-			for _, tc := range tags {
-				values, err := db.Store().QueryTagValues(tc.Tag, "")
-				if err != nil {
-					continue
-				}
-				for _, v := range values {
-					texts = append(texts, strings.ReplaceAll(tc.Tag, "-", " ")+": "+v.Value)
-				}
-			}
-			fmt.Printf("collected %d tag values\n", len(texts))
-
-			// Batch benchmark
-			batchSize := 50
-			start := time.Now()
-			var batchTotal int
-			for i := 0; i < len(texts); i += batchSize {
-				end := min(i+batchSize, len(texts))
-				vecs, err := lib.EmbedBatch(texts[i:end])
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "batch error at %d: %v\n", i, err)
-					continue
-				}
-				batchTotal += len(vecs)
-			}
-			batchElapsed := time.Since(start)
-			fmt.Printf("batch(%d): embedded %d values in %v (%.1f ms/value)\n",
-				batchSize, batchTotal, batchElapsed,
-				float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
-
-			// Single benchmark
-			start = time.Now()
-			var singleTotal int
-			for _, text := range texts {
-				if _, err := lib.EmbedQuery(text); err != nil {
-					continue
-				}
-				singleTotal++
-			}
-			singleElapsed := time.Since(start)
-			fmt.Printf("single:    embedded %d values in %v (%.1f ms/value)\n",
-				singleTotal, singleElapsed,
-				float64(singleElapsed.Milliseconds())/float64(max(singleTotal, 1)))
-
-			fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
-			return
-		}
-
-		if *bench == "chunks" {
-			// R1304: sample real chunks via AllChunks (real chunker boundaries)
-			files, err := db.Files()
-			if err != nil {
-				fatal(err)
-			}
-			if len(files) == 0 {
-				fmt.Println("no indexed files")
-				return
-			}
-
-			// Sample 200 chunks: pick file at random, get its real chunks, pick one.
-			// File-first sampling prevents large files (JSONL) from dominating.
-			const sampleSize = 200
-			fileChunkCache := make(map[string][]string)
-			var chunks []string
-			var minBytes, maxBytes int
-
-			for len(chunks) < sampleSize {
-				fpath := files[rand.Intn(len(files))]
-				cached, ok := fileChunkCache[fpath]
-				if !ok {
-					results := db.AllChunks(fpath)
-					for _, cr := range results {
-						if cr.Content != "" {
-							cached = append(cached, cr.Content)
-						}
-					}
-					fileChunkCache[fpath] = cached
-				}
-				if len(cached) == 0 {
-					continue
-				}
-				c := cached[rand.Intn(len(cached))]
-				chunks = append(chunks, c)
-				n := len(c)
-				if minBytes == 0 || n < minBytes {
-					minBytes = n
-				}
-				if n > maxBytes {
-					maxBytes = n
-				}
-			}
-
-			// Stats
-			var totalBytes int
-			for _, c := range chunks {
-				totalBytes += len(c)
-			}
-			fmt.Printf("sampled %d chunks from %d files (avg %d bytes, min %d, max %d)\n",
-				len(chunks), len(fileChunkCache), totalBytes/max(len(chunks), 1), minBytes, maxBytes)
-			fmt.Printf("context: %d tokens, parallel: %d, tokens/seq: %d\n",
-				*ctxSize, *parallel, *ctxSize / *parallel)
-
-			// Batch benchmark: gollama wrapper auto-flushes at n_batch
-			// and n_seq_max. With WithBatch(ctxSize), n_batch and
-			// n_ubatch both equal ctxSize. Each sequence gets up to
-			// n_ctx_seq = ctxSize/parallel tokens; wrapper truncates
-			// if exceeded. ~3 bytes/token for BERT WordPiece.
-			seqMax := *parallel
-			seqTokens := *ctxSize / seqMax
-			seqBytes := seqTokens * 3
-			start := time.Now()
-			var batchTotal, batchCount, skipped int
-			var batch []string
-			flushBatch := func() {
-				if len(batch) == 0 {
-					return
-				}
-				vecs, err := lib.EmbedBatch(batch)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "batch error (%d items): %v\n", len(batch), err)
-				} else {
-					batchTotal += len(vecs)
-				}
-				batchCount++
-				batch = batch[:0]
-			}
-			for _, c := range chunks {
-				if len(c) > seqBytes {
-					skipped++
-					continue
-				}
-				batch = append(batch, c)
-				if len(batch) >= seqMax {
-					flushBatch()
-				}
-			}
-			flushBatch()
-			batchElapsed := time.Since(start)
-			fmt.Printf("batch(%d): embedded %d chunks in %d dispatches, %v (%.1f ms/chunk)\n",
-				seqMax, batchTotal, batchCount, batchElapsed,
-				float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
-			if skipped > 0 {
-				fmt.Printf("           skipped %d chunks exceeding %d-byte seq limit\n", skipped, seqBytes)
-			}
-
-			// Single benchmark (same chunks that batch used)
-			start = time.Now()
-			var embedded int
-			for _, c := range chunks {
-				if len(c) > seqBytes {
-					continue
-				}
-				if _, err := lib.EmbedQuery(c); err != nil {
-					continue
-				}
-				embedded++
-			}
-			singleElapsed := time.Since(start)
-			fmt.Printf("single:    embedded %d chunks in %v (%.1f ms/chunk)\n",
-				embedded, singleElapsed,
-				float64(singleElapsed.Milliseconds())/float64(max(embedded, 1)))
-			fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
-			return
-		}
-
-		// Single text embedding
-		rest := fs.Args()
-		if len(rest) < 1 {
-			fs.Usage()
-			os.Exit(1)
-		}
-		text := strings.Join(rest, " ")
 		vec, err := lib.EmbedQuery(text)
 		if err != nil {
 			fatal(err)
@@ -1653,6 +1492,467 @@ Options:
 		os.Stdout.Write(out)
 		fmt.Fprintln(os.Stdout)
 	})
+}
+
+// CRC: crc-CLI.md | R1792, R1793, R1798, R1799, R1800, R1801
+func cmdEmbedBench(args []string) {
+	fs := flag.NewFlagSet("embed bench", flag.ExitOnError)
+	ctxSize := fs.Int("ctx", 2048, "embedding context window size in tokens")
+	parallel := fs.Int("parallel", 8, "number of parallel sequences per batch")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark embed bench <tags|chunks> [options]
+
+Benchmark embedding performance.
+
+Options:
+  --ctx N          Embedding context window size (default 2048)
+  --parallel N     Parallel sequences per batch (default 8)`)
+	}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fs.Usage()
+		os.Exit(0)
+	}
+	// Extract mode before flag parsing
+	if len(args) < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	mode := args[0]
+	if mode != "tags" && mode != "chunks" {
+		fmt.Fprintf(os.Stderr, "unknown bench mode: %s (expected tags or chunks)\n", mode)
+		os.Exit(1)
+	}
+	fs.Parse(args[1:])
+
+	withDB(func(db *ark.DB) {
+		lib := ark.NewLibrarian(db, arkDir)
+		if lib == nil {
+			fatal(fmt.Errorf("claude not on PATH"))
+		}
+		if !lib.EmbeddingAvailable() {
+			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
+		}
+		lib.SetCtxSize(*ctxSize)
+		lib.SetParallel(*parallel)
+
+		switch mode {
+		case "tags":
+			cmdEmbedBenchTags(db, lib)
+		case "chunks":
+			cmdEmbedBenchChunks(db, lib, *ctxSize, *parallel)
+		}
+	})
+}
+
+func cmdEmbedBenchTags(db *ark.DB, lib *ark.Librarian) {
+	tags, err := db.TagList()
+	if err != nil {
+		fatal(err)
+	}
+	var texts []string
+	for _, tc := range tags {
+		values, err := db.Store().QueryTagValues(tc.Tag, "")
+		if err != nil {
+			continue
+		}
+		for _, v := range values {
+			texts = append(texts, strings.ReplaceAll(tc.Tag, "-", " ")+": "+v.Value)
+		}
+	}
+	fmt.Printf("collected %d tag values\n", len(texts))
+
+	batchSize := 50
+	start := time.Now()
+	var batchTotal int
+	for i := 0; i < len(texts); i += batchSize {
+		end := min(i+batchSize, len(texts))
+		vecs, err := lib.EmbedBatch(texts[i:end])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "batch error at %d: %v\n", i, err)
+			continue
+		}
+		batchTotal += len(vecs)
+	}
+	batchElapsed := time.Since(start)
+	fmt.Printf("batch(%d): embedded %d values in %v (%.1f ms/value)\n",
+		batchSize, batchTotal, batchElapsed,
+		float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
+
+	start = time.Now()
+	var singleTotal int
+	for _, text := range texts {
+		if _, err := lib.EmbedQuery(text); err != nil {
+			continue
+		}
+		singleTotal++
+	}
+	singleElapsed := time.Since(start)
+	fmt.Printf("single:    embedded %d values in %v (%.1f ms/value)\n",
+		singleTotal, singleElapsed,
+		float64(singleElapsed.Milliseconds())/float64(max(singleTotal, 1)))
+
+	fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
+}
+
+func cmdEmbedBenchChunks(db *ark.DB, lib *ark.Librarian, ctxSize, parallel int) {
+	files, err := db.Files()
+	if err != nil {
+		fatal(err)
+	}
+	if len(files) == 0 {
+		fmt.Println("no indexed files")
+		return
+	}
+
+	const sampleSize = 200
+	fileChunkCache := make(map[string][]string)
+	var chunks []string
+	var minBytes, maxBytes int
+
+	for len(chunks) < sampleSize {
+		fpath := files[rand.Intn(len(files))]
+		cached, ok := fileChunkCache[fpath]
+		if !ok {
+			results := db.AllChunks(fpath)
+			for _, cr := range results {
+				if cr.Content != "" {
+					cached = append(cached, cr.Content)
+				}
+			}
+			fileChunkCache[fpath] = cached
+		}
+		if len(cached) == 0 {
+			continue
+		}
+		c := cached[rand.Intn(len(cached))]
+		chunks = append(chunks, c)
+		n := len(c)
+		if minBytes == 0 || n < minBytes {
+			minBytes = n
+		}
+		if n > maxBytes {
+			maxBytes = n
+		}
+	}
+
+	var totalBytes int
+	for _, c := range chunks {
+		totalBytes += len(c)
+	}
+	fmt.Printf("sampled %d chunks from %d files (avg %d bytes, min %d, max %d)\n",
+		len(chunks), len(fileChunkCache), totalBytes/max(len(chunks), 1), minBytes, maxBytes)
+	fmt.Printf("context: %d tokens, parallel: %d, tokens/seq: %d\n",
+		ctxSize, parallel, ctxSize/parallel)
+
+	seqMax := parallel
+	seqTokens := ctxSize / seqMax
+	seqBytes := seqTokens * 3
+	start := time.Now()
+	var batchTotal, batchCount, skipped int
+	var batch []string
+	flushBatch := func() {
+		if len(batch) == 0 {
+			return
+		}
+		vecs, err := lib.EmbedBatch(batch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "batch error (%d items): %v\n", len(batch), err)
+		} else {
+			batchTotal += len(vecs)
+		}
+		batchCount++
+		batch = batch[:0]
+	}
+	for _, c := range chunks {
+		if len(c) > seqBytes {
+			skipped++
+			continue
+		}
+		batch = append(batch, c)
+		if len(batch) >= seqMax {
+			flushBatch()
+		}
+	}
+	flushBatch()
+	batchElapsed := time.Since(start)
+	fmt.Printf("batch(%d): embedded %d chunks in %d dispatches, %v (%.1f ms/chunk)\n",
+		seqMax, batchTotal, batchCount, batchElapsed,
+		float64(batchElapsed.Milliseconds())/float64(max(batchTotal, 1)))
+	if skipped > 0 {
+		fmt.Printf("           skipped %d chunks exceeding %d-byte seq limit\n", skipped, seqBytes)
+	}
+
+	start = time.Now()
+	var embedded int
+	for _, c := range chunks {
+		if len(c) > seqBytes {
+			continue
+		}
+		if _, err := lib.EmbedQuery(c); err != nil {
+			continue
+		}
+		embedded++
+	}
+	singleElapsed := time.Since(start)
+	fmt.Printf("single:    embedded %d chunks in %v (%.1f ms/chunk)\n",
+		embedded, singleElapsed,
+		float64(singleElapsed.Milliseconds())/float64(max(embedded, 1)))
+	fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
+}
+
+// CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1794, R1802-R1813
+func cmdEmbedValidate(args []string) {
+	fs := flag.NewFlagSet("embed validate", flag.ExitOnError)
+	fix := fs.Bool("fix", false, "delete orphan and wrong-dimension records")
+	verbose := fs.Bool("v", false, "show per-file detail")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark embed validate [options]
+
+Cross-reference embedding records (EC/EF) against FTS chunks.
+Reports orphans, mismatches, gaps, and dimension inconsistencies.
+
+Options:
+  --fix       Delete orphan EC/EF records and wrong-dimension EC records
+  -v          Show per-file detail`)
+	}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fs.Usage()
+		os.Exit(0)
+	}
+	fs.Parse(args)
+
+	problems := 0
+	withDB(func(db *ark.DB) {
+		store := db.Store()
+
+		// Pass 1: scan all EC records
+		ecInfo, err := store.ScanChunkEmbeddingKeys()
+		if err != nil {
+			fatal(fmt.Errorf("scan EC records: %w", err))
+		}
+
+		// Pass 2: scan all EF records
+		efCounts, err := store.ScanFileCentroidCounts()
+		if err != nil {
+			fatal(fmt.Errorf("scan EF records: %w", err))
+		}
+
+		// Pass 3: scan FTS files for ground truth
+		ftsChunks, err := db.FileChunkCounts()
+		if err != nil {
+			fatal(fmt.Errorf("scan FTS files: %w", err))
+		}
+
+		// Dimension census
+		dimCounts := make(map[int]int)
+		for _, info := range ecInfo {
+			for _, d := range info.Dims {
+				dimCounts[d]++
+			}
+		}
+		var majorityDim, majorityCount, totalEC int
+		for d, c := range dimCounts {
+			totalEC += c
+			if c > majorityCount {
+				majorityDim = d
+				majorityCount = c
+			}
+		}
+
+		// Check 1: orphan EC records (R1802)
+		var orphanECFiles int
+		var orphanECRecords int
+		type orphanDetail struct {
+			fileID uint64
+			count  int
+			reason string
+		}
+		var orphanDetails []orphanDetail
+		for fid, info := range ecInfo {
+			ftsCount, inFTS := ftsChunks[fid]
+			if !inFTS {
+				orphanECFiles++
+				orphanECRecords += len(info.ChunkIndices)
+				if *verbose {
+					orphanDetails = append(orphanDetails, orphanDetail{fid, len(info.ChunkIndices), "fileID not in FTS"})
+				}
+				continue
+			}
+			outOfRange := 0
+			for _, ci := range info.ChunkIndices {
+				if ci >= ftsCount {
+					outOfRange++
+				}
+			}
+			if outOfRange > 0 {
+				orphanECRecords += outOfRange
+				if *verbose {
+					orphanDetails = append(orphanDetails, orphanDetail{fid, outOfRange, fmt.Sprintf("chunkIdx >= %d", ftsCount)})
+				}
+			}
+		}
+		if orphanECRecords > 0 {
+			fmt.Printf("orphan EC records: %d", orphanECRecords)
+			if orphanECFiles > 0 {
+				fmt.Printf(" (%d whole files)", orphanECFiles)
+			}
+			fmt.Println()
+			problems += orphanECRecords
+			if *verbose {
+				for _, d := range orphanDetails {
+					fmt.Printf("  fileID=%d: %d records (%s)\n", d.fileID, d.count, d.reason)
+				}
+			}
+		}
+
+		// Check 2: EF/EC count mismatch (R1803)
+		type mismatchDetail struct {
+			fileID  uint64
+			efCount uint32
+			ecCount int
+		}
+		var mismatchDetails []mismatchDetail
+		for fid, efCount := range efCounts {
+			ecCount := 0
+			if info, ok := ecInfo[fid]; ok {
+				ecCount = len(info.ChunkIndices)
+			}
+			if int(efCount) != ecCount {
+				mismatchDetails = append(mismatchDetails, mismatchDetail{fid, efCount, ecCount})
+			}
+		}
+		if len(mismatchDetails) > 0 {
+			fmt.Printf("EF/EC count mismatches: %d\n", len(mismatchDetails))
+			problems += len(mismatchDetails)
+			if *verbose {
+				for _, d := range mismatchDetails {
+					fmt.Printf("  fileID=%d: EF count=%d, EC records=%d\n", d.fileID, d.efCount, d.ecCount)
+				}
+			}
+		}
+
+		// Check 3: missing EC records (R1804)
+		type missingDetail struct {
+			fileID uint64
+			have   int
+			need   int
+		}
+		var missingDetails []missingDetail
+		var missingRecords int
+		for fid, ftsCount := range ftsChunks {
+			ecCount := 0
+			if info, ok := ecInfo[fid]; ok {
+				ecCount = len(info.ChunkIndices)
+			}
+			if ecCount < ftsCount {
+				missingDetails = append(missingDetails, missingDetail{fid, ecCount, ftsCount})
+				missingRecords += ftsCount - ecCount
+			}
+		}
+		if missingRecords > 0 {
+			fmt.Printf("missing EC records: %d (%d files incomplete)\n", missingRecords, len(missingDetails))
+			problems += missingRecords
+			if *verbose {
+				for _, d := range missingDetails {
+					fmt.Printf("  fileID=%d: have %d, need %d\n", d.fileID, d.have, d.need)
+				}
+			}
+		}
+
+		// Check 4: orphan EF records (R1805)
+		var orphanEFIDs []uint64
+		for fid := range efCounts {
+			_, hasEC := ecInfo[fid]
+			_, hasFTS := ftsChunks[fid]
+			if !hasEC && !hasFTS {
+				orphanEFIDs = append(orphanEFIDs, fid)
+			}
+		}
+		if len(orphanEFIDs) > 0 {
+			fmt.Printf("orphan EF records: %d\n", len(orphanEFIDs))
+			problems += len(orphanEFIDs)
+			if *verbose {
+				for _, fid := range orphanEFIDs {
+					fmt.Printf("  fileID=%d: no EC records, no FTS entry\n", fid)
+				}
+			}
+		}
+
+		// Check 5: dimension consistency (R1806)
+		wrongDim := totalEC - majorityCount
+		if len(dimCounts) > 1 {
+			fmt.Printf("dimension inconsistency: majority dim=%d (%d records)\n", majorityDim, majorityCount)
+			for d, c := range dimCounts {
+				if d != majorityDim {
+					fmt.Printf("  dim=%d: %d records\n", d, c)
+				}
+			}
+			problems += wrongDim
+		}
+
+		if problems == 0 {
+			fmt.Printf("clean: %d EC records, %d EF records, %d FTS files\n", totalEC, len(efCounts), len(ftsChunks))
+		}
+
+		// Fix (R1807, R1808, R1813)
+		if *fix && problems > 0 {
+			var fixedOrphanEC, fixedOrphanEF, fixedWrongDim int
+
+			// Delete orphan EC: whole files not in FTS
+			for fid, info := range ecInfo {
+				_, inFTS := ftsChunks[fid]
+				if !inFTS {
+					if err := store.RemoveFileChunkEmbeddings(fid); err != nil {
+						fmt.Fprintf(os.Stderr, "fix: remove EC for fileID=%d: %v\n", fid, err)
+					} else {
+						fixedOrphanEC += len(info.ChunkIndices)
+					}
+					continue
+				}
+				// Delete out-of-range EC records
+				ftsCount := ftsChunks[fid]
+				for _, ci := range info.ChunkIndices {
+					if ci >= ftsCount {
+						if err := store.DeleteChunkEmbedding(fid, ci); err != nil {
+							fmt.Fprintf(os.Stderr, "fix: delete EC fileID=%d chunk=%d: %v\n", fid, ci, err)
+						} else {
+							fixedOrphanEC++
+						}
+					}
+				}
+			}
+
+			// Delete orphan EF records
+			for _, fid := range orphanEFIDs {
+				if err := store.DeleteFileCentroid(fid); err != nil {
+					fmt.Fprintf(os.Stderr, "fix: delete EF fileID=%d: %v\n", fid, err)
+				} else {
+					fixedOrphanEF++
+				}
+			}
+
+			// Delete wrong-dimension EC records
+			if len(dimCounts) > 1 {
+				for fid, info := range ecInfo {
+					for i, ci := range info.ChunkIndices {
+						if info.Dims[i] != majorityDim {
+							if err := store.DeleteChunkEmbedding(fid, ci); err != nil {
+								fmt.Fprintf(os.Stderr, "fix: delete wrong-dim EC fileID=%d chunk=%d: %v\n", fid, ci, err)
+							} else {
+								fixedWrongDim++
+							}
+						}
+					}
+				}
+			}
+
+			fmt.Printf("fixed: %d orphan EC, %d orphan EF, %d wrong-dim EC deleted\n",
+				fixedOrphanEC, fixedOrphanEF, fixedWrongDim)
+		}
+	})
+	if problems > 0 {
+		os.Exit(1)
+	}
 }
 
 func cmdServe(args []string) {
