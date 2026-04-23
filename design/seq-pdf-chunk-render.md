@@ -63,17 +63,20 @@ reuse it.
   |                        |    compute runBoxes    |
   |                        |  Phase 2 per tag       |
   |                        |    (bottom-up order):  |
-  |                        |    build glow tile     |
-  |                        |     (bg-color text     |
-  |                        |      shape, α=textness)|
-  |                        |    build text tile     |
-  |                        |     (target color per  |
-  |                        |      segment, α=       |
-  |                        |      textness)         |
-  |                        |    combined = blur(    |
-  |                        |      glow) + text      |
-  |                        |    ctx.save, clip to   |
-  |                        |      runBox union,     |
+  |                        |    1. silhouette tile  |
+  |                        |       (black text      |
+  |                        |        shape, α=       |
+  |                        |        textness)       |
+  |                        |    2. blur silhouette  |
+  |                        |       (expand shape)   |
+  |                        |    3. threshold→solid  |
+  |                        |       bg (α>T → opaque |
+  |                        |       theme.bg)        |
+  |                        |    4. small edge blur  |
+  |                        |    5. text tile on top |
+  |                        |       (target color    |
+  |                        |        per segment)    |
+  |                        |    ctx.save, clip,     |
   |                        |    drawImage(combined) |
   |                        |    ctx.restore         |
   |                        |                        |

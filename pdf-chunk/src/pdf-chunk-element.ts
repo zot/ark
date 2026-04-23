@@ -102,6 +102,9 @@ function ensureOverlayStyles(): void {
 			background: var(--term-accent-dim, rgba(224, 122, 71, 0.35));
 			color: transparent;
 		}
+		pdf-chunk > .pdf-text-layer span.ark-tag::selection {
+			background: rgb(from var(--term-accent, rgb(224, 122, 71)) r g b / 0.50);
+		}
 	`;
 	document.head.appendChild(s);
 }
@@ -604,26 +607,27 @@ function recolorTagsInCanvas(
 		});
 	}
 	ctx.font = savedFont;
-	// Phase 2: per-tag compositing. The generous region gives the
-	// blurred bg-colored glow room to fade; the runBoxes (union of
-	// per-segment rects) define the clip for what actually gets
-	// copied onto main. Outside the runBoxes, main's existing
-	// pixels are left alone — so overlapping regions between
-	// adjacent tags never stack their halos and create dark bands.
+	// Phase 2: five-step solid-background compositing. For each tag:
+	// 1. Silhouette tile (black, alpha = textness)
+	// 2. Expansion blur (spreads glyph shape outward)
+	// 3. Threshold to solid bg (alpha > T → opaque theme.bg)
+	// 4. Small edge blur (softens the cutout boundary)
+	// 5. Recolored text tile on top
+	const ALPHA_THRESHOLD = 8;
 	for (let pi = prepared.length - 1; pi >= 0; pi--) {
 		const p = prepared[pi];
 		const { nameLen, x0, y0, w, h, blurPx, snap, runBoxes } = p;
-		const mkBuffer = (): { c: HTMLCanvasElement; d: ImageData } | null => {
+		const mkCtx = (): CanvasRenderingContext2D | null => {
 			const c = document.createElement('canvas');
 			c.width = w;
 			c.height = h;
-			const x = c.getContext('2d');
-			if (!x) return null;
-			return { c, d: x.createImageData(w, h) };
+			return c.getContext('2d');
 		};
-		const bgBlurBuf = mkBuffer();
-		const textBuf = mkBuffer();
-		if (!bgBlurBuf || !textBuf) continue;
+		const silCtx = mkCtx();
+		const txtCtx = mkCtx();
+		if (!silCtx || !txtCtx) continue;
+		const silData = silCtx.createImageData(w, h);
+		const txtData = txtCtx.createImageData(w, h);
 		for (let py = 0; py < h; py++) {
 			const canvasY = y0 + py + 0.5;
 			for (let px = 0; px < w; px++) {
@@ -648,11 +652,8 @@ function recolorTagsInCanvas(
 					}
 				}
 				if (!box) continue;
-				const alpha = Math.min(255, Math.round(textness * 2.5 * 255));
-				bgBlurBuf.d.data[idx] = glowR;
-				bgBlurBuf.d.data[idx + 1] = glowG;
-				bgBlurBuf.d.data[idx + 2] = glowB;
-				bgBlurBuf.d.data[idx + 3] = alpha;
+				const alpha = Math.min(255, Math.round(textness * 255));
+				silData.data[idx + 3] = alpha;
 				const ratio = (canvasX - box.x0) / Math.max(1, box.x1 - box.x0);
 				const measuredPos = ratio * box.totalWidth;
 				let local = 0;
@@ -668,27 +669,42 @@ function recolorTagsInCanvas(
 				else if (charIdx <= nameLen) target = nameCol;
 				else if (charIdx === nameLen + 1) target = puncCol;
 				else target = valueCol;
-				textBuf.d.data[idx] = target[0];
-				textBuf.d.data[idx + 1] = target[1];
-				textBuf.d.data[idx + 2] = target[2];
-				textBuf.d.data[idx + 3] = alpha;
+				txtData.data[idx] = target[0];
+				txtData.data[idx + 1] = target[1];
+				txtData.data[idx + 2] = target[2];
+				txtData.data[idx + 3] = alpha;
 			}
 		}
-		bgBlurBuf.c.getContext('2d')!.putImageData(bgBlurBuf.d, 0, 0);
-		textBuf.c.getContext('2d')!.putImageData(textBuf.d, 0, 0);
-		const comb = document.createElement('canvas');
-		comb.width = w;
-		comb.height = h;
-		const cc = comb.getContext('2d');
-		if (!cc) continue;
-		cc.save();
-		cc.filter = `blur(${blurPx}px)`;
-		cc.drawImage(bgBlurBuf.c, 0, 0);
-		cc.restore();
-		cc.drawImage(textBuf.c, 0, 0);
-		// Clip to the bounding union of all runBoxes so the blurred
-		// halo doesn't enter neighboring tags' rects, but there are
-		// no gaps between segments within one tag (e.g. name↔value).
+		// Step 1 → 2: put silhouette, blur to expand shape
+		silCtx.putImageData(silData, 0, 0);
+		const expandCtx = mkCtx();
+		if (!expandCtx) continue;
+		expandCtx.filter = `blur(${blurPx}px)`;
+		expandCtx.drawImage(silCtx.canvas, 0, 0);
+		// Step 3: threshold — any alpha above threshold → solid bg
+		const expanded = expandCtx.getImageData(0, 0, w, h);
+		for (let i = 3; i < expanded.data.length; i += 4) {
+			if (expanded.data[i] > ALPHA_THRESHOLD) {
+				expanded.data[i - 3] = glowR;
+				expanded.data[i - 2] = glowG;
+				expanded.data[i - 1] = glowB;
+				expanded.data[i] = 255;
+			} else {
+				expanded.data[i] = 0;
+			}
+		}
+		expandCtx.putImageData(expanded, 0, 0);
+		// Step 4: small edge blur to soften the cutout boundary
+		const edgeBlurPx = Math.max(1, blurPx * 0.3);
+		const combCtx = mkCtx();
+		if (!combCtx) continue;
+		combCtx.filter = `blur(${edgeBlurPx}px)`;
+		combCtx.drawImage(expandCtx.canvas, 0, 0);
+		// Step 5: draw recolored text on top of the softened bg
+		combCtx.filter = 'none';
+		txtCtx.putImageData(txtData, 0, 0);
+		combCtx.drawImage(txtCtx.canvas, 0, 0);
+		// Clip to generous rect around runBox union
 		let clipX0 = Infinity, clipY0 = Infinity, clipX1 = -Infinity, clipY1 = -Infinity;
 		for (const b of runBoxes) {
 			clipX0 = Math.min(clipX0, b.x0);
@@ -700,7 +716,7 @@ function recolorTagsInCanvas(
 		ctx.beginPath();
 		ctx.rect(clipX0 - blurPx, clipY0, clipX1 - clipX0 + 2 * blurPx, clipY1 - clipY0);
 		ctx.clip();
-		ctx.drawImage(comb, x0, y0);
+		ctx.drawImage(combCtx.canvas, x0, y0);
 		ctx.restore();
 	}
 }
@@ -1140,6 +1156,17 @@ export class PdfChunkElement extends HTMLElement {
 		const mc = document.createElement('canvas').getContext('2d');
 		if (!mc) return;
 		const items = content.items;
+		const tagItems = new Set<number>();
+		for (let ii = 0; ii < items.length; ii++) {
+			const it = items[ii];
+			for (const t of content.tags) {
+				if (it.x + it.w > t.union.x && it.x < t.union.x + t.union.w &&
+					it.y + it.h > t.union.y && it.y < t.union.y + t.union.h) {
+					tagItems.add(ii);
+					break;
+				}
+			}
+		}
 		for (let ii = 0; ii < items.length; ii++) {
 			const it = items[ii];
 			if (!it.str || !it.str.trim()) continue;
@@ -1159,10 +1186,12 @@ export class PdfChunkElement extends HTMLElement {
 			const pdfScale = targetW / totalMeasured;
 			const parts = it.str.match(/[^\s-]+|-\s*|\s+/g) || [it.str];
 			let offset = 0;
+			const isTag = tagItems.has(ii);
 			for (const part of parts) {
 				const partMeasured = mc.measureText(part).width;
 				const span = document.createElement('span');
 				span.textContent = part;
+				if (isTag) span.className = 'ark-tag';
 				span.style.left = `${itemLeftPx + offset * pdfScale}px`;
 				span.style.top = `${topPx}px`;
 				span.style.fontSize = `${fontSize}px`;

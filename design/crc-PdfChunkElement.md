@@ -4,8 +4,8 @@
 Custom element (`<pdf-chunk>`) that renders one PDF chunk's page
 region as pixels. PDF.js rasterizes the page in native fidelity;
 a recolor pass then replaces raster tag ink with ark's theme
-colors in place, behind a blurred bg-colored halo clipped to
-per-segment rects. `<ark-tag>` children are reduced to
+colors in place, on a solid theme-bg surface shaped by blur
+expansion and thresholding. `<ark-tag>` children are reduced to
 transparent hit regions (pdf-chunk-scoped override; the
 standalone `<ark-tag>` element used elsewhere is unchanged). A
 PDF.js text layer rides on top for selection. Composes with

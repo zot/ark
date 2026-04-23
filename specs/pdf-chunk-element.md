@@ -331,7 +331,8 @@ The recolor runs per page in two phases:
   of glyph height, clamped by the gap to the line above),
   a descender pad below (up to 40% of glyph height, clamped
   by the gap to the line below), and a blur pad (~3× the
-  blur radius) on all sides so the glow has room to fade.
+  blur radius) on all sides so the background shape has room
+  to extend past the glyph edges.
 - Per-segment runBoxes on the canvas — one per segment rect,
   plus a clamped ascender/descender extension so each
   runBox covers its glyph including ascenders/descenders but
@@ -345,28 +346,36 @@ The recolor runs per page in two phases:
   before any tag writes — otherwise a neighbor's partial
   write contaminates the next snapshot.
 
-**Phase 2 — Composite.** For each tag, in bottom-up order:
+**Phase 2 — Composite.** For each tag, in bottom-up order,
+a five-step solid-background pipeline:
 
-- Build a **glow tile** the size of the region. For every
-  snapshot pixel that's a text pixel (luminance distinctly
-  darker than page bg) and lies inside one of this tag's
-  runBoxes, paint the theme bg color at `alpha = textness *
-  255`. Elsewhere in the tile, transparent.
-- Build a **text tile** the same way, except paint the
-  target color for the pixel's segment (punctuation, name,
-  or value) based on the runBox it's in and its position
-  inside that runBox.
-- Build a **combined** offscreen: apply `ctx.filter =
-  blur(blurPx)` when drawing the glow tile (turns the
-  text-shape into a soft halo), then draw the sharp text
-  tile on top unfiltered.
-- Draw `combined` onto the main canvas **clipped to the
-  runBox union** — a canvas `ctx.clip()` path built from
-  each runBox rect. Outside the runBoxes, main's pixels
-  are untouched. This is the key to avoiding dark bands:
-  the generous region gives blur room internally, but the
-  copy onto main only touches the runBox area, so two
-  adjacent tags' halos never stack.
+1. **Silhouette tile** — For every snapshot pixel that's a
+   text pixel (luminance distinctly darker than page bg) and
+   lies inside one of this tag's runBoxes, paint black at
+   `alpha = textness * 255`. This extracts the glyph shape.
+2. **Expansion blur** — Draw the silhouette tile with
+   `ctx.filter = blur(blurPx)`. This spreads the shape
+   outward along glyph contours, producing a soft expanded
+   silhouette larger than the original text.
+3. **Threshold to solid background** — Read back the blurred
+   silhouette and convert every pixel with `alpha > threshold`
+   to the theme's bg color at full opacity (alpha = 255).
+   This creates an opaque, glyph-shaped background surface
+   that fully covers the PDF page color beneath the tag.
+4. **Edge blur** — Apply a small blur to the thresholded
+   surface so the boundary doesn't look like a hard cutout
+   against the PDF page.
+5. **Recolored text** — Build a text tile (same pixel walk
+   as step 1, but paint each pixel in the theme color for
+   its segment — punctuation, name, or value). Draw this
+   sharp text tile on top of the softened background.
+
+The combined result is drawn onto the main canvas **clipped
+to a generous rect** around the runBox union. The solid
+background means tag text sits on a surface with known,
+constant contrast — no PDF page color mixing in. The two
+blur stages (expansion + edge softening) give independent
+control over background size and boundary quality.
 
 Bottom-up ordering means top-of-page tags composite last —
 any neighbor-edge pixels they overwrite are theirs to own.
@@ -381,10 +390,17 @@ textness = clamp(1 - pLum / bgLum, 0, 1)
 ```
 
 Pixels with `textness < 0.05` are treated as background and
-skipped. The alpha poured into the glow and text tiles at a
-text pixel is `round(textness * 255)` — so antialiased edge
-pixels come through at proportional alpha, preserving the
-PDF's native glyph smoothing.
+skipped. In the silhouette tile (step 1), the alpha at a text
+pixel is `round(textness * 255)` — so antialiased edge pixels
+contribute proportional alpha to the silhouette, which the
+expansion blur (step 2) then spreads into a natural shape.
+After thresholding (step 3), the background surface is fully
+opaque, so the original glyph-edge alpha no longer matters
+for the backing — it served only to shape the expansion.
+
+The text tile (step 5) also uses `round(textness * 255)` as
+alpha, preserving the PDF's native glyph antialiasing in the
+final colored text.
 
 For pure-black-on-white PDFs this works cleanly. For colored
 or textured page backgrounds, the fallback pageBg sampling
@@ -421,11 +437,13 @@ probe.remove();
 Cached on the host; theme-change invalidation (flush
 `pageCache` on theme switch) is deferred.
 
-The glow color is `theme.bg` (ark's UI background), chosen
-for contrast against the name and value colors, not against
-the PDF's page color. The result: the tag's halo looks like
-an ark element no matter what the PDF's page color happens to
-be.
+The background surface color is `theme.bg` (ark's UI
+background), chosen for contrast against the name and value
+colors, not against the PDF's page color. Because the
+threshold step (step 3) makes the surface fully opaque, the
+PDF page color is completely hidden beneath the tag — the
+tag reads as an ark element no matter what the PDF's page
+color happens to be.
 
 #### Fallback — No Segments
 
