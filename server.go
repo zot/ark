@@ -211,6 +211,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 		librarian: lib,
 	}
 
+	// Wire librarian into searcher for about filters
+	db.search.librarian = lib
+
 	// Wire pubsub into the indexer so tag extraction publishes events
 	db.indexer.SetPubSub(ps)
 	db.indexer.SetScheduler(sched, db.Config())
@@ -572,29 +575,30 @@ func PidFilePath(dbPath string) string {
 // JSON request/response helpers
 
 type searchRequest struct {
-	Query           string   `json:"query"`
-	About           string   `json:"about"`
-	Contains        string   `json:"contains"`
-	Regex           []string `json:"regex"`
-	ExceptRegex     []string `json:"exceptRegex"`
-	LikeFile        string   `json:"likeFile"`
-	K               int      `json:"k"`
-	Scores          bool     `json:"scores"`
-	After           string   `json:"after"`
-	Before          string   `json:"before"`
-	Chunks          bool     `json:"chunks"`
-	Files           bool     `json:"files"`
-	Tags            bool     `json:"tags"`
-	Filter          []string `json:"filter"`
-	Except          []string `json:"except"`
-	FilterFiles     []string `json:"filterFiles"`
-	ExcludeFiles    []string `json:"excludeFiles"`
-	FilterFileTags  []string `json:"filterFileTags"`
-	ExcludeFileTags []string `json:"excludeFileTags"`
-	Session         string   `json:"session,omitempty"`   // R657: optional session name
-	Fuzzy           bool     `json:"fuzzy,omitempty"`     // R748: typo-tolerant search
-	NoTmp           bool     `json:"noTmp,omitempty"`     // R687: exclude tmp:// documents
-	OnlyIfTmp       bool     `json:"onlyIfTmp,omitempty"` // R686: return 204 if no tmp files
+	Query           string           `json:"query"`
+	About           string           `json:"about"`
+	Contains        string           `json:"contains"`
+	Regex           []string         `json:"regex"`
+	ExceptRegex     []string         `json:"exceptRegex"`
+	LikeFile        string           `json:"likeFile"`
+	K               int              `json:"k"`
+	Scores          bool             `json:"scores"`
+	After           string           `json:"after"`
+	Before          string           `json:"before"`
+	Chunks          bool             `json:"chunks"`
+	Files           bool             `json:"files"`
+	Tags            bool             `json:"tags"`
+	Filter          []string         `json:"filter"`
+	Except          []string         `json:"except"`
+	FilterFiles     []string         `json:"filterFiles"`
+	ExcludeFiles    []string         `json:"excludeFiles"`
+	FilterFileTags  []string         `json:"filterFileTags"`
+	ExcludeFileTags []string         `json:"excludeFileTags"`
+	Session         string           `json:"session,omitempty"`      // R657: optional session name
+	Fuzzy           bool             `json:"fuzzy,omitempty"`        // R748: typo-tolerant search
+	NoTmp           bool             `json:"noTmp,omitempty"`        // R687: exclude tmp:// documents
+	OnlyIfTmp       bool             `json:"onlyIfTmp,omitempty"`    // R686: return 204 if no tmp files
+	ChunkFilters    []ChunkFilterRow `json:"chunkFilters,omitempty"` // CRC: crc-Server.md | R1783, R1784
 }
 
 // tmpRequest is the body for tmp:// add/update/remove endpoints.
@@ -653,6 +657,7 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		ExcludeFileTags: req.ExcludeFileTags,
 		Fuzzy:           req.Fuzzy,
 		NoTmp:           req.NoTmp,
+		ChunkFilters:    req.ChunkFilters,
 	}
 	if req.After != "" {
 		if t, err := ParseDate(req.After); err == nil {
@@ -705,6 +710,15 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		var results []SearchResultEntry
 		err := sess.RunSearch(req.Query, func(cache *microfts2.ChunkCache) error {
 			return SyncVoid(srv.db, func(db *DB) error {
+				// R1784, R1787: wire chunk filters — about filters resolve to file-level early/late
+				if len(opts.ChunkFilters) > 0 {
+					remaining, early, late := ResolveAboutFilters(opts.ChunkFilters, srv.librarian, db.Store(), opts.K)
+					opts.extraOpts = append(opts.extraOpts, early...)
+					if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
+						opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(remaining, cache, paths, db.Store())...)
+					}
+					opts.extraOpts = append(opts.extraOpts, late...)
+				}
 				var searchErr error
 				if req.Fuzzy {
 					results, searchErr = db.SearchFuzzy(req.Query, opts)
@@ -745,6 +759,17 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 		done := db.NewSearchCache()
 		defer done()
+
+		// R1784, R1787: wire chunk filters — about filters resolve to file-level early/late
+		if len(opts.ChunkFilters) > 0 {
+			remaining, early, late := ResolveAboutFilters(opts.ChunkFilters, srv.librarian, db.Store(), opts.K)
+			opts.extraOpts = append(opts.extraOpts, early...)
+			if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
+				cache := db.FTS().NewChunkCache()
+				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(remaining, cache, paths, db.Store())...)
+			}
+			opts.extraOpts = append(opts.extraOpts, late...)
+		}
 
 		var results []SearchResultEntry
 		var err error

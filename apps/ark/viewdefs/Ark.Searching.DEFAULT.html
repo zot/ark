@@ -86,7 +86,7 @@
       <!-- Resize handle -->
       <div class="ark-resize-handle"></div>
 
-      <!-- Right panel: File tree or placeholder -->
+      <!-- Right panel: search owns full height -->
       <div class="content-panel ark-detail">
 
         <!-- Search: <ark-search> web component -->
@@ -95,16 +95,11 @@
         <!-- Sidebar filter bridge: JS reads this on each search call -->
         <span class="hidden" id="ark-filter-bridge" ui-value="searchFiltersJSON()"></span>
 
-        <!-- Placeholder when nothing selected -->
-        <div class="ark-placeholder" ui-class-hidden="hidePlaceholder()">
-          <sl-icon name="archive" class="ark-placeholder-icon"></sl-icon>
-          <p>Select a source to view its file tree</p>
-        </div>
-
-        <!-- Add source form -->
-        <div class="ark-add-form" ui-class-hidden="hideAddForm()">
+        <!-- Add source form (overlay) -->
+        <div class="ark-add-form ark-overlay" ui-class-ark-overlay-open="showAddForm">
           <div class="panel-header">
             <span class="panel-title">Add Source</span>
+            <sl-icon-button name="x-lg" ui-action="cancelAddForm()" label="Close"></sl-icon-button>
           </div>
           <div class="ark-form-body">
             <sl-input label="Directory" placeholder="~/work/myproject" ui-value="newDir?keypress"></sl-input>
@@ -116,8 +111,8 @@
           </div>
         </div>
 
-        <!-- Source detail: file tree -->
-        <div class="ark-tree-panel" ui-class-hidden="hideSourceDetail()">
+        <!-- Source detail: file tree (slide-over overlay) -->
+        <div class="ark-tree-panel ark-overlay" ui-class-ark-overlay-open="showSourceDetail()">
           <div class="panel-header">
             <sl-tooltip placement="bottom">
               <span slot="content" ui-value="sourceHeaderFullPath()"></span>
@@ -129,6 +124,7 @@
                 Collapse Resolved
               </sl-button>
               <sl-icon-button name="arrow-clockwise" ui-action="refresh()" label="Scan & Refresh"></sl-icon-button>
+              <sl-icon-button name="x-lg" ui-action="deselectSource()" label="Close"></sl-icon-button>
             </div>
           </div>
 
@@ -454,33 +450,31 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
     }
 
-    .ark-placeholder {
-      flex: 1;
+    /* Slide-over overlay (file tree, add form) */
+    .ark-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: var(--term-text-dim, #8888a0);
-      gap: 12px;
+      background: var(--term-bg, #0a0a0f);
+      transform: translateX(100%);
+      transition: transform 0.2s ease-out;
+      pointer-events: none;
     }
 
-    .ark-placeholder-icon {
-      font-size: 48px;
-      opacity: 0.3;
+    .ark-overlay.ark-overlay-open {
+      transform: translateX(0);
+      pointer-events: auto;
     }
-
-    .ark-placeholder.hidden { display: none; }
 
     /* Add form */
     .ark-add-form {
       flex: 1;
-      display: flex;
-      flex-direction: column;
     }
-
-    .ark-add-form.hidden { display: none; }
 
     .ark-form-body {
       padding: 16px;
@@ -496,15 +490,10 @@
       padding-top: 8px;
     }
 
-    /* Tree panel */
+    /* Tree panel (overlay handles positioning) */
     .ark-tree-panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
       min-height: 0;
     }
-
-    .ark-tree-panel.hidden { display: none; }
 
     .ark-tree-actions {
       display: flex;

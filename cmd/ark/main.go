@@ -713,45 +713,203 @@ func cmdRefresh(args []string) {
 	})
 }
 
+// CRC: crc-CLI.md | Seq: seq-filter-stack.md | R1770, R1771, R1772, R1773, R1774, R1775, R1776
+
+type filterEntry struct {
+	polarity string // "with" or "without"
+	mode     string // "contains", "fuzzy", "regex", "tag", "about", "files"
+	query    string
+}
+
+// parseFilterStack extracts filter entries from raw args before flag.Parse.
+// Returns filter entries, remaining args for flag.Parse, and whether -parse was requested.
+func parseFilterStack(args []string) (entries []filterEntry, remaining []string, parseOnly bool) {
+	polarity := "with"
+	var accum []string // accumulator for bare terms / contains coalescing
+
+	flush := func() {
+		if len(accum) > 0 {
+			entries = append(entries, filterEntry{polarity, "contains", strings.Join(accum, " ")})
+			accum = nil
+		}
+	}
+
+	// flags that take a value argument — pass both flag and value through
+	valuedFlags := map[string]bool{
+		"-k": true, "-after": true, "-before": true, "-score": true,
+		"-session": true, "-wrap": true, "-like-file": true,
+		"-cpuprofile": true, "-memprofile": true, "-trace": true,
+		"-preview": true,
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		// normalize double-dash to single for our switch
+		norm := arg
+		if strings.HasPrefix(arg, "--") {
+			norm = arg[1:]
+		}
+
+		switch norm {
+		case "-with":
+			flush()
+			polarity = "with"
+		case "-without":
+			flush()
+			polarity = "without"
+		case "-contains":
+			flush()
+			i++
+			if i < len(args) {
+				accum = []string{args[i]}
+			}
+		case "-fuzzy":
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "fuzzy", args[i]})
+			}
+		case "-regex":
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "regex", args[i]})
+			}
+		case "-tag":
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "tag", strings.TrimPrefix(args[i], "@")})
+			}
+		case "-about":
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "about", args[i]})
+			}
+		case "-files":
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "files", args[i]})
+			}
+		case "-parse":
+			parseOnly = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				remaining = append(remaining, arg)
+				if valuedFlags[norm] {
+					i++
+					if i < len(args) {
+						remaining = append(remaining, args[i])
+					}
+				}
+			} else {
+				accum = append(accum, arg)
+			}
+		}
+		i++
+	}
+	flush()
+	return
+}
+
+// formatFilterStack prints the disambiguated command for -parse. R1781, R1782
+func formatFilterStack(entries []filterEntry) string {
+	var parts []string
+	parts = append(parts, "ark search")
+	pol := "with"
+	for _, e := range entries {
+		if e.polarity != pol {
+			parts = append(parts, "-"+e.polarity)
+			pol = e.polarity
+		}
+		if strings.ContainsAny(e.query, " \t\"") || strings.HasPrefix(e.query, "-") {
+			parts = append(parts, fmt.Sprintf("-%s %q", e.mode, e.query))
+		} else {
+			parts = append(parts, fmt.Sprintf("-%s %s", e.mode, e.query))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func cmdSearch(args []string) {
 	// Subcommand dispatch
 	if len(args) > 0 && args[0] == "expand" {
 		cmdSearchExpand(args[1:])
 		return
 	}
+
+	// R1770-R1778: parse filter stack before flag.Parse
+	filterEntries, remaining, parseOnly := parseFilterStack(args)
+
+	if parseOnly {
+		fmt.Println(formatFilterStack(filterEntries))
+		return
+	}
+
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
+	// CRC: crc-CLI.md | R1788, R1789
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark search [TERM...] [filters] [options]
+
+Filter modes (composable, repeatable):
+  -contains TERM    substring match (default for bare terms)
+  -fuzzy TERM       typo-tolerant match
+  -regex PATTERN    regular expression match
+  -tag TAG          tag filter (@name:value or name:value, @ optional)
+  -about QUERY      vector similarity match
+  -files GLOB       file path glob filter
+
+Polarity (default: -with):
+  -with             subsequent filters intersect (must match)
+  -without          subsequent filters subtract (must not match)
+
+  -parse            print disambiguated command and exit
+
+Bare terms coalesce into a single -contains. The first filter is the
+primary search; the rest are chunk-level post-filters. Use -parse to
+verify how your args are interpreted.
+
+Examples:
+  ark search fred ethel
+      Searches for "fred ethel" (bare terms coalesce)
+
+  ark search fred -without -tag status:done -with -files '*.md'
+      Search "fred", exclude done items, limit to markdown files
+
+  ark search -fuzzy concurency -without -regex '(?i)test'
+      Fuzzy primary, exclude chunks matching "test"
+
+  ark search -about "machine learning" -without -tag project:archive
+      Vector similarity search, exclude archived project
+
+  ark search -parse fred -without -tag done -files '*.md'
+      Print disambiguated command and exit
+
+Output:`)
+		fs.PrintDefaults()
+	}
 	k := fs.Int("k", 20, "max results")
 	scores := fs.Bool("scores", false, "show scores")
 	after := fs.String("after", "", "only results after date")
 	before := fs.String("before", "", "only results before date")
-	about := fs.String("about", "", "semantic search query")
-	contains := fs.String("contains", "", "exact match query")
-	var regex, exceptRegex stringSlice
-	fs.Var(&regex, "regex", "regex query (repeatable, AND logic)")
-	fs.Var(&exceptRegex, "except-regex", "regex exclude filter (repeatable, any match rejects)")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
 	multi := fs.Bool("multi", false, "run all strategies (coverage, density, overlap, bm25)")
-	fuzzy := fs.Bool("fuzzy", false, "typo-tolerant search (OR-union of trigrams with re-scoring)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
 	tags := fs.Bool("tags", false, "output extracted tags instead of content")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
-	files := fs.Bool("files", false, "emit full file content as JSONL")
+	files := fs.Bool("file-content", false, "emit full file content as JSONL")
 	preview := fs.Int("preview", 0, "with --chunks: extract N-char preview window around match")
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")
 	cpuProfile := fs.String("cpuprofile", "", "write CPU profile to file")
 	memProfile := fs.String("memprofile", "", "write memory profile to file")
 	traceFile := fs.String("trace", "", "write execution trace to file (view with go tool trace or Chrome DevTools)")
-	var filter, except, filterFiles, excludeFiles, filterFileTags, excludeFileTags stringSlice
-	fs.Var(&filter, "filter", "content-based positive filter (repeatable, FTS query)")
-	fs.Var(&except, "except", "content-based negative filter (repeatable, FTS query)")
-	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
-	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
-	fs.Var(&filterFileTags, "filter-file-tags", "tag-based positive filter (repeatable, tag name)")
-	fs.Var(&excludeFileTags, "exclude-file-tags", "tag-based negative filter (repeatable, tag name)")
-	fs.Parse(args)
+	fs.Parse(remaining)
 
 	// CRC: crc-CLI.md | R981, R982, R985
 	if *traceFile != "" {
@@ -789,7 +947,7 @@ func cmdSearch(args []string) {
 	}
 
 	if *chunks && *files {
-		fmt.Fprintln(os.Stderr, "error: --chunks and --files are mutually exclusive")
+		fmt.Fprintln(os.Stderr, "error: --chunks and --file-content are mutually exclusive")
 		os.Exit(1)
 	}
 
@@ -817,79 +975,125 @@ func cmdSearch(args []string) {
 		os.Exit(1)
 	}
 
+	// R1776-R1778: split filter entries into primary search + chunk filters
+	var primaryQuery, primaryAbout, primaryContains string
+	var primaryRegex []string
+	var primaryFuzzy bool
+	var chunkFilters []ark.ChunkFilterRow
+
+	if len(filterEntries) > 0 {
+		primary := filterEntries[0]
+		switch primary.mode {
+		case "contains":
+			primaryContains = primary.query
+		case "fuzzy":
+			primaryFuzzy = true
+			primaryQuery = primary.query
+		case "regex":
+			primaryRegex = []string{primary.query}
+		case "about":
+			primaryAbout = primary.query
+		case "tag":
+			primaryContains = primary.query
+		case "files":
+			// files-only primary: becomes a chunk filter, promote next entry to primary
+			chunkFilters = append(chunkFilters, ark.ChunkFilterRow{Polarity: primary.polarity, Mode: "files", Query: primary.query})
+			if len(filterEntries) > 1 {
+				second := filterEntries[1]
+				switch second.mode {
+				case "contains":
+					primaryContains = second.query
+				case "fuzzy":
+					primaryFuzzy = true
+					primaryQuery = second.query
+				case "regex":
+					primaryRegex = []string{second.query}
+				case "about":
+					primaryAbout = second.query
+				}
+				filterEntries = filterEntries[1:] // shift so [1:] below skips the promoted entry
+			}
+		}
+		for _, e := range filterEntries[1:] {
+			chunkFilters = append(chunkFilters, ark.ChunkFilterRow{
+				Polarity: e.polarity,
+				Mode:     e.mode,
+				Query:    e.query,
+			})
+		}
+	}
+
+	if *likeFile == "" && primaryContains == "" && primaryAbout == "" && len(primaryRegex) == 0 && !primaryFuzzy && primaryQuery == "" {
+		fmt.Fprintln(os.Stderr, "error: no search query")
+		os.Exit(1)
+	}
+
+	isSplit := primaryAbout != "" || primaryContains != "" || len(primaryRegex) > 0 || *likeFile != ""
+
 	// R590: --multi is mutually exclusive with --score
 	if *multi && *score != "" {
 		fmt.Fprintln(os.Stderr, "error: --multi and --score are mutually exclusive")
 		os.Exit(1)
 	}
-	// R592: --multi does not apply to --regex, --about, or --like-file
-	if *multi && (*about != "" || len(regex) > 0 || *likeFile != "") {
+	if *multi && (primaryAbout != "" || len(primaryRegex) > 0 || *likeFile != "") {
 		fmt.Fprintln(os.Stderr, "error: --multi cannot be used with --about, --regex, or --like-file")
 		os.Exit(1)
 	}
 
-	isSplit := *about != "" || *contains != "" || len(regex) > 0 || *likeFile != ""
+	// Determine query string for highlighting/preview
+	var queryStr string
+	if primaryContains != "" {
+		queryStr = primaryContains
+	} else if primaryAbout != "" {
+		queryStr = primaryAbout
+	} else if len(primaryRegex) > 0 {
+		queryStr = primaryRegex[0]
+	} else {
+		queryStr = primaryQuery
+	}
 
 	// Server-first: proxy to server if available, fall back to local.
 	// Server keeps caches warm (file name map, LMDB pages).
+	// CRC: crc-CLI.md | R1783, R1784
 	if client := serverClient(arkDir); client != nil {
+		// R1786: old filter flags removed — filter stack subsumes them
 		req := struct {
-			Query           string   `json:"query"`
-			About           string   `json:"about,omitempty"`
-			Contains        string   `json:"contains,omitempty"`
-			Regex           []string `json:"regex,omitempty"`
-			ExceptRegex     []string `json:"exceptRegex,omitempty"`
-			LikeFile        string   `json:"likeFile,omitempty"`
-			K               int      `json:"k"`
-			Scores          bool     `json:"scores,omitempty"`
-			After           string   `json:"after,omitempty"`
-			Before          string   `json:"before,omitempty"`
-			Chunks          bool     `json:"chunks,omitempty"`
-			Files           bool     `json:"files,omitempty"`
-			Tags            bool     `json:"tags,omitempty"`
-			Filter          []string `json:"filter,omitempty"`
-			Except          []string `json:"except,omitempty"`
-			FilterFiles     []string `json:"filterFiles,omitempty"`
-			ExcludeFiles    []string `json:"excludeFiles,omitempty"`
-			FilterFileTags  []string `json:"filterFileTags,omitempty"`
-			ExcludeFileTags []string `json:"excludeFileTags,omitempty"`
-			Session         string   `json:"session,omitempty"`
-			NoTmp           bool     `json:"noTmp,omitempty"`
+			Query        string               `json:"query"`
+			About        string               `json:"about,omitempty"`
+			Contains     string               `json:"contains,omitempty"`
+			Regex        []string             `json:"regex,omitempty"`
+			LikeFile     string               `json:"likeFile,omitempty"`
+			Fuzzy        bool                 `json:"fuzzy,omitempty"`
+			K            int                  `json:"k"`
+			Scores       bool                 `json:"scores,omitempty"`
+			After        string               `json:"after,omitempty"`
+			Before       string               `json:"before,omitempty"`
+			Chunks       bool                 `json:"chunks,omitempty"`
+			Files        bool                 `json:"files,omitempty"`
+			Tags         bool                 `json:"tags,omitempty"`
+			ChunkFilters []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
+			Session      string               `json:"session,omitempty"`
+			NoTmp        bool                 `json:"noTmp,omitempty"`
 		}{
-			Query:           strings.Join(fs.Args(), " "),
-			About:           *about,
-			Contains:        *contains,
-			Regex:           []string(regex),
-			ExceptRegex:     []string(exceptRegex),
-			LikeFile:        *likeFile,
-			K:               *k,
-			Scores:          *scores,
-			After:           *after,
-			Before:          *before,
-			Chunks:          *chunks,
-			Files:           *files,
-			Tags:            *tags,
-			Filter:          []string(filter),
-			Except:          []string(except),
-			FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
-			ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
-			FilterFileTags:  []string(filterFileTags),
-			ExcludeFileTags: []string(excludeFileTags),
-			Session:         *session,
-			NoTmp:           *noTmp,
+			Query:        primaryQuery,
+			About:        primaryAbout,
+			Contains:     primaryContains,
+			Regex:        primaryRegex,
+			LikeFile:     *likeFile,
+			Fuzzy:        primaryFuzzy,
+			K:            *k,
+			Scores:       *scores,
+			After:        *after,
+			Before:       *before,
+			Chunks:       *chunks,
+			Files:        *files,
+			Tags:         *tags,
+			ChunkFilters: chunkFilters,
+			Session:      *session,
+			NoTmp:        *noTmp,
 		}
 		var results []ark.SearchResultEntry
 		if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
-			var queryStr string
-			if *contains != "" {
-				queryStr = *contains
-			} else if *about != "" {
-				queryStr = *about
-			} else if len(regex) > 0 {
-				queryStr = regex[0]
-			} else {
-				queryStr = strings.Join(fs.Args(), " ")
-			}
 			if *tags {
 				printTagResults(results, *scores)
 			} else {
@@ -905,65 +1109,52 @@ func cmdSearch(args []string) {
 		done := d.NewSearchCache()
 		defer done()
 		opts := ark.SearchOpts{
-			K:               *k,
-			Scores:          *scores,
-			After:           afterTime,
-			Before:          beforeTime,
-			About:           *about,
-			Contains:        *contains,
-			Regex:           []string(regex),
-			ExceptRegex:     []string(exceptRegex),
-			LikeFile:        *likeFile,
-			Tags:            *tags,
-			Filter:          []string(filter),
-			Except:          []string(except),
-			FilterFiles:     ark.ExpandTildeSlice([]string(filterFiles)),
-			ExcludeFiles:    ark.ExpandTildeSlice([]string(excludeFiles)),
-			FilterFileTags:  []string(filterFileTags),
-			ExcludeFileTags: []string(excludeFileTags),
-			Score:           *score,
-			Multi:           *multi,
-			Fuzzy:           *fuzzy,
-			Proximity:       *proximity,
-			NoTmp:           *noTmp,
+			K:         *k,
+			Scores:    *scores,
+			After:     afterTime,
+			Before:    beforeTime,
+			About:     primaryAbout,
+			Contains:  primaryContains,
+			Regex:     primaryRegex,
+			LikeFile:  *likeFile,
+			Tags:      *tags,
+			Score:     *score,
+			Multi:     *multi,
+			Fuzzy:     primaryFuzzy,
+			Proximity: *proximity,
+			NoTmp:     *noTmp,
+		}
+
+		// R1784, R1787: wire chunk filters — about filters need server (Librarian)
+		if len(chunkFilters) > 0 {
+			remaining, early, late := ark.ResolveAboutFilters(chunkFilters, nil, d.Store(), *k)
+			opts.SetExtraOpts(early...)
+			if paths, pathErr := d.FTS().FileIDPaths(); pathErr == nil {
+				cache := d.FTS().NewChunkCache()
+				opts.SetExtraOpts(ark.BuildChunkFilters(remaining, cache, paths, d.Store())...)
+			}
+			opts.SetExtraOpts(late...)
 		}
 
 		var results []ark.SearchResultEntry
 		var err error
+		query := primaryQuery
 		if *multi {
-			// R585: multi-strategy search
-			query := strings.Join(fs.Args(), " ")
-			if query == "" && *contains == "" {
-				fmt.Fprintln(os.Stderr, "error: no search query")
-				os.Exit(1)
-			}
-			if query == "" {
-				query = *contains
+			if query == "" && primaryContains != "" {
+				query = primaryContains
 			}
 			results, err = d.SearchMulti(query, opts)
-		} else if *fuzzy {
-			// R738: typo-tolerant search
-			query := strings.Join(fs.Args(), " ")
-			if query == "" {
-				fmt.Fprintln(os.Stderr, "error: no search query")
-				os.Exit(1)
-			}
+		} else if primaryFuzzy {
 			results, err = d.SearchFuzzy(query, opts)
 		} else if isSplit {
 			results, err = d.SearchSplit(opts)
 		} else {
-			query := strings.Join(fs.Args(), " ")
-			if query == "" {
-				fmt.Fprintln(os.Stderr, "error: no search query")
-				os.Exit(1)
-			}
 			results, err = d.SearchCombined(query, opts)
 		}
 		if err != nil {
 			fatal(err)
 		}
 
-		// Fill content if requested
 		if *tags || *chunks {
 			results, err = d.FillChunks(results)
 			if err != nil {
@@ -976,22 +1167,10 @@ func cmdSearch(args []string) {
 			}
 		}
 
-		// Determine query for preview extraction
-		var query string
-		if *contains != "" {
-			query = *contains
-		} else if *about != "" {
-			query = *about
-		} else if len(regex) > 0 {
-			query = regex[0]
-		} else {
-			query = strings.Join(fs.Args(), " ")
-		}
-
 		if *tags {
 			printTagResults(results, *scores)
 		} else {
-			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, query)
+			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
 		}
 	})
 }

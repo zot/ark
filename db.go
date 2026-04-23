@@ -461,8 +461,9 @@ func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
 func (db *DB) Path() string { return db.dbPath }
 
 // Config returns the current configuration.
-func (db *DB) Config() *Config { return db.config }
-func (db *DB) Store() *Store   { return db.store }
+func (db *DB) Config() *Config   { return db.config }
+func (db *DB) Store() *Store     { return db.store }
+func (db *DB) Vec() *microvec.DB { return db.vec }
 
 // ConfigPath returns the path to ark.toml.
 func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") }

@@ -2817,3 +2817,47 @@ n- **R1305:** (inferred) `ark embed` requires a running server (model lives in t
 - **R1716:** (negative) No server-side rendering of PDF pages (no `/pdf/FID/page/N.png`) — browser-only for v1.
 - **R1717:** (negative) No form fields, annotations, or encrypted-PDF handling beyond what `getDocument` handles natively.
 - **R1718:** (negative) No `<pdf-chunk>`-based pagination viewer — deferred; will later compose from the primitive.
+
+## Feature: search-cli-filters
+**Source:** specs/search-cli-filters.md
+
+### Filter Syntax
+
+- **R1770:** `ark search` accepts mode flags: `-contains TERM`, `-fuzzy TERM`, `-regex PATTERN`, `-tag TAG`, `-about QUERY`, `-files GLOB`. Each produces a filter entry with a mode and query.
+- **R1771:** `-with` and `-without` are state toggles that set polarity for subsequent filter entries. Default polarity is `with`.
+- **R1772:** `with` polarity means intersect (chunk must match). `without` polarity means subtract (chunk must not match).
+- **R1773:** Bare terms (no leading `-`) are shorthand for `-contains`. Consecutive bare terms coalesce into a single `-contains` argument.
+- **R1774:** A mode flag or polarity toggle closes the current bare-term group and starts a new filter entry.
+- **R1775:** Bare terms following an explicit `-contains` coalesce into that contains group.
+
+### Primary Search and Filter Stack
+
+- **R1776:** The first filter entry becomes the primary search — it maps to the existing request fields (`query`, `contains`, `about`, `regex`, `fuzzy`).
+- **R1777:** All subsequent filter entries become `ChunkFilterRow` entries in the `chunk_filters` field.
+- **R1778:** The primary search drives the initial trigram index lookup. Filter rows narrow the result set post-search.
+
+### Tag Syntax
+
+- **R1779:** `-tag` accepts `name:value` or `@name:value` (leading `@` is stripped).
+- **R1780:** `-tag` with name only (no `:value`) matches files having that tag with any value.
+
+### Parse Flag
+
+- **R1781:** `-parse` prints the fully disambiguated command and exits without searching.
+- **R1782:** `-parse` output shows each entry with its explicit mode flag and quoted value. Polarity toggles are shown at each boundary.
+
+### Server Endpoint
+
+- **R1783:** `searchRequest` gains a `ChunkFilters []ChunkFilterRow` field (`chunk_filters` in JSON).
+- **R1784:** `handleSearch` wires `ChunkFilters` through `BuildChunkFilters` as chunk-level post-filters, same mechanism as `handleSearchGrouped`.
+- **R1785:** The flat `[]SearchResultEntry` response format is unchanged.
+
+### Removed Flags
+
+- **R1786:** The old file-level filter flags (`--filter`, `--except`, `--filter-files`, `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`, `--except-regex`) are removed from `ark search`. The filter stack subsumes them. `SearchOpts` and the server JSON API retain these fields for Lua UI sidebar source filtering.
+- **R1787:** `-about` is allowed as both a primary search mode and a filter mode. As a filter, it adds or subtracts chunks based on vector similarity.
+
+### Help Text
+
+- **R1788:** `ark search --help` groups options by purpose: output format, scoring/analysis, and profiling. Filter stack syntax and examples appear above the grouped options.
+- **R1789:** Help text includes concrete examples showing bare terms, polarity toggles, mixed modes, and `-parse` usage.

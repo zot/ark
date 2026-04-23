@@ -157,6 +157,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
+- [x] seq-filter-stack.md → `cmd/ark/main.go`, `server.go`, `search.go`
 - [x] crc-Librarian.md → `librarian.go`
 - [x] crc-PDFChunker.md → `pdfchunker.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
@@ -335,3 +336,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] A38: R1661, R1662, R1663, R1664 (blank-line filtering for ONLYOFFICE-style PDFs) — superseded by R1729 (line-level layout handling is pdftext's responsibility)
 - [ ] A39: R1669, R1674 (tag rect from line spans, first-line-only for wraps) — superseded by R1735, R1736 (tag scan uses Block.Chars; rect unions all covered glyph BBoxes including wrapped lines)
 - [ ] A40: R1723, R1657, R1658 (salvage at page 0 with no rect) — superseded by R1737 (salvage keyed at actual page, carries Block.BBox)
+- [ ] O80: No unit tests for parseFilterStack, formatFilterStack, or -parse output
+- [ ] O81: No unit tests for files mode in BuildChunkFilters
+- [x] A41: -about as chunk filter (AboutChunkFilter) not yet implemented — requires embedding model in filter path. -about works as primary search only.
+- [x] O82: About chunk filter requires configured embed_cmd/query_cmd in ark.toml — currently tag_model is set (Librarian path) but query-time embedding path is not. vec.Search fails silently.
+- [ ] O83: About filter in CLI local path (no server) silently skips — Librarian only available when server is running

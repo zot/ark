@@ -384,11 +384,19 @@ function Searching:refresh()
 end
 
 function Searching:selectSource(source)
+    if self.selectedSource == source then
+        self.selectedSource = nil
+        return
+    end
     self.selectedSource = source
     self.showAddForm = false
     if not source._loaded and not source._loading then
         source:loadRootNodes()
     end
+end
+
+function Searching:deselectSource()
+    self.selectedSource = nil
 end
 
 function Searching:openAddForm()

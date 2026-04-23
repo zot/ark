@@ -14,6 +14,7 @@ import (
 func cmdChats(args []string) {
 	fs := flag.NewFlagSet("chats", flag.ExitOnError)
 	withTools := fs.Bool("with-tools", false, "display tool calls and results")
+	sidechain := fs.Bool("sidechain", false, "display sidechain chatter")
 	wrap := fs.String("wrap", "", "wrap output with a name tag")
 	lineLen := fs.Int("line-length", 100, "word-wrap line length")
 	fs.Usage = func() {
@@ -52,7 +53,7 @@ Examples:
 	}
 
 	for _, path := range files {
-		if err := renderChat(path, *withTools, *lineLen); err != nil {
+		if err := renderChat(path, *withTools, *lineLen, *sidechain); err != nil {
 			fmt.Fprintf(os.Stderr, "error reading %s: %v\n", path, err)
 		}
 	}
@@ -106,7 +107,7 @@ type contentBlock struct {
 }
 
 // renderChat reads a JSONL file and prints a human-readable transcript.
-func renderChat(path string, withTools bool, lineLen int) error {
+func renderChat(path string, withTools bool, lineLen int, sidechain bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -123,7 +124,7 @@ func renderChat(path string, withTools bool, lineLen int) error {
 		}
 
 		// Skip sidechains (subagent traffic)
-		if rec.IsSidechain {
+		if rec.IsSidechain && !sidechain {
 			continue
 		}
 
