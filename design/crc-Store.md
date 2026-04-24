@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1598, R1599, R1600, R1601, R1602, R1603, R1604, R1605, R1606, R1607, R1608, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1802
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -150,25 +150,29 @@ ark-level settings, and tag tracking.
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
   EV records (for rebuild)
 
-### Chunk Embedding Records (R1598-R1608)
-- WriteChunkEmbedding(fileID, chunkIdx uint64, vec []float32): write
-  EC[fileID][chunkIdx] record. Key: `EC` + varint(fileID) + varint(chunkIdx).
-  Value: float32 vector.
-- ReadChunkEmbedding(fileID, chunkIdx uint64) ([]float32, error): read one EC record.
+### Chunk Embedding Records (R1833-R1845)
+- WriteChunkEmbedding(chunkID uint64, vec []float32): write EC[chunkID]
+  record. Key: `EC` + varint(chunkID). Value: float32 vector. (R1836)
+- WriteChunkEmbeddingBatch(chunks []ChunkVec): batch write. ChunkVec is
+  {ChunkID uint64, Vec []float32}. (R1837)
+- ReadChunkEmbedding(chunkID uint64) ([]float32, error): read one EC
+  record by chunkID. (R1838)
+- ReadChunkEmbeddings(chunkIDs []uint64) [][]float32: batch read EC
+  records for centroid computation. One View transaction. (R1842)
+- DeleteChunkEmbedding(chunkID uint64): delete one EC record. (R1839)
+- DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64): delete one
+  EC record using an existing transaction. For microfts2 callbacks. (R1840)
 - WriteFileCentroid(fileID uint64, sum []float32, count uint32): write
-  EF[fileID] record. Key: `EF` + varint(fileID). Value: float32 running sum + uint32 count.
-- ReadFileCentroid(fileID uint64) (sum []float32, count uint32, err error): read one EF record.
-- MissingChunkEmbeddings() ([]ChunkEmbedRef, error): cross-reference C records
-  in microfts2 against EC records, return chunks with no embedding.
+  EF[fileID] record. Unchanged key format. (R1835)
+- ReadFileCentroid(fileID uint64) (sum []float32, count uint32, err error):
+  read one EF record.
+- DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID uint64): delete one EF
+  record using an existing transaction. For microfts2 callbacks. (R1841)
 - ScanFileCentroids() (map[uint64][]float32, error): scan EF prefix, return
   fileID → centroid vector (sum / count).
-- DropChunkEmbeddings(): delete all EC and EF prefix records. (R1606)
-- RemoveFileChunkEmbeddings(fileID uint64): delete all EC records for fileID
-  and the EF centroid. Called when a file is re-indexed. (R1607)
-- ScanChunkEmbeddingKeys(): prefix scan all EC keys, returns per-file
-  chunk index list and vector dimension. Used by embed validate. (R1802)
-- DeleteChunkEmbedding(fileID uint64, chunkIdx int): delete one EC record.
-  Used by embed validate --fix for out-of-range or wrong-dimension records.
+- DropChunkEmbeddings(): delete all EC and EF prefix records. (R1844)
+- ScanChunkEmbeddingKeys() map[uint64]int: prefix scan EC keys, returns
+  chunkID → vector dimension. Used by embed validate. (R1845)
 
 ### Page Content Records (R1720-R1725)
 - WritePageContent(fileID uint64, page uint32, blob []byte): write

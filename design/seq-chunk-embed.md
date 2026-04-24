@@ -1,9 +1,11 @@
 # Sequence: Chunk Embedding Pipeline
-**Requirements:** R1593, R1594, R1595, R1596, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1618, R1620, R1817, R1818, R1819, R1820, R1822, R1823, R1824, R1825, R1826, R1827, R1828, R1829, R1830, R1831, R1832
+**Requirements:** R1593, R1594, R1595, R1596, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1618, R1620, R1830, R1831, R1833, R1835, R1846, R1847, R1848, R1849, R1852, R1854, R1862, R1863, R1864
 
 Post-reconcile chunk embedding. Runs after tag embedding (BatchEmbed)
 completes. One model, multiple tier contexts, bucket-based dispatch.
-High-water tracking prevents re-embedding already-processed chunks.
+EC records keyed by chunkID (one per unique content). In-batch seen
+set prevents the same chunkID from being queued multiple times when
+shared across files (R1862, R1863).
 
 ## Model Load (first use)
 
@@ -31,28 +33,16 @@ Server.doReconcile
     BatchEmbedChunks()  # then chunks                                       │
       │                                                                     │
       ├─ collect files (priority sort, exclude search_exclude)              │
+      │   seen := map[uint64]bool{}              # in-batch dedup (R1862)   │
       │                                                                     │
       ├─ for each file:                                                     │
-      │   chunkLens := fts.ChunkContentLens(fileID)                         │
-      │   lastChunkID := fts.FileInfoByID(fileID).Chunks[last].ChunkID     │
-      │   prev := lastEmbedded[fileID]                                      │
-      │                                                                     │
-      │   ┌─ Case 1 (R1823): count==prev.count && lastID==prev.lastID      │
-      │   │  → SKIP entirely                                                │
-      │   │                                                                 │
-      │   ├─ Case 2 (R1824): count==prev.count && lastID!=prev.lastID      │
-      │   │  → re-embed chunk[count-1] only                                 │
-      │   │  → subtract old EC vector from centroid (R1829)                 │
-      │   │                                                                 │
-      │   ├─ Case 3 (R1825): count>prev.count && lastID==chunks[prev-1].ID │
-      │   │  → embed from prev.count onward (clean append)                  │
-      │   │                                                                 │
-      │   └─ Case 4 (R1826): count>prev.count && lastID!=chunks[prev-1].ID │
-      │      → embed from prev.count-1 onward (boundary changed)            │
-      │      → subtract old EC vector for boundary chunk (R1829)            │
-      │                                                                     │
-      │   seed centroid from stored EF sum/count (R1828)                    │
-      │   route chunks to tier buckets by byte size                         │
+      │   finfo := fts.FileInfoByID(fileID)     # F-record with chunk list  │
+      │   for each entry in finfo.Chunks:                                   │
+      │     if seen[entry.ChunkID]: skip (deduped, R1863)                   │
+      │     ec := store.ReadChunkEmbedding(entry.ChunkID)                   │
+      │     if ec != nil: skip (already embedded, R1847)                    │
+      │     seen[entry.ChunkID] = true                                      │
+      │     route to tier bucket by chunk byte size                         │
       │                                                                     │
       ├─ Pass 2: embed one tier at a time (sequential, R1830)               │
       │   for each tier with non-empty bucket:                              │
@@ -62,57 +52,62 @@ Server.doReconcile
       │       │ texts := readChunkContent(batch)       │ off-actor          │
       │       │ vecs := embedWithCtx(ctx, texts)       │ GPU compute        │
       │       └────────────────────────────────────────┘                    │
-      │       store.WriteChunkEmbeddingBatch(cvs)                           │
-      │       addToCentroid(fileID, vecs)                                   │
+      │       store.WriteChunkEmbeddingBatch(cvs)  # keyed by chunkID      │
       │     ctx.Close()                                                     │
       │                                                                     │
-      ├─ Write EF centroids (once, after ALL tiers, R1830)                  │
-      │   for each file with centroid accumulator:                          │
+      ├─ Recompute EF centroids (once, after ALL tiers, R1848)              │
+      │   for each file that had missing chunks:                            │
+      │     chunkIDs := finfo.Chunks[*].ChunkID                            │
+      │     vecs := store.ReadChunkEmbeddings(chunkIDs)                    │
+      │     centroid := average(vecs)                                       │
       │     store.WriteFileCentroid(fileID, sum, count)                     │
-      │                                                                     │
-      ├─ Update lastEmbedded[fileID] for each processed file (R1827)        │
       │                                                                     │
       └─ done                                                               │
 ```
 
-## High-Water State (R1817-R1821)
+## Chunk Cleanup on File Removal (R1850, R1852, R1853)
 
 ```
-type embedState struct {
-    count       int      // chunks at last embed
-    lastChunkID uint64   // ChunkID of final chunk at last embed
-}
-
-Librarian.lastEmbedded map[uint64]embedState
-
-- in-memory only, resets on restart (R1820)
-- updated after successful embed pass per file (R1827)
-- stale entries for removed files harmless (R1821)
-```
-
-## File Re-Index (content changed)
-
-```
-Indexer.AddFile(path)
+Indexer.RemoveFile(path)
   │
-  ├─ store.RemoveFileChunkEmbeddings(fileID)   # delete EC + EF for file
+  ├─ fts.RemoveFileWithCallback(path, func(txn, orphans) {
+  │     for each orphanedChunkID:
+  │       store.DeleteChunkEmbeddingInTxn(txn, chunkID)
+  │     store.DeleteFileCentroidInTxn(txn, fileID)
+  │  })
   │
-  └─ next BatchEmbedChunks: lastEmbedded entry stale
-     → count or lastChunkID won't match → re-embed as needed
+  └─ remove tags, tag defs, tag values, page contents
 ```
 
-## Model Mismatch
+## Chunk Cleanup on Re-Index (R1849, R1852, R1854)
+
+```
+Indexer.executeFullRefresh(prep)
+  │
+  ├─ fts.ReindexWithCallback(path, strategy, func(txn, orphans, newIDs) {
+  │     for each orphanedChunkID:
+  │       store.DeleteChunkEmbeddingInTxn(txn, chunkID)
+  │     store.DeleteFileCentroidInTxn(txn, fileID)  # will be recomputed
+  │  })
+  │
+  ├─ (newIDs embedded in next BatchEmbedChunks pass, R1854)
+  │
+  └─ update tags, tag defs, tag values
+```
+
+## Model Mismatch / Migration (R1859, R1860)
 
 ```
 Server startup
   │
+  ├─ check ec_version I record
+  │   if absent or "1": drop all EC + EF, set ec_version = "2"
+  │
   ├─ detect tag_model changed (E condition "model_mismatch")
+  │   store.DropEmbeddings()           # T vectors + EV records
+  │   store.DropChunkEmbeddings()      # EC + EF records
   │
-  ├─ store.DropEmbeddings()           # existing: T vectors + EV records
-  ├─ store.DropChunkEmbeddings()      # new: EC + EF records
-  │
-  └─ next reconcile: lastEmbedded is empty (restart cleared it)
-     → full scan, all files processed
+  └─ next reconcile re-embeds everything
 ```
 
 ## Tier Routing

@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"slices"
@@ -1682,50 +1681,39 @@ func (s *Store) DropEmbeddings() error {
 }
 
 // --- Chunk Embedding Records (EC/EF) ---
-// CRC: crc-Store.md | R1598-R1608, R1618, R1619
+// CRC: crc-Store.md | R1833-R1845
 
-// ChunkEmbedRef identifies a chunk that needs embedding.
-type ChunkEmbedRef struct {
-	FileID   uint64
-	ChunkIdx int
-	Path     string
-}
-
-func chunkEmbedKey(fileID uint64, chunkIdx int) []byte {
+func chunkEmbedKey(chunkID uint64) []byte {
 	key := []byte(prefixEmbedChunk)
-	key = encodeVarint(key, fileID)
-	key = encodeVarint(key, uint64(chunkIdx))
-	return key
+	return encodeVarint(key, chunkID)
 }
 
 func fileCentroidKey(fileID uint64) []byte {
 	key := []byte(prefixEmbedFileCent)
-	key = encodeVarint(key, fileID)
-	return key
+	return encodeVarint(key, fileID)
 }
 
-// WriteChunkEmbedding writes one EC record. R1600
-func (s *Store) WriteChunkEmbedding(fileID uint64, chunkIdx int, vec []float32) error {
+// ChunkVec pairs a chunkID with its embedding vector. R1837
+type ChunkVec struct {
+	ChunkID uint64
+	Vec     []float32
+}
+
+// WriteChunkEmbedding writes one EC record keyed by chunkID. R1836
+func (s *Store) WriteChunkEmbedding(chunkID uint64, vec []float32) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, chunkEmbedKey(fileID, chunkIdx), float32ToBytes(vec), 0)
+		return txn.Put(s.dbi, chunkEmbedKey(chunkID), float32ToBytes(vec), 0)
 	})
 }
 
-// ChunkVec pairs a chunk index with its embedding vector for batch writes.
-type ChunkVec struct {
-	FileID   uint64
-	ChunkIdx int
-	Vec      []float32
-}
-
-// WriteChunkEmbeddingBatch writes multiple EC records in a single transaction. R1600
+// WriteChunkEmbeddingBatch writes multiple EC records in a single transaction. R1837
 func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 	if len(chunks) == 0 {
 		return nil
 	}
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		for _, c := range chunks {
-			if err := txn.Put(s.dbi, chunkEmbedKey(c.FileID, c.ChunkIdx), float32ToBytes(c.Vec), 0); err != nil {
+			if err := txn.Put(s.dbi, chunkEmbedKey(c.ChunkID), float32ToBytes(c.Vec), 0); err != nil {
 				return err
 			}
 		}
@@ -1733,11 +1721,11 @@ func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 	})
 }
 
-// ReadChunkEmbedding reads one EC record. R1601
-func (s *Store) ReadChunkEmbedding(fileID uint64, chunkIdx int) ([]float32, error) {
+// ReadChunkEmbedding reads one EC record by chunkID. R1838
+func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 	var vec []float32
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, chunkEmbedKey(fileID, chunkIdx))
+		v, err := txn.Get(s.dbi, chunkEmbedKey(chunkID))
 		if err != nil {
 			return err
 		}
@@ -1752,11 +1740,48 @@ func (s *Store) ReadChunkEmbedding(fileID uint64, chunkIdx int) ([]float32, erro
 	return vec, err
 }
 
-// WriteFileCentroid writes one EF record (running sum + count). R1602
+// ReadChunkEmbeddings batch reads EC records for centroid computation. R1842
+func (s *Store) ReadChunkEmbeddings(chunkIDs []uint64) [][]float32 {
+	result := make([][]float32, len(chunkIDs))
+	s.env.View(func(txn *lmdb.Txn) error {
+		for i, id := range chunkIDs {
+			v, err := txn.Get(s.dbi, chunkEmbedKey(id))
+			if err != nil {
+				continue
+			}
+			data := make([]byte, len(v))
+			copy(data, v)
+			result[i] = bytesToFloat32(data)
+		}
+		return nil
+	})
+	return result
+}
+
+// DeleteChunkEmbedding deletes one EC record by chunkID. R1839
+func (s *Store) DeleteChunkEmbedding(chunkID uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, chunkEmbedKey(chunkID), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// DeleteChunkEmbeddingInTxn deletes one EC record using an existing transaction. R1840
+func (s *Store) DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64) error {
+	err := txn.Del(s.dbi, chunkEmbedKey(chunkID), nil)
+	if lmdb.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// WriteFileCentroid writes one EF record (running sum + count). R1835
 func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		if count == 0 {
-			// Invalidate: delete the EF record
 			err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
 			if lmdb.IsNotFound(err) {
 				return nil
@@ -1771,7 +1796,7 @@ func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) er
 	})
 }
 
-// ReadFileCentroid reads one EF record. Returns sum, count. R1603
+// ReadFileCentroid reads one EF record. Returns sum, count.
 func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 	var sum []float32
 	var count uint32
@@ -1795,6 +1820,26 @@ func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 	return sum, count, err
 }
 
+// DeleteFileCentroid deletes one EF record.
+func (s *Store) DeleteFileCentroid(fileID uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+}
+
+// DeleteFileCentroidInTxn deletes one EF record using an existing transaction. R1841
+func (s *Store) DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID uint64) error {
+	err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
+	if lmdb.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // ScanFileCentroids returns all EF records as fileID → centroid (sum/count). R1605
 func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
@@ -1810,67 +1855,13 @@ func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 			count := binary.LittleEndian.Uint32(data[len(data)-4:])
 			sum := bytesToFloat32(data[:len(data)-4])
 			if count == 0 || len(sum) < 2 {
-				return nil // skip invalid or "all-skipped" markers
+				return nil
 			}
 			centroid := make([]float32, len(sum))
 			for i, s := range sum {
 				centroid[i] = s / float32(count)
 			}
 			result[fileID] = centroid
-			return nil
-		})
-	})
-	return result, err
-}
-
-// RemoveFileChunkEmbeddings deletes all EC records for a file and its EF centroid. R1607
-func (s *Store) RemoveFileChunkEmbeddings(fileID uint64) error {
-	log.Printf("librarian: removing EC records for fileID=%d", fileID)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		// EC records keyed by fileID prefix
-		prefix := []byte(prefixEmbedChunk)
-		prefix = encodeVarint(prefix, fileID)
-		if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
-		}); err != nil {
-			return err
-		}
-		// EF centroid — not-found is fine (may not exist yet)
-		err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
-		if lmdb.IsNotFound(err) {
-			return nil
-		}
-		return err
-	})
-}
-
-// CRC: crc-Store.md | R1802
-// ChunkEmbedInfo holds per-file embedding data from a prefix scan.
-type ChunkEmbedInfo struct {
-	ChunkIndices []int
-	Dims         []int // vector dimension per chunk (len(vec))
-}
-
-// ScanChunkEmbeddingKeys scans all EC records, returning per-file chunk indices and dimensions.
-func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]*ChunkEmbedInfo, error) {
-	result := make(map[uint64]*ChunkEmbedInfo)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
-			rest := k[len(prefixEmbedChunk):]
-			vals := decodeVarints(rest)
-			if len(vals) < 2 {
-				return nil
-			}
-			fileID := vals[0]
-			chunkIdx := int(vals[1])
-			dim := len(v) / 4 // float32 = 4 bytes
-			info := result[fileID]
-			if info == nil {
-				info = &ChunkEmbedInfo{}
-				result[fileID] = info
-			}
-			info.ChunkIndices = append(info.ChunkIndices, chunkIdx)
-			info.Dims = append(info.Dims, dim)
 			return nil
 		})
 	})
@@ -1897,25 +1888,31 @@ func (s *Store) ScanFileCentroidCounts() (map[uint64]uint32, error) {
 	return result, err
 }
 
-// DeleteChunkEmbedding deletes one EC record.
-func (s *Store) DeleteChunkEmbedding(fileID uint64, chunkIdx int) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, chunkEmbedKey(fileID, chunkIdx), nil)
-		if lmdb.IsNotFound(err) {
+// ScanChunkEmbeddingKeys scans all EC records, returning chunkID → vector dimension. R1845
+func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
+	result := make(map[uint64]int)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
+			rest := k[len(prefixEmbedChunk):]
+			chunkID, _ := binary.Uvarint(rest)
+			result[chunkID] = len(v) / 4
 			return nil
-		}
-		return err
+		})
 	})
+	return result, err
 }
 
-// DeleteFileCentroid deletes one EF record.
-func (s *Store) DeleteFileCentroid(fileID uint64) error {
+// DropChunkEmbeddings deletes all EC and EF records. R1844
+func (s *Store) DropChunkEmbeddings() error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
-		if lmdb.IsNotFound(err) {
-			return nil
+		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
 		}
-		return err
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		})
 	})
 }
 
@@ -1956,20 +1953,6 @@ func (s *Store) RemovePageContents(fileID uint64) error {
 		prefix := []byte(prefixPageContent)
 		prefix = encodeVarint(prefix, fileID)
 		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
-		})
-	})
-}
-
-// DropChunkEmbeddings deletes all EC and EF records. R1606
-func (s *Store) DropChunkEmbeddings() error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
-		}); err != nil {
-			return err
-		}
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(cur *lmdb.Cursor, _, _ []byte) error {
 			return cur.Del(0)
 		})
 	})

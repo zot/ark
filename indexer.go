@@ -6,13 +6,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"github.com/zot/microfts2"
 	"io"
 	"log"
 	"os"
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/bmatsuo/lmdb-go/lmdb"
+	"github.com/zot/microfts2"
 	"sync"
 
 	"github.com/zot/microvec"
@@ -177,7 +179,7 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	return fileid, nil
 }
 
-// RemoveFile removes a file from both engines and tags by path.
+// CRC: crc-Indexer.md | R1850, R1852, R1853
 func (idx *Indexer) RemoveFile(path string) error {
 	status, err := idx.fts.CheckFile(path)
 	if err != nil {
@@ -185,34 +187,30 @@ func (idx *Indexer) RemoveFile(path string) error {
 	}
 	fileid := status.FileID
 
-	if err := idx.fts.RemoveFile(path); err != nil {
+	if err := idx.fts.RemoveFileWithCallback(path, idx.removeCallback(fileid)); err != nil {
 		return fmt.Errorf("fts remove %s: %w", path, err)
 	}
-	// Vec removal is best-effort: file may never have been vectorized
 	idx.vec.RemoveFile(fileid)
 	if idx.store != nil {
 		if err := idx.store.RemoveTags(fileid); err != nil {
 			return fmt.Errorf("remove tags %s: %w", path, err)
 		}
 		idx.store.RemoveTagDefs(fileid)
-		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1105
 		idx.store.RemoveTagValues(fileid)
-		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
-		idx.store.RemovePageContents(fileid)        // R1725
+		idx.store.RemovePageContents(fileid)
 	}
 	return nil
 }
 
-// RemoveByID removes a file from both engines and tags by fileid.
+// CRC: crc-Indexer.md | R1851, R1852, R1853
 func (idx *Indexer) RemoveByID(fileid uint64) error {
 	info, err := idx.fts.FileInfoByID(fileid)
 	if err != nil {
 		return fmt.Errorf("file info %d: %w", fileid, err)
 	}
-	if err := idx.fts.RemoveFile(info.Names[0]); err != nil {
+	if err := idx.fts.RemoveFileWithCallback(info.Names[0], idx.removeCallback(fileid)); err != nil {
 		return fmt.Errorf("fts remove %d: %w", fileid, err)
 	}
-	// Vec removal is best-effort: file may never have been vectorized
 	idx.vec.RemoveFile(fileid)
 	if idx.store != nil {
 		if err := idx.store.RemoveTags(fileid); err != nil {
@@ -220,10 +218,44 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 		}
 		idx.store.RemoveTagDefs(fileid)
 		idx.store.RemoveTagValues(fileid)
-		idx.store.RemoveFileChunkEmbeddings(fileid) // R1607
-		idx.store.RemovePageContents(fileid)        // R1725
+		idx.store.RemovePageContents(fileid)
 	}
 	return nil
+}
+
+// removeCallback returns a RemoveCallback that cleans up orphaned EC records
+// and the EF centroid inside the same LMDB transaction. R1852, R1853
+func (idx *Indexer) removeCallback(fileID uint64) microfts2.RemoveCallback {
+	if idx.store == nil {
+		return nil
+	}
+	return func(txn *lmdb.Txn, orphanedChunkIDs []uint64) error {
+		for _, id := range orphanedChunkIDs {
+			if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
+				return err
+			}
+		}
+		return idx.store.DeleteFileCentroidInTxn(txn, fileID)
+	}
+}
+
+// reindexCallback returns a ReindexCallback that cleans up orphaned EC records
+// and the EF centroid inside the same LMDB transaction. R1849, R1852
+func (idx *Indexer) reindexCallback(fileID uint64) microfts2.ReindexCallback {
+	if idx.store == nil {
+		return nil
+	}
+	return func(txn *lmdb.Txn, orphanedChunkIDs, _ []uint64) error {
+		for _, id := range orphanedChunkIDs {
+			if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
+				return err
+			}
+		}
+		if len(orphanedChunkIDs) > 0 {
+			Logv(1, "reindex: fileID=%d orphaned %d EC records", fileID, len(orphanedChunkIDs))
+		}
+		return idx.store.DeleteFileCentroidInTxn(txn, fileID)
+	}
 }
 
 // refreshPrep holds data prepared by a worker for the ChanSvc to execute.
@@ -339,8 +371,11 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 // are extracted from clean chunk text via callback (R1114, R1124, R1126).
 // For append prep with pre-extracted tags, those are used instead.
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
+	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
 	acc := chunkAccumulator{strategy: prep.strategy}
-	fileid, _, err := idx.fts.ReindexWithContent(prep.path, prep.strategy,
+	// CRC: crc-Indexer.md | R1849, R1852, R1854
+	reindexCb := idx.reindexCallback(prep.oldID)
+	fileid, err := idx.fts.ReindexWithCallback(prep.path, prep.strategy, reindexCb,
 		microfts2.WithChunkCallback(acc.callback))
 	if err != nil {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
@@ -363,8 +398,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTags(prep.oldID)
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemoveTagValues(prep.oldID)
-			idx.store.RemoveFileChunkEmbeddings(prep.oldID) // R1607
-			idx.store.RemovePageContents(prep.oldID)        // R1725
+			idx.store.RemovePageContents(prep.oldID)
 		}
 		// Use pre-extracted values (append prep) or callback-extracted values
 		tagValues := prep.tagValues

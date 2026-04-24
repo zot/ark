@@ -1,6 +1,6 @@
 # Sequence: embed validate
 
-**Requirements:** R1794, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813
+**Requirements:** R1794, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1855, R1856, R1857, R1858, R1865, R1866
 
 Cross-reference EC/EF embedding records against FTS chunk data
 to find orphans, mismatches, and gaps.
@@ -57,11 +57,14 @@ CLI                          DB/Store                     microfts2
  |    if efByFile[fid].count != ecByFile[fid]:                |
  |      mismatch++              |                             |
  |                              |                             |
- |  === Check 3: missing EC ================================  |
+ |  === Check 3: missing EC (R1856, R1865, R1866) ===========  |
  |                              |                             |
- |  for fid in ftsChunks:       |                             |
- |    if ecByFile[fid] < ftsChunks[fid]:                      |
+ |  embeddable, excluded :=     |                             |
+ |    AllChunkIDsPartitioned(excludePatterns)                  |
+ |  for chunkID in embeddable:  |                             |
+ |    if chunkID not in ecDims: |                             |
  |      missingEC++             |                             |
+ |  print missingEC, len(excluded)                            |
  |                              |                             |
  |  === Check 4: orphan EF ================================  |
  |                              |                             |

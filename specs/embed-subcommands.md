@@ -61,9 +61,13 @@ orphaned embeddings.
    the actual number of EC records for that file. Indicates a
    crash-interrupted centroid update.
 
-3. **Missing EC records**: Files that have chunks in the FTS index but
-   no EC records (or fewer EC records than chunks). These are gaps
-   where embedding hasn't completed.
+3. **Missing EC records**: Unique chunkIDs that have C records in FTS
+   but no EC records. These are gaps where embedding hasn't completed.
+   Only counts chunks from files not matching `search_exclude` — the
+   embedding pipeline skips excluded files, so their chunks are
+   expected to lack EC records. The count of excluded chunks (those
+   belonging exclusively to `search_exclude` files) is reported
+   separately so the numbers are transparent.
 
 4. **Orphan EF records**: EF records whose fileID has no corresponding
    EC records or no FTS entry.

@@ -2919,30 +2919,72 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ## Feature: Embed Deduplication
 **Source:** specs/embed-dedup.md
 
-### Tracking State
+### Superseded (high-water tracking, replaced by ec-rekey chunkID dedup)
 
-- **R1817:** The Librarian maintains an in-memory map of `fileID → {count, lastChunkID}` representing the chunk state when a file was last successfully embedded.
-- **R1818:** `count` is the number of chunks in the file at last embed time.
-- **R1819:** `lastChunkID` is the microfts2 ChunkID (from the F-record) of the final chunk at last embed time.
-- **R1820:** The map resets on server restart. The first post-startup embed pass does a full scan (acceptable cold-start cost).
-- **R1821:** Stale entries for removed files are harmless and cleaned on restart. No explicit removal needed during runtime.
+- **R1817:** ~~superseded by R1847~~ The Librarian maintained an in-memory high-water map. Removed — chunkID EC lookup is the cross-pass dedup.
+- **R1818-R1827:** ~~superseded by R1846-R1848~~ High-water tracking state and skip logic. Replaced by chunkID-based EC key existence checks.
+- **R1828-R1829:** ~~superseded by R1848~~ Incremental centroid seeding/subtraction. Replaced by full recompute from EC records after embedding.
 
-### Skip Logic
+### Centroid Invariants (still load-bearing)
 
-- **R1822:** When `BatchEmbedChunks` processes a file, it reads the file's FTS chunk list to get the current count and last chunkID.
-- **R1823:** If `count == len(chunks) && lastChunkID == chunks[last].ChunkID`: skip entirely. Nothing changed since the last embed pass.
-- **R1824:** If `count == len(chunks) && lastChunkID != chunks[last].ChunkID`: the last chunk was re-indexed (append boundary case). Re-embed only the last chunk at index `count-1`.
-- **R1825:** If `count < len(chunks) && lastChunkID == chunks[count-1].ChunkID`: clean append. Embed from index `count` onward. Skip all chunks before `count`.
-- **R1826:** If `count < len(chunks) && lastChunkID != chunks[count-1].ChunkID`: boundary chunk changed. Embed from index `count-1` onward (re-embed boundary chunk plus new chunks).
-- **R1827:** After a successful embed pass for a file, update the tracking map with the new count and last chunkID.
-
-### Centroid Handling
-
-- **R1828:** When skipping known-good chunks (R1823-R1826), the existing EF centroid is preserved — no invalidation. The centroid accumulator is seeded from the stored EF sum/count.
-- **R1829:** When re-embedding a boundary chunk (R1824, R1826), subtract the old EC vector from the centroid sum before adding the new vector. Read the existing EC record for the old vector.
 - **R1830:** (invariant) EF centroids are written only after every tier bucket for that file has been flushed. Tier processing is sequential — a fast-bucket chunk must not trigger an early EF write while slow-bucket chunks for the same file are pending.
 - **R1831:** The write queue serializes embed passes across reconcile cycles. No two `BatchEmbedChunks` calls run concurrently.
+- **R1832:** `BatchEmbedChunks` needs chunk ChunkIDs from the FTS F-record. Implemented via `FileInfoByID`.
 
-### FTS Access
+### In-Batch Dedup
 
-- **R1832:** `BatchEmbedChunks` needs the last chunk's ChunkID from the FTS F-record. Add a DB method or extend the existing call path to expose this.
+- **R1862:** `BatchEmbedChunks` Pass 1 maintains a local `seen` set of chunkIDs already queued for embedding in this invocation.
+- **R1863:** When a chunkID is encountered that is already in the seen set, skip it without adding it to a tier bucket. This prevents the same content from being embedded multiple times within a single pass when multiple files reference the same deduplicated chunk.
+- **R1864:** Log the dedup count alongside existing embed stats: embedded, skipped (too large), and deduped (same chunkID from another file reference).
+
+## Feature: EC Rekey (chunkID-based Embedding)
+**Source:** specs/ec-rekey.md
+
+### Key Format
+
+- **R1833:** EC records are keyed by `EC` + varint(chunkID). One record per unique chunk content.
+- **R1834:** The old key format `EC` + varint(fileID) + varint(chunkIdx) is superseded. R1598 (old format) is replaced by R1833.
+- **R1835:** EF records remain keyed by fileID. EF centroid is computed from EC records resolved through the file's F-record chunk list.
+
+### Store API
+
+- **R1836:** `WriteChunkEmbedding(chunkID, vec)` writes one EC record keyed by chunkID.
+- **R1837:** `WriteChunkEmbeddingBatch(chunks []ChunkVec)` where ChunkVec is `{ChunkID uint64, Vec []float32}`.
+- **R1838:** `ReadChunkEmbedding(chunkID)` reads one EC record by chunkID.
+- **R1839:** `DeleteChunkEmbedding(chunkID)` deletes one EC record by chunkID.
+- **R1840:** `DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID)` deletes one EC record using an existing transaction. Used inside microfts2 callbacks.
+- **R1841:** `DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID)` deletes one EF record using an existing transaction.
+- **R1842:** `ReadChunkEmbeddings(chunkIDs []uint64) [][]float32` batch reads EC records for centroid computation.
+- **R1843:** `RemoveFileChunkEmbeddings(fileID)` is removed. Replaced by per-chunkID deletion in callbacks.
+- **R1844:** `DropChunkEmbeddings()` unchanged — drops all EC and EF records.
+- **R1845:** `ScanChunkEmbeddingKeys()` returns map[chunkID]*ChunkEmbedInfo (dimension only, no fileID grouping).
+
+### Embedding Pipeline
+
+- **R1846:** `BatchEmbedChunks` reads each file's F-record chunk list, checks EC[chunkID] for each, queues missing chunkIDs for embedding.
+- **R1847:** The lastEmbedded high-water map (R1817) is removed. ChunkID existence check is the dedup — if any file already caused a chunk to be embedded, EC[chunkID] exists.
+- **R1848:** After embedding a file's chunks, recompute its EF centroid from the file's chunk list: read EC[chunkID] for each entry, average the vectors, write EF.
+
+### Chunk Cleanup
+
+- **R1849:** The indexer's `executeFullRefresh` uses `ReindexWithCallback` instead of `ReindexWithContent`. The callback deletes EC records for orphaned chunkIDs via `DeleteChunkEmbeddingInTxn`.
+- **R1850:** The indexer's `RemoveFile` uses `RemoveFileWithCallback`. The callback deletes EC records for orphaned chunkIDs via `DeleteChunkEmbeddingInTxn`.
+- **R1851:** The indexer's `RemoveByID` uses `RemoveFileWithCallback`. Same callback as R1850.
+- **R1852:** Orphaned chunk cleanup and C record deletion happen in the same LMDB transaction (atomic).
+- **R1853:** The EF centroid for a removed file is deleted in the same callback.
+- **R1854:** New chunkIDs from `ReindexCallback` are embedded in the next `BatchEmbedChunks` pass, not in the callback. GPU compute does not belong inside a transaction.
+
+### Validate
+
+- **R1855:** `ark embed validate` orphan EC check: EC records whose chunkID has no C record in microfts2.
+- **R1856:** `ark embed validate` missing EC check: chunkIDs with C records but no EC record. Count unique chunkIDs, not per-file references.
+- **R1865:** The missing EC check partitions chunkIDs by `search_exclude`: chunks referenced only by excluded files are reported as "excluded" (expected), not "missing" (actionable). A chunkID shared by both excluded and non-excluded files counts as embeddable.
+- **R1866:** Report the excluded chunk count as a separate summary line so the total is transparent: missing + excluded + embedded = total unique chunks.
+- **R1857:** `ark embed validate` EF consistency: EF centroid count matches the number of EC records resolvable from the file's chunk list.
+- **R1858:** `--fix` deletes orphan EC records (chunkID without C record).
+
+### Migration
+
+- **R1859:** Store an `ec_version` I record. Value "2" means chunkID-keyed EC records.
+- **R1860:** On startup, if `ec_version` is absent or "1", drop all EC and EF records and set `ec_version` to "2". The next `BatchEmbedChunks` re-embeds with the new key format.
+- **R1861:** R1598 (old EC key format) and R1607 (RemoveFileChunkEmbeddings on re-index) are superseded by R1833 and R1849.

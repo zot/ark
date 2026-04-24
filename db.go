@@ -281,6 +281,14 @@ func Open(dbPath string) (*DB, error) {
 		log.Printf("warning: register pdf chunker: %v", err)
 	}
 	db.indexer = &Indexer{fts: fts, vec: vec, store: store, config: config, pdfChunker: db.pdfChunker}
+
+	// R1859, R1860: migrate EC records from (fileID, chunkIdx) to chunkID key format
+	if v, _ := store.IGet("ec_version"); v != "2" {
+		log.Println("migrate: dropping old EC/EF records (ec_version upgrade to 2)")
+		store.DropChunkEmbeddings()
+		store.IPut("ec_version", "2")
+	}
+
 	runSvc(db.svc)
 	return db, nil
 }
@@ -1535,6 +1543,60 @@ func (db *DB) ChunkSizes(path string) []int {
 	return lens
 }
 
+// AllChunkIDs returns the set of all unique chunkIDs referenced by F-records.
+// CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1856
+func (db *DB) AllChunkIDs() (map[uint64]bool, error) {
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uint64]bool)
+	for _, s := range statuses {
+		info, err := db.fts.FileInfoByID(s.FileID)
+		if err != nil {
+			continue
+		}
+		for _, fce := range info.Chunks {
+			result[fce.ChunkID] = true
+		}
+	}
+	return result, nil
+}
+
+// AllChunkIDsPartitioned returns chunkIDs split by search_exclude. Embeddable
+// contains chunkIDs referenced by at least one non-excluded file. Excluded
+// contains chunkIDs referenced only by excluded files.
+// CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1865, R1866
+func (db *DB) AllChunkIDsPartitioned(excludePatterns []string) (embeddable, excluded map[uint64]bool, err error) {
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return nil, nil, err
+	}
+	embeddable = make(map[uint64]bool)
+	allExcluded := make(map[uint64]bool)
+	for _, s := range statuses {
+		info, err := db.fts.FileInfoByID(s.FileID)
+		if err != nil {
+			continue
+		}
+		isExcluded := matchesAnyGlob(s.Path, excludePatterns)
+		for _, fce := range info.Chunks {
+			if isExcluded {
+				allExcluded[fce.ChunkID] = true
+			} else {
+				embeddable[fce.ChunkID] = true
+			}
+		}
+	}
+	excluded = make(map[uint64]bool)
+	for id := range allExcluded {
+		if !embeddable[id] {
+			excluded[id] = true
+		}
+	}
+	return embeddable, excluded, nil
+}
+
 // FileChunkCounts returns fileID → chunk count for all indexed files.
 // CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1802
 func (db *DB) FileChunkCounts() (map[uint64]int, error) {
@@ -1551,19 +1613,6 @@ func (db *DB) FileChunkCounts() (map[uint64]int, error) {
 		result[s.FileID] = len(lens)
 	}
 	return result, nil
-}
-
-// LastChunkID returns the ChunkID of the final chunk in the FTS F-record.
-// CRC: crc-DB.md | Seq: seq-chunk-embed.md | R1832
-func (db *DB) LastChunkID(fileID uint64) (uint64, error) {
-	info, err := db.fts.FileInfoByID(fileID)
-	if err != nil {
-		return 0, err
-	}
-	if len(info.Chunks) == 0 {
-		return 0, nil
-	}
-	return info.Chunks[len(info.Chunks)-1].ChunkID, nil
 }
 
 // IsIndexed returns true if the given file path is in the index.

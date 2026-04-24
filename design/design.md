@@ -344,3 +344,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O83: About filter in CLI local path (no server) silently skips — Librarian only available when server is running
 - [ ] A42: R547-R562 (ark vec bench) superseded by R1790-R1801 (ark embed subcommands)
 - [ ] A43: R1302-R1305, R1587 (ark embed flat flags) superseded by R1790-R1801 (ark embed subcommands)
+- [ ] A44: R1834 (old EC key format superseded by R1833) — no design artifact needed
+- [ ] A45: R1861 (R1598/R1607 superseded by R1833/R1849) — no design artifact needed
+- [ ] A46: R1817-R1829, R1832 (embed dedup high-water tracking) superseded by R1847 (chunkID dedup)

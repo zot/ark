@@ -1725,161 +1725,98 @@ Options:
 	withDB(func(db *ark.DB) {
 		store := db.Store()
 
-		// Pass 1: scan all EC records
-		ecInfo, err := store.ScanChunkEmbeddingKeys()
+		// R1855: scan EC records (keyed by chunkID)
+		ecDims, err := store.ScanChunkEmbeddingKeys()
 		if err != nil {
 			fatal(fmt.Errorf("scan EC records: %w", err))
 		}
 
-		// Pass 2: scan all EF records
+		// R1856, R1865: collect chunkIDs partitioned by search_exclude
+		excludePatterns := db.Config().SearchExclude
+		ftsChunkIDs, excludedChunkIDs, err := db.AllChunkIDsPartitioned(excludePatterns)
+		if err != nil {
+			fatal(fmt.Errorf("scan chunk IDs: %w", err))
+		}
+
+		// Scan EF records
 		efCounts, err := store.ScanFileCentroidCounts()
 		if err != nil {
 			fatal(fmt.Errorf("scan EF records: %w", err))
 		}
 
-		// Pass 3: scan FTS files for ground truth
-		ftsChunks, err := db.FileChunkCounts()
+		// R1855: orphan EC — chunkID has EC record but no C record
+		var orphanIDs []uint64
+		for chunkID := range ecDims {
+			if !ftsChunkIDs[chunkID] {
+				orphanIDs = append(orphanIDs, chunkID)
+			}
+		}
+		if len(orphanIDs) > 0 {
+			fmt.Printf("orphan EC records: %d (chunkID without C record)\n", len(orphanIDs))
+			problems += len(orphanIDs)
+			if *verbose {
+				for _, id := range orphanIDs {
+					fmt.Printf("  chunkID=%d\n", id)
+				}
+			}
+		}
+
+		// R1856, R1865: missing EC — embeddable chunkID has C record but no EC record
+		var missingCount int
+		for chunkID := range ftsChunkIDs {
+			if _, has := ecDims[chunkID]; !has {
+				missingCount++
+			}
+		}
+		if missingCount > 0 {
+			fmt.Printf("missing EC records: %d (unique chunks without embeddings)\n", missingCount)
+			problems += missingCount
+		}
+		// R1866: report excluded chunks separately
+		if len(excludedChunkIDs) > 0 {
+			fmt.Printf("excluded chunks: %d (in search_exclude files only, not embedded)\n", len(excludedChunkIDs))
+		}
+
+		// R1857: EF consistency — check centroid counts
+		ftsFiles, err := db.FileChunkCounts()
 		if err != nil {
 			fatal(fmt.Errorf("scan FTS files: %w", err))
 		}
-
-		// Dimension census
-		dimCounts := make(map[int]int)
-		for _, info := range ecInfo {
-			for _, d := range info.Dims {
-				dimCounts[d]++
-			}
-		}
-		var majorityDim, majorityCount, totalEC int
-		for d, c := range dimCounts {
-			totalEC += c
-			if c > majorityCount {
-				majorityDim = d
-				majorityCount = c
-			}
-		}
-
-		// Check 1: orphan EC records (R1802)
-		var orphanECFiles int
-		var orphanECRecords int
-		type orphanDetail struct {
-			fileID uint64
-			count  int
-			reason string
-		}
-		var orphanDetails []orphanDetail
-		for fid, info := range ecInfo {
-			ftsCount, inFTS := ftsChunks[fid]
-			if !inFTS {
-				orphanECFiles++
-				orphanECRecords += len(info.ChunkIndices)
-				if *verbose {
-					orphanDetails = append(orphanDetails, orphanDetail{fid, len(info.ChunkIndices), "fileID not in FTS"})
-				}
-				continue
-			}
-			outOfRange := 0
-			for _, ci := range info.ChunkIndices {
-				if ci >= ftsCount {
-					outOfRange++
-				}
-			}
-			if outOfRange > 0 {
-				orphanECRecords += outOfRange
-				if *verbose {
-					orphanDetails = append(orphanDetails, orphanDetail{fid, outOfRange, fmt.Sprintf("chunkIdx >= %d", ftsCount)})
-				}
-			}
-		}
-		if orphanECRecords > 0 {
-			fmt.Printf("orphan EC records: %d", orphanECRecords)
-			if orphanECFiles > 0 {
-				fmt.Printf(" (%d whole files)", orphanECFiles)
-			}
-			fmt.Println()
-			problems += orphanECRecords
-			if *verbose {
-				for _, d := range orphanDetails {
-					fmt.Printf("  fileID=%d: %d records (%s)\n", d.fileID, d.count, d.reason)
-				}
-			}
-		}
-
-		// Check 2: EF/EC count mismatch (R1803)
-		type mismatchDetail struct {
-			fileID  uint64
-			efCount uint32
-			ecCount int
-		}
-		var mismatchDetails []mismatchDetail
-		for fid, efCount := range efCounts {
-			ecCount := 0
-			if info, ok := ecInfo[fid]; ok {
-				ecCount = len(info.ChunkIndices)
-			}
-			if int(efCount) != ecCount {
-				mismatchDetails = append(mismatchDetails, mismatchDetail{fid, efCount, ecCount})
-			}
-		}
-		if len(mismatchDetails) > 0 {
-			fmt.Printf("EF/EC count mismatches: %d\n", len(mismatchDetails))
-			problems += len(mismatchDetails)
-			if *verbose {
-				for _, d := range mismatchDetails {
-					fmt.Printf("  fileID=%d: EF count=%d, EC records=%d\n", d.fileID, d.efCount, d.ecCount)
-				}
-			}
-		}
-
-		// Check 3: missing EC records (R1804)
-		type missingDetail struct {
-			fileID uint64
-			have   int
-			need   int
-		}
-		var missingDetails []missingDetail
-		var missingRecords int
-		for fid, ftsCount := range ftsChunks {
-			ecCount := 0
-			if info, ok := ecInfo[fid]; ok {
-				ecCount = len(info.ChunkIndices)
-			}
-			if ecCount < ftsCount {
-				missingDetails = append(missingDetails, missingDetail{fid, ecCount, ftsCount})
-				missingRecords += ftsCount - ecCount
-			}
-		}
-		if missingRecords > 0 {
-			fmt.Printf("missing EC records: %d (%d files incomplete)\n", missingRecords, len(missingDetails))
-			problems += missingRecords
-			if *verbose {
-				for _, d := range missingDetails {
-					fmt.Printf("  fileID=%d: have %d, need %d\n", d.fileID, d.have, d.need)
-				}
-			}
-		}
-
-		// Check 4: orphan EF records (R1805)
 		var orphanEFIDs []uint64
 		for fid := range efCounts {
-			_, hasEC := ecInfo[fid]
-			_, hasFTS := ftsChunks[fid]
-			if !hasEC && !hasFTS {
+			if _, hasFTS := ftsFiles[fid]; !hasFTS {
 				orphanEFIDs = append(orphanEFIDs, fid)
 			}
 		}
 		if len(orphanEFIDs) > 0 {
 			fmt.Printf("orphan EF records: %d\n", len(orphanEFIDs))
 			problems += len(orphanEFIDs)
-			if *verbose {
-				for _, fid := range orphanEFIDs {
-					fmt.Printf("  fileID=%d: no EC records, no FTS entry\n", fid)
-				}
-			}
 		}
 
-		// Check 5: dimension consistency (R1806)
-		wrongDim := totalEC - majorityCount
+		// Separate sentinels (dim=0) from real embeddings
+		sentinelCount := 0
+		dimCounts := make(map[int]int)
+		for _, dim := range ecDims {
+			if dim == 0 {
+				sentinelCount++
+			} else {
+				dimCounts[dim]++
+			}
+		}
+		if sentinelCount > 0 {
+			fmt.Printf("sentinel EC records: %d (chunks exceeding all embed tiers)\n", sentinelCount)
+		}
+
+		// Dimension consistency (R1806) — sentinels excluded
+		var majorityDim, majorityCount int
+		for d, c := range dimCounts {
+			if c > majorityCount {
+				majorityDim = d
+				majorityCount = c
+			}
+		}
+		realEC := len(ecDims) - sentinelCount
+		wrongDim := realEC - majorityCount
 		if len(dimCounts) > 1 {
 			fmt.Printf("dimension inconsistency: majority dim=%d (%d records)\n", majorityDim, majorityCount)
 			for d, c := range dimCounts {
@@ -1891,38 +1828,22 @@ Options:
 		}
 
 		if problems == 0 {
-			fmt.Printf("clean: %d EC records, %d EF records, %d FTS files\n", totalEC, len(efCounts), len(ftsChunks))
+			fmt.Printf("clean: %d EC records (%d embedded, %d sentinel), %d embeddable chunks, %d excluded chunks, %d EF records\n",
+				len(ecDims), realEC, sentinelCount, len(ftsChunkIDs), len(excludedChunkIDs), len(efCounts))
 		}
 
-		// Fix (R1807, R1808, R1813)
+		// R1858: fix
 		if *fix && problems > 0 {
 			var fixedOrphanEC, fixedOrphanEF, fixedWrongDim int
 
-			// Delete orphan EC: whole files not in FTS
-			for fid, info := range ecInfo {
-				_, inFTS := ftsChunks[fid]
-				if !inFTS {
-					if err := store.RemoveFileChunkEmbeddings(fid); err != nil {
-						fmt.Fprintf(os.Stderr, "fix: remove EC for fileID=%d: %v\n", fid, err)
-					} else {
-						fixedOrphanEC += len(info.ChunkIndices)
-					}
-					continue
-				}
-				// Delete out-of-range EC records
-				ftsCount := ftsChunks[fid]
-				for _, ci := range info.ChunkIndices {
-					if ci >= ftsCount {
-						if err := store.DeleteChunkEmbedding(fid, ci); err != nil {
-							fmt.Fprintf(os.Stderr, "fix: delete EC fileID=%d chunk=%d: %v\n", fid, ci, err)
-						} else {
-							fixedOrphanEC++
-						}
-					}
+			for _, chunkID := range orphanIDs {
+				if err := store.DeleteChunkEmbedding(chunkID); err != nil {
+					fmt.Fprintf(os.Stderr, "fix: delete EC chunkID=%d: %v\n", chunkID, err)
+				} else {
+					fixedOrphanEC++
 				}
 			}
 
-			// Delete orphan EF records
 			for _, fid := range orphanEFIDs {
 				if err := store.DeleteFileCentroid(fid); err != nil {
 					fmt.Fprintf(os.Stderr, "fix: delete EF fileID=%d: %v\n", fid, err)
@@ -1931,16 +1852,13 @@ Options:
 				}
 			}
 
-			// Delete wrong-dimension EC records
 			if len(dimCounts) > 1 {
-				for fid, info := range ecInfo {
-					for i, ci := range info.ChunkIndices {
-						if info.Dims[i] != majorityDim {
-							if err := store.DeleteChunkEmbedding(fid, ci); err != nil {
-								fmt.Fprintf(os.Stderr, "fix: delete wrong-dim EC fileID=%d chunk=%d: %v\n", fid, ci, err)
-							} else {
-								fixedWrongDim++
-							}
+				for chunkID, dim := range ecDims {
+					if dim != majorityDim {
+						if err := store.DeleteChunkEmbedding(chunkID); err != nil {
+							fmt.Fprintf(os.Stderr, "fix: delete wrong-dim EC chunkID=%d: %v\n", chunkID, err)
+						} else {
+							fixedWrongDim++
 						}
 					}
 				}
