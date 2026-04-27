@@ -53,41 +53,44 @@ Encoding conventions used throughout:
 - **Key:** `T` + tagname (raw bytes, no separator — tag names match
   `[\w][\w-]*` and never contain control bytes).
 - **Value:** `[count: uint32 big-endian (4 bytes)] [optional float32 vector (3072 bytes)]`.
-- **Semantic:** count = number of files in which the tag appears (a
-  file with three chunks all tagging `@food: hamburger` contributes
-  one). The optional trailing vector is the embedding of the tag
-  name (with hyphens converted to spaces, e.g. `design-decision` →
-  `design decision`); written by `WriteTagNameEmbedding`. A T record
-  with `len(value) == 4` has no embedding; `len(value) == 4+3072`
-  has one.
-- **Lifecycle:** `adjustTagTotal` increments/decrements the count
-  while preserving any trailing vector. When the count would reach
-  zero, the entire record is deleted (embedding goes with it).
+- **Semantic:** count = number of (chunk, tag) pairs in F records.
+  A file with three chunks all tagging `@food: hamburger` contributes
+  three (three F records, one per chunkid); a chunk shared across
+  two files contributes one. The optional trailing vector is the
+  embedding of the tag name (with hyphens converted to spaces, e.g.
+  `design-decision` → `design decision`); written by
+  `WriteTagNameEmbedding`. A T record with `len(value) == 4` has no
+  embedding; `len(value) == 4+3072` has one.
+- **Lifecycle:** `adjustTagTotal` increments by 1 for each new
+  (chunkid, tag) pair and decrements by 1 when an orphaned chunkid
+  drops its F record. When the count would reach zero, the entire
+  record is deleted (embedding goes with it).
 
-### F — Per-(file, tag) records (with optional tvid trailer)
+### F — Per-(chunk, tag) records (with optional tvid trailer)
 
-- **Key:** `F` + 8-byte big-endian fileid + tagname.
+- **Key:** `F` + chunkid (varint) + tagname.
 - **Value:** `[count: uint32 big-endian (4 bytes)] [optional packed tvid varints]`.
-- **Semantic:** one record per (file, tag) pair. Count = number of
-  occurrences of the tag in the file. The tvid trailer lists every
-  tag-value pair the file contributed for *this* tag, enabling
-  targeted V-record cleanup on file removal: read F records for the
-  fileid → collect tvids → remove the fileid from exactly those V
-  records.
-- **Lifecycle:** `UpdateTags` writes count only (no tvids).
-  `AppendTags` preserves any existing tvid trailer. The tvid trailer
-  is written by `updateFRecordTvids` after V records are written.
-  A writer that doesn't append tvids leaves the record valid (count
-  is always present) but stripped of the reverse-lookup hint.
+- **Semantic:** one record per (chunkid, tag) pair. Count = number
+  of occurrences of the tag in that chunk's content. The tvid
+  trailer lists every (tag, value) pair the chunk contributed,
+  enabling targeted V-record cleanup when a chunkid is orphaned.
+- **Lifecycle:** F records are written together with V records by
+  `UpdateTagValues`/`AppendTagValues` (chunkid-keyed). The cleanup
+  path runs via microfts2's orphan-chunkid callback, which calls
+  `Store.RemoveTagValuesInTxn(chunkID)`: scan `F[chunkid]`, drop the
+  chunkid from each tvid's V record, delete F records, decrement T.
 
 ### V — Tag value index
 
 - **Key:** `V` + tagname + `\x00` + value + `\x00` + tvid varint.
-- **Value:** packed fileid varints (LEB128).
+- **Value:** packed chunkid varints (LEB128).
 - **Semantic:** one record per unique (tag, value) pair. The tvid
   is a sequential numeric identifier for the (tag, value) — stable
   across re-index, used as the join key for tag-value embeddings
-  (EV records). Count = number of varints in the value.
+  (EV records). The value lists chunkids that carry this
+  (tag, value); count = number of varints in the value. File-level
+  callers resolve chunkids → fileids via microfts2 `FilesForChunk`
+  (or `ReadCRecord`) and dedupe.
 - **Forward lookup** (find values for a tag): prefix scan
   `V` + tagname + `\x00` returns one record per value, with tvid in
   the trailing bytes of each key.

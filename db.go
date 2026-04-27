@@ -21,6 +21,7 @@ import (
 	"github.com/zot/microfts2"
 
 	"github.com/BurntSushi/toml"
+	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microvec"
 )
 
@@ -303,6 +304,33 @@ func Open(dbPath string) (*DB, error) {
 	if tv, _ := store.IGet("tag_store_version"); tv != "1" {
 		return nil, fmt.Errorf("tag store schema upgrade required — run `ark rebuild` (tag_store_version=%q, want %q)", tv, "1")
 	}
+
+	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.
+	// Both run inside the caller's txn to avoid nested Views.
+	store.SetChunkResolver(
+		func(txn *lmdb.Txn, chunkID uint64) []uint64 {
+			crec, err := fts.ReadCRecord(txn, chunkID)
+			if err != nil {
+				return nil
+			}
+			ids := make([]uint64, 0, len(crec.FileIDs))
+			for _, f := range crec.FileIDs {
+				ids = append(ids, f.FileID)
+			}
+			return ids
+		},
+		func(fileID uint64) []uint64 {
+			info, err := fts.FileInfoByID(fileID)
+			if err != nil {
+				return nil
+			}
+			ids := make([]uint64, 0, len(info.Chunks))
+			for _, c := range info.Chunks {
+				ids = append(ids, c.ChunkID)
+			}
+			return ids
+		},
+	)
 
 	runSvc(db.svc)
 	return db, nil
@@ -1733,7 +1761,23 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		return nil, err
 	}
 
-	// R1148: build exclusion set from V records for cheap filtering
+	// R1148: build exclusion set from V records for cheap filtering.
+	// Post-migration TagValueFiles returns chunkids; resolve to fileids
+	// via microfts2 C-records so excludeIDs stays file-level.
+	addExcluded := func(excludeIDs map[uint64]bool, chunkIDs []uint64) error {
+		return db.fts.Env().View(func(txn *lmdb.Txn) error {
+			for _, cid := range chunkIDs {
+				crec, err := db.fts.ReadCRecord(txn, cid)
+				if err != nil {
+					continue
+				}
+				for _, f := range crec.FileIDs {
+					excludeIDs[f.FileID] = true
+				}
+			}
+			return nil
+		})
+	}
 	var excludeIDs map[uint64]bool
 	if !showAll {
 		excludeIDs = make(map[uint64]bool)
@@ -1742,8 +1786,8 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 			if err != nil {
 				return nil, err
 			}
-			for _, id := range ids {
-				excludeIDs[id] = true
+			if err := addExcluded(excludeIDs, ids); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -1755,8 +1799,8 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		if excludeIDs == nil {
 			excludeIDs = make(map[uint64]bool)
 		}
-		for _, id := range ids {
-			excludeIDs[id] = true
+		if err := addExcluded(excludeIDs, ids); err != nil {
+			return nil, err
 		}
 	}
 

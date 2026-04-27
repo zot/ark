@@ -23,6 +23,28 @@ import (
 type Store struct {
 	env *lmdb.Env
 	dbi lmdb.DBI
+	// filesForChunk resolves a chunkID to the fileids that reference it,
+	// using the provided LMDB txn (must read microfts2's C records).
+	// Set by the DB during Open via SetChunkResolver. May be nil during
+	// Init (e.g. in tests that exercise Store directly without microfts2).
+	// CRC: crc-Store.md | R1887, R1888
+	filesForChunk func(txn *lmdb.Txn, chunkID uint64) []uint64
+	// chunksForFile resolves a fileID to the chunkids it references.
+	// Opens its own View (microfts2 FileInfoByID isn't txn-aware). Called
+	// before the V-record scan so the resolver runs outside the scan's
+	// txn. CRC: crc-Store.md | R1889
+	chunksForFile func(fileID uint64) []uint64
+}
+
+// SetChunkResolver wires both directions of the chunkID↔fileID resolver.
+// Called by DB.Open after microfts2 is ready.
+//   - toFiles runs INSIDE the caller's txn (used by TagFiles).
+//   - toChunks opens its OWN view (microfts2 FileInfoByID is not txn-aware);
+//     called by FileTagValues before its main scan.
+// CRC: crc-Store.md | R1887, R1889
+func (s *Store) SetChunkResolver(toFiles func(txn *lmdb.Txn, chunkID uint64) []uint64, toChunks func(fileID uint64) []uint64) {
+	s.filesForChunk = toFiles
+	s.chunksForFile = toChunks
 }
 
 // MissingRecord is a file that was indexed but no longer exists at its path.
@@ -69,11 +91,24 @@ const (
 	ECondConfigCatastrophe = "config_catastrophe"
 )
 
-// TagFileRecord is a per-file tag count returned by TagFiles.
+// TagFileRecord is a per-(chunk, file) tag count returned by TagFiles.
+// FileID is resolved from ChunkID via microfts2 FilesForChunk; a chunk
+// shared across N files yields N records. File-level callers dedupe
+// by FileID.
+// CRC: crc-Store.md | R1888
 type TagFileRecord struct {
-	FileID uint64
-	Tag    string
-	Count  uint32
+	ChunkID uint64
+	FileID  uint64
+	Tag     string
+	Count   uint32
+}
+
+// ChunkTagValues groups a chunkid with the tag-values extracted from
+// that chunk. Used by UpdateTagValues / AppendTagValues to write
+// V/F records keyed by chunkid. CRC: crc-Store.md | R1883, R1884
+type ChunkTagValues struct {
+	ChunkID uint64
+	Values  []TagValue
 }
 
 // TagCount is a tag name with its total count.
@@ -504,80 +539,9 @@ func (s *Store) ClearERecords() error {
 	})
 }
 
-// UpdateTags replaces all tag records for a file and recomputes totals.
-// tags maps tagname → count-in-file. All within one LMDB transaction.
-func (s *Store) UpdateTags(fileid uint64, tags map[string]uint32) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		// Collect old tags for this file
-		oldTags, err := s.fileTagsInTxn(txn, fileid)
-		if err != nil {
-			return err
-		}
-
-		// Delete old F records and decrement T totals
-		for tag, oldCount := range oldTags {
-			fk := tagFileKey(fileid, tag)
-			txn.Del(s.dbi, fk, nil)
-			if err := s.adjustTagTotal(txn, tag, -int64(oldCount)); err != nil {
-				return err
-			}
-		}
-
-		// Write new F records and increment T totals
-		for tag, count := range tags {
-			fk := tagFileKey(fileid, tag)
-			val := make([]byte, 4)
-			binary.BigEndian.PutUint32(val, count)
-			if err := txn.Put(s.dbi, fk, val, 0); err != nil {
-				return err
-			}
-			if err := s.adjustTagTotal(txn, tag, int64(count)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// RemoveTags deletes all tag records for a file and decrements totals.
-func (s *Store) RemoveTags(fileid uint64) error {
-	return s.UpdateTags(fileid, nil)
-}
-
-// AppendTags adds to existing F record counts and T totals for a file
-// without replacing. Used by the append-only indexing path where only
-// new content is scanned for tags.
-func (s *Store) AppendTags(fileid uint64, tags map[string]uint32) error {
-	if len(tags) == 0 {
-		return nil
-	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		for tag, count := range tags {
-			fk := tagFileKey(fileid, tag)
-			var existing uint32
-			var existingTvids []byte
-			v, err := txn.Get(s.dbi, fk)
-			if err == nil && len(v) >= 4 {
-				existing = binary.BigEndian.Uint32(v[:4])
-				if len(v) > 4 {
-					existingTvids = bytes.Clone(v[4:])
-				}
-			} else if !lmdb.IsNotFound(err) && err != nil {
-				return err
-			}
-			val := make([]byte, 4, 4+len(existingTvids))
-			binary.BigEndian.PutUint32(val, existing+count)
-			val = append(val, existingTvids...)
-			if err := txn.Put(s.dbi, fk, val, 0); err != nil {
-				return err
-			}
-			if err := s.adjustTagTotal(txn, tag, int64(count)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
+// (UpdateTags / AppendTags / RemoveTags removed; their function is now
+// expressed via UpdateTagValues / AppendTagValues / RemoveTagValues which
+// take ChunkTagValues. CRC: crc-Store.md | R1885)
 
 // ListTags returns all tags with their total counts.
 func (s *Store) ListTags() ([]TagCount, error) {
@@ -622,7 +586,11 @@ func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
 	return results, err
 }
 
-// TagFiles returns per-file records for the given tags.
+// TagFiles returns per-(chunk, file) records for the given tags. F records
+// are keyed by chunkid; each is fanned out to one record per file
+// referencing the chunk (via filesForChunk). File-level callers dedupe
+// by FileID.
+// CRC: crc-Store.md | R1888
 func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 	tagSet := make(map[string]bool, len(tags))
 	for _, t := range tags {
@@ -632,36 +600,34 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 	var records []TagFileRecord
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
-			if len(k) >= 10 && len(v) >= 4 {
-				tag := string(k[9:])
-				if tagSet[tag] {
-					records = append(records, TagFileRecord{
-						FileID: binary.BigEndian.Uint64(k[1:9]),
-						Tag:    tag,
-						Count:  binary.BigEndian.Uint32(v[:4]),
-					})
-				}
+			if len(v) < 4 {
+				return nil
+			}
+			chunkID, tag, ok := parseFKey(k)
+			if !ok || !tagSet[tag] {
+				return nil
+			}
+			count := binary.BigEndian.Uint32(v[:4])
+			if s.filesForChunk == nil {
+				records = append(records, TagFileRecord{
+					ChunkID: chunkID,
+					Tag:     tag,
+					Count:   count,
+				})
+				return nil
+			}
+			for _, fid := range s.filesForChunk(txn, chunkID) {
+				records = append(records, TagFileRecord{
+					ChunkID: chunkID,
+					FileID:  fid,
+					Tag:     tag,
+					Count:   count,
+				})
 			}
 			return nil
 		})
 	})
 	return records, err
-}
-
-// fileTagsInTxn reads all tag counts for a file within an existing transaction.
-func (s *Store) fileTagsInTxn(txn *lmdb.Txn, fileid uint64) (map[string]uint32, error) {
-	tags := make(map[string]uint32)
-	prefix := make([]byte, 9)
-	prefix[0] = byte(prefixTagFile)
-	binary.BigEndian.PutUint64(prefix[1:], fileid)
-
-	err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
-		if len(k) >= 10 && len(v) >= 4 {
-			tags[string(k[9:])] = binary.BigEndian.Uint32(v[:4])
-		}
-		return nil
-	})
-	return tags, err
 }
 
 // adjustTagTotal increments or decrements a T record within an existing transaction.
@@ -699,12 +665,25 @@ func tagTotalKey(tag string) []byte {
 	return key
 }
 
-func tagFileKey(fileid uint64, tag string) []byte {
-	key := make([]byte, 9+len(tag))
-	key[0] = byte(prefixTagFile)
-	binary.BigEndian.PutUint64(key[1:], fileid)
-	copy(key[9:], tag)
-	return key
+// tagFileKey builds an F record key: F + varint(chunkID) + tag.
+// CRC: crc-Store.md | R1874
+func tagFileKey(chunkID uint64, tag string) []byte {
+	key := []byte{byte(prefixTagFile)}
+	key = encodeVarint(key, chunkID)
+	return append(key, tag...)
+}
+
+// parseFKey extracts chunkID and tag from an F record key.
+// Returns (chunkID, tag, ok). CRC: crc-Store.md | R1874
+func parseFKey(k []byte) (uint64, string, bool) {
+	if len(k) < 2 || k[0] != byte(prefixTagFile) {
+		return 0, "", false
+	}
+	chunkID, n := binary.Uvarint(k[1:])
+	if n <= 0 {
+		return 0, "", false
+	}
+	return chunkID, string(k[1+n:]), true
 }
 
 // scanPrefix iterates all keys with the given prefix, calling fn for each.
@@ -971,72 +950,215 @@ func removeVarint(data []byte, target uint64) ([]byte, bool) {
 	return result, found
 }
 
-// UpdateTagValues replaces all V records for a fileid with new values.
-// Also updates F records with tvids for targeted cleanup.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1099, R1100, R1101, R1103, R1281, R1311, R1312, R1313
-func (s *Store) UpdateTagValues(fileid uint64, values []TagValue) error {
+// UpdateTagValues writes V/F records keyed by chunkid for the given
+// per-chunk tag-value bundles. Each chunkid is treated independently:
+// V records gain the chunkid in their value; F[chunkid][tag] is written
+// with count + tvid trailer; T totals are incremented for new
+// (chunkid, tag) pairs.
+//
+// Idempotent: writing the same chunkid twice is safe — V records dedupe
+// chunkids; F records are overwritten with the same content.
+//
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1873, R1874, R1875, R1876, R1883
+func (s *Store) UpdateTagValues(chunkTags []ChunkTagValues) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		// Remove fileid from existing V records using targeted cleanup
-		if err := s.removeFileidByTvids(txn, fileid); err != nil {
-			return err
+		for _, ct := range chunkTags {
+			if err := s.writeChunkTagValuesInTxn(txn, ct.ChunkID, ct.Values); err != nil {
+				return err
+			}
 		}
-		// Add new V records, get tvids per tag
-		tagTvids, err := s.addFileidToV(txn, fileid, values)
-		if err != nil {
-			return err
-		}
-		// Update F records with tvids (replace old tvids)
-		return s.updateFRecordTvids(txn, fileid, tagTvids, true)
+		return nil
 	})
 }
 
-// AppendTagValues adds V records without removing — append path.
-// Also appends tvids to F records.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1104, R1281, R1311
-func (s *Store) AppendTagValues(fileid uint64, values []TagValue) error {
+// AppendTagValues mirrors UpdateTagValues for the append path. Internally
+// the same idempotent write — chunkid-keyed records don't distinguish
+// "first write" from "append."
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1884
+func (s *Store) AppendTagValues(chunkTags []ChunkTagValues) error {
+	return s.UpdateTagValues(chunkTags)
+}
+
+// RemoveTagValues drops all F/V/T contributions of a chunkid. Used for
+// orphan-chunkid cleanup driven by microfts2 callbacks (R1899, R1900).
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1899, R1900
+func (s *Store) RemoveTagValues(chunkID uint64) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		tagTvids, err := s.addFileidToV(txn, fileid, values)
-		if err != nil {
-			return err
-		}
-		return s.updateFRecordTvids(txn, fileid, tagTvids, false)
+		return s.removeChunkIDInTxn(txn, chunkID)
 	})
 }
 
-// RemoveTagValues removes a fileid from V records identified by F-record tvids.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1105, R1312, R1313, R1314
-func (s *Store) RemoveTagValues(fileid uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return s.removeFileidByTvids(txn, fileid)
-	})
+// RemoveTagValuesInTxn is the txn-aware variant for orphan callbacks
+// that run inside microfts2's transaction. CRC: crc-Store.md | R1899
+func (s *Store) RemoveTagValuesInTxn(txn *lmdb.Txn, chunkID uint64) error {
+	return s.removeChunkIDInTxn(txn, chunkID)
 }
 
-// updateFRecordTvids writes tvids to F records for a fileid.
-// If replace is true, existing tvids are replaced (keeps count only).
-// If replace is false, new tvids are appended to existing ones.
-// CRC: crc-Store.md | R1311
-func (s *Store) updateFRecordTvids(txn *lmdb.Txn, fileid uint64, tagTvids map[string][]uint64, replace bool) error {
-	for tag, tvids := range tagTvids {
-		fk := tagFileKey(fileid, tag)
-		existing, err := txn.Get(s.dbi, fk)
-		if lmdb.IsNotFound(err) || len(existing) < 4 {
-			existing = nil
-		} else if err != nil {
+// writeChunkTagValuesInTxn writes F+V records for one chunk's values.
+// Groups values by tag, allocates/reuses tvids, updates V records,
+// writes F[chunkID][tag] = count + tvids, increments T for new pairs.
+// CRC: crc-Store.md | R1874, R1875, R1876
+func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, chunkID uint64, values []TagValue) error {
+	// Group values by tag
+	perTag := make(map[string][]TagValue)
+	for _, tv := range values {
+		if tv.Tag == "" {
+			continue
+		}
+		perTag[tv.Tag] = append(perTag[tv.Tag], tv)
+	}
+
+	for tag, vals := range perTag {
+		fk := tagFileKey(chunkID, tag)
+		_, err := txn.Get(s.dbi, fk)
+		isNew := lmdb.IsNotFound(err)
+		if err != nil && !isNew {
 			return err
 		}
-		var val []byte
-		if existing == nil {
-			val = make([]byte, 4)
-		} else if replace {
-			val = make([]byte, 4)
-			copy(val, existing[:4])
-		} else {
-			val = bytes.Clone(existing)
+
+		// Add chunkID to V records, collect tvids
+		var tvids []uint64
+		count := uint32(0)
+		for _, tv := range vals {
+			if tv.Value == "" {
+				count++
+				continue
+			}
+			// Cap key length: V key = prefix(1) + tag + sep(1) + value + sep(1) + varint(tvid)
+			if 1+len(tv.Tag)+1+len(tv.Value)+1+10 > maxVKeyLen {
+				count++
+				continue
+			}
+			tvid, err := s.addChunkIDToVRecord(txn, tv.Tag, tv.Value, chunkID)
+			if err != nil {
+				return err
+			}
+			tvids = append(tvids, tvid)
+			count++
 		}
-		for _, tvid := range tvids {
-			val = encodeVarint(val, tvid)
+
+		// Write F[chunkID][tag] = count + tvids
+		val := make([]byte, 4, 4+len(tvids)*10)
+		binary.BigEndian.PutUint32(val, count)
+		for _, tv := range tvids {
+			val = encodeVarint(val, tv)
 		}
 		if err := txn.Put(s.dbi, fk, val, 0); err != nil {
+			return err
+		}
+
+		// T adjustment: +1 per new (chunkID, tag) pair
+		if isNew {
+			if err := s.adjustTagTotal(txn, tag, 1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// addChunkIDToVRecord adds chunkID to V[tag][value] (allocating tvid for
+// new (tag, value) pairs). Returns the tvid.
+// CRC: crc-Store.md | R1873, R1281
+func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tag, value string, chunkID uint64) (uint64, error) {
+	fullKey, existing, tvid, err := s.findVRecord(txn, tag, value)
+	if err != nil {
+		return 0, err
+	}
+	if fullKey == nil {
+		// New (tag, value) — allocate tvid
+		tvid, err = s.allocIDInTxn(txn, IFieldNextTvid)
+		if err != nil {
+			return 0, fmt.Errorf("alloc tvid: %w", err)
+		}
+		fullKey = tagValueFullKey(tag, value, tvid)
+		blob := encodeVarint(nil, chunkID)
+		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+			return 0, err
+		}
+		return tvid, nil
+	}
+	// Existing record — add chunkID if not present
+	if !slices.Contains(decodeVarints(existing), chunkID) {
+		blob := encodeVarint(bytes.Clone(existing), chunkID)
+		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+			return 0, err
+		}
+	}
+	return tvid, nil
+}
+
+// removeChunkIDInTxn drops F records for a chunkid, decrements T totals
+// for each (chunkID, tag) pair, and removes the chunkid from V records
+// identified by the F-record tvid trail. CRC: crc-Store.md | R1900
+func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, chunkID uint64) error {
+	fPrefix := []byte{byte(prefixTagFile)}
+	fPrefix = encodeVarint(fPrefix, chunkID)
+
+	// First pass: collect all (tag, tvids) for this chunkid
+	type fEntry struct {
+		tag   string
+		tvids []uint64
+	}
+	var entries []fEntry
+	if err := scanPrefix(txn, s.dbi, fPrefix, func(_ *lmdb.Cursor, k, v []byte) error {
+		_, tag, ok := parseFKey(k)
+		if !ok {
+			return nil
+		}
+		var tvids []uint64
+		if len(v) > 4 {
+			tvids = decodeVarints(v[4:])
+		}
+		entries = append(entries, fEntry{tag: tag, tvids: tvids})
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Collect all tvids touched by this chunkid for the V scan
+	tvidSet := make(map[uint64]bool)
+	for _, e := range entries {
+		for _, tv := range e.tvids {
+			tvidSet[tv] = true
+		}
+	}
+
+	// Decrement T totals (-1 per chunk-tag pair)
+	for _, e := range entries {
+		if err := s.adjustTagTotal(txn, e.tag, -1); err != nil {
+			return err
+		}
+	}
+
+	// Drop the F records for this chunkid
+	if err := scanPrefix(txn, s.dbi, fPrefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+		return cur.Del(0)
+	}); err != nil {
+		return err
+	}
+
+	// Walk V records, remove chunkid from values where tvid matches
+	if len(tvidSet) > 0 {
+		vPrefix := []byte{byte(prefixTagValue)}
+		if err := scanPrefix(txn, s.dbi, vPrefix, func(cur *lmdb.Cursor, k, v []byte) error {
+			_, _, tvid, ok := parseVKey(k)
+			if !ok || !tvidSet[tvid] {
+				return nil
+			}
+			newV, found := removeVarint(v, chunkID)
+			if !found {
+				return nil
+			}
+			if len(newV) == 0 {
+				return cur.Del(0)
+			}
+			return txn.Put(s.dbi, k, newV, 0)
+		}); err != nil {
 			return err
 		}
 	}
@@ -1087,10 +1209,26 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 	return ids, err
 }
 
-// FileTagValues returns the first value found per tag for a given fileid by scanning V records.
-// CRC: crc-Store.md | R1142, R1143
+// FileTagValues returns the first value found per tag for a given fileid.
+// Resolves fileid → chunkids via chunksForFile (opens its own View), then
+// scans V records for each tag and returns the value whose chunkid set
+// intersects the file's chunkids. "First" means the first V record
+// encountered in LMDB key order.
+// CRC: crc-Store.md | R1142, R1143, R1889
 func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, error) {
 	result := make(map[string]string, len(tags))
+	if s.chunksForFile == nil {
+		return result, nil
+	}
+	chunks := s.chunksForFile(fileid)
+	if len(chunks) == 0 {
+		return result, nil
+	}
+	chunkSet := make(map[uint64]bool, len(chunks))
+	for _, c := range chunks {
+		chunkSet[c] = true
+	}
+
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		for _, tag := range tags {
 			prefix := tagValuePrefix(tag, "")
@@ -1100,10 +1238,11 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 				if !ok {
 					return nil
 				}
-				ids := decodeVarints(v)
-				if slices.Contains(ids, fileid) {
-					result[tag] = value
-					return errStopScan
+				for _, id := range decodeVarints(v) {
+					if chunkSet[id] {
+						result[tag] = value
+						return errStopScan
+					}
 				}
 				return nil
 			})
@@ -1192,65 +1331,6 @@ func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, er
 // errStopScan is a sentinel to break out of scanPrefix early.
 var errStopScan = fmt.Errorf("stop scan")
 
-// removeFileidByTvids removes fileid from specific V records identified by tvids.
-// Reads F records for the fileid to get tvids, then uses ScanVRecordTvids-style
-// scan to find and update/delete those V records.
-// CRC: crc-Store.md | R1312, R1313, R1314
-func (s *Store) removeFileidByTvids(txn *lmdb.Txn, fileid uint64) error {
-	// Read all F records for this fileid to collect tvids
-	tvids := make(map[uint64]bool)
-	fPrefix := make([]byte, 9)
-	fPrefix[0] = byte(prefixTagFile)
-	binary.BigEndian.PutUint64(fPrefix[1:], fileid)
-	if err := scanPrefix(txn, s.dbi, fPrefix, func(_ *lmdb.Cursor, _, v []byte) error {
-		// F value: count:4bytes + packed tvid varints
-		if len(v) > 4 {
-			for _, id := range decodeVarints(v[4:]) {
-				tvids[id] = true
-			}
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if len(tvids) == 0 {
-		// No tvids recorded — fall back to full scan for old-format records
-		return s.removeFileidFromAllV(txn, fileid)
-	}
-	// Scan V prefix, find records with matching tvids, remove fileid
-	prefix := []byte{byte(prefixTagValue)}
-	return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
-		_, _, tvid, ok := parseVKey(k)
-		if !ok || !tvids[tvid] {
-			return nil
-		}
-		newV, found := removeVarint(v, fileid)
-		if !found {
-			return nil
-		}
-		if len(newV) == 0 {
-			return cur.Del(0)
-		}
-		return txn.Put(s.dbi, k, newV, 0)
-	})
-}
-
-// removeFileidFromAllV scans all V keys and removes the fileid from value blobs.
-// Fallback for old-format V records that lack tvids in F records.
-func (s *Store) removeFileidFromAllV(txn *lmdb.Txn, fileid uint64) error {
-	prefix := []byte{byte(prefixTagValue)}
-	return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
-		newV, found := removeVarint(v, fileid)
-		if !found {
-			return nil
-		}
-		if len(newV) == 0 {
-			return cur.Del(0)
-		}
-		return txn.Put(s.dbi, k, newV, 0)
-	})
-}
-
 // maxVKeyLen is the maximum V record key length. LMDB default max key is 511 bytes.
 // Values that would push the key past this limit are skipped — long values
 // aren't useful for completion.
@@ -1270,48 +1350,6 @@ func (s *Store) findVRecord(txn *lmdb.Txn, tag, value string) (fullKey, existing
 		err = nil
 	}
 	return
-}
-
-// addFileidToV appends the fileid to V records for each (tag, value).
-// Returns a map of tag → []tvid for F record storage.
-// CRC: crc-Store.md | R1281, R1309, R1311
-func (s *Store) addFileidToV(txn *lmdb.Txn, fileid uint64, values []TagValue) (map[string][]uint64, error) {
-	tagTvids := make(map[string][]uint64)
-	for _, tv := range values {
-		if tv.Value == "" {
-			continue
-		}
-		// Check key length (estimate without tvid)
-		if 1+len(tv.Tag)+1+len(tv.Value)+1+10 > maxVKeyLen {
-			continue
-		}
-		fullKey, existing, tvid, err := s.findVRecord(txn, tv.Tag, tv.Value)
-		if err != nil {
-			return nil, err
-		}
-		if fullKey == nil {
-			// New (tag, value) pair — allocate tvid
-			tvid, err = s.allocIDInTxn(txn, IFieldNextTvid)
-			if err != nil {
-				return nil, fmt.Errorf("alloc tvid: %w", err)
-			}
-			fullKey = tagValueFullKey(tv.Tag, tv.Value, tvid)
-			blob := encodeVarint(nil, fileid)
-			if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
-				return nil, err
-			}
-		} else {
-			// Existing record — check if fileid already present
-			if !slices.Contains(decodeVarints(existing), fileid) {
-				blob := encodeVarint(bytes.Clone(existing), fileid)
-				if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
-					return nil, err
-				}
-			}
-		}
-		tagTvids[tv.Tag] = append(tagTvids[tv.Tag], tvid)
-	}
-	return tagTvids, nil
 }
 
 // --- Day-bucket operations (scheduling) ---

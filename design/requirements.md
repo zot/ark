@@ -185,7 +185,7 @@
 - **R123:** `ark tag counts <tag>...` shows the total count for each specified tag
 - **R124:** `ark tag files <tag>...` shows files containing the specified tags with file size
 - **R125:** `ark tag files --context <tag>...` shows each tag occurrence with the line from tag to end-of-line — includes definitions from tags.md alongside usage
-- **R126:** (inferred) When a file is removed, its tag counts are decremented and its F records deleted
+- **~~R126:~~** (Retired T11 — see R1899) (inferred) When a file is removed, its tag counts are decremented and its F records deleted
 
 ### Vocabulary
 
@@ -1679,7 +1679,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Tag Value Completion Endpoint
 - **R1081:** `POST /tags/values` accepts JSON body with `tag` and `prefix` strings
 - **R1082:** Returns JSON array of `{value, count}` objects for known values of the tag
-- **R1083:** Values are extracted by scanning files that have the tag (via F records for file IDs)
+- **~~R1083:~~** (Retired T10 — see R1876) Values are extracted by scanning files that have the tag (via F records for file IDs)
 - **R1084:** Results are filtered by prefix (case-insensitive) and sorted by count descending
 - **R1085:** (inferred) Count reflects how many files have that tag+value combination
 
@@ -1709,7 +1709,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### V Record Structure
 - **~~R1099:~~** (Retired T8 — see R1281) V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
-- **R1100:** V record value: packed varint-encoded fileids (unsigned LEB128)
+- **~~R1100:~~** (Retired T12 — see R1873) V record value: packed varint-encoded fileids (unsigned LEB128)
 - **R1101:** One LMDB entry per unique (tag, value) pair — fileids accumulate in the value
 - **R1102:** Count of files with a given (tag, value) = number of varints decoded from the value
 
@@ -2002,7 +2002,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Tag Value IDs
 - **R1280:** Each unique (tag, value) pair gets a sequential tag-value-id (varint)
-- **R1281:** The tag-value-id is part of the V record key: `V[tag]\x00[value]\x00[tvid: varint]` → packed fileids
+- **~~R1281:~~** (Retired T13 — see R1873) The tag-value-id is part of the V record key: `V[tag]\x00[value]\x00[tvid: varint]` → packed fileids
 - **R1282:** The ID counter (`next_tvid`) is stored as an ark LMDB setting (`I` prefix)
 - **R1283:** The tag-value-id is stable: assigned on first index, reused if the same (tag, value) pair persists
 - **R1284:** (inferred) On rebuild, tag-value-ids are reassigned from 1
@@ -2010,10 +2010,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1310:** Reverse lookup: scan V prefix, parse tvid from trailing bytes of each key
 
 ### F Record TVIDs
-- **R1311:** F record value is extended: `count:4bytes + packed tvid varints` for all tag-value pairs of that tag in that file
-- **R1312:** On file removal or re-index, read F records for the fileid to get all tvids
-- **R1313:** Remove fileid from exactly those V records identified by F-record tvids (targeted cleanup)
-- **R1314:** (inferred) Targeted V cleanup replaces the current full-scan approach in `removeFileidFromAllV`
+- **~~R1311:~~** (Retired T14 — see R1875) F record value is extended: `count:4bytes + packed tvid varints` for all tag-value pairs of that tag in that file
+- **~~R1312:~~** (Retired T15 — see R1899) On file removal or re-index, read F records for the fileid to get all tvids
+- **~~R1313:~~** (Retired T16 — see R1900) Remove fileid from exactly those V records identified by F-record tvids (targeted cleanup)
+- **~~R1314:~~** (Retired T17 — see R1900) (inferred) Targeted V cleanup replaces the current full-scan approach in `removeFileidFromAllV`
 
 ### What Gets Embedded
 - **R1285:** Tag names are embedded with hyphens converted to spaces (`design-decision` → "design decision")

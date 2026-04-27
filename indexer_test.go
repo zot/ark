@@ -183,28 +183,10 @@ func TestExtractTagValuesMentionIndented(t *testing.T) {
 	}
 }
 
-func TestTagWindowForAppend(t *testing.T) {
-	data := []byte("line one\n@sta")
-	// Split at position 13 (mid-tag), should back up to after "line one\n"
-	w := tagWindowForAppend(data, 9)
-	if string(w) != "@sta" {
-		t.Errorf("expected backing up to line start, got %q", string(w))
-	}
-
-	// Boundary-split tag: old content ends mid-tag, new content completes it
-	full := []byte("first line\n@status: open\nmore text")
-	w = tagWindowForAppend(full, 14) // split inside "@status: open"
-	tags := ExtractTags(w)
-	if tags["status"] != 1 {
-		t.Errorf("boundary-split tag should be found, got %d", tags["status"])
-	}
-
-	// Split exactly at newline — no back-up needed
-	w = tagWindowForAppend(full, 11) // right after "first line\n"
-	if string(w) != "@status: open\nmore text" {
-		t.Errorf("expected no back-up at newline boundary, got %q", string(w))
-	}
-}
+// (TestTagWindowForAppend removed: tagWindowForAppend was retired by the
+// chunkid-tag-store migration. Append-boundary handling is now microfts2's
+// responsibility via the chunker append protocol; per-chunk tag extraction
+// runs against re-emitted boundary chunks. R1895)
 
 // --- Append detection integration tests ---
 

@@ -264,14 +264,28 @@ func TestERecordRoundTrip(t *testing.T) {
 	}
 }
 
-// --- Tag tests (Store-level) ---
+// --- Tag tests (Store-level, chunkid-keyed) ---
 
-func TestUpdateTagsAndListTags(t *testing.T) {
+// ctv builds a ChunkTagValues with `count` tag occurrences per name, all
+// with empty value (no V records). Useful for T/F-only tests.
+func ctv(chunkID uint64, tags map[string]int) ChunkTagValues {
+	var values []TagValue
+	for tag, n := range tags {
+		for i := 0; i < n; i++ {
+			values = append(values, TagValue{Tag: tag})
+		}
+	}
+	return ChunkTagValues{ChunkID: chunkID, Values: values}
+}
+
+func TestUpdateTagValuesAndListTags(t *testing.T) {
 	s := testStore(t)
-	if err := s.UpdateTags(1, map[string]uint32{"decision": 2, "pattern": 1}); err != nil {
+	// Chunk 1 carries two `decision` occurrences and one `pattern`.
+	if err := s.UpdateTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2, "pattern": 1})}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateTags(2, map[string]uint32{"decision": 1}); err != nil {
+	// Chunk 2 carries one `decision`.
+	if err := s.UpdateTagValues([]ChunkTagValues{ctv(2, map[string]int{"decision": 1})}); err != nil {
 		t.Fatal(err)
 	}
 	tags, err := s.ListTags()
@@ -282,45 +296,23 @@ func TestUpdateTagsAndListTags(t *testing.T) {
 	for _, tc := range tags {
 		m[tc.Tag] = tc.Count
 	}
-	if m["decision"] != 3 {
-		t.Errorf("expected decision=3, got %d", m["decision"])
+	// T = number of distinct (chunkID, tag) pairs:
+	//   decision: chunks 1 and 2 → 2
+	//   pattern:  chunk 1 → 1
+	if m["decision"] != 2 {
+		t.Errorf("expected decision=2 (two chunks), got %d", m["decision"])
 	}
 	if m["pattern"] != 1 {
 		t.Errorf("expected pattern=1, got %d", m["pattern"])
 	}
 }
 
-func TestUpdateTagsReplaces(t *testing.T) {
+func TestRemoveTagValuesDecrements(t *testing.T) {
 	s := testStore(t)
-	if err := s.UpdateTags(1, map[string]uint32{"decision": 2}); err != nil {
-		t.Fatal(err)
-	}
-	// Replace: decision gone, pattern added
-	if err := s.UpdateTags(1, map[string]uint32{"pattern": 1}); err != nil {
-		t.Fatal(err)
-	}
-	tags, err := s.ListTags()
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := make(map[string]uint32)
-	for _, tc := range tags {
-		m[tc.Tag] = tc.Count
-	}
-	if _, ok := m["decision"]; ok {
-		t.Error("decision should be gone after replace")
-	}
-	if m["pattern"] != 1 {
-		t.Errorf("expected pattern=1, got %d", m["pattern"])
-	}
-}
+	s.UpdateTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2})})
+	s.UpdateTagValues([]ChunkTagValues{ctv(2, map[string]int{"decision": 1})})
 
-func TestRemoveTags(t *testing.T) {
-	s := testStore(t)
-	s.UpdateTags(1, map[string]uint32{"decision": 2})
-	s.UpdateTags(2, map[string]uint32{"decision": 1})
-
-	if err := s.RemoveTags(1); err != nil {
+	if err := s.RemoveTagValues(1); err != nil {
 		t.Fatal(err)
 	}
 	tags, err := s.ListTags()
@@ -328,41 +320,41 @@ func TestRemoveTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tags) != 1 {
-		t.Fatalf("expected 1 tag, got %d", len(tags))
+		t.Fatalf("expected 1 tag remaining, got %d", len(tags))
 	}
 	if tags[0].Tag != "decision" || tags[0].Count != 1 {
-		t.Errorf("expected decision=1, got %s=%d", tags[0].Tag, tags[0].Count)
+		t.Errorf("expected decision=1 after removing chunk 1, got %s=%d", tags[0].Tag, tags[0].Count)
 	}
 }
 
-func TestTagFiles(t *testing.T) {
+func TestTagFilesChunkAttributed(t *testing.T) {
 	s := testStore(t)
-	s.UpdateTags(1, map[string]uint32{"decision": 2})
-	s.UpdateTags(2, map[string]uint32{"decision": 1, "pattern": 3})
+	s.UpdateTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2})})
+	s.UpdateTagValues([]ChunkTagValues{ctv(2, map[string]int{"decision": 1, "pattern": 3})})
 
 	records, err := s.TagFiles([]string{"decision"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(records))
+		t.Fatalf("expected 2 records (one per chunk), got %d", len(records))
 	}
-	// Records are sorted by fileid (LMDB key order)
+	// Without a chunkResolver, FileID is 0; ChunkID carries the truth.
 	m := make(map[uint64]uint32)
 	for _, r := range records {
-		m[r.FileID] = r.Count
+		m[r.ChunkID] = r.Count
 	}
 	if m[1] != 2 {
-		t.Errorf("expected fileid=1 count=2, got %d", m[1])
+		t.Errorf("expected chunkID=1 count=2, got %d", m[1])
 	}
 	if m[2] != 1 {
-		t.Errorf("expected fileid=2 count=1, got %d", m[2])
+		t.Errorf("expected chunkID=2 count=1, got %d", m[2])
 	}
 }
 
 func TestTagCounts(t *testing.T) {
 	s := testStore(t)
-	s.UpdateTags(1, map[string]uint32{"decision": 2, "pattern": 1})
+	s.UpdateTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2, "pattern": 1})})
 
 	counts, err := s.TagCounts([]string{"decision", "nonexistent"})
 	if err != nil {
@@ -375,70 +367,48 @@ func TestTagCounts(t *testing.T) {
 	for _, c := range counts {
 		m[c.Tag] = c.Count
 	}
-	if m["decision"] != 2 {
-		t.Errorf("expected decision=2, got %d", m["decision"])
+	// One chunk carries decision → T[decision]=1.
+	if m["decision"] != 1 {
+		t.Errorf("expected decision=1 (one chunk), got %d", m["decision"])
 	}
 	if m["nonexistent"] != 0 {
 		t.Errorf("expected nonexistent=0, got %d", m["nonexistent"])
 	}
 }
 
-// --- AppendTags tests ---
+// --- AppendTagValues tests ---
 
-func TestAppendTagsAddsToExisting(t *testing.T) {
+func TestAppendTagValuesIdempotentForSameChunkID(t *testing.T) {
 	s := testStore(t)
-	s.UpdateTags(1, map[string]uint32{"decision": 2, "pattern": 1})
+	s.UpdateTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2, "pattern": 1})})
 
-	if err := s.AppendTags(1, map[string]uint32{"decision": 1, "new-tag": 3}); err != nil {
+	// Re-appending the same chunkid+tags is idempotent (chunkids are
+	// content-hashed: same content → same chunkid → same extraction).
+	if err := s.AppendTagValues([]ChunkTagValues{ctv(1, map[string]int{"decision": 2, "pattern": 1})}); err != nil {
 		t.Fatal(err)
 	}
 
-	tags, err := s.ListTags()
-	if err != nil {
-		t.Fatal(err)
-	}
+	tags, _ := s.ListTags()
 	m := make(map[string]uint32)
 	for _, tc := range tags {
 		m[tc.Tag] = tc.Count
 	}
-	if m["decision"] != 3 {
-		t.Errorf("expected decision=3, got %d", m["decision"])
+	if m["decision"] != 1 {
+		t.Errorf("expected decision=1 (one chunk, idempotent), got %d", m["decision"])
 	}
 	if m["pattern"] != 1 {
-		t.Errorf("expected pattern=1 (unchanged), got %d", m["pattern"])
-	}
-	if m["new-tag"] != 3 {
-		t.Errorf("expected new-tag=3, got %d", m["new-tag"])
+		t.Errorf("expected pattern=1, got %d", m["pattern"])
 	}
 }
 
-func TestAppendTagsEmptyIsNoop(t *testing.T) {
+func TestAppendTagValuesNewChunk(t *testing.T) {
 	s := testStore(t)
-	s.UpdateTags(1, map[string]uint32{"decision": 2})
-
-	if err := s.AppendTags(1, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.AppendTags(1, map[string]uint32{}); err != nil {
+	if err := s.AppendTagValues([]ChunkTagValues{ctv(99, map[string]int{"fresh": 5})}); err != nil {
 		t.Fatal(err)
 	}
 
 	tags, _ := s.ListTags()
-	if len(tags) != 1 || tags[0].Count != 2 {
-		t.Errorf("expected decision=2 unchanged, got %v", tags)
-	}
-}
-
-func TestAppendTagsNewFile(t *testing.T) {
-	s := testStore(t)
-
-	// AppendTags on a fileid with no existing tags
-	if err := s.AppendTags(99, map[string]uint32{"fresh": 5}); err != nil {
-		t.Fatal(err)
-	}
-
-	tags, _ := s.ListTags()
-	if len(tags) != 1 || tags[0].Tag != "fresh" || tags[0].Count != 5 {
-		t.Errorf("expected fresh=5, got %v", tags)
+	if len(tags) != 1 || tags[0].Tag != "fresh" || tags[0].Count != 1 {
+		t.Errorf("expected fresh=1 (one chunk carries the tag), got %v", tags)
 	}
 }
