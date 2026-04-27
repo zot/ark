@@ -129,11 +129,15 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// CRC: crc-DB.md | R382
-	// Register default chunking strategies
-	// Func strategies avoid external process overhead and scanner buffer limits
+	// Register default chunking strategies. Markdown registers as the
+	// AppendAwareChunker struct so AppendChunks merges paragraph
+	// extensions cleanly instead of falling through to full reindex.
+	// Other built-ins remain ChunkFunc for now (no AppendAware impl yet).
+	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		return fmt.Errorf("register strategy markdown: %w", err)
+	}
 	funcStrategies := map[string]microfts2.ChunkFunc{
 		"lines":      microfts2.LineChunkFunc,
-		"markdown":   microfts2.MarkdownChunkFunc,
 		"chat-jsonl": JSONLChunkFunc,
 	}
 	for name, fn := range funcStrategies {
@@ -252,9 +256,13 @@ func Open(dbPath string) (*DB, error) {
 	// are append-only, so chunks stay valid until the file changes.
 	// The cache is captured by the closure; microfts2 never sees it.
 	jsonlCache := newChunkCache(64)
+	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		vec.Close()
+		fts.Close()
+		return nil, fmt.Errorf("register markdown strategy: %w", err)
+	}
 	for name, fn := range map[string]microfts2.ChunkFunc{
 		"lines":      microfts2.LineChunkFunc,
-		"markdown":   microfts2.MarkdownChunkFunc,
 		"chat-jsonl": jsonlCache.wrap(JSONLChunkFunc),
 	} {
 		if err := fts.AddStrategyFunc(name, fn); err != nil {

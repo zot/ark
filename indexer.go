@@ -22,13 +22,22 @@ import (
 
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
-// chunkAccumulator collects chunk text and extracts per-chunk tag values
-// via callback. tagValues is parallel to chunks (one slice per chunk);
-// defs stays file-level (D records are file-keyed).
+// chunkAccumulator collects chunk text + tag-value extractions via two
+// microfts2 callbacks running side by side:
+//
+//   - WithChunkCallback fires per emitted chunk (every chunk, including
+//     content-dedup'd ones). Populates chunks (vector path) and tagValues
+//     (file-level publish via flattenChunkTags) and defs (D records).
+//   - WithIndexedChunkCallback fires only for newly-inserted chunkids.
+//     Populates chunkTags ([]ChunkTagValues) for chunkid-keyed F/V/T
+//     writes — chunkid arrives in-line with each fire, so no
+//     FileInfoByID + zip dance is needed.
+//
 // CRC: crc-Indexer.md | R1890, R1892
 type chunkAccumulator struct {
 	chunks    [][]byte
 	tagValues [][]TagValue
+	chunkTags []ChunkTagValues
 	defs      map[string]string
 	strategy  string
 }
@@ -45,6 +54,19 @@ func (a *chunkAccumulator) callback(chunkText string) {
 	}
 }
 
+// indexedCallback fires only for newly-inserted chunkids. Extracts tags
+// from the chunk content and emits a ChunkTagValues entry keyed by the
+// freshly-allocated chunkid. Content-dedup'd chunks (refcount-bumped C
+// records) do not fire — their F/V/T records already exist.
+// CRC: crc-Indexer.md | R1891
+func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
+	values := ExtractTagValues(ic.Chunk.Content, a.strategy)
+	a.chunkTags = append(a.chunkTags, ChunkTagValues{
+		ChunkID: ic.CRecord.ChunkID,
+		Values:  values,
+	})
+}
+
 // flattenChunkTags collapses per-chunk tag-value slices into a single
 // flat slice. Used at file-level boundaries (writeDateIndex, pubsub).
 // CRC: crc-Indexer.md | R1893
@@ -56,23 +78,6 @@ func flattenChunkTags(chunkTags [][]TagValue) []TagValue {
 	out := make([]TagValue, 0, n)
 	for _, c := range chunkTags {
 		out = append(out, c...)
-	}
-	return out
-}
-
-// zipChunkTags pairs each FRecord chunk entry with its accumulated
-// tag-value slice. Caller passes a slice of FRecord.Chunks aligned
-// with perChunk (typically the full slice for full reindex, or the
-// tail matching new chunks for append).
-// CRC: crc-Indexer.md | R1891
-func zipChunkTags(chunks []microfts2.FileChunkEntry, perChunk [][]TagValue) []ChunkTagValues {
-	n := len(chunks)
-	if len(perChunk) < n {
-		n = len(perChunk)
-	}
-	out := make([]ChunkTagValues, n)
-	for i := 0; i < n; i++ {
-		out[i] = ChunkTagValues{ChunkID: chunks[i].ChunkID, Values: perChunk[i]}
 	}
 	return out
 }
@@ -161,14 +166,16 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 	return items
 }
 
-// AddFile adds a file to both engines and extracts tags. Uses
-// WithChunkCallback to accumulate clean chunk text for microvec
-// and tag extraction, eliminating the splitChunks double-read.
-// CRC: crc-Indexer.md | R1113, R1123
+// AddFile adds a file to both engines and extracts tags. Uses two
+// microfts2 callbacks: WithChunkCallback for vector path and file-level
+// publish, WithIndexedChunkCallback for chunkid-keyed F/V/T writes
+// (only fires for genuinely-new chunkids — dedup'd chunks cost zero).
+// CRC: crc-Indexer.md | R1113, R1123, R1891
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	acc := chunkAccumulator{strategy: strategy}
 	fileid, _, err := idx.fts.AddFileWithContent(path, strategy,
-		microfts2.WithChunkCallback(acc.callback))
+		microfts2.WithChunkCallback(acc.callback),
+		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
 	}
@@ -184,13 +191,8 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	}
 
 	if idx.store != nil {
-		info, err := idx.fts.FileInfoByID(fileid)
-		if err != nil {
-			return fileid, fmt.Errorf("file info %d: %w", fileid, err)
-		}
-		chunkTags := zipChunkTags(info.Chunks, acc.tagValues)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
-		if err := idx.store.UpdateTagValues(chunkTags); err != nil {
+		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
 		}
 		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
@@ -359,6 +361,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			microfts2.WithModTime(prep.modTime),
 			microfts2.WithFileLength(prep.fileSize),
 			microfts2.WithAppendChunkCallback(acc.callback),
+			microfts2.WithIndexedChunkCallback(acc.indexedCallback),
 		)
 		if err != nil {
 			// Append failed — fall through to full reindex
@@ -373,21 +376,10 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		if err := idx.vec.AddFile(prep.oldID, chunks); err != nil {
 			return fmt.Errorf("vec add %s: %w", prep.path, err)
 		}
-		// Tags: chunkid-keyed via append callback. Tail of FRecord.Chunks
-		// matches the new chunks emitted by AppendChunks.
+		// Tags: chunkid-keyed; chunkids arrive via the indexed callback.
 		if idx.store != nil {
-			info, err := idx.fts.FileInfoByID(prep.oldID)
-			if err != nil {
-				return fmt.Errorf("file info %d: %w", prep.oldID, err)
-			}
-			n := len(acc.tagValues)
-			tail := info.Chunks
-			if len(tail) >= n {
-				tail = tail[len(tail)-n:]
-			}
-			chunkTags := zipChunkTags(tail, acc.tagValues)
 			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
-			if err := idx.store.AppendTagValues(chunkTags); err != nil {
+			if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 				return fmt.Errorf("append tag values %s: %w", prep.path, err)
 			}
 			if err := idx.store.AppendTagDefs(prep.oldID, acc.defs); err != nil {
@@ -414,7 +406,8 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	acc := chunkAccumulator{strategy: prep.strategy}
 	reindexCb := idx.reindexCallback(prep.oldID)
 	fileid, err := idx.fts.ReindexWithCallback(prep.path, prep.strategy, reindexCb,
-		microfts2.WithChunkCallback(acc.callback))
+		microfts2.WithChunkCallback(acc.callback),
+		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
 	}
@@ -438,13 +431,8 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemovePageContents(prep.oldID)
 		}
-		info, err := idx.fts.FileInfoByID(fileid)
-		if err != nil {
-			return fmt.Errorf("file info %d: %w", fileid, err)
-		}
-		chunkTags := zipChunkTags(info.Chunks, acc.tagValues)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
-		if err := idx.store.UpdateTagValues(chunkTags); err != nil {
+		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("update tag values %s: %w", prep.path, err)
 		}
 		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
@@ -542,7 +530,9 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	fullHash := sha256.Sum256(data)
 	fi, _ := os.Stat(path)
 
-	// Append to FTS index, accumulating per-chunk tag values via callback.
+	// Append to FTS index, accumulating per-chunk tag values via the
+	// chunkid-aware indexed callback (newly-inserted chunks only) and
+	// the text-only callback (every chunk, for vector + pubsub paths).
 	acc := chunkAccumulator{strategy: strategy}
 	err = idx.fts.AppendChunks(fileid, newBytes, strategy,
 		microfts2.WithBaseLine(baseLine),
@@ -550,6 +540,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		microfts2.WithModTime(fi.ModTime().UnixNano()),
 		microfts2.WithFileLength(fi.Size()),
 		microfts2.WithAppendChunkCallback(acc.callback),
+		microfts2.WithIndexedChunkCallback(acc.indexedCallback),
 	)
 	if err != nil {
 		return fmt.Errorf("fts append %s: %w", path, err)
@@ -565,20 +556,10 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		return fmt.Errorf("vec add %s: %w", path, err)
 	}
 
-	// Tags and defs: chunkid-keyed via callback.
+	// Tags and defs: chunkid-keyed via indexed callback.
 	if idx.store != nil {
-		updated, err := idx.fts.FileInfoByID(fileid)
-		if err != nil {
-			return fmt.Errorf("file info %d: %w", fileid, err)
-		}
-		n := len(acc.tagValues)
-		tail := updated.Chunks
-		if len(tail) >= n {
-			tail = tail[len(tail)-n:]
-		}
-		chunkTags := zipChunkTags(tail, acc.tagValues)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
-		if err := idx.store.AppendTagValues(chunkTags); err != nil {
+		if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("append tag values %s: %w", path, err)
 		}
 		if err := idx.store.AppendTagDefs(fileid, acc.defs); err != nil {

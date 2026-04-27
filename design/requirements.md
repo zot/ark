@@ -3034,13 +3034,13 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Indexer pipeline
 
 - **R1890:** `chunkAccumulator.tagValues` becomes `[][]TagValue` indexed by chunk position; the callback appends one slice per chunk. `chunks` and `tagValues` stay parallel — same length, same order.
-- **R1891:** After `fts.AddFileWithContent` (or `fts.ReindexWithCallback`), zip `acc.tagValues` with `FileInfoByID(fileid).Chunks` to produce `[]ChunkTagValues` keyed by chunkid; pass to `Store.UpdateTagValues`.
+- **R1891:** Chunkid-keyed `[]ChunkTagValues` is built directly inside `microfts2.WithIndexedChunkCallback` — each callback fire delivers `IndexedChunk{Chunk, CRecord}`, so `acc.indexedCallback` extracts tags from `ic.Chunk.Content` and emits `ChunkTagValues{ChunkID: ic.CRecord.ChunkID, Values: values}`. After indexing, `Store.UpdateTagValues(acc.chunkTags)` writes them. No `FileInfoByID` lookup, no chunk-list zip — chunkid arrives in-line.
 - **R1892:** The `tags` accumulator field (file-level tag→count map) is removed. Per-chunk content lives in `tagValues`.
 - **R1893:** `flattenChunkTags(chunkTags [][]TagValue) []TagValue` collapses per-chunk slices to file-level for `writeDateIndex` and `pubsub.PublishAndWatch` call sites. R795/R796 (pubsub) and R866/R869/R870/R872 (schedule) remain file-level.
 
 ### Append path
 
-- **R1894:** Both append entry points (`Indexer.AppendFile` and `executeRefresh` isAppend branch) use `microfts2.WithAppendChunkCallback` instead of `tagWindowForAppend`.
+- **R1894:** Both append entry points (`Indexer.AppendFile` and `executeRefresh` isAppend branch) drive their tag pipeline through two microfts2 callbacks: `WithAppendChunkCallback` (text-only, every emitted chunk — feeds `acc.tagValues` for file-level pubsub/schedule) and `WithIndexedChunkCallback` (chunkid-aware, newly-inserted chunks only — feeds `acc.chunkTags` for chunkid-keyed F/V/T writes). Both replace the prior `tagWindowForAppend` pre-extraction.
 - **R1895:** `tagWindowForAppend` is removed (definition + both call sites). Boundary handling is microfts2's responsibility via the chunker's append protocol; tags split across the seam are re-emitted by the callback as part of the merged chunk.
 - **R1896:** `refreshPrep` no longer carries `tagValues`, `tags`, or `defs`. Tag extraction moves on-actor during execute. Pre-extraction was a marginal optimization the migration makes incompatible.
 - **R1897:** Vector path unchanged: `splitChunks(prep.data, ...)` and `vec.AddFile(fileid, allChunks)` stay file-level. Vectors are file-scoped.
@@ -3055,3 +3055,21 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Sequencing
 
 - **R1902:** This migration depends on the completed `microfts2-abi-catchup` migration for refcount-aware `FileIDCount` and the `AppendAwareChunker` infrastructure.
+
+## Feature: microfts2 Callback Adoption (post-chunkid-tag-store)
+**Source:** specs/migrations/complete/003-chunkid-tag-store.md (in-place addendum after microfts2 landed `WithIndexedChunkCallback`)
+
+These extend the chunkid-tag-store work with the chunkid-aware indexed
+callback API delivered by microfts2 on 2026-04-27 (see
+`requests/microfts2-indexed-chunk-callback.md` and the response file
+in microfts2). Anchored in-place rather than as a new migration —
+the changes are corrections/extensions to the chunkid-tag-store
+implementation, not a separate format break.
+
+- **R1903:** Markdown is registered via `microfts2.AddChunker("markdown", microfts2.MarkdownChunker{})` (struct form) rather than via `AddStrategyFunc` + `MarkdownChunkFunc` (function form). The struct form preserves microfts2's `AppendAwareChunker` interface, enabling clean paragraph-extension merges on append.
+- **R1904:** `chunkAccumulator` carries an `indexedCallback(microfts2.IndexedChunk)` method and a `chunkTags []ChunkTagValues` field. The method extracts tags from `ic.Chunk.Content` and appends `ChunkTagValues{ic.CRecord.ChunkID, values}`. Fires only for newly-inserted chunkids per microfts2's `WithIndexedChunkCallback` contract.
+- **R1905:** Content-dedup'd chunks (microfts2 refcount-bumped C records) do not fire `WithIndexedChunkCallback` and therefore contribute zero F/V/T writes from ark — the records already capture the tags from the first file that brought the content in. This is a deliberate efficiency property of the chunkid-aware path.
+- **R1906:** All four indexer paths pass both `WithChunkCallback` (or `WithAppendChunkCallback` on append) and `WithIndexedChunkCallback`. The text-only callback feeds `acc.chunks`, `acc.tagValues`, and `acc.defs` for vector indexing, file-level pubsub/schedule, and D-record writes; the indexed callback feeds `acc.chunkTags` for F/V/T writes. Tag extraction runs twice on newly-inserted chunks (once per callback) — sub-millisecond, accepted as not worth optimizing.
+- **R1907:** R386's interim ("fall through to full refresh on dirty markdown append boundaries") is partially superseded for markdown — `MarkdownChunker` now implements `AppendAwareChunker` so paragraph-extension appends merge cleanly. R386 still applies to chunkers that haven't implemented `AppendAwareChunker` yet (microfts2's deferred gap O16 covers the remaining built-in chunkers).
+- **R1908:** Orphan-chunkid cleanup continues to use microfts2's `RemoveCallback` (delivers `[]uint64` post-deletion). Migration to the richer pre-deletion `WithRemovedChunkCallback` (delivers full `CRecord`) is deferred — the current path correctly drops F/V/T per chunkid via `Store.RemoveTagValuesInTxn`, and the richer callback is only useful when ark needs to read tvids from the CRecord directly instead of scanning F[chunkid] itself.
+
