@@ -6,39 +6,14 @@ index staleness.
 
 ## I Records: Config Storage
 
-Each config field gets its own LMDB key under the `I` prefix, following
-the same `I[name] → value` pattern as microfts2. Scalar fields store
-their string representation. Compound fields (sources, chunkers, etc.)
-store JSON.
+Each config field gets its own LMDB I record (`I[name] → value`),
+following the same pattern as microfts2. Scalar fields store their
+string representation; compound fields store JSON. Operational
+non-config state (e.g. `next_tvid` counter) also lives in I records.
 
-Known I record names are a Go pseudo-enum (string constants). The set
-of known names is the complete list of Config struct fields plus
-operational fields like ID counters.
-
-### Config Fields
-
-Every exported field in the Config struct maps to an I record:
-
-- `dotfiles` → "true" / "false"
-- `case_insensitive` → "true" / "false"
-- `embed_cmd` → string
-- `query_cmd` → string
-- `tag_model` → string (GGUF filename)
-- `global_include` → JSON string array
-- `global_exclude` → JSON string array
-- `strategies` → JSON string map
-- `sources` → JSON array of Source
-- `chunkers` → JSON array of ChunkerConfig
-- `session_ttl` → string
-- `search_exclude` → JSON string array
-- `schedule` → JSON ScheduleConfig
-
-### Operational Fields
-
-Non-config fields also live in I records:
-
-- `next_tvid` → uint64 counter (tag value ID allocation)
-- Any future counters or internal state
+The known-name set, encoding per field, and schema markers
+(`ec_version`, etc.) are listed in
+[record-formats.md](record-formats.md) (Configuration Records section).
 
 ### Lifecycle
 
@@ -55,24 +30,17 @@ detects the change and updates I records.
 **Rebuild:** Clear all I records (and E records), write fresh config.
 This is the hard reset.
 
-## E Records: Error Conditions
+## E: Records: Error Conditions
 
-`E` prefix + name → JSON payload describing a persistent error or
-warning condition. E records survive restarts and are surfaced in
-`ark status`.
+E: records hold persistent error or warning conditions surfaced in
+`ark status`. They survive restarts and are cleared when the
+condition resolves — either by config changing back, by
+`ark rebuild`, or by manual `ark config` commands that fix the issue.
 
-E records are cleared when the condition resolves — either by config
-changing back, by `ark rebuild`, or by manual `ark config` commands
-that fix the issue.
-
-### Known E Conditions
-
-- `model_mismatch` — tag_model changed, stored embeddings are from a
-  different model. Payload: `{"stored":"old","current":"new"}`.
-- `index_stale` — case_insensitive, aliases, or chunker config changed.
-  The FTS index was built with different settings. Requires `ark rebuild`.
-- `config_catastrophe` — all sources removed or config appears zeroed out.
-  Payload: stored config summary for recovery.
+Record key/value layout and the disambiguating colon prefix: see
+[record-formats.md](record-formats.md) (E: section). Known
+condition names (`model_mismatch`, `index_stale`,
+`config_catastrophe`) are also listed there.
 
 ## Change Classification
 

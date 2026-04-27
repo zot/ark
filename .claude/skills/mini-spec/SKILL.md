@@ -30,6 +30,21 @@ TaskCreate: "Gaps Phase: [feature name]"
 
 Do NOT proceed until tasks exist. This is required for user visibility into progress.
 
+## MANDATORY: Check for In-Flight Migrations
+
+Before any phase, run `~/.claude/bin/minispec query migrations`. It
+lists in-flight migration specs (the `*.md` files in
+`specs/migrations/`, excluding `complete/`). Each file is an
+in-process migration — record formats, APIs, or internal structures
+are mid-flux. If any are present:
+
+- Surface them to the user before doing other work.
+- In-flight migrations take priority. Do not start unrelated changes
+  that touch the same code paths until the migration is complete.
+- If your task IS the in-flight migration, proceed.
+
+Migrations are temporary by design — see "Migration Workflow" below.
+
 ---
 
 ## Overview
@@ -37,10 +52,12 @@ Do NOT proceed until tasks exist. This is required for user visibility into prog
 3-level architecture: specs → design → code.
 
 ```
-specs/    # Human intent — what to build and why, in the user's own words
-design/   # AI translation — requirements.md, crc-*, seq-*, ui-*, test-*, manifest-ui.md
-docs/     # user-manual.md, developer-guide.md
-src/      # Code with traceability comments
+specs/                # Human intent — current state of the project, in the user's own words
+  migrations/         # In-flight migrations — temporary, get moved on completion
+    complete/         # Completed migrations, numbered in landing order
+design/               # AI translation — requirements.md, crc-*, seq-*, ui-*, test-*, manifest-ui.md
+docs/                 # user-manual.md, developer-guide.md
+src/                  # Code with traceability comments
 ```
 
 ### What each level is for
@@ -263,29 +280,94 @@ Run `~/.claude/bin/minispec phase gaps` to validate the gaps section, then run `
 2. **Requirements ↔ Design:** Each requirement is referenced by at least one design artifact
 3. **Requirements ↔ Code:** Each requirement appears as an inline Rn ref in at least one code file
 
-`design.md` Gaps section tracks (use S1/R1/D1/C1/I1/O1/A1 numbering):
+`design.md` Gaps section tracks (use S1/R1/D1/C1/I1/O1/A1/T1 numbering):
 - **Spec→Requirements (Sn):** Spec items not captured in requirements.md
 - **Requirements→Design (Rn):** Requirements without design artifacts referencing them
 - **Design→Code (Dn):** Designed features without code
 - **Code→Design (Cn):** Code without design artifacts
 - **Implementation (In):** Requirements with design coverage but no inline Rn ref in any code file
 - **Oversights (On):** Missing tests, tech debt, enhancements, security concerns, etc.
-- **Approved (An):** Approved gap, never checked off to ensure they stay in place
+- **Approved (An):** Approved gap. Permanent — written without a checkbox.
+- **'Tired (Tn):** Retired requirement — obsoleted by a later change. Each Tn names the original Rn, the replacement Rn (or "no replacement" if removed outright), and the reason (usually a migration or refactor). Retired Rn entries stay in requirements.md with their original text but get a `~~Rn:~~ (Retired Tn — see Rxxx)` marker so old design/code references still resolve. Permanent — written without a checkbox.
 
-Nest related items with checkboxes:
+Nest related items with checkboxes (only S/R/D/C/I/O take checkboxes; A and T are permanent and never carry one):
 ```markdown
 - [ ] R1: Requirement R5 has no design artifact
 - [ ] O1: Test coverage gaps
   - [ ] Feature A (5 scenarios)
   - [ ] Feature B (3 scenarios)
-- [ ] A1: Dangling methods, these are never called
-  - [ ] Maluba.go: Maluba.Frobnicate, Maluba.Enreify
+- A1: Dangling methods, these are never called
+  - Maluba.go: Maluba.Frobnicate, Maluba.Enreify
+- T1: R1598 retired by R1833 (2026-04-23 ec-rekey)
+  - reason: EC keys moved from (fileID, chunkIdx) to chunkID
+- T2: R1099 retired by R1281 (2026-04-09 tag-embeddings)
+  - reason: V key gained trailing tvid varint
 ```
+
+If you encounter legacy `- [ ] An:` lines, drop the `[ ]` —
+`minispec validate` reports them as `permanent gaps with checkbox`.
+
+Use `minispec update add-gap` to add gaps; it writes the right
+shape automatically (no checkbox for A/T, checkbox for the rest).
 
 **Upon completion**, offer to update Documentation (Documentation Phase).
 
 7. Documentation Phase, Optional -- offer to user after Gaps
 Create `docs/user-manual.md` and `docs/developer-guide.md` with traceability links.
+
+## Migration Workflow
+
+Specs in `specs/` describe how the system *is* — they're the
+canonical "current state." Migration specs describe how to get from
+state A to state B. They have a built-in expiration: once
+implemented, the "Problem" they describe no longer exists.
+
+To keep `specs/` from accumulating stale migration narratives:
+
+1. **Create migration specs in `specs/migrations/`**, not in
+   `specs/`. One file or several — one per coherent migration.
+2. **Run the mini-spec phases** on the migration specs as normal
+   (Spec → Requirements → Design → Implementation → Simplification
+   → Gaps).
+3. **When implementation lands**, the migration is complete. The
+   code now embodies state B.
+4. **Update the affected `specs/*.md` files** to describe state B
+   as the current truth — fold in record formats, API contracts,
+   or other steady-state material that the migration changed.
+5. **Retire obsoleted requirements.** For each obsolete Rn run:
+
+   ```
+   ~/.claude/bin/minispec update retire R<old> R<new> "<reason>"
+   ```
+
+   Use `-` instead of `R<new>` if there is no replacement. The
+   command rewrites the R<old> line in `requirements.md` to
+   `**~~R<old>:~~** (Retired Tn — see R<new>) <original text>` AND
+   appends a new Tn entry to `design.md` Gaps in one atomic step.
+   Outputs the assigned Tn.
+
+   If a CRC card or inline code comment still references the
+   retired Rn but the code no longer fulfills it, update the
+   reference to the replacement Rn. (References to retired Rn in
+   code that was removed are fine — the comment went with the
+   code.)
+
+6. **Move the migration spec(s)** by running:
+
+   ```
+   ~/.claude/bin/minispec update migration-complete <name>
+   ```
+
+   The command moves `specs/migrations/<name>.md` to
+   `specs/migrations/complete/<NNN>-<name>.md` where NNN is the
+   next zero-padded three-digit prefix. Numbers are assigned at
+   completion time, not creation time, so concurrent in-flight
+   migrations don't fight over numbers and the prefix reflects
+   actual landing order. Outputs the new path.
+
+`specs/migrations/complete/` is the migration history — a
+chronological record of what changed and why. `specs/` always
+reflects the present.
 
 ## CRC Card Format
 ```markdown
@@ -355,6 +437,7 @@ The `minispec` CLI tool (at `~/.claude/bin/minispec`) performs structural operat
 ~/.claude/bin/minispec query uncovered       # List Rn without design refs
 ~/.claude/bin/minispec query gaps            # List gap items
 ~/.claude/bin/minispec query requirements    # List all requirements
+~/.claude/bin/minispec query migrations      # List in-flight migration specs
 
 # Updates - artifact checkboxes (in design.md)
 ~/.claude/bin/minispec update check design.md crc-Store.md     # Check artifact
@@ -364,10 +447,16 @@ The `minispec` CLI tool (at `~/.claude/bin/minispec`) performs structural operat
 ~/.claude/bin/minispec update add-ref crc-Store.md R5          # Add requirement to CRC
 ~/.claude/bin/minispec update remove-ref crc-Store.md R5       # Remove requirement from CRC
 
-# Updates - gaps
+# Updates - gaps (S/R/D/C/I/O get checkboxes; A/T are permanent)
 ~/.claude/bin/minispec update add-gap O "Test coverage needed" # Add oversight gap
 ~/.claude/bin/minispec update resolve-gap O3                   # Mark gap resolved
 ~/.claude/bin/minispec update approve-gap D3                   # Convert gap to approved (A) type
+~/.claude/bin/minispec update add-gap T "R5 retired by R10"    # Add retired-requirement gap
+
+# Updates - migrations
+~/.claude/bin/minispec update retire R5 R10 "2026-04-27 schema-v2"   # Retire R5, replaced by R10
+~/.claude/bin/minispec update retire R7 - "no replacement"           # Retire with no replacement
+~/.claude/bin/minispec update migration-complete schema-v2           # Move spec to complete/ with NNN- prefix
 ```
 
 Use the tool to:

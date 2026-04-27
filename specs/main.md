@@ -426,24 +426,18 @@ Mirrors the CLI. JSON request/response.
 
 ## Ark Subdatabase
 
-LMDB subdatabase `ark` stores:
-- `M` [fileid: 8] -> JSON — missing file record
-  - path: string — last known path
-  - lastSeen: number — timestamp when last indexed
-- `U` [path bytes] -> JSON — unresolved file record
-  - path: string — full path of the file
-  - firstSeen: number — timestamp when first noticed
-  - dir: string — which watched directory it was found in
-  Files that don't match any include or exclude pattern. Persisted
-  so the list survives across scans. Cleared when the user adds a
-  rule that covers them or explicitly dismisses them. During scans,
-  unresolved files that no longer exist on disk are removed silently
-  (no need to track missing files that were never indexed).
-- `T` [tagname] -> count — tag vocabulary with global counts
-- `F` [fileid: 8] [tagname] -> count — per-file tag occurrences
-- `I` -> JSON — ark-level settings
-  - sourceConfig: embedded or path reference to config
-  - dotfiles: boolean — whether * matches dotfiles (default true)
+LMDB subdatabase `ark` stores tag records (T/F/V/D), embedding records
+(EV/EC/EF), config (I), error conditions (E:), file state (M/U), and
+page content (PC). Record key/value layouts and the schema-version
+protocol live in [record-formats.md](record-formats.md).
+
+Notable behaviors documented elsewhere:
+- M records: files that were indexed but have since disappeared from
+  disk — flagged for the user/agent to decide what to do.
+- U records: files seen during a scan that don't match any
+  include/exclude rule. Persisted so the list survives scans;
+  cleared when a covering rule is added, the file is dismissed, or
+  the file no longer exists on disk.
 
 ## Setup and Install
 

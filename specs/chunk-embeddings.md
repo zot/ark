@@ -58,29 +58,20 @@ happens once.
 
 ## Storage
 
-Chunk embeddings and file centroids are stored in the ark LMDB
-subdatabase alongside existing T/EV records.
+Chunk embeddings (EC) and file centroids (EF) are stored in the ark
+LMDB subdatabase alongside existing T/EV records.
 
-### EC records — chunk vectors
+EC has one record per unique chunk content (microfts2-dedup'd —
+same text shared across files gets one EC). Orphan-cleanup happens
+via microfts2's removal/reindex callbacks delivering orphaned
+chunkIDs that ark deletes inside the same LMDB transaction.
 
-Key: `EC` + varint(fileID) + varint(chunkIdx)
-Value: float32 vector (768 dims = 3072 bytes)
+EF stores a running sum + count so centroid updates are O(1):
+add a chunk → `sum += vec; n++`; remove → `sum -= vec; n--`; query
+→ `centroid = sum / n`. Recomputed from scratch on full re-index.
 
-One record per indexed chunk. Deleted when the parent file is
-re-indexed (all chunks for that file are removed and re-embedded).
-
-### EF records — file centroids
-
-Key: `EF` + varint(fileID)
-Value: float32 running sum (768 dims = 3072 bytes) + uint32 chunk count
-
-The centroid is the mean of a file's chunk vectors. Stored as a
-running sum plus count for O(1) incremental updates:
-- Add chunk: `sum += vec; n++`
-- Remove chunk: `sum -= vec; n--`
-- Query: `centroid = sum / n`
-
-Recomputed from scratch when a file is fully re-indexed.
+Record key/value layouts: see [record-formats.md](record-formats.md)
+(EC and EF sections).
 
 ## Batch Embedding Pipeline
 

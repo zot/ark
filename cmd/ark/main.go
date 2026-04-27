@@ -1942,7 +1942,7 @@ func printDBCounts(counts *ark.DBRecordCounts, mapUsed, mapTotal int64) {
 func printRecordSection(name string, recs []ark.RecordCount, totalRecs *int64, totalKeys, totalVals *int64) {
 	fmt.Printf("\ndb: %s\n", name)
 	for _, r := range recs {
-		fmt.Printf("  %s %-14s %7d  keys %-10s  vals %s\n",
+		fmt.Printf("  %-2s %-16s %7d  keys %-10s  vals %s\n",
 			r.Prefix, r.Purpose, r.Count,
 			formatBytes(r.KeyBytes), formatBytes(r.ValueBytes))
 		*totalRecs += r.Count

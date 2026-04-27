@@ -12,17 +12,14 @@ for tags like `status` that appear in hundreds of files.
 
 ## V Records
 
-A new LMDB key prefix `V` stores tag values:
+The `V` prefix stores tag values. Each unique (tag, value) pair gets
+one LMDB entry whose value bytes list the fileids with that
+(tag, value), enabling fast value completion without disk I/O.
 
-- Key: `V[tagname]\x00[value]`
-- Value: packed varint-encoded fileids
-
-The `\x00` byte separates the tag name from the value. Tag names
-are `[\w][\w-]*` so they cannot contain null bytes.
-
-Each unique (tag, value) pair gets one LMDB entry. The value bytes
-are the list of fileids that have that tag set to that value,
-encoded as varints (unsigned, LEB128). Count = number of varints.
+Record key/value layout: see [record-formats.md](record-formats.md)
+(V section). Note: V keys also carry a trailing tvid varint that
+joins to EV records (tag-value embeddings) — see
+[tag-embeddings.md](tag-embeddings.md).
 
 ## Lifecycle
 
@@ -38,11 +35,11 @@ V records follow the same lifecycle as F and D records:
 
 ## Querying
 
-- **All values for a tag:** prefix scan `V[tagname]\x00`. Decode
-  varints from each value to get count.
-- **Values matching prefix:** prefix scan `V[tagname]\x00[prefix]`.
-  LMDB's sorted keys make this a range scan.
-- **Files for a (tag, value):** direct key lookup, decode varints.
+V records support three query patterns: all-values-for-a-tag (count
+varint fileids per record), prefix-filtered values (LMDB sorted-key
+range scan), and (tag, value) → fileids direct lookup. See
+[record-formats.md](record-formats.md) (V section) for the exact
+prefix scan keys.
 
 ## Integration with handleTagValues
 

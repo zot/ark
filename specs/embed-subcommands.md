@@ -53,29 +53,33 @@ orphaned embeddings.
 
 ### Checks
 
-1. **Orphan EC records**: EC records whose fileID no longer exists in
-   the FTS index, or whose chunkIdx exceeds the file's actual chunk
-   count. These are embeddings for chunks that no longer exist.
+1. **Orphan EC records**: EC records whose chunkID has no
+   corresponding C record in microfts2 (the chunk no longer exists
+   in any file).
 
 2. **EF/EC count mismatch**: EF centroid's stored count doesn't match
-   the actual number of EC records for that file. Indicates a
-   crash-interrupted centroid update.
+   the number of EC records resolvable from the file's F-record
+   chunk list. Indicates a crash-interrupted centroid update.
 
-3. **Missing EC records**: Unique chunkIDs that have C records in FTS
-   but no EC records. These are gaps where embedding hasn't completed.
+3. **Missing EC records**: chunkIDs with C records in microfts2 but
+   no EC record. These are gaps where embedding hasn't completed.
    Only counts chunks from files not matching `search_exclude` — the
    embedding pipeline skips excluded files, so their chunks are
    expected to lack EC records. The count of excluded chunks (those
    belonging exclusively to `search_exclude` files) is reported
    separately so the numbers are transparent.
 
-4. **Orphan EF records**: EF records whose fileID has no corresponding
-   EC records or no FTS entry.
+4. **Orphan EF records**: EF records whose fileID has no
+   corresponding EC records reachable via the file's F-record chunk
+   list, or no FTS entry.
 
 5. **Dimension consistency**: All EC vectors should have the same
    dimension. Report the distribution of dimensions found (e.g.,
    "742 records at dim=768, 3 records at dim=384"). Flag any that
    differ from the majority.
+
+EC/EF record key/value layouts: see
+[record-formats.md](record-formats.md).
 
 ### Options
 

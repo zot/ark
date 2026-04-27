@@ -408,12 +408,13 @@ type ChunkFilterRow struct {
 	Query    string `json:"query"`
 }
 
-// resolveChunkLocation resolves a CRecord to (path, range) using the fileIDPaths map. R1395
+// resolveChunkLocation resolves a CRecord to (path, range) using the fileIDPaths map.
+// CRC: crc-Searcher.md | R1395, R1867
 func resolveChunkLocation(crec microfts2.CRecord, paths map[uint64]string) (string, string, bool) {
 	if len(crec.FileIDs) == 0 {
 		return "", "", false
 	}
-	fileid := crec.FileIDs[0]
+	fileid := crec.FileIDs[0].FileID
 	path, ok := paths[fileid]
 	if !ok {
 		return "", "", false
@@ -498,13 +499,14 @@ func tagFileIDSet(names []string, value, valueMode string, store *Store) map[uin
 }
 
 // fileIDChunkFilter returns a ChunkFilter from a pre-built file ID set.
+// CRC: crc-Searcher.md | R1867
 func fileIDChunkFilter(fileIDs map[uint64]bool) microfts2.ChunkFilter {
 	if len(fileIDs) == 0 {
 		return func(crec microfts2.CRecord) bool { return false }
 	}
 	return func(crec microfts2.CRecord) bool {
 		for _, fid := range crec.FileIDs {
-			if fileIDs[fid] {
+			if fileIDs[fid.FileID] {
 				return true
 			}
 		}

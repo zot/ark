@@ -1606,9 +1606,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R902:** Counts are right-aligned for readability
 - **R903:** Without `--db`, status output is unchanged
 - **R904:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
-- **R905:** ark record types: D (tag-defs), F (file-tags), I (settings), M (missing), T (tag-totals), U (unresolved), V (tag-values)
+- **R905:** ark record types include single-byte prefixes (D tag-defs, F file-tags, I settings, M missing, T tag-totals, U unresolved, V tag-values) and multi-byte prefixes (`E:` errors, `EV` tag-value embeddings, `EC` chunk embeddings, `EF` file centroids, `PC` page content). Each prefix gets its own row — multi-byte prefixes are not collapsed into a single-byte bucket.
 - **R906:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
-- **R907:** (inferred) Store needs a RecordCounts method to count ark subdatabase records by prefix
+- **R907:** (inferred) Store needs a RecordCounts method that returns counts keyed by full prefix string. Known multi-byte prefixes (`E:`, `EV`, `EC`, `EF`, `PC`) are matched before falling back to a single-byte prefix.
 - **R908:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
 - **R1130:** A total summary line shows aggregate record count, key bytes, value bytes, and proportion of LMDB map
 
@@ -1708,7 +1708,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 **Source:** specs/tag-value-index.md
 
 ### V Record Structure
-- **R1099:** V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
+- **~~R1099:~~** (Retired T8 — see R1281) V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
 - **R1100:** V record value: packed varint-encoded fileids (unsigned LEB128)
 - **R1101:** One LMDB entry per unique (tag, value) pair — fileids accumulate in the value
 - **R1102:** Count of files with a given (tag, value) = number of varints decoded from the value
@@ -1723,7 +1723,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### V Record Queries
 - **R1108:** Prefix scan `V[tagname]\x00` returns all values for a tag with counts
 - **R1109:** Prefix scan `V[tagname]\x00[prefix]` filters values by prefix — LMDB sorted keys make this a range scan
-- **R1110:** Direct key lookup `V[tagname]\x00[value]` returns fileids for a specific (tag, value) pair
+- **~~R1110:~~** (Retired T9 — see R1309) Direct key lookup `V[tagname]\x00[value]` returns fileids for a specific (tag, value) pair
 
 ### Endpoint Integration
 - **R1111:** `POST /tags/values` switches from file-reading to V record queries — O(1) LMDB lookup instead of O(files) disk reads
@@ -2524,16 +2524,16 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### LMDB Records
 
-- **R1598:** EC records store chunk vectors. Key: `EC` + varint(fileID) + varint(chunkIdx). Value: float32 vector (768 dims).
+- **~~R1598:~~** (Retired T1 — see R1833) EC records store chunk vectors. Key: `EC` + varint(fileID) + varint(chunkIdx). Value: float32 vector (768 dims).
 - **R1599:** EF records store file centroids. Key: `EF` + varint(fileID). Value: float32 running sum (768 dims) + uint32 chunk count.
-- **R1600:** `WriteChunkEmbedding(fileID, chunkIdx, vec)` writes one EC record.
-- **R1601:** `ReadChunkEmbedding(fileID, chunkIdx)` reads one EC record.
+- **~~R1600:~~** (Retired T2 — see R1836) `WriteChunkEmbedding(fileID, chunkIdx, vec)` writes one EC record.
+- **~~R1601:~~** (Retired T3 — see R1838) `ReadChunkEmbedding(fileID, chunkIdx)` reads one EC record.
 - **R1602:** `WriteFileCentroid(fileID, sum, count)` writes one EF record (running sum + count).
 - **R1603:** `ReadFileCentroid(fileID)` reads one EF record, returns sum and count.
 - **R1604:** `MissingChunkEmbeddings()` returns chunks with C records in microfts2 but no EC record in ark store.
 - **R1605:** `ScanFileCentroids()` returns all EF records as a map.
 - **R1606:** `DropChunkEmbeddings()` deletes all EC and EF records (for rebuild or model mismatch).
-- **R1607:** EC records for a file are deleted when the file is re-indexed.
+- **~~R1607:~~** (Retired T4 — see R1849) EC records for a file are deleted when the file is re-indexed.
 - **R1608:** (inferred) EF centroid is recomputed from scratch when a file is fully re-indexed.
 
 ### Batch Embedding Pipeline
@@ -2891,9 +2891,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### embed validate — Checks
 
-- **R1802:** Orphan EC records: EC records whose fileID does not exist in the FTS index, or whose chunkIdx exceeds the file's actual chunk count.
-- **R1803:** EF/EC count mismatch: EF centroid's stored count does not match the actual number of EC records for that file.
-- **R1804:** Missing EC records: files with chunks in the FTS index but no EC records (or fewer EC records than chunks).
+- **~~R1802:~~** (Retired T5 — no replacement) Orphan EC records: EC records whose fileID does not exist in the FTS index, or whose chunkIdx exceeds the file's actual chunk count.
+- **~~R1803:~~** (Retired T6 — no replacement) EF/EC count mismatch: EF centroid's stored count does not match the actual number of EC records for that file.
+- **~~R1804:~~** (Retired T7 — no replacement) Missing EC records: files with chunks in the FTS index but no EC records (or fewer EC records than chunks).
 - **R1805:** Orphan EF records: EF records whose fileID has no corresponding EC records or no FTS entry.
 - **R1806:** Dimension consistency: all EC vectors should have the same dimension. Reports the distribution of dimensions found (count per dimension). Flags any that differ from the majority.
 
@@ -2988,3 +2988,70 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1859:** Store an `ec_version` I record. Value "2" means chunkID-keyed EC records.
 - **R1860:** On startup, if `ec_version` is absent or "1", drop all EC and EF records and set `ec_version` to "2". The next `BatchEmbedChunks` re-embeds with the new key format.
 - **R1861:** R1598 (old EC key format) and R1607 (RemoveFileChunkEmbeddings on re-index) are superseded by R1833 and R1849.
+
+## Feature: microfts2 ABI Catch-Up
+**Source:** specs/migrations/microfts2-abi-catchup.md
+
+- **R1867:** ark consumers of `microfts2.CRecord.FileIDs` access the `FileID` field on each element rather than treating the slice as `[]uint64`. Reflects microfts2's refcounted C-record fileids list shape `[]FileIDCount` (struct with `FileID` and `Count`).
+- **R1868:** F-record chunk entries' `Location` field continues to be the source of line-range strings used by ark; the additive `Locator []byte` field is not consumed by ark in this catch-up.
+- **R1869:** ark's chunkers do not implement the optional `microfts2.AppendAwareChunker` interface in this catch-up. `AppendChunks` calls continue with non-AppendAware chunkers, falling through to full refresh on dirty append boundaries (consistent with R386).
+- **R1870:** `FileIDCount.Count` (per-file occurrence count of a chunk) is not consumed in this catch-up. ark continues to treat C-record fileids as a set; refcount-aware deduping is owned by the chunkid-tag-store migration.
+- **R1871:** This migration requires a full reindex on first run after deployment because microfts2's on-disk record formats are incompatible with the previous version. `ark rebuild` is the supported path; old indices won't parse against the new code.
+- **R1872:** This migration must complete before the chunkid-tag-store migration (which uses the new `Locator` and AppendAwareChunker infrastructure) and before the parked status-db code changes can be verified by build.
+
+## Feature: Chunkid Tag Store
+**Source:** specs/migrations/chunkid-tag-store.md
+
+### Record format
+
+- **R1873:** V record key shape preserved: `V[tag]\x00[value]\x00[tvid varint]`. Only the value semantic changes from packed fileid varints to packed chunkid varints. EV records continue to join via tvid; no rekey of EV.
+- **R1874:** F record key changes from `F[fileid:8][tagname]` to `F[chunkid varint][tagname]`. Multi-record per chunkid, one record per (chunkid, tagname) pair.
+- **R1875:** F record value layout preserved: `[count: uint32 big-endian][optional packed tvid varints]`. Only the key prefix changes; value encoding is unchanged from the pre-migration shape.
+- **R1876:** T record key and value layout preserved (`T[tagname]` → `[count: uint32 big-endian][optional float32 vector (3072 bytes)]`). The count *semantic* shifts from "number of files containing the tag" to "number of (chunk, tag) pairs in F records." A file with 3 chunks all carrying the same tag contributes 3; a chunk shared by 2 files contributes 1.
+- **R1877:** D records unchanged: key remains `D[tagname][fileid:8]`, value remains description bytes. Definitions are a file-level property.
+- **R1878:** EV, EC, EF, M, U, I, E:, PC records unchanged by this migration.
+
+### Schema marker
+
+- **R1879:** Add an I record `tag_store_version`. Value `"1"` marks the post-migration state.
+- **R1880:** On `DB.Open`, after the existing `ec_version` check, read `tag_store_version`. If empty or != `"1"`, refuse to start with the error: "tag store schema upgrade required — run `ark rebuild`". Do not auto-drop V/F/T records.
+- **R1881:** `cmdRebuild` already removes the LMDB env (via `cmdInit --no-setup`); no V/F/T-specific drop code is needed. After re-creating the DB, write `tag_store_version = "1"` unconditionally on first Open of a new DB.
+- **R1882:** New DBs from `ark init` are tagged `tag_store_version = "1"` at creation time.
+
+### Store API
+
+- **R1883:** `Store.UpdateTagValues(chunkTags []ChunkTagValues) error` replaces the fileid-keyed UpdateTagValues + UpdateTags pair. ChunkTagValues = `{ChunkID uint64; Values []TagValue}`. T-record increments are computed per-chunk during the merged write.
+- **R1884:** `Store.AppendTagValues(chunkTags []ChunkTagValues) error` mirrors UpdateTagValues for the append path.
+- **R1885:** `Store.UpdateTags(fileid, tags)` and `Store.AppendTags(fileid, tags)` are removed. Their content is now expressed via ChunkTagValues.
+- **R1886:** `Store.UpdateTagDefs(fileid, defs)` and `Store.AppendTagDefs(fileid, defs)` keep their fileid signature; D records remain `D[tagname][fileid:8]`.
+
+### Reverse lookups
+
+- **R1887:** `TagValueFiles(tag, value) []uint64` returns chunkids (post-migration). File-level callers resolve via microfts2 `FilesForChunk` and dedupe.
+- **R1888:** `TagFiles(tags) []TagFileInfo` returns chunk-attributed entries (`{ChunkID, FileID, …}`). File-level callers dedupe by FileID.
+- **R1889:** `FileTagValues(fileid, tags) (map[string]string, error)` is implemented chunkid-internally with a fileid-input wrapper; wired into Inbox per R1142, R1147, R1149. Inbox no longer reads files from disk for tag lookups.
+
+### Indexer pipeline
+
+- **R1890:** `chunkAccumulator.tagValues` becomes `[][]TagValue` indexed by chunk position; the callback appends one slice per chunk. `chunks` and `tagValues` stay parallel — same length, same order.
+- **R1891:** After `fts.AddFileWithContent` (or `fts.ReindexWithCallback`), zip `acc.tagValues` with `FileInfoByID(fileid).Chunks` to produce `[]ChunkTagValues` keyed by chunkid; pass to `Store.UpdateTagValues`.
+- **R1892:** The `tags` accumulator field (file-level tag→count map) is removed. Per-chunk content lives in `tagValues`.
+- **R1893:** `flattenChunkTags(chunkTags [][]TagValue) []TagValue` collapses per-chunk slices to file-level for `writeDateIndex` and `pubsub.PublishAndWatch` call sites. R795/R796 (pubsub) and R866/R869/R870/R872 (schedule) remain file-level.
+
+### Append path
+
+- **R1894:** Both append entry points (`Indexer.AppendFile` and `executeRefresh` isAppend branch) use `microfts2.WithAppendChunkCallback` instead of `tagWindowForAppend`.
+- **R1895:** `tagWindowForAppend` is removed (definition + both call sites). Boundary handling is microfts2's responsibility via the chunker's append protocol; tags split across the seam are re-emitted by the callback as part of the merged chunk.
+- **R1896:** `refreshPrep` no longer carries `tagValues`, `tags`, or `defs`. Tag extraction moves on-actor during execute. Pre-extraction was a marginal optimization the migration makes incompatible.
+- **R1897:** Vector path unchanged: `splitChunks(prep.data, ...)` and `vec.AddFile(fileid, allChunks)` stay file-level. Vectors are file-scoped.
+- **R1898:** If `AppendChunks` returns an error, `executeRefresh` falls through to `executeFullRefresh`, which uses its own fresh accumulator. The append accumulator is discarded.
+
+### Cleanup mechanism (orphan chunkids)
+
+- **R1899:** File removal does not directly modify V records. Instead, `RemoveFileWithCallback` and `ReindexWithCallback` deliver any chunkids whose microfts2 C-record refcount reached zero.
+- **R1900:** For each orphaned chunkid: scan `F[chunkid]` prefix to enumerate (tagname, count, tvids) entries; for each tvid, decrement the corresponding V record by removing the chunkid; if a V record becomes empty, delete it; decrement T totals by `count` for each tagname; drop F records for the orphaned chunkid.
+- **R1901:** Chunks shared across files retain their F/V/T entries until the last file referencing them is removed. Refcount management is microfts2's responsibility via the FileIDCount C-record shape.
+
+### Sequencing
+
+- **R1902:** This migration depends on the completed `microfts2-abi-catchup` migration for refcount-aware `FileIDCount` and the `AppendAwareChunker` infrastructure.

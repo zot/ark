@@ -177,6 +177,15 @@ func Init(dbPath string, opts InitOpts) error {
 		return fmt.Errorf("write config I records: %w", err)
 	}
 
+	// CRC: crc-DB.md | R1879, R1882
+	// Schema markers for fresh DB.
+	if err := store.IPut("ec_version", "2"); err != nil {
+		return fmt.Errorf("write ec_version: %w", err)
+	}
+	if err := store.IPut("tag_store_version", "1"); err != nil {
+		return fmt.Errorf("write tag_store_version: %w", err)
+	}
+
 	return nil
 }
 
@@ -287,6 +296,12 @@ func Open(dbPath string) (*DB, error) {
 		log.Println("migrate: dropping old EC/EF records (ec_version upgrade to 2)")
 		store.DropChunkEmbeddings()
 		store.IPut("ec_version", "2")
+	}
+
+	// R1879, R1880: refuse to start on a stale tag store schema. Init writes "1"
+	// for fresh DBs (R1882). An old DB lacking the marker requires `ark rebuild`.
+	if tv, _ := store.IGet("tag_store_version"); tv != "1" {
+		return nil, fmt.Errorf("tag store schema upgrade required — run `ark rebuild` (tag_store_version=%q, want %q)", tv, "1")
 	}
 
 	runSvc(db.svc)
@@ -1299,40 +1314,44 @@ type StatusInfo struct {
 // StatusDB returns per-prefix record counts for both subdatabases.
 // CRC: crc-DB.md | R899, R904, R905
 func (db *DB) StatusDB() (*DBRecordCounts, error) {
-	ftsLabels := map[byte]string{
-		'C': "chunks",
-		'F': "files",
-		'H': "hashes",
-		'I': "config",
-		'N': "paths",
-		'T': "trigrams",
-		'W': "tokens",
+	ftsLabels := map[string]string{
+		"C": "chunks",
+		"F": "files",
+		"H": "hashes",
+		"I": "config",
+		"N": "paths",
+		"T": "trigrams",
+		"W": "tokens",
 	}
-	arkLabels := map[byte]string{
-		'D': "tag-defs",
-		'E': "embeddings",
-		'F': "file-tags",
-		'I': "settings",
-		'M': "missing",
-		'T': "tag-totals",
-		'U': "unresolved",
-		'V': "tag-values",
+	arkLabels := map[string]string{
+		"D":  "tag-defs",
+		"F":  "file-tags",
+		"I":  "settings",
+		"M":  "missing",
+		"T":  "tag-totals",
+		"U":  "unresolved",
+		"V":  "tag-values",
+		"E:": "errors",
+		"EV": "tag-value-embeds",
+		"EC": "chunk-embeds",
+		"EF": "file-centroids",
+		"PC": "page-content",
 	}
 
 	result := &DBRecordCounts{}
 
-	// microfts2 records
+	// microfts2 records — single-byte prefixes only
 	ftsCounts, err := db.fts.RecordCounts()
 	if err != nil {
 		return nil, fmt.Errorf("microfts2 record counts: %w", err)
 	}
-	ftsStats := make(map[byte]RecordStats)
+	ftsStats := make(map[string]RecordStats, len(ftsCounts))
 	for k, v := range ftsCounts {
-		ftsStats[k] = RecordStats{Count: v.Count, KeyBytes: v.KeyBytes, ValueBytes: v.ValueBytes}
+		ftsStats[string([]byte{k})] = RecordStats{Count: v.Count, KeyBytes: v.KeyBytes, ValueBytes: v.ValueBytes}
 	}
 	result.Microfts2 = buildRecordCounts(ftsStats, ftsLabels)
 
-	// ark records
+	// ark records — full-prefix keys
 	arkCounts, err := db.store.RecordCounts()
 	if err != nil {
 		return nil, fmt.Errorf("ark record counts: %w", err)
@@ -1343,13 +1362,13 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 }
 
 // buildRecordCounts converts raw prefix stats into sorted RecordCount slices.
-func buildRecordCounts(stats map[byte]RecordStats, labels map[byte]string) []RecordCount {
+func buildRecordCounts(stats map[string]RecordStats, labels map[string]string) []RecordCount {
 	var recs []RecordCount
 	// Include all known labels, even if count is 0
 	for prefix, label := range labels {
 		s := stats[prefix]
 		recs = append(recs, RecordCount{
-			Prefix:     string([]byte{prefix}),
+			Prefix:     prefix,
 			Purpose:    label,
 			Count:      s.Count,
 			KeyBytes:   s.KeyBytes,

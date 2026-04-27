@@ -347,3 +347,13 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] A44: R1834 (old EC key format superseded by R1833) — no design artifact needed
 - [ ] A45: R1861 (R1598/R1607 superseded by R1833/R1849) — no design artifact needed
 - [ ] A46: R1817-R1829, R1832 (embed dedup high-water tracking) superseded by R1847 (chunkID dedup)
+- A47: R1868-R1872 are deferred or scope-negative requirements from the microfts2-abi-catchup migration: they declare what this catch-up does NOT do (use Locator field, implement AppendAwareChunker, consume FileIDCount.Count, etc.). No inline code coverage is expected; the deferrals are owned by the chunkid-tag-store migration. The migration spec body documents the intentional non-implementations.
+- T1: R1598 retired by R1833 (EC key moved from (fileID, chunkIdx) to chunkID via ec-rekey migration)
+- T2: R1600 retired by R1836 (WriteChunkEmbedding signature changed to single chunkID arg via ec-rekey)
+- T3: R1601 retired by R1838 (ReadChunkEmbedding signature changed to single chunkID arg via ec-rekey)
+- T4: R1607 retired by R1849 (EC deletion on re-index moved to microfts2 callback path (per-chunkID); see also R1850 R1851)
+- T5: R1802 retired (Orphan EC check reworded post-rekey: chunkID with no C record in microfts2 (per R1855); old fileID/chunkIdx framing obsolete)
+- T6: R1803 retired (EF/EC count mismatch reworded post-rekey: count must match unique chunkIDs in file's F-record list (per R1857); old per-file EC framing obsolete)
+- T7: R1804 retired (Missing EC check reworded post-rekey: chunkIDs with C records but no EC record (per R1856); old per-file framing obsolete)
+- T8: R1099 retired by R1281 (V record key gained trailing tvid varint via tag-embeddings work (pre-migration-workflow); landed in tag-embeddings.md)
+- T9: R1110 retired by R1309 (Direct (tag,value) lookup is no longer possible without tvid; prefix scan now returns the one record with tvid in key suffix (pre-migration-workflow))

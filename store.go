@@ -1416,10 +1416,36 @@ func (s *Store) PutScheduleConfig(serialized string) error {
 	return s.IPut(IFieldScheduleConfig, serialized)
 }
 
+// recordPrefixOf returns the full prefix string for an ark-subdatabase
+// key. Known multi-byte prefixes (E:, EV, EC, EF, PC) are matched
+// first; otherwise the single-byte prefix is returned.
+// CRC: crc-Store.md | R905, R907
+func recordPrefixOf(k []byte) string {
+	if len(k) >= 2 {
+		switch {
+		case k[0] == byte(prefixError) && k[1] == ':':
+			return "E:"
+		case k[0] == 'E' && k[1] == 'V':
+			return "EV"
+		case k[0] == 'E' && k[1] == 'C':
+			return "EC"
+		case k[0] == 'E' && k[1] == 'F':
+			return "EF"
+		case k[0] == 'P' && k[1] == 'C':
+			return "PC"
+		}
+	}
+	if len(k) == 0 {
+		return ""
+	}
+	return string(k[0:1])
+}
+
 // RecordCounts scans all keys in the ark subdatabase and returns
-// stats grouped by prefix byte. CRC: crc-Store.md | R907
-func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
-	counts := make(map[byte]RecordStats)
+// stats grouped by full prefix string.
+// CRC: crc-Store.md | R905, R907
+func (s *Store) RecordCounts() (map[string]RecordStats, error) {
+	counts := make(map[string]RecordStats)
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		cur, err := txn.OpenCursor(s.dbi)
 		if err != nil {
@@ -1429,11 +1455,12 @@ func (s *Store) RecordCounts() (map[byte]RecordStats, error) {
 		k, v, err := cur.Get(nil, nil, lmdb.First)
 		for err == nil {
 			if len(k) > 0 {
-				s := counts[k[0]]
-				s.Count++
-				s.KeyBytes += int64(len(k))
-				s.ValueBytes += int64(len(v))
-				counts[k[0]] = s
+				p := recordPrefixOf(k)
+				st := counts[p]
+				st.Count++
+				st.KeyBytes += int64(len(k))
+				st.ValueBytes += int64(len(v))
+				counts[p] = st
 			}
 			k, v, err = cur.Get(nil, nil, lmdb.Next)
 		}

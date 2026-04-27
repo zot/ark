@@ -48,35 +48,26 @@ unloads to free memory. Next query reloads it.
 If deferred to first query, users who query infrequently would
 always hit cold-start latency, driving them to query even less.
 
-## Tag Value IDs
+## Tag Value IDs and Storage
 
-Each unique (tag, value) pair gets a sequential ID (varint). The
-ID is part of the V record key:
+Each unique (tag, value) pair gets a sequential numeric ID called a
+tvid. Tvids are stable: assigned on first index, reused if the same
+(tag, value) persists across re-indexes. The tvid is the join key
+between V records (the tag-value index) and EV records (the
+tag-value compound embedding).
 
-```
-V[tag]\x00[value]\x00[tvid: varint] → packed_fileids
-```
+Tag name embeddings live inline on T records — appended to the
+count — so no separate per-tag-embedding prefix is needed. Tag-value
+compound embeddings are stored under the EV prefix, keyed by tvid.
+F records carry a list of tvids in their value, enabling targeted
+V-record cleanup on file removal (read F records for the fileid →
+collect tvids → remove the fileid from exactly those V records;
+replaces the older full-scan approach in `removeFileidFromAllV`).
 
-The tag-value-id is stable: assigned on first index, reused on
-re-index if the same (tag, value) pair persists. The ID counter
-is stored as an ark LMDB setting (`I` prefix, key: `next_tvid`).
+The tvid counter is an I record (`next_tvid`).
 
-Forward lookup: prefix scan `V[tag]\x00[value]\x00` returns one
-record with the tvid in the key suffix. Reverse lookup: scan V
-prefix, parse tvid from each key.
-
-## F Records Carry TVIDs
-
-F records track which tags appear in a file. The value is extended
-to include tvids:
-
-```
-F[fileid:8][tag] → count:4bytes + packed tvid varints
-```
-
-On file removal or re-index, read F records for the fileid to get
-all tvids, then remove the fileid from exactly those V records.
-This replaces the current full-scan approach in `removeFileidFromAllV`.
+Record key/value layouts: see [record-formats.md](record-formats.md)
+(T, V, F, EV, I sections).
 
 ## What Gets Embedded
 
@@ -91,23 +82,10 @@ hyphenated compounds as opaque tokens.
   `design-decision: use LMDB` → embed "design decision: use LMDB".
   The colon signals label-value structure to the model.
 
-## Embedding Storage
+## Storage scale
 
-Tag name embeddings are stored inline in T records. Tag-value
-compound embeddings use a separate EV prefix:
-
-```
-T[tag_name] → count:4bytes + optional float32 vector (3072 bytes)
-EV[tvid: varint] → float32 vector (3072 bytes)
-```
-
-T records already exist for every tag. The embedding vector is
-appended to the count — if `len(value) == 4`, no embedding yet;
-if `len(value) == 4+3072`, embedding is present. ~270 tags × 3082
-bytes ≈ 810KB total. No separate ET prefix needed.
-
-EV records use the compact numeric tvid from V records (~3857
-entries). Values are raw float32 arrays.
+~270 tags × 3082 bytes ≈ 810KB for inline T-record embeddings.
+~3857 EV entries with raw float32 arrays at 3072 bytes each.
 
 ## Embedding Lifecycle
 

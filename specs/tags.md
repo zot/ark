@@ -6,12 +6,13 @@ mentions. Tags are an ark-level concept, not a microfts2 concern.
 
 ## Storage (ark subdatabase)
 
-- `T` [tagname] -> count — tag vocabulary with global counts
-- `F` [fileid: 8] [tagname] -> count — per-file tag occurrences
+T records hold tag vocabulary with global counts. F records hold
+per-file tag occurrences. Tags are updated whenever a file is
+indexed or refreshed; on remove, the file's tag entries are deleted
+and global counts decremented.
 
-Tags are updated whenever a file is indexed or refreshed. On
-remove, the file's tag entries are deleted and global counts
-decremented.
+Record key/value layouts: see [record-formats.md](record-formats.md)
+(T and F sections).
 
 ## Tag vocabulary file: `~/.ark/tags.md`
 
@@ -27,22 +28,24 @@ The first word after `@tag:` is the tag name; the rest is the
 description. These appear in `~/.ark/tags.md` and any other indexed
 file.
 
-Definitions are extracted at index time and cached in LMDB as
-`D` prefix records. The files remain the source of truth — D records
-update whenever files are indexed, refreshed, or appended.
+Definitions are extracted at index time and cached as D records.
+Files remain the source of truth — D records update whenever files
+are indexed, refreshed, or appended. One record per (tag, file)
+pair where the file defines the tag; a file defining multiple tags
+produces multiple D records. Removed and re-extracted on re-index
+(same lifecycle as F records).
 
-Storage: `D` [tagname] [fileid: 8] -> description bytes. One record
-per definition per source file. When a file is re-indexed, its D
-records are removed and re-extracted (same lifecycle as F records).
+Record key/value layout: see [record-formats.md](record-formats.md)
+(D section).
 
 ## Tag values
 
-Tag values are indexed in LMDB for fast completion. See
-specs/tag-value-index.md for the V record design.
-
-Storage: `V` [tagname] `\x00` [value] -> packed varint fileids.
-One LMDB entry per unique (tag, value) pair. Updated alongside
-T, F, and D records during index/refresh/append/remove.
+Tag values are indexed for fast completion. One V record per unique
+(tag, value) pair, updated alongside T, F, and D records during
+index/refresh/append/remove. See
+[specs/tag-value-index.md](tag-value-index.md) for the design and
+query patterns; record key/value layout in
+[record-formats.md](record-formats.md) (V section).
 
 ## CLI
 

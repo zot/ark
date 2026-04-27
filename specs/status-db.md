@@ -13,25 +13,25 @@ unchanged.
 
 ## Record Types
 
-Two subdatabases share the LMDB environment:
+Two subdatabases share the LMDB environment. Full record key/value
+layouts and the complete prefix inventory live in
+[record-formats.md](record-formats.md). The list below names what
+`ark status --db` tallies.
 
-**microfts2** (the FTS engine):
-- C — chunk records (one per indexed chunk)
-- F — file records (one per indexed file)
-- H — content hash → chunk ID mapping
-- I — config/counter records (settings, totalChunks, totalTokens)
-- N — filename key chain (path → file ID)
-- T — trigram inverted index entries
-- W — token inverted index entries
+**microfts2** (the FTS engine): C, F, H, I, N, T, W. All
+microfts2 prefixes are single-byte. (See microfts2 documentation
+for layouts.)
 
-**ark** (the zettelkasten layer):
-- D — tag definition records
-- F — per-file tag counts
-- I — settings record
-- M — missing file records
-- T — tag total counts
-- U — unresolved file records
-- V — tag value records (tag/value → fileid mapping)
+**ark** (the zettelkasten layer): every prefix listed in
+`record-formats.md` gets its own row — single-byte (M, U, I, T, F,
+D, V) and multi-byte (E:, EV, EC, EF, PC). Multi-byte prefixes are
+not collapsed; counting `E` as a combined bucket would make
+`model_mismatch` errors and tag-value embeddings indistinguishable.
+
+`Store.RecordCounts()` returns counts keyed by the full prefix
+string. Prefix detection for each key: known multi-byte prefixes
+(`E:`, `EV`, `EC`, `EF`, `PC`) are matched first; anything else
+falls back to its single-byte prefix.
 
 ## Output
 
