@@ -6,15 +6,15 @@
 ### Language and Environment
 
 - **R1:** Ark is written in Go
-- **R2:** Ark uses microfts2 (trigram) and microvec (vector) as library dependencies
+- **~~R2:~~** (Retired T18 — no replacement) Ark uses microfts2 (trigram) and microvec (vector) as library dependencies
 - **R3:** LMDB access is via microfts2's shared environment
 - **R4:** Server communication uses Unix domain sockets
 
 ### Shared LMDB Environment
 
-- **R5:** Ark opens microfts2 first (creates LMDB env), then passes the env to microvec
+- **~~R5:~~** (Retired T19 — no replacement) Ark opens microfts2 first (creates LMDB env), then passes the env to microvec
 - **R6:** Ark opens its own named subdatabase for metadata (missing files, unresolved files, settings)
-- **R7:** MaxDBs is set to 8 (microfts2: 2, microvec: 1, ark: 1+, room to grow)
+- **~~R7:~~** (Retired T27 — see R1911) MaxDBs is set to 8 (microfts2: 2, microvec: 1, ark: 1+, room to grow)
 
 ### Source Configuration
 
@@ -49,9 +49,9 @@
 
 ### Init
 
-- **R30:** `ark init` creates a new database: initializes microfts2, microvec, ark subdatabase, and writes default config
+- **~~R30:~~** (Retired T28 — see R1912) `ark init` creates a new database: initializes microfts2, microvec, ark subdatabase, and writes default config
 - **R31:** microfts2 is initialized with character set, case insensitivity, and aliases
-- **R32:** microvec is initialized with embedding command
+- **~~R32:~~** (Retired T20 — no replacement) microvec is initialized with embedding command
 - **R33:** Character set, embedding command, and aliases are immutable after creation
 - **R34:** Newline alias maps `\n` to `\x01` (SOH) for line-start matching in queries
 
@@ -61,32 +61,32 @@
 - **R36:** Files are checked for staleness via microfts2 and skipped if fresh
 - **R37:** Files are added to microfts2 first (returns fileid and chunk offsets)
 - **R38:** Chunk text is read from the file using offsets returned by microfts2
-- **R39:** Chunks are added to microvec using the fileid from microfts2
-- **R40:** microfts2 is the source of truth for file identity — microvec receives fileids from it
+- **~~R39:~~** (Retired T21 — no replacement) Chunks are added to microvec using the fileid from microfts2
+- **~~R40:~~** (Retired T22 — no replacement) microfts2 is the source of truth for file identity — microvec receives fileids from it
 
 ### Remove Files
 
 - **R41:** Remove takes a file path (or glob pattern), removes from both engines
-- **R42:** microfts2 resolves path to fileid, microvec removes by fileid
+- **~~R42:~~** (Retired T23 — no replacement) microfts2 resolves path to fileid, microvec removes by fileid
 
 ### Refresh
 
 - **R43:** Refresh re-indexes stale files using microfts2 staleness detection (modtime + content hash)
-- **R44:** For each stale file: re-add to microfts2, remove old vectors from microvec, add new vectors
+- **~~R44:~~** (Retired T24 — no replacement) For each stale file: re-add to microfts2, remove old vectors from microvec, add new vectors
 - **R45:** Missing files are not auto-deleted — added to ark's missing files list for review
 
 ### Combined Search
 
 - **R46:** Combined search sends the same query text to both engines
 - **R47:** microfts2 returns file/chunk matches with trigram scores
-- **R48:** microvec returns file/chunk matches with cosine similarity scores
+- **~~R48:~~** (Retired T29 — see R1915) microvec returns file/chunk matches with cosine similarity scores
 - **R49:** Results are merged by (fileid, chunknum), combining scores
 - **R50:** Results are sorted by combined score descending
 - **R51:** Output format: filepath:startline-endline with score
 
 ### Split Search
 
-- **R52:** `--about <text>` sends query to microvec only (semantic search)
+- **~~R52:~~** (Retired T30 — see R1916) `--about <text>` sends query to microvec only (semantic search)
 - **R53:** `--contains <text>` sends query to microfts2 only (exact match)
 - **R54:** `--regex <pattern>` sends query to microfts2 only (regex match)
 - **R55:** `--contains` and `--regex` compose — `--contains` drives FTS query, `--regex` post-filters results
@@ -1736,7 +1736,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1113:** Indexer passes `WithChunkCallback` to `AddFileWithContent` to receive clean chunk text during indexing
 - **R1114:** Indexer passes `WithChunkCallback` to `ReindexWithContent` during full refresh
 - **R1115:** Indexer passes `WithAppendChunkCallback` to `AppendChunks` during append refresh
-- **R1116:** The callback accumulates chunk text slices for microvec embedding
+- **~~R1116:~~** (Retired T31 — see R1913) The callback accumulates chunk text slices for microvec embedding
 - **R1117:** The callback extracts tag values from each chunk's clean text via `ExtractTagValues`
 - **R1118:** The callback extracts tag defs from each chunk's clean text via `ExtractTagDefs`
 - **R1119:** (inferred) The callback extracts tag counts via `TagCountsFromValues` on accumulated tag values
@@ -1749,7 +1749,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### splitChunks Elimination
 - **R1123:** `splitChunks` is removed from `AddFile` — callback provides chunk text
 - **R1124:** `splitChunks` is removed from `executeFullRefresh` — callback provides chunk text
-- **R1125:** `splitChunks` is retained in the append microvec path (needs all chunks for re-embedding)
+- **~~R1125:~~** (Retired T25 — no replacement) `splitChunks` is retained in the append microvec path (needs all chunks for re-embedding)
 
 ### Prep/Execute Restructure
 - **R1126:** `prepareRefresh` no longer extracts tags for full refresh — tags come from callback in `executeRefresh`
@@ -3043,7 +3043,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1894:** Both append entry points (`Indexer.AppendFile` and `executeRefresh` isAppend branch) drive their tag pipeline through two microfts2 callbacks: `WithAppendChunkCallback` (text-only, every emitted chunk — feeds `acc.tagValues` for file-level pubsub/schedule) and `WithIndexedChunkCallback` (chunkid-aware, newly-inserted chunks only — feeds `acc.chunkTags` for chunkid-keyed F/V/T writes). Both replace the prior `tagWindowForAppend` pre-extraction.
 - **R1895:** `tagWindowForAppend` is removed (definition + both call sites). Boundary handling is microfts2's responsibility via the chunker's append protocol; tags split across the seam are re-emitted by the callback as part of the merged chunk.
 - **R1896:** `refreshPrep` no longer carries `tagValues`, `tags`, or `defs`. Tag extraction moves on-actor during execute. Pre-extraction was a marginal optimization the migration makes incompatible.
-- **R1897:** Vector path unchanged: `splitChunks(prep.data, ...)` and `vec.AddFile(fileid, allChunks)` stay file-level. Vectors are file-scoped.
+- **~~R1897:~~** (Retired T26 — no replacement) Vector path unchanged: `splitChunks(prep.data, ...)` and `vec.AddFile(fileid, allChunks)` stay file-level. Vectors are file-scoped.
 - **R1898:** If `AppendChunks` returns an error, `executeRefresh` falls through to `executeFullRefresh`, which uses its own fresh accumulator. The append accumulator is discarded.
 
 ### Cleanup mechanism (orphan chunkids)
@@ -3069,7 +3069,76 @@ implementation, not a separate format break.
 - **R1903:** Markdown is registered via `microfts2.AddChunker("markdown", microfts2.MarkdownChunker{})` (struct form) rather than via `AddStrategyFunc` + `MarkdownChunkFunc` (function form). The struct form preserves microfts2's `AppendAwareChunker` interface, enabling clean paragraph-extension merges on append.
 - **R1904:** `chunkAccumulator` carries an `indexedCallback(microfts2.IndexedChunk)` method and a `chunkTags []ChunkTagValues` field. The method extracts tags from `ic.Chunk.Content` and appends `ChunkTagValues{ic.CRecord.ChunkID, values}`. Fires only for newly-inserted chunkids per microfts2's `WithIndexedChunkCallback` contract.
 - **R1905:** Content-dedup'd chunks (microfts2 refcount-bumped C records) do not fire `WithIndexedChunkCallback` and therefore contribute zero F/V/T writes from ark — the records already capture the tags from the first file that brought the content in. This is a deliberate efficiency property of the chunkid-aware path.
-- **R1906:** All four indexer paths pass both `WithChunkCallback` (or `WithAppendChunkCallback` on append) and `WithIndexedChunkCallback`. The text-only callback feeds `acc.chunks`, `acc.tagValues`, and `acc.defs` for vector indexing, file-level pubsub/schedule, and D-record writes; the indexed callback feeds `acc.chunkTags` for F/V/T writes. Tag extraction runs twice on newly-inserted chunks (once per callback) — sub-millisecond, accepted as not worth optimizing.
+- **~~R1906:~~** (Retired T32 — see R1926) All four indexer paths pass both `WithChunkCallback` (or `WithAppendChunkCallback` on append) and `WithIndexedChunkCallback`. The text-only callback feeds `acc.chunks`, `acc.tagValues`, and `acc.defs` for vector indexing, file-level pubsub/schedule, and D-record writes; the indexed callback feeds `acc.chunkTags` for F/V/T writes. Tag extraction runs twice on newly-inserted chunks (once per callback) — sub-millisecond, accepted as not worth optimizing.
 - **R1907:** R386's interim ("fall through to full refresh on dirty markdown append boundaries") is partially superseded for markdown — `MarkdownChunker` now implements `AppendAwareChunker` so paragraph-extension appends merge cleanly. R386 still applies to chunkers that haven't implemented `AppendAwareChunker` yet (microfts2's deferred gap O16 covers the remaining built-in chunkers).
 - **R1908:** Orphan-chunkid cleanup continues to use microfts2's `RemoveCallback` (delivers `[]uint64` post-deletion). Migration to the richer pre-deletion `WithRemovedChunkCallback` (delivers full `CRecord`) is deferred — the current path correctly drops F/V/T per chunkid via `Store.RemoveTagValuesInTxn`, and the richer callback is only useful when ark needs to read tvids from the CRecord directly instead of scanning F[chunkid] itself.
 
+## Feature: microvec → EC search migration
+**Source:** specs/migrations/microvec-to-ec-search.md
+
+### Dependencies and lifetime
+
+- **R1909:** Ark uses microfts2 (trigram) and an internal embedding pipeline (Librarian + EC chunk-embedding records) as its search engines. (replaces R2)
+- **R1910:** Ark opens microfts2 first (creates LMDB env). The Store and Librarian share that env. (replaces R5)
+- **R1911:** MaxDBs is set to the count microfts2 + the ark subdatabase require — no microvec subDB is allocated. (replaces R7)
+- **R1912:** `ark init` creates a new database: initializes microfts2, the ark subdatabase, and writes default config. No microvec initialization step. (replaces R30)
+
+### Vector search via Librarian + EC
+
+- **R1913:** Chunk embeddings are written to EC records by `Librarian.BatchEmbedChunks`; chunkid is the key. The text-only chunk callback no longer carries chunk text for embedding. (replaces R39, R1116)
+- **R1914:** chunkid (not fileid) is the source of truth for embedding identity. `Librarian.BatchEmbedChunks` reads chunks by chunkid via the indexed callback path; orphan cleanup uses microfts2 callbacks (R1899–R1901). (replaces R40)
+- **R1915:** `Librarian.SearchChunks(queryVec []float32, k int) ([]ChunkScore, error)` returns the top-k EC records by cosine similarity, found via a single LMDB View with a cursor walk over the EC prefix and a min-heap of size k. (replaces R48)
+- **R1916:** `--about <text>` routes through `Librarian.EmbedQuery` for the query vector and `Librarian.SearchChunks` for ranking. When `tag_model` is unconfigured, `--about` returns an actionable error (existing `Librarian.EmbeddingAvailable()` gate). (replaces R52)
+- **R1917:** `ChunkScore` is `{ChunkID uint64, FileID uint64, Score float64}`. `FileID` is recovered from `CRecord.FileIDs[0]` inside the search txn. Merge/intersect by (FileID, ChunkID) tuple — the same key shape microvec used.
+- **R1918:** `Searcher.merge`, `Searcher.intersect`, and `Searcher.vecOnly` retype from `[]microvec.SearchResult` to `[]ChunkScore`. The merge/intersect math is unchanged.
+
+### Centroid filtering — config-gated
+
+- **R1919:** `AboutCentroidFilter` (config bool, `toml:"about_centroid_filter,omitempty"`, default `false`) controls whether centroid-based pre-filtering runs for `about` queries. Default `false` so small/medium corpora bypass the centroid blind spot.
+- **R1920:** `AboutCentroidThreshold` (config float64, `toml:"about_centroid_threshold,omitempty"`, default `0.3`) is the cosine similarity gate the centroid filter applies. Consulted only when `AboutCentroidFilter` is true.
+- **R1921:** `ResolveAboutFilters` consults `AboutCentroidFilter`. When false, returns no early `WithOnly` / late `WithExcept` options for "about" rows. When true, gates file centroids at `cosineSimilarity > AboutCentroidThreshold` (replacing the previously hard-coded 0.3).
+- **R1922:** When `AboutCentroidFilter` is false, `Librarian.SearchChunks` walks every EC record (no centroid pre-filter). When true, the walk narrows to chunks whose owning file passed the centroid gate at `AboutCentroidThreshold`.
+
+### microvec removal
+
+- **R1923:** `Searcher.vec`, `DB.vec`, `DB.Vec()`, and `Indexer.vec` are removed. `microvec.Open` / `microvec.Create` calls in `db.go` are deleted, as is the `microvec` import from every Go file that loses its last reference.
+- **R1924:** `go.mod` no longer depends on `github.com/zot/microvec`; `go mod tidy` drops it.
+- **R1925:** Pre-existing microvec records inside the LMDB env are orphaned blobs reclaimed on the next `ark init` / rebuild. No schema marker bump is required (the record formats ark *writes* don't change).
+
+### Indexer callback wording
+
+- **R1926:** The text-only chunk callback (`WithChunkCallback` / `WithAppendChunkCallback`) feeds `acc.tagValues` and `acc.defs` for file-level pubsub/schedule and D-record writes. It does not carry chunk text for embedding — embeddings go through the chunkid-aware indexed callback path and `Librarian.BatchEmbedChunks`. (replaces R1906; the "vector indexing" clause referred to microvec.)
+
+## Feature: about multi-search and chunk-level about filter
+**Source:** specs/migrations/about-multi-search.md
+
+### Multi-query EC walk
+
+- **~~R1927:~~** (Retired T33 — no replacement) `AboutKind` enum has values `AboutTopK` (produce top-k by score) and `AboutSet` (produce a chunkID set whose score ≥ threshold). One value per request in a multi-query walk.
+- **R1928:** `AboutRequest` is `{QueryVec []float32, K int}`. There is one request shape — top-K — because empirically a cosine-threshold reducer is no-op against the nomic embedding distribution (basically every chunk passes 0.3; almost none passes a usefully strict gate).
+- **R1929:** `AboutResult` is `{TopK []ChunkScore}`. The result slice is index-parallel to the request slice.
+- **R1930:** `Librarian.SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error)` walks EC records once. For each chunk it computes cosine similarity against every `req.QueryVec` and pushes onto that request's min-heap of size `K`. After the walk, every surviving chunk's `FileID` is resolved via `fts.ReadCRecord` inside one shared txn.
+- **R1931:** `Librarian.SearchChunks(qvec, k)` is reduced to a thin wrapper that calls `SearchChunksMulti` with one `AboutRequest` and returns the resulting `TopK`.
+
+### Chunk-level "about" filter
+
+- **R1932:** Each `Mode == "about"` filter row goes through `SearchChunksMulti` as a top-K request with `K = row.K` if non-zero, else `cfg.AboutFilterTopK`. The resulting `TopK` is converted to a chunkID set, and a `microfts2.WithChunkFilter` closure checks `crec.ChunkID` against that set. Polarity (`with`/`without`) negates the closure. Top-K (not threshold) because the nomic embedding distribution makes a cosine threshold unworkable for chunk-level filtering.
+- **~~R1933:~~** (Retired T34 — no replacement) A single threshold knob is reused for both centroid pre-filter and chunk-level about filter: `cfg.AboutCentroidThreshold` (default 0.3). Per-row override is future work.
+- **R1934:** When the embedding pipeline is unavailable (`Librarian.EmbeddingAvailable()` returns false), about-mode chunk filter rows are dropped with a logged warning rather than failing the surrounding search.
+
+### Searcher integration
+
+- **R1935:** Combined about coordination — `ResolveAboutFilters` collects the primary `--about` query (if any) and every `Mode == "about"` chunk filter row into one `SearchChunksMulti` call. Primary `--about` results route to merge/intersect/vecOnly via `opts.aboutResults`. Each filter row's `TopK` becomes a chunkID set: published as a `microfts2.WithChunkFilter` closure (consumed by FTS) **and** exposed as an `AboutFilterSet` so vec-only paths can apply the same membership filter.
+
+### CLI cold path
+
+- **R1936:** The CLI cold path (`cmd/ark/main.go` search dispatcher) errors out with an actionable "start `ark serve`" message when `opts.About != ""` or any chunk filter row has `Mode == "about"`. Embedding-model warm-up per CLI invocation is too costly; the server is the only supported host for about queries.
+
+### UI
+
+- **R1937:** The `ark-search` web component (`ark-search/src/ark-search-element.ts`) adds `"about"` to the `FilterMode` union and to the `FILTER_MODES` array. The existing free-text input branch handles about's input — no per-row threshold control.
+
+### Filter top-K knob
+
+- **R1938:** `AboutFilterTopK` (config int, `toml:"about_filter_top_k,omitempty"`, default 200) is the default chunk count retained per about-mode filter row. A small default narrows aggressively; users tune up if they want more recall.
+- **R1939:** `ChunkFilterRow` gains an optional `K int` field (`json:"k,omitempty"`). When non-zero it overrides `cfg.AboutFilterTopK` for that row. Lets a single search mix tight and loose about filters.

@@ -13,7 +13,6 @@ require (
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zot/frictionless v0.29.0
 	github.com/zot/microfts2 v0.2.0
-	github.com/zot/microvec v0.1.0
 	github.com/zot/pdftext v0.1.0
 	github.com/zot/ui-engine v0.21.0
 )

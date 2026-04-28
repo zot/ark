@@ -17,7 +17,9 @@ interface PhasedGroup {
   phase: Phase;
 }
 
-type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "files";
+// CRC: crc-ArkSearchElement.md | R1937 — "about" filter mode for
+// semantic chunk-level membership filtering.
+type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "files" | "about";
 type Polarity = "with" | "without";
 type TagMatchMode = "exact" | "regex" | "fuzzy";
 type TagNameMatch = "contains" | "exact";
@@ -50,7 +52,7 @@ interface SourceToggle {
 
 const SEARCH_MODES = ["contains", "fuzzy", "regex", "tag"] as const;
 type SearchMode = (typeof SEARCH_MODES)[number];
-const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files"];
+const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files", "about"];
 const TAG_MATCH_LABELS: Record<TagMatchMode, string> = { exact: "Aa", regex: ".*", fuzzy: "~" };
 const TAG_MATCH_CYCLE: TagMatchMode[] = ["exact", "regex", "fuzzy"];
 const TAG_NAME_MATCH_LABELS: Record<TagNameMatch, string> = { contains: "~", exact: "=" };
@@ -620,7 +622,12 @@ export class ArkSearchElement extends HTMLElement {
       input.className = "ark-search-filter-query";
       input.type = "text";
       input.value = row.query;
-      input.placeholder = row.mode === "files" ? "*.md, **/*.jsonl" : "filter...";
+      input.placeholder =
+        row.mode === "files"
+          ? "*.md, **/*.jsonl"
+          : row.mode === "about"
+            ? "semantic match..."
+            : "filter...";
       input.addEventListener("input", () => {
         row.query = input.value;
         this.debouncedSearch();

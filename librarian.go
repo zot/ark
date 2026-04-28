@@ -4,7 +4,9 @@ package ark
 // R1235-R1254, R1268-R1273
 
 import (
+	"container/heap"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/bmatsuo/lmdb-go/lmdb"
 	llama "github.com/godeps/gollama"
 	"github.com/zot/microfts2"
 )
@@ -475,6 +478,180 @@ func (l *Librarian) EmbeddingAvailable() bool {
 	return l != nil && l.modelPath != ""
 }
 
+// ChunkScore pairs a chunkID and its primary fileID with the cosine
+// similarity score against a query vector. Returned by SearchChunks.
+// FileID is the first FileID listed in the chunk's CRecord.
+// CRC: crc-Librarian.md | R1917
+type ChunkScore struct {
+	ChunkID uint64
+	FileID  uint64
+	Score   float64
+}
+
+// chunkScoreHeap is a min-heap of ChunkScore by Score, used by
+// SearchChunks to retain the top-k highest-scoring chunks.
+type chunkScoreHeap []ChunkScore
+
+func (h chunkScoreHeap) Len() int            { return len(h) }
+func (h chunkScoreHeap) Less(i, j int) bool  { return h[i].Score < h[j].Score }
+func (h chunkScoreHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *chunkScoreHeap) Push(x any)         { *h = append(*h, x.(ChunkScore)) }
+func (h *chunkScoreHeap) Pop() any {
+	old := *h
+	n := len(old)
+	v := old[n-1]
+	*h = old[:n-1]
+	return v
+}
+
+// AboutRequest is one query in a multi-query EC walk. There is one
+// shape — top-K — because empirically a cosine-threshold reducer is
+// no-op against the nomic embedding distribution.
+// CRC: crc-Librarian.md | R1928
+type AboutRequest struct {
+	QueryVec []float32
+	K        int
+}
+
+// AboutResult is the per-request top-K reduction. Index-parallel to
+// the request slice returned by SearchChunksMulti.
+// CRC: crc-Librarian.md | R1929
+type AboutResult struct {
+	TopK []ChunkScore
+}
+
+// SearchChunks ranks every EC record by cosine similarity against
+// queryVec and returns the top-k highest-scoring chunks. Thin
+// wrapper over SearchChunksMulti.
+// CRC: crc-Librarian.md | Seq: seq-search.md | R1915, R1922, R1931
+func (l *Librarian) SearchChunks(queryVec []float32, k int) ([]ChunkScore, error) {
+	if k <= 0 || len(queryVec) == 0 {
+		return nil, nil
+	}
+	res, err := l.SearchChunksMulti([]AboutRequest{{QueryVec: queryVec, K: k}})
+	if err != nil || len(res) == 0 {
+		return nil, err
+	}
+	return res[0].TopK, nil
+}
+
+// SearchChunksMulti walks EC records once, scoring each chunk against
+// every request's QueryVec and pushing onto that request's min-heap
+// of size K. After the walk, every surviving chunk's FileID is
+// resolved via fts.ReadCRecord inside one shared txn.
+//
+// The returned slice is index-parallel to reqs. EC records whose
+// dimension does not match the first request's QueryVec are skipped
+// (all requests must use the same model and therefore the same dim).
+//
+// CRC: crc-Librarian.md | Seq: seq-search.md | R1930
+func (l *Librarian) SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+
+	dim := 0
+	queryNorms := make([]float64, len(reqs))
+	heaps := make([]*chunkScoreHeap, len(reqs))
+	for i, r := range reqs {
+		if len(r.QueryVec) == 0 {
+			return nil, fmt.Errorf("about request %d: empty query vector", i)
+		}
+		if dim == 0 {
+			dim = len(r.QueryVec) * 4
+		}
+		var ns float64
+		for _, x := range r.QueryVec {
+			ns += float64(x) * float64(x)
+		}
+		queryNorms[i] = math.Sqrt(ns)
+		h := &chunkScoreHeap{}
+		heap.Init(h)
+		heaps[i] = h
+	}
+
+	err := l.db.store.ViewChunkEmbeddings(func(txn *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+		if len(raw) != dim {
+			return true, nil
+		}
+		for i, r := range reqs {
+			if queryNorms[i] == 0 || r.K <= 0 {
+				continue
+			}
+			score := cosineFromBytes(raw, r.QueryVec, queryNorms[i])
+			h := heaps[i]
+			if h.Len() < r.K {
+				heap.Push(h, ChunkScore{ChunkID: chunkID, Score: score})
+			} else if score > (*h)[0].Score {
+				(*h)[0] = ChunkScore{ChunkID: chunkID, Score: score}
+				heap.Fix(h, 0)
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]AboutResult, len(reqs))
+	type pending struct {
+		reqIdx  int
+		chunkID uint64
+		score   float64
+	}
+	var topQueue []pending
+	for i := range reqs {
+		h := heaps[i]
+		drained := make([]ChunkScore, h.Len())
+		for j := range drained {
+			c := heap.Pop(h).(ChunkScore)
+			drained[len(drained)-1-j] = c
+		}
+		results[i].TopK = make([]ChunkScore, 0, len(drained))
+		for _, c := range drained {
+			topQueue = append(topQueue, pending{reqIdx: i, chunkID: c.ChunkID, score: c.Score})
+		}
+	}
+
+	if len(topQueue) > 0 {
+		if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+			for _, p := range topQueue {
+				crec, err := l.db.fts.ReadCRecord(txn, p.chunkID)
+				if err != nil || len(crec.FileIDs) == 0 {
+					continue
+				}
+				results[p.reqIdx].TopK = append(results[p.reqIdx].TopK, ChunkScore{
+					ChunkID: p.chunkID,
+					FileID:  crec.FileIDs[0].FileID,
+					Score:   p.score,
+				})
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+// cosineFromBytes computes cosine similarity between a query vector
+// and a packed []float32 stored in LMDB byte form, without allocating
+// an intermediate float32 slice.
+func cosineFromBytes(raw []byte, query []float32, queryNorm float64) float64 {
+	var dot, normSq float64
+	for i, q := range query {
+		bits := binary.LittleEndian.Uint32(raw[i*4:])
+		x := float64(math.Float32frombits(bits))
+		dot += x * float64(q)
+		normSq += x * x
+	}
+	denom := queryNorm * math.Sqrt(normSq)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
+}
+
 // EmbedQuery embeds a text string using the warm model.
 // Loads the model on first call. Resets TTL.
 // R1296
@@ -730,7 +907,9 @@ func (l *Librarian) createTierCtx(tier EmbedTier) (*llama.Context, error) {
 
 // BatchEmbedChunks embeds all chunks missing EC records, using tier
 // contexts for adaptive batching. Called post-reconcile after BatchEmbed.
-// CRC: crc-Librarian.md | R1609-R1617
+// chunkid is the embedding key; chunkids arrive via the indexed
+// callback delivered to the indexer at write time.
+// CRC: crc-Librarian.md | R1609-R1617, R1913, R1914
 func (l *Librarian) BatchEmbedChunks() error {
 	if !l.EmbeddingAvailable() || len(l.tiers) == 0 {
 		return nil

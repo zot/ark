@@ -17,7 +17,6 @@ import (
 	"github.com/zot/microfts2"
 	"sync"
 
-	"github.com/zot/microvec"
 )
 
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
@@ -82,11 +81,13 @@ func flattenChunkTags(chunkTags [][]TagValue) []TagValue {
 	return out
 }
 
-// Indexer coordinates adding, removing, and refreshing files across
-// both microfts2 and microvec. Extracts tags from file content.
+// Indexer coordinates adding, removing, and refreshing files. Drives
+// microfts2 indexing and orphan-EC cleanup callbacks. Extracts tags
+// from file content. Embeddings are written by Librarian.BatchEmbedChunks
+// post-reconcile — Indexer no longer writes vectors itself.
+// CRC: crc-Indexer.md | R1923, R1926
 type Indexer struct {
 	fts        *microfts2.DB
-	vec        *microvec.DB
 	store      *Store
 	pubsub     *PubSub         // nil when running without server
 	scheduler  *EventScheduler // nil when running without server
@@ -110,7 +111,6 @@ type scheduleItem struct {
 func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
 	return &Indexer{
 		fts:        fts,
-		vec:        idx.vec,
 		store:      idx.store,
 		pubsub:     idx.pubsub,
 		scheduler:  idx.scheduler,
@@ -186,9 +186,8 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		}
 	}
 
-	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
-		return fileid, fmt.Errorf("vec add %s: %w", path, err)
-	}
+	// Embeddings (EC/EF) are written by Librarian.BatchEmbedChunks
+	// post-reconcile — no synchronous vector write here. (R1923, R1926)
 
 	if idx.store != nil {
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
@@ -221,7 +220,7 @@ func (idx *Indexer) RemoveFile(path string) error {
 	if err := idx.fts.RemoveFileWithCallback(path, idx.removeCallback(fileid)); err != nil {
 		return fmt.Errorf("fts remove %s: %w", path, err)
 	}
-	idx.vec.RemoveFile(fileid)
+	// EC/EF cleanup runs inside the removeCallback above (R1850, R1852, R1853, R1923).
 	if idx.store != nil {
 		// V/F/T cleanup is driven by orphan-chunkid callbacks (R1899)
 		// installed via idx.removeCallback above.
@@ -240,7 +239,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	if err := idx.fts.RemoveFileWithCallback(info.Names[0], idx.removeCallback(fileid)); err != nil {
 		return fmt.Errorf("fts remove %d: %w", fileid, err)
 	}
-	idx.vec.RemoveFile(fileid)
+	// EC/EF cleanup is driven by the removeCallback above (R1923).
 	if idx.store != nil {
 		// V/F/T cleanup driven by orphan-chunkid callbacks (R1899).
 		idx.store.RemoveTagDefs(fileid)
@@ -367,15 +366,9 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			// Append failed — fall through to full reindex
 			return idx.executeFullRefresh(prep)
 		}
-		// Vectors: full refresh
-		idx.vec.RemoveFile(prep.oldID)
-		_, chunks, err := splitChunks(prep.data, prep.oldID, idx.fts)
-		if err != nil {
-			return fmt.Errorf("read chunks %s: %w", prep.path, err)
-		}
-		if err := idx.vec.AddFile(prep.oldID, chunks); err != nil {
-			return fmt.Errorf("vec add %s: %w", prep.path, err)
-		}
+		// Embeddings: orphan EC/EF cleanup ran inside the reindex callback;
+		// new chunks will be embedded by Librarian.BatchEmbedChunks
+		// post-reconcile (R1923, R1926).
 		// Tags: chunkid-keyed; chunkids arrive via the indexed callback.
 		if idx.store != nil {
 			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
@@ -418,11 +411,8 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		}
 	}
 
-	idx.vec.RemoveFile(prep.oldID)
-
-	if err := idx.vec.AddFile(fileid, acc.chunks); err != nil {
-		return fmt.Errorf("vec add %s: %w", prep.path, err)
-	}
+	// EC/EF cleanup ran inside reindexCb; new EC records arrive on the
+	// next BatchEmbedChunks pass. (R1923, R1926)
 
 	if idx.store != nil {
 		if fileid != prep.oldID {
@@ -546,15 +536,8 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		return fmt.Errorf("fts append %s: %w", path, err)
 	}
 
-	// Vectors: full refresh (remove old, re-add all chunks)
-	idx.vec.RemoveFile(fileid)
-	_, allChunks, err := splitChunks(data, fileid, idx.fts)
-	if err != nil {
-		return fmt.Errorf("read chunks %s: %w", path, err)
-	}
-	if err := idx.vec.AddFile(fileid, allChunks); err != nil {
-		return fmt.Errorf("vec add %s: %w", path, err)
-	}
+	// Embeddings: Librarian.BatchEmbedChunks reconciles EC/EF on the next
+	// pass. No synchronous vector write here. (R1923, R1926)
 
 	// Tags and defs: chunkid-keyed via indexed callback.
 	if idx.store != nil {
@@ -954,19 +937,3 @@ func ExtractTagDefs(content []byte) map[string]string {
 	return defs
 }
 
-// splitChunks reads chunk text from a file using ranges from microfts2.
-// Returns the raw file data alongside sliced chunks (avoids bytes.Join
-// when callers need the full content for tag extraction).
-func splitChunks(data []byte, fileid uint64, fts *microfts2.DB) ([]byte, [][]byte, error) {
-	info, err := fts.FileInfoByID(fileid)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	chunks := make([][]byte, len(info.Chunks))
-	for i, r := range info.Chunks {
-		chunks[i] = []byte(extractByRange(lines, r.Location))
-	}
-	return data, chunks, nil
-}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,7 +23,6 @@ import (
 	"github.com/zot/microfts2"
 
 	"github.com/yuin/goldmark"
-	"github.com/zot/microvec"
 )
 
 var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
@@ -65,7 +65,7 @@ type SearchOpts struct {
 	Scores          bool                     // include scores in output
 	After           time.Time                // only results newer than this (zero = no filter)
 	Before          time.Time                // only results older than this (zero = no filter)
-	About           string                   // semantic query (microvec)
+	About           string                   // semantic query — routed through Librarian + EC (R1916)
 	Contains        string                   // exact match query (microfts2)
 	Regex           []string                 // regex patterns (first drives SearchRegex, all are AND post-filters)
 	ExceptRegex     []string                 // regex subtract post-filters (any match rejects)
@@ -85,11 +85,66 @@ type SearchOpts struct {
 	Cache           *microfts2.ChunkCache    // R652: session-provided cache (nil = per-query)
 	ChunkFilters    []ChunkFilterRow         // R1402: stacked filter rows for chunk-level filtering
 	extraOpts       []microfts2.SearchOption // built from ChunkFilters at search time
+	// aboutResults, when set, is the precomputed top-k for opts.About
+	// from a combined SearchChunksMulti call. SearchSplit/SearchCombined
+	// consume it instead of running aboutSearch themselves. R1935
+	aboutResults    []ChunkScore
+	aboutResultsSet bool
+	// aboutFilterSets, when set, are the raw chunkID memberships from
+	// the same combined walk that produced aboutResults. SearchSplit
+	// applies them to vec-only output. R1935
+	aboutFilterSets []AboutFilterSet
 }
 
 // SetExtraOpts appends microfts2 search options built from chunk filters.
 func (o *SearchOpts) SetExtraOpts(opts ...microfts2.SearchOption) {
 	o.extraOpts = append(o.extraOpts, opts...)
+}
+
+// SetAboutResults plants the precomputed top-k for opts.About so that
+// SearchSplit/SearchCombined skip a redundant SearchChunks call.
+// CRC: crc-Searcher.md | R1935
+func (o *SearchOpts) SetAboutResults(results []ChunkScore) {
+	o.aboutResults = results
+	o.aboutResultsSet = true
+}
+
+// SetAboutFilterSets plants the chunkID-set view of about-filter
+// rows so vec-only paths can apply the same filter that
+// WithChunkFilter applies on the FTS side.
+// CRC: crc-Searcher.md | R1935
+func (o *SearchOpts) SetAboutFilterSets(sets []AboutFilterSet) {
+	o.aboutFilterSets = sets
+}
+
+// applyAboutFilterSets filters vecResults through every about-filter
+// chunkID set, honouring polarity. Used by vec-only paths that
+// bypass the FTS WithChunkFilter closures.
+// CRC: crc-Searcher.md | R1935
+func applyAboutFilterSets(vec []ChunkScore, sets []AboutFilterSet) []ChunkScore {
+	if len(sets) == 0 {
+		return vec
+	}
+	out := vec[:0]
+	for _, cs := range vec {
+		keep := true
+		for _, s := range sets {
+			_, in := s.ChunkIDs[cs.ChunkID]
+			if s.Polarity == "without" {
+				if in {
+					keep = false
+					break
+				}
+			} else if !in {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, cs)
+		}
+	}
+	return out
 }
 
 // SearchResultEntry is a merged/intersected search result.
@@ -216,10 +271,11 @@ type chunkKey struct {
 	ChunkNum uint64
 }
 
-// Searcher queries both engines and merges or intersects results.
+// Searcher queries microfts2 and the Librarian-backed embedding pipeline,
+// then merges or intersects results.
+// CRC: crc-Searcher.md | R1909, R1916, R1923
 type Searcher struct {
 	fts       *microfts2.DB
-	vec       *microvec.DB
 	store     *Store
 	config    *Config
 	librarian *Librarian
@@ -257,15 +313,23 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 		}
 	}
 
-	vecResults, err := s.vec.Search(query, k*2) // over-fetch for merge
-	if err != nil {
-		// FTS-only mode: skip vec, return FTS results
-		results := s.ftsOnly(ftsResults.Results)
-		if len(results) > k {
-			results = results[:k]
+	var vecResults []ChunkScore
+	if opts.aboutResultsSet {
+		vecResults = opts.aboutResults // precomputed by SearchGrouped's combined walk
+	} else {
+		vr, err := s.aboutSearch(query, k*2)
+		if err != nil {
+			// Embedding pipeline unavailable: fall back to FTS-only.
+			results := s.ftsOnly(ftsResults.Results)
+			if len(results) > k {
+				results = results[:k]
+			}
+			return s.filterAndResolve(results, opts)
 		}
-		return s.filterAndResolve(results, opts)
+		vecResults = vr
 	}
+	// Apply about-filter chunkID sets to vec results. R1935
+	vecResults = applyAboutFilterSets(vecResults, opts.aboutFilterSets)
 
 	merged := s.merge(ftsResults.Results, vecResults)
 	if len(merged) > k {
@@ -273,6 +337,22 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 	}
 	return s.filterAndResolve(merged, opts)
 }
+
+// aboutSearch embeds query and ranks chunks via the EC pipeline.
+// Returns ([]ChunkScore, nil) on success, an error when embedding is
+// unavailable so callers can fall back to FTS-only.
+// CRC: crc-Searcher.md | R1916, R1935
+func (s *Searcher) aboutSearch(query string, k int) ([]ChunkScore, error) {
+	if s.librarian == nil || !s.librarian.EmbeddingAvailable() {
+		return nil, fmt.Errorf("embedding pipeline unavailable")
+	}
+	qvec, err := s.librarian.EmbedQuery(query)
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	return s.librarian.SearchChunks(qvec, k)
+}
+
 
 // SearchSplit dispatches --about, --contains, --regex to appropriate engines.
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
@@ -295,15 +375,22 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	hasAbout := opts.About != ""
 	hasFTS := opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != ""
 
-	var vecResults []microvec.SearchResult
+	var vecResults []ChunkScore
 	var ftsResults []microfts2.SearchResult
 
 	if hasAbout {
-		vr, err := s.vec.Search(opts.About, k*2)
-		if err != nil {
-			return nil, fmt.Errorf("vec search: %w", err)
+		if opts.aboutResultsSet {
+			vecResults = opts.aboutResults // precomputed by SearchGrouped's combined walk
+		} else {
+			vr, err := s.aboutSearch(opts.About, k*2)
+			if err != nil {
+				return nil, fmt.Errorf("about search: %w", err)
+			}
+			vecResults = vr
 		}
-		vecResults = vr
+		// Apply about-filter chunkID sets — vec-only paths bypass the
+		// FTS WithChunkFilter closures that ResolveAboutFilters built. R1935
+		vecResults = applyAboutFilterSets(vecResults, opts.aboutFilterSets)
 	}
 
 	// Apply --except-regex as post-filter to any search mode
@@ -402,10 +489,12 @@ func validateSearchFlags(opts SearchOpts) error {
 // CRC: crc-Searcher.md | R1395-R1401
 
 // ChunkFilterRow describes a single stacked filter row from the UI.
+// CRC: crc-Searcher.md | R1939
 type ChunkFilterRow struct {
-	Polarity string `json:"polarity"` // "with" or "without"
-	Mode     string `json:"mode"`     // "contains", "fuzzy", "tag"
+	Polarity string `json:"polarity"`    // "with" or "without"
+	Mode     string `json:"mode"`        // "contains", "fuzzy", "tag", ...
 	Query    string `json:"query"`
+	K        int    `json:"k,omitempty"` // about-mode only: top-k override (0 = use cfg.AboutFilterTopK)
 }
 
 // resolveChunkLocation resolves a CRecord to (path, range) using the fileIDPaths map.
@@ -637,62 +726,194 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 	return opts
 }
 
-// ResolveAboutFilters partitions "about" entries from chunk filters, embeds
-// each query via Librarian, cosine-ranks against file centroids, and returns
-// file-level filter options. Positive abouts become WithOnly (early, narrows
-// FTS candidate set). Negative abouts become WithExcept (late, prunes after
-// other filters). Non-about rows are returned unmodified for BuildChunkFilters.
-// CRC: crc-Searcher.md | R1787
-func ResolveAboutFilters(rows []ChunkFilterRow, lib *Librarian, store *Store, k int) (remaining []ChunkFilterRow, early, late []microfts2.SearchOption) {
+// AboutResolution bundles everything ResolveAboutFilters returns.
+// CRC: crc-Searcher.md | R1932, R1935
+type AboutResolution struct {
+	Remaining       []ChunkFilterRow         // filter rows with about rows stripped
+	AboutResults    []ChunkScore             // top-k for primary --about (nil when none requested)
+	HasAboutResults bool                     // primary --about was processed (even if empty)
+	ChunkFilterOpts []microfts2.SearchOption // WithChunkFilter closures for each about filter row
+	AboutFilterSets []AboutFilterSet         // raw chunkID sets so vec-only paths can filter too
+	Early           []microfts2.SearchOption // centroid pre-filter (file-level WithOnly)
+	Late            []microfts2.SearchOption // centroid pre-filter (file-level WithExcept)
+}
+
+// AboutFilterSet pairs the chunkID membership of an about-filter row
+// with its polarity, so callers (vec-only paths) can apply the same
+// filter the FTS WithChunkFilter closures would.
+// CRC: crc-Searcher.md | R1935
+type AboutFilterSet struct {
+	ChunkIDs map[uint64]struct{}
+	Polarity string // "with" or "without"
+}
+
+// ResolveAboutFilters orchestrates every about query in one search:
+// the primary `--about` (if primaryAbout != "") and every Mode ==
+// "about" chunk-filter row are submitted as a single
+// `Librarian.SearchChunksMulti` call, sharing one EC walk.
+//
+// Outputs:
+//   - Remaining: filter rows with about rows stripped (caller passes
+//     these to BuildChunkFilters).
+//   - AboutResults: top-k chunks for the primary query (HasAboutResults
+//     reports whether the slot is meaningful).
+//   - ChunkFilterOpts: WithChunkFilter closures gating chunks on the
+//     per-row chunkID set (`with` polarity = membership, `without`
+//     polarity = inverted).
+//   - Early/Late: centroid pre-filter `WithOnly`/`WithExcept` options
+//     emitted only when cfg.AboutCentroidFilter is true.
+//
+// When the embedding pipeline is unavailable, primary --about is
+// fatal (returns err) so the caller can decide on FTS fallback.
+// About-mode filter rows are dropped with a logged warning instead.
+//
+// CRC: crc-Searcher.md | Seq: seq-search.md | R1787, R1921, R1934, R1935
+func ResolveAboutFilters(rows []ChunkFilterRow, primaryAbout string, primaryK int, lib *Librarian, store *Store, cfg *Config) (AboutResolution, error) {
+	var res AboutResolution
 	var aboutRows []ChunkFilterRow
 	for _, row := range rows {
 		if row.Mode == "about" && row.Query != "" {
 			aboutRows = append(aboutRows, row)
 		} else {
-			remaining = append(remaining, row)
+			res.Remaining = append(res.Remaining, row)
 		}
 	}
-	if len(aboutRows) == 0 || lib == nil || !lib.EmbeddingAvailable() {
-		return
+
+	hasPrimary := primaryAbout != ""
+	if !hasPrimary && len(aboutRows) == 0 {
+		return res, nil
 	}
 
-	centroids, err := store.ScanFileCentroids()
-	if err != nil || len(centroids) == 0 {
-		return
+	if lib == nil || !lib.EmbeddingAvailable() {
+		if hasPrimary {
+			return res, fmt.Errorf("embedding pipeline unavailable")
+		}
+		log.Printf("about filter: embedding pipeline unavailable, dropping %d filter row(s)", len(aboutRows))
+		return res, nil
 	}
 
-	for _, row := range aboutRows {
-		queryVec, err := lib.EmbedQuery(row.Query)
+	// CRC: crc-Config.md | R1920 — centroid pre-filter cosine gate.
+	threshold := 0.3
+	if cfg != nil {
+		threshold = cfg.AboutCentroidThreshold
+	}
+
+	// Combined chunk-level walk: primary --about and every about
+	// filter row are top-K requests sharing one EC cursor scan.
+	// Filter rows convert their TopK into a chunkID membership set.
+	// CRC: crc-Searcher.md | R1932, R1935
+	filterTopK := 200
+	if cfg != nil && cfg.AboutFilterTopK > 0 {
+		filterTopK = cfg.AboutFilterTopK
+	}
+	var reqs []AboutRequest
+	primaryReqIdx := -1
+	if hasPrimary {
+		qvec, err := lib.EmbedQuery(primaryAbout)
 		if err != nil {
+			return res, fmt.Errorf("embed primary about: %w", err)
+		}
+		primaryReqIdx = len(reqs)
+		reqs = append(reqs, AboutRequest{QueryVec: qvec, K: primaryK})
+	}
+	var metas []aboutFilterMeta
+	for _, row := range aboutRows {
+		qvec, err := lib.EmbedQuery(row.Query)
+		if err != nil {
+			log.Printf("about filter: embed %q: %v — dropping", row.Query, err)
 			continue
 		}
+		k := row.K
+		if k <= 0 {
+			k = filterTopK
+		}
+		metas = append(metas, aboutFilterMeta{row: row, reqIdx: len(reqs), queryVec: qvec})
+		reqs = append(reqs, AboutRequest{QueryVec: qvec, K: k})
+	}
 
+	multi, err := lib.SearchChunksMulti(reqs)
+	if err != nil {
+		return res, fmt.Errorf("about multi-search: %w", err)
+	}
+
+	if hasPrimary && primaryReqIdx >= 0 && primaryReqIdx < len(multi) {
+		res.AboutResults = multi[primaryReqIdx].TopK
+		res.HasAboutResults = true
+	}
+	for _, m := range metas {
+		topK := multi[m.reqIdx].TopK
+		if len(topK) == 0 {
+			continue
+		}
+		set := make(map[uint64]struct{}, len(topK))
+		for _, cs := range topK {
+			set[cs.ChunkID] = struct{}{}
+		}
+		res.AboutFilterSets = append(res.AboutFilterSets, AboutFilterSet{
+			ChunkIDs: set,
+			Polarity: m.row.Polarity,
+		})
+		filter := func(crec microfts2.CRecord) bool {
+			_, ok := set[crec.ChunkID]
+			return ok
+		}
+		if m.row.Polarity == "without" { // R1400
+			orig := filter
+			filter = func(crec microfts2.CRecord) bool { return !orig(crec) }
+		}
+		res.ChunkFilterOpts = append(res.ChunkFilterOpts, microfts2.WithChunkFilter(filter))
+	}
+
+	// Optional centroid pre-filter — file-level WithOnly/WithExcept.
+	// Reuses the embeddings we already computed above.
+	if cfg != nil && cfg.AboutCentroidFilter && store != nil {
+		centroids, cerr := store.ScanFileCentroids()
+		if cerr == nil && len(centroids) > 0 {
+			res.Early, res.Late = computeCentroidFilters(metas, centroids, threshold, primaryK)
+		}
+	}
+
+	return res, nil
+}
+
+// aboutFilterMeta carries per-row state across the chunk-level walk
+// and the optional file-level centroid filter.
+type aboutFilterMeta struct {
+	row      ChunkFilterRow
+	reqIdx   int
+	queryVec []float32
+}
+
+// computeCentroidFilters scores each about filter's query vector
+// against every file centroid, keeping files above the threshold,
+// and emits per-row WithOnly (with) or WithExcept (without).
+// CRC: crc-Searcher.md | R1921
+func computeCentroidFilters(metas []aboutFilterMeta, centroids map[uint64][]float32, threshold float64, k int) (early, late []microfts2.SearchOption) {
+	for _, m := range metas {
 		type scored struct {
 			fileID uint64
 			score  float64
 		}
 		var matches []scored
 		for fid, centroid := range centroids {
-			s := cosineSimilarity(queryVec, centroid)
-			if s > 0.3 {
+			s := cosineSimilarity(m.queryVec, centroid)
+			if s > threshold {
 				matches = append(matches, scored{fid, s})
 			}
 		}
 		if len(matches) == 0 {
 			continue
 		}
-
 		sort.Slice(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
 		limit := k * 2
-		if len(matches) > limit {
+		if limit > 0 && len(matches) > limit {
 			matches = matches[:limit]
 		}
-
 		fileIDs := make(map[uint64]struct{}, len(matches))
-		for _, m := range matches {
-			fileIDs[m.fileID] = struct{}{}
+		for _, mm := range matches {
+			fileIDs[mm.fileID] = struct{}{}
 		}
-		if row.Polarity == "without" {
+		if m.row.Polarity == "without" {
 			late = append(late, microfts2.WithExcept(fileIDs))
 		} else {
 			early = append(early, microfts2.WithOnly(fileIDs))
@@ -846,8 +1067,9 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 	return microfts2.WithOnly(included), nil
 }
 
-// merge combines results from both engines by (fileid, chunknum).
-func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []microvec.SearchResult) []SearchResultEntry {
+// merge combines results from both engines by (FileID, ChunkID).
+// CRC: crc-Searcher.md | R1918
+func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []ChunkScore) []SearchResultEntry {
 	m := make(map[chunkKey]*SearchResultEntry)
 	cache := s.newFTSKeyCache()
 
@@ -879,12 +1101,15 @@ func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []micro
 	}
 
 	for _, r := range vecResults {
-		key := chunkKey{FileID: r.FileID, ChunkNum: r.ChunkNum}
-		entry, ok := m[key]
+		key, ok := cache.resolveChunkScore(r)
 		if !ok {
+			continue
+		}
+		entry, exists := m[key]
+		if !exists {
 			entry = &SearchResultEntry{
-				FileID:   r.FileID,
-				ChunkNum: r.ChunkNum,
+				FileID:   key.FileID,
+				ChunkNum: key.ChunkNum,
 			}
 			m[key] = entry
 		}
@@ -904,14 +1129,18 @@ func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []micro
 }
 
 // intersect keeps only chunks present in both result sets.
-func (s *Searcher) intersect(ftsResults []microfts2.SearchResult, vecResults []microvec.SearchResult) []SearchResultEntry {
+// CRC: crc-Searcher.md | R1918
+func (s *Searcher) intersect(ftsResults []microfts2.SearchResult, vecResults []ChunkScore) []SearchResultEntry {
+	cache := s.newFTSKeyCache()
 	vecMap := make(map[chunkKey]float64)
 	for _, r := range vecResults {
-		key := chunkKey{FileID: r.FileID, ChunkNum: r.ChunkNum}
+		key, ok := cache.resolveChunkScore(r)
+		if !ok {
+			continue
+		}
 		vecMap[key] = r.Score
 	}
 
-	cache := s.newFTSKeyCache()
 	var results []SearchResultEntry
 	for _, r := range ftsResults {
 		key, ok := cache.resolve(r)
@@ -934,15 +1163,22 @@ func (s *Searcher) intersect(ftsResults []microfts2.SearchResult, vecResults []m
 	return results
 }
 
-func (s *Searcher) vecOnly(vecResults []microvec.SearchResult) []SearchResultEntry {
-	results := make([]SearchResultEntry, len(vecResults))
-	for i, r := range vecResults {
-		results[i] = SearchResultEntry{
-			FileID:   r.FileID,
-			ChunkNum: r.ChunkNum,
+// vecOnly converts ChunkScore results into SearchResultEntry rows.
+// CRC: crc-Searcher.md | R1918
+func (s *Searcher) vecOnly(vecResults []ChunkScore) []SearchResultEntry {
+	cache := s.newFTSKeyCache()
+	results := make([]SearchResultEntry, 0, len(vecResults))
+	for _, r := range vecResults {
+		key, ok := cache.resolveChunkScore(r)
+		if !ok {
+			continue
+		}
+		results = append(results, SearchResultEntry{
+			FileID:   key.FileID,
+			ChunkNum: key.ChunkNum,
 			VecScore: r.Score,
 			Score:    r.Score,
-		}
+		})
 	}
 	return results
 }
@@ -1143,6 +1379,27 @@ func (c *ftsKeyCache) resolve(r microfts2.SearchResult) (chunkKey, bool) {
 	}
 	cn := chunkNumForRange(info, r.Range)
 	return chunkKey{FileID: fileID, ChunkNum: cn}, true
+}
+
+// resolveChunkScore converts a ChunkScore (FileID + ChunkID) to a
+// chunkKey (FileID + position-in-file) for merge/intersect keying.
+// CRC: crc-Searcher.md | R1918
+func (c *ftsKeyCache) resolveChunkScore(cs ChunkScore) (chunkKey, bool) {
+	info, ok := c.fileInfo[cs.FileID]
+	if !ok {
+		var err error
+		info, err = c.s.fts.FileInfoByID(cs.FileID)
+		if err != nil {
+			return chunkKey{}, false
+		}
+		c.fileInfo[cs.FileID] = info
+	}
+	for i, cr := range info.Chunks {
+		if cr.ChunkID == cs.ChunkID {
+			return chunkKey{FileID: cs.FileID, ChunkNum: uint64(i)}, true
+		}
+	}
+	return chunkKey{}, false
 }
 
 // TagResult is a tag found in search results.
@@ -1383,18 +1640,35 @@ func (s *Searcher) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEnt
 // SearchGrouped runs a search and groups results by file.
 // Files sorted by best chunk score (descending), chunks within each file
 // sorted by score (descending). Each chunk includes a pre-rendered HTML preview.
-// CRC: crc-Searcher.md
+// CRC: crc-Searcher.md | R1935
 func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
-	// R1402-R1403, R1787: build chunk filter options from stacked filter rows
-	if len(opts.ChunkFilters) > 0 {
-		remaining, early, late := ResolveAboutFilters(opts.ChunkFilters, s.librarian, s.store, opts.K)
-		opts.extraOpts = append(opts.extraOpts, early...)
+	// R1402-R1403, R1787, R1935: combined about coordination.
+	// One ResolveAboutFilters call covers the primary --about and
+	// every Mode == "about" filter row via a single SearchChunksMulti
+	// EC walk. BuildChunkFilters handles the remaining (non-about)
+	// rows.
+	if len(opts.ChunkFilters) > 0 || opts.About != "" {
+		k := opts.K
+		if k == 0 {
+			k = 20
+		}
+		ar, err := ResolveAboutFilters(opts.ChunkFilters, opts.About, k*2, s.librarian, s.store, s.config)
+		if err != nil {
+			return nil, err
+		}
+		if ar.HasAboutResults {
+			opts.aboutResults = ar.AboutResults
+			opts.aboutResultsSet = true
+		}
+		opts.aboutFilterSets = ar.AboutFilterSets
+		opts.extraOpts = append(opts.extraOpts, ar.Early...)
+		opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
 		if opts.Cache != nil {
 			if paths, pathErr := s.fts.FileIDPaths(); pathErr == nil {
-				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(remaining, opts.Cache, paths, s.store)...)
+				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, opts.Cache, paths, s.store)...)
 			}
 		}
-		opts.extraOpts = append(opts.extraOpts, late...)
+		opts.extraOpts = append(opts.extraOpts, ar.Late...)
 	}
 
 	var results []SearchResultEntry

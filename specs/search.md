@@ -5,23 +5,50 @@
 Both engines query the same text. Results merged and re-ranked.
 
 - microfts2 returns file/chunk matches with trigram scores
-- microvec returns file/chunk matches with cosine similarity scores
-- Ark merges by (fileid, chunknum), combining scores
+- The Librarian + EC chunk-embedding pipeline returns chunk matches
+  with cosine similarity scores
+- Ark merges by (fileid, chunkid), combining scores
 - Results sorted by combined score descending
 - Output: filepath:startline-endline with score
+- When the embedding pipeline is unavailable (no `tag_model`
+  configured, model file missing), combined search falls back to
+  FTS-only — same shape, no semantic component
 
 ## Split search
 
-Targeted queries for one or both engines:
+Targeted queries:
 
-- `--about <text>` goes to microvec (semantic)
+- `--about <text>` runs the embedding pipeline (Librarian.EmbedQuery
+  + chunk-level cosine ranking against EC records)
 - `--contains <text>` goes to microfts2 (exact)
 - `--regex <pattern>` goes to microfts2 (regex)
 - `--contains` and `--regex` compose: `--contains` drives FTS, `--regex` post-filters
 - Either flag works alone (single-engine search, no intersection)
 - Both `--about` + `--contains`/`--regex` — results intersected
-  by (fileid, chunknum)
+  by (fileid, chunkid)
 - Output: same format as combined
+- `--about` requires `tag_model` to be configured; otherwise it
+  errors with an actionable message
+
+## File-centroid pre-filter (config-gated)
+
+Each file maintains a centroid embedding (EF record). When enabled,
+"about" queries can use the centroid as a coarse pre-filter — files
+whose centroid sits more than the configured cosine distance from
+the query are skipped before chunk-level scoring.
+
+Two `ark.toml` keys control this:
+
+```toml
+about_centroid_filter = false   # default: off (chunk-level scan only)
+about_centroid_threshold = 0.3  # cosine similarity gate when filter is on
+```
+
+Default is off because file centroids hide variance: files whose
+chunks scatter widely have centroids that sit in space neither
+chunk inhabits, so a centroid-based filter can suppress files whose
+outlier chunks would have matched. Enable for very large corpora
+where the chunk-level scan cost is unacceptable.
 
 ## Search output modes
 
@@ -110,11 +137,12 @@ density normalization.
 
 ## Search during incomplete embedding
 
-When vector indexing is in progress, combined search compensates:
-- Vector search runs against whatever embeddings exist (partial but
-  not wrong — results are valid, just incomplete)
-- A parallel FTS query catches files that vector hasn't reached yet
-- Results merge by (fileid, chunknum), deduplicating and taking the
+When chunk embedding is in progress, combined search compensates:
+- Chunk-level cosine ranking runs against whatever EC records exist
+  (partial but not wrong — results are valid, just incomplete)
+- A parallel FTS query catches files that the embedder hasn't
+  reached yet
+- Results merge by (fileid, chunkid), deduplicating and taking the
   best combined score
 - This happens transparently — the user doesn't need to know whether
-  vector indexing is complete
+  embedding is complete

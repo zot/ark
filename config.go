@@ -32,6 +32,10 @@ type Config struct {
 	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
 	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
 	EmbedTiers      []EmbedTier       `toml:"embed_tiers,omitempty"`    // R1588: ctx/parallel per tier
+	// CRC: crc-Config.md | R1919, R1920, R1938
+	AboutCentroidFilter    bool    `toml:"about_centroid_filter,omitempty"`
+	AboutCentroidThreshold float64 `toml:"about_centroid_threshold,omitempty"`
+	AboutFilterTopK        int     `toml:"about_filter_top_k,omitempty"`
 	PdfPreviewZoom  float64           `toml:"pdf_preview_zoom,omitempty"`
 	Schedule        ScheduleConfig    `toml:"schedule"`                 // R853, R854
 	Errors          []string          `toml:"-"`
@@ -135,6 +139,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	cfg.validate()
 	cfg.initEmbedTiers() // R1590, R1591
+	if cfg.AboutCentroidThreshold == 0 {
+		cfg.AboutCentroidThreshold = 0.3 // R1920
+	}
+	if cfg.AboutFilterTopK == 0 {
+		cfg.AboutFilterTopK = 200 // R1938
+	}
 	// R950, R951: expand tilde in all path fields at load time
 	cfg.GlobalInclude = ExpandTildeSlice(cfg.GlobalInclude)
 	cfg.GlobalExclude = ExpandTildeSlice(cfg.GlobalExclude)

@@ -1,8 +1,9 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
-microvec, and the ark subdatabase. Entry point for all operations.
+the Librarian/EC embedding pipeline, and the ark subdatabase. Entry
+point for all operations.
 
 All operations are serialized through a closure actor (ChanSvc).
 The actor is an implementation detail — the public API stays unchanged
@@ -15,8 +16,7 @@ operations complete) document this on the API. (R986, R993, R995)
 
 ## Knows
 - fts: *microfts2.DB — trigram search engine
-- vec: *microvec.DB — vector search engine
-- store: *Store — ark's own subdatabase
+- store: *Store — ark's own subdatabase (R1909, R1910)
 - config: *Config — parsed source configuration
 - dbPath: string — database directory path
 - svc: ChanSvc — closure actor channel, serializes all DB access
@@ -24,12 +24,12 @@ operations complete) document this on the API. (R986, R993, R995)
 - writing: bool — true while a write goroutine is in flight (R1067)
 
 ## Does
-- Init(path, opts): create new database — open microfts2, pass env to
-  microvec, create ark subdatabase, write default config, register
-  func strategies (lines, chat-jsonl, markdown), register chunker
-  strategies from ark.toml [[chunker]] entries, create starter tags.md.
-  Seed ark.toml from install/ark.toml via BundleReadFile if not present.
-  Write full config to I records via Store.WriteConfig. (R1539)
+- Init(path, opts): create new database — open microfts2, create ark
+  subdatabase, write default config, register func strategies (lines,
+  chat-jsonl, markdown), register chunker strategies from ark.toml
+  [[chunker]] entries, create starter tags.md. Seed ark.toml from
+  install/ark.toml via BundleReadFile if not present. Write full
+  config to I records via Store.WriteConfig. (R1539, R1911, R1912)
 - Open(path): open existing database — same sequence, read config.
   Registers func strategies (lines, chat-jsonl, markdown). Registers
   chunker strategies from ark.toml [[chunker]] entries. Passes store
@@ -50,7 +50,7 @@ operations complete) document this on the API. (R986, R993, R995)
   Extracts role attr from `type`+`isMeta` fields: human, assistant, or
   skill. For skill chunks, parses `Base directory for this skill: PATH`
   to extract skill name attr. (R1507, R1508)
-- Close(): close in reverse order (store, vec, fts)
+- Close(): close in reverse order (store, fts) (R1923)
 - TagList(): delegate to Store.ListTags
 - TagCounts(tags): delegate to Store.TagCounts
 - TagFiles(tags): delegate to Store.TagFiles, resolve fileids to paths/sizes
@@ -117,10 +117,11 @@ operations complete) document this on the API. (R986, R993, R995)
 
 ## Collaborators
 - Config: loads and validates ark.toml
-- Store: ark's own LMDB subdatabase (missing, unresolved, tags)
+- Store: ark's own LMDB subdatabase (missing, unresolved, tags, EC, EF)
 - Scanner: walks directories (uses Config + Matcher)
-- Indexer: adds/removes files in both engines, extracts tags
-- Searcher: queries both engines and merges results
+- Indexer: adds/removes files in microfts2 and ark store, extracts tags
+- Searcher: queries microfts2 + Librarian and merges results
+- Librarian: embeds queries and ranks chunks via EC records (R1915, R1916)
 - Matcher: pattern matching for IsIndexable
 
 ## Sequences

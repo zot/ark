@@ -1953,6 +1953,33 @@ func (s *Store) ScanFileCentroidCounts() (map[uint64]uint32, error) {
 	return result, err
 }
 
+// ViewChunkEmbeddings cursor-walks the EC prefix inside a single
+// LMDB View. fn receives the open txn, the chunkID, and the raw
+// vector bytes (length is len(vec)/4 float32s). Reading further
+// records inside the same txn (e.g. fts.ReadCRecord) is safe.
+// Returning false stops the scan; returning an error aborts.
+// CRC: crc-Store.md | R1915
+func (s *Store) ViewChunkEmbeddings(fn func(txn *lmdb.Txn, chunkID uint64, vec []byte) (cont bool, err error)) error {
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
+			rest := k[len(prefixEmbedChunk):]
+			chunkID, _ := binary.Uvarint(rest)
+			cont, err := fn(txn, chunkID, v)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return errStopScan
+			}
+			return nil
+		})
+	})
+	if err == errStopScan {
+		return nil
+	}
+	return err
+}
+
 // ScanChunkEmbeddingKeys scans all EC records, returning chunkID → vector dimension. R1845
 func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
 	result := make(map[uint64]int)

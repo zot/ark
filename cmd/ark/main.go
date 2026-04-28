@@ -1123,15 +1123,32 @@ Output:`)
 			NoTmp:     *noTmp,
 		}
 
-		// R1784, R1787: wire chunk filters — about filters need server (Librarian)
+		// CRC: crc-CLI.md | R1936 — about queries (primary or filter)
+		// require the warm embedding model owned by `ark serve`.
+		// Cold-path warm-up per CLI invocation isn't worth the cost.
+		hasAboutFilter := false
+		for _, row := range chunkFilters {
+			if row.Mode == "about" && row.Query != "" {
+				hasAboutFilter = true
+				break
+			}
+		}
+		if primaryAbout != "" || hasAboutFilter {
+			fatal(fmt.Errorf("about queries require a running server — start `ark serve` first"))
+		}
+
+		// R1784, R1787: wire non-about chunk filter rows.
 		if len(chunkFilters) > 0 {
-			remaining, early, late := ark.ResolveAboutFilters(chunkFilters, nil, d.Store(), *k)
-			opts.SetExtraOpts(early...)
+			ar, err := ark.ResolveAboutFilters(chunkFilters, "", *k*2, nil, d.Store(), d.Config())
+			if err != nil {
+				fatal(err)
+			}
+			opts.SetExtraOpts(ar.Early...)
 			if paths, pathErr := d.FTS().FileIDPaths(); pathErr == nil {
 				cache := d.FTS().NewChunkCache()
-				opts.SetExtraOpts(ark.BuildChunkFilters(remaining, cache, paths, d.Store())...)
+				opts.SetExtraOpts(ark.BuildChunkFilters(ar.Remaining, cache, paths, d.Store())...)
 			}
-			opts.SetExtraOpts(late...)
+			opts.SetExtraOpts(ar.Late...)
 		}
 
 		var results []ark.SearchResultEntry

@@ -710,14 +710,26 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		var results []SearchResultEntry
 		err := sess.RunSearch(req.Query, func(cache *microfts2.ChunkCache) error {
 			return SyncVoid(srv.db, func(db *DB) error {
-				// R1784, R1787: wire chunk filters — about filters resolve to file-level early/late
-				if len(opts.ChunkFilters) > 0 {
-					remaining, early, late := ResolveAboutFilters(opts.ChunkFilters, srv.librarian, db.Store(), opts.K)
-					opts.extraOpts = append(opts.extraOpts, early...)
-					if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
-						opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(remaining, cache, paths, db.Store())...)
+				// R1784, R1787, R1935: combined about coordination.
+				if len(opts.ChunkFilters) > 0 || opts.About != "" {
+					k := opts.K
+					if k == 0 {
+						k = 20
 					}
-					opts.extraOpts = append(opts.extraOpts, late...)
+					ar, err := ResolveAboutFilters(opts.ChunkFilters, opts.About, k*2, srv.librarian, db.Store(), db.Config())
+					if err != nil {
+						return err
+					}
+					if ar.HasAboutResults {
+						opts.SetAboutResults(ar.AboutResults)
+					}
+					opts.SetAboutFilterSets(ar.AboutFilterSets)
+					opts.extraOpts = append(opts.extraOpts, ar.Early...)
+					opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
+					if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
+						opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, cache, paths, db.Store())...)
+					}
+					opts.extraOpts = append(opts.extraOpts, ar.Late...)
 				}
 				var searchErr error
 				if req.Fuzzy {
@@ -760,15 +772,27 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		done := db.NewSearchCache()
 		defer done()
 
-		// R1784, R1787: wire chunk filters — about filters resolve to file-level early/late
-		if len(opts.ChunkFilters) > 0 {
-			remaining, early, late := ResolveAboutFilters(opts.ChunkFilters, srv.librarian, db.Store(), opts.K)
-			opts.extraOpts = append(opts.extraOpts, early...)
+		// R1784, R1787, R1935: combined about coordination.
+		if len(opts.ChunkFilters) > 0 || opts.About != "" {
+			k := opts.K
+			if k == 0 {
+				k = 20
+			}
+			ar, err := ResolveAboutFilters(opts.ChunkFilters, opts.About, k*2, srv.librarian, db.Store(), db.Config())
+			if err != nil {
+				return nil, err
+			}
+			if ar.HasAboutResults {
+				opts.SetAboutResults(ar.AboutResults)
+			}
+			opts.SetAboutFilterSets(ar.AboutFilterSets)
+			opts.extraOpts = append(opts.extraOpts, ar.Early...)
+			opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
 			if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
 				cache := db.FTS().NewChunkCache()
-				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(remaining, cache, paths, db.Store())...)
+				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, cache, paths, db.Store())...)
 			}
-			opts.extraOpts = append(opts.extraOpts, late...)
+			opts.extraOpts = append(opts.extraOpts, ar.Late...)
 		}
 
 		var results []SearchResultEntry

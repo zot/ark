@@ -22,19 +22,23 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/bmatsuo/lmdb-go/lmdb"
-	"github.com/zot/microvec"
 )
 
 // Version is set by ldflags at build time from README.md.
 // Fallback value for plain `go build`.
 var Version = "dev"
 
-// DB is the main ark facade. It coordinates microfts2, microvec,
-// and the ark subdatabase. All operations are serialized through a
-// closure actor (svc channel). CRC: crc-DB.md | R986
+// CRC: crc-DB.md | R1924, R1925 — microvec is no longer a dependency.
+// Any pre-existing microvec records inside the LMDB env are orphaned
+// blobs reclaimed on the next `ark init` / rebuild.
+var _ = Version // anchor for the migration's removal Rn refs
+
+// DB is the main ark facade. It coordinates microfts2, the
+// Librarian/EC embedding pipeline, and the ark subdatabase. All
+// operations are serialized through a closure actor (svc channel).
+// CRC: crc-DB.md | R986, R1909, R1910, R1923
 type DB struct {
 	fts     *microfts2.DB
-	vec     *microvec.DB
 	store   *Store
 	config  *Config
 	matcher *Matcher
@@ -98,7 +102,9 @@ func Init(dbPath string, opts InitOpts) error {
 		aliases['\n'] = '\x01'
 	}
 
-	// Initialize microfts2 (creates the LMDB environment)
+	// Initialize microfts2 (creates the LMDB environment).
+	// CRC: crc-DB.md | R1911, R1912 — microfts2 owns its own subDBs; ark's
+	// store shares the same env. No microvec subDB is allocated.
 	ftsOpts := microfts2.Options{
 		CaseInsensitive: opts.CaseInsensitive,
 		Aliases:         aliases,
@@ -110,17 +116,6 @@ func Init(dbPath string, opts InitOpts) error {
 		return fmt.Errorf("init microfts2: %w", err)
 	}
 	defer fts.Close()
-
-	// Initialize microvec (receives the LMDB env)
-	vecOpts := microvec.Options{
-		EmbedCmd: opts.EmbedCmd,
-		QueryCmd: opts.QueryCmd,
-	}
-	vec, err := microvec.Create(fts.Env(), vecOpts)
-	if err != nil {
-		return fmt.Errorf("init microvec: %w", err)
-	}
-	defer vec.Close()
 
 	// Initialize ark subdatabase
 	store, err := OpenStore(fts.Env())
@@ -232,17 +227,9 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("open microfts2: %w", err)
 	}
 
-	// Open microvec (receives the LMDB env)
-	vec, err := microvec.Open(fts.Env(), microvec.Options{})
-	if err != nil {
-		fts.Close()
-		return nil, fmt.Errorf("open microvec: %w", err)
-	}
-
 	// Open ark subdatabase
 	store, err := OpenStore(fts.Env())
 	if err != nil {
-		vec.Close()
 		fts.Close()
 		return nil, fmt.Errorf("open ark store: %w", err)
 	}
@@ -257,7 +244,6 @@ func Open(dbPath string) (*DB, error) {
 	// The cache is captured by the closure; microfts2 never sees it.
 	jsonlCache := newChunkCache(64)
 	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
-		vec.Close()
 		fts.Close()
 		return nil, fmt.Errorf("register markdown strategy: %w", err)
 	}
@@ -266,7 +252,6 @@ func Open(dbPath string) (*DB, error) {
 		"chat-jsonl": jsonlCache.wrap(JSONLChunkFunc),
 	} {
 		if err := fts.AddStrategyFunc(name, fn); err != nil {
-			vec.Close()
 			fts.Close()
 			return nil, fmt.Errorf("register %s strategy: %w", name, err)
 		}
@@ -282,12 +267,11 @@ func Open(dbPath string) (*DB, error) {
 
 	db := &DB{
 		fts:     fts,
-		vec:     vec,
 		store:   store,
 		config:  config,
 		matcher: matcher,
 		scanner: &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
-		search:  &Searcher{fts: fts, vec: vec, store: store, config: config},
+		search:  &Searcher{fts: fts, store: store, config: config},
 		dbPath:  dbPath,
 		svc:     make(chan func(), 8),
 	}
@@ -298,7 +282,7 @@ func Open(dbPath string) (*DB, error) {
 	if err := fts.AddChunker("pdf", db.pdfChunker); err != nil {
 		log.Printf("warning: register pdf chunker: %v", err)
 	}
-	db.indexer = &Indexer{fts: fts, vec: vec, store: store, config: config, pdfChunker: db.pdfChunker}
+	db.indexer = &Indexer{fts: fts, store: store, config: config, pdfChunker: db.pdfChunker}
 
 	// R1859, R1860: migrate EC records from (fileID, chunkIdx) to chunkID key format
 	if v, _ := store.IGet("ec_version"); v != "2" {
@@ -435,9 +419,6 @@ func (db *DB) Close() error {
 		db.svc = nil
 	}
 	// store doesn't need explicit close (shares env with fts)
-	if err := db.vec.Close(); err != nil {
-		return err
-	}
 	return db.fts.Close()
 }
 
@@ -520,9 +501,8 @@ func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
 func (db *DB) Path() string { return db.dbPath }
 
 // Config returns the current configuration.
-func (db *DB) Config() *Config   { return db.config }
-func (db *DB) Store() *Store     { return db.store }
-func (db *DB) Vec() *microvec.DB { return db.vec }
+func (db *DB) Config() *Config { return db.config }
+func (db *DB) Store() *Store   { return db.store }
 
 // ConfigPath returns the path to ark.toml.
 func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") }

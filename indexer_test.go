@@ -9,7 +9,6 @@ import (
 
 	"github.com/zot/microfts2"
 
-	"github.com/zot/microvec"
 )
 
 func TestExtractTagsBasic(t *testing.T) {
@@ -190,8 +189,9 @@ func TestExtractTagValuesMentionIndented(t *testing.T) {
 
 // --- Append detection integration tests ---
 
-// testIndexer creates a microfts2.DB, microvec.DB, Store, and Indexer
-// backed by a temporary LMDB environment.
+// testIndexer creates a microfts2.DB, Store, and Indexer backed by a
+// temporary LMDB environment. Embeddings are not exercised here —
+// Librarian.BatchEmbedChunks runs out of band post-reconcile.
 func testIndexer(t *testing.T) (*Indexer, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -204,12 +204,6 @@ func testIndexer(t *testing.T) (*Indexer, string) {
 	}
 	fts.AddStrategyFunc("line", microfts2.LineChunkFunc)
 
-	// microvec (shares the LMDB env)
-	vec, err := microvec.Create(fts.Env(), microvec.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// Store (shares the LMDB env)
 	store, err := OpenStore(fts.Env())
 	if err != nil {
@@ -220,7 +214,7 @@ func testIndexer(t *testing.T) (*Indexer, string) {
 		fts.Close()
 	})
 
-	idx := &Indexer{fts: fts, vec: vec, store: store}
+	idx := &Indexer{fts: fts, store: store}
 	return idx, dir
 }
 
