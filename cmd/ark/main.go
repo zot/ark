@@ -711,12 +711,13 @@ func cmdRefresh(args []string) {
 	})
 }
 
-// CRC: crc-CLI.md | Seq: seq-filter-stack.md | R1770, R1771, R1772, R1773, R1774, R1775, R1776
+// CRC: crc-CLI.md | Seq: seq-filter-stack.md | R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1940
 
 type filterEntry struct {
 	polarity string // "with" or "without"
 	mode     string // "contains", "fuzzy", "regex", "tag", "about", "files"
 	query    string
+	k        int // R1940: about-mode filter top-K override (0 = use config default)
 }
 
 // parseFilterStack extracts filter entries from raw args before flag.Parse.
@@ -727,7 +728,7 @@ func parseFilterStack(args []string) (entries []filterEntry, remaining []string,
 
 	flush := func() {
 		if len(accum) > 0 {
-			entries = append(entries, filterEntry{polarity, "contains", strings.Join(accum, " ")})
+			entries = append(entries, filterEntry{polarity, "contains", strings.Join(accum, " "), 0})
 			accum = nil
 		}
 	}
@@ -766,31 +767,49 @@ func parseFilterStack(args []string) (entries []filterEntry, remaining []string,
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "fuzzy", args[i]})
+				entries = append(entries, filterEntry{polarity, "fuzzy", args[i], 0})
 			}
 		case "-regex":
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "regex", args[i]})
+				entries = append(entries, filterEntry{polarity, "regex", args[i], 0})
 			}
 		case "-tag":
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "tag", strings.TrimPrefix(args[i], "@")})
+				entries = append(entries, filterEntry{polarity, "tag", strings.TrimPrefix(args[i], "@"), 0})
 			}
 		case "-about":
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "about", args[i]})
+				entries = append(entries, filterEntry{polarity, "about", args[i], 0})
 			}
 		case "-files":
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "files", args[i]})
+				entries = append(entries, filterEntry{polarity, "files", args[i], 0})
+			}
+		case "-filter-k":
+			flush()
+			i++
+			if i < len(args) {
+				n, err := strconv.Atoi(args[i])
+				if err != nil || n < 1 {
+					fmt.Fprintf(os.Stderr, "warning: invalid --filter-k value %q -- ignored\n", args[i])
+				} else if len(entries) == 0 {
+					fmt.Fprintln(os.Stderr, "warning: --filter-k has no prior filter entry to apply to -- ignored")
+				} else {
+					last := &entries[len(entries)-1]
+					if last.mode != "about" {
+						fmt.Fprintf(os.Stderr, "warning: --filter-k only applies to -about filters, not %q -- ignored\n", last.mode)
+					} else {
+						last.k = n
+					}
+				}
 			}
 		case "-parse":
 			parseOnly = true
@@ -827,6 +846,9 @@ func formatFilterStack(entries []filterEntry) string {
 			parts = append(parts, fmt.Sprintf("-%s %q", e.mode, e.query))
 		} else {
 			parts = append(parts, fmt.Sprintf("-%s %s", e.mode, e.query))
+		}
+		if e.k > 0 {
+			parts = append(parts, fmt.Sprintf("--filter-k %d", e.k))
 		}
 	}
 	return strings.Join(parts, " ")
@@ -995,7 +1017,7 @@ Output:`)
 			primaryContains = primary.query
 		case "files":
 			// files-only primary: becomes a chunk filter, promote next entry to primary
-			chunkFilters = append(chunkFilters, ark.ChunkFilterRow{Polarity: primary.polarity, Mode: "files", Query: primary.query})
+			chunkFilters = append(chunkFilters, ark.ChunkFilterRow{Polarity: primary.polarity, Mode: "files", Query: primary.query, K: primary.k})
 			if len(filterEntries) > 1 {
 				second := filterEntries[1]
 				switch second.mode {
@@ -1017,6 +1039,7 @@ Output:`)
 				Polarity: e.polarity,
 				Mode:     e.mode,
 				Query:    e.query,
+				K:        e.k,
 			})
 		}
 	}

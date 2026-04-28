@@ -50,6 +50,20 @@ chunk inhabits, so a centroid-based filter can suppress files whose
 outlier chunks would have matched. Enable for very large corpora
 where the chunk-level scan cost is unacceptable.
 
+## About filter top-K override
+
+Each about-mode filter row keeps a top-K chunk set during the EC walk.
+The default `about_filter_top_k` (200) can be overridden per row:
+
+- **Config:** `about_filter_top_k` in `ark.toml` sets the default
+  chunk count for every about filter row (already wired).
+- **CLI:** `--filter-k N` (or `-filter-k N`) after an `-about` filter
+  entry sets `ChunkFilterRow.K` for that row. Only meaningful for
+  about-mode filters; primarily a tuning/test knob — most users will
+  rely on the config default (200). If placed after a non-about entry
+  or after `-with`/`-without` with no prior filter entry, warns that
+  `--filter-k` has no effect.
+
 ## Search output modes
 
 - Default: `filepath:startline-endline` (one per line), with optional `\tscore`

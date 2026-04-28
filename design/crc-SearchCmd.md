@@ -1,5 +1,5 @@
 # SearchCmd
-**Requirements:** R649, R650, R651, R652, R653, R1936
+**Requirements:** R649, R650, R651, R652, R653, R1936, R1940
 
 Command object for search operations. Constructed by CLI, HTTP
 handler, or Lua function. Runs directly or within a session.

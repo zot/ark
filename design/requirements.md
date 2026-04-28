@@ -3142,3 +3142,4 @@ implementation, not a separate format break.
 
 - **R1938:** `AboutFilterTopK` (config int, `toml:"about_filter_top_k,omitempty"`, default 200) is the default chunk count retained per about-mode filter row. A small default narrows aggressively; users tune up if they want more recall.
 - **R1939:** `ChunkFilterRow` gains an optional `K int` field (`json:"k,omitempty"`). When non-zero it overrides `cfg.AboutFilterTopK` for that row. Lets a single search mix tight and loose about filters.
+- **R1940:** CLI filter stack: `--filter-k N` (or `-filter-k N`) after an `-about` filter entry sets `ChunkFilterRow.K` for that row. Only meaningful for about-mode filters. If placed after a non-about entry, `parseFilterStack` logs a warning that `--filter-k` is ignored on this mode. If placed after `-with`/`-without` (no prior filter entry), logs a warning that `--filter-k` has no entry to apply to.
