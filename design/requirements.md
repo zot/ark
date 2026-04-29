@@ -1108,8 +1108,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R698:** (superseded) StrategyFunc wrappers removed — score functions passed directly
 - **R699:** (superseded) BM25 passed directly as ScoreFunc
 - **R700:** (superseded) Bigram strategy removed
-- **R701:** (superseded) Bigram strategy removed
-- **R702:** (superseded) Bigram strategy removed
+- **~~R701:~~** (Retired T35 — no replacement) (superseded) Bigram strategy removed
+- **~~R702:~~** (Retired T36 — no replacement) (superseded) Bigram strategy removed
 - **R703:** (superseded) QueryBigramCounts removed from microfts2
 - **R704:** (superseded) DB format reverted to v2
 - **R705:** (superseded) Bigram rebuild no longer needed
@@ -1299,16 +1299,16 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R805:** Ark maintains a priority queue sorted by next-fire time with a single `time.Timer`
 - **R806:** When the timer fires: deliver the event through listen, pop the entry, reset the timer to the new head
 - **R807:** If the fired event is recurring, compute the next occurrence and re-enqueue before resetting the timer
-- **R808:** ~~Scheduling is a subscription property, not a tag property~~ **Superseded by R853-R855:** scheduling is driven by ark.toml config + day-bucket indexing, not subscriptions
+- **~~R808:~~** (Retired T37 — see R853) ~~Scheduling is a subscription property, not a tag property~~ **Superseded by R853-R855:** scheduling is driven by ark.toml config + day-bucket indexing, not subscriptions
 - **R809:** Only the next occurrence of a recurring event lives in the queue
 - **R821:** One-shot (`--scheduled`) tag values: DATE formats `YYYY-MM-DD HH:MM`, `YYYY-MM-DD` (defaults 09:00), `MM-DD` (annual). Past one-shots ignored.
 - **R822:** Recurring (`--recurring`) tag values follow the grammar: `[starting [on|at] DATE] every [ORDINAL] PERIOD [at HH:MM] [ending [on|at] DATE] [DESCRIPTION]`
 - **R823:** Annual shorthand: a bare `MM-DD` value is treated as annually recurring
 - **R824:** Recurring PERIOD types: duration (Nm, Nh), day name (Monday-Sunday), day class (weekday, weekend, day), scope (of the week/month/year)
 - **R825:** `@ended: [REASON]` in the same chunk as a scheduled/recurring tag stops the event — scheduler skips chunks containing both
-- **R826:** ~~On subscribe with `--scheduled`/`--recurring`, scan existing tags via TagContext and populate the queue.~~ **Superseded by R868-R870:** scheduler reads day buckets at startup, not subscription-triggered
-- **R827:** ~~If no subscription declares a tag as scheduled/recurring, zero scheduling overhead~~ **Superseded by R853:** zero overhead unless tag is in ark.toml `[schedule]`
-- **R828:** ~~Scheduled events are per-subscription~~ **Superseded by R868:** scheduler fires to all listening sessions, not per-subscription
+- **~~R826:~~** (Retired T38 — see R868) ~~On subscribe with `--scheduled`/`--recurring`, scan existing tags via TagContext and populate the queue.~~ **Superseded by R868-R870:** scheduler reads day buckets at startup, not subscription-triggered
+- **~~R827:~~** (Retired T39 — see R853) ~~If no subscription declares a tag as scheduled/recurring, zero scheduling overhead~~ **Superseded by R853:** zero overhead unless tag is in ark.toml `[schedule]`
+- **~~R828:~~** (Retired T40 — see R868) ~~Scheduled events are per-subscription~~ **Superseded by R868:** scheduler fires to all listening sessions, not per-subscription
 
 ### Muting
 
@@ -1415,11 +1415,11 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1025:** Query: find month bucket at or before range start, crank forward to generate all events in range
 - **R1026:** Month buckets computed on startup from schedule log files. Recomputable on restart.
 - **R1027:** `ark schedule search` computes events from specs and month buckets — works without a running server
-- **R1028:** @obsolete-req: R866 -- day bucket LMDB indexing replaced by month buckets
-- **R1029:** @obsolete-req: R871 -- TF reverse index for deletion no longer needed
-- **R1030:** @obsolete-req: R911 -- TD JSON array no longer needed
-- **R1031:** @obsolete-req: R912 -- ack status embedded in day buckets no longer needed
-- **R1032:** @obsolete-req: R1019 -- dayBucketsFromLogFile no longer needed
+- **~~R1028:~~** (Retired T41 — no replacement) @obsolete-req: R866 -- day bucket LMDB indexing replaced by month buckets
+- **~~R1029:~~** (Retired T42 — no replacement) @obsolete-req: R871 -- TF reverse index for deletion no longer needed
+- **~~R1030:~~** (Retired T43 — no replacement) @obsolete-req: R911 -- TD JSON array no longer needed
+- **~~R1031:~~** (Retired T44 — no replacement) @obsolete-req: R912 -- ack status embedded in day buckets no longer needed
+- **~~R1032:~~** (Retired T45 — no replacement) @obsolete-req: R1019 -- dayBucketsFromLogFile no longer needed
 
 ### Schedule Tags --values
 
@@ -1438,7 +1438,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Gap Detection (revised)
 
 - **R1041:** Gap detection compares recurrence spec against @ack: dates — no fired records needed
-- **R1042:** @obsolete-req: R870 -- @ark-event-fired: entries in log no longer needed for gap detection
+- **~~R1042:~~** (Retired T46 — no replacement) @obsolete-req: R870 -- @ark-event-fired: entries in log no longer needed for gap detection
 - **R1043:** `ark schedule search --gaps` computes unacked past occurrences from spec vs @ack: dates
 
 ## Feature: Chat Transcript

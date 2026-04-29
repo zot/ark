@@ -886,6 +886,10 @@ Polarity (default: -with):
   -with             subsequent filters intersect (must match)
   -without          subsequent filters subtract (must not match)
 
+Per-filter tuning:
+  --filter-k N      after an -about filter, override the top-K chunk
+                    cap for that row (default: about_filter_top_k=200)
+
   -parse            print disambiguated command and exit
 
 Bare terms coalesce into a single -contains. The first filter is the

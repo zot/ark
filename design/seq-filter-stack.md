@@ -1,6 +1,6 @@
 # Sequence: CLI Filter Stack Parsing and Execution
 
-**Requirements:** R1770–R1789
+**Requirements:** R1770–R1789, R1940
 
 Shows how `ark search` args are parsed into a filter stack and
 executed through the server.
@@ -22,6 +22,8 @@ User → cmdSearch(args)
         "-tag"      → emit {polarity, "tag", strip @ from next arg}
         "-about"    → emit {polarity, "about", next arg}
         "-files"    → emit {polarity, "files", next arg}
+        "-filter-k" → set K on most recent entry (R1940)
+                       warn + ignore if no entry, or entry not "about"
         bare term   → coalesce into current contains group
                        (start new contains group if none open)
         other "-*"  → pass through to remainingArgs for flag.Parse

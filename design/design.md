@@ -384,3 +384,16 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O84: EmbedCmd/QueryCmd config fields are vestigial post-microvec removal — should be deleted from Config, Store I records, and CLI flags
 - T33: R1927 retired (2026-04-28 about-multi-search amendment; only one request kind (top-K) needed)
 - T34: R1933 retired (2026-04-28 about-multi-search amendment; centroid + chunk filter use different shapes (threshold vs top-K))
+- A48: R523, R524 are negative requirements (no changes to microfts2 API / fsnotify coordination) — un-anchorable by design. Their fulfillment is the absence of changes, not the presence of an artifact.
+- T35: R701 retired (bigram strategy removed)
+- T36: R702 retired (bigram strategy removed)
+- T37: R808 retired by R853 (schedule moved to ark.toml config + day-bucket indexing (R853-R855))
+- T38: R826 retired by R868 (scheduler reads day buckets at startup, not subscription-triggered (R868-R870))
+- T39: R827 retired by R853 (zero overhead unless tag is in ark.toml [schedule])
+- T40: R828 retired by R868 (scheduler fires to all listening sessions, not per-subscription)
+- T41: R1028 retired (day bucket LMDB indexing replaced by month buckets (obsolescence marker for R866))
+- T42: R1029 retired (TF reverse index for deletion no longer needed (obsolescence marker for R871))
+- T43: R1030 retired (TD JSON array no longer needed (obsolescence marker for R911))
+- T44: R1031 retired (ack status embedded in day buckets no longer needed (obsolescence marker for R912))
+- T45: R1032 retired (dayBucketsFromLogFile no longer needed (obsolescence marker for R1019))
+- T46: R1042 retired (@ark-event-fired: log entries no longer needed for gap detection (obsolescence marker for R870))
