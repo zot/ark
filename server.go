@@ -311,6 +311,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /tags", srv.handleTags)
 	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
 	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
 	mux.HandleFunc("POST /config/add-source", srv.handleConfigAddSource)
 	mux.HandleFunc("POST /config/remove-source", srv.handleConfigRemoveSource)
@@ -1253,6 +1254,29 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, files)
+}
+
+// handleInbox returns inbox entries from the running server. Lets the
+// CLI's `ark message inbox` see tmp:// messages that only live in
+// server memory.
+// CRC: crc-Server.md | R1952
+func (srv *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ShowAll         bool `json:"showAll,omitempty"`
+		IncludeArchived bool `json:"includeArchived,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	entries, err := Sync(srv.db, func(db *DB) ([]InboxEntry, error) {
+		return db.Inbox(req.ShowAll, req.IncludeArchived)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, entries)
 }
 
 func (srv *Server) handleTagDefs(w http.ResponseWriter, r *http.Request) {

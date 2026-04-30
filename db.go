@@ -233,6 +233,8 @@ func Open(dbPath string) (*DB, error) {
 		fts.Close()
 		return nil, fmt.Errorf("open ark store: %w", err)
 	}
+	tmpTags := NewTmpTagStore()
+	store.SetTmpTagStore(tmpTags)
 
 	matcher := &Matcher{Dotfiles: config.Dotfiles}
 
@@ -299,8 +301,14 @@ func Open(dbPath string) (*DB, error) {
 
 	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.
 	// Both run inside the caller's txn to avoid nested Views.
+	// Overlay-issued ids (high bit set) route to TmpTagStore so the
+	// chunkid↔fileid mapping for tmp:// content stays first-class.
+	// CRC: crc-DB.md | R1948, R1950
 	store.SetChunkResolver(
 		func(txn *lmdb.Txn, chunkID uint64) []uint64 {
+			if IsOverlayID(chunkID) {
+				return tmpTags.FilesForChunk(chunkID)
+			}
 			crec, err := fts.ReadCRecord(txn, chunkID)
 			if err != nil {
 				return nil
@@ -312,6 +320,9 @@ func Open(dbPath string) (*DB, error) {
 			return ids
 		},
 		func(fileID uint64) []uint64 {
+			if IsOverlayID(fileID) {
+				return tmpTags.ChunksForFile(fileID)
+			}
 			info, err := fts.FileInfoByID(fileID)
 			if err != nil {
 				return nil
@@ -570,10 +581,13 @@ func (db *DB) FTS() *microfts2.DB {
 	return db.fts
 }
 
-// AddTmpFile indexes content in memory via the microfts2 overlay.
-// CRC: crc-DB.md | R663, R666, R667
+// AddTmpFile indexes content in memory via the microfts2 overlay
+// and writes the extracted tag values into the in-memory tag overlay
+// via Store.UpdateTagValues.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R663, R666, R667, R1948
 func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
-	fid, err := db.fts.AddTmpFile(path, strategy, content)
+	acc := &chunkAccumulator{strategy: strategy}
+	fid, err := db.fts.AddTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, err
 	}
@@ -581,20 +595,42 @@ func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) 
 		db.tmpPaths = make(map[string]uint64)
 	}
 	db.tmpPaths[path] = fid
+	stampFileID(acc.chunkTags, fid)
+	if err := db.store.UpdateTagValues(acc.chunkTags); err != nil {
+		return fid, fmt.Errorf("write tmp tags: %w", err)
+	}
 	return fid, nil
 }
 
-// UpdateTmpFile replaces content of an existing tmp:// document.
-// CRC: crc-DB.md | R666
+// UpdateTmpFile replaces content of an existing tmp:// document and
+// re-extracts its tag values into the in-memory tag overlay.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R666, R1948
 func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
-	return db.fts.UpdateTmpFile(path, strategy, content)
+	acc := &chunkAccumulator{strategy: strategy}
+	if err := db.fts.UpdateTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback)); err != nil {
+		return err
+	}
+	fid, ok := db.tmpPaths[path]
+	if !ok {
+		return nil
+	}
+	// UpdateTmpFile drops the file's prior overlay chunks; clear our
+	// tag overlay first so UpdateTagValues writes a clean replacement.
+	db.store.RemoveFileTagValues(fid)
+	stampFileID(acc.chunkTags, fid)
+	if err := db.store.UpdateTagValues(acc.chunkTags); err != nil {
+		return fmt.Errorf("write tmp tags: %w", err)
+	}
+	return nil
 }
 
 // AppendTmpFile appends content to a tmp:// document, creating it if needed.
-// Creates new chunks from the appended content without touching existing chunks.
-// CRC: crc-DB.md
+// Newly emitted chunks have their tag values added to the overlay via
+// Store.AppendTagValues; existing chunks are untouched.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R1948
 func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, error) {
-	fid, err := db.fts.AppendTmpFile(path, strategy, content)
+	acc := &chunkAccumulator{strategy: strategy}
+	fid, err := db.fts.AppendTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, err
 	}
@@ -602,18 +638,35 @@ func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, erro
 		db.tmpPaths = make(map[string]uint64)
 	}
 	db.tmpPaths[path] = fid
+	stampFileID(acc.chunkTags, fid)
+	if err := db.store.AppendTagValues(acc.chunkTags); err != nil {
+		return fid, fmt.Errorf("write tmp tags: %w", err)
+	}
 	return fid, nil
 }
 
-// RemoveTmpFile removes a tmp:// document from the overlay.
-// CRC: crc-DB.md | R666
+// RemoveTmpFile drops a tmp:// document from the overlay. Tag entries
+// are cleared first so the trigram and tag overlays never disagree
+// on which fileids exist.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R666, R1944
 func (db *DB) RemoveTmpFile(path string) error {
-	err := db.fts.RemoveTmpFile(path)
-	if err != nil {
+	if fid, ok := db.tmpPaths[path]; ok {
+		db.store.RemoveFileTagValues(fid)
+	}
+	if err := db.fts.RemoveTmpFile(path); err != nil {
 		return err
 	}
 	delete(db.tmpPaths, path)
 	return nil
+}
+
+// stampFileID populates ChunkTagValues.FileID for every entry so the
+// Store dispatcher can route overlay groups to TmpTagStore by fileid.
+// CRC: crc-DB.md | R1947
+func stampFileID(chunkTags []ChunkTagValues, fileID uint64) {
+	for i := range chunkTags {
+		chunkTags[i].FileID = fileID
+	}
 }
 
 // HasTmp returns true if any tmp:// documents exist.
@@ -1696,6 +1749,7 @@ type TagFileInfo struct {
 }
 
 // TagFiles returns files containing the specified tags with file size.
+// CRC: crc-DB.md | R1948
 func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 	records, err := db.store.TagFiles(tags)
 	if err != nil {
@@ -1703,22 +1757,139 @@ func (db *DB) TagFiles(tags []string) ([]TagFileInfo, error) {
 	}
 	var results []TagFileInfo
 	for _, rec := range records {
-		info, err := db.fts.FileInfoByID(rec.FileID)
-		if err != nil {
+		path, ok := db.resolveFilePath(rec.FileID)
+		if !ok {
 			continue
 		}
 		var size int64
-		if fi, err := os.Stat(info.Names[0]); err == nil {
-			size = fi.Size()
+		if !IsOverlayID(rec.FileID) {
+			if fi, err := os.Stat(path); err == nil {
+				size = fi.Size()
+			}
 		}
 		results = append(results, TagFileInfo{
-			Path:  info.Names[0],
+			Path:  path,
 			Size:  size,
 			Tag:   rec.Tag,
 			Count: rec.Count,
 		})
 	}
 	return results, nil
+}
+
+// inboxFields collects the tag-block fields the inbox displays.
+// CRC: crc-DB.md | R1952
+type inboxFields struct {
+	status, to, from, requestID, summary, kind  string
+	responseHandled, requestHandled, statusDate string
+}
+
+// readInboxFields collects the tag values the inbox needs. Persistent
+// files use ParseTagBlock on disk content (preserves canonical block
+// semantics for `--message`-style messages). Tmp:// files read via
+// Store.FileTagValues, which dispatches to the in-memory tag overlay.
+// Returns ok=false when the @status tag is absent — the candidate is
+// not an inboxable message.
+// CRC: crc-DB.md | R1147, R1149, R1952
+func (db *DB) readInboxFields(fileID uint64, path string) (inboxFields, bool) {
+	var f inboxFields
+	if IsOverlayID(fileID) {
+		got, err := db.store.FileTagValues(fileID, []string{
+			"status", "to-project", "from-project",
+			"ark-request", "ark-response", "issue",
+			"response-handled", "request-handled", "status-date",
+		})
+		if err != nil {
+			return f, false
+		}
+		f.status = got["status"]
+		if f.status == "" {
+			return f, false
+		}
+		f.to = got["to-project"]
+		if i := strings.IndexByte(f.to, ','); i >= 0 {
+			f.to = strings.TrimSpace(f.to[:i])
+		}
+		f.from = got["from-project"]
+		if v := got["ark-request"]; v != "" {
+			f.requestID = v
+			if f.to == f.from {
+				f.kind = "self"
+			} else {
+				f.kind = "request"
+			}
+			f.summary = got["issue"]
+		} else if v := got["ark-response"]; v != "" {
+			f.requestID = v
+			f.kind = "response"
+			f.summary = got["issue"]
+			if f.summary == "" {
+				f.summary = "ark-response:" + v
+			}
+		}
+		f.responseHandled = got["response-handled"]
+		f.requestHandled = got["request-handled"]
+		f.statusDate = got["status-date"]
+		return f, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return f, false
+	}
+	tb := ParseTagBlock(data)
+	var ok bool
+	f.status, ok = tb.Get("status")
+	if !ok {
+		return f, false
+	}
+	f.to, _ = tb.Get("to-project")
+	if i := strings.IndexByte(f.to, ','); i >= 0 {
+		f.to = strings.TrimSpace(f.to[:i])
+	}
+	f.from, _ = tb.Get("from-project")
+	if v, ok := tb.Get("ark-request"); ok {
+		f.requestID = v
+		if f.to == f.from {
+			f.kind = "self"
+		} else {
+			f.kind = "request"
+		}
+		if iss, ok := tb.Get("issue"); ok {
+			f.summary = iss
+		}
+	} else if v, ok := tb.Get("ark-response"); ok {
+		f.requestID = v
+		f.kind = "response"
+		if iss, ok := tb.Get("issue"); ok {
+			f.summary = iss
+		} else {
+			f.summary = "ark-response:" + v
+		}
+	}
+	f.responseHandled, _ = tb.Get("response-handled")
+	f.requestHandled, _ = tb.Get("request-handled")
+	f.statusDate, _ = tb.Get("status-date")
+	return f, true
+}
+
+// resolveFilePath returns the path for a fileid. Persistent fileids
+// resolve via microfts2's FileInfoByID; overlay fileids resolve via
+// the in-memory tmp paths map.
+// CRC: crc-DB.md | R1948
+func (db *DB) resolveFilePath(fileID uint64) (string, bool) {
+	if IsOverlayID(fileID) {
+		for path, fid := range db.tmpPaths {
+			if fid == fileID {
+				return path, true
+			}
+		}
+		return "", false
+	}
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil || len(info.Names) == 0 {
+		return "", false
+	}
+	return info.Names[0], true
 }
 
 // InboxEntry is a message from the cross-project messaging system.
@@ -1800,60 +1971,34 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		}
 		seen[rec.FileID] = true
 
-		// Skip excluded files (completed/denied/archived) via V records
 		if excludeIDs != nil && excludeIDs[rec.FileID] {
 			continue
 		}
 
-		// R1146: filter to /requests/ paths
-		info, err := db.fts.FileInfoByID(rec.FileID)
-		if err != nil {
-			continue
-		}
-		path := info.Names[0]
-		if !strings.Contains(path, "/requests/") {
-			continue
-		}
-
-		// Read only survivors — ParseTagBlock for precise header values
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		tb := ParseTagBlock(data)
-		statusVal, ok := tb.Get("status")
+		// R1146: persistent files filter to /requests/ paths. Tmp://
+		// messages bypass the path filter — any tmp:// document with
+		// a @status: tag is inboxable. R1952
+		path, ok := db.resolveFilePath(rec.FileID)
 		if !ok {
 			continue
 		}
+		if !IsOverlayID(rec.FileID) && !strings.Contains(path, "/requests/") {
+			continue
+		}
 
-		toVal, _ := tb.Get("to-project")
-		if i := strings.IndexByte(toVal, ','); i >= 0 {
-			toVal = strings.TrimSpace(toVal[:i])
+		f, ok := db.readInboxFields(rec.FileID, path)
+		if !ok {
+			continue
 		}
-		fromVal, _ := tb.Get("from-project")
-		var summary, requestID, kind string
-		if v, ok := tb.Get("ark-request"); ok {
-			requestID = v
-			if toVal == fromVal {
-				kind = "self"
-			} else {
-				kind = "request"
-			}
-			if iss, ok := tb.Get("issue"); ok {
-				summary = iss
-			}
-		} else if v, ok := tb.Get("ark-response"); ok {
-			requestID = v
-			kind = "response"
-			if iss, ok := tb.Get("issue"); ok {
-				summary = iss
-			} else {
-				summary = "ark-response:" + v
-			}
-		}
-		responseHandled, _ := tb.Get("response-handled")
-		requestHandled, _ := tb.Get("request-handled")
-		statusDate, _ := tb.Get("status-date")
+		statusVal := f.status
+		toVal := f.to
+		fromVal := f.from
+		requestID := f.requestID
+		summary := f.summary
+		kind := f.kind
+		responseHandled := f.responseHandled
+		requestHandled := f.requestHandled
+		statusDate := f.statusDate
 		entries = append(entries, InboxEntry{
 			Status:          statusVal,
 			To:              toVal,

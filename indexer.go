@@ -16,7 +16,6 @@ import (
 	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
 	"sync"
-
 )
 
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
@@ -57,7 +56,13 @@ func (a *chunkAccumulator) callback(chunkText string) {
 // from the chunk content and emits a ChunkTagValues entry keyed by the
 // freshly-allocated chunkid. Content-dedup'd chunks (refcount-bumped C
 // records) do not fire — their F/V/T records already exist.
-// CRC: crc-Indexer.md | R1891
+//
+// Reads only ic.Chunk.Content and ic.CRecord.ChunkID. Overlay-fired
+// CRecord has no LMDB transaction context (Txn() and DB() return nil),
+// so the callback must never traverse the CRecord into LMDB. This
+// makes the same callback shape work for both persistent and tmp://
+// indexing without branching. (R1949)
+// CRC: crc-Indexer.md | R1891, R1949
 func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 	values := ExtractTagValues(ic.Chunk.Content, a.strategy)
 	a.chunkTags = append(a.chunkTags, ChunkTagValues{
@@ -936,4 +941,3 @@ func ExtractTagDefs(content []byte) map[string]string {
 	}
 	return defs
 }
-

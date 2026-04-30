@@ -97,7 +97,8 @@ overlay. Used by the `onlyIfTmp` optimization.
 Tags are extracted from tmp:// content using the same regex as
 persistent files. Tag counts (T and F records) for tmp:// files
 are tracked in memory alongside the overlay — they don't touch
-LMDB.
+LMDB. Structure, tvid integration, and the unified read path are
+specified in [tmp-tag-overlay.md](tmp-tag-overlay.md).
 
 ## Lua integration
 

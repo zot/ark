@@ -34,6 +34,19 @@ type Store struct {
 	// before the V-record scan so the resolver runs outside the scan's
 	// txn. CRC: crc-Store.md | R1889
 	chunksForFile func(fileID uint64) []uint64
+	// tmp is the in-memory tag overlay for tmp:// content. Reads union
+	// LMDB results with overlay results; chunkid- and fileid-keyed
+	// writes dispatch by high bit of the id (overlay ids count down
+	// from MaxUint64).
+	// CRC: crc-Store.md | R1946, R1947
+	tmp *TmpTagStore
+}
+
+// SetTmpTagStore wires the in-memory tag overlay. Called by DB after
+// the overlay is constructed.
+// CRC: crc-Store.md | R1941, R1946
+func (s *Store) SetTmpTagStore(tmp *TmpTagStore) {
+	s.tmp = tmp
 }
 
 // SetChunkResolver wires both directions of the chunkID↔fileID resolver.
@@ -41,6 +54,7 @@ type Store struct {
 //   - toFiles runs INSIDE the caller's txn (used by TagFiles).
 //   - toChunks opens its OWN view (microfts2 FileInfoByID is not txn-aware);
 //     called by FileTagValues before its main scan.
+//
 // CRC: crc-Store.md | R1887, R1889
 func (s *Store) SetChunkResolver(toFiles func(txn *lmdb.Txn, chunkID uint64) []uint64, toChunks func(fileID uint64) []uint64) {
 	s.filesForChunk = toFiles
@@ -105,9 +119,13 @@ type TagFileRecord struct {
 
 // ChunkTagValues groups a chunkid with the tag-values extracted from
 // that chunk. Used by UpdateTagValues / AppendTagValues to write
-// V/F records keyed by chunkid. CRC: crc-Store.md | R1883, R1884
+// V/F records keyed by chunkid. FileID is optional and populated by
+// tmp:// callers so the overlay dispatcher can route the entry to
+// TmpTagStore by fileid; persistent callers leave it zero.
+// CRC: crc-Store.md | R1883, R1884, R1947
 type ChunkTagValues struct {
 	ChunkID uint64
+	FileID  uint64
 	Values  []TagValue
 }
 
@@ -627,7 +645,13 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 			return nil
 		})
 	})
-	return records, err
+	if err != nil {
+		return records, err
+	}
+	if s.tmp != nil {
+		records = append(records, s.tmp.TagFiles(tags)...)
+	}
+	return records, nil
 }
 
 // adjustTagTotal increments or decrements a T record within an existing transaction.
@@ -961,8 +985,15 @@ func removeVarint(data []byte, target uint64) ([]byte, bool) {
 //
 // CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1873, R1874, R1875, R1876, R1883
 func (s *Store) UpdateTagValues(chunkTags []ChunkTagValues) error {
+	persistent, overlay := s.partitionChunkTags(chunkTags)
+	for fileID, ct := range overlay {
+		s.tmp.UpdateTagValues(fileID, ct)
+	}
+	if len(persistent) == 0 {
+		return nil
+	}
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		for _, ct := range chunkTags {
+		for _, ct := range persistent {
 			if err := s.writeChunkTagValuesInTxn(txn, ct.ChunkID, ct.Values); err != nil {
 				return err
 			}
@@ -971,21 +1002,78 @@ func (s *Store) UpdateTagValues(chunkTags []ChunkTagValues) error {
 	})
 }
 
+// partitionChunkTags splits chunk-tag groups by origin: LMDB-bound
+// entries (chunkid high bit clear) go to a flat slice; overlay-bound
+// entries (chunkid high bit set) bucket by FileID for the overlay
+// dispatcher. Returns empty maps when the overlay isn't configured —
+// overlay entries are dropped silently in that case (test paths).
+// CRC: crc-Store.md | R1947
+func (s *Store) partitionChunkTags(chunkTags []ChunkTagValues) ([]ChunkTagValues, map[uint64][]ChunkTagValues) {
+	var persistent []ChunkTagValues
+	overlay := map[uint64][]ChunkTagValues{}
+	for _, ct := range chunkTags {
+		if !IsOverlayID(ct.ChunkID) {
+			persistent = append(persistent, ct)
+			continue
+		}
+		if s.tmp == nil {
+			continue
+		}
+		overlay[ct.FileID] = append(overlay[ct.FileID], ct)
+	}
+	return persistent, overlay
+}
+
 // AppendTagValues mirrors UpdateTagValues for the append path. Internally
-// the same idempotent write — chunkid-keyed records don't distinguish
-// "first write" from "append."
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1884
+// the same idempotent write for the persistent path — chunkid-keyed
+// records don't distinguish "first write" from "append." Overlay
+// entries route through TmpTagStore.AppendTagValues so existing
+// chunks for the fileid are preserved.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1884, R1947
 func (s *Store) AppendTagValues(chunkTags []ChunkTagValues) error {
-	return s.UpdateTagValues(chunkTags)
+	persistent, overlay := s.partitionChunkTags(chunkTags)
+	for fileID, ct := range overlay {
+		s.tmp.AppendTagValues(fileID, ct)
+	}
+	if len(persistent) == 0 {
+		return nil
+	}
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		for _, ct := range persistent {
+			if err := s.writeChunkTagValuesInTxn(txn, ct.ChunkID, ct.Values); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // RemoveTagValues drops all F/V/T contributions of a chunkid. Used for
 // orphan-chunkid cleanup driven by microfts2 callbacks (R1899, R1900).
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1899, R1900
+// Dispatches by chunkid high bit: overlay chunkids route to
+// TmpTagStore; persistent chunkids touch LMDB.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1899, R1900, R1947
 func (s *Store) RemoveTagValues(chunkID uint64) error {
+	if IsOverlayID(chunkID) {
+		if s.tmp != nil {
+			s.tmp.RemoveChunk(chunkID)
+		}
+		return nil
+	}
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		return s.removeChunkIDInTxn(txn, chunkID)
 	})
+}
+
+// RemoveFileTagValues clears every tag entry for a fileid. Overlay
+// fileids dispatch to TmpTagStore.RemoveFile. Persistent fileids
+// are a no-op at this entry point — their per-chunk cleanup runs
+// through microfts2's RemovedChunkCallback during the LMDB removal.
+// CRC: crc-Store.md | R1944, R1947
+func (s *Store) RemoveFileTagValues(fileID uint64) {
+	if IsOverlayID(fileID) && s.tmp != nil {
+		s.tmp.RemoveFile(fileID)
+	}
 }
 
 // RemoveTagValuesInTxn is the txn-aware variant for orphan callbacks
@@ -1206,7 +1294,13 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 	if err == errStopScan {
 		err = nil
 	}
-	return ids, err
+	if err != nil {
+		return ids, err
+	}
+	if s.tmp != nil {
+		ids = append(ids, s.tmp.TagValueFiles(tag, value)...)
+	}
+	return ids, nil
 }
 
 // FileTagValues returns the first value found per tag for a given fileid.
@@ -1216,6 +1310,12 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 // encountered in LMDB key order.
 // CRC: crc-Store.md | R1142, R1143, R1889
 func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, error) {
+	if IsOverlayID(fileid) {
+		if s.tmp == nil {
+			return map[string]string{}, nil
+		}
+		return s.tmp.FileTagValues(fileid, tags), nil
+	}
 	result := make(map[string]string, len(tags))
 	if s.chunksForFile == nil {
 		return result, nil

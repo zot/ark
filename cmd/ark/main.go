@@ -4980,6 +4980,20 @@ func cmdMessageInbox(args []string) {
 		}
 	}
 
+	// Server-first so tmp:// inbox messages (only in server memory)
+	// are visible. Cold-path fallback when no server is running.
+	// CRC: crc-CLI.md | R1952
+	if client := serverClient(arkDir); client != nil {
+		req := struct {
+			ShowAll         bool `json:"showAll,omitempty"`
+			IncludeArchived bool `json:"includeArchived,omitempty"`
+		}{ShowAll: *all, IncludeArchived: *includeArchived}
+		var entries []ark.InboxEntry
+		if err := proxyDecode(client, "POST", "/inbox", req, &entries); err == nil {
+			printEntries(entries)
+			return
+		}
+	}
 	withDB(func(d *ark.DB) {
 		entries, err := d.Inbox(*all, *includeArchived)
 		if err != nil {
