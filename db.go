@@ -313,6 +313,10 @@ func Open(dbPath string) (*DB, error) {
 	db.indexer.extmap = db.extmap
 	db.indexer.db = db
 	store.SetExtMap(db.extmap)
+	if store.tmp != nil {
+		// Overlay-source @ext cleanup hook. (R2023)
+		store.tmp.SetExtMap(db.extmap, db)
+	}
 
 	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.
 	// Both run inside the caller's txn to avoid nested Views.
@@ -598,8 +602,9 @@ func (db *DB) FTS() *microfts2.DB {
 
 // AddTmpFile indexes content in memory via the microfts2 overlay
 // and writes the extracted tag values into the in-memory tag overlay
-// via Store.UpdateTagValues.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R663, R666, R667, R1948
+// via Store.UpdateTagValues. Overlay-source @ext routings are
+// applied to ExtMap state (in-memory only — no LMDB writes).
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R663, R666, R667, R1948, R2012, R2016
 func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
 	acc := &chunkAccumulator{strategy: strategy}
 	fid, err := db.fts.AddTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
@@ -614,12 +619,19 @@ func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) 
 	if err := db.store.UpdateTagValues(acc.chunkTags); err != nil {
 		return fid, fmt.Errorf("write tmp tags: %w", err)
 	}
+	if db.indexer != nil {
+		if err := db.indexer.runOverlayExtRouting(fid, acc.chunkTags); err != nil {
+			return fid, fmt.Errorf("overlay ext routing: %w", err)
+		}
+	}
 	return fid, nil
 }
 
 // UpdateTmpFile replaces content of an existing tmp:// document and
-// re-extracts its tag values into the in-memory tag overlay.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R666, R1948
+// re-extracts its tag values into the in-memory tag overlay. Overlay
+// @ext cleanup runs as a side effect of TmpTagStore's removal hook;
+// new routings apply via runOverlayExtRouting.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R666, R1948, R2012, R2016, R2023
 func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 	acc := &chunkAccumulator{strategy: strategy}
 	if err := db.fts.UpdateTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback)); err != nil {
@@ -631,18 +643,25 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 	}
 	// UpdateTmpFile drops the file's prior overlay chunks; clear our
 	// tag overlay first so UpdateTagValues writes a clean replacement.
+	// RemoveFileTagValues → TmpTagStore.RemoveFile drives @ext cleanup.
 	db.store.RemoveFileTagValues(fid)
 	stampFileID(acc.chunkTags, fid)
 	if err := db.store.UpdateTagValues(acc.chunkTags); err != nil {
 		return fmt.Errorf("write tmp tags: %w", err)
+	}
+	if db.indexer != nil {
+		if err := db.indexer.runOverlayExtRouting(fid, acc.chunkTags); err != nil {
+			return fmt.Errorf("overlay ext routing: %w", err)
+		}
 	}
 	return nil
 }
 
 // AppendTmpFile appends content to a tmp:// document, creating it if needed.
 // Newly emitted chunks have their tag values added to the overlay via
-// Store.AppendTagValues; existing chunks are untouched.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R1948
+// Store.AppendTagValues; existing chunks are untouched. Overlay-source
+// @ext routings on the new chunks are applied via runOverlayExtRouting.
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R1948, R2012, R2016
 func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, error) {
 	acc := &chunkAccumulator{strategy: strategy}
 	fid, err := db.fts.AppendTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
@@ -656,6 +675,11 @@ func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, erro
 	stampFileID(acc.chunkTags, fid)
 	if err := db.store.AppendTagValues(acc.chunkTags); err != nil {
 		return fid, fmt.Errorf("write tmp tags: %w", err)
+	}
+	if db.indexer != nil {
+		if err := db.indexer.runOverlayExtRouting(fid, acc.chunkTags); err != nil {
+			return fid, fmt.Errorf("overlay ext routing: %w", err)
+		}
 	}
 	return fid, nil
 }
@@ -1158,11 +1182,21 @@ func (db *DB) resolveExtUUID(value string) []uint64 {
 	return chunks
 }
 
-// chunkFileID returns the fileid that owns chunkID. Falls back to
-// reading the C record inside the supplied txn. ok=false when the
-// chunk is unknown or has no file linkage.
-// CRC: crc-DB.md | R1990
+// chunkFileID returns the fileid that owns chunkID. Branches on
+// IsOverlayID — overlay chunkids resolve via Store.filesForChunk
+// (routed to TmpTagStore.FilesForChunk), persistent chunkids read
+// the C record inside the supplied txn. ok=false when the chunk is
+// unknown or has no file linkage.
+// CRC: crc-DB.md | R1990, R2028
 func (db *DB) chunkFileID(txn *lmdb.Txn, chunkID uint64) (uint64, bool) {
+	if IsOverlayID(chunkID) {
+		if db.store != nil && db.store.filesForChunk != nil {
+			if fids := db.store.filesForChunk(txn, chunkID); len(fids) > 0 {
+				return fids[0], true
+			}
+		}
+		return 0, false
+	}
 	crec, err := db.fts.ReadCRecord(txn, chunkID)
 	if err != nil || len(crec.FileIDs) == 0 {
 		return 0, false

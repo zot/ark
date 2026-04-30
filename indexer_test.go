@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/zot/microfts2"
-
 )
 
 func TestExtractTagsBasic(t *testing.T) {

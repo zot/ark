@@ -37,6 +37,8 @@ type TmpTagStore struct {
 	tagCounts     map[string]int            // tag name → chunk count
 	tvidProducers map[uint64]int            // tvid → producer chunk count
 	tvids         *TvidMap                  // shared resolver (R1964, R1965)
+	extmap        *ExtMap                   // ext routing cleanup (R2023)
+	db            *DB                       // passed through to ExtMap.CleanupSource (R2023)
 }
 
 // NewTmpTagStore creates an empty overlay backed by the supplied tvid
@@ -55,8 +57,18 @@ func NewTmpTagStore(tvids *TvidMap) *TmpTagStore {
 
 // UpdateTagValues replaces the per-chunk entries for a fileid. Drops
 // existing chunkids registered to the fileid, then writes new ones.
-// CRC: crc-TmpTagStore.md | R1942, R1966
+// Drives ExtMap @ext cleanup for the dropped chunks before re-adding.
+// CRC: crc-TmpTagStore.md | R1942, R1966, R2023
 func (t *TmpTagStore) UpdateTagValues(fileID uint64, chunkTags []ChunkTagValues) {
+	t.mu.RLock()
+	var pairs []extCleanupPair
+	for _, cid := range t.fileChunks[fileID] {
+		for _, te := range t.extTvidsForChunkLocked(cid) {
+			pairs = append(pairs, extCleanupPair{chunkID: cid, tvidExt: te})
+		}
+	}
+	t.mu.RUnlock()
+	t.runExtCleanup(pairs)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.removeFileLocked(fileID)
@@ -107,9 +119,17 @@ func (t *TmpTagStore) resolveOrAlloc(tag, value string) uint64 {
 }
 
 // RemoveChunk drops a single chunkid's entry. Used when Store
-// dispatches a chunkid-keyed RemoveTagValues to the overlay.
-// CRC: crc-TmpTagStore.md | R1967
+// dispatches a chunkid-keyed RemoveTagValues to the overlay. Drives
+// ExtMap @ext cleanup before locking.
+// CRC: crc-TmpTagStore.md | R1967, R2023
 func (t *TmpTagStore) RemoveChunk(chunkID uint64) {
+	t.mu.RLock()
+	var pairs []extCleanupPair
+	for _, te := range t.extTvidsForChunkLocked(chunkID) {
+		pairs = append(pairs, extCleanupPair{chunkID: chunkID, tvidExt: te})
+	}
+	t.mu.RUnlock()
+	t.runExtCleanup(pairs)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.removeChunkLocked(chunkID)
@@ -122,12 +142,62 @@ func (t *TmpTagStore) removeChunkLocked(chunkID uint64) {
 	t.dropChunkLocked(chunkID, true)
 }
 
+// SetExtMap wires the ExtMap so chunk-removal paths can drive
+// overlay-source @ext cleanup. Also sets the DB pointer used by
+// ExtMap.CleanupSource for spec recovery during the cleanup walk.
+// Cleanup runs lock-free (the chunk's @ext tvids are snapshotted
+// first under RLock, then CleanupSource is called outside any
+// TmpTagStore lock to avoid the t.mu ↔ ExtMap lock cycle that arises
+// when CleanupSource calls back through DB.chunkFileID →
+// Store.filesForChunk → TmpTagStore.FilesForChunk).
+// CRC: crc-TmpTagStore.md | R2023
+func (t *TmpTagStore) SetExtMap(m *ExtMap, db *DB) {
+	t.mu.Lock()
+	t.extmap = m
+	t.db = db
+	t.mu.Unlock()
+}
+
+// extTvidsForChunkLocked snapshots the @ext tvids the chunk
+// contributes. Caller holds t.mu (any kind). (R2023)
+func (t *TmpTagStore) extTvidsForChunkLocked(chunkID uint64) []uint64 {
+	entry, ok := t.chunks[chunkID]
+	if !ok {
+		return nil
+	}
+	src := entry.tvids[tagExt]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]uint64, len(src))
+	copy(out, src)
+	return out
+}
+
+// runExtCleanup drives ExtMap.CleanupSource for each (chunkID, tvid_ext)
+// pair. MUST be called outside any TmpTagStore lock. (R2023)
+func (t *TmpTagStore) runExtCleanup(pairs []extCleanupPair) {
+	if t.extmap == nil {
+		return
+	}
+	for _, p := range pairs {
+		_ = t.extmap.CleanupSource(nil, nil, t.db, p.chunkID, p.tvidExt)
+	}
+}
+
+// extCleanupPair is one (source chunkid, tvid_ext) cleanup directive.
+type extCleanupPair struct {
+	chunkID uint64
+	tvidExt uint64
+}
+
 // dropChunkLocked removes one chunk's entry, decrements tag counts and
 // per-tvid producer counts, and prunes any overlay tvids that lose
 // their last producer. When updateFileList is true, the chunk is also
 // removed from its file's chunk list (callers iterating fileChunks
 // pass false to avoid mutating the slice they're walking). Caller
-// holds t.mu.
+// holds t.mu. ExtMap @ext cleanup must be driven by the caller before
+// invoking this — see runExtCleanup. (R2023)
 func (t *TmpTagStore) dropChunkLocked(chunkID uint64, updateFileList bool) {
 	entry, ok := t.chunks[chunkID]
 	if !ok {
@@ -164,8 +234,18 @@ func (t *TmpTagStore) dropChunkLocked(chunkID uint64, updateFileList bool) {
 // RemoveFile drops every entry belonging to a tmp:// fileid. Tvids
 // whose last producer was this file and whose origin is OriginOverlay
 // are pruned from the shared TvidMap; persistent tvids are left alone.
-// CRC: crc-TmpTagStore.md | R1944, R1951, R1967
+// Drives ExtMap @ext cleanup for each chunk before locking.
+// CRC: crc-TmpTagStore.md | R1944, R1951, R1967, R2023
 func (t *TmpTagStore) RemoveFile(fileID uint64) {
+	t.mu.RLock()
+	var pairs []extCleanupPair
+	for _, cid := range t.fileChunks[fileID] {
+		for _, te := range t.extTvidsForChunkLocked(cid) {
+			pairs = append(pairs, extCleanupPair{chunkID: cid, tvidExt: te})
+		}
+	}
+	t.mu.RUnlock()
+	t.runExtCleanup(pairs)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.removeFileLocked(fileID)

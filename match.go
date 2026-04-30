@@ -13,7 +13,7 @@ import (
 type Classification int
 
 const (
-	Included   Classification = iota
+	Included Classification = iota
 	Excluded
 	Unresolved
 )

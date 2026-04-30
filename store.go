@@ -697,6 +697,9 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 	if s.tmp != nil {
 		records = append(records, s.tmp.TagFiles(tags)...)
 	}
+	if s.extmap != nil {
+		records = append(records, s.extmap.OverlayTagFiles(tags)...)
+	}
 	return records, nil
 }
 
@@ -1574,6 +1577,9 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 	}
 	if s.tmp != nil {
 		ids = append(ids, s.tmp.TagValueFiles(tag, value)...)
+	}
+	if s.extmap != nil {
+		ids = append(ids, s.extmap.OverlayTagValueFiles(tag, value)...)
 	}
 	return ids, nil
 }

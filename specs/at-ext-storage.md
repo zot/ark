@@ -247,6 +247,203 @@ converge correctly even when both source and target are in the same
 batch — some redundant resolution work is acceptable; end state is
 consistent.
 
+## Overlay (tmp://) target routing
+
+`tmp://` content is editable and short-lived; UUID targets in `tmp://`
+files are exactly the read-write tagging case `@ext` was designed for.
+A persistent file can route tags to a `tmp://` chunk, and a `tmp://`
+file can route tags to either kind of target. None of these routings
+may leave persistent residue: when ark exits, the overlay state is
+gone, so any LMDB record keyed by an overlay tvid or pointing at an
+overlay chunkid would dangle on the next startup with no recovery
+path.
+
+### Routing scopes
+
+Each `@ext` routing falls into one of four cases by the persistence
+of its source and target. `IsOverlayID(id) = id has the high bit set`
+applies to both chunkids and fileids — the microfts2 overlay counts
+down from `MaxUint64`, LMDB counts up.
+
+```
+                target persistent      target overlay
+              ┌──────────────────────┬──────────────────────┐
+source        │ X + V + ExtMap maps  │ ExtMap maps only     │
+persistent    │ (today's path)       │                      │
+              ├──────────────────────┼──────────────────────┤
+source        │ ExtMap maps only     │ ExtMap maps only     │
+overlay       │                      │                      │
+              └──────────────────────┴──────────────────────┘
+```
+
+`bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(targetChunkID)`.
+LMDB X and V records are written iff `bothPersistent`. Any overlay
+involvement on either end keeps the routing entirely in ExtMap's
+in-memory state.
+
+### ExtMap state extensions
+
+The six maps (`targetToChunk`, `chunkToTargets`, `fileidToTvids`,
+`extByAnchor`, `unresolvedTargets`, `virtualTagCount`) accept any
+uint64 chunkid or fileid; they hold persistent and overlay routings
+interleaved without distinguishing. Two new pieces fill the gap left
+by the missing X and V records:
+
+- `overlayRoutings[tvid_ext][target_chunkid] → []routed_tvid` —
+  in-memory parallel to X records, populated only for routings where
+  `!bothPersistent`. The same data the X record would have stored,
+  except session-scoped.
+- `overlayValues[tag][value] → []target_chunkid` — in-memory parallel
+  to V records, populated only for routings where `!bothPersistent`.
+  Used by `Store.TagValueFiles` and `Store.TagFiles` to surface
+  overlay-routed targets at query time. Multi-set semantics match V
+  records: each contribution adds an entry; removal strikes one
+  occurrence.
+
+`Rebuild` is unchanged. It scans X records (persistent only) to
+populate the six maps. `overlayRoutings` and `overlayValues` start
+empty on each session and fill as overlay sources index.
+
+### Indexing path
+
+`applyIndexExt` decides per-target. For each accepted target chunkid:
+
+1. Compute `bothPersistent`.
+2. Allocate routed-tag tvids via the existing path (`allocIDInTxn`
+   when source is persistent; `TmpTagStore.resolveOrAlloc` /
+   `TvidMap.AllocOverlay` when source is overlay — same shared
+   `TvidMap`).
+3. If `bothPersistent`: write X record + multi-set-append target
+   chunkid to each routed tag's V record (today's path).
+4. Else: write `overlayRoutings[tvid_ext][target_chunkid] = routed_tvids`;
+   append target chunkid to `overlayValues[tag][value]` for each
+   routed tag (multi-set, no dedup, mirroring V record semantics).
+5. Either way: update the six maps (`targetToChunk`, `chunkToTargets`,
+   `fileidToTvids`, `extByAnchor`, `virtualTagCount`).
+
+The self-reference check still fires on every routing regardless of
+overlay-ness — a `tmp://` file's `@ext` cannot self-target.
+
+### Query unification
+
+`Store.TagValueFiles(tag, value)` and `Store.TagFiles(tags)` already
+union persistent LMDB results with `TmpTagStore`'s overlay-direct
+results. They gain a third leg:
+`ExtMap.OverlayTagValueFiles(tag, value)` returns
+`overlayValues[tag][value]` chunkids, and the equivalent
+`ExtMap.OverlayTagFiles(tags)` walks `overlayValues` for the requested
+tag names. The three legs union without coordination — chunkids do
+not collide across persistent / overlay-direct / overlay-routed
+sources.
+
+T-totals: `virtualTagCount[tag]` already counts every routed
+contribution (overlay or persistent), so the existing
+`LMDB_T[tag] + virtualTagCount[tag]` formula stays correct without
+modification.
+
+### Cleanup paths
+
+Two trigger surfaces:
+
+**Persistent source orphan callback** (microfts2 fires per chunkid).
+Existing F→V cleanup runs and yields the source's `tvid_ext` list. For
+each `tvid_ext`, call `ExtMap.CleanupSource(sourceChunkID, tvidExt,
+txn, tt)`.
+
+**Overlay source removal** (`TmpTagStore.RemoveFile` /
+`RemoveChunk`). Before TmpTagStore drops the chunk, enumerate its
+`tvids["ext"]` to find the `tvid_ext` set the chunk contributed. For
+each `tvid_ext`, call `ExtMap.CleanupSource(sourceChunkID, tvidExt,
+nil, nil)` — txn and TvidTxn are unused for overlay sources because
+no LMDB writes can fire (every routing for an overlay source has
+`bothPersistent=false`).
+
+`CleanupSource(sourceChunkID, tvidExt, txn, tt)` walks
+`targetToChunk[tvidExt]` (in-memory). For each target_chunkid:
+
+- `bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(target_chunkid)`
+- If `bothPersistent`: read routed_tvids from the X record; strike
+  target_chunkid from each routed tag's V record (one occurrence);
+  delete the X record.
+- Else: read routed_tvids from `overlayRoutings[tvidExt][target_chunkid]`;
+  strike target_chunkid from `overlayValues[tag][value]` (one
+  occurrence); delete the `overlayRoutings` entry.
+- Decrement `virtualTagCount[tag]` per routed tag.
+
+After the loop, drop `tvidExt` from `targetToChunk`,
+`chunkToTargets`, `fileidToTvids`, `extByAnchor`,
+`unresolvedTargets`, and `overlayRoutings`. The walk-the-maps shape
+replaces today's `Store.ScanExtRecords` walk; X records are read
+once per persistent target during the walk, not enumerated up front.
+
+### Re-resolution
+
+The canonical re-resolution flow is unchanged in shape. `applyReresolve`
+gains the same per-target `bothPersistent` branch on Adds and Removes:
+persistent targets touch X / V; overlay targets touch
+`overlayRoutings` / `overlayValues`. Updates (V record blob shifts
+caused by other entries) only apply to persistent targets — overlay
+representations don't pack varints, so there is nothing to "shift."
+
+When microfts2's reindex callback fires for a persistent file, the
+candidate set still comes from `fileidToTvids[F.fileid]` plus
+`extByAnchor[F.path]` plus `extByAnchor[UUID]` for added/removed
+`@id` values — overlay routings appear in those maps under the same
+keys, so they are re-resolved alongside persistent ones.
+
+### Overlay-aware `chunkFileID`
+
+`DB.chunkFileID(txn, chunkID)` today reads only persistent C records
+(`fts.ReadCRecord`). For overlay chunkids it must branch to
+`Store.filesForChunk(chunkID)`, which already routes overlay
+chunkids to `TmpTagStore.FilesForChunk` via the resolver wired in
+`DB.Open`. Without this, ExtMap cannot determine the fileid of an
+overlay target during `Rebuild` (a no-op for overlay since they
+don't appear in X records, but defensive) or during indexing
+self-reference checks (a `tmp://` source routing to a `tmp://`
+target needs to know both fileids to compare).
+
+### Overlay error log
+
+Overlay routings are best-effort: their target may vanish before the
+user notices, and their resolution dies with the session. The user
+needs visibility into what overlay routings happened, what failed,
+and what was skipped. ExtMap holds an in-memory error log for these
+diagnostics:
+
+- `overlayErrors []OverlayError` — append-only ring or unbounded
+  slice (size cap to be decided at design time).
+- Each entry: `{Time, SourceChunkID, SourceFileID, Severity,
+  Message}`. Severity is `info` (informational, e.g., "@ext routes
+  to tmp:// target — session-scoped") or `warn` (e.g., "self-reference
+  in overlay routing rejected", "target resolution returned empty").
+
+ExtMap exposes:
+
+- `RecordOverlayError(severity, sourceChunkID, sourceFileID, message)`
+  — append entry. Called by `applyIndexExt` and `applyReresolve`
+  when they take overlay-affecting branches.
+- `OverlayErrors() []OverlayError` — read snapshot.
+- `ClearOverlayErrors()` — reset the log.
+- `AddOverlayError(severity, message)` — externally-supplied entry
+  (used by `ark errors --add`).
+
+These are wired to the planned `ark errors` CLI command (PLAN.md
+V2.5) for `dump`, `clear`, and `add` operations against the overlay
+log. Persistent error records (a separate concept on the same
+roadmap item) are out of scope here.
+
+### What stays the same
+
+- `extByAnchor` keys on the literal anchor text regardless of
+  resolution outcome — overlay-source candidates appear in
+  `extByAnchor[F.path]` / `extByAnchor[UUID]` and are re-resolved
+  by file-change events identically to persistent ones.
+- `unresolvedTargets` membership is overlay-agnostic.
+- Self-reference rejection still fires for any source/target pair
+  with the same fileid.
+- T-totals query as `LMDB_T[tag] + virtualTagCount[tag]`.
+
 ## Out of scope (deferred)
 
 - **Advanced anchor forms** (`path:line`, `path:"string"`,

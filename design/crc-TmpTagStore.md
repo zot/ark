@@ -1,5 +1,5 @@
 # TmpTagStore
-**Requirements:** R1941, R1942, R1943, R1944, R1945, R1949, R1950, R1951, R1964, R1966, R1967
+**Requirements:** R1941, R1942, R1943, R1944, R1945, R1949, R1950, R1951, R1964, R1966, R1967, R2017, R2023
 
 In-memory tag overlay for `tmp://` content. Mirrors the persistent
 V/F/T runtime API so callers do not branch on persistent vs tmp.
@@ -49,6 +49,15 @@ Lives for the server's lifetime; no LMDB writes, no schema marker.
 - HasFile(fileid uint64) bool: true if the overlay tracks any
   chunkids for the fileid. Used by Store dispatch to decide whether
   a read needs the overlay branch.
+- (overlay-source ext cleanup) Before dropChunkLocked drops a chunk
+  whose `tvids["ext"]` is non-empty, enumerate those tvids and call
+  `ExtMap.CleanupSource(chunkID, tvidExt, nil, nil)` for each. Every
+  routing for an overlay source has bothPersistent=false, so no
+  LMDB writes can fire; txn and TvidTxn are passed as nil. (R2023)
+- (overlay-source ext alloc) `resolveOrAlloc(tag, value)` is the
+  allocator routed-tag tvids use when the source is overlay. Same
+  Lookup-then-AllocOverlay semantics as direct overlay tag entries —
+  one shared TvidMap. (R2017)
 
 ## Origin discriminator
 Overlay-issued fileids count down from `MaxUint64` and overlay-issued
@@ -62,6 +71,10 @@ without consulting any external map. (R1950)
 - DB: instantiates the overlay at startup and tears it down on close
 - TvidMap: shared `tvid → (tag, value)` resolver; consulted on every
   write (Lookup → AllocOverlay) and read (Resolve)
+- ExtMap: notified of overlay source removal so it can clean up
+  ext routings whose source chunk is going away; also consumes
+  `resolveOrAlloc` indirectly when overlay-source @ext routings
+  allocate tvids for routed tags (R2017, R2023)
 
 ## Sequences
 - seq-tmp-tag-overlay.md

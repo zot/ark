@@ -284,16 +284,23 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 // strike their X records and routed-tag V entries afterward. Order
 // matters: the @ext tvids must be read before RemoveTagValuesInTxn
 // wipes F[orphan][ext], and CleanupSource must run before tt.Commit
-// drops tvid_exts whose source V records emptied. (R1899, R2008, R2009)
+// drops tvid_exts whose source V records emptied. (R1899, R2008,
+// R2009, R2022, R2024)
 func (idx *Indexer) cleanupOrphans(txn *lmdb.Txn, tt *TvidTxn, orphanedChunkIDs []uint64) error {
-	var extTvids []uint64
+	type extPair struct {
+		sourceChunkID uint64
+		tvidExt       uint64
+	}
+	var extPairs []extPair
 	if idx.extmap != nil {
 		for _, id := range orphanedChunkIDs {
 			ts, err := idx.store.ReadExtTvidsForChunk(txn, id)
 			if err != nil {
 				return err
 			}
-			extTvids = append(extTvids, ts...)
+			for _, te := range ts {
+				extPairs = append(extPairs, extPair{sourceChunkID: id, tvidExt: te})
+			}
 		}
 	}
 	for _, id := range orphanedChunkIDs {
@@ -305,8 +312,8 @@ func (idx *Indexer) cleanupOrphans(txn *lmdb.Txn, tt *TvidTxn, orphanedChunkIDs 
 		}
 	}
 	if idx.extmap != nil {
-		for _, te := range extTvids {
-			if err := idx.extmap.CleanupSource(txn, tt, idx.db, te); err != nil {
+		for _, p := range extPairs {
+			if err := idx.extmap.CleanupSource(txn, tt, idx.db, p.sourceChunkID, p.tvidExt); err != nil {
 				return err
 			}
 		}
@@ -395,13 +402,12 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 // collectIndexExtPlans walks freshly-written chunkTags, parses each
 // @ext value, and resolves the target. Resolution happens here
 // (outside the write txn) so the txn-aware applyIndexExt only does
-// record I/O. CRC: crc-Indexer.md | R1996
+// record I/O. Overlay (tmp://) source chunkids are accepted —
+// applyIndexExt branches per-target on bothPersistent.
+// CRC: crc-Indexer.md | R1996, R2012, R2016
 func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValues) []extIndexPlan {
 	var out []extIndexPlan
 	for _, ct := range chunkTags {
-		if IsOverlayID(ct.ChunkID) {
-			continue
-		}
 		for _, tv := range ct.Values {
 			if tv.Tag != tagExt || tv.Value == "" {
 				continue
@@ -425,6 +431,28 @@ func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValu
 		}
 	}
 	return out
+}
+
+// runOverlayExtRouting handles @ext routing for overlay (tmp://)
+// source content. Mirrors runExtRouting but skips the LMDB
+// transaction since every routing for an overlay source has
+// bothPersistent=false — applyIndexExt accepts nil txn/tt and writes
+// only to in-memory ExtMap state.
+// CRC: crc-Indexer.md | R2012, R2016, R2018
+func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValues) error {
+	if idx.extmap == nil || idx.db == nil {
+		return nil
+	}
+	plans := idx.collectIndexExtPlans(fileID, chunkTags)
+	if len(plans) == 0 {
+		return nil
+	}
+	for _, p := range plans {
+		if err := idx.extmap.applyIndexExt(nil, nil, idx.db, p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // collectReresolvePlans determines which tvid_exts need re-resolution

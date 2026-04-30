@@ -389,8 +389,6 @@ func (r pdfRect) String() string {
 	return fmt.Sprintf("%.0f,%.0f,%.0f,%.0f", r.X, r.Y, r.W, r.H)
 }
 
-
-
 // clampRectToPage keeps a chunk rect within the observed page extent.
 // Degenerate rects (collapsed after clamp) fall back to the original.
 func clampRectToPage(r pdfRect, pageSize [2]float64) pdfRect {
