@@ -46,6 +46,7 @@ type DB struct {
 	indexer    *Indexer
 	scanner    *Scanner
 	search     *Searcher
+	extmap     *ExtMap     // CRC: crc-ExtMap.md | R1992
 	pdfChunker *PDFChunker // CRC: crc-PDFChunker.md | R1720, R1726
 
 	dbPath   string
@@ -303,6 +304,15 @@ func Open(dbPath string) (*DB, error) {
 	if err := store.LoadTvidMap(); err != nil {
 		return nil, fmt.Errorf("load tvid map: %w", err)
 	}
+
+	// CRC: crc-ExtMap.md | R1993
+	db.extmap = NewExtMap()
+	if err := db.extmap.Rebuild(db); err != nil {
+		return nil, fmt.Errorf("rebuild ext map: %w", err)
+	}
+	db.indexer.extmap = db.extmap
+	db.indexer.db = db
+	store.SetExtMap(db.extmap)
 
 	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.
 	// Both run inside the caller's txn to avoid nested Views.
@@ -1133,19 +1143,61 @@ func (db *DB) ResolveExtTarget(target string) []uint64 {
 // resolveExtUUID returns every chunkid carrying @id == value.
 // CRC: crc-DB.md | R1985
 func (db *DB) resolveExtUUID(value string) []uint64 {
-	tvid, ok := db.store.TvidMap().Lookup("id", value)
+	tvid, ok := db.store.TvidMap().Lookup(tagID, value)
 	if !ok {
 		return nil
 	}
 	var chunks []uint64
 	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
-		blob, err := txn.Get(db.store.dbi, tagValueFullKey("id", value, tvid))
+		blob, err := txn.Get(db.store.dbi, tagValueFullKey(tagID, value, tvid))
 		if err == nil {
 			chunks = decodeVarints(blob)
 		}
 		return nil
 	})
 	return chunks
+}
+
+// chunkFileID returns the fileid that owns chunkID. Falls back to
+// reading the C record inside the supplied txn. ok=false when the
+// chunk is unknown or has no file linkage.
+// CRC: crc-DB.md | R1990
+func (db *DB) chunkFileID(txn *lmdb.Txn, chunkID uint64) (uint64, bool) {
+	crec, err := db.fts.ReadCRecord(txn, chunkID)
+	if err != nil || len(crec.FileIDs) == 0 {
+		return 0, false
+	}
+	return crec.FileIDs[0].FileID, true
+}
+
+// fileIDPath returns the canonical path for a fileid (Names[0]).
+// CRC: crc-DB.md | R2000
+func (db *DB) fileIDPath(fileID uint64) (string, bool) {
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil || len(info.Names) == 0 {
+		return "", false
+	}
+	return info.Names[0], true
+}
+
+// chunkIDValues returns the list of @id values registered against
+// chunkID, derived from F[chunkID][id]. Used by ExtMap candidate
+// collection to drive the "appearing UUID" lookup.
+// CRC: crc-DB.md | R2000
+func (db *DB) chunkIDValues(txn *lmdb.Txn, chunkID uint64) []string {
+	key := tagFileKey(chunkID, "id")
+	v, err := txn.Get(db.store.dbi, key)
+	if err != nil || len(v) <= 4 {
+		return nil
+	}
+	tvids := decodeVarints(v[4:])
+	out := make([]string, 0, len(tvids))
+	for _, tv := range tvids {
+		if _, val, ok := db.store.tvids.Resolve(tv); ok {
+			out = append(out, val)
+		}
+	}
+	return out
 }
 
 // resolveExtPath returns the file's first chunkid (preamble), or nil

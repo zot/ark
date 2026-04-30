@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -9,8 +9,17 @@ indexer doesn't write EC records itself. (R1923, R1926)
 
 `ParseExtTarget(value) (target, tags, ok)` lives in `ext.go` next to the
 chunkAccumulator. It splits an `@ext:` value into the TARGET substring
-plus the chain of routed `TagValue` entries; storage of those routed
-tags is the next roadmap point. (R1983, R1984)
+plus the chain of routed `TagValue` entries. (R1983, R1984)
+
+`@ext` routing is delegated to ExtMap. During the indexed-chunk
+callback, for each `TagValue{Tag: "ext", Value: V}` in the chunk's
+extracted tags, the indexer calls `ExtMap.IndexExt(tvid_ext, V,
+sourceFileid, txn, tt)`. The reindex callback (microfts2 fires
+once per file with `(fileid, orphanedChunkIDs, addedChunkIDs)`)
+calls `ExtMap.ReresolveOnReindex(...)` for the canonical
+re-resolution flow. The orphan callback path for source chunks
+calls `ExtMap.CleanupSource(tvid_ext, txn, tt)` for each tvid_ext
+held in `F[source][ext]`. (R1996, R2000-R2007, R2008)
 
 ## Knows
 - fts: *microfts2.DB — trigram engine
@@ -87,8 +96,12 @@ tags is the next roadmap point. (R1983, R1984)
 - Config: schedule tag declarations for date indexing
 - PubSub: notified after tag extraction (Publish call)
 - Librarian: writes EC/EF records post-reconcile (BatchEmbedChunks); not invoked synchronously from the Indexer (R1923)
+- ExtMap: orchestrates @ext routing during the indexed-chunk
+  callback, the reindex callback, and the source-side orphan
+  callback
 
 ## Sequences
 - seq-add.md
 - seq-server-startup.md
 - seq-pubsub.md
+- seq-ext-routing.md

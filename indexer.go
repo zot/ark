@@ -98,6 +98,8 @@ type Indexer struct {
 	scheduler  *EventScheduler // nil when running without server
 	config     *Config         // for schedule tag checks
 	pdfChunker *PDFChunker     // R1720: flushes per-page blobs after microfts2 assigns fileids
+	extmap     *ExtMap         // CRC: crc-ExtMap.md | R1996, R2000-R2008
+	db         *DB             // back-pointer for ExtMap routing — uses ResolveExtTarget + chunkFileID
 
 	pendingSchedule []scheduleItem // accumulated during scan, drained after
 }
@@ -202,6 +204,11 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
 			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
 		}
+		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
+		added := chunkIDsOf(acc.chunkTags)
+		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
+			return fileid, fmt.Errorf("ext routing %s: %w", path, err)
+		}
 		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
@@ -212,6 +219,21 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	}
 
 	return fileid, nil
+}
+
+// chunkIDsOf returns the chunkids from a ChunkTagValues slice,
+// skipping overlay (tmp://) ids. Used to feed ExtMap with the
+// addedChunkIDs vector for re-resolution.
+// CRC: crc-Indexer.md | R2000
+func chunkIDsOf(cts []ChunkTagValues) []uint64 {
+	out := make([]uint64, 0, len(cts))
+	for _, ct := range cts {
+		if IsOverlayID(ct.ChunkID) {
+			continue
+		}
+		out = append(out, ct.ChunkID)
+	}
+	return out
 }
 
 // CRC: crc-Indexer.md | R1850, R1852, R1853
@@ -257,6 +279,41 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	return nil
 }
 
+// cleanupOrphans drops EC records and inline F/V/T contributions for
+// orphaned chunks, capturing @ext source tvids first so ExtMap can
+// strike their X records and routed-tag V entries afterward. Order
+// matters: the @ext tvids must be read before RemoveTagValuesInTxn
+// wipes F[orphan][ext], and CleanupSource must run before tt.Commit
+// drops tvid_exts whose source V records emptied. (R1899, R2008, R2009)
+func (idx *Indexer) cleanupOrphans(txn *lmdb.Txn, tt *TvidTxn, orphanedChunkIDs []uint64) error {
+	var extTvids []uint64
+	if idx.extmap != nil {
+		for _, id := range orphanedChunkIDs {
+			ts, err := idx.store.ReadExtTvidsForChunk(txn, id)
+			if err != nil {
+				return err
+			}
+			extTvids = append(extTvids, ts...)
+		}
+	}
+	for _, id := range orphanedChunkIDs {
+		if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
+			return err
+		}
+		if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
+			return err
+		}
+	}
+	if idx.extmap != nil {
+		for _, te := range extTvids {
+			if err := idx.extmap.CleanupSource(txn, tt, idx.db, te); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // removeCallback returns a RemoveCallback that cleans up orphaned EC records
 // and the EF centroid inside the same LMDB transaction. The TvidTxn
 // receives F/V/T removals; its caller commits or aborts based on the
@@ -266,14 +323,8 @@ func (idx *Indexer) removeCallback(fileID uint64, tt *TvidTxn) microfts2.RemoveC
 		return nil
 	}
 	return func(txn *lmdb.Txn, orphanedChunkIDs []uint64) error {
-		for _, id := range orphanedChunkIDs {
-			if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
-				return err
-			}
-			// R1899, R1900: drop F/V/T contributions for the orphaned chunkid.
-			if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
-				return err
-			}
+		if err := idx.cleanupOrphans(txn, tt, orphanedChunkIDs); err != nil {
+			return err
 		}
 		return idx.store.DeleteFileCentroidInTxn(txn, fileID)
 	}
@@ -283,25 +334,141 @@ func (idx *Indexer) removeCallback(fileID uint64, tt *TvidTxn) microfts2.RemoveC
 // and the EF centroid inside the same LMDB transaction. The TvidTxn
 // receives F/V/T removals; its caller commits or aborts based on the
 // surrounding ReindexWithCallback result. R1849, R1852, R1899, R1963
+//
+// addedChunkIDs is intentionally ignored here — ReresolveOnReindex
+// runs post-UpdateTagValues (see runExtRouting), where the new
+// chunks' @id V records are already visible.
 func (idx *Indexer) reindexCallback(fileID uint64, tt *TvidTxn) microfts2.ReindexCallback {
 	if idx.store == nil {
 		return nil
 	}
 	return func(txn *lmdb.Txn, orphanedChunkIDs, _ []uint64) error {
-		for _, id := range orphanedChunkIDs {
-			if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
-				return err
-			}
-			// R1899, R1900: drop F/V/T contributions for the orphaned chunkid.
-			if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
-				return err
-			}
+		if err := idx.cleanupOrphans(txn, tt, orphanedChunkIDs); err != nil {
+			return err
 		}
 		if len(orphanedChunkIDs) > 0 {
 			Logv(1, "reindex: fileID=%d orphaned %d EC records", fileID, len(orphanedChunkIDs))
 		}
 		return idx.store.DeleteFileCentroidInTxn(txn, fileID)
 	}
+}
+
+// runExtRouting handles the post-UpdateTagValues @ext flow for one
+// file: IndexExt for each new chunk's @ext entries, then
+// ReresolveOnReindex to absorb target-side changes (including the
+// "appearing UUID" case).
+//
+// Resolution runs OUTSIDE the LMDB write txn so ResolveExtTarget's
+// internal View doesn't nest. The write txn opens once for record
+// I/O only.
+//
+// fileID is the source-side file just indexed; addedChunkIDs and
+// orphanedChunkIDs are the chunk diffs reported by microfts2;
+// chunkTags are the per-chunk tag values just persisted by Store.
+// CRC: crc-Indexer.md | R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2011
+func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64, chunkTags []ChunkTagValues) error {
+	if idx.extmap == nil || idx.db == nil {
+		return nil
+	}
+	idxPlans := idx.collectIndexExtPlans(fileID, chunkTags)
+	rrPlans := idx.collectReresolvePlans(fileID, addedChunkIDs, orphanedChunkIDs)
+	if len(idxPlans) == 0 && len(rrPlans) == 0 {
+		return nil
+	}
+	return idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		return idx.store.env.Update(func(txn *lmdb.Txn) error {
+			for _, p := range idxPlans {
+				if err := idx.extmap.applyIndexExt(txn, tt, idx.db, p); err != nil {
+					return err
+				}
+			}
+			for _, p := range rrPlans {
+				if err := idx.extmap.applyReresolve(txn, tt, idx.db, fileID, p); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+}
+
+// collectIndexExtPlans walks freshly-written chunkTags, parses each
+// @ext value, and resolves the target. Resolution happens here
+// (outside the write txn) so the txn-aware applyIndexExt only does
+// record I/O. CRC: crc-Indexer.md | R1996
+func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValues) []extIndexPlan {
+	var out []extIndexPlan
+	for _, ct := range chunkTags {
+		if IsOverlayID(ct.ChunkID) {
+			continue
+		}
+		for _, tv := range ct.Values {
+			if tv.Tag != tagExt || tv.Value == "" {
+				continue
+			}
+			tvidExt, ok := idx.store.tvids.Lookup(tagExt, tv.Value)
+			if !ok {
+				continue
+			}
+			target, routed, parseOK := ParseExtTarget(tv.Value)
+			if !parseOK {
+				continue
+			}
+			out = append(out, extIndexPlan{
+				sourceChunkID: ct.ChunkID,
+				sourceFileID:  fileID,
+				tvidExt:       tvidExt,
+				target:        target,
+				targets:       idx.db.ResolveExtTarget(target),
+				routedTags:    routed,
+			})
+		}
+	}
+	return out
+}
+
+// collectReresolvePlans determines which tvid_exts need re-resolution
+// for this file change and pre-resolves each. CRC: crc-Indexer.md |
+// R2000, R2001
+func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64) []extReresolvePlan {
+	candidates := idx.extmap.candidatesForFileChange(idx.db, fileID, addedChunkIDs, orphanedChunkIDs)
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]extReresolvePlan, 0, len(candidates))
+	for tvidExt := range candidates {
+		_, value, ok := idx.store.tvids.Resolve(tvidExt)
+		if !ok {
+			continue
+		}
+		target, routed, parseOK := ParseExtTarget(value)
+		if !parseOK {
+			continue
+		}
+		out = append(out, extReresolvePlan{
+			tvidExt:    tvidExt,
+			target:     target,
+			routedTags: routed,
+			newTargets: idx.db.ResolveExtTarget(target),
+		})
+	}
+	return out
+}
+
+type extIndexPlan struct {
+	sourceChunkID uint64
+	sourceFileID  uint64
+	tvidExt       uint64
+	target        string
+	targets       []uint64
+	routedTags    []TagValue
+}
+
+type extReresolvePlan struct {
+	tvidExt    uint64
+	target     string
+	routedTags []TagValue
+	newTargets []uint64
 }
 
 // refreshPrep holds data prepared by a worker for the ChanSvc to execute.
@@ -391,6 +558,11 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			if err := idx.store.AppendTagDefs(prep.oldID, acc.defs); err != nil {
 				return fmt.Errorf("append tag defs %s: %w", prep.path, err)
 			}
+			// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R2007
+			added := chunkIDsOf(acc.chunkTags)
+			if err := idx.runExtRouting(prep.oldID, added, nil, acc.chunkTags); err != nil {
+				return fmt.Errorf("ext routing %s: %w", prep.path, err)
+			}
 			flat := flattenChunkTags(acc.tagValues)
 			// R795, R796: publish tag events from appended content
 			if idx.pubsub != nil {
@@ -443,6 +615,11 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		}
 		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
 			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
+		}
+		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
+		added := chunkIDsOf(acc.chunkTags)
+		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
+			return fmt.Errorf("ext routing %s: %w", prep.path, err)
 		}
 		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events from refreshed content
@@ -563,6 +740,11 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		}
 		if err := idx.store.AppendTagDefs(fileid, acc.defs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
+		}
+		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R2007
+		added := chunkIDsOf(acc.chunkTags)
+		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
+			return fmt.Errorf("ext routing %s: %w", path, err)
 		}
 		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events from appended content

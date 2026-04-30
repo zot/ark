@@ -128,6 +128,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`
+- [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`
@@ -171,6 +172,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-embed-validate.md → `cmd/ark/main.go`, `store.go`
 - [x] seq-tmp-tag-overlay.md → `db.go`, `store.go`, `tmp_tag_store.go`, `indexer.go`
 - [x] seq-tvid-overlay.md → `tvid_map.go`, `store.go`, `tmp_tag_store.go`, `db.go`
+- [x] seq-ext-routing.md → `extmap.go`, `indexer.go`, `store.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -213,36 +215,36 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 - [x] O1: Test files not yet written: config_test.go, match_test.go, search_test.go, store_test.go, tags_test.go
 - [ ] O2: serverClient TOCTOU race — probe can succeed but actual request fails if server dies between. Acceptable for v1
-- [ ] A1: IndexBuilt field removed from StatusInfo during simplification — spec still mentions it, update spec
-- [ ] A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from LMDB key on read)
+- A1: IndexBuilt field removed from StatusInfo during simplification — spec still mentions it, update spec
+- A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from LMDB key on read)
 - [ ] O3: Integration tests need live microfts2+microvec: merge/intersect (test-Searcher), FillChunks/FillFiles (test-ChunkRetrieval)
 - [ ] O4: Fetch uses O(n) StaleFiles scan — add direct path lookup to microfts2 when performance matters
 - [ ] O5: ark stop does not verify process is ark (PID rollover could kill wrong process) — check /proc/PID/cmdline on Linux
-- [ ] A3: R187 (vector search) deferred to V4 — no design artifact needed until then
-- [ ] A4: R214 (negative requirement — no separate lock file) — verified by absence, no design artifact needed
+- A3: R187 (vector search) deferred to V4 — no design artifact needed until then
+- A4: R214 (negative requirement — no separate lock file) — verified by absence, no design artifact needed
 - [ ] O6: JSONL chunks flood search results — single conversation file produces hundreds of score-1.0 chunks, burying small .md files. Mitigated by --filter-files/--exclude-files filtering.
-- [ ] A5: microfts2 WithOnly/WithExcept — implemented in microfts2 dependency, used by Searcher.ResolveFilters
-- [ ] A6: R231 (no backward compatibility for --source/--not-source) — verified by removal, no design artifact needed
-- [ ] A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
+- A5: microfts2 WithOnly/WithExcept — implemented in microfts2 dependency, used by Searcher.ResolveFilters
+- A6: R231 (no backward compatibility for --source/--not-source) — verified by removal, no design artifact needed
+- A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
 - [ ] O7: Shutdown race: signal handler calls db.Close() while reconcileLoop and watchLoop goroutines may still be running. watcher.Close() stops watchLoop, but reconcileLoop can still be mid-Scan/Refresh against the LMDB env. Need to close reconcileCh and wait for goroutine to drain before db.Close().
 - [x] D1: R338-R339 (EnsureArkSource) — designed in crc-Server.md but not implemented. Server should ensure ~/.ark is a source on every startup, before reconciliation.
 - [x] D2: R340 (RemoveSource guard for ~/.ark) — designed in crc-Config.md line 25 but not implemented. Config.RemoveSource should reject the ark database directory.
 - [x] O8: ark install UI asset extraction not yet implemented — R276-R281 designed, bundle commands (R297-R318) implemented, install needs to call ExtractBundle
 - [x] O9: ~/.ark/mcp shell script (R283) not yet created — needs adaptation of .ui/mcp pattern for ~/.ark/ paths
-- [ ] A8: R294 (zip-graft allows layering without recompilation) — build process property, no code artifact
-- [ ] A9: R296 (re-export CreateBundle/ExtractBundle from ui-engine) — upstream change in ui-engine/cli/exports.go, done
-- [ ] A10: R303 (bundle is build-time command) — inferred, covered by R297 implementation
-- [ ] A11: R319-R322 (Makefile asset pipeline) — Makefile infrastructure, not Go code
+- A8: R294 (zip-graft allows layering without recompilation) — build process property, no code artifact
+- A9: R296 (re-export CreateBundle/ExtractBundle from ui-engine) — upstream change in ui-engine/cli/exports.go, done
+- A10: R303 (bundle is build-time command) — inferred, covered by R297 implementation
+- A11: R319-R322 (Makefile asset pipeline) — Makefile infrastructure, not Go code
 - [x] O10: Self-triggered ark.toml events — configMutate saves ark.toml, watcher fires, watchLoop reloads config + triggers a second reconcile. Harmless (idempotent) but wasteful. Could suppress with a short debounce or write-flag.
 - [ ] O11: No tests for watcher/throttle — the throttle state machine is testable (inject clock, mock watcher channels) but untested
 - [x] D3: Phase C (R360-R369, append detection) blocked on microfts2 — needs FileLength in N record, AppendChunks API, chunker offset support. Requests in ~/work/microfts2/UPDATES.md items 2-4
 - [ ] O12: Append detection assumes clean chunk boundaries — all current strategies (lines, chat-jsonl) produce clean boundaries. For markdown strategy, derive boundary cleanliness from last chunk end vs file length. When unclean, implement back-seek from last chunk to find match point and WithReplaceFrom in microfts2.AppendChunks
 - [ ] O13: AppendFile reads full file twice (once in DetectAppend for prefix hash, once in AppendFile for new bytes + full hash). Acceptable because savings come from avoiding re-chunking/re-indexing old content. Could optimize with hash state passing if profiling shows it matters.
-- [x] A12: R376-R381, R384 (markdown chunker) — implemented in microfts2 as MarkdownChunkFunc
+- A12: R376-R381, R384 (markdown chunker) — implemented in microfts2 as MarkdownChunkFunc
 - [x] D4: R415-R416, R541-R546 RegisterLuaFunctions — mcp:indexing(), mcp:search_grouped(), mcp:open() all registered. HTTP endpoints removed.
-- [ ] A13: R423-R428 (MCP event pulse indicator) — pure Lua/CSS in Frictionless status bar, no ark Go code needed
-- [ ] A14: R418 (browser reconnect on reload) — handled by ui-engine WebSocket reconnect logic, no ark code
-- [ ] A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code
+- A13: R423-R428 (MCP event pulse indicator) — pure Lua/CSS in Frictionless status bar, no ark Go code needed
+- A14: R418 (browser reconnect on reload) — handled by ui-engine WebSocket reconnect logic, no ark code
+- A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code
 - [x] D5: R420 (preferred port on restart) — needs flib.Config.Port field in Frictionless upstream
 - [ ] D6: R438-R439 (browser count) — flib.Runtime doesn't expose WebSocket connection count. UIStatus reports running/port/indexing but not browser count. Needs flib API addition.
 - [ ] O14: gollama v0.1.8 SIGILL on Zen 2 (Steam Deck) — llama.cpp compute graph uses unsupported instructions. vec bench loads model but crashes on GetEmbeddings. Needs gollama rebuild with -march=znver2 or compatible flags.
@@ -250,20 +252,20 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O16: QueryTrigramCounts + BM25Func open two separate LMDB Views for overlapping data — could be one transaction with a BM25FuncFromQuery helper in microfts2
 - [ ] O17: --proximity only works with --multi currently — spec says it composes with any search mode (R597)
 - [ ] O18: No unit tests for Session actor — testable with injected clock/mock FTS
-- [ ] A16: SearchCmd has no separate code file — command object is implicit in session closures (server.go, session.go). CRC card documents the concept.
+- A16: SearchCmd has no separate code file — command object is implicit in session closures (server.go, session.go). CRC card documents the concept.
 - [ ] O19: No unit tests for tmp:// operations — AddTmpFile, RemoveTmpFile, onlyIfTmp probe, --no-tmp flag
 - [x] O20: ark files does not yet list tmp:// documents (R671 — needs handleFiles update)
 - [x] O21: ark status does not yet report tmp:// document count (R676)
-- [x] A17: R703 (QueryBigramCounts return type) — superseded, bigrams removed from microfts2
-- [x] A18: R704-R705 (bigrams on by default, rebuild needed) — superseded, bigrams removed
-- [x] A19: R706 (ark rebuild recreates v3 format) — superseded, DB reverted to v2
-- [x] A20: R707 (index size impact) — superseded, no bigram index
-- [ ] A21: R717 (--unmatched implies request-only) — inferred, behavior falls out of the filter logic naturally
+- A17: R703 (QueryBigramCounts return type) — superseded, bigrams removed from microfts2
+- A18: R704-R705 (bigrams on by default, rebuild needed) — superseded, bigrams removed
+- A19: R706 (ark rebuild recreates v3 format) — superseded, DB reverted to v2
+- A20: R707 (index size impact) — superseded, no bigram index
+- A21: R717 (--unmatched implies request-only) — inferred, behavior falls out of the filter logic naturally
 - [x] O22: R737: flib.Config needs Verbosity field to propagate ark verbosity to ui-engine cfg.Logging.Verbosity — requires cross-project change to frictionless/flib
 - [ ] O23: No unit tests for SearchFuzzy — testable with mock microfts2 DB
 - [x] C1: search_grouped mode dispatch — added "fuzzy" case (opts.Fuzzy=true, query stays). UI replaces "about" button with "fuzzy".
 
-- [ ] A22: R753 (tagPattern/tagblock regexes unchanged) — verified by absence, no design artifact needed
+- A22: R753 (tagPattern/tagblock regexes unchanged) — verified by absence, no design artifact needed
 - [ ] O24: Pubsub: SessionID on ScheduledEvent not used in fire() delivery — events fire to all sessions, not per-subscriber. Wire per-session filtering when needed.
 - [ ] O25: Pubsub: writerID always empty string — self-notification exclusion (R798) cannot trigger. Wire actual session ID through indexer when session-aware indexing exists.
 - [x] O26: Pubsub: ExtractTagValues only matches first tag per line on compound tags — subsequent tags in compound lines won't fire subscriptions. Needs RE2-compatible non-greedy or two-pass approach.
@@ -280,24 +282,24 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O37: Gap detection (R890-R892) not implemented — comparing @ark-event-fired: in log vs @ack: in source file
 - [ ] O38: No unit tests for: ParseAcks, AckCoversDate, WriteDayBucketsForFile, handleScheduleSearch, handleScheduleChange, CheckScheduleConfig, cmdSchedule
 - [ ] O39: handleScheduleChange uses strings.Replace matching trimmed value in untrimmed line — fragile for lines with unusual leading content
-- [ ] A23: R980 (calendar virtual items from recurrence specs) — deferred to Lua/UI work
+- A23: R980 (calendar virtual items from recurrence specs) — deferred to Lua/UI work
 - [ ] O40: No unit tests for write actor: enqueueWrite, startNextWrite, ScanAsync, RefreshAsync
 - [ ] O41: R1066: deferred-schedule pattern (pendingSchedule/DrainSchedule) not yet removed — schedule I/O still deferred rather than running in write goroutine
 - [ ] O42: No unit tests for editor endpoints: handleSearchGrouped, handleTagComplete, handleTagValues, handleSave, handleSetTags
 - [x] O43: handleTagValues reads files to extract values — O(files) I/O on each completion request. Store tag values in LMDB during indexing for O(1) lookup when this becomes slow.
 - [ ] O44: handleSave allows writing to any indexed file — no authorization check. Acceptable for local use; revisit if ark ever serves untrusted clients.
-- [ ] A24: R1098 (CORS) — same-origin, no explicit headers needed for localhost. Revisit if editor loaded from file:// origin.
+- A24: R1098 (CORS) — same-origin, no explicit headers needed for localhost. Revisit if editor loaded from file:// origin.
 - [ ] O45: No unit tests for V record Store methods: UpdateTagValues, AppendTagValues, RemoveTagValues, QueryTagValues, TagValueFiles
 - [ ] O46: RemoveTagValues scans all V keys to find one fileid — O(total V records). Add reverse index (VF prefix) if profiling shows this is slow.
-- [ ] A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
-- [ ] A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
+- A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
+- A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
 - [ ] O47: R1115: WithAppendChunkCallback not yet wired in append paths — tags still extracted from tagWindowForAppend (R1127). Wire when microvec supports incremental chunk updates
 - [ ] O48: Editor JS bundle not in release pipeline — Makefile must copy ark-markdown-editor.js to zip-graft for ark install
 - [ ] O49: No unit tests for content fetching: handleContentFetch, handleContentView, handleContentRaw, contentPath
-- [ ] A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared
+- A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared
 - [ ] O50: No unit tests for content view/edit toggle: renderMarkdownForContent, contentLinkRewriter, ink-mde integration
-- [ ] A28: R1200-R1215, R1222-R1224 (tag search panel UI) — TypeScript-only, no Go CRC card. Traced to specs/tag-search-panel.md
-- [ ] A29: R1255-R1265 (spectral search UI — two-phase results, toggle, throttling) — TypeScript-only, no Go CRC card. Traced to specs/spectral-search.md
+- A28: R1200-R1215, R1222-R1224 (tag search panel UI) — TypeScript-only, no Go CRC card. Traced to specs/tag-search-panel.md
+- A29: R1255-R1265 (spectral search UI — two-phase results, toggle, throttling) — TypeScript-only, no Go CRC card. Traced to specs/spectral-search.md
 - [ ] O51: No unit tests for handleShowInFolder endpoint
 - [ ] O52: No unit tests for Librarian: QueueExpand, DrainPending, WaitForRequest, WaitForResult, FuzzyMatchTags, fuzzyMatch, fuzzyMatchWords, trigrams
 - [ ] O53: No unit tests for expansion CLI subcommands: --wait, --fuzzy, --search, --result, --error
@@ -306,18 +308,18 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O54: Tag search panel UI not yet implemented (TagSearchWidget fires search but has no panel to display results)
 - [ ] O55: innerHTML for non-markdown previews — sanitize if content is untrusted
 - [ ] O56: No search deduplication/cancellation for in-flight requests
-- [ ] A30: R1329 (packaging) is a build concern — documented in design.md cross-cutting, no CRC card needed
+- A30: R1329 (packaging) is a build concern — documented in design.md cross-cutting, no CRC card needed
 
-- [ ] A31: R1368-R1371 (package structure) — build/config concern, no CRC card needed
-- [ ] A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed
+- A31: R1368-R1371 (package structure) — build/config concern, no CRC card needed
+- A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed
 - [ ] O57: No unit tests for Store.MatchTagNames, Store.MatchTagValues
 - [ ] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters
 - [ ] O59: No integration test for resolveTagContainsQuery end-to-end (structured tag query → regex search)
 - [ ] O60: No unit tests for wrapTagElements — tag pattern matching, idempotency, HTML attribute avoidance
 - [ ] O61: ark-search-element.js symlink not in install/release pipeline — must be added to Makefile like ark-markdown-editor.js
-- [ ] A33: R1500 (markdown path unchanged) — verified by absence, no design artifact needed
-- [ ] A34: R1502 (/raw/ unchanged) — verified by absence, no design artifact needed
-- [ ] A35: R1503 (/fetch unchanged) — verified by absence, no design artifact needed
+- A33: R1500 (markdown path unchanged) — verified by absence, no design artifact needed
+- A34: R1502 (/raw/ unchanged) — verified by absence, no design artifact needed
+- A35: R1503 (/fetch unchanged) — verified by absence, no design artifact needed
 - [ ] O62: No unit tests for DB.AllChunks
 - [ ] O63: No unit tests for chunked content rendering in handleContentView
 - [ ] O64: No unit tests for ChunkStats, NewTokenizer, printChunkStats
@@ -336,21 +338,21 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O77: PDF chunker: truncated PDFs with recoverable xref tables fail seehuhn's strict xref parser (error: 'xref: table at byte N: strconv.ParseInt: parsing "trailer <<"'). pdftotext and other tolerant parsers recover these. Currently surfaced as one log line per scan via FileChunks; the empty-file-set doesn't help because the files are non-empty. Needs a fallback parser strategy.
 - [x] O78: PDF chunker: contiguous heading lines produce separate heading chunks instead of being merged into one. Resumes with multi-line section titles fragment.
 - [x] O79: PDF chunker: heading + following paragraph should merge into one chunk (spec R1632/R1633 says 'a heading and the body text following it form a heading chunk' but the implementation splits on heading/body transition). Search UX suffers when many short heading-only chunks surface as long, thin result rows.
-- [ ] A36: R1624, R1625, R1626, R1627, R1628, R1629, R1631, R1632, R1634, R1636 (PDF span-level extraction and structure detection) — superseded by pdftext. R1624 → R1729 (library swap); R1625–R1634, R1636 → R1730 (pdftext's Blocks replace our in-house structure detection)
-- [ ] A37: R1652, R1653, R1654, R1655, R1656, R1657, R1658, R1660 (byte-stream salvage codepath) — superseded by R1734 (pdftext emits Salvage as a BlockKind inline with structured blocks; no separate in-ark salvage path)
-- [ ] A38: R1661, R1662, R1663, R1664 (blank-line filtering for ONLYOFFICE-style PDFs) — superseded by R1729 (line-level layout handling is pdftext's responsibility)
-- [ ] A39: R1669, R1674 (tag rect from line spans, first-line-only for wraps) — superseded by R1735, R1736 (tag scan uses Block.Chars; rect unions all covered glyph BBoxes including wrapped lines)
-- [ ] A40: R1723, R1657, R1658 (salvage at page 0 with no rect) — superseded by R1737 (salvage keyed at actual page, carries Block.BBox)
+- A36: R1624, R1625, R1626, R1627, R1628, R1629, R1631, R1632, R1634, R1636 (PDF span-level extraction and structure detection) — superseded by pdftext. R1624 → R1729 (library swap); R1625–R1634, R1636 → R1730 (pdftext's Blocks replace our in-house structure detection)
+- A37: R1652, R1653, R1654, R1655, R1656, R1657, R1658, R1660 (byte-stream salvage codepath) — superseded by R1734 (pdftext emits Salvage as a BlockKind inline with structured blocks; no separate in-ark salvage path)
+- A38: R1661, R1662, R1663, R1664 (blank-line filtering for ONLYOFFICE-style PDFs) — superseded by R1729 (line-level layout handling is pdftext's responsibility)
+- A39: R1669, R1674 (tag rect from line spans, first-line-only for wraps) — superseded by R1735, R1736 (tag scan uses Block.Chars; rect unions all covered glyph BBoxes including wrapped lines)
+- A40: R1723, R1657, R1658 (salvage at page 0 with no rect) — superseded by R1737 (salvage keyed at actual page, carries Block.BBox)
 - [ ] O80: No unit tests for parseFilterStack, formatFilterStack, or -parse output
 - [ ] O81: No unit tests for files mode in BuildChunkFilters
-- [x] A41: -about as chunk filter (AboutChunkFilter) not yet implemented — requires embedding model in filter path. -about works as primary search only.
+- A41: -about as chunk filter (AboutChunkFilter) not yet implemented — requires embedding model in filter path. -about works as primary search only.
 - [x] O82: About chunk filter requires configured embed_cmd/query_cmd in ark.toml — currently tag_model is set (Librarian path) but query-time embedding path is not. vec.Search fails silently.
 - [ ] O83: About filter in CLI local path (no server) silently skips — Librarian only available when server is running
-- [ ] A42: R547-R562 (ark vec bench) superseded by R1790-R1801 (ark embed subcommands)
-- [ ] A43: R1302-R1305, R1587 (ark embed flat flags) superseded by R1790-R1801 (ark embed subcommands)
-- [ ] A44: R1834 (old EC key format superseded by R1833) — no design artifact needed
-- [ ] A45: R1861 (R1598/R1607 superseded by R1833/R1849) — no design artifact needed
-- [ ] A46: R1817-R1829, R1832 (embed dedup high-water tracking) superseded by R1847 (chunkID dedup)
+- A42: R547-R562 (ark vec bench) superseded by R1790-R1801 (ark embed subcommands)
+- A43: R1302-R1305, R1587 (ark embed flat flags) superseded by R1790-R1801 (ark embed subcommands)
+- A44: R1834 (old EC key format superseded by R1833) — no design artifact needed
+- A45: R1861 (R1598/R1607 superseded by R1833/R1849) — no design artifact needed
+- A46: R1817-R1829, R1832 (embed dedup high-water tracking) superseded by R1847 (chunkID dedup)
 - A47: R1868-R1872 are deferred or scope-negative requirements from the microfts2-abi-catchup migration: they declare what this catch-up does NOT do (use Locator field, implement AppendAwareChunker, consume FileIDCount.Count, etc.). No inline code coverage is expected; the deferrals are owned by the chunkid-tag-store migration. The migration spec body documents the intentional non-implementations.
 - T1: R1598 retired by R1833 (EC key moved from (fileID, chunkIdx) to chunkID via ec-rekey migration)
 - T2: R1600 retired by R1836 (WriteChunkEmbedding signature changed to single chunkID arg via ec-rekey)
@@ -402,3 +404,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T45: R1032 retired (dayBucketsFromLogFile no longer needed (obsolescence marker for R1019))
 - T46: R1042 retired (@ark-event-fired: log entries no longer needed for gap detection (obsolescence marker for R870))
 - [x] I1: R1951 (shared tvid map) — to be resolved when crc-TvidMap.md lands. Subpoint 3 specifies the shared resolver (`specs/tvid-map-overlay.md`, R1953–R1969); TmpTagStore moves from `(tag, value)` strings to tvids in the same change.
+- [ ] O85: ExtMap state mutation isn't transactional with the env.Update — if microfts2's commit aborts, the in-memory maps may be briefly inconsistent. Convergence is restored by ExtMap.Rebuild on next DB.Open. Acceptable per design (.scratch/EXT-V-F.md, multi-file batch convergence).
+- [ ] O86: No tests for @ext storage layer — test-ExtMap.md and integration coverage of multi-set V, X record CRUD, and the canonical re-resolution flow not yet written
+- [ ] O87: @ext targets that resolve to overlay (tmp://) chunkids are logged-and-skipped in applyIndexExt. Full support needs (a) in-memory overlay E-records parallel to TmpTagStore — diagnostics that live and die with the session, since persisting them would outlive the context that produced them — (b) overlay-aware chunkFileID via Store.filesForChunk, (c) ExtMap state for overlay chunkids in chunkToTargets/fileidToTvids/targetToChunk, rebuildable from session state on startup. Tracked in PLAN.md.

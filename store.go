@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +44,11 @@ type Store struct {
 	// TvidTxn during indexing writes.
 	// CRC: crc-Store.md | R1953, R1958
 	tvids *TvidMap
+	// extmap supplies per-tag virtual contribution counts for the
+	// T-total query path. Set by DB.Open after ExtMap.Rebuild; nil
+	// in test paths that don't go through DB.
+	// CRC: crc-Store.md | R2010
+	extmap *ExtMap
 }
 
 // SetTmpTagStore wires the in-memory tag overlay. Called by DB after
@@ -52,6 +56,14 @@ type Store struct {
 // CRC: crc-Store.md | R1941, R1946
 func (s *Store) SetTmpTagStore(tmp *TmpTagStore) {
 	s.tmp = tmp
+}
+
+// SetExtMap wires the in-memory @ext routing state. Called by DB.Open
+// after ExtMap.Rebuild so TagCounts can augment T-totals with
+// virtual ext-routed contributions.
+// CRC: crc-Store.md | R2010
+func (s *Store) SetExtMap(m *ExtMap) {
+	s.extmap = m
 }
 
 // TvidMap returns the resolver. Always non-nil after OpenStore.
@@ -167,6 +179,13 @@ const (
 	prefixEmbedFileCent = "EF" // R1599: file centroid (running sum + count)
 	prefixError         = 'E'  // R1543: persistent error conditions (E + name → JSON)
 	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
+	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
+)
+
+// Reserved tag names used by the routing/identity machinery.
+const (
+	tagExt = "ext" // R1991: @ext compound tag (source-side)
+	tagID  = "id"  // R1986: @id identity tag (UUID branch of ext target resolution)
 )
 
 // OpenStore opens or creates the ark subdatabase within the given LMDB environment.
@@ -596,15 +615,24 @@ func (s *Store) ListTags() ([]TagCount, error) {
 	return tags, err
 }
 
-// TagCounts returns counts for specific tags.
+// TagCounts returns counts for specific tags. Augments the LMDB
+// F-driven T count with ExtMap.VirtualTagCount so ext-routed
+// contributions show up in totals (multi-set V semantics — routed
+// tag tvids do not write F records at the target chunkid).
+// CRC: crc-Store.md | R2010
 func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
+	var virtual map[string]int
+	if s.extmap != nil {
+		virtual = s.extmap.VirtualTagCounts(tags)
+	}
 	var results []TagCount
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		for _, tag := range tags {
 			tk := tagTotalKey(tag)
 			v, err := txn.Get(s.dbi, tk)
+			extra := uint32(virtual[tag])
 			if lmdb.IsNotFound(err) {
-				results = append(results, TagCount{Tag: tag, Count: 0})
+				results = append(results, TagCount{Tag: tag, Count: extra})
 				continue
 			}
 			if err != nil {
@@ -613,7 +641,7 @@ func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
 			if len(v) >= 4 {
 				results = append(results, TagCount{
 					Tag:   tag,
-					Count: binary.BigEndian.Uint32(v[:4]),
+					Count: binary.BigEndian.Uint32(v[:4]) + extra,
 				})
 			}
 		}
@@ -1132,7 +1160,7 @@ func (s *Store) WithTvidTxn(fn func(*TvidTxn) error) error {
 // writes F[chunkID][tag] = count + tvids, increments T for new pairs.
 // Tvid registrations are recorded in the supplied TvidTxn; the caller
 // commits or aborts to publish them to the live TvidMap.
-// CRC: crc-Store.md | R1874, R1875, R1876, R1959, R1963
+// CRC: crc-Store.md | R1874, R1875, R1876, R1959, R1963, R1991
 func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64, values []TagValue) error {
 	// Group values by tag
 	perTag := make(map[string][]TagValue)
@@ -1195,7 +1223,11 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uin
 // addChunkIDToVRecord adds chunkID to V[tag][value] (allocating tvid for
 // new (tag, value) pairs). Uses TvidTxn.Lookup to find an existing tvid
 // without scanning the V prefix; falls back to allocation when none
-// exists. Returns the tvid. CRC: crc-Store.md | R1873, R1281, R1955, R1963
+// exists. Multi-set append — no dedup check. Each contribution (inline
+// or ext-routed) writes its own varint entry; cleanup uses
+// removeOneVarint via removeOneChunkIDFromVRecord (ext) or removeVarint
+// via removeChunkIDInTxn (inline orphan path). Returns the tvid.
+// CRC: crc-Store.md | R1873, R1281, R1955, R1963, R1988
 func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value string, chunkID uint64) (uint64, error) {
 	if tvid, ok := tt.Lookup(tag, value); ok {
 		fullKey := tagValueFullKey(tag, value, tvid)
@@ -1203,11 +1235,9 @@ func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value strin
 		if err != nil && !lmdb.IsNotFound(err) {
 			return 0, err
 		}
-		if !slices.Contains(decodeVarints(existing), chunkID) {
-			blob := encodeVarint(bytes.Clone(existing), chunkID)
-			if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
-				return 0, err
-			}
+		blob := encodeVarint(bytes.Clone(existing), chunkID)
+		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+			return 0, err
 		}
 		return tvid, nil
 	}
@@ -1222,6 +1252,192 @@ func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value strin
 	}
 	tt.Add(tvid, tag, value, OriginPersistent)
 	return tvid, nil
+}
+
+// removeOneVarint removes the first occurrence of target from a
+// varint-encoded blob. Returns the new blob and whether the value
+// was found. Used for multi-set V cleanup of ext routings —
+// each routing's contribution is one entry and cleanup strikes
+// one occurrence so other contributors survive.
+func removeOneVarint(data []byte, target uint64) ([]byte, bool) {
+	i := 0
+	for i < len(data) {
+		start := i
+		var v uint64
+		var shift uint
+		for i < len(data) {
+			b := data[i]
+			i++
+			v |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+			shift += 7
+		}
+		if v == target {
+			return append(append([]byte(nil), data[:start]...), data[i:]...), true
+		}
+	}
+	return data, false
+}
+
+// removeOneChunkIDFromVRecord strikes one occurrence of chunkID from
+// V[tag][value][tvid]. If the record empties, deletes the V key and
+// records tvid removal in the TvidTxn. Returns whether anything was
+// removed.
+// CRC: crc-Store.md | R1988, R2005, R2008
+func (s *Store) removeOneChunkIDFromVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value string, tvid, chunkID uint64) (bool, error) {
+	fullKey := tagValueFullKey(tag, value, tvid)
+	existing, err := txn.Get(s.dbi, fullKey)
+	if err != nil {
+		if lmdb.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	newV, found := removeOneVarint(existing, chunkID)
+	if !found {
+		return false, nil
+	}
+	if len(newV) == 0 {
+		if err := txn.Del(s.dbi, fullKey, nil); err != nil {
+			return false, err
+		}
+		tt.Remove(tvid)
+		return true, nil
+	}
+	return true, txn.Put(s.dbi, fullKey, newV, 0)
+}
+
+// extRoutingKey builds an X record key: X + varint(tvid_ext) + varint(target_chunkid).
+// CRC: crc-Store.md | R1989
+func extRoutingKey(tvidExt, targetChunk uint64) []byte {
+	key := []byte{byte(prefixExtRouting)}
+	key = encodeVarint(key, tvidExt)
+	return encodeVarint(key, targetChunk)
+}
+
+// extRoutingPrefix returns the scan prefix for one tvid_ext.
+// CRC: crc-Store.md | R1989
+func extRoutingPrefix(tvidExt uint64) []byte {
+	key := []byte{byte(prefixExtRouting)}
+	return encodeVarint(key, tvidExt)
+}
+
+// parseExtRoutingKey extracts tvid_ext and target_chunkid from a key.
+// Returns ok=false if the key shape doesn't match.
+// CRC: crc-Store.md | R1989
+func parseExtRoutingKey(k []byte) (tvidExt, targetChunk uint64, ok bool) {
+	if len(k) < 3 || k[0] != byte(prefixExtRouting) {
+		return 0, 0, false
+	}
+	rest := k[1:]
+	tvidExt, n := binary.Uvarint(rest)
+	if n <= 0 {
+		return 0, 0, false
+	}
+	rest = rest[n:]
+	targetChunk, n = binary.Uvarint(rest)
+	if n <= 0 || n != len(rest) {
+		return 0, 0, false
+	}
+	return tvidExt, targetChunk, true
+}
+
+// ExtRouting is one X record's payload: a target chunkid and the
+// routed tag tvids that this @ext routing contributed.
+// CRC: crc-Store.md | R1989
+type ExtRouting struct {
+	TargetChunkID uint64
+	RoutedTvids   []uint64
+}
+
+// WriteExtRecord writes X[tvid_ext][target_chunkid] = packed routed_tvid varints.
+// CRC: crc-Store.md | R1989
+func (s *Store) WriteExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64, routedTvids []uint64) error {
+	key := extRoutingKey(tvidExt, targetChunk)
+	var blob []byte
+	for _, t := range routedTvids {
+		blob = encodeVarint(blob, t)
+	}
+	return txn.Put(s.dbi, key, blob, 0)
+}
+
+// ReadExtRecord returns the routed tvids for one (tvid_ext, target_chunkid).
+// Returns (nil, nil) when the record is absent.
+// CRC: crc-Store.md | R1989
+func (s *Store) ReadExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) ([]uint64, error) {
+	key := extRoutingKey(tvidExt, targetChunk)
+	blob, err := txn.Get(s.dbi, key)
+	if err != nil {
+		if lmdb.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return decodeVarints(blob), nil
+}
+
+// ScanExtRecords prefix-scans X[tvid_ext], decoding each routing.
+// CRC: crc-Store.md | R1989
+func (s *Store) ScanExtRecords(txn *lmdb.Txn, tvidExt uint64) ([]ExtRouting, error) {
+	prefix := extRoutingPrefix(tvidExt)
+	var out []ExtRouting
+	err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+		te, tc, ok := parseExtRoutingKey(k)
+		if !ok || te != tvidExt {
+			return nil
+		}
+		out = append(out, ExtRouting{TargetChunkID: tc, RoutedTvids: decodeVarints(v)})
+		return nil
+	})
+	return out, err
+}
+
+// DeleteExtRecord removes one X record.
+// CRC: crc-Store.md | R1989
+func (s *Store) DeleteExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) error {
+	key := extRoutingKey(tvidExt, targetChunk)
+	if err := txn.Del(s.dbi, key, nil); err != nil {
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// ScanAllExtRecords iterates every X record in the store. Used by
+// ExtMap.Rebuild on startup to repopulate the in-memory maps.
+// CRC: crc-Store.md | R1990, R1993
+func (s *Store) ScanAllExtRecords(txn *lmdb.Txn, fn func(tvidExt, targetChunk uint64, routedTvids []uint64) error) error {
+	prefix := []byte{byte(prefixExtRouting)}
+	return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+		te, tc, ok := parseExtRoutingKey(k)
+		if !ok {
+			return nil
+		}
+		return fn(te, tc, decodeVarints(v))
+	})
+}
+
+// ReadExtTvidsForChunk returns the @ext tag tvids registered against
+// chunkID's F record. Used by orphan callbacks to capture source-side
+// ext routings before the F records are dropped.
+// CRC: crc-Store.md | R2008
+func (s *Store) ReadExtTvidsForChunk(txn *lmdb.Txn, chunkID uint64) ([]uint64, error) {
+	key := tagFileKey(chunkID, tagExt)
+	v, err := txn.Get(s.dbi, key)
+	if err != nil {
+		if lmdb.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(v) <= 4 {
+		return nil, nil
+	}
+	return decodeVarints(v[4:]), nil
 }
 
 // removeChunkIDInTxn drops F records for a chunkid, decrements T totals

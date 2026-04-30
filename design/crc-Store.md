@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -210,6 +210,32 @@ ark-level settings, and tag tracking.
   `tt.Remove(tvid)` whenever it deletes a V record entirely.
 - `ScanVRecordTvids` becomes a thin wrapper over `tvids.Snapshot()`
   for diagnostics.
+- `addChunkIDToVRecord` is a **multi-set append** — no dedup check.
+  Each contribution (inline or ext-routed) writes its own varint
+  entry. `removeVarint` removes the first occurrence so other
+  contributors survive when one is cleaned up. (R1988)
+
+### Ext provenance records (R1989-R1991, R2010)
+- WriteExtRecord(txn *lmdb.Txn, tvid_ext, target_chunkid uint64,
+  routed_tvids []uint64): write `X[tvid_ext][target_chunkid] →
+  packed routed_tvid varints`. One X record per (tvid_ext,
+  target_chunkid) pair. (R1989)
+- ScanExtRecords(tvid_ext uint64) []ExtRouting: prefix-scan
+  X[tvid_ext], decode each (target_chunkid, []routed_tvid) pair.
+  Used by source-side cleanup and re-resolution. (R1989, R1990)
+- DeleteExtRecord(txn *lmdb.Txn, tvid_ext, target_chunkid uint64):
+  delete one X record. (R1989)
+- ScanAllExtRecords() — used by ExtMap.Rebuild at startup to
+  repopulate the six in-memory maps. (R1990, R1993)
+- The X key shape is **chunkid-keyed, not fileid-keyed**: the
+  durable bridge across an ark restart so the orphan callback can
+  find routings to clean up after offline edits. (R1990)
+- F records stay inline-only; routed-tag tvids are NOT added to any
+  target chunk's F record. F[source][ext] holds the @ext tag's tvid
+  the same way any other F record holds tag tvids. (R1991)
+- TagCounts(tags []string): T-total query augmented with
+  `ExtMap.VirtualTagCount(tag)`; returns `LMDB_T[tag] +
+  virtualTagCount[tag]`. (R2010)
 
 ## Collaborators
 - Matcher: used by DismissByPattern and ResolveByPattern
@@ -217,6 +243,9 @@ ark-level settings, and tag tracking.
   by the read union and the write dispatcher
 - TvidMap: shared `tvid → (tag, value, origin)` resolver; loaded
   from V records at startup, maintained via TvidTxn during writes
+- ExtMap: in-memory routing state for @ext; consulted by TagCounts
+  for T-total augmentation and driven by Indexer for X-record
+  CRUD and V-record multi-set ops
 
 ## Sequences
 - seq-add.md

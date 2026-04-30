@@ -27,8 +27,9 @@ record class.
 | Prefix | Record class        | Key shape                                         | Value                                   |
 |--------|---------------------|---------------------------------------------------|-----------------------------------------|
 | `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
-| `F`    | File-tag            | `F` + fileid:8 + tagname                          | uint32 count + optional tvids           |
-| `V`    | Tag value           | `V` + tag + `\x00` + value + `\x00` + tvid varint | packed fileid varints                   |
+| `F`    | Chunk-tag           | `F` + chunkid varint + tagname                    | uint32 count + optional tvids           |
+| `V`    | Tag value           | `V` + tag + `\x00` + value + `\x00` + tvid varint | packed chunkid varints (multi-set)      |
+| `X`    | @ext routing        | `X` + tvid_ext varint + target_chunkid varint     | packed routed_tvid varints              |
 | `D`    | Tag definition      | `D` + tagname + fileid:8                          | description bytes                       |
 | `EV`   | Tag-value embedding | `EV` + tvid varint                                | float32 vector (3072 bytes)             |
 | `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
@@ -65,6 +66,11 @@ Encoding conventions used throughout:
   (chunkid, tag) pair and decrements by 1 when an orphaned chunkid
   drops its F record. When the count would reach zero, the entire
   record is deleted (embedding goes with it).
+- **Query-time augmentation:** `Store.TagCounts` returns
+  `LMDB_T[tag] + ExtMap.VirtualTagCount[tag]`. Ext-routed
+  contributions don't write F records (target's F is inline-only),
+  so the LMDB T count doesn't see them; the in-memory virtual count
+  fills the gap. See "X — @ext routing" below.
 
 ### F — Per-(chunk, tag) records (with optional tvid trailer)
 
@@ -83,7 +89,7 @@ Encoding conventions used throughout:
 ### V — Tag value index
 
 - **Key:** `V` + tagname + `\x00` + value + `\x00` + tvid varint.
-- **Value:** packed chunkid varints (LEB128).
+- **Value:** packed chunkid varints (LEB128). **Multi-set, not set.**
 - **Semantic:** one record per unique (tag, value) pair. The tvid
   is a sequential numeric identifier for the (tag, value) — stable
   across re-index, used as the join key for tag-value embeddings
@@ -91,6 +97,18 @@ Encoding conventions used throughout:
   (tag, value); count = number of varints in the value. File-level
   callers resolve chunkids → fileids via microfts2 `FilesForChunk`
   (or `ReadCRecord`) and dedupe.
+- **Multi-set semantics:** `addChunkIDToVRecord` does not dedup —
+  every contribution writes its own varint entry. A chunk that has
+  `@food: hamburger` inline AND is ext-routed `@food: hamburger`
+  from one source has two entries in
+  `V[food][hamburger][tvid_food]`. Search-side result sets coalesce,
+  so duplicates are invisible to callers; the multiplicity exists
+  so that removal of one contribution doesn't strip valid
+  contributions from others. Inline cleanup uses `removeVarint`
+  (remove all occurrences for a given chunkid+tvid pair, scoped by
+  F-trail walk); ext cleanup uses `removeOneVarint` (remove first
+  occurrence) so each X-record's contribution is independently
+  reversible.
 - **Forward lookup** (find values for a tag): prefix scan
   `V` + tagname + `\x00` returns one record per value, with tvid in
   the trailing bytes of each key.
@@ -104,6 +122,49 @@ Encoding conventions used throughout:
 - **Legacy compatibility:** `parseVKey` accepts pre-tvid keys
   (no trailing varint after the second `\x00`) and returns tvid=0;
   writers always emit the tvid suffix.
+
+### X — @ext routing
+
+- **Key:** `X` + tvid_ext varint + target_chunkid varint, where
+  tvid_ext is the tvid of the source's `@ext` tag and
+  target_chunkid is one of the chunks the @ext routing applied to.
+- **Value:** packed routed_tvid varints — the tvids of the routed
+  tags (the `@tag1: v1 @tag2: v2 …` chain inside the @ext value)
+  that this routing contributed to the target's V records.
+- **Semantic:** durable provenance for `@ext: TARGET @tag: v …`.
+  Source files contribute @ext-routed entries to a target chunk's
+  V records via multi-set V append (one entry per routed tag per
+  target chunk). The X record records the source-side tvid and the
+  routed tvids it added so cleanup is precise: when the source
+  chunk is orphaned, walk `X[tvid_ext]`, strike each
+  `target_chunkid` from the named routed tag's V record (multi-set
+  remove first occurrence), then drop the X record.
+- **Chunkid-keyed (not fileid-keyed):** the X key holds a
+  target_chunkid so an offline edit across an ark restart still
+  resolves. If ark stops, the user edits the target file (deleting
+  an `@id` line, say), and ark restarts → reindex → target chunk
+  orphans, the startup scan of X records populates
+  `chunkToTargets[orphan_chunkid]` so the orphan callback can find
+  the routings to clean up. Fileid-keyed X cannot do this — the
+  post-edit re-resolution would return empty and the stale V entry
+  would have no discovery path.
+- **Forward lookup** (all routings for one source @ext): prefix
+  scan `X` + tvid_ext varint returns one record per target chunk.
+- **Startup rebuild:** `ScanAllExtRecords` iterates every X record
+  to repopulate the in-memory ExtMap (six maps + virtualTagCount).
+  Bounded by total routing count.
+- **Lifecycle:** written by `ExtMap.applyIndexExt` at index time
+  and `ExtMap.applyReresolve` on target reindex; deleted by
+  `ExtMap.CleanupSource` (source chunk orphaned) and
+  `applyReresolve` Removes (target chunkid no longer matches the
+  spec). See `specs/at-ext-storage.md` for the canonical
+  re-resolution flow and `design/seq-ext-routing.md` for the
+  sequence diagram.
+- **What lives in memory, not LMDB:** the ExtMap's six
+  in-memory maps (`targetToChunk`, `chunkToTargets`,
+  `fileidToTvids`, `extByAnchor`, `unresolvedTargets`,
+  `virtualTagCount`) are derived from the X records and rebuilt at
+  startup. Only the X records are persistent.
 
 ### D — Tag definitions
 
@@ -299,19 +360,29 @@ read the tvid from each key suffix.
 is first indexed, the counter is incremented and the new tvid is
 written into:
 - The V record key suffix.
-- The F record value trailer (for every file occurrence carrying
+- The F record value trailer (for every chunk occurrence carrying
   this (tag, value)).
 - An EV record (lazily, on next batch-embed pass).
 
 Re-indexing the same (tag, value) reuses the existing tvid; tvids
 are stable.
 
+Routed tags inside `@ext: TARGET @tag1: v1 …` allocate from the
+same `next_tvid` counter — no separate ID space. The routed tvids
+are written into the V record (multi-set append at the target
+chunkid) and into the X record value (provenance trailer for the
+source's @ext tvid). The source's @ext tag itself is also a
+regular tag — its (tag="ext", value=full text) gets its own tvid
+in V/F as usual.
+
 ### File-level vs chunk-level
 
 | Record | Keyed by | Notes |
 |--------|----------|-------|
-| F, D, M, EF, U | file (fileid) | File-level; one per file |
+| D, M, EF, U | file (fileid) | File-level; one per file |
+| F | chunk (chunkid) | Chunk-level (chunkid-keyed since tag store v1) |
 | V, T | tag (or tag+value) | Vocabulary-level; cross-file |
+| X | (tvid_ext, target chunkid) | @ext provenance; one per (source @ext tvid, target chunk) pair |
 | EC | chunkid | Chunk-level (microfts2-dedup'd content) |
 | EV | tvid | Tag-value compound (cross-file) |
 | PC | (file, page) | File-level page slice |
