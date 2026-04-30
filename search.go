@@ -353,7 +353,6 @@ func (s *Searcher) aboutSearch(query string, k int) ([]ChunkScore, error) {
 	return s.librarian.SearchChunks(qvec, k)
 }
 
-
 // SearchSplit dispatches --about, --contains, --regex to appropriate engines.
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
@@ -491,8 +490,8 @@ func validateSearchFlags(opts SearchOpts) error {
 // ChunkFilterRow describes a single stacked filter row from the UI.
 // CRC: crc-Searcher.md | R1939
 type ChunkFilterRow struct {
-	Polarity string `json:"polarity"`    // "with" or "without"
-	Mode     string `json:"mode"`        // "contains", "fuzzy", "tag", ...
+	Polarity string `json:"polarity"` // "with" or "without"
+	Mode     string `json:"mode"`     // "contains", "fuzzy", "tag", ...
 	Query    string `json:"query"`
 	K        int    `json:"k,omitempty"` // about-mode only: top-k override (0 = use cfg.AboutFilterTopK)
 }
@@ -1857,8 +1856,8 @@ func renderPdfPreview(attrs []microfts2.Pair, path string, pdfZoom float64) (str
 // (semicolon-separated) so every tag overlays the rendered page.
 // Pages without a `page_size` attribute fall through to an HTML-
 // escaped pre-wrapped block. R1739, R1740
-// CRC: crc-Server.md | R1739, R1740
-func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
+// CRC: crc-Server.md | R1739, R1740, R1982
+func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) string {
 	type pageAgg struct {
 		page        string
 		pageSize    string
@@ -1901,7 +1900,7 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string) string {
 			// chunks as HTML-escaped pre-wrapped text.
 			for _, ch := range agg.salvage {
 				buf.WriteString(`<div class="ark-chunk">`)
-				buf.WriteString(wrapTagElements(template.HTMLEscapeString(ch.Content)))
+				buf.WriteString(wrapTagElements(template.HTMLEscapeString(ch.Content), db))
 				buf.WriteString("</div>\n")
 			}
 			continue

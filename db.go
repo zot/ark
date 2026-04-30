@@ -1020,6 +1020,111 @@ func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microft
 	return db.fts.GetChunks(fpath, targetRange, before, after)
 }
 
+// ResolveLink resolves an @link: value to a /content/ URL target.
+// UUID branch first (TvidMap.Lookup against tag "id" → V record →
+// chunkid → fileid → path + chunk Location). Path branch second:
+// microfts2.CheckFile reports whether the literal value names a known
+// file. Returns ok=false when neither resolves. Anchor parsing and
+// content-hash fallback are deferred.
+// CRC: crc-DB.md | Seq: seq-ark-tag-click.md | R1976, R1977, R1978
+func (db *DB) ResolveLink(value string) (path, location string, ok bool) {
+	if value == "" {
+		return "", "", false
+	}
+	if path, location, ok = db.resolveLinkUUID(value); ok {
+		return path, location, true
+	}
+	if status, err := db.fts.CheckFile(value); err == nil && status.FileID != 0 {
+		return value, "", true
+	}
+	return "", "", false
+}
+
+// resolveLinkUUID handles the @id-based branch of ResolveLink.
+// CRC: crc-DB.md | R1976, R1977
+func (db *DB) resolveLinkUUID(value string) (path, location string, ok bool) {
+	tvid, hit := db.store.TvidMap().Lookup("id", value)
+	if !hit {
+		return "", "", false
+	}
+	chunkID, fileID := db.lookupIDChunk(value, tvid)
+	if chunkID == 0 {
+		return "", "", false
+	}
+	if IsOverlayID(chunkID) {
+		return db.resolveOverlayChunk(chunkID)
+	}
+	if fileID == 0 {
+		return "", "", false
+	}
+	return db.locateChunkInFile(chunkID, fileID)
+}
+
+// lookupIDChunk reads V[id][value][tvid], decodes the first chunkid,
+// and (for persistent chunkids) resolves to the owning fileid in the
+// same View. Returns zero values when the record is missing or empty.
+// CRC: crc-DB.md | R1976, R1977
+func (db *DB) lookupIDChunk(value string, tvid uint64) (chunkID, fileID uint64) {
+	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		blob, err := txn.Get(db.store.dbi, tagValueFullKey("id", value, tvid))
+		if err != nil {
+			return nil
+		}
+		ids := decodeVarints(blob)
+		if len(ids) == 0 {
+			return nil
+		}
+		chunkID = ids[0]
+		if IsOverlayID(chunkID) {
+			return nil
+		}
+		crec, err := db.fts.ReadCRecord(txn, chunkID)
+		if err == nil && len(crec.FileIDs) > 0 {
+			fileID = crec.FileIDs[0].FileID
+		}
+		return nil
+	})
+	return chunkID, fileID
+}
+
+// resolveOverlayChunk maps a tmp:// chunkid to its source path. Tmp
+// content has no per-chunk Location, so the result has empty location.
+// CRC: crc-DB.md | R1976
+func (db *DB) resolveOverlayChunk(chunkID uint64) (path, location string, ok bool) {
+	fileIDs := db.store.tmp.FilesForChunk(chunkID)
+	if len(fileIDs) == 0 {
+		return "", "", false
+	}
+	return db.tmpPathForFile(fileIDs[0])
+}
+
+// locateChunkInFile reads FileInfoByID and returns the file's path
+// plus the chunk's Location. CRC: crc-DB.md | R1976, R1977
+func (db *DB) locateChunkInFile(chunkID, fileID uint64) (path, location string, ok bool) {
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil || len(info.Names) == 0 {
+		return "", "", false
+	}
+	for _, c := range info.Chunks {
+		if c.ChunkID == chunkID {
+			return info.Names[0], c.Location, true
+		}
+	}
+	return info.Names[0], "", true
+}
+
+// tmpPathForFile resolves a tmp:// fileid to its source path. The
+// overlay does not record per-chunk Locations, so location is empty.
+// CRC: crc-DB.md | R1976
+func (db *DB) tmpPathForFile(fileID uint64) (path, location string, ok bool) {
+	for p, fid := range db.tmpPaths {
+		if fid == fileID {
+			return p, "", true
+		}
+	}
+	return "", "", false
+}
+
 // QueryTrigramCounts returns trigram counts for a query string.
 func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
 	return db.fts.QueryTrigramCounts(query)

@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2325,7 +2326,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rendered := renderMarkdownForContent(data, path)
-		shell.Content = template.HTML(wrapTagElements(rendered))
+		shell.Content = template.HTML(wrapTagElements(rendered, srv.db))
 		tmpl.Execute(w, shell)
 	} else {
 		tmpl, err := srv.loadContentTemplate("content-plain.html")
@@ -2349,7 +2350,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// entry from every chunk on that page. Block rects alone would
 			// leave gaps between text regions.
 			if strategy == "pdf" {
-				shell.Content = template.HTML(renderPdfChunksByPage(chunks, path))
+				shell.Content = template.HTML(renderPdfChunksByPage(chunks, path, srv.db))
 				tmpl.Execute(w, shell)
 				return
 			}
@@ -2362,9 +2363,9 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			for _, ch := range chunks {
 				var rendered string
 				if useMarkdown {
-					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path))
+					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
 				} else {
-					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content))
+					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), srv.db)
 				}
 				// R1509-R1512: role grouping for chat-jsonl chunks.
 				role, _ := microfts2.PairGet(ch.Attrs, "role")
@@ -2417,7 +2418,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// otherwise. R1703-R1708
 			switch {
 			case strategy == "chat-jsonl":
-				shell.Content = template.HTML(wrapTagElements(renderMarkdownForContent(data, path)))
+				shell.Content = template.HTML(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
 			case strategy == "pdf" && isChunk:
 				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
 					return db.ChunkAttrs(path, rangeParam), nil
@@ -2429,10 +2430,10 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				if pdfHTML, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
 					shell.Content = template.HTML(pdfHTML)
 				} else {
-					shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+					shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
 				}
 			default:
-				shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data))))
+				shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
 			}
 		}
 		tmpl.Execute(w, shell)
@@ -2515,10 +2516,10 @@ func renderMarkdownForContent(data []byte, filePath string) string {
 // wrapTagElements post-processes rendered HTML to wrap @tag: value patterns
 // in <ark-tag> elements for interactive tag widgets in read views.
 // Skips tags preceded by backtick (code context) or inside <code> elements.
-// CRC: crc-Server.md | Seq: seq-ark-tag-click.md | R1485-R1489
+// CRC: crc-Server.md | Seq: seq-ark-tag-click.md | R1485-R1489, R1979, R1980, R1981
 var arkTagRe = regexp.MustCompile(`(?m)@([a-zA-Z][\w.-]*):[ \t]*([^\n<]*)`)
 
-func wrapTagElements(html string) string {
+func wrapTagElements(html string, db *DB) string {
 	matches := arkTagRe.FindAllStringSubmatchIndex(html, -1)
 	if len(matches) == 0 {
 		return html
@@ -2543,7 +2544,9 @@ func wrapTagElements(html string) string {
 		buf.WriteString(html[prev:start])
 		name := html[m[2]:m[3]]
 		value := strings.TrimRight(html[m[4]:m[5]], " \t")
-		if value == "" {
+		if name == "link" && value != "" {
+			renderLinkElement(&buf, value, db)
+		} else if value == "" {
 			buf.WriteString(`<ark-tag><name>` + name + `</name></ark-tag>`)
 		} else {
 			buf.WriteString(`<ark-tag><name>` + name + `</name> <value>` + value + `</value></ark-tag>`)
@@ -2552,6 +2555,32 @@ func wrapTagElements(html string) string {
 	}
 	buf.WriteString(html[prev:])
 	return buf.String()
+}
+
+// renderLinkElement emits the @link: rendering — an <a> for resolved
+// links, an <ark-tag class="ark-link-broken"> wrapper for broken or
+// unresolvable values. The value text comes from a regex match over
+// already-rendered HTML, so it is inserted into element text without
+// re-escaping. The href is HTML-attribute-escaped because we assemble
+// it from the path. CRC: crc-Server.md | R1980, R1981
+func renderLinkElement(buf *strings.Builder, value string, db *DB) {
+	if db != nil {
+		if path, loc, ok := db.ResolveLink(value); ok {
+			href := "/content" + path
+			if loc != "" {
+				href += "?range=" + url.QueryEscape(loc)
+			}
+			buf.WriteString(`<a class="ark-link" href="`)
+			buf.WriteString(template.HTMLEscapeString(href))
+			buf.WriteString(`">@link: `)
+			buf.WriteString(value)
+			buf.WriteString(`</a>`)
+			return
+		}
+	}
+	buf.WriteString(`<ark-tag class="ark-link-broken"><name>link</name> <value>`)
+	buf.WriteString(value)
+	buf.WriteString(`</value></ark-tag>`)
 }
 
 // contentShellData holds the template data for content HTML shells.

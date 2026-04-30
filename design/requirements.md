@@ -3204,3 +3204,14 @@ implementation, not a separate format break.
 - **R1973:** Resolution chain: `TvidMap.Lookup("id", UUID)` → tvid; `Store.TagValueFiles("id", UUID)` → chunkids; microfts2 `CRecord.FileIDs` → fileid; `FileInfoByID` → path + chunk Location. Each leg already exists; no new code beyond consumers.
 - **R1974:** Multiple chunks with the same UUID resolve to all matching chunks. The index returns the full list; callers choose by policy (all, first, error). The index does not enforce UUID uniqueness — duplicates are an authoring concern.
 - **R1975:** `tmp://` content participates in `@id` indexing via the unified read path. `Store.TagValueFiles` unions persistent and overlay results, so a UUID declared in `tmp://` content resolves alongside disk content for the server's lifetime.
+
+## Feature: @link rendering
+**Source:** specs/at-link.md
+
+- **R1976:** `DB.ResolveLink(value string) (path, location string, ok bool)` resolves an `@link:` value to a `/content/` URL target. UUID branch first (in-memory `TvidMap.Lookup("id", value)` → tvid → V record → chunkid → fileid → path + Location); path branch second (`microfts2.CheckFile(value)` returns the indexed path with empty Location). Returns `ok=false` when neither resolves.
+- **R1977:** UUID resolution uses the live `TvidMap` and a single LMDB `txn.Get` against the exact V key — no prefix scan. Chunkid → fileid uses the existing `chunkID→fileIDs` resolver wired in `DB.Open`.
+- **R1978:** Path resolution accepts the value as a literal path. No anchor parsing (`path:line`, `path:/regex/`, `path[N]:`) and no content-hash fallback in v1; both are deferred to a follow-up.
+- **R1979:** `wrapTagElements(html string, db *DB) string` consumes a `*DB` so it can call `ResolveLink`. A nil `db` short-circuits the link branch to the broken renderer; tests that bypass the server pass nil.
+- **R1980:** When `name == "link"` and `ResolveLink` returns ok, the rendered output is `<a class="ark-link" href="/content/{path}?range={loc}">@link: VALUE</a>` — replacing the would-be `<ark-tag>` wrapper. The `?range=` query param is omitted when location is empty (path-only resolution).
+- **R1981:** When `name == "link"` and resolution fails, render `<ark-tag class="ark-link-broken"><name>link</name> <value>VALUE</value></ark-tag>` so the tag widget still picks it up but the frontend can style it as broken.
+- **R1982:** All seven `wrapTagElements` call sites (`server.go` ×6, `search.go` ×1) thread `srv.db` (or the equivalent DB reference held by their caller) into the function.
