@@ -3215,3 +3215,12 @@ implementation, not a separate format break.
 - **R1980:** When `name == "link"` and `ResolveLink` returns ok, the rendered output is `<a class="ark-link" href="/content/{path}?range={loc}">@link: VALUE</a>` — replacing the would-be `<ark-tag>` wrapper. The `?range=` query param is omitted when location is empty (path-only resolution).
 - **R1981:** When `name == "link"` and resolution fails, render `<ark-tag class="ark-link-broken"><name>link</name> <value>VALUE</value></ark-tag>` so the tag widget still picks it up but the frontend can style it as broken.
 - **R1982:** All seven `wrapTagElements` call sites (`server.go` ×6, `search.go` ×1) thread `srv.db` (or the equivalent DB reference held by their caller) into the function.
+
+## Feature: @ext parsing and target resolution
+**Source:** specs/at-ext-parsing.md
+
+- **R1983:** `ParseExtTarget(value string) (target string, tags []TagValue, ok bool)` splits an `@ext:` value into a TARGET substring (everything up to the first embedded `@tag:`) and the chain of routed `TagValue` entries that follow. Each routed tag's value is clipped at the next embedded `@tag:` boundary or end of string. Tag names are lowercased; values are TrimSpace'd.
+- **R1984:** `ParseExtTarget` returns `ok=false` when the TARGET is empty or no embedded tag follows it. A TARGET-only `@ext:` declares no annotation and is treated as a no-op rather than an error.
+- **R1985:** `DB.ResolveExtTarget(target string) []uint64` returns the chunkids identified by the TARGET. Empty slice signals "broken or unknown." UUID branch is tried first via `TvidMap.Lookup("id", target)` and the V record's full chunkid blob — every chunk carrying that id is returned. Path branch is tried second via `microfts2.CheckFile(target)` and `FileInfoByID`, returning only the file's first chunk (preamble convention).
+- **R1986:** UUID resolution wins when a target string matches both an `@id` value and a path; UUIDs are the more specific identifier.
+- **R1987:** Anchored target forms (`path:line`, `path:string`, `path:/regex/`, `path[N]:anchor`, `path^:anchor`) are documented in `specs/at-ext-parsing.md` as deferred. v1 ships UUID + path; anchors land as separate branches inside `ResolveExtTarget`.

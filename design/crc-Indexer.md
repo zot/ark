@@ -7,6 +7,11 @@ file content, and updates the Store. Embeddings are written
 asynchronously by Librarian.BatchEmbedChunks post-reconcile —
 indexer doesn't write EC records itself. (R1923, R1926)
 
+`ParseExtTarget(value) (target, tags, ok)` lives in `ext.go` next to the
+chunkAccumulator. It splits an `@ext:` value into the TARGET substring
+plus the chain of routed `TagValue` entries; storage of those routed
+tags is the next roadmap point. (R1983, R1984)
+
 ## Knows
 - fts: *microfts2.DB — trigram engine
 - store: *Store — tag storage and EC/EF records (R1923)

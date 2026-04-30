@@ -1113,6 +1113,58 @@ func (db *DB) locateChunkInFile(chunkID, fileID uint64) (path, location string, 
 	return info.Names[0], "", true
 }
 
+// ResolveExtTarget returns chunkids identified by an @ext target.
+// UUID branch first (TvidMap → V record's full chunkid blob, every
+// chunk carrying that id); path branch second (CheckFile + FileInfoByID,
+// first chunk only by preamble convention). Empty result means broken
+// or unknown — callers treat that as a no-op annotation.
+// CRC: crc-DB.md | R1985, R1986
+func (db *DB) ResolveExtTarget(target string) []uint64 {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil
+	}
+	if chunks := db.resolveExtUUID(target); len(chunks) > 0 {
+		return chunks
+	}
+	return db.resolveExtPath(target)
+}
+
+// resolveExtUUID returns every chunkid carrying @id == value.
+// CRC: crc-DB.md | R1985
+func (db *DB) resolveExtUUID(value string) []uint64 {
+	tvid, ok := db.store.TvidMap().Lookup("id", value)
+	if !ok {
+		return nil
+	}
+	var chunks []uint64
+	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		blob, err := txn.Get(db.store.dbi, tagValueFullKey("id", value, tvid))
+		if err == nil {
+			chunks = decodeVarints(blob)
+		}
+		return nil
+	})
+	return chunks
+}
+
+// resolveExtPath returns the file's first chunkid (preamble), or nil
+// when the path is not indexed. Anchored target forms (path:line,
+// path:string, path:/regex/, path[N]:anchor) are deferred — when they
+// land they branch off resolveExtPath before the CheckFile probe.
+// CRC: crc-DB.md | R1985, R1987
+func (db *DB) resolveExtPath(path string) []uint64 {
+	status, err := db.fts.CheckFile(path)
+	if err != nil || status.FileID == 0 {
+		return nil
+	}
+	info, err := db.fts.FileInfoByID(status.FileID)
+	if err != nil || len(info.Chunks) == 0 {
+		return nil
+	}
+	return []uint64{info.Chunks[0].ChunkID}
+}
+
 // tmpPathForFile resolves a tmp:// fileid to its source path. The
 // overlay does not record per-chunk Locations, so location is empty.
 // CRC: crc-DB.md | R1976

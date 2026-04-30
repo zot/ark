@@ -127,7 +127,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Matcher.md → `match.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
-- [x] crc-Indexer.md → `indexer.go`
+- [x] crc-Indexer.md → `indexer.go`, `ext.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`

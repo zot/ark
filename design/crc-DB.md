@@ -133,6 +133,12 @@ operations complete) document this on the API. (R986, R993, R995)
   path + chunk Location); path branch second (microfts2.CheckFile).
   Returns ok=false when neither resolves. Used by wrapTagElements in
   the rendering hot path. (R1976, R1977, R1978)
+- ResolveExtTarget(target) []uint64: return chunkids identified by
+  an `@ext:` target spec. UUID branch returns every chunk carrying
+  the id (full V record blob); path branch returns the first chunk
+  of the file (preamble convention). Empty result means broken or
+  unknown — callers treat as a no-op annotation. Anchored target
+  forms are deferred. (R1985, R1986, R1987)
 
 ## Collaborators
 - Config: loads and validates ark.toml
