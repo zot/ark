@@ -9,7 +9,7 @@ import (
 )
 
 func TestTmpTagStoreUpdateAndRead(t *testing.T) {
-	store := NewTmpTagStore()
+	store := NewTmpTagStore(NewTvidMap())
 
 	// Two chunks for one tmp:// fileid
 	const fid = uint64(0xFFFFFFFFFFFFFFFF)
@@ -46,7 +46,7 @@ func TestTmpTagStoreUpdateAndRead(t *testing.T) {
 
 func TestStoreUnionAndDispatch(t *testing.T) {
 	s := testStore(t)
-	tmp := NewTmpTagStore()
+	tmp := NewTmpTagStore(s.TvidMap())
 	s.SetTmpTagStore(tmp)
 
 	const fid = uint64(0xFFFFFFFFFFFFFFFE)
@@ -96,7 +96,7 @@ func TestAddTmpFileExtractsTags(t *testing.T) {
 	}
 
 	store := testStore(t)
-	tmp := NewTmpTagStore()
+	tmp := NewTmpTagStore(store.TvidMap())
 	store.SetTmpTagStore(tmp)
 	db := &DB{fts: fts, store: store, tmpPaths: map[string]uint64{}}
 	db.svc = make(chan func(), 16)

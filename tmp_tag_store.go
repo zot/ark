@@ -3,8 +3,10 @@ package ark
 // CRC: crc-TmpTagStore.md
 //
 // In-memory tag overlay for tmp:// content. Mirrors the persistent
-// V/F/T runtime API so callers stay tmp-unaware. Lives for the
-// server's lifetime; no LMDB writes, no schema marker.
+// V/F/T runtime API so callers stay tmp-unaware. Per-chunk entries
+// store tvids resolved through the shared TvidMap; (tag, value)
+// strings live in one place. Lives for the server's lifetime; no
+// LMDB writes, no schema marker.
 
 import (
 	"sync"
@@ -18,34 +20,42 @@ func IsOverlayID(id uint64) bool {
 	return int64(id) < 0
 }
 
-// chunkTagEntry holds one chunk's tags grouped by tag name. Mirrors
-// the runtime shape of the persistent V records.
+// chunkTagEntry holds one chunk's tvids grouped by tag name. (tag,
+// value) strings are resolved on demand via TvidMap.Resolve.
+// CRC: crc-TmpTagStore.md | R1964
 type chunkTagEntry struct {
 	fileID uint64
-	values map[string][]string // tag → values
+	tvids  map[string][]uint64 // tag → tvids
 }
 
 // TmpTagStore is the in-memory tag overlay for tmp:// fileids.
 // CRC: crc-TmpTagStore.md | R1941
 type TmpTagStore struct {
-	mu         sync.RWMutex
-	chunks     map[uint64]*chunkTagEntry // chunkID → entry
-	fileChunks map[uint64][]uint64       // fileID → chunkIDs
-	tagCounts  map[string]int            // tag name → chunk count
+	mu            sync.RWMutex
+	chunks        map[uint64]*chunkTagEntry // chunkID → entry
+	fileChunks    map[uint64][]uint64       // fileID → chunkIDs
+	tagCounts     map[string]int            // tag name → chunk count
+	tvidProducers map[uint64]int            // tvid → producer chunk count
+	tvids         *TvidMap                  // shared resolver (R1964, R1965)
 }
 
-// NewTmpTagStore creates an empty overlay.
-func NewTmpTagStore() *TmpTagStore {
+// NewTmpTagStore creates an empty overlay backed by the supplied tvid
+// resolver. The TvidMap is shared with Store so persistent and overlay
+// tvids resolve through one map.
+// CRC: crc-TmpTagStore.md | R1964
+func NewTmpTagStore(tvids *TvidMap) *TmpTagStore {
 	return &TmpTagStore{
-		chunks:     make(map[uint64]*chunkTagEntry),
-		fileChunks: make(map[uint64][]uint64),
-		tagCounts:  make(map[string]int),
+		chunks:        make(map[uint64]*chunkTagEntry),
+		fileChunks:    make(map[uint64][]uint64),
+		tagCounts:     make(map[string]int),
+		tvidProducers: make(map[uint64]int),
+		tvids:         tvids,
 	}
 }
 
 // UpdateTagValues replaces the per-chunk entries for a fileid. Drops
 // existing chunkids registered to the fileid, then writes new ones.
-// CRC: crc-TmpTagStore.md | R1942
+// CRC: crc-TmpTagStore.md | R1942, R1966
 func (t *TmpTagStore) UpdateTagValues(fileID uint64, chunkTags []ChunkTagValues) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -55,7 +65,7 @@ func (t *TmpTagStore) UpdateTagValues(fileID uint64, chunkTags []ChunkTagValues)
 
 // AppendTagValues adds entries for newly-emitted chunks without
 // touching prior chunks for the fileid.
-// CRC: crc-TmpTagStore.md | R1943
+// CRC: crc-TmpTagStore.md | R1943, R1966
 func (t *TmpTagStore) AppendTagValues(fileID uint64, chunkTags []ChunkTagValues) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -68,78 +78,104 @@ func (t *TmpTagStore) appendLocked(fileID uint64, chunkTags []ChunkTagValues) {
 		if _, exists := t.chunks[ct.ChunkID]; exists {
 			continue
 		}
-		entry := &chunkTagEntry{fileID: fileID, values: make(map[string][]string)}
+		entry := &chunkTagEntry{fileID: fileID, tvids: make(map[string][]uint64)}
 		for _, tv := range ct.Values {
 			if tv.Tag == "" {
 				continue
 			}
-			entry.values[tv.Tag] = append(entry.values[tv.Tag], tv.Value)
+			tvid := t.resolveOrAlloc(tv.Tag, tv.Value)
+			entry.tvids[tv.Tag] = append(entry.tvids[tv.Tag], tvid)
 		}
 		t.chunks[ct.ChunkID] = entry
 		t.fileChunks[fileID] = append(t.fileChunks[fileID], ct.ChunkID)
-		for tag := range entry.values {
+		for tag, tvids := range entry.tvids {
 			t.tagCounts[tag]++
+			for _, tvid := range tvids {
+				t.tvidProducers[tvid]++
+			}
 		}
 	}
 }
 
+// resolveOrAlloc finds an existing tvid for (tag, value) or allocates
+// a new overlay tvid. CRC: crc-TmpTagStore.md | R1965, R1966
+func (t *TmpTagStore) resolveOrAlloc(tag, value string) uint64 {
+	if tvid, ok := t.tvids.Lookup(tag, value); ok {
+		return tvid
+	}
+	return t.tvids.AllocOverlay(tag, value)
+}
+
 // RemoveChunk drops a single chunkid's entry. Used when Store
 // dispatches a chunkid-keyed RemoveTagValues to the overlay.
-// CRC: crc-TmpTagStore.md
+// CRC: crc-TmpTagStore.md | R1967
 func (t *TmpTagStore) RemoveChunk(chunkID uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.removeChunkLocked(chunkID)
 }
 
-// removeChunkLocked drops the entry and updates fileChunks + tagCounts.
+// removeChunkLocked drops the entry, updates fileChunks + tagCounts,
+// and prunes any overlay tvids whose last producer was this chunk.
 // Caller holds t.mu.
 func (t *TmpTagStore) removeChunkLocked(chunkID uint64) {
+	t.dropChunkLocked(chunkID, true)
+}
+
+// dropChunkLocked removes one chunk's entry, decrements tag counts and
+// per-tvid producer counts, and prunes any overlay tvids that lose
+// their last producer. When updateFileList is true, the chunk is also
+// removed from its file's chunk list (callers iterating fileChunks
+// pass false to avoid mutating the slice they're walking). Caller
+// holds t.mu.
+func (t *TmpTagStore) dropChunkLocked(chunkID uint64, updateFileList bool) {
 	entry, ok := t.chunks[chunkID]
 	if !ok {
 		return
 	}
-	for tag := range entry.values {
+	for tag, tvids := range entry.tvids {
 		t.tagCounts[tag]--
 		if t.tagCounts[tag] <= 0 {
 			delete(t.tagCounts, tag)
 		}
-	}
-	chunks := t.fileChunks[entry.fileID]
-	for i, c := range chunks {
-		if c == chunkID {
-			t.fileChunks[entry.fileID] = append(chunks[:i], chunks[i+1:]...)
-			break
+		for _, tvid := range tvids {
+			t.tvidProducers[tvid]--
+			if t.tvidProducers[tvid] <= 0 {
+				delete(t.tvidProducers, tvid)
+				t.tvids.RemoveOverlayUnused(tvid)
+			}
 		}
 	}
-	if len(t.fileChunks[entry.fileID]) == 0 {
-		delete(t.fileChunks, entry.fileID)
+	if updateFileList {
+		chunks := t.fileChunks[entry.fileID]
+		for i, c := range chunks {
+			if c == chunkID {
+				t.fileChunks[entry.fileID] = append(chunks[:i], chunks[i+1:]...)
+				break
+			}
+		}
+		if len(t.fileChunks[entry.fileID]) == 0 {
+			delete(t.fileChunks, entry.fileID)
+		}
 	}
 	delete(t.chunks, chunkID)
 }
 
-// RemoveFile drops every entry belonging to a tmp:// fileid.
-// CRC: crc-TmpTagStore.md | R1944
+// RemoveFile drops every entry belonging to a tmp:// fileid. Tvids
+// whose last producer was this file and whose origin is OriginOverlay
+// are pruned from the shared TvidMap; persistent tvids are left alone.
+// CRC: crc-TmpTagStore.md | R1944, R1951, R1967
 func (t *TmpTagStore) RemoveFile(fileID uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.removeFileLocked(fileID)
 }
 
-// removeFileLocked drops all chunks for fileID. Caller holds t.mu.
+// removeFileLocked drops all chunks for fileID and prunes any overlay
+// tvids whose last producer departed with the file. Caller holds t.mu.
 func (t *TmpTagStore) removeFileLocked(fileID uint64) {
 	for _, chunkID := range t.fileChunks[fileID] {
-		entry := t.chunks[chunkID]
-		if entry == nil {
-			continue
-		}
-		for tag := range entry.values {
-			t.tagCounts[tag]--
-			if t.tagCounts[tag] <= 0 {
-				delete(t.tagCounts, tag)
-			}
-		}
-		delete(t.chunks, chunkID)
+		t.dropChunkLocked(chunkID, false)
 	}
 	delete(t.fileChunks, fileID)
 }
@@ -159,7 +195,7 @@ func (t *TmpTagStore) TagFiles(tags []string) []TagFileRecord {
 	defer t.mu.RUnlock()
 	var out []TagFileRecord
 	for chunkID, entry := range t.chunks {
-		for tag, vals := range entry.values {
+		for tag, tvids := range entry.tvids {
 			if !tagSet[tag] {
 				continue
 			}
@@ -167,7 +203,7 @@ func (t *TmpTagStore) TagFiles(tags []string) []TagFileRecord {
 				ChunkID: chunkID,
 				FileID:  entry.fileID,
 				Tag:     tag,
-				Count:   uint32(len(vals)),
+				Count:   uint32(len(tvids)),
 			})
 		}
 	}
@@ -175,15 +211,20 @@ func (t *TmpTagStore) TagFiles(tags []string) []TagFileRecord {
 }
 
 // TagValueFiles returns the overlay's chunkids carrying the given
-// (tag, value). Mirrors Store.TagValueFiles' chunkid-returning shape.
-// CRC: crc-TmpTagStore.md | R1945
+// (tag, value). Resolves via TvidMap.Lookup so the lookup is O(1) in
+// the in-memory map plus a per-entry membership check.
+// CRC: crc-TmpTagStore.md | R1945, R1964
 func (t *TmpTagStore) TagValueFiles(tag, value string) []uint64 {
+	tvid, ok := t.tvids.Lookup(tag, value)
+	if !ok {
+		return nil
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var out []uint64
 	for chunkID, entry := range t.chunks {
-		for _, v := range entry.values[tag] {
-			if v == value {
+		for _, ct := range entry.tvids[tag] {
+			if ct == tvid {
 				out = append(out, chunkID)
 				break
 			}
@@ -194,7 +235,7 @@ func (t *TmpTagStore) TagValueFiles(tag, value string) []uint64 {
 
 // FileTagValues returns the first value found per requested tag for
 // a tmp:// fileid. Mirrors Store.FileTagValues semantics.
-// CRC: crc-TmpTagStore.md | R1945
+// CRC: crc-TmpTagStore.md | R1945, R1964
 func (t *TmpTagStore) FileTagValues(fileID uint64, tags []string) map[string]string {
 	result := make(map[string]string, len(tags))
 	t.mu.RLock()
@@ -208,8 +249,12 @@ func (t *TmpTagStore) FileTagValues(fileID uint64, tags []string) map[string]str
 			if _, found := result[tag]; found {
 				continue
 			}
-			if vals := entry.values[tag]; len(vals) > 0 {
-				result[tag] = vals[0]
+			tvids := entry.tvids[tag]
+			if len(tvids) == 0 {
+				continue
+			}
+			if _, value, ok := t.tvids.Resolve(tvids[0]); ok {
+				result[tag] = value
 			}
 		}
 		if len(result) == len(tags) {

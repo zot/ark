@@ -233,7 +233,7 @@ func Open(dbPath string) (*DB, error) {
 		fts.Close()
 		return nil, fmt.Errorf("open ark store: %w", err)
 	}
-	tmpTags := NewTmpTagStore()
+	tmpTags := NewTmpTagStore(store.TvidMap())
 	store.SetTmpTagStore(tmpTags)
 
 	matcher := &Matcher{Dotfiles: config.Dotfiles}
@@ -297,6 +297,11 @@ func Open(dbPath string) (*DB, error) {
 	// for fresh DBs (R1882). An old DB lacking the marker requires `ark rebuild`.
 	if tv, _ := store.IGet("tag_store_version"); tv != "1" {
 		return nil, fmt.Errorf("tag store schema upgrade required — run `ark rebuild` (tag_store_version=%q, want %q)", tv, "1")
+	}
+
+	// CRC: crc-DB.md | R1958, R1968, R1969
+	if err := store.LoadTvidMap(); err != nil {
+		return nil, fmt.Errorf("load tvid map: %w", err)
 	}
 
 	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.

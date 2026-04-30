@@ -3159,3 +3159,38 @@ implementation, not a separate format break.
 - **R1950:** Overlay chunkids count down from `MaxUint64`. The high bit (set when read as int64) is the per-record origin discriminator alongside the fileid high bit.
 - **R1951:** Tvid resolution shares a single map with the persistent tvid resolver (subpoint 3). Each entry is annotated with its origin (persistent vs overlay) so `RemoveFile` cleans up only tvids introduced solely by tmp:// content.
 - **R1952:** Inbox queries (`ark message inbox`) resolve their tag lookups via `Store.FileTagValues`, exercising the unified read path. `FileTagValues` is no longer orphaned: R1142, R1147, and R1149 are wired through inbox as part of this feature.
+
+## Feature: tvid map and transaction overlay
+**Source:** specs/tvid-map-overlay.md
+
+### Live map
+
+- **R1953:** `Store` owns a `TvidMap` collaborator: an in-memory map `tvid → (tag, value, origin)` covering every tvid the index has seen, persistent and `tmp://` alike. The map lives in process memory; V records are the source of truth.
+- **R1954:** `TvidMap.Resolve(tvid uint64) (tag, value string, ok bool)` returns the `(tag, value)` for a tvid in O(1) under read lock, replacing V-prefix scans for tvid resolution.
+- **R1955:** `TvidMap.Lookup(tag, value string) (tvid uint64, ok bool)` provides the reverse lookup so callers with a `(tag, value)` pair can find an existing tvid without an LMDB scan.
+- **R1956:** `TvidMap.Snapshot() map[uint64]TagAlt` returns a copy for diagnostics; `Store.ScanVRecordTvids` becomes a thin wrapper over `Snapshot`.
+- **R1957:** Each entry carries a `TvidOrigin` of `OriginPersistent` or `OriginOverlay`, fixed at the tvid's first registration. A persistent tvid that later acquires an overlay producer keeps `OriginPersistent`; origin marks where the tvid was born, not who currently uses it.
+
+### Startup load
+
+- **R1958:** `Store.LoadTvidMap()` runs once during `DB.Open` (after the Store is wired but before the server accepts traffic). It scans V records and registers every tvid with `OriginPersistent`. This is the only V-prefix scan needed for tvid resolution per process lifetime.
+
+### Transaction overlay
+
+- **R1959:** `TvidTxn` is an overlay struct scoped to one LMDB write transaction. `Store.tvids.Begin()` returns a fresh `TvidTxn`; the write actor's `env.Update` block calls `Begin`, then `Commit` on success or `Abort` on error/panic.
+- **R1960:** `TvidTxn.Add(tvid, tag, value, origin)` records a tvid registration in the overlay. `TvidTxn.Remove(tvid)` records a removal. Neither touches the live map directly.
+- **R1961:** `TvidTxn.Resolve(tvid)` consults the overlay first (added entries visible, removed entries hidden) and falls through to the live map. Used by code running inside the txn that needs to resolve tvids it has just added or is about to remove.
+- **R1962:** `TvidTxn.Commit` merges added/removed entries into the live map under write lock. `TvidTxn.Abort` discards the overlay. Reads outside the txn never observe overlay state. The write-actor invariant (one `env.Update` at a time) guarantees only one `TvidTxn` is ever live, so commit-merge never contends with another writer.
+- **R1963:** `Store.addChunkIDToVRecord` calls `tt.Add(tvid, tag, value, OriginPersistent)` whenever it allocates a new tvid via `allocIDInTxn`. `Store.removeChunkIDInTxn` calls `tt.Remove(tvid)` whenever it deletes a V record entirely (orphan cleanup).
+
+### Tmp:// integration
+
+- **R1964:** `TmpTagStore` per-chunk entries store tvids instead of `(tag, value)` strings. Read methods (`TagValueFiles`, `FileTagValues`, etc.) resolve tvids via the shared `TvidMap` before returning results.
+- **R1965:** `TvidMap.AllocOverlay(tag, value)` allocates a fresh overlay tvid when `Lookup(tag, value)` finds none. Overlay tvids count down from `MaxUint64` using a separate in-memory counter, mirroring the chunkid/fileid overlay convention; the high bit (set when read as int64) marks a tvid as overlay-issued.
+- **R1966:** `TmpTagStore.UpdateTagValues` and `AppendTagValues` resolve each `(tag, value)` to a tvid (existing via `Lookup`, new via `AllocOverlay`) before writing per-chunk entries.
+- **R1967:** `TmpTagStore.RemoveFile` drops the file's per-chunk tvid contributions. If a tvid loses its last `tmp://` producer AND its origin is `OriginOverlay`, it is removed from the live `TvidMap`. `OriginPersistent` tvids are never dropped on `tmp://` removal — the LMDB record still owns them.
+
+### Lifetime and recovery
+
+- **R1968:** No persistence beyond V records. Server restart triggers `LoadTvidMap` again. No schema marker, no version check, no `ark rebuild` interaction.
+- **R1969:** Crash safety: a process death mid-write rolls back the LMDB transaction. The next startup reloads from V records. Overlay entries from an aborted `TvidTxn` never enter the live map because `Commit` was never called.

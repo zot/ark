@@ -492,10 +492,10 @@ type ChunkScore struct {
 // SearchChunks to retain the top-k highest-scoring chunks.
 type chunkScoreHeap []ChunkScore
 
-func (h chunkScoreHeap) Len() int            { return len(h) }
-func (h chunkScoreHeap) Less(i, j int) bool  { return h[i].Score < h[j].Score }
-func (h chunkScoreHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *chunkScoreHeap) Push(x any)         { *h = append(*h, x.(ChunkScore)) }
+func (h chunkScoreHeap) Len() int           { return len(h) }
+func (h chunkScoreHeap) Less(i, j int) bool { return h[i].Score < h[j].Score }
+func (h chunkScoreHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *chunkScoreHeap) Push(x any)        { *h = append(*h, x.(ChunkScore)) }
 func (h *chunkScoreHeap) Pop() any {
 	old := *h
 	n := len(old)
@@ -739,10 +739,7 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 	if err != nil {
 		return nil, fmt.Errorf("scan EV records: %w", err)
 	}
-	tagValues, err := l.db.store.ScanVRecordTvids()
-	if err != nil {
-		return nil, fmt.Errorf("scan V record tvids: %w", err)
-	}
+	tagValues := l.db.store.TvidMap().Snapshot()
 
 	type scored struct {
 		tvid  uint64
@@ -818,10 +815,7 @@ func (l *Librarian) BatchEmbed() error {
 	// Resolve tvids to text for embedding
 	var tvidMap map[uint64]TagAlt
 	if len(missingTvids) > 0 {
-		tvidMap, err = l.db.store.ScanVRecordTvids()
-		if err != nil {
-			return fmt.Errorf("scan V record tvids: %w", err)
-		}
+		tvidMap = l.db.store.TvidMap().Snapshot()
 	}
 
 	// Batch embed tag names (hyphens → spaces)

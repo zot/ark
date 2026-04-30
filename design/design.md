@@ -137,6 +137,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PubSub.md → `pubsub.go`
 - [x] crc-EventScheduler.md → `scheduler.go`
 - [x] crc-TmpTagStore.md → `tmp_tag_store.go`
+- [x] crc-TvidMap.md → `tvid_map.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -169,6 +170,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-pdf-chunk-retrieval.md → `pdfchunker.go`, `store.go`
 - [x] seq-embed-validate.md → `cmd/ark/main.go`, `store.go`
 - [x] seq-tmp-tag-overlay.md → `db.go`, `store.go`, `tmp_tag_store.go`, `indexer.go`
+- [x] seq-tvid-overlay.md → `tvid_map.go`, `store.go`, `tmp_tag_store.go`, `db.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -399,4 +401,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T44: R1031 retired (ack status embedded in day buckets no longer needed (obsolescence marker for R912))
 - T45: R1032 retired (dayBucketsFromLogFile no longer needed (obsolescence marker for R1019))
 - T46: R1042 retired (@ark-event-fired: log entries no longer needed for gap detection (obsolescence marker for R870))
-- [ ] I1: R1951 (shared tvid map) deferred — depends on subpoint 3 (in-memory tvid map). Until subpoint 3 lands, TmpTagStore stores tag values directly without tvids; the unified resolver shape ships when subpoint 3 introduces it.
+- [x] I1: R1951 (shared tvid map) — to be resolved when crc-TvidMap.md lands. Subpoint 3 specifies the shared resolver (`specs/tvid-map-overlay.md`, R1953–R1969); TmpTagStore moves from `(tag, value)` strings to tvids in the same change.

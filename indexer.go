@@ -222,7 +222,9 @@ func (idx *Indexer) RemoveFile(path string) error {
 	}
 	fileid := status.FileID
 
-	if err := idx.fts.RemoveFileWithCallback(path, idx.removeCallback(fileid)); err != nil {
+	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		return idx.fts.RemoveFileWithCallback(path, idx.removeCallback(fileid, tt))
+	}); err != nil {
 		return fmt.Errorf("fts remove %s: %w", path, err)
 	}
 	// EC/EF cleanup runs inside the removeCallback above (R1850, R1852, R1853, R1923).
@@ -241,7 +243,9 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 	if err != nil {
 		return fmt.Errorf("file info %d: %w", fileid, err)
 	}
-	if err := idx.fts.RemoveFileWithCallback(info.Names[0], idx.removeCallback(fileid)); err != nil {
+	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		return idx.fts.RemoveFileWithCallback(info.Names[0], idx.removeCallback(fileid, tt))
+	}); err != nil {
 		return fmt.Errorf("fts remove %d: %w", fileid, err)
 	}
 	// EC/EF cleanup is driven by the removeCallback above (R1923).
@@ -254,8 +258,10 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 }
 
 // removeCallback returns a RemoveCallback that cleans up orphaned EC records
-// and the EF centroid inside the same LMDB transaction. R1852, R1853
-func (idx *Indexer) removeCallback(fileID uint64) microfts2.RemoveCallback {
+// and the EF centroid inside the same LMDB transaction. The TvidTxn
+// receives F/V/T removals; its caller commits or aborts based on the
+// surrounding RemoveFileWithCallback result. R1852, R1853, R1963
+func (idx *Indexer) removeCallback(fileID uint64, tt *TvidTxn) microfts2.RemoveCallback {
 	if idx.store == nil {
 		return nil
 	}
@@ -265,7 +271,7 @@ func (idx *Indexer) removeCallback(fileID uint64) microfts2.RemoveCallback {
 				return err
 			}
 			// R1899, R1900: drop F/V/T contributions for the orphaned chunkid.
-			if err := idx.store.RemoveTagValuesInTxn(txn, id); err != nil {
+			if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
 				return err
 			}
 		}
@@ -274,8 +280,10 @@ func (idx *Indexer) removeCallback(fileID uint64) microfts2.RemoveCallback {
 }
 
 // reindexCallback returns a ReindexCallback that cleans up orphaned EC records
-// and the EF centroid inside the same LMDB transaction. R1849, R1852, R1899
-func (idx *Indexer) reindexCallback(fileID uint64) microfts2.ReindexCallback {
+// and the EF centroid inside the same LMDB transaction. The TvidTxn
+// receives F/V/T removals; its caller commits or aborts based on the
+// surrounding ReindexWithCallback result. R1849, R1852, R1899, R1963
+func (idx *Indexer) reindexCallback(fileID uint64, tt *TvidTxn) microfts2.ReindexCallback {
 	if idx.store == nil {
 		return nil
 	}
@@ -285,7 +293,7 @@ func (idx *Indexer) reindexCallback(fileID uint64) microfts2.ReindexCallback {
 				return err
 			}
 			// R1899, R1900: drop F/V/T contributions for the orphaned chunkid.
-			if err := idx.store.RemoveTagValuesInTxn(txn, id); err != nil {
+			if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
 				return err
 			}
 		}
@@ -402,11 +410,14 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
 	acc := chunkAccumulator{strategy: prep.strategy}
-	reindexCb := idx.reindexCallback(prep.oldID)
-	fileid, err := idx.fts.ReindexWithCallback(prep.path, prep.strategy, reindexCb,
-		microfts2.WithChunkCallback(acc.callback),
-		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
-	if err != nil {
+	var fileid uint64
+	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		var err error
+		fileid, err = idx.fts.ReindexWithCallback(prep.path, prep.strategy, idx.reindexCallback(prep.oldID, tt),
+			microfts2.WithChunkCallback(acc.callback),
+			microfts2.WithIndexedChunkCallback(acc.indexedCallback))
+		return err
+	}); err != nil {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
 	}
 

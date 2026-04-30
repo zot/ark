@@ -40,6 +40,11 @@ type Store struct {
 	// from MaxUint64).
 	// CRC: crc-Store.md | R1946, R1947
 	tmp *TmpTagStore
+	// tvids is the shared tvid → (tag, value) resolver. Loaded once
+	// from V records during DB.Open via LoadTvidMap; maintained by
+	// TvidTxn during indexing writes.
+	// CRC: crc-Store.md | R1953, R1958
+	tvids *TvidMap
 }
 
 // SetTmpTagStore wires the in-memory tag overlay. Called by DB after
@@ -47,6 +52,19 @@ type Store struct {
 // CRC: crc-Store.md | R1941, R1946
 func (s *Store) SetTmpTagStore(tmp *TmpTagStore) {
 	s.tmp = tmp
+}
+
+// TvidMap returns the resolver. Always non-nil after OpenStore.
+// CRC: crc-Store.md | R1953
+func (s *Store) TvidMap() *TvidMap {
+	return s.tvids
+}
+
+// LoadTvidMap performs the one-time V-prefix scan that populates the
+// resolver with OriginPersistent entries. Called by DB.Open after the
+// tag-store schema check passes. CRC: crc-Store.md | R1958
+func (s *Store) LoadTvidMap() error {
+	return s.tvids.LoadFromStore(s)
 }
 
 // SetChunkResolver wires both directions of the chunkID↔fileID resolver.
@@ -162,7 +180,7 @@ func OpenStore(env *lmdb.Env) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open ark subdatabase: %w", err)
 	}
-	return &Store{env: env, dbi: dbi}, nil
+	return &Store{env: env, dbi: dbi, tvids: NewTvidMap()}, nil
 }
 
 // AddMissing records a missing file.
@@ -854,19 +872,6 @@ type TagValueCount struct {
 	Count int    `json:"count"`
 }
 
-// tagValueScanKey builds a V record scan prefix: V[tagname]\x00[value]\x00
-// Used for prefix scan to find the one record with tvid appended.
-// CRC: crc-Store.md | R1309
-func tagValueScanKey(tag, value string) []byte {
-	key := make([]byte, 1+len(tag)+1+len(value)+1)
-	key[0] = byte(prefixTagValue)
-	copy(key[1:], tag)
-	key[1+len(tag)] = 0
-	copy(key[2+len(tag):], value)
-	key[2+len(tag)+len(value)] = 0
-	return key
-}
-
 // tagValueFullKey builds a V record key with tvid: V[tagname]\x00[value]\x00[tvid varint]
 // CRC: crc-Store.md | R1281
 func tagValueFullKey(tag, value string, tvid uint64) []byte {
@@ -992,14 +997,21 @@ func (s *Store) UpdateTagValues(chunkTags []ChunkTagValues) error {
 	if len(persistent) == 0 {
 		return nil
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	tt := s.tvids.Begin()
+	err := s.env.Update(func(txn *lmdb.Txn) error {
 		for _, ct := range persistent {
-			if err := s.writeChunkTagValuesInTxn(txn, ct.ChunkID, ct.Values); err != nil {
+			if err := s.writeChunkTagValuesInTxn(txn, tt, ct.ChunkID, ct.Values); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		tt.Abort()
+		return err
+	}
+	tt.Commit()
+	return nil
 }
 
 // partitionChunkTags splits chunk-tag groups by origin: LMDB-bound
@@ -1038,14 +1050,21 @@ func (s *Store) AppendTagValues(chunkTags []ChunkTagValues) error {
 	if len(persistent) == 0 {
 		return nil
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	tt := s.tvids.Begin()
+	err := s.env.Update(func(txn *lmdb.Txn) error {
 		for _, ct := range persistent {
-			if err := s.writeChunkTagValuesInTxn(txn, ct.ChunkID, ct.Values); err != nil {
+			if err := s.writeChunkTagValuesInTxn(txn, tt, ct.ChunkID, ct.Values); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		tt.Abort()
+		return err
+	}
+	tt.Commit()
+	return nil
 }
 
 // RemoveTagValues drops all F/V/T contributions of a chunkid. Used for
@@ -1060,9 +1079,16 @@ func (s *Store) RemoveTagValues(chunkID uint64) error {
 		}
 		return nil
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return s.removeChunkIDInTxn(txn, chunkID)
+	tt := s.tvids.Begin()
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return s.removeChunkIDInTxn(txn, tt, chunkID)
 	})
+	if err != nil {
+		tt.Abort()
+		return err
+	}
+	tt.Commit()
+	return nil
 }
 
 // RemoveFileTagValues clears every tag entry for a fileid. Overlay
@@ -1076,17 +1102,38 @@ func (s *Store) RemoveFileTagValues(fileID uint64) {
 	}
 }
 
-// RemoveTagValuesInTxn is the txn-aware variant for orphan callbacks
-// that run inside microfts2's transaction. CRC: crc-Store.md | R1899
-func (s *Store) RemoveTagValuesInTxn(txn *lmdb.Txn, chunkID uint64) error {
-	return s.removeChunkIDInTxn(txn, chunkID)
+// RemoveTagValuesInTxn drops a chunk's V/F/T contributions using a
+// caller-supplied TvidTxn. The caller is responsible for committing
+// the TvidTxn after microfts2's surrounding env.Update returns success,
+// or aborting it on error — this keeps the in-memory tvid map
+// consistent with LMDB even if microfts2's commit fails.
+// CRC: crc-Store.md | R1899, R1962, R1963
+func (s *Store) RemoveTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) error {
+	return s.removeChunkIDInTxn(txn, tt, chunkID)
+}
+
+// WithTvidTxn runs fn under a fresh write-txn-scoped tvid overlay,
+// committing on nil error and aborting otherwise. Used to wrap
+// microfts2 callback-bearing operations whose own commit/abort governs
+// whether the in-memory tvid map should track their work.
+// CRC: crc-Store.md | R1959, R1962
+func (s *Store) WithTvidTxn(fn func(*TvidTxn) error) error {
+	tt := s.tvids.Begin()
+	if err := fn(tt); err != nil {
+		tt.Abort()
+		return err
+	}
+	tt.Commit()
+	return nil
 }
 
 // writeChunkTagValuesInTxn writes F+V records for one chunk's values.
 // Groups values by tag, allocates/reuses tvids, updates V records,
 // writes F[chunkID][tag] = count + tvids, increments T for new pairs.
-// CRC: crc-Store.md | R1874, R1875, R1876
-func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, chunkID uint64, values []TagValue) error {
+// Tvid registrations are recorded in the supplied TvidTxn; the caller
+// commits or aborts to publish them to the live TvidMap.
+// CRC: crc-Store.md | R1874, R1875, R1876, R1959, R1963
+func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64, values []TagValue) error {
 	// Group values by tag
 	perTag := make(map[string][]TagValue)
 	for _, tv := range values {
@@ -1117,7 +1164,7 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, chunkID uint64, values [
 				count++
 				continue
 			}
-			tvid, err := s.addChunkIDToVRecord(txn, tv.Tag, tv.Value, chunkID)
+			tvid, err := s.addChunkIDToVRecord(txn, tt, tv.Tag, tv.Value, chunkID)
 			if err != nil {
 				return err
 			}
@@ -1146,40 +1193,43 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, chunkID uint64, values [
 }
 
 // addChunkIDToVRecord adds chunkID to V[tag][value] (allocating tvid for
-// new (tag, value) pairs). Returns the tvid.
-// CRC: crc-Store.md | R1873, R1281
-func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tag, value string, chunkID uint64) (uint64, error) {
-	fullKey, existing, tvid, err := s.findVRecord(txn, tag, value)
-	if err != nil {
-		return 0, err
-	}
-	if fullKey == nil {
-		// New (tag, value) — allocate tvid
-		tvid, err = s.allocIDInTxn(txn, IFieldNextTvid)
-		if err != nil {
-			return 0, fmt.Errorf("alloc tvid: %w", err)
-		}
-		fullKey = tagValueFullKey(tag, value, tvid)
-		blob := encodeVarint(nil, chunkID)
-		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+// new (tag, value) pairs). Uses TvidTxn.Lookup to find an existing tvid
+// without scanning the V prefix; falls back to allocation when none
+// exists. Returns the tvid. CRC: crc-Store.md | R1873, R1281, R1955, R1963
+func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value string, chunkID uint64) (uint64, error) {
+	if tvid, ok := tt.Lookup(tag, value); ok {
+		fullKey := tagValueFullKey(tag, value, tvid)
+		existing, err := txn.Get(s.dbi, fullKey)
+		if err != nil && !lmdb.IsNotFound(err) {
 			return 0, err
+		}
+		if !slices.Contains(decodeVarints(existing), chunkID) {
+			blob := encodeVarint(bytes.Clone(existing), chunkID)
+			if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+				return 0, err
+			}
 		}
 		return tvid, nil
 	}
-	// Existing record — add chunkID if not present
-	if !slices.Contains(decodeVarints(existing), chunkID) {
-		blob := encodeVarint(bytes.Clone(existing), chunkID)
-		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
-			return 0, err
-		}
+	tvid, err := s.allocIDInTxn(txn, IFieldNextTvid)
+	if err != nil {
+		return 0, fmt.Errorf("alloc tvid: %w", err)
 	}
+	fullKey := tagValueFullKey(tag, value, tvid)
+	blob := encodeVarint(nil, chunkID)
+	if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+		return 0, err
+	}
+	tt.Add(tvid, tag, value, OriginPersistent)
 	return tvid, nil
 }
 
 // removeChunkIDInTxn drops F records for a chunkid, decrements T totals
 // for each (chunkID, tag) pair, and removes the chunkid from V records
-// identified by the F-record tvid trail. CRC: crc-Store.md | R1900
-func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, chunkID uint64) error {
+// identified by the F-record tvid trail. When a V record is fully
+// emptied, its tvid is recorded in the TvidTxn for removal from the
+// live map on commit. CRC: crc-Store.md | R1900, R1963
+func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) error {
 	fPrefix := []byte{byte(prefixTagFile)}
 	fPrefix = encodeVarint(fPrefix, chunkID)
 
@@ -1243,7 +1293,11 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, chunkID uint64) error {
 				return nil
 			}
 			if len(newV) == 0 {
-				return cur.Del(0)
+				if err := cur.Del(0); err != nil {
+					return err
+				}
+				tt.Remove(tvid)
+				return nil
 			}
 			return txn.Put(s.dbi, k, newV, 0)
 		}); err != nil {
@@ -1279,23 +1333,28 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 	return results, err
 }
 
-// TagValueFiles returns fileids for a specific (tag, value) pair.
-// Uses prefix scan since V key includes tvid suffix.
-// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110, R1309
+// TagValueFiles returns chunkids for a specific (tag, value) pair.
+// Resolves the tvid via TvidMap.Lookup and reads the V record by exact
+// key — no prefix scan.
+// CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110, R1309, R1955
 func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
-	scanKey := tagValueScanKey(tag, value)
 	var ids []uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, _, v []byte) error {
+	if tvid, ok := s.tvids.Lookup(tag, value); ok {
+		fullKey := tagValueFullKey(tag, value, tvid)
+		err := s.env.View(func(txn *lmdb.Txn) error {
+			v, err := txn.Get(s.dbi, fullKey)
+			if lmdb.IsNotFound(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
 			ids = decodeVarints(v)
-			return errStopScan
+			return nil
 		})
-	})
-	if err == errStopScan {
-		err = nil
-	}
-	if err != nil {
-		return ids, err
+		if err != nil {
+			return ids, err
+		}
 	}
 	if s.tmp != nil {
 		ids = append(ids, s.tmp.TagValueFiles(tag, value)...)
@@ -1435,22 +1494,6 @@ var errStopScan = fmt.Errorf("stop scan")
 // Values that would push the key past this limit are skipped — long values
 // aren't useful for completion.
 const maxVKeyLen = 511
-
-// findVRecord looks up an existing V record for (tag, value) by prefix scan.
-// Returns the full key, existing value blob, and tvid. If not found, returns nil key and tvid 0.
-func (s *Store) findVRecord(txn *lmdb.Txn, tag, value string) (fullKey, existing []byte, tvid uint64, err error) {
-	scanKey := tagValueScanKey(tag, value)
-	err = scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
-		fullKey = bytes.Clone(k)
-		existing = bytes.Clone(v)
-		_, _, tvid, _ = parseVKey(k)
-		return errStopScan
-	})
-	if err == errStopScan {
-		err = nil
-	}
-	return
-}
 
 // --- Day-bucket operations (scheduling) ---
 
@@ -1611,22 +1654,6 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 }
 
 // --- Tag Value ID allocation (R1280-R1284) ---
-
-// AllocTagValueID atomically increments and returns the next tag-value-id.
-// CRC: crc-Store.md | R1280, R1282, R1536, R1572
-func (s *Store) AllocTagValueID() (uint64, error) {
-	return s.allocID(IFieldNextTvid)
-}
-
-func (s *Store) allocID(iFieldName string) (uint64, error) {
-	var id uint64
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		var err error
-		id, err = s.allocIDInTxn(txn, iFieldName)
-		return err
-	})
-	return id, err
-}
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
 func (s *Store) allocIDInTxn(txn *lmdb.Txn, iFieldName string) (uint64, error) {
@@ -1807,9 +1834,17 @@ func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 	return missing, err
 }
 
-// ScanVRecordTvids scans all V records and returns tvid → {tag, value} mapping.
-// CRC: crc-Store.md | R1310
+// ScanVRecordTvids returns the live tvid → (tag, value) mapping. Reads
+// the in-memory TvidMap; the V-record scan only runs once during
+// LoadTvidMap. CRC: crc-Store.md | R1310, R1956
 func (s *Store) ScanVRecordTvids() (map[uint64]TagAlt, error) {
+	return s.tvids.Snapshot(), nil
+}
+
+// scanVRecordTvidsRaw is the persistent V-prefix scan. Called once by
+// TvidMap.LoadFromStore at startup; not used afterwards.
+// CRC: crc-Store.md | R1958
+func (s *Store) scanVRecordTvidsRaw() (map[uint64]TagAlt, error) {
 	result := make(map[uint64]TagAlt)
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagValue)}, func(_ *lmdb.Cursor, k, _ []byte) error {
