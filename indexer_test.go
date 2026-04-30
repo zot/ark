@@ -405,3 +405,116 @@ func TestRefreshFileFallsBackToFullReindex(t *testing.T) {
 		t.Errorf("expected new=1, got %d", m["new"])
 	}
 }
+
+// TestAtIDSectionResolution verifies that @id values land in the
+// chunk produced by the markdown chunker for their containing section
+// — preamble vs heading-scoped — and resolve back to the correct
+// chunkid via Store.TagValueFiles.
+// CRC: crc-Indexer.md | R1970 | R1971 | R1972 | R1973
+func TestAtIDSectionResolution(t *testing.T) {
+	idx, dir := testIndexer(t)
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const preambleUUID = "preamble-9b3a1f2c"
+	const sectionAUUID = "section-a-7d4e0f5b"
+	content := "@id: " + preambleUUID + "\n" +
+		"\n" +
+		"Preamble body line.\n" +
+		"\n" +
+		"## Section A\n" +
+		"\n" +
+		"@id: " + sectionAUUID + "\n" +
+		"\n" +
+		"Section A body.\n" +
+		"\n" +
+		"## Section B\n" +
+		"\n" +
+		"Section B body — no id.\n"
+	fp := writeFile(t, dir, "doc.md", content)
+
+	fileID, err := idx.AddFile(fp, "markdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.store.LoadTvidMap()
+
+	preChunks, err := idx.store.TagValueFiles("id", preambleUUID)
+	if err != nil || len(preChunks) != 1 {
+		t.Fatalf("preamble id: want 1 chunk, got %d (err=%v)", len(preChunks), err)
+	}
+	secChunks, err := idx.store.TagValueFiles("id", sectionAUUID)
+	if err != nil || len(secChunks) != 1 {
+		t.Fatalf("section id: want 1 chunk, got %d (err=%v)", len(secChunks), err)
+	}
+	if preChunks[0] == secChunks[0] {
+		t.Fatalf("preamble and section ids resolve to same chunk %d", preChunks[0])
+	}
+
+	info, err := idx.fts.FileInfoByID(fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkSet := make(map[uint64]bool, len(info.Chunks))
+	for _, c := range info.Chunks {
+		chunkSet[c.ChunkID] = true
+	}
+	if !chunkSet[preChunks[0]] || !chunkSet[secChunks[0]] {
+		t.Errorf("@id chunkids do not belong to fileid %d (chunks=%v, pre=%d, sec=%d)",
+			fileID, chunkSet, preChunks[0], secChunks[0])
+	}
+}
+
+// TestAtIDTmpResolution confirms @id declared in tmp:// content
+// resolves through Store.TagValueFiles via the unified read path.
+// CRC: crc-Indexer.md | R1975
+func TestAtIDTmpResolution(t *testing.T) {
+	idx, _ := testIndexer(t)
+	tmp := NewTmpTagStore(idx.store.TvidMap())
+	idx.store.SetTmpTagStore(tmp)
+
+	const uuid = "tmp-id-cafef00d"
+	const fileID = uint64(0xFFFFFFFFFFFFFFFE)
+	const chunkID = uint64(0xFFFFFFFFFFFFFFF0)
+	if err := idx.store.UpdateTagValues([]ChunkTagValues{{
+		ChunkID: chunkID, FileID: fileID,
+		Values: []TagValue{{Tag: "id", Value: uuid}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, err := idx.store.TagValueFiles("id", uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 || chunks[0] != chunkID {
+		t.Errorf("tmp:// id: want [%x], got %x", chunkID, chunks)
+	}
+}
+
+// TestAtIDDuplicateUUIDReturnsAll confirms the index does not enforce
+// uniqueness — multiple chunks with the same @id all surface.
+// CRC: crc-Indexer.md | R1974
+func TestAtIDDuplicateUUIDReturnsAll(t *testing.T) {
+	idx, dir := testIndexer(t)
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const uuid = "shared-deadbeef"
+	content := "## A\n\n@id: " + uuid + "\n\n## B\n\n@id: " + uuid + "\n"
+	fp := writeFile(t, dir, "dup.md", content)
+	if _, err := idx.AddFile(fp, "markdown"); err != nil {
+		t.Fatal(err)
+	}
+	idx.store.LoadTvidMap()
+
+	chunks, err := idx.store.TagValueFiles("id", uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 2 {
+		t.Errorf("duplicate UUID: want 2 chunks, got %d", len(chunks))
+	}
+}

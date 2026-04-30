@@ -3194,3 +3194,13 @@ implementation, not a separate format break.
 
 - **R1968:** No persistence beyond V records. Server restart triggers `LoadTvidMap` again. No schema marker, no version check, no `ark rebuild` interaction.
 - **R1969:** Crash safety: a process death mid-write rolls back the LMDB transaction. The next startup reloads from V records. Overlay entries from an aborted `TvidTxn` never enter the live map because `Commit` was never called.
+
+## Feature: @id indexing
+**Source:** specs/at-id.md
+
+- **R1970:** `@id: UUID` extracts and indexes as a regular tag through the existing `ExtractTagValues` pipeline. No special record type — V/F/T records use the same shape as any other tag.
+- **R1971:** The chunk that contains the `@id:` declaration *is* the resolved target. No separate section-anchor concept; the chunker's granularity (markdown heading, lines window, JSONL message, PDF block, etc.) determines the resolved scope.
+- **R1972:** Markdown preamble (content before the first heading) resolves to the file's first chunk. An `@id:` in the preamble identifies the whole leading section. An `@id:` under a heading identifies that heading's chunk.
+- **R1973:** Resolution chain: `TvidMap.Lookup("id", UUID)` → tvid; `Store.TagValueFiles("id", UUID)` → chunkids; microfts2 `CRecord.FileIDs` → fileid; `FileInfoByID` → path + chunk Location. Each leg already exists; no new code beyond consumers.
+- **R1974:** Multiple chunks with the same UUID resolve to all matching chunks. The index returns the full list; callers choose by policy (all, first, error). The index does not enforce UUID uniqueness — duplicates are an authoring concern.
+- **R1975:** `tmp://` content participates in `@id` indexing via the unified read path. `Store.TagValueFiles` unions persistent and overlay results, so a UUID declared in `tmp://` content resolves alongside disk content for the server's lifetime.
