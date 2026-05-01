@@ -368,6 +368,29 @@ func (t *TmpTagStore) ChunksForFile(fileID uint64) []uint64 {
 	return out
 }
 
+// TagsForChunk returns inline (tag, value) pairs present at an overlay
+// chunkID. Mirrors Store.TagsForChunk for tmp:// content.
+// CRC: crc-TmpTagStore.md | R2080
+func (t *TmpTagStore) TagsForChunk(chunkID uint64) []TagValue {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	entry, ok := t.chunks[chunkID]
+	if !ok {
+		return nil
+	}
+	var out []TagValue
+	for tag, tvids := range entry.tvids {
+		for _, tvid := range tvids {
+			_, value, ok := t.tvids.Resolve(tvid)
+			if !ok {
+				continue
+			}
+			out = append(out, TagValue{Tag: tag, Value: value})
+		}
+	}
+	return out
+}
+
 // HasFile returns true if any chunkids are tracked for the fileid.
 // CRC: crc-TmpTagStore.md
 func (t *TmpTagStore) HasFile(fileID uint64) bool {

@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079
 
 Owns the in-memory state and orchestration for `@ext` routing.
 Six core maps maintained alongside DB X-record writes; canonical
@@ -127,6 +127,15 @@ sources index, dropped as overlay items disappear.
   --overlay --clear`. (R2030, R2031)
 - AddOverlayError(severity, message): append externally-supplied
   entry. Used by `ark errors --overlay --add`. (R2030, R2031)
+- ExtRoutingsForTargetChunk(targetChunkID, db) []IncomingExtRouting:
+  per-target render lookup. For each tvid_ext in
+  `chunkToTargets[targetChunkID]`, returns the source chunkid, source
+  file path, target anchor (currently always empty — anchored target
+  forms are deferred), and the routed (tag, value) pairs. Branches
+  on `bothPersistent` to read routed tvids from X records (LMDB)
+  vs `overlayRoutings`. Self-contained — opens its own read txn via
+  `db.store.env.View`. Used by Server.enrichContent to emit
+  `<ark-ext-tags>` blocks. (R2065, R2073, R2079)
 - AppendIsDegenerate: append-only file changes use ReresolveOnReindex
   unchanged — the diff is empty for unchanged chunks; Adds fire only
   when newly-resolvable anchors land in the appended content; Removes
@@ -141,6 +150,17 @@ sources index, dropped as overlay items disappear.
 - SourceFileID: uint64 (zero if externally added)
 - Severity: string ("info" or "warn")
 - Message: string
+
+### IncomingExtRouting (R2065, R2073, R2079)
+- TvidExt: uint64 — the @ext tvid that produced this routing
+- SourceChunkID: uint64 — chunk where the @ext declaration lives
+- SourceFilePath: string — path of the file containing the source
+  chunk (drives `<ark-tag externalFile="...">`)
+- TargetAnchor: string — anchor portion of the target spec
+  (post-`:` text); always "" for v1 because anchored target forms
+  are not yet resolvable. Drives `<ark-tag externalTarget="...">`
+- Routed: []TagValue — the (tag, value) pairs the ext declaration
+  contributed at this target chunk
 
 ## Collaborators
 - DB: ResolveExtTarget for spec → chunkid resolution; ParseExtTarget

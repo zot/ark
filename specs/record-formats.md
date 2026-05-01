@@ -22,7 +22,8 @@ A single LMDB environment hosts two named subdatabases:
 ## Prefix Inventory
 
 Every key starts with a one- or two-byte prefix that identifies the
-record class.
+record class. `ark status -db` shows these records so when we add or
+change them, we need to update the CLI code so it's up-to-date.
 
 | Prefix | Record class        | Key shape                                         | Value                                   |
 |--------|---------------------|---------------------------------------------------|-----------------------------------------|

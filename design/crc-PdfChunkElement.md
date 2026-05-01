@@ -1,5 +1,5 @@
 # PdfChunkElement
-**Requirements:** R1666, R1667, R1668, R1677, R1678, R1679, R1680, R1681, R1691, R1692, R1693, R1694, R1695, R1696, R1697, R1698, R1699, R1700, R1701, R1702, R1709, R1710, R1711, R1712, R1713, R1714, R1715, R1716, R1717, R1718, R1741, R1742, R1743, R1744, R1745, R1746, R1747, R1748, R1749, R1750, R1751, R1752, R1753, R1754, R1755, R1756, R1757, R1761, R1762, R1763, R1764, R1765, R1766, R1767, R1768, R1769
+**Requirements:** R1666, R1667, R1668, R1677, R1678, R1679, R1680, R1681, R1691, R1692, R1693, R1694, R1695, R1696, R1697, R1698, R1699, R1700, R1701, R1702, R1709, R1710, R1711, R1712, R1713, R1714, R1715, R1716, R1717, R1718, R1741, R1742, R1743, R1744, R1745, R1746, R1747, R1748, R1749, R1750, R1751, R1752, R1753, R1754, R1755, R1756, R1757, R1761, R1762, R1763, R1764, R1765, R1766, R1767, R1768, R1769, R2076, R2082
 
 Custom element (`<pdf-chunk>`) that renders one PDF chunk's page
 region as pixels. PDF.js rasterizes the page in native fidelity;
@@ -83,6 +83,12 @@ shadow DOM — inherits host theme CSS.
 - renderErrorFallback(state): when src fetch fails, page is out
   of range, or rect is invalid, show fallback children (R1691,
   R1692, R1693)
+- positionOverlayChildren(): position `<ark-heading rect="...">`
+  and `<ark-ext-tags>` children absolutely above the canvas at
+  rect-derived CSS coordinates — same scheme as `<ark-tag>` hit
+  regions, but the elements remain visible (heading marker,
+  tag-icon indicator) rather than transparent. Re-run on
+  scaleBand change (R2076, R2082).
 
 ## Collaborators
 - PDF.js (`pdfjs-dist`): document parse and page render APIs;

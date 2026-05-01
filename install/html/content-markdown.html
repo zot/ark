@@ -554,6 +554,8 @@
 await import('/ark-search-element.js{{.BundleHash}}');
 // R1709: register <pdf-chunk> so PDF search results render as page regions.
 await import('/pdf-chunk-element.js{{.BundleHash}}');
+// R2032-R2050, R2065-R2072: tag-overview sidebar + <ark-ext-tags> element.
+await import('/tag-overview.js{{.BundleHash}}');
 
 const path = location.pathname.replace(/^\/content/, '');
 const btn = document.getElementById('toggle-btn');

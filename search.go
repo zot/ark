@@ -1859,12 +1859,17 @@ func renderPdfPreview(attrs []microfts2.Pair, path string, pdfZoom float64) (str
 // CRC: crc-Server.md | R1739, R1740, R1982
 func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) string {
 	type pageAgg struct {
-		page        string
-		pageSize    string
-		tagRects    []string
-		tagSegments []string
-		salvage     []microfts2.ChunkResult // only used when pageSize stays empty
+		page          string
+		pageSize      string
+		tagRects      []string
+		tagSegments   []string
+		headingRects  []string                // R2076: per-heading rect for <ark-heading> overlays
+		extTagsBlocks []string                // R2065, R2073, R2082: per-chunk <ark-ext-tags> with rect
+		salvage       []microfts2.ChunkResult // only used when pageSize stays empty
 	}
+	// R2065, R2079: chunkIDs in chunk order so we can look up ext routings
+	// per chunk via ChunkResult.Index.
+	chunkIDs := db.ChunkIDsForPath(path)
 	var order []string
 	pages := make(map[string]*pageAgg)
 	for _, ch := range chunks {
@@ -1887,8 +1892,20 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) 
 			ts, _ := microfts2.PairGet(ch.Attrs, "tag_segments")
 			agg.tagSegments = append(agg.tagSegments, string(ts))
 		}
-		if _, hasRect := microfts2.PairGet(ch.Attrs, "rect"); !hasRect {
+		rect, hasRect := microfts2.PairGet(ch.Attrs, "rect")
+		if !hasRect {
 			agg.salvage = append(agg.salvage, ch)
+		}
+		// R2076: PDFChunker emits font_size only for Heading-kind blocks.
+		if _, isHeading := microfts2.PairGet(ch.Attrs, "font_size"); isHeading && hasRect {
+			agg.headingRects = append(agg.headingRects, string(rect))
+		}
+		// R2065, R2073, R2079, R2082: per-chunk ext-tags overlay.
+		if hasRect && ch.Index < len(chunkIDs) {
+			routings := db.extmap.ExtRoutingsForTargetChunk(chunkIDs[ch.Index], db)
+			if block := renderExtTagsBlock(routings, string(rect)); block != "" {
+				agg.extTagsBlocks = append(agg.extTagsBlocks, block)
+			}
 		}
 	}
 
@@ -1918,6 +1935,17 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) 
 		buf.WriteString(template.HTMLEscapeString(agg.pageSize))
 		buf.WriteString(`">`)
 		writePdfTagChildren(&buf, strings.Join(agg.tagRects, ";"), strings.Join(agg.tagSegments, ";"))
+		// R2076: <ark-heading> overlays for Heading-kind blocks.
+		for _, hr := range agg.headingRects {
+			buf.WriteString(`<ark-heading rect="`)
+			buf.WriteString(template.HTMLEscapeString(hr))
+			buf.WriteString(`"></ark-heading>`)
+		}
+		// R2065, R2073, R2082: <ark-ext-tags> overlays per chunk that
+		// has incoming ext routings.
+		for _, etb := range agg.extTagsBlocks {
+			buf.WriteString(etb)
+		}
 		buf.WriteString(`</pdf-chunk>` + "\n")
 	}
 	return buf.String()

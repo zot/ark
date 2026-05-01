@@ -1,5 +1,5 @@
 # PDFChunker
-**Requirements:** R1630, R1633, R1635, R1637, R1638, R1639, R1640, R1641, R1642, R1643, R1665, R1670, R1671, R1672, R1673, R1675, R1676, R1719, R1720, R1721, R1722, R1724, R1725, R1726, R1727, R1728, R1729, R1730, R1731, R1732, R1733, R1734, R1735, R1736, R1737, R1738, R1758, R1759, R1760
+**Requirements:** R1630, R1633, R1635, R1637, R1638, R1639, R1640, R1641, R1642, R1643, R1665, R1670, R1671, R1672, R1673, R1675, R1676, R1719, R1720, R1721, R1722, R1724, R1725, R1726, R1727, R1728, R1729, R1730, R1731, R1732, R1733, R1734, R1735, R1736, R1737, R1738, R1758, R1759, R1760, R2076
 
 Uses `github.com/zot/pdftext` to open a PDF, iterate pages, and
 receive structure-detected `Block`s (Paragraph, Heading, Table,
@@ -27,6 +27,7 @@ re-parse.
 - extractTagRects(block): scan Block.Text (and Block.Caption if non-empty) for ark tag pattern; for each match, union Block.Chars/Block.CaptionChars BBoxes whose byte ranges overlap the match. Emit compact string: `name=value@x,y,w,h;...` (R1735, R1736, R1671, R1672)
 - extractTagSegments(block): parallel to extractTagRects. For each tag match, compute per-segment rects — `@` (byte `[m[0], m[0]+1)`), name (`[m[2], m[3])`), `:` (`[m[3], m[3]+1)`), value (`[m[4], valueEnd)` with trailing ASCII whitespace trimmed). Emit `atRect|nameRect|colonRect|valRect1|valRect2…;nextTag…` (R1758, R1759). Value segment can be multiple rects — one per physical line — computed by charRangeRectsByLine (R1760).
 - charRangeRectsByLine(chars, start, end): iterate Block.Chars in the byte range, group consecutive chars whose baseline Y differs from the running average glyph height by no more than half an average height; each group becomes one union rect. Wrapped values produce multiple rects (R1760).
+- on Heading-kind chunks, the existing `rect` Attr (already populated from `Block.BBox`) is what the server uses to emit `<ark-heading rect="...">` for the tag overview's PDF heading rendering. No new pdftext output is needed — the data is already present (R2076).
 
 ## Collaborators
 - `github.com/zot/pdftext` (Doc, Page, Block, Char): page iteration, structure detection, NFKC-normalized text, per-glyph BBoxes

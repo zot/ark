@@ -1,5 +1,5 @@
 # ArkTagElement
-**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498, R1512, R1668
+**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498, R1512, R1668, R2073, R2074
 
 Custom element (`<ark-tag>`) that renders an interactive tag widget
 in read-only content (goldmark HTML and plain-text `<pre>` blocks).
@@ -15,6 +15,21 @@ No shadow DOM — inherits host theme CSS.
   parent for overlay placement. Ignored by `<ark-tag>` itself;
   standalone behavior (styling, click, dispatch) is unchanged
   (R1668)
+- optional `externalFile` attribute — set when the element is
+  a child of `<ark-ext-tags>`. Path of the source document
+  containing the `@ext:` declaration that produced this tag.
+  Used by the sidebar's external-link tooltip and click target.
+  Inline `<ark-tag>` elements (not in `<ark-ext-tags>`) do not
+  carry this attribute (R2073)
+- optional `externalTarget` attribute — also set only when
+  ext-routed. Anchor part of the original target spec
+  (everything after the `:` in the @ext target). Empty/omitted
+  when the target was a bare path or bare UUID. The target
+  file path is implicit (= the file currently being rendered)
+  and is not duplicated on the element (R2073)
+- `id` attribute — assigned to every `<ark-tag>` (inline and
+  ext-routed) so the sidebar can anchor links to specific tags
+  in the DOM (R2074)
 
 ## Does
 - renders styled tag: CSS `content` generates `@` on `name::before` and `:` on `name::after`; name colored `--term-accent-bright`, value colored `--term-success`, punctuation colored `--term-text`

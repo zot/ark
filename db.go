@@ -1648,6 +1648,7 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 		"T":  "tag-totals",
 		"U":  "unresolved",
 		"V":  "tag-values",
+		"X":  "ext-routings",
 		"E:": "errors",
 		"EV": "tag-value-embeds",
 		"EC": "chunk-embeds",
@@ -1863,6 +1864,45 @@ func (db *DB) AllChunks(path string) []microfts2.ChunkResult {
 		return nil
 	}
 	return chunks
+}
+
+// ChunkIDsForPath returns the path's chunk IDs in chunk order, or
+// nil if the file is not indexed.
+// CRC: crc-DB.md | R2065, R2079
+func (db *DB) ChunkIDsForPath(path string) []uint64 {
+	info, err := db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return nil
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil || len(finfo.Chunks) == 0 {
+		return nil
+	}
+	out := make([]uint64, len(finfo.Chunks))
+	for i, c := range finfo.Chunks {
+		out[i] = c.ChunkID
+	}
+	return out
+}
+
+// ChunkIDByLocation returns the chunk ID for a given range/location
+// string in a file, or 0 if not found.
+// CRC: crc-DB.md | R2065, R2079
+func (db *DB) ChunkIDByLocation(path, loc string) uint64 {
+	info, err := db.fts.CheckFile(path)
+	if err != nil || info.FileID == 0 {
+		return 0
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil {
+		return 0
+	}
+	for _, c := range finfo.Chunks {
+		if c.Location == loc {
+			return c.ChunkID
+		}
+	}
+	return 0
 }
 
 // ChunkSizes returns byte sizes for all chunks of a file from CRecord ContentLen.

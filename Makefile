@@ -10,10 +10,10 @@ GOLLAMA_DIR ?= ../gollama
 
 CACHE_DIR := cache
 
-.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk
+.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk tag-overview
 
 # Default: deps, cache, build+bundle
-all: cache markdown-editor ark-search pdf-chunk build
+all: cache markdown-editor ark-search pdf-chunk tag-overview build
 
 # Build markdown editor JS bundle
 markdown-editor:
@@ -26,6 +26,10 @@ ark-search:
 # Build pdf-chunk element JS bundle + pdfjs worker
 pdf-chunk:
 	@$(MAKE) -C pdf-chunk build
+
+# Build tag-overview JS bundle (sidebar + <ark-ext-tags>)
+tag-overview:
+	@$(MAKE) -C tag-overview build
 
 # Build Go binary and graft cached assets
 build: gollama
@@ -88,6 +92,7 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
 	@if [ -d markdown-editor/dist ]; then cp markdown-editor/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d ark-search/dist ]; then cp ark-search/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d pdf-chunk/dist ]; then cp pdf-chunk/dist/* $(CACHE_DIR)/html/; fi
+	@if [ -d tag-overview/dist ]; then cp tag-overview/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"

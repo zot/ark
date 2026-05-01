@@ -136,6 +136,104 @@ func (m *ExtMap) OverlayTagFiles(tags []string) []TagFileRecord {
 	return out
 }
 
+// IncomingExtRouting is the per-target render shape — one entry per
+// @ext routing landing in a given target chunk. Carries the source
+// metadata (file path, chunk id) and the routed (tag, value) pairs
+// needed by Server.enrichContent to emit the <ark-ext-tags>
+// affordance. Distinct from the storage-shape ExtRouting in store.go,
+// which is just (target_chunkid, []routed_tvid).
+// CRC: crc-ExtMap.md | R2065, R2073, R2079
+type IncomingExtRouting struct {
+	TvidExt        uint64
+	SourceChunkID  uint64
+	SourceFilePath string
+	TargetAnchor   string
+	Routed         []TagValue
+}
+
+// ExtRoutingsForTargetChunk returns every @ext routing whose target is
+// targetChunkID, fully resolved for rendering. Branches on
+// bothPersistent to read routed tvids from X records (LMDB) or from
+// the in-memory overlayRoutings map. Returns nil when no routings
+// target this chunk. TargetAnchor is always "" for v1 — anchored
+// target forms (path:section, UUID:section) aren't yet resolvable, so
+// chunkToTargets only holds bare-target routings.
+// CRC: crc-ExtMap.md | R2065, R2073, R2079
+func (m *ExtMap) ExtRoutingsForTargetChunk(targetChunkID uint64, db *DB) []IncomingExtRouting {
+	type pending struct {
+		tvidExt        uint64
+		sourceChunkID  uint64
+		bothPersistent bool
+		overlayRouted  []uint64
+	}
+	targetOverlay := IsOverlayID(targetChunkID)
+
+	m.mu.RLock()
+	tvidExts := m.chunkToTargets[targetChunkID]
+	if len(tvidExts) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	pendings := make([]pending, 0, len(tvidExts))
+	for _, te := range tvidExts {
+		srcChunk, ok := m.extSource[te]
+		if !ok {
+			continue
+		}
+		bp := !IsOverlayID(srcChunk) && !targetOverlay
+		var overlayRouted []uint64
+		if !bp {
+			if per := m.overlayRoutings[te][targetChunkID]; len(per) > 0 {
+				overlayRouted = append([]uint64(nil), per...)
+			}
+		}
+		pendings = append(pendings, pending{
+			tvidExt:        te,
+			sourceChunkID:  srcChunk,
+			bothPersistent: bp,
+			overlayRouted:  overlayRouted,
+		})
+	}
+	m.mu.RUnlock()
+	if len(pendings) == 0 {
+		return nil
+	}
+
+	out := make([]IncomingExtRouting, 0, len(pendings))
+	_ = db.store.env.View(func(txn *lmdb.Txn) error {
+		for _, p := range pendings {
+			srcPath := ""
+			if fid, ok := db.chunkFileID(txn, p.sourceChunkID); ok {
+				if path, ok := db.resolveFilePath(fid); ok {
+					srcPath = path
+				}
+			}
+
+			var rtvids []uint64
+			if p.bothPersistent {
+				rtvids, _ = db.store.ReadExtRecord(txn, p.tvidExt, targetChunkID)
+			} else {
+				rtvids = p.overlayRouted
+			}
+			routed := make([]TagValue, 0, len(rtvids))
+			for _, t := range rtvids {
+				if tag, val, ok := db.store.tvids.Resolve(t); ok {
+					routed = append(routed, TagValue{Tag: tag, Value: val})
+				}
+			}
+
+			out = append(out, IncomingExtRouting{
+				TvidExt:        p.tvidExt,
+				SourceChunkID:  p.sourceChunkID,
+				SourceFilePath: srcPath,
+				Routed:         routed,
+			})
+		}
+		return nil
+	})
+	return out
+}
+
 // RecordOverlayError appends an internal diagnostic to the overlay
 // error log. Called by applyIndexExt and applyReresolve when they
 // take overlay-touched branches.

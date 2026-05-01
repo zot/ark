@@ -180,6 +180,14 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-ArkTagElement.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 - [x] crc-PdfChunkElement.md → `pdf-chunk/src/pdf-chunk-element.ts`
 
+### CRC Cards (TypeScript — Tag Overview)
+- [ ] crc-TagOverviewSidebar.md → `tag-overview/src/sidebar.ts`
+- [ ] crc-ArkExtTagsElement.md → `tag-overview/src/ark-ext-tags-element.ts`
+
+### Sequences (Tag Overview)
+- [ ] seq-tag-overview-load.md → `server.go`, `tag-overview/src/sidebar.ts`
+- [ ] seq-tag-overview-click.md → `tag-overview/src/sidebar.ts`, `tag-overview/src/ark-ext-tags-element.ts`
+
 ### Sequences (TypeScript — PDF Chunk Element)
 - [x] seq-pdf-chunk-render.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
 - [x] seq-pdf-slice.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
@@ -410,3 +418,11 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O88: No tests yet for @ext overlay (tmp://) target routing — covers four routing scopes, overlayRoutings/overlayValues lifecycle, lock-flap-free per-target dispatch, TmpTagStore→ExtMap cleanup hook, and the ark errors API. Belongs alongside O86.
 - [ ] O89: ark errors CLI command not yet implemented. ExtMap exposes RecordOverlayError/AddOverlayError/OverlayErrors/ClearOverlayErrors per R2030; CLI surface (PLAN.md V2.5) needs to consume them via dump/clear/add subcommands.
 - [ ] O90: Multi-source tvid_ext edge case predates overlay routing: two source chunks with identical @ext value text share a tvid_ext, so cleanup of one source incorrectly clears the other's contributions from targetToChunk and the overlay maps. Pre-existing — not regressed by overlay work — but visible in overlay flows when persistent and overlay sources happen to write the same @ext line.
+- T47: R2077 retired (pdftext.Block.BBox already provides heading rects; PDFChunker already emits rect in chunk Attrs. No upstream pdftext change needed.)
+- [ ] O91: Tag-overview routing emission regression: fresh @ext routings stopped registering after several restart + cleanup cycles in dev DB. Pristine pre-implementation binary has same behavior — accumulated LMDB state, not code. Workaround: ark rebuild. Investigate if reproducible from clean state.
+- [ ] I2: R2063 R2064 width persistence uses localStorage as Stage B substrate — HostAPI/I-record swap deferred (Go endpoint work needs its own mini-spec pass). Functional persistence works; per-machine instead of per-DB.
+- [ ] I3: R2032-R2064 R2065-R2072 R2081-R2084 tag-overview frontend Rs are referenced in tag-overview/src/tag-overview.ts via range comments rather than per-Rn inline refs. Coverage exists; granularity coarser than minispec validate expects.
+- [ ] O92: Touch peek (R2042, R2044) deferred — desktop hover peek lands; touch tap conflicts with row-click scroll. Needs separate tap target (long-press, peek-toggle icon) or mode-specific hit area.
+- [ ] O93: R2082 PDF body indicator positioning is a stub — server emits <ark-ext-tags rect=...> but the bundle does not yet position the indicator over the <pdf-chunk> canvas at the rect coordinates. Heading-overlay positioning works; ext-tags overlay does not. Needs <pdf-chunk> coordination.
+- [ ] O94: ExtRoutingsForTargetChunk per-chunk LMDB View txn — handleContentView and renderPdfChunksByPage call it inside a per-chunk loop, opening N read txns. Cheap individually; for 100+ chunk files worth batching to one txn per request via an ExtRoutingsForTargetChunks([]uint64, *DB) variant.
+- [ ] O95: No automated tests for tag-overview frontend — verified manually via Playwright across modes, filter, category, resize, peek, autotrack. Vitest/Jest harness for tag-overview.ts plus a Go test for renderExtTagsBlock and assignSidebarIDs would lock in behavior.

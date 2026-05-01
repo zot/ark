@@ -2325,8 +2325,49 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rendered := renderMarkdownForContent(data, path)
-		shell.Content = template.HTML(wrapTagElements(rendered, srv.db))
+		// R2065, R2073, R2079: per-chunk markdown rendering so each chunk
+		// can carry its own <ark-ext-tags> indicator. Single-chunk views
+		// (?range=) render just that chunk; full-file views walk AllChunks.
+		// Falls back to single-blob rendering when the file is not indexed.
+		var buf strings.Builder
+		if isChunk {
+			rendered := wrapTagElements(renderMarkdownForContent(data, path), srv.db)
+			var extBlock string
+			if cid := srv.db.ChunkIDByLocation(path, rangeParam); cid != 0 {
+				extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
+			}
+			buf.WriteString(`<div class="ark-chunk" data-range="`)
+			buf.WriteString(template.HTMLEscapeString(rangeParam))
+			buf.WriteString(`">`)
+			buf.WriteString(extBlock)
+			buf.WriteString(rendered)
+			buf.WriteString("</div>\n")
+		} else {
+			chunks, _ := Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
+				return db.AllChunks(path), nil
+			})
+			if len(chunks) > 0 {
+				chunkIDs := srv.db.ChunkIDsForPath(path)
+				for i, ch := range chunks {
+					rendered := wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
+					var extBlock string
+					if i < len(chunkIDs) {
+						extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(chunkIDs[i], srv.db), "")
+					}
+					buf.WriteString(`<div class="ark-chunk" data-range="`)
+					buf.WriteString(template.HTMLEscapeString(ch.Range))
+					buf.WriteString(`">`)
+					buf.WriteString(extBlock)
+					buf.WriteString(rendered)
+					buf.WriteString("</div>\n")
+				}
+			} else {
+				buf.WriteString(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
+			}
+		}
+		// R2074, R2075: id anchors for sidebar — applied across the
+		// assembled chunked HTML.
+		shell.Content = template.HTML(assignSidebarIDs(buf.String()))
 		tmpl.Execute(w, shell)
 	} else {
 		tmpl, err := srv.loadContentTemplate("content-plain.html")
@@ -2350,22 +2391,30 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// entry from every chunk on that page. Block rects alone would
 			// leave gaps between text regions.
 			if strategy == "pdf" {
-				shell.Content = template.HTML(renderPdfChunksByPage(chunks, path, srv.db))
+				// R2074, R2075, R2076: id anchors for sidebar — applied to
+				// <ark-tag> and <ark-heading> overlays inside <pdf-chunk>.
+				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, srv.db)))
 				tmpl.Execute(w, shell)
 				return
 			}
 			// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
 			// render through goldmark. Other strategies stay pre-wrapped.
 			useMarkdown := strategy == "chat-jsonl"
+			// R2065, R2073, R2079: chunkIDs for per-chunk ext-routing lookup.
+			chunkIDs := srv.db.ChunkIDsForPath(path)
 			var buf strings.Builder
 			prevRole := ""
 			groupOpen := false
-			for _, ch := range chunks {
+			for i, ch := range chunks {
 				var rendered string
 				if useMarkdown {
 					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
 				} else {
 					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), srv.db)
+				}
+				var extBlock string
+				if i < len(chunkIDs) {
+					extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(chunkIDs[i], srv.db), "")
 				}
 				// R1509-R1512: role grouping for chat-jsonl chunks.
 				role, _ := microfts2.PairGet(ch.Attrs, "role")
@@ -2402,6 +2451,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				buf.WriteString(`<div class="ark-chunk" data-range="`)
 				buf.WriteString(template.HTMLEscapeString(ch.Range))
 				buf.WriteString(`">`)
+				buf.WriteString(extBlock)
 				buf.WriteString(rendered)
 				buf.WriteString("</div>\n")
 			}
@@ -2411,7 +2461,10 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				}
 				buf.WriteString("</div>\n")
 			}
-			shell.Content = template.HTML(buf.String())
+			// R2074, R2075: id anchors for sidebar — applied across the
+			// assembled chunked HTML (covers inline <ark-tag> from
+			// wrapTagElements and <ark-tag> children inside <ark-ext-tags>).
+			shell.Content = template.HTML(assignSidebarIDs(buf.String()))
 		} else {
 			// Single chunk or unchunked file — render through goldmark for JSONL,
 			// as <pdf-chunk> for PDF chunks with a rect, plain-text fallback
@@ -2581,6 +2634,74 @@ func renderLinkElement(buf *strings.Builder, value string, db *DB) {
 	buf.WriteString(`<ark-tag class="ark-link-broken"><name>link</name> <value>`)
 	buf.WriteString(value)
 	buf.WriteString(`</value></ark-tag>`)
+}
+
+// renderExtTagsBlock emits the <ark-ext-tags> indicator block for a
+// chunk's incoming ext routings. Each routing contributes one or
+// more <ark-tag> children carrying externalFile and externalTarget.
+// rect is empty for HTML chunks (the element positions itself at the
+// top of its `<div class="ark-chunk">` container) and "X,Y,W,H" for
+// PDF chunks (the element positions absolutely over the `<pdf-chunk>`
+// canvas). Returns "" when routings is empty.
+// CRC: crc-Server.md | R2065, R2073, R2082
+func renderExtTagsBlock(routings []IncomingExtRouting, rect string) string {
+	if len(routings) == 0 {
+		return ""
+	}
+	var buf strings.Builder
+	buf.WriteString(`<ark-ext-tags`)
+	if rect != "" {
+		buf.WriteString(` rect="`)
+		buf.WriteString(template.HTMLEscapeString(rect))
+		buf.WriteString(`"`)
+	}
+	buf.WriteString(`>`)
+	for _, r := range routings {
+		for _, tv := range r.Routed {
+			buf.WriteString(`<ark-tag externalFile="`)
+			buf.WriteString(template.HTMLEscapeString(r.SourceFilePath))
+			buf.WriteString(`" externalTarget="`)
+			buf.WriteString(template.HTMLEscapeString(r.TargetAnchor))
+			buf.WriteString(`"><name>`)
+			buf.WriteString(template.HTMLEscapeString(tv.Tag))
+			buf.WriteString(`</name>`)
+			if tv.Value != "" {
+				buf.WriteString(` <value>`)
+				buf.WriteString(template.HTMLEscapeString(tv.Value))
+				buf.WriteString(`</value>`)
+			}
+			buf.WriteString(`</ark-tag>`)
+		}
+	}
+	buf.WriteString(`</ark-ext-tags>`)
+	return buf.String()
+}
+
+// arkTagOpenRe and headingOpenRe match the open-tag of <ark-tag>,
+// HTML headings (<h1>-<h6>), and <ark-heading> (PDF) for sidebar
+// id-anchor assignment.
+var arkTagOpenRe = regexp.MustCompile(`<ark-tag(\s|>)`)
+var headingOpenRe = regexp.MustCompile(`<(h[1-6]|ark-heading)(\s|>)`)
+
+// assignSidebarIDs adds id attributes to <ark-tag> elements
+// (id="ark-tag-N"), HTML headings, and <ark-heading> (id="ark-heading-N")
+// so the sidebar can DOM-anchor entries. Numbers are sequential within
+// the supplied HTML; the heading counter spans <h1>-<h6> and
+// <ark-heading> together.
+// CRC: crc-Server.md | R2074, R2075, R2076
+func assignSidebarIDs(html string) string {
+	var tagN int
+	html = arkTagOpenRe.ReplaceAllStringFunc(html, func(m string) string {
+		tagN++
+		return fmt.Sprintf(`<ark-tag id="ark-tag-%d"%s`, tagN, m[len("<ark-tag"):])
+	})
+	var hN int
+	html = headingOpenRe.ReplaceAllStringFunc(html, func(m string) string {
+		hN++
+		boundary := strings.IndexAny(m[1:], " \t\n>") + 1
+		return fmt.Sprintf(`<%s id="ark-heading-%d"%s`, m[1:boundary], hN, m[boundary:])
+	})
+	return html
 }
 
 // contentShellData holds the template data for content HTML shells.

@@ -24,14 +24,14 @@ for layouts.)
 
 **ark** (the zettelkasten layer): every prefix listed in
 `record-formats.md` gets its own row — single-byte (M, U, I, T, F,
-D, V) and multi-byte (E:, EV, EC, EF, PC). Multi-byte prefixes are
+D, V, X) and multi-byte (E:, EV, EC, EF, PC). Multi-byte prefixes are
 not collapsed; counting `E` as a combined bucket would make
 `model_mismatch` errors and tag-value embeddings indistinguishable.
 
 `Store.RecordCounts()` returns counts keyed by the full prefix
 string. Prefix detection for each key: known multi-byte prefixes
 (`E:`, `EV`, `EC`, `EF`, `PC`) are matched first; anything else
-falls back to its single-byte prefix.
+(including `X` ext-routings) falls back to its single-byte prefix.
 
 ## Output
 
@@ -41,24 +41,30 @@ purpose label, record count, key bytes, and value bytes.
 
 ```
 db: microfts2
-  C chunks          149277  keys 567.0 KB    vals 95.1 MB
-  F files             4163  keys 12.1 KB     vals 29.6 MB
-  H hashes          149277  keys 4.7 MB      vals 421.2 KB
-  I config              16  keys 264 B       vals 104 B
-  N paths             4163  keys 368.6 KB    vals 373.6 KB
-  T trigrams        134021  keys 523.5 KB    vals 45.3 MB
-  W tokens          307754  keys 1.5 MB      vals 7.9 MB
+  C  chunks            155683  keys 592.0 KB    vals 120.5 MB
+  F  files               5013  keys 14.6 KB     vals 42.8 MB
+  H  hashes            155683  keys 4.9 MB      vals 440.0 KB
+  I  config                17  keys 277 B       vals 104 B
+  N  paths               5013  keys 440.1 KB    vals 446.1 KB
+  T  trigrams          182969  keys 714.7 KB    vals 56.5 MB
+  W  tokens            464687  keys 2.2 MB      vals 10.0 MB
 
 db: ark
-  D tag-defs           101  keys 1.8 KB      vals 9.6 KB
-  F file-tags         7032  keys 117.3 KB    vals 27.5 KB
-  I settings             1  keys 1 B         vals 17 B
-  M missing              0  keys 0 B         vals 0 B
-  T tag-totals         295  keys 2.8 KB      vals 1.2 KB
-  U unresolved        1738  keys 126.2 KB    vals 256.6 KB
-  V tag-values        1247  keys 14.2 KB     vals 8.3 KB
+  D  tag-defs             105  keys 1.8 KB      vals 9.7 KB
+  E: errors                 0  keys 0 B         vals 0 B
+  EC chunk-embeds           0  keys 0 B         vals 0 B
+  EF file-centroids         0  keys 0 B         vals 0 B
+  EV tag-value-embeds       0  keys 0 B         vals 0 B
+  F  file-tags           1973  keys 23.3 KB     vals 11.6 KB
+  I  settings              17  keys 201 B       vals 4.6 KB
+  M  missing                0  keys 0 B         vals 0 B
+  PC page-content         767  keys 3.7 KB      vals 866.4 KB
+  T  tag-totals           170  keys 1.5 KB      vals 680 B
+  U  unresolved          1862  keys 129.2 KB    vals 267.3 KB
+  V  tag-values          1313  keys 83.3 KB     vals 5.8 KB
+  X  ext-routings           0  keys 0 B         vals 0 B
 
-db total: 757838 records, 7.8 MB keys, 178.9 MB vals (186.7 MB data in 405.4 MB map)
+db total: 975272 records, 9.1 MB keys, 231.8 MB vals (240.9 MB data in 489.3 MB map)
 ```
 
 Record types are sorted alphabetically within each subdatabase.

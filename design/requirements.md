@@ -3276,3 +3276,60 @@ implementation, not a separate format break.
 - **R2029:** ExtMap holds an in-memory `overlayErrors []OverlayError` log. Each entry: `{Time, SourceChunkID, SourceFileID, Severity, Message}` where `Severity` is `info` or `warn`. The log is in-memory only and resets on each session.
 - **R2030:** ExtMap exposes `RecordOverlayError(severity, sourceChunkID, sourceFileID, message)` for internal callers (invoked by `applyIndexExt` and `applyReresolve` when they take overlay-affecting branches), `OverlayErrors() []OverlayError` for read snapshots, `ClearOverlayErrors()` to reset, and `AddOverlayError(severity, message)` for externally-supplied entries.
 - **R2031:** The overlay error log is the data source for the `ark errors` CLI command (PLAN.md V2.5) `dump`, `clear`, and `add` operations against the overlay log. Persistent error records are a separate concept and out of scope for this feature.
+
+## Feature: tag overview
+**Source:** specs/tag-overview.md
+
+- **R2032:** Sidebar entries are scoped to the current scroll position through the end of the presented content; when `/content/` serves a slice of a file, the cutoff is the bottom of the slice rather than end-of-file.
+- **R2033:** The sidebar has three modes: collapsed (badge only), abbreviated (entry names only), and full (names + values for tag entries).
+- **R2034:** Clicking the badge cycles modes in order 1 → 2 → 3 → 1 (collapsed → abbreviated → full → collapsed).
+- **R2035:** The badge displays a mode glyph that indicates the current mode (collapsed `▢`, abbreviated `▤`, full `▦`).
+- **R2036:** Each file opens in abbreviated mode. Mode does not persist across files.
+- **R2037:** A file with no headings and no tags shows no badge.
+- **R2038:** In collapsed mode the badge text shows the first entry of the current section followed by a total count (e.g., `# Munsters + 5`).
+- **R2039:** The badge has two visibly separate hit zones: `[mode-glyph N tags]` cycles modes; `[▼]` opens the category-filter dropdown.
+- **R2040:** Heading entries render as the heading text indented per heading level (h1, h2, h3...). Heading rows have no icons; their row click is the only affordance.
+- **R2041:** Tag entries (full mode) display tag name + value, grouped per section under the nearest heading or chunk location. Each tag row carries a search icon (🔍) on the right.
+- **R2042:** Tag entries (abbreviated mode) display tag name only; hover (desktop) or tap (touch) reveals a single entry's value inline without leaving abbreviated mode.
+- **R2043:** Ext entries display a virtual-tag icon (⊕) preceding the tag name and an external-link icon (↗) at the right of the row, after the search icon. Both ext-specific icons appear in abbreviated and full modes.
+- **R2044:** At most one entry's peek is open at a time. Any tap closes any open peek; tapping a closed entry then opens it.
+- **R2045:** A sidebar section is anchored by either a heading or a tagged chunk, whichever appears first. Auto-track highlights the section currently at the top of the viewport; the highlight remains on that entry until the next heading or tagged chunk reaches the top.
+- **R2046:** Heading row click scrolls the document to that heading's chunk.
+- **R2047:** Tag row text/row click (inline or ext) scrolls the document to that tag's chunk.
+- **R2048:** Inline tag row 🔍 click dispatches a click on the corresponding body `<ark-tag>` element, which scrolls to the tag if needed and opens an `<ark-search>` panel below it seeded with `tag: value`.
+- **R2049:** Ext tag row 🔍 click dispatches the indicator's panel-open action with the specific tag from the clicked row, bypassing the pick-list dropdown.
+- **R2050:** Ext tag row ↗ click navigates to the source document — the file containing the `@ext:` declaration — and scrolls to the relevant chunk.
+- **R2051:** Hovering or long-pressing the ↗ icon shows a three-line tooltip: DEFINITION-PATH (= `externalFile`), divider, THIS-PATH (the file currently being viewed), and an `anchor: ANCHOR-SPEC` line. The `anchor:` line is omitted entirely when `externalTarget` is empty.
+- **R2052:** The sidebar header has a substring filter input. Filter tokens are whitespace-separated and order-independent: every token must match (substring, case-insensitive) against the entry's currently visible text.
+- **R2053:** Filter visible-text scope is mode-dependent: in abbreviated mode, name + heading text only; in full mode, name + value + heading text. Hover-revealed values do not count as visible.
+- **R2054:** Filter matched substrings are highlighted in entries using the existing ark search highlight style.
+- **R2055:** The category filter dropdown opens from the badge's `[▼]` hit zone as a custom popover with three checkboxes — headings, inline tags, ext tags. Empty selection means all categories are shown.
+- **R2056:** When a filter is active, the badge shows the filtered count and a small indicator on the `[▼]` glyph; when no filter is active, the badge shows the total count.
+- **R2057:** Filter state resets per file. Filter state persists across mode toggles within the same file.
+- **R2058:** When the auto-track current entry is filtered out, the highlight falls to the nearest visible entry above. If no visible entry exists above, no highlight is shown.
+- **R2059:** When the filter input does not fit next to the badge on its row, it wraps to the next line.
+- **R2060:** The sidebar's left edge is a draggable resize handle, touch-draggable on touch devices.
+- **R2061:** Sidebar minimum width keeps the badge readable; sidebar maximum width is `viewport - 3rem`.
+- **R2062:** Default sidebar width on first open (no I record present) is 25% of the viewport width.
+- **R2063:** Two sidebar widths persist across sessions in DB I records: `sidebar-width-tag-name` (abbreviated mode) and `sidebar-width-tag-name-value` (full mode). Switching modes resizes the sidebar to that mode's stored width.
+- **R2064:** The resize handle and per-mode persisted widths apply only when the sidebar is open (modes 2 and 3); collapsed mode shows only the badge in its corner.
+- **R2065:** The server emits an `<ark-ext-tags>` custom element at the top of any chunk that has ext routings; the element contains one `<ark-tag>` child per ext-routed tag at that location.
+- **R2066:** `<ark-ext-tags>` renders a Bootstrap-style tag icon — a single-tag glyph when its location has one ext tag and a stacked multi-tag glyph when several — as SVG, scaling cleanly and themed via CSS.
+- **R2067:** `<ark-ext-tags>` does not consume vertical space; it overlays the chunk's first line area without affecting document flow.
+- **R2068:** Mousedown on `<ark-ext-tags>` opens a dropdown listing each ext tag at the location with its value. The element exposes ARIA role `button` with `aria-haspopup="menu"`.
+- **R2069:** Pick-list click-and-drag gesture: mousedown on `<ark-ext-tags>` → drag down onto a tag → mouseup on that tag opens an `<ark-search>` panel at the indicator's seam, seeded with `tag: value`.
+- **R2070:** Pick-list click-and-release gesture: mousedown on `<ark-ext-tags>` → mouseup without moving onto a tag leaves the dropdown open; subsequent click on a tag opens the search panel; click outside or Escape dismisses.
+- **R2071:** The pick-list dropdown appears even when the location has only one ext tag — there is no single-tag shortcut that skips the dropdown.
+- **R2072:** `<ark-ext-tags>` keyboard support: Enter or Space opens the dropdown, arrow keys navigate, Enter selects.
+- **R2073:** When `<ark-tag>` is a child of `<ark-ext-tags>`, it carries `externalFile` (source file path) and `externalTarget` (anchor part of the target spec, omitted/empty when the target was a bare path or bare UUID) attributes. The target file path is implicit (= the file currently being rendered) and is not duplicated on the element.
+- **R2074:** All `<ark-tag>` elements — inline and ext-routed — carry an `id` attribute for sidebar DOM anchoring.
+- **R2075:** HTML and markdown content emit standard `<h1>`–`<h6>` heading elements with `id` attributes for sidebar anchoring.
+- **R2076:** PDF content emits `<ark-heading rect="...">` elements positioned absolutely over the `<pdf-chunk>` canvas at rect-derived coordinates. v1 PDF headings carry no level information and render as a flat list in the sidebar.
+- **~~R2077:~~** (Retired T47 — no replacement) pdftext gains a heading-rect output (currently absent) so the server has the data needed to emit `<ark-heading>` elements.
+- **R2078:** The `/content/` endpoint emits overview data inline (push, not pull). No separate `/overview/` endpoint is created; the existing `/content/` response carries every element the sidebar needs.
+- **R2079:** Server-side `/content/` rendering consults the inline tag store, `chunkToTargets` for ext routings, and the chunker / pdftext output for headings to produce the unified element tree.
+- **R2080:** A `tagsForChunk` Go method is added to expose per-chunk inline tags for `/content/` rendering. (Today no such method exists.)
+- **R2081:** In HTML chunks, `<ark-ext-tags>` and `<ark-heading>` (when applicable) are positioned absolutely within their chunk container (`position: absolute` over a `position: relative` chunk wrapper) so they overlay without disrupting flow.
+- **R2082:** In PDF chunks, `<ark-ext-tags>`, `<ark-heading>`, and `<ark-tag>` ride above the `<pdf-chunk>` canvas via absolute positioning at coordinates derived from their rect attributes — the same approach inline `<ark-tag>` already uses for PDF tags.
+- **R2083:** Sidebar, badge, indicators, and filter render in `<ark-search>` results' `/content/` iframes identically to standalone `/content/` views — search-result rendering inherits the overview, with no separate code path.
+- **R2084:** (inferred — scope boundary) The CodeMirror-based markdown editing view is out of scope for v1. The overview is supported only in rendered content views (HTML, markdown read views, PDF). Editing-view support is a v2 follow-up.

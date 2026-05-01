@@ -1636,6 +1636,50 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 	return result, err
 }
 
+// TagsForChunk returns inline (tag, value) pairs present at chunkID.
+// Reads F records for the chunk and resolves each tvid via TvidMap.
+// Multi-set semantics — if a (tag, value) pair appears multiple times
+// in the chunk's F record it appears multiple times in the result.
+// Inline only — does NOT consult ExtMap routings; for ext-routed
+// tags use ExtMap.ExtRoutingsForTargetChunk. Routes overlay chunkids
+// to TmpTagStore.
+// CRC: crc-Store.md | R2080
+func (s *Store) TagsForChunk(chunkID uint64) ([]TagValue, error) {
+	if IsOverlayID(chunkID) {
+		if s.tmp == nil {
+			return nil, nil
+		}
+		return s.tmp.TagsForChunk(chunkID), nil
+	}
+	prefix := []byte{byte(prefixTagFile)}
+	prefix = encodeVarint(prefix, chunkID)
+
+	var result []TagValue
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			_, tag, ok := parseFKey(k)
+			if !ok || len(v) < 4 {
+				return nil
+			}
+			rest := v[4:]
+			for len(rest) > 0 {
+				tvid, n := binary.Uvarint(rest)
+				if n <= 0 {
+					break
+				}
+				rest = rest[n:]
+				_, value, ok := s.tvids.Resolve(tvid)
+				if !ok {
+					continue
+				}
+				result = append(result, TagValue{Tag: tag, Value: value})
+			}
+			return nil
+		})
+	})
+	return result, err
+}
+
 // TagValueMatch is a tag value with its file ID list, returned by MatchTagValues.
 // CRC: crc-Store.md | R1468
 type TagValueMatch struct {
