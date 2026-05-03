@@ -235,6 +235,15 @@ const STACKED_TAG_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" fill="c
 <path d="M2 2v6.5a.5.5 0 0 0 .146.354l6 6a.5.5 0 0 0 .708 0l6.5-6.5a.5.5 0 0 0 0-.708l-6-6A.5.5 0 0 0 9 1.5H2.5A.5.5 0 0 0 2 2zm3 3a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/>
 </svg>`;
 
+// Outline icon used for the collapsed badge — three indented bars
+// reading as "headings + structure", since the sidebar lists both
+// headings and tags.
+const OUTLINE_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+<rect x="1" y="3" width="13" height="1.2" rx="0.4"/>
+<rect x="3" y="7.4" width="11" height="1.2" rx="0.4"/>
+<rect x="5" y="11.9" width="9" height="1.2" rx="0.4"/>
+</svg>`;
+
 // ---- Sidebar --------------------------------------------------------
 // R2032-R2064, R2083, R2084
 
@@ -252,7 +261,7 @@ const MAX_RIGHT_GUTTER_PX = 48;  // viewport - 3rem ≈ 48px
 
 class TagOverviewSidebar {
   private host: HTMLElement;
-  private mode: Mode = "abbreviated";
+  private mode: Mode;
   private entries: Entry[] = [];
   private sections: Section[] = [];
   private rows: RowRecord[] = [];
@@ -282,8 +291,9 @@ class TagOverviewSidebar {
   // Peek state — abbreviated mode only (R2042, R2044)
   private openPeekRow: HTMLElement | null = null;
 
-  constructor(host: HTMLElement) {
+  constructor(host: HTMLElement, initialMode: Mode = "abbreviated") {
     this.host = host;
+    this.mode = initialMode;
   }
 
   mount(): void {
@@ -443,25 +453,34 @@ class TagOverviewSidebar {
     this.adjustOverlayButtons();
   }
 
-  /** R2038, R2056: badge shows count + mode glyph. When a filter is
-   *  active, show filtered count and add an "active" class to ▼. */
+  /** R2038, R2056: badge shows count + mode glyph in expanded modes;
+   *  collapsed mode renders just the multi-tag SVG so it sits unobtrusive
+   *  at the right edge. When a filter is active, show filtered count and
+   *  add an "active" class to ▼. */
   private updateBadgeText(): void {
     if (!this.badgeEl) return;
     const cycle = this.badgeEl.querySelector(".ark-tag-overview-badge-cycle");
     if (!cycle) return;
+    if (this.mode === "collapsed") {
+      cycle.innerHTML = OUTLINE_SVG;
+      const totalTags = this.entries.filter(e => e.kind !== "heading").length;
+      const totalHeadings = this.entries.length - totalTags;
+      const parts: string[] = [];
+      if (totalHeadings) parts.push(`${totalHeadings} heading${totalHeadings === 1 ? "" : "s"}`);
+      if (totalTags) parts.push(`${totalTags} tag${totalTags === 1 ? "" : "s"}`);
+      cycle.setAttribute("title", `${parts.join(", ")} — click to expand`);
+      return;
+    }
     const totalTags = this.entries.filter(e => e.kind !== "heading").length;
     const filterActive = this.filterText.trim() !== "" || this.filterCategories.size > 0;
     const visible = filterActive ? this.visibleTagCount() : totalTags;
     const glyph = MODE_GLYPH[this.mode];
-    if (this.mode === "collapsed") {
-      const firstHeading = this.entries.find(e => e.kind === "heading");
-      const lead = firstHeading?.headingText ?? "";
-      cycle.textContent = `${glyph} ${lead ? lead + " + " : ""}${visible}`;
-    } else if (filterActive) {
+    if (filterActive) {
       cycle.textContent = `${glyph} ${visible}/${totalTags} tags`;
     } else {
       cycle.textContent = `${glyph} ${totalTags} tags`;
     }
+    cycle.removeAttribute("title");
     this.filterBtn?.classList.toggle(
       "ark-tag-overview-badge-filter-active",
       this.filterCategories.size > 0,
@@ -1018,8 +1037,24 @@ const SIDEBAR_CSS = `
 }
 .ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-panel,
 .ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-resize,
-.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge-input {
+.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge-input,
+.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge-filter {
   display: none;
+}
+.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge {
+  padding: 0.15em;
+  background: transparent;
+  border-bottom: none;
+  gap: 0;
+}
+.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge-cycle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2em 0.3em;
+  opacity: 0.85;
+}
+.ark-tag-overview[data-mode="collapsed"] .ark-tag-overview-badge-cycle:hover {
+  opacity: 1;
 }
 .ark-tag-overview-resize {
   position: absolute;
@@ -1302,7 +1337,11 @@ function bootstrap(): void {
     customElements.define(EXT_TAGS_TAG, ArkExtTagsElement);
   }
   const host = document.getElementById("content") ?? document.body;
-  const sidebar = new TagOverviewSidebar(host);
+  // Search-result iframes append ?tag-overview=collapsed so previews
+  // start showing only the right-edge icon instead of the full sidebar.
+  const param = new URL(location.href).searchParams.get("tag-overview");
+  const initialMode: Mode = param === "collapsed" ? "collapsed" : "abbreviated";
+  const sidebar = new TagOverviewSidebar(host, initialMode);
   sidebar.mount();
 }
 

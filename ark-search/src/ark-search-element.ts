@@ -1301,6 +1301,10 @@ export class ArkSearchElement extends HTMLElement {
       if (chunk.range) params.set("range", chunk.range);
       params.set("edit", "true");
       params.set("toggle", "false");
+      // Start the tag-overview sidebar in collapsed mode — search results
+      // are tight on horizontal space, so the right-edge icon is the
+      // sensible default. Users can expand by clicking it.
+      params.set("tag-overview", "collapsed");
       for (const h of highlights) params.append("highlight", h);
       const iframeSrc = `/content${group.path}?${params}`;
 
