@@ -84,6 +84,13 @@ that were actually set.
 auto_compact = true
 ```
 
+**Placement matters.** TOML attaches every key after a `[table]`
+header to that table until the next header. `auto_compact` is a
+top-level field, so it must appear *before* any `[strategies]`,
+`[[source]]`, `[schedule]`, etc. — otherwise the parser silently
+reads it as `schedule.auto_compact` (or whatever the most recent
+table was) and the value is ignored.
+
 ## Out of scope
 
 - Scheduled compaction (cron-style). The toml setting is binary.
