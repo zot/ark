@@ -3333,3 +3333,29 @@ implementation, not a separate format break.
 - **R2082:** In PDF chunks, `<ark-ext-tags>`, `<ark-heading>`, and `<ark-tag>` ride above the `<pdf-chunk>` canvas via absolute positioning at coordinates derived from their rect attributes — the same approach inline `<ark-tag>` already uses for PDF tags.
 - **R2083:** Sidebar, badge, indicators, and filter render in `<ark-search>` results' `/content/` iframes identically to standalone `/content/` views — search-result rendering inherits the overview, with no separate code path.
 - **R2084:** (inferred — scope boundary) The CodeMirror-based markdown editing view is out of scope for v1. The overview is supported only in rendered content views (HTML, markdown read views, PDF). Editing-view support is a v2 follow-up.
+
+## Feature: ark serve -compact
+**Source:** specs/serve-compact.md
+
+- **R2085:** `ark serve` accepts a `-compact` flag. When absent, startup is unchanged.
+- **R2086:** When `-compact` is set, startup runs `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB environment under `~/.ark/` (microfts2 and ark) before the server begins handling requests.
+- **R2087:** Compaction copies into a sibling path (`<dbpath>.compact`); on success the original is replaced via atomic rename. On failure, the original is left in place, the partial copy is removed, and the error is logged.
+- **R2088:** Compaction failure must not block service. Startup continues with the uncompacted database.
+- **R2089:** Compaction occurs while the file lock on `~/.ark/` is held and the server is not yet listening; no read-only or read-write transactions are in flight from clients.
+- **R2090:** When the post-compaction size of an environment is within 5% of the original size, the rename is skipped and the message "already compact" is logged. (inferred — avoids unnecessary I/O on a fresh DB or one compacted recently.)
+- **R2091:** Compaction emits a stdout line per environment of the form `compacting <env>: <oldSize> → <newSize>` before the normal `serving on …` message.
+
+## Feature: ark tag verify
+**Source:** specs/tag-verify.md
+
+- **R2092:** `ark tag verify` is a subcommand that cross-checks ark's tag-system state — F, V, T, X records and the in-memory ExtMap — and reports drift.
+- **R2093:** `ark tag verify` accepts `--repair` (write corrections; default is read-only) and `--scope SCOPE` where SCOPE is one of `ext`, `tag-totals`, or `all` (default).
+- **R2094:** Under `--scope ext`, for every F record carrying the `ext` tag, `verify` parses the value via `ParseExtTarget`, re-resolves the target via `ResolveExtTarget`, and reports missing X records, stale X records (target chunk no longer matches), and routed-tvid drift between the X record's stored tvids and the current `@ext:` value's routed tags.
+- **R2095:** Under `--scope ext`, `verify` reports orphan X records — X records whose `tvid_ext` no longer corresponds to any F record source.
+- **R2096:** Under `--scope ext`, `verify` cross-checks the in-memory ExtMap maps (`extByAnchor`, `targetToChunk`, `chunkToTargets`, `fileidToTvids`, `unresolvedTargets`, `extSource`) against the on-disk X records and reports any divergence.
+- **R2097:** Under `--scope tag-totals`, for each T record, `verify` recomputes the total from V multi-set sizes plus `ExtMap.virtualTagCount`, and reports drift from the stored T value.
+- **R2098:** `--scope all` runs both ext and tag-totals checks.
+- **R2099:** Output is plain text, one issue per line, ending with a summary `verify: N issues found, M repaired`. Exit code 0 = no issues, 1 = issues (read-only) or partial repair, 2 = verify itself failed.
+- **R2100:** With `--repair`: missing X records are written via `WriteExtRecord` plus matching `addChunkIDToVRecord` per routed_tvid; stale or orphan X records are removed via `DeleteExtRecord` plus matching `removeOneChunkIDFromVRecord`; routed-tvid drift is corrected by deleting and rewriting; tag-total drift rewrites the T value; ExtMap drift triggers `ExtMap.Rebuild`.
+- **R2101:** Repair operations execute inside a single LMDB write transaction. Partial repair (some issues fixable, others not) is reported per-issue and surfaces via exit code 1.
+- **R2102:** `verify` is linear in the number of F records carrying `ext`, X records, and T records; not on any hot path.

@@ -139,6 +139,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-EventScheduler.md → `scheduler.go`
 - [x] crc-TmpTagStore.md → `tmp_tag_store.go`
 - [x] crc-TvidMap.md → `tvid_map.go`
+- [ ] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -173,6 +174,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tmp-tag-overlay.md → `db.go`, `store.go`, `tmp_tag_store.go`, `indexer.go`
 - [x] seq-tvid-overlay.md → `tvid_map.go`, `store.go`, `tmp_tag_store.go`, `db.go`
 - [x] seq-ext-routing.md → `extmap.go`, `indexer.go`, `store.go`
+- [ ] seq-tag-verify.md → `cmd/ark/main.go`, `verify.go`, `extmap.go`, `store.go`, `db.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`

@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// ParseExtTarget splits an @ext: value into (TARGET, []TagValue).
-// Format: TARGET @tag1: v1 @tag2: v2 ...
+// ParseExtTarget splits an `@ext:` value into (TARGET, []TagValue).
+// Format: TARGET `@tag1: v1 @tag2: v2 ...`
 // The greedy tagValueRegex captures everything to end of line, so
-// embedded @tag: patterns are peeled from the captured value the
+// embedded `@tag:` patterns are peeled from the captured value the
 // same way ExtractTagValues handles compound tags. Returns ok=false
 // when the TARGET is empty or no embedded tag follows it — a
 // TARGET-only @ext has nothing to apply.

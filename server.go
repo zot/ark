@@ -66,6 +66,7 @@ type ServeOpts struct {
 	NoScan    bool
 	Verbosity int  // R735: verbose level (0–4)
 	Force     bool // R1558: accept config changes, clear E records
+	Compact   bool // R2085: compact LMDB via mdb_env_copy2 before opening
 }
 
 // ServerAlreadyRunning is returned when `ark serve` finds an existing server.
@@ -132,6 +133,15 @@ func Serve(dbPath string, opts ServeOpts) error {
 	pidPath := PidFilePath(dbPath)
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
+	}
+
+	// CRC: crc-Server.md | R2086, R2088, R2089, R2091
+	// Compact before Open: socket lock is held, no clients connected,
+	// no transactions in flight. Failure logs and continues.
+	if opts.Compact {
+		if err := CompactDB(dbPath); err != nil {
+			log.Printf("compact: %v (continuing with uncompacted DB)", err)
+		}
 	}
 
 	// Open database

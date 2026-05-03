@@ -1917,13 +1917,15 @@ Options:
 	}
 }
 
+// CRC: crc-CLI.md | R2085
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	noScan := fs.Bool("no-scan", false, "skip startup reconciliation")
 	force := fs.Bool("force", false, "accept config changes, clear error conditions")
+	compact := fs.Bool("compact", false, "compact LMDB via mdb_env_copy2 before opening (one-shot, opt-in)")
 	fs.Parse(args)
 
-	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan, Force: *force})
+	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan, Force: *force, Compact: *compact})
 	if errors.Is(err, ark.ServerAlreadyRunning) {
 		fmt.Fprintln(os.Stderr, "ark server already running")
 		os.Exit(0)
@@ -3966,7 +3968,8 @@ Subcommands:
   defs [TAG...]     Show tag definitions (from tags.md)
   set FILE TAG VAL  Update or add tags in a file's tag block
   get FILE [TAG...] Read tags from a file's tag block
-  check FILE [H...] Validate tag block structure`
+  check FILE [H...] Validate tag block structure
+  verify            Verify ext routings, X records, and tag counts`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -3993,6 +3996,8 @@ Subcommands:
 		cmdTagGet(subArgs)
 	case "check":
 		cmdTagCheck(subArgs)
+	case "verify":
+		cmdTagVerify(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -4393,6 +4398,52 @@ func cmdTagCheck(args []string) {
 		fmt.Fprintf(os.Stderr, "- %s\n", p)
 	}
 	os.Exit(1)
+}
+
+// CRC: crc-CLI.md | R2092, R2093, R2099
+func cmdTagVerify(args []string) {
+	fs := flag.NewFlagSet("tag verify", flag.ExitOnError)
+	repair := fs.Bool("repair", false, "write corrections (default: read-only)")
+	scope := fs.String("scope", "all", "ext | tag-totals | all")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark tag verify [--repair] [--scope SCOPE]
+
+Cross-checks F, V, T, and X records and the in-memory ExtMap.
+Reports drift; with --repair, writes corrections in a single
+write transaction.
+
+  --scope ext         only @ext routings + ExtMap consistency
+  --scope tag-totals  only T-record drift vs V multi-set + ExtMap virtuals
+  --scope all         both (default)`)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	switch *scope {
+	case "ext", "tag-totals", "all":
+	default:
+		fmt.Fprintf(os.Stderr, "error: invalid --scope %q (want ext, tag-totals, or all)\n", *scope)
+		os.Exit(2)
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		fmt.Fprintln(os.Stderr, "error: ark tag verify requires the server to be stopped (uses LMDB write txn)")
+		fmt.Fprintln(os.Stderr, "       run 'ark stop' first")
+		os.Exit(2)
+	}
+
+	var result ark.VerifyResult
+	var verifyErr error
+	withDB(func(d *ark.DB) {
+		result, verifyErr = d.Verify(ark.VerifyOptions{Repair: *repair, Scope: *scope}, os.Stdout)
+	})
+	if verifyErr != nil {
+		fmt.Fprintf(os.Stderr, "verify failed: %v\n", verifyErr)
+		os.Exit(2)
+	}
+	if result.Issues > result.Repaired {
+		os.Exit(1)
+	}
 }
 
 // cmdChunkJSONL is a chunking strategy command: splits a file on newline
