@@ -1922,10 +1922,26 @@ func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	noScan := fs.Bool("no-scan", false, "skip startup reconciliation")
 	force := fs.Bool("force", false, "accept config changes, clear error conditions")
-	compact := fs.Bool("compact", false, "compact LMDB via mdb_env_copy2 before opening (one-shot, opt-in)")
+	compact := fs.Bool("compact", false, "compact LMDB via mdb_env_copy2 before opening (overrides ark.toml auto_compact)")
 	fs.Parse(args)
 
-	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan, Force: *force, Compact: *compact})
+	// CRC: crc-CLI.md | R2126, R2127
+	// -compact (when supplied) overrides ark.toml auto_compact;
+	// when absent, fall back to the toml setting (default false).
+	compactSupplied := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "compact" {
+			compactSupplied = true
+		}
+	})
+	resolvedCompact := *compact
+	if !compactSupplied {
+		if cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml")); err == nil {
+			resolvedCompact = cfg.AutoCompact
+		}
+	}
+
+	err := ark.Serve(arkDir, ark.ServeOpts{NoScan: *noScan, Force: *force, Compact: resolvedCompact})
 	if errors.Is(err, ark.ServerAlreadyRunning) {
 		fmt.Fprintln(os.Stderr, "ark server already running")
 		os.Exit(0)

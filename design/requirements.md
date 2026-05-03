@@ -3401,3 +3401,10 @@ implementation, not a separate format break.
 - **R2122:** `Rebuild` populates `routedTagsByTvidExt` while scanning X records: for each X record's routed_tvids list, decode each tvid via `TvidMap.Resolve` to (tag, value) and accumulate into the map under the tvid_ext key. Multiple X records sharing the same tvid_ext write the same routed list (routed-tags are a property of the tvid_ext, not the target_chunkid), so later writes are idempotent.
 - **R2123:** `applyIndexExt` and `applyReresolve` keep `routedTagsByTvidExt` current alongside the other maps — Adds populate the entry, the Empty-new-set branch drops it. `CleanupSource` drops the entry when the tvid_ext is evicted from the other ExtMap maps.
 - **R2124:** `ExtMap.ExtTagFiles(tags []string)` returns `[]TagFileRecord` for every (tvid_ext, target_chunkid) pair where the cached routed-tag set intersects the requested tags. `ExtMap.ExtTagValueFiles(tag, value string)` returns `[]uint64` of target chunkids when `routedTagsByTvidExt[tvid_ext]` contains a matching (tag, value) pair. Both accessors walk persistent and overlay routings in a single pass under one RLock — they replace the historical `OverlayTagFiles` / `OverlayTagValueFiles` pair which only saw overlay routings.
+
+## Feature: auto_compact in ark.toml
+**Source:** specs/serve-compact.md, specs/cli-commands.md
+
+- **R2125:** `ark.toml` accepts a top-level `auto_compact = true|false` boolean. When set to `true`, `ark serve` runs the LMDB compaction step on startup as if `-compact` had been passed.
+- **R2126:** When the user supplies `-compact` (or `-compact=false`) on the `ark serve` command line, the flag value wins regardless of `auto_compact` in ark.toml. The CLI distinguishes "flag supplied" from "flag absent at default" via `flag.FlagSet.Visit` after `Parse`.
+- **R2127:** When `-compact` is not supplied and `auto_compact` is absent from ark.toml, the default is `false` — preserving the historical opt-in compaction behaviour.

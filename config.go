@@ -37,6 +37,8 @@ type Config struct {
 	AboutCentroidThreshold float64        `toml:"about_centroid_threshold,omitempty"`
 	AboutFilterTopK        int            `toml:"about_filter_top_k,omitempty"`
 	PdfPreviewZoom         float64        `toml:"pdf_preview_zoom,omitempty"`
+	// CRC: crc-Config.md | R2125
+	AutoCompact            bool           `toml:"auto_compact,omitempty"`
 	Schedule               ScheduleConfig `toml:"schedule"` // R853, R854
 	Errors                 []string       `toml:"-"`
 	dbPath                 string         `toml:"-"`

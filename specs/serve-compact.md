@@ -59,9 +59,34 @@ When the post-compaction size is within 5% of the original, log
 "already compact" and skip the rename for that environment. Avoids
 unnecessary I/O on a fresh DB or one compacted recently.
 
+## `auto_compact` in ark.toml
+
+`ark.toml` accepts a top-level `auto_compact = true|false` boolean.
+When set, it determines whether `ark serve` runs the compaction step
+on startup, *unless* the CLI flag is supplied.
+
+Resolution:
+
+1. If the user supplied `-compact` or `-compact=false` on the
+   command line, the flag value wins.
+2. Otherwise, use `auto_compact` from ark.toml.
+3. If `auto_compact` is not set in the toml, the default is
+   `false` — preserves today's opt-in semantics.
+
+The CLI `-compact` flag remains a bool so users can still type the
+short form. Distinguishing "user supplied the flag" from "default
+zero value" uses `fs.Visit` after `fs.Parse` to enumerate the flags
+that were actually set.
+
+`ark.toml` example:
+
+```toml
+auto_compact = true
+```
+
 ## Out of scope
 
-- Automatic / scheduled compaction. The flag is opt-in.
+- Scheduled compaction (cron-style). The toml setting is binary.
 - Compaction of any non-LMDB storage (the file tree itself, blob
   files, etc.).
 - Online compaction during a running session.

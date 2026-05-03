@@ -591,7 +591,7 @@ ark serve [--no-scan] [--force] [--compact]
 |-------------|---------|---------------------------------------------------------------------------------------------------------------------|
 | `--no-scan` | `false` | Skip startup reconciliation                                                                                         |
 | `--force`   | `false` | Accept config changes, clear E records                                                                              |
-| `--compact` | `false` | Run `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB env before opening (one-shot, opt-in; see `serve-compact.md`) |
+| `--compact` | `false` | Run `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB env before opening. When the flag is supplied (either form), it overrides `auto_compact` in ark.toml; when omitted, falls back to the toml setting (default `false`). See `serve-compact.md`. |
 
 Exits 0 with a stderr message if a server is already running. The
 process holds the file lock on `~/.ark/`, writes a PID file, and
