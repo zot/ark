@@ -3359,3 +3359,12 @@ implementation, not a separate format break.
 - **R2100:** With `--repair`: missing X records are written via `WriteExtRecord` plus matching `addChunkIDToVRecord` per routed_tvid; stale or orphan X records are removed via `DeleteExtRecord` plus matching `removeOneChunkIDFromVRecord`; routed-tvid drift is corrected by deleting and rewriting; tag-total drift rewrites the T value; ExtMap drift triggers `ExtMap.Rebuild`.
 - **R2101:** Repair operations execute inside a single LMDB write transaction. Partial repair (some issues fixable, others not) is reported per-issue and surfaces via exit code 1.
 - **R2102:** `verify` is linear in the number of F records carrying `ext`, X records, and T records; not on any hot path.
+
+## Feature: CLI commands central reference
+**Source:** specs/cli-commands.md
+
+- **R2103:** `specs/cli-commands.md` is the canonical reference for ark's CLI surface. Every top-level command, every subcommand, and every flag is documented there; per-feature specs supply rationale and design context.
+- **R2104:** When the central CLI spec disagrees with the implementation, the spec is the verification target — it gets updated to match the code, not the other way around.
+- **R2105:** The central CLI spec contains: a Command Inventory table (one row per top-level command with synopsis, server requirement, and notes); a Global Flags section; a Conventions section (server detection, cold-start, exit codes, output formats, `tmp://` handling, `reorderArgs`, filter stack, path filters, aliases); and a per-command section with flag tables and behavior.
+- **R2106:** Each per-command section lists every flag the implementation accepts, including default value and one-line meaning. Flags omitted from the spec are drift to be reconciled.
+- **R2107:** (inferred) Internal/build-time commands (e.g. `bundle`, `chunk-chat-jsonl`, `search expand`) are included in the canonical inventory with their internal status noted.
