@@ -3969,7 +3969,8 @@ Subcommands:
   set FILE TAG VAL  Update or add tags in a file's tag block
   get FILE [TAG...] Read tags from a file's tag block
   check FILE [H...] Validate tag block structure
-  verify            Verify ext routings, X records, and tag counts`
+  verify            Verify ext routings, X records, and tag counts
+  inspect           Dump @ext disk + in-memory state (read-only)`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -3998,6 +3999,8 @@ Subcommands:
 		cmdTagCheck(subArgs)
 	case "verify":
 		cmdTagVerify(subArgs)
+	case "inspect":
+		cmdTagInspect(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, tagUsage)
@@ -4444,6 +4447,67 @@ write transaction.
 	if result.Issues > result.Repaired {
 		os.Exit(1)
 	}
+}
+
+// cmdTagInspect dumps @ext on-disk + in-memory state. Read-only.
+// CRC: crc-CLI.md | R2113, R2115, R2116, R2117
+func cmdTagInspect(args []string) {
+	fs := flag.NewFlagSet("tag inspect", flag.ExitOnError)
+	scope := fs.String("scope", ark.ScopeExt, "ext (v1 only)")
+	target := fs.String("target", "", "path filter (narrow output to one file)")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark tag inspect [--scope SCOPE] [--target PATH] [--json]
+
+Read-only observability for @ext state. Sibling of ark tag verify.
+Server-aware: proxies via the running server when up, opens LMDB
+read-only when the server is stopped (in-memory ExtMap section is
+unavailable in the latter mode).
+
+  --scope ext       what to dump (only ext supported in v1)
+  --target PATH     narrow output to one file's chunks
+  --json            JSON output instead of grouped plain text`)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+	if *scope != ark.ScopeExt {
+		fmt.Fprintf(os.Stderr, "error: invalid --scope %q (only %q supported in v1)\n", *scope, ark.ScopeExt)
+		os.Exit(2)
+	}
+
+	emit := func(rep *ark.ExtInspectReport) {
+		if *asJSON {
+			if err := rep.WriteJSON(os.Stdout); err != nil {
+				fatal(err)
+			}
+			return
+		}
+		rep.WriteText(os.Stdout)
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		var rep ark.ExtInspectReport
+		body := map[string]any{"scope": *scope}
+		if *target != "" {
+			body["target"] = *target
+		}
+		if err := proxyDecode(client, "POST", "/tags/inspect", body, &rep); err != nil {
+			fatal(err)
+		}
+		emit(&rep)
+		return
+	}
+
+	withDB(func(d *ark.DB) {
+		rep, err := d.InspectExt(ark.InspectOptions{Scope: *scope, Target: *target})
+		if err != nil {
+			fatal(err)
+		}
+		rep.ServerSide = false
+		rep.UnavailNote = "ExtMap state unavailable — server not running. Disk view only."
+		rep.InMemory = nil
+		emit(rep)
+	})
 }
 
 // cmdChunkJSONL is a chunking strategy command: splits a file on newline

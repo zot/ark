@@ -3368,3 +3368,36 @@ implementation, not a separate format break.
 - **R2105:** The central CLI spec contains: a Command Inventory table (one row per top-level command with synopsis, server requirement, and notes); a Global Flags section; a Conventions section (server detection, cold-start, exit codes, output formats, `tmp://` handling, `reorderArgs`, filter stack, path filters, aliases); and a per-command section with flag tables and behavior.
 - **R2106:** Each per-command section lists every flag the implementation accepts, including default value and one-line meaning. Flags omitted from the spec are drift to be reconciled.
 - **R2107:** (inferred) Internal/build-time commands (e.g. `bundle`, `chunk-chat-jsonl`, `search expand`) are included in the canonical inventory with their internal status noted.
+
+## Feature: @ext storage layer (extSource)
+**Source:** specs/at-ext-storage.md
+
+- **R2108:** ExtMap maintains a seventh structure alongside the six in R1992: `extSource[tvid_ext] → source_chunkid` — a single source chunkid per tvid_ext, used by render and cleanup paths to identify which chunk authored the @ext declaration. When multiple chunks share the same compound @ext text (same tvid_ext), any of them is an acceptable source; the map holds one.
+- **R2109:** `ExtMap.Rebuild` populates `extSource` while scanning X records: for each tvid_ext encountered, resolve it via `TvidMap.Resolve` to recover the (tag, value) pair, then read `V[ext][value][tvid_ext]` once and store its first source chunkid as `extSource[tvid_ext]`. The first-entry choice is stable across rebuilds because V record source-chunk lists are append-multi-set.
+
+## Feature: compound-tag extraction (per-outer-tag dispatch)
+**Source:** specs/tag-extraction-fixes.md, specs/at-ext-parsing.md
+
+- **R2110:** `ExtractTagValues` returns one `(tag, value)` pair per `@x:` line — the *outer* tag, with `value` capturing from after `@x:` to end of line. It does NOT peel embedded `@y: z` segments out of the value as additional sibling entries. Compound interpretation is delegated to the outer tag's owner.
+- **R2111:** Each outer tag owns its own embedded-tag semantics. `@ext` is owned by `ParseExtTarget` (specs/at-ext-parsing.md). Future outer tags (e.g. `@priority`) define their own parser and call site. The default for an outer tag with no registered handler is no embedded handling — the value is opaque text.
+- **R2112:** Helpers that split a compound value name the *owner-tag-specific* semantics in their identifier — never a generic name like `splitCompoundTags`. This rule keeps future readers from inferring a single shared mechanism that doesn't exist.
+
+## Feature: ark tag inspect (observability)
+**Source:** specs/tag-inspect.md
+
+- **R2113:** `ark tag inspect [--scope SCOPE] [--target PATH] [--json]` is a read-only observability subcommand. It never mutates LMDB or in-memory state. It is a sibling of `ark tag verify`; verify validates and repairs, inspect reveals.
+- **R2114:** `--scope ext` (the default and only v1 scope) dumps three sections: on-disk @ext state (X records, V[ext] records, F[chunkid][ext] records); in-memory ExtMap state (every map ExtMap holds); bridges (per-tvid_ext consolidated view linking on-disk and in-memory entries with decoded tag/value/path).
+- **R2115:** `--target PATH` filters output to one file: X records whose target_chunkid is in PATH's chunkid set, V[ext] entries whose source chunk is in PATH's chunkid set, and ExtMap entries that reference PATH's fileid. Absence of `--target` means dump everything.
+- **R2116:** `--json` emits a machine-readable shape with the same three sections. Default output is plain text grouped by section, suitable for terminal reading.
+- **R2117:** `inspect` is server-aware. When `ark serve` is running, the CLI proxies via `POST /tags/inspect` so the in-memory ExtMap section reflects the live server's reconstructed state. When the server is stopped, the CLI opens LMDB read-only and emits only the on-disk sections plus a note that in-memory state is unavailable.
+- **R2118:** Inspect is linear in X records, V[ext] records, and F[chunkid][ext] records. Not on any hot path.
+- **R2119:** Dropping the temporary `cmd/extdiag` diagnostic is part of inspect landing — its functionality is fully subsumed by `ark tag inspect --scope ext`.
+
+## Feature: ext-routed targets visible to tag queries
+**Source:** specs/at-ext-storage.md
+
+- **R2120:** `Store.TagFiles(tags)` and `Store.TagValueFiles(tag, value)` union four legs: F records (inline source-chunk), `TmpTagStore` (overlay-direct), `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueFiles` (persistent ext-routed targets), and the same ExtMap accessor for overlay-routed targets. The accessor walks one set of in-memory maps and emits chunkids for both persistence kinds in a single pass. The four legs union without coordination — chunkids do not collide across sources.
+- **R2121:** ExtMap maintains `routedTagsByTvidExt[tvid_ext] → []TagValue` — the routed (tag, value) pairs each tvid_ext contributes. The cache eliminates the need for tag-query callers to read X records or re-resolve routed_tvids on the hot path.
+- **R2122:** `Rebuild` populates `routedTagsByTvidExt` while scanning X records: for each X record's routed_tvids list, decode each tvid via `TvidMap.Resolve` to (tag, value) and accumulate into the map under the tvid_ext key. Multiple X records sharing the same tvid_ext write the same routed list (routed-tags are a property of the tvid_ext, not the target_chunkid), so later writes are idempotent.
+- **R2123:** `applyIndexExt` and `applyReresolve` keep `routedTagsByTvidExt` current alongside the other maps — Adds populate the entry, the Empty-new-set branch drops it. `CleanupSource` drops the entry when the tvid_ext is evicted from the other ExtMap maps.
+- **R2124:** `ExtMap.ExtTagFiles(tags []string)` returns `[]TagFileRecord` for every (tvid_ext, target_chunkid) pair where the cached routed-tag set intersects the requested tags. `ExtMap.ExtTagValueFiles(tag, value string)` returns `[]uint64` of target chunkids when `routedTagsByTvidExt[tvid_ext]` contains a matching (tag, value) pair. Both accessors walk persistent and overlay routings in a single pass under one RLock — they replace the historical `OverlayTagFiles` / `OverlayTagValueFiles` pair which only saw overlay routings.

@@ -663,7 +663,7 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 
 	var records []TagFileRecord
 	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
+		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
 			if len(v) < 4 {
 				return nil
 			}
@@ -689,16 +689,30 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 				})
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		// CRC: crc-Store.md | R2120 — ext-routed targets need fileid
+		// resolution against the same txn; ExtTagFiles is chunkid-only.
+		if s.extmap != nil && s.filesForChunk != nil {
+			for _, ext := range s.extmap.ExtTagFiles(tags) {
+				for _, fid := range s.filesForChunk(txn, ext.ChunkID) {
+					records = append(records, TagFileRecord{
+						ChunkID: ext.ChunkID,
+						FileID:  fid,
+						Tag:     ext.Tag,
+						Count:   ext.Count,
+					})
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return records, err
 	}
 	if s.tmp != nil {
 		records = append(records, s.tmp.TagFiles(tags)...)
-	}
-	if s.extmap != nil {
-		records = append(records, s.extmap.OverlayTagFiles(tags)...)
 	}
 	return records, nil
 }
@@ -1579,7 +1593,7 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 		ids = append(ids, s.tmp.TagValueFiles(tag, value)...)
 	}
 	if s.extmap != nil {
-		ids = append(ids, s.extmap.OverlayTagValueFiles(tag, value)...)
+		ids = append(ids, s.extmap.ExtTagValueFiles(tag, value)...)
 	}
 	return ids, nil
 }

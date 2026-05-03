@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124
 
 Owns the in-memory state and orchestration for `@ext` routing.
 Six core maps maintained alongside DB X-record writes; canonical
@@ -28,6 +28,15 @@ sources index, dropped as overlay items disappear.
 - virtualTagCount: map[string]int — per-tag count of ext-routed
   contributions, persistent and overlay alike; sums into T-totals
   at query time (R1992, R2010, R2021)
+- extSource: map[uint64]uint64 — tvid_ext → single source chunkid;
+  identifies which chunk authored the @ext declaration. Used by
+  ExtRoutingsForTargetChunk (render path) and CleanupSource. When
+  multiple chunks share the same compound @ext text, any one is an
+  acceptable source; the map holds one. (R2108)
+- routedTagsByTvidExt: map[uint64][]TagValue — tvid_ext → routed
+  (tag, value) pairs. Cache used by ExtTagFiles / ExtTagValueFiles
+  to avoid re-reading X records or re-resolving routed_tvids on the
+  tag-query hot path. (R2121, R2122)
 - overlayRoutings: map[uint64]map[uint64][]uint64 — tvid_ext →
   target_chunkid → routed_tvids. In-memory parallel to X records
   for routings where `!bothPersistent`. Session-scoped. (R2013)
@@ -40,13 +49,18 @@ sources index, dropped as overlay items disappear.
   SourceChunkID, SourceFileID, Severity, Message}. (R2029)
 
 ## Does
-- Rebuild(db *DB): startup scan of X records to repopulate the six
-  core maps. Reads `targetToChunk` and `virtualTagCount` directly
-  from X record contents; derives `chunkToTargets`, `fileidToTvids`,
-  and `extByAnchor` (the latter via TvidMap.Resolve on each
-  tvid_ext to recover the spec text). `overlayRoutings`,
-  `overlayValues`, and `overlayErrors` are zeroed (no on-disk
-  source). (R1993, R2015)
+- Rebuild(db *DB): startup scan of X records to repopulate the seven
+  core maps (six from R1992 plus extSource). Reads `targetToChunk`
+  and `virtualTagCount` directly from X record contents; derives
+  `chunkToTargets`, `fileidToTvids`, and `extByAnchor` (the latter
+  via TvidMap.Resolve on each tvid_ext to recover the spec text).
+  Populates `extSource` by reading `V[ext][value][tvid_ext]` once
+  per tvid_ext and storing the first source chunkid. Populates
+  `routedTagsByTvidExt` by decoding each X record's routed_tvids
+  via TvidMap; later writes for the same tvid_ext are idempotent
+  because routed pairs are a property of tvid_ext.
+  `overlayRoutings`, `overlayValues`, and `overlayErrors` are
+  zeroed (no on-disk source). (R1993, R2015, R2109, R2122)
 - IndexExt(tvid_ext, sourceChunkID, value, sourceFileid, txn, tt):
   orchestrate one @ext routing. Steps: (1) ParseExtTarget(value);
   skip if !ok. (2) DB.ResolveExtTarget(target_spec). Empty → mark
@@ -109,14 +123,17 @@ sources index, dropped as overlay items disappear.
   alike. (R2010, R2021)
 - VirtualTagCounts(tags []string) map[string]int: batched
   accessor under one RLock for hot-path callers. (R2010)
-- OverlayTagValueFiles(tag, value) []uint64: return a copy of
-  `overlayValues[tag][value]` under RLock. Used by
-  Store.TagValueFiles to add overlay-routed contributions to query
-  results. (R2019, R2020)
-- OverlayTagFiles(tags []string) []TagFileRecord: walk
-  `overlayValues` for the requested tag names, emit per-chunkid
-  records suitable for unioning with persistent and TmpTagStore
-  results. (R2019, R2020)
+- ExtTagValueFiles(tag, value) []uint64: walk
+  `routedTagsByTvidExt`; for each tvid_ext whose routed pairs
+  contain (tag, value), append `targetToChunk[tvid_ext]` to the
+  result. Covers both persistent and overlay routings under a
+  single RLock. Used by Store.TagValueFiles. (R2120, R2124)
+- ExtTagFiles(tags []string) []TagFileRecord: walk
+  `routedTagsByTvidExt`; for each (tvid_ext, routed) where any
+  routed.Tag is in `tags`, emit a TagFileRecord per
+  target_chunkid in `targetToChunk[tvid_ext]`. Covers persistent
+  and overlay routings in one pass. Used by Store.TagFiles. (R2120,
+  R2124)
 - RecordOverlayError(severity, sourceChunkID, sourceFileID,
   message): append entry to `overlayErrors`. Called by IndexExt
   and ReresolveOnReindex when they take overlay-touched branches

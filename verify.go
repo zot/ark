@@ -238,6 +238,18 @@ func (db *DB) crossCheckExtMap(decls map[uint64]*extDecl) []string {
 			}
 		}
 	}
+	// extSource: every tvid_ext with at least one X record must have a
+	// recorded source. Unresolved @ext declarations (decls with no X
+	// records) have no consumers needing extSource.
+	// CRC: crc-TagVerify.md | R2096, R2108
+	for tvid, d := range decls {
+		if len(d.actual) == 0 {
+			continue
+		}
+		if src, ok := db.extmap.extSource[tvid]; !ok || src == 0 {
+			msgs = append(msgs, fmt.Sprintf("ext: ExtMap.extSource[%d] missing — render and cleanup paths will skip this routing", tvid))
+		}
+	}
 	db.extmap.mu.RUnlock()
 	sort.Strings(msgs)
 	return msgs

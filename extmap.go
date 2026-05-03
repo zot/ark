@@ -38,6 +38,7 @@ type ExtMap struct {
 	unresolvedTargets map[uint64]bool                // tvid_exts whose target spec resolves to nothing
 	virtualTagCount   map[string]int                 // ext-routed contributions per tag (persistent + overlay)
 	extSource         map[uint64]uint64              // tvid_ext → source chunkID (R2024, R2026)
+	routedTagsByTvidExt map[uint64][]TagValue        // tvid_ext → routed (tag, value) pairs (R2121)
 	overlayRoutings   map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
 	overlayValues     map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
 	overlayErrors     []OverlayError                 // session diagnostics (R2029)
@@ -54,6 +55,7 @@ func NewExtMap() *ExtMap {
 		unresolvedTargets: make(map[uint64]bool),
 		virtualTagCount:   make(map[string]int),
 		extSource:         make(map[uint64]uint64),
+		routedTagsByTvidExt: make(map[uint64][]TagValue),
 		overlayRoutings:   make(map[uint64]map[uint64][]uint64),
 		overlayValues:     make(map[string]map[string][]uint64),
 	}
@@ -84,27 +86,43 @@ func (m *ExtMap) VirtualTagCounts(tags []string) map[string]int {
 	return out
 }
 
-// OverlayTagValueFiles returns chunkids carrying (tag, value) via
-// overlay-touched @ext routings. Unioned with persistent V record
-// scan and TmpTagStore.TagValueFiles results by Store.TagValueFiles.
-// CRC: crc-ExtMap.md | R2019, R2020
-func (m *ExtMap) OverlayTagValueFiles(tag, value string) []uint64 {
+// ExtTagValueFiles returns target chunkids carrying (tag, value) via
+// any @ext routing — persistent or overlay. Walks
+// routedTagsByTvidExt (the cache populated by Rebuild and maintained
+// alongside writes) and emits the target chunkids for each tvid_ext
+// whose routed pairs include (tag, value). Unioned by
+// Store.TagValueFiles with the persistent V record scan and
+// TmpTagStore.TagValueFiles results.
+// CRC: crc-ExtMap.md | R2120, R2124
+func (m *ExtMap) ExtTagValueFiles(tag, value string) []uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	src := m.overlayValues[tag][value]
-	if len(src) == 0 {
-		return nil
+	var out []uint64
+	for tvidExt, routed := range m.routedTagsByTvidExt {
+		matched := false
+		for _, tv := range routed {
+			if tv.Tag == tag && tv.Value == value {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		for _, chunkID := range m.targetToChunk[tvidExt] {
+			out = append(out, chunkID)
+		}
 	}
-	out := make([]uint64, len(src))
-	copy(out, src)
 	return out
 }
 
-// OverlayTagFiles emits per-(chunkid, tag) records for overlay-routed
-// targets matching the requested tag names. Unioned by Store.TagFiles
-// alongside persistent and TmpTagStore results.
-// CRC: crc-ExtMap.md | R2019, R2020
-func (m *ExtMap) OverlayTagFiles(tags []string) []TagFileRecord {
+// ExtTagFiles emits per-(chunkid, tag) records for ext-routed targets
+// — persistent or overlay — that carry any of the requested tag
+// names. Walks routedTagsByTvidExt + targetToChunk in one pass under
+// a single RLock. Unioned by Store.TagFiles alongside the F-record
+// scan and TmpTagStore results.
+// CRC: crc-ExtMap.md | R2120, R2124
+func (m *ExtMap) ExtTagFiles(tags []string) []TagFileRecord {
 	if len(tags) == 0 {
 		return nil
 	}
@@ -115,20 +133,20 @@ func (m *ExtMap) OverlayTagFiles(tags []string) []TagFileRecord {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []TagFileRecord
-	for tag, byVal := range m.overlayValues {
-		if !tagSet[tag] {
+	for tvidExt, routed := range m.routedTagsByTvidExt {
+		chunks := m.targetToChunk[tvidExt]
+		if len(chunks) == 0 {
 			continue
 		}
-		for _, chunkIDs := range byVal {
-			counts := make(map[uint64]uint32, len(chunkIDs))
-			for _, cid := range chunkIDs {
-				counts[cid]++
+		for _, tv := range routed {
+			if !tagSet[tv.Tag] {
+				continue
 			}
-			for cid, count := range counts {
+			for _, chunkID := range chunks {
 				out = append(out, TagFileRecord{
-					ChunkID: cid,
-					Tag:     tag,
-					Count:   count,
+					ChunkID: chunkID,
+					Tag:     tv.Tag,
+					Count:   1,
 				})
 			}
 		}
@@ -295,6 +313,7 @@ func (m *ExtMap) Rebuild(db *DB) error {
 	m.unresolvedTargets = make(map[uint64]bool)
 	m.virtualTagCount = make(map[string]int)
 	m.extSource = make(map[uint64]uint64)
+	m.routedTagsByTvidExt = make(map[uint64][]TagValue)
 	m.overlayRoutings = make(map[uint64]map[uint64][]uint64)
 	m.overlayValues = make(map[string]map[string][]uint64)
 	m.overlayErrors = nil
@@ -306,15 +325,38 @@ func (m *ExtMap) Rebuild(db *DB) error {
 			if fileID, ok := db.chunkFileID(txn, targetChunk); ok {
 				m.fileidToTvids[fileID] = appendUnique(m.fileidToTvids[fileID], tvidExt)
 			}
-			if _, value, ok := db.store.tvids.Resolve(tvidExt); ok {
+			if tag, value, ok := db.store.tvids.Resolve(tvidExt); ok {
 				if spec, _, parseOk := ParseExtTarget(value); parseOk {
 					m.extByAnchor[spec] = appendUnique(m.extByAnchor[spec], tvidExt)
 				}
-			}
-			for _, rt := range routedTvids {
-				if tag, _, ok := db.store.tvids.Resolve(rt); ok {
-					m.virtualTagCount[tag]++
+				// CRC: crc-ExtMap.md | R2108, R2109
+				if _, have := m.extSource[tvidExt]; !have {
+					if vbytes, gerr := txn.Get(db.store.dbi, tagValueFullKey(tag, value, tvidExt)); gerr == nil {
+						if srcs := decodeVarints(vbytes); len(srcs) > 0 {
+							m.extSource[tvidExt] = srcs[0]
+						}
+					}
 				}
+			}
+			// CRC: crc-ExtMap.md | R2121, R2122
+			// routedTagsByTvidExt is keyed per tvid_ext; the same tvid
+			// appears once per X record but the routed list is identical
+			// across them, so write once on the first sighting.
+			needRouted := false
+			if _, have := m.routedTagsByTvidExt[tvidExt]; !have {
+				needRouted = true
+			}
+			pairs := make([]TagValue, 0, len(routedTvids))
+			for _, rt := range routedTvids {
+				if tag, val, ok := db.store.tvids.Resolve(rt); ok {
+					m.virtualTagCount[tag]++
+					if needRouted {
+						pairs = append(pairs, TagValue{Tag: tag, Value: val})
+					}
+				}
+			}
+			if needRouted {
+				m.routedTagsByTvidExt[tvidExt] = pairs
 			}
 			return nil
 		})
@@ -442,6 +484,12 @@ func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPla
 	m.extByAnchor[p.target] = appendUnique(m.extByAnchor[p.target], p.tvidExt)
 	m.extSource[p.tvidExt] = p.sourceChunkID
 	delete(m.unresolvedTargets, p.tvidExt)
+	// CRC: crc-ExtMap.md | R2121, R2123 — routed tags are tvid_ext-scoped.
+	if _, have := m.routedTagsByTvidExt[p.tvidExt]; !have {
+		dup := make([]TagValue, len(p.routedTags))
+		copy(dup, p.routedTags)
+		m.routedTagsByTvidExt[p.tvidExt] = dup
+	}
 	for _, w := range writes {
 		m.targetToChunk[p.tvidExt] = append(m.targetToChunk[p.tvidExt], w.chunkID)
 		m.chunkToTargets[w.chunkID] = appendUnique(m.chunkToTargets[w.chunkID], p.tvidExt)
@@ -671,6 +719,17 @@ func (m *ExtMap) applyReresolve(txn *lmdb.Txn, tt *TvidTxn, db *DB, fileID uint6
 		}
 		delete(m.unresolvedTargets, tvidExt)
 	}
+	// CRC: crc-ExtMap.md | R2121, R2123 — set cache on Adds; drop on empty.
+	if len(addOps) > 0 {
+		if _, have := m.routedTagsByTvidExt[tvidExt]; !have {
+			dup := make([]TagValue, len(routed))
+			copy(dup, routed)
+			m.routedTagsByTvidExt[tvidExt] = dup
+		}
+	}
+	if len(m.targetToChunk[tvidExt]) == 0 {
+		delete(m.routedTagsByTvidExt, tvidExt)
+	}
 	if len(newTargets) == 0 {
 		m.unresolvedTargets[tvidExt] = true
 		m.extByAnchor[target] = appendUnique(m.extByAnchor[target], tvidExt)
@@ -777,6 +836,7 @@ func (m *ExtMap) CleanupSource(txn *lmdb.Txn, tt *TvidTxn, db *DB, sourceChunkID
 	delete(m.unresolvedTargets, tvidExt)
 	delete(m.overlayRoutings, tvidExt)
 	delete(m.extSource, tvidExt)
+	delete(m.routedTagsByTvidExt, tvidExt) // CRC: crc-ExtMap.md | R2123
 	if _, val, ok := resolveTvid(tt, db, tvidExt); ok {
 		if spec, _, parseOK := ParseExtTarget(val); parseOK {
 			m.extByAnchor[spec] = removeUint64(m.extByAnchor[spec], tvidExt)

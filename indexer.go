@@ -1017,18 +1017,20 @@ func ExtractTags(content []byte) map[string]uint32 {
 }
 
 // tagValueRegex matches @tag: followed by the value to end of line.
-// For compound tags (@ref: path @topic: body), the greedy [^\n]* captures
-// everything — the outer tag's value includes subsequent tags as text.
-// The loop in ExtractTagValues peels embedded tags from the value,
-// so all tags fire for pubsub. Outer values are preserved intact.
+// The greedy [^\n]* captures everything after the colon — for a compound
+// line like `@ext: TARGET @t1: v1`, the outer tag's value is the full
+// remainder. Embedded tag handling is each outer tag's own job (e.g.
+// ParseExtTarget for @ext), not this regex's. R2110, R2111
 var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
 
-// ExtractTagValues scans content for @tag: patterns and returns name+value pairs.
-// Used by both tag counting and pubsub delivery. Skips mentioned tags
-// per R1317-R1325. Strategy controls whether markdown-specific heuristics
-// (fenced/indented code) apply.
-// Compound tags on a single line produce entries for each embedded tag,
-// with outer tags keeping their full value. (Resolves O26.)
+// ExtractTagValues returns one (Tag, Value) per `@x:` line — the outer
+// tag of each line, with Value spanning from after `@x:` to end of line.
+// Embedded `@y: z` segments inside that value are NOT peeled here;
+// compound semantics are per-outer-tag and live with each tag's owner
+// (ParseExtTarget for @ext; future tags register their own handlers).
+// Skips mentions per R1317-R1325. Strategy controls whether
+// markdown-specific heuristics (fenced/indented code) apply.
+// CRC: crc-Indexer.md | R1317-R1325, R2110, R2111
 func ExtractTagValues(content []byte, strategy string) []TagValue {
 	markdown := strategy == "markdown"
 	locs := tagValueRegex.FindAllSubmatchIndex(content, -1)
@@ -1037,37 +1039,13 @@ func ExtractTagValues(content []byte, strategy string) []TagValue {
 	}
 	values := make([]TagValue, 0, len(locs))
 	for _, loc := range locs {
-		atPos := loc[0]
-		if isMention(content, atPos, markdown) {
+		if isMention(content, loc[0], markdown) {
 			continue
 		}
-		tag := strings.ToLower(string(content[loc[2]:loc[3]]))
-		val := content[loc[4]:loc[5]]
 		values = append(values, TagValue{
-			Tag:   tag,
-			Value: strings.TrimSpace(string(val)),
+			Tag:   strings.ToLower(string(content[loc[2]:loc[3]])),
+			Value: strings.TrimSpace(string(content[loc[4]:loc[5]])),
 		})
-		// Peel compound tags from the value portion.
-		// valBase tracks the offset of val within content so we can
-		// call isMention with absolute positions. R1317-R1325
-		valBase := loc[4]
-		for {
-			subIdx := tagValueRegex.FindSubmatchIndex(val)
-			if subIdx == nil {
-				break
-			}
-			subAtPos := valBase + subIdx[0]
-			subTag := strings.ToLower(string(val[subIdx[2]:subIdx[3]]))
-			val = val[subIdx[4]:subIdx[5]]
-			valBase += subIdx[4]
-			if isMention(content, subAtPos, markdown) {
-				continue
-			}
-			values = append(values, TagValue{
-				Tag:   subTag,
-				Value: strings.TrimSpace(string(val)),
-			})
-		}
 	}
 	return values
 }

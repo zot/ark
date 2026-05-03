@@ -11,12 +11,15 @@ import (
 
 // ParseExtTarget splits an `@ext:` value into (TARGET, []TagValue).
 // Format: TARGET `@tag1: v1 @tag2: v2 ...`
-// The greedy tagValueRegex captures everything to end of line, so
-// embedded `@tag:` patterns are peeled from the captured value the
-// same way ExtractTagValues handles compound tags. Returns ok=false
-// when the TARGET is empty or no embedded tag follows it — a
-// TARGET-only @ext has nothing to apply.
-// CRC: crc-Indexer.md | R1983, R1984
+// The greedy tagValueRegex captures everything to end of line; this
+// function owns the @ext-specific peel of embedded `@tag:` segments
+// from that captured value. ExtractTagValues no longer peels — each
+// outer tag's owner does its own embedded-tag handling. The name
+// ParseExtTarget encodes this @ext-specific semantics; do not
+// generalize to a name that suggests a single shared mechanism.
+// Returns ok=false when the TARGET is empty or no embedded tag
+// follows it — a TARGET-only @ext has nothing to apply.
+// CRC: crc-Indexer.md | R1983, R1984, R2111, R2112
 func ParseExtTarget(value string) (target string, tags []TagValue, ok bool) {
 	first := tagValueRegex.FindStringSubmatchIndex(value)
 	if first == nil {

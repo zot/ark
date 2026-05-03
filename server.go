@@ -322,6 +322,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /tags", srv.handleTags)
 	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
 	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
 	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
 	mux.HandleFunc("POST /config/add-source", srv.handleConfigAddSource)
@@ -1265,6 +1266,30 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, files)
+}
+
+// handleTagInspect dumps disk + in-memory @ext state. Read-only.
+// CRC: crc-Server.md | R2117
+func (srv *Server) handleTagInspect(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scope  string `json:"scope"`
+		Target string `json:"target,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Scope == "" {
+		req.Scope = ScopeExt
+	}
+	rep, err := Sync(srv.db, func(db *DB) (*ExtInspectReport, error) {
+		return db.InspectExt(InspectOptions{Scope: req.Scope, Target: req.Target})
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, rep)
 }
 
 // handleInbox returns inbox entries from the running server. Lets the

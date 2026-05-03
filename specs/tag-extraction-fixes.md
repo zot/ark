@@ -23,17 +23,33 @@ those alone.
 
 ### Compound tags
 
-Inline tag support is required for compound tags of the form:
+A line of the form `@a: TARGET @b: v1 @c: v2` is a *compound* tag.
+Compound semantics are **per-outer-tag** — different outer tags use
+the embedded `@x: y` segments differently:
 
-    @ref: file:location @item: body
+- `@ext:` routes the embedded tags as annotations applying to a
+  different chunk (the TARGET); the embedded tags are NOT inline
+  tags on the source. See `specs/at-ext-parsing.md` and
+  `specs/at-ext-storage.md`.
+- A hypothetical `@priority:` would meta-modify the next tag (and
+  could be recursive: `@priority: 12 @priority: high @ext: …`).
+- Future shapes (annotation tags, conditional tags, …) will define
+  their own embedded semantics.
 
-`@ref:` is a compound tag — its value runs to EOL and incorporates
-the nested `@item:` tag. Both `@ref` and `@item` must be indexed
-in the file where they appear. The inline fix enables this.
+`ExtractTagValues` therefore returns only the *outer* tag of each
+compound line — one `(tag, value)` pair where the value is the
+substring from after the first `@x:` to end of line. Each consuming
+code path dispatches on the outer tag name to the embedded-tag
+handler that owns those semantics. The default for unknown outer
+tags is no embedded handling.
 
-Future (hypergraph): `@ref:` projects the nested `@item: body` onto
-the referenced file, so search results show it as if the tag were
-in that file. That projection is not part of this fix.
+Naming rule: any helper that splits a compound value must encode
+the *owner-tag-specific* semantics in its name (`ParseExtTarget`,
+not `splitCompoundTags`).
+
+Future (hypergraph): the `@ext:` projection — embedded tags showing
+up as if they lived in the target file — is provided by the X record
++ V record + ExtMap layer, not by inline-extraction peeling.
 
 ## Append-detection tag boundary
 

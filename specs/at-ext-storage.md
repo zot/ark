@@ -77,6 +77,20 @@ embedded in that text, so no separate cache field is needed.
   reindex that could plausibly produce a resolution.
 - `virtualTagCount[tag] → int` — counter for ext-routed contributions
   per tag, used in T-total queries (see "T accounting" below).
+- `extSource[tvid_ext] → source_chunkid` — single source chunkid per
+  tvid_ext. Used by render and cleanup paths to identify which chunk
+  authored the @ext declaration. When multiple chunks share the same
+  compound @ext text (same tvid_ext), any of them is an acceptable
+  source for rendering — the map holds one. Recovered at startup from
+  the V[ext][value][tvid_ext] source-chunkid list (first entry).
+- `routedTagsByTvidExt[tvid_ext] → []TagValue` — the routed (tag,
+  value) pairs each tvid_ext contributes. Used by the tag-query path
+  (`ExtTagFiles` / `ExtTagValueFiles`) to find which tvid_exts
+  contribute a requested tag without re-reading X records or
+  re-resolving routed_tvids. Populated at Rebuild from each X
+  record's routed_tvids decoded via TvidMap; kept current by
+  `applyIndexExt` (Adds), `applyReresolve` (Adds and Removes), and
+  `CleanupSource` (drop on tvid_ext eviction).
 
 ## Indexing flow
 
@@ -300,9 +314,12 @@ by the missing X and V records:
   records: each contribution adds an entry; removal strikes one
   occurrence.
 
-`Rebuild` is unchanged. It scans X records (persistent only) to
-populate the six maps. `overlayRoutings` and `overlayValues` start
-empty on each session and fill as overlay sources index.
+`Rebuild` scans X records (persistent only) to populate the six core
+maps and `extSource`. For each tvid_ext encountered, it reads the
+V[ext][value][tvid_ext] entry once to recover a source chunkid (first
+entry in the source-chunkid list) and writes it into `extSource`.
+`overlayRoutings` and `overlayValues` start empty on each session and
+fill as overlay sources index.
 
 ### Indexing path
 
@@ -326,15 +343,36 @@ overlay-ness — a `tmp://` file's `@ext` cannot self-target.
 
 ### Query unification
 
-`Store.TagValueFiles(tag, value)` and `Store.TagFiles(tags)` already
-union persistent LMDB results with `TmpTagStore`'s overlay-direct
-results. They gain a third leg:
-`ExtMap.OverlayTagValueFiles(tag, value)` returns
-`overlayValues[tag][value]` chunkids, and the equivalent
-`ExtMap.OverlayTagFiles(tags)` walks `overlayValues` for the requested
-tag names. The three legs union without coordination — chunkids do
-not collide across persistent / overlay-direct / overlay-routed
-sources.
+`Store.TagValueFiles(tag, value)` and `Store.TagFiles(tags)` union
+four legs:
+
+1. **F records** — inline contributions, source-chunk-keyed.
+2. **`TmpTagStore`** — overlay-direct (tags inline on `tmp://` chunks).
+3. **ExtMap, persistent ext-routed** — `ExtMap.ExtTagFiles(tags)` /
+   `ExtMap.ExtTagValueFiles(tag, value)` walk an in-memory cache
+   (`routedTagsByTvidExt[tvid_ext] → []TagValue`) and
+   `targetToChunk[tvid_ext]` to surface every persistent target chunk
+   carrying any of the requested tags. F records intentionally never
+   land at the target chunk (R1991), so without this leg the target
+   side is invisible to tag queries.
+4. **ExtMap, overlay-routed** — same maps, same accessor; overlay
+   target chunks appear in `targetToChunk` because the maps don't
+   distinguish persistent from overlay. The persistent-vs-overlay
+   distinction lives in the X record / `overlayRoutings` write side,
+   not here.
+
+The four legs union without coordination — chunkids do not collide
+across the sources. The historical pair
+`ExtMap.OverlayTagFiles` / `ExtMap.OverlayTagValueFiles` is replaced
+by `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueFiles`; the new pair
+covers both persistent and overlay routings in one walk.
+
+The cache is populated by `Rebuild` (from on-disk X records'
+routed_tvids decoded via TvidMap), maintained alongside writes by
+`applyIndexExt` and `applyReresolve` (Adds add to the cache,
+Removes prune it when the tvid_ext loses its last target),
+and torn down by `CleanupSource` (drop the cache entry as the
+tvid_ext leaves every map).
 
 T-totals: `virtualTagCount[tag]` already counts every routed
 contribution (overlay or persistent), so the existing

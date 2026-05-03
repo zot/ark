@@ -16,8 +16,11 @@ the tags to apply."
 
 `@ext: VALUE` is matched the same way as any other tag — the existing
 `tagValueRegex` captures `VALUE` as the text after `@ext:` to end of
-line. `ParseExtTarget(value string) (target string, tags []TagValue, ok bool)`
-splits that text:
+line. The embedded `@x: y` segments inside `VALUE` are NOT extracted
+as inline tags by `ExtractTagValues`; they belong to the `@ext` flow,
+which calls `ParseExtTarget` to recover them as routed-tag pairs.
+`ParseExtTarget(value string) (target string, tags []TagValue, ok bool)`
+splits the captured `VALUE`:
 
 - The TARGET is the substring up to the first `@tag:` pattern,
   trimmed.

@@ -679,6 +679,7 @@ ark tag set FILE TAG VAL [TAG VAL ...]
 ark tag get FILE [TAG ...]
 ark tag check FILE [HEADING...]
 ark tag verify [--repair] [--scope SCOPE]
+ark tag inspect [--scope SCOPE] [--target PATH] [--json]
 ```
 
 | Subcommand | Server | Behavior |
@@ -692,6 +693,7 @@ ark tag verify [--repair] [--scope SCOPE]
 | `get FILE [TAG...]` | none | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1 |
 | `check FILE [HEADING...]` | none | Validate FILE's tag block. Optional headings restrict allowed body headings |
 | `verify` | refused | Cross-check F/V/T/X records and the in-memory ExtMap. `--repair` writes corrections in a single LMDB write txn. `--scope` is `ext`, `tag-totals`, or `all` (default). Refuses if the server is running. Exit 1 on issues, 2 on tool failure or invalid scope |
+| `inspect` | optional | Read-only observability for `@ext` state. Server-aware: proxies via the running server (in-memory ExtMap section included) or opens LMDB read-only when stopped (disk-only with a note). `--scope ext` (v1 only); `--target PATH` narrows to one file's chunks; `--json` for machine output. Output sections: on-disk (X / V[ext] / F[ext]), in-memory ExtMap maps, per-tvid_ext bridges with decoded paths and routed (tag, value) pairs |
 
 ### `ui` — UI operations
 

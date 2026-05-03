@@ -139,7 +139,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-EventScheduler.md → `scheduler.go`
 - [x] crc-TmpTagStore.md → `tmp_tag_store.go`
 - [x] crc-TvidMap.md → `tvid_map.go`
-- [ ] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
+- [x] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
+- [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
