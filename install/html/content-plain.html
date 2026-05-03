@@ -510,18 +510,35 @@
 <script type="module">
 const highlights = new URL(location.href).searchParams.getAll('highlight');
 
-// Hand highlight patterns to any <pdf-chunk> children. The element uses
-// PDF.js getTextContent() to locate matches and overlays boxes at their
-// positions.
-for (const pc of document.querySelectorAll('pdf-chunk')) {
-  if (highlights.length) pc.setAttribute('highlight', highlights.join('\n'));
-}
-
 // R1459-R1463, R1476: highlight regex matches in plain-text previews.
 // Two paths: <ark-tag> elements get a highlight class on matching children;
 // bare text nodes get <mark> wrappers via DOM splitting (preserves elements).
+// <pdf-chunk> manages its own highlight overlay via the `highlight` attribute;
+// we forward the patterns to it and never touch its subtree.
 function applyHighlights(patterns) {
   const pre = document.getElementById('content');
+  const HL = 'ark-search-highlight';
+
+  // Forward to <pdf-chunk> children. Their own observed-attribute path
+  // rebuilds the overlay; on empty patterns we drop the attribute.
+  for (const pc of pre.querySelectorAll('pdf-chunk')) {
+    if (patterns.length) pc.setAttribute('highlight', patterns.join('\n'));
+    else pc.removeAttribute('highlight');
+  }
+
+  // R1466: live re-highlighting must replace, not accumulate. Unwrap any
+  // prior <mark> wrappers and drop the class from <ark-tag> children before
+  // re-applying — otherwise nested marks accumulate as the query changes.
+  for (const m of pre.querySelectorAll('mark.' + HL)) {
+    const parent = m.parentNode;
+    while (m.firstChild) parent.insertBefore(m.firstChild, m);
+    parent.removeChild(m);
+  }
+  for (const el of pre.querySelectorAll('.' + HL)) {
+    el.classList.remove(HL);
+  }
+  pre.normalize();
+
   if (!patterns.length) return;
 
   const regexes = [];
@@ -532,7 +549,6 @@ function applyHighlights(patterns) {
 
   // Highlight <ark-tag> elements: reconstruct the full tag text
   // (@name: value) and test each regex against it.
-  const HL = 'ark-search-highlight';
   for (const tag of pre.querySelectorAll('ark-tag')) {
     const nameEl = tag.querySelector('name');
     const valueEl = tag.querySelector('value');
@@ -552,9 +568,18 @@ function applyHighlights(patterns) {
     }
   }
 
-  // Highlight bare text nodes: walk non-ark-tag text, split at matches.
+  // Highlight bare text nodes: walk text, skip subtrees we don't own.
+  // <ark-tag> handles its own highlight class above; <pdf-chunk> manages
+  // its overlay via the `highlight` attribute — wrapping a <mark> inside
+  // its positioned text layer would make the invisible selection text
+  // suddenly visible.
   const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => n.parentElement.closest('ark-tag') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    acceptNode: (n) => {
+      const p = n.parentElement;
+      if (!p) return NodeFilter.FILTER_REJECT;
+      if (p.closest('ark-tag, pdf-chunk')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
   });
   const textNodes = [];
   while (walker.nextNode()) textNodes.push(walker.currentNode);

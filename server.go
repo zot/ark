@@ -1908,15 +1908,16 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 
 	query := req.Query
 
-	// R1469: structured tag query — V records pin exact chunkIDs, so when
-	// no other text primary is set we bypass FTS entirely and build results
-	// straight from ChunksByID. When combined with a text primary, the
-	// chunkID set overlays as a WithChunkFilter.
+	// CRC: crc-Server.md | R1469, R2129
+	// Structured tag query — V records pin exact chunkIDs, so when no other
+	// text primary is set we bypass FTS entirely and build results straight
+	// from ChunksByID. R2129: empty query means no text primary regardless of
+	// mode, so leftover UI mode state doesn't force a regex-with-chunk-filter.
 	tagOnly := false
 	var tagChunkIDs []uint64
 	if len(req.NameTokens) > 0 {
 		tagChunkIDs = srv.resolveTagChunks(req.NameTokens, req.ValueTokens, req.NameMatch)
-		hasTextPrimary := req.Mode == "contains" || req.Mode == "about" || req.Mode == "regex" || req.Mode == "fuzzy"
+		hasTextPrimary := query != "" && (req.Mode == "contains" || req.Mode == "about" || req.Mode == "regex" || req.Mode == "fuzzy")
 		tagOnly = !hasTextPrimary
 		if !tagOnly {
 			set := make(map[uint64]bool, len(tagChunkIDs))
