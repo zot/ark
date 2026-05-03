@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -107,13 +107,34 @@ Optionally retrieves chunk text or full file content.
   trigrams with posting-list tally, then C-record re-scoring. Resolves
   filters, applies proximity reranking if requested, runs the standard
   filterAndResolve pipeline. Sets Strategy to "fuzzy" on all results.
-- TagChunkFilter(tag, value, mode, store): resolve file IDs from
-  T/V records at construction time, return a ChunkFilter that checks
-  file ID set membership. No chunk text reads. (R1399)
+- TagChunkFilter(tag, value, store): resolve chunkIDs from T/V
+  records at construction time (F-record ChunkID for name-only;
+  V-record chunkIDs via MatchTagValues with TokenizeTagValue-split
+  tokens for name+value), return a ChunkFilter that checks chunkID
+  set membership. Chunk-precise — no chunk text reads. (R1399, R2128)
 - TagContainsChunkFilter(nameTokens, valueTokens, store): resolve
-  matching tag names from Store.MatchTagNames and file IDs from
-  Store.TagFiles/MatchTagValues at construction time, return a
-  ChunkFilter that checks file ID set membership. (R1470)
+  matching tag names via Store.MatchTagNames and chunkIDs via
+  Store.TagFiles (name-only) or Store.MatchTagValues
+  (TagValueMatch.ChunkIDs) at construction time, return a chunkID-
+  set ChunkFilter. (R1470)
+- chunkIDChunkFilter(set): membership predicate over crec.ChunkID,
+  used by chunk-precise tag filters. (R1399)
+- TokenizeTagValue(s): shell-style splitter for tag-value strings
+  — whitespace separates tokens, double quotes group multi-word
+  tokens, backslash escapes the next rune. Used by TagChunkFilter
+  so quoted values like `meal:"french toast"` and escaped quotes
+  like `note:say \"hi\"` tokenize correctly. (R2128)
+- ChunksByID(chunkIDs): resolve chunkIDs to SearchResultEntry list
+  by reading C records (FileID), looking up paths via FileIDPaths,
+  and recovering Range from the F record's chunk list. Stale chunkIDs
+  (deleted/replaced chunks) are silently skipped. No FTS pass. (R1469)
+- GroupTagChunks(chunkIDs, opts): build GroupedResult straight from
+  a tag-derived chunkID set — calls ChunksByID, applies FilterFiles/
+  ExcludeFiles, fills chunk text via cache, groups via groupResults.
+  Used when a structured tag query has no other text primary. (R1469)
+- groupResults(results, tokenPatterns): factored grouping/preview
+  pipeline shared by SearchGrouped and GroupTagChunks. Sorts files
+  and chunks by score (descending). (R1469)
 - AboutChunkFilter(query, librarian, threshold): chunk-level
   similarity filter. Embeds the query via Librarian, runs a single
   AboutSet request through Librarian.SearchChunksMulti, returns a

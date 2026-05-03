@@ -325,7 +325,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed
 - [ ] O57: No unit tests for Store.MatchTagNames, Store.MatchTagValues
 - [ ] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters
-- [ ] O59: No integration test for resolveTagContainsQuery end-to-end (structured tag query → regex search)
+- [ ] O59: No integration test for resolveTagChunks + GroupTagChunks end-to-end (structured tag query → V-record chunkIDs → direct chunk lookup)
 - [ ] O60: No unit tests for wrapTagElements — tag pattern matching, idempotency, HTML attribute avoidance
 - [ ] O61: ark-search-element.js symlink not in install/release pipeline — must be added to Makefile like ark-markdown-editor.js
 - A33: R1500 (markdown path unchanged) — verified by absence, no design artifact needed

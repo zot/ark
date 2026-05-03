@@ -59,20 +59,47 @@ before chunk scanning.
 
 ### Search endpoint: tag-contains query mode
 
-`handleSearchGrouped` gains support for a structured tag query.
-When the request includes tag name tokens (instead of a regex
-query string), the server:
+`handleSearchGrouped` accepts a structured tag query (`name_tokens`,
+`value_tokens`, `name_match`, `value_match`). The server:
 
-1. Scans T records to find matching tag names
-2. If value tokens are provided, scans V records for each
-   matched name to find matching values and collect file IDs
-3. Builds a regex query that OR's the matched name:value pairs
-4. Optionally uses the V record file IDs as a prefilter
-   (WithOnly) so FTS only scores files that contain the tags
+1. Resolves matching tag names from T records via R1467.
+2. Collects chunkIDs from F records (name-only) or V records
+   (name+value via R1468). V records hold chunkIDs directly —
+   no FTS regex assembly is needed.
+3. When no other text primary is set (no Contains/About/Regex/
+   LikeFile/Fuzzy), bypasses FTS entirely: `Searcher.GroupTagChunks`
+   builds GroupedResult straight from the chunkID set, resolving
+   path/range via C+F record reads. Stale chunkIDs (deleted or
+   replaced chunks) are silently skipped.
+4. When combined with a text primary, the chunkID set overlays
+   as a `WithChunkFilter` over the chosen FTS pipeline.
 
-This keeps scoring in the FTS engine where it belongs — the
-server just resolves names and values from the index before
-searching.
+The V record IS the index; FTS does not need to re-derive what
+the index already knows.
+
+### Token tokenization (CLI and server)
+
+Tag-value strings (e.g. the value half of `name:value` from a CLI
+`-tag` flag) tokenize through `TokenizeTagValue`:
+
+- Whitespace separates tokens.
+- Double quotes group runs of characters as a single token,
+  allowing whitespace inside: `"french toast"` → one token
+  `french toast`.
+- Backslash escapes the next rune anywhere — inside or outside
+  quotes. `\"` produces a literal `"`; `\\` produces a literal
+  `\`; `\ ` outside quotes produces a literal space within a
+  token. Unmatched trailing quote or backslash is tolerated.
+- Empty tokens are dropped.
+- All matching is case-insensitive (V record values and tokens
+  are lowercased before substring comparison in R1468).
+
+Browser clients that send `value_tokens` as a JSON array have
+already split on the client side; server-side tokenization runs
+only when the value arrives as a single string (e.g. from the
+CLI `-tag name:value` flag). Both paths feed `Store.MatchTagValues`,
+so the matching semantics are identical regardless of where the
+split happened.
 
 ### Chunk filter: tag-contains mode
 

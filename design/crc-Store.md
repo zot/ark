@@ -105,8 +105,9 @@ ark-level settings, and tag tracking.
   name. Linear scan — T record set is small. (R1467)
 - MatchTagValues(tag string, tokens []string) []TagValueMatch: scan
   V records for a given tag name, return values where every token is
-  a case-insensitive substring. Each result includes the value string
-  and its file ID list. (R1468)
+  a case-insensitive substring. Each match carries the chunkIDs
+  decoded from the V-record value blob (TagValueMatch.ChunkIDs).
+  Callers that need fileIDs resolve through filesForChunk. (R1468)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time

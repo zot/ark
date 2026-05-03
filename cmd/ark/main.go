@@ -1003,6 +1003,7 @@ Output:`)
 	var primaryQuery, primaryAbout, primaryContains string
 	var primaryRegex []string
 	var primaryFuzzy bool
+	var primaryTagNames, primaryTagValues []string
 	var chunkFilters []ark.ChunkFilterRow
 
 	if len(filterEntries) > 0 {
@@ -1018,7 +1019,18 @@ Output:`)
 		case "about":
 			primaryAbout = primary.query
 		case "tag":
-			primaryContains = primary.query
+			// V records pin chunkIDs — server bypasses FTS entirely for the
+			// primary tag query. Name half splits on whitespace; value half
+			// uses TokenizeTagValue (quotes + backslash escapes) so
+			// `meal:"french toast"` produces a single substring token.
+			nameStr, valueStr, _ := strings.Cut(primary.query, ":")
+			nameStr = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(nameStr), "@"))
+			if nameStr != "" {
+				primaryTagNames = strings.Fields(nameStr)
+			}
+			if valueStr != "" {
+				primaryTagValues = ark.TokenizeTagValue(valueStr)
+			}
 		case "files":
 			// files-only primary: becomes a chunk filter, promote next entry to primary
 			chunkFilters = append(chunkFilters, ark.ChunkFilterRow{Polarity: primary.polarity, Mode: "files", Query: primary.query, K: primary.k})
@@ -1048,7 +1060,7 @@ Output:`)
 		}
 	}
 
-	if *likeFile == "" && primaryContains == "" && primaryAbout == "" && len(primaryRegex) == 0 && !primaryFuzzy && primaryQuery == "" {
+	if *likeFile == "" && primaryContains == "" && primaryAbout == "" && len(primaryRegex) == 0 && !primaryFuzzy && primaryQuery == "" && len(primaryTagNames) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no search query")
 		os.Exit(1)
 	}
@@ -1099,6 +1111,9 @@ Output:`)
 			ChunkFilters []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
 			Session      string               `json:"session,omitempty"`
 			NoTmp        bool                 `json:"noTmp,omitempty"`
+			NameTokens   []string             `json:"nameTokens,omitempty"`
+			ValueTokens  []string             `json:"valueTokens,omitempty"`
+			NameMatch    string               `json:"nameMatch,omitempty"`
 		}{
 			Query:        primaryQuery,
 			About:        primaryAbout,
@@ -1116,6 +1131,9 @@ Output:`)
 			ChunkFilters: chunkFilters,
 			Session:      *session,
 			NoTmp:        *noTmp,
+			NameTokens:   primaryTagNames,
+			ValueTokens:  primaryTagValues,
+			NameMatch:    "exact",
 		}
 		var results []ark.SearchResultEntry
 		if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
@@ -1181,16 +1199,21 @@ Output:`)
 		var results []ark.SearchResultEntry
 		var err error
 		query := primaryQuery
-		if *multi {
+		switch {
+		case len(primaryTagNames) > 0 && !isSplit && !primaryFuzzy && !*multi:
+			// V-record bypass for primary tag query (local fallback path).
+			chunkIDs := d.ResolveTagChunks(primaryTagNames, primaryTagValues, "exact")
+			results, err = d.SearchTagChunks(chunkIDs, opts)
+		case *multi:
 			if query == "" && primaryContains != "" {
 				query = primaryContains
 			}
 			results, err = d.SearchMulti(query, opts)
-		} else if primaryFuzzy {
+		case primaryFuzzy:
 			results, err = d.SearchFuzzy(query, opts)
-		} else if isSplit {
+		case isSplit:
 			results, err = d.SearchSplit(opts)
-		} else {
+		default:
 			results, err = d.SearchCombined(query, opts)
 		}
 		if err != nil {

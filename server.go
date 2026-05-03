@@ -612,6 +612,11 @@ type searchRequest struct {
 	NoTmp           bool             `json:"noTmp,omitempty"`        // R687: exclude tmp:// documents
 	OnlyIfTmp       bool             `json:"onlyIfTmp,omitempty"`    // R686: return 204 if no tmp files
 	ChunkFilters    []ChunkFilterRow `json:"chunkFilters,omitempty"` // CRC: crc-Server.md | R1783, R1784
+	// R1469: structured tag query — server resolves chunkIDs from V/F records
+	// and bypasses FTS entirely when no other text primary is set.
+	NameTokens  []string `json:"nameTokens,omitempty"`
+	ValueTokens []string `json:"valueTokens,omitempty"`
+	NameMatch   string   `json:"nameMatch,omitempty"` // "exact" or "contains" (default)
 }
 
 // tmpRequest is the body for tmp:// add/update/remove endpoints.
@@ -716,6 +721,36 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := buildSearchOpts(req)
+
+	// R1469: structured tag query — V records pin chunkIDs, so when there's
+	// no other text primary we bypass FTS and read chunks straight by ID.
+	// Stale chunkIDs (not currently indexed) are skipped silently.
+	if len(req.NameTokens) > 0 && req.About == "" && req.Contains == "" && len(req.Regex) == 0 && req.LikeFile == "" && !req.Fuzzy {
+		chunkIDs := srv.resolveTagChunks(req.NameTokens, req.ValueTokens, req.NameMatch)
+		results, err := Sync(srv.db, func(db *DB) ([]SearchResultEntry, error) {
+			entries, terr := db.SearchTagChunks(chunkIDs, opts)
+			if terr != nil {
+				return nil, terr
+			}
+			if req.Tags || req.Chunks {
+				return db.FillChunks(entries)
+			}
+			if req.Files {
+				return db.FillFiles(entries)
+			}
+			return entries, nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.Tags {
+			writeJSON(w, ExtractResultTags(results))
+		} else {
+			writeJSON(w, results)
+		}
+		return
+	}
 
 	// R657, R658, R659: session-scoped search
 	if req.Session != "" {
@@ -1873,11 +1908,25 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 
 	query := req.Query
 
-	// R1469: resolve structured tag query from T/V records.
-	// Skip the mode switch — resolveTagContainsQuery sets opts.Regex directly.
+	// R1469: structured tag query — V records pin exact chunkIDs, so when
+	// no other text primary is set we bypass FTS entirely and build results
+	// straight from ChunksByID. When combined with a text primary, the
+	// chunkID set overlays as a WithChunkFilter.
+	tagOnly := false
+	var tagChunkIDs []uint64
 	if len(req.NameTokens) > 0 {
-		query, opts = srv.resolveTagContainsQuery(req.NameTokens, req.ValueTokens, req.NameMatch, opts)
-	} else {
+		tagChunkIDs = srv.resolveTagChunks(req.NameTokens, req.ValueTokens, req.NameMatch)
+		hasTextPrimary := req.Mode == "contains" || req.Mode == "about" || req.Mode == "regex" || req.Mode == "fuzzy"
+		tagOnly = !hasTextPrimary
+		if !tagOnly {
+			set := make(map[uint64]bool, len(tagChunkIDs))
+			for _, cid := range tagChunkIDs {
+				set[cid] = true
+			}
+			opts.extraOpts = append(opts.extraOpts, microfts2.WithChunkFilter(chunkIDChunkFilter(set)))
+		}
+	}
+	if !tagOnly {
 		switch req.Mode {
 		case "contains":
 			opts.Contains = query
@@ -1894,13 +1943,17 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Multi-strategy for combined queries — exclude regex (R1229)
-	if !opts.Fuzzy && opts.Contains == "" && opts.About == "" && len(opts.Regex) == 0 {
+	if !tagOnly && !opts.Fuzzy && opts.Contains == "" && opts.About == "" && len(opts.Regex) == 0 {
 		opts.Multi = true
 	}
 
 	var results []GroupedResult
 	var err error
-	if req.Session != "" {
+	if tagOnly {
+		results, err = Sync(srv.db, func(db *DB) ([]GroupedResult, error) {
+			return db.GroupTagChunks(tagChunkIDs, opts)
+		})
+	} else if req.Session != "" {
 		sess := srv.GetOrCreateSession(req.Session)
 		err = sess.RunSearch(query, func(cache *microfts2.ChunkCache) error {
 			return SyncVoid(srv.db, func(db *DB) error {
@@ -1922,82 +1975,13 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
-// resolveTagContainsQuery resolves structured tag name/value tokens against
-// T and V records, building a regex query and optional file ID prefilter.
-// Runs Store lookups through the closure actor (LMDB reads are fast, no write queue).
+// resolveTagChunks dispatches the chunkID resolution through the DB actor.
 // CRC: crc-Server.md | R1469
-func (srv *Server) resolveTagContainsQuery(nameTokens, valueTokens []string, nameMatch string, opts SearchOpts) (string, SearchOpts) {
-	type resolved struct {
-		query string
-		opts  SearchOpts
-	}
-	res, err := Sync(srv.db, func(db *DB) (resolved, error) {
-		var matchedNames []string
-		var err error
-		if nameMatch == "exact" && len(nameTokens) == 1 {
-			// Exact mode: verify the tag exists in T records
-			counts, cErr := db.store.TagCounts(nameTokens)
-			if cErr != nil || len(counts) == 0 || counts[0].Count == 0 {
-				return resolved{query: "(?!)", opts: opts}, nil
-			}
-			matchedNames = []string{nameTokens[0]}
-		} else {
-			matchedNames, err = db.store.MatchTagNames(nameTokens)
-			if err != nil || len(matchedNames) == 0 {
-				return resolved{query: "(?!)", opts: opts}, nil
-			}
-		}
-
-		if len(valueTokens) == 0 {
-			// Name-only: build regex, prefilter by file IDs from F records
-			fileIDs := make(map[uint64]struct{})
-			var parts []string
-			for _, name := range matchedNames {
-				parts = append(parts, regexp.QuoteMeta(name))
-				recs, _ := db.store.TagFiles([]string{name})
-				for _, r := range recs {
-					fileIDs[r.FileID] = struct{}{}
-				}
-			}
-			query := `(^|\s)@(` + strings.Join(parts, "|") + `):`
-			opts.Regex = []string{query}
-			if len(fileIDs) > 0 {
-				opts.extraOpts = append(opts.extraOpts, microfts2.WithOnly(fileIDs))
-			}
-			return resolved{query: "", opts: opts}, nil
-		}
-
-		// Name + value: resolve V records, prefilter by file IDs
-		fileIDs := make(map[uint64]struct{})
-		var queryParts []string
-		for _, name := range matchedNames {
-			matches, mErr := db.store.MatchTagValues(name, valueTokens)
-			if mErr != nil || len(matches) == 0 {
-				continue
-			}
-			nameEsc := regexp.QuoteMeta(name)
-			for _, m := range matches {
-				valEsc := regexp.QuoteMeta(m.Value)
-				queryParts = append(queryParts, `(^|\s)@`+nameEsc+`:\s*`+valEsc)
-				for _, fid := range m.FileIDs {
-					fileIDs[fid] = struct{}{}
-				}
-			}
-		}
-		if len(queryParts) == 0 {
-			return resolved{query: "(?!)", opts: opts}, nil
-		}
-		query := strings.Join(queryParts, "|")
-		opts.Regex = []string{query}
-		if len(fileIDs) > 0 {
-			opts.extraOpts = append(opts.extraOpts, microfts2.WithOnly(fileIDs))
-		}
-		return resolved{query: "", opts: opts}, nil
+func (srv *Server) resolveTagChunks(nameTokens, valueTokens []string, nameMatch string) []uint64 {
+	ids, _ := Sync(srv.db, func(db *DB) ([]uint64, error) {
+		return db.ResolveTagChunks(nameTokens, valueTokens, nameMatch), nil
 	})
-	if err != nil {
-		return "(?!)", opts
-	}
-	return res.query, res.opts
+	return ids
 }
 
 // handleTagComplete returns tag name completions matching a prefix.

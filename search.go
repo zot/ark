@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
 
 	"github.com/yuin/goldmark"
@@ -556,36 +557,6 @@ func FuzzyChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uint64
 	}
 }
 
-// tagFileIDSet builds a set of file IDs from T/V records for tag filtering.
-// All resolution happens at construction time — the returned set is a simple
-// membership check per chunk. Tags are file-level metadata, so file ID
-// matching is the correct semantic (a tag in any chunk means the file has it).
-// CRC: crc-Searcher.md | R1399, R1470
-func tagFileIDSet(names []string, value, valueMode string, store *Store) map[uint64]bool {
-	fileIDs := make(map[uint64]bool)
-	for _, name := range names {
-		if value == "" {
-			// Name-only: get all file IDs that have this tag (F records)
-			recs, _ := store.TagFiles([]string{name})
-			for _, r := range recs {
-				fileIDs[r.FileID] = true
-			}
-		} else {
-			// Name + value: scan V records, filter values by mode
-			allVals, _ := store.QueryTagValues(name, "")
-			for _, vc := range allVals {
-				if matchTag(vc.Value, value, valueMode) {
-					ids, _ := store.TagValueFiles(name, vc.Value)
-					for _, id := range ids {
-						fileIDs[id] = true
-					}
-				}
-			}
-		}
-	}
-	return fileIDs
-}
-
 // fileIDChunkFilter returns a ChunkFilter from a pre-built file ID set.
 // CRC: crc-Searcher.md | R1867
 func fileIDChunkFilter(fileIDs map[uint64]bool) microfts2.ChunkFilter {
@@ -602,32 +573,86 @@ func fileIDChunkFilter(fileIDs map[uint64]bool) microfts2.ChunkFilter {
 	}
 }
 
-// TagChunkFilter returns a ChunkFilter that matches by tag name and value
-// using T/V records in LMDB (in RAM, no chunk text reads). R1399
-// Mode: "exact", "regex", or "fuzzy" — applies to both name and value.
-func TagChunkFilter(tag, value, mode string, store *Store) microfts2.ChunkFilter {
-	return fileIDChunkFilter(tagFileIDSet([]string{tag}, value, mode, store))
-}
-
-// matchTag compares a candidate against a pattern using the given mode.
-func matchTag(candidate, pattern, mode string) bool {
-	switch mode {
-	case "regex":
-		re, err := regexp.Compile("(?i)" + pattern)
-		if err != nil {
-			return candidate == pattern
-		}
-		return re.MatchString(candidate)
-	case "fuzzy":
-		results := fuzzyMatch(pattern, []string{candidate}, 0.3)
-		return len(results) > 0 && results[0].score > 0
-	default: // exact
-		return strings.EqualFold(candidate, pattern)
+// chunkIDChunkFilter returns a ChunkFilter from a pre-built chunkID set.
+// Use when V/F records pin specific chunks (chunk-precise tag filters).
+// CRC: crc-Searcher.md | R1399
+func chunkIDChunkFilter(chunkIDs map[uint64]bool) microfts2.ChunkFilter {
+	if len(chunkIDs) == 0 {
+		return func(crec microfts2.CRecord) bool { return false }
+	}
+	return func(crec microfts2.CRecord) bool {
+		return chunkIDs[crec.ChunkID]
 	}
 }
 
+// TagChunkFilter returns a ChunkFilter that matches by tag name and value
+// using T/V records in LMDB (in RAM, no chunk text reads). Chunk-precise:
+// name-only collects F-record chunkIDs; name+value tokenizes value via
+// TokenizeTagValue (quote-aware, whitespace-split) and matches V records
+// case-insensitively (AND substring per token).
+// CRC: crc-Searcher.md | R1399
+func TagChunkFilter(tag, value string, store *Store) microfts2.ChunkFilter {
+	chunkIDs := make(map[uint64]bool)
+	if value == "" {
+		recs, _ := store.TagFiles([]string{tag})
+		for _, r := range recs {
+			chunkIDs[r.ChunkID] = true
+		}
+	} else {
+		matches, _ := store.MatchTagValues(tag, TokenizeTagValue(value))
+		for _, m := range matches {
+			for _, cid := range m.ChunkIDs {
+				chunkIDs[cid] = true
+			}
+		}
+	}
+	return chunkIDChunkFilter(chunkIDs)
+}
+
+// TokenizeTagValue splits a tag value into tokens, honoring double quotes
+// and backslash escapes:
+// `open new` → ["open", "new"]
+// `"french toast"` → ["french toast"]
+// `cook "french toast" hot` → ["cook", "french toast", "hot"]
+// `say \"hi\"` → [`say`, `"hi"`]
+// `path\\sub` → [`path\sub`]
+// Outside quotes, `\` escapes the next rune (including space). Inside
+// quotes, `\` escapes `"` and `\`. Unmatched trailing quote/backslash
+// is tolerated. Empty tokens are dropped.
+// CRC: crc-Searcher.md | R1399
+func TokenizeTagValue(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inQuote := false
+	escaped := false
+	for _, r := range s {
+		if escaped {
+			cur.WriteRune(r)
+			escaped = false
+			continue
+		}
+		switch {
+		case r == '\\':
+			escaped = true
+		case r == '"':
+			inQuote = !inQuote
+		case !inQuote && (r == ' ' || r == '\t'):
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
+}
+
 // TagContainsChunkFilter returns a ChunkFilter that resolves matching tag names
-// and values from T/V records. No chunk text reads — file ID set membership only.
+// and values from T/V records. Chunk-precise — F/V records carry chunkIDs.
 // CRC: crc-Searcher.md | R1470
 func TagContainsChunkFilter(nameTokens, valueTokens []string, store *Store) microfts2.ChunkFilter {
 	matchedNames, _ := store.MatchTagNames(nameTokens)
@@ -635,27 +660,25 @@ func TagContainsChunkFilter(nameTokens, valueTokens []string, store *Store) micr
 		return func(crec microfts2.CRecord) bool { return false }
 	}
 
-	fileIDs := make(map[uint64]bool)
+	chunkIDs := make(map[uint64]bool)
 	if len(valueTokens) == 0 {
-		// Name-only: collect file IDs for all matched names
 		for _, name := range matchedNames {
 			recs, _ := store.TagFiles([]string{name})
 			for _, r := range recs {
-				fileIDs[r.FileID] = true
+				chunkIDs[r.ChunkID] = true
 			}
 		}
 	} else {
-		// Name + value: resolve V records with token matching
 		for _, name := range matchedNames {
 			vMatches, _ := store.MatchTagValues(name, valueTokens)
 			for _, vm := range vMatches {
-				for _, fid := range vm.FileIDs {
-					fileIDs[fid] = true
+				for _, cid := range vm.ChunkIDs {
+					chunkIDs[cid] = true
 				}
 			}
 		}
 	}
-	return fileIDChunkFilter(fileIDs)
+	return chunkIDChunkFilter(chunkIDs)
 }
 
 // BuildChunkFilters converts UI filter rows into microfts2 search options.
@@ -687,7 +710,7 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 			tag = strings.TrimSpace(tag)
 			value = strings.TrimSpace(value)
 			if store != nil {
-				filter = TagChunkFilter(tag, value, "exact", store)
+				filter = TagChunkFilter(tag, value, store)
 			} else {
 				continue
 			}
@@ -1240,6 +1263,127 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 	return s.FillChunksUsing(results, nil)
 }
 
+// SearchTagChunks resolves a tag-derived chunkID set to a flat
+// SearchResultEntry list — bypasses FTS. Applies FilterFiles/ExcludeFiles
+// post-hoc and caps to opts.K. Caller fills chunks/files as needed.
+// CRC: crc-Searcher.md | R1469
+func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
+	results, err := s.ChunksByID(chunkIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 {
+		m := &Matcher{Dotfiles: true}
+		filtered := results[:0]
+		for _, r := range results {
+			if len(opts.FilterFiles) > 0 {
+				include := false
+				for _, pat := range opts.FilterFiles {
+					if m.Match(pat, r.Path, false) {
+						include = true
+						break
+					}
+				}
+				if !include {
+					continue
+				}
+			}
+			excluded := false
+			for _, pat := range opts.ExcludeFiles {
+				if m.Match(pat, r.Path, false) {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+			filtered = append(filtered, r)
+		}
+		results = filtered
+	}
+	k := opts.K
+	if k == 0 {
+		k = 20
+	}
+	if len(results) > k {
+		results = results[:k]
+	}
+	return results, nil
+}
+
+// GroupTagChunks resolves a tag-derived chunkID set straight to GroupedResult
+// — bypasses FTS. Wraps SearchTagChunks with chunk-text fill and the shared
+// grouping/preview pipeline used by SearchGrouped.
+// CRC: crc-Searcher.md | R1469
+func (s *Searcher) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
+	results, err := s.SearchTagChunks(chunkIDs, opts)
+	if err != nil {
+		return nil, err
+	}
+	results, err = s.FillChunksUsing(results, opts.Cache)
+	if err != nil {
+		return nil, err
+	}
+	return s.groupResults(results, nil), nil
+}
+
+// ChunksByID resolves a chunkID set to SearchResultEntry list directly —
+// no FTS pass. Reads each C record for FileID, skips stale chunkIDs whose
+// C records no longer exist, and looks up Range via the F record. Used by
+// tag queries: V records pin exact chunkIDs, so FTS is redundant.
+// CRC: crc-Searcher.md | R1399
+func (s *Searcher) ChunksByID(chunkIDs []uint64) ([]SearchResultEntry, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	paths, err := s.fts.FileIDPaths()
+	if err != nil {
+		return nil, err
+	}
+	rangeCache := make(map[uint64]map[uint64]string) // fileID → chunkID → range
+	var entries []SearchResultEntry
+	err = s.fts.Env().View(func(txn *lmdb.Txn) error {
+		for _, cid := range chunkIDs {
+			crec, rerr := s.fts.ReadCRecord(txn, cid)
+			if rerr != nil || len(crec.FileIDs) == 0 {
+				continue
+			}
+			fid := crec.FileIDs[0].FileID
+			path, ok := paths[fid]
+			if !ok {
+				continue
+			}
+			ranges, cached := rangeCache[fid]
+			if !cached {
+				frec, ferr := s.fts.FileInfoByID(fid)
+				if ferr != nil {
+					rangeCache[fid] = nil
+					continue
+				}
+				ranges = make(map[uint64]string, len(frec.Chunks))
+				for _, fce := range frec.Chunks {
+					ranges[fce.ChunkID] = fce.Location
+				}
+				rangeCache[fid] = ranges
+			}
+			rng, ok := ranges[cid]
+			if !ok {
+				continue
+			}
+			entries = append(entries, SearchResultEntry{
+				Path:     path,
+				Range:    rng,
+				FileID:   fid,
+				ChunkNum: cid,
+				Score:    1,
+			})
+		}
+		return nil
+	})
+	return entries, err
+}
+
 // FillChunksUsing reads chunk text using the provided cache, or creates a
 // fresh per-query cache if cache is nil. The session path provides a non-nil
 // cache so that successive searches reuse cached file reads.
@@ -1712,7 +1856,13 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 		tokenPatterns = compileTokenPatterns(highlightQuery)
 	}
 
-	// Group by file
+	return s.groupResults(results, tokenPatterns), nil
+}
+
+// groupResults groups SearchResultEntry by file, renders previews, and sorts
+// files / chunks by score (descending). Shared by SearchGrouped and the
+// tag-direct path (GroupTagChunks). tokenPatterns may be nil (no highlighting).
+func (s *Searcher) groupResults(results []SearchResultEntry, tokenPatterns []*regexp.Regexp) []GroupedResult {
 	type fileGroup struct {
 		path     string
 		strategy string
@@ -1721,11 +1871,9 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 	}
 	groups := make(map[uint64]*fileGroup)
 	var order []uint64
-
 	for _, r := range results {
 		g, ok := groups[r.FileID]
 		if !ok {
-			// Look up strategy for this file
 			strategy := ""
 			if info, err := s.fts.FileInfoByID(r.FileID); err == nil {
 				strategy = info.Strategy
@@ -1750,13 +1898,9 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			g.best = r.Score
 		}
 	}
-
-	// Sort files by best chunk score (descending)
 	sort.Slice(order, func(i, j int) bool {
 		return groups[order[i]].best > groups[order[j]].best
 	})
-
-	// Build result, sort chunks within each file by score (descending)
 	grouped := make([]GroupedResult, 0, len(order))
 	for _, fid := range order {
 		g := groups[fid]
@@ -1769,7 +1913,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 			Chunks:   g.chunks,
 		})
 	}
-	return grouped, nil
+	return grouped
 }
 
 // RenderPreview renders chunk text as HTML for app display.

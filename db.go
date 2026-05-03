@@ -1049,6 +1049,66 @@ func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, err
 	return db.search.SearchGrouped(query, opts)
 }
 
+// GroupTagChunks builds GroupedResult straight from a tag-derived chunkID set,
+// bypassing FTS. CRC: crc-Searcher.md | R1469
+func (db *DB) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
+	return db.search.GroupTagChunks(chunkIDs, opts)
+}
+
+// SearchTagChunks returns a flat SearchResultEntry list from a tag-derived
+// chunkID set, bypassing FTS. CRC: crc-Searcher.md | R1469
+func (db *DB) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
+	return db.search.SearchTagChunks(chunkIDs, opts)
+}
+
+// ResolveTagChunks resolves structured tag name/value tokens against T/V
+// records to a chunkID slice. Name-only branch collects F-record chunkIDs;
+// name+value branch matches V-record values case-insensitively (AND substring
+// per token) and collects their chunkIDs.
+// CRC: crc-Searcher.md | R1469, R1467, R1468
+func (db *DB) ResolveTagChunks(nameTokens, valueTokens []string, nameMatch string) []uint64 {
+	var matchedNames []string
+	if nameMatch == "exact" && len(nameTokens) == 1 {
+		counts, cErr := db.store.TagCounts(nameTokens)
+		if cErr != nil || len(counts) == 0 || counts[0].Count == 0 {
+			return nil
+		}
+		matchedNames = []string{nameTokens[0]}
+	} else {
+		names, mErr := db.store.MatchTagNames(nameTokens)
+		if mErr != nil || len(names) == 0 {
+			return nil
+		}
+		matchedNames = names
+	}
+	seen := make(map[uint64]struct{})
+	if len(valueTokens) == 0 {
+		for _, name := range matchedNames {
+			recs, _ := db.store.TagFiles([]string{name})
+			for _, r := range recs {
+				seen[r.ChunkID] = struct{}{}
+			}
+		}
+	} else {
+		for _, name := range matchedNames {
+			matches, mErr := db.store.MatchTagValues(name, valueTokens)
+			if mErr != nil {
+				continue
+			}
+			for _, m := range matches {
+				for _, cid := range m.ChunkIDs {
+					seen[cid] = struct{}{}
+				}
+			}
+		}
+	}
+	ids := make([]uint64, 0, len(seen))
+	for cid := range seen {
+		ids = append(ids, cid)
+	}
+	return ids
+}
+
 // GetChunks returns the target chunk and its positional neighbors.
 func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microfts2.ChunkResult, error) {
 	return db.fts.GetChunks(fpath, targetRange, before, after)

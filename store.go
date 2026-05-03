@@ -1694,11 +1694,13 @@ func (s *Store) TagsForChunk(chunkID uint64) ([]TagValue, error) {
 	return result, err
 }
 
-// TagValueMatch is a tag value with its file ID list, returned by MatchTagValues.
+// TagValueMatch is a tag value with its chunkID list, returned by
+// MatchTagValues. The chunkIDs come straight from the V record value blob
+// (post chunkid migration); callers that need fileIDs resolve via filesForChunk.
 // CRC: crc-Store.md | R1468
 type TagValueMatch struct {
-	Value   string   `json:"value"`
-	FileIDs []uint64 `json:"file_ids"`
+	Value    string   `json:"value"`
+	ChunkIDs []uint64 `json:"chunk_ids"`
 }
 
 // MatchTagNames scans T records and returns tag names where every token
@@ -1734,7 +1736,7 @@ func (s *Store) MatchTagNames(tokens []string) ([]string, error) {
 
 // MatchTagValues scans V records for a given tag name and returns values
 // where every token appears as a case-insensitive substring. Each result
-// includes the value string and its file ID list.
+// carries the chunkIDs from the V record value blob (decoded varints).
 // CRC: crc-Store.md | R1468
 func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, error) {
 	lower := make([]string, len(tokens))
@@ -1758,8 +1760,8 @@ func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, er
 				}
 			}
 			results = append(results, TagValueMatch{
-				Value:   value,
-				FileIDs: decodeVarints(v),
+				Value:    value,
+				ChunkIDs: decodeVarints(v),
 			})
 			return nil
 		})
