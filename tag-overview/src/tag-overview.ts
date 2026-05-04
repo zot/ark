@@ -310,12 +310,12 @@ class TagOverviewSidebar {
     this.startAutoTrack();
   }
 
-  /** The markdown content view's #toggle-btn (pencil/eye) is fixed
-   *  to the top-right corner — it collides with the sidebar.
-   *  Push it left of the sidebar by the sidebar's actual width. */
+  // CRC: crc-TagOverviewSidebar.md | R2130, R2131
+  /** Push toggle-btn left of the sidebar; also publish sidebar width. */
   private adjustOverlayButtons(): void {
     if (!this.root) return;
     const w = this.root.offsetWidth;
+    document.documentElement.style.setProperty("--ark-tag-overview-width", `${w}px`);
     for (const id of ["toggle-btn"]) {
       const btn = document.getElementById(id);
       if (btn) btn.style.right = `calc(${w}px + 0.75em)`;
@@ -1260,6 +1260,12 @@ pdf-chunk ark-ext-tags {
   position: absolute;
   float: none;
   margin: 0;
+}
+/* R2131 */
+body[data-pdf-host] ark-search {
+  display: block;
+  margin-left: 3em;
+  margin-right: calc(max(3em, var(--ark-tag-overview-width, 0px)) + 1em);
 }
 .ark-ext-tags-indicator {
   pointer-events: auto;

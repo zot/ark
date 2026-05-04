@@ -1,5 +1,5 @@
 # TagOverviewSidebar
-**Requirements:** R2032, R2033, R2034, R2035, R2036, R2037, R2038, R2039, R2040, R2041, R2042, R2043, R2044, R2045, R2046, R2047, R2048, R2049, R2050, R2051, R2052, R2053, R2054, R2055, R2056, R2057, R2058, R2059, R2060, R2061, R2062, R2063, R2064, R2083, R2084
+**Requirements:** R2032, R2033, R2034, R2035, R2036, R2037, R2038, R2039, R2040, R2041, R2042, R2043, R2044, R2045, R2046, R2047, R2048, R2049, R2050, R2051, R2052, R2053, R2054, R2055, R2056, R2057, R2058, R2059, R2060, R2061, R2062, R2063, R2064, R2083, R2084, R2130, R2131
 
 Right-side sidebar in `/content/` that surfaces a document's
 headings and tags as a unified, navigable outline. Mounts in any
@@ -88,6 +88,14 @@ directly. No shadow DOM — inherits host theme CSS.
 - inheritsInIframe: same component instance mounts in
   `<ark-search>` result iframes — no separate code path
   (R2083)
+- publishWidth(): on every width change (drag, mode switch,
+  mount, collapse), set `--ark-tag-overview-width` on
+  `document.documentElement` to the sidebar's current
+  `offsetWidth`, so unrelated content (e.g. PDF-host
+  `<ark-search>` panels) can position itself relative to the
+  sidebar without coupling. The injected stylesheet also carries
+  a `body[data-pdf-host] ark-search` rule that consumes the var
+  with a fixed gutter fallback (R2130, R2131)
 
 ## Collaborators
 - ArkTagElement: dispatch target for inline-tag search-icon

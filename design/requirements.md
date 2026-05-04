@@ -3335,6 +3335,8 @@ implementation, not a separate format break.
 - **R2082:** In PDF chunks, `<ark-ext-tags>`, `<ark-heading>`, and `<ark-tag>` ride above the `<pdf-chunk>` canvas via absolute positioning at coordinates derived from their rect attributes — the same approach inline `<ark-tag>` already uses for PDF tags.
 - **R2083:** Sidebar, badge, indicators, and filter render in `<ark-search>` results' `/content/` iframes identically to standalone `/content/` views — search-result rendering inherits the overview, with no separate code path.
 - **R2084:** (inferred — scope boundary) The CodeMirror-based markdown editing view is out of scope for v1. The overview is supported only in rendered content views (HTML, markdown read views, PDF). Editing-view support is a v2 follow-up.
+- **R2130:** The sidebar publishes its current outer width as the CSS custom property `--ark-tag-overview-width` on the document element, updated whenever the sidebar resizes (drag, mode change, mount, collapse). Other content positions itself relative to the sidebar by reading this var.
+- **R2131:** When `<body>` carries the `data-pdf-host` attribute, embedded `<ark-search>` panels apply `margin-left: 3em` and `margin-right: calc(max(3em, var(--ark-tag-overview-width, 0px)) + 1em)` so the panel's kill boxes remain reachable beneath the sidebar. The fallback gutter applies when the sidebar is absent.
 
 ## Feature: ark serve -compact
 **Source:** specs/serve-compact.md

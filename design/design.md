@@ -184,12 +184,12 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PdfChunkElement.md → `pdf-chunk/src/pdf-chunk-element.ts`
 
 ### CRC Cards (TypeScript — Tag Overview)
-- [ ] crc-TagOverviewSidebar.md → `tag-overview/src/sidebar.ts`
-- [ ] crc-ArkExtTagsElement.md → `tag-overview/src/ark-ext-tags-element.ts`
+- [ ] crc-TagOverviewSidebar.md → `tag-overview/src/tag-overview.ts`
+- [ ] crc-ArkExtTagsElement.md → `tag-overview/src/tag-overview.ts`
 
 ### Sequences (Tag Overview)
-- [ ] seq-tag-overview-load.md → `server.go`, `tag-overview/src/sidebar.ts`
-- [ ] seq-tag-overview-click.md → `tag-overview/src/sidebar.ts`, `tag-overview/src/ark-ext-tags-element.ts`
+- [ ] seq-tag-overview-load.md → `server.go`, `tag-overview/src/tag-overview.ts`
+- [ ] seq-tag-overview-click.md → `tag-overview/src/tag-overview.ts`
 
 ### Sequences (TypeScript — PDF Chunk Element)
 - [x] seq-pdf-chunk-render.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`

@@ -179,6 +179,22 @@ DB:
 The resize handle and persisted widths apply only when the
 sidebar is open (modes 2 and 3).
 
+### Published width
+
+The sidebar publishes its current outer width as a CSS custom
+property `--ark-tag-overview-width` on the document element,
+updated whenever the sidebar resizes (drag, mode change, mount,
+collapse). Other content can position itself relative to the
+sidebar by reading this var without needing the sidebar to know
+about it directly.
+
+When `<body>` carries the `data-pdf-host` attribute (set by the
+PDF host module while the page is in PDF-render mode), embedded
+`<ark-search>` panels reserve right-side margin equal to the
+sidebar width plus a small gap, so the panel's kill boxes
+remain reachable beneath the sidebar's left edge. The fallback
+when the sidebar is absent is a small fixed gutter.
+
 ## Body surface
 
 ### Indicator: `<ark-ext-tags>`
