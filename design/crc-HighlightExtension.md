@@ -1,5 +1,5 @@
 # HighlightExtension
-**Requirements:** R1459, R1460, R1461, R1462, R1463, R1466
+**Requirements:** R1459, R1460, R1461, R1462, R1463, R1466, R2132
 
 CM6 `StateField` + `StateEffect` + `ViewPlugin` trio that highlights
 regex matches inside the editor viewport. Fed by the `highlight=<regex>`
@@ -20,6 +20,7 @@ reloading. Lives in `markdown-editor/src/highlight-extension.ts`.
 - walks `view.visibleRanges` on construction, on `docChanged`/`viewportChanged`, and whenever the pattern field changes
 - slices the doc text for each visible range, runs every regex, and emits a `Decoration.mark({class: "ark-search-highlight"})` for each hit
 - skips zero-length matches to avoid infinite loops on patterns like `(^|\s)`
+- tracks taken ranges across regexes; when a regex's group range overlaps an earlier-taken range (typically a duplicate regex in the list), falls back to a literal `indexOf` of the captured group text past the taken range, bounded to the same line as the original match — so N copies of the same line-anchored regex highlight the first N occurrences of the token (R2132)
 - returns a sorted `DecorationSet` via `Decoration.set(ranges, true)` — overlapping marks are allowed
 - on first construction with non-empty patterns, finds the earliest match across all regexes over the whole doc and dispatches `EditorView.scrollIntoView(firstMatch, {y: "center"})` in a microtask, so the iframe opens scrolled to the first match
 - registers a `message` listener on `window` that watches for `{type: 'ark-set-highlights', patterns: [...]}` from the parent and dispatches `setHighlightPatternsEffect.of(patterns)` on its own `EditorView`; the listener is removed in `destroy()`

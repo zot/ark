@@ -106,10 +106,13 @@ export function highlightExtension(initialPatterns: string[]) {
         }
       }
 
+      // CRC: crc-HighlightExtension.md | R2132
       build(view: EditorView): DecorationSet {
         const regexes = view.state.field(patternsField, false) ?? [];
         if (regexes.length === 0) return Decoration.none;
-        const ranges: Range<Decoration>[] = [];
+        const taken: Array<{ start: number; end: number }> = [];
+        const overlaps = (s: number, e: number) =>
+          taken.some((t) => s < t.end && t.start < e);
         for (const { from, to } of view.visibleRanges) {
           const text = view.state.sliceDoc(from, to);
           for (const re of regexes) {
@@ -121,19 +124,47 @@ export function highlightExtension(initialPatterns: string[]) {
                 continue;
               }
               // If a capture group exists, highlight only the group;
-              // otherwise highlight the full match. This lets tag-value
-              // regexes anchor to the tag prefix but highlight only the
-              // value token: `@NAME:[^\n]*?(TOKEN)`. The group is at
-              // the end of the match, so offset = full length - group length.
+              // otherwise highlight the full match. The group sits at
+              // the end of the match — `@NAME:[^\n]*?(TOKEN)` — so
+              // offset = full length - group length.
               const hasGroup = m[1] !== undefined;
-              const gLen = hasGroup ? m[1].length : m[0].length;
-              const gOffset = hasGroup ? m[0].length - m[1].length : 0;
-              const start = from + m.index + gOffset;
-              const end = start + gLen;
-              ranges.push(highlightMark.range(start, end));
+              const gText = hasGroup ? m[1] : m[0];
+              const gLen = gText.length;
+              const gOffset = hasGroup ? m[0].length - gLen : 0;
+              let start = from + m.index + gOffset;
+              let end = start + gLen;
+              // If this range is already claimed by an earlier regex
+              // (typically a duplicate of the same pattern in the
+              // highlight list), advance to the next literal occurrence
+              // of the captured text past the taken range, bounded to
+              // the same line — line-anchored regexes like
+              // `^@issue:[^\n]*?(TOKEN)` can't find a second match by
+              // re-execution alone since the anchor only appears once.
+              if (hasGroup && overlaps(start, end)) {
+                const lineStart = text.lastIndexOf("\n", m.index) + 1;
+                const lineEndIdx = text.indexOf("\n", m.index + m[0].length);
+                const lineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+                let searchFrom = end - from;
+                while (overlaps(start, end)) {
+                  const next = text.indexOf(gText, searchFrom);
+                  if (next === -1 || next < lineStart || next + gLen > lineEnd) {
+                    start = -1;
+                    break;
+                  }
+                  start = from + next;
+                  end = start + gLen;
+                  searchFrom = next + gLen;
+                }
+              }
+              if (start < 0 || overlaps(start, end)) continue;
+              taken.push({ start, end });
             }
           }
         }
+        taken.sort((a, b) => a.start - b.start);
+        const ranges: Range<Decoration>[] = taken.map((t) =>
+          highlightMark.range(t.start, t.end),
+        );
         return Decoration.set(ranges, true);
       }
 

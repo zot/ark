@@ -242,3 +242,32 @@ This is the same rendering used by `renderTagSearchResults` in
 the current tag-widget.ts. The CM6-based rendering in
 search-result-view.ts remains a markdown-editor concern for
 ark-search code blocks.
+
+## Match Highlighting
+
+Iframe chunk previews receive `highlight=<regex>` URL params —
+one per regex — that the in-iframe `highlight-extension`
+compiles and applies as `Decoration.mark` ranges. The first
+render scrolls to the earliest match; later edits to the query
+push updated patterns over `postMessage` so the iframe
+re-decorates without reloading.
+
+### Non-overlapping highlights
+
+Each highlight regex in the URL param list claims a distinct
+range. When the user's query repeats a token (e.g. `patterns OR
+... patterns`), `<ark-search>` emits one regex per token, and
+the highlighter assigns each one its own occurrence rather than
+piling multiple regexes onto the first match.
+
+For tag-anchored regexes of the form
+`(?:(?<=\s)|^)@NAME:[^\n]*?(TOKEN)`, the lazy `[^\n]*?` plus a
+single `@NAME:` anchor on a line means re-executing the regex
+finds the same first match — there is no second `@NAME:` to
+anchor at. When a regex's claimed range overlaps a range
+already taken by an earlier regex in the list, the highlighter
+falls back to a literal search for the captured group's text
+past the taken range, bounded to the same line as the original
+match. This produces the intuitive behavior — N copies of the
+same regex highlight the first N occurrences of the token in
+the matched line — without changing the regex contract.
