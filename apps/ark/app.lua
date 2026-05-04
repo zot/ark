@@ -495,22 +495,6 @@ function Searching:showSourceDetail()
     return self.selectedSource ~= nil and not self.showAddForm
 end
 
-function Searching:hideSourceDetail()
-    return not self:showSourceDetail()
-end
-
-function Searching:showPlaceholder()
-    return self.selectedSource == nil and not self.showAddForm
-end
-
-function Searching:hidePlaceholder()
-    return not self:showPlaceholder()
-end
-
-function Searching:hideAddForm()
-    return not self.showAddForm
-end
-
 function Searching:sourceHeaderText()
     if self.selectedSource then return compressPath(self.selectedSource.dir) end
     return ""

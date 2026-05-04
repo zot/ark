@@ -157,6 +157,18 @@ issue. One card per conversation, never duplicated.
 Source management, file tree, project editor unchanged. Search UI
 is now the `<ark-search>` web component — Lua no longer does search.
 
+**Right-panel layout:** `<ark-search>` always fills the right panel.
+The file tree (`.ark-tree-panel`) and Add Source form (`.ark-add-form`)
+sit on top as `.ark-overlay` elements (`position: absolute; inset: 0`)
+with a `transform: translateX(100%)` resting state. The
+`.ark-overlay-open` class is bound to `showSourceDetail()` (tree)
+and `showAddForm` (form), animating them in from the right.
+
+**Source-click toggle:** `selectSource(source)` toggles —
+re-clicking the currently selected source clears `selectedSource`,
+collapsing the tree overlay. `deselectSource()` is the same close
+path, used by the X button in the tree header.
+
 Key method: `searchFiltersJSON()` — builds filter_files and
 exclude_files arrays from sidebar buttons, returns JSON string.
 Read by JS SearchAPI via hidden span bridge.

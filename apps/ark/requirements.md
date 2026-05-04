@@ -31,7 +31,9 @@ Each source shows:
 - Strategy name (markdown, lines, etc.)
 - File counts: included / excluded / unresolved
 
-Clicking a source shows its file tree in the right panel.
+Clicking a source slides its file tree in over the right panel
+(see "File Tree" below). Clicking the same source again, or the X
+button in the tree's header, dismisses the overlay.
 
 ### Source Display Grouping
 
@@ -65,8 +67,10 @@ remove-pattern commands. Errors are reported via notifications.
 
 ## File Tree
 
-Right panel. Shows the actual filesystem merged with ark's index
-state. Every file and directory shows one of three states:
+Slide-over overlay above the right panel. Search owns the full
+right panel; selecting a source slides the file tree in from the
+right edge. The tree shows the actual filesystem merged with ark's
+index state. Every file and directory shows one of three states:
 
 - **Included** (green check) — matches an include pattern, will be indexed
 - **Excluded** (red X) — matches an exclude pattern, skipped
@@ -113,6 +117,18 @@ that state (pattern match, .gitignore, etc.).
 
 A draggable handle between left and right panels allows resizing.
 Minimum 180px, maximum 50% of viewport width.
+
+### Slide-Over Behavior
+
+Both the file tree and the Add Source form sit above the search
+component as absolute-positioned overlays:
+
+- Default state: search visible, no overlay
+- Selecting a source: tree overlay slides in from the right
+- "Add Source" button: form overlay slides in from the right
+- Re-clicking the selected source toggles the tree off
+- X button in the overlay header closes it
+- Search remains mounted underneath so its state survives
 
 ## Search
 
