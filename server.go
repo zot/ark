@@ -489,9 +489,12 @@ func (srv *Server) reconcile() {
 	})
 }
 
-// doReconcile runs the actual reconciliation: sources-check, scan, refresh.
-// After sources-check, updates watches for any new/removed sources (R351).
-// Called inside the DB actor.
+// doReconcile runs the actual reconciliation: sources-check, sweep,
+// scan, refresh. After sources-check, updates watches for any
+// new/removed sources (R351). Sweep drops files that no longer
+// classify as Included (R2138, R2142). Called inside the DB actor.
+//
+// CRC: crc-Server.md | Seq: seq-reconcile.md | R2138, R2142
 func (srv *Server) doReconcile(db *DB) {
 	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
@@ -513,6 +516,10 @@ func (srv *Server) doReconcile(db *DB) {
 	}
 	srv.setIndexing(sourceDirs)
 
+	log.Println("reconcile: sweeping...")
+	if err := db.SweepAsync(); err != nil {
+		log.Printf("reconcile: sweep error: %v", err)
+	}
 	log.Println("reconcile: scanning...")
 	if _, err := db.ScanAsync(); err != nil {
 		log.Printf("reconcile: scan error: %v", err)

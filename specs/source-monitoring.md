@@ -17,8 +17,8 @@ sources. It does not appear in ark.toml.
 
 When any config mutation command runs (add-source, remove-source,
 add-include, add-exclude, remove-pattern), the server triggers a
-reconciliation cycle afterward: sources-check, scan, refresh. The
-same cycle that runs at startup.
+reconciliation cycle afterward: sources-check, sweep, scan, refresh.
+The same cycle that runs at startup.
 
 This is extracted into a `Reconcile` method that startup also calls.
 Same logic, idempotent, safe to call repeatedly. Runs in a background
@@ -27,6 +27,28 @@ goroutine so the HTTP handler returns immediately.
 If a reconcile is already running when another is requested, the new
 request waits for the current one to finish and then runs. Not
 dropped — config may have changed again during the previous run.
+
+### Sweep step: drop newly-excluded files
+
+Scan adds new files and Refresh re-indexes stale ones, but neither
+revisits the *classification* of files already in the index. When the
+user adds an exclude (or removes an include) that newly excludes
+already-indexed files, those files persist in the index until manual
+removal or rebuild.
+
+The sweep step closes that gap. Before scan, it walks the indexed
+file set and re-classifies each path against the current effective
+include/exclude patterns of its source. Any file that no longer
+classifies as `Included` is removed. Removal goes through the same
+path as `ark remove`, so all derived state — chunks, tag values,
+ext routings — is dropped consistently.
+
+A file whose source has been removed entirely is also swept (no
+source claims it, so it cannot be classified Included).
+
+Sweep is part of every Reconcile cycle, not only the post-mutation
+ones. A hand-edit to ark.toml, a startup with an updated config, or
+any other entry into Reconcile produces the same result.
 
 ## Phase B: Filesystem Watching
 

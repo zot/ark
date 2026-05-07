@@ -113,8 +113,8 @@ const (
 	IFieldEmbedCmd        = "embed_cmd"
 	IFieldQueryCmd        = "query_cmd"
 	IFieldTagModel        = "tag_model"
-	IFieldGlobalInclude   = "global_include"
-	IFieldGlobalExclude   = "global_exclude"
+	IFieldDefaultInclude  = "default_include"
+	IFieldDefaultExclude  = "default_exclude"
 	IFieldStrategies      = "strategies"
 	IFieldSources         = "sources"
 	IFieldChunkers        = "chunkers"
@@ -177,6 +177,7 @@ const (
 	prefixEmbedValue    = "EV" // R1290: tag-value compound embeddings
 	prefixEmbedChunk    = "EC" // R1598: chunk-level embeddings
 	prefixEmbedFileCent = "EF" // R1599: file centroid (running sum + count)
+	prefixEmbedDef      = "ED" // R2151: tag-definition embeddings
 	prefixError         = 'E'  // R1543: persistent error conditions (E + name → JSON)
 	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
@@ -306,7 +307,7 @@ func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]Missing
 			var rec MissingRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				for _, pat := range patterns {
-					if matcher.Match(pat, rec.Path, false) {
+					if matcher.Match(pat, rec.Path, "", false) {
 						rec.FileID = binary.BigEndian.Uint64(k[1:9])
 						dismissed = append(dismissed, rec)
 						return cur.Del(0)
@@ -326,7 +327,7 @@ func (s *Store) ResolveByPattern(patterns []string, matcher *Matcher) error {
 			var rec UnresolvedRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				for _, pat := range patterns {
-					if matcher.Match(pat, rec.Path, false) {
+					if matcher.Match(pat, rec.Path, "", false) {
 						return cur.Del(0)
 					}
 				}
@@ -431,10 +432,10 @@ func (s *Store) WriteConfig(cfg *Config) error {
 		if err := put(IFieldSessionTTL, cfg.SessionTTL); err != nil {
 			return err
 		}
-		if err := putJSON(IFieldGlobalInclude, cfg.GlobalInclude); err != nil {
+		if err := putJSON(IFieldDefaultInclude, cfg.DefaultInclude); err != nil {
 			return err
 		}
-		if err := putJSON(IFieldGlobalExclude, cfg.GlobalExclude); err != nil {
+		if err := putJSON(IFieldDefaultExclude, cfg.DefaultExclude); err != nil {
 			return err
 		}
 		if err := putJSON(IFieldStrategies, cfg.Strategies); err != nil {
@@ -484,8 +485,8 @@ func (s *Store) ReadConfig() (*Config, error) {
 		cfg.QueryCmd = get(IFieldQueryCmd)
 		cfg.TagModel = get(IFieldTagModel)
 		cfg.SessionTTL = get(IFieldSessionTTL)
-		getJSON(IFieldGlobalInclude, &cfg.GlobalInclude)
-		getJSON(IFieldGlobalExclude, &cfg.GlobalExclude)
+		getJSON(IFieldDefaultInclude, &cfg.DefaultInclude)
+		getJSON(IFieldDefaultExclude, &cfg.DefaultExclude)
 		getJSON(IFieldStrategies, &cfg.Strategies)
 		getJSON(IFieldSources, &cfg.Sources)
 		getJSON(IFieldChunkers, &cfg.Chunkers)
@@ -829,26 +830,31 @@ type TagDefRecord struct {
 }
 
 // UpdateTagDefs replaces all D records for a fileid with new definitions.
+// ED records for the same fileid are dropped in the same transaction so
+// stale embeddings never outlive their definitions; the next batch-embed
+// pass picks up the new (tag, fileid) pairs as missing.
+// CRC: crc-Store.md | R2154
 func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		// Remove old D records for this fileid
-		prefix := []byte{byte(prefixTagDef)}
-		_ = scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, v []byte) error {
-			// Key format: D[tagname][fileid:8] — fileid is last 8 bytes
-			if len(k) < 9 {
+		// Both D and ED keys end with an 8-byte big-endian fileid.
+		// Walking each prefix and matching the suffix is bounded by
+		// tag-def count (~270 today), not file count.
+		delByFileid := func(prefix []byte, prefixLen int) {
+			_ = scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, _ []byte) error {
+				if len(k) < prefixLen+8 {
+					return nil
+				}
+				if binary.BigEndian.Uint64(k[len(k)-8:]) == fileid {
+					return cur.Del(0)
+				}
 				return nil
-			}
-			fid := binary.BigEndian.Uint64(k[len(k)-8:])
-			if fid == fileid {
-				return cur.Del(0)
-			}
-			return nil
-		})
+			})
+		}
+		delByFileid([]byte{byte(prefixTagDef)}, 1)
+		delByFileid([]byte(prefixEmbedDef), len(prefixEmbedDef)) // R2154
 
-		// Write new D records
 		for tag, desc := range defs {
-			dk := tagDefKey(tag, fileid)
-			if err := txn.Put(s.dbi, dk, []byte(desc), 0); err != nil {
+			if err := txn.Put(s.dbi, tagDefKey(tag, fileid), []byte(desc), 0); err != nil {
 				return err
 			}
 		}
@@ -856,12 +862,17 @@ func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 	})
 }
 
-// RemoveTagDefs deletes all D records for a fileid.
+// RemoveTagDefs deletes all D records for a fileid. ED records for the
+// same fileid are dropped in the same txn via UpdateTagDefs.
+// CRC: crc-Store.md | R2155
 func (s *Store) RemoveTagDefs(fileid uint64) error {
 	return s.UpdateTagDefs(fileid, nil)
 }
 
-// AppendTagDefs adds D records without removing existing ones.
+// AppendTagDefs adds D records without removing existing ones. Existing
+// ED records for unchanged (tag, fileid) pairs are left intact; newly
+// added pairs become "missing" and are picked up by the next BatchEmbed.
+// CRC: crc-Store.md | R2156
 func (s *Store) AppendTagDefs(fileid uint64, defs map[string]string) error {
 	if len(defs) == 0 {
 		return nil
@@ -1880,9 +1891,9 @@ func (s *Store) PutScheduleConfig(serialized string) error {
 }
 
 // recordPrefixOf returns the full prefix string for an ark-subdatabase
-// key. Known multi-byte prefixes (E:, EV, EC, EF, PC) are matched
+// key. Known multi-byte prefixes (E:, EV, EC, EF, ED, PC) are matched
 // first; otherwise the single-byte prefix is returned.
-// CRC: crc-Store.md | R905, R907
+// CRC: crc-Store.md | R905, R907, R2162
 func recordPrefixOf(k []byte) string {
 	if len(k) >= 2 {
 		switch {
@@ -1894,6 +1905,8 @@ func recordPrefixOf(k []byte) string {
 			return "EC"
 		case k[0] == 'E' && k[1] == 'F':
 			return "EF"
+		case k[0] == 'E' && k[1] == 'D':
+			return "ED"
 		case k[0] == 'P' && k[1] == 'C':
 			return "PC"
 		}
@@ -1960,6 +1973,24 @@ func (s *Store) allocIDInTxn(txn *lmdb.Txn, iFieldName string) (uint64, error) {
 func embedValueKey(tvid uint64) []byte {
 	key := []byte(prefixEmbedValue)
 	return encodeVarint(key, tvid)
+}
+
+// embedDefKey builds an ED prefix key: ED[tagname][fileid:8]. R2151
+func embedDefKey(tag string, fileid uint64) []byte {
+	key := make([]byte, len(prefixEmbedDef)+len(tag)+8)
+	copy(key, prefixEmbedDef)
+	copy(key[len(prefixEmbedDef):], tag)
+	binary.BigEndian.PutUint64(key[len(prefixEmbedDef)+len(tag):], fileid)
+	return key
+}
+
+// TagDefRef identifies a single (tag, fileid) tag-definition pair.
+// Description is populated by MissingTagDefEmbeddings so the Librarian
+// can embed without a second LMDB read. R2151, R2157
+type TagDefRef struct {
+	Tag         string
+	FileID      uint64
+	Description string
 }
 
 // WriteTagNameEmbedding appends an embedding vector to a T record.
@@ -2116,6 +2147,78 @@ func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 	return missing, err
 }
 
+// WriteTagDefEmbedding writes an ED record keyed by (tag, fileid).
+// CRC: crc-Store.md | R2151, R2153, R2159
+func (s *Store) WriteTagDefEmbedding(tag string, fileid uint64, vec []float32) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, embedDefKey(tag, fileid), float32ToBytes(vec), 0)
+	})
+}
+
+// ReadTagDefEmbedding reads an ED record. Returns (nil, nil) if absent.
+// CRC: crc-Store.md | R2159
+func (s *Store) ReadTagDefEmbedding(tag string, fileid uint64) ([]float32, error) {
+	var vec []float32
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, embedDefKey(tag, fileid))
+		if lmdb.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		vec = bytesToFloat32(v)
+		return nil
+	})
+	return vec, err
+}
+
+// MissingTagDefEmbeddings returns (tag, fileid, description) tuples that
+// have a D record but no matching ED record. Pure DB scan: enumerates
+// every D record's description, then strips pairs already covered by
+// ED. Crash-safe and self-recovering — the next post-reconcile pass
+// picks up anything left unwritten.
+// CRC: crc-Store.md | R2157
+func (s *Store) MissingTagDefEmbeddings() ([]TagDefRef, error) {
+	type tdKey struct {
+		tag    string
+		fileid uint64
+	}
+	missing := make(map[tdKey]string)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		// Collect every D record as a candidate.
+		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagDef)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 9 {
+				return nil
+			}
+			tag := string(k[1 : len(k)-8])
+			fid := binary.BigEndian.Uint64(k[len(k)-8:])
+			missing[tdKey{tag, fid}] = string(v)
+			return nil
+		}); err != nil {
+			return err
+		}
+		// Strip pairs that already have an ED record.
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(_ *lmdb.Cursor, k, _ []byte) error {
+			if len(k) < len(prefixEmbedDef)+8 {
+				return nil
+			}
+			tag := string(k[len(prefixEmbedDef) : len(k)-8])
+			fid := binary.BigEndian.Uint64(k[len(k)-8:])
+			delete(missing, tdKey{tag, fid})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TagDefRef, 0, len(missing))
+	for k, desc := range missing {
+		out = append(out, TagDefRef{Tag: k.tag, FileID: k.fileid, Description: desc})
+	}
+	return out, nil
+}
+
 // ScanVRecordTvids returns the live tvid → (tag, value) mapping. Reads
 // the in-memory TvidMap; the V-record scan only runs once during
 // LoadTvidMap. CRC: crc-Store.md | R1310, R1956
@@ -2140,8 +2243,10 @@ func (s *Store) scanVRecordTvidsRaw() (map[uint64]TagAlt, error) {
 	return result, err
 }
 
-// DropEmbeddings strips embedding vectors from T records and deletes all EV records.
-// CRC: crc-Store.md | R1294
+// DropEmbeddings strips embedding vectors from T records and deletes
+// all EV and ED records. Triggered by tag_model mismatch — every
+// vector tied to the old model goes together.
+// CRC: crc-Store.md | R1294, R2160
 func (s *Store) DropEmbeddings() error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		// Strip vectors from T records (keep count)
@@ -2156,7 +2261,13 @@ func (s *Store) DropEmbeddings() error {
 			return err
 		}
 		// Delete all EV records
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(cur *lmdb.Cursor, _, _ []byte) error {
+		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
+		}
+		// Delete all ED records. R2160
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(cur *lmdb.Cursor, _, _ []byte) error {
 			return cur.Del(0)
 		})
 	})

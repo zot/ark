@@ -26,17 +26,18 @@ type Matcher struct {
 
 // Classify determines whether a path is included, excluded, or unresolved
 // given a set of include and exclude patterns. Include wins conflicts.
-func (m *Matcher) Classify(includes, excludes []string, path string, isDir bool) Classification {
+// CRC: crc-Matcher.md | R2133
+func (m *Matcher) Classify(includes, excludes []string, absPath, sourceDir string, isDir bool) Classification {
 	included := false
 	excluded := false
 	for _, p := range includes {
-		if m.Match(p, path, isDir) {
+		if m.Match(p, absPath, sourceDir, isDir) {
 			included = true
 			break
 		}
 	}
 	for _, p := range excludes {
-		if m.Match(p, path, isDir) {
+		if m.Match(p, absPath, sourceDir, isDir) {
 			excluded = true
 			break
 		}
@@ -50,10 +51,24 @@ func (m *Matcher) Classify(includes, excludes []string, path string, isDir bool)
 	return Unresolved
 }
 
-// Match tests whether a single pattern matches a path.
-// isDir indicates whether the path is a directory.
-// Trailing / on the pattern means directory-only; otherwise file-only.
-func (m *Matcher) Match(pattern, path string, isDir bool) bool {
+// Match tests whether a single pattern matches a file. R2133.
+//
+// Three anchoring forms by leading slashes:
+//
+//   - "./X": source-root-anchored. Strips "./", matches against the
+//     source-relative path (absPath relative to sourceDir).
+//   - "/X":  filesystem-absolute. Matches against absPath as-is.
+//   - "X":   bare. Prepends "**/", matches at any depth in source
+//     (or against absPath when sourceDir is empty).
+//
+// Trailing "/" on the pattern means directory-only.
+//
+// sourceDir may be empty for ad-hoc filtering callers (search filters,
+// `ark remove` patterns, etc.) — in that case, "./" and bare forms fall
+// back to matching against absPath directly.
+//
+// CRC: crc-Matcher.md | R2133
+func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 	dirPattern := strings.HasSuffix(pattern, "/")
 	if dirPattern != isDir {
 		return false
@@ -62,26 +77,31 @@ func (m *Matcher) Match(pattern, path string, isDir bool) bool {
 		pattern = strings.TrimSuffix(pattern, "/")
 	}
 
-	anchored := strings.HasPrefix(pattern, "/")
-	if anchored {
-		pattern = pattern[1:]
-		path = strings.TrimPrefix(path, "/")
-	} else {
-		// Unanchored patterns match at any depth — prepend **/
+	var matchPath string
+	switch {
+	case strings.HasPrefix(pattern, "./"):
+		pattern = pattern[2:]
+		matchPath = sourceRelative(absPath, sourceDir)
+		if matchPath == "" {
+			return false
+		}
+	case strings.HasPrefix(pattern, "/"):
+		matchPath = absPath
+	default:
 		pattern = "**/" + pattern
+		matchPath = sourceRelative(absPath, sourceDir)
+		if matchPath == "" {
+			return false
+		}
 	}
 
-	matched, err := doublestar.Match(pattern, path)
-	if err != nil {
-		return false
-	}
-	if !matched {
+	matched, err := doublestar.Match(pattern, matchPath)
+	if err != nil || !matched {
 		return false
 	}
 
 	if !m.Dotfiles {
-		// Check if a wildcard matched a dotfile component
-		base := filepath.Base(path)
+		base := filepath.Base(matchPath)
 		if strings.HasPrefix(base, ".") && !hasDotPrefix(pattern) {
 			return false
 		}
@@ -89,10 +109,24 @@ func (m *Matcher) Match(pattern, path string, isDir bool) bool {
 	return true
 }
 
+// sourceRelative returns the source-relative form of absPath when
+// sourceDir is non-empty and absPath is under it. Falls back to
+// absPath when sourceDir is empty (ad-hoc Match callers). Returns
+// empty string when absPath is not under sourceDir.
+func sourceRelative(absPath, sourceDir string) string {
+	if sourceDir == "" {
+		return absPath
+	}
+	rel, err := filepath.Rel(sourceDir, absPath)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "" {
+		return ""
+	}
+	return rel
+}
+
 // hasDotPrefix checks if the pattern explicitly names a dotfile
 // (so the dotfile filter should not reject the match).
 func hasDotPrefix(pattern string) bool {
-	// Check if the last path component of the pattern starts with .
 	i := strings.LastIndex(pattern, "/")
 	if i >= 0 {
 		return strings.HasPrefix(pattern[i+1:], ".")

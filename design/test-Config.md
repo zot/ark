@@ -7,11 +7,29 @@
 **Expected:** Config struct populated, sources have correct strategy, no errors
 **Refs:** crc-Config.md
 
-## Test: per-source patterns are additive
-**Purpose:** Verify per-source include/exclude combine with global, not replace
-**Input:** Global include ["*.md"], source include ["*.txt"]
-**Expected:** EffectivePatterns returns ["*.md", "*.txt"] for that source
-**Refs:** crc-Config.md
+## Test: per-source include replaces default
+**Purpose:** R2143, R2144 — per-source include patterns replace default_include for that source
+**Input:** default_include ["*.md", "*.go"], source.Include ["*.txt"]
+**Expected:** EffectivePatterns returns ["*.txt"]
+**Refs:** crc-Config.md, R2143, R2144
+
+## Test: per-source omitted inherits default
+**Purpose:** R2144 — when a source omits `include`, default_include applies; setting only `exclude` preserves default_include
+**Input:** default_include ["*.md", "*.go"], source.Exclude ["drafts/"], source.Include unset
+**Expected:** EffectivePatterns returns includes=["*.md", "*.go"], excludes=["drafts/"]
+**Refs:** crc-Config.md, R2143, R2144
+
+## Test: per-source include.add extends default
+**Purpose:** R2146 — `include.add = [...]` appends to default_include rather than replacing
+**Input:** default_include ["*.md", "*.go"], source written as `include.add = ["*.lua"]`
+**Expected:** EffectivePatterns returns includes=["*.md", "*.go", "*.lua"]
+**Refs:** crc-Config.md, R2146
+
+## Test: per-source exclude.add extends default
+**Purpose:** R2146 — `exclude.add = [...]` appends to default_exclude rather than replacing
+**Input:** default_exclude [".git/"], source written as `exclude.add = ["drafts/"]`
+**Expected:** EffectivePatterns returns excludes=[".git/", "drafts/"]
+**Refs:** crc-Config.md, R2146
 
 ## Test: identical include exclude is error
 **Purpose:** Config validation catches identical include and exclude strings
@@ -42,3 +60,4 @@
 **Input:** ["*.md", "--source", "/path/to/dir"]
 **Expected:** Reordered to ["--source", "/path/to/dir", "*.md"]
 **Refs:** crc-CLI.md, R232, R233
+

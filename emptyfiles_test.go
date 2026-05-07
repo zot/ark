@@ -65,9 +65,9 @@ func testScanner(t *testing.T) (*Scanner, string, *EmptyFiles) {
 
 	// Build Config programmatically (no ark.toml needed)
 	cfg := &Config{
-		Sources:       []Source{{Dir: dir}},
-		GlobalInclude: []string{"*.txt", "*.pdf"},
-		Dotfiles:      false,
+		Sources:        []Source{{Dir: dir}},
+		DefaultInclude: []string{"*.txt", "*.pdf"},
+		Dotfiles:       false,
 	}
 	matcher := &Matcher{}
 

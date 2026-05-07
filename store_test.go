@@ -412,3 +412,214 @@ func TestAppendTagValuesNewChunk(t *testing.T) {
 		t.Errorf("expected fresh=1 (one chunk carries the tag), got %v", tags)
 	}
 }
+
+// --- ED record tests (R2151-R2162) ---
+// CRC: crc-Store.md | Test: test-TagDefEmbed.md
+
+// fakeVec returns a deterministic 768-dim vector seeded by tag.
+// The first byte is set so different inputs produce different vectors;
+// the rest stays zero, which is fine for round-trip equality tests.
+func fakeVec(seed byte) []float32 {
+	v := make([]float32, 768)
+	v[0] = float32(seed)
+	return v
+}
+
+func vecEqual(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestED_WriteAndRead validates ED key/value round-trip per fileid.
+// Refs: R2151, R2153, R2159
+func TestED_WriteAndRead(t *testing.T) {
+	s := testStore(t)
+	want := fakeVec(7)
+	if err := s.WriteTagDefEmbedding("decision", 42, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReadTagDefEmbedding("decision", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vecEqual(got, want) {
+		t.Errorf("round-trip mismatch")
+	}
+	missing, err := s.ReadTagDefEmbedding("decision", 99)
+	if err != nil {
+		t.Fatalf("read absent: %v", err)
+	}
+	if missing != nil {
+		t.Errorf("expected nil for absent fileid, got %v", missing)
+	}
+}
+
+// TestED_MissingFindsDWithoutED checks the batch-embed discovery path.
+// Refs: R2157
+func TestED_MissingFindsDWithoutED(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpdateTagDefs(10, map[string]string{"decision": "choosing tools"}); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := s.MissingTagDefEmbeddings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].Tag != "decision" || missing[0].FileID != 10 {
+		t.Fatalf("expected one missing pair (decision,10), got %+v", missing)
+	}
+	if missing[0].Description != "choosing tools" {
+		t.Errorf("description not carried back: %q", missing[0].Description)
+	}
+	if err := s.WriteTagDefEmbedding("decision", 10, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	missing2, err := s.MissingTagDefEmbeddings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing2) != 0 {
+		t.Errorf("expected empty after write, got %+v", missing2)
+	}
+}
+
+// TestED_UpdateTagDefsDropsED verifies ED lifecycle mirrors D on replace.
+// Refs: R2154
+func TestED_UpdateTagDefsDropsED(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpdateTagDefs(10, map[string]string{"a": "x", "b": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	s.WriteTagDefEmbedding("a", 10, fakeVec(1))
+	s.WriteTagDefEmbedding("b", 10, fakeVec(2))
+
+	if err := s.UpdateTagDefs(10, map[string]string{"c": "z"}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.ReadTagDefEmbedding("a", 10); v != nil {
+		t.Error("expected ED(a,10) gone")
+	}
+	if v, _ := s.ReadTagDefEmbedding("b", 10); v != nil {
+		t.Error("expected ED(b,10) gone")
+	}
+	missing, _ := s.MissingTagDefEmbeddings()
+	if len(missing) != 1 || missing[0].Tag != "c" || missing[0].FileID != 10 {
+		t.Errorf("expected (c,10) missing, got %+v", missing)
+	}
+}
+
+// TestED_UpdateTagDefsScopedByFileid ensures ED deletion is scoped to the
+// fileid being replaced — other files' ED records survive.
+// Refs: R2154
+func TestED_UpdateTagDefsScopedByFileid(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTagDefs(10, map[string]string{"a": "x"})
+	s.UpdateTagDefs(20, map[string]string{"a": "x"})
+	s.WriteTagDefEmbedding("a", 10, fakeVec(1))
+	s.WriteTagDefEmbedding("a", 20, fakeVec(2))
+
+	if err := s.UpdateTagDefs(10, nil); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.ReadTagDefEmbedding("a", 10); v != nil {
+		t.Error("expected ED(a,10) cleared")
+	}
+	v, _ := s.ReadTagDefEmbedding("a", 20)
+	if !vecEqual(v, fakeVec(2)) {
+		t.Error("ED(a,20) should survive — different fileid")
+	}
+}
+
+// TestED_RemoveTagDefsDropsED — removal path drops both D and ED.
+// Refs: R2155
+func TestED_RemoveTagDefsDropsED(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTagDefs(7, map[string]string{"decision": "d"})
+	s.WriteTagDefEmbedding("decision", 7, fakeVec(3))
+
+	if err := s.RemoveTagDefs(7); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.ReadTagDefEmbedding("decision", 7); v != nil {
+		t.Error("expected ED gone after RemoveTagDefs")
+	}
+	missing, _ := s.MissingTagDefEmbeddings()
+	for _, m := range missing {
+		if m.Tag == "decision" && m.FileID == 7 {
+			t.Error("removed pair should not appear in MissingTagDefEmbeddings")
+		}
+	}
+}
+
+// TestED_AppendTagDefsPreservesED — append leaves existing ED intact.
+// Refs: R2156
+func TestED_AppendTagDefsPreservesED(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTagDefs(10, map[string]string{"a": "x"})
+	want := fakeVec(5)
+	s.WriteTagDefEmbedding("a", 10, want)
+
+	if err := s.AppendTagDefs(10, map[string]string{"b": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ReadTagDefEmbedding("a", 10)
+	if !vecEqual(got, want) {
+		t.Error("ED(a,10) should survive AppendTagDefs")
+	}
+	missing, _ := s.MissingTagDefEmbeddings()
+	if len(missing) != 1 || missing[0].Tag != "b" || missing[0].FileID != 10 {
+		t.Errorf("expected only (b,10) missing, got %+v", missing)
+	}
+}
+
+// TestED_DropEmbeddingsClearsED — model swap drops ED with EV and T-vec.
+// Refs: R2160
+func TestED_DropEmbeddingsClearsED(t *testing.T) {
+	s := testStore(t)
+	s.UpdateTagDefs(1, map[string]string{"a": "x", "b": "y"})
+	s.WriteTagDefEmbedding("a", 1, fakeVec(1))
+	s.WriteTagDefEmbedding("b", 1, fakeVec(2))
+
+	if err := s.DropEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.ReadTagDefEmbedding("a", 1); v != nil {
+		t.Error("expected ED(a,1) cleared by DropEmbeddings")
+	}
+	if v, _ := s.ReadTagDefEmbedding("b", 1); v != nil {
+		t.Error("expected ED(b,1) cleared by DropEmbeddings")
+	}
+	// D records survive — DropEmbeddings only touches embedding records.
+	defs, _ := s.ListTagDefs(nil)
+	if len(defs) != 2 {
+		t.Errorf("expected D records preserved, got %d", len(defs))
+	}
+}
+
+// TestED_RecordCountsListsED — RecordCounts surfaces "ED" prefix so
+// `ark status -db` can count them.
+// Refs: R2162
+func TestED_RecordCountsListsED(t *testing.T) {
+	s := testStore(t)
+	s.WriteTagDefEmbedding("decision", 1, fakeVec(1))
+	s.WriteTagDefEmbedding("pattern", 2, fakeVec(2))
+
+	counts, err := s.RecordCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := counts["ED"]
+	if !ok {
+		t.Fatalf("expected ED prefix in RecordCounts, got %v", counts)
+	}
+	if st.Count != 2 {
+		t.Errorf("expected 2 ED records, got %d", st.Count)
+	}
+}

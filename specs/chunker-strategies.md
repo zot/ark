@@ -42,8 +42,8 @@ strings = [["\"", "\""], ["'", "'"], ["\"\"\"", "\"\"\""]]
 ### Full form — struct-level control
 
 Languages with word brackets (begin/end), separators (then/else),
-or non-default escape characters use the full form with inline
-tables.
+non-default escape characters, or scan-restricted contexts (template
+literal interpolation) use the full form with inline tables.
 
 ```toml
 [[chunker]]
@@ -62,6 +62,72 @@ tab_width = 4
 line_comments = ["--"]
 string_defs = [{open = "\"", close = "\"", escape = "\\"}, {open = "'", close = "'", escape = "\\"}, {open = "[[", close = "]]"}]
 ```
+
+### Bracket modes (full form only)
+
+Brackets and strings are the same construct in microfts2 — strings
+are scan-restricted brackets. Ark hides this behind separate `strings`
+and `brackets` (easy form), and behind `string_defs` and `bracket_defs`
+(full form). Internally each entry maps to a single `BracketGroup`:
+
+- `strings` / `string_defs` → restricted-mode group (only the close
+  marker, the escape, and any explicitly listed inner openers are
+  recognized; everything else is literal).
+- `brackets` / `bracket_defs` → code-mode group (full scanning inside).
+
+`bracket_defs` entries support three optional fields that expose the
+underlying microfts2 model for languages that need them:
+
+- `escape` — escape character honored inside the group (rare for code
+  brackets; useful for word brackets that need `\` interpretation).
+- `allowed_inner` — list of opener strings that *re-enter* code mode
+  from inside an otherwise restricted group. The classic case is the
+  JavaScript template literal `` ` `` re-entering code via `${`.
+  Setting `allowed_inner` (even to an empty list) puts the group into
+  scan-restricted mode — making `bracket_defs` capable of expressing
+  string-like brackets as well.
+- `allowed_parent` — list of parent openers in which this bracket may
+  be recognized. The classic case is the JS interpolation bracket
+  `${` ... `}`, which should only be recognized while inside a
+  backtick template literal. Outside that context, `${` is plain text.
+
+Example — JavaScript template literal with interpolation:
+
+```toml
+[[chunker]]
+name = "bracket-js"
+type = "bracket-full"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+string_defs = [
+  {open = "\"", close = "\"", escape = "\\"},
+  {open = "'",  close = "'",  escape = "\\"},
+]
+bracket_defs = [
+  {open = ["{"], close = ["}"]},
+  {open = ["("], close = [")"]},
+  {open = ["["], close = ["]"]},
+  # backquote string that re-enters code via ${...}
+  {open = ["`"], close = ["`"], escape = "\\", allowed_inner = ["${"]},
+  # ${...} only recognized inside backquote groups
+  {open = ["${"], close = ["}"], allowed_parent = ["`"]},
+]
+```
+
+Notes on semantics:
+
+- Easy-form `strings` always use scan-restricted mode with the
+  configured escape (default `\`) and no inner openers — the common
+  case.
+- `allowed_inner = []` and an omitted `allowed_inner` are
+  *semantically distinct* in microfts2: omitted means code mode,
+  empty list means restricted with no inner openers (pure raw
+  string). In TOML, omit the field for code mode; write
+  `allowed_inner = []` for raw-string mode.
+- A `bracket_defs` entry with `allowed_inner` set is functionally a
+  string. Use `string_defs` for ordinary strings; reach for the
+  `bracket_defs` form only when you need `allowed_inner` to name
+  inner openers (template literals).
 
 ### Type field
 

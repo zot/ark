@@ -55,17 +55,29 @@
 **Expected:** does not match
 **Refs:** crc-Matcher.md, R18
 
-## Test: anchored pattern matches only at root
-**Purpose:** Pattern "/vendor/" only matches at watched directory root
-**Input:** pattern="/vendor/", paths=["vendor", "pkg/vendor"]
+## Test: source-anchored ./pattern only matches at source root
+**Purpose:** Pattern "./vendor/" only matches at source-directory root
+**Input:** pattern="./vendor/", sourceDir="/proj", absPaths=["/proj/vendor", "/proj/pkg/vendor"]
 **Expected:** root matches, nested does not
-**Refs:** crc-Matcher.md, R21
+**Refs:** crc-Matcher.md, R2133
 
-## Test: unanchored pattern matches at any depth
-**Purpose:** Pattern "node_modules/" matches at any depth
-**Input:** pattern="node_modules/", paths=["node_modules", "pkg/node_modules"]
+## Test: bare pattern matches at any depth in source
+**Purpose:** Pattern "node_modules/" matches at any depth in source
+**Input:** pattern="node_modules/", sourceDir="/proj", absPaths=["/proj/node_modules", "/proj/pkg/node_modules"]
 **Expected:** both match
-**Refs:** crc-Matcher.md, R21
+**Refs:** crc-Matcher.md, R2133
+
+## Test: filesystem-absolute pattern matches by absolute path
+**Purpose:** Pattern "/tmp/**" matches any file under /tmp regardless of source
+**Input:** pattern="/tmp/**", sourceDir="/home/me/proj", absPaths=["/tmp/foo", "/home/me/proj/tmp/foo"]
+**Expected:** first matches (under /tmp); second does not (under source's tmp/, but pattern is filesystem-rooted)
+**Refs:** crc-Matcher.md, R2133
+
+## Test: filesystem-absolute pattern unrelated to source is a no-op
+**Purpose:** Pattern "/var/log/**" with source elsewhere matches nothing in that source
+**Input:** pattern="/var/log/**", sourceDir="/home/me/proj", absPath="/home/me/proj/var/log/x"
+**Expected:** does not match (pattern's prefix does not contain the file's abs path)
+**Refs:** crc-Matcher.md, R2133
 
 ## Test: include wins over exclude
 **Purpose:** Classify returns included when both match

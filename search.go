@@ -987,7 +987,7 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 		matched := make(map[uint64]struct{})
 		for id, path := range pathIndex {
 			for _, pat := range opts.FilterFiles {
-				if m.Match(pat, path, false) {
+				if m.Match(pat, path, "", false) {
 					matched[id] = struct{}{}
 					break
 				}
@@ -1052,7 +1052,7 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 		m := &Matcher{Dotfiles: true}
 		for id, path := range pathIndex {
 			for _, pat := range opts.ExcludeFiles {
-				if m.Match(pat, path, false) {
+				if m.Match(pat, path, "", false) {
 					delete(included, id)
 					break
 				}
@@ -1279,7 +1279,7 @@ func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]Search
 			if len(opts.FilterFiles) > 0 {
 				include := false
 				for _, pat := range opts.FilterFiles {
-					if m.Match(pat, r.Path, false) {
+					if m.Match(pat, r.Path, "", false) {
 						include = true
 						break
 					}
@@ -1290,7 +1290,7 @@ func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]Search
 			}
 			excluded := false
 			for _, pat := range opts.ExcludeFiles {
-				if m.Match(pat, r.Path, false) {
+				if m.Match(pat, r.Path, "", false) {
 					excluded = true
 					break
 				}

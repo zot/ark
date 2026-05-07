@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -46,12 +46,14 @@ loads on first embedding query and stays warm until TTL expiry.
   Single query embedding for both steps (hybrid approach). Multiply
   tag × value scores. Returns top-K similar tag-value compounds.
   Same result shape as FuzzyMatchTags. (R1297, R1315, R1316)
-- BatchEmbed(): scan MissingTagNameEmbeddings + MissingTagValueEmbeddings,
-  resolve tvids via ScanVRecordTvids, embed in batches of 50 using
-  EmbedBatch (GPU dispatch off actor), write T vectors and EV records
-  through DB actor. Hyphens→spaces for tag names, "tag: value" format
-  for compounds. Called post-reconcile from the write goroutine. (R1292,
-  R1293, R1295)
+- BatchEmbed(): scan MissingTagNameEmbeddings + MissingTagValueEmbeddings
+  + MissingTagDefEmbeddings, resolve tvids via ScanVRecordTvids, embed
+  in batches of 50 using EmbedBatch (GPU dispatch off actor), write T
+  vectors, EV records, and ED records through DB actor. Hyphens→spaces
+  for tag names; "tag: value" format for compounds; raw description
+  text alone for tag defs (no tag name in the embedded text — see
+  specs/tag-def-embeddings.md "What Gets Embedded"). Called
+  post-reconcile from the write goroutine. (R1292, R1293, R1295, R2158)
 - NewTokenizer() (*Tokenizer, error): load model, create minimal
   context (WithContext(64), no WithEmbeddings) for tokenization only.
   Returns a Tokenizer that wraps the context. Caller must Close().

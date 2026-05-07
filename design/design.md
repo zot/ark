@@ -221,6 +221,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
 - [x] test-TagBlock.md → `tagblock_test.go`
+- [x] test-Sweep.md → `db_test.go`
+- [x] test-TagDefEmbed.md → `store_test.go`
 
 ## Gaps
 
@@ -430,3 +432,13 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O94: ExtRoutingsForTargetChunk per-chunk LMDB View txn — handleContentView and renderPdfChunksByPage call it inside a per-chunk loop, opening N read txns. Cheap individually; for 100+ chunk files worth batching to one txn per request via an ExtRoutingsForTargetChunks([]uint64, *DB) variant.
 - [ ] O95: No automated tests for tag-overview frontend — verified manually via Playwright across modes, filter, category, resize, peek, autotrack. Vitest/Jest harness for tag-overview.ts plus a Go test for renderExtTagsBlock and assignSidebarIDs would lock in behavior.
 - A49: R2103-R2107 are document-level requirements about specs/cli-commands.md itself (canonical inventory, exhaustive flag tables, verification target). They have no implementation in code — the spec is the artifact. Same pattern as record-formats.md, which is anchored in design but has no R-numbers.
+- T48: R21 retired by R2133 (2026-05-04 pattern-anchoring (single/double slash semantics for filesystem-absolute vs source-anchored))
+- T49: R342 retired by R2138 (2026-05-04 reconcile-sweep (cycle gains sweep step before scan))
+- T50: R2134 retired (2026-05-04 shadow-rule-incoherent (include wins per R10, so blanket excludes are valid))
+- T51: R2135 retired (2026-05-04 shadow-rule-incoherent)
+- T52: R2136 retired (2026-05-04 shadow-rule-incoherent)
+- T53: R2137 retired (2026-05-04 shadow-rule-incoherent)
+- T54: R12 retired by R2143 (2026-05-04 default-replace-semantics (top-level patterns are defaults; per-source patterns replace them))
+- T55: R13 retired by R2144 (2026-05-04 default-replace-semantics (per-source replaces, not adds))
+- T56: R26 retired by R2145 (2026-05-04 default-replace-semantics (TOML keys renamed to default_include/default_exclude))
+- [ ] O96: Librarian-level ED tests (rebuild regenerates ED, BatchEmbed writes ED for missing pairs) require a real GGUF model and are not run by 'go test'. Store-level ED tests in store_test.go cover R2151-R2162 at the LMDB layer; the model-side path is exercised manually after each model swap.

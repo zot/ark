@@ -2074,7 +2074,7 @@ func filterPaths(paths []string, patterns []string) []string {
 	var out []string
 	for _, p := range paths {
 		for _, pat := range patterns {
-			if m.Match(pat, p, false) {
+			if m.Match(pat, p, "", false) {
 				out = append(out, p)
 				break
 			}
@@ -2403,7 +2403,7 @@ func matchBaseSet(paths []string, include, exclude []string) []string {
 		if len(include) > 0 {
 			matched := false
 			for _, pat := range include {
-				if m.Match(pat, p, false) {
+				if m.Match(pat, p, "", false) {
 					matched = true
 					break
 				}
@@ -2414,7 +2414,7 @@ func matchBaseSet(paths []string, include, exclude []string) []string {
 		}
 		excluded := false
 		for _, pat := range exclude {
-			if m.Match(pat, p, false) {
+			if m.Match(pat, p, "", false) {
 				excluded = true
 				break
 			}
@@ -4158,7 +4158,7 @@ func matchPath(path string, include, exclude []string) bool {
 	if len(include) > 0 {
 		matched := false
 		for _, pat := range include {
-			if m.Match(pat, path, false) {
+			if m.Match(pat, path, "", false) {
 				matched = true
 				break
 			}
@@ -4168,7 +4168,7 @@ func matchPath(path string, include, exclude []string) bool {
 		}
 	}
 	for _, pat := range exclude {
-		if m.Match(pat, path, false) {
+		if m.Match(pat, path, "", false) {
 			return false
 		}
 	}

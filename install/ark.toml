@@ -2,9 +2,9 @@
 dotfiles = true
 case_insensitive = true
 
-# Global patterns — apply to all sources
-include = []
-exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+# Default patterns — apply to any source that doesn't override
+default_include = []
+default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 
 # Strategy mapping — glob pattern to chunking strategy
 [strategies]

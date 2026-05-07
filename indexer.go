@@ -810,7 +810,7 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		if len(patterns) > 0 {
 			matched := false
 			for _, p := range patterns {
-				if matcher.Match(p, s.Path, false) {
+				if matcher.Match(p, s.Path, "", false) {
 					matched = true
 					break
 				}

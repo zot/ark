@@ -485,6 +485,9 @@ func registerChunkers(fts *microfts2.DB, cfg *Config) {
 
 // buildBracketLang converts a ChunkerConfig to a microfts2.BracketLang.
 // Handles both easy form (flat pairs) and full form (struct defs).
+// Strings and brackets unify into BracketGroup: strings get a non-nil
+// AllowedInner (scan-restricted mode), brackets leave it nil (code mode).
+// CRC: crc-DB.md | R2147, R2148, R2149, R2150
 func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
 	lang := microfts2.BracketLang{
 		LineComments: cc.LineComments,
@@ -496,23 +499,38 @@ func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
 	}
 	isFull := cc.Type == "bracket-full" || cc.Type == "indent-full"
 	if isFull {
-		// Full form: string_defs and bracket_defs
 		for _, sd := range cc.StringDefs {
-			lang.StringDelims = append(lang.StringDelims, microfts2.StringDelim{
-				Open: sd.Open, Close: sd.Close, Escape: sd.Escape,
+			lang.Brackets = append(lang.Brackets, microfts2.BracketGroup{
+				Open:         []string{sd.Open},
+				Close:        []string{sd.Close},
+				Escape:       sd.Escape,
+				AllowedInner: []string{},
 			})
 		}
 		for _, bd := range cc.BracketDefs {
-			lang.Brackets = append(lang.Brackets, microfts2.BracketGroup{
-				Open: bd.Open, Separators: bd.Separators, Close: bd.Close,
-			})
+			grp := microfts2.BracketGroup{
+				Open:          bd.Open,
+				Separators:    bd.Separators,
+				Close:         bd.Close,
+				Escape:        bd.Escape,
+				AllowedParent: bd.AllowedParent,
+			}
+			if bd.AllowedInner != nil {
+				grp.AllowedInner = *bd.AllowedInner
+				if grp.AllowedInner == nil {
+					grp.AllowedInner = []string{}
+				}
+			}
+			lang.Brackets = append(lang.Brackets, grp)
 		}
 	} else {
-		// Easy form: flat pairs with default escape "\"
 		for _, pair := range cc.Strings {
 			if len(pair) == 2 {
-				lang.StringDelims = append(lang.StringDelims, microfts2.StringDelim{
-					Open: pair[0], Close: pair[1], Escape: `\`,
+				lang.Brackets = append(lang.Brackets, microfts2.BracketGroup{
+					Open:         []string{pair[0]},
+					Close:        []string{pair[1]},
+					Escape:       `\`,
+					AllowedInner: []string{},
 				})
 			}
 		}
@@ -577,7 +595,7 @@ func (db *DB) ReloadConfig() error {
 }
 
 // IsIndexable returns true if path would be indexed by any configured source.
-// CRC: crc-DB.md | Seq: seq-file-change.md
+// CRC: crc-DB.md | Seq: seq-file-change.md | R2133
 func (db *DB) IsIndexable(path string) bool {
 	for _, src := range db.config.Sources {
 		if IsGlob(src.Dir) {
@@ -588,7 +606,7 @@ func (db *DB) IsIndexable(path string) bool {
 			continue // path not under this source
 		}
 		includes, excludes := db.config.EffectivePatterns(src)
-		if db.matcher.Classify(includes, excludes, relPath, false) == Included {
+		if db.matcher.Classify(includes, excludes, path, src.Dir, false) == Included {
 			return true
 		}
 	}
@@ -837,7 +855,7 @@ func (db *DB) Remove(patterns []string) error {
 	}
 	for _, s := range statuses {
 		for _, pat := range patterns {
-			if db.matcher.Match(pat, s.Path, false) {
+			if db.matcher.Match(pat, s.Path, "", false) {
 				if err := db.indexer.RemoveFile(s.Path); err != nil {
 					return err
 				}
@@ -899,6 +917,94 @@ func (db *DB) Refresh(patterns []string) error {
 		}
 	}
 	return nil
+}
+
+// SweepResult lists paths removed during a sweep pass.
+type SweepResult struct {
+	Removed []string
+}
+
+// Sweep walks every indexed file and removes any that no longer
+// classify as Included against current config. Files whose claiming
+// source has been removed are also dropped. Removal goes through the
+// canonical Indexer.RemoveFile path so chunks/tag values/ext routings
+// drop consistently.
+//
+// Sync version — used by tests and cold-start CLI. The async wrapper
+// (SweepAsync) routes through the write queue.
+//
+// CRC: crc-DB.md | Seq: seq-reconcile.md | R2138, R2139, R2140, R2141
+func (db *DB) Sweep() (*SweepResult, error) {
+	return sweepWith(db.fts, db.indexer, db.matcher, db.config)
+}
+
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R2138, R2141
+// SweepAsync queues the sweep through the write goroutine so removals
+// serialize behind any in-flight write, mirroring RefreshAsync.
+func (db *DB) SweepAsync() error {
+	statuses, err := db.fts.StaleFiles()
+	if err != nil {
+		return fmt.Errorf("list files: %w", err)
+	}
+	if len(statuses) == 0 {
+		return nil
+	}
+	cfg := db.config
+	matcher := db.matcher
+	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		idx := db.indexer.withFTS(ftsCopy)
+		for _, s := range statuses {
+			if shouldSweep(s.Path, matcher, cfg) {
+				if err := idx.RemoveFile(s.Path); err != nil {
+					log.Printf("sweep: remove %s: %v", s.Path, err)
+				}
+			}
+		}
+	})
+	return nil
+}
+
+// sweepWith is the shared sweep body, parameterized by fts/indexer/etc.
+// so sync and async paths can share logic.
+// CRC: crc-DB.md | R2139, R2140, R2141
+func sweepWith(fts *microfts2.DB, idx *Indexer, matcher *Matcher, cfg *Config) (*SweepResult, error) {
+	statuses, err := fts.StaleFiles()
+	if err != nil {
+		return nil, fmt.Errorf("list files: %w", err)
+	}
+	result := &SweepResult{}
+	for _, s := range statuses {
+		if !shouldSweep(s.Path, matcher, cfg) {
+			continue
+		}
+		if err := idx.RemoveFile(s.Path); err != nil {
+			log.Printf("sweep: remove %s: %v", s.Path, err)
+			continue
+		}
+		result.Removed = append(result.Removed, s.Path)
+	}
+	return result, nil
+}
+
+// shouldSweep returns true when the path should be removed from the
+// index — either no source claims it (R2140) or its claiming source
+// classifies it as not-Included (R2139).
+// CRC: crc-DB.md | R2139, R2140
+func shouldSweep(path string, matcher *Matcher, cfg *Config) bool {
+	for _, src := range cfg.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		rel, err := filepath.Rel(src.Dir, path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		// Path is under this source. Re-classify.
+		includes, excludes := cfg.EffectivePatterns(src)
+		return matcher.Classify(includes, excludes, path, src.Dir, false) != Included
+	}
+	// No source claims it — sweep.
+	return true
 }
 
 // CRC: crc-DB.md | Seq: seq-write-actor.md | R1051, R1052, R1062
@@ -1401,8 +1507,8 @@ func (db *DB) DiffConfig() ([]ConfigChange, error) {
 	check(IFieldQueryCmd, stored.QueryCmd, db.config.QueryCmd)
 	check(IFieldTagModel, stored.TagModel, db.config.TagModel)
 	check(IFieldSessionTTL, stored.SessionTTL, db.config.SessionTTL)
-	checkJSON(IFieldGlobalInclude, stored.GlobalInclude, db.config.GlobalInclude)
-	checkJSON(IFieldGlobalExclude, stored.GlobalExclude, db.config.GlobalExclude)
+	checkJSON(IFieldDefaultInclude, stored.DefaultInclude, db.config.DefaultInclude)
+	checkJSON(IFieldDefaultExclude, stored.DefaultExclude, db.config.DefaultExclude)
 	checkJSON(IFieldStrategies, stored.Strategies, db.config.Strategies)
 	checkJSON(IFieldSources, stored.Sources, db.config.Sources)
 	checkJSON(IFieldChunkers, stored.Chunkers, db.config.Chunkers)
@@ -1487,7 +1593,7 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 			if len(filterFiles) > 0 {
 				matched := false
 				for _, pat := range filterFiles {
-					if matcher.Match(pat, s.Path, false) {
+					if matcher.Match(pat, s.Path, "", false) {
 						matched = true
 						break
 					}
@@ -1498,7 +1604,7 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 			}
 			excluded := false
 			for _, pat := range excludeFiles {
-				if matcher.Match(pat, s.Path, false) {
+				if matcher.Match(pat, s.Path, "", false) {
 					excluded = true
 					break
 				}
@@ -1713,6 +1819,7 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 		"EV": "tag-value-embeds",
 		"EC": "chunk-embeds",
 		"EF": "file-centroids",
+		"ED": "tag-def-embeds", // R2162
 		"PC": "page-content",
 	}
 

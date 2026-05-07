@@ -35,6 +35,7 @@ change them, we need to update the CLI code so it's up-to-date.
 | `EV`   | Tag-value embedding | `EV` + tvid varint                                | float32 vector (3072 bytes)             |
 | `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
 | `EF`   | File centroid       | `EF` + fileID varint                              | float32 sum (3072 bytes) + uint32 count |
+| `ED`   | Tag-def embedding   | `ED` + tagname + fileid:8                         | float32 vector (3072 bytes)             |
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
 | `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
@@ -212,6 +213,28 @@ Encoding conventions used throughout:
   transaction. New chunkIDs (from re-index) are picked up by the
   next `BatchEmbedChunks` pass; EC writes happen out of the actor
   transaction (GPU compute mustn't block the actor).
+
+### ED — Tag-definition embeddings
+
+- **Key:** `ED` + tagname + 8-byte big-endian fileid. Mirrors D
+  exactly — same one-record-per-(tag, file) shape.
+- **Value:** float32 vector (3072 bytes for nomic-768).
+- **Semantic:** one embedding per tag-definition (tag, file) pair.
+  Embedded text is the description alone (no tag name) — the
+  query direction is chunk → tag, so the name's lexical surface
+  would bias the vector against meaning. Used for chunk →
+  tag-name retrieval: score a chunk's EC vector against ED
+  records to surface tag names whose definitions describe the
+  chunk.
+- **Lifecycle:** ED is dropped alongside D in
+  `Store.UpdateTagDefs` (replace path) and
+  `Store.RemoveTagDefs` (file removal). New ED records are written
+  by the next batch-embed pass via `Store.WriteTagDefEmbedding`,
+  driven by `Store.MissingTagDefEmbeddings`. Same drop path as T
+  and EV on `tag_model` change (`Store.DropEmbeddings`) and on
+  `ark rebuild`.
+- **Reverse lookup** (embeddings for a tag): prefix scan
+  `ED` + tagname returns one record per defining file.
 
 ### EF — File centroids
 

@@ -23,8 +23,8 @@ type Config struct {
 	CaseInsensitive bool              `toml:"case_insensitive,omitempty"`
 	EmbedCmd        string            `toml:"embed_cmd,omitempty"`
 	QueryCmd        string            `toml:"query_cmd,omitempty"`
-	GlobalInclude   []string          `toml:"include"`
-	GlobalExclude   []string          `toml:"exclude"`
+	DefaultInclude  []string          `toml:"default_include"`
+	DefaultExclude  []string          `toml:"default_exclude"`
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
@@ -33,15 +33,15 @@ type Config struct {
 	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
 	EmbedTiers      []EmbedTier       `toml:"embed_tiers,omitempty"`    // R1588: ctx/parallel per tier
 	// CRC: crc-Config.md | R1919, R1920, R1938
-	AboutCentroidFilter    bool           `toml:"about_centroid_filter,omitempty"`
-	AboutCentroidThreshold float64        `toml:"about_centroid_threshold,omitempty"`
-	AboutFilterTopK        int            `toml:"about_filter_top_k,omitempty"`
-	PdfPreviewZoom         float64        `toml:"pdf_preview_zoom,omitempty"`
+	AboutCentroidFilter    bool    `toml:"about_centroid_filter,omitempty"`
+	AboutCentroidThreshold float64 `toml:"about_centroid_threshold,omitempty"`
+	AboutFilterTopK        int     `toml:"about_filter_top_k,omitempty"`
+	PdfPreviewZoom         float64 `toml:"pdf_preview_zoom,omitempty"`
 	// CRC: crc-Config.md | R2125
-	AutoCompact            bool           `toml:"auto_compact,omitempty"`
-	Schedule               ScheduleConfig `toml:"schedule"` // R853, R854
-	Errors                 []string       `toml:"-"`
-	dbPath                 string         `toml:"-"`
+	AutoCompact bool           `toml:"auto_compact,omitempty"`
+	Schedule    ScheduleConfig `toml:"schedule"` // R853, R854
+	Errors      []string       `toml:"-"`
+	dbPath      string         `toml:"-"`
 }
 
 // ScheduleConfig declares which tags carry date values and their defaults.
@@ -114,19 +114,121 @@ type StringDefConfig struct {
 }
 
 // BracketDefConfig is the full-form bracket group config.
+// CRC: crc-Config.md | R2148, R2149, R2150
 type BracketDefConfig struct {
 	Open       []string `toml:"open"`
 	Separators []string `toml:"separators"`
 	Close      []string `toml:"close"`
+	Escape     string   `toml:"escape,omitempty"`
+	// AllowedInner: nil = code mode (default); non-nil (even empty)
+	// = scan-restricted, mirroring microfts2.BracketGroup semantics.
+	AllowedInner  *[]string `toml:"allowed_inner,omitempty"`
+	AllowedParent []string  `toml:"allowed_parent,omitempty"`
 }
 
 // Source is a directory entry in the configuration.
 type Source struct {
 	Dir        string            `toml:"dir"`
 	Strategies map[string]string `toml:"strategies,omitempty"`
-	Include    []string          `toml:"include"`
-	Exclude    []string          `toml:"exclude"`
+	Include    PatternSpec       `toml:"include,omitempty"`
+	Exclude    PatternSpec       `toml:"exclude,omitempty"`
 	FromGlob   string            `toml:"from_glob,omitempty"`
+}
+
+// PatternSpec is a per-source include or exclude pattern list.
+// Two TOML forms are accepted (mutually exclusive within one source):
+//
+//	include = ["*.md"]              -- replace form (Replace)
+//	include.add = ["*.lua"]         -- extend form (Add)
+//
+// Replace substitutes the default entirely; extend appends to the
+// default. Both empty means inherit the default.
+//
+// CRC: crc-Config.md | R2143, R2144, R2146
+type PatternSpec struct {
+	Replace []string
+	Add     []string
+}
+
+// IsZero reports whether the PatternSpec carries no patterns
+// (used for omitempty).
+func (p PatternSpec) IsZero() bool {
+	return len(p.Replace) == 0 && len(p.Add) == 0
+}
+
+// UnmarshalTOML decodes either the array form (`= [...]`) into
+// Replace or the table form (`{ add = [...] }`) into Add. R2146.
+func (p *PatternSpec) UnmarshalTOML(data interface{}) error {
+	switch v := data.(type) {
+	case []interface{}:
+		p.Replace = stringSliceFromTOML(v)
+		return nil
+	case map[string]interface{}:
+		addRaw, ok := v["add"]
+		if !ok {
+			return fmt.Errorf("pattern table must have key `add`")
+		}
+		addList, ok := addRaw.([]interface{})
+		if !ok {
+			return fmt.Errorf("`add` must be an array of strings")
+		}
+		p.Add = stringSliceFromTOML(addList)
+		return nil
+	case nil:
+		return nil
+	default:
+		return fmt.Errorf("unsupported pattern form: %T", data)
+	}
+}
+
+// MarshalTOML emits the array form when Replace is set, the inline-
+// table form `{ add = [...] }` when Add is set, otherwise an empty
+// representation that is omitted by omitempty.
+func (p PatternSpec) MarshalTOML() ([]byte, error) {
+	if len(p.Replace) > 0 {
+		return tomlEncodeStrings(p.Replace), nil
+	}
+	if len(p.Add) > 0 {
+		buf := []byte("{add = ")
+		buf = append(buf, tomlEncodeStrings(p.Add)...)
+		buf = append(buf, '}')
+		return buf, nil
+	}
+	return []byte("[]"), nil
+}
+
+// stringSliceFromTOML asserts each element of a TOML-decoded
+// []interface{} as a string.
+func stringSliceFromTOML(v []interface{}) []string {
+	out := make([]string, 0, len(v))
+	for _, x := range v {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// tomlEncodeStrings emits a TOML inline string array.
+func tomlEncodeStrings(s []string) []byte {
+	buf := []byte{'['}
+	for i, x := range s {
+		if i > 0 {
+			buf = append(buf, ',', ' ')
+		}
+		buf = append(buf, '"')
+		// Minimal TOML escape — backslash and double-quote.
+		for j := 0; j < len(x); j++ {
+			c := x[j]
+			if c == '\\' || c == '"' {
+				buf = append(buf, '\\')
+			}
+			buf = append(buf, c)
+		}
+		buf = append(buf, '"')
+	}
+	buf = append(buf, ']')
+	return buf
 }
 
 // LoadConfig reads and validates an ark.toml file.
@@ -148,8 +250,8 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.AboutFilterTopK = 200 // R1938
 	}
 	// R950, R951: expand tilde in all path fields at load time
-	cfg.GlobalInclude = ExpandTildeSlice(cfg.GlobalInclude)
-	cfg.GlobalExclude = ExpandTildeSlice(cfg.GlobalExclude)
+	cfg.DefaultInclude = ExpandTildeSlice(cfg.DefaultInclude)
+	cfg.DefaultExclude = ExpandTildeSlice(cfg.DefaultExclude)
 	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
@@ -160,8 +262,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	for i := range cfg.Sources {
 		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
-		cfg.Sources[i].Include = ExpandTildeSlice(cfg.Sources[i].Include)
-		cfg.Sources[i].Exclude = ExpandTildeSlice(cfg.Sources[i].Exclude)
+		cfg.Sources[i].Include.Replace = ExpandTildeSlice(cfg.Sources[i].Include.Replace)
+		cfg.Sources[i].Include.Add = ExpandTildeSlice(cfg.Sources[i].Include.Add)
+		cfg.Sources[i].Exclude.Replace = ExpandTildeSlice(cfg.Sources[i].Exclude.Replace)
+		cfg.Sources[i].Exclude.Add = ExpandTildeSlice(cfg.Sources[i].Exclude.Add)
 	}
 	return &cfg, nil
 }
@@ -180,9 +284,9 @@ func WriteDefaultConfig(path string, configSeed []byte) error {
 dotfiles = true
 case_insensitive = true
 
-# Global patterns — apply to all sources
-include = []
-exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+# Default patterns — apply to any source that doesn't override
+default_include = []
+default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
 
 # Strategy mapping — glob pattern to chunking strategy
 [strategies]
@@ -207,7 +311,7 @@ func (c *Config) EnsureArkSource() {
 	}
 	c.Sources = append(c.Sources, Source{
 		Dir:     c.dbPath,
-		Include: []string{"ark.toml", "schedule/**", "apps/**", "storage/**"},
+		Include: PatternSpec{Replace: []string{"ark.toml", "schedule/**", "apps/**", "storage/**"}},
 	})
 }
 
@@ -222,16 +326,50 @@ func (c *Config) IsInSource(path string) bool {
 	return false
 }
 
-// EffectivePatterns returns the combined global + per-source patterns.
+// EffectivePatterns returns the include/exclude patterns in effect
+// for a source. Per-source patterns either replace or extend the
+// defaults: replace form (`include = [...]`) substitutes; extend form
+// (`include.add = [...]`) appends. A source that uses neither form
+// inherits the default unchanged.
+// CRC: crc-Config.md | R2143, R2144, R2146
 func (c *Config) EffectivePatterns(src Source) (includes, excludes []string) {
-	includes = make([]string, 0, len(c.GlobalInclude)+len(src.Include))
-	includes = append(includes, c.GlobalInclude...)
-	includes = append(includes, src.Include...)
-
-	excludes = make([]string, 0, len(c.GlobalExclude)+len(src.Exclude))
-	excludes = append(excludes, c.GlobalExclude...)
-	excludes = append(excludes, src.Exclude...)
+	includes = resolvePatterns(src.Include, c.DefaultInclude)
+	excludes = resolvePatterns(src.Exclude, c.DefaultExclude)
 	return
+}
+
+// collectPatternSpec drives the ShowWhy collector against the
+// effective patterns for one category, labeling matches by their
+// origin (the source's `include`/`exclude` form, the source's
+// extend list, or the default). R2146.
+func collectPatternSpec(spec PatternSpec, defaults []string,
+	sourceLabel, defaultLabel string,
+	matches, sources *[]string,
+	collect func(patterns []string, label string, pats *[]string, srcs *[]string)) {
+	if len(spec.Replace) > 0 {
+		collect(spec.Replace, sourceLabel, matches, sources)
+		return
+	}
+	collect(defaults, defaultLabel, matches, sources)
+	if len(spec.Add) > 0 {
+		collect(spec.Add, sourceLabel+" (add)", matches, sources)
+	}
+}
+
+// resolvePatterns applies replace/extend semantics for one
+// (PatternSpec, defaults) pair.
+// CRC: crc-Config.md | R2143, R2144, R2146
+func resolvePatterns(spec PatternSpec, defaults []string) []string {
+	if len(spec.Replace) > 0 {
+		return spec.Replace
+	}
+	if len(spec.Add) > 0 {
+		out := make([]string, 0, len(defaults)+len(spec.Add))
+		out = append(out, defaults...)
+		out = append(out, spec.Add...)
+		return out
+	}
+	return defaults
 }
 
 // HasErrors returns true if the config has validation errors.
@@ -335,7 +473,7 @@ func matchesFilterExclude(path string, filterFiles, excludeFiles []string) bool 
 	if len(filterFiles) > 0 {
 		matched := false
 		for _, pat := range filterFiles {
-			if m.Match(pat, path, false) {
+			if m.Match(pat, path, "", false) {
 				matched = true
 				break
 			}
@@ -345,7 +483,7 @@ func matchesFilterExclude(path string, filterFiles, excludeFiles []string) bool 
 		}
 	}
 	for _, pat := range excludeFiles {
-		if m.Match(pat, path, false) {
+		if m.Match(pat, path, "", false) {
 			return false
 		}
 	}
@@ -400,7 +538,7 @@ func ExpandTildeSlice(paths []string) []string {
 func (c *Config) validate() {
 	c.Errors = nil
 	// Check global patterns
-	c.checkDuplicates(c.GlobalInclude, c.GlobalExclude, "global")
+	c.checkDuplicates(c.DefaultInclude, c.DefaultExclude, "global")
 	// Check per-source patterns against their effective set
 	for _, src := range c.Sources {
 		inc, exc := c.EffectivePatterns(src)
@@ -645,13 +783,13 @@ func (c *Config) AddInclude(pattern, sourceDir string) error {
 		return err
 	}
 	if sourceDir == "" {
-		c.GlobalInclude = append(c.GlobalInclude, pattern)
+		c.DefaultInclude = append(c.DefaultInclude, pattern)
 	} else {
 		src, err := c.findSource(sourceDir)
 		if err != nil {
 			return err
 		}
-		src.Include = append(src.Include, pattern)
+		appendToPatternSpec(&src.Include, pattern)
 	}
 	c.validate()
 	return nil
@@ -664,16 +802,27 @@ func (c *Config) AddExclude(pattern, sourceDir string) error {
 		return err
 	}
 	if sourceDir == "" {
-		c.GlobalExclude = append(c.GlobalExclude, pattern)
+		c.DefaultExclude = append(c.DefaultExclude, pattern)
 	} else {
 		src, err := c.findSource(sourceDir)
 		if err != nil {
 			return err
 		}
-		src.Exclude = append(src.Exclude, pattern)
+		appendToPatternSpec(&src.Exclude, pattern)
 	}
 	c.validate()
 	return nil
+}
+
+// appendToPatternSpec appends a pattern to whichever form is already
+// in use (Replace or Add), so add-include preserves the user's
+// chosen form. When both are empty, Replace is the default.
+func appendToPatternSpec(spec *PatternSpec, pattern string) {
+	if len(spec.Add) > 0 {
+		spec.Add = append(spec.Add, pattern)
+		return
+	}
+	spec.Replace = append(spec.Replace, pattern)
 }
 
 // RemovePattern removes a pattern from include or exclude lists. If
@@ -681,7 +830,7 @@ func (c *Config) AddExclude(pattern, sourceDir string) error {
 // source. Returns an error if the pattern wasn't found.
 func (c *Config) RemovePattern(pattern, sourceDir string) error {
 	if sourceDir == "" {
-		if removeFromSlice(&c.GlobalInclude, pattern) || removeFromSlice(&c.GlobalExclude, pattern) {
+		if removeFromSlice(&c.DefaultInclude, pattern) || removeFromSlice(&c.DefaultExclude, pattern) {
 			c.validate()
 			return nil
 		}
@@ -691,7 +840,8 @@ func (c *Config) RemovePattern(pattern, sourceDir string) error {
 	if err != nil {
 		return err
 	}
-	if removeFromSlice(&src.Include, pattern) || removeFromSlice(&src.Exclude, pattern) {
+	if removeFromSlice(&src.Include.Replace, pattern) || removeFromSlice(&src.Include.Add, pattern) ||
+		removeFromSlice(&src.Exclude.Replace, pattern) || removeFromSlice(&src.Exclude.Add, pattern) {
 		c.validate()
 		return nil
 	}
@@ -737,29 +887,35 @@ func (c *Config) ShowWhy(filePath string) (*WhyResult, error) {
 		return result, nil
 	}
 
-	filePath = relPath // Use relative path for pattern matching from here on
-	// Check ignore files
-	ignoreExcludes, ignoreSources := c.loadIgnoreFiles(matchedSource.Dir, filePath)
+	// Check ignore files (uses source-relative form)
+	ignoreExcludes, ignoreSources := c.loadIgnoreFiles(matchedSource.Dir, relPath)
 
-	// Find all matching patterns with their sources
+	// Find all matching patterns with their sources. R2133: pass abs
+	// path + source dir so the matcher can dispatch on `/`, `./`, or
+	// bare patterns correctly.
 	var matchingIncludes, matchingExcludes []string
 	var includeSources, excludeSources []string
 
 	collect := func(patterns []string, label string, pats *[]string, srcs *[]string) {
 		for _, p := range patterns {
-			if m.Match(p, filePath, isDir) {
+			if m.Match(p, filePath, matchedSource.Dir, isDir) {
 				*pats = append(*pats, p)
 				*srcs = append(*srcs, label)
 			}
 		}
 	}
-	collect(c.GlobalInclude, "global include", &matchingIncludes, &includeSources)
-	collect(matchedSource.Include, fmt.Sprintf("source %s include", matchedSource.Dir), &matchingIncludes, &includeSources)
-	collect(c.GlobalExclude, "global exclude", &matchingExcludes, &excludeSources)
-	collect(matchedSource.Exclude, fmt.Sprintf("source %s exclude", matchedSource.Dir), &matchingExcludes, &excludeSources)
+	// R2143, R2144, R2146: replace/extend resolution per category.
+	collectPatternSpec(matchedSource.Include, c.DefaultInclude,
+		fmt.Sprintf("source %s include", matchedSource.Dir),
+		"default_include",
+		&matchingIncludes, &includeSources, collect)
+	collectPatternSpec(matchedSource.Exclude, c.DefaultExclude,
+		fmt.Sprintf("source %s exclude", matchedSource.Dir),
+		"default_exclude",
+		&matchingExcludes, &excludeSources, collect)
 	// Ignore file patterns have per-pattern source labels
 	for i, p := range ignoreExcludes {
-		if m.Match(p, filePath, isDir) {
+		if m.Match(p, filePath, matchedSource.Dir, isDir) {
 			matchingExcludes = append(matchingExcludes, p)
 			excludeSources = append(excludeSources, ignoreSources[i])
 		}

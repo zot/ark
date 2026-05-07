@@ -63,7 +63,8 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 
 			// Classify directories: if excluded, skip entirely
 			if isDir {
-				cls := sc.matcher.Classify(includes, excludes, relPath, true)
+				// CRC: crc-Scanner.md | R2133
+				cls := sc.matcher.Classify(includes, excludes, path, dir, true)
 				if cls == Excluded {
 					return filepath.SkipDir
 				}
@@ -71,7 +72,8 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 			}
 
 			// Classify files
-			cls := sc.matcher.Classify(includes, excludes, relPath, false)
+			// CRC: crc-Scanner.md | R2133
+			cls := sc.matcher.Classify(includes, excludes, path, dir, false)
 			switch cls {
 			case Included:
 				// R1645, R1646, R1647: detect empty files (size == 0) up front —

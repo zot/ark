@@ -22,8 +22,8 @@
 - **R9:** A file must match at least one include pattern to be indexed
 - **R10:** When both include and exclude match the same file, include wins — no specificity ranking
 - **R11:** Identical include and exclude strings are a config error, reported on every operation until resolved
-- **R12:** Global include/exclude patterns apply to all directories
-- **R13:** Per-source include/exclude are additive — combine with global, not replace
+- **~~R12:~~** (Retired T54 — see R2143) Global include/exclude patterns apply to all directories
+- **~~R13:~~** (Retired T55 — see R2144) Per-source include/exclude are additive — combine with global, not replace
 - **R14:** Each source directory may optionally specify a `strategies` map (glob pattern → chunking strategy name) that amends the global strategies table for files in that source
 - **R15:** Files matching no include or exclude pattern are held in an "unresolved" list — no automatic indexing
 - **R16:** Pattern language uses doublestar glob syntax (github.com/bmatcuk/doublestar/v4). Trailing `/` means directory-only; no trailing `/` means file-only. These are ark-level semantic modifiers on top of doublestar matching.
@@ -31,7 +31,7 @@
 - **R18:** `*` and `**` match dotfiles by default (controlled by `dotfiles` config, default true)
 - **R19:** Standard glob wildcards (`?`, `[abc]`, `{alt1,alt2}`) are supported
 - **R20:** Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
-- **R21:** Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
+- **~~R21:~~** (Retired T48 — see R2133) Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
 - **R22:** `ark init` ships default excludes for `.git/`, `.env`, etc.
 
 ### Config File
@@ -39,7 +39,7 @@
 - **R23:** Config file is TOML format, named `ark.toml`
 - **R24:** Config file lives in the database directory
 - **R25:** Config has global `dotfiles` setting (default true)
-- **R26:** Config has global `include` and `exclude` pattern arrays
+- **~~R26:~~** (Retired T56 — see R2145) Config has global `include` and `exclude` pattern arrays
 - **R27:** Config has `[[source]]` entries with `dir`, optional `strategies` map, and optional `include`/`exclude`
 
 ### Database Directory
@@ -568,7 +568,7 @@
 - **R341:** ~/.ark does not appear in ark.toml's source list
 
 ### Phase A: Config-Triggered Reconcile
-- **R342:** A Reconcile method encapsulates the startup reconciliation cycle: sources-check → scan → refresh
+- **~~R342:~~** (Retired T49 — see R2138) A Reconcile method encapsulates the startup reconciliation cycle: sources-check → scan → refresh
 - **R343:** Startup calls Reconcile (existing behavior, extracted into method)
 - **R344:** Every config mutation handler (add-source, remove-source, add-include, add-exclude, remove-pattern) triggers Reconcile after completing
 - **R345:** Reconcile runs in a background goroutine — HTTP handlers return immediately
@@ -980,7 +980,7 @@
 **Source:** specs/chunker-strategies.md
 
 - **R624:** Chunker language configs are defined in `ark.toml` as `[[chunker]]` entries, not hardcoded in Go
-- **R625:** Each `[[chunker]]` entry has a `name` (strategy name), `type` ("bracket" or "indent"), and language fields (line_comments, block_comments, strings, brackets, leading_comments)
+- **R625:** Each `[[chunker]]` entry has a `name` (strategy name), a `type` (`bracket`, `bracket-full`, `indent`, or `indent-full`), `line_comments`, `block_comments`, and either easy-form pairs (`strings`, `brackets`) or full-form structs (`string_defs`, `bracket_defs`)
 - **R626:** `type = "bracket"` entries register via `microfts2.AddChunker` with `microfts2.BracketChunker(lang)`
 - **R627:** `type = "indent"` entries register via `microfts2.AddChunker` with `microfts2.IndentChunker(lang, tabWidth)`
 - **R628:** `tab_width` field is required for indent type; defaults to 4 if omitted
@@ -995,6 +995,10 @@
 - **R637:** If a `[[chunker]]` name conflicts with a hardcoded strategy, the TOML config wins
 - **R638:** Existing hardcoded strategies (lines, markdown, chat-jsonl, lines-overlap, words-overlap) remain unchanged
 - **R639:** (inferred) Chunker strategies appear in `ark strategy list` alongside existing strategies
+- **R2147:** Each `strings` / `string_defs` entry is translated to a `microfts2.BracketGroup` with non-nil `AllowedInner` (scan-restricted mode), Escape from the entry (default `\` for easy form), and no inner openers
+- **R2148:** Each `brackets` / `bracket_defs` entry is translated to a `microfts2.BracketGroup` with `AllowedInner` left nil (code mode) unless the full-form entry sets `allowed_inner` explicitly
+- **R2149:** `bracket_defs` entries accept optional `escape`, `allowed_inner`, and `allowed_parent` fields that pass through to the corresponding `BracketGroup` fields
+- **R2150:** A `bracket_defs` entry with `allowed_inner` set (even to `[]`) is interpreted as scan-restricted, matching microfts2's nil-vs-empty semantics; an entry that omits `allowed_inner` stays in code mode
 
 ## Feature: Sessions
 **Source:** specs/sessions.md
@@ -3413,3 +3417,45 @@ implementation, not a separate format break.
 - **R2125:** `ark.toml` accepts a top-level `auto_compact = true|false` boolean. When set to `true`, `ark serve` runs the LMDB compaction step on startup as if `-compact` had been passed.
 - **R2126:** When the user supplies `-compact` (or `-compact=false`) on the `ark serve` command line, the flag value wins regardless of `auto_compact` in ark.toml. The CLI distinguishes "flag supplied" from "flag absent at default" via `flag.FlagSet.Visit` after `Parse`.
 - **R2127:** When `-compact` is not supplied and `auto_compact` is absent from ark.toml, the default is `false` — preserving the historical opt-in compaction behaviour.
+
+## Feature: pattern anchoring forms and source-shadow validation
+**Source:** specs/main.md, specs/source-monitoring.md
+
+- **R2133:** Patterns have three anchoring forms by leading slashes. **No leading slash** matches at any depth within the source directory (equivalent to prepending `**/`). **Single leading slash** (`/path`) is filesystem-absolute — matched against the file's absolute path on disk. **Leading `./`** is source-root-anchored — after stripping `./`, the remainder is matched against the source-relative path. Replaces R21 (Retired T48). The `./` form replaces the prior interpretation where `/path` meant source-anchored.
+- **~~R2134:~~** (Retired T50 — no replacement) A filesystem-absolute exclude *shadows* a source when the pattern's literal prefix (the substring up to the first glob character `*`, `?`, `[`, `{`, or `\`) is equal to or an ancestor path of the source's directory. A shadowed source can never have any indexable file.
+- **~~R2135:~~** (Retired T51 — no replacement) Shadow detection runs at config-load. On detection, ark refuses to start (or refuses the config-mutation that produced the situation), names the offending pattern and source, and instructs the user to remove one or the other. The user must resolve the contradiction before ark proceeds.
+- **~~R2136:~~** (Retired T52 — no replacement) Shadow detection also runs on `ark config add-source`. If adding the new source would make it shadowed by an existing absolute exclude, the add fails before the source is persisted.
+- **~~R2137:~~** (Retired T53 — no replacement) Source-root-anchored patterns (`./path` form) and bare patterns cannot shadow a source — they are scoped to a single source's relative paths and never have an "ancestor of source.Dir" relation. Only filesystem-absolute exclude patterns are checked for shadowing.
+
+## Feature: Reconcile sweep step
+**Source:** specs/source-monitoring.md
+
+- **R2138:** Reconcile runs `sources-check → sweep → scan → refresh`. The sweep step runs before scan so newly-excluded files are dropped before their dependents are re-evaluated. Replaces R342 (Retired T49).
+- **R2139:** Sweep walks every file currently in the index. For each path, sweep determines which configured source claims it (path is under source.Dir) and re-classifies it against the current effective include/exclude patterns of that source. Any file that no longer classifies as `Included` is removed.
+- **R2140:** A file whose claiming source has been removed from configuration is also swept — no source claims it, so it cannot be classified `Included`.
+- **R2141:** Sweep removal goes through the same removal path as `ark remove`, so all derived state — chunks (via microfts2 refcounting), tag values, and ext routings — is dropped consistently. Sweep does not bypass that path.
+- **R2142:** Sweep runs every Reconcile cycle, not only the post-mutation ones. Startup, hand-edits to ark.toml caught by fsnotify, and any other entry into Reconcile produce the same result.
+
+## Feature: default vs per-source patterns (replace semantics)
+**Source:** specs/main.md
+
+- **R2143:** The top-level `default_include` and `default_exclude` arrays apply to any source that does not specify its own `include` (resp. `exclude`). Replaces R12 (Retired T54).
+- **R2144:** When a source sets `include`, those patterns *replace* `default_include` for that source — no merging. Same for `exclude`. The two patterns are independent: a source may set only `include` (inheriting `default_exclude`) or only `exclude` (inheriting `default_include`). Replaces R13 (Retired T55).
+- **R2145:** ark.toml uses TOML keys `default_include` and `default_exclude` at the top level. Per-source `[[source]]` blocks continue to use `include` and `exclude`. Replaces R26 (Retired T56).
+- **R2146:** A per-source `include`/`exclude` may be written either as an array (`include = [...]`) for replace form or as a table with key `add` (`include.add = [...]`) for extend form. Replace substitutes the default entirely; extend appends per-source patterns to the default. The two forms are mutually exclusive within one source (TOML enforces this — a key cannot be both array and table). A source that uses neither form inherits the default unchanged.
+
+## Feature: tag-definition embeddings (ED records)
+**Source:** specs/tag-def-embeddings.md
+
+- **R2151:** Each tag-definition (D record) has a parallel ED record holding a float32 vector embedding of the definition's description text. One ED per (tag, fileid), keyed `ED` + tagname + fileid:8.
+- **R2152:** ED embeds the description text alone — not the tag name. The chunk → tag-name query direction makes the name's lexical surface bias the vector against the description's meaning, so the name is excluded.
+- **R2153:** ED uses the same float32 vector format and dimensionality as EV and EC (3072 bytes for nomic-768).
+- **R2154:** When a fileid's D records are replaced (`Store.UpdateTagDefs`), the fileid's ED records are dropped in the same LMDB transaction. Mirrors D's R505 lifecycle.
+- **R2155:** When a fileid's D records are removed (`Store.RemoveTagDefs`), the fileid's ED records are dropped in the same LMDB transaction.
+- **R2156:** When D records are appended (`Store.AppendTagDefs`), no ED writes occur synchronously — newly added (tag, fileid) pairs are picked up by the next batch-embed pass via `Store.MissingTagDefEmbeddings`. Mirrors D's R511 append path.
+- **R2157:** `Store.MissingTagDefEmbeddings` returns `(tag, fileid)` pairs that have a D record but no ED record. Used by the post-reconcile batch-embed pass.
+- **R2158:** The Librarian's batch-embed pass (the same pass that writes T-name and EV vectors) embeds each missing description via `EmbedQuery` and writes ED via `Store.WriteTagDefEmbedding(tag, fileid, vec)`.
+- **R2159:** `Store.WriteTagDefEmbedding(tag, fileid, vec)` writes one ED record. `Store.ReadTagDefEmbedding(tag, fileid)` reads one back; `(nil, nil)` if absent.
+- **R2160:** `Store.DropEmbeddings` deletes all ED records alongside dropping T-name vectors and EV records. ED is gated by `tag_model` — a model swap drops T-name, EV, and ED together. No separate ED schema marker.
+- **R2161:** (inferred) ED records are rebuilt from scratch by `ark rebuild`, same as T/F/V/D records.
+- **R2162:** `ark status -db` prefix listing includes ED alongside T/F/V/D/EV/EC/EF.

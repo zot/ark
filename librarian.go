@@ -790,9 +790,12 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 	return matches, nil
 }
 
-// BatchEmbed scans for missing tag name and tag value embeddings,
-// embeds them in batches, and writes the results to LMDB.
-// Called post-reconcile from the write goroutine. R1292, R1293, R1295
+// BatchEmbed scans for missing tag name, tag value, and tag-definition
+// embeddings, embeds them in batches, and writes the results to LMDB.
+// Called post-reconcile from the write goroutine — also the rebuild
+// regeneration path, since rebuild drops ED via DropEmbeddings and
+// the next pass repopulates from the surviving D records.
+// CRC: crc-Librarian.md | Seq: seq-tag-embed.md | R1292, R1293, R1295, R2152, R2158, R2161
 func (l *Librarian) BatchEmbed() error {
 	if !l.EmbeddingAvailable() {
 		return nil
@@ -807,10 +810,15 @@ func (l *Librarian) BatchEmbed() error {
 	if err != nil {
 		return fmt.Errorf("scan missing value embeddings: %w", err)
 	}
-	if len(missingTags) == 0 && len(missingTvids) == 0 {
+	missingDefs, err := l.db.store.MissingTagDefEmbeddings()
+	if err != nil {
+		return fmt.Errorf("scan missing tag-def embeddings: %w", err)
+	}
+	if len(missingTags) == 0 && len(missingTvids) == 0 && len(missingDefs) == 0 {
 		return nil
 	}
-	log.Printf("librarian: embedding %d tag names + %d tag values", len(missingTags), len(missingTvids))
+	log.Printf("librarian: embedding %d tag names + %d tag values + %d tag defs",
+		len(missingTags), len(missingTvids), len(missingDefs))
 
 	// Resolve tvids to text for embedding
 	var tvidMap map[uint64]TagAlt
@@ -867,7 +875,29 @@ func (l *Librarian) BatchEmbed() error {
 		}
 	}
 
-	log.Printf("librarian: tag embedding complete (%d names, %d values)", len(missingTags), len(missingTvids))
+	// Batch embed tag definitions. The embed text is the description
+	// alone — no tag name, no hyphen-to-space rewrite. ED is queried
+	// chunk → tag, so name-as-cue would bias the vector. R2152, R2158
+	for i := 0; i < len(missingDefs); i += batchSize {
+		end := min(i+batchSize, len(missingDefs))
+		batch := missingDefs[i:end]
+		texts := make([]string, len(batch))
+		for j, ref := range batch {
+			texts[j] = ref.Description
+		}
+		vecs, err := l.EmbedBatch(texts)
+		if err != nil {
+			return fmt.Errorf("embed tag defs batch: %w", err)
+		}
+		for j, ref := range batch {
+			if err := l.db.store.WriteTagDefEmbedding(ref.Tag, ref.FileID, vecs[j]); err != nil {
+				log.Printf("librarian: write tag-def embedding %q@%d: %v", ref.Tag, ref.FileID, err)
+			}
+		}
+	}
+
+	log.Printf("librarian: tag embedding complete (%d names, %d values, %d defs)",
+		len(missingTags), len(missingTvids), len(missingDefs))
 	return nil
 }
 

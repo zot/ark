@@ -50,8 +50,26 @@ Config validation: if an include and exclude pattern are
 identical strings, that's an error. Ark reports it on every
 operation until the user resolves the contradiction.
 
-Global include/exclude patterns apply to all directories. Per-directory
-overrides are optional.
+**Top-level patterns are defaults; per-source patterns replace or
+extend them.** The top-level `default_include` and `default_exclude`
+arrays apply to any source that does not specify its own `include` or
+`exclude`. A source can override the default in two ways:
+
+- **Replace** form — `include = ["*.md"]`. Per-source patterns
+  *replace* `default_include` entirely for that source.
+- **Extend** form — `include.add = ["*.md"]`. Per-source patterns
+  are *added* to `default_include` for that source.
+
+The two forms are mutually exclusive within a source — a TOML key
+is either an array or a table, not both. A source uses replace
+when narrowing the default set (e.g. only `*.md` here), extend when
+broadening it (e.g. defaults plus this directory's special files).
+
+The same forms apply to `exclude` / `exclude.add`.
+
+A source's `include` and `exclude` are independent: setting only
+`include` (any form) keeps `default_exclude` in effect; setting only
+`exclude` (any form) keeps `default_include` in effect.
 
 Each directory entry may optionally specify a `strategies` map (glob
 pattern → chunking strategy name) that amends the global strategies
@@ -92,18 +110,32 @@ Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
 for filenames that contain them.
 `ark init` ships with default excludes for `.git/`, `.env`, etc.
 
-Patterns without a leading `/` match at any depth within the
-watched directory (equivalent to prepending `**/`). Patterns with
-a leading `/` are anchored to the watched directory root.
+Three anchoring forms by leading slashes:
 
-Examples (given `dir: ~/work/myproject`):
+- **No leading slash** — matches at any depth within the source
+  directory (equivalent to prepending `**/`).
+- **Single leading slash** (`/path`) — **filesystem-absolute**;
+  matches against the file's absolute path on disk, regardless of
+  which source it belongs to. Enables blanket excludes (e.g.
+  `/tmp/**`).
+- **Leading `./`** (`./path`) — **source-root-anchored**; matches
+  only at the root of the source directory. After stripping `./`,
+  the remainder is matched against the source-relative path.
+
+Examples:
 - `exclude: node_modules/` — skips node_modules dirs anywhere
-- `exclude: /vendor/` — skips vendor/ only at project root
+- `exclude: ./vendor/` — skips vendor/ only at the source root
+- `exclude: /tmp/**` — blanket exclude of anything under /tmp
+- `exclude: /home/me/project/vendor/**` — excludes that exact
+  filesystem subtree (works whether or not /home/me/project is
+  itself a source)
 - `include: *.md` — matches markdown files at any depth
-- `include: /src/**` — matches everything under src/ at root
+- `include: ./src/**` — matches everything under src/ at the
+  source root
 - `include: **/*.md` — same as `*.md` (explicit recursive form)
 - `include: docs/**/*.txt` — text files anywhere under docs/
 - `include: *.{md,txt,org}` — multiple extensions in one pattern
+
 
 ### Config file: `ark.toml`
 
@@ -114,9 +146,9 @@ TOML format. Lives in the database directory.
 dotfiles = true  # whether * matches dotfiles (default true)
 case_insensitive = true
 
-# Global patterns — apply to all sources
-include = ["*.md", "*.txt", "*.org"]
-exclude = [".git/", ".env", "node_modules/"]
+# Default patterns — apply to any source that doesn't override
+default_include = ["*.md", "*.txt", "*.org"]
+default_exclude = [".git/", ".env", "node_modules/"]
 
 # Sources — directories to watch
 [[source]]
@@ -124,18 +156,26 @@ dir = "~/work/myproject"
 
 [[source]]
 dir = "~/notes"
-include = ["*.md"]          # per-source override (adds to global)
-exclude = ["drafts/"]       # per-source override (adds to global)
+include = ["*.md"]          # replaces default_include for this source
+exclude = ["drafts/"]       # replaces default_exclude for this source
+
+[[source]]
+dir = "~/scripts"
+include.add = ["*.lua"]     # extends default_include with *.lua
 
 [[source]]
 dir = "~/work/reference"
 strategies = {"*.txt" = "plain"}  # amends global strategies for this source
 ```
 
-Per-source `include` and `exclude` are additive — they combine with
-the global patterns, not replace them. A file must match at least one
-include pattern (global or per-source) to be indexed. The
-include-wins-conflicts rule applies to the combined set.
+Per-source `include`/`exclude` either replace or extend the
+corresponding default. Replace form (`include = [...]`) substitutes
+the default entirely; extend form (`include.add = [...]`) appends to
+the default. A source that omits both inherits both defaults. A
+source that sets only one (in either form) inherits the other. A file
+must match at least one include pattern (effective for that source)
+to be indexed. The include-wins-conflicts rule applies to the
+resulting set.
 
 @manifest files in source directories are a future enhancement. V1
 uses the central config.

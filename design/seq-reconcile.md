@@ -1,5 +1,5 @@
 # Sequence: Reconciliation
-**Requirements:** R342, R343, R344, R345, R346, R347
+**Requirements:** R343, R344, R345, R346, R347, R2138, R2139, R2140, R2141, R2142
 
 Covers the reconciliation cycle — called on startup, after config
 mutations, and on ark.toml fsnotify events.
@@ -29,6 +29,15 @@ Trigger (startup | config mutation | ark.toml change)
   │     │     ├── diff against DB sources
   │     │     ├── add new sources
   │     │     └── flag MIA sources
+  │     │
+  │     ├──> DB.Sweep()                          (R2138, R2139)
+  │     │     ├── microfts2.StaleFiles()         [iterate every indexed path]
+  │     │     ├── for each path:
+  │     │     │     ├── find claiming source (src.Dir prefix)
+  │     │     │     ├── no source → Indexer.RemoveFile(path)  (R2140)
+  │     │     │     └── Matcher.Classify(abs, src.Dir) ≠ Included
+  │     │     │           → Indexer.RemoveFile(path)            (R2141)
+  │     │     └── log sweep summary
   │     │
   │     ├──> DB.Scan()
   │     │     ├── Scanner.Scan(config)

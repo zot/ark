@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -47,9 +47,15 @@ ark-level settings, and tag tracking.
   without replacing — used by append-only indexing path
 - UpdateTagDefs(fileid, defs): replace all D records for fileid, write new ones.
   defs is map[string]string (tagname → description).
-  Within one LMDB txn: delete old D records for fileid, write new D records.
-- RemoveTagDefs(fileid): delete all D records for fileid
-- AppendTagDefs(fileid, defs): add D records without removing — append path
+  Within one LMDB txn: delete old D records for fileid, delete the
+  fileid's ED records (one per old D), write new D records. ED
+  records for new (tag, fileid) pairs are written lazily by the
+  batch-embed pass. (R2154)
+- RemoveTagDefs(fileid): delete all D records for fileid via
+  UpdateTagDefs(fileid, nil); ED records drop in the same txn. (R2155)
+- AppendTagDefs(fileid, defs): add D records without removing — append path.
+  ED writes do not happen synchronously; new (tag, fileid) pairs become
+  visible via MissingTagDefEmbeddings on the next batch-embed pass. (R2156)
 - ListTagDefs(tags []string): scan D prefix, return definitions.
   If tags is empty, return all. Otherwise filter to requested tags.
   Returns (tagname, description, fileid) triples.
@@ -149,7 +155,22 @@ ark-level settings, and tag tracking.
 - MissingTagValueEmbeddings() []uint64: scan V records for tvids, return
   those without corresponding EV records. (R1292)
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
-  EV records (for rebuild)
+  EV records, delete all ED records (for rebuild). T-name, EV, and ED
+  share `tag_model`, so a model swap drops all three together. (R2160)
+
+### Tag-Definition Embedding Records (R2151-R2161)
+- WriteTagDefEmbedding(tag string, fileid uint64, vec []float32): write
+  ED[tag][fileid:8] record. Key: `ED` + tag bytes + 8-byte big-endian
+  fileid. Value: float32 vector. (R2151, R2153, R2159)
+- ReadTagDefEmbedding(tag string, fileid uint64) ([]float32, error):
+  read one ED record. Returns (nil, nil) when absent. (R2159)
+- MissingTagDefEmbeddings() []TagDefRef: scan D prefix, return (tag,
+  fileid) pairs that have a D record but no corresponding ED record.
+  Used by the post-reconcile batch-embed pass. (R2157)
+- DeleteTagDefEmbeddingsForFileInTxn(txn *lmdb.Txn, fileid uint64): scan
+  D prefix matching the trailing 8-byte fileid, delete the parallel ED
+  records inside the same txn. Used by UpdateTagDefs/RemoveTagDefs
+  before D records are deleted. (R2154, R2155)
 
 ### Chunk Embedding Records (R1833-R1845)
 - WriteChunkEmbedding(chunkID uint64, vec []float32): write EC[chunkID]

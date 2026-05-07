@@ -13,8 +13,8 @@ func TestLoadValidConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
 
-include = ["*.md", "*.txt"]
-exclude = [".git/", ".env"]
+default_include = ["*.md", "*.txt"]
+default_exclude = [".git/", ".env"]
 
 [[source]]
 dir = "` + dir + `"
@@ -41,12 +41,72 @@ strategies = {"*.txt" = "lines"}
 	}
 }
 
-func TestPerSourcePatternsAdditive(t *testing.T) {
+// R2146: per-source include.add extends default_include
+func TestPerSourceIncludeAddExtendsDefault(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
-include = ["*.md"]
-exclude = []
+default_include = ["*.md", "*.go"]
+
+[[source]]
+dir = "` + dir + `"
+include.add = ["*.lua"]
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc, _ := cfg.EffectivePatterns(cfg.Sources[0])
+	if len(inc) != 3 {
+		t.Fatalf("expected 3 include patterns (default + add), got %d: %v", len(inc), inc)
+	}
+	want := map[string]bool{"*.md": true, "*.go": true, "*.lua": true}
+	for _, p := range inc {
+		if !want[p] {
+			t.Errorf("unexpected pattern %q in result", p)
+		}
+		delete(want, p)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing patterns: %v", want)
+	}
+}
+
+// R2146: per-source exclude.add extends default_exclude
+func TestPerSourceExcludeAddExtendsDefault(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ark.toml")
+	content := `dotfiles = true
+default_include = ["*.md"]
+default_exclude = [".git/"]
+
+[[source]]
+dir = "` + dir + `"
+exclude.add = ["drafts/"]
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exc := cfg.EffectivePatterns(cfg.Sources[0])
+	if len(exc) != 2 {
+		t.Fatalf("expected 2 exclude patterns (default + add), got %d: %v", len(exc), exc)
+	}
+}
+
+// R2143, R2144: per-source include replaces default_include
+func TestPerSourceIncludeReplacesDefault(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ark.toml")
+	content := `dotfiles = true
+default_include = ["*.md", "*.go"]
+default_exclude = []
 
 [[source]]
 dir = "` + dir + `"
@@ -61,15 +121,35 @@ include = ["*.txt"]
 		t.Fatal(err)
 	}
 	inc, _ := cfg.EffectivePatterns(cfg.Sources[0])
+	if len(inc) != 1 || inc[0] != "*.txt" {
+		t.Errorf("expected per-source include to replace default; got %v", inc)
+	}
+}
+
+// R2144: when source omits include, default_include applies
+func TestPerSourceOmittedInheritsDefault(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ark.toml")
+	content := `dotfiles = true
+default_include = ["*.md", "*.go"]
+
+[[source]]
+dir = "` + dir + `"
+exclude = ["drafts/"]
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc, exc := cfg.EffectivePatterns(cfg.Sources[0])
 	if len(inc) != 2 {
-		t.Fatalf("expected 2 include patterns, got %d: %v", len(inc), inc)
+		t.Errorf("expected default_include to apply; got %v", inc)
 	}
-	found := map[string]bool{}
-	for _, p := range inc {
-		found[p] = true
-	}
-	if !found["*.md"] || !found["*.txt"] {
-		t.Errorf("expected [*.md, *.txt], got %v", inc)
+	if len(exc) != 1 || exc[0] != "drafts/" {
+		t.Errorf("expected per-source exclude to replace default_exclude; got %v", exc)
 	}
 }
 
@@ -77,8 +157,8 @@ func TestIdenticalIncludeExcludeIsError(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
-include = ["*.md"]
-exclude = ["*.md"]
+default_include = ["*.md"]
+default_exclude = ["*.md"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -106,7 +186,7 @@ func TestWriteDefaultConfig(t *testing.T) {
 		t.Error("default config should have dotfiles=true")
 	}
 	excSet := map[string]bool{}
-	for _, e := range cfg.GlobalExclude {
+	for _, e := range cfg.DefaultExclude {
 		excSet[e] = true
 	}
 	if !excSet[".git/"] {
@@ -122,8 +202,8 @@ func TestAddIncludePerSourceRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
-include = ["*.md"]
-exclude = [".git/"]
+default_include = ["*.md"]
+default_exclude = [".git/"]
 
 [[source]]
 dir = "` + dir + `"
@@ -153,23 +233,23 @@ dir = "` + dir + `"
 		t.Fatal("no sources after round-trip")
 	}
 	found := false
-	for _, p := range cfg2.Sources[0].Include {
+	for _, p := range cfg2.Sources[0].Include.Replace {
 		if p == "*.org" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("per-source include missing *.org after round-trip, got %v", cfg2.Sources[0].Include)
+		t.Errorf("per-source include missing *.org after round-trip, got %v", cfg2.Sources[0].Include.Replace)
 	}
 }
 
-// Test: test-Config.md — global add-include round-trip
-func TestAddIncludeGlobalRoundTrip(t *testing.T) {
+// Test: test-Config.md — default add-include round-trip
+func TestAddIncludeDefaultRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
-include = ["*.md"]
-exclude = [".git/"]
+default_include = ["*.md"]
+default_exclude = [".git/"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -191,13 +271,13 @@ exclude = [".git/"]
 		t.Fatal(err)
 	}
 	found := false
-	for _, p := range cfg2.GlobalInclude {
+	for _, p := range cfg2.DefaultInclude {
 		if p == "*.txt" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("global include missing *.txt after round-trip, got %v", cfg2.GlobalInclude)
+		t.Errorf("global include missing *.txt after round-trip, got %v", cfg2.DefaultInclude)
 	}
 }
 
@@ -205,8 +285,8 @@ func TestMissingSourceDirNotError(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")
 	content := `dotfiles = true
-include = []
-exclude = []
+default_include = []
+default_exclude = []
 
 [[source]]
 dir = "/nonexistent/path/that/will/never/exist"

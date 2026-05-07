@@ -13,7 +13,7 @@ files.
 
 ## Does
 - Scan(config): walk all source directories, classify each file
-  - For each file: Matcher.Classify with effective patterns
+  - For each file: Matcher.Classify(includes, excludes, absPath, src.Dir, isDir) — passes both forms so the matcher can pick filesystem-absolute or source-relative per pattern (R2133)
   - included + size == 0 + already in empty-set with current mtime → skip (R1645, R1646)
   - included + size == 0 + not in empty-set (or mtime changed) → record in set, add to EmptyFiles result (R1647)
   - included + size > 0 + not already indexed → add to NewFiles list (R1649)
