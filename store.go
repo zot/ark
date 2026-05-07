@@ -2077,6 +2077,34 @@ func (s *Store) ScanTagNameEmbeddings() (map[string][]float32, error) {
 	return result, err
 }
 
+// TagDefEmbedding pairs a (tag, fileid) ED key with its decoded vector.
+// CRC: crc-Store.md | R2151, R2164
+type TagDefEmbedding struct {
+	Tag    string
+	FileID uint64
+	Vec    []float32
+}
+
+// ScanTagDefEmbeddings returns every ED record as a flat slice. Used
+// by Librarian.SuggestTagNames to cosine-score each definition vector
+// against a chunk's EC vector. Order is undefined.
+// CRC: crc-Store.md | R2164
+func (s *Store) ScanTagDefEmbeddings() ([]TagDefEmbedding, error) {
+	var out []TagDefEmbedding
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < len(prefixEmbedDef)+8 {
+				return nil
+			}
+			tag := string(k[len(prefixEmbedDef) : len(k)-8])
+			fid := binary.BigEndian.Uint64(k[len(k)-8:])
+			out = append(out, TagDefEmbedding{Tag: tag, FileID: fid, Vec: bytesToFloat32(v)})
+			return nil
+		})
+	})
+	return out, err
+}
+
 // ScanTagValueEmbeddings returns all EV records as tvid → vector.
 func (s *Store) ScanTagValueEmbeddings() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)

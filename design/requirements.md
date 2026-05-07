@@ -3459,3 +3459,18 @@ implementation, not a separate format break.
 - **R2160:** `Store.DropEmbeddings` deletes all ED records alongside dropping T-name vectors and EV records. ED is gated by `tag_model` — a model swap drops T-name, EV, and ED together. No separate ED schema marker.
 - **R2161:** (inferred) ED records are rebuilt from scratch by `ark rebuild`, same as T/F/V/D records.
 - **R2162:** `ark status -db` prefix listing includes ED alongside T/F/V/D/EV/EC/EF.
+
+## Feature: tag-name suggestion (chunk → tag-name candidates)
+**Source:** specs/suggest-tag-names.md
+
+- **R2163:** `Librarian.SuggestTagNames(chunkID, k)` returns up to `k` tag names whose ED vectors are nearest to the chunk's EC vector, ranked by cosine similarity. Lives on Librarian (not DB) — vector queries belong to the embedding layer; HTTP callers reach it via `srv.librarian` like `SearchChunks` and `EmbedSimilarTagValues`.
+- **R2164:** Implementation reads `EC[chunkID]`, walks the ED prefix once, computes cosine per record, and resolves fileid → path via a single `db.fts.FileIDPaths()` call. No re-entrant LMDB writes.
+- **R2165:** Per-tag aggregation uses **max** across that tag's ED records — the tag's score is the score of the best-matching definition file. Averaging is rejected: it dilutes a sharp single-file match with weaker definitions in other files.
+- **R2166:** `TagSuggestion` carries `Tag`, aggregate `Score`, and `MotivatingFiles []TagSuggestionRef` ranked by per-file score descending. `TagSuggestionRef` carries `FileID`, `Path`, and that file's `Score`.
+- **R2167:** `MotivatingFiles[].Path` is resolved via `db.FTS().FileIDPaths()` — one map lookup per call, not N point reads. A fileid with no path entry leaves Path empty rather than failing the call.
+- **R2168:** `k <= 0` returns `(nil, nil)`. Not an error.
+- **R2169:** Chunk has no EC record → return `(nil, nil)`. Not an error: chunks embed lazily, the UI may call before the chunk has been processed.
+- **R2170:** Embedding unavailable (no `tag_model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully to manual tag entry.
+- **R2171:** ED prefix empty (no tag defs indexed yet) → return `(nil, nil)`.
+- **R2172:** A single ED record with vector dimension mismatched against the chunk's EC vector is skipped, not surfaced as an error. Mirrors `SearchChunksMulti`'s same-dim guard, covering mid-flight model swaps.
+- **R2173:** SuggestTagNames is read-only. No writes to LMDB, no model invocation, no agent call, no spectral expansion.

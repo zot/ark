@@ -634,6 +634,101 @@ func (l *Librarian) SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error
 	return results, nil
 }
 
+// TagSuggestion is a tag-name candidate ranked against a chunk's EC
+// vector. Score is the best (max) cosine across the tag's ED records;
+// MotivatingFiles ranks every contributing file's score descending.
+// CRC: crc-Librarian.md | R2166
+type TagSuggestion struct {
+	Tag             string
+	Score           float64
+	MotivatingFiles []TagSuggestionRef
+}
+
+// TagSuggestionRef identifies one definition file that contributed to
+// a tag suggestion. Path is empty if the fileid has no FTS path entry.
+// CRC: crc-Librarian.md | R2166, R2167
+type TagSuggestionRef struct {
+	FileID uint64
+	Path   string
+	Score  float64
+}
+
+// SuggestTagNames returns up to k tag names whose ED vectors are
+// nearest the chunk's EC vector. Pure cosine math; no model call.
+// Returns (nil, nil) for: k <= 0, missing EC, embedding unavailable,
+// empty ED prefix. Dimension-mismatched ED records are skipped.
+// CRC: crc-Librarian.md | Seq: seq-suggest-tags.md | R2163, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173
+func (l *Librarian) SuggestTagNames(chunkID uint64, k int) ([]TagSuggestion, error) {
+	if k <= 0 || !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	chunkVec, err := l.db.store.ReadChunkEmbedding(chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("read chunk embedding: %w", err)
+	}
+	if chunkVec == nil {
+		return nil, nil
+	}
+	eds, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	if len(eds) == 0 {
+		return nil, nil
+	}
+
+	// Aggregate per tag: best score wins, every contributing file kept.
+	perTag := make(map[string]*TagSuggestion)
+	for _, ed := range eds {
+		if len(ed.Vec) != len(chunkVec) {
+			continue
+		}
+		score := cosineSimilarity(chunkVec, ed.Vec)
+		ref := TagSuggestionRef{FileID: ed.FileID, Score: score}
+		if cur, ok := perTag[ed.Tag]; ok {
+			if score > cur.Score {
+				cur.Score = score
+			}
+			cur.MotivatingFiles = append(cur.MotivatingFiles, ref)
+		} else {
+			perTag[ed.Tag] = &TagSuggestion{
+				Tag:             ed.Tag,
+				Score:           score,
+				MotivatingFiles: []TagSuggestionRef{ref},
+			}
+		}
+	}
+	if len(perTag) == 0 {
+		return nil, nil
+	}
+
+	out := make([]TagSuggestion, 0, len(perTag))
+	for _, s := range perTag {
+		sort.Slice(s.MotivatingFiles, func(i, j int) bool {
+			return s.MotivatingFiles[i].Score > s.MotivatingFiles[j].Score
+		})
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > k {
+		out = out[:k]
+	}
+
+	// Resolve paths once. Failure is non-fatal — degraded results
+	// (empty Path) beat refusing to surface tag candidates — but it
+	// shouldn't pass silently if microfts2 itself errors.
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: SuggestTagNames path resolution: %v", perr)
+	}
+	for i := range out {
+		for j := range out[i].MotivatingFiles {
+			out[i].MotivatingFiles[j].Path = paths[out[i].MotivatingFiles[j].FileID]
+		}
+	}
+	return out, nil
+}
+
 // cosineFromBytes computes cosine similarity between a query vector
 // and a packed []float32 stored in LMDB byte form, without allocating
 // an intermediate float32 slice.
