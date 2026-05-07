@@ -181,6 +181,7 @@ const (
 	prefixError         = 'E'  // R1543: persistent error conditions (E + name → JSON)
 	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
+	prefixSerial        = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
 )
 
 // Reserved tag names used by the routing/identity machinery.
@@ -832,8 +833,9 @@ type TagDefRecord struct {
 // UpdateTagDefs replaces all D records for a fileid with new definitions.
 // ED records for the same fileid are dropped in the same transaction so
 // stale embeddings never outlive their definitions; the next batch-embed
-// pass picks up the new (tag, fileid) pairs as missing.
-// CRC: crc-Store.md | R2154
+// pass picks up the new (tag, fileid) pairs as missing. SED side-index
+// entries for the dropped EDs are also removed.
+// CRC: crc-Store.md | R2154, R2186
 func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		// Both D and ED keys end with an 8-byte big-endian fileid.
@@ -851,7 +853,8 @@ func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 			})
 		}
 		delByFileid([]byte{byte(prefixTagDef)}, 1)
-		delByFileid([]byte(prefixEmbedDef), len(prefixEmbedDef)) // R2154
+		delByFileid([]byte(prefixEmbedDef), len(prefixEmbedDef))                   // R2154
+		delByFileid(serialKey([]byte(prefixEmbedDef), nil), 1+len(prefixEmbedDef)) // R2186
 
 		for tag, desc := range defs {
 			if err := txn.Put(s.dbi, tagDefKey(tag, fileid), []byte(desc), 0); err != nil {
@@ -1968,6 +1971,101 @@ func (s *Store) allocIDInTxn(txn *lmdb.Txn, iFieldName string) (uint64, error) {
 	return id, nil
 }
 
+// --- Vector Freshness Substrate (S records, R2174-R2193) ---
+
+// serialKey builds an S-side-index key: S + original-prefix + original-key-tail.
+// CRC: crc-Store.md | R2174
+func serialKey(prefix, key []byte) []byte {
+	out := make([]byte, 1+len(prefix)+len(key))
+	out[0] = byte(prefixSerial)
+	copy(out[1:], prefix)
+	copy(out[1+len(prefix):], key)
+	return out
+}
+
+// allocSerial reads the I:serial counter, advances it by 1, writes back, and
+// returns the new value. The counter never resets — preserved across
+// rebuild, DropEmbeddings, and mdb_env_copy(MDB_CP_COMPACT) because the
+// I-record lives in the active B-tree. Records stamped within one write
+// txn share one serial; serials are strictly monotonic across txns. The
+// substrate does not backfill pre-existing records.
+// CRC: crc-Store.md | R2176, R2177, R2184, R2192
+func (s *Store) allocSerial(txn *lmdb.Txn) (uint64, error) {
+	return s.allocIDInTxn(txn, "serial")
+}
+
+// stampWriteWith writes the S-side-index entry for (prefix + key) with a
+// caller-supplied serial. Caller is responsible for the original record's
+// txn.Put. Used by batch writers that allocate one serial and stamp many
+// records with it.
+// CRC: crc-Store.md | R2174, R2175
+func stampWriteWith(txn *lmdb.Txn, dbi lmdb.DBI, prefix, key []byte, serial uint64) error {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], serial)
+	return txn.Put(dbi, serialKey(prefix, key), buf[:n], 0)
+}
+
+// stampWrite is the convenience wrapper for single-record callers: alloc a
+// serial and stamp in one call.
+// CRC: crc-Store.md | R2174-R2176
+func (s *Store) stampWrite(txn *lmdb.Txn, prefix, key []byte) error {
+	serial, err := s.allocSerial(txn)
+	if err != nil {
+		return err
+	}
+	return stampWriteWith(txn, s.dbi, prefix, key, serial)
+}
+
+// deleteStamp removes the S-side-index entry for (prefix + key). No-op if
+// absent. Used by embedding-record delete paths to keep the side index in
+// sync. No tombstone serials are introduced.
+// CRC: crc-Store.md | R2185, R2186, R2191
+func deleteStamp(txn *lmdb.Txn, dbi lmdb.DBI, prefix, key []byte) error {
+	err := txn.Del(dbi, serialKey(prefix, key), nil)
+	if lmdb.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// RecordSerial returns the stamped serial of the record at (prefix + key).
+// found is false iff no S-entry exists for that (prefix, key).
+// CRC: crc-Store.md | R2188
+func (s *Store) RecordSerial(prefix, key []byte) (serial uint64, found bool, err error) {
+	err = s.env.View(func(txn *lmdb.Txn) error {
+		v, gerr := txn.Get(s.dbi, serialKey(prefix, key))
+		if lmdb.IsNotFound(gerr) {
+			return nil
+		}
+		if gerr != nil {
+			return gerr
+		}
+		serial, _ = binary.Uvarint(v)
+		found = true
+		return nil
+	})
+	return serial, found, err
+}
+
+// WalkRecordsSinceSerial walks the S<prefix> side index in key order and
+// calls fn for each entry whose stamped serial is strictly greater than
+// `since`. fn receives the original record's full key (with the leading
+// 'S' byte stripped, so the original prefix bytes lead) and the decoded
+// serial. A non-nil error from fn stops iteration and is returned.
+// CRC: crc-Store.md | R2189, R2190
+func (s *Store) WalkRecordsSinceSerial(prefix []byte, since uint64, fn func(originalKey []byte, serial uint64) error) error {
+	sPrefix := serialKey(prefix, nil) // 'S' + prefix
+	return s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, sPrefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			serial, _ := binary.Uvarint(v)
+			if serial <= since {
+				return nil
+			}
+			return fn(k[1:], serial) // strip leading 'S'
+		})
+	})
+}
+
 // --- Embedding records (R1289-R1294) ---
 
 func embedValueKey(tvid uint64) []byte {
@@ -1994,34 +2092,38 @@ type TagDefRef struct {
 }
 
 // WriteTagNameEmbedding appends an embedding vector to a T record.
-// T record value: count:4bytes + float32 vector (3072 bytes).
-// CRC: crc-Store.md | R1289
+// T record value layout (count:4bytes + float32 vector) is unchanged
+// by stamping. Stamps ST<tag> in the same txn.
+// CRC: crc-Store.md | R1289, R2178, R2179
 func (s *Store) WriteTagNameEmbedding(tag string, vec []float32) error {
 	tk := tagTotalKey(tag)
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		v, err := txn.Get(s.dbi, tk)
-		if lmdb.IsNotFound(err) {
-			// Tag doesn't exist — write count=0 + vector
-			val := make([]byte, 4)
-			val = append(val, float32ToBytes(vec)...)
-			return txn.Put(s.dbi, tk, val, 0)
-		}
-		if err != nil {
+		if err != nil && !lmdb.IsNotFound(err) {
 			return err
 		}
-		// Preserve count, replace/add vector
 		val := make([]byte, 4)
-		copy(val, v[:4])
+		if v != nil {
+			copy(val, v[:4]) // preserve count
+		}
 		val = append(val, float32ToBytes(vec)...)
-		return txn.Put(s.dbi, tk, val, 0)
+		if err := txn.Put(s.dbi, tk, val, 0); err != nil {
+			return err
+		}
+		return s.stampWrite(txn, []byte{byte(prefixTagTotal)}, []byte(tag))
 	})
 }
 
-// WriteTagValueEmbedding writes an EV record.
-// CRC: crc-Store.md | R1290
+// WriteTagValueEmbedding writes an EV record. EV value layout is unchanged
+// by stamping. Stamps SEV<tvid-varint> in the same txn.
+// CRC: crc-Store.md | R1290, R2178, R2180
 func (s *Store) WriteTagValueEmbedding(tvid uint64, vec []float32) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, embedValueKey(tvid), float32ToBytes(vec), 0)
+		key := embedValueKey(tvid)
+		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+			return err
+		}
+		return s.stampWrite(txn, []byte(prefixEmbedValue), key[len(prefixEmbedValue):])
 	})
 }
 
@@ -2175,11 +2277,17 @@ func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 	return missing, err
 }
 
-// WriteTagDefEmbedding writes an ED record keyed by (tag, fileid).
-// CRC: crc-Store.md | R2151, R2153, R2159
+// WriteTagDefEmbedding writes an ED record keyed by (tag, fileid). ED
+// value layout is unchanged by stamping. Stamps SED<tag><fileid:8> in
+// the same txn.
+// CRC: crc-Store.md | R2151, R2153, R2159, R2178, R2181
 func (s *Store) WriteTagDefEmbedding(tag string, fileid uint64, vec []float32) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, embedDefKey(tag, fileid), float32ToBytes(vec), 0)
+		key := embedDefKey(tag, fileid)
+		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+			return err
+		}
+		return s.stampWrite(txn, []byte(prefixEmbedDef), key[len(prefixEmbedDef):])
 	})
 }
 
@@ -2273,8 +2381,10 @@ func (s *Store) scanVRecordTvidsRaw() (map[uint64]TagAlt, error) {
 
 // DropEmbeddings strips embedding vectors from T records and deletes
 // all EV and ED records. Triggered by tag_model mismatch — every
-// vector tied to the old model goes together.
-// CRC: crc-Store.md | R1294, R2160
+// vector tied to the old model goes together. ST*/SEV*/SED* side-index
+// entries are dropped in the same txn; SEC* is preserved (EC is not
+// part of DropEmbeddings).
+// CRC: crc-Store.md | R1294, R2160, R2187
 func (s *Store) DropEmbeddings() error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		// Strip vectors from T records (keep count)
@@ -2295,9 +2405,25 @@ func (s *Store) DropEmbeddings() error {
 			return err
 		}
 		// Delete all ED records. R2160
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(cur *lmdb.Cursor, _, _ []byte) error {
+		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(cur *lmdb.Cursor, _, _ []byte) error {
 			return cur.Del(0)
-		})
+		}); err != nil {
+			return err
+		}
+		// Delete every ST*, SEV*, SED* side-index entry. SEC* is preserved
+		// (DropEmbeddings does not touch EC). R2187
+		dropSerial := func(prefix []byte) error {
+			return scanPrefix(txn, s.dbi, serialKey(prefix, nil), func(cur *lmdb.Cursor, _, _ []byte) error {
+				return cur.Del(0)
+			})
+		}
+		if err := dropSerial([]byte{byte(prefixTagTotal)}); err != nil {
+			return err
+		}
+		if err := dropSerial([]byte(prefixEmbedValue)); err != nil {
+			return err
+		}
+		return dropSerial([]byte(prefixEmbedDef))
 	})
 }
 
@@ -2320,21 +2446,39 @@ type ChunkVec struct {
 	Vec     []float32
 }
 
-// WriteChunkEmbedding writes one EC record keyed by chunkID. R1836
+// WriteChunkEmbedding writes one EC record keyed by chunkID. EC value
+// layout is unchanged by stamping. Stamps SEC<chunkID-varint> in the
+// same txn.
+// CRC: crc-Store.md | R1836, R2178, R2182
 func (s *Store) WriteChunkEmbedding(chunkID uint64, vec []float32) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, chunkEmbedKey(chunkID), float32ToBytes(vec), 0)
+		key := chunkEmbedKey(chunkID)
+		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+			return err
+		}
+		return s.stampWrite(txn, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
 	})
 }
 
-// WriteChunkEmbeddingBatch writes multiple EC records in a single transaction. R1837
+// WriteChunkEmbeddingBatch writes multiple EC records in a single
+// transaction. One serial is allocated for the batch; every SEC entry is
+// stamped with that one serial.
+// CRC: crc-Store.md | R1837, R2183
 func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 	if len(chunks) == 0 {
 		return nil
 	}
 	return s.env.Update(func(txn *lmdb.Txn) error {
+		serial, err := s.allocSerial(txn)
+		if err != nil {
+			return err
+		}
 		for _, c := range chunks {
-			if err := txn.Put(s.dbi, chunkEmbedKey(c.ChunkID), float32ToBytes(c.Vec), 0); err != nil {
+			key := chunkEmbedKey(c.ChunkID)
+			if err := txn.Put(s.dbi, key, float32ToBytes(c.Vec), 0); err != nil {
+				return err
+			}
+			if err := stampWriteWith(txn, s.dbi, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):], serial); err != nil {
 				return err
 			}
 		}
@@ -2379,24 +2523,25 @@ func (s *Store) ReadChunkEmbeddings(chunkIDs []uint64) [][]float32 {
 	return result
 }
 
-// DeleteChunkEmbedding deletes one EC record by chunkID. R1839
+// DeleteChunkEmbedding deletes one EC record by chunkID and its matching
+// SEC side-index entry.
+// CRC: crc-Store.md | R1839, R2185
 func (s *Store) DeleteChunkEmbedding(chunkID uint64) error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, chunkEmbedKey(chunkID), nil)
-		if lmdb.IsNotFound(err) {
-			return nil
-		}
-		return err
+		return s.DeleteChunkEmbeddingInTxn(txn, chunkID)
 	})
 }
 
-// DeleteChunkEmbeddingInTxn deletes one EC record using an existing transaction. R1840
+// DeleteChunkEmbeddingInTxn deletes one EC record using an existing
+// transaction; also drops the matching SEC side-index entry.
+// CRC: crc-Store.md | R1840, R2185
 func (s *Store) DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64) error {
-	err := txn.Del(s.dbi, chunkEmbedKey(chunkID), nil)
-	if lmdb.IsNotFound(err) {
-		return nil
+	key := chunkEmbedKey(chunkID)
+	err := txn.Del(s.dbi, key, nil)
+	if err != nil && !lmdb.IsNotFound(err) {
+		return err
 	}
-	return err
+	return deleteStamp(txn, s.dbi, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
 }
 
 // WriteFileCentroid writes one EF record (running sum + count). R1835
@@ -2550,7 +2695,9 @@ func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
 	return result, err
 }
 
-// DropChunkEmbeddings deletes all EC and EF records. R1844
+// DropChunkEmbeddings deletes all EC and EF records, and drops every SEC*
+// side-index entry alongside the EC sweep. EF is not stamped.
+// CRC: crc-Store.md | R1844, R2193
 func (s *Store) DropChunkEmbeddings() error {
 	return s.env.Update(func(txn *lmdb.Txn) error {
 		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(cur *lmdb.Cursor, _, _ []byte) error {
@@ -2558,7 +2705,13 @@ func (s *Store) DropChunkEmbeddings() error {
 		}); err != nil {
 			return err
 		}
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(cur *lmdb.Cursor, _, _ []byte) error {
+		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
+		}
+		// Drop SEC* side-index entries. R2193
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedChunk), nil), func(cur *lmdb.Cursor, _, _ []byte) error {
 			return cur.Del(0)
 		})
 	})

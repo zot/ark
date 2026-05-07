@@ -3474,3 +3474,27 @@ implementation, not a separate format break.
 - **R2171:** ED prefix empty (no tag defs indexed yet) → return `(nil, nil)`.
 - **R2172:** A single ED record with vector dimension mismatched against the chunk's EC vector is skipped, not surfaced as an error. Mirrors `SearchChunksMulti`'s same-dim guard, covering mid-flight model swaps.
 - **R2173:** SuggestTagNames is read-only. No writes to LMDB, no model invocation, no agent call, no spectral expansion.
+
+## Feature: vector freshness substrate (S records)
+**Source:** specs/vector-freshness.md
+
+- **R2174:** The vector freshness side index lives under single-byte prefix `S` (`prefixSerial = 'S'`), disjoint from every existing prefix's first byte. Keys: `S + <original-prefix-bytes> + <original-key-tail>`.
+- **R2175:** S-record values are varint-encoded uint64 (`binary.PutUvarint` / `binary.Uvarint`).
+- **R2176:** Serial values come from a maintained counter stored in I record `I:serial`. `allocSerial(txn)` reads the counter, advances it by 1, writes the new value back, and returns the value used for stamps in that txn. Sourced from the I-record (not from `lmdb.Txn.ID()`) because LMDB's compact-copy may reset `mt_txnid` on the destination.
+- **R2177:** The serial counter is never reset over the database's lifetime. Preserved across `ark rebuild`, `Store.DropEmbeddings`, model swaps, and `mdb_env_copy(MDB_CP_COMPACT)` because the I-record lives in the active B-tree.
+- **R2178:** Original record values (T, EV, ED, EC) are unchanged by stamping. Existing readers (`ReadTagNameEmbedding`, `ReadTagValueEmbedding`, `ReadTagDefEmbedding`, `ReadChunkEmbedding`, scan/walk variants) continue to work without modification.
+- **R2179:** `Store.WriteTagNameEmbedding(tag, vec)` stamps `ST<tag>` in the same LMDB transaction as the T-record put.
+- **R2180:** `Store.WriteTagValueEmbedding(tvid, vec)` stamps `SEV<tvid-varint>` in the same LMDB transaction as the EV put.
+- **R2181:** `Store.WriteTagDefEmbedding(tag, fileid, vec)` stamps `SED<tag><fileid:8>` in the same LMDB transaction as the ED put.
+- **R2182:** `Store.WriteChunkEmbedding(chunkID, vec)` stamps `SEC<chunkID-varint>` in the same LMDB transaction as the EC put.
+- **R2183:** `Store.WriteChunkEmbeddingBatch(chunks)` allocates one serial via `allocSerial` at the top of its callback and stamps every batch record's `SEC<...>` entry with that single allocated serial in the same txn.
+- **R2184:** All records stamped within one LMDB write transaction share a single serial — "records that moved together carry the same mark." Across transactions, serials are strictly monotonic.
+- **R2185:** `Store.DeleteChunkEmbedding(chunkID)` and `Store.DeleteChunkEmbeddingInTxn(txn, chunkID)` drop the matching `SEC<chunkID>` entry in the same txn as the EC delete.
+- **R2186:** `Store.UpdateTagDefs`'s existing `delByFileid` loop is extended to drop `SED<tag><fileid>` entries alongside the fileid's old D and ED records.
+- **R2187:** `Store.DropEmbeddings` drops every `ST*`, `SEV*`, and `SED*` entry alongside its existing T-name vector strip and EV/ED record drops. `SEC*` entries are not touched, consistent with `DropEmbeddings` not touching EC.
+- **R2188:** `Store.RecordSerial(prefix, key) (serial uint64, found bool, err error)` returns the stamped serial of the record at `(prefix + key)`. `found=false` iff no S-entry exists for that (prefix, key).
+- **R2189:** `Store.WalkRecordsSinceSerial(prefix []byte, since uint64, fn func(originalKey []byte, serial uint64) error) error` walks the `S<prefix>` side index in key order and calls fn for each entry whose stamped serial is strictly greater than `since`. fn receives the original record's full key (including the original prefix bytes) and the stamped serial.
+- **R2190:** A non-nil error returned from `WalkRecordsSinceSerial`'s fn stops iteration and is propagated by the call as its return value.
+- **R2191:** (inferred) The substrate does not introduce tombstone serials. Deleted records' S-entries are removed alongside the value; clients reconcile cache rows by lookup-then-delete.
+- **R2192:** (inferred) The substrate does not backfill S-entries for records written before it lands. Pre-substrate records gain an S-entry on their next write; clients doing a from-scratch sweep walk the data prefix directly the first time, then switch to `WalkRecordsSinceSerial` for incremental refresh.
+- **R2193:** `Store.DropChunkEmbeddings` (rebuild's EC+EF drop) drops every `SEC*` entry alongside the EC delete. EF is not stamped, so no side-index entries are touched on its side.

@@ -3,6 +3,8 @@ package ark
 // CRC: crc-Store.md | Test: test-Store.md, test-Tags.md
 
 import (
+	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -621,5 +623,527 @@ func TestED_RecordCountsListsED(t *testing.T) {
 	}
 	if st.Count != 2 {
 		t.Errorf("expected 2 ED records, got %d", st.Count)
+	}
+}
+
+// --- Vector Freshness Substrate (S records) ---
+// CRC: crc-Store.md | Test: test-VectorFreshness.md
+
+// readISerial reads the I:serial counter directly. 0 if absent.
+func readISerial(t *testing.T, s *Store) uint64 {
+	t.Helper()
+	v, err := s.IGetCounter("serial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// TestS_StampVarintUnderSPrefix validates side-index key shape and varint
+// encoding.
+// Refs: R2174, R2175
+func TestS_StampVarintUnderSPrefix(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(42, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	ecKey := chunkEmbedKey(42)
+	tail := ecKey[len(prefixEmbedChunk):]
+	serial, found, err := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected SEC entry to be present")
+	}
+	if serial == 0 {
+		t.Errorf("expected serial > 0, got 0")
+	}
+}
+
+// TestS_AllocSerialMonotonic validates that the I:serial counter increments
+// by 1 per write txn.
+// Refs: R2176
+func TestS_AllocSerialMonotonic(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	first := readISerial(t, s)
+	if err := s.WriteChunkEmbedding(2, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	second := readISerial(t, s)
+	if second != first+1 {
+		t.Errorf("expected counter to advance by 1, got %d -> %d", first, second)
+	}
+}
+
+// TestS_WriteTagNameEmbeddingStamps validates ST<tag> stamping.
+// Refs: R2179
+func TestS_WriteTagNameEmbeddingStamps(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteTagNameEmbedding("decision", fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	serial, found, err := s.RecordSerial([]byte{byte(prefixTagTotal)}, []byte("decision"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || serial == 0 {
+		t.Errorf("expected ST entry with serial > 0, got found=%v serial=%d", found, serial)
+	}
+}
+
+// TestS_WriteTagValueEmbeddingStamps validates SEV<tvid-varint> stamping.
+// Refs: R2180
+func TestS_WriteTagValueEmbeddingStamps(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteTagValueEmbedding(7, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	tail := embedValueKey(7)[len(prefixEmbedValue):]
+	serial, found, err := s.RecordSerial([]byte(prefixEmbedValue), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || serial == 0 {
+		t.Errorf("expected SEV entry with serial > 0, got found=%v serial=%d", found, serial)
+	}
+}
+
+// TestS_WriteTagDefEmbeddingStamps validates SED<tag><fileid:8> stamping.
+// Refs: R2181
+func TestS_WriteTagDefEmbeddingStamps(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteTagDefEmbedding("decision", 42, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	tail := embedDefKey("decision", 42)[len(prefixEmbedDef):]
+	serial, found, err := s.RecordSerial([]byte(prefixEmbedDef), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || serial == 0 {
+		t.Errorf("expected SED entry with serial > 0, got found=%v serial=%d", found, serial)
+	}
+}
+
+// TestS_WriteChunkEmbeddingStamps validates SEC<chunkID-varint> stamping.
+// Refs: R2182
+func TestS_WriteChunkEmbeddingStamps(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(99, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	tail := chunkEmbedKey(99)[len(prefixEmbedChunk):]
+	serial, found, err := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || serial == 0 {
+		t.Errorf("expected SEC entry with serial > 0, got found=%v serial=%d", found, serial)
+	}
+}
+
+// TestS_BatchSharesOneSerial validates per-txn semantics for batch writes.
+// Refs: R2183
+func TestS_BatchSharesOneSerial(t *testing.T) {
+	s := testStore(t)
+	pre := readISerial(t, s)
+	if err := s.WriteChunkEmbeddingBatch([]ChunkVec{
+		{ChunkID: 1, Vec: fakeVec(1)},
+		{ChunkID: 2, Vec: fakeVec(2)},
+		{ChunkID: 3, Vec: fakeVec(3)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seen []uint64
+	for _, id := range []uint64{1, 2, 3} {
+		tail := chunkEmbedKey(id)[len(prefixEmbedChunk):]
+		serial, found, err := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatalf("missing SEC entry for chunk %d", id)
+		}
+		seen = append(seen, serial)
+	}
+	if seen[0] != seen[1] || seen[1] != seen[2] {
+		t.Errorf("expected all batch records to share one serial, got %v", seen)
+	}
+	if seen[0] != pre+1 {
+		t.Errorf("expected batch serial = pre+1 (%d), got %d", pre+1, seen[0])
+	}
+}
+
+// TestS_CrossTxnMonotonic validates strictly-increasing serials across
+// distinct write txns.
+// Refs: R2184
+func TestS_CrossTxnMonotonic(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteChunkEmbedding(2, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	tail1 := chunkEmbedKey(1)[len(prefixEmbedChunk):]
+	tail2 := chunkEmbedKey(2)[len(prefixEmbedChunk):]
+	s1, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail1)
+	s2, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail2)
+	if !(s2 > s1) {
+		t.Errorf("expected s2 > s1, got s1=%d s2=%d", s1, s2)
+	}
+}
+
+// TestS_RestampUpdatesSerial validates that rewriting a record advances its
+// serial.
+// Refs: R2184
+func TestS_RestampUpdatesSerial(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	tail := chunkEmbedKey(1)[len(prefixEmbedChunk):]
+	first, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if err := s.WriteChunkEmbedding(1, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	second, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if !(second > first) {
+		t.Errorf("expected second > first, got first=%d second=%d", first, second)
+	}
+}
+
+// TestS_OriginalValuesUnchanged validates that stamping does not disturb the
+// underlying record values.
+// Refs: R2178
+func TestS_OriginalValuesUnchanged(t *testing.T) {
+	s := testStore(t)
+	want := fakeVec(7)
+	if err := s.WriteChunkEmbedding(1, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReadChunkEmbedding(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vecEqual(got, want) {
+		t.Errorf("EC round-trip mismatch")
+	}
+	if err := s.WriteTagDefEmbedding("a", 1, want); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := s.ReadTagDefEmbedding("a", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vecEqual(got2, want) {
+		t.Errorf("ED round-trip mismatch")
+	}
+	if err := s.WriteTagValueEmbedding(7, want); err != nil {
+		t.Fatal(err)
+	}
+	got3, err := s.ReadTagValueEmbedding(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vecEqual(got3, want) {
+		t.Errorf("EV round-trip mismatch")
+	}
+}
+
+// TestS_DeleteChunkEmbeddingDropsSEC validates side-index cleanup on delete.
+// Refs: R2185
+func TestS_DeleteChunkEmbeddingDropsSEC(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteChunkEmbedding(1); err != nil {
+		t.Fatal(err)
+	}
+	tail := chunkEmbedKey(1)[len(prefixEmbedChunk):]
+	_, found, err := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("expected SEC entry to be gone after delete")
+	}
+}
+
+// TestS_UpdateTagDefsDropsSED validates the delByFileid extension covers SED.
+// Refs: R2186
+func TestS_UpdateTagDefsDropsSED(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpdateTagDefs(10, map[string]string{"a": "x", "b": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTagDefEmbedding("a", 10, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTagDefEmbedding("b", 10, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateTagDefs(10, map[string]string{"c": "z"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"a", "b"} {
+		tail := embedDefKey(tag, 10)[len(prefixEmbedDef):]
+		_, found, _ := s.RecordSerial([]byte(prefixEmbedDef), tail)
+		if found {
+			t.Errorf("expected SED(%s,10) to be gone", tag)
+		}
+	}
+}
+
+// TestS_DropEmbeddingsClearsTagSideStamps validates the model-swap drop covers
+// ST*/SEV*/SED* but leaves SEC* alone.
+// Refs: R2187
+func TestS_DropEmbeddingsClearsTagSideStamps(t *testing.T) {
+	s := testStore(t)
+	// populate all four
+	s.WriteTagNameEmbedding("t1", fakeVec(1))
+	s.WriteTagValueEmbedding(7, fakeVec(2))
+	s.WriteTagDefEmbedding("d1", 10, fakeVec(3))
+	s.WriteChunkEmbedding(99, fakeVec(4))
+
+	if err := s.DropEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, found, _ := s.RecordSerial([]byte{byte(prefixTagTotal)}, []byte("t1")); found {
+		t.Error("expected ST(t1) gone")
+	}
+	tailEV := embedValueKey(7)[len(prefixEmbedValue):]
+	if _, found, _ := s.RecordSerial([]byte(prefixEmbedValue), tailEV); found {
+		t.Error("expected SEV(7) gone")
+	}
+	tailED := embedDefKey("d1", 10)[len(prefixEmbedDef):]
+	if _, found, _ := s.RecordSerial([]byte(prefixEmbedDef), tailED); found {
+		t.Error("expected SED(d1,10) gone")
+	}
+	tailEC := chunkEmbedKey(99)[len(prefixEmbedChunk):]
+	if _, found, _ := s.RecordSerial([]byte(prefixEmbedChunk), tailEC); !found {
+		t.Error("expected SEC(99) preserved by DropEmbeddings")
+	}
+}
+
+// TestS_DropChunkEmbeddingsClearsSEC validates the rebuild EC drop covers SEC*.
+// Refs: R2193
+func TestS_DropChunkEmbeddingsClearsSEC(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbeddingBatch([]ChunkVec{
+		{ChunkID: 1, Vec: fakeVec(1)},
+		{ChunkID: 2, Vec: fakeVec(2)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DropChunkEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint64{1, 2} {
+		tail := chunkEmbedKey(id)[len(prefixEmbedChunk):]
+		if _, found, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail); found {
+			t.Errorf("expected SEC(%d) gone", id)
+		}
+	}
+}
+
+// TestS_RecordSerialAbsent validates the found=false case.
+// Refs: R2188
+func TestS_RecordSerialAbsent(t *testing.T) {
+	s := testStore(t)
+	tail := chunkEmbedKey(999)[len(prefixEmbedChunk):]
+	serial, found, err := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("expected found=false for never-stamped key")
+	}
+	if serial != 0 {
+		t.Errorf("expected serial=0 for absent, got %d", serial)
+	}
+}
+
+// TestS_WalkSinceZeroVisitsAll validates the baseline walk.
+// Refs: R2189
+func TestS_WalkSinceZeroVisitsAll(t *testing.T) {
+	s := testStore(t)
+	for _, id := range []uint64{1, 2, 3} {
+		if err := s.WriteChunkEmbedding(id, fakeVec(byte(id))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	visited := map[uint64]uint64{}
+	err := s.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), 0, func(originalKey []byte, serial uint64) error {
+		// originalKey starts with "EC"
+		id, _ := binary.Uvarint(originalKey[len(prefixEmbedChunk):])
+		visited[id] = serial
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visited) != 3 {
+		t.Errorf("expected 3 visits, got %d (%v)", len(visited), visited)
+	}
+	for _, id := range []uint64{1, 2, 3} {
+		if visited[id] == 0 {
+			t.Errorf("expected serial > 0 for chunk %d", id)
+		}
+	}
+}
+
+// TestS_WalkSinceFiltersStrictGreater validates the > since filter.
+// Refs: R2189
+func TestS_WalkSinceFiltersStrictGreater(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	tail1 := chunkEmbedKey(1)[len(prefixEmbedChunk):]
+	s1, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail1)
+	if err := s.WriteChunkEmbedding(2, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	visited := map[uint64]uint64{}
+	err := s.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), s1, func(originalKey []byte, serial uint64) error {
+		id, _ := binary.Uvarint(originalKey[len(prefixEmbedChunk):])
+		visited[id] = serial
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visited) != 1 {
+		t.Errorf("expected 1 visit, got %d (%v)", len(visited), visited)
+	}
+	if _, ok := visited[2]; !ok {
+		t.Error("expected chunk 2 to be visited")
+	}
+}
+
+// TestS_WalkPropagatesError validates fn-error early-stop.
+// Refs: R2190
+func TestS_WalkPropagatesError(t *testing.T) {
+	s := testStore(t)
+	for _, id := range []uint64{1, 2, 3} {
+		s.WriteChunkEmbedding(id, fakeVec(byte(id)))
+	}
+	sentinel := errors.New("stop")
+	calls := 0
+	err := s.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), 0, func(_ []byte, _ uint64) error {
+		calls++
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected sentinel, got %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 call before stop, got %d", calls)
+	}
+}
+
+// TestS_CounterSurvivesDropEmbeddings validates monotonicity across drop.
+// Refs: R2177
+func TestS_CounterSurvivesDropEmbeddings(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteTagNameEmbedding("t1", fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	pre := readISerial(t, s)
+	if err := s.DropEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTagNameEmbedding("t2", fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	post := readISerial(t, s)
+	if !(post > pre) {
+		t.Errorf("expected counter to advance past drop, got pre=%d post=%d", pre, post)
+	}
+	serial, found, _ := s.RecordSerial([]byte{byte(prefixTagTotal)}, []byte("t2"))
+	if !found || !(serial > pre) {
+		t.Errorf("expected new ST entry serial > pre (%d), got found=%v serial=%d", pre, found, serial)
+	}
+}
+
+// TestS_CounterSurvivesDropChunkEmbeddings validates monotonicity across the
+// rebuild EC drop.
+// Refs: R2177
+func TestS_CounterSurvivesDropChunkEmbeddings(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	pre := readISerial(t, s)
+	if err := s.DropChunkEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteChunkEmbedding(1, fakeVec(2)); err != nil {
+		t.Fatal(err)
+	}
+	post := readISerial(t, s)
+	if !(post > pre) {
+		t.Errorf("expected counter to advance past drop, got pre=%d post=%d", pre, post)
+	}
+	tail := chunkEmbedKey(1)[len(prefixEmbedChunk):]
+	serial, _, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail)
+	if !(serial > pre) {
+		t.Errorf("expected new SEC serial > pre (%d), got %d", pre, serial)
+	}
+}
+
+// TestS_NoBackfill validates that pre-substrate records (raw txn.Put bypassing
+// the stamping writers) have no S-entry until next write touches them.
+// Refs: R2192
+func TestS_NoBackfill(t *testing.T) {
+	s := testStore(t)
+	// Simulate a pre-substrate write — bypass WriteChunkEmbedding.
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, chunkEmbedKey(42), float32ToBytes(fakeVec(1)), 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := chunkEmbedKey(42)[len(prefixEmbedChunk):]
+	if _, found, _ := s.RecordSerial([]byte(prefixEmbedChunk), tail); found {
+		t.Error("expected found=false for pre-substrate record")
+	}
+	visited := 0
+	s.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), 0, func(_ []byte, _ uint64) error {
+		visited++
+		return nil
+	})
+	if visited != 0 {
+		t.Errorf("expected walk to skip pre-substrate record, got %d visits", visited)
+	}
+}
+
+// TestS_NoTombstones validates that delete leaves no observable residue.
+// Refs: R2191
+func TestS_NoTombstones(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteChunkEmbedding(1, fakeVec(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteChunkEmbedding(1); err != nil {
+		t.Fatal(err)
+	}
+	visited := 0
+	err := s.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), 0, func(_ []byte, _ uint64) error {
+		visited++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visited != 0 {
+		t.Errorf("expected walk to find nothing after delete, got %d visits", visited)
 	}
 }

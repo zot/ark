@@ -225,6 +225,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Sweep.md → `db_test.go`
 - [x] test-TagDefEmbed.md → `store_test.go`
 - [x] test-SuggestTagNames.md → `librarian_test.go`
+- [x] test-VectorFreshness.md → `store_test.go`
 
 ## Gaps
 

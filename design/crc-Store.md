@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -48,9 +48,10 @@ ark-level settings, and tag tracking.
 - UpdateTagDefs(fileid, defs): replace all D records for fileid, write new ones.
   defs is map[string]string (tagname → description).
   Within one LMDB txn: delete old D records for fileid, delete the
-  fileid's ED records (one per old D), write new D records. ED
-  records for new (tag, fileid) pairs are written lazily by the
-  batch-embed pass. (R2154)
+  fileid's ED records (one per old D), delete the fileid's matching
+  SED side-index entries, write new D records. ED records for new
+  (tag, fileid) pairs are written lazily by the batch-embed pass.
+  (R2154, R2186)
 - RemoveTagDefs(fileid): delete all D records for fileid via
   UpdateTagDefs(fileid, nil); ED records drop in the same txn. (R2155)
 - AppendTagDefs(fileid, defs): add D records without removing — append path.
@@ -141,8 +142,10 @@ ark-level settings, and tag tracking.
 
 ### Embedding Records (R1289-R1294)
 - WriteTagNameEmbedding(tag string, vec []float32): append embedding
-  vector to T record value (count:4 + vector). (R1289)
-- WriteTagValueEmbedding(tvid uint64, vec []float32): write EV[tvid] record
+  vector to T record value (count:4 + vector); same txn stamps
+  ST<tag> via stampWrite. (R1289, R2179)
+- WriteTagValueEmbedding(tvid uint64, vec []float32): write EV[tvid]
+  record; same txn stamps SEV<tvid-varint> via stampWrite. (R2180)
 - ReadTagNameEmbedding(tag string) ([]float32, error): read vector from
   T record (nil if len(value) == 4, i.e. count only)
 - ReadTagValueEmbedding(tvid uint64) ([]float32, error): read EV record
@@ -155,13 +158,16 @@ ark-level settings, and tag tracking.
 - MissingTagValueEmbeddings() []uint64: scan V records for tvids, return
   those without corresponding EV records. (R1292)
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
-  EV records, delete all ED records (for rebuild). T-name, EV, and ED
-  share `tag_model`, so a model swap drops all three together. (R2160)
+  EV records, delete all ED records, and delete every ST*/SEV*/SED*
+  side-index entry (for rebuild). T-name, EV, and ED share `tag_model`,
+  so a model swap drops all three together. SEC* is preserved (EC is
+  not part of DropEmbeddings). (R2160, R2187)
 
 ### Tag-Definition Embedding Records (R2151-R2161)
 - WriteTagDefEmbedding(tag string, fileid uint64, vec []float32): write
   ED[tag][fileid:8] record. Key: `ED` + tag bytes + 8-byte big-endian
-  fileid. Value: float32 vector. (R2151, R2153, R2159)
+  fileid. Value: float32 vector. Same txn stamps SED<tag><fileid:8>
+  via stampWrite. (R2151, R2153, R2159, R2181)
 - ReadTagDefEmbedding(tag string, fileid uint64) ([]float32, error):
   read one ED record. Returns (nil, nil) when absent. (R2159)
 - MissingTagDefEmbeddings() []TagDefRef: scan D prefix, return (tag,
@@ -169,21 +175,27 @@ ark-level settings, and tag tracking.
   Used by the post-reconcile batch-embed pass. (R2157)
 - DeleteTagDefEmbeddingsForFileInTxn(txn *lmdb.Txn, fileid uint64): scan
   D prefix matching the trailing 8-byte fileid, delete the parallel ED
-  records inside the same txn. Used by UpdateTagDefs/RemoveTagDefs
-  before D records are deleted. (R2154, R2155)
+  records and their matching SED side-index entries inside the same
+  txn. Used by UpdateTagDefs/RemoveTagDefs before D records are
+  deleted. (R2154, R2155, R2186)
 
 ### Chunk Embedding Records (R1833-R1845)
 - WriteChunkEmbedding(chunkID uint64, vec []float32): write EC[chunkID]
-  record. Key: `EC` + varint(chunkID). Value: float32 vector. (R1836)
+  record. Key: `EC` + varint(chunkID). Value: float32 vector. Same txn
+  stamps SEC<chunkID-varint> via stampWrite. (R1836, R2182)
 - WriteChunkEmbeddingBatch(chunks []ChunkVec): batch write. ChunkVec is
-  {ChunkID uint64, Vec []float32}. (R1837)
+  {ChunkID uint64, Vec []float32}. Single allocSerial at the top of
+  the callback; every batch record's SEC<...> entry is stamped with
+  that one serial via stampWriteWith. (R1837, R2183)
 - ReadChunkEmbedding(chunkID uint64) ([]float32, error): read one EC
   record by chunkID. (R1838)
 - ReadChunkEmbeddings(chunkIDs []uint64) [][]float32: batch read EC
   records for centroid computation. One View transaction. (R1842)
-- DeleteChunkEmbedding(chunkID uint64): delete one EC record. (R1839)
+- DeleteChunkEmbedding(chunkID uint64): delete one EC record and its
+  matching SEC side-index entry in the same txn. (R1839, R2185)
 - DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64): delete one
-  EC record using an existing transaction. For microfts2 callbacks. (R1840)
+  EC record and its matching SEC side-index entry using an existing
+  transaction. For microfts2 callbacks. (R1840, R2185)
 - WriteFileCentroid(fileID uint64, sum []float32, count uint32): write
   EF[fileID] record. Unchanged key format. (R1835)
 - ReadFileCentroid(fileID uint64) (sum []float32, count uint32, err error):
@@ -192,9 +204,42 @@ ark-level settings, and tag tracking.
   record using an existing transaction. For microfts2 callbacks. (R1841)
 - ScanFileCentroids() (map[uint64][]float32, error): scan EF prefix, return
   fileID → centroid vector (sum / count).
-- DropChunkEmbeddings(): delete all EC and EF prefix records. (R1844)
+- DropChunkEmbeddings(): delete all EC and EF prefix records, and
+  delete every SEC* side-index entry alongside the EC sweep. EF
+  has no side-index. (R1844, R2193)
 - ScanChunkEmbeddingKeys() map[uint64]int: prefix scan EC keys, returns
   chunkID → vector dimension. Used by embed validate. (R1845)
+
+### Vector Freshness Substrate (S records, R2174-R2193)
+- allocSerial(txn *lmdb.Txn) (uint64, error): unexported. Read the
+  `I:serial` counter, advance by 1, write back, return the new value.
+  Sourced from an I-record (not lmdb.Txn.ID()) because compact-copy
+  may reset mt_txnid; the I-record sits in the active B-tree and is
+  preserved by every compact-copy. Counter never resets over the
+  database's lifetime. (R2176, R2177)
+- stampWriteWith(txn *lmdb.Txn, prefix, key []byte, serial uint64) error:
+  unexported. Write the side-index entry `S<prefix><key>` →
+  varint(serial). Caller is responsible for the original record's
+  txn.Put. Used by WriteChunkEmbeddingBatch to stamp every batch
+  record with one shared serial. (R2174, R2175)
+- stampWrite(txn *lmdb.Txn, prefix, key []byte) error: unexported
+  convenience wrapper. Calls allocSerial, then stampWriteWith.
+  Used by the four single-record Write*Embedding methods. (R2174-R2176)
+- deleteStamp(txn *lmdb.Txn, prefix, key []byte) error: unexported.
+  Delete `S<prefix><key>` from the side index. No-op if absent.
+  Used by the embedding-record delete paths to keep the side index
+  in sync. (R2185, R2186)
+- RecordSerial(prefix, key []byte) (serial uint64, found bool, err error):
+  return the stamped serial of the record at (prefix + key). found
+  is false iff no S-entry exists for that key. (R2188)
+- WalkRecordsSinceSerial(prefix []byte, since uint64,
+  fn func(originalKey []byte, serial uint64) error) error: walk the
+  `S<prefix>` side index in key order, varint-decode each entry's
+  serial, call fn for each entry whose serial is strictly greater
+  than `since`. fn receives the original record's full key (with
+  the leading `S` stripped, so the original prefix bytes lead) and
+  the decoded serial. A non-nil error from fn stops iteration and
+  is returned by the call. (R2189, R2190)
 
 ### Page Content Records (R1720-R1725)
 - WritePageContent(fileID uint64, page uint32, blob []byte): write
