@@ -729,6 +729,206 @@ func (l *Librarian) SuggestTagNames(chunkID uint64, k int) ([]TagSuggestion, err
 	return out, nil
 }
 
+// ChunkSuggestion is a chunk-candidate ranked against a tag's ED
+// vectors. Score is the best (max) cosine across the tag's defs;
+// MotivatingDefs ranks every contributing def file's score descending.
+// CRC: crc-Librarian.md | R2205
+type ChunkSuggestion struct {
+	ChunkID        uint64
+	FileID         uint64
+	Path           string
+	Score          float64
+	MotivatingDefs []DefMatch
+}
+
+// DefMatch identifies one tag-definition file that contributed to a
+// chunk suggestion. Path is empty if the fileid has no FTS path entry.
+// CRC: crc-Librarian.md | R2206
+type DefMatch struct {
+	FileID uint64
+	Path   string
+	Score  float64
+}
+
+// chunkAgg is a per-chunk aggregate kept on the heap during the EC
+// walk. perDef is index-parallel to the def slice passed to
+// chunksForDefs; it lets surviving chunks reconstruct MotivatingDefs
+// with each def file's score after the walk.
+type chunkAgg struct {
+	chunkID uint64
+	score   float64
+	perDef  []float64
+}
+
+type chunkAggHeap []chunkAgg
+
+func (h chunkAggHeap) Len() int           { return len(h) }
+func (h chunkAggHeap) Less(i, j int) bool { return h[i].score < h[j].score }
+func (h chunkAggHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *chunkAggHeap) Push(x any)        { *h = append(*h, x.(chunkAgg)) }
+func (h *chunkAggHeap) Pop() any {
+	old := *h
+	n := len(old)
+	v := old[n-1]
+	*h = old[:n-1]
+	return v
+}
+
+// ChunksForTag returns up to k chunks whose EC vectors are nearest
+// any of the named tag's ED vectors. Aggregate per chunk is the max
+// cosine across the tag's defs. Read-only; no model invocation.
+// Returns (nil, nil) for: k <= 0, embedding unavailable, tag with no
+// ED records, empty EC prefix, or no surviving chunks after CRecord
+// resolution.
+// CRC: crc-Librarian.md | Seq: seq-chunks-for-tag.md | R2194, R2196, R2197, R2202, R2207, R2208, R2209, R2211, R2212, R2213, R2214, R2215
+func (l *Librarian) ChunksForTag(tag string, k int) ([]ChunkSuggestion, error) {
+	if k <= 0 || !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	all, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	var defs []TagDefEmbedding
+	for _, ed := range all {
+		if ed.Tag == tag {
+			defs = append(defs, ed)
+		}
+	}
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	return l.chunksForDefs(defs, k)
+}
+
+// ChunksForTagDef returns up to k chunks whose EC vectors are nearest
+// the single ED[tag, fileid] record. Useful for reconciling divergent
+// definitions of the same tag across files. Each result chunk's
+// MotivatingDefs is a single-entry slice with the requested
+// (fileid, path, score). Read-only; no model invocation.
+// CRC: crc-Librarian.md | Seq: seq-chunks-for-tag.md | R2195, R2198, R2200, R2201, R2203, R2204, R2207, R2208, R2210, R2211, R2212, R2213, R2214, R2215
+func (l *Librarian) ChunksForTagDef(tag string, fileid uint64, k int) ([]ChunkSuggestion, error) {
+	if k <= 0 || !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	vec, err := l.db.store.ReadTagDefEmbedding(tag, fileid)
+	if err != nil {
+		return nil, fmt.Errorf("read tag-def embedding: %w", err)
+	}
+	if vec == nil {
+		return nil, nil
+	}
+	return l.chunksForDefs([]TagDefEmbedding{{Tag: tag, FileID: fileid, Vec: vec}}, k)
+}
+
+// chunksForDefs runs the EC walk against a fixed set of ED query
+// vectors and returns the top-k chunks ranked by max cosine across
+// those defs. Shared backbone for ChunksForTag (multi-def) and
+// ChunksForTagDef (single def).
+// CRC: crc-Librarian.md | R2196, R2197, R2198, R2199, R2200, R2201, R2202
+func (l *Librarian) chunksForDefs(defs []TagDefEmbedding, k int) ([]ChunkSuggestion, error) {
+	dimBytes := len(defs[0].Vec) * 4
+	queryNorms := make([]float64, len(defs))
+	for i, d := range defs {
+		var ns float64
+		for _, x := range d.Vec {
+			ns += float64(x) * float64(x)
+		}
+		queryNorms[i] = math.Sqrt(ns)
+	}
+
+	h := &chunkAggHeap{}
+	heap.Init(h)
+
+	err := l.db.store.ViewChunkEmbeddings(func(_ *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+		if len(raw) != dimBytes {
+			return true, nil
+		}
+		perDef := make([]float64, len(defs))
+		var maxScore float64
+		first := true
+		for i, d := range defs {
+			if queryNorms[i] == 0 {
+				continue
+			}
+			s := cosineFromBytes(raw, d.Vec, queryNorms[i])
+			perDef[i] = s
+			if first || s > maxScore {
+				maxScore = s
+				first = false
+			}
+		}
+		if h.Len() < k {
+			heap.Push(h, chunkAgg{chunkID: chunkID, score: maxScore, perDef: perDef})
+		} else if maxScore > (*h)[0].score {
+			(*h)[0] = chunkAgg{chunkID: chunkID, score: maxScore, perDef: perDef}
+			heap.Fix(h, 0)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if h.Len() == 0 {
+		return nil, nil
+	}
+
+	drained := make([]chunkAgg, h.Len())
+	for j := range drained {
+		c := heap.Pop(h).(chunkAgg)
+		drained[len(drained)-1-j] = c
+	}
+
+	type resolvedChunk struct {
+		chunkAgg
+		fileID uint64
+	}
+	var resolved []resolvedChunk
+	if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+		for _, c := range drained {
+			crec, rerr := l.db.fts.ReadCRecord(txn, c.chunkID)
+			if rerr != nil || len(crec.FileIDs) == 0 {
+				continue
+			}
+			resolved = append(resolved, resolvedChunk{chunkAgg: c, fileID: crec.FileIDs[0].FileID})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if len(resolved) == 0 {
+		return nil, nil
+	}
+
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: chunksForDefs path resolution: %v", perr)
+	}
+
+	out := make([]ChunkSuggestion, 0, len(resolved))
+	for _, r := range resolved {
+		defMatches := make([]DefMatch, len(defs))
+		for i, d := range defs {
+			defMatches[i] = DefMatch{
+				FileID: d.FileID,
+				Path:   paths[d.FileID],
+				Score:  r.perDef[i],
+			}
+		}
+		sort.Slice(defMatches, func(i, j int) bool {
+			return defMatches[i].Score > defMatches[j].Score
+		})
+		out = append(out, ChunkSuggestion{
+			ChunkID:        r.chunkID,
+			FileID:         r.fileID,
+			Path:           paths[r.fileID],
+			Score:          r.score,
+			MotivatingDefs: defMatches,
+		})
+	}
+	return out, nil
+}
+
 // cosineFromBytes computes cosine similarity between a query vector
 // and a packed []float32 stored in LMDB byte form, without allocating
 // an intermediate float32 slice.

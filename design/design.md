@@ -168,6 +168,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 - [x] seq-suggest-tags.md → `librarian.go`
+- [x] seq-chunks-for-tag.md → `librarian.go`
 - [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
 - [x] seq-pdf-chunk.md → `pdfchunker.go`
 - [x] seq-empty-file-skip.md → `scanner.go`, `db.go`, `emptyfiles.go`
@@ -225,6 +226,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Sweep.md → `db_test.go`
 - [x] test-TagDefEmbed.md → `store_test.go`
 - [x] test-SuggestTagNames.md → `librarian_test.go`
+- [x] test-ChunksForTag.md → `librarian_test.go`
 - [x] test-VectorFreshness.md → `store_test.go`
 
 ## Gaps

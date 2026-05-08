@@ -3498,3 +3498,29 @@ implementation, not a separate format break.
 - **R2191:** (inferred) The substrate does not introduce tombstone serials. Deleted records' S-entries are removed alongside the value; clients reconcile cache rows by lookup-then-delete.
 - **R2192:** (inferred) The substrate does not backfill S-entries for records written before it lands. Pre-substrate records gain an S-entry on their next write; clients doing a from-scratch sweep walk the data prefix directly the first time, then switch to `WalkRecordsSinceSerial` for incremental refresh.
 - **R2193:** `Store.DropChunkEmbeddings` (rebuild's EC+EF drop) drops every `SEC*` entry alongside the EC delete. EF is not stamped, so no side-index entries are touched on its side.
+
+## Feature: chunks-for-tag (tag → chunk candidates)
+**Source:** specs/chunks-for-tag.md
+
+- **R2194:** `Librarian.ChunksForTag(tag, k)` returns up to `k` chunks whose EC vectors are nearest to any of the named tag's ED vectors, ranked by cosine similarity. Lives on Librarian (not DB) — vector queries belong to the embedding layer; HTTP callers reach it via `srv.librarian` like `SuggestTagNames` and `SearchChunks`.
+- **R2195:** `Librarian.ChunksForTagDef(tag, fileid, k)` restricts scoring to a single `(tag, fileid)` ED record, useful when reconciling divergent definitions of the same tag across files.
+- **R2196:** `ChunksForTag` walks the ED prefix once, collecting every record whose tag matches the requested tag, then performs a single EC walk scoring each chunk against every collected ED vector.
+- **R2197:** Per-chunk aggregation in `ChunksForTag` uses **max** across the tag's ED records — the chunk's score is the score of the best-matching definition file. Same rationale as `SuggestTagNames` per-tag aggregation.
+- **R2198:** EC records whose dimension does not match an ED query vector's dimension are skipped, mirroring `SearchChunksMulti`'s same-dim guard. Mid-flight model swaps do not surface as errors.
+- **R2199:** Top-k selection uses a min-heap of size `k` over chunk aggregate scores. Per-chunk `MotivatingDefs` are retained only for chunks alive in the heap, bounding memory at O(k × |defs|).
+- **R2200:** After the EC walk, each surviving chunk's primary `FileID` is resolved via `db.fts.ReadCRecord` inside one shared txn (matches `SearchChunksMulti`). Chunks with no CRecord or empty `FileIDs` are dropped from results, not surfaced as errors.
+- **R2201:** Path resolution for both chunk primary fileids and definition-file fileids goes through one `db.FTS().FileIDPaths()` call. A fileid with no path entry leaves `Path` empty rather than failing the call.
+- **R2202:** Each result chunk's `MotivatingDefs` is sorted by per-def score descending; chunks are sorted by aggregate score descending.
+- **R2203:** `ChunksForTagDef` reads the single `ED[tag, fileid]` record via `Store.ReadTagDefEmbedding`. Missing → return `(nil, nil)`. Not an error.
+- **R2204:** `ChunksForTagDef` produces a single-entry `MotivatingDefs` slice per result chunk, holding the requested `(fileid, path, score)`. Same `ChunkSuggestion` shape as `ChunksForTag`.
+- **R2205:** `ChunkSuggestion` carries `ChunkID`, `FileID` (chunk's primary), `Path` (for `FileID`), aggregate `Score`, and `MotivatingDefs []DefMatch`.
+- **R2206:** `DefMatch` carries `FileID` (the definition file), `Path` (for `FileID`), and `Score` (this def's cosine against the chunk).
+- **R2207:** `k <= 0` returns `(nil, nil)`. Not an error.
+- **R2208:** Embedding unavailable (no `tag_model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully.
+- **R2209:** `ChunksForTag` — tag has no ED records → return `(nil, nil)`. Not an error.
+- **R2210:** `ChunksForTagDef` — `ED[tag, fileid]` absent → return `(nil, nil)`. Not an error.
+- **R2211:** EC prefix empty (no chunks embedded yet) → return `(nil, nil)`.
+- **R2212:** `ChunksForTag` and `ChunksForTagDef` are read-only. No writes to LMDB, no model invocation, no agent call, no spectral expansion.
+- **R2213:** Neither call gates results by absolute score threshold; `k` is the only cardinality bound. The UI may apply a minimum display threshold.
+- **R2214:** Neither call filters chunks already carrying the tag. Orphan-detection policy belongs to the caller (UI) or to the Phase 1E hot-correlations cache.
+- **R2215:** (inferred) Neither call maintains a hot-correlations cache. Both are live, on-demand queries each time they are called.
