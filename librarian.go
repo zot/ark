@@ -929,6 +929,771 @@ func (l *Librarian) chunksForDefs(defs []TagDefEmbedding, k int) ([]ChunkSuggest
 	return out, nil
 }
 
+// K_TOP_HC is the per-tag top-K bound enforced by the hot-correlations
+// sweep. Fixed for this slice; configurability is a future tuning
+// question.
+// CRC: crc-Librarian.md | R2228
+const K_TOP_HC = 20
+
+// HCSweepResult is the summary returned by SweepHotCorrelations and
+// also reflected as @sweep-* tags in the tmp:// progress doc. (Named
+// HCSweep- to distinguish from db.go's file-removal SweepResult.)
+// CRC: crc-Librarian.md | R2217
+type HCSweepResult struct {
+	StartedAt   time.Time
+	CompletedAt time.Time
+	DurationMS  int64
+	ChangedEDs  int
+	ChangedECs  int
+	TagsRebuilt int
+	TagsTouched int
+	OrphanTotal int
+	FromScratch bool
+}
+
+// TagSimilarity is one tag-pair score for RelatedTags / TagPairConflict.
+// Tag is empty when both tags are inputs to the call (TagPairConflict).
+// CRC: crc-Librarian.md | R2224
+type TagSimilarity struct {
+	Tag       string
+	Score     float64
+	SrcFileID uint64
+	DstFileID uint64
+	SrcPath   string
+	DstPath   string
+}
+
+// DriftPair is one within-tag def-vs-def cosine for TagDrift. FileIDA <
+// FileIDB by convention so pairs are canonical.
+// CRC: crc-Librarian.md | R2225
+type DriftPair struct {
+	FileIDA uint64
+	FileIDB uint64
+	PathA   string
+	PathB   string
+	Score   float64
+}
+
+// edsByTag groups ED records by tag. Used by the sweep and tag-tag
+// queries so the cosine math can iterate per tag without re-scanning.
+func edsByTag(eds []TagDefEmbedding) map[string][]TagDefEmbedding {
+	out := make(map[string][]TagDefEmbedding)
+	for _, ed := range eds {
+		out[ed.Tag] = append(out[ed.Tag], ed)
+	}
+	return out
+}
+
+// vecNorm computes the Euclidean norm of a float32 vector as float64.
+func vecNorm(v []float32) float64 {
+	var ns float64
+	for _, x := range v {
+		ns += float64(x) * float64(x)
+	}
+	return math.Sqrt(ns)
+}
+
+// maxCosineAgainstDefs returns the max cosine of vec against every def's
+// vector. Skips defs whose dimension differs from vec. Returns -1 if no
+// def can be scored (caller treats as "skip this chunk-tag pair").
+func maxCosineAgainstDefs(vec []float32, defs []TagDefEmbedding) float64 {
+	best := math.Inf(-1)
+	for _, d := range defs {
+		if len(d.Vec) != len(vec) {
+			continue
+		}
+		s := cosineSimilarity(vec, d.Vec)
+		if s > best {
+			best = s
+		}
+	}
+	return best
+}
+
+// RelatedTags returns up to k tags whose ED vectors are nearest the
+// named tag's. Per-other-tag aggregate is the max cosine across all
+// (def_self, def_other) pairs. Live; no cache.
+// CRC: crc-Librarian.md | R2221, R2224
+func (l *Librarian) RelatedTags(tag string, k int) ([]TagSimilarity, error) {
+	if k <= 0 || !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	all, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	groups := edsByTag(all)
+	selfDefs, ok := groups[tag]
+	if !ok || len(selfDefs) == 0 {
+		return nil, nil
+	}
+
+	out := make([]TagSimilarity, 0, len(groups))
+	for otherTag, otherDefs := range groups {
+		if otherTag == tag {
+			continue
+		}
+		var best float64
+		var bestSrc, bestDst uint64
+		first := true
+		for _, sd := range selfDefs {
+			for _, od := range otherDefs {
+				if len(sd.Vec) != len(od.Vec) {
+					continue
+				}
+				s := cosineSimilarity(sd.Vec, od.Vec)
+				if first || s > best {
+					best = s
+					bestSrc = sd.FileID
+					bestDst = od.FileID
+					first = false
+				}
+			}
+		}
+		if first {
+			continue
+		}
+		out = append(out, TagSimilarity{
+			Tag:       otherTag,
+			Score:     best,
+			SrcFileID: bestSrc,
+			DstFileID: bestDst,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > k {
+		out = out[:k]
+	}
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: RelatedTags path resolution: %v", perr)
+	}
+	for i := range out {
+		out[i].SrcPath = paths[out[i].SrcFileID]
+		out[i].DstPath = paths[out[i].DstFileID]
+	}
+	return out, nil
+}
+
+// TagPairConflict returns the max-pair cosine between two tags and the
+// (SrcFileID, DstFileID) defs that scored it.
+// CRC: crc-Librarian.md | R2222, R2224
+func (l *Librarian) TagPairConflict(tagA, tagB string) (TagSimilarity, error) {
+	if !l.EmbeddingAvailable() {
+		return TagSimilarity{}, nil
+	}
+	all, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return TagSimilarity{}, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	groups := edsByTag(all)
+	defsA, okA := groups[tagA]
+	defsB, okB := groups[tagB]
+	if !okA || !okB || len(defsA) == 0 || len(defsB) == 0 {
+		return TagSimilarity{}, nil
+	}
+	var best float64
+	var bestA, bestB uint64
+	first := true
+	for _, da := range defsA {
+		for _, db := range defsB {
+			if len(da.Vec) != len(db.Vec) {
+				continue
+			}
+			s := cosineSimilarity(da.Vec, db.Vec)
+			if first || s > best {
+				best = s
+				bestA = da.FileID
+				bestB = db.FileID
+				first = false
+			}
+		}
+	}
+	if first {
+		return TagSimilarity{}, nil
+	}
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: TagPairConflict path resolution: %v", perr)
+	}
+	return TagSimilarity{
+		Score:     best,
+		SrcFileID: bestA,
+		DstFileID: bestB,
+		SrcPath:   paths[bestA],
+		DstPath:   paths[bestB],
+	}, nil
+}
+
+// TagDrift returns pairwise within-tag def cosines, sorted descending.
+// For a tag with n defs the result has n*(n-1)/2 pairs. FileIDA <
+// FileIDB in each pair to canonicalize the ordering.
+// CRC: crc-Librarian.md | R2223, R2225
+func (l *Librarian) TagDrift(tag string) ([]DriftPair, error) {
+	if !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	all, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	defs := edsByTag(all)[tag]
+	if len(defs) < 2 {
+		return nil, nil
+	}
+	var pairs []DriftPair
+	for i := range defs {
+		for j := i + 1; j < len(defs); j++ {
+			a, b := defs[i], defs[j]
+			if len(a.Vec) != len(b.Vec) {
+				continue
+			}
+			fidA, fidB := a.FileID, b.FileID
+			if fidA > fidB {
+				fidA, fidB = fidB, fidA
+			}
+			pairs = append(pairs, DriftPair{
+				FileIDA: fidA,
+				FileIDB: fidB,
+				Score:   cosineSimilarity(a.Vec, b.Vec),
+			})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].Score > pairs[j].Score })
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: TagDrift path resolution: %v", perr)
+	}
+	for i := range pairs {
+		pairs[i].PathA = paths[pairs[i].FileIDA]
+		pairs[i].PathB = paths[pairs[i].FileIDB]
+	}
+	return pairs, nil
+}
+
+// TopKChunksForTag reads the cached top-K chunks for a tag from the HC
+// cache, applying the alibi-stamp freshness filter at read time. Same
+// ChunkSuggestion shape as ChunksForTag — callers can treat them
+// interchangeably. MotivatingDefs is empty (the cache doesn't preserve
+// per-def winners; ChunksForTag is the live path that does).
+// CRC: crc-Librarian.md | Seq: seq-hot-correlations.md | R2218, R2219, R2220, R2249, R2250, R2252, R2253, R2257
+func (l *Librarian) TopKChunksForTag(tag string, k int) ([]ChunkSuggestion, error) {
+	if k <= 0 || !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+	entries, err := l.db.store.ReadHotCorrelations(tag)
+	if err != nil {
+		return nil, fmt.Errorf("read hot-correlations: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	maxEDSerial, err := l.db.store.MaxTagDefSerial(tag)
+	if err != nil {
+		return nil, fmt.Errorf("max ed serial: %w", err)
+	}
+	if maxEDSerial == 0 {
+		// All defs deleted or never existed — entries are stranded.
+		return nil, nil
+	}
+
+	type survivor struct {
+		chunkID uint64
+		score   float64
+		fileID  uint64
+	}
+	var survivors []survivor
+	hcPrefix := []byte(prefixHotCorrelation)
+	ecPrefix := []byte(prefixEmbedChunk)
+
+	for _, e := range entries {
+		hcKeyTail := hotCorrKey(tag, e.ChunkID)[len(prefixHotCorrelation):]
+		hcSerial, hcFound, err := l.db.store.RecordSerial(hcPrefix, hcKeyTail)
+		if err != nil {
+			return nil, fmt.Errorf("hc serial: %w", err)
+		}
+		if !hcFound {
+			continue
+		}
+		// EC freshness: existence + serial.
+		ecKeyTail := chunkEmbedKey(e.ChunkID)[len(prefixEmbedChunk):]
+		ecSerial, ecFound, err := l.db.store.RecordSerial(ecPrefix, ecKeyTail)
+		if err != nil {
+			return nil, fmt.Errorf("ec serial: %w", err)
+		}
+		if !ecFound {
+			continue
+		}
+		if hcSerial < ecSerial {
+			continue
+		}
+		// ED freshness: any tag def moved past this entry's stamp.
+		if hcSerial < maxEDSerial {
+			continue
+		}
+		survivors = append(survivors, survivor{chunkID: e.ChunkID, score: e.Score})
+	}
+	if len(survivors) == 0 {
+		return nil, nil
+	}
+
+	// Resolve primary FileID per chunk via fts.ReadCRecord.
+	if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+		filtered := survivors[:0]
+		for _, s := range survivors {
+			crec, rerr := l.db.fts.ReadCRecord(txn, s.chunkID)
+			if rerr != nil || len(crec.FileIDs) == 0 {
+				continue
+			}
+			s.fileID = crec.FileIDs[0].FileID
+			filtered = append(filtered, s)
+		}
+		survivors = filtered
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if len(survivors) == 0 {
+		return nil, nil
+	}
+
+	paths, perr := l.db.fts.FileIDPaths()
+	if perr != nil {
+		log.Printf("librarian: TopKChunksForTag path resolution: %v", perr)
+	}
+
+	sort.Slice(survivors, func(i, j int) bool { return survivors[i].score > survivors[j].score })
+	if len(survivors) > k {
+		survivors = survivors[:k]
+	}
+	out := make([]ChunkSuggestion, 0, len(survivors))
+	for _, s := range survivors {
+		out = append(out, ChunkSuggestion{
+			ChunkID:        s.chunkID,
+			FileID:         s.fileID,
+			Path:           paths[s.fileID],
+			Score:          s.score,
+			MotivatingDefs: nil,
+		})
+	}
+	return out, nil
+}
+
+// sweepProgress carries throttled progress state for the hot-correlations
+// sweep. Updates the tmp://sweep/hot-correlations.md document at most
+// every 250 ms, with terminal-state flushes immediate.
+// CRC: crc-Librarian.md | R2240, R2241, R2242, R2243, R2244
+type sweepProgress struct {
+	db        *DB
+	docPath   string
+	throttle  time.Duration
+	started   time.Time
+	lastFlush time.Time
+
+	status      string
+	phase       string
+	progress    float64
+	changedEDs  int
+	changedECs  int
+	tagsRebuilt int
+	tagsTouched int
+	orphanTotal int
+	durationMS  int64
+	completed   time.Time
+	errMsg      string
+}
+
+func newSweepProgress(db *DB) *sweepProgress {
+	return &sweepProgress{
+		db:       db,
+		docPath:  "tmp://sweep/hot-correlations.md",
+		throttle: 250 * time.Millisecond,
+		status:   "idle",
+		phase:    "",
+	}
+}
+
+// start records the sweep's start time and immediately flushes a
+// `running` snapshot.
+func (sp *sweepProgress) start(changedEDs, changedECs int) {
+	sp.started = time.Now()
+	sp.status = "running"
+	sp.phase = "tag-rebuild"
+	sp.progress = 0
+	sp.changedEDs = changedEDs
+	sp.changedECs = changedECs
+	sp.tagsRebuilt = 0
+	sp.tagsTouched = 0
+	sp.orphanTotal = 0
+	sp.durationMS = 0
+	sp.completed = time.Time{}
+	sp.errMsg = ""
+	sp.flushNow()
+}
+
+// tick updates progress fraction and phase. Honors the throttle —
+// writes to the doc only if the previous flush was at least throttle
+// ago.
+func (sp *sweepProgress) tick(phase string, frac float64) {
+	sp.phase = phase
+	sp.progress = frac
+	if time.Since(sp.lastFlush) >= sp.throttle {
+		sp.flushNow()
+	}
+}
+
+// complete flips status to "complete", populates the result fields, and
+// flushes immediately.
+func (sp *sweepProgress) complete(r *HCSweepResult) {
+	sp.status = "complete"
+	sp.phase = "done"
+	sp.progress = 1.0
+	sp.tagsRebuilt = r.TagsRebuilt
+	sp.tagsTouched = r.TagsTouched
+	sp.orphanTotal = r.OrphanTotal
+	sp.durationMS = r.DurationMS
+	sp.completed = r.CompletedAt
+	sp.flushNow()
+}
+
+// fail flips status to "error" and flushes immediately.
+func (sp *sweepProgress) fail(err error) {
+	sp.status = "error"
+	sp.errMsg = err.Error()
+	sp.completed = time.Now()
+	sp.durationMS = sp.completed.Sub(sp.started).Milliseconds()
+	sp.flushNow()
+}
+
+// flushNow renders the current state and writes it to the tmp:// doc,
+// regardless of throttle.
+func (sp *sweepProgress) flushNow() {
+	content := sp.render()
+	if _, exists := sp.db.tmpPaths[sp.docPath]; exists {
+		if err := sp.db.UpdateTmpFile(sp.docPath, "markdown", content); err != nil {
+			log.Printf("sweep progress update: %v", err)
+		}
+	} else {
+		if _, err := sp.db.AddTmpFile(sp.docPath, "markdown", content); err != nil {
+			log.Printf("sweep progress add: %v", err)
+		}
+	}
+	sp.lastFlush = time.Now()
+}
+
+// render produces the markdown body with @sweep-* tags reflecting
+// current state. R2241.
+func (sp *sweepProgress) render() []byte {
+	var b strings.Builder
+	b.WriteString("@sweep: hot-correlations\n")
+	fmt.Fprintf(&b, "@sweep-status: %s\n", sp.status)
+	if !sp.started.IsZero() {
+		fmt.Fprintf(&b, "@sweep-started: %s\n", sp.started.UTC().Format(time.RFC3339))
+	}
+	if sp.status == "running" || sp.status == "complete" || sp.status == "error" {
+		fmt.Fprintf(&b, "@sweep-phase: %s\n", sp.phase)
+		fmt.Fprintf(&b, "@sweep-progress: %.2f\n", sp.progress)
+		fmt.Fprintf(&b, "@sweep-changed-eds: %d\n", sp.changedEDs)
+		fmt.Fprintf(&b, "@sweep-changed-ecs: %d\n", sp.changedECs)
+		fmt.Fprintf(&b, "@sweep-tags-rebuilt: %d\n", sp.tagsRebuilt)
+		fmt.Fprintf(&b, "@sweep-tags-touched: %d\n", sp.tagsTouched)
+		fmt.Fprintf(&b, "@sweep-orphan-total: %d\n", sp.orphanTotal)
+	}
+	if !sp.completed.IsZero() {
+		fmt.Fprintf(&b, "@sweep-completed: %s\n", sp.completed.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&b, "@sweep-duration-ms: %d\n", sp.durationMS)
+	}
+	if sp.errMsg != "" {
+		fmt.Fprintf(&b, "@sweep-error: %s\n", sp.errMsg)
+	}
+	return []byte(b.String())
+}
+
+// SweepHotCorrelations runs the incremental corpus-wide cosine sweep
+// against the HC cache. Reads I:hcsweep, walks SED/SEC for changes,
+// rebuilds affected tags (phase 3), displaces against unchanged tags
+// (phase 4), advances the bookmark on success. Per-tag write txns
+// for crash safety. Progress is published through the tmp:// doc.
+// CRC: crc-Librarian.md | Seq: seq-hot-correlations.md | R2216, R2217, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2245, R2251, R2252, R2253, R2254, R2255, R2256, R2257
+func (l *Librarian) SweepHotCorrelations() (*HCSweepResult, error) {
+	if !l.EmbeddingAvailable() {
+		return nil, nil
+	}
+
+	progress := newSweepProgress(l.db)
+
+	bookmark, err := l.db.store.IGetCounter("hcsweep")
+	if err != nil {
+		return nil, fmt.Errorf("read hcsweep bookmark: %w", err)
+	}
+	fromScratch := bookmark == 0
+
+	// Survey changed work via the S substrate.
+	type edChange struct {
+		tag    string
+		fileID uint64
+		serial uint64
+	}
+	var changedEDs []edChange
+	var maxSeen uint64 = bookmark
+	if err := l.db.store.WalkRecordsSinceSerial([]byte(prefixEmbedDef), bookmark,
+		func(origKey []byte, serial uint64) error {
+			// origKey = ED + tag + fileid:8
+			if len(origKey) < len(prefixEmbedDef)+8 {
+				return nil
+			}
+			tag := string(origKey[len(prefixEmbedDef) : len(origKey)-8])
+			fid := binary.BigEndian.Uint64(origKey[len(origKey)-8:])
+			changedEDs = append(changedEDs, edChange{tag: tag, fileID: fid, serial: serial})
+			if serial > maxSeen {
+				maxSeen = serial
+			}
+			return nil
+		}); err != nil {
+		progress.fail(err)
+		return nil, fmt.Errorf("walk SED: %w", err)
+	}
+
+	type ecChange struct {
+		chunkID uint64
+		serial  uint64
+	}
+	var changedECs []ecChange
+	if err := l.db.store.WalkRecordsSinceSerial([]byte(prefixEmbedChunk), bookmark,
+		func(origKey []byte, serial uint64) error {
+			if len(origKey) < len(prefixEmbedChunk) {
+				return nil
+			}
+			rest := origKey[len(prefixEmbedChunk):]
+			cid, _ := binary.Uvarint(rest)
+			changedECs = append(changedECs, ecChange{chunkID: cid, serial: serial})
+			if serial > maxSeen {
+				maxSeen = serial
+			}
+			return nil
+		}); err != nil {
+		progress.fail(err)
+		return nil, fmt.Errorf("walk SEC: %w", err)
+	}
+
+	progress.start(len(changedEDs), len(changedECs))
+
+	// Pre-load all defs grouped by tag.
+	allDefs, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		progress.fail(err)
+		return nil, fmt.Errorf("scan tag-def embeddings: %w", err)
+	}
+	defsByTag := edsByTag(allDefs)
+
+	// Identify tags needing full rebuild.
+	tagsToRebuild := make(map[string]struct{})
+	for _, c := range changedEDs {
+		tagsToRebuild[c.tag] = struct{}{}
+	}
+
+	result := &HCSweepResult{
+		StartedAt:   progress.started,
+		ChangedEDs:  len(changedEDs),
+		ChangedECs:  len(changedECs),
+		FromScratch: fromScratch,
+	}
+
+	// Phase 3: tag rebuild.
+	totalRebuilds := len(tagsToRebuild)
+	rebuildIdx := 0
+	for tag := range tagsToRebuild {
+		rebuildIdx++
+		progress.tick("tag-rebuild", float64(rebuildIdx)/float64(totalRebuilds+len(changedECs)))
+
+		defs := defsByTag[tag]
+		if len(defs) == 0 {
+			// All defs for this tag were deleted — drop the tag's HC.
+			if err := l.db.store.ReplaceHotCorrelations(tag, nil); err != nil {
+				progress.fail(err)
+				return nil, fmt.Errorf("replace HC for %q: %w", tag, err)
+			}
+			result.TagsRebuilt++
+			continue
+		}
+		topK, err := l.computeTagTopK(defs)
+		if err != nil {
+			progress.fail(err)
+			return nil, fmt.Errorf("compute top-K for %q: %w", tag, err)
+		}
+		if err := l.db.store.ReplaceHotCorrelations(tag, topK); err != nil {
+			progress.fail(err)
+			return nil, fmt.Errorf("replace HC for %q: %w", tag, err)
+		}
+		result.TagsRebuilt++
+	}
+
+	// Phase 4: chunk displace against unaffected tags.
+	if len(changedECs) > 0 {
+		// Pre-load unaffected tags' HC into memory; track which changed.
+		type hcBucket struct {
+			entries []HotCorrelation // sorted desc by score
+			changed bool
+		}
+		buckets := make(map[string]*hcBucket)
+		for tag := range defsByTag {
+			if _, rebuilt := tagsToRebuild[tag]; rebuilt {
+				continue
+			}
+			entries, err := l.db.store.ReadHotCorrelations(tag)
+			if err != nil {
+				progress.fail(err)
+				return nil, fmt.Errorf("read HC for phase 4 %q: %w", tag, err)
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Score > entries[j].Score })
+			buckets[tag] = &hcBucket{entries: entries}
+		}
+
+		for i, c := range changedECs {
+			progress.tick("chunk-displace",
+				float64(totalRebuilds+i+1)/float64(totalRebuilds+len(changedECs)))
+			vec, err := l.db.store.ReadChunkEmbedding(c.chunkID)
+			if err != nil {
+				progress.fail(err)
+				return nil, fmt.Errorf("read EC %d: %w", c.chunkID, err)
+			}
+			if vec == nil {
+				continue
+			}
+			for tag, b := range buckets {
+				defs := defsByTag[tag]
+				score := maxCosineAgainstDefs(vec, defs)
+				if math.IsInf(score, -1) {
+					continue
+				}
+				// Drop existing entry for this chunkid if present (it was
+				// scored against an older EC).
+				for j := range b.entries {
+					if b.entries[j].ChunkID == c.chunkID {
+						b.entries = append(b.entries[:j], b.entries[j+1:]...)
+						b.changed = true
+						break
+					}
+				}
+				if len(b.entries) < K_TOP_HC {
+					b.entries = append(b.entries, HotCorrelation{ChunkID: c.chunkID, Score: score})
+					sort.Slice(b.entries, func(i, j int) bool { return b.entries[i].Score > b.entries[j].Score })
+					b.changed = true
+				} else if score > b.entries[len(b.entries)-1].Score {
+					b.entries[len(b.entries)-1] = HotCorrelation{ChunkID: c.chunkID, Score: score}
+					sort.Slice(b.entries, func(i, j int) bool { return b.entries[i].Score > b.entries[j].Score })
+					b.changed = true
+				}
+			}
+		}
+
+		for tag, b := range buckets {
+			if !b.changed {
+				continue
+			}
+			if err := l.db.store.ReplaceHotCorrelations(tag, b.entries); err != nil {
+				progress.fail(err)
+				return nil, fmt.Errorf("replace HC for %q in phase 4: %w", tag, err)
+			}
+			result.TagsTouched++
+		}
+	}
+
+	// Phase 5: bookmark.
+	if err := l.db.store.ISetCounter("hcsweep", maxSeen); err != nil {
+		progress.fail(err)
+		return nil, fmt.Errorf("write hcsweep bookmark: %w", err)
+	}
+
+	// Compute orphan total — count of all HC entries across all tags.
+	orphanTotal := 0
+	for tag := range defsByTag {
+		entries, err := l.db.store.ReadHotCorrelations(tag)
+		if err != nil {
+			progress.fail(err)
+			return nil, fmt.Errorf("count HC for %q: %w", tag, err)
+		}
+		orphanTotal += len(entries)
+	}
+	result.OrphanTotal = orphanTotal
+
+	// Phase 6: complete.
+	result.CompletedAt = time.Now()
+	result.DurationMS = result.CompletedAt.Sub(progress.started).Milliseconds()
+	progress.complete(result)
+	return result, nil
+}
+
+// HandleSweepCorrelations runs the hot-correlations sweep synchronously
+// and returns the result as JSON. POST /sweep/correlations.
+// CRC: crc-Librarian.md | R2247
+func (l *Librarian) HandleSweepCorrelations(w http.ResponseWriter, r *http.Request) {
+	result, err := l.SweepHotCorrelations()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if result == nil {
+		writeJSON(w, map[string]string{"status": "embedding-unavailable"})
+		return
+	}
+	writeJSON(w, result)
+}
+
+// computeTagTopK walks every EC record and returns the top-K chunks for
+// the given tag (max-cosine across defs). Used by Phase 3 of the sweep.
+// CRC: crc-Librarian.md | R2234
+func (l *Librarian) computeTagTopK(defs []TagDefEmbedding) ([]HotCorrelation, error) {
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	dimBytes := len(defs[0].Vec) * 4
+	queryNorms := make([]float64, len(defs))
+	for i, d := range defs {
+		queryNorms[i] = vecNorm(d.Vec)
+	}
+
+	h := &chunkAggHeap{}
+	heap.Init(h)
+
+	err := l.db.store.ViewChunkEmbeddings(func(_ *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+		if len(raw) != dimBytes {
+			return true, nil
+		}
+		var maxScore float64
+		first := true
+		for i, d := range defs {
+			if queryNorms[i] == 0 {
+				continue
+			}
+			s := cosineFromBytes(raw, d.Vec, queryNorms[i])
+			if first || s > maxScore {
+				maxScore = s
+				first = false
+			}
+		}
+		if first {
+			return true, nil
+		}
+		if h.Len() < K_TOP_HC {
+			heap.Push(h, chunkAgg{chunkID: chunkID, score: maxScore})
+		} else if maxScore > (*h)[0].score {
+			(*h)[0] = chunkAgg{chunkID: chunkID, score: maxScore}
+			heap.Fix(h, 0)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HotCorrelation, h.Len())
+	for j := range out {
+		c := heap.Pop(h).(chunkAgg)
+		out[len(out)-1-j] = HotCorrelation{ChunkID: c.chunkID, Score: c.score}
+	}
+	return out, nil
+}
+
 // cosineFromBytes computes cosine similarity between a query vector
 // and a packed []float32 stored in LMDB byte form, without allocating
 // an intermediate float32 slice.

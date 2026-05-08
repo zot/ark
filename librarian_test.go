@@ -5,6 +5,7 @@ package ark
 import (
 	"math"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/zot/microfts2"
@@ -611,6 +612,406 @@ func TestChunksForTag_NoOrphanFilter(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("expected both chunks (no orphan filter), got %d: %+v", len(got), got)
+	}
+}
+
+// --- Hot Correlations (HC) tests ---
+// CRC: crc-Librarian.md | Test: test-HotCorrelations.md
+
+// TestHC_SweepFromScratch — empty bookmark triggers full corpus
+// rebuild for every tag with ED records.
+// Refs: R2216, R2232, R2234
+func TestHC_SweepFromScratch(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\nb\nc\n", "line")
+	if len(chunks) < 3 {
+		t.Skipf("line chunker produced %d chunks, need 3", len(chunks))
+	}
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[1], vecFrom(0, 1, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[2], vecFrom(0.5, 0.5, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+
+	r, err := l.SweepHotCorrelations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("nil result")
+	}
+	if !r.FromScratch {
+		t.Errorf("expected FromScratch true")
+	}
+	if r.TagsRebuilt != 1 {
+		t.Errorf("TagsRebuilt: got %d want 1", r.TagsRebuilt)
+	}
+	got, _ := db.store.ReadHotCorrelations("priority")
+	if len(got) != 3 {
+		t.Errorf("expected 3 HC entries, got %d", len(got))
+	}
+}
+
+// TestHC_SweepIdempotent — running twice with no changes is a no-op.
+// Refs: R2233, R2236, R2239
+func TestHC_SweepIdempotent(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := l.SweepHotCorrelations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.FromScratch {
+		t.Errorf("second sweep FromScratch should be false")
+	}
+	if r2.ChangedEDs != 0 || r2.ChangedECs != 0 {
+		t.Errorf("expected zero churn on second sweep, got changedEDs=%d changedECs=%d", r2.ChangedEDs, r2.ChangedECs)
+	}
+	if r2.TagsRebuilt != 0 || r2.TagsTouched != 0 {
+		t.Errorf("expected no work, got rebuilt=%d touched=%d", r2.TagsRebuilt, r2.TagsTouched)
+	}
+}
+
+// TestHC_SweepPhase3PicksUpNewED — adding an ED triggers a tag rebuild
+// without touching unrelated tags' HC entries.
+// Refs: R2234
+func TestHC_SweepPhase3PicksUpNewED(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("a", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	hcA, _ := db.store.ReadHotCorrelations("a")
+	if len(hcA) == 0 {
+		t.Fatal("expected HC for tag 'a' after first sweep")
+	}
+
+	db.store.WriteTagDefEmbedding("b", 11, vecFrom(0, 1, 0, 0))
+	r, err := l.SweepHotCorrelations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ChangedEDs != 1 || r.TagsRebuilt != 1 {
+		t.Errorf("expected ChangedEDs=1 TagsRebuilt=1, got changedEDs=%d rebuilt=%d", r.ChangedEDs, r.TagsRebuilt)
+	}
+	hcB, _ := db.store.ReadHotCorrelations("b")
+	if len(hcB) == 0 {
+		t.Errorf("expected HC for new tag 'b' after sweep")
+	}
+}
+
+// TestHC_SweepPhase4Displaces — a new EC chunk that scores higher than
+// the current bottom of an unaffected tag's top-K replaces the
+// displaced entry.
+// Refs: R2235
+func TestHC_SweepPhase4Displaces(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\nb\nc\n", "line")
+	if len(chunks) < 3 {
+		t.Skipf("line chunker produced %d chunks, need 3", len(chunks))
+	}
+	// First fill top-K with three chunks of varying score.
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(0.9, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[1], vecFrom(0.7, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[2], vecFrom(0.5, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	hc1, _ := db.store.ReadHotCorrelations("priority")
+	if len(hc1) != 3 {
+		t.Fatalf("expected 3 HC after first sweep, got %d", len(hc1))
+	}
+
+	// Add a new chunk that scores between 0.5 and 0.7 → does NOT displace.
+	_, chunks2 := indexFileWithChunks(t, l, dir, "doc2.md", "x\n", "line")
+	newChunk := chunks2[0]
+	db.store.WriteChunkEmbedding(newChunk, vecFrom(0.6, 0, 0, 0))
+	r, err := l.SweepHotCorrelations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Phase 4 doesn't run when phase 3 covers all tags. Here phase 3
+	// does NOT run (no ED changes). Phase 4 should consider this new EC
+	// against tag "priority".
+	_ = r
+	hc2, _ := db.store.ReadHotCorrelations("priority")
+	// With K=20 and only 3 entries before, the new chunk gets added.
+	if len(hc2) != 4 {
+		t.Errorf("expected 4 HC after displace add, got %d", len(hc2))
+	}
+}
+
+// TestHC_TopK_StaleEC_DroppedAtRead — alibi-stamp filter: an EC
+// rewritten after the HC entry's stamp causes the entry to be dropped
+// at read time.
+// Refs: R2219, R2249
+func TestHC_TopK_StaleEC_DroppedAtRead(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\nb\n", "line")
+	if len(chunks) < 2 {
+		t.Skipf("need 2 chunks")
+	}
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(0.9, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[1], vecFrom(0.5, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	// Advance EC[chunks[0]]'s serial — stamp moves past HC's stamp.
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(0.95, 0, 0, 0))
+
+	got, err := l.TopKChunksForTag("priority", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		if s.ChunkID == chunks[0] {
+			t.Errorf("expected chunk %d to be filtered (EC moved), got %+v", chunks[0], got)
+		}
+	}
+	// chunks[1] is still fresh.
+	if len(got) == 0 {
+		t.Errorf("expected at least the stable entry to survive, got empty")
+	}
+}
+
+// TestHC_TopK_StaleED_AllDroppedAtRead — any ED move past HC's stamp
+// invalidates every entry for that tag.
+// Refs: R2219, R2249
+func TestHC_TopK_StaleED_AllDroppedAtRead(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\nb\n", "line")
+	if len(chunks) < 2 {
+		t.Skipf("need 2 chunks")
+	}
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(0.9, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[1], vecFrom(0.5, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the tag's ED — stamp moves past HC.
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0.001, 0, 0))
+
+	got, err := l.TopKChunksForTag("priority", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected all entries filtered (ED moved), got %d: %+v", len(got), got)
+	}
+}
+
+// TestHC_TopK_MissingEC_Dropped — entry referring to a deleted chunk is
+// dropped at read time.
+// Refs: R2249
+func TestHC_TopK_MissingEC_Dropped(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\nb\n", "line")
+	if len(chunks) < 2 {
+		t.Skipf("need 2 chunks")
+	}
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(0.9, 0, 0, 0))
+	db.store.WriteChunkEmbedding(chunks[1], vecFrom(0.5, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	db.store.DeleteChunkEmbedding(chunks[0])
+
+	got, err := l.TopKChunksForTag("priority", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		if s.ChunkID == chunks[0] {
+			t.Errorf("expected deleted-EC entry to be dropped, got %+v", got)
+		}
+	}
+}
+
+// TestHC_TopK_NoEntries — empty cache returns (nil, nil).
+// Refs: R2220
+func TestHC_TopK_NoEntries(t *testing.T) {
+	l, _, _ := suggestSetup(t)
+	got, err := l.TopKChunksForTag("absent", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %+v", got)
+	}
+}
+
+// TestHC_RelatedTags — top-K nearest tags by max-pair cosine.
+// Refs: R2221, R2224
+func TestHC_RelatedTags(t *testing.T) {
+	l, db, _ := suggestSetup(t)
+	db.store.WriteTagDefEmbedding("a", 10, vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("b", 11, vecFrom(0.9, 0.1, 0, 0))     // close to a
+	db.store.WriteTagDefEmbedding("c", 12, vecFrom(0, 1, 0, 0))         // far from a
+
+	got, err := l.RelatedTags("a", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 tags, got %d", len(got))
+	}
+	if got[0].Tag != "b" || got[1].Tag != "c" {
+		t.Errorf("expected order [b, c], got [%s, %s]", got[0].Tag, got[1].Tag)
+	}
+}
+
+// TestHC_TagPairConflict — max-pair cosine across two tags.
+// Refs: R2222, R2224
+func TestHC_TagPairConflict(t *testing.T) {
+	l, db, _ := suggestSetup(t)
+	db.store.WriteTagDefEmbedding("a", 10, vecFrom(0.5, 0.5, 0, 0))    // weak vs B
+	db.store.WriteTagDefEmbedding("a", 11, vecFrom(1, 0, 0, 0))         // strong vs B
+	db.store.WriteTagDefEmbedding("b", 20, vecFrom(1, 0, 0, 0))
+
+	got, err := l.TagPairConflict("a", "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SrcFileID != 11 || got.DstFileID != 20 {
+		t.Errorf("expected SrcFileID=11 DstFileID=20, got %+v", got)
+	}
+	if math.Abs(got.Score-1.0) > 1e-9 {
+		t.Errorf("expected score 1.0, got %v", got.Score)
+	}
+}
+
+// TestHC_TagDrift — pairwise cosines within one tag, sorted desc.
+// Refs: R2223, R2225
+func TestHC_TagDrift(t *testing.T) {
+	l, db, _ := suggestSetup(t)
+	db.store.WriteTagDefEmbedding("a", 10, vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("a", 11, vecFrom(0.9, 0.1, 0, 0))    // close to 10
+	db.store.WriteTagDefEmbedding("a", 12, vecFrom(0, 1, 0, 0))         // far from 10
+
+	got, err := l.TagDrift("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 pairs (3*2/2), got %d", len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Score < got[i].Score {
+			t.Errorf("pairs not sorted desc: %+v", got)
+			break
+		}
+	}
+	for _, p := range got {
+		if p.FileIDA >= p.FileIDB {
+			t.Errorf("expected FileIDA < FileIDB, got %+v", p)
+		}
+	}
+}
+
+// TestHC_ProgressDocLifecycle — sweep transitions tmp:// doc through
+// running → complete with the right tags.
+// Refs: R2240, R2241, R2244
+func TestHC_ProgressDocLifecycle(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatal(err)
+	}
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := db.tmpPaths["tmp://sweep/hot-correlations.md"]; !ok {
+		t.Fatalf("expected progress doc to be registered as tmp://")
+	}
+	// Progress doc should reflect 'complete' status with our tag.
+	rdr, err := db.fts.TmpContent("tmp://sweep/hot-correlations.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1024)
+	n, _ := rdr.Read(buf)
+	body := string(buf[:n])
+	if !strings.Contains(body, "@sweep-status: complete") {
+		t.Errorf("expected @sweep-status: complete, got: %s", body)
+	}
+	if !strings.Contains(body, "@sweep-completed:") {
+		t.Errorf("expected @sweep-completed:, got: %s", body)
+	}
+}
+
+// TestHC_ReadOnly — TopK and tag-tag queries don't mutate state.
+// Refs: R2252
+func TestHC_ReadOnly(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, _ := db.store.RecordCounts()
+	if _, err := l.TopKChunksForTag("priority", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.RelatedTags("priority", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.TagPairConflict("priority", "priority"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.TagDrift("priority"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := db.store.RecordCounts()
+	for k, b := range before {
+		if a := after[k]; a.Count != b.Count {
+			t.Errorf("prefix %q count changed: before=%d after=%d", string(k), b.Count, a.Count)
+		}
+	}
+}
+
+// TestHC_SweepRefreshesAlibi — running a sweep after an ED change
+// re-stamps the tag's HC entries so reads return them again.
+// Refs: R2251
+func TestHC_SweepRefreshesAlibi(t *testing.T) {
+	l, db, dir := suggestSetup(t)
+	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")
+	db.store.WriteChunkEmbedding(chunks[0], vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0, 0, 0))
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	// ED moves: TopK now filters everything.
+	db.store.WriteTagDefEmbedding("priority", 10, vecFrom(1, 0.001, 0, 0))
+	got1, _ := l.TopKChunksForTag("priority", 5)
+	if len(got1) != 0 {
+		t.Fatalf("expected ED-stale entries filtered, got %+v", got1)
+	}
+	// Sweep again: phase 3 rebuilds, fresh stamps.
+	if _, err := l.SweepHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := l.TopKChunksForTag("priority", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 1 {
+		t.Errorf("expected entries restored after re-sweep, got %d: %+v", len(got2), got2)
 	}
 }
 

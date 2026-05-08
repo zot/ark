@@ -357,6 +357,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /search/expand/fuzzy", srv.librarian.HandleFuzzyMatch)
 		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
 		mux.HandleFunc("POST /search/expand/embed", srv.librarian.HandleEmbedMatch)
+		mux.HandleFunc("POST /sweep/correlations", srv.librarian.HandleSweepCorrelations)
 	}
 
 	log.Printf("ark server listening on %s", socketPath)

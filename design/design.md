@@ -169,6 +169,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
 - [x] seq-suggest-tags.md → `librarian.go`
 - [x] seq-chunks-for-tag.md → `librarian.go`
+- [x] seq-hot-correlations.md → `librarian.go`, `store.go`
 - [x] seq-chunk-embed.md → `librarian.go`, `store.go`, `server.go`, `config.go`
 - [x] seq-pdf-chunk.md → `pdfchunker.go`
 - [x] seq-empty-file-skip.md → `scanner.go`, `db.go`, `emptyfiles.go`
@@ -227,6 +228,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagDefEmbed.md → `store_test.go`
 - [x] test-SuggestTagNames.md → `librarian_test.go`
 - [x] test-ChunksForTag.md → `librarian_test.go`
+- [x] test-HotCorrelations.md → `librarian_test.go`, `store_test.go`
 - [x] test-VectorFreshness.md → `store_test.go`
 
 ## Gaps
@@ -447,3 +449,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T55: R13 retired by R2144 (2026-05-04 default-replace-semantics (per-source replaces, not adds))
 - T56: R26 retired by R2145 (2026-05-04 default-replace-semantics (TOML keys renamed to default_include/default_exclude))
 - [ ] O96: Librarian-level ED tests (rebuild regenerates ED, BatchEmbed writes ED for missing pairs) require a real GGUF model and are not run by 'go test'. Store-level ED tests in store_test.go cover R2151-R2162 at the LMDB layer; the model-side path is exercised manually after each model swap.
+- A50: R2246: Lua API mcp:sweepHotCorrelations() deferred — CLI subcommand 'ark sweep correlations' lands the invocation surface for 1E; the Lua wrapper will land alongside the curation view UI (Phase 1F) when the Lua binding is needed.
+- A51: R2248: Cron-via-tag triggering deferred to a follow-up slice (the 'small extension' described in CURATION-VIEW.md). Sweep invocation in 1E is direct (CLI / Lua / Go); scheduler integration arrives separately.

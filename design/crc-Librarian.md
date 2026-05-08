@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -110,6 +110,32 @@ loads on first embedding query and stays warm until TTL expiry.
   result chunk's MotivatingDefs has length 1, the requested
   (fileid, path, score). Read-only. (R2195, R2198-R2208,
   R2210-R2215)
+- SweepHotCorrelations() (*SweepResult, error): incremental
+  corpus-wide sweep producing the HC top-K cache per tag.
+  Reads I:hcsweep, walks SED and SEC for changed records,
+  runs phase-3 tag rebuilds (full EC walk per affected tag,
+  ReplaceHotCorrelations per tag) and phase-4 chunk-displace
+  passes (per-tag delete+write for each new chunk that
+  exceeds a tag's current min). Per-tag write transactions
+  for crash safety. Bookmark advances only on full success.
+  Surfaces progress through tmp://sweep/hot-correlations.md
+  with 250 ms throttle; terminal transitions flush
+  immediately. (R2216, R2217, R2230, R2232-R2244)
+- TopKChunksForTag(tag, k) ([]ChunkSuggestion, error): read
+  HC top-K from the cache. Performs alibi-stamp filtering
+  per entry — drops if EC missing, EC current serial >
+  HC stamp, or any tag-def's current serial > HC stamp.
+  Result may be shorter than k. Returns (nil, nil) for
+  empty HC, k <= 0, or embedding unavailable. (R2218,
+  R2219, R2220, R2249-R2252)
+- RelatedTags(tag, k) ([]TagSimilarity, error): live ED↔ED
+  scan, max-pair aggregation per other tag. Returns top-k
+  nearest tags with their best def-pair. (R2221, R2224)
+- TagPairConflict(tagA, tagB) (TagSimilarity, error): live
+  max-pair cosine across every (def_a, def_b). (R2222,
+  R2224)
+- TagDrift(tag) ([]DriftPair, error): live within-tag
+  pairwise cosines, sorted descending. (R2223, R2225)
 - SetCtxSize(n int): set embedding context window (bench only). (R1587)
 - SetParallel(n int): set parallel sequences (bench only). (R1587)
 - loadModel(): load GGUF model from modelPath, create default context
@@ -131,9 +157,11 @@ loads on first embedding query and stays warm until TTL expiry.
 
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
-- Store: V record queries, T/EV/EC/EF record reads and writes,
-  tag-value-id allocation, ScanVRecordTvids for reverse lookup
-- DB: AllChunks for chunk content retrieval, enqueueWrite for actor writes
+- Store: V record queries, T/EV/EC/EF/HC record reads and writes,
+  tag-value-id allocation, ScanVRecordTvids for reverse lookup,
+  S-substrate stamping/freshness queries
+- DB: AllChunks for chunk content retrieval, enqueueWrite for actor
+  writes, AddTmpFile/UpdateTmpFile for the sweep progress doc
 - Searcher: fetch grouped results for curated tags
 - gollama: model loading, multi-context creation, embedding computation
 - Config: tag_model path, embed_tiers, search_exclude patterns

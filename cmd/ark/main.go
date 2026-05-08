@@ -159,6 +159,8 @@ func main() {
 		cmdStatus(args)
 	case "stop":
 		cmdStop(args)
+	case "sweep":
+		cmdSweep(args)
 	case "tag":
 		cmdTag(args)
 	case "install":
@@ -218,6 +220,7 @@ Commands:
   stale       List stale files
   status      Show database status
   stop        Stop the running server
+  sweep       Run a corpus-wide sweep (correlations: refresh HC top-K cache)
   tag         Tag operations (list, counts, files, defs)
   ui          UI operations (run, display, event, checkpoint, ...)
   unresolved  List unresolved files
@@ -5654,5 +5657,81 @@ Examples:
 	}
 	if dr.Description != "" {
 		fmt.Printf("text:      %s\n", dr.Description)
+	}
+}
+
+// cmdSweep dispatches the `ark sweep` subcommands. Currently only
+// `ark sweep correlations` is implemented; future phases may add other
+// sweep types (e.g. chunk-pairwise).
+// CRC: crc-CLI.md | R2247
+func cmdSweep(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: ark sweep SUBCOMMAND
+
+Subcommands:
+  correlations    Run the hot-correlations sweep (refreshes the HC top-K cache per tag).`)
+		os.Exit(1)
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "correlations":
+		cmdSweepCorrelations(rest)
+	case "-h", "--help":
+		fmt.Println(`Usage: ark sweep SUBCOMMAND
+
+Subcommands:
+  correlations    Run the hot-correlations sweep (refreshes the HC top-K cache per tag).`)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown sweep subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+// cmdSweepCorrelations triggers the hot-correlations sweep on the
+// running server and prints the JSON result.
+// CRC: crc-CLI.md | R2247
+func cmdSweepCorrelations(args []string) {
+	fs := flag.NewFlagSet("sweep correlations", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark sweep correlations
+
+Refresh the hot-correlations top-K cache per tag.
+
+Reads the I:hcsweep bookmark, walks the S substrate for changed ED
+and EC records since the bookmark, rebuilds tags whose definitions
+moved (full top-K recompute) and displaces individual chunks against
+unchanged tags. Per-tag write transactions; the bookmark advances
+only on full success.
+
+Progress is published through tmp://sweep/hot-correlations.md
+(throttled at 250 ms; terminal status flushes immediately).
+Subscribers can listen via mcp:subscribe({tag="sweep-status"}, ...).
+
+Requires a running server.`)
+	}
+	fs.Parse(args)
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fmt.Fprintln(os.Stderr, "error: ark sweep correlations requires a running server (start with 'ark serve')")
+		os.Exit(1)
+	}
+	var result ark.HCSweepResult
+	if err := proxyDecode(client, "POST", "/sweep/correlations", nil, &result); err != nil {
+		fatal(err)
+	}
+	if result.StartedAt.IsZero() {
+		fmt.Println("sweep skipped: embedding unavailable")
+		return
+	}
+	fmt.Printf("sweep complete in %d ms\n", result.DurationMS)
+	fmt.Printf("  changed EDs:   %d\n", result.ChangedEDs)
+	fmt.Printf("  changed ECs:   %d\n", result.ChangedECs)
+	fmt.Printf("  tags rebuilt:  %d\n", result.TagsRebuilt)
+	fmt.Printf("  tags touched:  %d\n", result.TagsTouched)
+	fmt.Printf("  HC entries:    %d\n", result.OrphanTotal)
+	if result.FromScratch {
+		fmt.Println("  from scratch:  true (bookmark was zero)")
 	}
 }

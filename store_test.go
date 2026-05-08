@@ -5,6 +5,7 @@ package ark
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1145,5 +1146,233 @@ func TestS_NoTombstones(t *testing.T) {
 	}
 	if visited != 0 {
 		t.Errorf("expected walk to find nothing after delete, got %d visits", visited)
+	}
+}
+
+// --- Hot Correlation (HC) tests ---
+// CRC: crc-Store.md | Test: test-HotCorrelations.md
+
+// TestHC_WriteReadRoundTrip — write/read recovers the score, S-substrate
+// stamps the record alongside.
+// Refs: R2226, R2227, R2229
+func TestHC_WriteReadRoundTrip(t *testing.T) {
+	s := testStore(t)
+	if err := s.WriteHotCorrelation("priority", 42, 0.85); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReadHotCorrelations("priority")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ChunkID != 42 {
+		t.Fatalf("expected one entry for chunk 42, got %+v", got)
+	}
+	if math.Abs(got[0].Score-0.85) > 1e-9 {
+		t.Errorf("score round-trip: got %v want 0.85", got[0].Score)
+	}
+	// Stamp should exist with non-zero serial.
+	key := hotCorrKey("priority", 42)
+	serial, found, err := s.RecordSerial([]byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || serial == 0 {
+		t.Errorf("expected SHC stamp present and non-zero, got found=%v serial=%d", found, serial)
+	}
+}
+
+// TestHC_ReadEmpty — no entries returns nil/empty, no error.
+func TestHC_ReadEmpty(t *testing.T) {
+	s := testStore(t)
+	got, err := s.ReadHotCorrelations("absent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %+v", got)
+	}
+}
+
+// TestHC_DeleteRemovesValueAndStamp — DeleteHotCorrelation clears both
+// the HC record and the SHC stamp.
+// Refs: R2229
+func TestHC_DeleteRemovesValueAndStamp(t *testing.T) {
+	s := testStore(t)
+	s.WriteHotCorrelation("priority", 42, 0.85)
+	if err := s.DeleteHotCorrelation("priority", 42); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ReadHotCorrelations("priority")
+	if len(got) != 0 {
+		t.Errorf("expected entry gone, got %+v", got)
+	}
+	key := hotCorrKey("priority", 42)
+	_, found, err := s.RecordSerial([]byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Errorf("expected stamp gone after delete")
+	}
+}
+
+// TestHC_ReplaceAtomic — ReplaceHotCorrelations clears existing entries
+// for a tag and writes the batch in one txn; all batch entries share a
+// single serial.
+// Refs: R2229, R2238
+func TestHC_ReplaceAtomic(t *testing.T) {
+	s := testStore(t)
+	s.WriteHotCorrelation("priority", 1, 0.5)
+	s.WriteHotCorrelation("priority", 2, 0.6)
+
+	batch := []HotCorrelation{
+		{ChunkID: 10, Score: 0.9},
+		{ChunkID: 11, Score: 0.8},
+		{ChunkID: 12, Score: 0.7},
+	}
+	if err := s.ReplaceHotCorrelations("priority", batch); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ReadHotCorrelations("priority")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 entries after replace, got %d (%+v)", len(got), got)
+	}
+	gotIDs := map[uint64]float64{}
+	for _, e := range got {
+		gotIDs[e.ChunkID] = e.Score
+	}
+	for _, want := range batch {
+		if math.Abs(gotIDs[want.ChunkID]-want.Score) > 1e-9 {
+			t.Errorf("missing or wrong score for chunk %d: got %v want %v", want.ChunkID, gotIDs[want.ChunkID], want.Score)
+		}
+	}
+	if _, ok := gotIDs[1]; ok {
+		t.Errorf("old entry chunk=1 not cleared")
+	}
+
+	// Verify all three new entries share a single serial.
+	serials := []uint64{}
+	for _, e := range batch {
+		key := hotCorrKey("priority", e.ChunkID)
+		serial, found, err := s.RecordSerial([]byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Errorf("stamp missing for chunk %d", e.ChunkID)
+		}
+		serials = append(serials, serial)
+	}
+	for i := 1; i < len(serials); i++ {
+		if serials[i] != serials[0] {
+			t.Errorf("expected shared serial across batch, got %v", serials)
+			break
+		}
+	}
+}
+
+// TestHC_ReplaceEmpty — ReplaceHotCorrelations with an empty slice
+// clears the tag's HC entries.
+// Refs: R2229
+func TestHC_ReplaceEmpty(t *testing.T) {
+	s := testStore(t)
+	s.WriteHotCorrelation("priority", 1, 0.5)
+	s.WriteHotCorrelation("priority", 2, 0.6)
+	if err := s.ReplaceHotCorrelations("priority", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ReadHotCorrelations("priority")
+	if len(got) != 0 {
+		t.Errorf("expected empty after replace-with-nil, got %+v", got)
+	}
+}
+
+// TestHC_DropClearsAllAndStamps — DropHotCorrelations sweeps every HC
+// and SHC record across all tags.
+// Refs: R2231
+func TestHC_DropClearsAllAndStamps(t *testing.T) {
+	s := testStore(t)
+	s.WriteHotCorrelation("priority", 1, 0.5)
+	s.WriteHotCorrelation("priority", 2, 0.6)
+	s.WriteHotCorrelation("status", 3, 0.7)
+	if err := s.DropHotCorrelations(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"priority", "status"} {
+		got, _ := s.ReadHotCorrelations(tag)
+		if len(got) != 0 {
+			t.Errorf("expected %s empty after drop, got %+v", tag, got)
+		}
+	}
+	// No SHC entries either.
+	visited := 0
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(_ *lmdb.Cursor, _, _ []byte) error {
+			visited++
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visited != 0 {
+		t.Errorf("expected no SHC stamps after drop, got %d", visited)
+	}
+}
+
+// TestHC_DropEmbeddingsCascadesToHC — DropEmbeddings clears HC and SHC
+// alongside T/EV/ED and their stamps.
+// Refs: R2231
+func TestHC_DropEmbeddingsCascadesToHC(t *testing.T) {
+	s := testStore(t)
+	// Populate enough state that DropEmbeddings has work to do.
+	if err := s.UpdateTagDefs(10, map[string]string{"priority": "ranking"}); err != nil {
+		t.Fatal(err)
+	}
+	s.WriteTagDefEmbedding("priority", 10, fakeVec(1))
+	s.WriteHotCorrelation("priority", 100, 0.9)
+	s.WriteHotCorrelation("priority", 101, 0.85)
+
+	if err := s.DropEmbeddings(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ReadHotCorrelations("priority")
+	if len(got) != 0 {
+		t.Errorf("expected HC empty after DropEmbeddings, got %+v", got)
+	}
+	visited := 0
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(_ *lmdb.Cursor, _, _ []byte) error {
+			visited++
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visited != 0 {
+		t.Errorf("expected no SHC stamps after DropEmbeddings, got %d", visited)
+	}
+}
+
+// TestHC_TagBoundary — entries for tag "ab" don't bleed into reads for
+// tag "a" (or vice versa). Variable-length tag prefix matching is
+// length-bounded by chunkID width.
+func TestHC_TagBoundary(t *testing.T) {
+	s := testStore(t)
+	s.WriteHotCorrelation("a", 1, 0.5)
+	s.WriteHotCorrelation("ab", 2, 0.6)
+
+	gotA, _ := s.ReadHotCorrelations("a")
+	if len(gotA) != 1 || gotA[0].ChunkID != 1 {
+		t.Errorf(`expected tag "a" to return one entry chunk=1, got %+v`, gotA)
+	}
+	gotAB, _ := s.ReadHotCorrelations("ab")
+	if len(gotAB) != 1 || gotAB[0].ChunkID != 2 {
+		t.Errorf(`expected tag "ab" to return one entry chunk=2, got %+v`, gotAB)
 	}
 }

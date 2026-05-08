@@ -182,6 +182,7 @@ const (
 	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
 	prefixSerial        = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
+	prefixHotCorrelation = "HC" // R2226: tag → top-K chunks cosine cache (HC + tag + chunkid:8 → score:float64)
 )
 
 // Reserved tag names used by the routing/identity machinery.
@@ -380,6 +381,16 @@ func (s *Store) IDel(name string) error {
 			return nil
 		}
 		return err
+	})
+}
+
+// ISetCounter writes an arbitrary uint64 to a counter I record. Used by
+// callers that need to set bookmarks to specific values (e.g. the
+// hot-correlations sweep advancing I:hcsweep to its high-water serial).
+// CRC: crc-Store.md | R2230, R2236
+func (s *Store) ISetCounter(name string, val uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, makeIKey(name), []byte(strconv.FormatUint(val, 10)), 0)
 	})
 }
 
@@ -2423,7 +2434,200 @@ func (s *Store) DropEmbeddings() error {
 		if err := dropSerial([]byte(prefixEmbedValue)); err != nil {
 			return err
 		}
-		return dropSerial([]byte(prefixEmbedDef))
+		if err := dropSerial([]byte(prefixEmbedDef)); err != nil {
+			return err
+		}
+		// Delete all HC records and their SHC stamps. R2231
+		if err := scanPrefix(txn, s.dbi, []byte(prefixHotCorrelation), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
+		}
+		return dropSerial([]byte(prefixHotCorrelation))
+	})
+}
+
+// --- Hot Correlation Records (HC) ---
+// CRC: crc-Store.md | R2226-R2231
+
+// HotCorrelation pairs a chunkID with its cosine score against a tag's
+// definition vectors. Stored under HC[tag][chunkID:8].
+// CRC: crc-Store.md | R2226, R2227
+type HotCorrelation struct {
+	ChunkID uint64
+	Score   float64
+}
+
+// hotCorrKey builds an HC prefix key: HC[tagname][chunkid:8].
+// Same encoding as embedDefKey, with chunkid replacing fileid.
+// CRC: crc-Store.md | R2226
+func hotCorrKey(tag string, chunkID uint64) []byte {
+	key := make([]byte, len(prefixHotCorrelation)+len(tag)+8)
+	copy(key, prefixHotCorrelation)
+	copy(key[len(prefixHotCorrelation):], tag)
+	binary.BigEndian.PutUint64(key[len(prefixHotCorrelation)+len(tag):], chunkID)
+	return key
+}
+
+// hotCorrValue packs a cosine score into 8 big-endian bytes.
+// CRC: crc-Store.md | R2227
+func hotCorrValue(score float64) []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], math.Float64bits(score))
+	return buf[:]
+}
+
+// hotCorrParse decodes an HC value into its float64 score. Returns 0 if
+// the value is shorter than 8 bytes (defensive — should never happen).
+func hotCorrParse(v []byte) float64 {
+	if len(v) < 8 {
+		return 0
+	}
+	return math.Float64frombits(binary.BigEndian.Uint64(v))
+}
+
+// WriteHotCorrelation writes one HC entry and stamps SHC<tag><chunkid>
+// in the same LMDB transaction. The stamp is the entry's alibi at
+// freshness check time (R2229).
+// CRC: crc-Store.md | R2226, R2227, R2229
+func (s *Store) WriteHotCorrelation(tag string, chunkID uint64, score float64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		key := hotCorrKey(tag, chunkID)
+		if err := txn.Put(s.dbi, key, hotCorrValue(score), 0); err != nil {
+			return err
+		}
+		return s.stampWrite(txn, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+	})
+}
+
+// ReadHotCorrelations returns every HC entry for a tag. Order is
+// undefined — caller sorts.
+// CRC: crc-Store.md | R2226
+func (s *Store) ReadHotCorrelations(tag string) ([]HotCorrelation, error) {
+	prefix := make([]byte, len(prefixHotCorrelation)+len(tag))
+	copy(prefix, prefixHotCorrelation)
+	copy(prefix[len(prefixHotCorrelation):], tag)
+	suffixOffset := len(prefix)
+	tagLen := len(tag)
+	var out []HotCorrelation
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			// Reject keys whose tag portion is longer than ours — scanPrefix
+			// matches by byte prefix, so HC<tag>foo<chunkid> would also match
+			// when querying HC<tag>. Re-check the tag boundary.
+			if len(k) != suffixOffset+8 {
+				return nil
+			}
+			// Extract tag portion to be sure prefix matches exactly.
+			if string(k[len(prefixHotCorrelation):len(prefixHotCorrelation)+tagLen]) != tag {
+				return nil
+			}
+			chunkID := binary.BigEndian.Uint64(k[suffixOffset:])
+			out = append(out, HotCorrelation{ChunkID: chunkID, Score: hotCorrParse(v)})
+			return nil
+		})
+	})
+	return out, err
+}
+
+// DeleteHotCorrelation removes one HC entry and its matching SHC stamp
+// in the same txn. No-op if the entry is absent.
+// CRC: crc-Store.md | R2229
+func (s *Store) DeleteHotCorrelation(tag string, chunkID uint64) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		key := hotCorrKey(tag, chunkID)
+		if err := txn.Del(s.dbi, key, nil); err != nil && !lmdb.IsNotFound(err) {
+			return err
+		}
+		return deleteStamp(txn, s.dbi, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+	})
+}
+
+// ReplaceHotCorrelations atomically replaces a tag's HC entries with
+// the supplied slice. All deletes and writes happen in one LMDB txn;
+// every new entry is stamped with that txn's serial. Used by the
+// sweep's phase-3 tag rebuild.
+// CRC: crc-Store.md | R2229, R2238
+func (s *Store) ReplaceHotCorrelations(tag string, entries []HotCorrelation) error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		// Delete every existing HC entry for this tag, plus its stamp.
+		prefix := make([]byte, len(prefixHotCorrelation)+len(tag))
+		copy(prefix, prefixHotCorrelation)
+		copy(prefix[len(prefixHotCorrelation):], tag)
+		tagLen := len(tag)
+		if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, _ []byte) error {
+			if len(k) != len(prefixHotCorrelation)+tagLen+8 {
+				return nil
+			}
+			if string(k[len(prefixHotCorrelation):len(prefixHotCorrelation)+tagLen]) != tag {
+				return nil
+			}
+			origKey := append([]byte(nil), k...)
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			return deleteStamp(txn, s.dbi, []byte(prefixHotCorrelation), origKey[len(prefixHotCorrelation):])
+		}); err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			return nil
+		}
+		// One serial per replace call — all new entries in this batch share it.
+		serial, err := s.allocSerial(txn)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			key := hotCorrKey(tag, e.ChunkID)
+			if err := txn.Put(s.dbi, key, hotCorrValue(e.Score), 0); err != nil {
+				return err
+			}
+			if err := stampWriteWith(txn, s.dbi, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):], serial); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// MaxTagDefSerial returns the maximum recorded serial across the tag's
+// SED side-index entries. Zero if the tag has no defs. Used by HC's
+// alibi-stamp freshness check — a tag's HC entry is stale if any of
+// its def serials has advanced past the entry's own stamp.
+// CRC: crc-Store.md | R2229, R2249
+func (s *Store) MaxTagDefSerial(tag string) (uint64, error) {
+	prefix := serialKey([]byte(prefixEmbedDef), []byte(tag))
+	wantKeyLen := len(prefix) + 8
+	var maxSerial uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) != wantKeyLen {
+				return nil
+			}
+			serial, _ := binary.Uvarint(v)
+			if serial > maxSerial {
+				maxSerial = serial
+			}
+			return nil
+		})
+	})
+	return maxSerial, err
+}
+
+// DropHotCorrelations deletes every HC record and every SHC side-index
+// entry. Called by DropEmbeddings on model swap.
+// CRC: crc-Store.md | R2231
+func (s *Store) DropHotCorrelations() error {
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		if err := scanPrefix(txn, s.dbi, []byte(prefixHotCorrelation), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		}); err != nil {
+			return err
+		}
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(cur *lmdb.Cursor, _, _ []byte) error {
+			return cur.Del(0)
+		})
 	})
 }
 

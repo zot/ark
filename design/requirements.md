@@ -3524,3 +3524,49 @@ implementation, not a separate format break.
 - **R2213:** Neither call gates results by absolute score threshold; `k` is the only cardinality bound. The UI may apply a minimum display threshold.
 - **R2214:** Neither call filters chunks already carrying the tag. Orphan-detection policy belongs to the caller (UI) or to the Phase 1E hot-correlations cache.
 - **R2215:** (inferred) Neither call maintains a hot-correlations cache. Both are live, on-demand queries each time they are called.
+
+## Feature: hot correlations (HC sweep + tag-tag queries)
+**Source:** specs/hot-correlations.md
+
+- **R2216:** `Librarian.SweepHotCorrelations() (*SweepResult, error)` runs the incremental corpus-wide sweep, using S-record serials (Phase 1C) to skip unchanged work. Synchronous; intended to be invoked from a background goroutine. Progress is published through the `tmp://sweep/hot-correlations.md` document.
+- **R2217:** `SweepResult` carries `StartedAt`, `CompletedAt`, `DurationMS`, `ChangedEDs`, `ChangedECs`, `TagsRebuilt`, `TagsTouched`, `OrphanTotal`, `FromScratch`. Same numbers also land in the tmp:// progress doc as `@sweep-*` tags.
+- **R2218:** `Librarian.TopKChunksForTag(tag, k) ([]ChunkSuggestion, error)` reads the cached top-K chunks for a tag from the HC cache. Sub-millisecond LMDB lookup. Same `ChunkSuggestion` shape as `ChunksForTag` (R2205) — callers can treat the two interchangeably.
+- **R2219:** `TopKChunksForTag` filters stale entries at read time using the alibi-stamp pattern: an HC entry is dropped if `RecordSerial(HC, key)` is less than `RecordSerial(EC, chunkid)` *or* less than the maximum `RecordSerial(ED, tag||fileid)` across the tag's defs. Result may be shorter than `k` until the next sweep refreshes it.
+- **R2220:** `TopKChunksForTag` returns `(nil, nil)` for: no HC entries for the tag, `k <= 0`, embedding unavailable.
+- **R2221:** `Librarian.RelatedTags(tag, k) ([]TagSimilarity, error)` returns up to `k` tags whose ED vectors are nearest to any of the named tag's ED vectors. Per-other-tag aggregate is the max cosine across all (def_a, def_b) pairs. Live; no cache.
+- **R2222:** `Librarian.TagPairConflict(tagA, tagB) (TagSimilarity, error)` returns the max-pair cosine between two tags and the `(SrcFileID, DstFileID)` defs that scored it.
+- **R2223:** `Librarian.TagDrift(tag) ([]DriftPair, error)` returns pairwise within-tag def cosines, sorted descending. For a tag with `n` defs the result has `n*(n-1)/2` pairs.
+- **R2224:** `TagSimilarity` carries `Tag` (empty for `TagPairConflict` since both tags are inputs), `Score`, `SrcFileID`, `DstFileID`, `SrcPath`, `DstPath`.
+- **R2225:** `DriftPair` carries `FileIDA`, `FileIDB`, `PathA`, `PathB`, `Score`.
+- **R2226:** HC keys use the same variable-tag + fixed-suffix scheme as ED records: `HC<tag-bytes><chunkid:8-bytes-big-endian>`.
+- **R2227:** HC values are flat `score:float64` (8 bytes). No version metadata embedded in the value — freshness lives in the S substrate.
+- **R2228:** Top-K bound `K_TOP_HC` is fixed at **20** for this slice. Configuration is a future tuning question, not part of 1E.
+- **R2229:** HC writes are stamped through the existing S-substrate machinery (Phase 1C). The HC record's own stamp serves as its alibi at freshness check time — `Store.WriteHotCorrelation` (or its equivalent) writes the value and stamps `S<HC<key>>` in the same LMDB transaction, on the same path as `WriteChunkEmbedding`, `WriteTagDefEmbedding`, etc. (R2179–R2183).
+- **R2230:** `I:hcsweep` is the persistence anchor for the sweep — a uint64 holding the last successful sweep's high-water serial.
+- **R2231:** `I:hcsweep` is cleared by `ark rebuild` (full corpus rebuild) and by `Store.DropEmbeddings` (model swap), forcing a from-scratch sweep on the next invocation. `Store.DropEmbeddings` also drops every `HC*` record and its matching `SHC*` stamp, alongside the existing `T*`/`EV*`/`ED*` and `ST*`/`SEV*`/`SED*` drops (R2187).
+- **R2232:** Sweep phase 1 — read `last_sweep_serial` from `I:hcsweep`. A zero value indicates from-scratch.
+- **R2233:** Sweep phase 2 — survey changed work via `WalkRecordsSinceSerial(prefixEmbedDef, last_sweep_serial, …)` for ED changes and `WalkRecordsSinceSerial(prefixEmbedChunk, last_sweep_serial, …)` for EC changes.
+- **R2234:** Sweep phase 3 (tag rebuild) — for each tag with any ED record advancing past the bookmark, recompute the tag's full top-K by walking every EC record. Atomically replace the tag's HC entries (delete previous, write new top-K).
+- **R2235:** Sweep phase 4 (chunk displace) — for each EC chunk advancing past the bookmark that wasn't already covered by phase 3, compute cosines vs each ED record, max-aggregate per tag, and displace the lowest-scoring HC entry if exceeded.
+- **R2236:** Sweep phase 5 — write `I:hcsweep = max(seen_serial)` only on full success. A mid-sweep error leaves the bookmark unchanged so the next run picks up where this one stopped.
+- **R2237:** Sweep phase 6 — update the tmp:// progress doc to `@sweep-status: complete` with final counts (or `@sweep-status: error` with `@sweep-error:`).
+- **R2238:** Phases 3 and 4 use per-tag LMDB write transactions, not a single transaction across the entire sweep. Reasons: long write transactions block the closure actor; per-tag txns leave the cache in a consistent partially-updated state on crash.
+- **R2239:** The sweep is idempotent per `(tag, chunkid)`: rerunning the same work produces the same HC contents.
+- **R2240:** Progress is surfaced through `tmp://sweep/hot-correlations.md` — a single-chunk tmp:// document rewritten in place on each progress tick.
+- **R2241:** Progress doc tags: `@sweep`, `@sweep-status` (`idle` | `running` | `complete` | `error`), `@sweep-started`, `@sweep-progress` (fraction in `[0, 1]`), `@sweep-phase` (`tag-rebuild` | `chunk-displace` | `done`), `@sweep-changed-eds`, `@sweep-changed-ecs`, `@sweep-tags-rebuilt`, `@sweep-tags-touched`, `@sweep-orphan-total`, `@sweep-eta-seconds`, `@sweep-duration-ms`, `@sweep-completed`, `@sweep-error` (present only when status = error).
+- **R2242:** Progress-doc throttling — the sweep updates the doc at most every **250 ms**. Within a 250 ms window, progress counters accumulate in memory; the next flush at the window boundary writes them.
+- **R2243:** Terminal-state transitions (`running → complete`, `running → error`) flush the progress doc immediately, even mid-throttle-window. The terminal state is never delayed.
+- **R2244:** Progress-doc lifecycle: created at server startup with `@sweep-status: idle` and no progress fields. On sweep start, status flips to `running`, `@sweep-started` is set, all progress fields are zeroed. On terminal transition, status flips, `@sweep-completed` is set, `@sweep-error` is set if applicable. The doc stays in its terminal state until the next sweep starts.
+- **R2245:** UI subscribers reach the progress doc through existing tag-subscription plumbing (`mcp:subscribe`). No new event channel is introduced.
+- **R2246:** A Lua API `mcp:sweepHotCorrelations()` is a thin wrapper that invokes the Librarian method on the server.
+- **R2247:** A CLI subcommand `ark sweep correlations` is a thin wrapper that proxies to the running server (matches the pattern of other long-running ops).
+- **R2248:** (inferred — scope boundary) Cron-via-tag triggering is **deferred** to a follow-up slice. The 1E engine knows nothing about the scheduler; an external subscriber will invoke `SweepHotCorrelations()` when cron-via-tag wiring lands.
+- **R2249:** An HC entry is considered stale if any of: the EC record at `chunkid` is missing; `RecordSerial(EC, chunkid)` is greater than `RecordSerial(HC, key)`; or any `RecordSerial(ED, tag||fileid)` across the tag's defs is greater than `RecordSerial(HC, key)`. The HC record's own stamp is the comparison reference — there is no per-entry version metadata to track. The check is a single LMDB lookup per axis (HC, EC, and one per def of the tag).
+- **R2250:** The read-time staleness filter (R2219, R2249) is the only invalidation path during normal operation. No active sweep on EC delete is performed.
+- **R2251:** The next sweep's tag-rebuild (phase 3) and chunk-displace (phase 4) passes naturally replace stale entries with current ones; no separate cleanup pass is needed.
+- **R2252:** `SweepHotCorrelations`, `TopKChunksForTag`, `RelatedTags`, `TagPairConflict`, and `TagDrift` do not invoke a search agent and do not call the embedding model. They operate purely on vectors and serials already in LMDB.
+- **R2253:** Hot correlations does not filter chunks already carrying the tag at the storage layer. Same decision as `ChunksForTag` (R2214): orphan-detection policy is caller-side. The curation view applies the filter when rendering.
+- **R2254:** EC and ED writes do not actively invalidate HC entries. The substrate's monotonic stamping plus the read-time alibi-stamp filter handle staleness without coupling the write path to HC.
+- **R2255:** (deferred — scope boundary) Persistent completion history (e.g. `~/.ark/sweep/correlations-history.md`) is **not** written by 1E. The tmp:// progress doc holds in-memory state only and vanishes on server restart.
+- **R2256:** Sweep does not auto-trigger on indexer activity, file changes, model loads, or any other corpus event. It runs on explicit invocation only.
+- **R2257:** No in-memory mirror of HC is maintained. All reads go through LMDB. The "in-memory tail of recent S records" question (1C deferred decision) becomes actionable through profiling 1E against real workloads, not in this slice.
