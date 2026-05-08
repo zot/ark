@@ -1366,10 +1366,11 @@ func (sp *sweepProgress) fail(err error) {
 }
 
 // flushNow renders the current state and writes it to the tmp:// doc,
-// regardless of throttle.
+// regardless of throttle. Called from inside the sweep's write
+// goroutine so the writes coordinate with all other DB mutators.
 func (sp *sweepProgress) flushNow() {
 	content := sp.render()
-	if _, exists := sp.db.tmpPaths[sp.docPath]; exists {
+	if sp.db.hasTmpPath(sp.docPath) {
 		if err := sp.db.UpdateTmpFile(sp.docPath, "markdown", content); err != nil {
 			log.Printf("sweep progress update: %v", err)
 		}
@@ -1624,20 +1625,41 @@ func (l *Librarian) SweepHotCorrelations() (*HCSweepResult, error) {
 	return result, nil
 }
 
-// HandleSweepCorrelations runs the hot-correlations sweep synchronously
-// and returns the result as JSON. POST /sweep/correlations.
+// HandleSweepCorrelations runs the hot-correlations sweep through the
+// write goroutine and returns the result as JSON. POST /sweep/correlations.
+//
+// All sweep mutation (HC writes, bookmark, tmp:// progress) routes
+// through enqueueWrite so it serializes with every other DB writer
+// per the actor architecture. The HTTP handler enters the closure
+// actor briefly to enqueue, then waits on a channel for the sweep
+// goroutine's result.
 // CRC: crc-Librarian.md | R2247
 func (l *Librarian) HandleSweepCorrelations(w http.ResponseWriter, r *http.Request) {
-	result, err := l.SweepHotCorrelations()
-	if err != nil {
+	type outcome struct {
+		result *HCSweepResult
+		err    error
+	}
+	ch := make(chan outcome, 1)
+	if err := SyncVoid(l.db, func(db *DB) error {
+		db.enqueueWrite(func(_ *microfts2.DB) {
+			res, err := l.SweepHotCorrelations()
+			ch <- outcome{res, err}
+		})
+		return nil
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if result == nil {
+	o := <-ch
+	if o.err != nil {
+		http.Error(w, o.err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if o.result == nil {
 		writeJSON(w, map[string]string{"status": "embedding-unavailable"})
 		return
 	}
-	writeJSON(w, result)
+	writeJSON(w, o.result)
 }
 
 // computeTagTopK walks every EC record and returns the top-K chunks for

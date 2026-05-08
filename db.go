@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -50,6 +51,7 @@ type DB struct {
 	pdfChunker *PDFChunker // CRC: crc-PDFChunker.md | R1720, R1726
 
 	dbPath   string
+	tmpMu    sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
 	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
 	svc      chan func()       // R986: closure actor channel
 
@@ -629,10 +631,12 @@ func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) 
 	if err != nil {
 		return 0, err
 	}
+	db.tmpMu.Lock()
 	if db.tmpPaths == nil {
 		db.tmpPaths = make(map[string]uint64)
 	}
 	db.tmpPaths[path] = fid
+	db.tmpMu.Unlock()
 	stampFileID(acc.chunkTags, fid)
 	if err := db.store.UpdateTagValues(acc.chunkTags); err != nil {
 		return fid, fmt.Errorf("write tmp tags: %w", err)
@@ -655,7 +659,9 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 	if err := db.fts.UpdateTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback)); err != nil {
 		return err
 	}
+	db.tmpMu.RLock()
 	fid, ok := db.tmpPaths[path]
+	db.tmpMu.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -686,10 +692,12 @@ func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, erro
 	if err != nil {
 		return 0, err
 	}
+	db.tmpMu.Lock()
 	if db.tmpPaths == nil {
 		db.tmpPaths = make(map[string]uint64)
 	}
 	db.tmpPaths[path] = fid
+	db.tmpMu.Unlock()
 	stampFileID(acc.chunkTags, fid)
 	if err := db.store.AppendTagValues(acc.chunkTags); err != nil {
 		return fid, fmt.Errorf("write tmp tags: %w", err)
@@ -707,13 +715,18 @@ func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, erro
 // on which fileids exist.
 // CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R666, R1944
 func (db *DB) RemoveTmpFile(path string) error {
-	if fid, ok := db.tmpPaths[path]; ok {
+	db.tmpMu.RLock()
+	fid, ok := db.tmpPaths[path]
+	db.tmpMu.RUnlock()
+	if ok {
 		db.store.RemoveFileTagValues(fid)
 	}
 	if err := db.fts.RemoveTmpFile(path); err != nil {
 		return err
 	}
+	db.tmpMu.Lock()
 	delete(db.tmpPaths, path)
+	db.tmpMu.Unlock()
 	return nil
 }
 
@@ -732,9 +745,20 @@ func (db *DB) HasTmp() bool {
 	return db.fts.HasTmp()
 }
 
+// hasTmpPath returns true if path is registered in the in-memory
+// tmp:// tracking map. Locked.
+func (db *DB) hasTmpPath(path string) bool {
+	db.tmpMu.RLock()
+	defer db.tmpMu.RUnlock()
+	_, ok := db.tmpPaths[path]
+	return ok
+}
+
 // TmpFiles returns all tmp:// paths.
 // CRC: crc-DB.md | R664
 func (db *DB) TmpFiles() []string {
+	db.tmpMu.RLock()
+	defer db.tmpMu.RUnlock()
 	paths := make([]string, 0, len(db.tmpPaths))
 	for p := range db.tmpPaths {
 		paths = append(paths, p)
@@ -1421,6 +1445,8 @@ func (db *DB) resolveExtPath(path string) []uint64 {
 // overlay does not record per-chunk Locations, so location is empty.
 // CRC: crc-DB.md | R1976
 func (db *DB) tmpPathForFile(fileID uint64) (path, location string, ok bool) {
+	db.tmpMu.RLock()
+	defer db.tmpMu.RUnlock()
 	for p, fid := range db.tmpPaths {
 		if fid == fileID {
 			return p, "", true
@@ -1731,6 +1757,9 @@ func (db *DB) Status() (*StatusInfo, error) {
 		}
 	}
 
+	db.tmpMu.RLock()
+	tmpCount := len(db.tmpPaths)
+	db.tmpMu.RUnlock()
 	return &StatusInfo{
 		Version:    Version,
 		DBFormat:   dbFormat,
@@ -1744,7 +1773,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		Strategies: strategies,
 		MapUsed:    mapUsed,
 		MapTotal:   mapTotal,
-		TmpFiles:   len(db.tmpPaths),
+		TmpFiles:   tmpCount,
 	}, nil
 }
 
@@ -1873,6 +1902,8 @@ func (db *DB) Files() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.tmpMu.RLock()
+	defer db.tmpMu.RUnlock()
 	paths := make([]string, 0, len(statuses)+len(db.tmpPaths))
 	for _, s := range statuses {
 		paths = append(paths, s.Path)
@@ -2333,6 +2364,8 @@ func (db *DB) readInboxFields(fileID uint64, path string) (inboxFields, bool) {
 // CRC: crc-DB.md | R1948
 func (db *DB) resolveFilePath(fileID uint64) (string, bool) {
 	if IsOverlayID(fileID) {
+		db.tmpMu.RLock()
+		defer db.tmpMu.RUnlock()
 		for path, fid := range db.tmpPaths {
 			if fid == fileID {
 				return path, true
