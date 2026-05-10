@@ -3465,11 +3465,242 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp:suggestTagNames(chunkID, k) — chunk → tag-name candidates.
+		// CRC: crc-Server.md | R2258, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "suggestTagNames", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			k := int(L.CheckNumber(2))
+			out, err := srv.librarian.SuggestTagNames(chunkID, k)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range out {
+				row := L.NewTable()
+				L.SetField(row, "tag", lua.LString(s.Tag))
+				L.SetField(row, "score", lua.LNumber(s.Score))
+				files := L.NewTable()
+				for j, f := range s.MotivatingFiles {
+					fr := L.NewTable()
+					L.SetField(fr, "fileID", lua.LNumber(f.FileID))
+					L.SetField(fr, "path", lua.LString(f.Path))
+					L.SetField(fr, "score", lua.LNumber(f.Score))
+					files.RawSetInt(j+1, fr)
+				}
+				L.SetField(row, "motivatingFiles", files)
+				result.RawSetInt(i+1, row)
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:chunksForTag(tag, k) — tag → chunk candidates (live).
+		// CRC: crc-Server.md | R2259, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "chunksForTag", L.NewFunction(func(L *lua.LState) int {
+			tag := L.CheckString(1)
+			k := int(L.CheckNumber(2))
+			out, err := srv.librarian.ChunksForTag(tag, k)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range out {
+				result.RawSetInt(i+1, chunkSuggestionToLua(L, s))
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:chunksForTagDef(tag, fileID, k) — tag-def → chunk candidates (live).
+		// CRC: crc-Server.md | R2260, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "chunksForTagDef", L.NewFunction(func(L *lua.LState) int {
+			tag := L.CheckString(1)
+			fileID := uint64(L.CheckNumber(2))
+			k := int(L.CheckNumber(3))
+			out, err := srv.librarian.ChunksForTagDef(tag, fileID, k)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range out {
+				result.RawSetInt(i+1, chunkSuggestionToLua(L, s))
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:topKChunksForTag(tag, k) — cached top-K with alibi-stamp filter.
+		// CRC: crc-Server.md | R2261, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "topKChunksForTag", L.NewFunction(func(L *lua.LState) int {
+			tag := L.CheckString(1)
+			k := int(L.CheckNumber(2))
+			out, err := srv.librarian.TopKChunksForTag(tag, k)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range out {
+				result.RawSetInt(i+1, chunkSuggestionToLua(L, s))
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:relatedTags(tag, k) — tags whose ED vectors are nearest the
+		// focused tag's ED records.
+		// CRC: crc-Server.md | R2262, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "relatedTags", L.NewFunction(func(L *lua.LState) int {
+			tag := L.CheckString(1)
+			k := int(L.CheckNumber(2))
+			out, err := srv.librarian.RelatedTags(tag, k)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range out {
+				result.RawSetInt(i+1, tagSimilarityToLua(L, s))
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:tagPairConflict(tagA, tagB) — max-pair cosine across two tags'
+		// ED records. Returns a single table (not an array).
+		// CRC: crc-Server.md | R2263, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "tagPairConflict", L.NewFunction(func(L *lua.LState) int {
+			tagA := L.CheckString(1)
+			tagB := L.CheckString(2)
+			out, err := srv.librarian.TagPairConflict(tagA, tagB)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(tagSimilarityToLua(L, out))
+			return 1
+		}))
+
+		// mcp:tagDrift(tag) — within-tag pairwise cosine across one tag's
+		// ED records, sorted by score descending.
+		// CRC: crc-Server.md | R2264, R2266, R2267, R2268, R2269, R2270
+		L.SetField(tbl, "tagDrift", L.NewFunction(func(L *lua.LState) int {
+			tag := L.CheckString(1)
+			out, err := srv.librarian.TagDrift(tag)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, p := range out {
+				row := L.NewTable()
+				L.SetField(row, "fileIDA", lua.LNumber(p.FileIDA))
+				L.SetField(row, "pathA", lua.LString(p.PathA))
+				L.SetField(row, "fileIDB", lua.LNumber(p.FileIDB))
+				L.SetField(row, "pathB", lua.LString(p.PathB))
+				L.SetField(row, "score", lua.LNumber(p.Score))
+				result.RawSetInt(i+1, row)
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:sweepHotCorrelations() — corpus-wide HC sweep through
+		// enqueueWrite. Mirrors HandleSweepCorrelations exactly.
+		// CRC: crc-Server.md | R2265, R2270
+		L.SetField(tbl, "sweepHotCorrelations", L.NewFunction(func(L *lua.LState) int {
+			type outcome struct {
+				result *HCSweepResult
+				err    error
+			}
+			ch := make(chan outcome, 1)
+			if err := SyncVoid(srv.db, func(db *DB) error {
+				db.enqueueWrite(func(_ *microfts2.DB) {
+					res, err := srv.librarian.SweepHotCorrelations()
+					ch <- outcome{res, err}
+				})
+				return nil
+			}); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			o := <-ch
+			if o.err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(o.err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			if o.result == nil {
+				L.SetField(result, "status", lua.LString("embedding-unavailable"))
+				L.Push(result)
+				return 1
+			}
+			L.SetField(result, "startedAt", lua.LString(o.result.StartedAt.Format(time.RFC3339)))
+			L.SetField(result, "completedAt", lua.LString(o.result.CompletedAt.Format(time.RFC3339)))
+			L.SetField(result, "durationMs", lua.LNumber(o.result.DurationMS))
+			L.SetField(result, "changedEDs", lua.LNumber(o.result.ChangedEDs))
+			L.SetField(result, "changedECs", lua.LNumber(o.result.ChangedECs))
+			L.SetField(result, "tagsRebuilt", lua.LNumber(o.result.TagsRebuilt))
+			L.SetField(result, "tagsTouched", lua.LNumber(o.result.TagsTouched))
+			L.SetField(result, "orphanTotal", lua.LNumber(o.result.OrphanTotal))
+			L.SetField(result, "fromScratch", lua.LBool(o.result.FromScratch))
+			L.Push(result)
+			return 1
+		}))
+
 		return nil
 	})
 	if err != nil {
 		log.Printf("ui: register lua functions failed: %v", err)
 	}
+}
+
+// chunkSuggestionToLua converts a ChunkSuggestion into the Lua table
+// shape shared by mcp:chunksForTag, mcp:chunksForTagDef, and
+// mcp:topKChunksForTag (R2266 lowerCamelCase fields, R2267 IDs as
+// numbers).
+func chunkSuggestionToLua(L *lua.LState, s ChunkSuggestion) *lua.LTable {
+	row := L.NewTable()
+	L.SetField(row, "chunkID", lua.LNumber(s.ChunkID))
+	L.SetField(row, "fileID", lua.LNumber(s.FileID))
+	L.SetField(row, "path", lua.LString(s.Path))
+	L.SetField(row, "score", lua.LNumber(s.Score))
+	defs := L.NewTable()
+	for i, d := range s.MotivatingDefs {
+		dr := L.NewTable()
+		L.SetField(dr, "fileID", lua.LNumber(d.FileID))
+		L.SetField(dr, "path", lua.LString(d.Path))
+		L.SetField(dr, "score", lua.LNumber(d.Score))
+		defs.RawSetInt(i+1, dr)
+	}
+	L.SetField(row, "motivatingDefs", defs)
+	return row
+}
+
+// tagSimilarityToLua converts a TagSimilarity into the Lua table
+// shape shared by mcp:relatedTags and mcp:tagPairConflict (R2266,
+// R2267).
+func tagSimilarityToLua(L *lua.LState, s TagSimilarity) *lua.LTable {
+	row := L.NewTable()
+	L.SetField(row, "tag", lua.LString(s.Tag))
+	L.SetField(row, "score", lua.LNumber(s.Score))
+	L.SetField(row, "srcFileID", lua.LNumber(s.SrcFileID))
+	L.SetField(row, "srcPath", lua.LString(s.SrcPath))
+	L.SetField(row, "dstFileID", lua.LNumber(s.DstFileID))
+	L.SetField(row, "dstPath", lua.LString(s.DstPath))
+	return row
 }
 
 // getField extracts a string field from a Lua table value.

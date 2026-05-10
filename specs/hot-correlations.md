@@ -302,18 +302,92 @@ plus `sweep-progress` to drive the progress indicator.
 
 ## Invocation
 
-For 1E the only invocation surface is direct:
+For 1E the invocation surfaces are direct:
 
 - `Librarian.SweepHotCorrelations()` from Go.
-- A Lua API `mcp:sweepHotCorrelations()` (thin wrapper).
 - A CLI subcommand `ark sweep correlations` (thin wrapper that
   proxies to a running server, like other long-running ops).
+- A Lua API `mcp:sweepHotCorrelations()` (thin wrapper). See the
+  Lua API section below for the full curation-view bridge surface
+  including the read methods.
 
 **Cron-via-tag triggering is deferred to a follow-up slice.**
 The plan's "Cron-via-tags as Phase 1H or separate" item is the
 right home for it. When that lands, the agentic-executor
 subscriber will fire `SweepHotCorrelations()` on its scheduled
 tag — the engine doesn't need to know about cron.
+
+## Lua API
+
+Five thin Lua wrappers, one per Librarian read method plus the
+sweep trigger. Surfaced for the Phase 1F curation view: the
+cached chunk-for-tag panel, the three tag→tag lenses, and an
+on-demand sweep button.
+
+```lua
+-- Cached top-K chunks for a tag (HC entries with alibi-stamp filter).
+local chunks = mcp:topKChunksForTag("design-decision", 10)
+-- chunks[i] = {
+--   chunkID = 4711, fileID = 123, path = "/abs/path/to/chunk.md",
+--   score = 0.78,
+--   motivatingDefs = {
+--     { fileID = 88, path = "...", score = 0.78 }, ...
+--   }
+-- }
+-- Same ChunkSuggestion shape as mcp:chunksForTag — swappable.
+
+-- Tags whose ED vectors are nearest a focused tag's ED records.
+local related = mcp:relatedTags("design-decision", 10)
+-- related[i] = {
+--   tag = "decision-record", score = 0.82,
+--   srcFileID = 88, srcPath = "/abs/path/to/source-def.md",
+--   dstFileID = 91, dstPath = "/abs/path/to/related-def.md"
+-- }
+
+-- Conflict between two tags: the max-pair cosine across their ED records.
+local conflict = mcp:tagPairConflict("design-decision", "decision-record")
+-- conflict = {
+--   tag = "", score = 0.91,
+--   srcFileID = 88, srcPath = "/abs/path/to/A-def.md",
+--   dstFileID = 91, dstPath = "/abs/path/to/B-def.md"
+-- }
+-- (tag is empty because both tags are inputs; src/dst identify the
+-- best-matching definition file from each side.)
+
+-- Drift within a single tag: pairwise cosine across the tag's ED records.
+local drift = mcp:tagDrift("design-decision")
+-- drift[i] = {
+--   fileIDA = 88, pathA = "/abs/path/to/def-a.md",
+--   fileIDB = 91, pathB = "/abs/path/to/def-b.md",
+--   score = 0.62
+-- }
+-- (fileIDA < fileIDB by convention so pairs are canonical.)
+
+-- Trigger the corpus-wide sweep. Routes through enqueueWrite.
+-- Subscribe to @sweep-status / @sweep-progress beforehand to follow
+-- progress; the call returns when the sweep completes.
+local result = mcp:sweepHotCorrelations()
+-- result = {
+--   startedAt    = "2026-05-09T11:42:00Z",   -- RFC3339
+--   completedAt  = "2026-05-09T11:42:16Z",
+--   durationMs   = 16000,
+--   changedEDs   = 0, changedECs = 12,
+--   tagsRebuilt  = 0, tagsTouched = 8,
+--   orphanTotal  = 14,
+--   fromScratch  = false
+-- }
+-- Equivalent to POST /sweep/correlations. When the embedding model
+-- is unavailable the call returns {status = "embedding-unavailable"}
+-- (matching the HTTP path's degraded reply).
+```
+
+Field naming, ID encoding, empty-result, and error conventions
+match `mcp:suggestTagNames` (see suggest-tag-names.md):
+lowerCamelCase fields, IDs as Lua numbers, empty result → empty
+table `{}`, errors → `(nil, errstring)`. The four read methods
+are read-only. `mcp:sweepHotCorrelations()` is the one writer in
+the set; it enqueues through the write goroutine, identical to
+the HTTP `POST /sweep/correlations` path.
 
 ## Stale Entry Handling
 

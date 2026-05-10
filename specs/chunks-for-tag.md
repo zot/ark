@@ -160,3 +160,41 @@ embeddings, pre-existing) are both already populated. The
 suggestion UI may want to cache results per (tag, fileid) at
 the viewer layer if pagination is added; the API itself is
 stateless.
+
+## Lua API
+
+Two thin Lua wrappers, one per Go method. Surfaced for the
+Phase 1F curation view.
+
+`mcp:chunksForTag(tag, k)` — wraps `Librarian.ChunksForTag`.
+
+```lua
+local results = mcp:chunksForTag("design-decision", 10)
+-- results: array of suggestion tables
+-- results[i] = {
+--   chunkID = 4711,
+--   fileID = 123,
+--   path = "/abs/path/to/chunk.md",
+--   score = 0.78,
+--   motivatingDefs = {
+--     { fileID = 88, path = "/abs/path/to/def.md", score = 0.78 },
+--     ...
+--   }
+-- }
+```
+
+`mcp:chunksForTagDef(tag, fileID, k)` — wraps
+`Librarian.ChunksForTagDef`. Same return shape; `motivatingDefs`
+has length 1 (the requested definition file).
+
+```lua
+local results = mcp:chunksForTagDef("design-decision", 88, 10)
+```
+
+Field naming, ID encoding, empty-result, and error conventions
+match `mcp:suggestTagNames` (see suggest-tag-names.md). Returns
+empty table `{}` when the Go layer reports `(nil, nil)` for any
+of: tag has no ED records, EC prefix empty, embedding
+unavailable, `ED[tag, fileid]` absent (def-flavor), or k ≤ 0.
+
+Read-only. No new locks, no new write paths.

@@ -3570,3 +3570,20 @@ implementation, not a separate format break.
 - **R2255:** (deferred — scope boundary) Persistent completion history (e.g. `~/.ark/sweep/correlations-history.md`) is **not** written by 1E. The tmp:// progress doc holds in-memory state only and vanishes on server restart.
 - **R2256:** Sweep does not auto-trigger on indexer activity, file changes, model loads, or any other corpus event. It runs on explicit invocation only.
 - **R2257:** No in-memory mirror of HC is maintained. All reads go through LMDB. The "in-memory tail of recent S records" question (1C deferred decision) becomes actionable through profiling 1E against real workloads, not in this slice.
+
+## Feature: curation Lua bridge (mcp:* methods for 1B/1D/1E reads + sweep)
+**Source:** specs/suggest-tag-names.md, specs/chunks-for-tag.md, specs/hot-correlations.md
+
+- **R2258:** `mcp:suggestTagNames(chunkID, k)` is registered on the Lua MCP table as a thin wrapper over `Librarian.SuggestTagNames`. Surfaced for the Phase 1F curation view so Lua app code can drive the chunk → tag-candidates entry point without going through HTTP.
+- **R2259:** `mcp:chunksForTag(tag, k)` is registered as a thin wrapper over `Librarian.ChunksForTag`. Same `ChunkSuggestion` shape as `mcp:topKChunksForTag` so Lua callers can swap cached and live forms.
+- **R2260:** `mcp:chunksForTagDef(tag, fileID, k)` is registered as a thin wrapper over `Librarian.ChunksForTagDef`. Returns a `ChunkSuggestion` array whose per-entry `motivatingDefs` has length 1 (the requested definition file).
+- **R2261:** `mcp:topKChunksForTag(tag, k)` is registered as a thin wrapper over `Librarian.TopKChunksForTag`. The HC-cached read path with the alibi-stamp staleness filter (R2218, R2219) applied inside the Go layer.
+- **R2262:** `mcp:relatedTags(tag, k)` is registered as a thin wrapper over `Librarian.RelatedTags`. Returns up to `k` `TagSimilarity` records ranked by cosine across the tag's ED↔ED neighbourhood.
+- **R2263:** `mcp:tagPairConflict(tagA, tagB)` is registered as a thin wrapper over `Librarian.TagPairConflict`. Returns the single max-pair `TagSimilarity` between two tags' ED records.
+- **R2264:** `mcp:tagDrift(tag)` is registered as a thin wrapper over `Librarian.TagDrift`. Returns the within-tag pairwise `DriftPair` array sorted by score descending.
+- **R2265:** `mcp:sweepHotCorrelations()` is registered as a thin wrapper that triggers the corpus-wide sweep through the same write-goroutine path used by HTTP `POST /sweep/correlations`. Returns the `SweepResult` summary on completion.
+- **R2266:** Result-table field names are lowerCamelCase mirrors of the Go struct field names (`Tag` → `tag`, `MotivatingFiles` → `motivatingFiles`, `FileID` → `fileID`, `MotivatingDefs` → `motivatingDefs`, `DurationMS` → `durationMs`, etc.). Matches the convention established by `mcp:inbox()`.
+- **R2267:** `chunkID` and `fileID` arguments and result fields cross the Lua boundary as Lua numbers. Current corpus IDs (~48K chunks, ~1k file IDs) fit within IEEE-754 double precision (2^53). String-encoded fallback is deferred until corpus growth warrants it.
+- **R2268:** When the underlying Go call returns `(nil, nil)` (empty result, missing inputs, embedding unavailable, k ≤ 0, etc.), the Lua wrapper pushes an empty Lua table (`{}`) instead of Lua nil. Matches `mcp:inbox()`; lets Lua callers iterate without nil-guarding.
+- **R2269:** When the underlying Go call returns a non-nil error, the Lua wrapper returns `(nil, errstring)` — the standard gopher-lua two-return convention used by `mcp:inbox()`, `mcp:open()`, and other existing bridge methods.
+- **R2270:** The seven read wrappers (R2258–R2264) acquire only a read txn through `Sync(srv.db, ...)`. They do not enqueue work in the write goroutine and do not block other writers. `mcp:sweepHotCorrelations()` (R2265) is the one writer in the set; it routes through the same `enqueueWrite` path that `POST /sweep/correlations` uses (R2240 etc.), so the actor invariant holds.
