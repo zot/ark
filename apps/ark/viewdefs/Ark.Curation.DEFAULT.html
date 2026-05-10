@@ -1,0 +1,369 @@
+<template>
+  <div class="cur-app">
+    <div class="cur-header panel-header">
+      <span class="panel-title">Curation</span>
+      <span class="cur-status" ui-value="sweepStatusText()" ui-class-cur-busy="sweepBusy()"></span>
+      <div class="cur-header-actions">
+        <sl-tooltip content="Run hot-correlations sweep">
+          <sl-icon-button name="lightning-charge-fill" ui-action="sweepNow()" ui-attr-disabled="sweepBusy()" label="Sweep"></sl-icon-button>
+        </sl-tooltip>
+      </div>
+    </div>
+
+    <div class="cur-body">
+      <!-- Left: pinned-chunks workspace -->
+      <div class="cur-pinned-panel">
+        <div class="cur-pinned-header">
+          <span class="cur-pinned-title">Pinned chunks</span>
+          <span class="cur-pinned-count" ui-value="pinnedCount()"></span>
+          <span class="cur-new-pill" ui-class-hidden="noNew()" ui-value="newCount()"></span>
+          <sl-tooltip content="Drop everything below the topmost pin">
+            <sl-icon-button name="layer-backward" ui-action="sweepOlder()" ui-attr-disabled="noPinned()" label="Sweep older"></sl-icon-button>
+          </sl-tooltip>
+        </div>
+
+        <div class="cur-pinned-empty" ui-class-hidden="hasPinned()">
+          <sl-icon name="pin-angle"></sl-icon>
+          <p>No chunks pinned yet.</p>
+          <p class="cur-empty-hint">Curate from search results or pin chunks from a focused tag.</p>
+        </div>
+
+        <div class="cur-pinned-list" ui-class-hidden="noPinned()">
+          <div ui-view="pinned?wrapper=lua.ViewList"></div>
+        </div>
+      </div>
+
+      <!-- Right: tag explorer -->
+      <div class="cur-explorer-panel">
+        <div class="cur-explorer-header">
+          <span class="cur-explorer-title">Tag explorer</span>
+        </div>
+
+        <div class="cur-focus-bar">
+          <sl-input size="small" placeholder="Focus a tag..." ui-value="_focusInput?keypress" ui-event-keypress-enter="focusTagFromInput()">
+            <sl-icon slot="prefix" name="bullseye"></sl-icon>
+          </sl-input>
+          <sl-tooltip content="Focus this tag">
+            <sl-icon-button name="arrow-right-short" ui-action="focusTagFromInput()" label="Focus"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip content="Clear focus">
+            <sl-icon-button name="x-circle" ui-action="clearFocus()" ui-attr-disabled="notFocused()" label="Clear"></sl-icon-button>
+          </sl-tooltip>
+        </div>
+
+        <div class="cur-explorer-empty" ui-class-hidden="isFocused()">
+          <p>Type a tag name and press Enter to explore its chunks, related tags, and definition drift.</p>
+        </div>
+
+        <div class="cur-focused-block" ui-class-hidden="notFocused()">
+          <div class="cur-focused-tag-line">
+            <span class="cur-focused-label">Focused:</span>
+            <span class="cur-focused-tag" ui-value="focusedTag"></span>
+          </div>
+
+          <div class="cur-focus-error" ui-class-hidden="noFocusError()" ui-value="focusError()"></div>
+
+          <div class="cur-focused-section">
+            <div class="cur-focused-section-header">
+              <span>Top chunks</span>
+              <span class="cur-focused-count" ui-value="focusedChunkCount()"></span>
+            </div>
+            <div ui-view="_focusedChunks?wrapper=lua.ViewList"></div>
+          </div>
+
+          <div class="cur-focused-section">
+            <div class="cur-focused-section-header">
+              <span>Related tags</span>
+              <span class="cur-focused-count" ui-value="focusedRelatedCount()"></span>
+            </div>
+            <div ui-view="_focusedRelated?wrapper=lua.ViewList"></div>
+          </div>
+
+          <div class="cur-focused-section">
+            <div class="cur-focused-section-header">
+              <span>Drift</span>
+              <span class="cur-focused-count" ui-value="focusedDriftCount()"></span>
+            </div>
+            <div ui-view="_focusedDrift?wrapper=lua.ViewList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .cur-app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-family: var(--term-mono, 'JetBrains Mono', monospace);
+      font-size: 13px;
+      color: var(--term-text, #e0e0e8);
+      background: var(--term-bg, #0a0a0f);
+    }
+
+    .cur-header {
+      flex-shrink: 0;
+      gap: 12px;
+    }
+
+    .cur-status {
+      flex: 1;
+      font-size: 12px;
+      color: var(--term-text-dim, #999);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cur-busy {
+      color: var(--term-accent, #E07A47);
+    }
+
+    .cur-header-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .cur-body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .cur-pinned-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .cur-pinned-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--term-border, #222);
+    }
+
+    .cur-pinned-title {
+      font-weight: 600;
+    }
+
+    .cur-pinned-count {
+      color: var(--term-text-dim, #999);
+    }
+
+    .cur-pinned-count::before { content: "("; }
+    .cur-pinned-count::after { content: ")"; }
+
+    .cur-new-pill {
+      padding: 1px 6px;
+      border-radius: 8px;
+      background: var(--term-accent, #E07A47);
+      color: var(--term-bg, #0a0a0f);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .cur-new-pill::before { content: "NEW "; }
+
+    .cur-pinned-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+    }
+
+    .cur-pinned-empty,
+    .cur-explorer-empty {
+      padding: 24px;
+      text-align: center;
+      color: var(--term-text-dim, #999);
+    }
+
+    .cur-pinned-empty sl-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .cur-empty-hint {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    .cur-explorer-panel {
+      width: 360px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--term-border, #222);
+      overflow: hidden;
+    }
+
+    .cur-explorer-header {
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--term-border, #222);
+      font-weight: 600;
+    }
+
+    .cur-focus-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--term-border, #222);
+      min-width: 0;
+    }
+
+    .cur-focus-bar sl-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .cur-focused-block {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .cur-focused-tag-line {
+      padding: 8px 12px;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      border-bottom: 1px solid var(--term-border, #222);
+    }
+
+    .cur-focused-label {
+      color: var(--term-text-dim, #999);
+      font-size: 11px;
+    }
+
+    .cur-focused-tag {
+      font-weight: 600;
+      color: var(--term-accent, #E07A47);
+    }
+
+    .cur-focus-error {
+      padding: 6px 12px;
+      color: var(--term-error, #ff6b6b);
+      font-size: 12px;
+    }
+
+    .cur-focused-section {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--term-border, #222);
+    }
+
+    .cur-focused-section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 0 12px 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--term-text-dim, #999);
+    }
+
+    .cur-focused-count::before { content: "("; }
+    .cur-focused-count::after { content: ")"; }
+
+    /* Pinned-chunk card */
+    .cur-pin {
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border: 1px solid var(--term-border, #222);
+      border-radius: 4px;
+      background: var(--term-bg-alt, #111);
+    }
+
+    .cur-pin-new {
+      border-color: var(--term-accent, #E07A47);
+      box-shadow: 0 0 0 1px var(--term-accent, #E07A47);
+    }
+
+    .cur-pin-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .cur-pin-new-pill {
+      padding: 0 5px;
+      border-radius: 6px;
+      background: var(--term-accent, #E07A47);
+      color: var(--term-bg, #0a0a0f);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .cur-pin-path {
+      flex: 1;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--term-link, #6cc3ff);
+    }
+
+    .cur-pin-path:hover {
+      text-decoration: underline;
+    }
+
+    .cur-pin-suggestions {
+      margin-top: 4px;
+      font-size: 12px;
+    }
+
+    .cur-pin-suggestions-empty,
+    .cur-pin-suggestions-error {
+      color: var(--term-text-dim, #999);
+      font-style: italic;
+      padding: 2px 0;
+    }
+
+    .cur-pin-suggestions-error {
+      color: var(--term-error, #ff6b6b);
+    }
+
+    /* Suggestion / chunk row */
+    .cur-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 10px;
+    }
+
+    .cur-row-tag,
+    .cur-row-path {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .cur-row-link {
+      cursor: pointer;
+      color: var(--term-link, #6cc3ff);
+    }
+
+    .cur-row-link:hover {
+      text-decoration: underline;
+    }
+
+    .cur-row-score {
+      font-variant-numeric: tabular-nums;
+      color: var(--term-text-dim, #999);
+      font-size: 11px;
+    }
+
+    .cur-drift-arrow {
+      color: var(--term-text-dim, #999);
+    }
+  </style>
+</template>

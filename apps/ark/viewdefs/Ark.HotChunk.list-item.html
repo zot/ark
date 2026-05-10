@@ -1,0 +1,9 @@
+<template>
+  <div class="cur-row">
+    <span class="cur-row-path cur-row-link" ui-value="shortPath()" ui-event-click="openFile()" title="Open file"></span>
+    <span class="cur-row-score" ui-value="scoreLabel()"></span>
+    <sl-tooltip content="Pin this chunk to the workspace">
+      <sl-icon-button name="pin-angle-fill" ui-action="pin()" label="Pin"></sl-icon-button>
+    </sl-tooltip>
+  </div>
+</template>

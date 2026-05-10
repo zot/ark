@@ -166,10 +166,10 @@ stateless.
 Two thin Lua wrappers, one per Go method. Surfaced for the
 Phase 1F curation view.
 
-`mcp:chunksForTag(tag, k)` — wraps `Librarian.ChunksForTag`.
+`mcp.chunksForTag(tag, k)` — wraps `Librarian.ChunksForTag`.
 
 ```lua
-local results = mcp:chunksForTag("design-decision", 10)
+local results = mcp.chunksForTag("design-decision", 10)
 -- results: array of suggestion tables
 -- results[i] = {
 --   chunkID = 4711,
@@ -183,16 +183,16 @@ local results = mcp:chunksForTag("design-decision", 10)
 -- }
 ```
 
-`mcp:chunksForTagDef(tag, fileID, k)` — wraps
+`mcp.chunksForTagDef(tag, fileID, k)` — wraps
 `Librarian.ChunksForTagDef`. Same return shape; `motivatingDefs`
 has length 1 (the requested definition file).
 
 ```lua
-local results = mcp:chunksForTagDef("design-decision", 88, 10)
+local results = mcp.chunksForTagDef("design-decision", 88, 10)
 ```
 
 Field naming, ID encoding, empty-result, and error conventions
-match `mcp:suggestTagNames` (see suggest-tag-names.md). Returns
+match `mcp.suggestTagNames` (see suggest-tag-names.md). Returns
 empty table `{}` when the Go layer reports `(nil, nil)` for any
 of: tag has no ED records, EC prefix empty, embedding
 unavailable, `ED[tag, fileid]` absent (def-flavor), or k ≤ 0.

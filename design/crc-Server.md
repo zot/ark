@@ -142,39 +142,39 @@ Optionally starts the embedded ui-engine alongside.
     for `new` in prototype chain: if present, calls
     prototype:new(table) instead (session:create + init). Entries
     sorted dirs-first then alphabetically.
-  - mcp:suggestTagNames(chunkID, k) — thin wrapper over
+  - mcp.suggestTagNames(chunkID, k) — thin wrapper over
     Librarian.SuggestTagNames. Returns Lua array of suggestion tables
     {tag, score, motivatingFiles=[{fileID, path, score}, ...]}.
     Empty result → empty table; error → (nil, errstring). Read-only,
     Sync read txn. (R2258, R2266-R2270)
-  - mcp:chunksForTag(tag, k) — thin wrapper over
+  - mcp.chunksForTag(tag, k) — thin wrapper over
     Librarian.ChunksForTag. Returns Lua array of suggestion tables
     {chunkID, fileID, path, score, motivatingDefs=[{fileID, path,
     score}, ...]} ranked by max-aggregate score across the tag's
-    defs. Same shape as mcp:topKChunksForTag — swappable. Read-only.
+    defs. Same shape as mcp.topKChunksForTag — swappable. Read-only.
     (R2259, R2266-R2270)
-  - mcp:chunksForTagDef(tag, fileID, k) — thin wrapper over
-    Librarian.ChunksForTagDef. Same shape as mcp:chunksForTag;
+  - mcp.chunksForTagDef(tag, fileID, k) — thin wrapper over
+    Librarian.ChunksForTagDef. Same shape as mcp.chunksForTag;
     motivatingDefs has length 1 (the requested definition file).
     Read-only. (R2260, R2266-R2270)
-  - mcp:topKChunksForTag(tag, k) — thin wrapper over
+  - mcp.topKChunksForTag(tag, k) — thin wrapper over
     Librarian.TopKChunksForTag. HC-cached read with the alibi-stamp
-    staleness filter (R2218, R2219). Same shape as mcp:chunksForTag.
+    staleness filter (R2218, R2219). Same shape as mcp.chunksForTag.
     Read-only. (R2261, R2266-R2270)
-  - mcp:relatedTags(tag, k) — thin wrapper over Librarian.RelatedTags.
+  - mcp.relatedTags(tag, k) — thin wrapper over Librarian.RelatedTags.
     Returns Lua array of {tag, score, srcFileID, srcPath, dstFileID,
     dstPath} ranked by ED↔ED cosine. Read-only. (R2262, R2266-R2270)
-  - mcp:tagPairConflict(tagA, tagB) — thin wrapper over
+  - mcp.tagPairConflict(tagA, tagB) — thin wrapper over
     Librarian.TagPairConflict. Returns a single Lua table
     {tag="", score, srcFileID, srcPath, dstFileID, dstPath} (tag empty
     because both tag names are inputs; src/dst identify the
     best-matching definition file from each side). Read-only.
     (R2263, R2266-R2270)
-  - mcp:tagDrift(tag) — thin wrapper over Librarian.TagDrift. Returns
+  - mcp.tagDrift(tag) — thin wrapper over Librarian.TagDrift. Returns
     Lua array of {fileIDA, pathA, fileIDB, pathB, score} (fileIDA <
     fileIDB by convention) sorted by score descending. Read-only.
     (R2264, R2266-R2270)
-  - mcp:sweepHotCorrelations() — thin wrapper that triggers the
+  - mcp.sweepHotCorrelations() — thin wrapper that triggers the
     corpus-wide sweep through enqueueWrite, identical to HTTP POST
     /sweep/correlations. Returns HCSweepResult table {startedAt
     (RFC3339), completedAt (RFC3339), durationMs, changedEDs,

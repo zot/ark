@@ -307,7 +307,7 @@ For 1E the invocation surfaces are direct:
 - `Librarian.SweepHotCorrelations()` from Go.
 - A CLI subcommand `ark sweep correlations` (thin wrapper that
   proxies to a running server, like other long-running ops).
-- A Lua API `mcp:sweepHotCorrelations()` (thin wrapper). See the
+- A Lua API `mcp.sweepHotCorrelations()` (thin wrapper). See the
   Lua API section below for the full curation-view bridge surface
   including the read methods.
 
@@ -326,7 +326,7 @@ on-demand sweep button.
 
 ```lua
 -- Cached top-K chunks for a tag (HC entries with alibi-stamp filter).
-local chunks = mcp:topKChunksForTag("design-decision", 10)
+local chunks = mcp.topKChunksForTag("design-decision", 10)
 -- chunks[i] = {
 --   chunkID = 4711, fileID = 123, path = "/abs/path/to/chunk.md",
 --   score = 0.78,
@@ -334,10 +334,10 @@ local chunks = mcp:topKChunksForTag("design-decision", 10)
 --     { fileID = 88, path = "...", score = 0.78 }, ...
 --   }
 -- }
--- Same ChunkSuggestion shape as mcp:chunksForTag — swappable.
+-- Same ChunkSuggestion shape as mcp.chunksForTag — swappable.
 
 -- Tags whose ED vectors are nearest a focused tag's ED records.
-local related = mcp:relatedTags("design-decision", 10)
+local related = mcp.relatedTags("design-decision", 10)
 -- related[i] = {
 --   tag = "decision-record", score = 0.82,
 --   srcFileID = 88, srcPath = "/abs/path/to/source-def.md",
@@ -345,7 +345,7 @@ local related = mcp:relatedTags("design-decision", 10)
 -- }
 
 -- Conflict between two tags: the max-pair cosine across their ED records.
-local conflict = mcp:tagPairConflict("design-decision", "decision-record")
+local conflict = mcp.tagPairConflict("design-decision", "decision-record")
 -- conflict = {
 --   tag = "", score = 0.91,
 --   srcFileID = 88, srcPath = "/abs/path/to/A-def.md",
@@ -355,7 +355,7 @@ local conflict = mcp:tagPairConflict("design-decision", "decision-record")
 -- best-matching definition file from each side.)
 
 -- Drift within a single tag: pairwise cosine across the tag's ED records.
-local drift = mcp:tagDrift("design-decision")
+local drift = mcp.tagDrift("design-decision")
 -- drift[i] = {
 --   fileIDA = 88, pathA = "/abs/path/to/def-a.md",
 --   fileIDB = 91, pathB = "/abs/path/to/def-b.md",
@@ -366,7 +366,7 @@ local drift = mcp:tagDrift("design-decision")
 -- Trigger the corpus-wide sweep. Routes through enqueueWrite.
 -- Subscribe to @sweep-status / @sweep-progress beforehand to follow
 -- progress; the call returns when the sweep completes.
-local result = mcp:sweepHotCorrelations()
+local result = mcp.sweepHotCorrelations()
 -- result = {
 --   startedAt    = "2026-05-09T11:42:00Z",   -- RFC3339
 --   completedAt  = "2026-05-09T11:42:16Z",
@@ -382,10 +382,10 @@ local result = mcp:sweepHotCorrelations()
 ```
 
 Field naming, ID encoding, empty-result, and error conventions
-match `mcp:suggestTagNames` (see suggest-tag-names.md):
+match `mcp.suggestTagNames` (see suggest-tag-names.md):
 lowerCamelCase fields, IDs as Lua numbers, empty result → empty
 table `{}`, errors → `(nil, errstring)`. The four read methods
-are read-only. `mcp:sweepHotCorrelations()` is the one writer in
+are read-only. `mcp.sweepHotCorrelations()` is the one writer in
 the set; it enqueues through the write goroutine, identical to
 the HTTP `POST /sweep/correlations` path.
 

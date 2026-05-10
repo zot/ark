@@ -3,15 +3,16 @@
 @note: add interactive searching -- this is the user's google and yahoo on all their stuff and all of the assistant's stuff. Frictionless chat and other events links to the AI partner directly
 @note: need to have a way to show unresolved files deep in the trees. Ark CLI should help with this. `ark unresolved` has "path" right now but it should be <pattern>
 
-The ark app has two top-level views, mirroring the two ark agents:
+The ark app has three top-level views:
 
 - **Searching** — index manager + full-text search (ark-searcher)
 - **Messaging** — cross-project message dashboard (ark-messenger)
+- **Curation** — vocabulary-maintenance workshop (chunk → tag, tag → chunk, tag → tag)
 
 A thin root object routes between them. The MCP shell's bottom bar
-has two ark buttons: one for searching (archive icon), one for
-messaging (envelope icon). Each sets the view mode and displays the
-ark app.
+has three ark buttons: searching (archive icon), messaging
+(envelope icon), and curation (compass icon). Each sets the view
+mode and displays the ark app.
 
 ## Architecture
 
@@ -235,11 +236,120 @@ Manual refresh button. Real-time updates are V3 territory.
 
 - Cross-project file writes (never, by design)
 
+## Curation View
+
+The vocabulary-maintenance workshop. Three of the four entry points
+from `.scratch/CURATION-VIEW.md` (chunk → similar-chunks deferred,
+no backend yet):
+
+- **chunk → tag candidates** (entry 1, `mcp:suggestTagNames`)
+- **tag → chunk candidates** (entry 2, `mcp:topKChunksForTag` cached
+  / `mcp:chunksForTag` live)
+- **tag → tag** (entry 4, `mcp:relatedTags` / `mcp:tagDrift` /
+  `mcp:tagPairConflict`)
+
+### Layout
+
+Two-column workshop:
+
+- **Left/main:** pinned-chunks workspace. Each pinned chunk shows
+  its path, a content preview, and a tag-suggestions panel
+  (entry 1). Per-chunk dismiss; sweep-older bulk action.
+- **Right:** tag explorer. Type a tag to focus it; when focused,
+  shows the tag's top-K chunks (entry 2), related tags (entry 4),
+  and drift pairs (entry 4). Click a related tag to switch focus;
+  click a chunk to pin it.
+
+A header strip carries the title, sweep status, sweep button, and
+refresh.
+
+### Pinned-chunks behavior
+
+Four rules from `.scratch/CURATION-VIEW.md`:
+
+- **Always-add, never-flip.** `Ark.Curation:curate(chunkID)` adds
+  the chunk to the top of the list and never switches the user
+  into the view. Pinning is a stash gesture from anywhere in the
+  app (eventually `<ark-search>` results, manually for now).
+- **New chunks land at the top** by pin time.
+- **Per-chunk dismiss.** Each pinned chunk has its own X button.
+- **Sweep older.** A button drops everything below the topmost
+  pin in one click. Topmost pin survives as the working anchor.
+- **New-since-last-viewed accent.** Chunks pinned while the view
+  was closed get a visual accent (NEW pill). Accent clears when
+  the view is opened. The "last viewed" timestamp is persisted
+  per-user.
+
+### Tag focus
+
+A text input accepts a tag name. Submitting the input "focuses"
+that tag, populating:
+
+- **Chunks for this tag** — `mcp:topKChunksForTag(tag, k)` via the
+  HC cache. Each row has a pin button. Falls back to
+  `mcp:chunksForTag` (live) when the cache is missing or empty
+  and the embedding model is available.
+- **Related tags** — `mcp:relatedTags(tag, k)`. Click a tag to
+  switch focus.
+- **Drift pairs** — `mcp:tagDrift(tag)`. Read-only display showing
+  which definition files of the tag have diverged.
+
+A "clear focus" button restores the unfocused state of the side
+panel (an empty-state hint).
+
+### Sweep controls
+
+- **Sweep button** — calls `mcp:sweepHotCorrelations()`. Runs
+  through the write goroutine, identical to
+  `POST /sweep/correlations`. Returns the `SweepResult` summary.
+  The button is disabled while a sweep is in flight; the header
+  shows a "sweeping..." indicator.
+- **Sweep result** — once the call returns, the header shows a
+  one-line summary (duration, tagsRebuilt, tagsTouched). The
+  embedding-unavailable degraded reply is surfaced as a friendly
+  one-line message instead.
+
+Live progress (subscribing to the `tmp://sweep/hot-correlations.md`
+doc's `@sweep-status` / `@sweep-progress` tags) is a follow-up
+slice — Frictionless `mcp:subscribe` is for publisher topics, and
+the Lua bridge for tmp:// document subscriptions is not yet in
+place.
+
+### Persistence
+
+Pinned chunks and the last-viewed timestamp persist across server
+restarts in `~/.ark/apps/curation/state.json`. The directory is
+created on first write. State is loaded on view init and rewritten
+on every mutation.
+
+### What's NOT in scope (this slice)
+
+- **Entry 3 (chunk → similar chunks)** — needs a Librarian
+  backend (`SimilarChunks(chunkID, k)`) that doesn't exist yet.
+- **`<ark-search>` Curate button** — separate TypeScript slice;
+  for now the curation view is reachable through the bottom-bar
+  button and chunks are pinned from the focused-tag list or via
+  `ark:curate(chunkID)` from Lua.
+- **Tag conflict explorer** — `mcp:tagPairConflict(tagA, tagB)`
+  is bridged but the UX for picking two tags is deferred. The
+  drift surface covers the within-tag case, which is the more
+  common need.
+- **Vocabulary gaps** (bottom-K against all tag defs) — bottom-K
+  inversion of the same engine; not in this slice.
+- **Tag-name completion** — typed input only, no autocomplete.
+- **Tag-write actions** — applying a suggestion to a chunk's
+  source file is Phase 2 (Workmanlike / Magic modes).
+- **Status badge on the bottom-bar button** — the badge with
+  pinned-count + new-count is described in CURATION-VIEW.md but
+  lives in the MCP shell, not this app. Surfaced as a separate
+  slice once the workshop is settled.
+
 ## MCP Shell Integration
 
-Two ark buttons in the MCP bottom bar:
-- **Archive icon** — displays ark in searching mode (current behavior)
-- **Envelope icon** — displays ark in messaging mode (new)
+Three ark buttons in the MCP bottom bar:
+- **Archive icon** — displays ark in searching mode
+- **Envelope icon** — displays ark in messaging mode
+- **Compass icon** — displays ark in curation mode (new)
 
 Each button sets the view mode on the ark instance before calling
 `mcp:display("ark")`.

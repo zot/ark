@@ -118,13 +118,13 @@ viewer layer if pagination is added; the API itself is stateless.
 
 ## Lua API
 
-`mcp:suggestTagNames(chunkID, k)` — thin Lua wrapper over
+`mcp.suggestTagNames(chunkID, k)` — thin Lua wrapper over
 `Librarian.SuggestTagNames`. Surfaced for the Phase 1F curation
 view so Lua app code can drive the chunk → tag-candidates entry
 point without going through the HTTP layer.
 
 ```lua
-local results = mcp:suggestTagNames(chunkID, 5)
+local results = mcp.suggestTagNames(chunkID, 5)
 -- results: array of suggestion tables
 -- results[i] = {
 --   tag = "design-decision",
@@ -139,7 +139,7 @@ local results = mcp:suggestTagNames(chunkID, 5)
 Field naming: lowerCamelCase mirroring the Go struct field names
 (`Tag` → `tag`, `MotivatingFiles` → `motivatingFiles`,
 `FileID` → `fileID`). Matches the established Lua convention used
-by `mcp:inbox()`.
+by `mcp.inbox()`.
 
 ID encoding: `chunkID` and `fileID` cross the boundary as Lua
 numbers. Current corpus IDs (~48K chunks, ~1k file IDs) are well
@@ -154,7 +154,7 @@ Return shape:
   embedding unavailable, k ≤ 0) → returns an empty Lua table
   `{}`. Lua-friendly; callers can iterate without nil-guarding.
 - Error → returns `(nil, errstring)`. Standard gopher-lua
-  two-return convention, parallel to `mcp:inbox()` and
-  `mcp:open()`.
+  two-return convention, parallel to `mcp.inbox()` and
+  `mcp.open()`.
 
 Read-only. No new locks, no new write paths.

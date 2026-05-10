@@ -3465,7 +3465,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:suggestTagNames(chunkID, k) — chunk → tag-name candidates.
+		// mcp.suggestTagNames(chunkID, k) — chunk → tag-name candidates.
 		// CRC: crc-Server.md | R2258, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "suggestTagNames", L.NewFunction(func(L *lua.LState) int {
 			chunkID := uint64(L.CheckNumber(1))
@@ -3496,7 +3496,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:chunksForTag(tag, k) — tag → chunk candidates (live).
+		// mcp.chunksForTag(tag, k) — tag → chunk candidates (live).
 		// CRC: crc-Server.md | R2259, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "chunksForTag", L.NewFunction(func(L *lua.LState) int {
 			tag := L.CheckString(1)
@@ -3515,7 +3515,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:chunksForTagDef(tag, fileID, k) — tag-def → chunk candidates (live).
+		// mcp.chunksForTagDef(tag, fileID, k) — tag-def → chunk candidates (live).
 		// CRC: crc-Server.md | R2260, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "chunksForTagDef", L.NewFunction(func(L *lua.LState) int {
 			tag := L.CheckString(1)
@@ -3535,7 +3535,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:topKChunksForTag(tag, k) — cached top-K with alibi-stamp filter.
+		// mcp.topKChunksForTag(tag, k) — cached top-K with alibi-stamp filter.
 		// CRC: crc-Server.md | R2261, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "topKChunksForTag", L.NewFunction(func(L *lua.LState) int {
 			tag := L.CheckString(1)
@@ -3554,7 +3554,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:relatedTags(tag, k) — tags whose ED vectors are nearest the
+		// mcp.relatedTags(tag, k) — tags whose ED vectors are nearest the
 		// focused tag's ED records.
 		// CRC: crc-Server.md | R2262, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "relatedTags", L.NewFunction(func(L *lua.LState) int {
@@ -3574,7 +3574,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:tagPairConflict(tagA, tagB) — max-pair cosine across two tags'
+		// mcp.tagPairConflict(tagA, tagB) — max-pair cosine across two tags'
 		// ED records. Returns a single table (not an array).
 		// CRC: crc-Server.md | R2263, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "tagPairConflict", L.NewFunction(func(L *lua.LState) int {
@@ -3590,7 +3590,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:tagDrift(tag) — within-tag pairwise cosine across one tag's
+		// mcp.tagDrift(tag) — within-tag pairwise cosine across one tag's
 		// ED records, sorted by score descending.
 		// CRC: crc-Server.md | R2264, R2266, R2267, R2268, R2269, R2270
 		L.SetField(tbl, "tagDrift", L.NewFunction(func(L *lua.LState) int {
@@ -3615,7 +3615,7 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
-		// mcp:sweepHotCorrelations() — corpus-wide HC sweep through
+		// mcp.sweepHotCorrelations() — corpus-wide HC sweep through
 		// enqueueWrite. Mirrors HandleSweepCorrelations exactly.
 		// CRC: crc-Server.md | R2265, R2270
 		L.SetField(tbl, "sweepHotCorrelations", L.NewFunction(func(L *lua.LState) int {
@@ -3668,8 +3668,8 @@ func (srv *Server) registerLuaFunctions() {
 }
 
 // chunkSuggestionToLua converts a ChunkSuggestion into the Lua table
-// shape shared by mcp:chunksForTag, mcp:chunksForTagDef, and
-// mcp:topKChunksForTag (R2266 lowerCamelCase fields, R2267 IDs as
+// shape shared by mcp.chunksForTag, mcp.chunksForTagDef, and
+// mcp.topKChunksForTag (R2266 lowerCamelCase fields, R2267 IDs as
 // numbers).
 func chunkSuggestionToLua(L *lua.LState, s ChunkSuggestion) *lua.LTable {
 	row := L.NewTable()
@@ -3690,7 +3690,7 @@ func chunkSuggestionToLua(L *lua.LState, s ChunkSuggestion) *lua.LTable {
 }
 
 // tagSimilarityToLua converts a TagSimilarity into the Lua table
-// shape shared by mcp:relatedTags and mcp:tagPairConflict (R2266,
+// shape shared by mcp.relatedTags and mcp.tagPairConflict (R2266,
 // R2267).
 func tagSimilarityToLua(L *lua.LState, s TagSimilarity) *lua.LTable {
 	row := L.NewTable()
