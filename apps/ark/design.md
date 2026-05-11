@@ -562,5 +562,7 @@ tmp:// document watcher; the live progress feed described in
 `.scratch/CURATION-VIEW.md` (subscribing to the sweep doc's
 `@sweep-status`/`@sweep-progress` tags) is deferred to a follow-up
 slice. For the current cut the call is synchronous from the Lua
-side — a sweep that takes ~16 s blocks the workspace; users see a
-"sweeping..." indicator until it completes.
+side — the workspace blocks until the sweep returns, with a
+"sweeping..." indicator. Sweep duration depends on corpus shape
+and the 1E bookmark state; budget more than a casual click before
+it completes.

@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 the Librarian/EC embedding pipeline, and the ark subdatabase. Entry
@@ -54,11 +54,24 @@ operations complete) document this on the API. (R986, R993, R995)
   pass through from full form. Empty `allowed_inner = []` means
   scan-restricted with no inner openers (raw mode), distinct from omitted.
   (R2147, R2148, R2149, R2150)
-- JSONLChunkFunc: content-aware JSONL chunker — parses JSON, extracts
-  text and thinking blocks, skips tool_use/tool_result/signatures/metadata.
-  Extracts role attr from `type`+`isMeta` fields: human, assistant, or
-  skill. For skill chunks, parses `Base directory for this skill: PATH`
-  to extract skill name attr. (R1507, R1508)
+- JSONLChunker: content-aware JSONL chunker — empty struct implementing
+  `microfts2.Chunker` and `microfts2.AppendAwareChunker` (R2273). `Chunks`
+  parses JSON, extracts text and thinking blocks (R238, R239); skips
+  `tool_use`, `tool_result`, `planContent`, and operational record types
+  (R240-R243) because their content is already represented elsewhere in
+  the index or is operational metadata. Every other non-empty line emits
+  a chunk (R2271); when text extraction yields no content (parseable
+  JSON without recognized text shape, malformed JSON, partial JSON at
+  the tail), the chunk's content is the raw line bytes (R2272).
+  `AppendChunks` re-chunks from the byte offset in `lastLocator` through
+  end-of-file; first emitted chunk decides clean vs replace boundary
+  via byte-range comparison with the previous last chunk (R2274). Each
+  chunk's `Locator` is a byte range encoded by
+  `microfts2.EncodeByteRangeLocator` (R2275); `Range` continues to
+  carry the 1-based line number for display (R244). Extracts role attr
+  from `type`+`isMeta` fields: human, assistant, or skill. For skill
+  chunks, parses `Base directory for this skill: PATH` to extract skill
+  name attr. (R1507, R1508)
 - Close(): close in reverse order (store, fts) (R1923)
 - TagList(): delegate to Store.ListTags
 - TagCounts(tags): delegate to Store.TagCounts

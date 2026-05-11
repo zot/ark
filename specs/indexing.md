@@ -16,9 +16,55 @@ registered by name in the database.
 
 `ark init` registers these by default, plus:
 
-- `chat-jsonl` — `ark chunk-chat-jsonl <file>`: content-aware chunker
-  for Claude conversation logs. Extracts text and thinking blocks,
-  skips tool use/results and metadata.
+- `chat-jsonl` — content-aware chunker for Claude conversation logs.
+  See "chat-jsonl chunker" below.
+
+### chat-jsonl chunker
+
+Indexes Claude Code conversation logs (JSONL, one JSON record per line).
+
+**Emission invariant.** Every non-empty line that isn't explicitly
+filtered produces exactly one chunk. The chunker's job is to group
+content for indexing and embedding — it must not silently drop
+user-searchable content. If a line can't be cleanly extracted (partial
+JSON at the tail of a growing file, malformed JSON, recognized JSON
+that doesn't match the text extractor), the chunk's content is the
+raw line bytes. Searchable beats invisible.
+
+**Explicit filters** — these records are skipped because their content
+is already represented elsewhere in the index or is operational
+metadata:
+
+- `tool_use` blocks (input contains file contents and code edits
+  whose authoritative copies live in the indexed files)
+- `tool_result` blocks (command output and file reads, also already
+  indexed in their source form or obsolete)
+- top-level `planContent` (duplicate of message content)
+- record types: `progress`, `file-history-snapshot`,
+  `queue-operation`, `system` (operational metadata, not user-meaningful)
+
+**Extraction**, when the line isn't filtered:
+
+- `type:text` blocks: the `text` field; multiple text blocks in one
+  message join with newlines.
+- `type:thinking` blocks: the `thinking` field (not the `signature`).
+- `message.content` when it's a string: the entire string.
+- Anything else (parseable JSON that doesn't match the above, partial
+  or malformed JSON): the raw line as chunk content.
+
+Chunk range is `N-N` (1-based line number) for traceability. The
+chunk's attrs carry `timestamp` and `role` when extractable from the
+JSON.
+
+**Append handling.** When a JSONL file grows (the common case during
+an active Claude Code session), the chunker handles incremental
+indexing through the `AppendAwareChunker` interface. Only new and
+modified content is re-chunked — the rest of the file's chunks are
+preserved without re-embedding. A partial trailing line that hasn't
+yet received its newline is emitted as a chunk for the bytes
+available; when a later append completes the line, that chunk is
+replaced with a corrected version through the drop-and-replace
+semantics that microfts2's append protocol provides.
 
 ### Paragraph-based markdown chunker
 

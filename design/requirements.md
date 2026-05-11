@@ -411,10 +411,10 @@
 - **R235:** (inferred) Add a test that verifies per-source add-include round-trips correctly through the CLI arg parsing path
 
 ## Feature: Content-Aware JSONL Chunker
-**Source:** specs/main.md
+**Source:** specs/indexing.md
 
 - **R236:** The `chat-jsonl` strategy is a Go func chunker registered with microfts2 on both Init and Open
-- **R237:** Each JSONL line is parsed as JSON; lines with no extractable text produce no chunk
+- **~~R237:~~** (Retired T57 — see R2271) Each JSONL line is parsed as JSON; lines with no extractable text produce no chunk
 - **R238:** The chunker extracts `type:text` blocks (the `text` field) from `message.content`
 - **R239:** The chunker extracts `type:thinking` blocks (the `thinking` field, not the `signature`)
 - **R240:** The chunker skips `tool_use` blocks entirely (input contains file contents, code edits)
@@ -426,6 +426,11 @@
 - **R246:** As a Go func strategy, the chunker avoids scanner buffer limits on large JSONL lines
 - **R247:** (inferred) When `message.content` is a string (not array), the entire string is the chunk text
 - **R248:** (inferred) The `chat-jsonl` strategy replaces the external `ark chunk-chat-jsonl` command — no external process needed
+- **R2271:** Every non-empty JSONL line that isn't covered by an explicit filter (R240, R241, R242, R243) produces exactly one chunk. The chunker must not silently drop user-searchable content; "searchable beats invisible" is the governing principle for indexing.
+- **R2272:** When text extraction yields no content (parseable JSON whose shape doesn't match the text/thinking/string extractor, malformed JSON, partial JSON at the tail of a growing file), the chunk's content is the raw line bytes. The line is searchable as JSON text even when the extractor can't lift human-readable content out of it.
+- **R2273:** The `chat-jsonl` strategy is registered as a struct implementing `microfts2.Chunker` and `microfts2.AppendAwareChunker`. The struct is empty (no per-instance state); per-file resume state lives in the chunk locator stored in microfts2's F record.
+- **R2274:** `chat-jsonl.AppendChunks(path, lastLocator, newBytes, yield)` re-chunks from the byte offset encoded in `lastLocator` through end-of-file. The first emitted chunk's byte range determines `replacedLast`: same range as the previous last chunk → clean boundary (drop the emitted chunk, don't yield it, return `replacedLast=false`); different range (typically extension because a partial-line chunk now has more content) → yield as replacement, return `replacedLast=true`.
+- **R2275:** Each chunk's `Locator` carries the chunk's byte range in the file (encoded via `microfts2.EncodeByteRangeLocator`). The `Range` field continues to carry the line-number range for display and traceability (R244); the locator is internal resume state for AppendAware.
 
 ## Feature: Enhanced Status
 **Source:** specs/status-enhanced.md

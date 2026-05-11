@@ -535,8 +535,12 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 	}
 
 	// Try append detection (LMDB reads are concurrent-safe)
-	if ok, _ := idx.DetectAppend(path, fileID); ok {
+	ok, _ := idx.DetectAppend(path, fileID)
+	Logv(2, "prepare-refresh: %s detect=%v", path, ok)
+	if ok {
 		info, err := idx.fts.FileInfoByID(fileID)
+		Logv(2, "prepare-refresh: %s info-err=%v FL=%d data-len=%d",
+			path, err, info.FileLength, len(data))
 		if err == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength {
 			prep.isAppend = true
 			prep.newBytes = data[info.FileLength:]
@@ -560,6 +564,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 // Must be called from the ChanSvc goroutine (single writer).
 // CRC: crc-Indexer.md | R1894, R1896, R1898
 func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
+	Logv(2, "execute-refresh: %s isAppend=%v newBytes=%d", prep.path, prep.isAppend, len(prep.newBytes))
 	if prep.isAppend {
 		acc := chunkAccumulator{strategy: prep.strategy}
 		err := idx.fts.AppendChunks(prep.oldID, prep.newBytes, prep.strategy,
@@ -570,8 +575,10 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			microfts2.WithAppendChunkCallback(acc.callback),
 			microfts2.WithIndexedChunkCallback(acc.indexedCallback),
 		)
+		Logv(2, "execute-refresh: %s AppendChunks err=%v newChunks=%d", prep.path, err, len(acc.chunkTags))
 		if err != nil {
 			// Append failed — fall through to full reindex
+			Logv(2, "execute-refresh: %s falling through to full refresh due to err: %v", prep.path, err)
 			return idx.executeFullRefresh(prep)
 		}
 		// Embeddings: orphan EC/EF cleanup ran inside the reindex callback;
@@ -681,36 +688,47 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
 	info, err := idx.fts.FileInfoByID(fileid)
 	if err != nil {
+		Logv(2, "detect-append: %s FileInfoByID err: %v", path, err)
 		return false, err
 	}
 	var zeroHash [32]byte
 	if info.FileLength <= 0 || info.ContentHash == zeroHash {
+		Logv(2, "detect-append: %s no stored hash/length (FL=%d hash-zero=%v)",
+			path, info.FileLength, info.ContentHash == zeroHash)
 		return false, nil
 	}
 
 	fi, err := os.Stat(path)
 	if err != nil {
+		Logv(2, "detect-append: %s stat err: %v", path, err)
 		return false, err
 	}
 	if fi.Size() <= info.FileLength {
+		Logv(2, "detect-append: %s didn't grow (size=%d FL=%d)",
+			path, fi.Size(), info.FileLength)
 		return false, nil // didn't grow
 	}
 
 	// Hash the first FileLength bytes
 	f, err := os.Open(path)
 	if err != nil {
+		Logv(2, "detect-append: %s open err: %v", path, err)
 		return false, err
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.CopyN(h, f, info.FileLength); err != nil {
+		Logv(2, "detect-append: %s hash copy err: %v", path, err)
 		return false, err
 	}
 	var hash [32]byte
 	copy(hash[:], h.Sum(nil))
 
-	return hash == info.ContentHash, nil
+	match := hash == info.ContentHash
+	Logv(2, "detect-append: %s hash match=%v (FL=%d size=%d)",
+		path, match, info.FileLength, fi.Size())
+	return match, nil
 }
 
 // AppendFile indexes only the new content appended to a file.

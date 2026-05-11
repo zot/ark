@@ -127,21 +127,19 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// CRC: crc-DB.md | R382
-	// Register default chunking strategies. Markdown registers as the
-	// AppendAwareChunker struct so AppendChunks merges paragraph
-	// extensions cleanly instead of falling through to full reindex.
-	// Other built-ins remain ChunkFunc for now (no AppendAware impl yet).
+	// Register default chunking strategies. Markdown and chat-jsonl
+	// register as AppendAwareChunker structs so AppendChunks handles
+	// boundary-spanning edits (markdown: paragraph extensions; chat-jsonl:
+	// growing JSONL records) cleanly instead of falling through to full
+	// reindex. (R2273)
 	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		return fmt.Errorf("register strategy markdown: %w", err)
 	}
-	funcStrategies := map[string]microfts2.ChunkFunc{
-		"lines":      microfts2.LineChunkFunc,
-		"chat-jsonl": JSONLChunkFunc,
+	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+		return fmt.Errorf("register strategy chat-jsonl: %w", err)
 	}
-	for name, fn := range funcStrategies {
-		if err := fts.AddStrategyFunc(name, fn); err != nil {
-			return fmt.Errorf("register strategy %s: %w", name, err)
-		}
+	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+		return fmt.Errorf("register strategy lines: %w", err)
 	}
 	externalStrategies := map[string]string{
 		"lines-overlap": "microfts chunk-lines-overlap -lines 50",
@@ -241,25 +239,23 @@ func Open(dbPath string) (*DB, error) {
 
 	matcher := &Matcher{Dotfiles: config.Dotfiles}
 
-	// CRC: crc-DB.md | R382
-	// Register built-in func strategies (must happen on every Open,
-	// not just InitDB — func strategies aren't persisted in LMDB).
-	// The chat-jsonl chunker is wrapped in an LRU cache — conversation logs
-	// are append-only, so chunks stay valid until the file changes.
-	// The cache is captured by the closure; microfts2 never sees it.
-	jsonlCache := newChunkCache(64)
+	// CRC: crc-DB.md | R382, R2273
+	// Register built-in chunkers (must happen on every Open, not just
+	// InitDB — chunker registrations aren't persisted in LMDB). Markdown
+	// and chat-jsonl register as AppendAwareChunker structs (R2273) so
+	// growing files index incrementally via microfts2's drop-and-replace
+	// append protocol.
 	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register markdown strategy: %w", err)
 	}
-	for name, fn := range map[string]microfts2.ChunkFunc{
-		"lines":      microfts2.LineChunkFunc,
-		"chat-jsonl": jsonlCache.wrap(JSONLChunkFunc),
-	} {
-		if err := fts.AddStrategyFunc(name, fn); err != nil {
-			fts.Close()
-			return nil, fmt.Errorf("register %s strategy: %w", name, err)
-		}
+	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+		fts.Close()
+		return nil, fmt.Errorf("register chat-jsonl strategy: %w", err)
+	}
+	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+		fts.Close()
+		return nil, fmt.Errorf("register lines strategy: %w", err)
 	}
 
 	// CRC: crc-DB.md | R624, R626, R627, R628, R629, R630, R636, R637
@@ -2639,102 +2635,15 @@ func (db *DB) TagContext(tags []string) ([]TagContextEntry, error) {
 	return entries, nil
 }
 
-// chunkCache is an LRU cache for chunker output. The cache key is (path, content length) —
-// if the file size changed, the entry is stale. The closure captures this cache so
-// microfts2's verify path gets cached chunks without knowing about the cache.
-type chunkCache struct {
-	maxSize int
-	entries map[chunkCacheKey]*chunkCacheEntry
-	order   []*chunkCacheEntry // LRU order, most recent last
-}
-
-type chunkCacheKey struct {
-	path       string
-	contentLen int
-}
-
-type chunkCacheEntry struct {
-	key    chunkCacheKey
-	chunks []microfts2.Chunk
-}
-
-func newChunkCache(maxSize int) *chunkCache {
-	return &chunkCache{
-		maxSize: maxSize,
-		entries: make(map[chunkCacheKey]*chunkCacheEntry),
-	}
-}
-
-// wrap returns a ChunkFunc that checks the cache before calling the underlying chunker.
-func (cc *chunkCache) wrap(fn microfts2.ChunkFunc) microfts2.ChunkFunc {
-	return func(path string, content []byte, yield func(microfts2.Chunk) bool) error {
-		key := chunkCacheKey{path, len(content)}
-
-		if entry, ok := cc.entries[key]; ok {
-			cc.touch(entry)
-			for _, c := range entry.chunks {
-				if !yield(c) {
-					return nil
-				}
-			}
-			return nil
-		}
-
-		// Cache miss — run the real chunker and collect results
-		var chunks []microfts2.Chunk
-		err := fn(path, content, func(c microfts2.Chunk) bool {
-			// Copy to decouple from the content buffer
-			cp := microfts2.Chunk{
-				Range:   append([]byte{}, c.Range...),
-				Content: append([]byte{}, c.Content...),
-				Attrs:   microfts2.CopyPairs(c.Attrs),
-			}
-			chunks = append(chunks, cp)
-			return true
-		})
-		if err != nil {
-			return err
-		}
-
-		cc.put(key, chunks)
-
-		// Now yield the cached chunks to the caller
-		for _, c := range chunks {
-			if !yield(c) {
-				return nil
-			}
-		}
-		return nil
-	}
-}
-
-func (cc *chunkCache) touch(entry *chunkCacheEntry) {
-	for i, e := range cc.order {
-		if e == entry {
-			cc.order = append(cc.order[:i], cc.order[i+1:]...)
-			break
-		}
-	}
-	cc.order = append(cc.order, entry)
-}
-
-func (cc *chunkCache) put(key chunkCacheKey, chunks []microfts2.Chunk) {
-	// Evict oldest if at capacity
-	for len(cc.order) >= cc.maxSize {
-		oldest := cc.order[0]
-		cc.order = cc.order[1:]
-		delete(cc.entries, oldest.key)
-	}
-	entry := &chunkCacheEntry{key: key, chunks: chunks}
-	cc.entries[key] = entry
-	cc.order = append(cc.order, entry)
-}
-
-// CRC: crc-DB.md | R236, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247
+// CRC: crc-DB.md | R236, R238, R239, R240, R241, R242, R243, R244, R245, R247, R2271, R2272, R2275
 // JSONLChunkFunc is a content-aware chunker for Claude conversation logs.
-// Parses each line as JSON and extracts only human-readable text
-// (user/assistant text blocks and thinking blocks). Skips tool_use,
-// tool_result, signatures, metadata, and non-message record types.
+// Extracts human-readable text (user/assistant text blocks, thinking
+// blocks) where available; emits a chunk with raw line bytes when the
+// line is partial JSON at the file tail (R2272). Complete lines whose
+// content is operational/tool-only (R240-R243) are skipped — the
+// extractor returns empty and we drop them. Each chunk's Locator
+// carries its byte range in the source content (R2275); AppendAware
+// uses this to resume across calls.
 func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) error {
 	lineNum := 0
 	start := 0
@@ -2743,20 +2652,39 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 			continue
 		}
 		lineNum++
-		line := content[start:i]
+		lineStart := start
+		lineEnd := i
+		line := content[lineStart:lineEnd]
 		start = i + 1
 
 		if len(line) == 0 {
 			continue
 		}
 
+		atEOF := i == len(content)
 		text := extractJSONLTextFast(line)
-		if len(text) == 0 {
+		var chunkText []byte
+		switch {
+		case len(text) > 0:
+			chunkText = text
+		case atEOF:
+			// Partial trailing line — no terminating newline yet. Emit a
+			// chunk with the raw bytes so the content is searchable;
+			// AppendAware drop-and-replace will correct it once the line
+			// completes on a later append. (R2271, R2272, R2274)
+			chunkText = line
+		default:
+			// Complete line with no extracted content — operational or
+			// tool-only record. Skip per R240-R243.
 			continue
 		}
 
 		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
-		chunk := microfts2.Chunk{Range: []byte(r), Content: text}
+		chunk := microfts2.Chunk{
+			Range:   []byte(r),
+			Locator: microfts2.EncodeByteRangeLocator(lineStart, lineEnd),
+			Content: chunkText,
+		}
 		// R1507-R1508: extract role and skill attrs from JSONL metadata.
 		var attrs []microfts2.Pair
 		if ts := extractJSONLTimestamp(line); ts != nil {
@@ -2765,7 +2693,7 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 		if role := extractJSONLRole(line); role != "" {
 			attrs = append(attrs, microfts2.Pair{Key: []byte("role"), Value: []byte(role)})
 			if role == "skill" {
-				if name := extractSkillName(text); name != "" {
+				if name := extractSkillName(chunkText); name != "" {
 					attrs = append(attrs, microfts2.Pair{Key: []byte("skill"), Value: []byte(name)})
 				}
 			}
@@ -2776,6 +2704,95 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 		}
 	}
 	return nil
+}
+
+// CRC: crc-DB.md | R2273, R2274
+// JSONLChunker implements microfts2.Chunker and microfts2.AppendAwareChunker
+// for the chat-jsonl strategy. Per-file resume state lives in the chunk
+// locator stored in microfts2's F record (R2275), so the struct itself
+// carries no state.
+type JSONLChunker struct{}
+
+// Chunks delegates to JSONLChunkFunc.
+func (JSONLChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
+	return JSONLChunkFunc(path, content, yield)
+}
+
+// AppendChunks re-chunks chat-jsonl from the byte offset encoded in
+// lastLocator through end-of-file (R2274). The first emitted chunk's
+// byte range decides replacedLast: same range as the previous last
+// chunk means the boundary was clean (drop, don't yield); a different
+// range means the previous last chunk has been extended or replaced
+// (typically a partial trailing line whose record has now grown or
+// completed) and we yield it as a replacement with replacedLast=true.
+// Subsequent chunks are yielded normally with line and byte ranges
+// adjusted to absolute positions.
+func (JSONLChunker) AppendChunks(path string, lastLocator []byte, _ []byte, yield func(microfts2.Chunk) bool) (bool, error) {
+	if len(lastLocator) == 0 {
+		// Legacy F record from before chat-jsonl emitted locators.
+		// Error so the indexer falls through to executeFullRefresh,
+		// which replaces all chunks (including locator-bearing ones)
+		// in a single transaction. One-time per-file migration cost.
+		return false, fmt.Errorf("chat-jsonl append: no locator on previous last chunk; needs full reindex")
+	}
+	oldStart, oldEnd, ok := microfts2.DecodeByteRangeLocator(lastLocator)
+	if !ok {
+		return false, fmt.Errorf("chat-jsonl append: malformed last-chunk locator")
+	}
+	full, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("chat-jsonl append: read file: %w", err)
+	}
+	if oldStart < 0 || oldStart > len(full) || oldEnd < oldStart || oldEnd > len(full) {
+		return false, fmt.Errorf("chat-jsonl append: locator [%d,%d) outside file (len %d)", oldStart, oldEnd, len(full))
+	}
+	baseLine := bytes.Count(full[:oldStart], []byte{'\n'})
+	oldLen := oldEnd - oldStart
+
+	var firstSeen bool
+	var replacedLast bool
+	wrap := func(c microfts2.Chunk) bool {
+		relStart, relEnd, okLoc := microfts2.DecodeByteRangeLocator(c.Locator)
+		if !firstSeen {
+			firstSeen = true
+			if okLoc && relStart == 0 && relEnd == oldLen {
+				return true // clean boundary — drop, don't yield
+			}
+			replacedLast = true
+		}
+		adjustedRange := adjustChunkRangeLines(string(c.Range), baseLine)
+		var adjustedLoc []byte
+		if okLoc {
+			adjustedLoc = microfts2.EncodeByteRangeLocator(oldStart+relStart, oldStart+relEnd)
+		} else {
+			adjustedLoc = c.Locator
+		}
+		return yield(microfts2.Chunk{
+			Range:   []byte(adjustedRange),
+			Locator: adjustedLoc,
+			Content: c.Content,
+			Attrs:   c.Attrs,
+		})
+	}
+	if err := JSONLChunkFunc(path, full[oldStart:], wrap); err != nil {
+		return replacedLast, err
+	}
+	return replacedLast, nil
+}
+
+// adjustChunkRangeLines parses an "N-M" range and adds baseLine to both
+// endpoints. Returns the input unchanged if it doesn't match the format.
+func adjustChunkRangeLines(rangeStr string, baseLine int) string {
+	idx := strings.IndexByte(rangeStr, '-')
+	if idx < 1 || idx == len(rangeStr)-1 {
+		return rangeStr
+	}
+	startN, errS := strconv.Atoi(rangeStr[:idx])
+	endN, errE := strconv.Atoi(rangeStr[idx+1:])
+	if errS != nil || errE != nil {
+		return rangeStr
+	}
+	return strconv.Itoa(startN+baseLine) + "-" + strconv.Itoa(endN+baseLine)
 }
 
 // JSONLChunkFuncOld is the json.Unmarshal-based chunker, kept for comparison.

@@ -451,3 +451,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O96: Librarian-level ED tests (rebuild regenerates ED, BatchEmbed writes ED for missing pairs) require a real GGUF model and are not run by 'go test'. Store-level ED tests in store_test.go cover R2151-R2162 at the LMDB layer; the model-side path is exercised manually after each model swap.
 - A50: R2246: Lua API mcp.sweepHotCorrelations() deferred — CLI subcommand 'ark sweep correlations' lands the invocation surface for 1E; the Lua wrapper will land alongside the curation view UI (Phase 1F) when the Lua binding is needed.
 - A51: R2248: Cron-via-tag triggering deferred to a follow-up slice (the 'small extension' described in CURATION-VIEW.md). Sweep invocation in 1E is direct (CLI / Lua / Go); scheduler integration arrives separately.
+- T57: R237 retired by R2271 (2026-05-11 chat-jsonl emit-all: lines without extractable text now emit raw-line chunks instead of being dropped)
