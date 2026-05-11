@@ -20,6 +20,8 @@ The Frictionless command is `~/.ark/ark ui`. UI skills use `{cmd}` as a placehol
 
 **The ark app lives in both Git and Fossil.** The app source is at `apps/ark/` inside this Git repo, but since it's also a Frictionless app it uses the Fossil checkpoint flow (`{cmd} checkpoint local`, `{cmd} checkpoint baseline`). After a `/ui-thorough` pass, do both: `checkpoint local` for the Fossil branch, then a Git commit for the repo. This is non-standard — most Frictionless apps only use Fossil.
 
+**New viewdefs need a `linkapp` to load.** The runtime reads viewdefs from `~/.ark/viewdefs/` (symlink directory). Adding a new viewdef to `apps/ark/viewdefs/` does not register it automatically — run `~/.ark/ark ui linkapp add ark` once to refresh the symlinks. The view will render nothing until you do.
+
 ## Quick Recall
 
 Use /ark to query the knowledge base or write tagged content.

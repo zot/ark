@@ -242,11 +242,11 @@ The vocabulary-maintenance workshop. Three of the four entry points
 from `.scratch/CURATION-VIEW.md` (chunk → similar-chunks deferred,
 no backend yet):
 
-- **chunk → tag candidates** (entry 1, `mcp:suggestTagNames`)
-- **tag → chunk candidates** (entry 2, `mcp:topKChunksForTag` cached
-  / `mcp:chunksForTag` live)
-- **tag → tag** (entry 4, `mcp:relatedTags` / `mcp:tagDrift` /
-  `mcp:tagPairConflict`)
+- **chunk → tag candidates** (entry 1, `mcp.suggestTagNames`)
+- **tag → chunk candidates** (entry 2, `mcp.topKChunksForTag` cached
+  / `mcp.chunksForTag` live)
+- **tag → tag** (entry 4, `mcp.relatedTags` / `mcp.tagDrift` /
+  `mcp.tagPairConflict`)
 
 ### Layout
 
@@ -285,13 +285,13 @@ Four rules from `.scratch/CURATION-VIEW.md`:
 A text input accepts a tag name. Submitting the input "focuses"
 that tag, populating:
 
-- **Chunks for this tag** — `mcp:topKChunksForTag(tag, k)` via the
+- **Chunks for this tag** — `mcp.topKChunksForTag(tag, k)` via the
   HC cache. Each row has a pin button. Falls back to
-  `mcp:chunksForTag` (live) when the cache is missing or empty
+  `mcp.chunksForTag` (live) when the cache is missing or empty
   and the embedding model is available.
-- **Related tags** — `mcp:relatedTags(tag, k)`. Click a tag to
+- **Related tags** — `mcp.relatedTags(tag, k)`. Click a tag to
   switch focus.
-- **Drift pairs** — `mcp:tagDrift(tag)`. Read-only display showing
+- **Drift pairs** — `mcp.tagDrift(tag)`. Read-only display showing
   which definition files of the tag have diverged.
 
 A "clear focus" button restores the unfocused state of the side
@@ -299,7 +299,7 @@ panel (an empty-state hint).
 
 ### Sweep controls
 
-- **Sweep button** — calls `mcp:sweepHotCorrelations()`. Runs
+- **Sweep button** — calls `mcp.sweepHotCorrelations()`. Runs
   through the write goroutine, identical to
   `POST /sweep/correlations`. Returns the `SweepResult` summary.
   The button is disabled while a sweep is in flight; the header
@@ -330,7 +330,7 @@ on every mutation.
   for now the curation view is reachable through the bottom-bar
   button and chunks are pinned from the focused-tag list or via
   `ark:curate(chunkID)` from Lua.
-- **Tag conflict explorer** — `mcp:tagPairConflict(tagA, tagB)`
+- **Tag conflict explorer** — `mcp.tagPairConflict(tagA, tagB)`
   is bridged but the UX for picking two tags is deferred. The
   drift surface covers the within-tag case, which is the more
   common need.

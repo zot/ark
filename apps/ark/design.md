@@ -200,7 +200,7 @@ the sweep status, and the persistence wiring.
 
 A chunk in the pinned-chunks list. Each carries its own
 tag-suggestions panel, lazy-loaded on first display via
-`mcp:suggestTagNames`.
+`mcp.suggestTagNames`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -216,7 +216,7 @@ tag-suggestions panel, lazy-loaded on first display via
 ### Ark.TagSuggestion
 
 A row in a pinned chunk's tag-suggestions panel. Shape mirrors the
-Lua bridge return from `mcp:suggestTagNames`.
+Lua bridge return from `mcp.suggestTagNames`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -227,8 +227,8 @@ Lua bridge return from `mcp:suggestTagNames`.
 ### Ark.HotChunk
 
 A chunk row in the focused-tag panel's "Top chunks" list. Shape
-mirrors the Lua bridge return from `mcp:topKChunksForTag` /
-`mcp:chunksForTag`.
+mirrors the Lua bridge return from `mcp.topKChunksForTag` /
+`mcp.chunksForTag`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -240,7 +240,7 @@ mirrors the Lua bridge return from `mcp:topKChunksForTag` /
 ### Ark.RelatedTag
 
 A row in the focused-tag panel's "Related tags" list. Shape
-mirrors `mcp:relatedTags`.
+mirrors `mcp.relatedTags`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -252,7 +252,7 @@ mirrors `mcp:relatedTags`.
 ### Ark.DriftPair
 
 A row in the focused-tag panel's "Drift" list. Shape mirrors
-`mcp:tagDrift`.
+`mcp.tagDrift`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -400,7 +400,7 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | notFocused() | focusedTag == "" |
 | focusError() | _focusError |
 | noFocusError() | _focusError == "" (used by `ui-class-hidden`) |
-| sweepNow() | Call mcp:sweepHotCorrelations() in a guarded section; sets _sweepBusy / _sweepResult |
+| sweepNow() | Call mcp.sweepHotCorrelations() in a guarded section; sets _sweepBusy / _sweepResult |
 | sweepStatusText() | Display string for the header strip |
 | sweepBusy() | _sweepBusy (used by `ui-attr-disabled`) |
 | _persist() | Write {pinned: [...], lastViewedAt: ...} to state.json. Internal. |
@@ -413,7 +413,7 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | new(chunkID, fileID, path, pinnedAt) | Construct a pinned-chunk record |
 | dismiss() | Call curation:dismissChunk(self) |
 | openFile() | Call mcp:open(path) |
-| loadSuggestions() | Call mcp:suggestTagNames(chunkID, k); populate _suggestions / _suggestionsError; mark _suggestionsLoaded |
+| loadSuggestions() | Call mcp.suggestTagNames(chunkID, k); populate _suggestions / _suggestionsError; mark _suggestionsLoaded |
 | suggestions() | Return _suggestions; lazy-loads on first call |
 | suggestionsError() | _suggestionsError |
 | noSuggestionsError() | _suggestionsError == "" (used by `ui-class-hidden`) |
@@ -552,7 +552,7 @@ fall back to an empty workspace and continue without raising.
 ## Sweep Behavior
 
 `sweepNow()` sets `_sweepBusy = true`, calls
-`mcp:sweepHotCorrelations()`, and stores the returned summary in
+`mcp.sweepHotCorrelations()`, and stores the returned summary in
 `_sweepResult`. The button is bound to `canSweep()` so it disables
 while a call is in flight. The header reflects the busy state via
 `sweepStatusText()`.
