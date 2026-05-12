@@ -34,25 +34,27 @@ type Event struct {
 }
 
 // PubSub manages tag subscriptions and notification delivery.
-// R778, R799, R800, R801, R802, R803, R804
+// CRC: crc-PubSub.md | R778, R799, R800, R801, R802, R803, R804, R2276, R2279
 type PubSub struct {
-	subs       map[string][]*TagSub
-	queues     map[string]chan Event
-	lastListen map[string]time.Time
-	mu         sync.RWMutex
-	ttl        time.Duration
-	queueDepth int
-	db         *DB // for watchdog tmp:// writes (nil = watchdog disabled)
+	subs        map[string][]*TagSub
+	queues      map[string]chan Event
+	lastListen  map[string]time.Time
+	mu          sync.RWMutex
+	ttl         time.Duration
+	queueDepth  int
+	db          *DB                            // for watchdog tmp:// writes (nil = watchdog disabled)
+	tagSetCache map[string]map[TagValue]bool   // R2283: path → last-published tag-set, used by PublishTmpDiff
 }
 
 // NewPubSub creates a PubSub with the given TTL and queue depth.
 func NewPubSub(ttl time.Duration, queueDepth int) *PubSub {
 	return &PubSub{
-		subs:       make(map[string][]*TagSub),
-		queues:     make(map[string]chan Event),
-		lastListen: make(map[string]time.Time),
-		ttl:        ttl,
-		queueDepth: queueDepth,
+		subs:        make(map[string][]*TagSub),
+		queues:      make(map[string]chan Event),
+		lastListen:  make(map[string]time.Time),
+		ttl:         ttl,
+		queueDepth:  queueDepth,
+		tagSetCache: make(map[string]map[TagValue]bool),
 	}
 }
 
@@ -154,6 +156,12 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 	var unmatched []TagValue
 	for _, tv := range tags {
 		matched := false
+		// Broadcast across all matching sessions — each session has its
+		// own queue and is an independent subscriber. Used to short-
+		// circuit after the first session match, which silently
+		// prevented "tests as alternative subscribers" alongside the
+		// running UI (and admin observers alongside their target
+		// session). R2276, R2293.
 		for sid, subs := range ps.subs {
 			if sid == writerID {
 				continue // R798: no self-notification
@@ -181,17 +189,164 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 					sub.Drops.Add(1)
 				}
 				matched = true
-				break // One notification per sub match per tag, not per sub
+				break // one notification per (tag) within a session, not per sub
 			}
-			if matched {
-				break
-			}
+			// continue to the next session — broadcast to all
+			// matching sessions, not just the first (R2276, R2293).
 		}
 		if !matched {
 			unmatched = append(unmatched, tv)
 		}
 	}
 	return unmatched
+}
+
+// PublishTmpDiff is the centralized tmp:// publish path. Called from
+// db.AddTmpFile / db.UpdateTmpFile / db.AppendTmpFile after the actor
+// write commits. Extracts tags from content, diffs against the cached
+// prior tag-set for path, and publishes only the (tag, value) pairs
+// that are new since the last publish for this path. Updates the
+// cache so the next call sees the current state as prior.
+//
+// AppendTmpFile callers pass the full resulting content (existing +
+// appended) so prior tags don't re-fire on each append (R2286).
+// AddTmpFile callers see an empty prior set (path's first write), so
+// every present tag fires (R2285).
+//
+// CRC: crc-PubSub.md | Seq: seq-tmp-subscription.md | R2278, R2281, R2283, R2284, R2285, R2286
+func (ps *PubSub) PublishTmpDiff(writerID, path string, content []byte, strategy string) {
+	tags := ExtractTagValues(content, strategy)
+
+	// Build the new set; collect (tag, value) pairs that weren't in the
+	// prior set. Lock once for the read/swap of tagSetCache; do the
+	// publish outside the lock to avoid blocking other publishers while
+	// fan-out runs.
+	next := make(map[TagValue]bool, len(tags))
+	for _, tv := range tags {
+		next[tv] = true
+	}
+
+	ps.mu.Lock()
+	prev := ps.tagSetCache[path]
+	ps.tagSetCache[path] = next
+	ps.mu.Unlock()
+
+	var changed []TagValue
+	for tv := range next {
+		if !prev[tv] {
+			changed = append(changed, tv)
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	ps.PublishAndWatch(writerID, path, changed)
+}
+
+// PublishTmpAppend is the append-variant of PublishTmpDiff. Called
+// from db.AppendTmpFile after the actor write commits. Extracts tags
+// from the appended content and **unions** them into the cache —
+// prior tags remain in the cache (so they don't re-fire on the next
+// publish for this path), and only newly-introduced (tag, value)
+// pairs are published.
+//
+// Equivalent semantically to "extract tags from the whole resulting
+// content and diff against the cache" (R2286), but the union form
+// avoids reading the full doc back from the overlay.
+//
+// CRC: crc-PubSub.md | Seq: seq-tmp-subscription.md | R2281, R2286
+func (ps *PubSub) PublishTmpAppend(writerID, path string, appendContent []byte, strategy string) {
+	newTags := ExtractTagValues(appendContent, strategy)
+
+	ps.mu.Lock()
+	prev := ps.tagSetCache[path]
+	if prev == nil {
+		prev = make(map[TagValue]bool, len(newTags))
+		ps.tagSetCache[path] = prev
+	}
+	var changed []TagValue
+	for _, tv := range newTags {
+		if !prev[tv] {
+			prev[tv] = true
+			changed = append(changed, tv)
+		}
+	}
+	ps.mu.Unlock()
+
+	if len(changed) == 0 {
+		return
+	}
+	ps.PublishAndWatch(writerID, path, changed)
+}
+
+// ClearTagSetCache drops the cached tag-set for path. Called from
+// db.RemoveTmpFile so the next AddTmpFile on the same path treats it
+// as new (prior set empty → every tag fires).
+//
+// CRC: crc-PubSub.md | R2287
+func (ps *PubSub) ClearTagSetCache(path string) {
+	ps.mu.Lock()
+	delete(ps.tagSetCache, path)
+	ps.mu.Unlock()
+}
+
+// CompressBatch returns one Event per (path, tag) keeping the latest.
+// Used by per-session listening goroutines before dispatching a batch
+// into the Lua VM — rapid progress-style tag changes within one batch
+// collapse to a single callback-relevant snapshot. Operates on Go
+// structs; no Lua-table allocation here (R2296).
+//
+// CRC: crc-PubSub.md | Seq: seq-tmp-subscription.md | R2295, R2310
+func CompressBatch(events []Event) []Event {
+	if len(events) <= 1 {
+		return events
+	}
+	type key struct{ path, tag string }
+	idx := make(map[key]int, len(events))
+	out := make([]Event, 0, len(events))
+	for _, e := range events {
+		k := key{e.Path, e.Tag}
+		if i, ok := idx[k]; ok {
+			out[i] = e // replace with latest
+			continue
+		}
+		idx[k] = len(out)
+		out = append(out, e)
+	}
+	return out
+}
+
+// QueueDepth returns the current event-queue length for sessionID.
+// Monitor read API — non-blocking inspection of how many events are
+// queued behind a (possibly slow) subscriber.
+//
+// CRC: crc-PubSub.md | R2303
+func (ps *PubSub) QueueDepth(sessionID string) int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return len(ps.queues[sessionID])
+}
+
+// LastListenAt returns the timestamp of the session's most recent
+// Listen drain. Zero time if the session has no record. Monitor read
+// API — lets a watcher flag sessions whose drain has stalled.
+//
+// CRC: crc-PubSub.md | R2304
+func (ps *PubSub) LastListenAt(sessionID string) time.Time {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.lastListen[sessionID]
+}
+
+// SubCount returns the number of active subscriptions for sessionID.
+// Used by the Lua-bridge lifecycle code to decide when to stop the
+// per-session listening goroutine.
+//
+// CRC: crc-PubSub.md | R2300
+func (ps *PubSub) SubCount(sessionID string) int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return len(ps.subs[sessionID])
 }
 
 // TagValue is a tag name + value pair for Publish.

@@ -179,6 +179,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tvid-overlay.md → `tvid_map.go`, `store.go`, `tmp_tag_store.go`, `db.go`
 - [x] seq-ext-routing.md → `extmap.go`, `indexer.go`, `store.go`
 - [ ] seq-tag-verify.md → `cmd/ark/main.go`, `verify.go`, `extmap.go`, `store.go`, `db.go`
+- [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -230,6 +231,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-ChunksForTag.md → `librarian_test.go`
 - [x] test-HotCorrelations.md → `librarian_test.go`, `store_test.go`
 - [x] test-VectorFreshness.md → `store_test.go`
+- [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
 
 ## Gaps
 
@@ -452,3 +454,13 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A50: R2246: Lua API mcp.sweepHotCorrelations() deferred — CLI subcommand 'ark sweep correlations' lands the invocation surface for 1E; the Lua wrapper will land alongside the curation view UI (Phase 1F) when the Lua binding is needed.
 - A51: R2248: Cron-via-tag triggering deferred to a follow-up slice (the 'small extension' described in CURATION-VIEW.md). Sweep invocation in 1E is direct (CLI / Lua / Go); scheduler integration arrives separately.
 - T57: R237 retired by R2271 (2026-05-11 chat-jsonl emit-all: lines without extractable text now emit raw-line chunks instead of being dropped)
+- A52: R2306: (scope boundary) no event-history buffer; current state is in tmp:// doc tags at subscribe time, subscribers see live events only
+- A53: R2307: (scope boundary) HTTP POST /subscribe and ark subscribe CLI surfaces are unchanged; they consume the centralized publish via R2281 without surface-contract changes
+- A54: R2310: (scope boundary) compression is intra-batch only; events for the same (path, tag) in successive Listen batches are not coalesced
+- A55: R2311: (scope boundary) subscribe-before-doc-exists is valid; events fire on first AddTmpFile after subscription registration
+- A56: R2280: (scope/historical) internal callers that previously skipped publishing — bug surface closed by R2281 centralization, no separate code artifact needed
+- A57: R2301: (lifecycle) server shutdown stops listening goroutines via existing flib shutdown path — no new explicit code, falls out of WithLua + listening-goroutine teardown
+- A58: R2305: monitor 'since' semantics reuse existing Store.RecordSerial and Store.WalkRecordsSinceSerial (R2174-R2193); no new code in this slice
+- A59: R2308: (scope boundary) no handle-based cancellation exposed from Lua — replace-by-(session,tag) via re-subscribe is the cancel; no code artifact
+- A60: R2309: (scope boundary) Go PubSub.Subscribe/Cancel APIs unchanged — append semantics + value-pattern cancel preserved for HTTP and direct Go callers; no code change required
+- A61: R2312: test-as-subscriber pattern — codified in test-TmpSubscription.md and exercised by the test files; no production-code artifact

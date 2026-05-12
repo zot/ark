@@ -59,6 +59,15 @@ type Server struct {
 	pubsub          *PubSub             // R799: subscription registry
 	scheduler       *EventScheduler     // R805: time-based event queue
 	librarian       *Librarian          // R1235: Haiku co-process for spectral search
+
+	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
+	// sessionID with at least one mcp.subscribe gets a listening
+	// goroutine that drains pubsub.Listen, compresses by (path, tag),
+	// and dispatches to its registered onpublish callback via WithLua.
+	// listenMu protects both maps below.
+	listenMu     sync.Mutex
+	listenLoops  map[string]chan struct{}  // sessionID → stop signal
+	onpublishCBs map[string]*lua.LFunction // sessionID → onpublish callback (R2291)
 }
 
 // ServeOpts controls server behavior.
@@ -203,6 +212,11 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	// R799: Create pubsub and scheduler
 	ps := NewPubSub(10*time.Minute, 100)
+	// R2281: wire centralized tmp:// publish — DB's AddTmpFile /
+	// UpdateTmpFile / AppendTmpFile / RemoveTmpFile call into pubsub
+	// after the actor write commits. PubSub already has SetDB for
+	// its watchdog-write path; the wiring is bidirectional.
+	db.SetPubSub(ps)
 	schedDir := filepath.Join(dbPath, "schedule")
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
 
@@ -1563,11 +1577,11 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	// CRC: crc-Server.md | R2282 — pubsub publish is now centralized
+	// in db.AddTmpFile via PubSub.PublishTmpDiff; the manual
+	// PublishAndWatch call that used to live here is removed.
+	// Schedule processing still needs the extracted tags.
 	tagValues := ExtractTagValues(content, strategy)
-	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, tagValues)
-	}
-	// Schedule processing for tmp:// files with schedule tags
 	if srv.scheduler != nil {
 		var pending []scheduleItem
 		cfg := srv.db.Config()
@@ -1610,9 +1624,7 @@ func (srv *Server) handleTmpUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues(content, strategy))
-	}
+	// R2282: publish is now centralized in db.UpdateTmpFile.
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1669,9 +1681,7 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if srv.pubsub != nil {
-		srv.pubsub.PublishAndWatch("", req.Path, ExtractTagValues(content, req.Strategy))
-	}
+	// R2282: publish is now centralized in db.AppendTmpFile.
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -2826,6 +2836,92 @@ func serializeScheduleConfig(cfg *Config) string {
 	return strings.Join(parts, ",")
 }
 
+// ensureListenLoop starts a per-session listening goroutine if one
+// isn't already running for sessionID. Idempotent; called from
+// mcp.subscribe after the sub is registered.
+// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2294, R2299
+func (srv *Server) ensureListenLoop(sessionID string) {
+	srv.listenMu.Lock()
+	if srv.listenLoops == nil {
+		srv.listenLoops = make(map[string]chan struct{})
+	}
+	if _, running := srv.listenLoops[sessionID]; running {
+		srv.listenMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	srv.listenLoops[sessionID] = stop
+	srv.listenMu.Unlock()
+	go srv.runListenLoop(sessionID, stop)
+}
+
+// maybeStopListenLoop stops the per-session listening goroutine and
+// clears the onpublish callback when the session has no remaining
+// subscriptions. Called from mcp.cancel after pubsub.Cancel returns.
+// CRC: crc-Server.md | R2300
+func (srv *Server) maybeStopListenLoop(sessionID string) {
+	if srv.pubsub == nil {
+		return
+	}
+	if srv.pubsub.SubCount(sessionID) > 0 {
+		return
+	}
+	srv.listenMu.Lock()
+	if stop, ok := srv.listenLoops[sessionID]; ok {
+		close(stop)
+		delete(srv.listenLoops, sessionID)
+	}
+	delete(srv.onpublishCBs, sessionID)
+	srv.listenMu.Unlock()
+}
+
+// runListenLoop drains pubsub.Listen for sessionID, compresses each
+// batch by (path, tag), and dispatches the survivors into the Lua
+// VM via uiRuntime.WithLua. One WithLua call per batch, not per
+// event. Exits when stop is closed or when the session's pubsub
+// state is gone.
+// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2294, R2295, R2296, R2297, R2298, R2302
+func (srv *Server) runListenLoop(sessionID string, stop <-chan struct{}) {
+	const listenTimeout = 5 * time.Second
+	for {
+		// Cheap pre-check so a fast cancel doesn't pay one more Listen.
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		if srv.pubsub == nil {
+			return
+		}
+		events := srv.pubsub.Listen(sessionID, listenTimeout)
+		// After Listen returns, re-check stop — Cancel might have run
+		// concurrently and we don't want to dispatch into a dead session.
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		if len(events) == 0 {
+			continue
+		}
+		compressed := CompressBatch(events)
+		srv.listenMu.Lock()
+		cb := srv.onpublishCBs[sessionID]
+		srv.listenMu.Unlock()
+		if cb == nil || srv.uiRuntime == nil {
+			continue
+		}
+		_ = srv.uiRuntime.WithLua(func(rt *cli.LuaRuntime) error {
+			L := rt.State
+			arr := buildEventArray(L, compressed)
+			if err := L.CallByParam(lua.P{Fn: cb, NRet: 0, Protect: true}, arr); err != nil {
+				log.Printf("onpublish(%s): %v", sessionID, err)
+			}
+			return nil
+		})
+	}
+}
+
 // CRC: crc-Server.md | Seq: seq-search.md
 func (srv *Server) registerLuaFunctions() {
 	if srv.uiRuntime == nil {
@@ -3660,11 +3756,143 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp.subscribe(sessionID, filter) — register/replace a
+		// subscription for sessionID. Filter mirrors TagSub with
+		// lowerCamelCase fields. Replace-by-(session, tag): drops any
+		// prior sub on the same tag for this session, then appends
+		// the new one. Starts the listening goroutine on first sub
+		// for the session.
+		// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2277, R2288, R2289, R2290, R2293, R2299
+		L.SetField(tbl, "subscribe", L.NewFunction(func(L *lua.LState) int {
+			sessionID := L.CheckString(1)
+			filterTbl := L.CheckTable(2)
+			sub, err := buildTagSubFromLua(filterTbl)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			if srv.pubsub == nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("pubsub unavailable"))
+				return 2
+			}
+			srv.pubsub.Cancel(sessionID, sub.Tag, "")
+			srv.pubsub.Subscribe(sessionID, []*TagSub{sub})
+			srv.ensureListenLoop(sessionID)
+			return 0
+		}))
+
+		// mcp.onpublish(sessionID, callback) — register/replace the
+		// per-session callback. One callback per session.
+		// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2291
+		L.SetField(tbl, "onpublish", L.NewFunction(func(L *lua.LState) int {
+			sessionID := L.CheckString(1)
+			cb := L.CheckFunction(2)
+			srv.listenMu.Lock()
+			if srv.onpublishCBs == nil {
+				srv.onpublishCBs = make(map[string]*lua.LFunction)
+			}
+			srv.onpublishCBs[sessionID] = cb
+			srv.listenMu.Unlock()
+			return 0
+		}))
+
+		// mcp.cancel(sessionID, tag) — drop the subscription on tag
+		// for session. Empty tag drops all subs for the session and
+		// stops the listening goroutine.
+		// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2292, R2300
+		L.SetField(tbl, "cancel", L.NewFunction(func(L *lua.LState) int {
+			sessionID := L.CheckString(1)
+			tag := L.OptString(2, "")
+			if srv.pubsub == nil {
+				return 0
+			}
+			srv.pubsub.Cancel(sessionID, tag, "")
+			srv.maybeStopListenLoop(sessionID)
+			return 0
+		}))
+
 		return nil
 	})
 	if err != nil {
 		log.Printf("ui: register lua functions failed: %v", err)
 	}
+}
+
+// buildTagSubFromLua decodes a Lua filter table into a TagSub. Field
+// shape mirrors TagSub one-to-one with lowerCamelCase (R2289):
+// `tag` (required string), `valueRE` (optional regex string),
+// `filterFiles` (optional string array), `excludeFiles` (optional
+// string array). Missing/nil optional fields map to Go zero-values
+// which already mean "match any."
+// CRC: crc-Server.md | R2289
+func buildTagSubFromLua(t *lua.LTable) (*TagSub, error) {
+	tagV := t.RawGetString("tag")
+	tag, ok := tagV.(lua.LString)
+	if !ok || string(tag) == "" {
+		return nil, fmt.Errorf("subscribe: tag (string) required")
+	}
+	sub := &TagSub{Tag: string(tag)}
+	if v := t.RawGetString("valueRE"); v != lua.LNil {
+		s, ok := v.(lua.LString)
+		if !ok {
+			return nil, fmt.Errorf("subscribe: valueRE must be a string")
+		}
+		re, err := regexp.Compile(string(s))
+		if err != nil {
+			return nil, fmt.Errorf("subscribe: invalid valueRE: %w", err)
+		}
+		sub.ValueRE = re
+	}
+	if v := t.RawGetString("filterFiles"); v != lua.LNil {
+		arr, ok := v.(*lua.LTable)
+		if !ok {
+			return nil, fmt.Errorf("subscribe: filterFiles must be an array")
+		}
+		sub.FilterFiles = luaArrayToStrings(arr)
+	}
+	if v := t.RawGetString("excludeFiles"); v != lua.LNil {
+		arr, ok := v.(*lua.LTable)
+		if !ok {
+			return nil, fmt.Errorf("subscribe: excludeFiles must be an array")
+		}
+		sub.ExcludeFiles = luaArrayToStrings(arr)
+	}
+	return sub, nil
+}
+
+// luaArrayToStrings extracts the array part of a Lua table into a
+// []string. Non-string entries are skipped.
+func luaArrayToStrings(t *lua.LTable) []string {
+	var out []string
+	t.ForEach(func(k, v lua.LValue) {
+		if _, ok := k.(lua.LNumber); !ok {
+			return
+		}
+		if s, ok := v.(lua.LString); ok {
+			out = append(out, string(s))
+		}
+	})
+	return out
+}
+
+// buildEventArray builds a 1-indexed Lua array of event tables from
+// the compressed []Event. Each event table mirrors the Go Event
+// struct field-for-field with lowerCamelCase naming (R2266).
+// Future Event fields can be added to the struct and surfaced here.
+// CRC: crc-Server.md | R2297, R2298
+func buildEventArray(L *lua.LState, events []Event) *lua.LTable {
+	arr := L.NewTable()
+	for i, e := range events {
+		row := L.NewTable()
+		L.SetField(row, "tag", lua.LString(e.Tag))
+		L.SetField(row, "value", lua.LString(e.Value))
+		L.SetField(row, "path", lua.LString(e.Path))
+		L.SetField(row, "time", lua.LString(e.Time.Format(time.RFC3339Nano)))
+		arr.RawSetInt(i+1, row)
+	}
+	return arr
 }
 
 // chunkSuggestionToLua converts a ChunkSuggestion into the Lua table

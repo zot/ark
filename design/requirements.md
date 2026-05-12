@@ -2950,7 +2950,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1864:** Log the dedup count alongside existing embed stats: embedded, skipped (too large), and deduped (same chunkID from another file reference).
 
 ## Feature: EC Rekey (chunkID-based Embedding)
-**Source:** specs/ec-rekey.md
+**Source:** specs/migrations/complete/002-ec-rekey.md
 
 ### Key Format
 
@@ -3069,7 +3069,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1902:** This migration depends on the completed `microfts2-abi-catchup` migration for refcount-aware `FileIDCount` and the `AppendAwareChunker` infrastructure.
 
 ## Feature: microfts2 Callback Adoption (post-chunkid-tag-store)
-**Source:** specs/migrations/complete/003-chunkid-tag-store.md (in-place addendum after microfts2 landed `WithIndexedChunkCallback`)
+**Source:** specs/migrations/complete/003-chunkid-tag-store.md
 
 These extend the chunkid-tag-store work with the chunkid-aware indexed
 callback API delivered by microfts2 on 2026-04-27 (see
@@ -3592,3 +3592,44 @@ implementation, not a separate format break.
 - **R2268:** When the underlying Go call returns `(nil, nil)` (empty result, missing inputs, embedding unavailable, k ≤ 0, etc.), the Lua wrapper pushes an empty Lua table (`{}`) instead of Lua nil. Matches `mcp:inbox()`; lets Lua callers iterate without nil-guarding.
 - **R2269:** When the underlying Go call returns a non-nil error, the Lua wrapper returns `(nil, errstring)` — the standard gopher-lua two-return convention used by `mcp:inbox()`, `mcp:open()`, and other existing bridge methods.
 - **R2270:** The seven read wrappers (R2258–R2264) acquire only a read txn through `Sync(srv.db, ...)`. They do not enqueue work in the write goroutine and do not block other writers. `mcp.sweepHotCorrelations()` (R2265) is the one writer in the set; it routes through the same `enqueueWrite` path that `POST /sweep/correlations` uses (R2240 etc.), so the actor invariant holds.
+
+## Feature: tmp:// subscription primitive
+**Source:** specs/tmp-subscription.md
+
+- **R2276:** Pub/sub is the primary integration plane between ark and any consumer that observes corpus state — UIs, tests, monitors, and agents are symmetric subscribers. They use the same Go API and the same Lua API; no test-only seams are introduced.
+- **R2277:** The Go API on `*PubSub` is the canonical contract; the Lua bridge is a thin wrapper that delegates to it. Tests and the Ark monitor exercise the Go API directly.
+- **R2278:** tmp:// paths are first-class citizens of the existing `TagSub.FilterFiles` / `TagSub.ExcludeFiles` doublestar glob matcher. No new struct, no new field, no special-case branch — `matchFileFilters` (pubsub.go:463) handles `tmp://...` paths through the same code path as persistent paths.
+- **R2279:** tmp:// publish for HTTP-driven writes is already wired: `handleTmpAdd` (server.go:1568), `handleTmpUpdate` (server.go:1614), and `handleTmpAppend` (server.go:1673) each call `srv.pubsub.PublishAndWatch("", path, ExtractTagValues(content, strategy))` after their `SyncVoid` write commits. This requirement records the existing baseline that the slice extends rather than introduces.
+- **R2280:** Several internal callers of the DB-layer tmp:// write methods skip publishing today and therefore write tmp:// docs that no subscriber sees: `librarian.go:1374` and `librarian.go:1378` (sweep progress doc), `pubsub.go:85` (Watchdog tmp:// findings), `server.go:292` (missed-events), `server.go:563-565` (indexer-side reset), `server.go:3205` (Lua `tmp_add` bridge). These are bugs to close, not missing features.
+- **R2281:** Publishing is centralized inside the DB-layer methods. `db.AddTmpFile`, `db.UpdateTmpFile`, and `db.AppendTmpFile` each, after their actor write commits, extract tags from the resulting content via `ExtractTagValues` and publish through pubsub. Every internal caller becomes correct-by-construction.
+- **R2282:** The three HTTP handlers (`handleTmpAdd`, `handleTmpUpdate`, `handleTmpAppend`) stop calling `PublishAndWatch` manually; the centralized DB-layer path handles publishing for them.
+- **R2283:** PubSub maintains an in-memory `map[path] → map[tag]value` cache of the last-published tag-set per tmp:// path. The cache is updated after each successful publish.
+- **R2284:** Each centralized publish diffs the new tag-set against the cached prior set and publishes only `(tag, value)` pairs whose value differs from the cached value (or whose tag is new). This is the only-on-change policy: a sweep that rewrites `tmp://sweep/hot-correlations.md` every 250 ms with unchanged `@sweep-status` and incrementing `@sweep-progress` produces one event per progress increment, not a flood for every tag in the doc.
+- **R2285:** `db.AddTmpFile` treats the prior tag-set as empty — every present tag publishes on the first write to a new path.
+- **R2286:** `db.AppendTmpFile` extracts tags from the **whole resulting content** (existing + appended) before diffing, so tags already published from prior content don't re-fire on each append.
+- **R2287:** The tag-set cache entry for a path is cleared when `RemoveTmpFile` is called for that path, and on server restart (matches the tmp:// lifecycle — no persistence across restart).
+- **R2288:** A new Lua method `mcp.subscribe(sessionID, filter)` registers a subscription for the named session. `sessionID` is a string the app picks (default convention: app or view name like `"curation"`); apps may use finer granularity (per-request, per-panel) as bookkeeping suits.
+- **R2289:** The `filter` argument is a Lua table whose fields mirror `TagSub` one-to-one with lowerCamelCase naming: `tag` (required string), `valueRE` (optional regex string), `filterFiles` (optional array of glob strings), `excludeFiles` (optional array of glob strings). Missing/nil optional fields map to Go zero-values that mean "match any."
+- **R2290:** `mcp.subscribe` is **replace-by-(session, tag)**: calling it for an existing `(session, tag)` pair drops any prior sub on that tag for that session, then adds the new sub. The Lua bridge implements this as `PubSub.Cancel(session, tag, "")` followed by `PubSub.Subscribe(session, [newSub])`. The Go `PubSub.Subscribe` API keeps its append semantics; the constraint is a Lua-bridge convention.
+- **R2291:** A new Lua method `mcp.onpublish(sessionID, callback)` registers the per-session callback. **One callback per session**; re-registering replaces the prior callback.
+- **R2292:** A new Lua method `mcp.cancel(sessionID, tag)` drops the subscription on that tag for that session. `mcp.cancel(sessionID, "")` drops all subscriptions for the session and stops the session's listening goroutine.
+- **R2293:** All three Lua bridge methods take the session as the first argument explicitly, mirroring Go's `PubSub.Subscribe(sessionID, ...)`, `Listen(sessionID, ...)`, and `Cancel(sessionID, ...)`. Cross-session admin use (e.g. the Ark monitor watching `"otherapp"`) is supported by passing a different session string.
+- **R2294:** For each session that has at least one subscription, the server runs one listening goroutine that drains `PubSub.Listen(sessionID, timeout)` in a loop.
+- **R2295:** For each batch returned by `Listen`, the listening goroutine compresses the batch by `(path, tag)` — for each unique pair, only the latest event survives — then makes **one** `srv.uiRuntime.WithLua(...)` call passing the compressed array of event tables. One Lua-VM hop per batch, not per event.
+- **R2296:** Compression operates on `[]Event` (Go structs); Lua event tables are constructed only for events that survive compression, inside the `WithLua` closure. Discarded events never allocate Lua tables.
+- **R2297:** The Lua callback registered via `mcp.onpublish` receives one argument: a 1-indexed Lua array of event tables. Each event table mirrors the Go `Event` struct field-for-field with lowerCamelCase naming (R2266 convention).
+- **R2298:** Future fields added to the Go `Event` struct surface in Lua automatically; the bridge builds the event table from the struct's field set, not from a hard-coded list.
+- **R2299:** The listening goroutine for a session starts on the first `mcp.subscribe(session, ...)` call for that session.
+- **R2300:** When the session's subscription count reaches zero — via `mcp.cancel(session, tag)` removing the last sub, or `mcp.cancel(session, "")` — the listening goroutine stops and the session's pubsub state (`ps.queues[sessionID]`, `ps.subs[sessionID]`, `ps.lastListen[sessionID]`) is cleaned up via the existing `Cancel` empty-tag path.
+- **R2301:** Server shutdown stops all listening goroutines cleanly through the existing flib shutdown path.
+- **R2302:** If the Lua VM is busy and a `WithLua` call queues, events accumulate in the per-session pubsub channel; overflow increments `sub.Drops` per existing logic. No new flow control is introduced.
+- **R2303:** `PubSub.QueueDepth(sessionID) int` returns the current event-queue length for a session, computed as `len(ps.queues[sessionID])` under the existing lock. Used by the Ark monitor to surface "events queued behind a slow subscriber" without polling.
+- **R2304:** `PubSub.LastListenAt(sessionID) time.Time` returns the timestamp of the session's most recent `Listen` drain, read from `ps.lastListen[sessionID]` under the existing lock. Used by the monitor to flag stalled subscribers.
+- **R2305:** For "what changed since I connected," the monitor uses `Store.RecordSerial` and `Store.WalkRecordsSinceSerial` (R2174–R2193). The monitor pulls the current serial at startup as its baseline and filters older changes by stamp comparison. No new state is introduced by this slice for "since" semantics.
+- **R2306:** (scope boundary) No event-history buffer is introduced. Subscribers see live events only; current state lives in the tmp:// doc's tags at subscribe time. A subscriber connecting after a terminal transition reads the doc body to learn the current state.
+- **R2307:** (scope boundary) The HTTP `POST /subscribe` and `ark subscribe` CLI surfaces are unchanged. Whether they route through the new centralized DB-layer publish path is decided implicitly by R2281 (they do, because they call the centralized DB methods); the surface contract is unchanged.
+- **R2308:** (scope boundary) No handle-based cancellation is exposed from Lua. Re-subscribing is the cancel via the replace-by-(session, tag) rule.
+- **R2309:** (scope boundary) The Go `PubSub.Subscribe` and `PubSub.Cancel` APIs are unchanged. Go callers retain append-semantics subscribe and value-pattern cancel. The tighter Lua conventions are layered on top.
+- **R2310:** (scope boundary) Compression is intra-batch only. Events for the same `(path, tag)` that arrive in successive `Listen` batches are not coalesced.
+- **R2311:** (scope boundary) Subscribe-before-doc-exists is valid. Subscribing to a tmp:// path that hasn't been created yet registers the subscription; events fire when the first `AddTmpFile` publishes.
+- **R2312:** The test-as-subscriber pattern is the canonical testing approach. Tests subscribe through the same Go API (`PubSub.Subscribe` + `Listen`) that the Lua bridge uses; no mocks or test-only seams are introduced. Substrate-correctness bugs (e.g. an internal caller that fails to publish) are caught by tests that exercise the real substrate.

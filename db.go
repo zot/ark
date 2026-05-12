@@ -54,6 +54,7 @@ type DB struct {
 	tmpMu    sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
 	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
 	svc      chan func()       // R986: closure actor channel
+	pubsub   *PubSub           // R2281: set by SetPubSub; nil disables centralized tmp:// publish
 
 	// Write actor: read/write path separation. R1051-R1068
 	writeQueue      []func(*microfts2.DB) // queued write closures
@@ -546,6 +547,12 @@ func buildBracketLang(cc ChunkerConfig) microfts2.BracketLang {
 // Path returns the database directory path.
 func (db *DB) Path() string { return db.dbPath }
 
+// SetPubSub wires the centralized tmp:// publish path. After this is
+// called, AddTmpFile / UpdateTmpFile / AppendTmpFile / RemoveTmpFile
+// all signal the pubsub on tag changes. Mirrors PubSub.SetDB.
+// CRC: crc-DB.md | R2281
+func (db *DB) SetPubSub(ps *PubSub) { db.pubsub = ps }
+
 // Config returns the current configuration.
 func (db *DB) Config() *Config { return db.config }
 func (db *DB) Store() *Store   { return db.store }
@@ -620,7 +627,10 @@ func (db *DB) FTS() *microfts2.DB {
 // and writes the extracted tag values into the in-memory tag overlay
 // via Store.UpdateTagValues. Overlay-source @ext routings are
 // applied to ExtMap state (in-memory only — no LMDB writes).
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R663, R666, R667, R1948, R2012, R2016
+// After the write completes, calls pubsub.PublishTmpDiff so
+// subscribers see the new tag-set (prior set is empty for a fresh
+// path → every present tag fires, R2285).
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R663, R666, R667, R1948, R2012, R2016, R2281, R2285
 func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
 	acc := &chunkAccumulator{strategy: strategy}
 	fid, err := db.fts.AddTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
@@ -642,14 +652,19 @@ func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) 
 			return fid, fmt.Errorf("overlay ext routing: %w", err)
 		}
 	}
+	if db.pubsub != nil {
+		db.pubsub.PublishTmpDiff("", path, content, strategy)
+	}
 	return fid, nil
 }
 
 // UpdateTmpFile replaces content of an existing tmp:// document and
 // re-extracts its tag values into the in-memory tag overlay. Overlay
 // @ext cleanup runs as a side effect of TmpTagStore's removal hook;
-// new routings apply via runOverlayExtRouting.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R666, R1948, R2012, R2016, R2023
+// new routings apply via runOverlayExtRouting. After the write
+// completes, calls pubsub.PublishTmpDiff so subscribers see only the
+// (tag, value) pairs that changed since the prior write (R2284).
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R666, R1948, R2012, R2016, R2023, R2281, R2284
 func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 	acc := &chunkAccumulator{strategy: strategy}
 	if err := db.fts.UpdateTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback)); err != nil {
@@ -674,6 +689,9 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 			return fmt.Errorf("overlay ext routing: %w", err)
 		}
 	}
+	if db.pubsub != nil {
+		db.pubsub.PublishTmpDiff("", path, content, strategy)
+	}
 	return nil
 }
 
@@ -681,7 +699,10 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 // Newly emitted chunks have their tag values added to the overlay via
 // Store.AppendTagValues; existing chunks are untouched. Overlay-source
 // @ext routings on the new chunks are applied via runOverlayExtRouting.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | R1948, R2012, R2016
+// After the write completes, calls pubsub.PublishTmpAppend so newly
+// introduced (tag, value) pairs fire while tags already published
+// from prior content stay quiet (R2286).
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R1948, R2012, R2016, R2281, R2286
 func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, error) {
 	acc := &chunkAccumulator{strategy: strategy}
 	fid, err := db.fts.AppendTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
@@ -703,13 +724,17 @@ func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, erro
 			return fid, fmt.Errorf("overlay ext routing: %w", err)
 		}
 	}
+	if db.pubsub != nil {
+		db.pubsub.PublishTmpAppend("", path, content, strategy)
+	}
 	return fid, nil
 }
 
 // RemoveTmpFile drops a tmp:// document from the overlay. Tag entries
 // are cleared first so the trigram and tag overlays never disagree
-// on which fileids exist.
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | R666, R1944
+// on which fileids exist. Clears the pubsub tag-set cache so the
+// next AddTmpFile on the same path treats it as new (R2287).
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-tmp-subscription.md | R666, R1944, R2287
 func (db *DB) RemoveTmpFile(path string) error {
 	db.tmpMu.RLock()
 	fid, ok := db.tmpPaths[path]
@@ -723,6 +748,9 @@ func (db *DB) RemoveTmpFile(path string) error {
 	db.tmpMu.Lock()
 	delete(db.tmpPaths, path)
 	db.tmpMu.Unlock()
+	if db.pubsub != nil {
+		db.pubsub.ClearTagSetCache(path)
+	}
 	return nil
 }
 

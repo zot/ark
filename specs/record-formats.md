@@ -36,6 +36,8 @@ change them, we need to update the CLI code so it's up-to-date.
 | `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
 | `EF`   | File centroid       | `EF` + fileID varint                              | float32 sum (3072 bytes) + uint32 count |
 | `ED`   | Tag-def embedding   | `ED` + tagname + fileid:8                         | float32 vector (3072 bytes)             |
+| `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
+| `HC`   | Hot correlations    | `HC` + tagname + chunkid:8                        | float64 score (8 bytes)                 |
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
 | `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
@@ -250,6 +252,81 @@ Encoding conventions used throughout:
 - **Lifecycle:** deleted with its file via callback. Recomputed
   after `BatchEmbedChunks` processes new embeddings for the file.
 
+## Freshness Substrate (S)
+
+### S — Per-record txn serial stamp
+
+- **Key:** `S` + original-prefix-bytes + original-key. Examples:
+  `ST<tagname>`, `SEV<tvid-varint>`, `SEC<chunkID-varint>`,
+  `SED<tagname><fileid:8>`, `SHC<tagname><chunkid:8>` (any
+  stamped prefix gets a parallel `S<prefix>` entry).
+- **Value:** varint-encoded uint64 — the txn serial allocated to
+  the LMDB transaction that wrote the stamped record. Multiple
+  records written in one txn share one serial; later txns have
+  strictly greater serials.
+- **Source counter:** `I:serial` (varint uint64). Maintained
+  explicitly rather than from `txn.ID()` because ark's startup
+  compact-copy (`mdb_env_copy(MDB_CP_COMPACT)`) may reset
+  `mt_txnid` on the destination, but the I-record counter sits
+  in the live B-tree and is preserved across compactions.
+- **Semantic:** monotonic freshness stamp. "Records that moved
+  together carry the same mark." Used by derived caches (HC,
+  future) to identify which records changed since a bookmark —
+  `RecordSerial(prefix, key)` and
+  `WalkRecordsSinceSerial(prefix, since, fn)`.
+- **Lifecycle:** written via `stampWrite` / `stampWriteWith`
+  alongside the original record's `txn.Put`, inside the same
+  txn (atomic). Deleted alongside the original record
+  (`DeleteChunkEmbedding`, `UpdateTagDefs` def-replacement,
+  `DropEmbeddings` model swap, `DropChunkEmbeddings` rebuild).
+  No tombstones — `RecordSerial` returns `found=false` after
+  delete.
+- **Currently stamped prefixes:** T, EV, EC, ED, HC. Future
+  stamped prefixes (F, X, schedule, etc.) adopt the substrate
+  generically — no per-prefix code beyond the `stampWrite` call.
+- **Prefix-byte note:** `S` is a single byte and disjoint from
+  every other allocated prefix's first byte. Variable-length
+  tagname suffixes could otherwise collide (e.g. a `T` record
+  with a tagname starting with `S` would collide with `TS*`);
+  `S` was chosen specifically to avoid that.
+
+Full design: `specs/vector-freshness.md`.
+
+## Derived Caches (HC)
+
+### HC — Hot correlations top-K cache
+
+- **Key:** `HC` + tagname (raw bytes) + chunkid:8 (big-endian).
+  Same variable-length tagname prefix as T / D / ED records.
+- **Value:** float64 score (8 bytes, IEEE 754). No version
+  metadata embedded — freshness lives in the S substrate.
+- **Semantic:** per-tag top-K best-scoring chunks. One record
+  per (tag, chunkid) in the bucket. Top-K bound is enforced by
+  the sweep, not by storage. At current corpus
+  (~105 tags × top-K=20), the cache holds ~2100 entries.
+- **Freshness:** HC writes are stamped via the S substrate
+  (`SHC<tagname><chunkid:8>`). A read considers an HC entry
+  fresh iff:
+  - `RecordSerial(HC, key) ≥ RecordSerial(EC, chunkid)`, and
+  - `RecordSerial(HC, key) ≥ max RecordSerial(ED, tagname || fileid)`
+    across all of the tag's def files.
+
+  The HC's own stamp is its alibi — proof of when it was
+  written. Stale entries are filtered at read time
+  (`TopKChunksForTag`); the next sweep refreshes them.
+- **Lifecycle:** written by `Librarian.SweepHotCorrelations`.
+  Phase 3 of the sweep rebuilds a tag's full top-K
+  (`Store.ReplaceHotCorrelations`); phase 4 displaces individual
+  chunks against unchanged tags. Per-tag write transactions for
+  crash safety. Dropped wholesale by `ark rebuild` and by
+  `DropEmbeddings` (sweep bookmark `I:hcsweep` reset alongside).
+- **Sweep bookmark:** `I:hcsweep` (varint uint64) — the last
+  successful sweep's high-water serial. Zero means from-scratch
+  on next run.
+
+Full design: `specs/hot-correlations.md`. Alibi-stamp pattern:
+`~/.claude/personal/patterns/alibi-stamp.md`.
+
 ## Configuration Records (I)
 
 - **Key:** `I` + name (raw bytes).
@@ -266,29 +343,31 @@ Encoding conventions used throughout:
 These mirror `Config` struct fields, written by `WriteConfig`
 during `ark init` and by config-mutating commands.
 
-| Name | Encoding | Source field |
-|------|----------|--------------|
-| `dotfiles` | bool→string ("true"/"false") | `Config.Dotfiles` |
-| `case_insensitive` | bool→string | `Config.CaseInsensitive` |
-| `embed_cmd` | string | `Config.EmbedCmd` |
-| `query_cmd` | string | `Config.QueryCmd` |
-| `tag_model` | string (GGUF filename) | `Config.TagModel` |
-| `global_include` | JSON array | `Config.GlobalInclude` |
-| `global_exclude` | JSON array | `Config.GlobalExclude` |
-| `strategies` | JSON map | `Config.Strategies` |
-| `sources` | JSON array | `Config.Sources` |
-| `chunkers` | JSON array | `Config.Chunkers` |
-| `session_ttl` | string | `Config.SessionTTL` |
-| `search_exclude` | JSON array | `Config.SearchExclude` |
-| `embed_tiers` | JSON array | `Config.EmbedTiers` |
-| `schedule` | JSON | `Config.Schedule` |
-| `schedule_config` | JSON | `Config.ScheduleConfig` |
+| Name               | Encoding                     | Source field             |
+|--------------------|------------------------------|--------------------------|
+| `dotfiles`         | bool→string ("true"/"false") | `Config.Dotfiles`        |
+| `case_insensitive` | bool→string                  | `Config.CaseInsensitive` |
+| `embed_cmd`        | string                       | `Config.EmbedCmd`        |
+| `query_cmd`        | string                       | `Config.QueryCmd`        |
+| `tag_model`        | string (GGUF filename)       | `Config.TagModel`        |
+| `global_include`   | JSON array                   | `Config.GlobalInclude`   |
+| `global_exclude`   | JSON array                   | `Config.GlobalExclude`   |
+| `strategies`       | JSON map                     | `Config.Strategies`      |
+| `sources`          | JSON array                   | `Config.Sources`         |
+| `chunkers`         | JSON array                   | `Config.Chunkers`        |
+| `session_ttl`      | string                       | `Config.SessionTTL`      |
+| `search_exclude`   | JSON array                   | `Config.SearchExclude`   |
+| `embed_tiers`      | JSON array                   | `Config.EmbedTiers`      |
+| `schedule`         | JSON                         | `Config.Schedule`        |
+| `schedule_config`  | JSON                         | `Config.ScheduleConfig`  |
 
 ### Operational fields
 
 | Name | Encoding | Purpose |
 |------|----------|---------|
 | `next_tvid` | uint64 counter | Tag-value-id allocation (V record tvid suffix, EV record key). Incremented when a new (tag, value) pair is first indexed. |
+| `serial` | varint uint64 | Per-txn monotonic serial counter for the S freshness substrate. Allocated once per write txn that stamps records; preserved across LMDB compact-copy (unlike `txn.ID()`). |
+| `hcsweep` | varint uint64 | High-water serial of the last successful `SweepHotCorrelations` run. Zero means from-scratch on next sweep; reset by `ark rebuild` and by `DropEmbeddings` (model swap). |
 
 ### Schema markers
 
@@ -401,13 +480,16 @@ in V/F as usual.
 
 ### File-level vs chunk-level
 
-| Record | Keyed by | Notes |
-|--------|----------|-------|
-| D, M, EF, U | file (fileid) | File-level; one per file |
-| F | chunk (chunkid) | Chunk-level (chunkid-keyed since tag store v1) |
-| V, T | tag (or tag+value) | Vocabulary-level; cross-file |
-| X | (tvid_ext, target chunkid) | @ext provenance; one per (source @ext tvid, target chunk) pair |
-| EC | chunkid | Chunk-level (microfts2-dedup'd content) |
-| EV | tvid | Tag-value compound (cross-file) |
-| PC | (file, page) | File-level page slice |
-| I, E | named key | Singletons |
+| Record      | Keyed by                   | Notes                                                                          |
+|-------------|----------------------------|--------------------------------------------------------------------------------|
+| D, M, EF, U | file (fileid)              | File-level; one per file                                                       |
+| F           | chunk (chunkid)            | Chunk-level (chunkid-keyed since tag store v1)                                 |
+| V, T        | tag (or tag+value)         | Vocabulary-level; cross-file                                                   |
+| X           | (tvid_ext, target chunkid) | @ext provenance; one per (source @ext tvid, target chunk) pair                 |
+| EC          | chunkid                    | Chunk-level (microfts2-dedup'd content)                                        |
+| EV          | tvid                       | Tag-value compound (cross-file)                                                |
+| ED          | (tag, fileid)              | Tag-definition embedding; one per (tag, defining file) pair                    |
+| PC          | (file, page)               | File-level page slice                                                          |
+| HC          | (tag, chunkid)             | Derived top-K cache; one record per (tag, chunkid) inside the bucket           |
+| S           | (stamped prefix + key)     | Side-index; inherits the stamped record's axis (SEC chunk-level, SED per-(tag,file), SHC per-(tag,chunk)) |
+| I, E        | named key                  | Singletons                                                                     |
