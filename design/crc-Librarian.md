@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257, R2313, R2314, R2315, R2316, R2317, R2318, R2319, R2320, R2321, R2324, R2326, R2327, R2328, R2329, R2330, R2331, R2332, R2333, R2334, R2335, R2336, R2337, R2338, R2339, R2340, R2341, R2342, R2343
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -10,9 +10,9 @@ loads on first embedding query and stays warm until TTL expiry.
 - mu: sync.Mutex — protects all mutable state
 - available: bool — whether `claude` was found on PATH at startup
 - db: *DB — for V record queries, Store access, search
-- pending: []ExpandRequest — lotto tube request queue
+- pending: []ExpandRequest — lotto tube request queue (spectral)
 - waiters: []chan struct{} — signaled when a request is queued
-- results: map[string]*ExpandResult — requestID → result
+- results: map[string]*ExpandResult — requestID → result (spectral)
 - model: *llama.Model — warm embedding model (nil when unloaded)
 - modelCtx: *llama.Context — default embedding context (2048/8, for tags/queries)
 - tierCtxs: []*llama.Context — per-tier contexts for chunk embedding (R1594)
@@ -20,6 +20,11 @@ loads on first embedding query and stays warm until TTL expiry.
 - modelPath: string — path to GGUF file from config
 - modelTimer: *time.Timer — TTL for model unloading
 - (removed: lastEmbedded — superseded by chunkID-based dedup, R1847)
+- pendingConnections: []ConnectionsRequest — lotto tube queue (find-connections, R2321)
+- connectionsWaiters: []chan struct{} — signaled when a connections request is queued (R2321)
+- connectionsResults: map[string]*ConnectionsRecord — requestID → in-flight record (chunkIDs, deadline, status, timer) (R2319, R2331)
+- connectionsLastWait: time.Time — last observed `ark connections --wait` consumer (R2320)
+- connectionsAvailWindow: time.Duration — availability window (config or constant; mirrors spectral) (R2320)
 
 ## Does
 ### Expansion Queue (Sidecar Pattern)
@@ -146,6 +151,54 @@ loads on first embedding query and stays warm until TTL expiry.
 - EmbeddingAvailable() bool: whether tag_model is configured and
   the GGUF file exists
 
+### Find Connections (Sidecar Pattern, 1G)
+- FindConnections(chunkIDs []uint64, opts FindConnectionsOpts) (string, error):
+  orchestrator entry point. Allocates a request ID, creates the
+  tmp:// doc through the write actor with pending header tags,
+  enqueues the request, schedules a deadline timer, returns the
+  request ID immediately. Non-blocking on the sidecar. (R2319,
+  R2326, R2327, R2331)
+- ConnectionsAvailable() bool: reports true when `ark connections
+  --wait` has been observed within `connectionsAvailWindow`.
+  Mirrors `Available()` for spectral. (R2320)
+- QueueConnectionsRequest(req ConnectionsRequest): append to
+  pendingConnections, signal connectionsWaiters. (R2321)
+- DrainPendingConnections() []ConnectionsRequest: atomically drain
+  the queue. Updates `connectionsLastWait` as a side effect (the
+  drain itself is evidence of an active `--wait` consumer). (R2321)
+- WaitForConnectionsRequest(timeout time.Duration) bool: block
+  until requests are available; updates connectionsLastWait on
+  entry. (R2321)
+- SetConnectionsResult(id string, result *ConnectionsResult) error:
+  validate non-empty Evidence on every theme and shared-tag entry;
+  on protocol violation route to SetConnectionsError. On success,
+  render body and call UpdateTmpFile through the write actor with
+  body + @connections-status: completed +
+  @connections-completed:<RFC3339> + @connections-progress: done.
+  Cancel the deadline timer. Late call after terminal state: log
+  and return nil. (R2317, R2329, R2330, R2333)
+- SetConnectionsError(id string, message string): UpdateTmpFile
+  through the write actor with @connections-status: errored +
+  @connections-error:<message> + @connections-completed + done.
+  Cancel deadline timer. Idempotent on terminal state. (R2318,
+  R2329, R2333)
+- TickConnectionsElapsed(id string): the orchestrator's elapsed-
+  tick goroutine. Every ~5 s, UpdateTmpFile with new
+  @connections-elapsed value (and @connections-progress when
+  caller advances it). Throttle policy: 5 s minimum between
+  non-terminal updates; centralized publish dedups unchanged
+  tag values. (R2328)
+- BuildFetchPayload(id string) ([]ChunkFetchEntry, error): for a
+  pending/working request, walk chunkIDs, resolve each chunk's
+  primary FileID + path via fts.ReadCRecord, read the chunk
+  content (DB.AllChunks or chunk-store accessor), return
+  []{chunkID, fileID, path, content}. Reports unknown chunk IDs
+  in the error chain; the caller (CLI `--fetch`) surfaces them
+  as exit non-zero. (R2316, R2324)
+- CleanConnectionsResults(): cap the connectionsResults map by
+  age; long-completed entries fall off. Mirrors CleanResults.
+  (R2321)
+
 ### HTTP Handlers
 - HandleExpand: POST /search/expand — queue request, return ID
 - HandleExpandWait: GET /search/expand/wait — lotto tube
@@ -154,6 +207,10 @@ loads on first embedding query and stays warm until TTL expiry.
 - HandleFuzzyMatch: POST /search/expand/fuzzy — trigram fuzzy match
 - HandleExpandSearch: POST /search/expand/search — search curated tags
 - HandleEmbedMatch: POST /search/expand/embed — embedding similarity
+- HandleConnectionsWait: GET /connections/wait — lotto tube for find-connections sidecar (R2315, R2321)
+- HandleConnectionsFetch: GET /connections/fetch?id=... — returns BuildFetchPayload JSON (R2316)
+- HandleConnectionsResult: POST /connections/result — SetConnectionsResult with stdin JSON body (R2317)
+- HandleConnectionsError: POST /connections/error — SetConnectionsError (R2318)
 
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
@@ -171,3 +228,4 @@ loads on first embedding query and stays warm until TTL expiry.
 - seq-tag-embed.md
 - seq-chunk-embed.md
 - seq-tag-embed.md
+- seq-find-connections.md

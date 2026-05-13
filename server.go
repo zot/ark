@@ -372,6 +372,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
 		mux.HandleFunc("POST /search/expand/embed", srv.librarian.HandleEmbedMatch)
 		mux.HandleFunc("POST /sweep/correlations", srv.librarian.HandleSweepCorrelations)
+		// Find Connections (1G) — sidecar lotto-tube endpoints.
+		// CRC: crc-Server.md | Seq: seq-find-connections.md | R2315, R2316, R2317, R2318
+		mux.HandleFunc("GET /connections/wait", srv.librarian.HandleConnectionsWait)
+		mux.HandleFunc("GET /connections/fetch", srv.librarian.HandleConnectionsFetch)
+		mux.HandleFunc("POST /connections/result", srv.librarian.HandleConnectionsResult)
+		mux.HandleFunc("POST /connections/error", srv.librarian.HandleConnectionsError)
 	}
 
 	log.Printf("ark server listening on %s", socketPath)
@@ -3753,6 +3759,44 @@ func (srv *Server) registerLuaFunctions() {
 			L.SetField(result, "orphanTotal", lua.LNumber(o.result.OrphanTotal))
 			L.SetField(result, "fromScratch", lua.LBool(o.result.FromScratch))
 			L.Push(result)
+			return 1
+		}))
+
+		// mcp.findConnections(chunkIDs, opts) — fire-and-forget bridge
+		// for the find-connections sidecar. Returns the request ID
+		// string immediately. Returns (nil, "agent unavailable") when
+		// no `ark connections --wait` consumer has been observed
+		// inside the availability window; returns (nil, "chunkIDs
+		// empty") when the array is empty.
+		// CRC: crc-Server.md | Seq: seq-find-connections.md | R2313, R2322, R2323, R2324, R2325
+		L.SetField(tbl, "findConnections", L.NewFunction(func(L *lua.LState) int {
+			arr := L.CheckTable(1)
+			ids := make([]uint64, 0, arr.Len())
+			arr.ForEach(func(_, v lua.LValue) {
+				if n, ok := v.(lua.LNumber); ok {
+					if n >= 0 {
+						ids = append(ids, uint64(n))
+					}
+				}
+			})
+			opts := FindConnectionsOpts{}
+			if optsTbl, ok := L.Get(2).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("timeoutSeconds").(lua.LNumber); ok {
+					opts.TimeoutSeconds = int(v)
+				}
+			}
+			if srv.librarian == nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("agent unavailable"))
+				return 2
+			}
+			id, err := srv.librarian.FindConnections(ids, opts)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(id))
 			return 1
 		}))
 

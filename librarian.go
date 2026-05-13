@@ -52,6 +52,15 @@ type Librarian struct {
 	modelTTL   time.Duration
 	ctxSize    int // embedding context window size override (bench only) R1587
 	parallel   int // parallel sequences override (bench only) R1587
+
+	// Find Connections (1G) — second lotto tube + orchestrator state.
+	// CRC: crc-Librarian.md | Seq: seq-find-connections.md
+	// R2319-R2321
+	pendingConnections     []ConnectionsRequest
+	connectionsWaiters     []chan struct{}
+	connectionsResults     map[string]*ConnectionsRecord
+	connectionsLastWait    time.Time
+	connectionsAvailWindow time.Duration
 }
 
 // ExpandRequest is a queued expansion request.
@@ -93,12 +102,14 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 	}
 	cfg := db.Config()
 	l := &Librarian{
-		available: true,
-		db:        db,
-		results:   make(map[string]*ExpandResult),
-		modelTTL:  5 * time.Minute,
-		ctxSize:   2048,
-		tiers:     cfg.EmbedTiers, // R1594: sorted at config load
+		available:              true,
+		db:                     db,
+		results:                make(map[string]*ExpandResult),
+		modelTTL:               5 * time.Minute,
+		ctxSize:                2048,
+		tiers:                  cfg.EmbedTiers, // R1594: sorted at config load
+		connectionsResults:     make(map[string]*ConnectionsRecord),
+		connectionsAvailWindow: 60 * time.Second, // R2320
 	}
 	// R1274: resolve tag_model path
 	if tagModel := cfg.TagModel; tagModel != "" {

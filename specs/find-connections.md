@@ -21,10 +21,10 @@ Three things flow together:
 3. **Fire-and-forget Lua bridge.** `mcp.findConnections(chunkIDs)`
    enqueues the request and returns a request ID **immediately**.
    The Lua VM never blocks. The Frictionless UI subscribes to the
-   tmp:// document's `@connections-status` transitions via
-   `mcp.subscribeTmpDoc` (the substrate primitive added in
-   Subtask 0) and rebinds its reactive state when the terminal
-   status fires.
+   tmp:// document's `@connections-status` transitions via the
+   substrate primitives added in Subtask 0 (`mcp.onpublish`,
+   `mcp.subscribe`, `mcp.cancel`) and rebinds its reactive state
+   when the terminal status fires.
 
 Language: Go (server, sidecar CLI, Librarian orchestrator).
 Environment: ark server with the `ark-connections` agent launched
@@ -171,7 +171,10 @@ subscribing workshop never sees stale state at the end.
 
 ## Lua API
 
-A single fire-and-forget bridge method:
+A single fire-and-forget bridge method on the Go side; the
+workshop wires it together with the three substrate primitives
+that landed in Subtask 0 (`mcp.onpublish` / `mcp.subscribe` /
+`mcp.cancel`).
 
 ```lua
 -- Enqueue a Find Connections request. Returns the request ID
@@ -182,27 +185,47 @@ local requestID = mcp.findConnections(chunkIDs, opts)
 -- Returns: requestID (string) on success, (nil, errstring) if
 -- the agent is unavailable or the chunkIDs list is empty.
 
--- The workshop then subscribes to the tmp:// doc using the
--- substrate primitive from Subtask 0:
-local handle = mcp.subscribeTmpDoc(
-    "tmp://connections/" .. requestID .. ".md",
-    { tag = "connections-status", value = "completed" },
-    function(path, tagValues)
-        -- Read the doc body, parse Themes / Shared Tag Candidates,
-        -- update reactive state.
+-- The workshop subscribes to the tmp:// doc via the substrate
+-- primitives. Session names are app-chosen; replace-by-
+-- (session, tag) gives free cancellation when the user clicks
+-- Find Connections again.
+local session = "curation:fc-" .. requestID
+mcp.onpublish(session, function(events)
+    for _, e in ipairs(events) do
+        if e.tag == "connections-status" then
+            if e.value == "completed" then
+                -- Read the doc body, parse Themes / Shared Tag
+                -- Candidates, populate reactive state.
+            elseif e.value == "errored" then
+                -- Render @connections-error.
+            end
+        end
     end
-)
+end)
+mcp.subscribe(session, {
+    tag         = "connections-status",
+    valueRE     = "^(completed|errored)$",
+    filterFiles = { "tmp://connections/" .. requestID .. ".md" },
+})
 
--- Cancellation: unsubscribe + drop the doc; the sidecar work
+-- Cancellation: drop the subscription. The sidecar work
 -- continues until timeout but its result is ignored.
-mcp.unsubscribe(handle)
+mcp.cancel(session, "")
 ```
 
 `mcp.findConnections` returns `(nil, errstring)` when:
 
-- No `ark-connections` sidecar is registered (no `--wait`
-  consumer).
-- `chunkIDs` is empty or contains an unknown chunk ID.
+- No `ark-connections` sidecar is registered — `Librarian.
+  ConnectionsAvailable()` returns false when no
+  `ark connections --wait` has been observed within the
+  availability window (mirrors `Librarian.Available()` for
+  spectral expand).
+- `chunkIDs` is empty.
+
+Unknown chunk IDs are not checked at enqueue time — the sidecar's
+`--fetch` step surfaces them as an `errored` terminal status with
+`@connections-error: unknown chunk <id>`. This keeps the bridge
+sub-millisecond and avoids a redundant LMDB pass on enqueue.
 
 Standard gopher-lua two-return convention. Field names follow the
 project's lowerCamelCase Lua conventions (R2266 et al.).
@@ -294,9 +317,10 @@ commands; everything else is rejected.
 - Sidecar `--fetch` returns the right chunk content for known
   chunks; errors cleanly on unknown chunk IDs.
 - Sidecar `--result` rejects results with empty evidence lists.
-- Subscription firing: simulate Subtask 0's `subscribeTmpDoc`
-  primitive against the tmp:// doc, verify the callback fires on
-  the terminal transition with the expected tag values.
+- Subscription firing: subscribe through Go's `PubSub.Subscribe`
+  + `Listen` API (the test-as-subscriber pattern from
+  Subtask 0's R2312) against the tmp:// doc, verify events fire
+  on the terminal transition with the expected tag values.
 - Lua bridge: `mcp.findConnections` returns a request ID, never
   blocks; returns `(nil, errstring)` cleanly when the agent is
   unavailable.

@@ -163,7 +163,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
 - [x] seq-filter-stack.md → `cmd/ark/main.go`, `server.go`, `search.go`
-- [x] crc-Librarian.md → `librarian.go`
+- [x] crc-Librarian.md → `librarian.go`, `connections.go`
 - [x] crc-PDFChunker.md → `pdfchunker.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
@@ -180,6 +180,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ext-routing.md → `extmap.go`, `indexer.go`, `store.go`
 - [ ] seq-tag-verify.md → `cmd/ark/main.go`, `verify.go`, `extmap.go`, `store.go`, `db.go`
 - [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
+- [x] seq-find-connections.md → `connections.go`, `server.go`, `cmd/ark/main.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -232,6 +233,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-HotCorrelations.md → `librarian_test.go`, `store_test.go`
 - [x] test-VectorFreshness.md → `store_test.go`
 - [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
+- [x] test-FindConnections.md → `connections_test.go`
 
 ## Gaps
 
@@ -464,3 +466,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A59: R2308: (scope boundary) no handle-based cancellation exposed from Lua — replace-by-(session,tag) via re-subscribe is the cancel; no code artifact
 - A60: R2309: (scope boundary) Go PubSub.Subscribe/Cancel APIs unchanged — append semantics + value-pattern cancel preserved for HTTP and direct Go callers; no code change required
 - A61: R2312: test-as-subscriber pattern — codified in test-TmpSubscription.md and exercised by the test files; no production-code artifact
+- A62: R2314 ark-connections agent file lives at .claude/agents/ark-connections.md (external to Go code)
+- A63: R2335-R2338 are scope-boundary requirements (deferred 1G work) — intentionally have no implementation
+- A64: R2339-R2343 are test-only requirements covered by connections_test.go (validator scans non-test files for impl coverage)

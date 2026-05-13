@@ -113,6 +113,8 @@ func main() {
 		cmdChunks(args)
 	case "config":
 		cmdConfig(args)
+	case "connections":
+		cmdConnections(args)
 	case "chats":
 		cmdChats(args)
 	case "cp":
@@ -194,6 +196,7 @@ Commands:
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
               remove-pattern, show-why, add-strategy
+  connections Sidecar CLI for find-connections (--wait/--fetch/--result/--error)
   cp          Extract embedded files matching a glob pattern
   dismiss     Dismiss missing files
   embed       Embedding operations (text, bench, validate)
@@ -1495,6 +1498,93 @@ Options:`)
 		fmt.Print(pretty.String())
 	}
 	fmt.Println()
+}
+
+// CRC: crc-CLI.md | Seq: seq-find-connections.md
+// R2313, R2315, R2316, R2317, R2318
+func cmdConnections(args []string) {
+	fs := flag.NewFlagSet("connections", flag.ExitOnError)
+	wait := fs.Bool("wait", false, "lotto tube: block until find-connections requests arrive, print as JSON")
+	fetch := fs.String("fetch", "", "fetch chunk content for request ID: returns JSON array of {chunkID, fileID, path, content}")
+	resultFlag := fs.String("result", "", "post result for request ID; result JSON read from stdin")
+	errorFlag := fs.String("error", "", "post error for request ID: REQUEST_ID=MESSAGE")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections [options]
+
+Sidecar CLI for find-connections (curation workshop's "Find Connections" action).
+Requires a running server.
+
+Subcommands (for sidecar agent use):
+  --wait              Lotto tube: block until requests arrive, print JSON
+  --fetch ID          Fetch chunk content for a request, print JSON array
+  --result ID         Post result JSON for request ID (JSON read from stdin)
+  --error ID=MESSAGE  Post error for request ID
+
+Options:`)
+		fs.PrintDefaults()
+	}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fs.Usage()
+		os.Exit(0)
+	}
+	fs.Parse(args)
+
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+
+	if *wait {
+		data, err := proxyRaw(client, "GET", "/connections/wait", nil)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *fetch != "" {
+		data, err := proxyRaw(client, "GET", "/connections/fetch?id="+url.QueryEscape(*fetch), nil)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Print(string(data))
+		return
+	}
+
+	if *resultFlag != "" {
+		var payload ark.ConnectionsResult
+		dec := json.NewDecoder(os.Stdin)
+		if err := dec.Decode(&payload); err != nil {
+			fatal(fmt.Errorf("parsing result JSON from stdin: %w", err))
+		}
+		if err := proxyOK(client, "POST", "/connections/result", map[string]any{
+			"id":     *resultFlag,
+			"result": payload,
+		}); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	if *errorFlag != "" {
+		parts := strings.SplitN(*errorFlag, "=", 2)
+		id := parts[0]
+		msg := ""
+		if len(parts) > 1 {
+			msg = parts[1]
+		}
+		if err := proxyOK(client, "POST", "/connections/error", map[string]any{
+			"id":      id,
+			"message": msg,
+		}); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	fs.Usage()
+	os.Exit(1)
 }
 
 // CRC: crc-CLI.md | R1302-R1305
