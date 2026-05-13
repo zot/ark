@@ -24,8 +24,11 @@ const STATUS_VALUES = [
 
 // --- State management for open search panels ---
 
-/** Toggle payload: tag name + initial value. */
+/** Toggle payload: tag location + name + initial value.
+ *  tagFrom is the document offset of the ArkTag node — used as the
+ *  per-instance key so two tags with the same name toggle independently. */
 interface TogglePayload {
+  tagFrom: number;
   tagName: string;
   tagValue: string;
 }
@@ -40,26 +43,35 @@ interface PanelState {
 }
 
 /** State field tracking which tags have open search panels.
- *  Also provides block widget decorations since plugins can't do block widgets. */
+ *  Also provides block widget decorations since plugins can't do block widgets.
+ *  Keyed by ArkTag node offset (tagFrom), so two @tag: instances with the same
+ *  name keep separate panel state. Keys are remapped through document changes. */
 function createOpenSearchPanels(api: HostAPI) {
-  return StateField.define<Map<string, PanelState>>({
+  return StateField.define<Map<number, PanelState>>({
     create: () => new Map(),
     update(panels, tr) {
+      let next = panels;
+      if (tr.docChanged && panels.size > 0) {
+        next = new Map();
+        for (const [from, state] of panels) {
+          const mapped = tr.changes.mapPos(from);
+          if (mapped !== null) next.set(mapped, state);
+        }
+      }
       for (const effect of tr.effects) {
         if (effect.is(toggleSearchPanel)) {
-          const next = new Map(panels);
-          if (next.has(effect.value.tagName)) {
-            next.delete(effect.value.tagName);
+          if (next === panels) next = new Map(panels);
+          if (next.has(effect.value.tagFrom)) {
+            next.delete(effect.value.tagFrom);
           } else {
-            next.set(effect.value.tagName, {
+            next.set(effect.value.tagFrom, {
               tagName: effect.value.tagName,
               tagValue: effect.value.tagValue,
             });
           }
-          return next;
         }
       }
-      return panels;
+      return next;
     },
     provide: (field) =>
       EditorView.decorations.compute([field], (state) => {
@@ -71,20 +83,16 @@ function createOpenSearchPanels(api: HostAPI) {
         tree.iterate({
           enter(node) {
             if (node.name !== "ArkTag") return;
-            const nameNode = node.node.getChild("ArkTagName");
-            if (!nameNode) return;
-            const tagName = state.sliceDoc(nameNode.from, nameNode.to);
-            const panelState = panels.get(tagName);
-            if (panelState) {
-              const line = state.doc.lineAt(node.to);
-              widgets.push(
-                Decoration.widget({
-                  widget: new TagSearchPanelWidget(panelState, api),
-                  block: true,
-                  side: 1,
-                }).range(line.to),
-              );
-            }
+            const panelState = panels.get(node.from);
+            if (!panelState) return;
+            const line = state.doc.lineAt(node.to);
+            widgets.push(
+              Decoration.widget({
+                widget: new TagSearchPanelWidget(node.from, panelState, api),
+                block: true,
+                side: 1,
+              }).range(line.to),
+            );
           },
         });
 
@@ -98,6 +106,7 @@ function createOpenSearchPanels(api: HostAPI) {
 /** Widget shown after a tag — click to toggle search panel. */
 class TagSearchWidget extends WidgetType {
   constructor(
+    private readonly tagFrom: number,
     private readonly tagName: string,
     private readonly tagValue: string,
     private readonly tagText: string,
@@ -118,6 +127,7 @@ class TagSearchWidget extends WidgetType {
       e.stopPropagation();
       view.dispatch({
         effects: toggleSearchPanel.of({
+          tagFrom: this.tagFrom,
           tagName: this.tagName,
           tagValue: this.tagValue,
         }),
@@ -127,7 +137,11 @@ class TagSearchWidget extends WidgetType {
   }
 
   eq(other: TagSearchWidget): boolean {
-    return this.tagText === other.tagText && this.isOpen === other.isOpen;
+    return (
+      this.tagFrom === other.tagFrom &&
+      this.tagText === other.tagText &&
+      this.isOpen === other.isOpen
+    );
   }
 }
 
@@ -135,6 +149,7 @@ class TagSearchWidget extends WidgetType {
  *  Delegates to the `<ark-search>` custom element. R1377 */
 class TagSearchPanelWidget extends WidgetType {
   constructor(
+    private readonly tagFrom: number,
     private readonly state: PanelState,
     private readonly api: HostAPI,
   ) {
@@ -149,6 +164,7 @@ class TagSearchPanelWidget extends WidgetType {
     el.addEventListener("close", () => {
       view.dispatch({
         effects: toggleSearchPanel.of({
+          tagFrom: this.tagFrom,
           tagName: this.state.tagName,
           tagValue: this.state.tagValue,
         }),
@@ -158,7 +174,7 @@ class TagSearchPanelWidget extends WidgetType {
   }
 
   eq(other: TagSearchPanelWidget): boolean {
-    return this.state === other.state;
+    return this.tagFrom === other.tagFrom && this.state === other.state;
   }
 
   updateDOM(): boolean {
@@ -220,7 +236,7 @@ function buildTagDecorations(
   view: EditorView,
   api: HostAPI,
   path: string,
-  panelsField: StateField<Map<string, PanelState>>,
+  panelsField: StateField<Map<number, PanelState>>,
 ): DecorationSet {
   const isEditing = view.state.field(editMode, false);
   if (isEditing) return Decoration.none;
@@ -260,7 +276,7 @@ function buildTagDecorations(
         // All tags get the search button — placed before the tag for stable position
         widgets.push(
           Decoration.widget({
-            widget: new TagSearchWidget(tagName, tagValue, tagText, panels.has(tagName)),
+            widget: new TagSearchWidget(node.from, tagName, tagValue, tagText, panels.has(node.from)),
             side: -1,
           }).range(node.from),
         );
