@@ -3682,3 +3682,12 @@ implementation, not a separate format break.
 - **R2341:** Test: `ark connections --fetch` returns the correct chunk content for valid chunk IDs and a non-zero exit with a clear error for unknown chunk IDs.
 - **R2342:** Test: `ark connections --result` rejects payloads where any theme or shared-tag entry has empty evidence; the rejection drives `@connections-status` to `errored` with a protocol-violation message.
 - **R2343:** Test: `mcp.findConnections` is sub-millisecond, returns the request ID string for valid input, and returns `(nil, "agent unavailable")` when no `--wait` consumer has been observed inside the availability window.
+
+## Feature: Curation Workshop (Go-owned state)
+**Source:** specs/curation.md
+
+- **R2355:** The curation workshop's pinned-chunks state lives on the Server as a Go `Curation` struct (`Pinned []PinnedChunk`). Mutations serialize through the Lua executor goroutine via `flib.Runtime.WithLua`, so concurrent callers don't need separate locking beyond the Curation's own mutex.
+- **R2356:** Server registers a global Lua table `ark` during `registerLuaFunctions`. `ark.curation` is the Lua-side view of the Go `Curation` struct.
+- **R2357:** `ark.curation.pinned` is a Lua-side mirror of the Go-side `Curation.pinned` slice. The mirror is rebuilt inside the same Lua-executor closure that mutates the Go slice, so Frictionless's variable-change detection observes a single atomic transition per mutation.
+- **R2358:** `ark.curation.pin(chunkID, fileID, path)` adds or moves-to-top a pinned chunk. Always-add never-flip — a re-pin moves the existing entry to the top of the list, preserving FileID/Path when the new call passes them as zero/empty.
+- **R2359:** `PinnedChunk` fields: `ChunkID` (uint64), `FileID` (uint64), `Path` (string), `PinnedAt` (Unix seconds, int64). Lua mirror uses lowerCamelCase field names: `chunkID`, `fileID`, `path`, `pinnedAt`.

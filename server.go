@@ -59,6 +59,7 @@ type Server struct {
 	pubsub          *PubSub             // R799: subscription registry
 	scheduler       *EventScheduler     // R805: time-based event queue
 	librarian       *Librarian          // R1235: Haiku co-process for spectral search
+	curation        *Curation           // R2355: Go-owned curation workshop state; ark.curation in Lua
 
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
@@ -234,6 +235,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		pubsub:    ps,
 		scheduler: sched,
 		librarian: lib,
+		curation:  newCuration(), // R2355
 	}
 
 	// Wire librarian into searcher for about filters
@@ -2959,6 +2961,26 @@ func (srv *Server) registerLuaFunctions() {
 		if !ok {
 			return fmt.Errorf("mcp is not a table")
 		}
+
+		// R2356: register the global `ark` Lua table with a curation subtable.
+		// State is Go-owned (srv.curation.pinned); ark.curation.pinned is the
+		// Lua-side mirror Frictionless watches. Mutators (e.g. ark.curation.pin)
+		// run in the Lua executor — they update the Go slice and refresh the
+		// mirror in the same tick.
+		arkTable := L.NewTable()
+		curationTable := L.NewTable()
+		L.SetField(curationTable, "pinned", L.NewTable())
+		L.SetField(arkTable, "curation", curationTable)
+		L.SetGlobal("ark", arkTable)
+		srv.curation.luaTable = curationTable
+		// R2358: pin mutator — append/move-to-top, refresh mirror.
+		L.SetField(curationTable, "pin", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			fileID := uint64(L.OptNumber(2, 0))
+			path := L.OptString(3, "")
+			srv.curation.pin(L, chunkID, fileID, path)
+			return 0
+		}))
 
 		// mcp:indexing() — returns array of source dirs currently being indexed
 		L.SetField(tbl, "indexing", L.NewFunction(func(L *lua.LState) int {

@@ -156,6 +156,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TvidMap.md → `tvid_map.go`
 - [x] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
+- [x] crc-Curation.md → `curation.go`, `server.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
