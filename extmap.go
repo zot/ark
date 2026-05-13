@@ -86,6 +86,66 @@ func (m *ExtMap) VirtualTagCounts(tags []string) map[string]int {
 	return out
 }
 
+// VirtualTagNames returns the set of tag names with at least one
+// ext-routed contribution (persistent X records and overlay routings
+// alike, since virtualTagCount merges both). Used by tag-source
+// parity in Store.ListTags / Store.MatchTagNames.
+// CRC: crc-ExtMap.md | R2344, R2352
+func (m *ExtMap) VirtualTagNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0, len(m.virtualTagCount))
+	for name, count := range m.virtualTagCount {
+		if count > 0 {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// VirtualTagValues returns the distinct values routed for the given
+// tag name across all @ext routings (persistent + overlay). Used by
+// tag-source parity in Store.QueryTagValues / Store.MatchTagValues.
+// CRC: crc-ExtMap.md | R2344, R2352
+func (m *ExtMap) VirtualTagValues(tag string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := make(map[string]struct{})
+	for _, routed := range m.routedTagsByTvidExt {
+		for _, tv := range routed {
+			if tv.Tag == tag {
+				seen[tv.Value] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	return out
+}
+
+// RoutedTagsForChunk returns the (tag, value) pairs that route TO
+// targetChunkID via any @ext routing — persistent or overlay. Walks
+// chunkToTargets[targetChunkID] and unions routedTagsByTvidExt for
+// each tvid_ext. Used by Store.AllTagsForChunk for tag-source
+// parity. Lighter-weight than ExtRoutingsForTargetChunk: no source
+// path resolution, no DB transaction.
+// CRC: crc-ExtMap.md | R2344, R2351
+func (m *ExtMap) RoutedTagsForChunk(targetChunkID uint64) []TagValue {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	tvidExts := m.chunkToTargets[targetChunkID]
+	if len(tvidExts) == 0 {
+		return nil
+	}
+	var out []TagValue
+	for _, te := range tvidExts {
+		out = append(out, m.routedTagsByTvidExt[te]...)
+	}
+	return out
+}
+
 // ExtTagValueFiles returns target chunkids carrying (tag, value) via
 // any @ext routing — persistent or overlay. Walks
 // routedTagsByTvidExt (the cache populated by Rebuild and maintained

@@ -67,6 +67,21 @@ and F (per-file count) prefix keys. Tag names are the portion between
 @ and :, stored lowercase. The tag vocabulary file (`~/.ark/tags.md`)
 documents definitions using `@tag: name -- description` format.
 
+### Tag Source Parity (R2344)
+Tags reach the index from three sources: **inline** (T/F/V records in
+LMDB, extracted from chunk text), **ext-routed virtual** (ExtMap entries
+written by `@ext:` directives, originating in inline files via X records
+or in tmp:// documents via overlay routings — both merge into the same
+in-memory maps), and **tmp:// overlay** (TmpTagStore mirror of T/F/V
+semantics for tmp:// content). A read API that enumerates tag names, tag
+values, tag counts, or per-target tag sets unions all three. The only
+exception is tag definitions (D records), which are structurally inline-
+only — virtual and overlay tags have no defining text. Explicitly inline-
+only read APIs (e.g. `Store.TagsForChunk`) name themselves as such and a
+parallel all-sources variant (e.g. `Store.AllTagsForChunk`) exists for
+the canonical union. Referenced from `crc-Store.md`, `crc-ExtMap.md`,
+and `crc-TmpTagStore.md`.
+
 ### Chunk/File Retrieval
 Search results can include content via `--chunks` (JSONL per chunk)
 or `--files` (JSONL per file, deduplicated). This enables the
@@ -234,6 +249,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-VectorFreshness.md → `store_test.go`
 - [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
 - [x] test-FindConnections.md → `connections_test.go`
+- [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 
 ## Gaps
 
@@ -469,3 +485,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A62: R2314 ark-connections agent file lives at .claude/agents/ark-connections.md (external to Go code)
 - A63: R2335-R2338 are scope-boundary requirements (deferred 1G work) — intentionally have no implementation
 - A64: R2339-R2343 are test-only requirements covered by connections_test.go (validator scans non-test files for impl coverage)
+- [x] O97: Tag source parity — unit tests deferred. Live verification via UI search 'shopping' in contains-name mode confirmed 2 expected hits. Methods touched: ListTags, TagCounts, QueryTagValues, FileTagValues, MatchTagNames, MatchTagValues, AllTagsForChunk plus ExtMap.VirtualTagNames/VirtualTagValues/RoutedTagsForChunk and TmpTagStore.TagNames/TagValuesForTag/TagCounts. Tests should cover each method picking up an ext-only tag, a tmp-only tag, and an inline tag with parity.

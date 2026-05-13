@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352
 
 Owns the in-memory state and orchestration for `@ext` routing.
 Six core maps maintained alongside DB X-record writes; canonical
@@ -134,6 +134,15 @@ sources index, dropped as overlay items disappear.
   target_chunkid in `targetToChunk[tvid_ext]`. Covers persistent
   and overlay routings in one pass. Used by Store.TagFiles. (R2120,
   R2124)
+- VirtualTagNames() []string: enumerate all ext-routed tag names
+  (keys of `virtualTagCount` with count > 0). Covers routings from
+  inline X records and overlay (tmp://) sources. Used by tag-source
+  parity in Store.ListTags / MatchTagNames. (R2344, R2352)
+- VirtualTagValues(tag string) []string: enumerate distinct
+  values routed for the given tag name from
+  `routedTagsByTvidExt`, deduplicated. Covers persistent + overlay
+  routings. Used by tag-source parity in Store.QueryTagValues /
+  MatchTagValues. (R2344, R2352)
 - RecordOverlayError(severity, sourceChunkID, sourceFileID,
   message): append entry to `overlayErrors`. Called by IndexExt
   and ReresolveOnReindex when they take overlay-touched branches

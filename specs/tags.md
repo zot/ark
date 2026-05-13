@@ -65,3 +65,27 @@ query patterns; record key/value layout in
 
 - `GET /tags` — all tags with counts
 - `GET /tags/<tag>/files` — files containing tag
+
+## Tag source parity
+
+Tags reach the index from three sources:
+
+1. **Inline** — `@tag:` text extracted from chunks during indexing, stored
+   as T/F/V records in LMDB.
+2. **Ext-routed (virtual)** — `@ext:` directives that project (tag, value)
+   pairs onto target chunks. May originate in inline files (persistent X
+   records) or in tmp:// documents (overlay routings); both are merged
+   into the same in-memory state in ExtMap.
+3. **tmp:// overlay** — `@tag:` text in tmp:// document content, mirrored
+   into TmpTagStore.
+
+A tag's source must not affect its visibility through read APIs. Every
+read API that enumerates tag names, tag values, tag counts, or per-target
+tag sets (per-file, per-chunk) unions all three sources. The only
+exceptions are operations that are structurally impossible for a given
+source — e.g. tag definitions (D records) exist only for inline tags,
+because virtual and overlay tags have no defining line of text.
+
+Inline read paths that explicitly opt out of this union must say so in
+their documentation, and a parallel "all-sources" variant must exist for
+the read-side caller that wants the canonical union.

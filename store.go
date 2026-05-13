@@ -611,39 +611,67 @@ func (s *Store) ClearERecords() error {
 // expressed via UpdateTagValues / AppendTagValues / RemoveTagValues which
 // take ChunkTagValues. CRC: crc-Store.md | R1885)
 
-// ListTags returns all tags with their total counts.
+// ListTags returns all tags with their total counts. Unions inline
+// T records with ExtMap virtual tag names and TmpTagStore overlay
+// tag names; counts are summed across sources. Honors tag source
+// parity.
+// CRC: crc-Store.md | R2344, R2345
 func (s *Store) ListTags() ([]TagCount, error) {
-	var tags []TagCount
+	counts := make(map[string]uint32)
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
 			if len(k) >= 2 && len(v) >= 4 {
 				count := binary.BigEndian.Uint32(v[:4])
 				if count > 0 {
-					tags = append(tags, TagCount{Tag: string(k[1:]), Count: count})
+					counts[string(k[1:])] = count
 				}
 			}
 			return nil
 		})
 	})
-	return tags, err
+	if err != nil {
+		return nil, err
+	}
+	if s.extmap != nil {
+		for _, name := range s.extmap.VirtualTagNames() {
+			counts[name] += uint32(s.extmap.VirtualTagCount(name))
+		}
+	}
+	if s.tmp != nil {
+		for _, name := range s.tmp.TagNames() {
+			counts[name] += uint32(s.tmp.TagCounts([]string{name})[name])
+		}
+	}
+	tags := make([]TagCount, 0, len(counts))
+	for name, count := range counts {
+		if count > 0 {
+			tags = append(tags, TagCount{Tag: name, Count: count})
+		}
+	}
+	return tags, nil
 }
 
 // TagCounts returns counts for specific tags. Augments the LMDB
-// F-driven T count with ExtMap.VirtualTagCount so ext-routed
-// contributions show up in totals (multi-set V semantics — routed
-// tag tvids do not write F records at the target chunkid).
-// CRC: crc-Store.md | R2010
+// F-driven T count with ExtMap.VirtualTagCount (ext-routed
+// contributions — multi-set V semantics, routed tag tvids do not
+// write F records at the target chunkid) and TmpTagStore.TagCounts
+// (tmp:// overlay contributions). Honors tag source parity.
+// CRC: crc-Store.md | R2010, R2344, R2346
 func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
 	var virtual map[string]int
 	if s.extmap != nil {
 		virtual = s.extmap.VirtualTagCounts(tags)
+	}
+	var overlay map[string]int
+	if s.tmp != nil {
+		overlay = s.tmp.TagCounts(tags)
 	}
 	var results []TagCount
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		for _, tag := range tags {
 			tk := tagTotalKey(tag)
 			v, err := txn.Get(s.dbi, tk)
-			extra := uint32(virtual[tag])
+			extra := uint32(virtual[tag]) + uint32(overlay[tag])
 			if lmdb.IsNotFound(err) {
 				results = append(results, TagCount{Tag: tag, Count: extra})
 				continue
@@ -1567,9 +1595,14 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 
 // QueryTagValues returns values for a tag, optionally filtered by prefix.
 // CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1108, R1109
+// QueryTagValues returns values for the given tag whose text starts
+// with prefix, with counts. Unions inline V records with ExtMap
+// virtual values and TmpTagStore overlay values; counts are summed
+// per (tag, value) across sources. Honors tag source parity.
+// CRC: crc-Store.md | R1108, R1109, R2344, R2347
 func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
+	counts := make(map[string]int)
 	scanKey := tagValuePrefix(tag, prefix)
-	var results []TagValueCount
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
 			// Key format: V[tag]\x00[value]\x00[tvid] — parse with two null separators
@@ -1577,18 +1610,41 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 			if !ok {
 				return nil
 			}
-			count := len(decodeVarints(v))
-			if count > 0 {
-				results = append(results, TagValueCount{Value: value, Count: count})
+			c := len(decodeVarints(v))
+			if c > 0 {
+				counts[value] += c
 			}
 			return nil
 		})
 	})
+	if err != nil {
+		return nil, err
+	}
+	if s.extmap != nil {
+		for _, value := range s.extmap.VirtualTagValues(tag) {
+			if prefix != "" && !strings.HasPrefix(value, prefix) {
+				continue
+			}
+			counts[value] += len(s.extmap.ExtTagValueFiles(tag, value))
+		}
+	}
+	if s.tmp != nil {
+		for _, value := range s.tmp.TagValuesForTag(tag) {
+			if prefix != "" && !strings.HasPrefix(value, prefix) {
+				continue
+			}
+			counts[value] += len(s.tmp.TagValueFiles(tag, value))
+		}
+	}
+	results := make([]TagValueCount, 0, len(counts))
+	for value, count := range counts {
+		results = append(results, TagValueCount{Value: value, Count: count})
+	}
 	// R1129: sort by count descending
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Count > results[j].Count
 	})
-	return results, err
+	return results, nil
 }
 
 // TagValueFiles returns chunkids for a specific (tag, value) pair.
@@ -1623,56 +1679,103 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 	return ids, nil
 }
 
-// FileTagValues returns the first value found per tag for a given fileid.
-// Resolves fileid → chunkids via chunksForFile (opens its own View), then
-// scans V records for each tag and returns the value whose chunkid set
-// intersects the file's chunkids. "First" means the first V record
-// encountered in LMDB key order.
-// CRC: crc-Store.md | R1142, R1143, R1889
+// FileTagValues returns the first value found per tag for a given
+// fileid. Resolves fileid → chunkids via chunksForFile (or
+// TmpTagStore.ChunksForFile for overlay fileids), then unions:
+// inline V records intersecting the file's chunks, ExtMap-routed
+// virtual values targeting those chunks, and TmpTagStore overlay
+// values. "First" means the first match seen across the union,
+// preserving inline → ext → overlay precedence per tag.
+// Honors tag source parity.
+// CRC: crc-Store.md | R1142, R1143, R1889, R2344, R2348, R2354
 func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, error) {
+	result := make(map[string]string, len(tags))
+	if len(tags) == 0 {
+		return result, nil
+	}
+
+	var chunks []uint64
 	if IsOverlayID(fileid) {
 		if s.tmp == nil {
-			return map[string]string{}, nil
+			return result, nil
 		}
-		return s.tmp.FileTagValues(fileid, tags), nil
-	}
-	result := make(map[string]string, len(tags))
-	if s.chunksForFile == nil {
-		return result, nil
-	}
-	chunks := s.chunksForFile(fileid)
-	if len(chunks) == 0 {
-		return result, nil
+		chunks = s.tmp.ChunksForFile(fileid)
+	} else if s.chunksForFile != nil {
+		chunks = s.chunksForFile(fileid)
 	}
 	chunkSet := make(map[uint64]bool, len(chunks))
 	for _, c := range chunks {
 		chunkSet[c] = true
 	}
 
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		for _, tag := range tags {
-			prefix := tagValuePrefix(tag, "")
-			err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
-				// Key format: V[tag]\x00[value]\x00[tvid]
-				_, value, _, ok := parseVKey(k)
-				if !ok {
-					return nil
+	// Inline path: persistent V records.
+	if !IsOverlayID(fileid) && len(chunkSet) > 0 {
+		err := s.env.View(func(txn *lmdb.Txn) error {
+			for _, tag := range tags {
+				if _, found := result[tag]; found {
+					continue
 				}
-				for _, id := range decodeVarints(v) {
-					if chunkSet[id] {
-						result[tag] = value
-						return errStopScan
+				prefix := tagValuePrefix(tag, "")
+				err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+					_, value, _, ok := parseVKey(k)
+					if !ok {
+						return nil
+					}
+					for _, id := range decodeVarints(v) {
+						if chunkSet[id] {
+							result[tag] = value
+							return errStopScan
+						}
+					}
+					return nil
+				})
+				if err != nil && err != errStopScan {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return result, err
+		}
+	}
+
+	// Ext-routed virtual values targeting any of the file's chunks.
+	if s.extmap != nil && len(chunkSet) > 0 {
+		for _, tag := range tags {
+			if _, found := result[tag]; found {
+				continue
+			}
+			for _, value := range s.extmap.VirtualTagValues(tag) {
+				hit := false
+				for _, cid := range s.extmap.ExtTagValueFiles(tag, value) {
+					if chunkSet[cid] {
+						hit = true
+						break
 					}
 				}
-				return nil
-			})
-			if err != nil && err != errStopScan {
-				return err
+				if hit {
+					result[tag] = value
+					break
+				}
 			}
 		}
-		return nil
-	})
-	return result, err
+	}
+
+	// Overlay (tmp://) values — direct dispatch for overlay fileids.
+	if s.tmp != nil && IsOverlayID(fileid) {
+		var pending []string
+		for _, tag := range tags {
+			if _, found := result[tag]; !found {
+				pending = append(pending, tag)
+			}
+		}
+		for tag, value := range s.tmp.FileTagValues(fileid, pending) {
+			result[tag] = value
+		}
+	}
+
+	return result, nil
 }
 
 // TagsForChunk returns inline (tag, value) pairs present at chunkID.
@@ -1719,6 +1822,24 @@ func (s *Store) TagsForChunk(chunkID uint64) ([]TagValue, error) {
 	return result, err
 }
 
+// AllTagsForChunk returns the canonical union of (tag, value) pairs
+// at chunkID: inline TagsForChunk plus ExtMap-routed virtual tags
+// targeting the chunk. Honors tag source parity — use this for any
+// "all tags here" question; reserve TagsForChunk for the strict
+// inline view (e.g. write-side code that must see only source text
+// tags).
+// CRC: crc-Store.md | R2344, R2351, R2354
+func (s *Store) AllTagsForChunk(chunkID uint64) ([]TagValue, error) {
+	result, err := s.TagsForChunk(chunkID)
+	if err != nil {
+		return result, err
+	}
+	if s.extmap != nil {
+		result = append(result, s.extmap.RoutedTagsForChunk(chunkID)...)
+	}
+	return result, nil
+}
+
 // TagValueMatch is a tag value with its chunkID list, returned by
 // MatchTagValues. The chunkIDs come straight from the V record value blob
 // (post chunkid migration); callers that need fileIDs resolve via filesForChunk.
@@ -1728,10 +1849,11 @@ type TagValueMatch struct {
 	ChunkIDs []uint64 `json:"chunk_ids"`
 }
 
-// MatchTagNames scans T records and returns tag names where every token
-// appears as a case-insensitive substring. Linear scan — the T record
-// set is small (hundreds to low thousands).
-// CRC: crc-Store.md | R1467
+// MatchTagNames returns tag names where every token appears as a
+// case-insensitive substring of the name. Linear scan across all
+// three sources: inline T records, ExtMap virtual names, and
+// TmpTagStore overlay names. Deduplicated. Honors tag source parity.
+// CRC: crc-Store.md | R1467, R2344, R2349
 func (s *Store) MatchTagNames(tokens []string) ([]string, error) {
 	if len(tokens) == 0 {
 		return nil, nil
@@ -1740,58 +1862,117 @@ func (s *Store) MatchTagNames(tokens []string) ([]string, error) {
 	for i, t := range tokens {
 		lower[i] = strings.ToLower(t)
 	}
-	var matched []string
+	seen := make(map[string]struct{})
+	consider := func(name string) {
+		ln := strings.ToLower(name)
+		for _, tok := range lower {
+			if !strings.Contains(ln, tok) {
+				return
+			}
+		}
+		seen[name] = struct{}{}
+	}
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
 			if len(k) < 2 || len(v) < 4 {
 				return nil
 			}
-			name := strings.ToLower(string(k[1:]))
-			for _, tok := range lower {
-				if !strings.Contains(name, tok) {
-					return nil
-				}
-			}
-			matched = append(matched, string(k[1:]))
+			consider(string(k[1:]))
 			return nil
 		})
 	})
-	return matched, err
+	if err != nil {
+		return nil, err
+	}
+	if s.extmap != nil {
+		for _, name := range s.extmap.VirtualTagNames() {
+			consider(name)
+		}
+	}
+	if s.tmp != nil {
+		for _, name := range s.tmp.TagNames() {
+			consider(name)
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	return out, nil
 }
 
-// MatchTagValues scans V records for a given tag name and returns values
-// where every token appears as a case-insensitive substring. Each result
-// carries the chunkIDs from the V record value blob (decoded varints).
-// CRC: crc-Store.md | R1468
+// MatchTagValues returns values for the given tag where every token
+// appears as a case-insensitive substring. Unions inline V records,
+// ExtMap virtual values, and TmpTagStore overlay values; chunkIDs
+// are merged per value across sources. Honors tag source parity.
+// CRC: crc-Store.md | R1468, R2344, R2350
 func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, error) {
 	lower := make([]string, len(tokens))
 	for i, t := range tokens {
 		lower[i] = strings.ToLower(t)
 	}
+	matches := make(map[string][]uint64)
+	consider := func(value string, chunkIDs []uint64) {
+		if len(tokens) > 0 {
+			lv := strings.ToLower(value)
+			for _, tok := range lower {
+				if !strings.Contains(lv, tok) {
+					return
+				}
+			}
+		}
+		matches[value] = append(matches[value], chunkIDs...)
+	}
 	prefix := tagValuePrefix(tag, "")
-	var results []TagValueMatch
 	err := s.env.View(func(txn *lmdb.Txn) error {
 		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
 			_, value, _, ok := parseVKey(k)
 			if !ok {
 				return nil
 			}
-			if len(tokens) > 0 {
-				lv := strings.ToLower(value)
-				for _, tok := range lower {
-					if !strings.Contains(lv, tok) {
-						return nil
-					}
-				}
-			}
-			results = append(results, TagValueMatch{
-				Value:    value,
-				ChunkIDs: decodeVarints(v),
-			})
+			consider(value, decodeVarints(v))
 			return nil
 		})
 	})
-	return results, err
+	if err != nil {
+		return nil, err
+	}
+	if s.extmap != nil {
+		for _, value := range s.extmap.VirtualTagValues(tag) {
+			consider(value, s.extmap.ExtTagValueFiles(tag, value))
+		}
+	}
+	if s.tmp != nil {
+		for _, value := range s.tmp.TagValuesForTag(tag) {
+			consider(value, s.tmp.TagValueFiles(tag, value))
+		}
+	}
+	results := make([]TagValueMatch, 0, len(matches))
+	for value, chunkIDs := range matches {
+		results = append(results, TagValueMatch{
+			Value:    value,
+			ChunkIDs: dedupUint64(chunkIDs),
+		})
+	}
+	return results, nil
+}
+
+// dedupUint64 returns the input slice with duplicates removed,
+// preserving first-occurrence order.
+func dedupUint64(xs []uint64) []uint64 {
+	if len(xs) <= 1 {
+		return xs
+	}
+	seen := make(map[uint64]struct{}, len(xs))
+	out := xs[:0]
+	for _, x := range xs {
+		if _, ok := seen[x]; ok {
+			continue
+		}
+		seen[x] = struct{}{}
+		out = append(out, x)
+	}
+	return out
 }
 
 // errStopScan is a sentinel to break out of scanPrefix early.

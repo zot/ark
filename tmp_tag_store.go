@@ -391,6 +391,59 @@ func (t *TmpTagStore) TagsForChunk(chunkID uint64) []TagValue {
 	return out
 }
 
+// TagNames returns distinct tag names present in the overlay.
+// Used by tag-source parity in Store.ListTags / Store.MatchTagNames.
+// CRC: crc-TmpTagStore.md | R2344, R2353
+func (t *TmpTagStore) TagNames() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]string, 0, len(t.tagCounts))
+	for name, count := range t.tagCounts {
+		if count > 0 {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// TagValuesForTag returns distinct values for the given tag name
+// across all overlay chunks. Resolves tvids via the shared TvidMap.
+// Used by tag-source parity in Store.QueryTagValues /
+// Store.MatchTagValues.
+// CRC: crc-TmpTagStore.md | R2344, R2353
+func (t *TmpTagStore) TagValuesForTag(tag string) []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	seen := make(map[string]struct{})
+	for _, entry := range t.chunks {
+		for _, tvid := range entry.tvids[tag] {
+			if _, value, ok := t.tvids.Resolve(tvid); ok {
+				seen[value] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	return out
+}
+
+// TagCounts returns per-tag chunk counts from the overlay for the
+// requested tags. Used by tag-source parity in Store.TagCounts.
+// CRC: crc-TmpTagStore.md | R2344, R2353
+func (t *TmpTagStore) TagCounts(tags []string) map[string]int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]int, len(tags))
+	for _, tag := range tags {
+		if c := t.tagCounts[tag]; c > 0 {
+			out[tag] = c
+		}
+	}
+	return out
+}
+
 // HasFile returns true if any chunkids are tracked for the fileid.
 // CRC: crc-TmpTagStore.md
 func (t *TmpTagStore) HasFile(fileID uint64) bool {

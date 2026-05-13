@@ -187,6 +187,20 @@
 - **R125:** `ark tag files --context <tag>...` shows each tag occurrence with the line from tag to end-of-line — includes definitions from tags.md alongside usage
 - **~~R126:~~** (Retired T11 — see R1899) (inferred) When a file is removed, its tag counts are decremented and its F records deleted
 
+### Tag source parity
+
+- **R2344:** Tag source parity — read APIs that enumerate tag names, tag values, tag counts, or per-target tag sets union all three tag sources: inline (T/F/V records), ext-routed virtual (ExtMap, including overlay routings from tmp:// source files), and tmp:// overlay (TmpTagStore). Tag definitions (D records) are exempt because virtual and overlay tags have no defining text. Read APIs documented as opting out of the union (e.g., `Store.TagsForChunk` strictly inline) must have a parallel "all-sources" variant.
+- **R2345:** `Store.ListTags` returns tags from all three sources, with counts summed across sources.
+- **R2346:** `Store.TagCounts(tags)` includes tmp:// overlay counts alongside inline + ext-routed counts.
+- **R2347:** `Store.QueryTagValues(tag, prefix)` includes ext-routed values and tmp:// overlay values, not only inline V records.
+- **R2348:** `Store.FileTagValues(fileid, tags)` includes ext-routed virtual values targeting the file's chunks and tmp:// overlay values; symmetric for persistent and overlay fileids.
+- **R2349:** `Store.MatchTagNames(tokens)` matches against tag names from all three sources.
+- **R2350:** `Store.MatchTagValues(tag, tokens)` matches against tag values from all three sources.
+- **R2351:** `Store.AllTagsForChunk(chunkID)` unions inline + ext-routed + tmp:// overlay tag pairs at the chunk. `Store.TagsForChunk` retains its inline-only contract by name; documentation points to AllTagsForChunk for the canonical union.
+- **R2352:** `ExtMap.VirtualTagNames()` and `ExtMap.VirtualTagValues(tag)` enumerate ext-routed tag names and (name, value) entries respectively, covering routings from inline X records and overlay (tmp://) sources.
+- **R2353:** `TmpTagStore.TagNames()`, `TagValuesForTag(tag)`, and `TagCounts(tags)` enumerate names, values, and counts for overlay tags.
+- **R2354:** `TmpTagStore.FileTagValues` and `TmpTagStore.TagsForChunk` (when reached via overlay-ID dispatch) union ExtMap-routed virtual tags targeting the overlay chunks, with parity to the persistent-ID path.
+
 ### Vocabulary
 
 - **R127:** Tag vocabulary file lives at `~/.ark/tags.md` — indexed like any other file

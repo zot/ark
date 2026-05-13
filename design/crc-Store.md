@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R907, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -37,10 +37,16 @@ ark-level settings, and tag tracking.
   Within one LMDB txn: delete old F records for fileid, write new F records,
   recompute T totals from all F records for affected tagnames.
 - RemoveTags(fileid): delete all F records for fileid, decrement T totals
-- ListTags(): scan T prefix, return all tagname/count pairs
-- TagCounts(tags []string): look up T records for specific tags
+- ListTags(): scan T prefix, then union with ExtMap.VirtualTagNames
+  and TmpTagStore.TagNames; counts are summed per tag across sources.
+  Honors tag source parity. (R2344, R2345)
+- TagCounts(tags []string): look up T records for specific tags,
+  add ExtMap.VirtualTagCounts and TmpTagStore.TagCounts for the same
+  tags. Honors tag source parity. (R2010, R2344, R2346)
 - TagFiles(tags []string): scan F prefix for matching tags,
-  return fileid + count per file. Caller resolves fileid to path/size.
+  return fileid + count per file. Unions ExtMap.ExtTagFiles and
+  TmpTagStore.TagFiles. Caller resolves fileid to path/size.
+  Honors tag source parity. (R2120, R2344)
 - TagContext(tags []string): for each F record match, read file content
   and extract lines containing the tag — return tag-to-end-of-line text
 - AppendTags(fileid, tags): add to existing F record counts and T totals
@@ -97,24 +103,38 @@ ark-level settings, and tag tracking.
   remove fileid from exactly those V records. Delete V keys whose
   blob becomes empty. (R1105, R1312, R1313, R1314)
 - QueryTagValues(tag, prefix string) []TagValueCount: prefix scan
-  V[tag]\x00[prefix], parse key to extract value (between first and
-  last null separators) and tvid (after last null). Decode varint
-  count from value blob. Return {value, count} pairs. (R1108, R1109)
+  V[tag]\x00[prefix] for inline values, then union with
+  ExtMap.VirtualTagValues(tag) and TmpTagStore.TagValuesForTag(tag),
+  prefix-filtered. Return {value, count} pairs. Honors tag source
+  parity. (R1108, R1109, R2344, R2347)
 - TagValueFiles(tag, value string) []uint64: prefix scan
   V[tag]\x00[value]\x00, decode varints from value blob of the one
-  matching record. (R1110, R1309)
+  matching record, union with ExtMap.ExtTagValueFiles and
+  TmpTagStore.TagValueFiles. Honors tag source parity. (R1110, R1309,
+  R2120, R2344)
 - FileTagValues(fileid uint64, tags []string) map[string]string:
-  for each requested tag, scan V[tag]\x00 entries, parse value from
-  key (between first and last null), check if fileid is in the varint
-  list, return first matching value per tag. (R1142, R1143)
-- MatchTagNames(tokens []string) []string: scan T records, return
-  tag names where every token is a case-insensitive substring of the
-  name. Linear scan — T record set is small. (R1467)
+  for each requested tag, return the first observed value: scan V
+  records for inline matches against the file's chunks, then union
+  with ExtMap-routed virtual values targeting those chunks, and (when
+  fileid is overlay) TmpTagStore.FileTagValues. Honors tag source
+  parity. (R1142, R1143, R2344, R2348)
+- TagsForChunk(chunkID): strictly inline (T/F/V records for persistent
+  chunks; TmpTagStore mirror for overlay chunks). Inline-only by name;
+  see AllTagsForChunk for the canonical union. (R2080, R2344, R2351)
+- AllTagsForChunk(chunkID): union of inline TagsForChunk plus
+  ExtMap.ExtRoutingsForTargetChunk(chunkID, db). Canonical "all tags
+  at this chunk" read for callers that want parity. Honors tag source
+  parity. (R2344, R2351)
+- MatchTagNames(tokens []string) []string: scan T records, then
+  ExtMap.VirtualTagNames and TmpTagStore.TagNames, return all names
+  where every token is a case-insensitive substring. Dedup across
+  sources. Honors tag source parity. (R1467, R2344, R2349)
 - MatchTagValues(tag string, tokens []string) []TagValueMatch: scan
-  V records for a given tag name, return values where every token is
-  a case-insensitive substring. Each match carries the chunkIDs
-  decoded from the V-record value blob (TagValueMatch.ChunkIDs).
-  Callers that need fileIDs resolve through filesForChunk. (R1468)
+  V records for inline matches, then union with ExtMap.VirtualTagValues
+  and TmpTagStore.TagValuesForTag matches. Filter by token containment.
+  Each match carries chunkIDs (inline from V blob, ExtMap from
+  ExtTagValueFiles, tmp from TmpTagStore.TagValueFiles). Honors tag
+  source parity. (R1468, R2344, R2350)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time

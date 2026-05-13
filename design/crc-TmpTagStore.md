@@ -1,5 +1,5 @@
 # TmpTagStore
-**Requirements:** R1941, R1942, R1943, R1944, R1945, R1949, R1950, R1951, R1964, R1966, R1967, R2017, R2023
+**Requirements:** R1941, R1942, R1943, R1944, R1945, R1949, R1950, R1951, R1964, R1966, R1967, R2017, R2023, R2344, R2353, R2354
 
 In-memory tag overlay for `tmp://` content. Mirrors the persistent
 V/F/T runtime API so callers do not branch on persistent vs tmp.
@@ -46,6 +46,16 @@ Lives for the server's lifetime; no LMDB writes, no schema marker.
 - FileTagValues(fileid uint64, tags []string) []TagValue: return
   the file's values for the requested tag names. Used by inbox via
   `Store.FileTagValues`. (R1945)
+- TagNames() []string: enumerate distinct tag names present in the
+  overlay (keys of `tagCounts` with count > 0). Used by tag source
+  parity in `Store.ListTags` / `MatchTagNames`. (R2344, R2353)
+- TagValuesForTag(tag string) []string: enumerate distinct values
+  resolved through `TvidMap.Resolve` over `chunks[*].tvids[tag]`,
+  deduplicated. Used by tag source parity in `Store.QueryTagValues`
+  / `MatchTagValues`. (R2344, R2353)
+- TagCounts(tags []string) map[string]int: per-tag chunk counts
+  from `tagCounts`. Used by tag source parity in `Store.TagCounts`.
+  (R2344, R2353)
 - HasFile(fileid uint64) bool: true if the overlay tracks any
   chunkids for the fileid. Used by Store dispatch to decide whether
   a read needs the overlay branch.
