@@ -13,42 +13,42 @@ and append detection.
 ## Throttled On-Notify
 
 ```
-fsnotify event (CREATE | WRITE | REMOVE | RENAME)
+1. fsnotify event (CREATE | WRITE | REMOVE | RENAME)
   │
-  ├── if new directory created:
-  │     └── watchDirRecursive (bypass indexability check)
+  ├── 1.1. if new directory created:
+  │     └── 1.1.1. watchDirRecursive (bypass indexability check)
   │
-  ├── if ark.toml changed:
-  │     ├── Config.Load() + Server.Reconcile()
+  ├── 1.2. if ark.toml changed:
+  │     ├── 1.2.1. Config.Load() + Server.Reconcile()
   │     │   (full reconciliation, not per-file)
-  │     └── clearIgnoredPaths() (invalidate negative cache)
+  │     └── 1.2.2. clearIgnoredPaths() (invalidate negative cache)
   │
-  ├── isIgnored(path)?
-  │     ├── check ignoredPaths set (negative cache)
-  │     ├── if miss: DB.IsIndexable(path)
-  │     │     ├── find source for path
-  │     │     ├── Config.EffectivePatterns(src)
-  │     │     └── Matcher.Classify(includes, excludes, relPath, false)
-  │     ├── if not indexable: add to ignoredPaths, skip event
-  │     └── if indexable: continue to throttle
+  ├── 1.3. isIgnored(path)?
+  │     ├── 1.3.1. check ignoredPaths set (negative cache)
+  │     ├── 1.3.2. if miss: DB.IsIndexable(path)
+  │     │     ├── 1.3.2.1. find source for path
+  │     │     ├── 1.3.2.2. Config.EffectivePatterns(src)
+  │     │     └── 1.3.2.3. Matcher.Classify(includes, excludes, relPath, false)
+  │     ├── 1.3.3. if not indexable: add to ignoredPaths, skip event
+  │     └── 1.3.4. if indexable: continue to throttle
   │
-  ├── if source file changed (passes indexability check):
+  ├── 1.4. if source file changed (passes indexability check):
   │     │
-  │     ├── if in immediate mode (no active throttle):
-  │     │     ├── index/refresh the file immediately
-  │     │     └── start throttle window
+  │     ├── 1.4.1. if in immediate mode (no active throttle):
+  │     │     ├── 1.4.1.1. index/refresh the file immediately
+  │     │     └── 1.4.1.2. start throttle window
   │     │
-  │     ├── if in throttle window:
-  │     │     └── ignore (filesystem has the truth)
+  │     ├── 1.4.2. if in throttle window:
+  │     │     └── 1.4.2.1. ignore (filesystem has the truth)
   │     │
-  │     └── when throttle window expires:
-  │           ├── if events arrived during window:
-  │           │     ├── single re-index of current state
-  │           │     └── start new throttle window
-  │           └── if no events during window:
-  │                 └── return to immediate mode
+  │     └── 1.4.3. when throttle window expires:
+  │           ├── 1.4.3.1. if events arrived during window:
+  │           │     ├── 1.4.3.1.1. single re-index of current state
+  │           │     └── 1.4.3.1.2. start new throttle window
+  │           └── 1.4.3.2. if no events during window:
+  │                 └── 1.4.3.2.1. return to immediate mode
   │
-  └── max wait ceiling: if throttle has been active for N seconds
+  └── 1.5. max wait ceiling: if throttle has been active for N seconds
         without a re-index, force one regardless of events
 ```
 

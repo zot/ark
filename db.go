@@ -1171,6 +1171,82 @@ func (db *DB) RefreshAsync() error {
 	return nil
 }
 
+// IndexPathsAsync schedules per-path index updates through the write actor.
+// For each path: stat → decide add/refresh/remove based on disk and index
+// state. One closure for the whole batch (R991). Must be called from inside
+// the actor.
+//
+// CRC: crc-DB.md | Seq: seq-file-change.md#1.4 | R991
+func (db *DB) IndexPathsAsync(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		idx := db.indexer.withFTS(ftsCopy)
+		for _, path := range paths {
+			db.syncOnePath(idx, path)
+		}
+		db.drainWriteSchedule(idx)
+	})
+	return nil
+}
+
+// syncOnePath brings one path's index entry in line with disk. Inside the
+// write actor (caller's responsibility). Add/refresh/remove dispatched by
+// (disk-exists, index-known) state.
+//
+// CRC: crc-DB.md | Seq: seq-file-change.md#1.4.1.1
+func (db *DB) syncOnePath(idx *Indexer, path string) {
+	fi, statErr := os.Stat(path)
+	status, checkErr := idx.fts.CheckFile(path)
+	known := checkErr == nil && status.FileID != 0
+
+	if statErr != nil {
+		if known {
+			if err := idx.RemoveFile(path); err != nil {
+				log.Printf("watch: remove %s: %v", path, err)
+			}
+		}
+		return
+	}
+	if fi.IsDir() {
+		return
+	}
+
+	src, rel, ok := db.findSourceForPath(path)
+	if !ok {
+		return
+	}
+	strategy := db.config.StrategyForFile(rel, src.Strategies)
+
+	if known {
+		if err := idx.RefreshFile(path, strategy); err != nil {
+			log.Printf("watch: refresh %s: %v", path, err)
+		}
+		return
+	}
+	if _, err := idx.AddFile(path, strategy); err != nil {
+		log.Printf("watch: add %s: %v", path, err)
+	}
+}
+
+// findSourceForPath locates the non-glob source whose Dir is a prefix of path.
+// Returns the source, the path relative to src.Dir, and ok=true on hit.
+func (db *DB) findSourceForPath(path string) (*Source, string, bool) {
+	for i := range db.config.Sources {
+		s := &db.config.Sources[i]
+		if IsGlob(s.Dir) {
+			continue
+		}
+		rel, err := filepath.Rel(s.Dir, path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		return s, rel, true
+	}
+	return nil, "", false
+}
+
 // NewSearchCache enables FRecord caching in microfts2 for the duration
 // of a search operation. Call the returned function to release the cache.
 func (db *DB) NewSearchCache() func() {

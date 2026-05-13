@@ -493,8 +493,24 @@ func (srv *Server) ReloadUIEngine() error {
 	return nil
 }
 
+// indexPaths schedules per-path index updates through the DB actor.
+// Called by the watcher with the set of paths that have changed in a
+// throttle window. Fire-and-forget. (R991)
+//
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.4 | R991
+func (srv *Server) indexPaths(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	srv.db.Do(func(db *DB) {
+		if err := db.IndexPathsAsync(paths); err != nil {
+			log.Printf("watch: index paths: %v", err)
+		}
+	})
+}
+
 // reconcile sends a reconciliation cycle through the DB actor.
-// Fire-and-forget — the watcher doesn't need the result. R987, R990
+// Fire-and-forget — the watcher doesn't need the result. R987, R990, R992
 func (srv *Server) reconcile() {
 	srv.db.Do(func(db *DB) {
 		// Wire schedule callback for async write goroutines

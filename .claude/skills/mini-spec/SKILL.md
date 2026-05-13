@@ -199,7 +199,7 @@ Guidelines:
 Create in `design/`:
 - `design.md`: Intent + Artifacts (design files → code file checkboxes)
 - `crc-*`: CRC cards (see format below)
-- `seq-*`: sequence diagrams (≤150 chars wide)
+- `seq-*`: sequence diagrams (≤150 chars wide; number their steps — see "Numbered Sequence Anchors" below)
 - `ui-*`: ASCII layouts, reference CRC cards
 - `test-*`: test designs (see format below)
 - `manifest-ui.md`: routes, theme, global components
@@ -241,12 +241,31 @@ Format rules:
 - Backticks around code paths are optional
 - Checkbox state applies to all code files on that line
 
+**Numbered Sequence Anchors:** Number the steps in your sequence diagrams using dotted notation so code can pin to specific steps. Place the number wherever the diagram style allows:
+
+- Tree/outline: `1.4. step description` on the line itself
+- UML actor-lane: `1.4` on its own line directly above the arrow
+- Mermaid/pseudo-Mermaid: `1.4` at the start of the step
+
+A file may contain more than one numbered diagram. Items in the first numbered diagram begin with `1.`, the second with `2.`, and so on (`1`, `1.1`, `1.1.1`, `2`, `2.1`, ...). The first segment K is the diagram index. Numbers are local to the file: `1.4` in seq-foo.md is unrelated to `1.4` in seq-bar.md.
+
+Reference a numbered step from code with `Seq: seq-foo.md#1.4`. File-only refs (`Seq: seq-foo.md`) remain valid for diagrams that aren't numbered.
+
+**Why number:** the anchor creates a bidirectional, grep-able link.
+- Agent generating code: drop `seq-foo.md#1.4` in a traceability comment as a promise that this code implements that step.
+- Agent making a code change: follow the anchor to verify what the diagram says the step does.
+- Human reading code: `grep "seq-foo.md#1.4" src/` finds every implementation of that step.
+
+For this to work, the number must be uniquely findable in the diagram source (avoid prose that starts with dotted numbers at the same indentation). Within a single file, every dotted ID may appear at most once. Append new steps with new numbers; renumbering existing steps orphans the code that pins to them — same discipline as Rn IDs.
+
+The validator checks per-K tree contiguity (under K.x, children must be K.x.1, K.x.2, … with no gaps), K-sequence contiguity within the file (Ks are 1, 2, 3, …), and intra-file ID uniqueness. Unnumbered seq files are silently skipped — numbering is opt-in per file.
+
 **Upon completion**, run `~/.claude/bin/minispec phase design` to verify coverage, then offer Implementation Phase. Do not jump to Gaps.
 
 4. Implementation Phase
 Add traceability comments with optional inline requirement refs:
 ```
-// CRC: crc-Store.md | Seq: seq-crud.md | R4, R5
+// CRC: crc-Store.md | Seq: seq-crud.md#1.4 | R4, R5
 add(data): Item {
 ```
 

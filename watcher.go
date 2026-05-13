@@ -96,14 +96,19 @@ func (srv *Server) unwatchDir(dir string) {
 
 // watchLoop is the event processing goroutine. Implements throttled
 // on-notify: immediate response to the first event, then a throttle
-// window. Events during the window are ignored. Window expiry triggers
-// a single reconcile if events arrived. Max wait ceiling prevents
+// window. Events during the window accumulate path identities and
+// trigger one per-path re-index on expiry. Max wait ceiling prevents
 // event storms from starving the index.
+//
+// Anchors throughout this function reference steps in the "Throttled
+// On-Notify" diagram of seq-file-change.md.
+//
+// CRC: crc-Server.md | Seq: seq-file-change.md#1 | R991, R992
 func (srv *Server) watchLoop() {
 	configPath := srv.db.ConfigPath()
 	var (
 		throttle     *time.Timer
-		dirty        bool
+		pending      map[string]struct{}
 		ceilingStart time.Time
 	)
 
@@ -117,53 +122,63 @@ func (srv *Server) watchLoop() {
 				continue
 			}
 
-			// New directory created — add a watch for it
+			// New directory created — add a watch for it.
+			// Seq: seq-file-change.md#1.1
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					srv.watchDirRecursive(event.Name)
+					srv.watchDirRecursive(event.Name) // Seq: seq-file-change.md#1.1.1
 				}
 			}
 
+			// ark.toml changed — reload config + full reconcile. (R992)
+			// Seq: seq-file-change.md#1.2
 			if event.Name == configPath || filepath.Base(event.Name) == "ark.toml" {
-				// ark.toml changed — reload config + full reconcile
 				log.Println("watch: ark.toml changed, reloading config")
-				srv.ignoredPaths = make(map[string]struct{}) // invalidate negative cache
+				srv.ignoredPaths = make(map[string]struct{}) // Seq: seq-file-change.md#1.2.2
 				if err := srv.db.ReloadConfig(); err != nil {
 					log.Printf("watch: config reload failed: %v", err)
 				} else {
 					srv.db.Config().EnsureArkSource()
-					srv.reconcile()
+					srv.reconcile() // Seq: seq-file-change.md#1.2.1
 				}
 				continue
 			}
 
-			// Skip non-indexable files (negative cache + pattern check)
+			// Indexability filter — skip non-indexable files via negative cache + pattern check.
+			// Seq: seq-file-change.md#1.3
 			if _, ignored := srv.ignoredPaths[event.Name]; ignored {
-				continue
+				continue // Seq: seq-file-change.md#1.3.1
 			}
-			if !srv.db.IsIndexable(event.Name) {
-				srv.ignoredPaths[event.Name] = struct{}{}
+			if !srv.db.IsIndexable(event.Name) { // Seq: seq-file-change.md#1.3.2
+				srv.ignoredPaths[event.Name] = struct{}{} // Seq: seq-file-change.md#1.3.3
 				continue
 			}
 
-			// Source file changed
+			// Source file changed — per-path index update (R991).
+			// Seq: seq-file-change.md#1.4
 			if throttle == nil {
-				// Immediate mode — process now, start throttle
+				// Immediate mode — process this path now, start throttle.
+				// Seq: seq-file-change.md#1.4.1
 				log.Printf("watch: file changed: %s", event.Name)
-				srv.reconcile()
-				throttle = time.NewTimer(throttleWindow)
-				dirty = false
+				srv.indexPaths([]string{event.Name})    // Seq: seq-file-change.md#1.4.1.1
+				throttle = time.NewTimer(throttleWindow) // Seq: seq-file-change.md#1.4.1.2
+				pending = nil
 				ceilingStart = time.Now()
 			} else {
-				// In throttle window — just mark dirty
-				dirty = true
-				// Check max wait ceiling
+				// In throttle window — accumulate the path; filesystem has the truth.
+				// Seq: seq-file-change.md#1.4.2
+				if pending == nil {
+					pending = make(map[string]struct{})
+				}
+				pending[event.Name] = struct{}{}
+				// Max wait ceiling — force a re-index regardless of further events.
+				// Seq: seq-file-change.md#1.5
 				if time.Since(ceilingStart) >= maxWaitCeiling {
-					log.Println("watch: max wait ceiling reached, forcing reconcile")
+					log.Println("watch: max wait ceiling reached, forcing re-index")
 					throttle.Stop()
-					srv.reconcile()
+					srv.indexPaths(pathSetToSlice(pending))
+					pending = nil
 					throttle = time.NewTimer(throttleWindow)
-					dirty = false
 					ceilingStart = time.Now()
 				}
 			}
@@ -175,19 +190,30 @@ func (srv *Server) watchLoop() {
 			log.Printf("watch: error: %v", err)
 
 		case <-timerChan(throttle):
-			if dirty {
-				// Events arrived during window — reconcile + new window
-				log.Println("watch: throttle expired with pending changes, reconciling")
-				srv.reconcile()
-				throttle = time.NewTimer(throttleWindow)
-				dirty = false
-				// Keep ceilingStart from the original burst
+			if len(pending) > 0 {
+				// Events arrived during window — single re-index of accumulated paths.
+				// Seq: seq-file-change.md#1.4.3.1
+				log.Println("watch: throttle expired with pending changes, re-indexing")
+				srv.indexPaths(pathSetToSlice(pending))   // Seq: seq-file-change.md#1.4.3.1.1
+				pending = nil
+				throttle = time.NewTimer(throttleWindow) // Seq: seq-file-change.md#1.4.3.1.2
+				// ceilingStart unchanged — keep the original burst
 			} else {
-				// No events during window — back to immediate mode
-				throttle = nil
+				// No events during window — back to immediate mode.
+				// Seq: seq-file-change.md#1.4.3.2
+				throttle = nil // Seq: seq-file-change.md#1.4.3.2.1
 			}
 		}
 	}
+}
+
+// pathSetToSlice converts a deduplicated path set to a slice.
+func pathSetToSlice(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	return out
 }
 
 // timerChan returns the timer's channel, or a nil channel if timer is nil.
