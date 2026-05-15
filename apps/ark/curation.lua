@@ -13,11 +13,9 @@
 -- error flags); the entry table is a pure data mirror. See
 -- ~/.ark/patterns/itemwrapper-presenters.md (or `ark ui patterns`).
 --
--- For v1, sys.curation.dismiss and sys.curation.sweepOlder are
--- mocked in Lua (in-place mutation of sys.curation.pinned so
--- per-item presenter identity is preserved between mutations).
--- Real Go mutators + the entry-identity fix in refreshLuaTable
--- land in the /mini-spec follow-up — see PLAN-CURATE-CHUNK.md.
+-- sys.curation provides pin/dismiss/sweepOlder mutators backed by
+-- the Go write actor; refreshLuaTable preserves per-entry identity
+-- so presenters survive mutations.
 
 local SUGGESTIONS_K = 8
 local TOP_CHUNKS_K = 12
@@ -27,48 +25,9 @@ local function nowSeconds()
     return os.time()
 end
 
-----------------------------------------------------------------------
--- Lua-side mocks for sys.curation.dismiss / sweepOlder.
--- Both mutate sys.curation.pinned in place so the surviving entry
--- tables keep their identity (preserving the ViewList presenter
--- reuse rule view.BaseItem == item).
---
--- Registered lazily: sys may not exist at module-load time (the
--- runtime registers sys via registerLuaFunctions AFTER app.lua first
--- loads). ensureCurationMocks() is called from every callsite that
--- needs them; it's idempotent. Drops out when the real Go mutators
--- land (Task #8) — their presence makes the `not sys.curation.dismiss`
--- check false.
-----------------------------------------------------------------------
-
-local function ensureCurationMocks()
-    if not sys or not sys.curation then return end
-    if not sys.curation.dismiss then
-        sys.curation.dismiss = function(chunkID)
-            chunkID = tonumber(chunkID) or 0
-            if chunkID == 0 then return end
-            for i = #sys.curation.pinned, 1, -1 do
-                if sys.curation.pinned[i].chunkID == chunkID then
-                    table.remove(sys.curation.pinned, i)
-                    return
-                end
-            end
-        end
-    end
-    if not sys.curation.sweepOlder then
-        sys.curation.sweepOlder = function()
-            local pins = sys.curation.pinned
-            if #pins <= 1 then return end
-            for i = #pins, 2, -1 do
-                table.remove(pins, i)
-            end
-        end
-    end
+local function fmtScore(s)
+    return string.format("%.2f", s or 0)
 end
-
--- Try once at load. If sys is nil here, the per-call sites will
--- register on demand.
-ensureCurationMocks()
 
 ----------------------------------------------------------------------
 -- Prototypes
@@ -87,9 +46,8 @@ Ark.Curation = session:prototype("Ark.Curation", {
     _lastViewedAt = 0,
     _sweepBusy = false,
     _sweepResult = "",
-    -- Tag picker: lazy-loaded list of all defined tags. The Lua-side
-    -- popen + text parse is a stop-gap; PLAN.md item "HTTP-JSON calls
-    -- from Lua" + Task #9 (mcp.definedTags bridge) replace it.
+    -- Tag picker: lazy-loaded list of all defined tags via
+    -- mcp.definedTags(). Each entry is { tag = "...", description = "..." }.
     _definedTags = EMPTY,
     _definedTagsLoaded = false,
 })
@@ -166,27 +124,13 @@ function Curation:mutate()
     if self._stateLoaded ~= nil then self._stateLoaded = nil end
 end
 
--- Lazy-load the corpus's defined-tag list via the ark CLI.
--- Stop-gap: text-parse "tag -- description" lines from `ark tag defs`.
--- Replaced when the mcp.definedTags Lua bridge lands (Task #9).
+-- Lazy-load the corpus's defined-tag list. The Go bridge returns
+-- a deduped, alphabetically-sorted array of { tag, description }.
 function Curation:loadDefinedTags()
     if self._definedTagsLoaded then return end
     self._definedTagsLoaded = true
-    local bin = (os.getenv("HOME") or "") .. "/.ark/ark"
-    local handle = io.popen('"' .. bin .. '" tag defs 2>/dev/null')
-    if not handle then return end
-    local seen = {}
-    local out = {}
-    for line in handle:lines() do
-        local tag, desc = line:match("^(%S+)%s+%-%-%s*(.*)$")
-        if tag and not seen[tag] then
-            seen[tag] = true
-            table.insert(out, { tag = tag, description = desc or "" })
-        end
-    end
-    handle:close()
-    table.sort(out, function(a, b) return a.tag < b.tag end)
-    self._definedTags = out
+    local defs, _ = mcp.definedTags()
+    self._definedTags = defs or {}
 end
 
 -- Filtered view over _definedTags. Element identity is preserved across
@@ -225,7 +169,6 @@ function Curation:curate(chunkID, fileID, path)
 end
 
 function Curation:sweepOlder()
-    ensureCurationMocks()
     sys.curation.sweepOlder()
 end
 
@@ -412,7 +355,6 @@ function PinnedChunk:path()     return self.viewItem.baseItem.path end
 function PinnedChunk:pinnedAt() return self.viewItem.baseItem.pinnedAt end
 
 function PinnedChunk:dismiss()
-    ensureCurationMocks()
     sys.curation.dismiss(self:chunkID())
 end
 
@@ -476,9 +418,7 @@ end
 
 -- TagSuggestion methods --------------------------------------------
 
-function TagSuggestion:scoreLabel()
-    return string.format("%.2f", self.score or 0)
-end
+function TagSuggestion:scoreLabel() return fmtScore(self.score) end
 
 -- HotChunk methods --------------------------------------------------
 
@@ -495,9 +435,7 @@ function HotChunk:shortPath()
     return compressPath(self.path)
 end
 
-function HotChunk:scoreLabel()
-    return string.format("%.2f", self.score or 0)
-end
+function HotChunk:scoreLabel() return fmtScore(self.score) end
 
 -- RelatedTag methods -----------------------------------------------
 
@@ -505,9 +443,7 @@ function RelatedTag:focus()
     if ark and ark._curation then ark._curation:focusTag(self.tag) end
 end
 
-function RelatedTag:scoreLabel()
-    return string.format("%.2f", self.score or 0)
-end
+function RelatedTag:scoreLabel() return fmtScore(self.score) end
 
 -- DriftPair methods ------------------------------------------------
 
@@ -519,9 +455,7 @@ function DriftPair:shortPathB()
     return compressPath(self.pathB)
 end
 
-function DriftPair:scoreLabel()
-    return string.format("%.2f", self.score or 0)
-end
+function DriftPair:scoreLabel() return fmtScore(self.score) end
 
 -- DefinedTag (tag-picker presenter) methods ------------------------
 

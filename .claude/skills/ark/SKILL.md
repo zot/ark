@@ -45,6 +45,15 @@ content after the colon through the newline is one atomic unit.
 Wrapping a tag line splits the content and loses everything after
 the break.
 
+**This applies to reformatting too.** When editing prose that
+already contains tags — reflowing paragraphs, applying column
+limits, running a formatter — preserve each tag line intact. A
+60-column reformatter that wraps `@note: cross-file correlations
+matter but in-file correlations might not — if only a bunch of
+chunks ...` will produce two lines, and ark will index only the
+first line's text as the `@note` value. The rest becomes unindexed
+prose. Audit tag lines before saving any reformatted file.
+
 In markdown, bare on its own line (no line breaks):
 ```
 @connection: recall agent context isolation = closure-actor private state
