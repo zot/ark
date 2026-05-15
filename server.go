@@ -59,7 +59,7 @@ type Server struct {
 	pubsub          *PubSub             // R799: subscription registry
 	scheduler       *EventScheduler     // R805: time-based event queue
 	librarian       *Librarian          // R1235: Haiku co-process for spectral search
-	curation        *Curation           // R2355: Go-owned curation workshop state; ark.curation in Lua
+	curation        *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
 
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
@@ -365,6 +365,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /tags/values", srv.handleTagValues)
 	mux.HandleFunc("POST /save", srv.handleSave)
 	mux.HandleFunc("POST /set-tags", srv.handleSetTags)
+	mux.HandleFunc("POST /curation/pin", srv.handleCuratePin)
 	if srv.librarian != nil {
 		mux.HandleFunc("POST /search/curate", srv.librarian.HandleExpand)
 		mux.HandleFunc("GET /search/curate/wait", srv.librarian.HandleExpandWait)
@@ -1410,6 +1411,45 @@ func (srv *Server) handleTagDefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, defs)
+}
+
+// curatePinRequest is the JSON payload for POST /curation/pin.
+// CRC: crc-Server.md | R2363
+type curatePinRequest struct {
+	ChunkID uint64 `json:"chunkID"`
+	FileID  uint64 `json:"fileID"`
+	Path    string `json:"path"`
+}
+
+// handleCuratePin pins a chunk from a web-component context that
+// can't reach Lua directly (chunk-row buttons in <ark-search>,
+// content-view iframes). Enters the Lua executor so the Go mutation
+// and Lua mirror refresh share a single tick.
+//
+// CRC: crc-Server.md | R2363
+func (srv *Server) handleCuratePin(w http.ResponseWriter, r *http.Request) {
+	var req curatePinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ChunkID == 0 {
+		http.Error(w, "chunkID required", http.StatusBadRequest)
+		return
+	}
+	if srv.uiRuntime == nil {
+		http.Error(w, "ui runtime not available", http.StatusServiceUnavailable)
+		return
+	}
+	err := srv.uiRuntime.WithLua(func(rt *cli.LuaRuntime) error {
+		srv.curation.pin(rt.State, req.ChunkID, req.FileID, req.Path)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // Seq: seq-config-mutate.md
@@ -2962,16 +3002,16 @@ func (srv *Server) registerLuaFunctions() {
 			return fmt.Errorf("mcp is not a table")
 		}
 
-		// R2356: register the global `ark` Lua table with a curation subtable.
-		// State is Go-owned (srv.curation.pinned); ark.curation.pinned is the
-		// Lua-side mirror Frictionless watches. Mutators (e.g. ark.curation.pin)
-		// run in the Lua executor — they update the Go slice and refresh the
-		// mirror in the same tick.
-		arkTable := L.NewTable()
+		// R2356: register the global `sys` Lua table with a curation subtable.
+		// State is Go-owned (srv.curation.pinned); sys.curation.pinned is the
+		// Lua-side mirror Frictionless watches. Mutators (sys.curation.pin /
+		// .dismiss / .sweepOlder) run in the Lua executor — they update the
+		// Go slice and refresh the mirror in the same tick.
+		sysTable := L.NewTable()
 		curationTable := L.NewTable()
 		L.SetField(curationTable, "pinned", L.NewTable())
-		L.SetField(arkTable, "curation", curationTable)
-		L.SetGlobal("sys", arkTable)
+		L.SetField(sysTable, "curation", curationTable)
+		L.SetGlobal("sys", sysTable)
 		srv.curation.luaTable = curationTable
 		// R2358: pin mutator — append/move-to-top, refresh mirror.
 		L.SetField(curationTable, "pin", L.NewFunction(func(L *lua.LState) int {
@@ -2979,6 +3019,17 @@ func (srv *Server) registerLuaFunctions() {
 			fileID := uint64(L.OptNumber(2, 0))
 			path := L.OptString(3, "")
 			srv.curation.pin(L, chunkID, fileID, path)
+			return 0
+		}))
+		// R2360: dismiss mutator — remove by chunkID, silent no-op when absent.
+		L.SetField(curationTable, "dismiss", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			srv.curation.dismiss(L, chunkID)
+			return 0
+		}))
+		// R2361: sweepOlder mutator — keep only the topmost pin.
+		L.SetField(curationTable, "sweepOlder", L.NewFunction(func(L *lua.LState) int {
+			srv.curation.sweepOlder(L)
 			return 0
 		}))
 
@@ -3601,6 +3652,43 @@ func (srv *Server) registerLuaFunctions() {
 				result.RawSetInt(idx, entryTbl)
 			}
 
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp.definedTags() — read-only list of defined tags + descriptions.
+		// Same store as POST /tags/defs. Sorted ascending by tag; duplicate
+		// tag names deduplicated, keeping the first non-empty description.
+		// CRC: crc-Server.md | R2364
+		L.SetField(tbl, "definedTags", L.NewFunction(func(L *lua.LState) int {
+			defs, err := Sync(srv.db, func(db *DB) ([]TagDefInfo, error) {
+				return db.TagDefs(nil)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			seen := make(map[string]int, len(defs))
+			unique := defs[:0]
+			for _, d := range defs {
+				if i, ok := seen[d.Tag]; ok {
+					if unique[i].Description == "" && d.Description != "" {
+						unique[i].Description = d.Description
+					}
+					continue
+				}
+				seen[d.Tag] = len(unique)
+				unique = append(unique, d)
+			}
+			sort.Slice(unique, func(i, j int) bool { return unique[i].Tag < unique[j].Tag })
+			result := L.NewTable()
+			for i, d := range unique {
+				row := L.NewTable()
+				L.SetField(row, "tag", lua.LString(d.Tag))
+				L.SetField(row, "description", lua.LString(d.Description))
+				result.RawSetInt(i+1, row)
+			}
 			L.Push(result)
 			return 1
 		}))

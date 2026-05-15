@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-Curation.md | R2355, R2356, R2357, R2358, R2359
+// CRC: crc-Curation.md | R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362
 
 import (
 	"sync"
@@ -23,22 +23,25 @@ type PinnedChunk struct {
 
 // Curation owns the curation workshop's pinned-chunks state. The
 // canonical store is the Go slice `pinned`; `luaTable` is the
-// `ark.curation` Lua-side table that Frictionless watches. The
+// `sys.curation` Lua-side table that Frictionless watches. The
 // `pinned` Lua field on that table is refreshed inside the same
 // Lua-executor closure that mutates the Go slice, so the two views
 // stay consistent without a separate publisher.
 //
 // CRC: crc-Curation.md | R2355, R2357
 type Curation struct {
-	mu       sync.Mutex
-	pinned   []PinnedChunk
-	luaTable *lua.LTable // ark.curation; set on registerLuaFunctions
+	mu          sync.Mutex
+	pinned      []PinnedChunk
+	luaTable    *lua.LTable           // sys.curation; set on registerLuaFunctions
+	entryTables map[uint64]*lua.LTable // per-ChunkID entry sub-tables; identity-preserved across refreshes (R2362)
 }
 
 // newCuration constructs an empty Curation.
 // CRC: crc-Curation.md | R2355
 func newCuration() *Curation {
-	return &Curation{}
+	return &Curation{
+		entryTables: make(map[uint64]*lua.LTable),
+	}
 }
 
 // pinnedSnapshot returns a copy of the pinned slice under the mutex.
@@ -90,12 +93,56 @@ func (c *Curation) pin(L *lua.LState, chunkID, fileID uint64, path string) {
 	c.refreshLuaTable(L)
 }
 
-// refreshLuaTable rebuilds the `pinned` field on the Lua-side
-// `ark.curation` table to match the Go slice. Called from inside
-// the Lua executor (Frictionless detects the table replacement and
-// pushes the diff to the browser).
+// dismiss removes the pinned entry whose ChunkID matches, if any.
+// Silent no-op when the chunkID is not pinned. Refreshes the Lua
+// mirror in the same tick. Lua-executor-only — call from inside
+// WithLua (or a function registered on a Lua table).
 //
-// CRC: crc-Curation.md | R2357
+// CRC: crc-Curation.md | R2360
+func (c *Curation) dismiss(L *lua.LState, chunkID uint64) {
+	c.mu.Lock()
+	idx := -1
+	for i, p := range c.pinned {
+		if p.ChunkID == chunkID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		c.mu.Unlock()
+		return
+	}
+	c.pinned = append(c.pinned[:idx], c.pinned[idx+1:]...)
+	c.mu.Unlock()
+	c.refreshLuaTable(L)
+}
+
+// sweepOlder drops every pinned entry except the topmost. Silent
+// no-op for ≤1 pin. Refreshes the Lua mirror in the same tick.
+// Lua-executor-only.
+//
+// CRC: crc-Curation.md | R2361
+func (c *Curation) sweepOlder(L *lua.LState) {
+	c.mu.Lock()
+	if len(c.pinned) <= 1 {
+		c.mu.Unlock()
+		return
+	}
+	c.pinned = c.pinned[:1]
+	c.mu.Unlock()
+	c.refreshLuaTable(L)
+}
+
+// refreshLuaTable rebuilds the `pinned` field on the Lua-side
+// `sys.curation` table to match the Go slice. Entry sub-tables for
+// surviving ChunkIDs keep their Lua identity across refreshes — the
+// per-ChunkID cache mutates each table's fields in place. Allocates
+// a fresh table only for newly pinned ChunkIDs; drops cache entries
+// for ChunkIDs that left the slice. Frictionless's ViewList reuses
+// presenters only when view.baseItem == item, so identity-preservation
+// is what keeps per-pin reactive state alive across mutations.
+//
+// CRC: crc-Curation.md | R2357, R2362
 func (c *Curation) refreshLuaTable(L *lua.LState) {
 	if c.luaTable == nil {
 		return
@@ -105,14 +152,25 @@ func (c *Curation) refreshLuaTable(L *lua.LState) {
 	copy(snap, c.pinned)
 	c.mu.Unlock()
 
+	live := make(map[uint64]struct{}, len(snap))
 	tbl := L.NewTable()
 	for i, p := range snap {
-		entry := L.NewTable()
+		live[p.ChunkID] = struct{}{}
+		entry := c.entryTables[p.ChunkID]
+		if entry == nil {
+			entry = L.NewTable()
+			c.entryTables[p.ChunkID] = entry
+		}
 		L.SetField(entry, "chunkID", lua.LNumber(p.ChunkID))
 		L.SetField(entry, "fileID", lua.LNumber(p.FileID))
 		L.SetField(entry, "path", lua.LString(p.Path))
 		L.SetField(entry, "pinnedAt", lua.LNumber(p.PinnedAt))
 		tbl.RawSetInt(i+1, entry)
+	}
+	for chunkID := range c.entryTables {
+		if _, ok := live[chunkID]; !ok {
+			delete(c.entryTables, chunkID)
+		}
 	}
 	L.SetField(c.luaTable, "pinned", tbl)
 }
