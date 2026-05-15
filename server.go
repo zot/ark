@@ -2971,7 +2971,7 @@ func (srv *Server) registerLuaFunctions() {
 		curationTable := L.NewTable()
 		L.SetField(curationTable, "pinned", L.NewTable())
 		L.SetField(arkTable, "curation", curationTable)
-		L.SetGlobal("ark", arkTable)
+		L.SetGlobal("sys", arkTable)
 		srv.curation.luaTable = curationTable
 		// R2358: pin mutator — append/move-to-top, refresh mirror.
 		L.SetField(curationTable, "pin", L.NewFunction(func(L *lua.LState) int {

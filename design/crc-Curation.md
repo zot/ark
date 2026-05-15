@@ -3,14 +3,14 @@
 
 Server-owned in-memory state for the curation workshop's pinned
 chunks. Canonical store is the Go slice; the Lua table at
-`ark.curation` is a mirror, refreshed inside the Lua executor
+`sys.curation` is a mirror, refreshed inside the Lua executor
 closure that mutates the Go slice. Frictionless observes the
 mirror through its standard variable-change detection.
 
 ## Knows
 - pinned: []PinnedChunk — canonical store; the workshop's pinned set
   in append-on-top order. Newest first.
-- luaTable: *lua.LTable — `ark.curation` Lua mirror; the `pinned`
+- luaTable: *lua.LTable — `sys.curation` Lua mirror; the `pinned`
   field of this table is rebuilt on every mutation.
 - mu: sync.Mutex — guards `pinned` for concurrent reads outside the
   Lua executor (e.g. HTTP handlers reading a snapshot without
@@ -26,12 +26,12 @@ mirror through its standard variable-change detection.
   or a body passed to `flib.Runtime.WithLua`). (R2358)
 - pinnedSnapshot(): copy of the pinned slice under the mutex. Use
   this from goroutines outside the Lua executor. (R2357)
-- refreshLuaTable(L): rebuild the `pinned` field on the `ark.curation`
+- refreshLuaTable(L): rebuild the `pinned` field on the `sys.curation`
   Lua table to match the Go slice. Called automatically by `pin`;
   exposed for any future mutation paths. (R2357)
 
 ## Collaborators
-- Server: holds the `*Curation` field; registers the `ark` global
+- Server: holds the `*Curation` field; registers the `sys` global
   Lua table and sets `Curation.luaTable` during
   `registerLuaFunctions`.
 - flib.Runtime: the closure-actor that runs `pin` (and any future

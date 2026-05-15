@@ -2,7 +2,7 @@
   <div class="cur-pin" ui-class-cur-pin-new="isNew()">
     <div class="cur-pin-header">
       <span class="cur-pin-new-pill" ui-class-hidden="notNew()">NEW</span>
-      <span class="cur-pin-path" ui-value="shortPath()" ui-event-click="openFile()"></span>
+      <a class="cur-pin-path" target="_blank" ui-attr-href="contentURL()" ui-value="shortPath()"></a>
       <sl-icon-button name="x-lg" ui-action="dismiss()" label="Dismiss"></sl-icon-button>
     </div>
 

@@ -29,7 +29,7 @@
         </div>
 
         <div class="cur-pinned-list" ui-class-hidden="noPinned()">
-          <div ui-view="pinned?wrapper=lua.ViewList"></div>
+          <div ui-view="pinned()?wrapper=lua.ViewList&amp;itemWrapper=Ark.PinnedChunk"></div>
         </div>
       </div>
 
@@ -40,19 +40,26 @@
         </div>
 
         <div class="cur-focus-bar">
-          <sl-input size="small" placeholder="Focus a tag..." ui-value="_focusInput?keypress" ui-event-keypress-enter="focusTagFromInput()">
+          <sl-input size="small" placeholder="Filter defined tags..." ui-value="_focusInput?keypress" ui-event-keypress-enter="focusTagFromInput()">
             <sl-icon slot="prefix" name="bullseye"></sl-icon>
           </sl-input>
-          <sl-tooltip content="Focus this tag">
-            <sl-icon-button name="arrow-right-short" ui-action="focusTagFromInput()" label="Focus"></sl-icon-button>
-          </sl-tooltip>
           <sl-tooltip content="Clear focus">
             <sl-icon-button name="x-circle" ui-action="clearFocus()" ui-attr-disabled="notFocused()" label="Clear"></sl-icon-button>
           </sl-tooltip>
         </div>
 
+        <div class="cur-tag-picker">
+          <div class="cur-tag-picker-header">
+            <span>Defined tags</span>
+            <span class="cur-focused-count" ui-value="filteredDefinedTagCount()"></span>
+          </div>
+          <div class="cur-tag-picker-list">
+            <div ui-view="filteredDefinedTags()?wrapper=lua.ViewList&itemWrapper=Ark.DefinedTag"></div>
+          </div>
+        </div>
+
         <div class="cur-explorer-empty" ui-class-hidden="isFocused()">
-          <p>Type a tag name and press Enter to explore its chunks, related tags, and definition drift.</p>
+          <p>Pick a tag above to explore its chunks, related tags, and definition drift.</p>
         </div>
 
         <div class="cur-focused-block" ui-class-hidden="notFocused()">
@@ -221,6 +228,54 @@
     .cur-focus-bar sl-input {
       flex: 1;
       min-width: 0;
+    }
+
+    .cur-tag-picker {
+      border-bottom: 1px solid var(--term-border, #222);
+      padding: 4px 0 6px;
+      flex-shrink: 0;
+    }
+
+    .cur-tag-picker-header {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      padding: 2px 12px 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--term-text-dim, #999);
+    }
+
+    .cur-tag-picker-list {
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    .cur-tag-pick-row {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      padding: 3px 12px;
+      cursor: pointer;
+    }
+
+    .cur-tag-pick-row:hover {
+      background: var(--term-bg-alt, #111);
+    }
+
+    .cur-tag-pick-name {
+      color: var(--term-link, #6cc3ff);
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+
+    .cur-tag-pick-desc {
+      color: var(--term-text-dim, #999);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .cur-focused-block {

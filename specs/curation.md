@@ -2,7 +2,7 @@
 
 The curation workshop's pinned-chunks state is owned by Go, not Lua.
 A `Curation` struct on the Server holds the canonical `Pinned`
-slice; Lua sees it through `ark.curation.pinned`, a table mirror
+slice; Lua sees it through `sys.curation.pinned`, a table mirror
 refreshed inside the same Lua-executor closure that mutates the Go
 slice. This lets Frictionless's variable-change detection observe
 mutations naturally — Frictionless watches Lua tables, and the
@@ -23,15 +23,15 @@ with its own `_persist()` call. The Go-owned shape is cleaner:
    mirror inside the same `WithLua` closure that mutates the Go
    slice. One atomic transition per mutation.
 
-## `ark` global Lua table
+## `sys` global Lua table
 
-The Server registers a global `ark` Lua table alongside the
-existing `mcp` table during `registerLuaFunctions`. `ark.curation`
-is a subtable; `ark.curation.pinned` is the mirror.
+The Server registers a global `sys` Lua table alongside the
+existing `mcp` table during `registerLuaFunctions`. `sys.curation`
+is a subtable; `sys.curation.pinned` is the mirror.
 
 ## Mutators
 
-- `ark.curation.pin(chunkID, fileID, path)` — add or move-to-top.
+- `sys.curation.pin(chunkID, fileID, path)` — add or move-to-top.
   Always-add never-flip: an already-pinned chunkID is moved to
   the top of the list with `PinnedAt = now`. `fileID == 0` or
   `path == ""` preserves the existing values on a re-pin.
