@@ -7,6 +7,13 @@
         <sl-tooltip content="Run hot-correlations sweep">
           <sl-icon-button name="lightning-charge-fill" ui-action="sweepNow()" ui-attr-disabled="sweepBusy()" label="Sweep"></sl-icon-button>
         </sl-tooltip>
+        <sl-button
+          size="small"
+          variant="primary"
+          class="cur-accept-button"
+          ui-action="acceptChanges()"
+          ui-attr-disabled="noPendingChanges()"
+        >Accept changes (<span ui-value="totalPendingCount()"></span>)</sl-button>
       </div>
     </div>
 
@@ -419,6 +426,130 @@
 
     .cur-drift-arrow {
       color: var(--term-text-dim, #999);
+    }
+
+    /* Accept-changes button */
+    .cur-accept-button {
+      margin-left: 4px;
+    }
+
+    /* Pending widget stack inside the card */
+    .cur-pin-widgets {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-bottom: 6px;
+      border-bottom: 1px dashed var(--term-border, #222);
+      margin-bottom: 6px;
+    }
+
+    .cur-pin-widget-add {
+      align-self: flex-start;
+      margin-left: -4px;
+    }
+
+    /* PendingWidget rows */
+    .cur-widget {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 2px 0;
+    }
+
+    .cur-widget-remove .cur-widget-tag,
+    .cur-widget-remove .cur-widget-value {
+      text-decoration: line-through;
+      opacity: 0.7;
+    }
+
+    .cur-widget-ext .cur-widget-tag {
+      border-left: 2px solid var(--term-accent, #E07A47);
+      padding-left: 4px;
+    }
+
+    .cur-widget-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: nowrap;
+    }
+
+    .cur-widget-tag {
+      flex: 0 0 140px;
+      min-width: 0;
+    }
+
+    .cur-widget-value {
+      flex: 1 1 auto;
+      min-width: 80px;
+    }
+
+    .cur-widget-ext-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-left: 8px;
+    }
+
+    .cur-widget-base {
+      flex: 0 0 80px;
+      min-width: 0;
+    }
+
+    .cur-widget-locator-kind {
+      flex: 0 0 110px;
+      min-width: 0;
+    }
+
+    .cur-widget-locator-text {
+      flex: 1 1 auto;
+      min-width: 80px;
+    }
+
+    .cur-widget-flags {
+      display: flex;
+      gap: 12px;
+      padding: 2px 8px 0;
+      font-size: 11px;
+      color: var(--term-text-dim, #999);
+    }
+
+    .cur-widget-dup {
+      color: var(--term-warning, #d4a637);
+    }
+
+    /* Card URL row */
+    .cur-pin-pending {
+      color: var(--term-accent, #E07A47);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* Confirm-dismiss inline UI */
+    .cur-pin-confirm {
+      border-color: var(--term-error, #ff6b6b);
+    }
+
+    .cur-pin-confirm-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0 6px;
+    }
+
+    .cur-pin-confirm-msg {
+      color: var(--term-error, #ff6b6b);
+      font-size: 12px;
+      flex: 1;
+    }
+
+    .cur-pin-accept-error {
+      margin-top: 6px;
+    }
+
+    /* Tag suggestions collapsible (sl-details) — defers to theme for borders/colors */
+    .cur-pin-suggestions {
+      margin-top: 6px;
     }
   </style>
 </template>

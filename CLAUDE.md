@@ -54,9 +54,17 @@ cache/                 Build cache (Makefile asset pipeline)
 
 ## Code Changes
 
-**Go changes must go through mini-spec.** Load `/mini-spec` and update the design (requirements, CRC cards, sequences) before modifying any Go files. Unanchored Go changes — code not tracked by the spec — can silently drift or disappear in future sessions. The spec is the anchor.
+We need all code/spec/design changes to be **anchored**. Make sure to load the required skill before making changes.
 
-**Separate Go and UI work.** The mini-spec and Frictionless UI workflows overlap significantly. Do Go/spec changes in one pass, UI changes (Lua, viewdefs) in another. Don't mix them in the same work stream.
+Simple bug fixes to anchored code are OK to make without loading the skills because the code is already anchored.
+
+**The apps/ directory contains Frictionless code** use `/ui-fast` or `/ui-thorough` to anchor those changes.
+- Before changing Frictionless code, ask the user if mutation is needed. If the user can simply restart the server, then you are free to **save tokens** and not worry about mutation code **at all**.
+
+**Code changes outside app/ contains mini-spec code** use `/mini-spec` to anchor the changes.
+
+
+**Separate /mini-spec and /ui-* work.** The mini-spec and Frictionless UI workflows overlap significantly. Do mini-spec code/spec/design changes in one pass, Frictionless changes (Lua, viewdefs) in another. Don't mix them in the same work stream because they have conflicting instructions that have caused confusion in the past.
 
 Go files use tabs for indentation. The Read tool displays them as spaces, so the Edit tool's `old_string` often fails on the first attempt. Use `cat -A` to see the actual whitespace when an edit doesn't match.
 

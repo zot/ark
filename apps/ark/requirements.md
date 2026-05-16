@@ -11,7 +11,7 @@ The ark app has three top-level views:
 
 A thin root object routes between them. The MCP shell's bottom bar
 has three ark buttons: searching (archive icon), messaging
-(envelope icon), and curation (compass icon). Each sets the view
+(envelope icon), and curation (multi-tag icon). Each sets the view
 mode and displays the ark app.
 
 ## Architecture
@@ -238,47 +238,171 @@ Manual refresh button. Real-time updates are V3 territory.
 
 ## Curation View
 
-The vocabulary-maintenance workshop. Three of the four entry points
-from `.scratch/CURATION-VIEW.md` (chunk → similar-chunks deferred,
-no backend yet):
+The vocabulary-maintenance workshop. The 2026-05 reframe
+(`.scratch/CURATE-ONE-CHUNK.md`) turns the pinned-chunks panel into
+a **per-chunk editing surface**: each pinned card carries a stack
+of *pending widgets* above its URL, lets the user author tag
+additions/removals (inline in the chunk text, or routed via
+`@ext` mirror files), and commits the batch through
+Stage / Revert / Accept verbs.
 
-- **chunk → tag candidates** (entry 1, `mcp.suggestTagNames`)
-- **tag → chunk candidates** (entry 2, `mcp.topKChunksForTag` cached
-  / `mcp.chunksForTag` live)
-- **tag → tag** (entry 4, `mcp.relatedTags` / `mcp.tagDrift` /
-  `mcp.tagPairConflict`)
+### File-truth principle
+
+Files → chunks → tags. **Files are the only source of truth.** The
+user (or this UI) edits text in a file region; ark rechunks +
+reindexes automatically. There is no special "rewrite a chunk" API
+— only `mcp.replaceRegion(path, byteStart, byteEnd, newText)` and,
+for routed tags, `mcp.setExtTag` / `mcp.removeExtTag` writing
+mirror files under `~/.ark/external/`. The workshop never tries to
+maintain its own chunk view independent of the file.
 
 ### Layout
 
-Two-column workshop:
+The pinned-chunks workshop is the primary surface. The tag
+explorer is retained as a **secondary panel** for tag-driven
+discovery (top chunks for a tag, related tags, drift pairs) —
+useful even though the primary authoring path now runs through
+per-chunk widget stacks.
 
-- **Left/main:** pinned-chunks workspace. Each pinned chunk shows
-  its path, a content preview, and a tag-suggestions panel
-  (entry 1). Per-chunk dismiss; sweep-older bulk action.
-- **Right:** tag explorer. Type a tag to focus it; when focused,
-  shows the tag's top-K chunks (entry 2), related tags (entry 4),
-  and drift pairs (entry 4). Click a related tag to switch focus;
-  click a chunk to pin it.
-
-A header strip carries the title, sweep status, sweep button, and
-refresh.
+```
++--------------------------------------+----------------------+
+| Curation  Sweep: idle  [⚡][↻ Accept (N)]                   |
++--------------------------------------+----------------------+
+| Pinned chunks (3) [⤓ Sweep older]   | Tag explorer         |
+| ┌──────────────────────────────────┐ | [_____________]      |
+| │ [tag][val][rem][ext][X]          │ | Defined tags          |
+| │ [tag][val][rem][ext][X]          │ |  • design-decision    |
+| │ [+]                              │ |  • feedback           |
+| │ NEW path/file.md (2 pending) X  │ | Focused: design-…    |
+| │  [↓ Stage] [↶ Revert]            │ |  Top chunks (10)     |
+| │  > tag suggestions               │ |  Related tags        |
+| └──────────────────────────────────┘ |  Drift               |
++--------------------------------------+----------------------+
+```
 
 ### Pinned-chunks behavior
 
-Four rules from `.scratch/CURATION-VIEW.md`:
-
 - **Always-add, never-flip.** `Ark.Curation:curate(chunkID)` adds
   the chunk to the top of the list and never switches the user
-  into the view. Pinning is a stash gesture from anywhere in the
-  app (eventually `<ark-search>` results, manually for now).
+  into the view.
 - **New chunks land at the top** by pin time.
-- **Per-chunk dismiss.** Each pinned chunk has its own X button.
-- **Sweep older.** A button drops everything below the topmost
-  pin in one click. Topmost pin survives as the working anchor.
+- **Per-chunk dismiss.** Each card has its own X button. Dismiss
+  prompts confirmation when the card has any pending changes.
+- **Sweep older.** Drops everything below the topmost pin.
 - **New-since-last-viewed accent.** Chunks pinned while the view
-  was closed get a visual accent (NEW pill). Accent clears when
-  the view is opened. The "last viewed" timestamp is persisted
-  per-user.
+  was closed wear a NEW pill, cleared on next view-open.
+
+### Pending widget stack (per card)
+
+Each card carries a stack of *pending widgets* above its URL row.
+A widget authors one tag operation (add, change, or remove)
+against the chunk.
+
+**Per-widget controls:**
+
+- `[tag]` — tag name input
+- `[value]` — tag value input (ignored when remove toggle is on)
+- `[remove]` — checkbox; off = add/change, on = remove this tag
+- `[ext]` — checkbox; off = inline (insert into chunk text), on =
+  routed via `@ext` mirror file (reveals base + locator dropdowns)
+- `[X]` — kill the widget unconditionally
+
+**Stack rules:**
+
+- **Empty-start invariant.** When the stack has no pending
+  content, exactly one empty widget remains visible — never zero.
+- **[+] button.** Adds a new empty widget below the stack.
+- **Tab-out auto-add.** Tabbing past the last field of a *filled*
+  widget creates a new empty widget. Tabbing past the last field
+  of an *empty* widget moves focus past the stack.
+
+**Read-only protections.** When the chunk's `chunkInfo.writable`
+is false (PDF chunks, `~/.claude/projects/**` chat logs, any other
+chunker reporting `writable: false`), the ext toggle locks on and
+inline operations are disabled with a "read-only" hint.
+
+### Ext-tag widgetry
+
+When a widget's ext toggle is on, two more controls reveal:
+
+- **Base dropdown** — `UUID | path`. Defaults to UUID when the
+  chunk has an `@id`; path otherwise.
+- **Locator dropdown** — `string | regex | absolute | bare`.
+  Defaults follow the table in `.scratch/CURATE-ONE-CHUNK.md`
+  ("Ext-tag widgetry — default selection table"): bare when the
+  UUID is unique within file, string (auto-picked via the
+  three-layer algorithm) otherwise, absolute for read-only
+  chunkers.
+
+A **scope readout** below the locator preview shows `will route
+to N chunks across M files` — important when UUID-base scope
+crosses files, or when an auto-picked locator matches more chunks
+than the user expected.
+
+Widget defaults come from `mcp.suggestExtLocator(chunkID)`. The
+widget reads `locatorText` for the proposed locator value
+(`locator` field has a known bug — tracked as a `/mini-spec`
+follow-up).
+
+### Stage / Revert / Accept verbs
+
+Three verbs in the workshop, two per-card and one panel-level:
+
+**Stage** (per-card): folds filled widgets into a per-card
+*staged ops* buffer. Widgets clear from the stack; pending badge
+updates. No disk write yet.
+
+**Revert** (per-card): clears the staged-ops buffer and
+recreates widgets from the staged operations. Symmetric to
+Stage.
+
+**Accept changes (N)** (panel-level, header button): implicit-
+stages any still-unstaged widgets across all cards, then
+executes every card's staged operations:
+
+- Inline op → `mcp.replaceRegion(path, byteStart, byteStart,
+  newText)` where `newText` is `@tag: value\n` (markdown) or
+  `commentSyntax @tag: value\n` (code chunks) per
+  `chunkInfo.commentSyntax`.
+- Inline remove → `mcp.replaceRegion` collapses the tag line
+  (range derivation deferred — v1 prepends a removal marker;
+  full per-line removal is a follow-up).
+- Ext op → `mcp.setExtTag(targetSpec, tag, value)` or
+  `mcp.removeExtTag(targetSpec, tag)` per the widget's base +
+  locator selection.
+
+Per-chunk errors surface on the failing card; successful cards
+clear their staged ops. The badge N counts filled widgets +
+staged ops across every pinned card; the button disables when
+N = 0.
+
+### Spectral-value rule
+
+Tag values must be **chunk-specific, not generic** — all chunks
+getting the same value is functionally equivalent to no value at
+all (spectral search collapses). The widget allows identical
+values across cards, but the per-card widget form encourages
+per-chunk values. See `.scratch/CURATE-ONE-CHUNK.md` "The
+spectral-value rule" for the rationale.
+
+### Tag explorer (secondary panel, kept)
+
+The right-side tag explorer survives the reframe as a secondary
+panel for tag-driven discovery. Type a tag name (or click one in
+the defined-tags picker); when focused, the panel shows the
+tag's top-K chunks (entry 2 from `.scratch/CURATION-VIEW.md`),
+related tags, and drift pairs. Click a related tag to switch
+focus; click a chunk to pin it.
+
+Entry coverage:
+
+- **chunk → tag candidates** (entry 1, `mcp.suggestTagNames`) —
+  surfaces inside each pinned card as the "tag suggestions"
+  collapsible.
+- **tag → chunk candidates** (entry 2, `mcp.topKChunksForTag`
+  cached / `mcp.chunksForTag` live).
+- **tag → tag** (entry 4, `mcp.relatedTags` / `mcp.tagDrift` /
+  `mcp.tagPairConflict`).
 
 ### Tag focus
 
@@ -324,32 +448,45 @@ on every mutation.
 
 ### What's NOT in scope (this slice)
 
+- **Chunk-text editor** — `<ark-markdown-editor>` embedded inside
+  each card's `> chunk text` collapsible. Needs Go bridges
+  (`mcp.chunkText`, `mcp.parseTagBlock`) — deferred to a
+  `/mini-spec` follow-up.
+- **`> current tags` reflection** — live tags-on-chunk display
+  derived from chunk text. Same Go-bridge gap as above.
+- **Find Connections integration** — the proposals panel with
+  `[Fill]` buttons that inject pre-filled widgets into evidence
+  chunks. Needs `mcp.tmp_get` (Lua-side read of tmp:// doc
+  content) — deferred to a `/mini-spec` follow-up.
+- **Sweep button retrofit** — convert `Curation:sweepNow` from
+  blocking to fire-and-forget + `mcp.subscribe` on
+  `tmp://sweep/hot-correlations.md`. Needs Go addition
+  (`mcp.sweepHotCorrelationsAsync` or non-blocking variant) —
+  deferred to a `/mini-spec` follow-up.
+- **Inline tag removal precision** — the design calls for
+  deleting tag-on-own-line vs. tag-tacked-on-line. v1 widgets
+  with `remove` toggle on stage a removal marker; full per-line
+  removal is a follow-up.
+- **Per-line annotation** — authoring a tag *about* a specific
+  line mid-chunk is deferred; v1 inserts at top.
 - **Entry 3 (chunk → similar chunks)** — needs a Librarian
   backend (`SimilarChunks(chunkID, k)`) that doesn't exist yet.
-- **`<ark-search>` Curate button** — separate TypeScript slice;
-  for now the curation view is reachable through the bottom-bar
-  button and chunks are pinned from the focused-tag list or via
-  `ark:curate(chunkID)` from Lua.
+- **`<ark-search>` Curate button** — separate TypeScript slice
+  (Subtask B in `.scratch/PLAN-CURATE-CHUNK.md`).
 - **Tag conflict explorer** — `mcp.tagPairConflict(tagA, tagB)`
-  is bridged but the UX for picking two tags is deferred. The
-  drift surface covers the within-tag case, which is the more
-  common need.
+  is bridged but the UX is deferred.
 - **Vocabulary gaps** (bottom-K against all tag defs) — bottom-K
-  inversion of the same engine; not in this slice.
+  inversion of the same engine.
 - **Tag-name completion** — typed input only, no autocomplete.
-- **Tag-write actions** — applying a suggestion to a chunk's
-  source file is Phase 2 (Workmanlike / Magic modes).
 - **Status badge on the bottom-bar button** — the badge with
-  pinned-count + new-count is described in CURATION-VIEW.md but
-  lives in the MCP shell, not this app. Surfaced as a separate
-  slice once the workshop is settled.
+  pinned-count + new-count lives in the MCP shell, not this app.
 
 ## MCP Shell Integration
 
 Three ark buttons in the MCP bottom bar:
 - **Archive icon** — displays ark in searching mode
 - **Envelope icon** — displays ark in messaging mode
-- **Compass icon** — displays ark in curation mode (new)
+- **Multi-tag icon** — displays ark in curation mode
 
 Each button sets the view mode on the ark instance before calling
 `mcp:display("ark")`.

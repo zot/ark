@@ -1,0 +1,73 @@
+<template>
+  <div class="cur-widget" ui-class-cur-widget-ext="extMode" ui-class-cur-widget-remove="removeMode">
+    <div class="cur-widget-row">
+      <sl-input
+        size="small"
+        class="cur-widget-tag"
+        placeholder="tag"
+        ui-value="tagName?keypress"
+      ></sl-input>
+      <sl-input
+        size="small"
+        class="cur-widget-value"
+        placeholder="value"
+        ui-value="tagValue?keypress"
+        ui-attr-disabled="removeMode"
+        ui-event-blur="autoAddOnTab()"
+      ></sl-input>
+      <sl-tooltip content="Remove this tag from the chunk on Stage">
+        <sl-checkbox
+          size="small"
+          ui-attr-checked="removeMode"
+          ui-event-sl-change="toggleRemove()"
+        >rem</sl-checkbox>
+      </sl-tooltip>
+      <sl-tooltip content="Route via @ext mirror instead of inline">
+        <sl-checkbox
+          size="small"
+          ui-attr-checked="extMode"
+          ui-attr-disabled="extToggleLocked()"
+          ui-event-sl-change="toggleExt()"
+        >ext</sl-checkbox>
+      </sl-tooltip>
+      <sl-tooltip content="Discard this widget">
+        <sl-icon-button name="x-lg" ui-action="kill()" label="Kill"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+
+    <div class="cur-widget-ext-row" ui-class-hidden="notExt()">
+      <sl-select
+        size="small"
+        class="cur-widget-base"
+        ui-value="extBase"
+        ui-event-sl-change="onBaseChange()"
+      >
+        <sl-option value="uuid">UUID</sl-option>
+        <sl-option value="path">path</sl-option>
+      </sl-select>
+      <sl-select
+        size="small"
+        class="cur-widget-locator-kind"
+        ui-value="extLocatorKind"
+        ui-event-sl-change="onLocatorKindChange()"
+      >
+        <sl-option value="string">string</sl-option>
+        <sl-option value="regex">regex</sl-option>
+        <sl-option value="absolute">absolute</sl-option>
+        <sl-option value="bare">bare</sl-option>
+      </sl-select>
+      <sl-input
+        size="small"
+        class="cur-widget-locator-text"
+        placeholder="locator"
+        ui-value="extLocatorText?keypress"
+        ui-attr-disabled="locatorBare()"
+      ></sl-input>
+    </div>
+
+    <div class="cur-widget-flags" ui-class-hidden="notExt()">
+      <span class="cur-widget-dup" ui-class-hidden="noDupFlag()" ui-value="dupFlag()"></span>
+      <span class="cur-widget-scope" ui-class-hidden="noScopeReadout()" ui-value="scopeReadout()"></span>
+    </div>
+  </div>
+</template>

@@ -50,18 +50,66 @@ Ark.Curation = session:prototype("Ark.Curation", {
     -- mcp.definedTags(). Each entry is { tag = "...", description = "..." }.
     _definedTags = EMPTY,
     _definedTagsLoaded = false,
+    -- Presenter registry: chunkID -> Ark.PinnedChunk. Lets us reach a
+    -- card's per-card state (widget stack, staged ops) without walking
+    -- the ViewList. Cleared on dismiss; entries for sweept-away pins
+    -- get cleaned out on the next totalPendingCount() pass.
+    _presenters = EMPTY,
 })
 Curation = Ark.Curation
 
 -- Presenter (itemWrapper) for each entry in sys.curation.pinned.
 -- See ~/.ark/patterns/itemwrapper-presenters.md (or `ark ui patterns`).
+-- The presenter carries the per-card workshop state: pending widget
+-- stack, staged-ops buffer (ready for Accept), lazy chunkInfo, lazy
+-- tag suggestions.
 Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
     viewItem = EMPTY,
+    -- Widget stack (empty-start invariant: always at least one widget)
+    _widgets = EMPTY,
+    -- Per-card staged-ops buffer: array of {kind, tagName, tagValue, targetSpec}.
+    -- kind ∈ {"inline-add", "inline-remove", "ext-set", "ext-remove"}.
+    _stagedOps = EMPTY,
+    -- Lazy chunkInfo (mcp.chunkInfo): {chunkID, fileID, path, range,
+    -- byteStart, byteEnd, writable, commentSyntax}
+    _chunkInfo = EMPTY,
+    _chunkInfoLoaded = false,
+    _chunkInfoError = "",
+    -- Lazy tag suggestions (mcp.suggestTagNames)
     _suggestions = EMPTY,
     _suggestionsLoaded = false,
     _suggestionsError = "",
+    -- Per-card Accept error
+    _acceptError = "",
+    -- Confirm-dismiss UI flag (set when dismiss is called with pending > 0)
+    _confirmDismiss = false,
 })
 PinnedChunk = Ark.PinnedChunk
+
+-- One pending tag operation in a PinnedChunk's widget stack. Each
+-- widget authors a single (tag, value) pair against the parent
+-- chunk: add/change (default) or remove (when removeMode); inline
+-- text edit (default) or routed via @ext mirror (when extMode).
+Ark.PendingWidget = session:prototype("Ark.PendingWidget", {
+    _chunk = EMPTY,                -- parent Ark.PinnedChunk
+    tagName = "",
+    tagValue = "",
+    removeMode = false,
+    extMode = false,
+    -- Ext-mode fields, populated on first toggleExt() via
+    -- mcp.suggestExtLocator. The widget reads `locatorText` from the
+    -- Go result (`locator` field has a known bug — same value as
+    -- locatorKind; tracked as a /mini-spec follow-up).
+    extBase = "",                  -- "uuid" | "path"
+    extBaseValue = "",             -- UUID string or absolute path
+    extLocatorKind = "",           -- "string" | "regex" | "absolute" | "bare"
+    extLocatorText = "",           -- locator value (empty for bare)
+    _extScopeChunks = 0,
+    _extScopeFiles = 0,
+    _withinFileDupCount = 0,
+    _extLoaded = false,            -- true after first suggestExtLocator
+})
+PendingWidget = Ark.PendingWidget
 
 Ark.TagSuggestion = session:prototype("Ark.TagSuggestion", {
     tag = "",
@@ -105,23 +153,12 @@ DefinedTag = Ark.DefinedTag
 
 function Curation:new(instance)
     instance = session:create(Curation, instance)
-    instance._focusedChunks = instance._focusedChunks or {}
-    instance._focusedRelated = instance._focusedRelated or {}
-    instance._focusedDrift = instance._focusedDrift or {}
+    -- Table fields default to nil via EMPTY; init them so iteration is safe.
+    instance._focusedChunks = {}
+    instance._focusedRelated = {}
+    instance._focusedDrift = {}
+    instance._presenters = {}
     return instance
-end
-
-function Curation:mutate()
-    if self._focusedChunks == nil then self._focusedChunks = {} end
-    if self._focusedRelated == nil then self._focusedRelated = {} end
-    if self._focusedDrift == nil then self._focusedDrift = {} end
-    if self._newCutoff == nil then self._newCutoff = 0 end
-    if self._lastViewedAt == nil then self._lastViewedAt = 0 end
-    if self._definedTags == nil then self._definedTags = {} end
-    if self._definedTagsLoaded == nil then self._definedTagsLoaded = false end
-    -- Pre-retrofit field — would shadow the :pinned() method.
-    if self.pinned ~= nil then self.pinned = nil end
-    if self._stateLoaded ~= nil then self._stateLoaded = nil end
 end
 
 -- Lazy-load the corpus's defined-tag list. The Go bridge returns
@@ -341,12 +378,20 @@ end
 ----------------------------------------------------------------------
 
 function PinnedChunk:new(listItem)
-    return session:create(PinnedChunk, {
+    local p = session:create(PinnedChunk, {
         viewItem = listItem,
+        _widgets = {},
+        _stagedOps = {},
+        _chunkInfo = {},
         _suggestions = {},
-        _suggestionsLoaded = false,
-        _suggestionsError = "",
     })
+    -- Empty-start invariant: always at least one empty widget visible.
+    table.insert(p._widgets, PendingWidget:new(p))
+    -- Register with the parent Curation so totalPendingCount can find us.
+    if ark and ark._curation then
+        ark._curation._presenters[p:chunkID()] = p
+    end
+    return p
 end
 
 -- Accessors over the Go-mirrored entry (viewItem.baseItem)
@@ -354,7 +399,36 @@ function PinnedChunk:chunkID()  return self.viewItem.baseItem.chunkID end
 function PinnedChunk:path()     return self.viewItem.baseItem.path end
 function PinnedChunk:pinnedAt() return self.viewItem.baseItem.pinnedAt end
 
+-- Dismiss with confirmation when there are pending changes.
 function PinnedChunk:dismiss()
+    if self:hasPending() then
+        self._confirmDismiss = true
+        return
+    end
+    self:_doDismiss()
+end
+
+function PinnedChunk:confirmDismiss()
+    self._confirmDismiss = false
+    self:_doDismiss()
+end
+
+function PinnedChunk:cancelDismiss()
+    self._confirmDismiss = false
+end
+
+function PinnedChunk:dismissPending()
+    return self._confirmDismiss
+end
+
+function PinnedChunk:notDismissPending()
+    return not self._confirmDismiss
+end
+
+function PinnedChunk:_doDismiss()
+    if ark and ark._curation then
+        ark._curation._presenters[self:chunkID()] = nil
+    end
     sys.curation.dismiss(self:chunkID())
 end
 
@@ -416,6 +490,223 @@ function PinnedChunk:hasSuggestions()
     return self._suggestionsLoaded and #self._suggestions > 0
 end
 
+-- chunkInfo --------------------------------------------------------
+
+function PinnedChunk:loadChunkInfo()
+    if self._chunkInfoLoaded then return end
+    self._chunkInfoLoaded = true
+    local info, err = mcp.chunkInfo(self:chunkID())
+    if err then
+        self._chunkInfoError = err
+        self._chunkInfo = {}
+        return
+    end
+    self._chunkInfo = info or {}
+end
+
+function PinnedChunk:chunkInfo()
+    if not self._chunkInfoLoaded then self:loadChunkInfo() end
+    return self._chunkInfo
+end
+
+function PinnedChunk:commentSyntax()
+    local info = self:chunkInfo()
+    return (info and info.commentSyntax) or ""
+end
+
+function PinnedChunk:writable()
+    local info = self:chunkInfo()
+    -- Default to true until chunkInfo loads; safer than guessing read-only.
+    if info == nil then return true end
+    if info.writable == nil then return true end
+    return info.writable
+end
+
+function PinnedChunk:readOnly()
+    return not self:writable()
+end
+
+-- Widget stack -----------------------------------------------------
+
+-- Empty-start invariant: the widget stack always shows at least one
+-- (empty) widget so the user has somewhere to type. Called wherever
+-- the stack might have just gone empty.
+function PinnedChunk:_ensureEmptyWidget()
+    if #self._widgets == 0 then
+        table.insert(self._widgets, PendingWidget:new(self))
+    end
+end
+
+function PinnedChunk:widgets()
+    self:_ensureEmptyWidget()
+    return self._widgets
+end
+
+function PinnedChunk:addWidget()
+    table.insert(self._widgets, PendingWidget:new(self))
+end
+
+function PinnedChunk:removeWidget(widget)
+    for i, w in ipairs(self._widgets) do
+        if w == widget then
+            table.remove(self._widgets, i)
+            break
+        end
+    end
+    self:_ensureEmptyWidget()
+end
+
+function PinnedChunk:filledWidgetCount()
+    local n = 0
+    for _, w in ipairs(self._widgets) do
+        if w:isFilled() then n = n + 1 end
+    end
+    return n
+end
+
+function PinnedChunk:pendingCount()
+    return self:filledWidgetCount() + #self._stagedOps
+end
+
+function PinnedChunk:hasPending()
+    return self:pendingCount() > 0
+end
+
+function PinnedChunk:noPending()
+    return self:pendingCount() == 0
+end
+
+function PinnedChunk:cannotStage()
+    return self:filledWidgetCount() == 0
+end
+
+function PinnedChunk:cannotRevert()
+    return #self._stagedOps == 0
+end
+
+-- Stage / Revert ---------------------------------------------------
+
+function PinnedChunk:stage()
+    -- Move every filled widget into the staged-ops buffer; drop
+    -- staged widgets from the stack. Empty widgets stay.
+    local kept = {}
+    for _, w in ipairs(self._widgets) do
+        if w:isFilled() then
+            table.insert(self._stagedOps, w:stagedOpRecord())
+        else
+            table.insert(kept, w)
+        end
+    end
+    self._widgets = kept
+    self:_ensureEmptyWidget()
+    self._acceptError = ""
+end
+
+function PinnedChunk:revert()
+    -- Pop staged ops back into widgets so the user can re-edit.
+    local newWidgets = {}
+    for _, op in ipairs(self._stagedOps) do
+        local w = PendingWidget:new(self)
+        w.tagName = op.tagName or ""
+        w.tagValue = op.tagValue or ""
+        if op.kind == "inline-remove" or op.kind == "ext-remove" then
+            w.removeMode = true
+        end
+        if op.kind == "ext-set" or op.kind == "ext-remove" then
+            w.extMode = true
+            -- Best-effort reconstruction: stash targetSpec into locatorText
+            -- so the user sees what they had. The ext fields proper are
+            -- repopulated from suggestExtLocator on next toggleExt cycle.
+            w.extLocatorKind = "absolute"
+            w.extLocatorText = op.targetSpec or ""
+            w._extLoaded = true
+        end
+        table.insert(newWidgets, w)
+    end
+    -- Keep any non-filled widgets the user had below the staged ones.
+    for _, w in ipairs(self._widgets) do
+        if not w:isFilled() then table.insert(newWidgets, w) end
+    end
+    self._widgets = newWidgets
+    self._stagedOps = {}
+    self:_ensureEmptyWidget()
+    self._acceptError = ""
+end
+
+-- Execute staged ops via mcp bridges. Implicit-stages any still-filled
+-- widgets first. Returns true on success, false on error (sets
+-- _acceptError). On success clears _stagedOps.
+function PinnedChunk:executeStagedOps()
+    -- Implicit-stage any unstaged-but-filled widgets so Accept doesn't
+    -- leave a widget behind.
+    self:stage()
+    if #self._stagedOps == 0 then return true end
+
+    local info = self:chunkInfo()
+    if self._chunkInfoError ~= "" then
+        self._acceptError = "chunkInfo: " .. self._chunkInfoError
+        return false
+    end
+    local path = (info and info.path) or self:path()
+    local byteStart = tonumber((info and info.byteStart) or 0) or 0
+    local comment = self:commentSyntax()
+
+    for _, op in ipairs(self._stagedOps) do
+        local ok, err = self:_dispatchOp(op, path, byteStart, comment)
+        if not ok then
+            self._acceptError = err or "unknown error"
+            return false
+        end
+    end
+    self._stagedOps = {}
+    self._acceptError = ""
+    return true
+end
+
+function PinnedChunk:_dispatchOp(op, path, byteStart, comment)
+    if op.kind == "inline-add" then
+        local line = self:_formatInline(op.tagName, op.tagValue, comment)
+        local _, err = mcp.replaceRegion(path, byteStart, byteStart, line)
+        if err then return false, err end
+        return true
+    elseif op.kind == "inline-remove" then
+        -- Per-line removal is a /mini-spec follow-up. v1 inserts a
+        -- removal marker so the user can see we tried.
+        local marker = self:_formatInline("removed-" .. op.tagName, op.tagValue or "", comment)
+        local _, err = mcp.replaceRegion(path, byteStart, byteStart, marker)
+        if err then return false, err end
+        return true
+    elseif op.kind == "ext-set" then
+        local _, err = mcp.setExtTag(op.targetSpec, op.tagName, op.tagValue or "")
+        if err then return false, err end
+        return true
+    elseif op.kind == "ext-remove" then
+        local _, err = mcp.removeExtTag(op.targetSpec, op.tagName)
+        if err then return false, err end
+        return true
+    end
+    return false, "unknown op kind: " .. tostring(op.kind)
+end
+
+-- Format an inline tag insertion per the chunker's comment syntax.
+-- Markdown chunks have empty commentSyntax and get bare `@tag: value`.
+function PinnedChunk:_formatInline(tag, value, comment)
+    local body
+    if value == "" then
+        body = "@" .. tag
+    else
+        body = "@" .. tag .. ": " .. value
+    end
+    if comment == "" then
+        return body .. "\n"
+    end
+    return comment .. " " .. body .. "\n"
+end
+
+-- Accept-error display helpers
+function PinnedChunk:acceptError()      return self._acceptError end
+function PinnedChunk:hasAcceptError()   return self._acceptError ~= "" end
+
 -- TagSuggestion methods --------------------------------------------
 
 function TagSuggestion:scoreLabel() return fmtScore(self.score) end
@@ -475,4 +766,212 @@ function DefinedTag:focus()
     if ark and ark._curation then
         ark._curation:focusTag(self:tag())
     end
+end
+
+----------------------------------------------------------------------
+-- Curation: Accept-changes (panel-level) methods
+----------------------------------------------------------------------
+
+-- Sum of (filled widgets + staged ops) across every PinnedChunk
+-- presenter. Drives the `Accept changes (N)` badge in the header.
+-- Skips presenters whose chunk has been dismissed (chunkID no longer
+-- in sys.curation.pinned) — those entries linger in _presenters
+-- until GC.
+function Curation:totalPendingCount()
+    local live = {}
+    for _, p in ipairs(sys.curation.pinned) do
+        live[p.chunkID] = true
+    end
+    local n = 0
+    for chunkID, presenter in pairs(self._presenters or {}) do
+        if live[chunkID] then
+            n = n + presenter:pendingCount()
+        else
+            self._presenters[chunkID] = nil
+        end
+    end
+    return n
+end
+
+function Curation:noPendingChanges()
+    return self:totalPendingCount() == 0
+end
+
+-- Iterate live presenters; for each card with any work, execute its
+-- staged ops via the per-card executeStagedOps (which implicit-stages
+-- first). Per-card errors land on the card's _acceptError; the panel
+-- continues with the next card.
+function Curation:acceptChanges()
+    for _, p in ipairs(sys.curation.pinned) do
+        local presenter = (self._presenters or {})[p.chunkID]
+        if presenter and (presenter:filledWidgetCount() > 0 or #presenter._stagedOps > 0) then
+            presenter:executeStagedOps()
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- PendingWidget methods
+----------------------------------------------------------------------
+
+function PendingWidget:new(chunk)
+    return session:create(PendingWidget, { _chunk = chunk })
+end
+
+local function trim(s)
+    return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function PendingWidget:isFilled()
+    -- A widget is "filled" once it has a tag name. Remove ops are
+    -- valid even with empty value; add ops without value still apply
+    -- (bare `@tag` is a meaningful annotation).
+    return trim(self.tagName) ~= ""
+end
+
+function PendingWidget:toggleRemove()
+    self.removeMode = not self.removeMode
+end
+
+function PendingWidget:toggleExt()
+    if self.extMode then
+        -- Force-on when chunk is read-only.
+        if self._chunk and self._chunk:readOnly() then return end
+        self.extMode = false
+        return
+    end
+    self.extMode = true
+    if not self._extLoaded then
+        self:_loadExtSuggestion()
+    end
+end
+
+function PendingWidget:_loadExtSuggestion()
+    self._extLoaded = true
+    if not self._chunk then return end
+    local sug, err = mcp.suggestExtLocator(self._chunk:chunkID())
+    if err or sug == nil then return end
+    self.extBase = sug.base or "path"
+    self.extBaseValue = sug.baseValue or self._chunk:path()
+    self.extLocatorKind = sug.locatorKind or "absolute"
+    self.extLocatorText = sug.locator or sug.locatorText or ""
+    self._withinFileDupCount = tonumber(sug.withinFileDupCount) or 0
+    if type(sug.crossFileScope) == "table" then
+        self._extScopeChunks = tonumber(sug.crossFileScope.chunks) or 0
+        self._extScopeFiles = tonumber(sug.crossFileScope.files) or 0
+    end
+end
+
+function PendingWidget:extToggleLocked()
+    return self._chunk and self._chunk:readOnly()
+end
+
+function PendingWidget:notExt()
+    return not self.extMode
+end
+
+function PendingWidget:noDupFlag()
+    return not self:hasDupFlag()
+end
+
+function PendingWidget:noScopeReadout()
+    return not self:hasScopeReadout()
+end
+
+function PendingWidget:locatorBare()
+    return self.extLocatorKind == "bare"
+end
+
+function PendingWidget:kill()
+    if self._chunk then self._chunk:removeWidget(self) end
+end
+
+-- Bound to ui-event-sl-change on the base dropdown. The ui-value
+-- binding has already updated self.extBase; this handler refreshes
+-- the locator defaults to match the new base.
+function PendingWidget:onBaseChange()
+    if self.extBase ~= "uuid" and self.extBase ~= "path" then return end
+    self._extLoaded = false
+    self:_loadExtSuggestion()
+end
+
+-- Bound to ui-event-sl-change on the locator-kind dropdown. The
+-- ui-value binding has already updated self.extLocatorKind; this
+-- handler clears the locator text when kind is bare.
+function PendingWidget:onLocatorKindChange()
+    if self.extLocatorKind == "bare" then
+        self.extLocatorText = ""
+    end
+end
+
+function PendingWidget:dupFlag()
+    if (self._withinFileDupCount or 0) <= 1 then return "" end
+    local shortVal = self.extBaseValue or ""
+    if #shortVal > 12 then shortVal = shortVal:sub(1, 8) .. "..." end
+    return string.format("UUID: %s (×%d in this file)",
+        shortVal, self._withinFileDupCount)
+end
+
+function PendingWidget:hasDupFlag()
+    return (self._withinFileDupCount or 0) > 1
+end
+
+function PendingWidget:scopeReadout()
+    local c = self._extScopeChunks or 0
+    local f = self._extScopeFiles or 0
+    if c == 0 and f == 0 then return "" end
+    return string.format("will route to %d chunk%s across %d file%s",
+        c, c == 1 and "" or "s",
+        f, f == 1 and "" or "s")
+end
+
+function PendingWidget:hasScopeReadout()
+    return (self._extScopeChunks or 0) > 0 or (self._extScopeFiles or 0) > 0
+end
+
+-- Tab-out auto-add: called from a viewdef keypress handler when the
+-- user tabs past the last input of this widget. If this widget is
+-- filled AND is the last in its chunk's stack, append a new empty
+-- widget below it. Empty widgets don't auto-add (lets focus escape
+-- the stack naturally).
+function PendingWidget:autoAddOnTab()
+    if not self:isFilled() then return end
+    if not self._chunk then return end
+    local widgets = self._chunk._widgets
+    if widgets[#widgets] ~= self then return end
+    self._chunk:addWidget()
+end
+
+-- Compose the @ext target spec from current ext fields. Used by
+-- stagedOpRecord() when extMode is on.
+function PendingWidget:targetSpec()
+    local base = self.extBaseValue or ""
+    local kind = self.extLocatorKind or ""
+    local text = self.extLocatorText or ""
+    if kind == "bare" or text == "" then
+        return base
+    end
+    if kind == "string" then
+        return base .. ':"' .. text .. '"'
+    elseif kind == "regex" then
+        return base .. ":/" .. text .. "/"
+    end
+    -- absolute (or anything else): emit as-is
+    return base .. ":" .. text
+end
+
+-- Build a record for the parent PinnedChunk's _stagedOps buffer.
+function PendingWidget:stagedOpRecord()
+    local tag = trim(self.tagName)
+    local value = trim(self.tagValue)
+    if self.extMode then
+        if self.removeMode then
+            return { kind = "ext-remove", tagName = tag, tagValue = value, targetSpec = self:targetSpec() }
+        end
+        return { kind = "ext-set", tagName = tag, tagValue = value, targetSpec = self:targetSpec() }
+    end
+    if self.removeMode then
+        return { kind = "inline-remove", tagName = tag, tagValue = value }
+    end
+    return { kind = "inline-add", tagName = tag, tagValue = value }
 end

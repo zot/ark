@@ -1,15 +1,55 @@
 <template>
-  <div class="cur-pin" ui-class-cur-pin-new="isNew()">
-    <div class="cur-pin-header">
-      <span class="cur-pin-new-pill" ui-class-hidden="notNew()">NEW</span>
-      <a class="cur-pin-path" target="_blank" ui-attr-href="contentURL()" ui-value="shortPath()"></a>
-      <sl-icon-button name="x-lg" ui-action="dismiss()" label="Dismiss"></sl-icon-button>
+  <div class="cur-pin" ui-class-cur-pin-new="isNew()" ui-class-cur-pin-confirm="dismissPending()">
+    <!-- Pending widget stack -->
+    <div class="cur-pin-widgets">
+      <div ui-view="widgets()?wrapper=lua.ViewList"></div>
+      <div class="cur-pin-widget-add">
+        <sl-tooltip content="Add a pending widget">
+          <sl-icon-button name="plus-lg" ui-action="addWidget()" label="Add widget"></sl-icon-button>
+        </sl-tooltip>
+      </div>
     </div>
 
-    <div class="cur-pin-suggestions">
+    <!-- URL row -->
+    <div class="cur-pin-header">
+      <span class="cur-pin-new-pill" ui-class-hidden="notNew()">NEW</span>
+      <a class="cur-pin-path" target="_blank" ui-attr-href="contentURL()" ui-value="shortPath()" title="Open file"></a>
+      <span class="cur-pin-pending" ui-class-hidden="noPending()">
+        (<span ui-value="pendingCount()"></span> pending)
+      </span>
+      <sl-tooltip content="Fold filled widgets into staged ops">
+        <sl-icon-button name="arrow-down-square" ui-action="stage()" ui-attr-disabled="cannotStage()" label="Stage"></sl-icon-button>
+      </sl-tooltip>
+      <sl-tooltip content="Pop staged ops back into widgets">
+        <sl-icon-button name="arrow-counterclockwise" ui-action="revert()" ui-attr-disabled="cannotRevert()" label="Revert"></sl-icon-button>
+      </sl-tooltip>
+      <sl-tooltip content="Dismiss this chunk">
+        <sl-icon-button name="x-lg" ui-action="dismiss()" label="Dismiss"></sl-icon-button>
+      </sl-tooltip>
+    </div>
+
+    <!-- Confirm-dismiss row (visible only when dismissed with pending) -->
+    <div class="cur-pin-confirm-row" ui-class-hidden="notDismissPending()">
+      <span class="cur-pin-confirm-msg">Discard pending changes?</span>
+      <sl-button size="small" variant="danger" ui-action="confirmDismiss()">Discard</sl-button>
+      <sl-button size="small" ui-action="cancelDismiss()">Cancel</sl-button>
+    </div>
+
+    <!-- Accept error (visible only when last Accept failed) -->
+    <sl-alert
+      variant="danger"
+      ui-attr-open="hasAcceptError()"
+      class="cur-pin-accept-error"
+    >
+      <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+      <span ui-value="acceptError()"></span>
+    </sl-alert>
+
+    <!-- Tag suggestions collapsible -->
+    <sl-details class="cur-pin-suggestions" summary="tag suggestions">
       <div class="cur-pin-suggestions-error" ui-class-hidden="noSuggestionsError()" ui-value="suggestionsError()"></div>
       <div class="cur-pin-suggestions-empty" ui-class-hidden="hasSuggestions()">No tag candidates.</div>
       <div ui-view="suggestions()?wrapper=lua.ViewList"></div>
-    </div>
+    </sl-details>
   </div>
 </template>

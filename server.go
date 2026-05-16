@@ -3738,7 +3738,7 @@ func (srv *Server) registerLuaFunctions() {
 			row := L.NewTable()
 			L.SetField(row, "base", lua.LString(sug.Base))
 			L.SetField(row, "baseValue", lua.LString(sug.BaseValue))
-			L.SetField(row, "locator", lua.LString(sug.LocatorKind))
+			L.SetField(row, "locator", lua.LString(sug.LocatorText))
 			L.SetField(row, "locatorKind", lua.LString(sug.LocatorKind))
 			L.SetField(row, "locatorText", lua.LString(sug.LocatorText))
 			L.SetField(row, "withinFileDupCount", lua.LNumber(sug.WithinFileDupCount))

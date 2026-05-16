@@ -57,37 +57,42 @@ bottom-bar buttons, one per view.
 Columns only shown when they have items. Cards use `content-card`
 theme class. Click card → `mcp:open(path)`.
 
-### Curation View (new)
+### Curation View (workshop reframe, 2026-05)
 ```
-+--------------------------------------------------------------+
-| Curation              Sweep: idle    [⚡ Sweep] [↻]           |
-+----------------------------------+---------------------------+
-| Pinned chunks (3) [⤓ Sweep older]| Tag explorer              |
-|                                  |  [_____________] [Focus]  |
-| ┌──────────────────────────────┐ |                           |
-| │ NEW  path/file.md          ✕ │ | (unfocused state)         |
-| │ "preview content..."          │ | Type a tag and press      |
-| │ Suggestions:                  │ | Enter to explore.         |
-| │  • design-decision   0.83     │ |                           |
-| │  • feedback          0.72     │ | (focused state)           |
-| └──────────────────────────────┘ | Focused: design-decision   |
-| ┌──────────────────────────────┐ | [Clear]                    |
-| │ path/other.md              ✕ │ |                            |
-| │ ...                          │ | Top chunks (10)            |
-| └──────────────────────────────┘ |  • path/A  0.83  [📌]      |
-|                                  |  • path/B  0.74  [📌]      |
-|                                  | Related tags               |
-|                                  |  • feedback  0.78          |
-|                                  | Drift                      |
-|                                  |  • A.md ↔ B.md  0.62       |
-+----------------------------------+---------------------------+
++----------------------------------------+----------------------+
+| Curation  Sweep: idle  [⚡][Accept (N)] |                      |
++----------------------------------------+----------------------+
+| Pinned chunks (3) [⤓ Sweep older]       | Tag explorer         |
+| ┌────────────────────────────────────┐ | [_____________]      |
+| │ [tag ][value][rem][ext][X]         │ | Defined tags         |
+| │ [tag ][value][rem][ext][X]         │ |  • design-decision   |
+| │ [+]                                 │ |  • feedback          |
+| │ NEW path/file.md  (2 pending)   X  │ |                      |
+| │  [↓ Stage]  [↶ Revert]              │ | Focused: design-dec  |
+| │  > tag suggestions  (8)             │ |  Top chunks (10)     |
+| │   • design-decision  0.83           │ |   • path/A  0.83 📌  |
+| │   • feedback         0.72           │ |  Related tags        |
+| └────────────────────────────────────┘ |   • feedback  0.78   |
+| ┌────────────────────────────────────┐ |  Drift               |
+| │ [tag ][value][rem][ext][X]         │ |   • A↔B  0.62        |
+| │ [+]                                 │ |                      |
+| │ path/other.md                    X  │ |                      |
+| │  > tag suggestions                 │ |                      |
+| └────────────────────────────────────┘ |                      |
++----------------------------------------+----------------------+
 ```
 
-Two-column workshop. Pinned-chunks list is the "always-add
-never-flip" surface — Curate gestures land here without flipping
-the user away. Each pinned chunk owns its tag suggestions. The
-right column is the explorer: type a tag to focus it, click
-chunks to pin, click related tags to switch focus.
+Primary surface: pinned cards with per-card pending widget
+stacks. Each widget authors one tag operation; Stage folds
+filled widgets into a per-card staged-ops buffer (in-memory).
+Accept (panel-level) commits every card's ops via
+`mcp.replaceRegion` (inline) and `mcp.setExtTag` /
+`mcp.removeExtTag` (ext).
+
+Secondary surface (right column): the tag explorer — Type a
+tag (or click one in the defined-tags picker), see top chunks,
+related tags, drift pairs. Click related → switch focus; click
+chunk → pin. Retained from the pre-reframe design.
 
 ## Data Model
 
@@ -178,40 +183,79 @@ issue. One card per conversation, never duplicated.
 
 ### Ark.Curation
 
-The workshop. Holds the pinned-chunks list, the focused-tag panel,
-the sweep status, and the persistence wiring.
+The workshop. The canonical pinned list lives Go-side as
+`sys.curation.pinned`; Lua reads it through a host-mirrored table
+and decorates entries with `Ark.PinnedChunk` presenters via
+`itemWrapper`. Tag explorer fields (focus, defined-tag picker)
+are retained from the pre-reframe design.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| pinned | Ark.PinnedChunk[] | Pinned chunks, newest at index 1 (top) |
-| focusedTag | string | Currently focused tag, "" when unfocused |
-| _focusInput | string | Text input value for tag focus |
+| focusedTag | string | Currently focused tag (explorer panel), "" when unfocused |
+| _focusInput | string | Text input value for tag focus / picker filter |
 | _focusedChunks | Ark.HotChunk[] | Top-K chunks for focusedTag |
 | _focusedRelated | Ark.RelatedTag[] | Related tags for focusedTag |
 | _focusedDrift | Ark.DriftPair[] | Drift pairs within focusedTag |
 | _focusError | string | Last focus error message ("" when none) |
-| _lastViewedAt | number | Unix epoch of last view activation, for NEW accent |
+| _newCutoff | number | Threshold timestamp — pins newer than this are NEW |
+| _lastViewedAt | number | Unix epoch of last view activation |
 | _sweepBusy | boolean | True while a sweep call is in flight |
 | _sweepResult | string | Last completed sweep summary ("" when none) |
-| _stateLoaded | boolean | Whether state.json has been loaded |
-| _statePath | string | Absolute path to state.json |
+| _definedTags | table[] | Lazy-loaded `{tag, description}` list for the picker |
+| _definedTagsLoaded | boolean | Whether `mcp.definedTags()` has been called |
 
-### Ark.PinnedChunk
+### Ark.PendingWidget
 
-A chunk in the pinned-chunks list. Each carries its own
-tag-suggestions panel, lazy-loaded on first display via
-`mcp.suggestTagNames`.
+A single pending tag operation queued on a `Ark.PinnedChunk`'s
+widget stack. Each widget authors one (tag, value) pair against
+the chunk, either inline (text edit) or routed (ext mirror).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| chunkID | number | Chunk identifier |
-| fileID | number | Owning file's ID |
-| path | string | Absolute path of the chunk's file |
-| pinnedAt | number | Unix epoch of when this chunk was pinned |
-| _newSinceLastView | boolean | True if pinnedAt > Curation._lastViewedAt at view-open |
-| _suggestions | Ark.TagSuggestion[] | Loaded tag candidates |
-| _suggestionsLoaded | boolean | Whether the load attempt has completed |
-| _suggestionsError | string | Last load error ("" when none) |
+| _chunk | Ark.PinnedChunk | Parent card reference (for stage callbacks) |
+| tagName | string | Tag name input value |
+| tagValue | string | Tag value input value (ignored when removeMode true) |
+| removeMode | boolean | true = remove this tag from chunk; false = add/change |
+| extMode | boolean | true = route via `@ext` mirror; false = inline text edit |
+| extBase | string | "uuid" or "path" — only meaningful when extMode |
+| extBaseValue | string | UUID string or absolute path matching extBase |
+| extLocatorKind | string | "string", "regex", "absolute", or "bare" |
+| extLocatorText | string | Locator value to embed in the target spec |
+| _extScopeChunks | number | Cross-file scope readout: chunks |
+| _extScopeFiles | number | Cross-file scope readout: files |
+| _withinFileDupCount | number | Within-file `@id` duplication count (0 if none) |
+| _extLoaded | boolean | True after `mcp.suggestExtLocator` populated defaults |
+
+### Ark.PinnedChunk
+
+Per-pin presenter created via `itemWrapper`. Decorates a
+host-mirrored entry from `sys.curation.pinned` (carrying
+`chunkID`, `fileID`, `path`, `pinnedAt`) with the per-card UI
+state: pending widget stack, staged-ops buffer, lazy-loaded
+chunk metadata, lazy-loaded tag suggestions.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| viewItem | Variable | ViewList item handle (gives access to `baseItem` for chunkID/path/pinnedAt) |
+| _widgets | Ark.PendingWidget[] | Pending widget stack. Empty-start invariant: always at least one empty widget. |
+| _stagedOps | table[] | Per-card buffer of `{kind, ...params}` records ready for Accept. Cleared on revert or successful Accept. |
+| _chunkInfo | table | Cached `mcp.chunkInfo` result: `{chunkID, fileID, path, range, byteStart, byteEnd, writable, commentSyntax}`. Nil until loaded. |
+| _chunkInfoLoaded | boolean | True after the first chunkInfo fetch (success or failure) |
+| _chunkInfoError | string | Last chunkInfo error ("" when none) |
+| _suggestions | Ark.TagSuggestion[] | Loaded tag candidates from `mcp.suggestTagNames` |
+| _suggestionsLoaded | boolean | Whether the suggestion load completed |
+| _suggestionsError | string | Last suggestion load error ("" when none) |
+| _acceptError | string | Last per-card Accept error ("" when none) |
+| _confirmDismiss | boolean | UI flag: confirm-dismiss alert visible (pending > 0) |
+
+**Staged op record shape** (`_stagedOps` entries):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| kind | string | "inline-add", "inline-remove", "ext-set", or "ext-remove" |
+| tagName | string | Tag name |
+| tagValue | string | Tag value (ignored for `inline-remove` / `ext-remove`) |
+| targetSpec | string | For ext-* ops: composed `BASE` or `BASE:NARROWER` string |
 
 ### Ark.TagSuggestion
 
@@ -384,44 +428,84 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 
 | Method | Description |
 |--------|-------------|
-| new() | Create instance, load state from disk |
+| new(instance) | Construct |
 | mutate() | Init missing arrays/fields on schema change |
-| curate(chunkID, fileID, path) | Add a chunk to the top of pinned (always-add never-flip). Idempotent — re-pinning bumps to top. Persists. |
-| dismissChunk(pin) | Remove pin from pinned. Persists. |
-| sweepOlder() | Drop everything below the topmost pin. Persists. |
-| pinnedCount() | Length of pinned[] |
-| newCount() | Count of pinned chunks where _newSinceLastView is true |
-| noNew() | newCount() == 0 (used by `ui-class-hidden`) |
-| onViewOpen() | Recompute _newSinceLastView for each pin against _lastViewedAt; then update _lastViewedAt to now and persist |
-| focusTagFromInput() | Call focusTag(_focusInput) |
-| focusTag(tag) | Set focusedTag, populate _focusedChunks / _focusedRelated / _focusedDrift via the bridge methods |
-| clearFocus() | Set focusedTag = "", clear focused arrays |
-| isFocused() | focusedTag != "" |
-| notFocused() | focusedTag == "" |
-| focusError() | _focusError |
-| noFocusError() | _focusError == "" (used by `ui-class-hidden`) |
-| sweepNow() | Call mcp.sweepHotCorrelations() in a guarded section; sets _sweepBusy / _sweepResult |
-| sweepStatusText() | Display string for the header strip |
-| sweepBusy() | _sweepBusy (used by `ui-attr-disabled`) |
-| _persist() | Write {pinned: [...], lastViewedAt: ...} to state.json. Internal. |
-| _load() | Read state.json on startup; rebuild pinned[] |
+| pinned() | Return `sys.curation.pinned` for ViewList binding |
+| curate(chunkID, fileID, path) | Proxy to `sys.curation.pin` — always-add never-flip |
+| sweepOlder() | Proxy to `sys.curation.sweepOlder` |
+| pinnedCount() | `#sys.curation.pinned` |
+| newCount() | Count of pins where `pinnedAt > _newCutoff` |
+| noNew() | newCount() == 0 |
+| hasPinned() | `#sys.curation.pinned > 0` |
+| noPinned() | inverse |
+| onViewOpen() | Rotate `_newCutoff = _lastViewedAt`; set `_lastViewedAt = now` |
+| **acceptChanges()** | Iterate pinned cards; for each card with filled-or-staged work: implicit-stage unstaged widgets, then execute staged ops via the per-card `executeStagedOps()`. Per-card errors land on the card's `_acceptError`. Successful cards clear `_stagedOps`. |
+| **totalPendingCount()** | Sum of (filled-widget count + staged-op count) across every PinnedChunk presenter. Drives the `Accept changes (N)` badge. |
+| **noPendingChanges()** | `totalPendingCount() == 0` (used by `ui-attr-disabled` on Accept) |
+| loadDefinedTags() | Lazy `mcp.definedTags()` populate of `_definedTags` |
+| filteredDefinedTags() | Filtered view over `_definedTags` per `_focusInput` |
+| filteredDefinedTagCount() | length of the filtered view |
+| focusTagFromInput() | Call focusTag(_focusInput) if non-empty |
+| focusTag(tag) | Populate `_focusedChunks` / `_focusedRelated` / `_focusedDrift` via bridge calls |
+| clearFocus() | Reset focus state |
+| isFocused() / notFocused() / focusError() / noFocusError() / focusedChunkCount() / focusedRelatedCount() / focusedDriftCount() | tag-explorer accessors (unchanged) |
+| sweepNow() | (unchanged for now — blocking call. Retrofit deferred to /mini-spec for async variant.) |
+| sweepStatusText() / sweepBusy() | sweep-state accessors |
 
 ### Ark.PinnedChunk
 
 | Method | Description |
 |--------|-------------|
-| new(chunkID, fileID, path, pinnedAt) | Construct a pinned-chunk record |
-| dismiss() | Call curation:dismissChunk(self) |
-| openFile() | Call mcp:open(path) |
-| loadSuggestions() | Call mcp.suggestTagNames(chunkID, k); populate _suggestions / _suggestionsError; mark _suggestionsLoaded |
-| suggestions() | Return _suggestions; lazy-loads on first call |
-| suggestionsError() | _suggestionsError |
-| noSuggestionsError() | _suggestionsError == "" (used by `ui-class-hidden`) |
-| hasSuggestions() | True when loaded with at least one result (hides the empty-state hint via `ui-class-hidden`) |
-| isNew() | _newSinceLastView |
-| notNew() | not _newSinceLastView (used by `ui-class-hidden`) |
-| shortPath() | Display version of path (compressed) |
-| scoreLabel(score) | "0.83" formatted |
+| new(listItem) | Construct presenter wrapping a ViewList item. Initializes `_widgets` with one empty widget (empty-start invariant). |
+| chunkID() / path() / pinnedAt() | Accessors over `viewItem.baseItem` |
+| dismiss() | If `pendingCount() > 0`, set `_confirmDismiss = true`. Otherwise call `sys.curation.dismiss(chunkID())`. |
+| confirmDismiss() | Final dismiss after confirmation |
+| cancelDismiss() | Clear `_confirmDismiss` |
+| isNew() / notNew() | NEW pill helpers (compare pinnedAt to Curation's `_newCutoff`) |
+| contentURL() / shortPath() | Path display helpers |
+| loadChunkInfo() | Lazy `mcp.chunkInfo(chunkID())` — populates `_chunkInfo` / `_chunkInfoError` |
+| chunkInfo() | Lazy accessor; returns `_chunkInfo` |
+| commentSyntax() | `_chunkInfo.commentSyntax` (`""` for markdown) |
+| writable() | `_chunkInfo.writable` (true unless read-only chunker) |
+| readOnly() | inverse |
+| **widgets()** | Return `_widgets`; lazy ensures empty-start invariant |
+| **addWidget()** | Append a new empty `Ark.PendingWidget` to `_widgets` |
+| **removeWidget(widget)** | Kill `X` — remove `widget` from `_widgets`; ensure empty-start invariant |
+| **ensureEmptyWidget()** | If no widget is empty, append one (called after auto-add / kill) |
+| **filledWidgetCount()** | Count of widgets where `:isFilled()` is true |
+| **pendingCount()** | `filledWidgetCount() + #_stagedOps` |
+| **hasPending()** | `pendingCount() > 0` |
+| **noPending()** | inverse |
+| **canStage()** | `filledWidgetCount() > 0` |
+| **canRevert()** | `#_stagedOps > 0` |
+| **stage()** | For each filled widget: build a staged-op record from its fields, append to `_stagedOps`. Remove staged widgets from `_widgets`. Restore empty-start invariant. |
+| **revert()** | Recreate widgets from `_stagedOps` (reverse the stage transformation). Clear `_stagedOps`. |
+| **executeStagedOps()** | Iterate `_stagedOps`; dispatch each through `mcp.replaceRegion` / `mcp.setExtTag` / `mcp.removeExtTag`. On error, set `_acceptError` and return false; on success, clear `_stagedOps` and return true. Called by `Curation:acceptChanges`. |
+| acceptError() / noAcceptError() / hasAcceptError() | per-card error display helpers |
+| loadSuggestions() | Lazy `mcp.suggestTagNames(chunkID, K)`; populates `_suggestions` / `_suggestionsError` |
+| suggestions() / suggestionsError() / noSuggestionsError() / hasSuggestions() | tag-suggestion accessors |
+
+### Ark.PendingWidget
+
+| Method | Description |
+|--------|-------------|
+| new(chunk) | Construct an empty widget bound to its parent PinnedChunk |
+| isEmpty() | true when `tagName == ""` and `tagValue == ""` and not removeMode and not extMode |
+| isFilled() | true when `tagName != ""` (value can be empty for remove ops or boolean tags) |
+| toggleRemove() | Flip `removeMode` |
+| toggleExt() | Flip `extMode`. On first turn-on, call `mcp.suggestExtLocator(chunkID)` to populate `extBase` / `extBaseValue` / `extLocatorKind` / `extLocatorText` / `_extScopeChunks` / `_extScopeFiles` / `_withinFileDupCount`. Reads `locatorText` for the actual locator value (`locator` field has a known Go bug). |
+| kill() | Call parent `chunk:removeWidget(self)` |
+| setBase(base) | Update `extBase`; re-run suggestExtLocator to get new defaults if needed |
+| setLocatorKind(kind) | Update `extLocatorKind`; clear `extLocatorText` for `bare`, otherwise leave editable |
+| canStage() | true when isFilled() and parent chunk allows the operation (ext-only if read-only) |
+| extToggleLocked() | true when parent chunk is read-only (ext always-on, can't toggle off) |
+| scopeReadout() | `"will route to N chunks across M files"` string for the readout line |
+| baseChoices() | `["uuid", "path"]` or `["path"]` (UUID hidden when chunk has no @id) |
+| locatorChoices() | `["string", "regex", "absolute", "bare"]` |
+| dupFlag() | `"UUID: %s... (×%d in this file)"` when `_withinFileDupCount > 1`, empty otherwise |
+| autoAddOnTab() | Called from viewdef tab-out event. If `isFilled()` and the parent's last widget is this one, call `chunk:addWidget()`. |
+| targetSpec() | Compose `BASE` or `BASE:NARROWER` from the ext fields (used by stage to build setExtTag arg) |
+| stagedOpRecord() | Return a `{kind, tagName, tagValue, targetSpec}` record for the parent's `_stagedOps` |
 
 ### Ark.HotChunk
 
@@ -479,7 +563,8 @@ Read-only display object. No actions.
 | Ark.Message.list-item.html | Ark.Message | Card in kanban column |
 | Ark.MessageDetail.DETAIL.html | Ark.MessageDetail | Dialog with rendered markdown, controls, Complete button |
 | Ark.Curation.DEFAULT.html | Ark.Curation | Two-column workshop: pinned chunks + tag explorer |
-| Ark.PinnedChunk.list-item.html | Ark.PinnedChunk | Pinned-chunk card with dismiss + tag suggestions |
+| Ark.PinnedChunk.list-item.html | Ark.PinnedChunk | Pinned-chunk card: widget stack + URL row + Stage/Revert + tag-suggestions collapsible |
+| Ark.PendingWidget.list-item.html | Ark.PendingWidget | Pending-tag widget row: tag/value/remove/ext/X (+ base/locator/scope when ext) |
 | Ark.TagSuggestion.list-item.html | Ark.TagSuggestion | One-line tag candidate with score |
 | Ark.HotChunk.list-item.html | Ark.HotChunk | Focused-tag chunk row with pin button |
 | Ark.RelatedTag.list-item.html | Ark.RelatedTag | Focused-tag related-tag row, click-to-focus |
@@ -509,7 +594,7 @@ Existing `displayArk()` and `displayArkMessages()` unchanged.
 Third button in bottom bar (after the envelope icon):
 ```html
 <span class="mcp-build-mode-toggle" ui-event-click="displayArkCuration()" title="Ark Curation">
-  <sl-icon name="compass"></sl-icon>
+  <sl-icon name="tags-fill"></sl-icon>
 </span>
 ```
 
