@@ -16,6 +16,17 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// arkSourceIncludePatterns is the include list for the hardcoded ~/.ark
+// source. Whitespace-separated so new patterns can be added one per line.
+// CRC: crc-Config.md | R961, R962, R2393
+const arkSourceIncludePatterns = `
+	ark.toml
+	schedule/**
+	apps/**
+	storage/**
+	external/**
+`
+
 // Config represents the parsed ark.toml configuration.
 // CRC: crc-Config.md | R624, R625
 type Config struct {
@@ -311,7 +322,7 @@ func (c *Config) EnsureArkSource() {
 	}
 	c.Sources = append(c.Sources, Source{
 		Dir:     c.dbPath,
-		Include: PatternSpec{Replace: []string{"ark.toml", "schedule/**", "apps/**", "storage/**"}},
+		Include: PatternSpec{Replace: strings.Fields(arkSourceIncludePatterns)},
 	})
 }
 
@@ -324,6 +335,23 @@ func (c *Config) IsInSource(path string) bool {
 		}
 	}
 	return false
+}
+
+// SourceRootForPath returns the absolute source-root directory that
+// contains path, or "" with ok=false when no concrete source claims
+// it. Glob-pattern sources (`src.Dir` containing `*?[`) are skipped —
+// the caller works with concrete roots only.
+// CRC: crc-Config.md | R2392
+func (c *Config) SourceRootForPath(path string) (string, bool) {
+	for _, src := range c.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		if path == src.Dir || strings.HasPrefix(path, src.Dir+string(filepath.Separator)) {
+			return src.Dir, true
+		}
+	}
+	return "", false
 }
 
 // EffectivePatterns returns the include/exclude patterns in effect

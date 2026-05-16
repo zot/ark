@@ -1,24 +1,38 @@
 package ark
 
-// CRC: crc-Curation.md | R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362
+// CRC: crc-Curation.md | R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362, R2381, R2382, R2383, R2384, R2385
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	lua "github.com/yuin/gopher-lua"
 )
+
+const curationStateVersion = 1
 
 // PinnedChunk is a curation workshop pin. Lives in the Go-owned
 // Curation slice; mirrored into Lua as a table for Frictionless's
 // variable system to observe.
 //
-// CRC: crc-Curation.md | R2359
+// CRC: crc-Curation.md | R2359, R2382
 type PinnedChunk struct {
-	ChunkID  uint64 `json:"chunkID"`
-	FileID   uint64 `json:"fileID"`
-	Path     string `json:"path"`
-	PinnedAt int64  `json:"pinnedAt"`
+	ChunkID  uint64 `json:"chunkID" toml:"chunkID"`
+	FileID   uint64 `json:"fileID" toml:"fileID"`
+	Path     string `json:"path" toml:"path"`
+	PinnedAt int64  `json:"pinnedAt" toml:"pinnedAt"`
+}
+
+// curationFile is the on-disk shape of curation.toml.
+// CRC: crc-Curation.md | R2382
+type curationFile struct {
+	Version int           `toml:"version"`
+	Pinned  []PinnedChunk `toml:"pinned"`
 }
 
 // Curation owns the curation workshop's pinned-chunks state. The
@@ -28,20 +42,27 @@ type PinnedChunk struct {
 // Lua-executor closure that mutates the Go slice, so the two views
 // stay consistent without a separate publisher.
 //
-// CRC: crc-Curation.md | R2355, R2357
+// CRC: crc-Curation.md | R2355, R2357, R2381
 type Curation struct {
 	mu          sync.Mutex
 	pinned      []PinnedChunk
-	luaTable    *lua.LTable           // sys.curation; set on registerLuaFunctions
+	luaTable    *lua.LTable            // sys.curation; set on registerLuaFunctions
 	entryTables map[uint64]*lua.LTable // per-ChunkID entry sub-tables; identity-preserved across refreshes (R2362)
+	statePath   string                 // absolute path to curation.toml; "" disables persistence (R2381)
 }
 
-// newCuration constructs an empty Curation.
-// CRC: crc-Curation.md | R2355
-func newCuration() *Curation {
-	return &Curation{
+// newCuration constructs an empty Curation. `dbPath` is the database
+// directory; the curation.toml lives directly under it. An empty
+// dbPath disables persistence (used by tests).
+// CRC: crc-Curation.md | R2355, R2381
+func newCuration(dbPath string) *Curation {
+	c := &Curation{
 		entryTables: make(map[uint64]*lua.LTable),
 	}
+	if dbPath != "" {
+		c.statePath = filepath.Join(dbPath, "curation.toml")
+	}
+	return c
 }
 
 // pinnedSnapshot returns a copy of the pinned slice under the mutex.
@@ -91,6 +112,7 @@ func (c *Curation) pin(L *lua.LState, chunkID, fileID uint64, path string) {
 	}
 	c.mu.Unlock()
 	c.refreshLuaTable(L)
+	c.save()
 }
 
 // dismiss removes the pinned entry whose ChunkID matches, if any.
@@ -115,6 +137,7 @@ func (c *Curation) dismiss(L *lua.LState, chunkID uint64) {
 	c.pinned = append(c.pinned[:idx], c.pinned[idx+1:]...)
 	c.mu.Unlock()
 	c.refreshLuaTable(L)
+	c.save()
 }
 
 // sweepOlder drops every pinned entry except the topmost. Silent
@@ -131,6 +154,64 @@ func (c *Curation) sweepOlder(L *lua.LState) {
 	c.pinned = c.pinned[:1]
 	c.mu.Unlock()
 	c.refreshLuaTable(L)
+	c.save()
+}
+
+// Load reads the curation state from `statePath`, populating the
+// pinned slice. Missing file → silent no-op. Malformed TOML or
+// unknown version → log and leave the slice empty (the next
+// mutation's save will overwrite the broken file). Must be called
+// during server startup so the Lua mirror reflects loaded state
+// once registerLuaFunctions wires up `luaTable`.
+// CRC: crc-Curation.md | R2382, R2383
+func (c *Curation) Load() {
+	if c.statePath == "" {
+		return
+	}
+	data, err := os.ReadFile(c.statePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("curation: load %s: %v", c.statePath, err)
+		}
+		return
+	}
+	var f curationFile
+	if _, err := toml.Decode(string(data), &f); err != nil {
+		log.Printf("curation: parse %s: %v", c.statePath, err)
+		return
+	}
+	if f.Version != curationStateVersion {
+		log.Printf("curation: %s version %d (expected %d) — ignoring", c.statePath, f.Version, curationStateVersion)
+		return
+	}
+	c.mu.Lock()
+	c.pinned = f.Pinned
+	c.mu.Unlock()
+}
+
+// save writes the current pinned slice to `statePath` atomically.
+// Called inside pin/dismiss/sweepOlder after the mutation and Lua
+// mirror refresh. On disk failure, logs and retains in-memory
+// state; the next mutation retries.
+// CRC: crc-Curation.md | R2384, R2385
+func (c *Curation) save() {
+	if c.statePath == "" {
+		return
+	}
+	c.mu.Lock()
+	snap := make([]PinnedChunk, len(c.pinned))
+	copy(snap, c.pinned)
+	c.mu.Unlock()
+
+	f := curationFile{Version: curationStateVersion, Pinned: snap}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(f); err != nil {
+		log.Printf("curation: encode %s: %v", c.statePath, err)
+		return
+	}
+	if err := atomicWriteFile(c.statePath, buf.Bytes(), 0644); err != nil {
+		log.Printf("curation: %v", err)
+	}
 }
 
 // refreshLuaTable rebuilds the `pinned` field on the Lua-side

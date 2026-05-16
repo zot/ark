@@ -3,6 +3,7 @@ package ark
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
@@ -124,10 +125,23 @@ func (db *DB) loadExtState() (map[uint64]*extDecl, []extOrphan, error) {
 			if !parseOK {
 				return nil
 			}
+			// Recover sourceDir for relative-path narrower resolution.
+			// R2374: ResolveExtTarget needs the authoring source's
+			// directory to absolutize relative bases.
+			sourceDir := ""
+			if db.extmap != nil {
+				if srcChunk, ok := db.extmap.SourceChunkID(tvid); ok {
+					if srcFileID, ok := db.chunkFileID(txn, srcChunk); ok {
+						if path, ok := db.fileIDPath(srcFileID); ok {
+							sourceDir = filepath.Dir(path)
+						}
+					}
+				}
+			}
 			d := &extDecl{
 				tvidExt:   tvid,
 				value:     value,
-				expected:  db.ResolveExtTarget(target),
+				expected:  db.ResolveExtTarget(target, sourceDir),
 				actual:    make(map[uint64][]uint64),
 				routedTvs: routed,
 			}

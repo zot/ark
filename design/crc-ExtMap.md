@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380
 
 Owns the in-memory state and orchestration for `@ext` routing.
 Six core maps maintained alongside DB X-record writes; canonical
@@ -20,9 +20,15 @@ sources index, dropped as overlay items disappear.
   used by the orphan callback (R1992)
 - fileidToTvids: map[uint64][]uint64 — fileid → tvid_exts; file-level
   reindex trigger (R1992)
-- extByAnchor: map[string][]uint64 — anchor spec text (UUID or path)
-  → tvid_exts; same map covers both forms because UUIDs and paths
-  don't collide (R1992, R1995)
+- extByAnchor: map[string][]uint64 — BASE of the TARGET (absolutized
+  path or `%UUID_VALUE`) → tvid_exts. Keyed by BASE only, not the
+  full TARGET text — the narrower (anchor + modifier) is recovered
+  from the tvid_ext's stored TARGET via `TvidMap.Resolve(tvid_ext)`
+  and re-evaluated at resolve time. This shape covers the
+  "initially unresolved → satisfiable on later target change" path
+  that `fileidToTvids` cannot (target chunks with new content that
+  now matches a previously-empty narrower). UUID and path BASEs
+  don't collide — paths can't start with `%`. (R1992, R2380)
 - unresolvedTargets: map[uint64]bool — tvid_exts whose target spec
   currently resolves to nothing (R1992, R1997)
 - virtualTagCount: map[string]int — per-tag count of ext-routed

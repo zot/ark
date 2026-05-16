@@ -87,7 +87,7 @@ func extTestDB(t *testing.T) (*DB, string, string) {
 
 func TestResolveExtTargetUUID(t *testing.T) {
 	db, _, uuid := extTestDB(t)
-	chunks := db.ResolveExtTarget(uuid)
+	chunks := db.ResolveExtTarget("%"+uuid, "")
 	if len(chunks) == 0 {
 		t.Fatalf("UUID target: no chunks resolved")
 	}
@@ -95,22 +95,129 @@ func TestResolveExtTargetUUID(t *testing.T) {
 
 func TestResolveExtTargetPath(t *testing.T) {
 	db, fp, _ := extTestDB(t)
-	chunks := db.ResolveExtTarget(fp)
+	chunks := db.ResolveExtTarget(fp, "")
 	if len(chunks) != 1 {
 		t.Fatalf("path target: want 1 chunk (first/preamble), got %d", len(chunks))
 	}
 }
 
+func TestMutateExtLineSingleTagReplace(t *testing.T) {
+	got, drop, matched := mutateExtLine(
+		`@ext: /a/b.md:"foo" @topic: old`,
+		`/a/b.md:"foo"`, "topic", "new", false)
+	if !matched || drop {
+		t.Fatalf("want matched && !drop, got matched=%v drop=%v", matched, drop)
+	}
+	if want := `@ext: /a/b.md:"foo" @topic: new`; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestMutateExtLineSingleTagRemoveDropsLine(t *testing.T) {
+	got, drop, matched := mutateExtLine(
+		`@ext: /a/b.md:"foo" @topic: x`,
+		`/a/b.md:"foo"`, "topic", "", true)
+	if !matched || !drop {
+		t.Fatalf("want matched && drop, got matched=%v drop=%v", matched, drop)
+	}
+	if got != "" {
+		t.Errorf("expected empty newLine for dropped line, got %q", got)
+	}
+}
+
+func TestMutateExtLineMultiTagReplaceOnly(t *testing.T) {
+	got, drop, matched := mutateExtLine(
+		`@ext: %abc @t1: v1 @target: oldv @t3: v3`,
+		`%abc`, "target", "newv", false)
+	if !matched || drop {
+		t.Fatalf("want matched && !drop")
+	}
+	if want := `@ext: %abc @t1: v1 @target: newv @t3: v3`; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestMutateExtLineMultiTagRemoveOnly(t *testing.T) {
+	got, drop, matched := mutateExtLine(
+		`@ext: %abc @t1: v1 @target: v2 @t3: v3`,
+		`%abc`, "target", "", true)
+	if !matched || drop {
+		t.Fatalf("want matched && !drop")
+	}
+	if want := `@ext: %abc @t1: v1 @t3: v3`; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+func TestMutateExtLineNoMatchOnTargetMismatch(t *testing.T) {
+	in := `@ext: /a/b.md:"foo" @topic: v`
+	got, _, matched := mutateExtLine(in, `/a/b.md:"bar"`, "topic", "new", false)
+	if matched || got != in {
+		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
+	}
+}
+
+func TestMutateExtLineNoMatchOnTagMismatch(t *testing.T) {
+	in := `@ext: /a/b.md:"foo" @topic: v`
+	got, _, matched := mutateExtLine(in, `/a/b.md:"foo"`, "other", "new", false)
+	if matched || got != in {
+		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
+	}
+}
+
+func TestMutateExtLineNonExtLineUntouched(t *testing.T) {
+	in := `# heading`
+	got, _, matched := mutateExtLine(in, `/x`, "topic", "new", false)
+	if matched || got != in {
+		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
+	}
+}
+
+func TestApplyExtMirrorEditReplacesFirstMatch(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "new", false)
+	if !matched {
+		t.Fatal("expected match")
+	}
+	want := "@ext: /a:\"x\" @topic: new\n@ext: /b:\"y\" @topic: q\n"
+	if string(got) != want {
+		t.Errorf("got %q want %q", string(got), want)
+	}
+}
+
+func TestApplyExtMirrorEditDropsLineOnRemove(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", true)
+	if !matched {
+		t.Fatal("expected match")
+	}
+	want := "@ext: /b:\"y\" @topic: q\n"
+	if string(got) != want {
+		t.Errorf("got %q want %q", string(got), want)
+	}
+}
+
+func TestApplyExtMirrorEditNoMatchReturnsOriginal(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: old\n")
+	got, matched := applyExtMirrorEdit(data, `/missing`, "topic", "v", false)
+	if matched {
+		t.Fatal("expected no match")
+	}
+	if string(got) != string(data) {
+		t.Errorf("data should be unchanged: got %q", string(got))
+	}
+}
+
 func TestResolveExtTargetUnknown(t *testing.T) {
 	db, _, _ := extTestDB(t)
-	if chunks := db.ResolveExtTarget("nope-not-real"); len(chunks) != 0 {
+	if chunks := db.ResolveExtTarget("/nope-not-real", ""); len(chunks) != 0 {
 		t.Errorf("unknown target should resolve empty, got %v", chunks)
 	}
 }
 
 func TestResolveExtTargetEmpty(t *testing.T) {
 	db, _, _ := extTestDB(t)
-	if chunks := db.ResolveExtTarget("   "); chunks != nil {
+	if chunks := db.ResolveExtTarget("   ", ""); chunks != nil {
 		t.Errorf("blank target should be nil, got %v", chunks)
 	}
 }

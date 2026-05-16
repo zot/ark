@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -404,8 +405,13 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 // (outside the write txn) so the txn-aware applyIndexExt only does
 // record I/O. Overlay (tmp://) source chunkids are accepted —
 // applyIndexExt branches per-target on bothPersistent.
-// CRC: crc-Indexer.md | R1996, R2012, R2016
+//
+// `sourceDir` (derived once from fileID) threads through to
+// ResolveExtTarget so relative-path narrower bases absolutize
+// against the source file's directory. (R2374)
+// CRC: crc-Indexer.md | R1996, R2012, R2016, R2374
 func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValues) []extIndexPlan {
+	sourceDir := idx.sourceDirFor(fileID)
 	var out []extIndexPlan
 	for _, ct := range chunkTags {
 		for _, tv := range ct.Values {
@@ -420,17 +426,35 @@ func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValu
 			if !parseOK {
 				continue
 			}
+			parts, _ := ParseExtTargetParts(target, sourceDir)
 			out = append(out, extIndexPlan{
 				sourceChunkID: ct.ChunkID,
 				sourceFileID:  fileID,
 				tvidExt:       tvidExt,
 				target:        target,
-				targets:       idx.db.ResolveExtTarget(target),
+				targetBase:    parts.BaseValue,
+				targets:       idx.db.ResolveExtTarget(target, sourceDir),
 				routedTags:    routed,
 			})
 		}
 	}
 	return out
+}
+
+// sourceDirFor returns the absolute directory of fileID's
+// canonical path, or "" if the file is unknown. Used to thread
+// source-dir context into ResolveExtTarget for relative-path
+// narrower resolution.
+// CRC: crc-Indexer.md | R2374
+func (idx *Indexer) sourceDirFor(fileID uint64) string {
+	if idx.db == nil {
+		return ""
+	}
+	path, ok := idx.db.fileIDPath(fileID)
+	if !ok {
+		return ""
+	}
+	return filepath.Dir(path)
 }
 
 // runOverlayExtRouting handles @ext routing for overlay (tmp://)
@@ -456,13 +480,19 @@ func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValu
 }
 
 // collectReresolvePlans determines which tvid_exts need re-resolution
-// for this file change and pre-resolves each. CRC: crc-Indexer.md |
-// R2000, R2001
+// for this file change and pre-resolves each. Each candidate's
+// source file may differ (the changed file F is the target of the
+// routings; the sources live elsewhere), so sourceDir is recovered
+// per-tvid_ext via ExtMap.SourceChunkID → chunkFileID → fileIDPath.
+// CRC: crc-Indexer.md | R2000, R2001, R2374
 func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64) []extReresolvePlan {
 	candidates := idx.extmap.candidatesForFileChange(idx.db, fileID, addedChunkIDs, orphanedChunkIDs)
 	if len(candidates) == 0 {
 		return nil
 	}
+	// Cache sourceDir per source-fileID so a many-tvid file pays the
+	// path lookup once.
+	sourceDirCache := make(map[uint64]string)
 	out := make([]extReresolvePlan, 0, len(candidates))
 	for tvidExt := range candidates {
 		_, value, ok := idx.store.tvids.Resolve(tvidExt)
@@ -473,28 +503,62 @@ func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphaned
 		if !parseOK {
 			continue
 		}
+		sourceDir := idx.reresolveSourceDir(tvidExt, sourceDirCache)
+		parts, _ := ParseExtTargetParts(target, sourceDir)
 		out = append(out, extReresolvePlan{
 			tvidExt:    tvidExt,
 			target:     target,
+			targetBase: parts.BaseValue,
 			routedTags: routed,
-			newTargets: idx.db.ResolveExtTarget(target),
+			newTargets: idx.db.ResolveExtTarget(target, sourceDir),
 		})
 	}
 	return out
+}
+
+// reresolveSourceDir returns the source directory for tvidExt's
+// authoring chunk, memoized by source-fileID across the
+// candidate loop.
+// CRC: crc-Indexer.md | R2374
+func (idx *Indexer) reresolveSourceDir(tvidExt uint64, cache map[uint64]string) string {
+	if idx.extmap == nil || idx.db == nil {
+		return ""
+	}
+	srcChunk, ok := idx.extmap.SourceChunkID(tvidExt)
+	if !ok {
+		return ""
+	}
+	var srcFileID uint64
+	var fileOK bool
+	_ = idx.db.fts.Env().View(func(txn *lmdb.Txn) error {
+		srcFileID, fileOK = idx.db.chunkFileID(txn, srcChunk)
+		return nil
+	})
+	if !fileOK {
+		return ""
+	}
+	if dir, hit := cache[srcFileID]; hit {
+		return dir
+	}
+	dir := idx.sourceDirFor(srcFileID)
+	cache[srcFileID] = dir
+	return dir
 }
 
 type extIndexPlan struct {
 	sourceChunkID uint64
 	sourceFileID  uint64
 	tvidExt       uint64
-	target        string
+	target        string // TARGET text as authored (verbatim for V record / debugging)
+	targetBase    string // BASE of the TARGET — absolutized path or UUID value — for extByAnchor keying (R2380)
 	targets       []uint64
 	routedTags    []TagValue
 }
 
 type extReresolvePlan struct {
 	tvidExt    uint64
-	target     string
+	target     string // TARGET text as authored
+	targetBase string // BASE for extByAnchor keying (R2380)
 	routedTags []TagValue
 	newTargets []uint64
 }

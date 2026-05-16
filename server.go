@@ -235,8 +235,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 		pubsub:    ps,
 		scheduler: sched,
 		librarian: lib,
-		curation:  newCuration(), // R2355
+		curation:  newCuration(dbPath), // R2355, R2381
 	}
+	srv.curation.Load() // R2383: hydrate pinned slice from curation.toml before luaTable is wired
 
 	// Wire librarian into searcher for about filters
 	db.search.librarian = lib
@@ -3013,6 +3014,8 @@ func (srv *Server) registerLuaFunctions() {
 		L.SetField(sysTable, "curation", curationTable)
 		L.SetGlobal("sys", sysTable)
 		srv.curation.luaTable = curationTable
+		// R2383: populate the Lua mirror from state loaded during Server.New.
+		srv.curation.refreshLuaTable(L)
 		// R2358: pin mutator — append/move-to-top, refresh mirror.
 		L.SetField(curationTable, "pin", L.NewFunction(func(L *lua.LState) int {
 			chunkID := uint64(L.CheckNumber(1))
@@ -3690,6 +3693,116 @@ func (srv *Server) registerLuaFunctions() {
 				result.RawSetInt(i+1, row)
 			}
 			L.Push(result)
+			return 1
+		}))
+
+		// mcp.chunkInfo(chunkID) — per-chunk metadata bundle for the
+		// curation workshop's chunk card. Sync read; errors follow
+		// (nil, errstring); unknown chunk → (nil, "chunk not found").
+		// CRC: crc-Server.md | R2386, R2389
+		L.SetField(tbl, "chunkInfo", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			info, err := Sync(srv.db, func(db *DB) (ChunkInfo, error) {
+				return db.ChunkInfo(chunkID)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			row := L.NewTable()
+			L.SetField(row, "chunkID", lua.LNumber(info.ChunkID))
+			L.SetField(row, "fileID", lua.LNumber(info.FileID))
+			L.SetField(row, "path", lua.LString(info.Path))
+			L.SetField(row, "range", lua.LString(info.Range))
+			L.SetField(row, "byteStart", lua.LNumber(info.ByteStart))
+			L.SetField(row, "byteEnd", lua.LNumber(info.ByteEnd))
+			L.SetField(row, "writable", lua.LBool(info.Writable))
+			L.SetField(row, "commentSyntax", lua.LString(info.CommentSyntax))
+			L.Push(row)
+			return 1
+		}))
+
+		// mcp.suggestExtLocator(chunkID) — three-layer locator algorithm.
+		// CRC: crc-Server.md | R2397, R2398, R2399, R2400, R2401
+		L.SetField(tbl, "suggestExtLocator", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			sug, err := Sync(srv.db, func(db *DB) (LocatorSuggestion, error) {
+				return db.SuggestExtLocator(chunkID)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			row := L.NewTable()
+			L.SetField(row, "base", lua.LString(sug.Base))
+			L.SetField(row, "baseValue", lua.LString(sug.BaseValue))
+			L.SetField(row, "locator", lua.LString(sug.LocatorKind))
+			L.SetField(row, "locatorKind", lua.LString(sug.LocatorKind))
+			L.SetField(row, "locatorText", lua.LString(sug.LocatorText))
+			L.SetField(row, "withinFileDupCount", lua.LNumber(sug.WithinFileDupCount))
+			scope := L.NewTable()
+			L.SetField(scope, "chunks", lua.LNumber(sug.CrossFileScope.Chunks))
+			L.SetField(scope, "files", lua.LNumber(sug.CrossFileScope.Files))
+			L.SetField(row, "crossFileScope", scope)
+			L.Push(row)
+			return 1
+		}))
+
+		// mcp.setExtTag(targetSpec, tag, value) — author an @ext routing
+		// into the mirror tree. CRC: crc-Server.md | R2393, R2395
+		L.SetField(tbl, "setExtTag", L.NewFunction(func(L *lua.LState) int {
+			targetSpec := L.CheckString(1)
+			tag := L.CheckString(2)
+			value := L.CheckString(3)
+			err := SyncVoid(srv.db, func(db *DB) error {
+				return db.SetExtTag(targetSpec, tag, value)
+			})
+			if err != nil {
+				L.Push(lua.LFalse)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.removeExtTag(targetSpec, tag) — remove an @ext routing
+		// from its mirror file (silent no-op when missing).
+		// CRC: crc-Server.md | R2396
+		L.SetField(tbl, "removeExtTag", L.NewFunction(func(L *lua.LState) int {
+			targetSpec := L.CheckString(1)
+			tag := L.CheckString(2)
+			err := SyncVoid(srv.db, func(db *DB) error {
+				return db.RemoveExtTag(targetSpec, tag)
+			})
+			if err != nil {
+				L.Push(lua.LFalse)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.replaceRegion(path, byteStart, byteEnd, newText) — atomic
+		// byte-range write through DB.ReplaceRegion. Returns (true, nil)
+		// or (false, errstring). CRC: crc-Server.md | R2390, R2391
+		L.SetField(tbl, "replaceRegion", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			byteStart := uint64(L.CheckNumber(2))
+			byteEnd := uint64(L.CheckNumber(3))
+			newText := L.CheckString(4)
+			err := SyncVoid(srv.db, func(db *DB) error {
+				return db.ReplaceRegion(path, byteStart, byteEnd, []byte(newText))
+			})
+			if err != nil {
+				L.Push(lua.LFalse)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
 			return 1
 		}))
 

@@ -4,6 +4,10 @@ Digital zettelkasten — files on disk, LMDB index. Hybrid trigram + vector sear
 
 load /ark first. This will let you remember and access memories.
 
+See [principles.md](principles.md) for ark's project-level
+commitments — what the system stands by and what those
+commitments imply for every feature and error path.
+
 ## Build
 
 ```

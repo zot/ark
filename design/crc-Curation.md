@@ -1,5 +1,5 @@
 # Curation
-**Requirements:** R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362, R2363
+**Requirements:** R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362, R2363, R2381, R2382, R2383, R2384, R2385
 
 Server-owned in-memory state for the curation workshop's pinned
 chunks. Canonical store is the Go slice; the Lua table at
@@ -20,6 +20,10 @@ mirror through its standard variable-change detection.
 - mu: sync.Mutex — guards `pinned` for concurrent reads outside the
   Lua executor (e.g. HTTP handlers reading a snapshot without
   entering the executor).
+- statePath: string — absolute path to `curation.toml`, computed
+  as `filepath.Join(dbPath, "curation.toml")` at construction.
+  Excluded from `arkSourceIncludePatterns` so the scanner and
+  watcher skip it. (R2381)
 
 ## Does
 - newCuration(): construct an empty Curation. (R2355)
@@ -45,6 +49,20 @@ mirror through its standard variable-change detection.
   for newly pinned ChunkIDs. Drops cache entries for ChunkIDs that
   left the slice. Called automatically by `pin`, `dismiss`, and
   `sweepOlder`. (R2357, R2362)
+- Load(): read `curation.toml` and populate the `pinned` slice. Runs
+  during `Server.New` after `newCuration()` and before
+  `registerLuaFunctions`. Missing file → silent no-op (empty start).
+  Malformed TOML, unknown version, or unparseable entries → log the
+  error, leave `pinned` empty, server continues running. The next
+  mutation's save overwrites the broken file. Format: TOML with
+  `version = 1` and `[[pinned]]` tables carrying `chunkID`,
+  `fileID`, `path`, `pinnedAt`. (R2382, R2383)
+- save(): write the current `pinned` slice to `statePath` atomically
+  (write to `curation.toml.tmp`, rename over `curation.toml`).
+  Called inside `pin`, `dismiss`, and `sweepOlder` after the mutation
+  and Lua-mirror refresh, so the save shares the WithLua tick. On
+  disk failure (full, permission denied) logs the error and retains
+  in-memory state; the next mutation's save retries. (R2384, R2385)
 
 ## Collaborators
 - Server: holds the `*Curation` field; registers the `sys` global

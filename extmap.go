@@ -10,6 +10,7 @@ package ark
 // every session.
 
 import (
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -101,6 +102,39 @@ func (m *ExtMap) VirtualTagNames() []string {
 		}
 	}
 	return out
+}
+
+// SourceChunkID returns the source chunkID that authored the
+// @ext routing for tvidExt, or (0, false) if unknown. Used by
+// the indexer's re-resolution path to recover sourceDir for
+// relative-path narrower resolution.
+// CRC: crc-ExtMap.md | R2374
+func (m *ExtMap) SourceChunkID(tvidExt uint64) (uint64, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cid, ok := m.extSource[tvidExt]
+	return cid, ok
+}
+
+// sourceDirLocked returns the source file's directory for
+// tvidExt's @ext authoring chunk, or "" when unknown. Used by
+// extByAnchor BASE keying for relative-path absolutization.
+// Caller must hold m.mu (Lock or RLock).
+// CRC: crc-ExtMap.md | R2374, R2380
+func (m *ExtMap) sourceDirLocked(txn *lmdb.Txn, db *DB, tvidExt uint64) string {
+	srcChunk, ok := m.extSource[tvidExt]
+	if !ok {
+		return ""
+	}
+	fileID, ok := db.chunkFileID(txn, srcChunk)
+	if !ok {
+		return ""
+	}
+	path, ok := db.fileIDPath(fileID)
+	if !ok {
+		return ""
+	}
+	return filepath.Dir(path)
 }
 
 // VirtualTagValues returns the distinct values routed for the given
@@ -386,9 +420,9 @@ func (m *ExtMap) Rebuild(db *DB) error {
 				m.fileidToTvids[fileID] = appendUnique(m.fileidToTvids[fileID], tvidExt)
 			}
 			if tag, value, ok := db.store.tvids.Resolve(tvidExt); ok {
-				if spec, _, parseOk := ParseExtTarget(value); parseOk {
-					m.extByAnchor[spec] = appendUnique(m.extByAnchor[spec], tvidExt)
-				}
+				// Resolve source chunkID first so extByAnchor BASE
+				// keying can use the source's directory for relative-
+				// path absolutization (R2374, R2380).
 				// CRC: crc-ExtMap.md | R2108, R2109
 				if _, have := m.extSource[tvidExt]; !have {
 					if vbytes, gerr := txn.Get(db.store.dbi, tagValueFullKey(tag, value, tvidExt)); gerr == nil {
@@ -396,6 +430,11 @@ func (m *ExtMap) Rebuild(db *DB) error {
 							m.extSource[tvidExt] = srcs[0]
 						}
 					}
+				}
+				if target, _, parseOk := ParseExtTarget(value); parseOk {
+					sourceDir := m.sourceDirLocked(txn, db, tvidExt)
+					parts, _ := ParseExtTargetParts(target, sourceDir)
+					m.extByAnchor[parts.BaseValue] = appendUnique(m.extByAnchor[parts.BaseValue], tvidExt)
 				}
 			}
 			// CRC: crc-ExtMap.md | R2121, R2122
@@ -471,7 +510,7 @@ func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPla
 	sourceOverlay := IsOverlayID(p.sourceChunkID)
 	if len(p.targets) == 0 {
 		m.mu.Lock()
-		m.extByAnchor[p.target] = appendUnique(m.extByAnchor[p.target], p.tvidExt)
+		m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
 		m.unresolvedTargets[p.tvidExt] = true
 		m.extSource[p.tvidExt] = p.sourceChunkID
 		m.mu.Unlock()
@@ -504,7 +543,7 @@ func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPla
 	}
 	if len(taken) == 0 {
 		m.mu.Lock()
-		m.extByAnchor[p.target] = appendUnique(m.extByAnchor[p.target], p.tvidExt)
+		m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
 		m.extSource[p.tvidExt] = p.sourceChunkID
 		m.mu.Unlock()
 		return nil
@@ -541,7 +580,7 @@ func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPla
 	}
 	hasOverlayWrite := false
 	m.mu.Lock()
-	m.extByAnchor[p.target] = appendUnique(m.extByAnchor[p.target], p.tvidExt)
+	m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
 	m.extSource[p.tvidExt] = p.sourceChunkID
 	delete(m.unresolvedTargets, p.tvidExt)
 	// CRC: crc-ExtMap.md | R2121, R2123 — routed tags are tvid_ext-scoped.
@@ -647,7 +686,7 @@ func (m *ExtMap) applyReresolve(txn *lmdb.Txn, tt *TvidTxn, db *DB, fileID uint6
 	tvidExt := p.tvidExt
 	newTargets := p.newTargets
 	routed := p.routedTags
-	target := p.target
+	targetBase := p.targetBase
 
 	m.mu.RLock()
 	oldAll := append([]uint64(nil), m.targetToChunk[tvidExt]...)
@@ -792,7 +831,7 @@ func (m *ExtMap) applyReresolve(txn *lmdb.Txn, tt *TvidTxn, db *DB, fileID uint6
 	}
 	if len(newTargets) == 0 {
 		m.unresolvedTargets[tvidExt] = true
-		m.extByAnchor[target] = appendUnique(m.extByAnchor[target], tvidExt)
+		m.extByAnchor[targetBase] = appendUnique(m.extByAnchor[targetBase], tvidExt)
 	}
 	m.mu.Unlock()
 	if hasOverlayWrite {
@@ -898,10 +937,13 @@ func (m *ExtMap) CleanupSource(txn *lmdb.Txn, tt *TvidTxn, db *DB, sourceChunkID
 	delete(m.extSource, tvidExt)
 	delete(m.routedTagsByTvidExt, tvidExt) // CRC: crc-ExtMap.md | R2123
 	if _, val, ok := resolveTvid(tt, db, tvidExt); ok {
-		if spec, _, parseOK := ParseExtTarget(val); parseOK {
-			m.extByAnchor[spec] = removeUint64(m.extByAnchor[spec], tvidExt)
-			if len(m.extByAnchor[spec]) == 0 {
-				delete(m.extByAnchor, spec)
+		if target, _, parseOK := ParseExtTarget(val); parseOK {
+			sourceDir := m.sourceDirLocked(txn, db, tvidExt)
+			parts, _ := ParseExtTargetParts(target, sourceDir)
+			key := parts.BaseValue
+			m.extByAnchor[key] = removeUint64(m.extByAnchor[key], tvidExt)
+			if len(m.extByAnchor[key]) == 0 {
+				delete(m.extByAnchor, key)
 			}
 		}
 	}

@@ -137,7 +137,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 ## Artifacts
 
 ### CRC Cards
-- [x] crc-DB.md → `db.go`
+- [x] crc-DB.md → `db.go`, `locator.go`
 - [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [x] crc-Store.md → `store.go`
@@ -197,6 +197,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-tag-verify.md → `cmd/ark/main.go`, `verify.go`, `extmap.go`, `store.go`, `db.go`
 - [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
 - [x] seq-find-connections.md → `connections.go`, `server.go`, `cmd/ark/main.go`
+- [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
+- [ ] seq-suggest-locator.md → `db.go`, `server.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -487,3 +489,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A63: R2335-R2338 are scope-boundary requirements (deferred 1G work) — intentionally have no implementation
 - A64: R2339-R2343 are test-only requirements covered by connections_test.go (validator scans non-test files for impl coverage)
 - [x] O97: Tag source parity — unit tests deferred. Live verification via UI search 'shopping' in contains-name mode confirmed 2 expected hits. Methods touched: ListTags, TagCounts, QueryTagValues, FileTagValues, MatchTagNames, MatchTagValues, AllTagsForChunk plus ExtMap.VirtualTagNames/VirtualTagValues/RoutedTagsForChunk and TmpTagStore.TagNames/TagValuesForTag/TagCounts. Tests should cover each method picking up an ext-only tag, a tmp-only tag, and an inline tag with parity.
+- T58: R1987 retired by R2366 (narrower forms formalized in R2365–R2379 (specs/at-ext-parsing.md grammar))
+- T59: R1995 retired by R2380 (extByAnchor keys by BASE only — narrower stored alongside tvid_ext for resolve-time evaluation)
+- [ ] I4: R2379 (workshop UI surfaces non-conforming range strings loudly) awaits the /ui-thorough pass — Go primitives already expose the needed state (locator falls back to bare or string-fallback when range is non-conforming, surfaced via mcp.suggestExtLocator).

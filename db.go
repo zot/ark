@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -50,11 +51,12 @@ type DB struct {
 	extmap     *ExtMap     // CRC: crc-ExtMap.md | R1992
 	pdfChunker *PDFChunker // CRC: crc-PDFChunker.md | R1720, R1726
 
-	dbPath   string
-	tmpMu    sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
-	tmpPaths map[string]uint64 // R664: tmp:// path → fileid tracking
-	svc      chan func()       // R986: closure actor channel
-	pubsub   *PubSub           // R2281: set by SetPubSub; nil disables centralized tmp:// publish
+	dbPath        string
+	tmpMu         sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
+	tmpPaths      map[string]uint64 // R664: tmp:// path → fileid tracking
+	svc           chan func()       // R986: closure actor channel
+	pubsub        *PubSub           // R2281: set by SetPubSub; nil disables centralized tmp:// publish
+	chunkerByName map[string]any    // R2386, R2389: mirror of microfts2's chunker registry for ChunkerMetadata lookup by strategy name
 
 	// Write actor: read/write path separation. R1051-R1068
 	writeQueue      []func(*microfts2.DB) // queued write closures
@@ -240,48 +242,51 @@ func Open(dbPath string) (*DB, error) {
 
 	matcher := &Matcher{Dotfiles: config.Dotfiles}
 
-	// CRC: crc-DB.md | R382, R2273
+	// R1644, R1651: in-memory set of zero-byte files shared by Scanner
+	// and the Indexer copies made via withFTS.
+	emptyFiles := NewEmptyFiles()
+
+	db := &DB{
+		fts:           fts,
+		store:         store,
+		config:        config,
+		matcher:       matcher,
+		scanner:       &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
+		search:        &Searcher{fts: fts, store: store, config: config},
+		dbPath:        dbPath,
+		svc:           make(chan func(), 8),
+		chunkerByName: make(map[string]any),
+	}
+
+	// CRC: crc-DB.md | R382, R2273, R2386, R2389
 	// Register built-in chunkers (must happen on every Open, not just
 	// InitDB — chunker registrations aren't persisted in LMDB). Markdown
 	// and chat-jsonl register as AppendAwareChunker structs (R2273) so
 	// growing files index incrementally via microfts2's drop-and-replace
-	// append protocol.
-	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+	// append protocol. addChunker mirrors each registration into
+	// db.chunkerByName so ChunkInfo can look up ChunkerMetadata by strategy.
+	if err := db.addChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register markdown strategy: %w", err)
 	}
-	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+	if err := db.addChunker("chat-jsonl", JSONLChunker{}); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register chat-jsonl strategy: %w", err)
 	}
-	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+	if err := db.addStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register lines strategy: %w", err)
 	}
 
 	// CRC: crc-DB.md | R624, R626, R627, R628, R629, R630, R636, R637
 	// Register chunker strategies from ark.toml [[chunker]] entries
-	registerChunkers(fts, config)
+	db.registerConfigChunkers(config)
 
-	// R1644, R1651: in-memory set of zero-byte files shared by Scanner
-	// and the Indexer copies made via withFTS.
-	emptyFiles := NewEmptyFiles()
-
-	db := &DB{
-		fts:     fts,
-		store:   store,
-		config:  config,
-		matcher: matcher,
-		scanner: &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
-		search:  &Searcher{fts: fts, store: store, config: config},
-		dbPath:  dbPath,
-		svc:     make(chan func(), 8),
-	}
 	// CRC: crc-PDFChunker.md | R1641, R1720, R1726
 	// PDFChunker holds a reference to ark.DB so it can stage per-page
 	// blobs during FileChunks and resolve path→fileid in GetChunk.
 	db.pdfChunker = NewPDFChunker(db)
-	if err := fts.AddChunker("pdf", db.pdfChunker); err != nil {
+	if err := db.addChunker("pdf", db.pdfChunker); err != nil {
 		log.Printf("warning: register pdf chunker: %v", err)
 	}
 	db.indexer = &Indexer{fts: fts, store: store, config: config, pdfChunker: db.pdfChunker}
@@ -451,10 +456,31 @@ func (db *DB) Close() error {
 	return db.fts.Close()
 }
 
-// registerChunkers reads [[chunker]] entries from config and registers
-// bracket/indent chunkers via microfts2.AddChunker.
+// addChunker registers c with microfts2 under name and mirrors it into
+// db.chunkerByName so ChunkInfo / SuggestExtLocator can look up
+// ChunkerMetadata by strategy name. microfts2's chunker map is private
+// and exposes no accessor, so ark keeps its own parallel registry.
+// CRC: crc-DB.md | R2386, R2389
+func (db *DB) addChunker(name string, c any) error {
+	if err := db.fts.AddChunker(name, c); err != nil {
+		return err
+	}
+	db.chunkerByName[name] = c
+	return nil
+}
+
+// addStrategyFunc registers a ChunkFunc as a strategy and mirrors a
+// FuncChunker into db.chunkerByName. FuncChunker doesn't implement
+// ChunkerMetadata, so the ChunkerMetadata defaults (writable=true,
+// commentSyntax="") apply automatically. CRC: crc-DB.md | R2386, R2389
+func (db *DB) addStrategyFunc(name string, fn microfts2.ChunkFunc) error {
+	return db.addChunker(name, microfts2.FuncChunker{Fn: fn})
+}
+
+// registerConfigChunkers reads [[chunker]] entries from cfg and
+// registers bracket/indent chunkers via db.addChunker.
 // CRC: crc-DB.md | R624, R625, R626, R627, R628, R629, R630, R636, R637
-func registerChunkers(fts *microfts2.DB, cfg *Config) {
+func (db *DB) registerConfigChunkers(cfg *Config) {
 	for _, cc := range cfg.Chunkers {
 		if cc.Name == "" {
 			log.Printf("warning: skipping chunker with empty name")
@@ -465,7 +491,7 @@ func registerChunkers(fts *microfts2.DB, cfg *Config) {
 		isBracket := cc.Type == "bracket" || cc.Type == "bracket-full"
 		switch {
 		case isBracket:
-			if err := fts.AddChunker(cc.Name, microfts2.BracketChunker(lang)); err != nil {
+			if err := db.addChunker(cc.Name, microfts2.BracketChunker(lang)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		case isIndent:
@@ -473,7 +499,7 @@ func registerChunkers(fts *microfts2.DB, cfg *Config) {
 			if tabWidth <= 0 {
 				tabWidth = 4
 			}
-			if err := fts.AddChunker(cc.Name, microfts2.IndentChunker(lang, tabWidth)); err != nil {
+			if err := db.addChunker(cc.Name, microfts2.IndentChunker(lang, tabWidth)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		default:
@@ -1437,21 +1463,186 @@ func (db *DB) locateChunkInFile(chunkID, fileID uint64) (path, location string, 
 	return info.Names[0], "", true
 }
 
-// ResolveExtTarget returns chunkids identified by an @ext target.
-// UUID branch first (TvidMap → V record's full chunkid blob, every
-// chunk carrying that id); path branch second (CheckFile + FileInfoByID,
-// first chunk only by preamble convention). Empty result means broken
-// or unknown — callers treat that as a no-op annotation.
-// CRC: crc-DB.md | R1985, R1986
-func (db *DB) ResolveExtTarget(target string) []uint64 {
-	target = strings.TrimSpace(target)
-	if target == "" {
+// ResolveExtTarget returns chunkids identified by an @ext TARGET.
+// Two-phase: decompose the target into (base, modifier, anchor) per
+// the grammar in specs/at-ext-parsing.md, then resolve. `sourceDir`
+// is the source file's absolute directory, used to absolutize
+// relative PATH bases; pass "" when no source context is available
+// (relative paths then degenerate to literal-as-written lookups).
+// Empty result means broken or unknown — callers treat that as a
+// no-op annotation.
+// CRC: crc-DB.md | R1985, R1986, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377
+func (db *DB) ResolveExtTarget(target, sourceDir string) []uint64 {
+	parts, ok := ParseExtTargetParts(target, sourceDir)
+	if !ok || parts.Invalid {
 		return nil
 	}
-	if chunks := db.resolveExtUUID(target); len(chunks) > 0 {
+	var chunks []uint64
+	if parts.BaseKind == "uuid" {
+		chunks = db.resolveExtUUIDBase(parts)
+	} else {
+		chunks = db.resolveExtPathBase(parts)
+	}
+	if parts.ModifierN > 0 {
+		chunks = applyExtModifier(chunks, parts.ModifierN)
+	}
+	return chunks
+}
+
+// resolveExtUUIDBase resolves a UUID-base TARGET to chunkids.
+// Bare UUID → every chunk carrying the @id value. Anchored UUID →
+// those chunks further filtered by string/regex match against
+// chunk content.
+// CRC: crc-DB.md | R2376
+func (db *DB) resolveExtUUIDBase(parts ExtTargetParts) []uint64 {
+	chunks := db.resolveExtUUID(parts.BaseValue)
+	if len(chunks) == 0 {
+		return nil
+	}
+	if parts.AnchorKind == "" {
 		return chunks
 	}
-	return db.resolveExtPath(target)
+	return db.filterChunksByAnchor(chunks, parts.AnchorKind, parts.AnchorText)
+}
+
+// resolveExtPathBase resolves a PATH-base TARGET to chunkids.
+// Bare path → first chunk (preamble convention). Anchored path →
+// chunks in the file filtered by string/regex/range match.
+// CRC: crc-DB.md | R2376, R2377
+func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
+	status, err := db.fts.CheckFile(parts.BaseValue)
+	if err != nil || status.FileID == 0 {
+		return nil
+	}
+	info, err := db.fts.FileInfoByID(status.FileID)
+	if err != nil || len(info.Chunks) == 0 {
+		return nil
+	}
+	if parts.AnchorKind == "" {
+		return []uint64{info.Chunks[0].ChunkID}
+	}
+	if parts.AnchorKind == "range" {
+		for _, c := range info.Chunks {
+			if c.Location == parts.AnchorText {
+				return []uint64{c.ChunkID}
+			}
+		}
+		return nil
+	}
+	// string or regex — load file's chunks with content and filter by
+	// index correlation with info.Chunks.
+	all := db.AllChunks(parts.BaseValue)
+	pattern := compileAnchorRegex(parts.AnchorKind, parts.AnchorText)
+	if parts.AnchorKind == "regex" && pattern == nil {
+		return nil
+	}
+	var out []uint64
+	for i, c := range all {
+		if i >= len(info.Chunks) {
+			break
+		}
+		if anchorMatches(c.Content, parts.AnchorKind, parts.AnchorText, pattern) {
+			out = append(out, info.Chunks[i].ChunkID)
+		}
+	}
+	return out
+}
+
+// filterChunksByAnchor takes a list of chunkIDs (possibly spanning
+// multiple files) and filters them to those whose content matches
+// the anchor. Used by UUID-base resolution after the @id lookup.
+// Order is preserved.
+// CRC: crc-DB.md | R2376
+func (db *DB) filterChunksByAnchor(chunks []uint64, kind, text string) []uint64 {
+	if len(chunks) == 0 || kind == "" {
+		return chunks
+	}
+	pattern := compileAnchorRegex(kind, text)
+	if kind == "regex" && pattern == nil {
+		return nil
+	}
+	var out []uint64
+	for _, cid := range chunks {
+		content, ok := db.chunkContent(cid)
+		if !ok {
+			continue
+		}
+		if anchorMatches(content, kind, text, pattern) {
+			out = append(out, cid)
+		}
+	}
+	return out
+}
+
+// chunkContent fetches the text for a single chunkID. Resolves
+// chunkID → fileID → path, then queries microfts2 for that chunk's
+// content via its Location. Returns ("", false) when any step fails.
+// CRC: crc-DB.md | R2028
+func (db *DB) chunkContent(chunkID uint64) (string, bool) {
+	var fileID uint64
+	var ok bool
+	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		fileID, ok = db.chunkFileID(txn, chunkID)
+		return nil
+	})
+	if !ok {
+		return "", false
+	}
+	path, ok := db.fileIDPath(fileID)
+	if !ok {
+		return "", false
+	}
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil {
+		return "", false
+	}
+	for _, c := range info.Chunks {
+		if c.ChunkID != chunkID {
+			continue
+		}
+		results, err := db.fts.GetChunks(path, c.Location, 0, 0)
+		if err != nil || len(results) == 0 {
+			return "", false
+		}
+		return results[0].Content, true
+	}
+	return "", false
+}
+
+// compileAnchorRegex returns a compiled regex for the regex anchor
+// kind, or nil for other kinds / invalid patterns.
+// CRC: crc-DB.md | R2376
+func compileAnchorRegex(kind, text string) *regexp.Regexp {
+	if kind != "regex" {
+		return nil
+	}
+	p, err := regexp.Compile(text)
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// anchorMatches reports whether content matches the anchor.
+// CRC: crc-DB.md | R2376
+func anchorMatches(content, kind, text string, pattern *regexp.Regexp) bool {
+	switch kind {
+	case "string":
+		return strings.Contains(content, text)
+	case "regex":
+		return pattern != nil && pattern.MatchString(content)
+	}
+	return false
+}
+
+// applyExtModifier post-filters chunks by MODIFIER. Returns
+// chunks[n-1:n] for 1-based N, or nil if out of range.
+// CRC: crc-DB.md | R2371
+func applyExtModifier(chunks []uint64, n int) []uint64 {
+	if n <= 0 || n > len(chunks) {
+		return nil
+	}
+	return []uint64{chunks[n-1]}
 }
 
 // resolveExtUUID returns every chunkid carrying @id == value.
@@ -1504,6 +1695,301 @@ func (db *DB) fileIDPath(fileID uint64) (string, bool) {
 	return info.Names[0], true
 }
 
+// ChunkInfo is the per-chunk metadata bundle the curation workshop UI
+// renders into a chunk card. Returned by DB.ChunkInfo and surfaced to
+// Lua via mcp.chunkInfo. CRC: crc-DB.md | R2386, R2387
+type ChunkInfo struct {
+	ChunkID       uint64
+	FileID        uint64
+	Path          string // canonical absolute path (FRecord.Names[0])
+	Range         string // chunker-specific range identifier (FileChunkEntry.Location)
+	ByteStart     uint64 // half-open [ByteStart, ByteEnd) byte range in the file
+	ByteEnd       uint64
+	Writable      bool   // false for read-only chunkers or hardcoded read-only zones
+	CommentSyntax string // line-comment delimiter for inline tag insertion ("" if n/a)
+}
+
+// ChunkInfo assembles the per-chunk metadata bundle the workshop UI
+// needs. Resolves chunkID → fileID → canonical path, finds the chunk's
+// FileChunkEntry to read Range and the byte-range Locator, looks up the
+// file's chunker via db.chunkerByName, queries ChunkerMetadata when
+// implemented (else defaults to writable=true, commentSyntax=""), and
+// folds in the hardcoded read-only zone check (paths under
+// ~/.claude/projects/** force writable=false). Unknown chunks return
+// (ChunkInfo{}, "chunk not found"). CRC: crc-DB.md | R2386, R2387, R2389
+func (db *DB) ChunkInfo(chunkID uint64) (ChunkInfo, error) {
+	var fileID uint64
+	var ok bool
+	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		fileID, ok = db.chunkFileID(txn, chunkID)
+		return nil
+	})
+	if !ok {
+		return ChunkInfo{}, errors.New("chunk not found")
+	}
+	info, err := db.fts.FileInfoByID(fileID)
+	if err != nil || len(info.Names) == 0 {
+		return ChunkInfo{}, errors.New("chunk not found")
+	}
+	path := info.Names[0]
+	var entry microfts2.FileChunkEntry
+	found := false
+	for _, c := range info.Chunks {
+		if c.ChunkID == chunkID {
+			entry = c
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ChunkInfo{}, errors.New("chunk not found")
+	}
+	// byteStart / byteEnd come from the chunker's
+	// EncodeByteRangeLocator output stored in FileChunkEntry.Locator.
+	// Chunkers that don't encode byte ranges (e.g. PDFChunker) leave
+	// these zero; the workshop UI gates on Writable in those cases.
+	// CRC: crc-DB.md | R2387
+	var byteStart, byteEnd uint64
+	if start, end, decoded := microfts2.DecodeByteRangeLocator(entry.Locator); decoded {
+		byteStart = uint64(start)
+		byteEnd = uint64(end)
+	}
+	writable, commentSyntax := db.chunkerMetadata(info.Strategy)
+	if writable && isReadOnlyPath(path) {
+		writable = false
+	}
+	return ChunkInfo{
+		ChunkID:       chunkID,
+		FileID:        fileID,
+		Path:          path,
+		Range:         entry.Location,
+		ByteStart:     byteStart,
+		ByteEnd:       byteEnd,
+		Writable:      writable,
+		CommentSyntax: commentSyntax,
+	}, nil
+}
+
+// chunkerMetadata returns the (writable, commentSyntax) pair for a
+// strategy by type-asserting against microfts2.ChunkerMetadata. Strategy
+// names absent from the registry, or chunkers that don't implement the
+// interface, return the safe defaults (true, ""). CRC: crc-DB.md | R2388
+func (db *DB) chunkerMetadata(strategy string) (bool, string) {
+	c, ok := db.chunkerByName[strategy]
+	if !ok {
+		return true, ""
+	}
+	if cm, ok := c.(microfts2.ChunkerMetadata); ok {
+		return cm.IsWritable(), cm.CommentSyntax()
+	}
+	return true, ""
+}
+
+// isReadOnlyPath returns true when path falls under a hardcoded
+// read-only zone. v1 zone is ~/.claude/projects/** — chat-log
+// transcripts are conceptually read-only even when the underlying
+// chunker reports IsWritable()=true. CRC: crc-DB.md | R2389
+func isReadOnlyPath(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	prefix := filepath.Join(home, ".claude", "projects") + string(filepath.Separator)
+	return strings.HasPrefix(path, prefix)
+}
+
+// ReplaceRegion atomically replaces the byte range [byteStart, byteEnd)
+// in path with newText. Direct file I/O matching mcp.setTags's
+// precedent for Lua-driven file mutation: validates the path is indexed
+// (rejects tmp://), bounds-checks the range, then writes via
+// temp+rename. The watcher picks up the change and triggers reindex —
+// this primitive does not enqueue an explicit reindex.
+// CRC: crc-DB.md | R2390, R2391
+func (db *DB) ReplaceRegion(path string, byteStart, byteEnd uint64, newText []byte) error {
+	if strings.HasPrefix(path, "tmp://") {
+		return errors.New("tmp:// paths use tmp_update")
+	}
+	if byteEnd < byteStart {
+		return fmt.Errorf("invalid range: byteEnd %d < byteStart %d", byteEnd, byteStart)
+	}
+	if _, err := db.fts.CheckFile(path); err != nil {
+		return fmt.Errorf("file not indexed: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if byteEnd > uint64(len(data)) {
+		return fmt.Errorf("range %d-%d out of bounds (file size %d)", byteStart, byteEnd, len(data))
+	}
+	out := make([]byte, 0, uint64(len(data))-byteEnd+byteStart+uint64(len(newText)))
+	out = append(out, data[:byteStart]...)
+	out = append(out, newText...)
+	out = append(out, data[byteEnd:]...)
+	return atomicWriteFile(path, out, 0644)
+}
+
+// atomicWriteFile writes data to path via a sibling .tmp file +
+// rename, ensuring readers always see either the pre- or post-state.
+// CRC: crc-DB.md | R2391
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s → %s: %w", tmpPath, path, err)
+	}
+	return nil
+}
+
+// resolveExtTargetFile resolves an `@ext` targetSpec to the canonical
+// absolute path of its target file. UUID bases resolve to the file
+// containing the chunk with that @id; path bases resolve to the
+// absolutized path itself. CRC: crc-DB.md | R2395
+func (db *DB) resolveExtTargetFile(targetSpec string) (string, error) {
+	parts, ok := ParseExtTargetParts(targetSpec, "")
+	if !ok || parts.Invalid {
+		return "", fmt.Errorf("malformed targetSpec: %q", targetSpec)
+	}
+	if parts.BaseKind == "path" {
+		if parts.BaseValue == "" {
+			return "", fmt.Errorf("targetSpec resolves to empty path")
+		}
+		return parts.BaseValue, nil
+	}
+	chunks := db.resolveExtUUIDBase(parts)
+	if len(chunks) == 0 {
+		return "", fmt.Errorf("no chunk found for UUID %q", parts.BaseValue)
+	}
+	var fileID uint64
+	var found bool
+	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		fileID, found = db.chunkFileID(txn, chunks[0])
+		return nil
+	})
+	if !found {
+		return "", fmt.Errorf("chunk %d has no file linkage", chunks[0])
+	}
+	path, ok := db.fileIDPath(fileID)
+	if !ok {
+		return "", fmt.Errorf("fileID %d has no canonical path", fileID)
+	}
+	return path, nil
+}
+
+// extMirrorPath returns the mirror-file path for a target file under
+// sourceRoot. Source-slug is path-as-slug (every `/` → `-`, leading
+// `-` stripped). Mirror layout:
+// `~/.ark/external/<slug>/<target-path-within-source>.md`. The trailing
+// `.md` is always appended so mirror files are markdown-indexed
+// regardless of the target's extension. CRC: crc-DB.md | R2392
+func extMirrorPath(sourceRoot, targetFile string) (string, error) {
+	rel, err := filepath.Rel(sourceRoot, targetFile)
+	if err != nil {
+		return "", fmt.Errorf("rel %s under %s: %w", targetFile, sourceRoot, err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("target %s not under source root %s", targetFile, sourceRoot)
+	}
+	slug := strings.ReplaceAll(strings.TrimPrefix(sourceRoot, string(filepath.Separator)), string(filepath.Separator), "-")
+	if slug == "" {
+		return "", fmt.Errorf("empty slug from source root %q", sourceRoot)
+	}
+	dbPath := arkHomeDir()
+	if dbPath == "" {
+		return "", errors.New("ark home directory unavailable")
+	}
+	return filepath.Join(dbPath, "external", slug, rel+".md"), nil
+}
+
+// arkHomeDir returns the canonical ~/.ark directory path. Used by
+// extMirrorPath to compute the mirror tree root.
+// CRC: crc-DB.md | R2392
+func arkHomeDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".ark")
+	}
+	return ""
+}
+
+// resolveExtMirror resolves targetSpec to its mirror file path under
+// `~/.ark/external/<slug>/`. Shared preamble for SetExtTag and
+// RemoveExtTag. CRC: crc-DB.md | R2392, R2395, R2396
+func (db *DB) resolveExtMirror(targetSpec string) (mirrorPath string, err error) {
+	targetFile, err := db.resolveExtTargetFile(targetSpec)
+	if err != nil {
+		return "", err
+	}
+	sourceRoot, ok := db.config.SourceRootForPath(targetFile)
+	if !ok {
+		return "", fmt.Errorf("no source root contains %s", targetFile)
+	}
+	return extMirrorPath(sourceRoot, targetFile)
+}
+
+// SetExtTag authors an `@ext` routing into the mirror tree under
+// `~/.ark/external/`. See CRC crc-DB.md and R2392-R2395 for the full
+// algorithm. CRC: crc-DB.md | R2392, R2393, R2394, R2395
+func (db *DB) SetExtTag(targetSpec, tag, value string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	mirrorPath, err := db.resolveExtMirror(targetSpec)
+	if err != nil {
+		return err
+	}
+	var data []byte
+	if existing, rerr := os.ReadFile(mirrorPath); rerr == nil {
+		data = existing
+	} else if !os.IsNotExist(rerr) {
+		return fmt.Errorf("read %s: %w", mirrorPath, rerr)
+	}
+	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, false)
+	if !matched {
+		// emit one (TARGET, tag, value) per line. Multi-tag lines
+		// are syntactically valid but the v1 authoring path always
+		// appends single-tag lines for trivial scanning.
+		// CRC: crc-DB.md | R2394
+		if len(newData) > 0 && newData[len(newData)-1] != '\n' {
+			newData = append(newData, '\n')
+		}
+		newData = append(newData, []byte(fmt.Sprintf("@ext: %s @%s: %s\n", targetSpec, strings.ToLower(tag), value))...)
+	}
+	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
+	}
+	return atomicWriteFile(mirrorPath, newData, 0644)
+}
+
+// RemoveExtTag removes an `@ext` routing from the mirror tree.
+// Missing mirror file or missing matching line is a silent no-op.
+// CRC: crc-DB.md | R2396
+func (db *DB) RemoveExtTag(targetSpec, tag string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	mirrorPath, err := db.resolveExtMirror(targetSpec)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(mirrorPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", mirrorPath, err)
+	}
+	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, "", true)
+	if !matched {
+		return nil
+	}
+	return atomicWriteFile(mirrorPath, newData, 0644)
+}
+
 // chunkIDValues returns the list of @id values registered against
 // chunkID, derived from F[chunkID][id]. Used by ExtMap candidate
 // collection to drive the "appearing UUID" lookup.
@@ -1524,22 +2010,6 @@ func (db *DB) chunkIDValues(txn *lmdb.Txn, chunkID uint64) []string {
 	return out
 }
 
-// resolveExtPath returns the file's first chunkid (preamble), or nil
-// when the path is not indexed. Anchored target forms (path:line,
-// path:string, path:/regex/, path[N]:anchor) are deferred — when they
-// land they branch off resolveExtPath before the CheckFile probe.
-// CRC: crc-DB.md | R1985, R1987
-func (db *DB) resolveExtPath(path string) []uint64 {
-	status, err := db.fts.CheckFile(path)
-	if err != nil || status.FileID == 0 {
-		return nil
-	}
-	info, err := db.fts.FileInfoByID(status.FileID)
-	if err != nil || len(info.Chunks) == 0 {
-		return nil
-	}
-	return []uint64{info.Chunks[0].ChunkID}
-}
 
 // tmpPathForFile resolves a tmp:// fileid to its source path. The
 // overlay does not record per-chunk Locations, so location is empty.

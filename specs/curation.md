@@ -93,6 +93,92 @@ in `apps/ark/<ark-search>` chunk rows and the content-view
 iframes. It is not the Lua app's path — Lua callers go through
 `sys.curation.pin` directly.
 
+## Persistence
+
+The pinned-chunks list survives server restart via
+`curation.toml`, co-located with `ark.toml` in the database
+directory.
+
+### File location
+
+`filepath.Join(dbPath, "curation.toml")`. The file is excluded
+from indexing — `arkSourceIncludePatterns` does not list it, so
+the watcher / scanner skip it.
+
+### File format
+
+TOML, one `[[pinned]]` table per entry, in canonical
+newest-first order (the same order the in-memory slice keeps).
+A top-level `version = 1` field gates future schema changes.
+
+```toml
+version = 1
+
+[[pinned]]
+chunkID = 4711
+fileID = 88
+path = "knowledge/notes.md"
+pinnedAt = 1715800000
+
+[[pinned]]
+chunkID = 8123
+fileID = 92
+path = "specs/curation.md"
+pinnedAt = 1715798200
+```
+
+Field names match the JSON tags on `PinnedChunk`
+(`chunkID`/`fileID`/`path`/`pinnedAt`). The `pinnedAt` value is
+Unix seconds, matching the in-memory representation.
+
+### Load
+
+`Curation.Load(path)` runs during `Server.New` after
+`newCuration()` and before `registerLuaFunctions` — the Lua
+mirror is populated from disk before any Lua code sees it.
+
+Behavior:
+- Missing file → silent no-op (first run, or user wiped the
+  state). Pinned list starts empty.
+- Malformed TOML, unknown version, or unparseable entries → log
+  the error, leave the in-memory slice empty. The server keeps
+  running. Subsequent mutations overwrite the broken file on
+  next save.
+- Entries reference `chunkID`/`fileID` values that may or may
+  not still exist in the current DB. The workshop's chunk-
+  resolution path is responsible for handling stale references
+  (e.g., displaying "chunk no longer indexed" when a pinned
+  entry can't be reached). Load does not validate against the
+  DB.
+
+### Save
+
+After every `pin`, `dismiss`, and `sweepOlder` call — inside the
+same `WithLua` closure that mutates the Go slice and refreshes
+the Lua mirror. One atomic write per mutation.
+
+Implementation: write to `curation.toml.tmp` then rename over
+`curation.toml`. This is sufficient atomicity for a single-file
+state — readers (the next process startup) see either the old
+file or the new, never a partial write.
+
+Failure handling:
+- Disk full / permission denied → log the error, keep in-memory
+  state as-is. The next mutation's save will retry; if the
+  server crashes before then, that single mutation is lost.
+- The in-memory state is the source of truth during the session;
+  the file is a checkpoint. Save failures don't roll back the
+  Go-side mutation.
+
+### Not used
+
+- No periodic save — every mutation saves.
+- No debounce — pinned-list mutations are user-initiated (pin
+  button, dismiss button, sweep), so the rate is human-scale
+  (< 1/sec under all realistic usage). The write cost is
+  negligible.
+- No shutdown save — every mutation already saved.
+
 ## Lua bridge: defined-tags listing
 
 `mcp.definedTags()` — returns an array of `{tag, description}`

@@ -48,6 +48,16 @@ func NewPDFChunker(db *DB) *PDFChunker {
 	return &PDFChunker{db: db, pending: make(map[string][]pendingPageBlob)}
 }
 
+// IsWritable reports whether the chunker handles editable text.
+// Always false for PDF — binary format with no text-edit primitive.
+// CRC: crc-PDFChunker.md | R2388
+func (c *PDFChunker) IsWritable() bool { return false }
+
+// CommentSyntax returns the line-comment delimiter for inline tag
+// authoring. Empty for PDFs — no line-comment convention applies.
+// CRC: crc-PDFChunker.md | R2388
+func (c *PDFChunker) CommentSyntax() string { return "" }
+
 // Chunks implements microfts2.Chunker for tmp documents. R1729, R1734
 // CRC: crc-PDFChunker.md | R1729, R1730, R1734
 func (c *PDFChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {

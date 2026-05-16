@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R899, R904, R905, R906, R907, R908, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401
 
 Main ark facade. Owns the LMDB lifecycle and coordinates microfts2,
 the Librarian/EC embedding pipeline, and the ark subdatabase. Entry
@@ -174,12 +174,81 @@ operations complete) document this on the API. (R986, R993, R995)
   path + chunk Location); path branch second (microfts2.CheckFile).
   Returns ok=false when neither resolves. Used by wrapTagElements in
   the rendering hot path. (R1976, R1977, R1978)
-- ResolveExtTarget(target) []uint64: return chunkids identified by
-  an `@ext:` target spec. UUID branch returns every chunk carrying
-  the id (full V record blob); path branch returns the first chunk
-  of the file (preamble convention). Empty result means broken or
-  unknown — callers treat as a no-op annotation. Anchored target
-  forms are deferred. (R1985, R1986, R1987)
+- ResolveExtTarget(target, sourceDir string) []uint64: return
+  chunkids identified by an `@ext:` target spec. Two-phase:
+  **decompose** the target into `(BASE, modifier, anchor)` per the
+  grammar in `specs/at-ext-parsing.md`, then **resolve**. BASE is
+  a `%UUID_VALUE` (UUID branch via `TvidMap.Lookup("id", value)`
+  → V record's full chunkid blob) or a PATH (absolute, `~/`-relative,
+  or source-relative). The `%` sigil makes BASE disambiguation
+  structural — no UUID-vs-path guessing. Relative PATH bases are
+  absolutized via `filepath.Join(sourceDir, base)` with minimal
+  normalization (no Clean, no EvalSymlinks). `\%` escape on
+  TARGETs starting with literal `%` is stripped at lookup. With
+  no narrower: path → first chunk (preamble); UUID → every chunk
+  carrying the id. With `:"string"` → literal substring match
+  scoped to the base; with `:/regex/` → regex match scoped to the
+  base; with `:RANGE_STRING` (PATH-only) → chunker dispatch
+  against the file. MODIFIER (`[N]` or `^`) post-filters the
+  anchor result set; no modifier = all matches. UUIDs reject
+  RANGE_STRING anchors. Empty result means broken or unknown.
+  (R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374,
+  R2375, R2376, R2377, R2378, R1985, R1986)
+- ChunkInfo(chunkID) (ChunkInfo, error): assemble the metadata
+  bundle the workshop UI needs. Resolves chunkID → fileID →
+  canonical path; retrieves the chunk's Range, byteStart, byteEnd
+  from microfts2; looks up the file's chunker; queries
+  ChunkerMetadata (`IsWritable()`, `CommentSyntax()`) if
+  implemented or defaults to `(true, "")`; folds in the hardcoded
+  read-only zone check (paths under `~/.claude/projects/**` force
+  writable=false). Returns `{ChunkID, FileID, Path, Range,
+  ByteStart, ByteEnd, Writable, CommentSyntax}`. (R2386, R2387,
+  R2389)
+- ReplaceRegion(path, byteStart, byteEnd uint64, newText []byte)
+  error: atomically replace the byte range `[byteStart, byteEnd)`
+  in `path` with `newText`. Direct file I/O (matching `mcp.setTags`'s
+  precedent for Lua-driven file mutation): validates path is indexed
+  (rejects tmp:// — those have their own path via `UpdateTmpFile`);
+  bounds-checks the range; uses write-to-temp + rename atomicity;
+  the watcher picks up the change and triggers reindex. The
+  fundamental file-region write primitive — `mcp.replaceRegion` is
+  a thin Lua bridge. (R2390, R2391)
+- SetExtTag(targetSpec, tag, value string) error: author an
+  `@ext` routing into the mirror tree under `~/.ark/external/`.
+  Resolves `targetSpec` to a target file; computes the source-slug
+  (path-as-slug, `/` → `-`) of the source root containing the
+  target; the mirror path is
+  `~/.ark/external/<slug>/<target-path-within-source>.md`. Reads
+  the mirror file (empty if absent), replaces the value in place
+  when a line matches `@ext: TARGET @tag:` byte-for-byte (same
+  TARGET text, same tag name), otherwise appends a new line
+  `@ext: TARGET @tag: value`. Direct file I/O with temp+rename
+  atomicity (matching `mcp.setTags`); the watcher/indexer reindex
+  the mirror file so the in-memory ext map updates. (R2392,
+  R2393, R2394, R2395)
+- RemoveExtTag(targetSpec, tag string) error: remove an `@ext`
+  routing from the mirror tree. Locates the mirror file (missing
+  → silent no-op), finds the matching `@ext: TARGET @tag:` line
+  (missing → silent no-op), removes it. Single-tag lines: delete
+  the whole line including trailing newline. Multi-tag lines
+  (rare in v1): remove only the `@tag: value` span, preserve the
+  rest. Direct file I/O with temp+rename atomicity. (R2396)
+- SuggestExtLocator(chunkID) (LocatorSuggestion, error): run the
+  three-layer locator algorithm for the workshop's `@ext`
+  authoring widget. Layer 1 — line-prefix token-minimum unique
+  among other chunks in the same file (smallest token count;
+  earliest line wins ties; case-insensitive uniqueness compare;
+  emit regex if prefix contains a literal `"`). Layer 2 —
+  rare-trigram-anchored substring (mid-line trigram unique to
+  this chunk, expanded to word boundaries, clamped 12–60 chars).
+  Layer 3 — `absolute` (the chunk's range string), unavailable
+  when the range starts with `"` or `/` (non-conforming per the
+  soft chunker contract). Returns `{Base, BaseValue, Locator,
+  LocatorKind, LocatorText, WithinFileDupCount, CrossFileScope}`.
+  Base = `"uuid"` when the chunk has `@id`, else `"path"`.
+  CrossFileScope is computed by running the same resolution path
+  the resolver would, scoped to the file for path bases or all
+  files for UUID bases. (R2397, R2398, R2399, R2400, R2401)
 - chunkFileID(txn, chunkID) (uint64, bool): branch on
   IsOverlayID(chunkID). Overlay chunkids resolve via
   Store.filesForChunk(chunkID), which routes through the
