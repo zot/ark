@@ -107,6 +107,8 @@ Go functions registered on the mcp table:
 - `mcp.tmp_update(path, content, strategy)` — update existing
 - `mcp.tmp_remove(path)` — remove
 - `mcp.tmp_list()` — list all tmp:// paths
+- `mcp.tmp_get(path)` — return the stored content of a tmp://
+  document (see below)
 
 These use the same `tmp://` naming convention as CLI commands.
 
@@ -118,3 +120,24 @@ for chunk retrieval; fetch returns it whole.
 
 `ark chunks tmp://name` already works — microfts2's `GetChunks`
 handles `tmp://` paths internally, reading from stored content.
+
+### `mcp.tmp_get(path)` — Lua-side read
+
+The Find-Connections-as-service flow in the curation workshop
+needs Lua to read the body of a `tmp://` document on terminal-
+status transitions. `mcp.tmp_get` is the read primitive that
+complements `mcp.tmp_add` / `mcp.tmp_update` — same overlay,
+opposite direction.
+
+```lua
+local content, err = mcp.tmp_get("tmp://connections/fc-7Yp2K3.md")
+```
+
+- Success: `(content, nil)` where `content` is a Lua string of
+  raw bytes (UTF-8 preserved verbatim).
+- Failure: `(nil, errstring)`. Failure modes: missing `tmp://`
+  prefix, document not present in the overlay, Sync error.
+
+Backed by `DB.TmpContent(path string) ([]byte, error)` —
+validates the prefix, reads through `db.fts.TmpContent`,
+returns the bytes. Sync read; no overlay mutation.

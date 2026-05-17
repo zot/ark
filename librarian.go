@@ -1636,6 +1636,25 @@ func (l *Librarian) SweepHotCorrelations() (*HCSweepResult, error) {
 	return result, nil
 }
 
+// SweepHotCorrelationsAsync enqueues the same closure SweepHotCorrelations
+// runs through, but returns immediately. The caller observes progress and
+// terminal state via tmp://sweep/hot-correlations.md (existing pubsub path).
+// Used by the curation workshop's sweep-button retrofit so the Lua VM is
+// not held for the duration of the sweep.
+// CRC: crc-Librarian.md | R2409
+func (l *Librarian) SweepHotCorrelationsAsync() {
+	if err := SyncVoid(l.db, func(db *DB) error {
+		db.enqueueWrite(func(_ *microfts2.DB) {
+			if _, err := l.SweepHotCorrelations(); err != nil {
+				log.Printf("async hot-correlations sweep: %v", err)
+			}
+		})
+		return nil
+	}); err != nil {
+		log.Printf("enqueue async hot-correlations sweep: %v", err)
+	}
+}
+
 // HandleSweepCorrelations runs the hot-correlations sweep through the
 // write goroutine and returns the result as JSON. POST /sweep/correlations.
 //

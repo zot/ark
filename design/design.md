@@ -204,6 +204,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
 - [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`
 - [x] crc-ArkTagElement.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
+- [ ] crc-CuratePinButton.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 - [x] crc-PdfChunkElement.md → `pdf-chunk/src/pdf-chunk-element.ts`
 
 ### CRC Cards (TypeScript — Tag Overview)
@@ -492,3 +493,11 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T58: R1987 retired by R2366 (narrower forms formalized in R2365–R2379 (specs/at-ext-parsing.md grammar))
 - T59: R1995 retired by R2380 (extByAnchor keys by BASE only — narrower stored alongside tvid_ext for resolve-time evaluation)
 - [ ] I4: R2379 (workshop UI surfaces non-conforming range strings loudly) awaits the /ui-thorough pass — Go primitives already expose the needed state (locator falls back to bare or string-fallback when range is non-conforming, surfaced via mcp.suggestExtLocator).
+- [ ] O98: R2402-R2403 ChunkTextByID does two LMDB+file-read passes — ChunkInfo and ChunkText each call db.fts.NewChunkCache() which re-reads the underlying file. Acceptable at workshop cadence (per-card, low frequency); revisit if profiling shows this dominates.
+- [ ] O99: R2408-R2409 SweepHotCorrelationsAsync frees the Lua VM but the inner closure still holds db.writing=true for the entire sweep (16s from-scratch). Pre-existing property of the sync sibling bridge — fix requires re-architecting SweepHotCorrelations to enqueue per-tag closures rather than running the whole sweep inside one enqueueWrite. Workshop UI mutations queue behind in-flight sweeps.
+- [ ] O100: R2402-R2410 No unit tests yet for the four new bridges (mcp.chunkText / mcp.parseTagBlock / mcp.tmp_get / mcp.sweepHotCorrelationsAsync) and their backing Go methods (DB.ChunkTextByID, DB.TmpContent, Librarian.SweepHotCorrelationsAsync). Live verification deferred to the upcoming /ui-thorough pass when the workshop's slice B/C consumes them.
+- [ ] O101: R2416-R2420 curate-pin inline JS and CSS duplicated between install/html/content-markdown.html and install/html/content-plain.html (~85 lines each). Extraction to install/html/curate-pin.js + curate-pin.css served from ~/.ark/html/ deferred; v1 keeps templates self-contained while the feature is exercised. Re-evaluate when a third content template arrives or when divergence appears.
+- [ ] O102: R2415 handleContentView's new fileID lookup (db.fts.CheckFile(path)) plus the existing ChunkIDsForPath call each open a separate microfts2 read pair (CheckFile + FileInfoByID). A combined ChunkIDsAndFileIDForPath(path) helper would cut one read pair on the full-file and JSONL rendering paths. Workshop cadence makes the current cost acceptable; revisit if profiling shows content-view dominates.
+- [x] O103: R2419 PDF chunks (rendered as <pdf-chunk> rather than <div class="ark-chunk">) currently get no curate-pin button. A parallel hook in pdf-chunk-element.ts would mirror the content-view selector. Out of scope for v1 of the curate buttons.
+- [ ] O104: R2423 PDF chunk hover-outline shows transparent border by default and reveals dashed outline on :hover. The 1px outline may obscure tight ark-tag overlays at the page rect edges. If reports of cluttered overlap arrive, switch to a lighter affordance (focus ring on the pin button only, or rely on the existing ark-tag border on hover).
+- [ ] O105: R2421-R2422 ark-curate-region positioning re-runs only on render() — no rescaleBand re-run hook yet. PdfChunkElement.handleResize switches scaleBand → re-renders; the regions get repositioned implicitly. If scaleBand-stable resizes start drifting visibly, expose positionRegions to the CSS-only resize path the same way positionHitRegions is.

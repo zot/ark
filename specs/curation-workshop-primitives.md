@@ -117,6 +117,61 @@ Reindex re-derives chunk boundaries from the chunker, so a
 chunk back; if the new text adds or removes structure the
 chunker recognizes, chunk count can shift.
 
+## `mcp.chunkText(chunkID)`
+
+Returns the chunk's text bytes. The workshop wraps each pinned
+card in an `<ark-markdown-editor>` and uses `mcp.parseTagBlock`
+on the result to compute the `> current tags` reflection.
+
+```lua
+local text, err = mcp.chunkText(chunkID)
+```
+
+- Success: `(text, nil)` where `text` is a Lua string of raw
+  bytes (UTF-8 preserved verbatim — no encoding transformation).
+- Failure: `(nil, errstring)`. Failure modes: unknown chunkID,
+  chunk whose range no longer resolves (file removed or
+  re-chunked between lookup calls), Sync error.
+
+Backed by `DB.ChunkTextByID(chunkID uint64) ([]byte, error)` —
+resolves chunkID to `(path, range)` via `ChunkInfo`, reads via
+the existing `ChunkText(path, range)` primitive. A `nil` text
+return from `ChunkText` (range unresolvable) surfaces as
+`"chunk text unavailable"`.
+
+One Sync round-trip from the bridge. Sync read; no DB mutation.
+
+## `mcp.parseTagBlock(text)`
+
+Parses the leading `@name: value` block of `text` into an
+ordered tag list plus the body bytes. Wraps the existing
+`ParseTagBlock` Go helper. The workshop calls this on the
+output of `mcp.chunkText` to derive `> current tags` without a
+re-chunk round-trip through the watcher.
+
+```lua
+local block, err = mcp.parseTagBlock(text)
+-- block = {
+--     tags = {
+--         { name = "topic", value = "streaming" },
+--         { name = "status", value = "draft" },
+--     },
+--     body = "rest of the chunk...",
+-- }
+```
+
+Semantics:
+
+- `block.tags` is an ordered Lua array of `{name, value}`
+  tables, in the order the `@` lines appear in `text`.
+- `block.body` is a Lua string of the bytes after the tag block
+  (and after the blank separator line, if one is present).
+- A chunk with no leading tag block returns
+  `{tags = {}, body = text}` — body is the entire input.
+
+Pure function: no DB lookup, no Sync. Errors only on a non-
+string argument (standard Lua type check).
+
 ## Ext-tag mirror files
 
 The workshop authors `@ext` routings into mirror files under

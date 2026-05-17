@@ -367,6 +367,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /save", srv.handleSave)
 	mux.HandleFunc("POST /set-tags", srv.handleSetTags)
 	mux.HandleFunc("POST /curation/pin", srv.handleCuratePin)
+	mux.HandleFunc("POST /curation/dismiss", srv.handleCurateDismiss)
+	mux.HandleFunc("GET /curation/pinned", srv.handleCuratePinned)
 	if srv.librarian != nil {
 		mux.HandleFunc("POST /search/curate", srv.librarian.HandleExpand)
 		mux.HandleFunc("GET /search/curate/wait", srv.librarian.HandleExpandWait)
@@ -1453,6 +1455,62 @@ func (srv *Server) handleCuratePin(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// curateDismissRequest is the JSON payload for POST /curation/dismiss.
+type curateDismissRequest struct {
+	ChunkID uint64 `json:"chunkID"`
+}
+
+// handleCurateDismiss removes a pinned chunk from a web-component
+// context (the toggle-off path of the content-view pin button).
+// Mirror of handleCuratePin; silent no-op when the chunkID is not
+// currently pinned.
+//
+// CRC: crc-Server.md | R2411, R2412
+func (srv *Server) handleCurateDismiss(w http.ResponseWriter, r *http.Request) {
+	var req curateDismissRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ChunkID == 0 {
+		http.Error(w, "chunkID required", http.StatusBadRequest)
+		return
+	}
+	if srv.uiRuntime == nil {
+		http.Error(w, "ui runtime not available", http.StatusServiceUnavailable)
+		return
+	}
+	err := srv.uiRuntime.WithLua(func(rt *cli.LuaRuntime) error {
+		srv.curation.dismiss(rt.State, req.ChunkID)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleCuratePinned returns the current pinned chunk IDs as JSON
+// for web-component consumers (the inline pin-button script reads
+// this on DOMContentLoaded to seed visual state). Read-only — no
+// Lua-executor entry; reads through Curation.pinnedSnapshot().
+//
+// CRC: crc-Server.md | R2413, R2414
+func (srv *Server) handleCuratePinned(w http.ResponseWriter, r *http.Request) {
+	if srv.curation == nil {
+		http.Error(w, "curation not available", http.StatusServiceUnavailable)
+		return
+	}
+	snap := srv.curation.pinnedSnapshot()
+	ids := make([]uint64, len(snap))
+	for i, p := range snap {
+		ids[i] = p.ChunkID
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"chunkIDs": ids})
+}
+
 // Seq: seq-config-mutate.md
 
 type configPatternRequest struct {
@@ -2316,6 +2374,12 @@ func (srv *Server) registerContentRoutes() {
 	srv.uiRuntime.UIHandleFunc("POST /file/save", srv.handleSave)
 	srv.uiRuntime.UIHandleFunc("POST /tags/set", srv.handleSetTags)
 	srv.uiRuntime.UIHandleFunc("POST /file/show", srv.handleShowInFolder)
+	// Curation endpoints — pin/dismiss/pinned are also registered on the
+	// unix-socket mux for CLI/test access; the UI mirrors here let the
+	// content-view inline JS reach them from the browser. R2411-R2414
+	srv.uiRuntime.UIHandleFunc("POST /curation/pin", srv.handleCuratePin)
+	srv.uiRuntime.UIHandleFunc("POST /curation/dismiss", srv.handleCurateDismiss)
+	srv.uiRuntime.UIHandleFunc("GET /curation/pinned", srv.handleCuratePinned)
 	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints)")
 	// NOTE: /content/ markdown shell references /ark-markdown-editor.js.
 	// The UI server serves from ~/.ark/html/ — the Makefile must copy
@@ -2373,6 +2437,24 @@ func (srv *Server) handleContentFetch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// writeArkChunkOpen writes the opening tag of a chunk div with range,
+// chunkID, and fileID data attributes for the curate-button inline JS.
+// chunkID == 0 emits an empty attribute (the inline JS treats those
+// chunks as not-pinnable). R2415
+func writeArkChunkOpen(buf *strings.Builder, rangeStr string, chunkID, fileID uint64) {
+	buf.WriteString(`<div class="ark-chunk" data-range="`)
+	buf.WriteString(template.HTMLEscapeString(rangeStr))
+	buf.WriteString(`" data-chunkid="`)
+	if chunkID != 0 {
+		fmt.Fprintf(buf, "%d", chunkID)
+	}
+	buf.WriteString(`" data-fileid="`)
+	if fileID != 0 {
+		fmt.Fprintf(buf, "%d", fileID)
+	}
+	buf.WriteString(`">`)
+}
+
 // handleContentView returns an HTML page that presents the file richly.
 // Markdown: goldmark-rendered HTML with pencil/eye toggle to ink-mde editor.
 // Other types: <pre> block.
@@ -2405,6 +2487,18 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		return db.FileStrategy(path), nil
 	})
 
+	// R2415: per-file fileID for the curate-button data attributes.
+	// One CheckFile call here is shared across every chunk div emitted
+	// below; the inline pin-button script reads data-fileid from each
+	// div to POST {chunkID, fileID, path}.
+	fileID, _ := Sync(srv.db, func(db *DB) (uint64, error) {
+		info, err := db.fts.CheckFile(path)
+		if err != nil {
+			return 0, nil
+		}
+		return info.FileID, nil
+	})
+
 	// Cache-busting hash for JS bundle
 	dbPath := srv.db.Path()
 	bundleHash := ""
@@ -2435,13 +2529,12 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		var buf strings.Builder
 		if isChunk {
 			rendered := wrapTagElements(renderMarkdownForContent(data, path), srv.db)
+			cid := srv.db.ChunkIDByLocation(path, rangeParam)
 			var extBlock string
-			if cid := srv.db.ChunkIDByLocation(path, rangeParam); cid != 0 {
+			if cid != 0 {
 				extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
 			}
-			buf.WriteString(`<div class="ark-chunk" data-range="`)
-			buf.WriteString(template.HTMLEscapeString(rangeParam))
-			buf.WriteString(`">`)
+			writeArkChunkOpen(&buf, rangeParam, cid, fileID)
 			buf.WriteString(extBlock)
 			buf.WriteString(rendered)
 			buf.WriteString("</div>\n")
@@ -2454,12 +2547,12 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				for i, ch := range chunks {
 					rendered := wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
 					var extBlock string
+					var cid uint64
 					if i < len(chunkIDs) {
-						extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(chunkIDs[i], srv.db), "")
+						cid = chunkIDs[i]
+						extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
 					}
-					buf.WriteString(`<div class="ark-chunk" data-range="`)
-					buf.WriteString(template.HTMLEscapeString(ch.Range))
-					buf.WriteString(`">`)
+					writeArkChunkOpen(&buf, ch.Range, cid, fileID)
 					buf.WriteString(extBlock)
 					buf.WriteString(rendered)
 					buf.WriteString("</div>\n")
@@ -2496,7 +2589,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			if strategy == "pdf" {
 				// R2074, R2075, R2076: id anchors for sidebar — applied to
 				// <ark-tag> and <ark-heading> overlays inside <pdf-chunk>.
-				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, srv.db)))
+				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, fileID, srv.db)))
 				tmpl.Execute(w, shell)
 				return
 			}
@@ -2516,8 +2609,10 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), srv.db)
 				}
 				var extBlock string
+				var cid uint64
 				if i < len(chunkIDs) {
-					extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(chunkIDs[i], srv.db), "")
+					cid = chunkIDs[i]
+					extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
 				}
 				// R1509-R1512: role grouping for chat-jsonl chunks.
 				role, _ := microfts2.PairGet(ch.Attrs, "role")
@@ -2551,9 +2646,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 					groupOpen = true
 					prevRole = roleStr
 				}
-				buf.WriteString(`<div class="ark-chunk" data-range="`)
-				buf.WriteString(template.HTMLEscapeString(ch.Range))
-				buf.WriteString(`">`)
+				writeArkChunkOpen(&buf, ch.Range, cid, fileID)
 				buf.WriteString(extBlock)
 				buf.WriteString(rendered)
 				buf.WriteString("</div>\n")
@@ -2572,9 +2665,15 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// Single chunk or unchunked file — render through goldmark for JSONL,
 			// as <pdf-chunk> for PDF chunks with a rect, plain-text fallback
 			// otherwise. R1703-R1708
+			//
+			// When the URL specifies a range (?range=...) we know exactly
+			// which chunk we're showing, so wrap the rendered content in a
+			// <div class="ark-chunk" data-chunkid data-fileid> so the
+			// curate-pin inline JS can install a pin button. R2415 R2417
+			var body strings.Builder
 			switch {
 			case strategy == "chat-jsonl":
-				shell.Content = template.HTML(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
+				body.WriteString(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
 			case strategy == "pdf" && isChunk:
 				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
 					return db.ChunkAttrs(path, rangeParam), nil
@@ -2584,12 +2683,23 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 					pdfZoom = 1.5
 				}
 				if pdfHTML, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
-					shell.Content = template.HTML(pdfHTML)
+					body.WriteString(pdfHTML)
 				} else {
-					shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
+					body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
 				}
 			default:
-				shell.Content = template.HTML(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
+				body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
+			}
+			if isChunk {
+				cid := srv.db.ChunkIDByLocation(path, rangeParam)
+				var buf strings.Builder
+				writeArkChunkOpen(&buf, rangeParam, cid, fileID)
+				buf.WriteString(body.String())
+				buf.WriteString("</div>")
+				shell.IsChunked = true
+				shell.Content = template.HTML(buf.String())
+			} else {
+				shell.Content = template.HTML(body.String())
 			}
 		}
 		tmpl.Execute(w, shell)
@@ -3458,6 +3568,24 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp.tmp_get(path) — return the stored content of an existing
+		// tmp:// document. Errors when the path lacks the tmp:// prefix
+		// or the document is absent from the overlay.
+		// CRC: crc-Server.md | R2406
+		L.SetField(tbl, "tmp_get", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			content, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+				return db.TmpContent(path)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(content))
+			return 1
+		}))
+
 		// mcp:listSource(sourcePath, prototype) — list one directory level
 		// with in-process classification. Replaces per-node subprocess calls.
 		// CRC: crc-Server.md | R835-R848
@@ -3723,6 +3851,44 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp.chunkText(chunkID) — chunk text bytes by chunkID. Wraps
+		// DB.ChunkTextByID, which routes through ChunkInfo + ChunkText.
+		// CRC: crc-Server.md | R2402
+		L.SetField(tbl, "chunkText", L.NewFunction(func(L *lua.LState) int {
+			chunkID := uint64(L.CheckNumber(1))
+			text, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+				return db.ChunkTextByID(chunkID)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(text))
+			return 1
+		}))
+
+		// mcp.parseTagBlock(text) — parse the leading @name: value block
+		// of text. Pure function; wraps ParseTagBlock. Returns a Lua
+		// table {tags = [{name, value}, ...], body}.
+		// CRC: crc-Server.md | R2404, R2405
+		L.SetField(tbl, "parseTagBlock", L.NewFunction(func(L *lua.LState) int {
+			text := L.CheckString(1)
+			tb := ParseTagBlock([]byte(text))
+			result := L.NewTable()
+			tags := L.NewTable()
+			for i, t := range tb.Tags() {
+				row := L.NewTable()
+				L.SetField(row, "name", lua.LString(t.Name))
+				L.SetField(row, "value", lua.LString(t.Value))
+				tags.RawSetInt(i+1, row)
+			}
+			L.SetField(result, "tags", tags)
+			L.SetField(result, "body", lua.LString(tb.Body()))
+			L.Push(result)
+			return 1
+		}))
+
 		// mcp.suggestExtLocator(chunkID) — three-layer locator algorithm.
 		// CRC: crc-Server.md | R2397, R2398, R2399, R2400, R2401
 		L.SetField(tbl, "suggestExtLocator", L.NewFunction(func(L *lua.LState) int {
@@ -3954,6 +4120,16 @@ func (srv *Server) registerLuaFunctions() {
 			}
 			L.Push(result)
 			return 1
+		}))
+
+		// mcp.sweepHotCorrelationsAsync() — fire-and-forget HC sweep.
+		// Enqueues through Librarian.SweepHotCorrelationsAsync; returns
+		// nothing. Caller subscribes to tmp://sweep/hot-correlations.md
+		// via mcp.subscribe for progress/terminal state.
+		// CRC: crc-Server.md | R2408, R2410
+		L.SetField(tbl, "sweepHotCorrelationsAsync", L.NewFunction(func(L *lua.LState) int {
+			srv.librarian.SweepHotCorrelationsAsync()
+			return 0
 		}))
 
 		// mcp.sweepHotCorrelations() — corpus-wide HC sweep through

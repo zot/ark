@@ -93,6 +93,164 @@ in `apps/ark/<ark-search>` chunk rows and the content-view
 iframes. It is not the Lua app's path — Lua callers go through
 `sys.curation.pin` directly.
 
+`POST /curation/dismiss` — request body JSON:
+
+```json
+{ "chunkID": 4711 }
+```
+
+- `chunkID` is required.
+- Response: `200 OK` with empty body on success (whether or not
+  the chunkID was actually pinned — silent no-op matches the
+  `sys.curation.dismiss` Lua semantic); `400 Bad Request` for
+  malformed JSON or missing chunkID; `503 Service Unavailable`
+  when the Lua runtime is not wired.
+- Mirror of `POST /curation/pin`. Used by the pin button's
+  toggle path: a currently-pinned chunk's button calls
+  `dismiss` instead of `pin`.
+
+`GET /curation/pinned` — response body JSON:
+
+```json
+{ "chunkIDs": [4711, 4712, 4715] }
+```
+
+- The chunk IDs of every currently pinned entry, in the same
+  newest-first order the in-memory slice keeps.
+- The endpoint is read-only — no Lua-executor entry needed; it
+  reads `sys.curation.pinned` through the Go-side snapshot
+  helper.
+- Used by web-component consumers (chunk-row pin buttons,
+  content-view inline JS) to display the pinned vs unpinned
+  state on initial render. Live updates within the same page
+  are tracked locally (each button knows its own state after
+  it's clicked). Cross-page synchrony (workshop pins → iframe
+  state) is not provided in v1 — re-loading the iframe picks
+  up the change.
+
+## Curate buttons (web-component consumers)
+
+The content view (`/content/PATH`) renders each chunk in a
+`<div class="ark-chunk">` wrapper. Two HTML data attributes
+carry the identifiers the pin button needs:
+
+```html
+<div class="ark-chunk" data-range="42-47" data-chunkid="4711" data-fileid="88">
+  ...
+</div>
+```
+
+- `data-chunkid` — chunk's stable uint64 ID, resolved via
+  `srv.db.ChunkIDsForPath(path)` (already called in the
+  current rendering path for `@ext` tag-block lookup).
+- `data-fileid` — the file's uint64 ID, resolved once per
+  file from microfts2's `CheckFile` / `FileInfoByID`.
+- `data-range` — unchanged, already present.
+
+Both `content-markdown.html` and `content-plain.html` render
+the chunk div and include a small inline `<script>` that adds
+a pin-icon button to each chunk on `DOMContentLoaded`,
+positioned at the chunk's upper-left corner. The script:
+
+1. Fetches `GET /curation/pinned` once on load to seed
+   pinned-state. Failures fall back to "everything unpinned"
+   (display-only feature — should not break the page).
+2. For each `<div class="ark-chunk">`, prepends a `<button
+   class="ark-curate-pin">` with `aria-pressed="true"` when
+   the chunk's `data-chunkid` is in the pinned set, otherwise
+   `aria-pressed="false"`. CSS distinguishes the two states
+   with the same icon glyph (filled vs outlined).
+3. On click:
+   - If `aria-pressed="false"`: POST `/curation/pin` with
+     `{chunkID, fileID, path}` from the data attributes plus
+     the page's path. On success, flip to `aria-pressed="true"`.
+   - If `aria-pressed="true"`: POST `/curation/dismiss` with
+     `{chunkID}`. On success, flip back.
+   - Non-2xx responses leave the visual state unchanged and
+     log to the console.
+
+Path resolution: the inline JS reads the file path from the
+URL — `location.pathname` after stripping the `/content/`
+prefix, decoded. The same convention `<ark-search>` already
+uses for navigation.
+
+Icon: a single SVG glyph rendered inline (no sprite file).
+Filled vs outlined is a CSS class toggle driven by
+`aria-pressed`. Width/height ~16 px, color follows the
+existing `--term-accent` / `--term-text-dim` theme variables.
+The button is absolutely positioned at the chunk div's
+upper-left with a small inset so it overlays the chunk's own
+content margin without intruding on the text.
+
+### PDF chunk pin overlays
+
+PDF chunks render inside a single page-aggregated `<pdf-chunk>`
+element (one per page covering 0,0,pw,ph) rather than as
+individual `<div class="ark-chunk">` wrappers. Each chunk on the
+page carries a `rect` attribute in page coordinates; the
+`<pdf-chunk>` web component already positions `<ark-tag>`
+overlays at those rects. The pin button piggybacks on the same
+machinery.
+
+For every chunk with a `rect`, the server emits an
+`<ark-curate-region>` overlay child inside the `<pdf-chunk>`:
+
+```html
+<ark-curate-region chunkid="4711" fileid="88" rect="120,400,360,140">
+</ark-curate-region>
+```
+
+- `chunkid` / `fileid` — plain HTML attributes (matching the
+  `<pdf-chunk>` attribute convention rather than `data-`).
+- `rect` — `x,y,w,h` in PDF page coordinates, same encoding as
+  `<ark-tag rect="...">`.
+
+`pdf-chunk-element.ts` gains a `positionRegions` pass run from
+`render()` alongside `positionHitRegions`. It iterates
+`:scope > ark-curate-region[rect]` children and converts the
+page-coord rect to CSS pixels using the same formula
+`positionHitRegions` already uses for ark-tag overlays:
+
+```
+leftPx   = (regionRect.x - chunkRect.x) * cssScale
+topPx    = (chunkRect.y + chunkRect.h - regionRect.y - regionRect.h) * cssScale
+widthPx  = regionRect.w  * cssScale
+heightPx = regionRect.h  * cssScale
+```
+
+The region is `position: absolute` with `pointer-events: auto`,
+a transparent default border, and a hover state that reveals
+the chunk's outline so the user can see chunk boundaries on the
+page. The pin button sits at the region's upper-left corner —
+the same CSS `.ark-curate-pin` rule used for the
+`<div class="ark-chunk">` case applies inside `<ark-curate-region>`
+unchanged.
+
+The inline pin-injection script extends its selector to match
+both element types:
+
+```js
+const elems = document.querySelectorAll(
+  'div.ark-chunk[data-chunkid], ark-curate-region[chunkid]'
+);
+```
+
+When iterating, the script reads identifiers via
+`el.dataset.chunkid` for the div case or
+`el.getAttribute('chunkid')` for the region case; the rest of
+the install/toggle logic is shared.
+
+PDF salvage chunks (no rect — already wrapped in
+`<div class="ark-chunk">` by `renderPdfChunksByPage`'s salvage
+fallback) get the standard pin via the existing div selector.
+
+### Hover outlines for chunk boundaries
+
+Both `<div class="ark-chunk">` and `<ark-curate-region>` show a
+faint dashed outline on `:hover` so the user can see chunk
+boundaries when they want to. Default state is invisible
+(transparent border) so the reading view stays clean.
+
 ## Persistence
 
 The pinned-chunks list survives server restart via

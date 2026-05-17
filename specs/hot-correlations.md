@@ -317,6 +317,42 @@ right home for it. When that lands, the agentic-executor
 subscriber will fire `SweepHotCorrelations()` on its scheduled
 tag — the engine doesn't need to know about cron.
 
+### Async invocation (workshop sweep-button retrofit)
+
+The blocking `mcp.sweepHotCorrelations()` works for the CLI and
+the test harness but holds the Lua VM for the full sweep — up
+to ~16 s on a from-scratch run at the current corpus. The
+curation workshop's sweep button needs a fire-and-forget shape
+that returns control immediately and observes progress via the
+existing `tmp://sweep/hot-correlations.md` document.
+
+```go
+// SweepHotCorrelationsAsync enqueues the sweep into the write
+// goroutine and returns immediately. The caller observes
+// progress + terminal state through tmp://sweep/hot-correlations.md
+// via the existing tag-subscription path. The *HCSweepResult
+// the blocking variant returns is logged but discarded —
+// callers that need it inline keep using SweepHotCorrelations.
+func (l *Librarian) SweepHotCorrelationsAsync()
+```
+
+```lua
+mcp.sweepHotCorrelationsAsync()  -- returns nothing
+```
+
+Pattern: subscribe to `@sweep-status` before calling the bridge;
+the subscription fires on `complete` or `error`; the workshop
+reads the doc body for counters and renders the result. Multiple
+async calls queue serially through the existing write actor; a
+second call while a sweep is in flight runs once the first
+completes. Steady-state sweeps after the first are cheap, so
+back-to-back calls aren't pathological — the workshop UI can
+debounce the button if rapid clicks become a problem.
+
+`mcp.sweepHotCorrelations()` and the `ark sweep correlations`
+CLI subcommand remain unchanged for callers that need the
+result inline.
+
 ## Lua API
 
 Five thin Lua wrappers, one per Librarian read method plus the

@@ -921,6 +921,7 @@ export class PdfChunkElement extends HTMLElement {
 			const yScale = this.currentPageH / textContent.pageH;
 			this.showImage(img.url, rect, cssScale);
 			this.positionHitRegions(rect, cssScale, textContent.tags, xScale, yScale);
+			this.positionRegions(rect, cssScale);
 			this.mountTextLayer(rect, cssScale, textContent, xScale, yScale);
 			this.applyHighlightsFromSpans();
 			this.clearError();
@@ -1111,6 +1112,30 @@ export class PdfChunkElement extends HTMLElement {
 				child.style.background = 'var(--pdf-tag-bg, var(--pdf-chunk-bg, white))';
 				child.style.fontSize = `${heightPx}px`;
 			}
+		}
+	}
+
+	// Position <ark-curate-region rect="..."> children absolutely above
+	// the canvas. Same coordinate transform as positionHitRegions' fallback
+	// path, applied to the curate-pin overlay regions emitted by the
+	// server's renderPdfChunksByPage. R2422
+	positionRegions(chunkRect: Rect, cssScale: number): void {
+		const regions = Array.from(
+			this.querySelectorAll<HTMLElement>(':scope > ark-curate-region[rect]'),
+		);
+		for (const region of regions) {
+			const r = parseRect(region.getAttribute('rect'));
+			if (!r) {
+				clearOverlayStyles(region);
+				continue;
+			}
+			const leftPx = (r.x - chunkRect.x) * cssScale;
+			const topPx = (chunkRect.y + chunkRect.h - r.y - r.h) * cssScale;
+			region.style.position = 'absolute';
+			region.style.left = `${leftPx}px`;
+			region.style.top = `${topPx}px`;
+			region.style.width = `${r.w * cssScale}px`;
+			region.style.height = `${r.h * cssScale}px`;
 		}
 	}
 

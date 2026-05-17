@@ -2534,11 +2534,7 @@ func (db *DB) Resolve(patterns []string) error {
 func (db *DB) Fetch(path string) ([]byte, error) {
 	// R692: tmp:// paths read from overlay's stored content
 	if strings.HasPrefix(path, "tmp://") {
-		r, err := db.fts.TmpContent(path)
-		if err != nil {
-			return nil, err
-		}
-		return io.ReadAll(r)
+		return db.TmpContent(path)
 	}
 
 	absPath, err := filepath.Abs(path)
@@ -2610,6 +2606,37 @@ func (db *DB) ChunkText(path, rangeLabel string) []byte {
 		return nil
 	}
 	return text
+}
+
+// ChunkTextByID resolves a chunkID to its text bytes by routing through
+// ChunkInfo for the (path, range) pair and then ChunkText. Backs the
+// mcp.chunkText Lua bridge.
+// CRC: crc-DB.md | R2403
+func (db *DB) ChunkTextByID(chunkID uint64) ([]byte, error) {
+	info, err := db.ChunkInfo(chunkID)
+	if err != nil {
+		return nil, err
+	}
+	text := db.ChunkText(info.Path, info.Range)
+	if text == nil {
+		return nil, fmt.Errorf("chunk text unavailable")
+	}
+	return text, nil
+}
+
+// TmpContent reads the stored content of a tmp:// document from the
+// microfts2 overlay. Validates the tmp:// prefix; absent overlay entries
+// surface microfts2's underlying error.
+// CRC: crc-DB.md | R2407
+func (db *DB) TmpContent(path string) ([]byte, error) {
+	if !strings.HasPrefix(path, "tmp://") {
+		return nil, fmt.Errorf("not a tmp:// path")
+	}
+	r, err := db.fts.TmpContent(path)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(r)
 }
 
 // AllChunks returns all chunk texts for a file, in order.

@@ -2000,8 +2000,10 @@ func renderPdfPreview(attrs []microfts2.Pair, path string, pdfZoom float64) (str
 // (semicolon-separated) so every tag overlays the rendered page.
 // Pages without a `page_size` attribute fall through to an HTML-
 // escaped pre-wrapped block. R1739, R1740
-// CRC: crc-Server.md | R1739, R1740, R1982
-func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) string {
+// fileID stamps every emitted <ark-curate-region> child so the
+// content-view curate-pin button has both identifiers it needs (R2421).
+// CRC: crc-Server.md | R1739, R1740, R1982, R2421
+func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, fileID uint64, db *DB) string {
 	type pageAgg struct {
 		page          string
 		pageSize      string
@@ -2009,6 +2011,7 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) 
 		tagSegments   []string
 		headingRects  []string                // R2076: per-heading rect for <ark-heading> overlays
 		extTagsBlocks []string                // R2065, R2073, R2082: per-chunk <ark-ext-tags> with rect
+		curateRegions []string                // R2421: per-chunk <ark-curate-region rect chunkid fileid>
 		salvage       []microfts2.ChunkResult // only used when pageSize stays empty
 	}
 	// R2065, R2079: chunkIDs in chunk order so we can look up ext routings
@@ -2051,6 +2054,15 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) 
 				agg.extTagsBlocks = append(agg.extTagsBlocks, block)
 			}
 		}
+		// R2421: per-chunk <ark-curate-region> for the curate-pin button.
+		// Salvage chunks (no rect) get the standard pin via their
+		// <div class="ark-chunk"> wrapper below — no region here.
+		if hasRect && ch.Index < len(chunkIDs) {
+			agg.curateRegions = append(agg.curateRegions, fmt.Sprintf(
+				`<ark-curate-region chunkid="%d" fileid="%d" rect="%s"></ark-curate-region>`,
+				chunkIDs[ch.Index], fileID, template.HTMLEscapeString(string(rect)),
+			))
+		}
 	}
 
 	var buf strings.Builder
@@ -2089,6 +2101,12 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, db *DB) 
 		// has incoming ext routings.
 		for _, etb := range agg.extTagsBlocks {
 			buf.WriteString(etb)
+		}
+		// R2421: per-chunk <ark-curate-region> overlays for pin buttons
+		// + hover outlines. Positioned by pdf-chunk-element's
+		// positionRegions pass.
+		for _, cr := range agg.curateRegions {
+			buf.WriteString(cr)
 		}
 		buf.WriteString(`</pdf-chunk>` + "\n")
 	}

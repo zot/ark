@@ -149,6 +149,14 @@ class ArkExtTagsElement extends HTMLElement {
     this.dropdown = dd;
     this.indicator?.setAttribute("aria-expanded", "true");
     ArkExtTagsElement.activeOwner = this;
+    // Grow the document so the dropdown is reachable (its absolute
+    // positioning doesn't extend body height) and scroll it into view
+    // if it would otherwise be clipped. Deferred past the opening
+    // click event sequence: scrolling between mousedown and mouseup
+    // would shift the page under the cursor, making the click event's
+    // target land on <body> (LCA of mousedown and mouseup targets)
+    // and falsely triggering the close-on-outside-click handler.
+    setTimeout(() => this.ensureDropdownVisible(), 50);
     // Click-outside / Escape to dismiss
     setTimeout(() => {
       document.addEventListener("click", this.onDocClick, true);
@@ -156,10 +164,29 @@ class ArkExtTagsElement extends HTMLElement {
     }, 0);
   }
 
+  /** The dropdown is `position: absolute` so it doesn't grow the
+   *  document height when it opens — when it lands near the bottom of
+   *  the page it gets clipped beneath the viewport with no way to
+   *  scroll to it. Add temporary `padding-bottom` on body to make the
+   *  page tall enough, then scroll the dropdown into view. */
+  private ensureDropdownVisible(): void {
+    if (!this.dropdown) return;
+    const rect = this.dropdown.getBoundingClientRect();
+    const docBottom = document.documentElement.scrollHeight;
+    const dropdownAbsBottom = rect.bottom + window.scrollY;
+    const overflow = dropdownAbsBottom - docBottom;
+    if (overflow > 0) {
+      document.body.style.paddingBottom = `${overflow + 16}px`;
+    }
+    this.dropdown.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   private closeDropdown(): void {
     if (!this.dropdown) return;
     this.dropdown.remove();
     this.dropdown = null;
+    // Release the body padding we may have added on open.
+    document.body.style.paddingBottom = "";
     this.indicator?.setAttribute("aria-expanded", "false");
     if (ArkExtTagsElement.activeOwner === this) {
       ArkExtTagsElement.activeOwner = null;
@@ -886,17 +913,23 @@ class TagOverviewSidebar {
     }
   }
 
-  /** R2046, R2047: scroll the document so the target id is visible. */
+  /** R2046, R2047: scroll the document so the target id is visible.
+   *  For ext entries the <ark-tag> child of <ark-ext-tags> is
+   *  display:none (it's a metadata carrier, not the visible widget) —
+   *  scrollIntoView would be a no-op, so resolve to the parent
+   *  <ark-ext-tags> host before scrolling. */
   private scrollTo(id: string): void {
     if (!id) return;
-    const target = this.host.querySelector(`#${CSS.escape(id)}`);
-    if (target) {
-      (target as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    let target = this.host.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null;
+    if (!target) return;
+    const extHost = target.closest(EXT_TAGS_TAG) as HTMLElement | null;
+    if (extHost) target = extHost;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   /** R2048: inline tag — dispatch click on body <ark-tag>. R2049: ext
-   *  tag — call openPanelForTag on the body <ark-ext-tags>. */
+   *  tag — scroll the parent <ark-ext-tags> into view, then call
+   *  openPanelForTag on it. */
   private dispatchSearch(entry: Entry): void {
     const target = this.host.querySelector(`#${CSS.escape(entry.elementId)}`) as HTMLElement | null;
     if (!target) return;
@@ -911,10 +944,14 @@ class TagOverviewSidebar {
       }
       return;
     }
-    // ext entry: parent <ark-ext-tags> exposes openPanelForTag.
+    // ext entry: parent <ark-ext-tags> exposes openPanelForTag and is
+    // the visible host (the inner <ark-tag> is display:none).
     const host = target.closest(EXT_TAGS_TAG) as ArkExtTagsElement | null;
-    if (host && entry.tagName) {
-      host.openPanelForTag(entry.tagName, entry.tagValue ?? "");
+    if (host) {
+      host.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (entry.tagName) {
+        host.openPanelForTag(entry.tagName, entry.tagValue ?? "");
+      }
     }
   }
 }
@@ -924,9 +961,17 @@ class TagOverviewSidebar {
 /** R2040-R2043: walk document order, classify by element. Inline tags
  *  are <ark-tag> NOT inside <ark-ext-tags>; ext tags are <ark-tag>
  *  children of <ark-ext-tags>. Headings are <h1>-<h6> and
- *  <ark-heading>. Each entry needs an id (assigned server-side). */
+ *  <ark-heading>. Each entry needs an id (assigned server-side).
+ *
+ *  Chunk-local reorder: the server emits `<ark-ext-tags>` blocks
+ *  before the heading inside each `<div class="ark-chunk">`, but
+ *  the user thinks of them as annotations *on* the heading's
+ *  chunk. So entries are grouped by their containing chunk and,
+ *  within each chunk, the heading is moved to the front. */
 function scanEntries(host: HTMLElement): Entry[] {
-  const out: Entry[] = [];
+  type WalkEntry = { entry: Entry; chunkEl: Element | null };
+  const walked: WalkEntry[] = [];
+  let headingCount = 0;
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_ELEMENT, {
     acceptNode(n) {
       const el = n as Element;
@@ -940,29 +985,34 @@ function scanEntries(host: HTMLElement): Entry[] {
     },
   });
   let node: Node | null = walker.currentNode;
-  // currentNode starts at host; advance to first match.
   while ((node = walker.nextNode())) {
     const el = node as HTMLElement;
     const tag = el.tagName.toLowerCase();
+    const chunkEl = el.closest("div.ark-chunk");
     const hMatch = /^h([1-6])$/.exec(tag);
     if (hMatch) {
-      out.push({
-        kind: "heading",
-        elementId: el.id,
-        headingText: (el.textContent ?? "").trim(),
-        headingLevel: Number(hMatch[1]),
+      headingCount++;
+      walked.push({
+        entry: {
+          kind: "heading",
+          elementId: el.id,
+          headingText: (el.textContent ?? "").trim(),
+          headingLevel: Number(hMatch[1]),
+        },
+        chunkEl,
       });
       continue;
     }
     if (tag === "ark-heading") {
-      // PDF headings are flat for v1 — no level info, no extracted
-      // text yet (the chunk's text is the body, not the heading
-      // string). Use the indexable order as a placeholder label.
-      out.push({
-        kind: "heading",
-        elementId: el.id,
-        headingText: `Heading ${out.filter(e => e.kind === "heading").length + 1}`,
-        headingLevel: 0,
+      headingCount++;
+      walked.push({
+        entry: {
+          kind: "heading",
+          elementId: el.id,
+          headingText: `Heading ${headingCount}`,
+          headingLevel: 0,
+        },
+        chunkEl,
       });
       continue;
     }
@@ -970,24 +1020,53 @@ function scanEntries(host: HTMLElement): Entry[] {
       const inExt = el.parentElement?.tagName.toLowerCase() === EXT_TAGS_TAG;
       const name = el.querySelector("name")?.textContent ?? "";
       const value = el.querySelector("value")?.textContent ?? "";
-      if (inExt) {
-        out.push({
-          kind: "ext",
-          elementId: el.id,
-          tagName: name,
-          tagValue: value,
-          externalFile: el.getAttribute("externalFile") ?? "",
-          externalTarget: el.getAttribute("externalTarget") ?? "",
-        });
-      } else {
-        out.push({
-          kind: "inline",
-          elementId: el.id,
-          tagName: name,
-          tagValue: value,
-        });
-      }
+      walked.push({
+        entry: inExt
+          ? {
+              kind: "ext",
+              elementId: el.id,
+              tagName: name,
+              tagValue: value,
+              externalFile: el.getAttribute("externalFile") ?? "",
+              externalTarget: el.getAttribute("externalTarget") ?? "",
+            }
+          : {
+              kind: "inline",
+              elementId: el.id,
+              tagName: name,
+              tagValue: value,
+            },
+        chunkEl,
+      });
     }
+  }
+
+  // Group by containing chunk, preserving the order each chunk was
+  // first seen. Entries without a chunk (rare; should not happen for
+  // well-formed content views) keep their walk order.
+  const chunkOrder: Array<Element | null> = [];
+  const chunkBuckets = new Map<Element | null, WalkEntry[]>();
+  for (const w of walked) {
+    let bucket = chunkBuckets.get(w.chunkEl);
+    if (!bucket) {
+      bucket = [];
+      chunkBuckets.set(w.chunkEl, bucket);
+      chunkOrder.push(w.chunkEl);
+    }
+    bucket.push(w);
+  }
+
+  // Within each chunk, hoist the (first) heading to the front so
+  // ext-tags and inline tags read as annotations under the heading.
+  const out: Entry[] = [];
+  for (const chunk of chunkOrder) {
+    const bucket = chunkBuckets.get(chunk)!;
+    const headingIdx = bucket.findIndex(w => w.entry.kind === "heading");
+    if (headingIdx > 0) {
+      const [headingEntry] = bucket.splice(headingIdx, 1);
+      bucket.unshift(headingEntry);
+    }
+    for (const w of bucket) out.push(w.entry);
   }
   return out;
 }
