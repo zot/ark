@@ -2,10 +2,34 @@
 
 Language: Go. Environment: CLI (part of the `ark` binary).
 
-The `ark message inbox` command shows incoming messages filtered by
-`@to-project`. Agents (especially Hermes on Haiku) need three
-additional capabilities to avoid shell gymnastics with grep/wc/cut
-pipelines.
+The `ark message inbox` command shows messages relating to a project.
+Agents (especially Hermes on Haiku) need additional capabilities to
+avoid shell gymnastics with grep/wc/cut pipelines.
+
+## --project flag (either side)
+
+```
+ark message inbox --project PROJECT
+```
+
+Filters messages where either `@to-project` OR `@from-project`
+matches PROJECT. This is the "everything involving PROJECT" view —
+both inbound traffic (responses, incoming requests) and outbound
+traffic (this project's outgoing requests still waiting on a reply).
+
+When a tighter view is needed, `--to` and `--from` filter each
+direction independently.
+
+## --to flag
+
+```
+ark message inbox --to PROJECT
+```
+
+Filters messages where `@to-project` matches PROJECT. This is the
+strict "incoming for PROJECT" view: requests targeted at PROJECT
+plus responses to PROJECT's outgoing requests. `--to` is what the
+old `--project` flag did before it was broadened.
 
 ## --from flag
 
@@ -13,12 +37,12 @@ pipelines.
 ark message inbox --from PROJECT
 ```
 
-Filters messages where `@from-project` matches PROJECT. Composable
-with `--project` — when both are given, a message must match both
-filters (intersection, not union). When only `--from` is given,
-`--project` is unconstrained.
+Filters messages where `@from-project` matches PROJECT. This is the
+outgoing view: "what did PROJECT send?"
 
-This gives the outgoing view: "what did this project send?"
+Composable with `--project` and `--to` — when given together, a
+message must match every filter (intersection, not union). `--from
+ark --to frictionless` selects only the ark→frictionless slice.
 
 ## --all flag
 

@@ -5076,7 +5076,10 @@ func cmdMessageCheck(args []string) {
 // CRC: crc-CLI.md | Seq: seq-message.md | R708, R709, R710, R713, R718
 func cmdMessageInbox(args []string) {
 	fs := flag.NewFlagSet("message inbox", flag.ExitOnError)
-	project := fs.String("project", "", "filter by to-project")
+	// R2430, R2431: --project matches either side; --to is the strict
+	// to-project filter (the old --project semantic).
+	project := fs.String("project", "", "filter by either to-project or from-project")
+	to := fs.String("to", "", "filter by to-project")
 	from := fs.String("from", "", "filter by from-project")
 	all := fs.Bool("all", false, "include completed/denied messages")
 	includeArchived := fs.Bool("include-archived", false, "include archived messages")
@@ -5085,10 +5088,14 @@ func cmdMessageInbox(args []string) {
 	fs.Parse(args)
 
 	printEntries := func(entries []ark.InboxEntry) {
-		// CLI-specific post-filters (project, from)
+		// CRC: crc-CLI.md | R2430, R2431
+		// CLI-specific post-filters (project, to, from)
 		var filtered []ark.InboxEntry
 		for _, e := range entries {
-			if *project != "" && e.To != *project {
+			if *project != "" && e.To != *project && e.From != *project {
+				continue
+			}
+			if *to != "" && e.To != *to {
 				continue
 			}
 			if *from != "" && e.From != *from {

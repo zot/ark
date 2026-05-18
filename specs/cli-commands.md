@@ -418,7 +418,7 @@ ark message new-response  --from P --to P --request ID [--content BODY] FILE
 ark message set-tags      FILE TAG VAL [TAG VAL ...]
 ark message get-tags      FILE [TAG ...]
 ark message check         FILE
-ark message inbox         [--project P] [--from P] [--all] [--include-archived] [--counts] [--unmatched]
+ark message inbox         [--project P] [--to P] [--from P] [--all] [--include-archived] [--counts] [--unmatched]
 ark message dm            --from S --to S [--ref ID] --content TEXT
 ```
 
@@ -434,14 +434,18 @@ ark message dm            --from S --to S [--ref ID] --content TEXT
 
 `message inbox` flags:
 
-| Flag                 | Default | Meaning                                      |
-|----------------------|---------|----------------------------------------------|
-| `--project P`        | —       | Filter by `to-project`                       |
-| `--from P`           | —       | Filter by `from-project`                     |
-| `--all`              | `false` | Include completed/done/denied messages       |
-| `--include-archived` | `false` | Include `@archived: true` messages           |
-| `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows |
-| `--unmatched`        | `false` | Show only requests with no matching response |
+| Flag                 | Default | Meaning                                                     |
+|----------------------|---------|-------------------------------------------------------------|
+| `--project P`        | —       | Filter by EITHER `to-project` OR `from-project` (R2431)     |
+| `--to P`             | —       | Filter by `to-project` (R2430; the old `--project` meaning) |
+| `--from P`           | —       | Filter by `from-project`                                    |
+| `--all`              | `false` | Include completed/done/denied messages                      |
+| `--include-archived` | `false` | Include `@archived: true` messages                          |
+| `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows                |
+| `--unmatched`        | `false` | Show only requests with no matching response                |
+
+Filters combine as intersection: `--from ark --to frictionless`
+shows only the ark→frictionless slice.
 
 Default inbox row is tab-separated:
 `DATE STATUS TO FROM SUMMARY PATH LAG`. Lag format

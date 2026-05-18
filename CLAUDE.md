@@ -18,6 +18,26 @@ The `-buildvcs=false` is needed because the repo has both git and fossil.
 
 The ark CLI should have nice --help. All subcommands should support --help.
 
+**Cross-cutting spec references need explicit updates.**
+Mini-spec's per-feature anchoring won't catch the canonical
+reference docs — update them yourself when their surface changes:
+
+- `specs/cli-commands.md` — every CLI subcommand/flag and its
+  semantics. Update when adding, renaming, or changing flags or
+  subcommands.
+- `specs/record-formats.md` — every LMDB record prefix, key shape,
+  and value layout in the `ark` subdatabase. Update when adding a
+  new record class, changing a key/value encoding, or retiring a
+  prefix. (Also remember `ark status -db`: it lists these records
+  and must stay in sync.)
+- `specs/lua-api.md` — every Go-side `SetField` on the `mcp`,
+  `MCP`, `sys`, `session`, and `ui` Lua globals. Update when
+  adding, renaming, or removing a Lua method. Three repos
+  contribute (`ark/server.go:registerLuaFunctions`,
+  `frictionless/internal/mcp/tools.go:setupMCPGlobal`, and
+  `ui-engine/internal/lua/runtime.go:createSessionTable` plus the
+  helpers each calls).
+
 ## Frictionless UI
 
 The Frictionless command is `~/.ark/ark ui`. UI skills use `{cmd}` as a placeholder for this.

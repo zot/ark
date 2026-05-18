@@ -859,7 +859,7 @@
 - **R495:** `ark message inbox [--project PROJECT]` lists non-closed messages across all indexed sources
 - **R496:** Finds files containing `@msg:` tags via the database, reads each file's tag block
 - **R497:** Filters to messages where `@msg` is not `closed`
-- **R498:** When `--project` is given, further filters to `@to-project` matching PROJECT
+- **~~R498:~~** (Retired T60 — see R2431) When `--project` is given, further filters to `@to-project` matching PROJECT
 - **R499:** Output sorted: `@msg:new` first, then others; within each group, sorted by file path
 - **R500:** Output format: one tab-separated line per message: `msg-value\tto-project\tfrom-project\tstatus\tissue-or-response\tpath`
 - **R501:** (inferred) Uses server proxy when available, falls back to cold-start withDB. Read-only.
@@ -3789,3 +3789,9 @@ implementation, not a separate format break.
 
 - **R2428:** PDFChunker's page-blob cache (`content_offset` / `content_len` chunk attrs + per-page blobs in the Store) MUST be populated whenever the chunker is invoked at index time, regardless of which interface microfts2's dispatch happens to pick. microfts2's `collectChunks` prefers `Chunker` over `FileChunker` when both are implemented, so `Chunks` is just as load-bearing for indexed-file persistence as `FileChunks`. Both index-time entry points seal page blobs.
 - **R2429:** Retrieval-time invocations of the chunker — the fallback inside `GetChunk` when `fastRetrieve` cannot satisfy the request — MUST NOT stage blobs. Retrieval is not indexing; staging without a matching `FlushBlobs` would leak `pending` entries and risk overwriting fresh blobs with old text on the next indexing pass. The streaming-retrieve helper uses a non-persisting code path internal to PDFChunker.
+
+## Feature: inbox project filter (either-side)
+**Source:** specs/inbox-enhancements.md
+
+- **R2430:** `ark message inbox --to PROJECT` filters messages where `@to-project` matches PROJECT. This is the strict "incoming for PROJECT" view (requests targeted at PROJECT plus responses to PROJECT's outgoing requests). `--to` carries the semantic the old `--project` flag had before R498 was retired.
+- **R2431:** `ark message inbox --project PROJECT` filters messages where EITHER `@to-project` OR `@from-project` matches PROJECT — the "everything involving PROJECT" view. Composable with `--from` and `--to`: every filter must match (intersection). Replaces the retired R498 to-only semantic; the strict to-only behavior is now `--to`.
