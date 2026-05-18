@@ -57,7 +57,7 @@ bottom-bar buttons, one per view.
 Columns only shown when they have items. Cards use `content-card`
 theme class. Click card → `mcp:open(path)`.
 
-### Curation View (workshop slice B+C, 2026-05)
+### Tag Forge (workshop slice B+C, 2026-05)
 ```
 +----------------------------------------+----------------------+
 | Curation  Sweep: idle  [⚡] [⌫ Clear unchanged] [Accept (…)] |
@@ -105,7 +105,7 @@ chunk → pin. Retained from the pre-reframe design.
 | _viewMode | string | "searching", "messaging", or "curation" |
 | _searching | Ark.Searching | The index/search view |
 | _messaging | Ark.Messaging | The messaging view |
-| _curation | Ark.Curation | The curation workshop view |
+| _curation | Ark.Curation | The Tag Forge view |
 
 ### Ark.Searching (renamed from Ark)
 
@@ -373,7 +373,7 @@ A row in the focused-tag panel's "Drift" list. Shape mirrors
 | showSearching() | Set _viewMode = "searching" |
 | showMessaging() | Set _viewMode = "messaging", refresh messaging |
 | showCuration() | Set _viewMode = "curation", call _curation:onViewOpen() |
-| curate(chunkID, fileID, path) | Pin a chunk to the curation workspace without flipping the view (always-add never-flip) |
+| curate(chunkID, fileID, path) | Pin a chunk to the Tag Forge without flipping the view (always-add never-flip) |
 
 ### Ark.Searching
 

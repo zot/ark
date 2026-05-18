@@ -2,11 +2,10 @@
 
 ## Gaps
 
-### Curation workshop reframe (slice B/C in progress)
+### Tag Forge reframe (slice B/C deferred items)
 - **Per-line annotation** — author a tag *about* a specific line mid-chunk. v1's inline-remove deletes the matching `@tag:` line (the fold algorithm does this at `[edit]` time); inline-add prepends to the leading tag block. Mid-chunk authoring is deferred.
 - **Tab-out auto-add** — `PendingWidget:autoAddOnTab()` is wired to `ui-event-blur` on the value input as a proxy. True keyboard tab-out detection needs a JS bridge or keypress handler the engine doesn't yet expose.
 - **Same-origin iframe DOM mutation** — the desired-state overlay rewrites `<ark-ext-tags>` children in the chunk-text iframe. Requires same-origin; confirm during `/ui-thorough` testing.
-- **One-click "convert ext to inline"** — current-tags ext rows have no direct "convert to inline" affordance; user removes ext and re-adds inline. Deferred.
 - **CurrentTagRow:applyEdit (ext-row in-edit editing)** — defined per design.md but the viewdef-side wiring (input edit-on-blur → applyEdit) is deferred. Read-only `queueRemove()` works in both modes.
 - **Desired-state overlay on iframe DOM** — `iframeBridgeCode` currently only scrapes; the overlay pass that rewrites `<ark-ext-tags>` children to reflect pending ops is deferred. Current-tags display still computes desired state Lua-side.
 
@@ -60,11 +59,3 @@ Features added via rapid prototyping that may need review:
 - MessageDetail presenter (load, tabs, status controls, complete)
 - Message card click → showDetail() instead of openFile()
 - Detail dialog inline in Messaging viewdef
-
-### Removed (replaced by ark-search component)
-- SearchFileGroup, SearchResult types + viewdefs
-- Search bar, filter panel (2x2 grid), search results ViewList
-- onSearchInput, search, buildFilterOpts, clearSearch, mode setters/getters
-- toggleFilterPanel, filterPanelIcon, hasActiveFilters, cycleHitsPerFile
-- Replaced with `<ark-search>` element + JS SearchAPI bridge
-- Sidebar filters → searchFiltersJSON() → hidden span → JS reads on search

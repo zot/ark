@@ -70,4 +70,6 @@ Go files use tabs for indentation. The Read tool displays them as spaces, so the
 
 Don't forget about gofmt -- no need to sed your way into poverty!
 
+Note that the Tag Forge is the same as the "Curation Workshop" or "Curation View"
+
 @CLAUDE.local.md
