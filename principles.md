@@ -125,6 +125,73 @@ have to remain optimizations.
 
 ---
 
+## Text is the truth; views are derived
+
+**Statement.** Inside any editing surface, the user's bytes are
+the source of truth — never a parallel authoritative state in
+row objects, presenter caches, or widget records. The text
+buffer holds what is. Everything the UI shows about that text
+(tag rows, structural outlines, render previews, dropdown
+indicators) is a *projection* that re-computes when the bytes
+change. The user can edit, undo, redo, switch surfaces — the
+view follows the text, never leads it.
+
+**Why.** When two surfaces both claim authority for the same
+information, they drift. Reconciling the drift takes either
+heavy synchronization or careful one-way pipes; either way the
+user pays in surprising behavior when undo, refresh, or
+multi-surface editing puts the two out of phase. Picking *the
+text* as truth at every scale — file bytes for the corpus, CM6
+buffer for the in-progress chunk — makes undo trivial, makes
+multi-occurrence handling natural (the Nth `@tag:` line is the
+Nth `@tag:` line, however the rows render it), and keeps the
+mental model clean across all editing modes.
+
+This is the in-session analog of the persistence principle
+above. Where that one says "files are the truth, the index is a
+cache," this one says "the buffer is the truth, the rows are a
+cache." Same shape at different scales.
+
+**Consequences.**
+
+- **No row-level state.** Tag row presenters don't hold
+  authoritative tag values. The row's `name` and `value` are
+  set by re-extraction from the editor's current text on every
+  docChanged. Edits propagate by mutating the text (one CM6
+  transaction per logical edit), not by mutating row fields
+  directly.
+- **Undo works for free.** Each row-driven edit is a single CM6
+  transaction. Ctrl-Z in the editor reverts the text; the next
+  docChanged re-derives row state from the rolled-back text;
+  the row visually returns to its previous values. No row-level
+  undo stack needed.
+- **Multi-occurrence is positional.** When the same tag name
+  appears multiple times in a chunk (`@topic: streaming` and
+  `@topic: realtime`), each row carries its 1-based occurrence
+  ordinal. Edits route to the Nth `@topic:` line. Re-extraction
+  on docChanged preserves correct mapping because the ordinals
+  match.
+- **External state is the lone exception, and it earns it.**
+  `@ext` mirror files live outside the chunk text by design.
+  They are their own files — themselves text-as-truth. The card
+  surfaces them as ext rows; pending ext-set / ext-remove ops
+  apply at Accept time, writing to those mirror files. The ext
+  rows in current-tags are a projection of (`~/.ark/external/`
+  mirror state + pending ops), the same way inline rows project
+  the chunk text.
+- **Side-by-side bypass forbidden.** A new editing affordance
+  must edit *the bytes* (or queue a pending op that edits
+  bytes), never write directly to row state and call it done.
+  If the rows hold state the bytes don't, the surfaces have
+  drifted.
+
+**Boundary.** This principle is about authoritative state, not
+display caches. Of course the UI may cache scraped values or
+parsed lists for performance; it just can't *author* into those
+caches independently of the underlying bytes.
+
+---
+
 <!-- More principles accrete here as they are named in design
 discussions. Candidates already implicit in the codebase:
 "local-first" (no cloud dependency), "human-readable embeddings"

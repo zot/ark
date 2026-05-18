@@ -3889,6 +3889,27 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp.extractTagValues(text, strategy) — extract every
+		// @name: value found anywhere in the text, using the same
+		// scanner the indexer uses. Catches mid-chunk tags and @id
+		// lines that ParseTagBlock (leading-block-only) misses. Pure
+		// function over content + chunker strategy name.
+		// CRC: crc-Server.md
+		L.SetField(tbl, "extractTagValues", L.NewFunction(func(L *lua.LState) int {
+			text := L.CheckString(1)
+			strategy := L.OptString(2, "markdown")
+			values := ExtractTagValues([]byte(text), strategy)
+			result := L.NewTable()
+			for i, tv := range values {
+				row := L.NewTable()
+				L.SetField(row, "name", lua.LString(tv.Tag))
+				L.SetField(row, "value", lua.LString(tv.Value))
+				result.RawSetInt(i+1, row)
+			}
+			L.Push(result)
+			return 1
+		}))
+
 		// mcp.suggestExtLocator(chunkID) — three-layer locator algorithm.
 		// CRC: crc-Server.md | R2397, R2398, R2399, R2400, R2401
 		L.SetField(tbl, "suggestExtLocator", L.NewFunction(func(L *lua.LState) int {

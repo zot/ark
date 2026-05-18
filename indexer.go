@@ -1103,7 +1103,10 @@ func ExtractTags(content []byte) map[string]uint32 {
 // line like `@ext: TARGET @t1: v1`, the outer tag's value is the full
 // remainder. Embedded tag handling is each outer tag's own job (e.g.
 // ParseExtTarget for @ext), not this regex's. R2110, R2111
-var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
+// The post-colon gap is `[ \t]*` (NOT `\s*`) so an empty-value tag like
+// `@e: ` doesn't swallow the newline and glue the next line's content
+// onto its own value.
+var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):[ \t]*([^\n]*)`)
 
 // ExtractTagValues returns one (Tag, Value) per `@x:` line — the outer
 // tag of each line, with Value spanning from after `@x:` to end of line.

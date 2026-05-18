@@ -183,6 +183,69 @@ recall step so users don't pay Luhmann's mental cost.
 
 ---
 
+## Tags as a NoSQL overlay
+
+Read those three orders from a working programmer's angle and the
+same structure shows up wearing different clothes. The corpus is a
+document store. Tags are a schemaless layer of columns and values
+that emerged where you wrote them, indexed automatically. The query
+surface behaves like any other NoSQL database — with spectral
+ranking bolted on as a third primitive.
+
+The mapping is direct. A tag name is a virtual column, declared
+the moment you typed it. A tag value is the field on that column.
+A chunk is a row. `@id:` is a primary key; `@ext:` is a foreign
+key that survives edits because the locator falls back gracefully
+when its anchor breaks. Stacked filter rows are compound `WHERE`
+clauses, ANDed. Saved filter snapshots are named views. The
+file-type chips are a coarse namespace control — which tables
+contribute to the result.
+
+### The CLI primitives
+
+A small set of orthogonal filters compose into the query surface:
+
+```
+-tag name:value     equality on a tag value (WHERE name = 'value')
+-tag name           tag exists (column not null)
+-contains STRING    full-text on the chunk body
+-about QUERY        vector similarity on the chunk body
+-without            flip polarity of subsequent filters (AND NOT)
+-tags               projection: emit tag/value pairs, not chunks
+-files GLOB         restrict by file path glob
+```
+
+Bare terms coalesce into a single `-contains`. The first filter is
+the primary search; the rest are post-filters on the candidate
+chunks. The same shape as a Mongo `find()` followed by a
+projection — match condition, plus an optional re-shape of the
+output.
+
+```
+ark search -tag status:closed
+ark search "LMDB" -tag decision -without -tag status:archived
+ark search -tag status:closed -tags
+```
+
+That last line is what makes ark queryable from *code*. A script
+gets a clean stream of structured values, no chunk-body parsing.
+The CLI is the database interface; the corpus is the data; the
+tags are the schema that grew where it was needed.
+
+### Spectral attenuation as a third primitive
+
+The thing NoSQL doesn't have is spectral ranking on tag values:
+chunks ordered by how well a value matches a query, rather than
+included or excluded by it. Today this lives in `<ark-search>`
+filter rows (see [*Filter by tag value*](#filter-by-tag-value)
+below) — the UI's value field is FTS-tokenized and ranks. The
+CLI's `-tag` is exact-match; CLI spectral access is on the
+horizon. Both flavors expose the same structural property — the
+polarizer image from
+[*Third-order: spectral attenuation*](#third-order-spectral-attenuation).
+
+---
+
 ## What you do with them
 
 ### Write

@@ -1,34 +1,43 @@
 <template>
-  <div class="cur-pin" ui-class-cur-pin-new="isNew()" ui-class-cur-pin-confirm="dismissPending()">
-    <!-- Pending widget stack -->
-    <div class="cur-pin-widgets">
+  <div class="cur-pin"
+       ui-attr-data-cur-chunkid="chunkID()"
+       ui-class-cur-pin-new="isNew()"
+       ui-class-cur-pin-confirm="dismissPending()"
+       ui-class-cur-pin-editing="isEditing()"
+       ui-class-cur-pin-error="hasAcceptError()">
+    <!-- Pending widget stack (hidden during edit mode) -->
+    <div class="cur-pin-widgets" ui-class-hidden="hideWidgets()">
       <div ui-view="widgets()?wrapper=lua.ViewList"></div>
       <div class="cur-pin-widget-add">
-        <sl-tooltip content="Add a pending widget">
-          <sl-icon-button name="plus-lg" ui-action="addWidget()" label="Add widget"></sl-icon-button>
+        <sl-tooltip content="Add a pending widget (click or Tab+Enter)">
+          <sl-icon-button name="plus-lg"
+                          ui-action="onPlusFocused()"
+                          label="Add widget"></sl-icon-button>
         </sl-tooltip>
       </div>
     </div>
 
     <!-- URL row -->
     <div class="cur-pin-header">
+      <sl-tooltip content="Edit / revert chunk">
+        <sl-icon-button class="cur-pin-edit-btn"
+                        ui-attr-name="editButtonIcon()"
+                        ui-class-cur-pin-edit-accent="editButtonAccent()"
+                        ui-action="toggleEdit()"
+                        ui-attr-disabled="readOnly()"
+                        label="Edit"></sl-icon-button>
+      </sl-tooltip>
       <span class="cur-pin-new-pill" ui-class-hidden="notNew()">NEW</span>
       <a class="cur-pin-path" target="_blank" ui-attr-href="contentURL()" ui-value="shortPath()" title="Open file"></a>
       <span class="cur-pin-pending" ui-class-hidden="noPending()">
         (<span ui-value="pendingCount()"></span> pending)
       </span>
-      <sl-tooltip content="Fold filled widgets into staged ops">
-        <sl-icon-button name="arrow-down-square" ui-action="stage()" ui-attr-disabled="cannotStage()" label="Stage"></sl-icon-button>
-      </sl-tooltip>
-      <sl-tooltip content="Pop staged ops back into widgets">
-        <sl-icon-button name="arrow-counterclockwise" ui-action="revert()" ui-attr-disabled="cannotRevert()" label="Revert"></sl-icon-button>
-      </sl-tooltip>
       <sl-tooltip content="Dismiss this chunk">
         <sl-icon-button name="x-lg" ui-action="dismiss()" label="Dismiss"></sl-icon-button>
       </sl-tooltip>
     </div>
 
-    <!-- Confirm-dismiss row (visible only when dismissed with pending) -->
+    <!-- Confirm-dismiss row -->
     <div class="cur-pin-confirm-row" ui-class-hidden="notDismissPending()">
       <span class="cur-pin-confirm-msg">Discard pending changes?</span>
       <sl-button size="small" variant="danger" ui-action="confirmDismiss()">Discard</sl-button>
@@ -36,20 +45,51 @@
     </div>
 
     <!-- Accept error (visible only when last Accept failed) -->
-    <sl-alert
-      variant="danger"
-      ui-attr-open="hasAcceptError()"
-      class="cur-pin-accept-error"
-    >
+    <sl-alert variant="danger"
+              ui-attr-open="hasAcceptError()"
+              closable
+              ui-event-sl-after-hide="clearAcceptError()"
+              class="cur-pin-accept-error">
       <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
       <span ui-value="acceptError()"></span>
     </sl-alert>
 
-    <!-- Tag suggestions collapsible -->
-    <sl-details class="cur-pin-suggestions" summary="tag suggestions">
+    <!-- Below-URL collapsibles -->
+    <sl-details class="cur-pin-current-tags" summary="current tags">
+      <div ui-view="currentTagsView()?wrapper=lua.ViewList"></div>
+    </sl-details>
+
+    <sl-details class="cur-pin-tag-scores" summary="tag scores">
       <div class="cur-pin-suggestions-error" ui-class-hidden="noSuggestionsError()" ui-value="suggestionsError()"></div>
       <div class="cur-pin-suggestions-empty" ui-class-hidden="hasSuggestions()">No tag candidates.</div>
       <div ui-view="suggestions()?wrapper=lua.ViewList"></div>
+    </sl-details>
+
+    <sl-details class="cur-pin-chunk-text" summary="chunk text" open>
+      <!-- Read-only iframe (hidden when editing). Click-to-edit is
+           wired inside the iframe's contentDocument by the bridge
+           script below, which skips clicks on ark-ext-tags and the
+           tag-overview sidebar so their own handlers can run. -->
+      <div class="cur-pin-chunk-readonly" ui-class-hidden="isEditing()">
+        <iframe class="cur-pin-iframe" ui-attr-src="iframeURL()" loading="lazy"></iframe>
+        <input type="hidden" class="cur-pin-ext-tags-input"
+               ui-value="setExtTagsJSON(_)?access=w" />
+        <span hidden ui-code="iframeBridgeCode()?priority=low"></span>
+      </div>
+      <!-- Edit mode: CM6 mount + hidden data spans + bridge JS -->
+      <div class="cur-pin-chunk-editor" ui-class-hidden="notEditing()">
+        <span class="cur-pin-editor-orig" hidden ui-value="chunkOriginalText()"></span>
+        <span class="cur-pin-editor-fold" hidden ui-value="foldedText()"></span>
+        <span class="cur-pin-editor-path" hidden ui-value="path()"></span>
+        <input type="hidden" class="cur-pin-editor-content-input"
+               ui-value="setEditorContent(_)?access=w" />
+        <input type="hidden" class="cur-pin-editor-dirty-input"
+               ui-value="setEditorDirty(_)?access=w" />
+        <input type="hidden" class="cur-pin-editor-ack-input"
+               ui-value="ackEditorCmds(_)?access=w" />
+        <div class="cur-pin-editor-mount"></div>
+      </div>
+      <span hidden ui-code="editorBridgeCode()?priority=low"></span>
     </sl-details>
   </div>
 </template>

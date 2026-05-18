@@ -265,19 +265,21 @@ useful even though the primary authoring path now runs through
 per-chunk widget stacks.
 
 ```
-+--------------------------------------+----------------------+
-| Curation  Sweep: idle  [⚡][↻ Accept (N)]                   |
-+--------------------------------------+----------------------+
-| Pinned chunks (3) [⤓ Sweep older]   | Tag explorer         |
-| ┌──────────────────────────────────┐ | [_____________]      |
-| │ [tag][val][rem][ext][X]          │ | Defined tags          |
-| │ [tag][val][rem][ext][X]          │ |  • design-decision    |
-| │ [+]                              │ |  • feedback           |
-| │ NEW path/file.md (2 pending) X  │ | Focused: design-…    |
-| │  [↓ Stage] [↶ Revert]            │ |  Top chunks (10)     |
-| │  > tag suggestions               │ |  Related tags        |
-| └──────────────────────────────────┘ |  Drift               |
-+--------------------------------------+----------------------+
++----------------------------------------+----------------------+
+| Curation  Sweep: idle  [⚡] [⌫ Clear unchanged] [Accept (…)] |
++----------------------------------------+----------------------+
+| Pinned chunks (3) [⤓ Sweep older]      | Tag explorer        |
+| ┌────────────────────────────────────┐ | [_____________]     |
+| │ [tag][val][rem][ext][X]            │ | Defined tags        |
+| │ [tag][val][rem][ext][X]            │ |  • design-decision  |
+| │ [+]                                │ |  • feedback         |
+| │ [edit] NEW path/file.md         [X]│ | Focused: design-…   |
+| │  > current tags                    │ |  Top chunks (10)    |
+| │  > tag scores                      │ |  Related tags       |
+| │  > chunk text                      │ |  Drift              |
+| │     (iframe; CM6 in edit mode)     │ |                     |
+| └────────────────────────────────────┘ |                     |
++----------------------------------------+----------------------+
 ```
 
 ### Pinned-chunks behavior
@@ -318,8 +320,16 @@ against the chunk.
 
 **Read-only protections.** When the chunk's `chunkInfo.writable`
 is false (PDF chunks, `~/.claude/projects/**` chat logs, any other
-chunker reporting `writable: false`), the ext toggle locks on and
-inline operations are disabled with a "read-only" hint.
+chunker reporting `writable: false`), the ext toggle locks on,
+inline operations are disabled with a "read-only" hint, and the
+per-card `[edit]` button is hidden (no CM6 mount for read-only).
+
+**Hidden during edit mode.** While the card is in edit mode (CM6
+editor mounted), the pending widget stack and the `[+]` button
+visually hide. The editor is the active authoring surface; pendings
+get folded into the draft on `[edit]` (see §"Edit / Revert").
+Pending state is preserved internally so `[revert]` can restore
+it.
 
 ### Ext-tag widgetry
 
@@ -344,37 +354,190 @@ widget reads `locatorText` for the proposed locator value
 (`locator` field has a known bug — tracked as a `/mini-spec`
 follow-up).
 
-### Stage / Revert / Accept verbs
+### Edit / Revert
 
-Three verbs in the workshop, two per-card and one panel-level:
+Each card has an `[edit|revert]` button to the left of the URL.
+The icon itself carries the has-changes cue: gray when the chunk
+is clean, accent (`--term-accent`) when it has changes. No
+separate dot indicator. The button drives a four-state machine:
 
-**Stage** (per-card): folds filled widgets into a per-card
-*staged ops* buffer. Widgets clear from the stack; pending badge
-updates. No disk write yet.
+| State | Editor mounted | Pendings filled | Editor matches original | Icon |
+|-------|----------------|------------------|-------------------------|------|
+| **clean** | no | none | — | `pencil-square` gray |
+| **pending-only** | no | yes | — | `pencil-square` accent |
+| **editing-clean** | yes | (folded) | yes | `arrow-counterclockwise` gray |
+| **editing-dirty** | yes | (folded) | no | `arrow-counterclockwise` accent |
 
-**Revert** (per-card): clears the staged-ops buffer and
-recreates widgets from the staged operations. Symmetric to
-Stage.
+**Click `[edit]`** (from clean or pending-only):
+- Snapshot `_chunkOriginalText` via `mcp.chunkText(chunkID)` and
+  `_savedPendings` (filled inline widgets being folded).
+- Mount CM6 editor seeded with `_chunkOriginalText`. Apply the
+  pending fold as **one CM6 transaction** (single undoable
+  history entry) — inline-add prepends `@tag: value\n` to the
+  leading tag block; inline-change replaces the matching `@tag:`
+  line; inline-remove deletes it.
+- Clear folded inline widgets from the pending stack. Ext widgets
+  remain (they don't fold into text).
+- State → editing-dirty if pendings were folded, editing-clean if
+  not.
 
-**Accept changes (N)** (panel-level, header button): implicit-
-stages any still-unstaged widgets across all cards, then
-executes every card's staged operations:
+**Click `[revert]`** (from any editing state):
+- Snapshot `_savedEditorText = editor.getDoc()` so a subsequent
+  `[edit]` can restore the user's draft byte-for-byte.
+- Destroy CM6 editor; chunk-text collapsible returns to its
+  read-only iframe view.
+- Restore `_widgets` from `_savedPendings`. Ext widgets stay.
+- State → pending-only (restored pendings) or clean.
 
-- Inline op → `mcp.replaceRegion(path, byteStart, byteStart,
-  newText)` where `newText` is `@tag: value\n` (markdown) or
-  `commentSyntax @tag: value\n` (code chunks) per
-  `chunkInfo.commentSyntax`.
-- Inline remove → `mcp.replaceRegion` collapses the tag line
-  (range derivation deferred — v1 prepends a removal marker;
-  full per-line removal is a follow-up).
-- Ext op → `mcp.setExtTag(targetSpec, tag, value)` or
-  `mcp.removeExtTag(targetSpec, tag)` per the widget's base +
-  locator selection.
+**Re-`[edit]` after a `[revert]`** consumes `_savedEditorText` as
+the editor's initial doc; new pendings added between revert and
+re-edit get folded fresh on top as a separate transaction.
 
-Per-chunk errors surface on the failing card; successful cards
-clear their staged ops. The badge N counts filled widgets +
-staged ops across every pinned card; the button disables when
-N = 0.
+**Auto-exit on fold-undo.** If pendings were folded at `[edit]`
+time AND the user Ctrl-Z's back so `editor.getDoc() ==
+_chunkOriginalText`, edit mode auto-exits. Pendings stay
+consumed (not restored) — the system never holds both pendings
+AND editor-with-changes simultaneously, avoiding pending/edit
+conflict.
+
+**Click on rendered chunk text** (when not in edit mode):
+equivalent to clicking `[edit]`. A transparent click-shield over
+the iframe catches clicks (iframe clicks don't bubble out).
+
+### Accept (N changed, M pending)
+
+Panel-level header button. `N` is the count of cards in editing-
+dirty state; `M` is the count of cards with any filled pending
+widgets (inline or ext) across all states. Label varies:
+
+- `N=0, M=0` → disabled, label `Accept (no changes)`.
+- `N>0, M=0` → enabled, label `Accept (N changed)`.
+- `N=0, M>0` → disabled, label `Accept — M pending` (pendings
+  must be promoted via `[edit]` first).
+- `N>0, M>0` → enabled, label `Accept (N changed, M pending)` —
+  clicking it triggers a warning dialog before executing.
+
+**Warning dialog** appears when clicking Accept with `M > 0`:
+
+```
+There are M pending changes you have not staged.
+
+[Save staged changes only]   [Go back to editing]
+```
+
+- "Save staged changes only": execute the N edited chunks (and
+  every card's filled ext widgets). The M pending inline widgets
+  stay in their stacks for revisit.
+- "Go back to editing": dismiss the dialog. User can `[edit]`
+  more chunks to promote pendings.
+
+**Accept execution:**
+
+For each card:
+- If `_isChunkEdited`: read `editor.getDoc()` via JS bridge →
+  `mcp.replaceRegion(path, byteStart, byteEnd_orig, text)`.
+- For each filled ext widget on the card (any mode): `extMode &&
+  !removeMode` → `mcp.setExtTag(targetSpec, tag, value)`;
+  `extMode && removeMode` → `mcp.removeExtTag(targetSpec, tag)`.
+- Pending inline widgets are NOT executed by Accept — they
+  require `[edit]` to fold them into a chunk-edit first.
+- On success: card returns to clean state (editor destroyed,
+  pendings cleared).
+- On error: `_acceptError` set, card retains state for retry.
+
+Per-card errors don't abort the panel — each card processes
+independently. Failed cards surface their error visually: red
+border on the card, `sl-alert` banner under the URL row showing
+the error text, and a small red dot on the card's
+`[edit|revert]` button. Manual dismiss clears the error.
+
+### Clear unchanged
+
+Header button next to `[Accept …]`. Dismisses every pinned chunk
+that satisfies all of: `_isChunkEdited == false`, no filled inline
+widgets, no filled ext widgets. Useful for clearing out the
+workshop after committing a batch.
+
+### Chunk text view
+
+The chunk text collapsible defaults to **initially expanded** —
+it's the primary surface the user wants to see.
+
+Two render modes:
+
+- **read-only** (default): iframe at
+  `/content<path>?range=byteStart-byteEnd&toggle=false`, the same
+  pattern `<ark-search>` uses for chunk previews. The iframe
+  embeds `<ark-ext-tags>` (with a tags icon next to the heading)
+  carrying `<ark-tag id externalfile externaltarget>` records
+  for every ext routing on the chunk. A transparent click-shield
+  div absolutely-positioned over the iframe catches clicks
+  (iframe clicks don't bubble out) and triggers `[edit]`. The
+  `<ark-ext-tags>` indicator stops click-propagation so its
+  dropdown still opens normally.
+- **editor**: iframe + click-shield destroyed; CM6 mounted in
+  their place via inline JS bridge using `createInkArkEditor`
+  from `/ark-markdown-editor.js`. Initial doc is
+  `_chunkOriginalText` (or `_savedEditorText` for perfect-restore
+  after revert); the fold applies as one CM6 transaction. Save
+  flow: at Accept time, the bridge reads `editor.getDoc()` and
+  Lua dispatches `mcp.replaceRegion`. Ctrl-S inside CM6 syncs the
+  draft to Lua state but does NOT itself fire Accept.
+
+Both modes shrink to fit their content, capped at 280 px. The
+iframe wrapper uses `max-height: 280px` and the bridge sets the
+iframe's explicit height from `contentDocument.body.scrollHeight`
+(re-measuring via `ResizeObserver` to catch late-rendering
+widgets like the ark-tag-overview sidebar). CM6 honors the cap
+through `.cm-editor { max-height: 280px }` with its own
+`.cm-scroller` handling internal overflow. Short chunks no
+longer show a half-empty 280-pixel pane.
+
+### Current tags collapsible (desired-state view)
+
+A widget-shaped list below the URL showing every tag the chunk
+*will have* after pending ops apply — the **desired state**, not
+the literal current state. Sources merge into one list:
+
+- Inline tags from `mcp.parseTagBlock(editor draft or
+  _chunkText).tags`.
+- Ext tags from the iframe's `<ark-ext-tags>` children, scraped
+  on iframe load via JS bridge (no new Go bridge needed — the
+  rendering already embeds the data).
+
+Both are unioned with pending ops:
+
+- Pending `inline-add` / `ext-set` → row appears with the new value.
+- Pending `inline-remove` / `ext-remove` → row hidden (or shown
+  struck-through, decide during `/ui-thorough`).
+- Pending change → row shows the new value with a subtle
+  "changed" indicator.
+
+Each row uses the same `<sl-input>` widget shape as pending
+widgets:
+
+- **Read-only mode** (iframe up): readonly + grayed. Clicking the
+  `rem` checkbox on a row queues a corresponding `inline-remove`
+  (or `ext-remove` for ext rows) into the pending stack — a
+  convenience action.
+- **Edit mode** (CM6 up): editable. Inline rows on edit-blur
+  dispatch a CM6 transaction rewriting the matching `@tag:` line.
+  Ext rows on edit-blur queue an `ext-set` pending op. A `[+ add
+  tag]` button below the rows adds a new editable row (inline by
+  default; toggleable to ext).
+
+Ext rows carry a small badge with the externalfile path. The
+iframe's `<ark-ext-tags>` dropdown contents are also overlayed
+to reflect desired state — the indicator stays visually
+identical, but its dropdown shows what the chunk will route to
+after pending ops apply.
+
+### Tag scores collapsible
+
+Renamed from "tag suggestions". One-line rows showing tag-name
+candidates from `mcp.suggestTagNames(chunkID, K)` with their
+cosine scores. Click affordances (pin / focus) carry over from
+the prior slice unchanged.
 
 ### Spectral-value rule
 
@@ -423,21 +586,58 @@ panel (an empty-state hint).
 
 ### Sweep controls
 
-- **Sweep button** — calls `mcp.sweepHotCorrelations()`. Runs
-  through the write goroutine, identical to
-  `POST /sweep/correlations`. Returns the `SweepResult` summary.
-  The button is disabled while a sweep is in flight; the header
-  shows a "sweeping..." indicator.
-- **Sweep result** — once the call returns, the header shows a
-  one-line summary (duration, tagsRebuilt, tagsTouched). The
+- **Sweep button** — fire-and-forget. Calls
+  `mcp.sweepHotCorrelationsAsync()` (non-blocking) and subscribes
+  to `tmp://sweep/hot-correlations.md` via `mcp.subscribe` for
+  the `@sweep-status` and `@sweep-progress` tags. The button is
+  disabled while a sweep is in flight; the header shows a live
+  progress indicator driven by the subscription callbacks.
+- **Sweep result** — on terminal `@sweep-status: completed` (or
+  `errored`), Lua reads the doc body via `mcp.tmp_get` for the
+  final summary (duration, tagsRebuilt, tagsTouched). The
   embedding-unavailable degraded reply is surfaced as a friendly
   one-line message instead.
 
-Live progress (subscribing to the `tmp://sweep/hot-correlations.md`
-doc's `@sweep-status` / `@sweep-progress` tags) is a follow-up
-slice — Frictionless `mcp:subscribe` is for publisher topics, and
-the Lua bridge for tmp:// document subscriptions is not yet in
-place.
+The retrofit from blocking to async unblocks the UI while a sweep
+is running and lets the header reflect mid-flight progress.
+
+### Find Connections orchestration
+
+The workshop offers a *proposals panel* sourced from the
+ark-connections sidecar. Workflow:
+
+- A "Find Connections" button in the header invokes
+  `mcp.findConnections(chunkIDs, opts)` with the currently pinned
+  chunks. Returns a request ID immediately (or surfaces "agent
+  unavailable" when no `ark connections --wait` consumer has
+  been observed).
+- The app subscribes via `mcp.subscribe` to
+  `tmp://connections/<id>.md`, filtering on the
+  `@connections-status` / `@connections-progress` /
+  `@connections-elapsed` / `@connections-error` tags. The header
+  shows a live progress indicator.
+- On terminal `@connections-status: completed`, Lua reads the
+  doc body via `mcp.tmp_get` and parses themes and shared-tag
+  candidates via `mcp.parseTagBlock` against the body sections.
+- The proposals panel renders the parsed proposals:
+  - **Themes** — short summary spanning some of the pinned chunks
+    with evidence chunk IDs.
+  - **Shared tag candidates** — `(tag, value)` proposals with
+    evidence chunk IDs.
+- Each shared-tag-candidate row has a `[Fill]` button that
+  **injects a pre-filled pending widget** into every evidence
+  chunk's pending stack. The user can then `[edit]` each card to
+  fold and review, or click Accept directly (the warning dialog
+  fires per the Accept rules).
+- On terminal `@connections-status: errored`, the panel shows
+  the error and offers a retry.
+
+The sidecar pattern keeps the LLM call out-of-process: ark
+publishes the request to `tmp://connections/<id>.md`; an external
+`ark connections --wait` consumer drains the queue, fetches chunk
+content via `/connections/fetch`, makes the LLM call, posts
+results via `POST /connections/result`. The workshop never
+talks to the LLM directly.
 
 ### Persistence
 
@@ -448,31 +648,11 @@ on every mutation.
 
 ### What's NOT in scope (this slice)
 
-- **Chunk-text editor** — `<ark-markdown-editor>` embedded inside
-  each card's `> chunk text` collapsible. Needs Go bridges
-  (`mcp.chunkText`, `mcp.parseTagBlock`) — deferred to a
-  `/mini-spec` follow-up.
-- **`> current tags` reflection** — live tags-on-chunk display
-  derived from chunk text. Same Go-bridge gap as above.
-- **Find Connections integration** — the proposals panel with
-  `[Fill]` buttons that inject pre-filled widgets into evidence
-  chunks. Needs `mcp.tmp_get` (Lua-side read of tmp:// doc
-  content) — deferred to a `/mini-spec` follow-up.
-- **Sweep button retrofit** — convert `Curation:sweepNow` from
-  blocking to fire-and-forget + `mcp.subscribe` on
-  `tmp://sweep/hot-correlations.md`. Needs Go addition
-  (`mcp.sweepHotCorrelationsAsync` or non-blocking variant) —
-  deferred to a `/mini-spec` follow-up.
-- **Inline tag removal precision** — the design calls for
-  deleting tag-on-own-line vs. tag-tacked-on-line. v1 widgets
-  with `remove` toggle on stage a removal marker; full per-line
-  removal is a follow-up.
 - **Per-line annotation** — authoring a tag *about* a specific
-  line mid-chunk is deferred; v1 inserts at top.
+  line mid-chunk is deferred; pendings prepend to the chunk's
+  leading tag block.
 - **Entry 3 (chunk → similar chunks)** — needs a Librarian
   backend (`SimilarChunks(chunkID, k)`) that doesn't exist yet.
-- **`<ark-search>` Curate button** — separate TypeScript slice
-  (Subtask B in `.scratch/PLAN-CURATE-CHUNK.md`).
 - **Tag conflict explorer** — `mcp.tagPairConflict(tagA, tagB)`
   is bridged but the UX is deferred.
 - **Vocabulary gaps** (bottom-K against all tag defs) — bottom-K
@@ -480,6 +660,10 @@ on every mutation.
 - **Tag-name completion** — typed input only, no autocomplete.
 - **Status badge on the bottom-bar button** — the badge with
   pinned-count + new-count lives in the MCP shell, not this app.
+- **One-click "convert ext to inline"** — the user removes the
+  ext and re-adds inline; a one-click convert action is deferred.
+- **Mirror-file compaction** — multi-tag lines targeting the
+  same chunk stay one-tag-per-line in v1.
 
 ## MCP Shell Integration
 

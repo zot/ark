@@ -4,16 +4,61 @@
       <span class="panel-title">Curation</span>
       <span class="cur-status" ui-value="sweepStatusText()" ui-class-cur-busy="sweepBusy()"></span>
       <div class="cur-header-actions">
-        <sl-tooltip content="Run hot-correlations sweep">
+        <sl-tooltip content="Run hot-correlations sweep (async)">
           <sl-icon-button name="lightning-charge-fill" ui-action="sweepNow()" ui-attr-disabled="sweepBusy()" label="Sweep"></sl-icon-button>
+        </sl-tooltip>
+        <sl-tooltip content="Find connections across pinned chunks">
+          <sl-icon-button name="diagram-3" ui-action="findConnections()" ui-attr-disabled="connectionsInFlight()" label="Find connections"></sl-icon-button>
+        </sl-tooltip>
+        <sl-tooltip content="Dismiss every pinned chunk with no changes">
+          <sl-button size="small" ui-action="clearUnchanged()" ui-attr-disabled="noUnchanged()">
+            <sl-icon slot="prefix" name="eraser"></sl-icon>
+            Clear unchanged
+          </sl-button>
         </sl-tooltip>
         <sl-button
           size="small"
           variant="primary"
           class="cur-accept-button"
           ui-action="acceptChanges()"
-          ui-attr-disabled="noPendingChanges()"
-        >Accept changes (<span ui-value="totalPendingCount()"></span>)</sl-button>
+          ui-attr-disabled="acceptDisabled()"
+        ><span ui-value="acceptLabel()"></span></sl-button>
+      </div>
+    </div>
+
+    <!-- Accept warning dialog -->
+    <sl-dialog label="Pending changes not staged"
+               class="cur-accept-warn-dialog"
+               ui-attr-open="acceptWarnVisible()"
+               ui-event-sl-request-close="cancelAccept()">
+      <p>There are <span ui-value="pendingCount()"></span> pending changes you have not staged.</p>
+      <p class="cur-warn-hint">Pending widgets are not executed until you promote them via the per-card edit button.</p>
+      <sl-button slot="footer" variant="primary" ui-action="confirmAccept()">Save staged changes only</sl-button>
+      <sl-button slot="footer" ui-action="cancelAccept()">Go back to editing</sl-button>
+    </sl-dialog>
+
+    <!-- Find Connections proposals panel -->
+    <div class="cur-conn-panel" ui-class-hidden="noConnections()">
+      <div class="cur-conn-header">
+        <span class="cur-conn-title">Find Connections</span>
+        <span class="cur-conn-status" ui-value="connectionsStatusText()"></span>
+        <sl-tooltip content="Dismiss the proposals panel">
+          <sl-icon-button name="x-lg" ui-action="clearConnections()" label="Dismiss"></sl-icon-button>
+        </sl-tooltip>
+      </div>
+      <sl-alert variant="danger"
+                ui-attr-open="hasConnectionsError()"
+                class="cur-conn-error">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <span ui-value="connectionsError()"></span>
+      </sl-alert>
+      <div class="cur-conn-themes" ui-class-hidden="noConnectionsThemes()">
+        <div class="cur-conn-section-header">Themes (<span ui-value="connectionsThemeCount()"></span>)</div>
+        <div ui-view="connectionsThemes()?wrapper=lua.ViewList"></div>
+      </div>
+      <div class="cur-conn-shared" ui-class-hidden="noConnectionsSharedTags()">
+        <div class="cur-conn-section-header">Shared tag candidates (<span ui-value="connectionsSharedTagCount()"></span>)</div>
+        <div ui-view="connectionsSharedTags()?wrapper=lua.ViewList"></div>
       </div>
     </div>
 
@@ -550,6 +595,188 @@
     /* Tag suggestions collapsible (sl-details) — defers to theme for borders/colors */
     .cur-pin-suggestions {
       margin-top: 6px;
+    }
+
+    /* Edit/Revert button — color carries the has-changes cue */
+    .cur-pin-edit-btn {
+      color: var(--term-text-dim, #999);
+      flex-shrink: 0;
+    }
+    .cur-pin-edit-accent {
+      color: var(--term-accent, #E07A47);
+    }
+
+    /* Below-URL collapsibles */
+    .cur-pin-current-tags,
+    .cur-pin-tag-scores,
+    .cur-pin-chunk-text {
+      margin-top: 4px;
+      font-size: 12px;
+    }
+    .cur-pin-chunk-text::part(content) {
+      padding: 0;
+    }
+
+    /* Chunk-text iframe + click-shield.
+       Wrapper uses max-height so short chunks shrink to their natural
+       size. The iframe's height is set explicitly by iframeBridgeCode
+       from contentDocument.body.scrollHeight (capped at 280px) — a
+       % height here would collapse against the wrapper's auto height.
+       The 280px fallback keeps the first paint sized correctly before
+       the bridge measures. */
+    .cur-pin-chunk-readonly {
+      position: relative;
+      width: 100%;
+      max-height: 280px;
+      overflow: hidden;
+    }
+    .cur-pin-iframe {
+      width: 100%;
+      height: 280px;
+      border: 0;
+      background: var(--term-bg, #0a0a0f);
+      display: block;
+      cursor: text;
+    }
+
+    /* CM6 editor mount. Wrapper uses max-height so short chunks
+       shrink to fit; CM6's own .cm-scroller handles overflow inside
+       the .cm-editor's max-height. The mount has no height — letting
+       it auto-size to the editor — and explicit ?wrapper/scroller
+       rules below tell CM6 to cap and scroll itself. */
+    .cur-pin-chunk-editor {
+      width: 100%;
+      max-height: 280px;
+      background: var(--term-bg, #0a0a0f);
+    }
+    .cur-pin-editor-mount {
+      width: 100%;
+      caret-color: var(--term-accent-bright, #ff9966);
+    }
+    .cur-pin-editor-mount .cm-editor {
+      max-height: 280px;
+    }
+    .cur-pin-editor-mount .cm-scroller {
+      overflow: auto;
+    }
+    /* CodeMirror's cursor element + the document area's caret. The
+       editor copies caret-color from the host, but cm-cursor's color
+       is set by the cm theme — we override so the cursor is visible
+       on our dark surface. */
+    .cur-pin-editor-mount .cm-cursor,
+    .cur-pin-editor-mount .cm-dropCursor {
+      border-left-color: var(--term-accent-bright, #ff9966);
+    }
+    /* Hide the ink-mde "powered by" attribution row at the bottom of
+       each embedded editor — it stacks up across pin cards and steals
+       vertical space we want for chunk text. */
+    .cur-pin-editor-mount .ink-mde-attribution {
+      display: none;
+    }
+
+    /* Current-tags rows — read-only widget shape with desired-state overlay */
+    .cur-current-tag {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 6px;
+      border-left: 2px solid var(--term-border, #222);
+      font-size: 12px;
+    }
+    .cur-current-tag-ext {
+      border-left-color: var(--term-accent, #E07A47);
+    }
+    .cur-current-tag-removed .cur-current-tag-name,
+    .cur-current-tag-removed .cur-current-tag-value {
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    .cur-current-tag-changed {
+      background: rgba(212, 166, 55, 0.08);
+    }
+    .cur-current-tag-added {
+      background: rgba(224, 122, 71, 0.08);
+    }
+    .cur-current-tag-name { flex: 0 0 120px; min-width: 0; }
+    .cur-current-tag-value { flex: 1 1 auto; min-width: 60px; }
+    .cur-current-tag-status {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: var(--term-text-dim, #999);
+    }
+    .cur-current-tag-ext-file {
+      font-size: 10px;
+      color: var(--term-text-dim, #999);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 180px;
+    }
+
+    /* Find Connections panel */
+    .cur-conn-panel {
+      flex-shrink: 0;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--term-border, #222);
+      background: var(--term-bg-alt, #111);
+    }
+    .cur-conn-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .cur-conn-title {
+      font-weight: 600;
+    }
+    .cur-conn-status {
+      flex: 1;
+      color: var(--term-text-dim, #999);
+      font-size: 11px;
+    }
+    .cur-conn-section-header {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--term-text-dim, #999);
+      margin: 4px 0;
+    }
+    .cur-conn-theme {
+      padding: 4px 0;
+      border-bottom: 1px dashed var(--term-border, #222);
+    }
+    .cur-conn-theme-text {
+      font-size: 12px;
+    }
+    .cur-conn-theme-evidence,
+    .cur-conn-shared {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--term-text-dim, #999);
+      padding: 2px 0;
+    }
+    .cur-conn-shared-label {
+      flex: 1;
+      color: var(--term-text, #e0e0e8);
+      font-weight: 500;
+    }
+    .cur-conn-evidence-label {
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+    .cur-conn-evidence-list {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Editing-card visual cue */
+    .cur-pin-editing {
+      border-color: var(--term-accent, #E07A47);
+      box-shadow: 0 0 0 1px var(--term-accent, #E07A47);
+    }
+    .cur-pin-error {
+      border-color: var(--term-error, #ff6b6b);
     }
   </style>
 </template>

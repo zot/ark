@@ -417,10 +417,13 @@ consumers behave identically when not exercised by the workshop.
 
 ## Out of scope for this spec
 
-- Workshop UI itself (pending widget stack, stage / revert /
-  accept, Find-Connections-as-service). Belongs to the
-  `/ui-thorough` pass that consumes these primitives.
-- Per-chunker editor variants (`<ark-markdown-editor>` is
+- Workshop UI itself (pending widget stack, `[edit|revert]`
+  state machine, Accept variants, Find-Connections orchestration,
+  current-tags desired-state rendering). Belongs to the
+  `/ui-thorough` pass that consumes these primitives — see
+  `apps/ark/requirements.md` "Curation View" and
+  `apps/ark/design.md` for the UI design.
+- Per-chunker editor variants (CM6 via `createInkArkEditor` is
   universal in v1; Lua / Python / Go modes deferred).
 - Mirror-file compaction (merging multi-tag lines targeting the
   same chunk). v1 authors one tag per line.
