@@ -58,16 +58,29 @@ func (c *PDFChunker) IsWritable() bool { return false }
 // CRC: crc-PDFChunker.md | R2388
 func (c *PDFChunker) CommentSyntax() string { return "" }
 
-// Chunks implements microfts2.Chunker for tmp documents. R1729, R1734
-// CRC: crc-PDFChunker.md | R1729, R1730, R1734
+// Chunks implements microfts2.Chunker. microfts2's collectChunks
+// dispatch prefers Chunker over FileChunker when both are
+// implemented, so this entry point is load-bearing for indexed-
+// file persistence — it MUST stage page blobs. The retrieval-
+// time streaming fallback uses the persist=false private helper
+// so retrieval doesn't masquerade as indexing. R1729, R1734, R2428
+// CRC: crc-PDFChunker.md | R1729, R1730, R1734, R2428
 func (c *PDFChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
+	return c.chunks(path, content, yield, true)
+}
+
+// chunks is the persist-parameterized private helper behind Chunks
+// and streamingRetrieve. persist=true seals page blobs; persist=false
+// is for retrieval-time invocations that must not stage. R2428, R2429
+// CRC: crc-PDFChunker.md | R2428, R2429
+func (c *PDFChunker) chunks(path string, content []byte, yield func(microfts2.Chunk) bool, persist bool) error {
 	doc, err := pdftext.Open(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		log.Printf("pdf: open %s: %v", path, err)
 		return nil
 	}
 	defer doc.Close()
-	c.extractDoc(path, doc, yield, false)
+	c.extractDoc(path, doc, yield, persist)
 	return nil
 }
 
@@ -314,7 +327,8 @@ func (c *PDFChunker) fastRetrieve(path string, customData *any, chunk *microfts2
 // streamingRetrieve runs the non-persisting chunker path until it finds
 // the target range and returns its content. Fallback when fastRetrieve
 // can't. Does not stage pending blobs — retrieval must not masquerade
-// as indexing. R1728
+// as indexing. R1728, R2429
+// CRC: crc-PDFChunker.md | R1728, R2429
 func (c *PDFChunker) streamingRetrieve(path, rangeLabel string) ([]byte, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -322,14 +336,14 @@ func (c *PDFChunker) streamingRetrieve(path, rangeLabel string) ([]byte, bool) {
 	}
 	var result []byte
 	var found bool
-	_ = c.Chunks(path, data, func(ch microfts2.Chunk) bool {
+	_ = c.chunks(path, data, func(ch microfts2.Chunk) bool {
 		if string(ch.Range) == rangeLabel {
 			result = append(result[:0], ch.Content...)
 			found = true
 			return false
 		}
 		return true
-	})
+	}, false)
 	return result, found
 }
 

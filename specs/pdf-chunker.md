@@ -165,6 +165,26 @@ The PDF chunker registers as strategy `"pdf"` via
 indexed files — owns the file read, hash-based skip) and `Chunker`
 (for tmp documents — receives raw bytes).
 
+### Indexing-path persistence is dispatch-agnostic
+
+The page-blob cache (`content_offset` / `content_len` attrs +
+per-page blobs in the Store) MUST be populated whenever the
+chunker is invoked at index time, regardless of which interface
+(`Chunker` or `FileChunker`) microfts2's dispatch happens to
+pick. microfts2's `collectChunks` prefers `Chunker` when both
+are implemented, so the `Chunks` entry point is just as load-
+bearing for indexed-file persistence as `FileChunks` is.
+
+Retrieval-time invocations of the chunker — the fallback path
+inside `GetChunk` when `fastRetrieve` cannot satisfy the request
+— must NOT stage blobs. Retrieval is not indexing; staging
+during retrieval would leak `pending` entries (no `FlushBlobs`
+follows) and risk overwriting fresh blobs with old text on the
+next indexing pass.
+
+Concretely: `Chunks` and `FileChunks` both seal page blobs;
+the streaming-retrieve helper uses a non-persisting code path.
+
 Configuration in ark.toml:
 
 ```toml

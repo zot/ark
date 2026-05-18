@@ -3894,7 +3894,7 @@ func (srv *Server) registerLuaFunctions() {
 		// scanner the indexer uses. Catches mid-chunk tags and @id
 		// lines that ParseTagBlock (leading-block-only) misses. Pure
 		// function over content + chunker strategy name.
-		// CRC: crc-Server.md
+		// CRC: crc-Server.md | R2426
 		L.SetField(tbl, "extractTagValues", L.NewFunction(func(L *lua.LState) int {
 			text := L.CheckString(1)
 			strategy := L.OptString(2, "markdown")

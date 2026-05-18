@@ -51,6 +51,28 @@ Future (hypergraph): the `@ext:` projection — embedded tags showing
 up as if they lived in the target file — is provided by the X record
 + V record + ExtMap layer, not by inline-extraction peeling.
 
+## Post-colon gap is intra-line whitespace only
+
+`tagValueRegex` matches `@name:` followed by the value to end of
+line. The gap between the colon and the value must be intra-line
+whitespace (`[ \t]*`), not the broader `\s*`. The broader class
+includes newlines, so an empty-value tag followed by a normal tag
+on the next line —
+
+```
+@e:
+@c: d
+```
+
+— parses as a single tag `e` whose value is `@c: d`, swallowing
+the next line entirely. This silently breaks any chunk that uses
+an empty-value tag as a marker (a common shape in `@status:` and
+`@archived:`-style markers, and in test fixtures that author
+empty-value tags before reaching the writer).
+
+The regex must restrict the post-colon gap to `[ \t]*` so the
+value capture honors the documented "to end of line" semantics.
+
 ## Append-detection tag boundary
 
 When a file is appended to, `ExtractTags` runs on `newBytes` starting

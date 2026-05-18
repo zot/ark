@@ -1105,7 +1105,8 @@ func ExtractTags(content []byte) map[string]uint32 {
 // ParseExtTarget for @ext), not this regex's. R2110, R2111
 // The post-colon gap is `[ \t]*` (NOT `\s*`) so an empty-value tag like
 // `@e: ` doesn't swallow the newline and glue the next line's content
-// onto its own value.
+// onto its own value. R2427
+// CRC: crc-Indexer.md | R2110, R2111, R2427
 var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):[ \t]*([^\n]*)`)
 
 // ExtractTagValues returns one (Tag, Value) per `@x:` line — the outer

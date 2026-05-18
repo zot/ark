@@ -172,6 +172,39 @@ Semantics:
 Pure function: no DB lookup, no Sync. Errors only on a non-
 string argument (standard Lua type check).
 
+## `mcp.extractTagValues(text, strategy)`
+
+Returns every `@name: value` pair found anywhere in `text`, using
+the same scanner the indexer uses (`ExtractTagValues`). Catches
+mid-chunk inline tags and `@id` lines that `mcp.parseTagBlock`
+(leading-block-only) misses. Used by the workshop's chunk card
+to populate the `> current tags` reflection from the full chunk
+text, not just the leading tag block.
+
+```lua
+local values = mcp.extractTagValues(text, strategy)
+-- values = {
+--     { name = "topic", value = "streaming" },
+--     { name = "id", value = "k-9f3" },
+--     { name = "status", value = "draft" },
+-- }
+```
+
+Semantics:
+
+- `values` is an ordered Lua array of `{name, value}` tables, in
+  the order the `@` lines appear in `text`.
+- `name` is lowercased; `value` is whitespace-trimmed.
+- `strategy` selects the chunker (e.g. `"markdown"`) so
+  markdown-specific mention heuristics (fenced/indented code) can
+  skip false positives. Defaults to `"markdown"`.
+- Compound lines like `@ext: TARGET @t1: v1` yield only the
+  outer tag (`@ext` with the full remainder as its value);
+  embedded-tag splitting is each outer tag's own job.
+
+Pure function: no DB lookup, no Sync. Errors only on a non-
+string argument (standard Lua type check).
+
 ## Ext-tag mirror files
 
 The workshop authors `@ext` routings into mirror files under

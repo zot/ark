@@ -3773,3 +3773,19 @@ implementation, not a separate format break.
 - **R2423:** `<ark-curate-region>` has a transparent border by default and reveals a faint dashed outline on `:hover` so the user can see chunk boundaries on the page. `pointer-events: auto` so the region receives hover and click events through the PDF canvas. The hover affordance also applies to `<div class="ark-chunk">` for consistency across PDF and non-PDF chunked views.
 - **R2424:** The pin button (`<button class="ark-curate-pin">`) is installed as the first child of every chunk container — both `<div class="ark-chunk">` and `<ark-curate-region>`. Existing CSS positions it at the container's upper-left (`top: 0.25em; left: 0.25em` for div; `top: 0; left: 0` for region since the region rect is already small). Same `aria-pressed` state, same click handler, same `/curation/pin` and `/curation/dismiss` endpoints.
 - **R2425:** The inline pin-injection script's selector matches both `div.ark-chunk[data-chunkid]` and `ark-curate-region[chunkid]`. Identifier extraction reads `el.dataset.chunkid` for the div case and `el.getAttribute('chunkid')` for the region case; the install loop, hover state, and toggle handler are otherwise shared between the two element types.
+
+## Feature: Curation Workshop Primitives — extractTagValues
+**Source:** specs/curation-workshop-primitives.md
+
+- **R2426:** `mcp.extractTagValues(text, strategy)` returns every `@name: value` pair found anywhere in `text`, using the same scanner the indexer uses (`ExtractTagValues`). The result is an ordered Lua array of `{name, value}` tables in the order the `@` lines appear; `name` is lowercased and `value` is whitespace-trimmed. `strategy` selects the chunker (e.g. `"markdown"`) so markdown-specific mention heuristics (fenced/indented code) can skip false positives; it defaults to `"markdown"`. Compound lines like `@ext: TARGET @t1: v1` yield only the outer tag, with the full remainder as its value — embedded-tag splitting is the outer tag's own job. Pure function: no DB lookup, no Sync.
+
+## Feature: tag value regex post-colon gap
+**Source:** specs/tag-extraction-fixes.md
+
+- **R2427:** `tagValueRegex` matches `@name:` followed by the value to end of line. The gap between the colon and the value is intra-line whitespace only (`[ \t]*`), never the broader `\s*`. The broader class would include newlines, so an empty-value tag followed by another `@` line — `@e:\n@c: d` — would parse as a single tag `e` whose value is `@c: d`, swallowing the next line. The `[ \t]*` form honors the documented "to end of line" semantics and keeps empty-value tags atomic.
+
+## Feature: PDFChunker indexing-path persistence is dispatch-agnostic
+**Source:** specs/pdf-chunker.md
+
+- **R2428:** PDFChunker's page-blob cache (`content_offset` / `content_len` chunk attrs + per-page blobs in the Store) MUST be populated whenever the chunker is invoked at index time, regardless of which interface microfts2's dispatch happens to pick. microfts2's `collectChunks` prefers `Chunker` over `FileChunker` when both are implemented, so `Chunks` is just as load-bearing for indexed-file persistence as `FileChunks`. Both index-time entry points seal page blobs.
+- **R2429:** Retrieval-time invocations of the chunker — the fallback inside `GetChunk` when `fastRetrieve` cannot satisfy the request — MUST NOT stage blobs. Retrieval is not indexing; staging without a matching `FlushBlobs` would leak `pending` entries and risk overwriting fresh blobs with old text on the next indexing pass. The streaming-retrieve helper uses a non-persisting code path internal to PDFChunker.
