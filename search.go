@@ -26,8 +26,6 @@ import (
 	"github.com/yuin/goldmark"
 )
 
-var tagPattern = regexp.MustCompile(`@([a-zA-Z][\w-]*):`)
-
 // defaultSearchOpts returns FTS search options with dynamic trigram filtering.
 // The filter uses a 50% ratio threshold — trigrams appearing in more than
 // half of all chunks are skipped as non-discriminating.
@@ -1545,41 +1543,87 @@ func (c *ftsKeyCache) resolveChunkScore(cs ChunkScore) (chunkKey, bool) {
 	return chunkKey{}, false
 }
 
-// TagResult is a tag found in search results.
-type TagResult struct {
-	Tag       string  `json:"tag"`
-	Count     int     `json:"count"`
-	BestScore float64 `json:"bestScore,omitempty"`
+// TagLocation is one chunk where a (tag, value) pair appears.
+// CRC: crc-Searcher.md | R2433
+type TagLocation struct {
+	Path  string `json:"path"`
+	Range string `json:"range"`
 }
 
-// ExtractResultTags scans result chunk texts for @tag: patterns and returns
-// tag names with counts and best scores. Results must have Text populated.
+// TagValueGroup is the chunks containing a single (tag, value) pair.
+// Count is the chunk count; Locations is the per-chunk path:range list.
+// Value may be empty when the @tag: appeared with no value text.
+// CRC: crc-Searcher.md | R2433, R2434
+type TagValueGroup struct {
+	Value     string        `json:"value"`
+	Count     int           `json:"count"`
+	Locations []TagLocation `json:"locations,omitempty"`
+}
+
+// TagResult is a tag found in search results, with its value/location
+// breakdown. Count is the chunk count across all values; FileCount is the
+// number of distinct files containing the tag.
+// CRC: crc-Searcher.md | R2433, R2434
+type TagResult struct {
+	Tag       string          `json:"tag"`
+	Count     int             `json:"count"`
+	BestScore float64         `json:"bestScore,omitempty"`
+	FileCount int             `json:"fileCount,omitempty"`
+	Values    []TagValueGroup `json:"values,omitempty"`
+}
+
+// ExtractResultTags scans result chunk texts for @tag: value patterns,
+// skipping mentions inside markdown fenced/indented code blocks. Each
+// chunk contributes at most one location per (tag, value) pair — repeated
+// inline occurrences within the same chunk don't inflate counts. Results
+// must have Text populated (via FillChunks).
+// CRC: crc-Searcher.md | R2433, R2434
 func ExtractResultTags(results []SearchResultEntry) []TagResult {
-	re := tagPattern
-	counts := make(map[string]int)
+	type groupKey struct{ tag, value string }
+	groups := make(map[string]map[string][]TagLocation)
 	bestScores := make(map[string]float64)
+	files := make(map[string]map[string]struct{})
 
 	for _, r := range results {
-		matches := re.FindAllStringSubmatch(r.Text, -1)
-		seen := make(map[string]bool)
-		for _, m := range matches {
-			tag := m[1]
-			if !seen[tag] {
-				counts[tag]++
-				seen[tag] = true
+		seen := make(map[groupKey]bool)
+		for _, tv := range ExtractTagValues([]byte(r.Text), "markdown") {
+			key := groupKey{tag: tv.Tag, value: tv.Value}
+			if seen[key] {
+				continue
 			}
-			if r.Score > bestScores[tag] {
-				bestScores[tag] = r.Score
+			seen[key] = true
+			if groups[tv.Tag] == nil {
+				groups[tv.Tag] = make(map[string][]TagLocation)
+				files[tv.Tag] = make(map[string]struct{})
+			}
+			groups[tv.Tag][tv.Value] = append(groups[tv.Tag][tv.Value], TagLocation{Path: r.Path, Range: r.Range})
+			files[tv.Tag][r.Path] = struct{}{}
+			if r.Score > bestScores[tv.Tag] {
+				bestScores[tv.Tag] = r.Score
 			}
 		}
 	}
 
-	tags := make([]TagResult, 0, len(counts))
-	for tag, count := range counts {
-		tags = append(tags, TagResult{Tag: tag, Count: count, BestScore: bestScores[tag]})
+	tags := make([]TagResult, 0, len(groups))
+	for tag, valMap := range groups {
+		tr := TagResult{Tag: tag, BestScore: bestScores[tag], FileCount: len(files[tag])}
+		for value, locs := range valMap {
+			tr.Values = append(tr.Values, TagValueGroup{Value: value, Count: len(locs), Locations: locs})
+			tr.Count += len(locs)
+		}
+		sort.Slice(tr.Values, func(i, j int) bool {
+			if tr.Values[i].Count != tr.Values[j].Count {
+				return tr.Values[i].Count > tr.Values[j].Count
+			}
+			return tr.Values[i].Value < tr.Values[j].Value
+		})
+		tags = append(tags, tr)
 	}
 	sort.Slice(tags, func(i, j int) bool {
-		return tags[i].Count > tags[j].Count
+		if tags[i].Count != tags[j].Count {
+			return tags[i].Count > tags[j].Count
+		}
+		return tags[i].Tag < tags[j].Tag
 	})
 	return tags
 }

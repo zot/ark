@@ -3795,3 +3795,17 @@ implementation, not a separate format break.
 
 - **R2430:** `ark message inbox --to PROJECT` filters messages where `@to-project` matches PROJECT. This is the strict "incoming for PROJECT" view (requests targeted at PROJECT plus responses to PROJECT's outgoing requests). `--to` carries the semantic the old `--project` flag had before R498 was retired.
 - **R2431:** `ark message inbox --project PROJECT` filters messages where EITHER `@to-project` OR `@from-project` matches PROJECT — the "everything involving PROJECT" view. Composable with `--from` and `--to`: every filter must match (intersection). Replaces the retired R498 to-only semantic; the strict to-only behavior is now `--to`.
+
+## Feature: tags-output baby food
+**Source:** specs/tags-baby-food.md
+
+- **R2432:** `ark search -tags` proxied through `POST /search` decodes the server's `[]TagResult` response directly. Previously the CLI decoded into `[]SearchResultEntry` and re-extracted on empty data, silently returning nothing for every server-path invocation.
+- **R2433:** `ark search -tags` emits a markdown bullet tree with four layers — `@tag-name` → value → file → `:range` — instead of TSV `tag\tcount` lines. The header for a tag carries `(N chunks across M files)` when the tag spans more than one value OR more than one file; single-value single-file tags drop the redundant header.
+- **R2434:** Tag extraction captures the value when present on the same line (`@name: value`) in addition to the tag name. The chunk-text scan still recognizes bare `@name:` patterns; the value layer is empty (no children) when no value is present.
+- **R2435:** Each `-with -tag NAME` filter on the command line suppresses `@NAME` from level 1 of the `-tags` output (the agent already knows it filtered for that tag). The value layer becomes the top of that subtree. `-without -tag …` never triggers suppression.
+- **R2436:** Each `-with -tag NAME:VALUE` filter suppresses both `@NAME` and the matching VALUE; the location layer becomes the top of that subtree. When every `-with -tag` filter is fully specified, the `-tags` output collapses to a flat list of file/chunk locations.
+- **R2437:** `-no-values` (orthogonal to the location axis) collapses the value layer; chunks from different values merge into one list under the tag name. Composes with `-no-chunks` and `-no-files`.
+- **R2438:** `-no-chunks` strips the `:range` suffix from location lines, leaving file paths only; duplicate file paths under one value are deduplicated. Composes with `-no-values`.
+- **R2439:** `-no-files` drops file/chunk locations entirely; only tag/value counts remain. Subsumes `-no-chunks`. Composes with `-no-values`; combined with `-no-values` it produces tag-names only.
+- **R2440:** Tags NOT named in any `-with -tag` filter appear in full hierarchy alongside any tags that did trigger suppression. Each filter independently determines what's hidden for its own tag.
+- **R2441:** `ark search -tags -json` emits `TagResult` JSONL — one object per line, full structured shape (tag, count, bestScore, fileCount, values[]) — instead of the markdown bullet tree. Suppression flags (`-no-values`/`-no-chunks`/`-no-files`) and `-with -tag` adaptive defaults do NOT affect JSON output; programs filter the structured data themselves.

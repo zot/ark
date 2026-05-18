@@ -558,7 +558,11 @@ Conventional flags:
 | `-proximity`       | `false` | Rerank top 2k candidates by query-term proximity                                                   |
 | `-session NAME`    | —       | Named session for cross-query cache (server only)                                                  |
 | `-no-tmp`          | `false` | Exclude tmp:// documents                                                                           |
-| `-tags`            | `false` | Output extracted tag names instead of content                                                      |
+| `-tags`            | `false` | Output extracted @tag activity as markdown bullets. See [tags-baby-food.md](tags-baby-food.md). Each `-with -tag NAME[:VALUE]` suppresses its own subtree from the output (the agent already knows what it filtered for) |
+| `-no-values`       | `false` | With `-tags`: collapse the value layer (tag → files/chunks). Orthogonal to the file/chunk axis     |
+| `-no-chunks`       | `false` | With `-tags`: drop `:range` from locations (file paths only); duplicate files dedup under one value |
+| `-no-files`        | `false` | With `-tags`: drop file/chunk locations entirely; only tag/value counts remain. Subsumes `-no-chunks` |
+| `-json`            | `false` | With `-tags`: emit `TagResult` JSONL (one object per line) instead of markdown bullets. Suppression flags do NOT apply — JSON is the raw structured view |
 | `-chunks`          | `false` | Emit chunk text as JSONL. Mutually exclusive with `-file-content`                                  |
 | `-file-content`    | `false` | Emit full file content as JSONL                                                                    |
 | `-preview N`       | `0`     | With `-chunks`: extract N-char preview window around match                                         |

@@ -931,7 +931,11 @@ Output:`)
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
-	tags := fs.Bool("tags", false, "output extracted tags instead of content")
+	tags := fs.Bool("tags", false, "output extracted @tag activity as markdown bullets (see -no-values/-no-chunks/-no-files)")
+	noValues := fs.Bool("no-values", false, "with -tags: collapse the value layer (tag → files/chunks)")
+	noChunks := fs.Bool("no-chunks", false, "with -tags: drop :range from locations (file paths only)")
+	noFiles := fs.Bool("no-files", false, "with -tags: drop file/chunk locations entirely (tag/value counts only)")
+	tagsJSON := fs.Bool("json", false, "with -tags: emit TagResult JSONL instead of markdown bullets")
 	chunks := fs.Bool("chunks", false, "emit chunk text as JSONL")
 	files := fs.Bool("file-content", false, "emit full file content as JSONL")
 	preview := fs.Int("preview", 0, "with --chunks: extract N-char preview window around match")
@@ -1141,14 +1145,26 @@ Output:`)
 			ValueTokens:  primaryTagValues,
 			NameMatch:    "exact",
 		}
-		var results []ark.SearchResultEntry
-		if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
-			if *tags {
-				printTagResults(results, *scores)
-			} else {
-				printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+		if *tags {
+			// Server returns []ark.TagResult for Tags:true; decode into that
+			// shape (previously decoded into []SearchResultEntry, silently
+			// producing empty output).
+			// CRC: crc-CLI.md | R2432, R2441
+			var tagResults []ark.TagResult
+			if err := proxyDecode(client, "POST", "/search", req, &tagResults); err == nil {
+				if *tagsJSON {
+					emitTagsJSONL(tagResults)
+				} else {
+					printTagsBabyFood(tagResults, buildTagsCfg(filterEntries, *noValues, *noChunks, *noFiles), *scores)
+				}
+				return
 			}
-			return
+		} else {
+			var results []ark.SearchResultEntry
+			if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
+				printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+				return
+			}
 		}
 		// Server proxy failed — fall through to local search
 	}
@@ -1239,7 +1255,12 @@ Output:`)
 		}
 
 		if *tags {
-			printTagResults(results, *scores)
+			tagResults := ark.ExtractResultTags(results)
+			if *tagsJSON {
+				emitTagsJSONL(tagResults)
+			} else {
+				printTagsBabyFood(tagResults, buildTagsCfg(filterEntries, *noValues, *noChunks, *noFiles), *scores)
+			}
 		} else {
 			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
 		}
@@ -1296,18 +1317,154 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 	}
 }
 
-func printTagResults(results []ark.SearchResultEntry, scores bool) {
-	printTagResultsDirect(ark.ExtractResultTags(results), scores)
+// tagsCfg drives -tags output formatting: which subtrees the agent
+// already knows about (and so can be suppressed), and how deep to
+// descend before stopping.
+// CRC: crc-CLI.md | R2433, R2435, R2436, R2437, R2438, R2439, R2440
+type tagsCfg struct {
+	noValues  bool                       // collapse value layer
+	noChunks  bool                       // file paths only, no :range
+	noFiles   bool                       // no locations at all (implies noChunks)
+	hideName  map[string]bool            // -with -tag NAME → hide @NAME header
+	hideValue map[string]map[string]bool // -with -tag NAME:VALUE → hide that value's header
 }
 
-func printTagResultsDirect(tags []ark.TagResult, scores bool) {
-	for _, t := range tags {
-		if scores {
-			fmt.Printf("%s\t%d\t%.4f\n", t.Tag, t.Count, t.BestScore)
-		} else {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
+// buildTagsCfg scans the parsed filter stack for `-with -tag NAME[:VALUE]`
+// entries and records which subtrees to suppress in the -tags output. The
+// agent supplied the filter, so it already knows the prefix — echoing it
+// is pure token cost. `-without -tag …` never triggers suppression: the
+// agent asked to exclude that tag and showing what else is there is the
+// useful answer.
+// CRC: crc-CLI.md | R2435, R2436, R2440
+func buildTagsCfg(filters []filterEntry, noValues, noChunks, noFiles bool) tagsCfg {
+	cfg := tagsCfg{
+		noValues:  noValues,
+		noChunks:  noChunks,
+		noFiles:   noFiles,
+		hideName:  make(map[string]bool),
+		hideValue: make(map[string]map[string]bool),
+	}
+	for _, f := range filters {
+		if f.polarity != "with" || f.mode != "tag" {
+			continue
+		}
+		nameStr, valueStr, hasValue := strings.Cut(f.query, ":")
+		nameStr = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(nameStr), "@")))
+		if nameStr == "" {
+			continue
+		}
+		cfg.hideName[nameStr] = true
+		if !hasValue || strings.TrimSpace(valueStr) == "" {
+			continue
+		}
+		if cfg.hideValue[nameStr] == nil {
+			cfg.hideValue[nameStr] = make(map[string]bool)
+		}
+		for _, tok := range ark.TokenizeTagValue(valueStr) {
+			cfg.hideValue[nameStr][tok] = true
 		}
 	}
+	return cfg
+}
+
+// emitTagsJSONL writes one TagResult per line as JSON for programmatic
+// consumers. Suppression flags and adaptive defaults are intentionally
+// not applied — JSON is the raw structured view; consumers filter
+// themselves (jq, etc.).
+// CRC: crc-CLI.md | R2441
+func emitTagsJSONL(tags []ark.TagResult) {
+	enc := json.NewEncoder(os.Stdout)
+	for _, t := range tags {
+		enc.Encode(t)
+	}
+}
+
+// printTagsBabyFood renders extracted tag activity as a markdown bullet
+// tree: @tag → value → file → :range. Layers are dropped according to
+// cfg — both the adaptive suppression from -with -tag filters and the
+// explicit -no-values / -no-chunks / -no-files flags. The output is
+// stable across invocations: tags sorted by count desc (ties by name),
+// values by count desc (ties by value), locations in extraction order.
+// CRC: crc-CLI.md | R2433, R2435, R2436, R2437, R2438, R2439, R2440
+func printTagsBabyFood(tags []ark.TagResult, cfg tagsCfg, scores bool) {
+	for _, t := range tags {
+		emitTag(t, cfg, scores)
+	}
+}
+
+func emitTag(t ark.TagResult, cfg tagsCfg, scores bool) {
+	baseIndent := 0
+	showName := !cfg.hideName[t.Tag]
+	if showName {
+		header := fmt.Sprintf("- @%s (%d", t.Tag, t.Count)
+		if t.FileCount > 1 {
+			header += fmt.Sprintf(" in %d files", t.FileCount)
+		}
+		header += ")"
+		if scores {
+			header += fmt.Sprintf(" [%.4f]", t.BestScore)
+		}
+		fmt.Println(header)
+		baseIndent = 2
+	}
+	if cfg.noValues {
+		emitLocations(flattenValueLocations(t.Values), cfg, baseIndent)
+		return
+	}
+	for _, v := range t.Values {
+		valIndent := baseIndent
+		hidden := cfg.hideValue[t.Tag][v.Value]
+		if !hidden {
+			valLabel := v.Value
+			if valLabel == "" {
+				valLabel = "(no value)"
+			}
+			fmt.Printf("%s- %s (%d)\n", spaces(baseIndent), valLabel, v.Count)
+			valIndent = baseIndent + 2
+		}
+		emitLocations(v.Locations, cfg, valIndent)
+	}
+}
+
+// flattenValueLocations merges every value's locations into a single
+// list, preserving extraction order across values.
+// CRC: crc-CLI.md | R2437
+func flattenValueLocations(values []ark.TagValueGroup) []ark.TagLocation {
+	var out []ark.TagLocation
+	for _, v := range values {
+		out = append(out, v.Locations...)
+	}
+	return out
+}
+
+// emitLocations prints the location layer per cfg: file:range entries,
+// file-only entries (deduped), or nothing.
+// CRC: crc-CLI.md | R2438, R2439
+func emitLocations(locs []ark.TagLocation, cfg tagsCfg, indent int) {
+	if cfg.noFiles {
+		return
+	}
+	if cfg.noChunks {
+		seen := make(map[string]bool)
+		for _, loc := range locs {
+			if seen[loc.Path] {
+				continue
+			}
+			seen[loc.Path] = true
+			fmt.Printf("%s- %s\n", spaces(indent), loc.Path)
+		}
+		return
+	}
+	for _, loc := range locs {
+		fmt.Printf("%s- %s:%s\n", spaces(indent), loc.Path, loc.Range)
+	}
+}
+
+func spaces(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", n)
 }
 
 // CRC: crc-CLI.md | Seq: seq-spectral-expand.md | R1243
