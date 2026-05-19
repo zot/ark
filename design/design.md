@@ -534,3 +534,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T84: R1827 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
 - T85: R1828 retired by R1848 (incremental centroid seeding replaced by full recompute)
 - T86: R1829 retired by R1848 (incremental centroid seeding replaced by full recompute)
+- T87: R716 retired by R2484 (2026-05-19 --unmatched global pair lookup)

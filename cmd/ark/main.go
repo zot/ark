@@ -4275,6 +4275,26 @@ func cmdUIVariables(args []string) {
 	fmt.Println()
 }
 
+// normalizeTagName strips a leading '@' and trailing ':' from a tag name so
+// callers can paste the rendered form ("@area:") and get the canonical name
+// ("area"). Without this, a copy-pasted name flows into TagBlock.Set and
+// Render emits "@@area:: VALUE". Mirrors R2449/R2450 for -tag sigil parsing.
+// R2483
+func normalizeTagName(name string) string {
+	name = strings.TrimPrefix(name, "@")
+	name = strings.TrimSuffix(name, ":")
+	return name
+}
+
+// normalizeTagNames applies normalizeTagName across a slice in place.
+// R2483
+func normalizeTagNames(names []string) []string {
+	for i, n := range names {
+		names[i] = normalizeTagName(n)
+	}
+	return names
+}
+
 // CRC: crc-CLI.md | R607, R608, R609, R610, R611, R612, R615
 func cmdTag(args []string) {
 	tagUsage := `Usage: ark tag <subcommand>
@@ -4357,7 +4377,7 @@ func cmdTagCounts(args []string) {
 	fs := flag.NewFlagSet("tag counts", flag.ExitOnError)
 	fs.Parse(args)
 
-	tags := fs.Args()
+	tags := normalizeTagNames(fs.Args())
 	if len(tags) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no tags specified")
 		os.Exit(1)
@@ -4393,7 +4413,7 @@ func cmdTagFiles(args []string) {
 	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
 	fs.Parse(args)
 
-	tags := fs.Args()
+	tags := normalizeTagNames(fs.Args())
 	if len(tags) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no tags specified")
 		os.Exit(1)
@@ -4468,7 +4488,7 @@ func cmdTagValues(args []string) {
 	}
 	fs.Parse(args)
 
-	tags := fs.Args()
+	tags := normalizeTagNames(fs.Args())
 	if len(tags) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no tags specified")
 		os.Exit(1)
@@ -4550,7 +4570,7 @@ func cmdTagDefs(args []string) {
 	fs := flag.NewFlagSet("tag defs", flag.ExitOnError)
 	showPath := fs.Bool("path", false, "show source file path, not deduplicated")
 	fs.Parse(args)
-	tags := fs.Args()
+	tags := normalizeTagNames(fs.Args())
 
 	printDefs := func(defs []ark.TagDefInfo) {
 		if *showPath {
@@ -4618,6 +4638,11 @@ func cmdTagSet(args []string) {
 		os.Exit(1)
 	}
 
+	// R2483: normalize tag names (strip leading @ and trailing :) at every even index.
+	for i := 0; i < len(pairs); i += 2 {
+		pairs[i] = normalizeTagName(pairs[i])
+	}
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		fatal(err)
@@ -4653,7 +4678,7 @@ func cmdTagGet(args []string) {
 	}
 
 	filePath := args[0]
-	requestedTags := args[1:]
+	requestedTags := normalizeTagNames(args[1:])
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -5140,6 +5165,40 @@ func readStdinBody() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// writeAtomicNew writes data to filePath atomically: write to a sibling
+// temp file in the same directory, fsync-close, then rename into place.
+// The destination either appears with full content or not at all — no
+// 0-byte husks from a partial WriteFile or an interrupted process. The
+// caller has already established that filePath does not exist; if a race
+// produces an existing file at rename time the underlying Rename clobbers
+// it, which is acceptable for the new-request/new-response use case.
+// R2485
+func writeAtomicNew(filePath string, data []byte) error {
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(filePath)+".tmp.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
 func cmdMessageNewRequest(args []string) {
 	fs := flag.NewFlagSet("message new-request", flag.ExitOnError)
 	from := fs.String("from", "", "source project name (required)")
@@ -5185,10 +5244,8 @@ func cmdMessageNewRequest(args []string) {
 		fmt.Fprintf(&buf, "\n%s", body)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-		fatal(err)
-	}
-	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+	// R2485: atomic create — no 0-byte husk if writing fails.
+	if err := writeAtomicNew(filePath, buf.Bytes()); err != nil {
 		fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "hint: when the response arrives, track your progress with @response-handled:\n")
@@ -5235,10 +5292,8 @@ func cmdMessageNewResponse(args []string) {
 		buf.WriteString(body)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-		fatal(err)
-	}
-	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+	// R2485: atomic create — no 0-byte husk if writing fails.
+	if err := writeAtomicNew(filePath, buf.Bytes()); err != nil {
 		fatal(err)
 	}
 }
@@ -5275,30 +5330,16 @@ func cmdMessageInbox(args []string) {
 	fs.Parse(args)
 
 	printEntries := func(entries []ark.InboxEntry) {
-		// CRC: crc-CLI.md | R2430, R2431
-		// CLI-specific post-filters (project, to, from)
-		var filtered []ark.InboxEntry
-		for _, e := range entries {
-			if *project != "" && e.To != *project && e.From != *project {
-				continue
-			}
-			if *to != "" && e.To != *to {
-				continue
-			}
-			if *from != "" && e.From != *from {
-				continue
-			}
-			filtered = append(filtered, e)
-		}
-
-		// R714, R723: pair entries by requestId for unmatched and lag
+		// R714, R723, R2484: pair entries by requestId against the FULL
+		// inbox before applying CLI filters, so --unmatched and lag see
+		// the counterpart even when a directional filter would hide it.
 		type pair struct {
 			request  *ark.InboxEntry
 			response *ark.InboxEntry
 		}
 		byID := make(map[string]*pair)
-		for i := range filtered {
-			e := &filtered[i]
+		for i := range entries {
+			e := &entries[i]
 			id := e.RequestID
 			if id == "" {
 				id = e.Path
@@ -5315,7 +5356,28 @@ func cmdMessageInbox(args []string) {
 			}
 		}
 
-		// R713, R716: --unmatched keeps only requests with no response
+		// CRC: crc-CLI.md | R2430, R2431, R2484
+		// CLI-specific post-filters. --all is applied here (not by the
+		// fetch) so that completed responses remain visible to byID for
+		// pair lookup; the display view still hides them unless asked.
+		var filtered []ark.InboxEntry
+		for _, e := range entries {
+			if !*all && (e.Status == "completed" || e.Status == "denied") {
+				continue
+			}
+			if *project != "" && e.To != *project && e.From != *project {
+				continue
+			}
+			if *to != "" && e.To != *to {
+				continue
+			}
+			if *from != "" && e.From != *from {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+
+		// R713, R2484: --unmatched keeps only requests whose global pair has no response
 		if *unmatched {
 			var um []ark.InboxEntry
 			for _, e := range filtered {
@@ -5423,12 +5485,15 @@ func cmdMessageInbox(args []string) {
 
 	// Server-first so tmp:// inbox messages (only in server memory)
 	// are visible. Cold-path fallback when no server is running.
-	// CRC: crc-CLI.md | R1952
+	// CRC: crc-CLI.md | R1952, R2484
+	// We always fetch with showAll=true so completed responses remain
+	// in the entry stream for byID pair lookup; --all is applied as a
+	// CLI post-filter in printEntries.
 	if client := serverClient(arkDir); client != nil {
 		req := struct {
 			ShowAll         bool `json:"showAll,omitempty"`
 			IncludeArchived bool `json:"includeArchived,omitempty"`
-		}{ShowAll: *all, IncludeArchived: *includeArchived}
+		}{ShowAll: true, IncludeArchived: *includeArchived}
 		var entries []ark.InboxEntry
 		if err := proxyDecode(client, "POST", "/inbox", req, &entries); err == nil {
 			printEntries(entries)
@@ -5436,7 +5501,7 @@ func cmdMessageInbox(args []string) {
 		}
 	}
 	withDB(func(d *ark.DB) {
-		entries, err := d.Inbox(*all, *includeArchived)
+		entries, err := d.Inbox(true, *includeArchived)
 		if err != nil {
 			fatal(err)
 		}

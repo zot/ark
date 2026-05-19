@@ -8,40 +8,52 @@ If the server is not running, start it with `~/.ark/ark serve`.
 
 ## Inbox Commands
 
+Pick the right scope. The three project flags compose as
+intersection — `--to ark --from microfts2` shows only the
+microfts2→ark slice.
+
 ```bash
-# incoming messages to a project (non-completed)
+# all messages involving a project (both directions, non-completed)
 ~/.ark/ark message inbox --project PROJECT
 
-# outgoing messages from a project (non-completed)
+# incoming only — addressed TO this project
+~/.ark/ark message inbox --to PROJECT
+
+# outgoing only — sent FROM this project
 ~/.ark/ark message inbox --from PROJECT
 
-# outgoing counts by status (one line per status)
+# counts by status (one row per status)
+~/.ark/ark message inbox --project PROJECT --counts
+~/.ark/ark message inbox --to PROJECT --counts
 ~/.ark/ark message inbox --from PROJECT --counts
 
-# all outgoing including completed/done/denied
-~/.ark/ark message inbox --from PROJECT --all
+# include completed/denied messages
+~/.ark/ark message inbox --project PROJECT --all
+~/.ark/ark message inbox --project PROJECT --all --counts
 
-# all outgoing counts (complete picture in one call)
-~/.ark/ark message inbox --from PROJECT --all --counts
+# unanswered requests TO this project (incoming, no response yet)
+~/.ark/ark message inbox --to PROJECT --unmatched
 
-# both directions for one project
-~/.ark/ark message inbox --project PROJECT --from PROJECT
-```
+# unanswered requests FROM this project (outbound, awaiting response)
+~/.ark/ark message inbox --from PROJECT --unmatched
 
-```bash
-# unanswered requests — requests with no matching response
+# unanswered requests in either direction
 ~/.ark/ark message inbox --project PROJECT --unmatched
 ```
 
 ### Inbox Flags
 
 All flags compose (intersection when combined):
-- `--project PROJECT` — filter by to-project
-- `--from PROJECT` — filter by from-project
-- `--all` — include completed/done/denied (default: excluded)
+- `--project PROJECT` — filter by EITHER `to-project` OR `from-project` (both directions)
+- `--to PROJECT` — filter by `to-project` (incoming only)
+- `--from PROJECT` — filter by `from-project` (outgoing only)
+- `--all` — include completed/denied (default: excluded)
 - `--include-archived` — include archived messages (default: excluded)
 - `--counts` — output `status\tcount` lines instead of individual rows
-- `--unmatched` — show only requests with no matching response (by requestId)
+- `--unmatched` — show only requests with no matching response (by requestId).
+  Pair lookup is global — works correctly with `--to`, `--from`, and
+  `--project`. The filter selects which unmatched requests are
+  displayed; the matcher always sees the full inbox.
 
 ### Inbox Output
 
@@ -99,11 +111,23 @@ For responses:
 Bare filenames: `requests/<short-name>.md`. Only add `-<session8>`
 suffix if the name collides.
 
-After writing the body, validate:
+**Validate every message file you create.** This is not optional —
+malformed tag blocks become silent index drift.
 ```bash
-~/.ark/ark tag check requests/the-file.md
+~/.ark/ark message check requests/the-file.md
 ```
-Follow any fix commands it outputs.
+`message check` is the message-aware form (it knows the expected
+heading list). If it reports problems, fix them with `ark tag set`
+or rewrite the file via `new-request`/`new-response`. Common
+failure modes:
+- Blank lines inside the tag block — must be a contiguous run of
+  `@name: value` lines with a single blank line separating the
+  block from the body.
+- Tags written without a space after the colon (`@area:lua`).
+- Tags inside the body instead of the top block.
+
+Pass `--content` to `new-request`/`new-response` rather than
+hand-writing the file; the CLI lays down the canonical shape.
 
 ## Managing Messages
 
@@ -131,6 +155,16 @@ Format: `YYYY-MM-DD`. Never set it manually.
 One lifecycle — `@status`: open, accepted, in-progress, completed, denied, future.
 
 Response progression: accepted → in-progress → completed.
+
+**Never invent statuses.** If `ark message inbox` shows messages
+with `done`, `resolved`, `shipped`, or any other value outside the
+list above, those are legacy artifacts from earlier lifecycles.
+Report them by their actual value when summarizing — do not silently
+normalize to `completed` and do not change them. Surface the
+mismatch so the owning session can decide.
+
+The `tag set` command accepts whatever string you give it; the
+guard is here, not in the CLI.
 
 ### Bookmark tags (read-only for Hermes)
 

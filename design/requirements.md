@@ -1157,7 +1157,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R713:** `ark message inbox --unmatched` shows only requests with no matching response
 - **R714:** Matching groups inbox entries by `requestId` — a request is unmatched if no response shares its `requestId`
 - **R715:** `--unmatched` composes with `--project`, `--from`, `--all`, `--include-archived`
-- **R716:** The unmatched check applies after all other filtering
+- **~~R716:~~** (Retired T87 — see R2484) The unmatched check applies after all other filtering
 - **R717:** (inferred) `--unmatched` implies request-only output — responses are never "unmatched"
 
 ### Bookmark lag in CLI inbox
@@ -3879,3 +3879,18 @@ implementation, not a separate format break.
 **Source:** specs/file-tag-filter.md
 
 - **R2472:** The `ark-search` web component exposes a `-file-tag` filter row alongside the existing `-tag` row. Both accept the new sigil match syntax. Polarity (`with` / `without`) and repeat semantics match the `-tag` row. The component serializes file-tag filters into the same `chunk_filters` request shape the server already handles for `-tag`.
+
+## Feature: tag-name CLI normalization
+**Source:** specs/cli-commands.md
+
+- **R2483:** Bare tag-name arguments to `ark tag set/get/counts/files/values/defs` (and the `message set-tags`/`message get-tags` aliases) strip a single leading `@` and a single trailing `:` per argument before use. A caller pasting the rendered form `@status:` is equivalent to passing `status`. Mirrors R2449/R2450 for `-tag` sigil parsing; prevents the `@@area::` malformed-tag wonk when a copy-pasted name flows into `TagBlock.Set`.
+
+## Feature: --unmatched global pair lookup
+**Source:** specs/cli-commands.md
+
+- **R2484:** Pair matching for `ark message inbox --unmatched` and for bookmark-lag computation uses the **full inbox**, not the post-filter slice. A request is "unmatched" iff no response with matching `requestId` exists anywhere in the index. The CLI's `--project`, `--to`, `--from`, `--all`, `--include-archived` filters select which unmatched requests are *displayed*; they do not constrain which pairings are *visible* to the matcher. (Replaces R716.) The lag field is computed against the global pair for the same reason: a `lag:PROJECT:STATUS` value should not disappear because a directional filter hid the counterpart message.
+
+## Feature: atomic message create
+**Source:** specs/cli-commands.md
+
+- **R2485:** `ark message new-request` and `ark message new-response` create the target file atomically (write to a sibling temp file in the same directory, then rename into place). A partial write, killed process, or other mid-flight failure never leaves a 0-byte husk at the target path. Either the file appears with full content, or it does not appear at all.

@@ -439,10 +439,10 @@ ark message dm            --from S --to S [--ref ID] --content TEXT
 | `--project P`        | —       | Filter by EITHER `to-project` OR `from-project` (R2431)     |
 | `--to P`             | —       | Filter by `to-project` (R2430; the old `--project` meaning) |
 | `--from P`           | —       | Filter by `from-project`                                    |
-| `--all`              | `false` | Include completed/done/denied messages                      |
+| `--all`              | `false` | Include `completed`/`denied` messages in the display (they are always considered for pair lookup) |
 | `--include-archived` | `false` | Include `@archived: true` messages                          |
 | `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows                |
-| `--unmatched`        | `false` | Show only requests with no matching response                |
+| `--unmatched`        | `false` | Show only requests with no matching response. Pair lookup is global — `--unmatched` combines correctly with `--to`/`--from`. |
 
 Filters combine as intersection: `--from ark --to frictionless`
 shows only the ark→frictionless slice.
@@ -451,6 +451,11 @@ Default inbox row is tab-separated:
 `DATE STATUS TO FROM SUMMARY PATH LAG`. Lag format
 `lag:PROJECT:STATUS` describes a stale `response-handled` /
 `request-handled` bookmark relative to the counterpart's status.
+
+Pair lookup (used by `--unmatched` and by the LAG column) consults
+the **full inbox**, not the post-filter slice. A directional or
+status filter changes what's *shown*; the matcher always sees both
+sides of a pair. See R2484.
 
 ### `missing`, `stale`, `unresolved`, `resolve`
 
@@ -698,6 +703,13 @@ ark tag check FILE [HEADING...]
 ark tag verify [--repair] [--scope SCOPE]
 ark tag inspect [--scope SCOPE] [--target PATH] [--json]
 ```
+
+Bare TAG arguments to `counts`, `files`, `values`, `defs`, `set`, and
+`get` are normalized: a single leading `@` and a single trailing `:`
+are stripped before use, so `@status:` and `status` resolve to the
+same tag. This catches the common copy-paste error where the rendered
+form leaks into the command line. Matches the `-tag` sigil
+normalization (see "Filter stack").
 
 | Subcommand | Server | Behavior |
 |------------|--------|----------|

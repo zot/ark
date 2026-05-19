@@ -150,9 +150,10 @@ read, and write correctly. Overriding these produces malformed or
 misplaced messages.
 **Be explicit about direction.** Hermes is Haiku — it answers what
 you ask, not what you meant. Say exactly what you need:
-- "unanswered requests to PROJECT" — `--unmatched` does this in one command now
-- "outbound requests FROM project still open" — waiting on others
-- "all messages involving project" — full picture
+- "unanswered requests TO project" — `--to PROJECT --unmatched`
+- "outbound requests from project still awaiting reply" — `--from PROJECT --unmatched`
+- "outbound requests FROM project still open" — `--from PROJECT`
+- "all messages involving project" (both directions) — `--project PROJECT`
 - "messages with bookmark lag" — who needs to catch up
 ```
 Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a request from ark to microfts2 about chunker interface.")
