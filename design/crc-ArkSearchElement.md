@@ -1,5 +1,5 @@
 # ArkSearchElement
-**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466, R1472, R1473, R1474, R1475, R1682, R1683, R1684, R1685, R1686, R1687, R1688, R1689, R1690, R1746, R1748, R1750, R1751, R1752, R1753, R1754, R1937
+**Requirements:** R1356, R1357, R1358, R1359, R1360, R1361, R1362, R1363, R1364, R1365, R1366, R1367, R1372, R1373, R1377, R1386, R1387, R1388, R1389, R1390, R1391, R1392, R1393, R1394, R1406, R1407, R1408, R1409, R1410, R1411, R1412, R1413, R1414, R1415, R1416, R1417, R1418, R1419, R1420, R1421, R1422, R1433, R1434, R1435, R1436, R1437, R1438, R1439, R1440, R1441, R1442, R1443, R1444, R1445, R1446, R1447, R1448, R1449, R1450, R1451, R1452, R1453, R1454, R1455, R1456, R1457, R1458, R1459, R1464, R1465, R1466, R1472, R1473, R1474, R1475, R1682, R1683, R1684, R1685, R1686, R1687, R1688, R1689, R1690, R1746, R1748, R1750, R1751, R1752, R1753, R1754, R1937, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2472
 
 Custom element (`<ark-search>`) that renders a tag search panel
 with query bar, results area, and resize handle. Pure DOM — no
@@ -27,8 +27,8 @@ CM6 dependency.
 - renders scrollable results area with grouped results
 - renders drag-to-resize handle
 - debounced search on input (300ms), immediate on Enter
-- for contains-name base queries, sends structured fields (name_tokens, value_tokens, name_match, value_match) so the server resolves T/V records; for exact-name, builds a regex query string as before (R1472, R1474)
-- for contains-name filter rows, sends `mode: "tag-contains"` with tokenized query instead of `mode: "regex"` fallback (R1473, R1474)
+- in tag mode, sends the primary tag predicate as `primaryTagQuery` (sigil form `[~|:]NAME[(=|:|~)VALUE]`); the server's shared TagMatcher resolves chunkIDs via V/F records and bypasses FTS (R2442, R2453)
+- filter rows of mode `tag` and `file-tag` serialize to `chunk_filters` entries carrying the same sigil query — one mode covers exact/contains/regex on each side (R2442, R2452, R2453)
 - computes a list of highlight regexes (one for the tag name prefix, one per value token) and appends them to iframe preview URLs as repeated `highlight=` query params
 - play-button path (`set tag()`) forces name match to exact — exploring "that one tag"
 - fires three-phase progressive search: trigram (instant), embedding (~150ms), curation (async)

@@ -1,5 +1,14 @@
 # Tag Name Contains-Tokens Filter
 
+> **Superseded.** The contains-name path described here is now part
+> of the unified sigil match syntax in
+> [file-tag-filter.md](file-tag-filter.md): `:NAME` selects the
+> contains-name mode (lowercased token bag, substring-AND). The
+> separate `tag-contains` wire mode and `TagContainsChunkFilter`
+> implementation have been retired. This spec is preserved for
+> historical context — refer to file-tag-filter.md for current
+> behavior.
+
 Enhance tag mode so contains-name queries use the T record index
 instead of falling back to regex chunk scanning. Applies to both
 the base query and chunk filter rows.

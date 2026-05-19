@@ -79,23 +79,28 @@ export interface SearchAPI {
   searchFiltered?(query: string, request: FilteredSearchRequest): Promise<SearchResultGroup[]>;
 }
 
-/** Parameters for a chunk-level filter row. R1416 */
+/** Parameters for a chunk-level filter row. R1416, R2442, R2452, R2453 */
 export interface ChunkFilterParam {
   polarity: "with" | "without";
-  mode: "contains" | "fuzzy" | "regex" | "tag" | "tag-contains";
+  mode: "contains" | "fuzzy" | "regex" | "tag" | "file-tag" | "files" | "about";
+  /** For mode "tag" and "file-tag", the query is the sigil form
+   *  `[~|:]NAME [(=|:|~) VALUE]` (R2442). For other modes, it's the
+   *  raw query string. */
   query: string;
 }
 
-/** Full search request with filters. R1416-R1418, R1469 */
+/** Full search request with filters. R1416-R1418, R2442, R2453 */
 export interface FilteredSearchRequest {
   mode?: string;
   chunkFilters?: ChunkFilterParam[];
   filterFiles?: string[];
   excludeFiles?: string[];
-  /** R1469: structured tag query — name tokens for T record resolution */
-  nameTokens?: string[];
-  /** R1469: structured tag query — value tokens for V record resolution */
-  valueTokens?: string[];
-  /** R1469: name match mode — "exact" or "contains" */
-  nameMatch?: "exact" | "contains";
+  /** R2442: primary tag predicate in sigil form (`[~|:]NAME [(=|:|~) VALUE]`).
+   *  Set when -tag (or -file-tag) is the only primary driver; the server
+   *  resolves chunkIDs via the shared TagMatcher and bypasses FTS. */
+  primaryTagQuery?: string;
+  /** R2453: switches the primary tag predicate to file-scoped — every
+   *  chunk on a matching file rather than only the chunks that directly
+   *  carry the tag. */
+  primaryFileTag?: boolean;
 }

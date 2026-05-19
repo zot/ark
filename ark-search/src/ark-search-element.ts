@@ -19,7 +19,7 @@ interface PhasedGroup {
 
 // CRC: crc-ArkSearchElement.md | R1937 — "about" filter mode for
 // semantic chunk-level membership filtering.
-type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "files" | "about";
+type FilterMode = "contains" | "fuzzy" | "regex" | "tag" | "file-tag" | "files" | "about";
 type Polarity = "with" | "without";
 type TagMatchMode = "exact" | "regex" | "fuzzy";
 type TagNameMatch = "contains" | "exact";
@@ -52,7 +52,7 @@ interface SourceToggle {
 
 const SEARCH_MODES = ["contains", "fuzzy", "regex", "tag"] as const;
 type SearchMode = (typeof SEARCH_MODES)[number];
-const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "files", "about"];
+const FILTER_MODES: FilterMode[] = ["contains", "fuzzy", "regex", "tag", "file-tag", "files", "about"];
 const TAG_MATCH_LABELS: Record<TagMatchMode, string> = { exact: "Aa", regex: ".*", fuzzy: "~" };
 const TAG_MATCH_CYCLE: TagMatchMode[] = ["exact", "regex", "fuzzy"];
 const TAG_NAME_MATCH_LABELS: Record<TagNameMatch, string> = { contains: "~", exact: "=" };
@@ -66,6 +66,48 @@ const TAG_NAME_CHARS = "[\\w.-]";
  *  each token matches independently and highlights separately. */
 function tokenizeValue(raw: string): string[] {
   return raw.split(/\s+/).filter(Boolean);
+}
+
+/** Build the sigil-form query from the four primitives that both
+ *  the primary base-bar and per-row tag inputs share.
+ *  R2442, R2452: name mode → leading sigil, value mode → separator. */
+function buildSigilQuery(
+  rawName: string,
+  nameMatch: TagNameMatch,
+  rawValue: string,
+  valueMatch: TagMatchMode,
+): string {
+  const name = rawName.trim();
+  const value = rawValue.trim();
+  const namePart = nameMatch === "contains" ? ":" + name : name;
+  if (value === "") return namePart;
+  switch (valueMatch) {
+    case "exact":
+      return namePart + "=" + value;
+    case "regex":
+      return namePart + "~" + value;
+    case "fuzzy":
+      // Treated as contains (substring-AND tokens). The fuzzy toggle
+      // had no effect for single-row tag filters previously and the
+      // sigil scheme has no fuzzy mode; map to the closest semantic.
+      return namePart + ":" + value;
+  }
+}
+
+/** Build the sigil-form query for a tag filter row. */
+function buildTagSigilQuery(row: FilterRow): string {
+  return buildSigilQuery(row.tagName, row.tagNameMatch, row.tagValue, row.tagMatchMode);
+}
+
+/** Build the sigil-form primary-tag query from the search bar's
+ *  base state. */
+function buildBasePrimaryTagQuery(
+  name: string,
+  nameMatch: TagNameMatch,
+  value: string,
+  valueMatch: TagMatchMode,
+): string {
+  return buildSigilQuery(name, nameMatch, value, valueMatch);
 }
 
 /** Build the `@name:` prefix regex, respecting contains vs exact
@@ -547,8 +589,10 @@ export class ArkSearchElement extends HTMLElement {
     el.appendChild(polaritySel);
     el.appendChild(modeSel);
 
-    // Mode-specific inputs
-    if (row.mode === "tag") {
+    // Mode-specific inputs.
+    // "tag" and "file-tag" share the same inputs — the difference is
+    // in how the server interprets the resulting predicate (R2453).
+    if (row.mode === "tag" || row.mode === "file-tag") {
       // R1413: structured tag fields
       const at = document.createElement("span");
       at.className = "ark-search-filter-at";
@@ -639,7 +683,7 @@ export class ArkSearchElement extends HTMLElement {
     }
 
     // Expand button R1433-R1436
-    const canExpand = (row.mode === "tag" || row.mode === "fuzzy") && this._api?.embedMatch;
+    const canExpand = (row.mode === "tag" || row.mode === "file-tag" || row.mode === "fuzzy") && this._api?.embedMatch;
     if (canExpand && group.rows.length === 1) {
       const expandBtn = document.createElement("button");
       expandBtn.className = "ark-search-filter-expand";
@@ -902,7 +946,8 @@ export class ArkSearchElement extends HTMLElement {
     const api = this._api;
     if (!api?.embedMatch) return;
 
-    const query = row.mode === "tag"
+    const isTagLike = row.mode === "tag" || row.mode === "file-tag";
+    const query = isTagLike
       ? (row.tagValue ? `${row.tagName} ${row.tagValue}` : row.tagName)
       : row.query;
 
@@ -914,7 +959,7 @@ export class ArkSearchElement extends HTMLElement {
       // Replace the original row with concrete exact-match rows R1435
       const newRows: FilterRow[] = matches.map(m => {
         const r = newFilterRow(row.mode, group.polarity);
-        if (row.mode === "tag") {
+        if (isTagLike) {
           r.tagName = m.tag;
           r.tagValue = m.value;
           r.tagMatchMode = "exact";
@@ -991,27 +1036,13 @@ export class ArkSearchElement extends HTMLElement {
       if (rows.length === 1) {
         // Single row — send as-is
         const row = rows[0];
-        if (row.mode === "tag") {
+        if (row.mode === "tag" || row.mode === "file-tag") {
           if (!row.tagName.trim()) continue;
-          // R1473: contains-name uses tag-contains mode for server-side
-          // T/V record resolution. Exact-name stays on the fast tag path.
-          if (row.tagNameMatch === "contains") {
-            const nameTokens = row.tagName.trim().split(/\s+/).filter(Boolean);
-            const valueTokens = row.tagValue.trim().split(/\s+/).filter(Boolean);
-            const q = valueTokens.length > 0
-              ? `${nameTokens.join(" ")}:${valueTokens.join(" ")}`
-              : nameTokens.join(" ");
-            filters.push({
-              polarity: group.polarity,
-              mode: "tag-contains",
-              query: q,
-            });
-          } else {
-            const q = row.tagValue.trim()
-              ? `${row.tagName.trim()}:${row.tagValue.trim()}`
-              : row.tagName.trim();
-            filters.push({ polarity: group.polarity, mode: "tag", query: q });
-          }
+          // R2442, R2452, R2453: build the sigil-form query. Same
+          // shape across "tag" and "file-tag"; the mode itself tells
+          // the server how to interpret it.
+          const q = buildTagSigilQuery(row);
+          filters.push({ polarity: group.polarity, mode: row.mode, query: q });
         } else {
           if (!row.query.trim()) continue;
           filters.push({
@@ -1021,10 +1052,13 @@ export class ArkSearchElement extends HTMLElement {
           });
         }
       } else {
-        // OR group — serialize as regex R1443-R1445
+        // OR group — serialize as regex R1443-R1445. Tag and file-tag
+        // alike fall back to a regex against chunk text here; the OR
+        // group can't preserve file-scoped semantics without a server
+        // change, so we degrade gracefully to chunk-text matching.
         const alts: string[] = [];
         for (const row of rows) {
-          if (row.mode === "tag") {
+          if (row.mode === "tag" || row.mode === "file-tag") {
             if (!row.tagName.trim()) continue;
             alts.push(this.tagRowRegex(row));
           } else {
@@ -1048,25 +1082,25 @@ export class ArkSearchElement extends HTMLElement {
     const api = this._api;
     if (!api) return;
 
-    // R1408, R1472: in tag mode, send structured tokens for server-side
-    // T/V record resolution. Both exact and contains name modes use the
-    // same path — the server handles both via MatchTagNames/MatchTagValues.
+    // R2442, R2453: in tag mode, send the primary predicate in sigil
+    // form. The server's shared TagMatcher resolves chunkIDs via V/F
+    // records and bypasses FTS when no other text primary is set.
     let query: string;
     let mode: string;
-    let nameTokens: string[] | undefined;
-    let valueTokens: string[] | undefined;
-    let nameMatch: "exact" | "contains" | undefined;
+    let primaryTagQuery: string | undefined;
     if (this._searchMode === "tag") {
       if (!this._baseTagName.trim()) {
         this.phasedResults = [];
         this.clearResults();
         return;
       }
-      nameTokens = this._baseTagName.trim().split(/\s+/).filter(Boolean);
-      nameMatch = this._baseTagNameMatch;
-      const rawVal = this._baseTagValue.trim();
-      if (rawVal) valueTokens = rawVal.split(/\s+/).filter(Boolean);
-      query = ""; // server builds the query from tokens
+      primaryTagQuery = buildBasePrimaryTagQuery(
+        this._baseTagName,
+        this._baseTagNameMatch,
+        this._baseTagValue,
+        this._baseTagMatch,
+      );
+      query = ""; // server resolves chunks from the predicate
       mode = "regex"; // result is a regex search
     } else {
       query = this.queryInput.value.trim();
@@ -1083,7 +1117,7 @@ export class ArkSearchElement extends HTMLElement {
 
     const chunkFilters = this.collectChunkFilters();
     const { filterFiles, excludeFiles } = this.collectFileFilters();
-    const hasFilters = chunkFilters.length > 0 || filterFiles.length > 0 || excludeFiles.length > 0 || !!nameTokens;
+    const hasFilters = chunkFilters.length > 0 || filterFiles.length > 0 || excludeFiles.length > 0 || !!primaryTagQuery;
 
     // Phase 1: trigram search R1386
     let phase1: Promise<void>;
@@ -1093,9 +1127,7 @@ export class ArkSearchElement extends HTMLElement {
         chunkFilters: chunkFilters.length > 0 ? chunkFilters : undefined,
         filterFiles: filterFiles.length > 0 ? filterFiles : undefined,
         excludeFiles: excludeFiles.length > 0 ? excludeFiles : undefined,
-        nameTokens,
-        valueTokens,
-        nameMatch,
+        primaryTagQuery,
       }).then((groups) => {
         if (gen !== this.searchGeneration) return;
         for (const g of groups) {

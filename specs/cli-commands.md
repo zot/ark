@@ -49,7 +49,7 @@ name, so always use the absolute path.
 | `stale`            | `stale [PATTERN...]`                                                                                                 | optional                 |                                                      |
 | `status`           | `status [--db] [--chunks] [--tokenize] [--filter-files G] [--exclude-files G]`                                       | preferred                |                                                      |
 | `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
-| `subscribe`        | `subscribe --session ID [--tag T] [--value RE] [--cancel] [--list] [--stats] [--filter-files G] [--exclude-files G]` | required                 |                                                      |
+| `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [--filter-files G] [--exclude-files G]` | required                 |                                                      |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved`                                                                                                         | optional                 | lists U records                                      |
@@ -531,18 +531,19 @@ ark search expand [SUBCOMMAND...]
 
 Filter-stack flags (parsed before `flag.Parse`):
 
-| Flag             | Meaning                                                 |
-|------------------|---------------------------------------------------------|
-| `-contains TERM` | Substring match (default for bare terms)                |
-| `-fuzzy TERM`    | Typo-tolerant match                                     |
-| `-regex PATTERN` | RE2 match                                               |
-| `-tag TAG`       | Tag filter (`name`, `name:value`, optional `@` prefix)  |
-| `-about QUERY`   | Vector similarity (server required for embedding model) |
-| `-files GLOB`    | Path glob filter                                        |
-| `-with`          | Subsequent filters intersect (default polarity)         |
-| `-without`       | Subsequent filters subtract                             |
-| `--filter-k N`   | After an `-about` entry, override per-row top-K         |
-| `-parse`         | Print disambiguated command and exit without searching  |
+| Flag             | Meaning                                                                                           |
+|------------------|---------------------------------------------------------------------------------------------------|
+| `-contains TERM` | Substring match (default for bare terms)                                                          |
+| `-fuzzy TERM`    | Typo-tolerant match                                                                               |
+| `-regex PATTERN` | RE2 match                                                                                         |
+| `-tag TAG`       | Tag filter, sigil syntax `[~|:]NAME[(=|:|~)VALUE]` (see [file-tag-filter.md](file-tag-filter.md)) |
+| `-file-tag TAG`  | File-tag filter — accepts every chunk on a file with the tag (same sigil syntax)                  |
+| `-about QUERY`   | Vector similarity (server required for embedding model)                                           |
+| `-files GLOB`    | Path glob filter                                                                                  |
+| `-with`          | Subsequent filters intersect (default polarity)                                                   |
+| `-without`       | Subsequent filters subtract                                                                       |
+| `--filter-k N`   | After an `-about` entry, override per-row top-K                                                   |
+| `-parse`         | Print disambiguated command and exit without searching                                            |
 
 Conventional flags:
 
@@ -661,19 +662,27 @@ on missing PID file, dead PID, or timeout.
 ark subscribe --session ID [options]
 ```
 
-| Flag                   | Default                      | Meaning                                                        |
-|------------------------|------------------------------|----------------------------------------------------------------|
-| `--session ID`         | required for register/cancel | Session ID                                                     |
-| `--cancel`             | `false`                      | Cancel matching subscription(s)                                |
-| `--list`               | `false`                      | List active subscriptions (`session\ttag\tvalue\thits\tdrops`) |
-| `--stats`              | `false`                      | Per-session totals                                             |
-| `--tag T`              | —                            | Tag name. Leading `@` and trailing `:` stripped                |
-| `--value RE`           | —                            | RE2 value filter; omit to match all values                     |
-| `--filter-files GLOB`  | —                            | Repeatable positive path filter                                |
-| `--exclude-files GLOB` | —                            | Repeatable negative path filter                                |
+| Flag                   | Default                      | Meaning                                                                                |
+|------------------------|------------------------------|----------------------------------------------------------------------------------------|
+| `--session ID`         | required for register/cancel | Session ID                                                                             |
+| `--cancel`             | `false`                      | Cancel matching subscription(s); pair with `--tag` to scope                            |
+| `--list`               | `false`                      | List active subscriptions (`session\tkind\tsigil\thits\tdrops`)                        |
+| `--stats`              | `false`                      | Per-session totals                                                                     |
+| `--tag T`              | —                            | Sigil-form match `[~|:]NAME[(=|:|~)VALUE]`. Leading `@` stripped. Repeatable           |
+| `--file-tag T`         | —                            | Same syntax; matches every chunk on a file that has the tag. Repeatable                |
+| `--filter-files GLOB`  | —                            | Repeatable positive path filter                                                        |
+| `--exclude-files GLOB` | —                            | Repeatable negative path filter                                                        |
+
+Match syntax is the same as `ark search -tag`. Name-side sigils:
+bare = exact, `:` prefix = contains (substring-AND), `~` prefix =
+regex (RE2). Value-side separators: `=V` exact, `:V` contains,
+`~V` regex. Each `--tag` and `--file-tag` becomes its own
+subscription entry; entries OR together at delivery time. The old
+`--value` flag is removed — its work is absorbed by the value
+sigil (`T=V`, `T:V`, `T~V`).
 
 Server-required. Without `--list`/`--stats`/`--cancel`, a register
-call requires `--session` and `--tag`.
+call requires `--session` and at least one `--tag` or `--file-tag`.
 
 ### `tag` — tag operations
 

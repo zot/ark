@@ -17,34 +17,48 @@ See .scratch/PUBSUB.md for the full brainstorm.
 # subscribe to all status changes
 ark subscribe --session $ID --tag status
 
-# subscribe with value filter (RE2 regex on tag content)
-ark subscribe --session $ID --tag to-project --value 'ark'
+# subscribe with value match (sigil syntax — see file-tag-filter.md)
+ark subscribe --session $ID --tag 'to-project=ark'
+ark subscribe --session $ID --tag 'status:open'
+ark subscribe --session $ID --tag 'status~^(open|accepted)$'
+
+# subscribe to every chunk on a file that has the tag (file-scoped)
+ark subscribe --session $ID --file-tag 'to-project=ark'
 
 # exclude files from matching (prevents infinite loops)
 ark subscribe --session $ID --tag status \
-  --except-files '/home/deck/.claude/**/*.jsonl'
+  --exclude-files '/home/deck/.claude/**/*.jsonl'
 ```
 
-Each `--tag` is one subscription entry. Optional `--value REGEX`
-filters on the tag's content. No `--value` means match any value.
+`--tag` and `--file-tag` accept the shared sigil match syntax
+`[~|:]NAME [(=|:|~) VALUE]` (see
+[file-tag-filter.md](file-tag-filter.md) for the full table).
+Each `--tag` / `--file-tag` is one subscription entry; they are
+independent axes and can repeat. Entries OR together at delivery
+time.
 
-Tag names are normalized: a leading `@` and trailing `:` are
-stripped so that `--tag @status:`, `--tag @status`, and `--tag status`
-all resolve to the tag name `status`. Users naturally type the
-`@tag:` form they see in files — the CLI shouldn't punish that.
+`--tag T` matches a chunk's own tag set. `--file-tag T` matches
+every chunk indexed on a file that has the tag somewhere; the
+publisher maintains an in-memory fileID set per subscription and
+re-evaluates membership on every indexing event so removing a tag
+from one chunk doesn't drop the file if another chunk still
+carries it.
 
-Multiple `--tag` flags in one command create multiple subscriptions
-(OR — any match fires). Each subscription is independent.
+Tag names are normalized: a leading `@` is stripped from any
+prefix arrangement (`@T`, `@~T`, `~@T`, `@:T`, `:@T` all normalize
+identically). A trailing `:` on the name is stripped via the
+separator-scan path. Users naturally type the `@tag:` form they
+see in files — the CLI accepts it.
 
 File filters parallel search flags:
 - `--filter-files GLOB` — only match tags in files matching the glob
-- `--except-files GLOB` — never match tags in files matching the glob
+- `--exclude-files GLOB` — never match tags in files matching the glob
 
 Both are checked at publish time before enqueue. They compose the
 same way as in search: `--filter-files` sets the scope,
-`--except-files` carves out exceptions within it. Example:
+`--exclude-files` carves out exceptions within it. Example:
 `--filter-files '~/.claude/projects/**/*.jsonl'` watches only
-conversation logs; adding `--except-files '**/c9f6bd1d*.jsonl'`
+conversation logs; adding `--exclude-files '**/c9f6bd1d*.jsonl'`
 excludes your own session's log from that set.
 
 ### Cancel
@@ -53,17 +67,18 @@ excludes your own session's log from that set.
 # cancel ALL subscriptions for this session
 ark subscribe --session $ID --cancel
 
-# cancel subscriptions for a specific tag
+# cancel subscriptions whose stored predicate accepts the name "dm"
 ark subscribe --session $ID --cancel --tag dm
 
-# cancel only subscriptions matching a specific value
-ark subscribe --session $ID --cancel --tag dm --value 'abc123'
+# cancel only subscriptions whose stored predicate accepts (dm, "abc123")
+ark subscribe --session $ID --cancel --tag 'dm=abc123'
 ```
 
 Bare `--cancel` wipes all subscriptions for the session — clean
-slate on reconnect. `--cancel --tag TAG` removes all subscriptions
-for that tag. Adding `--value VAL` narrows: only cancels
-subscriptions whose value regex would match VAL.
+slate on reconnect. `--cancel --tag TAG` parses the sigil and
+drops every entry whose stored predicate accepts the name (and
+optional value) it carries — name-only forms are wildcards over
+the value side.
 
 ## Listen
 
@@ -121,8 +136,8 @@ or removing it from the index. Remove `@mute: true` to resume.
 Publishing is implicit — it happens in the existing tag extraction
 path. When tags are extracted during add, refresh, or append, each
 tag is checked against the subscription registry. On match: check
-value regex (if any), check file exclusions, then enqueue a
-notification for the subscribing session.
+stored predicate (name and value modes), check file exclusions,
+then enqueue a notification for the subscribing session.
 
 The publish hook goes in `Indexer.AppendFile` (after
 `store.AppendTags`, ~indexer.go:352) and in `prepareRefresh`
@@ -134,7 +149,7 @@ was already extracted.
 In-memory. Dies with server. Agents re-subscribe on connect.
 
 Per-session data:
-- List of subscriptions: (tag name, optional value regex, file exclusions)
+- List of subscriptions: (kind={tag|file-tag}, parsed predicate, file filters; file-tag entries also carry a fileID membership set — see [file-tag-filter.md](file-tag-filter.md))
 - Notification channel: bounded, lossy (non-blocking send, drop if full)
 - Last-listen timestamp: for TTL reaping
 

@@ -4,7 +4,6 @@ package ark
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,15 +13,31 @@ import (
 	"github.com/zot/microfts2"
 )
 
+// TagSubKind selects whether the subscription matches the tag on
+// the chunk that carries it (default) or every chunk belonging to a
+// file that has the tag (file-scoped).
+// CRC: crc-PubSub.md | R2462
+type TagSubKind int
+
+const (
+	TagSubChunk TagSubKind = iota // R2457: tag arrives on this chunk
+	TagSubFile                    // R2460: any chunk on a matching file
+)
+
 // TagSub is a single subscription entry.
-// CRC: crc-PubSub.md | R879, R880: scheduling removed from subscriptions
+// CRC: crc-PubSub.md | R2442, R2457, R2458, R2460, R2462, R2463
 type TagSub struct {
-	Tag          string
-	ValueRE      *regexp.Regexp // nil = match any value
+	Kind         TagSubKind     // R2462: chunk vs file-scoped
+	Predicate    MatchPredicate // R2442: parsed sigil form
 	FilterFiles  []string       // only match these path globs (nil = all)
 	ExcludeFiles []string       // exclude these path globs
-	Hits         atomic.Uint64  // R819: events successfully enqueued
-	Drops        atomic.Uint64  // R819: events lost to full queue
+	// FileTagMembers tracks fileIDs currently matching this entry's
+	// Predicate. Populated/maintained only when Kind == TagSubFile.
+	// In-memory only — re-seeded on server restart via the normal
+	// indexing path. R2463, R2469
+	FileTagMembers map[uint64]bool
+	Hits           atomic.Uint64 // R819: events successfully enqueued
+	Drops          atomic.Uint64 // R819: events lost to full queue
 }
 
 // Event is a notification produced by Publish.
@@ -88,7 +103,7 @@ func (ps *PubSub) PublishAndWatch(writerID string, path string, tags []TagValue)
 	}
 }
 
-// Subscribe adds subscriptions for a session. R778, R779, R780, R781, R782, R783, R784
+// Subscribe adds subscriptions for a session. R778, R781, R782, R783, R784, R2457, R2459
 func (ps *PubSub) Subscribe(sessionID string, subs []*TagSub) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -99,9 +114,12 @@ func (ps *PubSub) Subscribe(sessionID string, subs []*TagSub) {
 	ps.lastListen[sessionID] = time.Now()
 }
 
-// Cancel removes subscriptions. R786, R787, R788
-// Empty tag cancels all. Empty value cancels all for that tag.
-// Non-empty value cancels only subs whose ValueRE would match.
+// Cancel removes subscriptions. R786, R787, R2458
+// Empty tag cancels all entries for the session. Non-empty tag
+// drops every entry whose Predicate accepts the lowered name and
+// (when a value is supplied) the value. The cancel target is
+// described in plain strings — callers parse the user's sigil arg
+// once and forward the (name, value) fields.
 func (ps *PubSub) Cancel(sessionID string, tag string, value string) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -118,16 +136,11 @@ func (ps *PubSub) Cancel(sessionID string, tag string, value string) {
 	existing := ps.subs[sessionID]
 	var kept []*TagSub
 	for _, s := range existing {
-		if s.Tag != tag {
+		if !s.Predicate.MatchName(tag) {
 			kept = append(kept, s)
 			continue
 		}
-		if value != "" && s.ValueRE != nil && !s.ValueRE.MatchString(value) {
-			kept = append(kept, s)
-			continue
-		}
-		if value != "" && s.ValueRE == nil {
-			// Sub matches any value, but cancel is value-scoped — keep it
+		if value != "" && !s.Predicate.MatchValue(value) {
 			kept = append(kept, s)
 			continue
 		}
@@ -140,10 +153,15 @@ func (ps *PubSub) Cancel(sessionID string, tag string, value string) {
 // writerID is excluded from self-notification (empty = no exclusion). R795, R796, R797, R798
 // Returns unmatched tags for watchdog processing.
 // If the file contains @mute: true, all events from it are silenced.
+//
+// Two passes (R2462):
+//   - Tag-kind (default): one event per matching (tag, value).
+//   - File-tag: one event per indexed chunk when the file's
+//     aggregate tags satisfy the predicate (entry/continued/exit).
+//
+// The file-tag pass runs even when tags is empty so a content-only
+// change on a member file still fires (R2466).
 func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagValue {
-	if len(tags) == 0 {
-		return nil
-	}
 	// Check for @mute: true — silences all events from this file
 	for _, tv := range tags {
 		if tv.Tag == "mute" && strings.TrimSpace(strings.ToLower(tv.Value)) == "true" {
@@ -171,10 +189,10 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 				continue
 			}
 			for _, sub := range subs {
-				if sub.Tag != tv.Tag {
-					continue
+				if sub.Kind != TagSubChunk {
+					continue // R2462: file-tag subs go through the file-tag pass
 				}
-				if sub.ValueRE != nil && !sub.ValueRE.MatchString(tv.Value) {
+				if !sub.Predicate.Match(tv) {
 					continue
 				}
 				if !matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles) {
@@ -198,7 +216,100 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 			unmatched = append(unmatched, tv)
 		}
 	}
+
+	// Pass 2: file-tag subscriptions (R2460–R2471). For each session
+	// with at least one file-tag sub, resolve the path's fileID once
+	// (lazy — most publishes have no file-tag subs at all). Then per
+	// sub, compare the cached membership against an authoritative
+	// read of the file's aggregate tag set and act on the transition.
+	if ps.anyFileTagSubLocked() {
+		ps.publishFileTagPass(writerID, path, now)
+	}
 	return unmatched
+}
+
+// anyFileTagSubLocked reports whether any session has at least one
+// TagSubFile entry. Must hold at least RLock. Cheap early-out so the
+// per-path fileID lookup is skipped for the common case where no
+// file-tag subscriptions exist.
+func (ps *PubSub) anyFileTagSubLocked() bool {
+	for _, subs := range ps.subs {
+		for _, s := range subs {
+			if s.Kind == TagSubFile {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// publishFileTagPass runs the membership transition logic across all
+// TagSubFile entries for the path just indexed. Caller holds RLock;
+// FileTagMembers maps are mutated under it because publish is
+// single-threaded per PubSub instance (no concurrent Publish calls
+// hit the same entry).
+// CRC: crc-PubSub.md | Seq: seq-pubsub.md | R2460, R2461, R2462, R2463, R2464, R2469, R2470, R2471, R2472
+func (ps *PubSub) publishFileTagPass(writerID, path string, now time.Time) {
+	if ps.db == nil {
+		return
+	}
+	fileID, ok := ps.db.PathFileID(path)
+	if !ok || fileID == 0 {
+		return
+	}
+	store := ps.db.Store()
+	if store == nil {
+		return
+	}
+	for sid, subs := range ps.subs {
+		if sid == writerID {
+			continue // R2471: no self-notification
+		}
+		ch := ps.queues[sid]
+		if ch == nil {
+			continue
+		}
+		for _, sub := range subs {
+			if sub.Kind != TagSubFile {
+				continue
+			}
+			if !matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles) {
+				continue
+			}
+			wasMember := false
+			if sub.FileTagMembers != nil {
+				wasMember = sub.FileTagMembers[fileID]
+			}
+			isMember := store.FileMatchesPredicate(fileID, sub.Predicate)
+			// CRC: crc-PubSub.md | R2465, R2466, R2467, R2468
+			switch {
+			case !wasMember && !isMember:
+				continue // R2468 — no-op transition
+			case !wasMember && isMember:
+				// R2465 — entry: track fileID and deliver chunk.
+				if sub.FileTagMembers == nil {
+					sub.FileTagMembers = make(map[uint64]bool)
+				}
+				sub.FileTagMembers[fileID] = true
+			case wasMember && !isMember:
+				// R2467 — exit: untrack fileID, still deliver this chunk.
+				delete(sub.FileTagMembers, fileID)
+				// R2466 — was=Y is=Y: continued; no membership change.
+			}
+			evt := Event{
+				Tag:   sub.Predicate.Canonical(),
+				Value: "",
+				Path:  path,
+				Time:  now,
+			}
+			select {
+			case ch <- evt:
+				sub.Hits.Add(1)
+			default:
+				sub.Drops.Add(1)
+			}
+		}
+	}
 }
 
 // PublishTmpDiff is the centralized tmp:// publish path. Called from
@@ -416,15 +527,25 @@ func FormatMarkdown(events []Event) string {
 	return b.String()
 }
 
-// SubInfo describes a subscription for listing. R814, R815, R816
+// SubInfo describes a subscription for listing. R814, R815, R816, R2458
+// Tag carries the canonical sigil form of the entry's predicate so
+// the user can copy it back into a cancel command. Kind is "tag" or
+// "file-tag" (R2462).
 type SubInfo struct {
 	SessionID    string
 	Tag          string
-	ValueRE      string // regex string or ""
+	Kind         string
 	FilterFiles  []string
 	ExcludeFiles []string
 	Hits         uint64
 	Drops        uint64
+}
+
+func tagSubKindLabel(k TagSubKind) string {
+	if k == TagSubFile {
+		return "file-tag"
+	}
+	return "tag"
 }
 
 // List returns subscription details. Empty sessionID returns all. R814, R815, R816
@@ -439,14 +560,12 @@ func (ps *PubSub) List(sessionID string) []SubInfo {
 		for _, s := range subs {
 			info := SubInfo{
 				SessionID:    sid,
-				Tag:          s.Tag,
+				Tag:          s.Predicate.Canonical(),
+				Kind:         tagSubKindLabel(s.Kind),
 				FilterFiles:  s.FilterFiles,
 				ExcludeFiles: s.ExcludeFiles,
 				Hits:         s.Hits.Load(),
 				Drops:        s.Drops.Load(),
-			}
-			if s.ValueRE != nil {
-				info.ValueRE = s.ValueRE.String()
 			}
 			result = append(result, info)
 		}
@@ -547,13 +666,16 @@ func (ps *PubSub) Watchdog(recentTags []TagValue, path string) []WatchdogResult 
 	return results
 }
 
-// subscribedTagSet returns the set of all tag names with active subscriptions.
+// subscribedTagSet returns the set of all tag names with active
+// subscriptions. Used by the watchdog to short-circuit unmatched
+// reports that actually correspond to a regex/contains subscription
+// whose name string differs from the literal extracted tag.
 // Must hold at least RLock.
 func (ps *PubSub) subscribedTagSet() map[string]bool {
 	tags := make(map[string]bool)
 	for _, subs := range ps.subs {
 		for _, s := range subs {
-			tags[s.Tag] = true
+			tags[s.Predicate.NameStr] = true
 		}
 	}
 	return tags

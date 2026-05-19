@@ -211,9 +211,9 @@
               chunk_filters: request.chunkFilters,
               filter_files: ff,
               exclude_files: ef,
-              name_tokens: request.nameTokens,
-              value_tokens: request.valueTokens,
-              name_match: request.nameMatch,
+              // R2442, R2453: primary tag predicate in sigil form
+              primary_tag_query: request.primaryTagQuery,
+              primary_file_tag: request.primaryFileTag,
             }),
           }).then(function(r) { return r.json(); });
         },

@@ -782,10 +782,22 @@ func parseFilterStack(args []string) (entries []filterEntry, remaining []string,
 				entries = append(entries, filterEntry{polarity, "regex", args[i], 0})
 			}
 		case "-tag":
+			// R2442, R2451: store the raw sigil-form arg; the
+			// shared parser runs at point of use (server, local
+			// fallback, and -parse rendering all parse the same
+			// string so behavior is identical end-to-end).
 			flush()
 			i++
 			if i < len(args) {
-				entries = append(entries, filterEntry{polarity, "tag", strings.TrimPrefix(args[i], "@"), 0})
+				entries = append(entries, filterEntry{polarity, "tag", args[i], 0})
+			}
+		case "-file-tag":
+			// R2453: file-level tag predicate. Same parser, different
+			// chunk filter at execution time.
+			flush()
+			i++
+			if i < len(args) {
+				entries = append(entries, filterEntry{polarity, "file-tag", args[i], 0})
 			}
 		case "-about":
 			flush()
@@ -839,6 +851,9 @@ func parseFilterStack(args []string) (entries []filterEntry, remaining []string,
 }
 
 // formatFilterStack prints the disambiguated command for -parse. R1781, R1782
+// Tag and file-tag rows are decoded via TagMatcher.Describe so the
+// user sees the resolved name-mode and value-mode rather than the
+// raw sigil string. R2451
 func formatFilterStack(entries []filterEntry) string {
 	var parts []string
 	parts = append(parts, "ark search")
@@ -848,7 +863,13 @@ func formatFilterStack(entries []filterEntry) string {
 			parts = append(parts, "-"+e.polarity)
 			pol = e.polarity
 		}
-		if strings.ContainsAny(e.query, " \t\"") || strings.HasPrefix(e.query, "-") {
+		if e.mode == "tag" || e.mode == "file-tag" {
+			if p, err := ark.ParseMatchSyntax(e.query); err == nil {
+				parts = append(parts, "-"+e.mode+" "+p.Describe())
+			} else {
+				parts = append(parts, fmt.Sprintf("-%s %q (parse error: %v)", e.mode, e.query, err))
+			}
+		} else if strings.ContainsAny(e.query, " \t\"") || strings.HasPrefix(e.query, "-") {
 			parts = append(parts, fmt.Sprintf("-%s %q", e.mode, e.query))
 		} else {
 			parts = append(parts, fmt.Sprintf("-%s %s", e.mode, e.query))
@@ -1013,7 +1034,12 @@ Output:`)
 	var primaryQuery, primaryAbout, primaryContains string
 	var primaryRegex []string
 	var primaryFuzzy bool
-	var primaryTagNames, primaryTagValues []string
+	// R2442, R2453: primary tag/file-tag predicate in sigil form.
+	// The CLI keeps the raw string and lets server / local fallback
+	// share one parser instead of marshalling tokens twice.
+	var primaryTagQuery string
+	var primaryFileTag bool
+	var primaryTagPredicate *ark.MatchPredicate
 	var chunkFilters []ark.ChunkFilterRow
 
 	if len(filterEntries) > 0 {
@@ -1029,17 +1055,20 @@ Output:`)
 		case "about":
 			primaryAbout = primary.query
 		case "tag":
-			// V records pin chunkIDs — server bypasses FTS entirely for the
-			// primary tag query. Name half splits on whitespace; value half
-			// uses TokenizeTagValue (quotes + backslash escapes) so
-			// `meal:"french toast"` produces a single substring token.
-			nameStr, valueStr, _ := strings.Cut(primary.query, ":")
-			nameStr = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(nameStr), "@"))
-			if nameStr != "" {
-				primaryTagNames = strings.Fields(nameStr)
+			// R2442, R2451: parse once; the server and the local
+			// fallback share the same predicate resolution path.
+			if pp, perr := ark.ParseMatchSyntax(primary.query); perr == nil {
+				primaryTagQuery = primary.query
+				primaryFileTag = false
+				primaryTagPredicate = &pp
 			}
-			if valueStr != "" {
-				primaryTagValues = ark.TokenizeTagValue(valueStr)
+		case "file-tag":
+			// R2453: file-scoped predicate. Same parse, different
+			// resolution shape (every chunk on a matching file).
+			if pp, perr := ark.ParseMatchSyntax(primary.query); perr == nil {
+				primaryTagQuery = primary.query
+				primaryFileTag = true
+				primaryTagPredicate = &pp
 			}
 		case "files":
 			// files-only primary: becomes a chunk filter, promote next entry to primary
@@ -1070,7 +1099,7 @@ Output:`)
 		}
 	}
 
-	if *likeFile == "" && primaryContains == "" && primaryAbout == "" && len(primaryRegex) == 0 && !primaryFuzzy && primaryQuery == "" && len(primaryTagNames) == 0 {
+	if *likeFile == "" && primaryContains == "" && primaryAbout == "" && len(primaryRegex) == 0 && !primaryFuzzy && primaryQuery == "" && primaryTagPredicate == nil {
 		fmt.Fprintln(os.Stderr, "error: no search query")
 		os.Exit(1)
 	}
@@ -1120,10 +1149,9 @@ Output:`)
 			Tags         bool                 `json:"tags,omitempty"`
 			ChunkFilters []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
 			Session      string               `json:"session,omitempty"`
-			NoTmp        bool                 `json:"noTmp,omitempty"`
-			NameTokens   []string             `json:"nameTokens,omitempty"`
-			ValueTokens  []string             `json:"valueTokens,omitempty"`
-			NameMatch    string               `json:"nameMatch,omitempty"`
+			NoTmp           bool   `json:"noTmp,omitempty"`
+			PrimaryTagQuery string `json:"primaryTagQuery,omitempty"`
+			PrimaryFileTag  bool   `json:"primaryFileTag,omitempty"`
 		}{
 			Query:        primaryQuery,
 			About:        primaryAbout,
@@ -1138,12 +1166,11 @@ Output:`)
 			Chunks:       *chunks,
 			Files:        *files,
 			Tags:         *tags,
-			ChunkFilters: chunkFilters,
-			Session:      *session,
-			NoTmp:        *noTmp,
-			NameTokens:   primaryTagNames,
-			ValueTokens:  primaryTagValues,
-			NameMatch:    "exact",
+			ChunkFilters:    chunkFilters,
+			Session:         *session,
+			NoTmp:           *noTmp,
+			PrimaryTagQuery: primaryTagQuery,
+			PrimaryFileTag:  primaryFileTag,
 		}
 		if *tags {
 			// Server returns []ark.TagResult for Tags:true; decode into that
@@ -1222,9 +1249,9 @@ Output:`)
 		var err error
 		query := primaryQuery
 		switch {
-		case len(primaryTagNames) > 0 && !isSplit && !primaryFuzzy && !*multi:
-			// V-record bypass for primary tag query (local fallback path).
-			chunkIDs := d.ResolveTagChunks(primaryTagNames, primaryTagValues, "exact")
+		case primaryTagPredicate != nil && !isSplit && !primaryFuzzy && !*multi:
+			// R2442, R2453: predicate-driven bypass (local fallback).
+			chunkIDs := d.ResolveTagPredicateChunks(*primaryTagPredicate, primaryFileTag)
 			results, err = d.SearchTagChunks(chunkIDs, opts)
 		case *multi:
 			if query == "" && primaryContains != "" {
@@ -1348,19 +1375,22 @@ func buildTagsCfg(filters []filterEntry, noValues, noChunks, noFiles bool) tagsC
 		if f.polarity != "with" || f.mode != "tag" {
 			continue
 		}
-		nameStr, valueStr, hasValue := strings.Cut(f.query, ":")
-		nameStr = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(nameStr), "@")))
-		if nameStr == "" {
+		// R2442: parse via the shared sigil parser. Only exact-name
+		// rows feed adaptive suppression — regex / contains rows can
+		// hide an unbounded set of tags, which would over-suppress.
+		p, err := ark.ParseMatchSyntax(f.query)
+		if err != nil || p.NameMode != ark.NameExact {
 			continue
 		}
+		nameStr := strings.ToLower(p.NameStr)
 		cfg.hideName[nameStr] = true
-		if !hasValue || strings.TrimSpace(valueStr) == "" {
+		if p.ValueMode != ark.ValueContains || len(p.ValueTokens) == 0 {
 			continue
 		}
 		if cfg.hideValue[nameStr] == nil {
 			cfg.hideValue[nameStr] = make(map[string]bool)
 		}
-		for _, tok := range ark.TokenizeTagValue(valueStr) {
+		for _, tok := range p.ValueTokens {
 			cfg.hideValue[nameStr][tok] = true
 		}
 	}
@@ -2259,7 +2289,7 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	}
 }
 
-// CRC: crc-CLI.md | R899, R900, R901, R902
+// CRC: crc-CLI.md | R2473, R2474, R2475, R2476
 func printDBCounts(counts *ark.DBRecordCounts, mapUsed, mapTotal int64) {
 	var totalRecs int64
 	var totalKeys, totalVals int64
@@ -5466,29 +5496,31 @@ func cmdMessageDM(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md | Seq: seq-pubsub.md
-// CRC: crc-CLI.md | R937
+// CRC: crc-CLI.md | Seq: seq-pubsub.md | R937, R2442, R2457, R2458, R2459, R2460, R2461
 func cmdSubscribe(args []string) {
 	fs := flag.NewFlagSet("subscribe", flag.ExitOnError)
 	session := fs.String("session", "", "session ID (required)")
 	cancel := fs.Bool("cancel", false, "cancel subscriptions")
 	list := fs.Bool("list", false, "list active subscriptions")
 	stats := fs.Bool("stats", false, "show hit/drop statistics")
-	tag := fs.String("tag", "", "tag name")
-	value := fs.String("value", "", "value regex filter")
+	var tagArgs, fileTagArgs stringSlice
+	fs.Var(&tagArgs, "tag", "tag match in sigil form `[~|:]NAME[(=|:|~)VALUE]` (repeatable)")
+	fs.Var(&fileTagArgs, "file-tag", "file-tag match: every chunk on a file with the tag (repeatable)")
 	var filterFiles, excludeFiles stringSlice
 	fs.Var(&filterFiles, "filter-files", "only match files matching glob (repeatable)")
-	fs.Var(&excludeFiles, "exclude-files", "exclude files matching glob (repeatable)") // R944: renamed from --except-files
+	fs.Var(&excludeFiles, "exclude-files", "exclude files matching glob (repeatable)") // R944
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: ark subscribe [options]")
 		fmt.Fprintln(os.Stderr, "\nSubscribe to tag notifications, manage subscriptions.")
-		fmt.Fprintln(os.Stderr, "\n--value takes an RE2 regex matched against the tag value.")
-		fmt.Fprintln(os.Stderr, "Omit --value to match all values for that tag.")
+		fmt.Fprintln(os.Stderr, "\nMatch syntax: `[~|:]NAME[(=|:|~)VALUE]`")
+		fmt.Fprintln(os.Stderr, "  name side  — bare = exact, `:` prefix = contains, `~` prefix = regex")
+		fmt.Fprintln(os.Stderr, "  value side — `=V` exact, `:V` contains, `~V` regex")
 		fmt.Fprintln(os.Stderr, "\nExamples:")
 		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status --value 'open|accepted'")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag to-project --value 'ark'")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag standup")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status~'^(open|accepted)$'")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag to-project=ark")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --file-tag to-project=ark")
+		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --cancel --tag dm")
 		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --cancel")
 		fmt.Fprintln(os.Stderr, "  ark subscribe --list")
 		fmt.Fprintln(os.Stderr, "  ark subscribe --stats")
@@ -5496,14 +5528,6 @@ func cmdSubscribe(args []string) {
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
-
-	// R937: normalize tag name — strip leading @ and trailing :
-	if *tag != "" {
-		t := *tag
-		t = strings.TrimPrefix(t, "@")
-		t = strings.TrimSuffix(t, ":")
-		*tag = t
-	}
 
 	client := serverClient(arkDir)
 	if client == nil {
@@ -5519,11 +5543,7 @@ func cmdSubscribe(args []string) {
 			fatal(err)
 		}
 		for _, info := range infos {
-			valStr := ""
-			if info.ValueRE != "" {
-				valStr = info.ValueRE
-			}
-			fmt.Printf("%s\t%s\t%s\t%d\t%d\n", info.SessionID, info.Tag, valStr, info.Hits, info.Drops)
+			fmt.Printf("%s\t%s\t%s\t%d\t%d\n", info.SessionID, info.Kind, info.Tag, info.Hits, info.Drops)
 		}
 		return
 	}
@@ -5547,35 +5567,52 @@ func cmdSubscribe(args []string) {
 	}
 
 	if *cancel {
+		// R2458: at most one --tag is meaningful for cancel; the
+		// server parses the sigil and drops every entry whose stored
+		// predicate accepts the (name, value) pair.
+		cancelTag := ""
+		if len(tagArgs) > 0 {
+			cancelTag = tagArgs[0]
+		}
 		if err := proxyOK(client, "POST", "/subscribe", map[string]any{
 			"session": *session,
 			"cancel":  true,
-			"tag":     *tag,
-			"value":   *value,
+			"tag":     cancelTag,
 		}); err != nil {
 			fatal(err)
 		}
 		return
 	}
 
-	if *tag == "" {
-		fatal(fmt.Errorf("--tag is required for subscribe"))
+	if len(tagArgs) == 0 && len(fileTagArgs) == 0 {
+		fatal(fmt.Errorf("--tag or --file-tag is required for subscribe"))
 	}
 
-	sub := map[string]any{
-		"tag":   *tag,
-		"value": *value,
+	subs := make([]any, 0, len(tagArgs)+len(fileTagArgs))
+	for _, t := range tagArgs {
+		sub := map[string]any{"tag": t, "kind": "tag"}
+		if len(filterFiles) > 0 {
+			sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
+		}
+		if len(excludeFiles) > 0 {
+			sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
+		}
+		subs = append(subs, sub)
 	}
-	if len(filterFiles) > 0 {
-		sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
-	}
-	if len(excludeFiles) > 0 {
-		sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
+	for _, t := range fileTagArgs {
+		sub := map[string]any{"tag": t, "kind": "file-tag"}
+		if len(filterFiles) > 0 {
+			sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
+		}
+		if len(excludeFiles) > 0 {
+			sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
+		}
+		subs = append(subs, sub)
 	}
 
 	if err := proxyOK(client, "POST", "/subscribe", map[string]any{
 		"session": *session,
-		"subs":    []any{sub},
+		"subs":    subs,
 	}); err != nil {
 		fatal(err)
 	}

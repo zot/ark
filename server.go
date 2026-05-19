@@ -662,11 +662,14 @@ type searchRequest struct {
 	NoTmp           bool             `json:"noTmp,omitempty"`        // R687: exclude tmp:// documents
 	OnlyIfTmp       bool             `json:"onlyIfTmp,omitempty"`    // R686: return 204 if no tmp files
 	ChunkFilters    []ChunkFilterRow `json:"chunkFilters,omitempty"` // CRC: crc-Server.md | R1783, R1784
-	// R1469: structured tag query — server resolves chunkIDs from V/F records
-	// and bypasses FTS entirely when no other text primary is set.
-	NameTokens  []string `json:"nameTokens,omitempty"`
-	ValueTokens []string `json:"valueTokens,omitempty"`
-	NameMatch   string   `json:"nameMatch,omitempty"` // "exact" or "contains" (default)
+	// R2442, R2453: primary tag predicate in sigil form. Set when
+	// `-tag <sigil>` (or `-file-tag <sigil>`) is the only primary
+	// driver; the server resolves chunkIDs via the shared TagMatcher
+	// and bypasses FTS entirely. Empty string means no primary tag.
+	// The accompanying boolean PrimaryFileTag switches the resolver
+	// to a file-scoped predicate (every chunk on a matching file).
+	PrimaryTagQuery string `json:"primaryTagQuery,omitempty"`
+	PrimaryFileTag  bool   `json:"primaryFileTag,omitempty"`
 }
 
 // tmpRequest is the body for tmp:// add/update/remove endpoints.
@@ -772,11 +775,11 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	opts := buildSearchOpts(req)
 
-	// R1469: structured tag query — V records pin chunkIDs, so when there's
-	// no other text primary we bypass FTS and read chunks straight by ID.
-	// Stale chunkIDs (not currently indexed) are skipped silently.
-	if len(req.NameTokens) > 0 && req.About == "" && req.Contains == "" && len(req.Regex) == 0 && req.LikeFile == "" && !req.Fuzzy {
-		chunkIDs := srv.resolveTagChunks(req.NameTokens, req.ValueTokens, req.NameMatch)
+	// R2442, R2453: primary tag/file-tag predicate. V/F records pin
+	// chunkIDs (and fileIDs for file-tag mode) — bypass FTS entirely
+	// when no other text primary is set. Stale IDs are skipped.
+	if req.PrimaryTagQuery != "" && req.About == "" && req.Contains == "" && len(req.Regex) == 0 && req.LikeFile == "" && !req.Fuzzy {
+		chunkIDs := srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
 		results, err := Sync(srv.db, func(db *DB) ([]SearchResultEntry, error) {
 			entries, terr := db.SearchTagChunks(chunkIDs, opts)
 			if terr != nil {
@@ -1005,7 +1008,7 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// CRC: crc-Server.md
+// CRC: crc-Server.md | R2477, R2480
 func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	wantDB := r.URL.Query().Get("db") == "true"
 
@@ -1816,15 +1819,20 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		Cancel  bool   `json:"cancel"`
 		List    bool   `json:"list"`
 		Stats   bool   `json:"stats"`
-		Subs    []struct {
+		Subs []struct {
+			// R2442, R2457, R2460: sigil-form tag query. The leading
+			// sigil and internal separator carry name/value match
+			// modes. `Kind` selects "tag" (chunk-precise) or
+			// "file-tag" (file-scoped). Default is "tag".
 			Tag          string   `json:"tag"`
-			Value        string   `json:"value"`
+			Kind         string   `json:"kind"`
 			FilterFiles  []string `json:"filter_files"`
 			ExcludeFiles []string `json:"exclude_files"`
 		} `json:"subs"`
-		// For cancel with specific tag/value
-		Tag   string `json:"tag"`
-		Value string `json:"value"`
+		// For cancel: the sigil-form predicate to drop. Name-only
+		// cancels all subs whose name matches; name+value cancels
+		// subs whose stored predicate accepts (name, value).
+		Tag string `json:"tag"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1839,7 +1847,22 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Cancel {
-		srv.pubsub.Cancel(req.Session, req.Tag, req.Value)
+		// R2458: the cancel target is a sigil-form predicate; we
+		// forward the name and value strings to PubSub.Cancel which
+		// drops every entry whose stored Predicate accepts them.
+		name, value := "", ""
+		if req.Tag != "" {
+			p, err := ParseMatchSyntax(req.Tag)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("bad cancel tag %q: %v", req.Tag, err), http.StatusBadRequest)
+				return
+			}
+			name = strings.ToLower(p.NameStr)
+			if p.ValueMode != ValueAny {
+				value = p.ValueStr
+			}
+		}
+		srv.pubsub.Cancel(req.Session, name, value)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1856,18 +1879,20 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 				excludeFiles = defaultExcl
 			}
 		}
+		p, err := ParseMatchSyntax(s.Tag)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bad tag %q: %v", s.Tag, err), http.StatusBadRequest)
+			return
+		}
+		kind := TagSubChunk
+		if s.Kind == "file-tag" {
+			kind = TagSubFile
+		}
 		sub := &TagSub{
-			Tag:          s.Tag,
+			Kind:         kind,
+			Predicate:    p,
 			FilterFiles:  s.FilterFiles,
 			ExcludeFiles: excludeFiles,
-		}
-		if s.Value != "" {
-			re, err := regexp.Compile(s.Value)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("bad value regex %q: %v", s.Value, err), http.StatusBadRequest)
-				return
-			}
-			sub.ValueRE = re
 		}
 		subs = append(subs, sub)
 	}
@@ -2025,10 +2050,10 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 		Filter          []string         `json:"filter"`
 		Except          []string         `json:"except"`
 		ChunkFilters    []ChunkFilterRow `json:"chunk_filters"`
-		// R1469: structured tag query for T/V record resolution
-		NameTokens  []string `json:"name_tokens"`
-		ValueTokens []string `json:"value_tokens"`
-		NameMatch   string   `json:"name_match"` // "exact" or "contains" (default)
+		// R2442, R2453: primary tag predicate in sigil form. Same
+		// semantics as the /search field of the same name.
+		PrimaryTagQuery string `json:"primary_tag_query"`
+		PrimaryFileTag  bool   `json:"primary_file_tag"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2049,15 +2074,16 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 
 	query := req.Query
 
-	// CRC: crc-Server.md | R1469, R2129
-	// Structured tag query — V records pin exact chunkIDs, so when no other
-	// text primary is set we bypass FTS entirely and build results straight
-	// from ChunksByID. R2129: empty query means no text primary regardless of
-	// mode, so leftover UI mode state doesn't force a regex-with-chunk-filter.
+	// CRC: crc-Server.md | R2442, R2453, R2129
+	// Primary tag predicate — V/F records pin chunkIDs, so when no
+	// other text primary is set we bypass FTS entirely and build
+	// results straight from ChunksByID. R2129: empty query means no
+	// text primary regardless of mode, so leftover UI mode state
+	// doesn't force a regex-with-chunk-filter.
 	tagOnly := false
 	var tagChunkIDs []uint64
-	if len(req.NameTokens) > 0 {
-		tagChunkIDs = srv.resolveTagChunks(req.NameTokens, req.ValueTokens, req.NameMatch)
+	if req.PrimaryTagQuery != "" {
+		tagChunkIDs = srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
 		hasTextPrimary := query != "" && (req.Mode == "contains" || req.Mode == "about" || req.Mode == "regex" || req.Mode == "fuzzy")
 		tagOnly = !hasTextPrimary
 		if !tagOnly {
@@ -2117,11 +2143,40 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
-// resolveTagChunks dispatches the chunkID resolution through the DB actor.
-// CRC: crc-Server.md | R1469
-func (srv *Server) resolveTagChunks(nameTokens, valueTokens []string, nameMatch string) []uint64 {
+// resolvePrimaryTagChunks parses the sigil-form predicate and returns
+// the chunkIDs (file-scoped or tag-scoped) selected by the predicate.
+// CRC: crc-Server.md | R2442, R2453
+func (srv *Server) resolvePrimaryTagChunks(query string, fileTag bool) []uint64 {
+	p, err := ParseMatchSyntax(query)
+	if err != nil {
+		return nil
+	}
 	ids, _ := Sync(srv.db, func(db *DB) ([]uint64, error) {
-		return db.ResolveTagChunks(nameTokens, valueTokens, nameMatch), nil
+		chunkIDs, fileIDs := resolvePredicateLocations(p, db.Store())
+		if !fileTag {
+			out := make([]uint64, 0, len(chunkIDs))
+			for cid := range chunkIDs {
+				out = append(out, cid)
+			}
+			return out, nil
+		}
+		// File-tag primary: every chunk on a matching file. Walk the
+		// known files and pull each one's chunks.
+		out := make([]uint64, 0)
+		fts := db.FTS()
+		if fts == nil {
+			return out, nil
+		}
+		for fid := range fileIDs {
+			info, err := fts.FileInfoByID(fid)
+			if err != nil {
+				continue
+			}
+			for _, ch := range info.Chunks {
+				out = append(out, ch.ChunkID)
+			}
+		}
+		return out, nil
 	})
 	return ids
 }
@@ -4257,7 +4312,10 @@ func (srv *Server) registerLuaFunctions() {
 				L.Push(lua.LString("pubsub unavailable"))
 				return 2
 			}
-			srv.pubsub.Cancel(sessionID, sub.Tag, "")
+			// R2289: replace-by-(session, predicate). Drop any prior
+			// sub on the same name for this session, then append the
+			// new one.
+			srv.pubsub.Cancel(sessionID, strings.ToLower(sub.Predicate.NameStr), "")
 			srv.pubsub.Subscribe(sessionID, []*TagSub{sub})
 			srv.ensureListenLoop(sessionID)
 			return 0
@@ -4300,31 +4358,39 @@ func (srv *Server) registerLuaFunctions() {
 	}
 }
 
-// buildTagSubFromLua decodes a Lua filter table into a TagSub. Field
-// shape mirrors TagSub one-to-one with lowerCamelCase (R2289):
-// `tag` (required string), `valueRE` (optional regex string),
-// `filterFiles` (optional string array), `excludeFiles` (optional
-// string array). Missing/nil optional fields map to Go zero-values
-// which already mean "match any."
-// CRC: crc-Server.md | R2289
+// buildTagSubFromLua decodes a Lua filter table into a TagSub.
+// Field shape (R2289, R2442, R2462):
+//   - `tag` (required string): sigil-form match query
+//   - `kind` (optional string): "tag" (default) or "file-tag"
+//   - `filterFiles` / `excludeFiles` (optional string arrays)
+//
+// CRC: crc-Server.md | R2289, R2442, R2462
 func buildTagSubFromLua(t *lua.LTable) (*TagSub, error) {
 	tagV := t.RawGetString("tag")
 	tag, ok := tagV.(lua.LString)
 	if !ok || string(tag) == "" {
 		return nil, fmt.Errorf("subscribe: tag (string) required")
 	}
-	sub := &TagSub{Tag: string(tag)}
-	if v := t.RawGetString("valueRE"); v != lua.LNil {
+	p, err := ParseMatchSyntax(string(tag))
+	if err != nil {
+		return nil, fmt.Errorf("subscribe: bad tag %q: %w", string(tag), err)
+	}
+	kind := TagSubChunk
+	if v := t.RawGetString("kind"); v != lua.LNil {
 		s, ok := v.(lua.LString)
 		if !ok {
-			return nil, fmt.Errorf("subscribe: valueRE must be a string")
+			return nil, fmt.Errorf("subscribe: kind must be a string")
 		}
-		re, err := regexp.Compile(string(s))
-		if err != nil {
-			return nil, fmt.Errorf("subscribe: invalid valueRE: %w", err)
+		switch string(s) {
+		case "", "tag":
+			kind = TagSubChunk
+		case "file-tag":
+			kind = TagSubFile
+		default:
+			return nil, fmt.Errorf("subscribe: unknown kind %q (want \"tag\" or \"file-tag\")", string(s))
 		}
-		sub.ValueRE = re
 	}
+	sub := &TagSub{Kind: kind, Predicate: p}
 	if v := t.RawGetString("filterFiles"); v != lua.LNil {
 		arr, ok := v.(*lua.LTable)
 		if !ok {

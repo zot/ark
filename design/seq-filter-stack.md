@@ -1,6 +1,6 @@
 # Sequence: CLI Filter Stack Parsing and Execution
 
-**Requirements:** R1770–R1789, R1940
+**Requirements:** R1770–R1789, R1940, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456
 
 Shows how `ark search` args are parsed into a filter stack and
 executed through the server.
@@ -19,7 +19,12 @@ User → cmdSearch(args)
                        subsequent bare terms coalesce into this entry
         "-fuzzy"    → emit {polarity, "fuzzy", next arg}
         "-regex"    → emit {polarity, "regex", next arg}
-        "-tag"      → emit {polarity, "tag", strip @ from next arg}
+        "-tag"      → emit {polarity, "tag",
+                              TagMatcher.ParseMatchSyntax(next arg)}
+                       (R2442–R2451: sigil parse + @ normalization)
+        "-file-tag" → emit {polarity, "file-tag",
+                              TagMatcher.ParseMatchSyntax(next arg)}
+                       (R2453: file-tag predicate, shared parser)
         "-about"    → emit {polarity, "about", next arg}
         "-files"    → emit {polarity, "files", next arg}
         "-filter-k" → set K on most recent entry (R1940)
@@ -68,7 +73,8 @@ User → cmdSearch(args)
         "contains" → ContainsChunkFilter
         "fuzzy"    → FuzzyChunkFilter
         "regex"    → microfts2.WithRegexFilter
-        "tag"      → TagChunkFilter
+        "tag"      → TagChunkFilter(row.Predicate)        (R2442)
+        "file-tag" → FileTagChunkFilter(row.Predicate)    (R2453–R2456)
         "about"    → AboutChunkFilter
         "files"    → fileIDChunkFilter (glob match)
       polarity "with"    → WithChunkFilter

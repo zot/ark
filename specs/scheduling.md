@@ -341,8 +341,11 @@ subscribe CLI and API. The `ScheduleMode` type, `ScheduleNone`,
 field on `TagSub` are removed from pubsub.go. `ScanForSub` is
 removed from scheduler.go — replaced by the log-based startup scan.
 
-Subscriptions retain: `--tag`, `--value`, `--filter-files`,
-`--except-files`, `--cancel`, `--list`, `--stats`.
+Subscriptions retain: `--tag` (sigil-form, see
+[file-tag-filter.md](file-tag-filter.md)), `--file-tag`,
+`--filter-files`, `--exclude-files`, `--cancel`, `--list`,
+`--stats`. `--value` is retired (T61–T63); the value-match piece
+is encoded in the `--tag` sigil.
 
 ## Acknowledgments
 

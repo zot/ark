@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312
+**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -20,10 +20,11 @@ no new struct, no new field (R2278).
   used to diff each tmp:// publish so only changed (tag, value) pairs fire (R2283, R2284)
 
 ### TagSub
-- Tag: string — exact tag name to match
-- ValueRE: *regexp.Regexp — optional, nil = match any value
+- Kind: enum {Tag, FileTag} — selects matching behavior (R2457, R2460)
+- Predicate: TagMatcher.MatchPredicate — parsed `[~]NAME [(=|:|~) VALUE]` from `-tag` / `-file-tag`; supersedes the prior `Tag string + ValueRE *regexp` pair (R2442, R2457, R2458, R2460)
 - FilterFiles: []doublestar.Pattern — only match these paths (nil = all)
 - ExcludeFiles: []doublestar.Pattern — exclude these paths (R945, renamed from ExceptFiles)
+- FileTagMembers: map[uint64]bool — set of fileIDs currently matching this entry's predicate; populated/maintained only when Kind == FileTag (R2463, R2469)
 - Hits: uint64 — events successfully enqueued (atomic)
 - Drops: uint64 — events lost to full queue (atomic)
 - (R879, R880) Schedule field removed — scheduling driven by ark.toml + day buckets, not subscriptions
@@ -38,20 +39,36 @@ no new struct, no new field (R2278).
 - Subscribe(sessionID string, subs []TagSub): add subscriptions for
   a session. Creates queue channel if needed. Resets lastListen.
   Append semantics preserved for HTTP and direct Go callers
-  (R2309); the Lua bridge layers replace-by-(session, tag)
-  on top.
-- Cancel(sessionID string, tag string, value string): remove
-  subscriptions. Empty tag = cancel all. Empty value = cancel all
-  for that tag. Non-empty value = cancel only subs whose ValueRE
-  would match the value.
-- Publish(sessionID string, path string, tags []TagValue):
+  (R2309); the Lua bridge layers replace-by-(session, predicate)
+  on top. `-tag` and `-file-tag` arguments arrive already parsed
+  into MatchPredicates and tagged with Kind (R2442, R2462).
+- Cancel(sessionID string, predicate MatchPredicate): remove
+  subscriptions. A zero predicate cancels all entries for the
+  session. A predicate with name-only mode cancels every entry
+  whose name matches. A predicate with name+value cancels every
+  entry whose predicate would match the same (name, value) pair
+  (R2458 replaces the old `tag/value` parameter pair).
+- Publish(sessionID string, path string, fileID uint64, tags []TagValue, fileTags []TagValue):
   called for both persistent-file indexing and tmp:// document
   writes. sessionID is the writer — excluded from self-notification.
-  For each tag, scan subs across all sessions: check tag name,
-  check ValueRE against value, check FilterFiles/ExcludeFiles via
-  `matchFileFilters` (which handles tmp:// paths identically to
-  persistent paths, R2278, R2279). On match: non-blocking send to
-  session's queue (R2302 — drops on overflow).
+  Two-pass match across subs in all sessions:
+  1. **Tag-kind subs** (R2457, R2459): for each `tv` in `tags`, find
+     subs where Predicate.Match(tv) and path passes file filters.
+     Non-blocking send to session queue (R2302 — drops on overflow).
+  2. **FileTag-kind subs** (R2460–R2471): for each such sub,
+     re-evaluate `wasMember = sub.FileTagMembers[fileID]` against
+     `isMember = anyMatch(sub.Predicate, fileTags)`. Transition
+     table:
+     - was=N, is=N → no-op (R2468)
+     - was=N, is=Y → set member, deliver chunk as entry event
+       (R2465)
+     - was=Y, is=Y → deliver chunk (R2466)
+     - was=Y, is=N → unset member, deliver chunk as exit event
+       (R2467)
+     The `fileTags` argument is the authoritative per-file tag
+     aggregate (R2464), passed in by Indexer / DB so PubSub does
+     not need a store handle. `@mute: true` short-circuits the
+     entire fileTag pass (R2470).
 - PublishTmpDiff(writerID, path string, content []byte, strategy string):
   centralized tmp:// publish helper called from `db.AddTmpFile`,
   `db.UpdateTmpFile`, `db.AppendTmpFile`. Extracts tags via

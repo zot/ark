@@ -143,7 +143,7 @@ func TestFindConnections_EnqueueCreatesPendingDoc(t *testing.T) {
 	chunkID, _ := indexLine(t, db, "a.txt", "hello world\n")
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "connections-status"},
+		{Predicate: mustParseSub(t, "connections-status")},
 	})
 
 	id, err := l.FindConnections([]uint64{chunkID}, FindConnectionsOpts{})
@@ -185,7 +185,7 @@ func TestSetConnectionsResult_FlipsToCompleted(t *testing.T) {
 	c2, _ := indexLine(t, db, "b.txt", "beta\n")
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "connections-status"},
+		{Predicate: mustParseSub(t, "connections-status")},
 	})
 
 	id, err := l.FindConnections([]uint64{c1, c2}, FindConnectionsOpts{TimeoutSeconds: 5})

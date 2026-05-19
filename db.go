@@ -575,9 +575,16 @@ func (db *DB) Path() string { return db.dbPath }
 
 // SetPubSub wires the centralized tmp:// publish path. After this is
 // called, AddTmpFile / UpdateTmpFile / AppendTmpFile / RemoveTmpFile
-// all signal the pubsub on tag changes. Mirrors PubSub.SetDB.
-// CRC: crc-DB.md | R2281
-func (db *DB) SetPubSub(ps *PubSub) { db.pubsub = ps }
+// all signal the pubsub on tag changes. Also threads the back-pointer
+// (ps.SetDB) so the file-tag pass can resolve path → fileID through
+// PubSub.
+// CRC: crc-DB.md | R2281, R2464
+func (db *DB) SetPubSub(ps *PubSub) {
+	db.pubsub = ps
+	if ps != nil {
+		ps.SetDB(db)
+	}
+}
 
 // Config returns the current configuration.
 func (db *DB) Config() *Config { return db.config }
@@ -1306,63 +1313,68 @@ func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, err
 }
 
 // GroupTagChunks builds GroupedResult straight from a tag-derived chunkID set,
-// bypassing FTS. CRC: crc-Searcher.md | R1469
+// bypassing FTS. CRC: crc-Searcher.md | R2442
 func (db *DB) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
 	return db.search.GroupTagChunks(chunkIDs, opts)
 }
 
 // SearchTagChunks returns a flat SearchResultEntry list from a tag-derived
-// chunkID set, bypassing FTS. CRC: crc-Searcher.md | R1469
+// chunkID set, bypassing FTS. CRC: crc-Searcher.md | R2442
 func (db *DB) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchTagChunks(chunkIDs, opts)
 }
 
-// ResolveTagChunks resolves structured tag name/value tokens against T/V
-// records to a chunkID slice. Name-only branch collects F-record chunkIDs;
-// name+value branch matches V-record values case-insensitively (AND substring
-// per token) and collects their chunkIDs.
-// CRC: crc-Searcher.md | R1469, R1467, R1468
-func (db *DB) ResolveTagChunks(nameTokens, valueTokens []string, nameMatch string) []uint64 {
-	var matchedNames []string
-	if nameMatch == "exact" && len(nameTokens) == 1 {
-		counts, cErr := db.store.TagCounts(nameTokens)
-		if cErr != nil || len(counts) == 0 || counts[0].Count == 0 {
-			return nil
+// PathFileID resolves a path to its fileID. tmp:// paths route
+// through the DB's own tmpPaths map; persistent paths go through
+// microfts2's CheckFile. Returns (0, false) when the path is not
+// currently indexed.
+// CRC: crc-DB.md | R2463, R2464
+func (db *DB) PathFileID(path string) (uint64, bool) {
+	if strings.HasPrefix(path, "tmp://") {
+		db.tmpMu.RLock()
+		fid, ok := db.tmpPaths[path]
+		db.tmpMu.RUnlock()
+		if !ok || fid == 0 {
+			return 0, false
 		}
-		matchedNames = []string{nameTokens[0]}
-	} else {
-		names, mErr := db.store.MatchTagNames(nameTokens)
-		if mErr != nil || len(names) == 0 {
-			return nil
-		}
-		matchedNames = names
+		return fid, true
 	}
-	seen := make(map[uint64]struct{})
-	if len(valueTokens) == 0 {
-		for _, name := range matchedNames {
-			recs, _ := db.store.TagFiles([]string{name})
-			for _, r := range recs {
-				seen[r.ChunkID] = struct{}{}
-			}
+	if db.fts == nil {
+		return 0, false
+	}
+	status, err := db.fts.CheckFile(path)
+	if err != nil || status.FileID == 0 {
+		return 0, false
+	}
+	return status.FileID, true
+}
+
+// ResolveTagPredicateChunks resolves a sigil-form MatchPredicate to
+// the chunkID slice that satisfies it. When fileTag is true, the
+// returned slice contains every chunkID belonging to a file that has
+// at least one matching tag (file-scoped match). When false, only
+// the chunks that directly carry the matching tag are returned.
+// CRC: crc-Searcher.md | R2442, R2453, R2456
+func (db *DB) ResolveTagPredicateChunks(p MatchPredicate, fileTag bool) []uint64 {
+	chunkIDs, fileIDs := resolvePredicateLocations(p, db.store)
+	if !fileTag {
+		out := make([]uint64, 0, len(chunkIDs))
+		for cid := range chunkIDs {
+			out = append(out, cid)
 		}
-	} else {
-		for _, name := range matchedNames {
-			matches, mErr := db.store.MatchTagValues(name, valueTokens)
-			if mErr != nil {
-				continue
-			}
-			for _, m := range matches {
-				for _, cid := range m.ChunkIDs {
-					seen[cid] = struct{}{}
-				}
-			}
+		return out
+	}
+	out := make([]uint64, 0)
+	for fid := range fileIDs {
+		info, err := db.fts.FileInfoByID(fid)
+		if err != nil {
+			continue
+		}
+		for _, ch := range info.Chunks {
+			out = append(out, ch.ChunkID)
 		}
 	}
-	ids := make([]uint64, 0, len(seen))
-	for cid := range seen {
-		ids = append(ids, cid)
-	}
-	return ids
+	return out
 }
 
 // GetChunks returns the target chunk and its positional neighbors.
@@ -2394,7 +2406,7 @@ type StatusInfo struct {
 }
 
 // StatusDB returns per-prefix record counts for both subdatabases.
-// CRC: crc-DB.md | R899, R904, R905
+// CRC: crc-DB.md | R2473, R2478, R2479, R2482
 func (db *DB) StatusDB() (*DBRecordCounts, error) {
 	ftsLabels := map[string]string{
 		"C": "chunks",

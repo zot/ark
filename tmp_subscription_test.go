@@ -55,8 +55,8 @@ func TestAddTmpFilePublishesAllTags(t *testing.T) {
 	defer cleanup()
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://add.md"}},
-		{Tag: "topic", FilterFiles: []string{"tmp://add.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://add.md"}},
+		{Predicate: mustParseSub(t, "topic"), FilterFiles: []string{"tmp://add.md"}},
 	})
 
 	_, err := Sync(db, func(d *DB) (uint64, error) {
@@ -92,8 +92,8 @@ func TestUpdateTmpFileOnlyChangesFire(t *testing.T) {
 	defer cleanup()
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://u.md"}},
-		{Tag: "kind", FilterFiles: []string{"tmp://u.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://u.md"}},
+		{Predicate: mustParseSub(t, "kind"), FilterFiles: []string{"tmp://u.md"}},
 	})
 
 	// Seed via Add; drain initial events.
@@ -140,7 +140,7 @@ func TestAppendTmpFileNoRefireOnExistingTags(t *testing.T) {
 	defer cleanup()
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "topic", FilterFiles: []string{"tmp://app.md"}},
+		{Predicate: mustParseSub(t, "topic"), FilterFiles: []string{"tmp://app.md"}},
 	})
 
 	// Seed via Add; drain initial.
@@ -183,7 +183,7 @@ func TestRemoveTmpFileClearsCache(t *testing.T) {
 	defer cleanup()
 
 	ps.Subscribe("test", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://rm.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://rm.md"}},
 	})
 
 	// Seed; drain.
@@ -222,7 +222,7 @@ func TestSubscribeBeforeDocExists(t *testing.T) {
 
 	// Subscribe first — no doc exists yet.
 	ps.Subscribe("future", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://later.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://later.md"}},
 	})
 
 	// No events before AddTmpFile.
@@ -243,6 +243,76 @@ func TestSubscribeBeforeDocExists(t *testing.T) {
 	}
 }
 
+// TestFileTagSubscribe — a TagSubFile subscription fires for every
+// chunk on a file once any chunk in the file carries a tag matching
+// the predicate. Membership transition follows the table in seq-pubsub.md.
+// R2460-R2469.
+func TestFileTagSubscribe(t *testing.T) {
+	db, ps, cleanup := setupTmpDB(t)
+	defer cleanup()
+
+	ps.Subscribe("ft", []*TagSub{{
+		Kind:      TagSubFile,
+		Predicate: mustParseSub(t, "to-project=ark"),
+	}})
+
+	// AddTmpFile with the matching tag — entry transition (N → Y).
+	// Should deliver one file-tag event for this indexing.
+	_, err := Sync(db, func(d *DB) (uint64, error) {
+		return d.AddTmpFile("tmp://ft/req.md", "lines",
+			[]byte("@to-project: ark\n@from-project: microfts2\n"))
+	})
+	if err != nil {
+		t.Fatalf("AddTmpFile: %v", err)
+	}
+	evts := ps.Listen("ft", 200*time.Millisecond)
+	if len(evts) != 1 {
+		t.Fatalf("entry: want 1 event, got %d (%+v)", len(evts), evts)
+	}
+	if evts[0].Path != "tmp://ft/req.md" {
+		t.Errorf("entry event path: got %q", evts[0].Path)
+	}
+
+	// AppendTmpFile on the same file (now a member) — continued
+	// transition (Y → Y). Should deliver one event.
+	_, err = Sync(db, func(d *DB) (uint64, error) {
+		return d.AppendTmpFile("tmp://ft/req.md", "lines",
+			[]byte("@status: open\nbody chunk\n"))
+	})
+	if err != nil {
+		t.Fatalf("AppendTmpFile: %v", err)
+	}
+	evts = ps.Listen("ft", 200*time.Millisecond)
+	if len(evts) != 1 {
+		t.Fatalf("continued: want 1 event, got %d (%+v)", len(evts), evts)
+	}
+
+	// UpdateTmpFile with content that drops the @to-project tag —
+	// exit transition (Y → N). Should deliver one event (the exit).
+	if err := SyncVoid(db, func(d *DB) error {
+		return d.UpdateTmpFile("tmp://ft/req.md", "lines",
+			[]byte("@status: closed\n"))
+	}); err != nil {
+		t.Fatalf("UpdateTmpFile: %v", err)
+	}
+	evts = ps.Listen("ft", 200*time.Millisecond)
+	if len(evts) != 1 {
+		t.Fatalf("exit: want 1 event, got %d (%+v)", len(evts), evts)
+	}
+
+	// Further appends on the now-non-member file — no events (N → N).
+	_, err = Sync(db, func(d *DB) (uint64, error) {
+		return d.AppendTmpFile("tmp://ft/req.md", "lines",
+			[]byte("more content\n"))
+	})
+	if err != nil {
+		t.Fatalf("AppendTmpFile post-exit: %v", err)
+	}
+	if evts := ps.Listen("ft", 100*time.Millisecond); len(evts) != 0 {
+		t.Errorf("post-exit: want 0 events, got %+v", evts)
+	}
+}
+
 // TestMultiSubscriberBroadcast — multiple sessions subscribed to the
 // same tag and path each receive the event. R2293 (cross-session).
 func TestMultiSubscriberBroadcast(t *testing.T) {
@@ -250,10 +320,10 @@ func TestMultiSubscriberBroadcast(t *testing.T) {
 	defer cleanup()
 
 	ps.Subscribe("alpha", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://b.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://b.md"}},
 	})
 	ps.Subscribe("beta", []*TagSub{
-		{Tag: "status", FilterFiles: []string{"tmp://b.md"}},
+		{Predicate: mustParseSub(t, "status"), FilterFiles: []string{"tmp://b.md"}},
 	})
 
 	_, err := Sync(db, func(d *DB) (uint64, error) {

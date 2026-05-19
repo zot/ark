@@ -3,10 +3,20 @@ package ark
 // CRC: crc-PubSub.md | Test: test-TmpSubscription.md
 
 import (
-	"regexp"
 	"testing"
 	"time"
 )
+
+// mustParseSub builds a TagSub from a sigil-form query; panics on
+// parse error so test failures are loud at construction time.
+func mustParseSub(t testing.TB, q string) MatchPredicate {
+	t.Helper()
+	p, err := ParseMatchSyntax(q)
+	if err != nil {
+		t.Fatalf("ParseMatchSyntax(%q): %v", q, err)
+	}
+	return p
+}
 
 // TestCompressBatch dedupes (path, tag) keeping the latest. R2295, R2310.
 func TestCompressBatch(t *testing.T) {
@@ -59,7 +69,7 @@ func TestCompressBatchEmptyAndSingle(t *testing.T) {
 func TestPubSubTmpFilterFirstClass(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("test", []*TagSub{{
-		Tag:         "connections-status",
+		Predicate:   mustParseSub(t, "connections-status"),
 		FilterFiles: []string{"tmp://connections/req1.md"},
 	}})
 	ps.Publish("", "tmp://connections/req1.md", []TagValue{
@@ -78,7 +88,7 @@ func TestPubSubTmpFilterFirstClass(t *testing.T) {
 func TestPubSubTmpGlobMatching(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("g", []*TagSub{{
-		Tag:         "status",
+		Predicate:   mustParseSub(t, "status"),
 		FilterFiles: []string{"tmp://prospector/*.md"},
 	}})
 	ps.Publish("", "tmp://prospector/a.md", []TagValue{{Tag: "status", Value: "ok"}})
@@ -95,7 +105,7 @@ func TestPubSubTmpGlobMatching(t *testing.T) {
 func TestPublishTmpDiffOnlyOnChange(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("c", []*TagSub{{
-		Tag:         "status",
+		Predicate:   mustParseSub(t, "status"),
 		FilterFiles: []string{"tmp://x.md"},
 	}})
 	body := []byte("@status: idle\n@kind: report\n")
@@ -131,7 +141,7 @@ func TestPublishTmpDiffOnlyOnChange(t *testing.T) {
 func TestPublishTmpAppend(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("ap", []*TagSub{{
-		Tag:         "topic",
+		Predicate:   mustParseSub(t, "topic"),
 		FilterFiles: []string{"tmp://a.md"},
 	}})
 	// Seed cache as if AddTmpFile had run.
@@ -157,7 +167,7 @@ func TestPublishTmpAppend(t *testing.T) {
 func TestClearTagSetCache(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("r", []*TagSub{{
-		Tag:         "status",
+		Predicate:   mustParseSub(t, "status"),
 		FilterFiles: []string{"tmp://r.md"},
 	}})
 	ps.PublishTmpDiff("", "tmp://r.md", []byte("@status: done\n"), "lines")
@@ -183,7 +193,10 @@ func TestSubCount(t *testing.T) {
 	if got := ps.SubCount("none"); got != 0 {
 		t.Errorf("empty session: want 0, got %d", got)
 	}
-	ps.Subscribe("s", []*TagSub{{Tag: "a"}, {Tag: "b"}})
+	ps.Subscribe("s", []*TagSub{
+		{Predicate: mustParseSub(t, "a")},
+		{Predicate: mustParseSub(t, "b")},
+	})
 	if got := ps.SubCount("s"); got != 2 {
 		t.Errorf("after two subs: want 2, got %d", got)
 	}
@@ -200,7 +213,7 @@ func TestSubCount(t *testing.T) {
 // TestQueueDepthAndLastListenAt — monitor read APIs report correctly. R2303, R2304.
 func TestQueueDepthAndLastListenAt(t *testing.T) {
 	ps := NewPubSub(time.Minute, 8)
-	ps.Subscribe("m", []*TagSub{{Tag: "x"}})
+	ps.Subscribe("m", []*TagSub{{Predicate: mustParseSub(t, "x")}})
 	before := time.Now()
 
 	// Three publishes; nothing drained yet.
@@ -229,7 +242,7 @@ func TestQueueDepthAndLastListenAt(t *testing.T) {
 // not block the publisher. R2302.
 func TestPublishBackpressureIncrementsDrops(t *testing.T) {
 	ps := NewPubSub(time.Minute, 4) // small queue
-	sub := &TagSub{Tag: "x"}
+	sub := &TagSub{Predicate: mustParseSub(t, "x")}
 	ps.Subscribe("b", []*TagSub{sub})
 
 	for range 20 {
@@ -255,13 +268,13 @@ func TestReSubscribeReplaceByTag(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	// Subscribe with filterFiles=[tmp://a.md]
 	ps.Subscribe("r", []*TagSub{{
-		Tag:         "x",
+		Predicate:   mustParseSub(t, "x"),
 		FilterFiles: []string{"tmp://a.md"},
 	}})
 	// Bridge would now run Cancel + Subscribe for replacement.
 	ps.Cancel("r", "x", "")
 	ps.Subscribe("r", []*TagSub{{
-		Tag:         "x",
+		Predicate:   mustParseSub(t, "x"),
 		FilterFiles: []string{"tmp://b.md"},
 	}})
 
@@ -278,13 +291,12 @@ func TestReSubscribeReplaceByTag(t *testing.T) {
 	}
 }
 
-// TestPublishWithValueRE — ValueRE filter applies as before. Regression
-// across the new substrate.
+// TestPublishWithValueRE — value-regex filter applies via the
+// new sigil syntax (R2446). Regression across the new substrate.
 func TestPublishWithValueRE(t *testing.T) {
 	ps := NewPubSub(time.Minute, 16)
 	ps.Subscribe("re", []*TagSub{{
-		Tag:     "status",
-		ValueRE: regexp.MustCompile("^(completed|errored)$"),
+		Predicate: mustParseSub(t, "status~^(completed|errored)$"),
 	}})
 	ps.Publish("", "p", []TagValue{{Tag: "status", Value: "pending"}})
 	ps.Publish("", "p", []TagValue{{Tag: "status", Value: "completed"}})

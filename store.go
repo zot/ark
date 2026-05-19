@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1957,6 +1958,98 @@ func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, er
 	return results, nil
 }
 
+// MatchNamesRegex returns every tag name accepted by re across
+// inline T records, ExtMap virtual names, and TmpTagStore overlay.
+// Case sensitivity is the regex's own concern — callers that want
+// case-insensitive matching compile with `(?i)`.
+// CRC: crc-Store.md | R2443
+func (s *Store) MatchNamesRegex(re *regexp.Regexp) []string {
+	if re == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	consider := func(name string) {
+		if re.MatchString(name) {
+			seen[name] = struct{}{}
+		}
+	}
+	_ = s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(k) < 2 {
+				return nil
+			}
+			consider(string(k[1:]))
+			return nil
+		})
+	})
+	if s.extmap != nil {
+		for _, name := range s.extmap.VirtualTagNames() {
+			consider(name)
+		}
+	}
+	if s.tmp != nil {
+		for _, name := range s.tmp.TagNames() {
+			consider(name)
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	return out
+}
+
+// FileMatchesPredicate reports whether fileID currently has at
+// least one (tag, value) pair accepted by p. Walks the file's
+// chunks (via the chunk resolver and tmp overlay) and tests each
+// chunk's full tag set through AllTagsForChunk so inline + ExtMap
+// virtual tags both count. Returns false on first error or when no
+// chunks resolve.
+// CRC: crc-Store.md | R2463, R2464
+func (s *Store) FileMatchesPredicate(fileID uint64, p MatchPredicate) bool {
+	var chunks []uint64
+	if IsOverlayID(fileID) {
+		if s.tmp == nil {
+			return false
+		}
+		chunks = s.tmp.ChunksForFile(fileID)
+	} else if s.chunksForFile != nil {
+		chunks = s.chunksForFile(fileID)
+	}
+	for _, cid := range chunks {
+		tags, err := s.AllTagsForChunk(cid)
+		if err != nil {
+			continue
+		}
+		for _, tv := range tags {
+			if p.Match(tv) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// FilesForChunks returns the fileID set that owns any of the given
+// chunkIDs. Uses the chunk-resolver set via SetChunkResolver so
+// both inline and overlay chunkIDs are handled the same way.
+// CRC: crc-Store.md | R2453
+func (s *Store) FilesForChunks(chunkIDs map[uint64]bool) map[uint64]bool {
+	fileIDs := make(map[uint64]bool)
+	if s.filesForChunk == nil || len(chunkIDs) == 0 {
+		return fileIDs
+	}
+	_ = s.env.View(func(txn *lmdb.Txn) error {
+		for cid := range chunkIDs {
+			for _, fid := range s.filesForChunk(txn, cid) {
+				fileIDs[fid] = true
+			}
+		}
+		return nil
+	})
+	return fileIDs
+}
+
 // dedupUint64 returns the input slice with duplicates removed,
 // preserving first-occurrence order.
 func dedupUint64(xs []uint64) []uint64 {
@@ -2088,7 +2181,7 @@ func (s *Store) PutScheduleConfig(serialized string) error {
 // recordPrefixOf returns the full prefix string for an ark-subdatabase
 // key. Known multi-byte prefixes (E:, EV, EC, EF, ED, PC) are matched
 // first; otherwise the single-byte prefix is returned.
-// CRC: crc-Store.md | R905, R907, R2162
+// CRC: crc-Store.md | R2479, R2481, R2162
 func recordPrefixOf(k []byte) string {
 	if len(k) >= 2 {
 		switch {
@@ -2114,7 +2207,7 @@ func recordPrefixOf(k []byte) string {
 
 // RecordCounts scans all keys in the ark subdatabase and returns
 // stats grouped by full prefix string.
-// CRC: crc-Store.md | R905, R907
+// CRC: crc-Store.md | R2479, R2481
 func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 	counts := make(map[string]RecordStats)
 	err := s.env.View(func(txn *lmdb.Txn) error {

@@ -685,6 +685,7 @@
 - **R406:** Preview rendering uses goldmark for markdown, JSON pretty-print for JSON (under a length threshold), plain text with HTML escaping otherwise
 - **R407:** Query tokens are highlighted with `<mark>` tags in all preview formats
 - **R408:** The file's chunking strategy determines which renderer to use
+- **~~R409:~~** (Retired T70 — no replacement) orphaned numbering gap
 - **R541:** `opts` table supports: `mode` (contains/about/fuzzy/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`
 - **R750:** `mode = "fuzzy"` sets `opts.Fuzzy = true` and dispatches to `SearchFuzzy` via `SearchGrouped`
 - **R542:** (inferred) Default mode is "combined", default k is 20, default preview is 0
@@ -693,6 +694,7 @@
 - **R410:** `mcp:open(path)` opens a file with the system viewer (`xdg-open` on Linux, `open` on macOS)
 - **R411:** The function returns immediately — the viewer opens asynchronously
 - **R412:** (inferred) The file path must be an indexed file — error if not found
+- **~~R413:~~** (Retired T71 — no replacement) orphaned numbering gap
 
 ### Indexing State — mcp:indexing()
 - **R414:** Returns an empty table when no indexing is in progress
@@ -1280,8 +1282,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Subscribe
 
 - **R778:** `ark subscribe --session ID --tag TAG` registers a tag subscription for the session
-- **R779:** `--value REGEX` optionally filters on tag content (Go RE2)
-- **R780:** No `--value` means match any value for that tag
+- **~~R779:~~** (Retired T61 — see R2458) `--value REGEX` optionally filters on tag content (Go RE2)
+- **~~R780:~~** (Retired T62 — see R2458) No `--value` means match any value for that tag
 - **R781:** Multiple `--tag` flags create multiple independent subscriptions (OR semantics)
 - **R782:** `--filter-files GLOB` restricts matching to files matching the glob
 - **R783:** `--except-files GLOB` excludes files matching the glob from matching
@@ -1289,7 +1291,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R785:** File filters are checked at publish time before enqueue
 - **R786:** `--cancel` with no `--tag` cancels all subscriptions for the session
 - **R787:** `--cancel --tag TAG` cancels all subscriptions for that tag
-- **R788:** `--cancel --tag TAG --value VAL` cancels only subscriptions whose value regex would match VAL
+- **~~R788:~~** (Retired T63 — see R2458) `--cancel --tag TAG --value VAL` cancels only subscriptions whose value regex would match VAL
 - **R937:** `--tag` values are normalized: leading `@` and trailing `:` are stripped so `@status:`, `@status`, and `status` all resolve to `status`
 
 ### Listen
@@ -1338,6 +1340,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R829:** `@mute: true` in a file silences all pubsub events from that file
 - **R830:** The mute check happens before subscription matching — no events fire, no watchdog findings
 - **R831:** Muted files are still indexed and searchable; only notifications are suppressed
+- **~~R832:~~** (Retired T72 — no replacement) orphaned numbering gap
+- **~~R833:~~** (Retired T73 — no replacement) orphaned numbering gap
+- **~~R834:~~** (Retired T74 — no replacement) orphaned numbering gap
 - **R810:** Quarter chimes: a built-in recurring event every 15 minutes with full date, day of week, time of day
 - **R811:** Push records: in-memory set of (event-id, session-id) pairs prevents duplicate delivery
 - **R812:** Server restart clears push records; startup re-scan fires anything due that hasn't been delivered
@@ -1623,16 +1628,16 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ## Feature: Status DB Records
 **Source:** specs/status-db.md
 
-- **R899:** `ark status --db` shows LMDB record counts grouped by subdatabase (microfts2, ark)
-- **R900:** Each record type displays prefix letter, purpose label, count, key bytes, and value bytes
-- **R901:** Record types are sorted alphabetically within each subdatabase
-- **R902:** Counts are right-aligned for readability
-- **R903:** Without `--db`, status output is unchanged
-- **R904:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
-- **R905:** ark record types include single-byte prefixes (D tag-defs, F file-tags, I settings, M missing, T tag-totals, U unresolved, V tag-values) and multi-byte prefixes (`E:` errors, `EV` tag-value embeddings, `EC` chunk embeddings, `EF` file centroids, `PC` page content). Each prefix gets its own row — multi-byte prefixes are not collapsed into a single-byte bucket.
-- **R906:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
-- **R907:** (inferred) Store needs a RecordCounts method that returns counts keyed by full prefix string. Known multi-byte prefixes (`E:`, `EV`, `EC`, `EF`, `PC`) are matched before falling back to a single-byte prefix.
-- **R908:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
+- **R2473:** `ark status --db` shows LMDB record counts grouped by subdatabase (microfts2, ark)
+- **R2474:** Each record type displays prefix letter, purpose label, count, key bytes, and value bytes
+- **R2475:** Record types are sorted alphabetically within each subdatabase
+- **R2476:** Counts are right-aligned for readability
+- **R2477:** Without `--db`, status output is unchanged
+- **R2478:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
+- **R2479:** ark record types include single-byte prefixes (D tag-defs, F file-tags, I settings, M missing, T tag-totals, U unresolved, V tag-values) and multi-byte prefixes (`E:` errors, `EV` tag-value embeddings, `EC` chunk embeddings, `EF` file centroids, `PC` page content). Each prefix gets its own row — multi-byte prefixes are not collapsed into a single-byte bucket.
+- **R2480:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
+- **R2481:** (inferred) Store needs a RecordCounts method that returns counts keyed by full prefix string. Known multi-byte prefixes (`E:`, `EV`, `EC`, `EF`, `PC`) are matched before falling back to a single-byte prefix.
+- **R2482:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
 - **R1130:** A total summary line shows aggregate record count, key bytes, value bytes, and proportion of LMDB map
 
 ## Feature: Search Profiling
@@ -2307,14 +2312,14 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R1467:** `Store.MatchTagNames(tokens []string)` scans T records and returns tag names where every token appears as a case-insensitive substring of the name. Linear scan — the T record set is small (hundreds to low thousands). Single-token input degenerates to simple substring match.
 - **R1468:** `Store.MatchTagValues(tag string, tokens []string)` scans V records for a given tag name and returns values where every token appears as a case-insensitive substring. Each result carries the chunkIDs decoded from the V-record value blob; callers that need fileIDs resolve through `filesForChunk`.
-- **R1469:** `handleSearchGrouped` accepts an optional structured tag query: name tokens, value tokens, and match modes (`name_tokens`, `value_tokens`, `name_match`, `value_match`). The server resolves the chunkID set through `resolveTagChunks` (matched names via R1467, then F-record chunkIDs for name-only or V-record chunkIDs via R1468 for name+value). When no other text primary is set, FTS is bypassed entirely — `Searcher.GroupTagChunks` builds GroupedResult directly from the chunkIDs (path/range via C+F record reads, stale chunkIDs skipped). When combined with a text primary, the chunkID set overlays as a `WithChunkFilter` (`chunkIDChunkFilter`) on top of the chosen FTS pipeline.
+- **~~R1469:~~** (Retired T64 — see R2442) `handleSearchGrouped` accepts an optional structured tag query: name tokens, value tokens, and match modes (`name_tokens`, `value_tokens`, `name_match`, `value_match`). The server resolves the chunkID set through `resolveTagChunks` (matched names via R1467, then F-record chunkIDs for name-only or V-record chunkIDs via R1468 for name+value). When no other text primary is set, FTS is bypassed entirely — `Searcher.GroupTagChunks` builds GroupedResult directly from the chunkIDs (path/range via C+F record reads, stale chunkIDs skipped). When combined with a text primary, the chunkID set overlays as a `WithChunkFilter` (`chunkIDChunkFilter`) on top of the chosen FTS pipeline.
 - **R2129:** "No text primary" in R1469 means an empty query string, regardless of `mode`. A request with `mode: "regex"` (or any text-primary mode) and `query: ""` routes through the tagOnly fast path — the mode field is leftover UI state, not an instruction to run an empty regex against every chunk in the chunkID filter.
-- **R1470:** `ChunkFilterRow` gains a `"tag-contains"` mode. Query format: `token1 token2:value1 value2` (space-separated name tokens before `:`, value tokens after). `BuildChunkFilters` constructs a chunk-precise filter via `TagContainsChunkFilter`: matched names from R1467, chunkIDs from R1468 (`TagValueMatch.ChunkIDs`) for the value branch and from F-record ChunkID for the name-only branch. Membership tested via `chunkIDChunkFilter` against `crec.ChunkID`.
+- **~~R1470:~~** (Retired T65 — see R2442) `ChunkFilterRow` gains a `"tag-contains"` mode. Query format: `token1 token2:value1 value2` (space-separated name tokens before `:`, value tokens after). `BuildChunkFilters` constructs a chunk-precise filter via `TagContainsChunkFilter`: matched names from R1467, chunkIDs from R1468 (`TagValueMatch.ChunkIDs`) for the value branch and from F-record ChunkID for the name-only branch. Membership tested via `chunkIDChunkFilter` against `crec.ChunkID`.
 - **R1471:** `BuildChunkFilters` accepts a `*Store` parameter so it can resolve T and V records for `"tag-contains"` mode. Existing modes (`contains`, `fuzzy`, `tag`) are unchanged.
-- **R2128:** `TokenizeTagValue(s string) []string` (in search.go) splits a tag value into tokens with shell-style quoting: whitespace separates tokens; double quotes group whitespace-containing runs into a single token; backslash escapes the next rune (inside or outside quotes), allowing literal `"`, `\`, or space within a token. Unmatched trailing quote or backslash is tolerated; empty tokens are dropped. Used by `TagChunkFilter` (CLI `-tag name:value` and chunk-filter rows) so quoted multi-word values like `meal:"french toast"` produce a single substring token. Browser clients that send `value_tokens` as a JSON array bypass this — they tokenize client-side.
-- **R1472:** On the client, `buildTagQuery()` for contains-name sends structured fields (`name_tokens`, `value_tokens`, `name_match`, `value_match`) in the search request instead of building a client-side regex. The server resolves and searches. Exact-name continues to send a regex query string as before.
-- **R1473:** On the client, `collectChunkFilters()` sends `mode: "tag-contains"` with `query: "token1 token2:value1 value2"` for contains-name filter rows, replacing the `mode: "regex"` fallback. Exact-name filter rows continue to use `mode: "tag"`.
-- **R1474:** Supersedes R1455 (client-side regex for contains-name) and R1458 (regex chunk filter fallback). The contains-name path now goes through the server's T/V record index.
+- **~~R2128:~~** (Retired T69 — see R2445) `TokenizeTagValue(s string) []string` (in search.go) splits a tag value into tokens with shell-style quoting: whitespace separates tokens; double quotes group whitespace-containing runs into a single token; backslash escapes the next rune (inside or outside quotes), allowing literal `"`, `\`, or space within a token. Unmatched trailing quote or backslash is tolerated; empty tokens are dropped. Used by `TagChunkFilter` (CLI `-tag name:value` and chunk-filter rows) so quoted multi-word values like `meal:"french toast"` produce a single substring token. Browser clients that send `value_tokens` as a JSON array bypass this — they tokenize client-side.
+- **~~R1472:~~** (Retired T66 — see R2442) On the client, `buildTagQuery()` for contains-name sends structured fields (`name_tokens`, `value_tokens`, `name_match`, `value_match`) in the search request instead of building a client-side regex. The server resolves and searches. Exact-name continues to send a regex query string as before.
+- **~~R1473:~~** (Retired T67 — see R2442) On the client, `collectChunkFilters()` sends `mode: "tag-contains"` with `query: "token1 token2:value1 value2"` for contains-name filter rows, replacing the `mode: "regex"` fallback. Exact-name filter rows continue to use `mode: "tag"`.
+- **~~R1474:~~** (Retired T68 — see R2442) Supersedes R1455 (client-side regex for contains-name) and R1458 (regex chunk filter fallback). The contains-name path now goes through the server's T/V record index.
 - **R1475:** Highlight regexes (`buildHighlightRegexes`, `tagRowRegex`) continue to build client-side regexes from the name and value tokens — these are for iframe rendering, not search.
 
 ## Feature: ark-tag-element
@@ -2948,8 +2953,18 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Superseded (high-water tracking, replaced by ec-rekey chunkID dedup)
 
 - **R1817:** ~~superseded by R1847~~ The Librarian maintained an in-memory high-water map. Removed — chunkID EC lookup is the cross-pass dedup.
-- **R1818-R1827:** ~~superseded by R1846-R1848~~ High-water tracking state and skip logic. Replaced by chunkID-based EC key existence checks.
-- **R1828-R1829:** ~~superseded by R1848~~ Incremental centroid seeding/subtraction. Replaced by full recompute from EC records after embedding.
+- **~~R1818:~~** (Retired T75 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1819:~~** (Retired T76 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1820:~~** (Retired T77 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1821:~~** (Retired T78 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1822:~~** (Retired T79 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1823:~~** (Retired T80 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1824:~~** (Retired T81 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1825:~~** (Retired T82 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1826:~~** (Retired T83 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1827:~~** (Retired T84 — see R1848) superseded by R1846-R1848 — high-water tracking state and skip logic
+- **~~R1828:~~** (Retired T85 — see R1848) superseded by R1848 — incremental centroid seeding/subtraction
+- **~~R1829:~~** (Retired T86 — see R1848) superseded by R1848 — incremental centroid seeding/subtraction
 
 ### Centroid Invariants (still load-bearing)
 
@@ -3809,3 +3824,58 @@ implementation, not a separate format break.
 - **R2439:** `-no-files` drops file/chunk locations entirely; only tag/value counts remain. Subsumes `-no-chunks`. Composes with `-no-values`; combined with `-no-values` it produces tag-names only.
 - **R2440:** Tags NOT named in any `-with -tag` filter appear in full hierarchy alongside any tags that did trigger suppression. Each filter independently determines what's hidden for its own tag.
 - **R2441:** `ark search -tags -json` emits `TagResult` JSONL — one object per line, full structured shape (tag, count, bestScore, fileCount, values[]) — instead of the markdown bullet tree. Suppression flags (`-no-values`/`-no-chunks`/`-no-files`) and `-with -tag` adaptive defaults do NOT affect JSON output; programs filter the structured data themselves.
+
+## Feature: tag match syntax (shared by -tag and -file-tag)
+**Source:** specs/file-tag-filter.md
+
+- **R2442:** `-tag` and `-file-tag` accept a single argument of the form `[~|:]NAME [(=|:|~) VALUE]`. A single shared parser converts the argument into a `MatchPredicate` (name mode + name material; value mode + value material) used by every consumer (search CLI, subscribe CLI, server JSON, ark-search element). The leading sigil selects the name mode; the internal separator selects the value mode.
+- **R2443:** Name match modes. **Exact:** bare `NAME` is a case-insensitive literal match against the tag name. **Contains:** `:NAME` lowercases NAME and the tag name, splits NAME on whitespace into tokens, matches iff every token is a substring of the lowercased tag name (substring-AND, order-independent). Mirrors `Store.MatchTagNames`. **Regex:** `~NAME` treats NAME as a case-insensitive RE2 pattern matched against the tag name.
+- **R2444:** Value match mode — exact: `=VALUE` compares the chunk tag value as a literal string. No normalization beyond the tag extractor's own.
+- **R2445:** Value match mode — contains: `:VALUE` lowercases VALUE and the chunk tag value, splits VALUE on whitespace into tokens, matches iff every token is a substring of the lowercased chunk value (substring-AND, order-independent). Mirrors `Store.MatchTagValues` semantics.
+- **R2446:** Value match mode — regex: `~VALUE` treats VALUE as an RE2 pattern matched against the chunk tag value with no anchoring (partial matches succeed).
+- **R2447:** A bare NAME (no separator) matches any value. The match succeeds if the name-mode accepts the chunk's tag name regardless of value content.
+- **R2448:** Empty value after a separator: `T=` matches only tags whose value is the empty string; `T:` and `T~` are degenerate (both match every value) and are accepted as equivalent to bare `T`.
+- **R2449:** `@` normalization: a single decorative `@` is stripped from the argument when it appears at the very start, immediately after `~` (regex name sigil), or immediately after `:` (contains name sigil) — so `@T`, `@~T`, `~@T`, `@:T`, and `:@T` all normalize to the same predicate as their `@`-less form. The name-mode sigil is preserved.
+- **R2450:** A trailing `:` on the name (the form `@status:` users see in files) is stripped during normalization, preserving existing behavior. Applied after `@` stripping and before sigil parsing.
+- **R2451:** `ark search -parse` annotates every `-tag` and `-file-tag` row with the decoded name-mode and value-mode, e.g. `-tag exact:status regex:^(open|in-progress)$`, so users can verify what the parser understood.
+
+## Feature: tag-match wire consolidation
+**Source:** specs/file-tag-filter.md
+
+- **R2452:** The server retires `ChunkFilterRow.Mode == "tag-contains"`. The single `tag` mode covers all name and value match shapes via the sigil-form Query. Callers that previously emitted `tag-contains` with query `"ntok:vtok"` must emit `tag` with query `:ntok:vtok` (leading `:` selects the contains-name mode). The semantic of `:V` on the value side is preserved (substring-AND tokens, what `MatchTagValues` already did); the sigil makes the prior implicit contains behavior explicit and adds `=` (exact) and `~` (regex) as new value modes.
+
+## Feature: ark search -file-tag
+**Source:** specs/file-tag-filter.md
+
+- **R2453:** `ark search -file-tag TAG[SEP VALUE]` is a chunk-level filter that accepts a chunk iff its primary file F has a tag matching the parsed predicate. The "file has tag" relation is "at least one chunk in F carries that (name, value) in its extracted tag set."
+- **R2454:** `-file-tag` honors the active `-with` / `-without` polarity at parse position. `-without -file-tag X` rejects chunks whose file has X.
+- **R2455:** `-file-tag` is repeatable in a single search. Multiple `-file-tag` entries AND together at their active polarity — a chunk's file must satisfy every entry.
+- **R2456:** The `-file-tag` predicate is evaluated against the per-file tag aggregate index (e.g. `FileTagValues`), never against a single chunk's local tag list. The result is cached once per file per search and reused across all chunks of that file.
+
+## Feature: ark subscribe match-syntax unification
+**Source:** specs/file-tag-filter.md
+
+- **R2457:** `ark subscribe -tag` accepts the new sigil match syntax via the shared parser (R2442). `-tag` becomes the only way to express name+value matching for tag-name subscriptions.
+- **R2458:** The `-value` flag is removed from `ark subscribe`. The matching pieces are absorbed into `-tag`: `T=V` for exact, `T:V` for contains, `T~RE` for regex-on-value. Callers that previously used `--cancel --tag T --value V` rewrite to `--cancel --tag T=V` (or the appropriate sigil form).
+- **R2459:** `-tag` is repeatable in a single subscribe call. Multiple `-tag` entries register multiple subscriptions for the session; entries OR together at delivery time — a notification fires if any entry matches the indexed tag.
+
+## Feature: ark subscribe -file-tag
+**Source:** specs/file-tag-filter.md
+
+- **R2460:** `ark subscribe -file-tag TAG[SEP VALUE]` registers interest in **any chunk indexed on a file that has the tag** matching the parsed predicate. The chunk's own text is not consulted; file-tag membership is what gates delivery.
+- **R2461:** `-file-tag` is repeatable. Multiple `-file-tag` entries OR together — a chunk's file matching any one of them triggers delivery (consistent with `-tag` repeat semantics).
+- **R2462:** A subscription entry may combine `-tag` and `-file-tag` independently. They are independent axes; neither is required when the other is present.
+- **R2463:** A subscription with one or more `-file-tag` filters maintains an in-memory set of fileIDs that currently match **at least one** of the subscription's `-file-tag` predicates (OR semantics, consistent with R2461). The set is consulted at delivery time and updated on every relevant indexing event.
+- **R2464:** On every chunk indexed for file F (regardless of F's current membership), each `-file-tag` predicate is re-evaluated against F's authoritative per-file tag aggregate (not the chunk's local tag delta). Removing a tag from one chunk does not imply F lost the tag — another chunk in F may still carry it.
+- **R2465:** Membership transition `was=N, is=Y`: F is added to the set; the indexed chunk is delivered as the entry event. Prior chunks on F are not backfilled.
+- **R2466:** Membership transition `was=Y, is=Y`: F remains a member; the indexed chunk is delivered.
+- **R2467:** Membership transition `was=Y, is=N`: F is removed from the set; the indexed chunk is delivered as the exit event. Symmetric with the entry rule — the moment T disappears on F is itself activity the subscriber asked for.
+- **R2468:** Membership transition `was=N, is=N`: no `-file-tag` delivery for this chunk on this subscription. Other subscriptions on the session (e.g., a plain `-tag`) may still deliver it independently.
+- **R2469:** Membership sets are in-memory only; they live with their parent subscription. On subscription cancel or session TTL reap, the set is discarded. On server restart, sets start empty and re-populate through the normal `was=N, is=Y` path as fresh chunks arrive.
+- **R2470:** `@mute: true` in a file silences all file-tag deliveries from that file. The mute check runs before membership evaluation.
+- **R2471:** A session does not receive `-file-tag` deliveries for chunks it itself indexed (same self-notification rule the existing `-tag` path already enforces).
+
+## Feature: ark-search element -file-tag row
+**Source:** specs/file-tag-filter.md
+
+- **R2472:** The `ark-search` web component exposes a `-file-tag` filter row alongside the existing `-tag` row. Both accept the new sigil match syntax. Polarity (`with` / `without`) and repeat semantics match the `-tag` row. The component serializes file-tag filters into the same `chunk_filters` request shape the server already handles for `-tag`.

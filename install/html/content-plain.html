@@ -715,9 +715,8 @@ const api = {
       chunk_filters: request.chunkFilters,
       filter_files: request.filterFiles,
       exclude_files: request.excludeFiles,
-      name_tokens: request.nameTokens,
-      value_tokens: request.valueTokens,
-      name_match: request.nameMatch,
+      primary_tag_query: request.primaryTagQuery,
+      primary_file_tag: request.primaryFileTag,
     }),
   }).then(r => r.json()),
   tagComplete: (prefix) => fetch('/tags/complete', {

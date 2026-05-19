@@ -140,6 +140,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-DB.md → `db.go`, `locator.go`
 - [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
+- [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`
@@ -357,7 +358,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A31: R1368-R1371 (package structure) — build/config concern, no CRC card needed
 - A32: R1374-R1376 (extraction scope — what stays in markdown-editor) — verified by absence of move, no design artifact needed
 - [ ] O57: No unit tests for Store.MatchTagNames, Store.MatchTagValues
-- [ ] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters
+- [x] O58: No unit tests for TagContainsChunkFilter or tag-contains mode in BuildChunkFilters — both retired in the sigil-syntax migration (T65), no longer applicable
 - [ ] O59: No integration test for resolveTagChunks + GroupTagChunks end-to-end (structured tag query → V-record chunkIDs → direct chunk lookup)
 - [ ] O60: No unit tests for wrapTagElements — tag pattern matching, idempotency, HTML attribute avoidance
 - [ ] O61: ark-search-element.js symlink not in install/release pipeline — must be added to Makefile like ark-markdown-editor.js
@@ -507,3 +508,29 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T60: R498 retired by R2431 (2026-05-18 inbox -project broadened)
 - [ ] O109: R2432-R2440 No unit tests yet for the new value-aware ExtractResultTags or printTagsBabyFood printer. Suppression-flag combinatorics (hideName, hideValue, noValues/noChunks/noFiles) live-verified only. A small table-driven test (handful of SearchResultEntry fixtures, expected []TagResult; and printer cases for each cfg combination) would lock in the extraction shape and the bullet output.
 - [ ] O110: R2433-R2434 ExtractResultTags uses 'markdown' strategy for ALL chunks regardless of source. Go/Lua/JSON chunks technically over-include @tag mentions inside comments (no fenced-code skip applies). Acceptable for an agent overview but a per-chunk strategy lookup would tighten correctness. SearchResultEntry would need either a Strategy field populated at FillChunks time or a fileID->strategy map passed through to the extractor.
+- T61: R779 retired by R2458 (subscribe --value flag absorbed into sigil syntax (T:V / T=V / T~V))
+- T62: R780 retired by R2458 (subscribe --value flag retired)
+- T63: R788 retired by R2458 (subscribe --value cancel narrowing replaced by sigil cancel)
+- T64: R1469 retired by R2442 (structured tag query (name_tokens/value_tokens/name_match) replaced by primary_tag_query sigil form)
+- T65: R1470 retired by R2442 (tag-contains chunk-filter mode retired in favor of unified tag mode with sigil syntax)
+- T66: R1472 retired by R2442 (client-side structured tag fields retired in favor of sigil-form primaryTagQuery)
+- T67: R1473 retired by R2442 (tag-contains mode retired)
+- T68: R1474 retired by R2442 (client name/value match modes encoded in sigil)
+- T69: R2128 retired by R2445 (TokenizeTagValue removed; ValueContains uses strings.Fields on lowercased value)
+- T70: R409 retired (orphaned numbering gap)
+- T71: R413 retired (orphaned numbering gap)
+- T72: R832 retired (orphaned numbering gap)
+- T73: R833 retired (orphaned numbering gap)
+- T74: R834 retired (orphaned numbering gap)
+- T75: R1818 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T76: R1819 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T77: R1820 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T78: R1821 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T79: R1822 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T80: R1823 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T81: R1824 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T82: R1825 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T83: R1826 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T84: R1827 retired by R1848 (high-water tracking replaced by chunkID-based EC dedup)
+- T85: R1828 retired by R1848 (incremental centroid seeding replaced by full recompute)
+- T86: R1829 retired by R1848 (incremental centroid seeding replaced by full recompute)

@@ -17,6 +17,7 @@ ark search TERM...
     [-fuzzy TERM]...
     [-regex PATTERN]...
     [-tag TAG]...
+    [-file-tag TAG]...
     [-about QUERY]...
     [-files GLOB]...
     [-with]
@@ -28,9 +29,15 @@ ark search TERM...
 - `-contains TERM`: substring match on chunk text.
 - `-fuzzy TERM`: typo-tolerant match on chunk text.
 - `-regex PATTERN`: regular expression match on chunk text.
-- `-tag TAG`: match files with the given tag. Format is
-  `name:value` or `@name:value` (leading `@` is optional).
-  Name-only (`name` or `@name`) matches any value.
+- `-tag TAG`: match chunks whose own text carries a tag accepted by
+  the predicate. TAG uses the shared sigil syntax
+  `[~|:]NAME [(=|:|~) VALUE]` — see
+  [file-tag-filter.md](file-tag-filter.md) for the full table.
+  Bare NAME or `:NAME` / `~NAME` with no separator matches any value.
+- `-file-tag TAG`: match every chunk on a file that has a matching
+  tag somewhere. Same sigil syntax. A file is considered to "have"
+  a tag when at least one of its chunks carries that (name, value)
+  in its extracted tag set.
 - `-about QUERY`: vector similarity match on chunk content.
 - `-files GLOB`: match files whose path matches the glob pattern.
 
