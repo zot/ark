@@ -36,6 +36,7 @@ name, so always use the absolute path.
 | `ls`               | `ls`                                                                                                                 | n/a                      | bundled binary only; alias of `bundle ls`            |
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
+| `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
 | `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up       |
 | `refresh`          | `refresh [PATTERN...]`                                                                                               | optional                 | re-index stale files                                 |
 | `remove`           | `remove PATTERN...`                                                                                                  | optional                 | tmp:// requires server                               |
@@ -456,6 +457,59 @@ Pair lookup (used by `--unmatched` and by the LAG column) consults
 the **full inbox**, not the post-filter slice. A directional or
 status filter changes what's *shown*; the matcher always sees both
 sides of a pair. See R2484.
+
+### `nano` — embedded shell-agent loop
+
+```
+ark nano [-m model] [-c | -s] [--base-url URL] [--max-steps N]
+         [--approve-all] [--stream] [prompt...]
+```
+
+Vendored Go port of nano.py (see [`readme-nano.md`](../readme-nano.md)
+for attribution and the MIT license). Talks to a local Ollama server
+via `/api/chat`. With a prompt, runs one-shot and exits. Without a
+prompt, drops into an interactive REPL backed by `chzyer/readline`.
+
+Flags (positional order is free; flags must precede the prompt):
+
+| Flag                | Required? | What it does                                                                            |
+|---------------------|-----------|-----------------------------------------------------------------------------------------|
+| `-m <model>`        | yes       | Ollama model name. No environment-variable fallback.                                    |
+| `--base-url <url>`  | no        | Ollama server base URL. Default `http://localhost:11434`.                               |
+| `--max-steps <N>`   | no        | Tool-call budget per task. Default 200. Non-integer arg exits with a parse error.       |
+| `--approve-all`     | no        | Auto-approve every shell command. Equivalent to typing `a` at the first approval prompt. |
+| `--stream`          | no        | Stream content tokens to stdout as Ollama emits them; suppresses the thinking spinner.  |
+| `-c`                | no        | Continue the most recent session whose `cwd` matches the current directory.             |
+| `-s`                | no        | Pick from up to ten recent sessions in this directory.                                  |
+| `-h`, `--help`      | no        | Print usage and exit 0. Accepted at any position, including after `-m`.                 |
+
+`-c` or `-s` with no matching sessions exits with `no sessions in
+this directory`. Missing model exits with `model not set: pass -m
+<model>`.
+
+Sessions persist to `~/.ark/nano-sessions.json` (one entry per
+turn). The schema and locking rules are documented in
+[`specs/nano-sessions.md`](nano-sessions.md). The schema is
+incompatible with both `~/.nano_sessions.json` (nano.py) and
+`~/.nano-go_sessions.json` (standalone nano-go).
+
+The model is given exactly one tool, `execute_shell`. Every command
+is shown to the user with its 5–10-word description before running
+unless `--approve-all` is in effect. Tool results are clipped to
+the last 12 000 bytes. See [`specs/nano-tool-loop.md`](nano-tool-loop.md)
+for the loop, approval, and execution details.
+
+REPL controls:
+
+- `:q`, `quit`, `exit` — end the session.
+- `:reset`, `reset` — clear history and start over.
+- Ctrl-D / EOF — exit cleanly.
+
+No environment variables are read. The standalone nano-go reads
+`OLLAMA_MODEL`, `OLLAMA_BASE_URL`, `NANO_MAX_STEPS`, and
+`NANO_APPROVE`; ark drops those hooks in favor of explicit flags
+(R2515, R2516, R2517, R2518 retired by T88–T91; flags landed as
+R2511, R2561, R2562, R2563).
 
 ### `missing`, `stale`, `unresolved`, `resolve`
 

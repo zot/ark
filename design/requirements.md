@@ -3894,3 +3894,120 @@ implementation, not a separate format break.
 **Source:** specs/cli-commands.md
 
 - **R2485:** `ark message new-request` and `ark message new-response` create the target file atomically (write to a sibling temp file in the same directory, then rename into place). A partial write, killed process, or other mid-flight failure never leaves a 0-byte husk at the target path. Either the file appears with full content, or it does not appear at all.
+
+## Feature: Nano — overview
+**Source:** specs/nano-overview.md
+
+- **R2486:** Nano is a Go port of nano.py that preserves the same shell-agent loop and single-tool philosophy. Embedded in ark and exposed via `ark nano`.
+- **R2487:** Nano talks to a local Ollama server via `/api/chat`, not OpenAI's Responses API.
+- **R2488:** The embedded code lives in module `github.com/zot/ark` (package `ark`); the standalone provenance was `github.com/zot/nano-go`.
+- **R2489:** The library lives at `nano.go` as a sibling top-level file in package `ark`.
+- **R2490:** The CLI is the `nano` subcommand of `ark`, wired in `cmd/ark/main.go`.
+- **R2491:** Nano's library code has no non-stdlib runtime dependencies; only the CLI path may depend on `github.com/chzyer/readline`.
+
+## Feature: Nano — library
+**Source:** specs/nano-library.md
+
+- **R2492:** All configuration hangs off a single exported `Nano` struct.
+- **R2493:** `Nano.Model` is required; the zero value causes `Run`/`REPL` to return an error.
+- **R2494:** `Nano.BaseURL` defaults to `http://localhost:11434`.
+- **R2495:** `Nano.MaxSteps` defaults to 200.
+- **R2496:** `Nano.SessionsPath` defaults to `~/.ark/nano-sessions.json`.
+- **R2497:** `Nano.Stdin`, `Stdout`, and `Stderr` default to `os.Stdin`, `os.Stdout`, and `os.Stderr` respectively.
+- **R2498:** `Nano.Cwd` defaults to the result of `os.Getwd`.
+- **R2499:** `Nano.HTTPClient` defaults to a fresh `*http.Client{}`.
+- **R2500:** `Run(prompt, history)` returns the final assistant text and the updated message history.
+- **R2501:** When `history` is nil, `Run` seeds it with the system prompt.
+- **R2502:** `REPL` accepts a `ReadLineFunc` callback so the library does not depend on `chzyer/readline`.
+- **R2503:** Passing a nil `ReadLineFunc` to `REPL` falls back to a plain `bufio` reader on `Nano.Stdin`.
+- **R2504:** `LoadNanoSessions(path)` returns `(nil, nil)` when the file does not exist.
+- **R2505:** `SaveNanoSession(path, s)` replaces any existing session with the same label and cwd rather than duplicating it.
+- **R2506:** `SaveNanoSession` caps the on-disk file at the most recent 50 sessions.
+- **R2507:** `NanoSessionsInCwd(path, cwd)` returns sessions whose cwd matches, oldest first.
+
+## Feature: Nano — CLI
+**Source:** specs/nano-cli.md
+
+- **R2508:** The CLI synopsis is `ark nano [-m model] [-c | -s] [prompt...]`.
+- **R2509:** A non-empty prompt runs one-shot: the prompt is executed and the program exits.
+- **R2510:** An empty prompt drops the user into an interactive REPL.
+- **R2511:** `-m <model>` sets the model name. Model must be provided via this flag — no environment-variable fallback.
+- **R2512:** `-c` resumes the most recent session whose cwd matches the current working directory.
+- **R2513:** `-s` lists up to ten recent sessions in the cwd, reads a digit from stdin, and resumes the chosen session.
+- **R2514:** When `-c` or `-s` finds no matching sessions, the CLI exits with `no sessions in this directory`.
+- **~~R2515:~~** (Retired T88 — no replacement) `OLLAMA_MODEL` seeds `Nano.Model` when `-m` is not given.
+- **~~R2516:~~** (Retired T89 — see R2561) `OLLAMA_BASE_URL` seeds `Nano.BaseURL`.
+- **~~R2517:~~** (Retired T90 — see R2562) `NANO_MAX_STEPS` seeds `Nano.MaxSteps`.
+- **~~R2518:~~** (Retired T91 — see R2563) `NANO_APPROVE=all` seeds `Nano.ApproveAll`.
+- **R2519:** When no model is set, the CLI exits with `model not set: pass -m <model>`.
+- **R2520:** The REPL uses `chzyer/readline` for line editing (arrow keys, history, ctrl-L).
+- **R2521:** `:q`, `quit`, and `exit` end the REPL.
+- **R2522:** `:reset` and `reset` clear the in-memory history and start over.
+- **R2523:** Ctrl-D / EOF on the prompt exits the REPL cleanly.
+- **R2524:** The CLI always runs with `KeepHistory=true`.
+- **R2525:** The CLI enables TTY (color and spinner) only when stderr is a character device.
+- **R2526:** Clean exit returns 0; fatal errors return 1.
+
+## Feature: Nano — sessions
+**Source:** specs/nano-sessions.md
+
+- **R2527:** Sessions are stored as a JSON array of `NanoSession` objects in a single file.
+- **R2528:** Each `NanoSession` has fields `label`, `cwd`, `ts`, and `messages`.
+- **R2529:** `label` is truncated to 80 characters when saved.
+- **R2530:** `cwd` is the absolute path of the working directory at save time.
+- **R2531:** `ts` is Unix epoch seconds at last save.
+- **R2532:** `messages` is the full chat history including system, user, assistant, and tool messages.
+- **R2533:** The sessions file is written with mode 0600.
+- **R2534:** `KeepHistory` defaults to false in the library so embedding does not silently write to disk.
+- **R2535:** The default sessions path is `~/.ark/nano-sessions.json`, distinct from both nano.py's `~/.nano_sessions.json` and standalone nano-go's `~/.nano-go_sessions.json`. The schemas are not all compatible; the three files remain independent.
+
+## Feature: Nano — tool loop
+**Source:** specs/nano-tool-loop.md
+
+- **R2536:** The model is given exactly one tool, `execute_shell`.
+- **R2537:** `execute_shell` accepts `command`, `description`, `cwd`, `timeout`, and `env`.
+- **R2538:** `command` and `description` are required arguments.
+- **R2539:** The library rejects `execute_shell` calls whose `description` is outside 5–10 words with the literal string `bad arguments: description must be 5-10 words`.
+- **R2540:** `timeout` defaults to 60 seconds when absent or zero.
+- **R2541:** `cwd` defaults to `Nano.Cwd` when absent.
+- **R2542:** Approved commands run with `env = os.Environ() ++ args.env`.
+- **R2543:** The Run loop iterates up to `MaxSteps` times.
+- **R2544:** When the loop budget is exhausted, `Run` returns the literal string `stopped: too many tool calls`.
+- **R2545:** Before each command runs, the approval prompt prints the description, the command (in green when TTY), and any non-default cwd/timeout/env to `Nano.Stderr`.
+- **R2546:** When `ApproveAll` is set, commands run without prompting.
+- **R2547:** `y` or `yes` approves the current command.
+- **R2548:** `a` or `all` flips `ApproveAll` to true and approves the current command.
+- **R2549:** Any other input — including EOF — denies the command.
+- **R2550:** A denied command returns the literal string `denied by user` as the tool result.
+- **R2551:** Approved commands run via `sh -c <command>`.
+- **R2552:** The tool result string is shaped as `$ <command>\nexit <code>\n<output>` or `$ <command>\ntimeout after <N>s\n<output>` on timeout.
+- **R2553:** Tool result strings are clipped to the last `Nano.MaxOutputBytes` bytes before being returned to the model.
+- **R2554:** A timer kills the running process when `timeout` elapses.
+- **R2555:** The system prompt includes the cwd, the platform (`runtime.GOOS`/`runtime.GOARCH`), and the user's `$SHELL`.
+- **R2556:** The system prompt includes a list of project documentation files (`CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `README.md`, case-insensitive) found under the cwd.
+- **R2557:** The system prompt includes a list of skill files (`SKILL.md`, `SKILLS.md`, case-insensitive) found under `.claude/skills`, `~/.claude/skills`, `~/.codex/skills`, and `~/.codex/plugins`.
+- **R2558:** Directory walks for docs and skills skip `.git`, `.venv`, `__pycache__`, `node_modules`, and `venv`.
+- **R2559:** `Nano.MaxOutputBytes` defaults to 12000.
+
+## Feature: Nano — help flag
+**Source:** specs/nano-cli.md
+
+- **R2560:** `ark nano -h` and `ark nano --help` print usage and exit 0. The flag is accepted at any position in the argument list, including after `-m`. Output names the synopsis, every recognized flag, every environment variable read, the sessions-file path, and the REPL command set.
+
+## Feature: Nano — flags-only configuration
+**Source:** specs/nano-cli.md
+
+- **R2561:** `--base-url <url>` sets `Nano.BaseURL`. Replaces R2516 (OLLAMA_BASE_URL env-var seed); no environment fallback.
+- **R2562:** `--max-steps <N>` sets `Nano.MaxSteps`. Replaces R2517 (NANO_MAX_STEPS env-var seed); no environment fallback. Non-integer argument exits with `--max-steps requires an integer`.
+- **R2563:** `--approve-all` (boolean, no argument) sets `Nano.ApproveAll = true`. Replaces R2518 (NANO_APPROVE env-var seed); no environment fallback.
+
+## Feature: Nano — streaming output
+**Source:** specs/nano-cli.md, specs/nano-library.md
+
+- **R2564:** `Nano.Stream bool` enables token-by-token streaming. When true, `chat()` dispatches to `chatStream()`, which sends `stream: true` to Ollama's `/api/chat`, parses the NDJSON response, and writes each non-empty `message.content` delta to `Nano.Stdout` as it arrives. Tool calls accumulate from frames where they appear (typically the final `done:true` frame). The thinking spinner (if `Spinner` is true) runs from request-sent until the first frame carrying visible content (`message.content` non-empty) or a tool call arrives, then yields to the stream. Empty / role-marker / reasoning-only frames do not stop the spinner — the live tokens or the approval prompt are the progress signal from that point on. After the stream terminates, the accumulated `Message` is returned for the agent loop. The library writes a trailing newline to Stdout after non-empty streamed content; downstream callers (REPL, one-shot CLI) skip the redundant final answer print when `Stream` is set.
+- **R2565:** `ark nano --stream` (boolean, no argument) sets `Nano.Stream = true`. Default off, matching the upstream nano-go behavior of `stream: false`. Mirrors `ollama run`'s token-by-token printing convention.
+
+## Feature: Nano — spinner interactivity gate
+**Source:** specs/nano-cli.md
+
+- **R2566:** `Nano.Spinner bool` controls the thinking spinner separately from `Nano.TTY`. `TTY` continues to gate ANSI color on `Stderr`; `Spinner` gates the animated spinner. The CLI sets `Spinner = stderrIsTerminal && stdoutIsTerminal` so the spinner appears only in fully-interactive mode — piping stdout (e.g. `ark nano … | cat`) or redirecting either descriptor suppresses it. `Stream` mode interacts with `Spinner` per R2564 (spin until first frame, then yield).

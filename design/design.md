@@ -257,6 +257,29 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 
+### CRC Cards (Nano)
+- [x] crc-Nano.md → `nano.go`
+- [x] crc-NanoOllamaClient.md → `nano.go`
+- [x] crc-NanoShellTool.md → `nano.go`
+- [x] crc-NanoApprover.md → `nano.go`
+- [x] crc-NanoSystemPromptBuilder.md → `nano.go`
+- [x] crc-NanoSessionStore.md → `nano.go`
+- [x] crc-NanoCLI.md → `cmd/ark/nano.go`
+- [x] crc-NanoPicker.md → `cmd/ark/nano.go`
+
+### Sequences (Nano)
+- [x] seq-nano-run-loop.md → `nano.go`
+- [x] seq-nano-repl-turn.md → `nano.go`, `cmd/ark/nano.go`
+- [x] seq-nano-session-resume.md → `cmd/ark/nano.go`
+- [x] seq-nano-shell-exec.md → `nano.go`
+
+### Test Designs (Nano)
+- [ ] test-Nano.md → `nano_test.go`
+- [ ] test-NanoShellTool.md → `nano_test.go`
+- [ ] test-NanoApprover.md → `nano_test.go`
+- [ ] test-NanoSessionStore.md → `nano_test.go`
+- [ ] test-NanoCLI.md → `cmd/ark/nano_cli_test.go`
+
 ## Gaps
 
 - [x] O1: Test files not yet written: config_test.go, match_test.go, search_test.go, store_test.go, tags_test.go
@@ -536,3 +559,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T85: R1828 retired by R1848 (incremental centroid seeding replaced by full recompute)
 - T86: R1829 retired by R1848 (incremental centroid seeding replaced by full recompute)
 - T87: R716 retired by R2484 (2026-05-19 --unmatched global pair lookup)
+- [ ] D9: Nano test files not yet implemented: test-Nano.md, test-NanoShellTool.md, test-NanoApprover.md, test-NanoSessionStore.md, test-NanoCLI.md (carried over from nano-go's original D1)
+- T88: R2515 retired (2026-05-20 nano-env-to-flags: OLLAMA_MODEL fallback dropped; model is set via -m only)
+- T89: R2516 retired by R2561 (2026-05-20 nano-env-to-flags: OLLAMA_BASE_URL → --base-url)
+- T90: R2517 retired by R2562 (2026-05-20 nano-env-to-flags: NANO_MAX_STEPS → --max-steps)
+- T91: R2518 retired by R2563 (2026-05-20 nano-env-to-flags: NANO_APPROVE → --approve-all)

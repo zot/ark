@@ -169,6 +169,8 @@ func main() {
 		cmdUIInstall(args)
 	case "message":
 		cmdMessage(args)
+	case "nano":
+		cmdNano(args)
 	case "subscribe":
 		cmdSubscribe(args)
 	case "listen":
@@ -208,6 +210,7 @@ Commands:
   ls          List embedded assets
   message     Messaging (new-request, new-response, set-tags, get-tags, check, inbox)
   missing     List missing files
+  nano        Embedded shell-agent loop (Ollama-backed; -m model, -c/-s session)
   rebuild     Drop and rebuild the entire index
   refresh     Re-index stale files
   remove      Remove files from the index
