@@ -255,6 +255,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
 - [x] test-FindConnections.md → `connections_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
+- [x] test-Curation.md → `curation_test.go`
 
 ## Gaps
 
