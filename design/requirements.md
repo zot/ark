@@ -4011,3 +4011,57 @@ implementation, not a separate format break.
 **Source:** specs/nano-cli.md
 
 - **R2566:** `Nano.Spinner bool` controls the thinking spinner separately from `Nano.TTY`. `TTY` continues to gate ANSI color on `Stderr`; `Spinner` gates the animated spinner. The CLI sets `Spinner = stderrIsTerminal && stdoutIsTerminal` so the spinner appears only in fully-interactive mode — piping stdout (e.g. `ark nano … | cat`) or redirecting either descriptor suppresses it. `Stream` mode interacts with `Spinner` per R2564 (spin until first frame, then yield).
+
+## Feature: Find Connections — substrate (Tag Forge Phase 2A backend)
+**Source:** specs/find-connections-substrate.md
+
+- **R2567:** `sys.findConnections(inputs, opts)` is the canonical Lua entry point for both normal and turbo modes; accepts a mixed input list and an opts table. The old `mcp.findConnections` becomes a backwards-compat shim that delegates with `mode = "turbo"` for one release.
+- **R2568:** Each input list entry is one of `{chunkID = N}`, `{path = P, range = R}`, or `{text = T}`. A bare integer array is accepted as a sugar form for `{chunkID = N}` entries (preserves 1G call shape).
+- **R2569:** `chunkID` inputs resolve via `EC[chunkID]` for vector substrates and via the chunk's V records for tag votes. Unknown chunkID is rejected at enqueue with `unknown chunk <id>` and no tmp:// doc is created.
+- **R2570:** `path:range` inputs select chunks whose `(startLine, endLine)` interval overlaps the requested `[startLine, endLine]` (1-based inclusive). `path:N` alone selects line N; `path` alone (without a `:range` suffix) is rejected.
+- **R2571:** `path` is resolved via the existing path resolver. A path miss is rejected at enqueue with `path "<p>" not found`. A malformed range is rejected with `path:range parse error`.
+- **R2572:** `text` inputs are embedded in-process via the existing `EmbedQuery` model path; no EC record is written. The text counts as one virtual input with `chunkID = 0` and `path = "<query>"` in evidence reporting.
+- **R2573:** Empty input list after normalization is rejected at enqueue with `chunkIDs/text/range empty`. No tmp:// doc is created.
+- **R2574:** For each normalized input, the substrate pipeline runs four passes: `vector(input, ED)`, `trigram(input, ED)`, `vector(input, EC)`, `trigram(input, EC)`.
+- **R2575:** `vector(input, ED)` is a cosine scan over ED records; per-tag aggregate is **max** across defining files, matching `SuggestTagNames`'s aggregation. Reuses the `SuggestTagNames` walk.
+- **R2576:** `trigram(input, ED)` is a trigram match against tag-definition text via microfts2; per-tag aggregate is max across defining files. Normalized overlap drives the score.
+- **R2577:** `vector(input, EC)` is a cosine scan over EC records via `SearchChunks(queryVec, K')` (K' = 50 by default). For each returned chunk, its V records cast tag votes; per-tag aggregate is the max chunk-similarity score across chunks carrying that tag.
+- **R2578:** `trigram(input, EC)` is a trigram-fuzzy match against chunk text; for each returned chunk, V records cast tag votes; per-tag aggregate is max trigram-score across contributing chunks.
+- **R2579:** All four substrate passes for a single request share one LMDB View txn to avoid lock churn. Multi-input requests use the existing `SearchChunksMulti` batched cursor walk where applicable.
+- **R2580:** Per-input merge across substrates: a tag's per-input aggregate score is **max** across the four substrate scores after normalization.
+- **R2581:** Cross-input merge across inputs: a tag's overall score is **max** across its per-input aggregate scores.
+- **R2582:** Per-substrate per-input scores are retained in the result for the evidence display: `vector_ed`, `trigram_ed`, `vector_ec`, `trigram_ec`. The pipeline does not collapse them into the single aggregate.
+- **R2583:** Each candidate's supporting-chunk list is the union of contributing chunks across inputs and substrates, capped at 10 entries by default.
+- **R2584:** Each candidate's motivating-files list carries the tag-def files whose ED matched, with per-file scores, mirroring `SuggestTagNames.MotivatingFiles`.
+- **R2585:** Output is the top-k candidates by overall score. `k` defaults to 20 and is clamped to `[1, 200]` via `opts.k`.
+- **R2586:** Vector cosine scores are normalized to `[0, 1]` via `(cos + 1) / 2`.
+- **R2587:** Trigram scores are normalized to `[0, 1]` using microfts2's existing fuzzy-match scoring. Vector and trigram scores are directly comparable on the same scale.
+- **R2588:** When embedding is unavailable (no `tag_model` configured, model file missing, or model load fails), vector substrates skip; trigram substrates still run. The doc header carries `@connections-warning: embedding unavailable`.
+- **R2589:** When the ED prefix is empty (no tag defs indexed), ED substrates contribute nothing; EC substrates still run; no warning header is emitted.
+- **R2590:** Connections docs carry a `@purpose` header: `curate` (default for `sys.findConnections`), `recall` (Phase 2B), or another consumer-chosen value. The curation workshop subscribes filtered to `@purpose: curate`.
+- **R2591:** Connections docs carry a `@connections-mode` header: `normal` (this phase) or `turbo` (2C / 1G). `normal` is the default for `sys.findConnections`.
+- **R2592:** Connections docs carry a `@proposal-count` header set on terminal `completed` transition with the number of proposal rows in the body.
+- **R2593:** Proposal rows live under a single `## Proposals` heading; each row begins with `@proposal-kind: <kind>` selecting its variant (`tag-name`, `theme`, `shared-tag`).
+- **R2594:** `@proposal-kind: tag-name` rows include `@proposal-value`, `@proposal-score`, `@proposal-evidence-chunks`, `@proposal-evidence-vector-ed`, `@proposal-evidence-trigram-ed`, `@proposal-evidence-vector-ec`, `@proposal-evidence-trigram-ec`, and `@proposal-motivating-files` (comma-separated `path:score`).
+- **R2595:** `@proposal-kind: theme` rows include `@proposal-text` and `@proposal-evidence-chunks`, replacing the legacy `## Themes` section in turbo mode.
+- **R2596:** `@proposal-kind: shared-tag` rows include `@proposal-tag`, `@proposal-value`, and `@proposal-evidence-chunks`, replacing the legacy `## Shared Tag Candidates` section in turbo mode.
+- **R2597:** During the 1G migration window, the server emits **both** the new `## Proposals` rows and the legacy `## Themes` / `## Shared Tag Candidates` sections in turbo mode so either parser can read the doc; the duplication is removed once the Lua workshop migrates to the unified section.
+- **R2598:** Normal-mode requests may transition `pending → completed` directly without an intermediate `working` state; the elapsed-ticker and progress-text updates from R2328 are skipped for normal mode.
+- **R2599:** Internal pipeline failure (LMDB read error, embedding mid-flight failure) flips the doc to `errored` with `@connections-error: <message>` via the existing write-actor path.
+- **R2600:** `sys.findConnections` returns `(requestID, nil)` on success or `(nil, errstring)` on caller error (empty inputs, unknown chunk, path miss, range parse error) or agent unavailability for turbo mode.
+- **R2601:** `opts.mode` defaults to `"normal"`. `opts.purpose` defaults to `"curate"`. `opts.timeoutSeconds` defaults to 30 and is clamped to `[5, 300]`.
+- **R2602:** Normal-mode `sys.findConnections` calls never block the Lua VM; the call returns sub-millisecond after enqueueing.
+- **R2603:** Turbo-mode `sys.findConnections` requires `ConnectionsAvailable()` to return true; otherwise returns `(nil, "agent unavailable")`.
+- **R2604:** `ark connections find [options] <input>...` accepts mixed input types (decimal chunkID, `PATH:N-M` / `PATH:N`, quoted text) and submits a find request. Returns `tmp://connections/<id>.md` on stdout for shell composition.
+- **R2605:** `ark connections find --wait` blocks until terminal status; on completion prints the doc body on stdout (markdown by default, JSON with `--json`).
+- **R2606:** `ark connections wait <path> [--timeout SEC] [--json]` blocks until the given tmp:// connections doc reaches terminal status and prints the doc body. With `--timeout SEC`, exits non-zero and prints the last-seen status to stderr when the timeout elapses without a terminal transition.
+- **R2607:** `ark connections show <path>` parses the persisted doc and projects structured fields without blocking. Supports `--status` (print only `@connections-status`), `--tags` (list tag-name proposals one per line), `--tag NAME` (filter to rows whose `@proposal-value` equals NAME), `--threshold N` (drop proposals below score N), and `--json` (JSON projection instead of markdown).
+- **R2608:** `ark connections show <path>` is distinct from `ark fetch <path>` which dumps the raw doc body unparsed. `show` parses and projects.
+- **R2609:** `ark connections list [--json]` lists in-flight requests (records still in the Librarian's `connectionsResults` map). Default output is a markdown table; `--json` emits a JSON array.
+- **R2610:** All `ark connections` public subcommands (`find`, `wait`, `show`, `list`) require a running server and exit with `server not running` when none is detected.
+- **R2611:** `ark connections sidecar-wait` is the lotto-tube drain for the turbo sidecar, replacing the previous `--wait` flag with identical semantics.
+- **R2612:** `ark connections sidecar-fetch <id>` returns the chunk-content JSON array for the request, replacing `--fetch ID`.
+- **R2613:** `ark connections sidecar-result <id>` reads result JSON from stdin and posts it to the server, replacing `--result ID`.
+- **R2614:** `ark connections sidecar-error <id> <message>` posts an error message for the request, replacing `--error ID=MESSAGE`. The message is a positional argument, not a name-value pair.
+- **R2615:** The removed `--wait`, `--fetch`, `--result`, `--error` flags produce a one-line hint pointing at the new subcommand name on stderr and exit with status 2.
+- **R2616:** `ark connections find --type chunk|text` forces every positional input to a single category. `chunk` treats each token as a chunk reference, accepting decimal chunkIDs and `PATH:N` / `PATH:N-M` locators (shape still selects which); non-chunk-shaped tokens exit non-zero. `text` treats every token literally, including tokens that look like chunkIDs or `path:locator`. With `--type` omitted, each input is auto-detected: decimal → chunkID, `path:locator` → range, otherwise → text. No quoting is required for bare text. An unknown `--type` value exits non-zero.

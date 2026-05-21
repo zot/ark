@@ -14,9 +14,7 @@ basic install-and-go story see [README.md](README.md); for the
 project-level commitments that constrain everything below see
 [principles.md](principles.md).
 
-@note: make ark tags an open standard -- Ark is a reference implementation
-
-@note: include ark tag applications: scheduling (with syntax), ark messages, link/id, ext tags
+@note: make ark tags an open standard -- Ark is a reference implementation; include ark tag applications: scheduling (with syntax), ark messages, link/id, ext tags
 
 ---
 

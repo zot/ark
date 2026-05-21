@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462, R2600, R2601, R2602, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -247,24 +247,65 @@ dispatches operations via proxy or cold-start.
   --fix: delete orphan EC, orphan EF, and wrong-dimension EC records.
   --verbose: per-file detail. Exit 0 if clean, exit 1 if problems.
   Uses withDB. Read-only without --fix.
-- cmdConnections: sidecar CLI for the find-connections agent.
-  Mirrors cmdSearchExpand's surface. Requires a running server;
-  all four subcommands proxy through the Unix socket. (R2313)
-    - --wait: block on GET /connections/wait, print JSON array of
-      {id, chunkIDs, timeoutSeconds} from
-      Librarian.DrainPendingConnections. (R2315)
-    - --fetch ID: GET /connections/fetch?id=ID, print JSON array of
-      {chunkID, fileID, path, content}. Non-zero exit when a chunk
-      ID is unknown; error message carries the offending chunk ID
-      so the agent can decide whether to call --error or retry.
-      (R2316)
-    - --result ID: read JSON payload from stdin
-      ({themes:[{Text, Evidence:[]}], sharedTags:[{Tag, Value,
-      Evidence:[]}]}), POST /connections/result. Server validates
-      evidence and writes the result body or flips to errored.
-      (R2317)
-    - --error ID=MESSAGE: POST /connections/error, server flips
-      @connections-status to errored with the message. (R2318)
+- cmdConnections: positional-subcommand CLI for find-connections.
+  Requires a running server; all subcommands proxy through the
+  Unix socket. (R2313, R2604–R2615) Dispatch table:
+
+  **Public (humans + downstream agents):**
+    - `find <inputs>...` → cmdConnectionsFind: parse mixed
+      input list (decimal chunkID, `PATH:N-M` / `PATH:N`,
+      quoted text), build []ConnectionsInput, POST
+      /connections/find with {inputs, opts}. Print the
+      returned `tmp://connections/<id>.md` on stdout. With
+      `--wait`, subscribe to the doc's @connections-status,
+      block until terminal, print body on completion.
+      `--json` switches the wait-output to JSON projection.
+      Flags: --mode normal|turbo (default normal), --k N
+      (default 20), --purpose curate|recall (default curate),
+      --timeout SEC (default 30), --wait, --json. (R2604, R2605)
+    - `wait <path>` → cmdConnectionsWait: subscribe to the
+      named tmp:// doc, block until @connections-status reaches
+      a terminal value, print body (markdown or JSON with
+      --json). `--timeout SEC` flag; on timeout, exit non-zero
+      and print the last-seen status to stderr. (R2606)
+    - `show <path>` → cmdConnectionsShow: fetch the doc body,
+      parse via ParseConnectionsDoc, apply projection flags.
+      Flags: --status, --tags, --tag NAME, --threshold N, --json.
+      Does not block on status. Distinct from `ark fetch <path>`
+      which dumps the raw body unparsed. (R2607, R2608)
+    - `list` → cmdConnectionsList: GET /connections/list,
+      print markdown table (default) or JSON with `--json`.
+      (R2609)
+
+  **Sidecar (turbo agent internal protocol — replaces the old
+  --wait/--fetch/--result/--error flags):**
+    - `sidecar-wait` → block on GET /connections/wait, print
+      JSON array of {id, chunkIDs, timeoutSeconds}. (R2315, R2611)
+    - `sidecar-fetch ID` → GET /connections/fetch?id=ID, print
+      JSON array of {chunkID, fileID, path, content}. Non-zero
+      exit when a chunk ID is unknown; error message carries
+      the offending chunk ID. (R2316, R2612)
+    - `sidecar-result ID` → read JSON payload from stdin,
+      POST /connections/result. (R2317, R2613)
+    - `sidecar-error ID MESSAGE` → POST /connections/error
+      (MESSAGE is a positional argument, not `ID=MESSAGE`).
+      (R2318, R2614)
+
+  Removed flags (`--wait`, `--fetch`, `--result`, `--error`)
+  produce a one-line hint pointing at the new subcommand and
+  exit with status 2. (R2615)
+
+  All public subcommands fail with `server not running` when
+  no server is detected. (R2610)
+- ParseConnectionsDoc(body []byte) *ConnectionsDoc: shared
+  parser used by cmdConnectionsShow and cmdConnectionsWait
+  (with --json). Reads header tags (@purpose, @connections-mode,
+  @connections-status, @connections-warning, @proposal-count,
+  ...) and `## Proposals` rows. Each row's `@proposal-kind`
+  selects the variant (tag-name / theme / shared-tag) and the
+  parser populates the kind-specific fields (R2593–R2596).
+  Lives next to connections.go so the server can use the same
+  parser for its own projections. (R2607)
 
 ## Collaborators
 - Server: proxy target when server is running

@@ -198,6 +198,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-tag-verify.md → `cmd/ark/main.go`, `verify.go`, `extmap.go`, `store.go`, `db.go`
 - [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
 - [x] seq-find-connections.md → `connections.go`, `server.go`, `cmd/ark/main.go`
+- [x] seq-find-connections-substrate.md → `connections.go`, `connections_substrate.go`, `server.go`, `cmd/ark/main.go`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 
@@ -254,6 +255,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-VectorFreshness.md → `store_test.go`
 - [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
 - [x] test-FindConnections.md → `connections_test.go`
+- [x] test-FindConnectionsSubstrate.md → `connections_substrate_test.go`
+- [ ] test-ConnectionsCLI.md → `cmd/ark/main_test.go`, `cmd/ark/connections_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 
@@ -564,3 +567,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T89: R2516 retired by R2561 (2026-05-20 nano-env-to-flags: OLLAMA_BASE_URL → --base-url)
 - T90: R2517 retired by R2562 (2026-05-20 nano-env-to-flags: NANO_MAX_STEPS → --max-steps)
 - T91: R2518 retired by R2563 (2026-05-20 nano-env-to-flags: NANO_APPROVE → --approve-all)
+- [ ] O111: R2579 single-shared-View-txn not implemented: substrate helpers (EmbedQuery, ReadChunkEmbedding, ScanTagDefEmbeddings, ListTagDefs, SearchChunks, SearchFuzzy) each open their own txn. Refactor for a single shared txn once profiling justifies the perf cost.
+- [ ] O112: 1G doc-body migration: apps/ark/curation.lua still parses legacy ## Themes / ## Shared Tag Candidates sections. The renderer emits both shapes in turbo mode (R2597) but the duplicate emission should be removed after a /ui-thorough pass switches the Lua workshop to the unified ## Proposals section.
+- [ ] O113: ark-connections sidecar guard script (.claude/agents/ark-connections.md or equivalent) needs updating to allow sidecar-wait/fetch/result/error positional invocations; old --wait/--fetch/--result/--error flags now exit non-zero.

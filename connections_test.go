@@ -118,7 +118,7 @@ func TestFindConnections_AgentUnavailable(t *testing.T) {
 	l, _, _ := setupConnections(t)
 	l.connectionsLastWait = time.Time{} // wipe the synthetic last-wait
 
-	_, err := l.FindConnections([]uint64{1, 2}, FindConnectionsOpts{})
+	_, err := l.FindConnectionsByChunkIDs([]uint64{1, 2}, FindConnectionsOpts{})
 	if err == nil || err.Error() != "agent unavailable" {
 		t.Fatalf("want agent unavailable, got %v", err)
 	}
@@ -129,8 +129,8 @@ func TestFindConnections_AgentUnavailable(t *testing.T) {
 func TestFindConnections_EmptyChunkIDs(t *testing.T) {
 	l, _, _ := setupConnections(t)
 	_, err := l.FindConnections(nil, FindConnectionsOpts{})
-	if err == nil || err.Error() != "chunkIDs empty" {
-		t.Fatalf("want chunkIDs empty, got %v", err)
+	if err == nil || err.Error() != "chunkIDs/text/range empty" {
+		t.Fatalf("want chunkIDs/text/range empty, got %v", err)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestFindConnections_EnqueueCreatesPendingDoc(t *testing.T) {
 		{Predicate: mustParseSub(t, "connections-status")},
 	})
 
-	id, err := l.FindConnections([]uint64{chunkID}, FindConnectionsOpts{})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{chunkID}, FindConnectionsOpts{})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSetConnectionsResult_FlipsToCompleted(t *testing.T) {
 		{Predicate: mustParseSub(t, "connections-status")},
 	})
 
-	id, err := l.FindConnections([]uint64{c1, c2}, FindConnectionsOpts{TimeoutSeconds: 5})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1, c2}, FindConnectionsOpts{TimeoutSeconds: 5})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestSetConnectionsResult_RejectsEmptyEvidence(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	c1, _ := indexLine(t, db, "a.txt", "alpha\n")
 
-	id, err := l.FindConnections([]uint64{c1}, FindConnectionsOpts{})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1}, FindConnectionsOpts{})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestConnectionsTimeout_FlipsToErrored(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	c1, _ := indexLine(t, db, "a.txt", "alpha\n")
 
-	id, err := l.FindConnections([]uint64{c1}, FindConnectionsOpts{TimeoutSeconds: 5})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1}, FindConnectionsOpts{TimeoutSeconds: 5})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestConnectionsTimeout_LateResultDiscarded(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	c1, _ := indexLine(t, db, "a.txt", "alpha\n")
 
-	id, err := l.FindConnections([]uint64{c1}, FindConnectionsOpts{TimeoutSeconds: 5})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1}, FindConnectionsOpts{TimeoutSeconds: 5})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestBuildFetchPayload_ReturnsContent(t *testing.T) {
 	c1, p1 := indexLine(t, db, "a.txt", "alpha\n")
 	c2, p2 := indexLine(t, db, "b.txt", "beta\n")
 
-	id, err := l.FindConnections([]uint64{c1, c2}, FindConnectionsOpts{})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1, c2}, FindConnectionsOpts{})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestBuildFetchPayload_UnknownChunkID(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	c1, _ := indexLine(t, db, "a.txt", "alpha\n")
 
-	id, err := l.FindConnections([]uint64{c1, 999999}, FindConnectionsOpts{})
+	id, err := l.FindConnectionsByChunkIDs([]uint64{c1, 999999}, FindConnectionsOpts{})
 	if err != nil {
 		t.Fatalf("FindConnections: %v", err)
 	}

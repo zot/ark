@@ -24,6 +24,7 @@ name, so always use the absolute path.
 | `chunks`           | `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]`                              | optional                 |                                                      |
 | `chunk-chat-jsonl` | `chunk-chat-jsonl FILE`                                                                                              | n/a                      | internal chunker (microfts2 protocol)                |
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
+| `connections`      | `connections SUBCOMMAND ...`                                                                                          | required                 | substrate + sidecar CLI (subcommands below)          |
 | `cp`               | `cp PATTERN DEST-DIR`                                                                                                | n/a                      | bundled binary only; alias of `bundle cp`            |
 | `dismiss`          | `dismiss PATTERN...`                                                                                                 | optional                 | drops M records                                      |
 | `embed`            | `embed SUBCOMMAND ...`                                                                                               | none                     | subcommands below                                    |
@@ -312,6 +313,70 @@ ark dismiss PATTERN...
 
 Removes M records (and associated entries) for files matching the
 patterns. Server-proxy if available.
+
+### `connections` — find-connections substrate + sidecar CLI
+
+```
+ark connections find INPUTS... [--mode normal|turbo] [--k N]
+                              [--purpose curate|recall] [--timeout S]
+                              [--type chunk|text]
+                              [--wait] [--json]
+ark connections wait PATH [--timeout S] [--json]
+ark connections show PATH [--status] [--tags] [--tag NAME]
+                          [--threshold N] [--json]
+ark connections list [--json]
+ark connections sidecar-wait
+ark connections sidecar-fetch ID
+ark connections sidecar-result ID            # stdin JSON
+ark connections sidecar-error ID MESSAGE
+```
+
+Substrate + lifecycle for `sys.findConnections`. The doc lifecycle
+lives at `tmp://connections/<id>.md` with `@purpose` /
+`@connections-mode` / `@connections-status` headers (see
+[find-connections-substrate.md](find-connections-substrate.md) and
+[find-connections.md](find-connections.md)).
+
+**Public subcommands (humans + downstream agents):**
+
+- `find` accepts mixed inputs:
+  - decimal `NNNNNN` → chunkID
+  - `PATH:N-M` or `PATH:N` → file path with line range (1-based inclusive)
+  - anything else → bare text, embedded on the fly (no quoting required)
+
+  Each token is auto-detected by default. `--type chunk|text` forces
+  every positional input to a single category. `chunk` still accepts
+  both decimal chunkIDs and `PATH:locator` forms (shape selects which).
+  `--type text` is the way to feed literal text that happens to look
+  like a chunkID or path:locator.
+
+  Returns the `tmp://connections/<id>.md` path on stdout. With
+  `--wait`, blocks until `@connections-status` is terminal and
+  prints the body. With `--json`, emits the parsed projection.
+- `wait PATH` blocks until terminal. On `--timeout SEC` expiry,
+  exits non-zero with the last-seen status on stderr.
+- `show PATH` parses the persisted doc and projects fields. Without
+  flags, prints a structured markdown summary. `--status` prints
+  only the status. `--tags` lists tag-name proposals one per line.
+  `--tag NAME` filters to rows whose `@proposal-value` equals NAME.
+  `--threshold N` drops proposals below the score. `--json` emits
+  the parsed projection. Distinct from `ark fetch PATH` which
+  dumps the raw body.
+- `list` lists in-flight requests (markdown table; `--json` for an
+  array).
+
+**Sidecar subcommands (turbo agent internal protocol, replace the
+old `--wait` / `--fetch` / `--result` / `--error` flags):**
+
+- `sidecar-wait` drains the turbo queue (lotto tube; JSON).
+- `sidecar-fetch ID` returns chunk content (JSON array of
+  `{chunkID, fileID, path, content}`).
+- `sidecar-result ID` reads result JSON from stdin and posts it.
+- `sidecar-error ID MESSAGE` posts an error (MESSAGE is positional,
+  not `ID=MESSAGE`).
+
+The removed flags print a one-line migration hint pointing at the
+new subcommand name and exit with status 2.
 
 ### `embed` — embedding operations
 

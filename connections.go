@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
+	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/microfts2"
 )
 
@@ -52,27 +54,36 @@ type SharedTagCand struct {
 // writes the tmp:// doc through the actor — this record holds the
 // metadata needed to drive header-tag updates and to enforce the
 // deadline timer.
-// CRC: crc-Librarian.md | R2319, R2326, R2331
+// CRC: crc-Librarian.md | R2319, R2326, R2331, R2590, R2591
 type ConnectionsRecord struct {
-	ID         string
-	ChunkIDs   []uint64
-	Started    time.Time
-	Deadline   time.Time
-	TimeoutDur time.Duration
-	Status     string // pending | working | completed | errored
-	Progress   string // fetching | thinking | posting | done
-	Elapsed    int    // seconds (rounded)
-	Error      string
-	Path       string // tmp://connections/<id>.md
-	Timer      *time.Timer
-	Done       bool
-	stop       chan struct{} // closed when the record reaches terminal state
+	ID            string
+	ChunkIDs      []uint64
+	Inputs        []substrateInput // R2568, R2574
+	Started       time.Time
+	Deadline      time.Time
+	TimeoutDur    time.Duration
+	Status        string // pending | working | completed | errored
+	Progress      string // fetching | thinking | posting | done
+	Elapsed       int    // seconds (rounded)
+	Error         string
+	Path          string // tmp://connections/<id>.md
+	Timer         *time.Timer
+	Done          bool
+	Mode          string // "normal" | "turbo" (R2591)
+	Purpose       string // "curate" | "recall" | ... (R2590)
+	K             int    // top-K for normal-mode proposal output (R2585)
+	Warning       string // surfaced as @connections-warning (R2588)
+	ProposalCount int    // populated on completed write (R2592)
+	stop          chan struct{} // closed when the record reaches terminal state
 }
 
 // FindConnectionsOpts bundles the optional parameters to FindConnections.
-// CRC: crc-Librarian.md | R2323
+// CRC: crc-Librarian.md | R2323, R2585, R2590, R2591, R2601
 type FindConnectionsOpts struct {
 	TimeoutSeconds int
+	Mode           string // "normal" (default) | "turbo"; R2591, R2601
+	Purpose        string // "curate" (default); R2590, R2601
+	K              int    // top-K candidates for normal mode (default 20, clamped [1,200]); R2585
 }
 
 // ChunkFetchEntry is one row of the --fetch response: chunkID, its
@@ -111,19 +122,41 @@ func (l *Librarian) ConnectionsAvailable() bool {
 	return time.Since(l.connectionsLastWait) < l.connectionsAvailWindow
 }
 
-// FindConnections allocates a request ID, writes the initial pending
-// tmp:// doc through the write actor, enqueues the request for the
-// sidecar, and schedules the deadline timer. Returns the request ID
-// immediately.
-// CRC: crc-Librarian.md | Seq: seq-find-connections.md | R2319, R2321, R2326, R2327, R2331, R2332
-func (l *Librarian) FindConnections(chunkIDs []uint64, opts FindConnectionsOpts) (string, error) {
+// FindConnections is the unified entry point for normal and turbo
+// modes. Normalizes inputs (chunkID, path+range, text), validates at
+// enqueue, allocates a request ID, writes the pending tmp:// doc with
+// @purpose / @connections-mode headers, then dispatches:
+//   normal → launches in-process substrate worker, returns ID
+//   turbo  → queues for sidecar (existing 1G path), returns ID
+// CRC: crc-Librarian.md | Seq: seq-find-connections-substrate.md | R2567, R2569, R2570, R2571, R2572, R2573, R2585, R2590, R2591, R2598, R2600, R2601, R2602, R2603
+func (l *Librarian) FindConnections(inputs []ConnectionsInput, opts FindConnectionsOpts) (string, error) {
 	if l == nil {
 		return "", errors.New("agent unavailable")
 	}
-	if len(chunkIDs) == 0 {
-		return "", errors.New("chunkIDs empty")
+	mode := opts.Mode
+	if mode == "" {
+		mode = "normal"
 	}
-	if !l.ConnectionsAvailable() {
+	purpose := opts.Purpose
+	if purpose == "" {
+		purpose = "curate"
+	}
+	k := opts.K
+	switch {
+	case k <= 0:
+		k = 20
+	case k > 200:
+		k = 200
+	}
+	// Strict chunkID-existence check only for normal mode: the
+	// substrate worker needs each chunk's EC vector at enqueue.
+	// Turbo preserves R2324's deferred "surface at --fetch" semantics.
+	strict := mode == "normal"
+	normInputs, chunkIDs, err := l.normalizeInputs(inputs, strict)
+	if err != nil {
+		return "", err
+	}
+	if mode == "turbo" && !l.ConnectionsAvailable() {
 		return "", errors.New("agent unavailable")
 	}
 	timeoutSec := clampTimeout(opts.TimeoutSeconds)
@@ -131,39 +164,68 @@ func (l *Librarian) FindConnections(chunkIDs []uint64, opts FindConnectionsOpts)
 	now := time.Now()
 	rec := &ConnectionsRecord{
 		ID:         id,
-		ChunkIDs:   append([]uint64(nil), chunkIDs...),
+		ChunkIDs:   chunkIDs,
+		Inputs:     normInputs,
 		Started:    now,
 		Deadline:   now.Add(time.Duration(timeoutSec) * time.Second),
 		TimeoutDur: time.Duration(timeoutSec) * time.Second,
 		Status:     "pending",
 		Progress:   "fetching",
 		Path:       connectionsDocPath(id),
+		Mode:       mode,
+		Purpose:    purpose,
+		K:          k,
 		stop:       make(chan struct{}),
 	}
-	if err := l.writeConnectionsDoc(rec, true); err != nil {
-		return "", fmt.Errorf("create tmp doc: %w", err)
+	if werr := l.writeConnectionsDoc(rec, true); werr != nil {
+		return "", fmt.Errorf("create tmp doc: %w", werr)
 	}
 	l.mu.Lock()
 	l.connectionsResults[id] = rec
-	l.pendingConnections = append(l.pendingConnections, ConnectionsRequest{
-		ID:             id,
-		ChunkIDs:       rec.ChunkIDs,
-		TimeoutSeconds: timeoutSec,
-	})
-	for _, ch := range l.connectionsWaiters {
-		select {
-		case ch <- struct{}{}:
-		default:
+	if mode == "turbo" {
+		l.pendingConnections = append(l.pendingConnections, ConnectionsRequest{
+			ID:             id,
+			ChunkIDs:       rec.ChunkIDs,
+			TimeoutSeconds: timeoutSec,
+		})
+		for _, ch := range l.connectionsWaiters {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
 		}
+		l.connectionsWaiters = nil
+		rec.Timer = time.AfterFunc(rec.TimeoutDur, func() {
+			l.connectionsTimeout(id)
+		})
 	}
-	l.connectionsWaiters = nil
-	rec.Timer = time.AfterFunc(rec.TimeoutDur, func() {
-		l.connectionsTimeout(id)
-	})
 	stop := rec.stop
 	l.mu.Unlock()
-	go l.runConnectionsTicker(id, stop)
+	if mode == "turbo" {
+		go l.runConnectionsTicker(id, stop)
+	} else {
+		go l.runSubstrate(rec, normInputs, k)
+	}
 	return id, nil
+}
+
+// FindConnectionsByChunkIDs is the legacy 1G call shape preserved as
+// a back-compat sugar layer. Converts each chunkID into a
+// ConnectionsInput entry and delegates with mode="turbo". Existing
+// callers (mcp.findConnections shim, the 1G sidecar wiring) continue
+// to work unchanged. R2568
+func (l *Librarian) FindConnectionsByChunkIDs(chunkIDs []uint64, opts FindConnectionsOpts) (string, error) {
+	if len(chunkIDs) == 0 {
+		return "", errors.New("chunkIDs empty")
+	}
+	inputs := make([]ConnectionsInput, len(chunkIDs))
+	for i, cid := range chunkIDs {
+		inputs[i] = ConnectionsInput{ChunkID: cid}
+	}
+	if opts.Mode == "" {
+		opts.Mode = "turbo"
+	}
+	return l.FindConnections(inputs, opts)
 }
 
 // runConnectionsTicker advances @connections-elapsed every
@@ -453,11 +515,22 @@ func validateEvidence(r *ConnectionsResult) error {
 }
 
 // renderConnectionsDoc emits the full markdown body. Header tags
-// come from the record; the body (R2330) is either rendered from a
-// passed-in string (completed state) or omitted.
+// come from the record; the body (R2330, R2594) is either rendered
+// from a passed-in string (completed state) or omitted.
+// CRC: crc-Librarian.md | R2588, R2590, R2591, R2592, R2594
 func renderConnectionsDoc(rec *ConnectionsRecord, body ...string) []byte {
 	var b strings.Builder
+	mode := rec.Mode
+	if mode == "" {
+		mode = "turbo" // legacy callers default to turbo
+	}
+	purpose := rec.Purpose
+	if purpose == "" {
+		purpose = "curate"
+	}
 	fmt.Fprintf(&b, "@connections-status: %s\n", rec.Status)
+	fmt.Fprintf(&b, "@purpose: %s\n", purpose)
+	fmt.Fprintf(&b, "@connections-mode: %s\n", mode)
 	fmt.Fprintf(&b, "@connections-request-id: %s\n", rec.ID)
 	fmt.Fprintf(&b, "@connections-pinned-chunks: %s\n", joinUint64s(rec.ChunkIDs))
 	fmt.Fprintf(&b, "@connections-started: %s\n", rec.Started.UTC().Format(time.RFC3339))
@@ -465,6 +538,12 @@ func renderConnectionsDoc(rec *ConnectionsRecord, body ...string) []byte {
 	fmt.Fprintf(&b, "@connections-progress: %s\n", rec.Progress)
 	if rec.Done {
 		fmt.Fprintf(&b, "@connections-completed: %s\n", time.Now().UTC().Format(time.RFC3339))
+	}
+	if rec.Warning != "" {
+		fmt.Fprintf(&b, "@connections-warning: %s\n", rec.Warning)
+	}
+	if rec.ProposalCount > 0 {
+		fmt.Fprintf(&b, "@proposal-count: %d\n", rec.ProposalCount)
 	}
 	if rec.Error != "" {
 		fmt.Fprintf(&b, "@connections-error: %s\n", rec.Error)
@@ -476,9 +555,66 @@ func renderConnectionsDoc(rec *ConnectionsRecord, body ...string) []byte {
 	return []byte(b.String())
 }
 
-// renderConnectionsBody renders the Themes / Shared Tag Candidates
-// markdown sections per R2330. Tag lines use comma-separated
-// chunk-ID lists.
+// SetSubstrateResult writes the normal-mode pipeline's output into
+// the tmp:// doc and flips status to completed. Mirrors
+// SetConnectionsResult but consumes a SubstrateResult instead of the
+// sidecar's ConnectionsResult payload.
+// CRC: crc-Librarian.md | R2585, R2592, R2593, R2594, R2598, R2599
+func (l *Librarian) SetSubstrateResult(id string, result *SubstrateResult) error {
+	if result == nil {
+		return l.SetConnectionsError(id, "empty substrate result")
+	}
+	l.mu.Lock()
+	rec := l.connectionsResults[id]
+	if rec == nil {
+		l.mu.Unlock()
+		return errors.New("unknown request id")
+	}
+	if rec.Done {
+		l.mu.Unlock()
+		log.Printf("connections: late substrate result for %s, discarding (status=%s)", id, rec.Status)
+		return nil
+	}
+	rec.Status = "completed"
+	rec.Progress = "done"
+	rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
+	rec.Done = true
+	rec.Warning = result.Warning
+	rec.ProposalCount = len(result.Candidates)
+	if rec.Timer != nil {
+		rec.Timer.Stop()
+		rec.Timer = nil
+	}
+	closeStop(rec)
+	l.mu.Unlock()
+	body := renderSubstrateBody(result)
+	return l.writeConnectionsDoc(rec, false, body)
+}
+
+// ListConnections returns snapshot copies of every in-flight
+// connections record. Used by `ark connections list`. R2609
+func (l *Librarian) ListConnections() []*ConnectionsRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]*ConnectionsRecord, 0, len(l.connectionsResults))
+	for _, rec := range l.connectionsResults {
+		cp := *rec
+		cp.Timer = nil
+		cp.stop = nil
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Started.After(out[j].Started)
+	})
+	return out
+}
+
+// renderConnectionsBody renders the turbo-mode body. Emits BOTH the
+// legacy `## Themes` / `## Shared Tag Candidates` sections (R2330)
+// and the new unified `## Proposals` section with @proposal-kind
+// rows during the 1G migration window. The duplicate emission is
+// removed once apps/ark/curation.lua switches to the unified parser.
+// CRC: crc-Librarian.md | R2593, R2595, R2596, R2597
 func renderConnectionsBody(r *ConnectionsResult) string {
 	var b strings.Builder
 	if len(r.Themes) > 0 {
@@ -493,6 +629,51 @@ func renderConnectionsBody(r *ConnectionsResult) string {
 			fmt.Fprintf(&b, "- @shared-tag: %s\n  @shared-tag-value: %s\n  @shared-tag-evidence: %s\n\n",
 				s.Tag, s.Value, joinUint64s(s.Evidence))
 		}
+	}
+	if len(r.Themes) > 0 || len(r.SharedTags) > 0 {
+		b.WriteString("## Proposals\n\n")
+		for _, t := range r.Themes {
+			fmt.Fprintf(&b, "- @proposal-kind: theme\n  @proposal-text: %q\n  @proposal-evidence-chunks: %s\n\n",
+				t.Text, joinUint64s(t.Evidence))
+		}
+		for _, s := range r.SharedTags {
+			fmt.Fprintf(&b, "- @proposal-kind: shared-tag\n  @proposal-tag: %s\n  @proposal-value: %s\n  @proposal-evidence-chunks: %s\n\n",
+				s.Tag, s.Value, joinUint64s(s.Evidence))
+		}
+	}
+	return b.String()
+}
+
+// renderSubstrateBody renders the normal-mode body: one ## Proposals
+// section with @proposal-kind: tag-name rows, each carrying the
+// per-substrate evidence scores. R2593, R2594
+func renderSubstrateBody(r *SubstrateResult) string {
+	if len(r.Candidates) == 0 {
+		return "## Proposals\n\n_no candidates returned_\n"
+	}
+	var b strings.Builder
+	b.WriteString("## Proposals\n\n")
+	for _, c := range r.Candidates {
+		fmt.Fprintf(&b, "- @proposal-kind: tag-name\n")
+		fmt.Fprintf(&b, "  @proposal-value: %q\n", c.Tag)
+		fmt.Fprintf(&b, "  @proposal-score: %.4f\n", c.Score)
+		fmt.Fprintf(&b, "  @proposal-evidence-chunks: %s\n", joinUint64s(c.SupportingChunks))
+		fmt.Fprintf(&b, "  @proposal-evidence-vector-ed: %.4f\n", c.PerSubstrate.VectorED)
+		fmt.Fprintf(&b, "  @proposal-evidence-trigram-ed: %.4f\n", c.PerSubstrate.TrigramED)
+		fmt.Fprintf(&b, "  @proposal-evidence-vector-ec: %.4f\n", c.PerSubstrate.VectorEC)
+		fmt.Fprintf(&b, "  @proposal-evidence-trigram-ec: %.4f\n", c.PerSubstrate.TrigramEC)
+		if len(c.MotivatingFiles) > 0 {
+			files := make([]string, 0, len(c.MotivatingFiles))
+			for _, mf := range c.MotivatingFiles {
+				path := mf.Path
+				if path == "" {
+					path = "<file " + strconv.FormatUint(mf.FileID, 10) + ">"
+				}
+				files = append(files, fmt.Sprintf("%s:%.4f", path, mf.Score))
+			}
+			fmt.Fprintf(&b, "  @proposal-motivating-files: %s\n", strings.Join(files, ", "))
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -603,4 +784,96 @@ func (l *Librarian) ConnectionRecordSnapshot(id string) *ConnectionsRecord {
 	cp := *rec
 	cp.Timer = nil
 	return &cp
+}
+
+// HandleConnectionsFind is the HTTP entry point for `ark connections find`.
+// POST /connections/find. Body: {inputs, opts}. Returns {requestID, path}.
+// R2567, R2604
+func (l *Librarian) HandleConnectionsFind(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Inputs []ConnectionsInput  `json:"inputs"`
+		Opts   FindConnectionsOpts `json:"opts"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := l.FindConnections(body.Inputs, body.Opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]string{
+		"requestID": id,
+		"path":      connectionsDocPath(id),
+	})
+}
+
+// luaTableToConnectionsInputs converts a Lua argument table to
+// []ConnectionsInput. Accepts both the sugar form (bare integer
+// array of chunkIDs, the 1G call shape) and the typed form (array
+// of {chunkID|path+range|text} tables). R2568
+func luaTableToConnectionsInputs(arr *lua.LTable) []ConnectionsInput {
+	out := make([]ConnectionsInput, 0, arr.Len())
+	arr.ForEach(func(_, v lua.LValue) {
+		switch x := v.(type) {
+		case lua.LNumber:
+			if x >= 0 {
+				out = append(out, ConnectionsInput{ChunkID: uint64(x)})
+			}
+		case *lua.LTable:
+			in := ConnectionsInput{}
+			if cid, ok := x.RawGetString("chunkID").(lua.LNumber); ok && cid > 0 {
+				in.ChunkID = uint64(cid)
+			}
+			if p, ok := x.RawGetString("path").(lua.LString); ok {
+				in.Path = string(p)
+			}
+			if r, ok := x.RawGetString("range").(lua.LString); ok {
+				in.Range = string(r)
+			}
+			if t, ok := x.RawGetString("text").(lua.LString); ok {
+				in.Text = string(t)
+			}
+			if in.ChunkID != 0 || in.Path != "" || in.Text != "" {
+				out = append(out, in)
+			}
+		}
+	})
+	return out
+}
+
+// HandleConnectionsList is the HTTP entry point for `ark connections list`.
+// GET /connections/list. Returns a JSON array of public-shape records.
+// R2609
+func (l *Librarian) HandleConnectionsList(w http.ResponseWriter, r *http.Request) {
+	recs := l.ListConnections()
+	type pubRec struct {
+		ID            string    `json:"id"`
+		Mode          string    `json:"mode"`
+		Purpose       string    `json:"purpose"`
+		Status        string    `json:"status"`
+		Started       time.Time `json:"started"`
+		Elapsed       int       `json:"elapsed"`
+		Path          string    `json:"path"`
+		ProposalCount int       `json:"proposalCount,omitempty"`
+		Error         string    `json:"error,omitempty"`
+		Warning       string    `json:"warning,omitempty"`
+	}
+	out := make([]pubRec, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, pubRec{
+			ID:            rec.ID,
+			Mode:          rec.Mode,
+			Purpose:       rec.Purpose,
+			Status:        rec.Status,
+			Started:       rec.Started,
+			Elapsed:       rec.Elapsed,
+			Path:          rec.Path,
+			ProposalCount: rec.ProposalCount,
+			Error:         rec.Error,
+			Warning:       rec.Warning,
+		})
+	}
+	writeJSON(w, out)
 }

@@ -1690,91 +1690,506 @@ Options:`)
 	fmt.Println()
 }
 
-// CRC: crc-CLI.md | Seq: seq-find-connections.md
-// R2313, R2315, R2316, R2317, R2318
+// CRC: crc-CLI.md | Seq: seq-find-connections-substrate.md | R2313, R2315, R2316, R2317, R2318, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616
 func cmdConnections(args []string) {
-	fs := flag.NewFlagSet("connections", flag.ExitOnError)
-	wait := fs.Bool("wait", false, "lotto tube: block until find-connections requests arrive, print as JSON")
-	fetch := fs.String("fetch", "", "fetch chunk content for request ID: returns JSON array of {chunkID, fileID, path, content}")
-	resultFlag := fs.String("result", "", "post result for request ID; result JSON read from stdin")
-	errorFlag := fs.String("error", "", "post error for request ID: REQUEST_ID=MESSAGE")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark connections [options]
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		printConnectionsHelp()
+		if len(args) == 0 {
+			os.Exit(1)
+		}
+		return
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "find":
+		cmdConnectionsFind(rest)
+	case "wait":
+		cmdConnectionsWait(rest)
+	case "show":
+		cmdConnectionsShow(rest)
+	case "list":
+		cmdConnectionsList(rest)
+	case "sidecar-wait":
+		cmdConnectionsSidecarWait(rest)
+	case "sidecar-fetch":
+		cmdConnectionsSidecarFetch(rest)
+	case "sidecar-result":
+		cmdConnectionsSidecarResult(rest)
+	case "sidecar-error":
+		cmdConnectionsSidecarError(rest)
+	case "--wait", "--fetch", "--result", "--error":
+		// R2615: deprecated flag → migration hint.
+		hint := strings.TrimPrefix(sub, "--")
+		fmt.Fprintf(os.Stderr, "ark connections %s removed; use `ark connections sidecar-%s` instead\n", sub, hint)
+		os.Exit(2)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown connections subcommand: %s\n", sub)
+		printConnectionsHelp()
+		os.Exit(1)
+	}
+}
 
-Sidecar CLI for find-connections (curation workshop's "Find Connections" action).
+func printConnectionsHelp() {
+	fmt.Fprintln(os.Stderr, `Usage: ark connections SUBCOMMAND [...]
+
+Find-connections substrate (curation workshop's "Find Connections" action).
 Requires a running server.
 
-Subcommands (for sidecar agent use):
-  --wait              Lotto tube: block until requests arrive, print JSON
-  --fetch ID          Fetch chunk content for a request, print JSON array
-  --result ID         Post result JSON for request ID (JSON read from stdin)
-  --error ID=MESSAGE  Post error for request ID
+Public subcommands:
+  find INPUTS... [--mode M] [--k N] [--purpose P] [--timeout S] [--wait] [--json]
+    Submit a find-connections request. INPUTS may mix:
+      NNNNNN           chunk ID (decimal)
+      PATH:N-M         file path with line range (1-based inclusive)
+      PATH:N           file path, single line
+      "ARBITRARY TEXT" bare text (embedded on the fly)
+    Returns the tmp://connections/<id>.md path on stdout. With --wait,
+    block until the request completes and print the body. With --json,
+    emit JSON when --wait is set.
+
+  wait PATH [--timeout S] [--json]
+    Block until the tmp:// connections doc at PATH reaches a terminal
+    @connections-status. Print the body on completion.
+
+  show PATH [--status] [--tags] [--tag NAME] [--threshold N] [--json]
+    Project structured fields from the doc. Does not block on status.
+    Distinct from "ark fetch PATH" which dumps the raw body.
+
+  list [--json]
+    List in-flight connections requests.
+
+Sidecar subcommands (turbo agent internal protocol):
+  sidecar-wait              Lotto tube: drain turbo request queue (JSON)
+  sidecar-fetch ID          Print chunk content JSON for a request
+  sidecar-result ID         Post result JSON (read from stdin)
+  sidecar-error ID MESSAGE  Post an error message`)
+}
+
+func cmdConnectionsFind(args []string) {
+	fs := flag.NewFlagSet("connections find", flag.ExitOnError)
+	mode := fs.String("mode", "normal", "mode: normal | turbo")
+	k := fs.Int("k", 20, "top-K candidates (clamped to [1,200])")
+	purpose := fs.String("purpose", "curate", "purpose: curate | recall | ...")
+	timeout := fs.Int("timeout", 30, "timeout seconds (clamped to [5,300])")
+	wait := fs.Bool("wait", false, "block until terminal status; print body on stdout")
+	jsonOut := fs.Bool("json", false, "with --wait, emit JSON projection instead of markdown")
+	typeFlag := fs.String("type", "", "input type: chunk | text (default: auto-detect each input)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections find INPUTS... [options]
+
+Submit a find-connections request. INPUTS may mix:
+  NNNNNN          chunk ID (decimal)
+  PATH:N-M        file path with line range (1-based inclusive)
+  PATH:N          file path, single line
+  anything else   bare text, embedded on the fly
+
+Without --type, each input is auto-detected. With --type chunk, every
+input is treated as a chunk reference (chunkID or path:locator — the
+shape still selects which). With --type text, every input is taken
+literally — useful when text happens to look like a chunkID or a
+path:locator (e.g. ` + "`--type text 42`" + ` searches for the literal
+string "42" instead of treating it as chunkID 42).
 
 Options:`)
 		fs.PrintDefaults()
 	}
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+	posArgs, flagArgs := splitConnectionsFindArgs(args)
+	fs.Parse(flagArgs)
+	if len(posArgs) == 0 {
 		fs.Usage()
-		os.Exit(0)
+		os.Exit(1)
 	}
-	fs.Parse(args)
-
+	inputs, err := parseConnectionsInputs(posArgs, *typeFlag)
+	if err != nil {
+		fatal(err)
+	}
 	client := serverClient(arkDir)
 	if client == nil {
 		fatal(fmt.Errorf("server not running — start with: ark serve"))
 	}
-
-	if *wait {
-		data, err := proxyRaw(client, "GET", "/connections/wait", nil)
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Print(string(data))
+	body := map[string]any{
+		"inputs": inputs,
+		"opts": map[string]any{
+			"mode":           *mode,
+			"k":              *k,
+			"purpose":        *purpose,
+			"timeoutSeconds": *timeout,
+		},
+	}
+	raw, err := proxyRaw(client, "POST", "/connections/find", body)
+	if err != nil {
+		fatal(err)
+	}
+	var resp struct {
+		RequestID string `json:"requestID"`
+		Path      string `json:"path"`
+	}
+	if jerr := json.Unmarshal(raw, &resp); jerr != nil {
+		fatal(fmt.Errorf("decode find response: %w", jerr))
+	}
+	if !*wait {
+		fmt.Println(resp.Path)
 		return
 	}
-
-	if *fetch != "" {
-		data, err := proxyRaw(client, "GET", "/connections/fetch?id="+url.QueryEscape(*fetch), nil)
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Print(string(data))
-		return
+	out, werr := waitConnectionsDoc(client, resp.Path, *timeout, *jsonOut)
+	if werr != nil {
+		fatal(werr)
 	}
+	fmt.Print(out)
+}
 
-	if *resultFlag != "" {
-		var payload ark.ConnectionsResult
-		dec := json.NewDecoder(os.Stdin)
-		if err := dec.Decode(&payload); err != nil {
-			fatal(fmt.Errorf("parsing result JSON from stdin: %w", err))
+// splitConnectionsFindArgs separates positional input tokens from flag
+// tokens, since Go's flag package stops at the first non-flag argument.
+// Bare integers, PATH:N-M tokens, and any token without a leading dash
+// are positional; everything else is a flag (consumes the next arg for
+// non-boolean flags).
+func splitConnectionsFindArgs(args []string) (positional, flags []string) {
+	boolFlags := map[string]bool{"--wait": true, "--json": true, "-wait": true, "-json": true}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			if boolFlags[a] || strings.Contains(a, "=") {
+				continue
+			}
+			// Non-boolean flag: consume next.
+			if i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
 		}
-		if err := proxyOK(client, "POST", "/connections/result", map[string]any{
-			"id":     *resultFlag,
-			"result": payload,
-		}); err != nil {
-			fatal(err)
-		}
-		return
+		positional = append(positional, a)
 	}
+	return positional, flags
+}
 
-	if *errorFlag != "" {
-		parts := strings.SplitN(*errorFlag, "=", 2)
-		id := parts[0]
-		msg := ""
-		if len(parts) > 1 {
-			msg = parts[1]
+// parseConnectionsInputs converts positional tokens to ConnectionsInput
+// entries. typeHint = "" auto-detects each token (decimal → chunkID,
+// `path:locator` → range, anything else → text). typeHint = "chunk"
+// forces every token to a chunk reference (still chunkID-or-path:locator
+// by shape; non-chunk-shaped tokens error). typeHint = "text" treats
+// every token literally. R2616
+func parseConnectionsInputs(tokens []string, typeHint string) ([]ark.ConnectionsInput, error) {
+	out := make([]ark.ConnectionsInput, 0, len(tokens))
+	for _, tok := range tokens {
+		switch typeHint {
+		case "chunk":
+			if n, err := strconv.ParseUint(tok, 10, 64); err == nil {
+				out = append(out, ark.ConnectionsInput{ChunkID: n})
+				continue
+			}
+			path, rng, ok := splitPathLocator(tok)
+			if !ok {
+				return nil, fmt.Errorf("--type chunk: %q must be a decimal chunkID, PATH:N, or PATH:N-M", tok)
+			}
+			out = append(out, ark.ConnectionsInput{Path: path, Range: rng})
+		case "text":
+			out = append(out, ark.ConnectionsInput{Text: tok})
+		case "":
+			// Auto-detect.
+			if n, err := strconv.ParseUint(tok, 10, 64); err == nil {
+				out = append(out, ark.ConnectionsInput{ChunkID: n})
+				continue
+			}
+			if path, rng, ok := splitPathLocator(tok); ok {
+				out = append(out, ark.ConnectionsInput{Path: path, Range: rng})
+				continue
+			}
+			out = append(out, ark.ConnectionsInput{Text: tok})
+		default:
+			return nil, fmt.Errorf("--type: unknown value %q (want chunk | text)", typeHint)
 		}
-		if err := proxyOK(client, "POST", "/connections/error", map[string]any{
-			"id":      id,
-			"message": msg,
-		}); err != nil {
-			fatal(err)
-		}
-		return
 	}
+	return out, nil
+}
 
-	fs.Usage()
+func splitPathLocator(tok string) (path, rng string, ok bool) {
+	colon := strings.LastIndexByte(tok, ':')
+	if colon <= 0 || colon >= len(tok)-1 {
+		return "", "", false
+	}
+	return tok[:colon], tok[colon+1:], true
+}
+
+func cmdConnectionsWait(args []string) {
+	fs := flag.NewFlagSet("connections wait", flag.ExitOnError)
+	timeout := fs.Int("timeout", 60, "timeout in seconds before giving up")
+	jsonOut := fs.Bool("json", false, "emit JSON projection instead of markdown")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections wait PATH [options]
+
+Block until the tmp:// connections doc at PATH reaches a terminal status.
+
+Options:`)
+		fs.PrintDefaults()
+	}
+	posArgs, flagArgs := splitConnectionsFindArgs(args)
+	fs.Parse(flagArgs)
+	if len(posArgs) != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	out, err := waitConnectionsDoc(client, posArgs[0], *timeout, *jsonOut)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Print(out)
+}
+
+// waitConnectionsDoc polls /fetch?path=PATH until @connections-status is
+// terminal or the timeout elapses. Returns the markdown body or, with
+// asJSON, the JSON projection of the parsed doc.
+func waitConnectionsDoc(client *http.Client, path string, timeoutSec int, asJSON bool) (string, error) {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for time.Now().Before(deadline) {
+		body, err := proxyRaw(client, "GET", "/fetch?path="+url.QueryEscape(path), nil)
+		if err == nil {
+			doc := ark.ParseConnectionsDoc(body)
+			if doc.Status == "completed" || doc.Status == "errored" {
+				if asJSON {
+					out, _ := json.MarshalIndent(doc, "", "  ")
+					return string(out) + "\n", nil
+				}
+				return string(body), nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// Best-effort last-status report on timeout.
+	body, _ := proxyRaw(client, "GET", "/fetch?path="+url.QueryEscape(path), nil)
+	doc := ark.ParseConnectionsDoc(body)
+	fmt.Fprintf(os.Stderr, "timeout after %ds; last-seen status: %s\n", timeoutSec, doc.Status)
 	os.Exit(1)
+	return "", nil
+}
+
+func cmdConnectionsShow(args []string) {
+	fs := flag.NewFlagSet("connections show", flag.ExitOnError)
+	statusOnly := fs.Bool("status", false, "print only @connections-status")
+	tagsOnly := fs.Bool("tags", false, "list tag-name proposals one per line")
+	tagFilter := fs.String("tag", "", "filter to proposals whose @proposal-value equals NAME")
+	threshold := fs.Float64("threshold", 0, "drop proposals below score N (0.0-1.0)")
+	jsonOut := fs.Bool("json", false, "emit JSON projection instead of markdown")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections show PATH [options]
+
+Project structured fields from the persisted doc. Does not block on status.
+
+Options:`)
+		fs.PrintDefaults()
+	}
+	posArgs, flagArgs := splitConnectionsFindArgs(args)
+	fs.Parse(flagArgs)
+	if len(posArgs) != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	body, err := proxyRaw(client, "GET", "/fetch?path="+url.QueryEscape(posArgs[0]), nil)
+	if err != nil {
+		fatal(err)
+	}
+	doc := ark.ParseConnectionsDoc(body)
+	if *statusOnly {
+		fmt.Println(doc.Status)
+		return
+	}
+	// Apply filters in place.
+	if *tagFilter != "" || *threshold > 0 {
+		filtered := make([]ark.ConnectionsPropo, 0, len(doc.Proposals))
+		for _, p := range doc.Proposals {
+			if *tagFilter != "" && p.Value != *tagFilter {
+				continue
+			}
+			if *threshold > 0 && p.Score < *threshold {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		doc.Proposals = filtered
+		doc.ProposalCount = len(filtered)
+	}
+	if *tagsOnly {
+		for _, p := range doc.Proposals {
+			if p.Kind == "tag-name" {
+				fmt.Println(p.Value)
+			}
+		}
+		return
+	}
+	if *jsonOut {
+		out, _ := json.MarshalIndent(doc, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
+	renderConnectionsShow(doc)
+}
+
+func renderConnectionsShow(doc *ark.ConnectionsDoc) {
+	fmt.Printf("status:        %s\n", doc.Status)
+	fmt.Printf("mode:          %s\n", doc.Mode)
+	fmt.Printf("purpose:       %s\n", doc.Purpose)
+	if doc.Warning != "" {
+		fmt.Printf("warning:       %s\n", doc.Warning)
+	}
+	if doc.Error != "" {
+		fmt.Printf("error:         %s\n", doc.Error)
+	}
+	fmt.Printf("requestID:     %s\n", doc.RequestID)
+	fmt.Printf("proposals:     %d\n", len(doc.Proposals))
+	if len(doc.Proposals) == 0 {
+		return
+	}
+	fmt.Println()
+	for i, p := range doc.Proposals {
+		switch p.Kind {
+		case "tag-name":
+			fmt.Printf("[%d] %s (score=%.4f)\n", i+1, p.Value, p.Score)
+		case "theme":
+			fmt.Printf("[%d] theme: %s\n", i+1, p.Text)
+		case "shared-tag":
+			fmt.Printf("[%d] @%s: %s\n", i+1, p.Tag, p.Value)
+		default:
+			fmt.Printf("[%d] %s\n", i+1, p.Kind)
+		}
+	}
+}
+
+func cmdConnectionsList(args []string) {
+	fs := flag.NewFlagSet("connections list", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "emit JSON array instead of markdown table")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections list [--json]`)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	raw, err := proxyRaw(client, "GET", "/connections/list", nil)
+	if err != nil {
+		fatal(err)
+	}
+	if *jsonOut {
+		fmt.Print(string(raw))
+		if !strings.HasSuffix(string(raw), "\n") {
+			fmt.Println()
+		}
+		return
+	}
+	var recs []struct {
+		ID            string    `json:"id"`
+		Mode          string    `json:"mode"`
+		Purpose       string    `json:"purpose"`
+		Status        string    `json:"status"`
+		Started       time.Time `json:"started"`
+		Elapsed       int       `json:"elapsed"`
+		Path          string    `json:"path"`
+		ProposalCount int       `json:"proposalCount,omitempty"`
+		Error         string    `json:"error,omitempty"`
+		Warning       string    `json:"warning,omitempty"`
+	}
+	if jerr := json.Unmarshal(raw, &recs); jerr != nil {
+		fatal(fmt.Errorf("decode list response: %w", jerr))
+	}
+	if len(recs) == 0 {
+		fmt.Println("no in-flight connections requests")
+		return
+	}
+	fmt.Println("| ID       | Mode    | Status     | Purpose | Elapsed | Path |")
+	fmt.Println("|----------|---------|------------|---------|---------|------|")
+	for _, r := range recs {
+		fmt.Printf("| %-8s | %-7s | %-10s | %-7s | %ds | %s |\n",
+			truncStr(r.ID, 8), r.Mode, r.Status, r.Purpose, r.Elapsed, r.Path)
+	}
+}
+
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func cmdConnectionsSidecarWait(_ []string) {
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	data, err := proxyRaw(client, "GET", "/connections/wait", nil)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Print(string(data))
+}
+
+func cmdConnectionsSidecarFetch(args []string) {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ark connections sidecar-fetch ID")
+		os.Exit(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	data, err := proxyRaw(client, "GET", "/connections/fetch?id="+url.QueryEscape(args[0]), nil)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Print(string(data))
+}
+
+func cmdConnectionsSidecarResult(args []string) {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ark connections sidecar-result ID")
+		os.Exit(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	var payload ark.ConnectionsResult
+	dec := json.NewDecoder(os.Stdin)
+	if err := dec.Decode(&payload); err != nil {
+		fatal(fmt.Errorf("parsing result JSON from stdin: %w", err))
+	}
+	if err := proxyOK(client, "POST", "/connections/result", map[string]any{
+		"id":     args[0],
+		"result": payload,
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdConnectionsSidecarError(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: ark connections sidecar-error ID MESSAGE")
+		os.Exit(1)
+	}
+	id := args[0]
+	msg := ""
+	if len(args) > 1 {
+		msg = strings.Join(args[1:], " ")
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running — start with: ark serve"))
+	}
+	if err := proxyOK(client, "POST", "/connections/error", map[string]any{
+		"id":      id,
+		"message": msg,
+	}); err != nil {
+		fatal(err)
+	}
 }
 
 // CRC: crc-CLI.md | R1302-R1305

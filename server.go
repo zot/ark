@@ -384,6 +384,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /connections/fetch", srv.librarian.HandleConnectionsFetch)
 		mux.HandleFunc("POST /connections/result", srv.librarian.HandleConnectionsResult)
 		mux.HandleFunc("POST /connections/error", srv.librarian.HandleConnectionsError)
+		mux.HandleFunc("POST /connections/find", srv.librarian.HandleConnectionsFind)
+		mux.HandleFunc("GET /connections/list", srv.librarian.HandleConnectionsList)
 	}
 
 	log.Printf("ark server listening on %s", socketPath)
@@ -3179,6 +3181,46 @@ func (srv *Server) registerLuaFunctions() {
 		L.SetField(sysTable, "curation", curationTable)
 		L.SetGlobal("sys", sysTable)
 		srv.curation.luaTable = curationTable
+
+		// sys.findConnections(inputs, opts) — unified entry point for
+		// both normal and turbo modes. inputs is a Lua array of entry
+		// tables ({chunkID = N} | {path = P, range = R} | {text = T})
+		// OR a bare integer array (sugar for chunkID entries; preserves
+		// 1G call shape). opts is a table with mode/purpose/k/timeoutSeconds.
+		// Returns (requestID, nil) on success or (nil, errstring) on failure.
+		// R2567, R2568, R2600, R2601, R2602, R2603
+		L.SetField(sysTable, "findConnections", L.NewFunction(func(L *lua.LState) int {
+			arr := L.CheckTable(1)
+			inputs := luaTableToConnectionsInputs(arr)
+			opts := FindConnectionsOpts{}
+			if optsTbl, ok := L.Get(2).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("timeoutSeconds").(lua.LNumber); ok {
+					opts.TimeoutSeconds = int(v)
+				}
+				if v, ok := optsTbl.RawGetString("mode").(lua.LString); ok {
+					opts.Mode = string(v)
+				}
+				if v, ok := optsTbl.RawGetString("purpose").(lua.LString); ok {
+					opts.Purpose = string(v)
+				}
+				if v, ok := optsTbl.RawGetString("k").(lua.LNumber); ok {
+					opts.K = int(v)
+				}
+			}
+			if srv.librarian == nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("librarian unavailable"))
+				return 2
+			}
+			id, err := srv.librarian.FindConnections(inputs, opts)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(id))
+			return 1
+		}))
 		// R2383: populate the Lua mirror from state loaded during Server.New.
 		srv.curation.refreshLuaTable(L)
 		// R2358: pin mutator — append/move-to-top, refresh mirror.
@@ -4281,7 +4323,11 @@ func (srv *Server) registerLuaFunctions() {
 				L.Push(lua.LString("agent unavailable"))
 				return 2
 			}
-			id, err := srv.librarian.FindConnections(ids, opts)
+			// mcp.findConnections is the 1G call shape (chunkID array,
+			// turbo mode). The unified sys.findConnections supports
+			// path:range + text inputs and the normal-mode pipeline.
+			// R2568
+			id, err := srv.librarian.FindConnectionsByChunkIDs(ids, opts)
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
