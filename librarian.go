@@ -93,16 +93,16 @@ type TagMatch struct {
 	Paths []string `json:"paths,omitempty"`
 }
 
-// NewLibrarian creates a Librarian. Returns nil if claude is not on PATH.
-// R1248, R1250, R1274
+// NewLibrarian creates a Librarian. The constructor succeeds whether
+// or not `claude` is on PATH; the `available` flag records claude's
+// presence so Available() can report it. Recall, embed, substrate,
+// and tag-embedding paths do not require claude.
+// R1248, R1250, R1274, R2642
 func NewLibrarian(db *DB, dbPath string) *Librarian {
 	_, err := exec.LookPath("claude")
-	if err != nil {
-		return nil
-	}
 	cfg := db.Config()
 	l := &Librarian{
-		available:              true,
+		available:              err == nil,
 		db:                     db,
 		results:                make(map[string]*ExpandResult),
 		modelTTL:               5 * time.Minute,
@@ -127,8 +127,10 @@ func (l *Librarian) SetCtxSize(n int) { l.ctxSize = n }
 // SetParallel sets the number of parallel sequences per batch. R1587
 func (l *Librarian) SetParallel(n int) { l.parallel = n }
 
-// Available returns whether spectral search is possible.
-// R1249
+// Available returns whether spectral search is possible (i.e., whether
+// `claude` was on PATH at construction). Recall, embed, and substrate
+// callers do not need to gate on this.
+// R1249, R2642
 func (l *Librarian) Available() bool {
 	return l != nil && l.available
 }

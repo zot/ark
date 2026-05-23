@@ -1376,3 +1376,289 @@ func TestHC_TagBoundary(t *testing.T) {
 		t.Errorf(`expected tag "ab" to return one entry chunk=2, got %+v`, gotAB)
 	}
 }
+
+// --- Discussed-tag (RD) tests ---
+// Test: test-Discussed.md
+
+// TestDiscussed_AddListRoundTrip verifies AddDiscussed writes an RD
+// record with the expected key shape and 8-byte unix-nanos value, and
+// ListDiscussed reads it back. R2648, R2650, R2651
+func TestDiscussed_AddListRoundTrip(t *testing.T) {
+	s := testStore(t)
+	before := time.Now()
+	if err := s.AddDiscussed("sess-1", "topic", "messaging"); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now()
+
+	got, err := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if got[0].Tag != "topic" || got[0].Value != "messaging" {
+		t.Errorf("unexpected entry: %+v", got[0])
+	}
+	if got[0].Timestamp.Before(before) || got[0].Timestamp.After(after.Add(time.Second)) {
+		t.Errorf("timestamp %v outside [%v, %v]", got[0].Timestamp, before, after)
+	}
+
+	// Verify the key layout: "RD" + "sess-1" + \x00 + "topic" + \x00 + "messaging"
+	expectedKey := append([]byte("RD"), []byte("sess-1\x00topic\x00messaging")...)
+	err = s.env.View(func(txn *lmdb.Txn) error {
+		v, getErr := txn.Get(s.dbi, expectedKey)
+		if getErr != nil {
+			t.Errorf("expected key %q present: %v", expectedKey, getErr)
+			return nil
+		}
+		if len(v) != 8 {
+			t.Errorf("expected 8-byte value, got %d", len(v))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDiscussed_BareTagEncoding verifies a bare @name argument (no
+// value) encodes with an empty trailing value segment. R2648
+func TestDiscussed_BareTagEncoding(t *testing.T) {
+	s := testStore(t)
+	if err := s.AddDiscussed("sess-1", "topic", ""); err != nil {
+		t.Fatal(err)
+	}
+	expectedKey := append([]byte("RD"), []byte("sess-1\x00topic\x00")...)
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		_, getErr := txn.Get(s.dbi, expectedKey)
+		if getErr != nil {
+			t.Errorf("expected bare-tag key %q present: %v", expectedKey, getErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	if len(got) != 1 || got[0].Tag != "topic" || got[0].Value != "" {
+		t.Errorf("expected one bare entry, got %+v", got)
+	}
+}
+
+// TestDiscussed_AddReAddOverwritesTimestamp verifies re-adding the
+// same (session, tag, value) updates the timestamp rather than
+// creating a duplicate. R2650
+func TestDiscussed_AddReAddOverwritesTimestamp(t *testing.T) {
+	s := testStore(t)
+	if err := s.AddDiscussed("sess-1", "topic", "messaging"); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	time.Sleep(2 * time.Millisecond)
+	if err := s.AddDiscussed("sess-1", "topic", "messaging"); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	if len(second) != 1 {
+		t.Fatalf("expected 1 entry after re-add, got %d", len(second))
+	}
+	if !second[0].Timestamp.After(first[0].Timestamp) {
+		t.Errorf("expected timestamp to advance: first=%v second=%v",
+			first[0].Timestamp, second[0].Timestamp)
+	}
+}
+
+// TestDiscussed_ListScope verifies ListDiscussed returns only the
+// requested session's entries. R2651
+func TestDiscussed_ListScope(t *testing.T) {
+	s := testStore(t)
+	s.AddDiscussed("sess-A", "topic", "messaging")
+	s.AddDiscussed("sess-A", "ext", "tagdefs")
+	s.AddDiscussed("sess-B", "topic", "auth")
+
+	a, _ := s.ListDiscussed("sess-A", 0, 24*time.Hour)
+	if len(a) != 2 {
+		t.Errorf("expected 2 entries for sess-A, got %d", len(a))
+	}
+	b, _ := s.ListDiscussed("sess-B", 0, 24*time.Hour)
+	if len(b) != 1 || b[0].Value != "auth" {
+		t.Errorf("expected 1 entry for sess-B (auth), got %+v", b)
+	}
+}
+
+// TestDiscussed_LazyTTL verifies entries past their TTL are skipped on
+// read but not deleted. R2659
+func TestDiscussed_LazyTTL(t *testing.T) {
+	s := testStore(t)
+	// Write an entry with a backdated timestamp by going below the API.
+	oldKey := discussedKey("sess-1", "topic", "messaging")
+	oldVal := make([]byte, 8)
+	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-25*time.Hour).UnixNano()))
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, oldKey, oldVal, 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	if len(got) != 0 {
+		t.Errorf("expected 0 entries (TTL expired), got %d", len(got))
+	}
+
+	// Raw record still present (lazy expiry only).
+	err = s.env.View(func(txn *lmdb.Txn) error {
+		_, gerr := txn.Get(s.dbi, oldKey)
+		if gerr != nil {
+			t.Errorf("expected RD record still present pre-prune, got %v", gerr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ttl=0 disables expiry — entry resurfaces.
+	got, _ = s.ListDiscussed("sess-1", 0, 0)
+	if len(got) != 1 {
+		t.Errorf("expected 1 entry with ttl=0, got %d", len(got))
+	}
+}
+
+// TestDiscussed_SinceFilter verifies --since DUR drops entries older
+// than NOW - DUR. R2651
+func TestDiscussed_SinceFilter(t *testing.T) {
+	s := testStore(t)
+	old := discussedKey("sess-1", "topic", "old")
+	recent := discussedKey("sess-1", "topic", "recent")
+	oldVal := make([]byte, 8)
+	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-2*time.Hour).UnixNano()))
+	recentVal := make([]byte, 8)
+	binary.BigEndian.PutUint64(recentVal, uint64(time.Now().Add(-10*time.Minute).UnixNano()))
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		if e := txn.Put(s.dbi, old, oldVal, 0); e != nil {
+			return e
+		}
+		return txn.Put(s.dbi, recent, recentVal, 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.ListDiscussed("sess-1", 30*time.Minute, 24*time.Hour)
+	if len(got) != 1 || got[0].Value != "recent" {
+		t.Errorf("expected only 'recent', got %+v", got)
+	}
+}
+
+// TestDiscussed_SkipsMalformedValue verifies RD records whose value
+// isn't 8 bytes are treated as expired and skipped on read. R2663
+func TestDiscussed_SkipsMalformedValue(t *testing.T) {
+	s := testStore(t)
+	bad := discussedKey("sess-1", "topic", "messaging")
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, bad, []byte{1, 2, 3, 4}, 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ListDiscussed("sess-1", 0, 24*time.Hour)
+	if len(got) != 0 {
+		t.Errorf("expected malformed entry skipped, got %+v", got)
+	}
+}
+
+// TestDiscussed_ClearScope verifies ClearDiscussed removes only the
+// requested session's entries. R2652
+func TestDiscussed_ClearScope(t *testing.T) {
+	s := testStore(t)
+	s.AddDiscussed("sess-A", "topic", "messaging")
+	s.AddDiscussed("sess-A", "ext", "tagdefs")
+	s.AddDiscussed("sess-B", "topic", "auth")
+
+	count, err := s.ClearDiscussed("sess-A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("expected deleted count 2, got %d", count)
+	}
+	a, _ := s.ListDiscussed("sess-A", 0, 24*time.Hour)
+	if len(a) != 0 {
+		t.Errorf("expected sess-A empty after clear, got %+v", a)
+	}
+	b, _ := s.ListDiscussed("sess-B", 0, 24*time.Hour)
+	if len(b) != 1 {
+		t.Errorf("expected sess-B intact (1 entry), got %d", len(b))
+	}
+}
+
+// TestDiscussed_PruneCrossSession verifies prune deletes expired
+// entries across all sessions and returns the count. R2653
+func TestDiscussed_PruneCrossSession(t *testing.T) {
+	s := testStore(t)
+	old := time.Now().Add(-25 * time.Hour)
+	recent := time.Now().Add(-1 * time.Hour)
+	writeStamped := func(session, tag, value string, ts time.Time) {
+		k := discussedKey(session, tag, value)
+		v := make([]byte, 8)
+		binary.BigEndian.PutUint64(v, uint64(ts.UnixNano()))
+		s.env.Update(func(txn *lmdb.Txn) error {
+			return txn.Put(s.dbi, k, v, 0)
+		})
+	}
+	writeStamped("sess-A", "topic", "old1", old)
+	writeStamped("sess-A", "topic", "recent1", recent)
+	writeStamped("sess-B", "topic", "old2", old)
+	writeStamped("sess-C", "ext", "recent2", recent)
+
+	deleted, err := s.PruneDiscussed(24 * time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Errorf("expected 2 deletions, got %d", deleted)
+	}
+
+	a, _ := s.ListDiscussed("sess-A", 0, 0)
+	if len(a) != 1 || a[0].Value != "recent1" {
+		t.Errorf("expected only recent1 in sess-A, got %+v", a)
+	}
+	b, _ := s.ListDiscussed("sess-B", 0, 0)
+	if len(b) != 0 {
+		t.Errorf("expected sess-B empty, got %+v", b)
+	}
+	c, _ := s.ListDiscussed("sess-C", 0, 0)
+	if len(c) != 1 {
+		t.Errorf("expected sess-C intact, got %+v", c)
+	}
+}
+
+// TestDiscussed_PruneZeroTTLNoOp verifies ttl=0 deletes nothing (the
+// "never expire" semantic). R2653, R2659
+func TestDiscussed_PruneZeroTTLNoOp(t *testing.T) {
+	s := testStore(t)
+	old := discussedKey("sess-1", "topic", "old")
+	oldVal := make([]byte, 8)
+	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-1000*time.Hour).UnixNano()))
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, old, oldVal, 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := s.PruneDiscussed(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected zero deletions with ttl=0, got %d", deleted)
+	}
+	got, _ := s.ListDiscussed("sess-1", 0, 0)
+	if len(got) != 1 {
+		t.Errorf("expected entry preserved with ttl=0, got %+v", got)
+	}
+}

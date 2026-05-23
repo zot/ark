@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -135,6 +135,19 @@ ark-level settings, and tag tracking.
   Each match carries chunkIDs (inline from V blob, ExtMap from
   ExtTagValueFiles, tmp from TmpTagStore.TagValueFiles). Honors tag
   source parity. (R1468, R2344, R2350)
+- AddDiscussed(session, tag, value string): write one RD record with
+  NOW unix-nanos as the value. Overwrites the timestamp on re-add.
+  (R2650)
+- ListDiscussed(session string, since time.Duration, ttl time.Duration)
+  []Discussed: range-scan `RD + session + \x00`, drop entries where
+  `timestamp + ttl < NOW` and (if since > 0) `timestamp < NOW - since`,
+  return surviving `(tag, value, timestamp)` triples. Malformed value
+  bytes are treated as expired. (R2651, R2659, R2663)
+- ClearDiscussed(session string) int: delete every RD record under the
+  session, return deleted count. (R2652)
+- PruneDiscussed(ttl time.Duration) int: full-scan RD prefix, delete
+  expired entries across all sessions, return deleted count. (R2653,
+  R2659)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
@@ -282,6 +295,27 @@ ark-level settings, and tag tracking.
   the decoded serial. A non-nil error from fn stops iteration and
   is returned by the call. (R2189, R2190)
 
+### Recall Discussed-tag records (RD, R2648-R2649, R2659, R2663)
+- Key: `"RD" + session-bytes + \x00 + tagname + \x00 + value`. session-bytes
+  is variable-length, no `\x00`; tagname and value follow the no-`\x00`
+  rule shared with V records. A bare `@name` entry encodes with an empty
+  value segment (key ends `... + \x00 + tagname + \x00`). (R2648)
+- Value: 8 bytes, unix nanoseconds as big-endian `uint64`. (R2648)
+- `R` is reserved as the recall-feature namespace; RD is its first
+  occupant. Future recall records (proposals, processed-stamps,
+  emission log) take other two-letter `R*` prefixes. (R2649)
+- TTL is applied lazily on read by ListDiscussed and the
+  substrate exclusion-set load. The records survive until
+  PruneDiscussed runs. (R2659)
+- Value bytes not equal to 8 are treated as expired and skipped on
+  read. Writers always emit 8 bytes; this path keeps readers robust.
+  (R2663)
+
+### Discussed (R2650-R2653, R2659)
+- Tag: string — tag name, no leading `@`
+- Value: string — empty means bare-name entry
+- Timestamp: time.Time — derived from the 8-byte RD value
+
 ### Page Content Records (R1720-R1725)
 - WritePageContent(fileID uint64, page uint32, blob []byte): write
   PC[fileID][page] record. Key: `PC` + varint(fileID) + varint(page).
@@ -372,3 +406,4 @@ ark-level settings, and tag tracking.
 - seq-tag-embed.md
 - seq-chunk-embed.md
 - seq-tvid-overlay.md
+- seq-discussed.md

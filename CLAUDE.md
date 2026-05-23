@@ -37,6 +37,11 @@ reference docs — update them yourself when their surface changes:
   `frictionless/internal/mcp/tools.go:setupMCPGlobal`, and
   `ui-engine/internal/lua/runtime.go:createSessionTable` plus the
   helpers each calls).
+- `specs/features.md` — every main capability with motivation and
+  objective. Update when a new feature ships, a feature's status
+  changes, or its motivation shifts. This is the project's
+  capabilities-axis summary; the per-feature specs own the
+  behavior.
 
 ## Frictionless UI
 

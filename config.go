@@ -51,8 +51,38 @@ type Config struct {
 	// CRC: crc-Config.md | R2125
 	AutoCompact bool           `toml:"auto_compact,omitempty"`
 	Schedule    ScheduleConfig `toml:"schedule"` // R853, R854
+	Recall      RecallConfig   `toml:"recall"`   // R2659
 	Errors      []string       `toml:"-"`
 	dbPath      string         `toml:"-"`
+}
+
+// RecallConfig collects the [recall] section of ark.toml.
+// CRC: crc-Config.md | R2659
+type RecallConfig struct {
+	// DiscussedTTL is the lifetime of an RD record before lazy
+	// expiry takes effect. Empty/missing falls back to 24h;
+	// `"0"` disables expiry (records never expire on read).
+	// An unparseable value falls back to 24h with a warning at
+	// server startup. R2659, R2663
+	DiscussedTTL string `toml:"discussed_ttl,omitempty"`
+}
+
+// DiscussedTTLDuration parses the [recall].discussed_ttl field and
+// returns the effective TTL. Empty/unparseable → 24h. `"0"` returns
+// 0, signaling "never expire" to Store.ListDiscussed / PruneDiscussed.
+// `wasParseError` is true when the value was set but couldn't be
+// parsed — callers can log a warning at startup.
+// CRC: crc-Config.md | R2659, R2663
+func (rc RecallConfig) DiscussedTTLDuration() (ttl time.Duration, wasParseError bool) {
+	const fallback = 24 * time.Hour
+	if rc.DiscussedTTL == "" {
+		return fallback, false
+	}
+	d, err := time.ParseDuration(rc.DiscussedTTL)
+	if err != nil {
+		return fallback, true
+	}
+	return d, false
 }
 
 // ScheduleConfig declares which tags carry date values and their defaults.

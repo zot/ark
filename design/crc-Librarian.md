@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257, R2313, R2314, R2315, R2316, R2317, R2318, R2319, R2320, R2321, R2324, R2326, R2327, R2328, R2329, R2330, R2331, R2332, R2333, R2334, R2335, R2336, R2337, R2338, R2339, R2340, R2341, R2342, R2343, R2409, R2567, R2569, R2570, R2571, R2572, R2573, R2574, R2575, R2576, R2577, R2578, R2579, R2580, R2581, R2582, R2583, R2584, R2585, R2586, R2587, R2588, R2589, R2590, R2591, R2592, R2593, R2594, R2595, R2596, R2597, R2598, R2599, R2603, R2609, R2568
+**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1274, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1595, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1623, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257, R2313, R2314, R2315, R2316, R2317, R2318, R2319, R2320, R2321, R2324, R2326, R2327, R2328, R2329, R2330, R2331, R2332, R2333, R2334, R2335, R2336, R2337, R2338, R2339, R2340, R2341, R2342, R2343, R2409, R2567, R2569, R2570, R2571, R2572, R2573, R2574, R2575, R2576, R2577, R2578, R2579, R2580, R2581, R2582, R2583, R2584, R2585, R2586, R2587, R2588, R2589, R2590, R2591, R2592, R2593, R2594, R2595, R2596, R2597, R2598, R2599, R2603, R2609, R2568, R2617, R2618, R2620, R2621, R2622, R2623, R2624, R2625, R2626, R2629, R2634, R2639, R2640, R2641, R1604, R1608, R2642, R2643, R2644, R2655, R2656, R2657, R2658, R2659, R2660, R2662, R2647
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -264,6 +264,34 @@ loads on first embedding query and stays warm until TTL expiry.
 - HandleConnectionsError: POST /connections/error — SetConnectionsError (R2318)
 - HandleConnectionsFind: POST /connections/find — accepts {inputs, opts}, invokes Librarian.FindConnections, returns {requestID, path} (R2567, R2604)
 - HandleConnectionsList: GET /connections/list — JSON array of in-flight records, used by `ark connections list` (R2609)
+- HandleRecall: POST /recall — parses {inputs, opts}, invokes Librarian.Recall, returns RecallResult JSON (R2629)
+
+### Recall (Phase 2B)
+- Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallResult, error): retrieves top-K chunks ranked by similarity (R2617). Normalizes inputs (R2618), runs Vector-EC and Trigram-EC (R2620) — Vector-EC via `(cos+1)/2` (R2586), Trigram-EC via Jaccard over trigram sets with a query-coverage floor (R2643, R2644) — merges via max across substrates and inputs (R2622), excludes self-chunks for any input that normalizes to a chunkID (R2623), resolves metadata and tags (R2624), reads content from cache if configured (R2625), sorts descending and returns top-K (R2626). Handles missing model gracefully by skipping Vector-EC and setting a warning (R2634). Rejects empty inputs (R2639) and unknown chunks (R2640). Clamps K option (R2641). Constructor `NewLibrarian` succeeds whether or not `claude` is on PATH; `Available()` reports spectral-expansion capability (R2642).
+- Admission-time tag filter: the substrate's scoring map only
+  admits candidate chunks that carry V records, unless
+  `opts.KeepTagless` is true. `-all` is the CLI surface; the
+  Lua bridge is `keepTagless`. The filter runs during admission
+  so the substrate's top-K contract honors only tagged
+  candidates by default. The tag lookup performed for the filter
+  is cached on the per-chunk accumulator and reused during the
+  result-enrichment phase. (R2647)
+- Recall consults `opts.Discussed` (carries the exclusion-set
+  union from `--session SID` and `--discussed @t...`) before the
+  requireTags / KeepTagless decision (R2658). For each candidate
+  chunk, strip any `(tag, value)` pair that matches the exclusion
+  set, then drop the chunk only if its tag list becomes empty —
+  permissive filter (R2656). Membership uses the matching rule:
+  bare-name entries match any value, exact-pair entries match
+  only the exact pair (R2657). When the caller passed `--session
+  SID`, the substrate loads the session's unexpired RD records
+  via `Store.ListDiscussed` before scoring and unions them into
+  the exclusion set; explicit `--discussed` entries contribute
+  alongside (R2655, R2659). `RecallOpts.Discussed
+  []Discussed{Tag, Value}` is the wire shape; empty slice
+  disables the filter (R2660). The substrate itself never writes
+  RD records — the recall agent's `ark discussed add` is the
+  only writer (R2662).
 
 ## Collaborators
 - Server: owns the Librarian, routes HTTP, status flags
@@ -283,3 +311,4 @@ loads on first embedding query and stays warm until TTL expiry.
 - seq-tag-embed.md
 - seq-find-connections.md
 - seq-find-connections-substrate.md
+- seq-discussed.md

@@ -80,6 +80,15 @@ For the basic syntax also see the *What Is a Tag* section in
 [README.md](README.md). The rest of this document focuses on what
 those three properties *enable*.
 
+A fourth property — the *kind* of relationship between a tag and
+its chunk (about / connection / idea / to-do / question / ...) —
+is currently being designed. The bare syntax can't tell you
+whether `@todo: rewrite spec` describes the chunk's subject or
+records an action item; **tag axes** put that structure back.
+The working notes live at
+[.scratch/TAG-AXES.md](.scratch/TAG-AXES.md); when the design
+settles, the canonical material moves into this document.
+
 ---
 
 ## The three orders of connection
@@ -650,3 +659,7 @@ mechanism is in service of.
   the *Why Not Vector?* comparison.
 - [VISION-NEW.md](VISION-NEW.md) — the broader project arc,
   the fun commitment, the three surfacing modes in depth.
+- [.scratch/TAG-AXES.md](.scratch/TAG-AXES.md) — in-flight
+  design for the tag-axis property (about / connection / idea
+  / to-do / …). Working notes; will migrate into this document
+  when it settles.

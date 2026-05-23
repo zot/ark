@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-Librarian.md | Seq: seq-find-connections-substrate.md | R2567, R2568, R2569, R2570, R2571, R2572, R2573, R2574, R2575, R2576, R2577, R2578, R2579, R2580, R2581, R2582, R2583, R2584, R2585, R2586, R2587, R2588, R2589
+// CRC: crc-Librarian.md | Seq: seq-find-connections-substrate.md | R2567, R2568, R2569, R2570, R2571, R2572, R2573, R2574, R2575, R2576, R2577, R2578, R2579, R2580, R2581, R2582, R2583, R2584, R2585, R2586, R2588, R2589, R2643, R2644
 
 import (
 	"errors"
@@ -40,7 +40,7 @@ type substrateInput struct {
 // SubstrateScores collects per-substrate similarity scores for one
 // (tag, input) pair. All values are normalized to [0, 1]. Zero means
 // "this substrate did not contribute" (either skipped or no signal).
-// R2582, R2586, R2587
+// R2582, R2586, R2643, R2644
 type SubstrateScores struct {
 	VectorED  float64 `json:"vectorEd"`
 	TrigramED float64 `json:"trigramEd"`
@@ -390,27 +390,29 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 		}
 	}
 
-	// Substrate 4: trigram(input, EC). R2578
-	// Skipped when the Searcher isn't wired (test setups without full DB).
+	// Substrate 4: trigram(input, EC). R2578, R2643, R2644
+	// Candidates from SearchFuzzy are re-scored as Jaccard(Tq, Tc) with
+	// a query-coverage floor that lets us skip the union computation
+	// for chunks that barely overlap the query. Skipped when the
+	// Searcher isn't wired (test setups without full DB).
 	if queryText != "" && l.db.search != nil {
 		hits, err := l.db.SearchFuzzy(queryText, SearchOpts{K: substrateInternalK})
 		if err == nil {
-			maxScore := 0.0
-			for _, h := range hits {
-				if h.Score > maxScore {
-					maxScore = h.Score
-				}
-			}
+			queryTris := queryTrigramSet(queryText)
 			for _, h := range hits {
 				cid, ok := l.resolveSearchEntryChunkID(h)
 				if !ok {
 					continue
 				}
-				normalized := 0.0
-				if maxScore > 0 {
-					normalized = h.Score / maxScore
+				chunkText, terr := substrateChunkText(l.db, cid)
+				if terr != nil {
+					continue
 				}
-				addVotesFromChunk(l.db, cid, normalized, out, in.chunkID, func(acc *candidateAcc, n float64) {
+				score := trigramJaccardWithFloor(queryTris, chunkText)
+				if score == 0 {
+					continue
+				}
+				addVotesFromChunk(l.db, cid, score, out, in.chunkID, func(acc *candidateAcc, n float64) {
 					if n > acc.scores.TrigramEC {
 						acc.scores.TrigramEC = n
 					}
@@ -492,6 +494,46 @@ func normalizeCos(cos float64) float64 {
 		v = 1
 	}
 	return v
+}
+
+// trigramCoverageFloor is the minimum |Tq ∩ Tc| / |Tq| required before
+// trigramJaccardWithFloor computes the union. Candidates below the floor
+// short-circuit to 0. R2644
+const trigramCoverageFloor = 0.1
+
+// queryTrigramSet extracts the trigram set of an input string using
+// microfts2's UTF-8-aware trigram engine. Shared by trigram-EC passes
+// in Phase 2A (connections substrate) and Phase 2B (recall). R2643
+func queryTrigramSet(text string) map[uint32]bool {
+	return trigramSet(trigramEngine.ExtractTrigrams([]byte(text)))
+}
+
+// trigramJaccardWithFloor returns Jaccard(Tq, Tc) — |Tq ∩ Tc| / |Tq ∪ Tc|
+// — short-circuited to 0 when query-coverage |Tq ∩ Tc| / |Tq| is below
+// trigramCoverageFloor. The intersection used for the coverage check is
+// reused as the Jaccard numerator. R2643, R2644
+func trigramJaccardWithFloor(queryTris map[uint32]bool, chunkText string) float64 {
+	if len(queryTris) == 0 || chunkText == "" {
+		return 0
+	}
+	chunkTris := trigramSet(trigramEngine.ExtractTrigrams([]byte(chunkText)))
+	if len(chunkTris) == 0 {
+		return 0
+	}
+	intersection := 0
+	for tri := range queryTris {
+		if chunkTris[tri] {
+			intersection++
+		}
+	}
+	if float64(intersection)/float64(len(queryTris)) < trigramCoverageFloor {
+		return 0
+	}
+	union := len(queryTris) + len(chunkTris) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 // substrateChunkText reads a chunk's content via the chunk cache.

@@ -2536,6 +2536,49 @@ func (db *DB) Unresolved() ([]UnresolvedRecord, error) {
 	return db.store.ListUnresolved()
 }
 
+// recallTTL returns the configured [recall].discussed_ttl, falling
+// back to 24h on empty/unparseable values.
+// CRC: crc-DB.md | R2659, R2663
+func (db *DB) recallTTL() time.Duration {
+	if cfg := db.Config(); cfg != nil {
+		ttl, _ := cfg.Recall.DiscussedTTLDuration()
+		return ttl
+	}
+	return 24 * time.Hour
+}
+
+// AddDiscussed records `(session, tag, value)` as discussed in the
+// recall dedup state, stamped with NOW.
+// CRC: crc-DB.md | R2650
+func (db *DB) AddDiscussed(session, tag, value string) error {
+	return db.store.AddDiscussed(session, tag, value)
+}
+
+// ListDiscussed returns the unexpired RD entries for one session.
+// Uses the configured TTL for lazy expiry.
+// CRC: crc-DB.md | R2651, R2659
+func (db *DB) ListDiscussed(session string, since time.Duration) ([]Discussed, error) {
+	return db.store.ListDiscussed(session, since, db.recallTTL())
+}
+
+// ClearDiscussed deletes all RD entries for one session.
+// CRC: crc-DB.md | R2652
+func (db *DB) ClearDiscussed(session string) (int, error) {
+	return db.store.ClearDiscussed(session)
+}
+
+// PruneDiscussed sweeps RD records across all sessions, deleting
+// entries older than `ttlOverride` (or the configured TTL when
+// `ttlOverride == 0`).
+// CRC: crc-DB.md | R2653, R2659
+func (db *DB) PruneDiscussed(ttlOverride time.Duration) (int, error) {
+	ttl := ttlOverride
+	if ttl == 0 {
+		ttl = db.recallTTL()
+	}
+	return db.store.PruneDiscussed(ttl)
+}
+
 // Resolve dismisses unresolved files by pattern.
 func (db *DB) Resolve(patterns []string) error {
 	return db.store.ResolveByPattern(patterns, db.matcher)

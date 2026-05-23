@@ -211,6 +211,13 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)
 	db.Config().EnsureArkSource()
 
+	// R2659, R2663: warn if [recall].discussed_ttl can't be parsed —
+	// we fall back to 24h either way, but the user should see typos.
+	if _, badTTL := db.Config().Recall.DiscussedTTLDuration(); badTTL {
+		log.Printf("warning: [recall].discussed_ttl=%q is not a valid duration; falling back to 24h",
+			db.Config().Recall.DiscussedTTL)
+	}
+
 	// R799: Create pubsub and scheduler
 	ps := NewPubSub(10*time.Minute, 100)
 	// R2281: wire centralized tmp:// publish — DB's AddTmpFile /
@@ -221,9 +228,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	schedDir := filepath.Join(dbPath, "schedule")
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
 
-	// R1235, R1248: Create librarian for spectral search (nil if claude not on PATH)
+	// R1235, R1248: Create librarian for spectral search
 	lib := NewLibrarian(db, dbPath)
-	if lib != nil {
+	if lib.Available() {
 		log.Printf("spectral search: claude available, librarian started")
 	}
 
@@ -369,6 +376,11 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /curation/pin", srv.handleCuratePin)
 	mux.HandleFunc("POST /curation/dismiss", srv.handleCurateDismiss)
 	mux.HandleFunc("GET /curation/pinned", srv.handleCuratePinned)
+	// Discussed-tag store (per-session recall dedup). R2650-R2653
+	mux.HandleFunc("POST /discussed/add", srv.handleDiscussedAdd)
+	mux.HandleFunc("POST /discussed/list", srv.handleDiscussedList)
+	mux.HandleFunc("POST /discussed/clear", srv.handleDiscussedClear)
+	mux.HandleFunc("POST /discussed/prune", srv.handleDiscussedPrune)
 	if srv.librarian != nil {
 		mux.HandleFunc("POST /search/curate", srv.librarian.HandleExpand)
 		mux.HandleFunc("GET /search/curate/wait", srv.librarian.HandleExpandWait)
@@ -386,6 +398,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /connections/error", srv.librarian.HandleConnectionsError)
 		mux.HandleFunc("POST /connections/find", srv.librarian.HandleConnectionsFind)
 		mux.HandleFunc("GET /connections/list", srv.librarian.HandleConnectionsList)
+		// Recall (Phase 2B) HTTP endpoint.
+		// CRC: crc-Server.md | Seq: seq-recall.md#1.3 | R2629
+		mux.HandleFunc("POST /recall", srv.librarian.HandleRecall)
 	}
 
 	log.Printf("ark server listening on %s", socketPath)
@@ -1247,6 +1262,132 @@ func (srv *Server) handleMissing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, missing)
+}
+
+// Discussed-tag store handlers (per-session recall dedup).
+// CRC: crc-Server.md | Seq: seq-discussed.md | R2650-R2653, R2659
+
+type discussedAddRequest struct {
+	Session string      `json:"session"`
+	Tags    []Discussed `json:"tags"`
+}
+
+func (srv *Server) handleDiscussedAdd(w http.ResponseWriter, r *http.Request) {
+	var req discussedAddRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Session == "" {
+		http.Error(w, "session ID required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Tags) == 0 {
+		http.Error(w, "no tags specified", http.StatusBadRequest)
+		return
+	}
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		for _, t := range req.Tags {
+			if err := db.AddDiscussed(req.Session, t.Tag, t.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "count": len(req.Tags)})
+}
+
+type discussedListRequest struct {
+	Session string `json:"session"`
+	Since   string `json:"since,omitempty"` // duration string
+}
+
+func (srv *Server) handleDiscussedList(w http.ResponseWriter, r *http.Request) {
+	var req discussedListRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Session == "" {
+		http.Error(w, "session ID required", http.StatusBadRequest)
+		return
+	}
+	var since time.Duration
+	if req.Since != "" {
+		d, err := time.ParseDuration(req.Since)
+		if err != nil {
+			http.Error(w, "invalid since: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		since = d
+	}
+	entries, err := Sync(srv.db, func(db *DB) ([]Discussed, error) {
+		return db.ListDiscussed(req.Session, since)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entries == nil {
+		entries = []Discussed{}
+	}
+	writeJSON(w, entries)
+}
+
+type discussedClearRequest struct {
+	Session string `json:"session"`
+}
+
+func (srv *Server) handleDiscussedClear(w http.ResponseWriter, r *http.Request) {
+	var req discussedClearRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Session == "" {
+		http.Error(w, "session ID required", http.StatusBadRequest)
+		return
+	}
+	count, err := Sync(srv.db, func(db *DB) (int, error) {
+		return db.ClearDiscussed(req.Session)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "count": count})
+}
+
+type discussedPruneRequest struct {
+	TTL string `json:"ttl,omitempty"`
+}
+
+func (srv *Server) handleDiscussedPrune(w http.ResponseWriter, r *http.Request) {
+	var req discussedPruneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var ttl time.Duration
+	if req.TTL != "" {
+		d, err := time.ParseDuration(req.TTL)
+		if err != nil {
+			http.Error(w, "invalid ttl: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		ttl = d
+	}
+	count, err := Sync(srv.db, func(db *DB) (int, error) {
+		return db.PruneDiscussed(ttl)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "count": count})
 }
 
 func (srv *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
@@ -3221,6 +3362,229 @@ func (srv *Server) registerLuaFunctions() {
 			L.Push(lua.LString(id))
 			return 1
 		}))
+
+		// sys.recall(inputs, opts) — delegates to Librarian.Recall.
+		// inputs is a Lua array of entry tables or bare integers (chunkIDs).
+		// opts is a table with k/includeContent.
+		// Returns (resultTable, nil) on success or (nil, errstring) on failure.
+		// CRC: crc-Server.md | Seq: seq-recall.md#2.1 | R2628
+		L.SetField(sysTable, "recall", L.NewFunction(func(L *lua.LState) int {
+			arr := L.CheckTable(1)
+			inputs := luaTableToConnectionsInputs(arr)
+			opts := RecallOpts{
+				IncludeContent: true,
+			}
+			if optsTbl, ok := L.Get(2).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("includeContent").(lua.LBool); ok {
+					opts.IncludeContent = bool(v)
+				}
+				if v, ok := optsTbl.RawGetString("k").(lua.LNumber); ok {
+					opts.K = int(v)
+				}
+				// R2647: substrate filter exposed via Lua.
+				if v, ok := optsTbl.RawGetString("keepTagless").(lua.LBool); ok {
+					opts.KeepTagless = bool(v)
+				}
+				// R2655: --session SID equivalent — substrate loads the
+				// session's RD records into the exclusion set.
+				if v, ok := optsTbl.RawGetString("session").(lua.LString); ok {
+					opts.Session = string(v)
+				}
+				// R2660: caller-supplied discussed list, as
+				// {{tag=..., value=...}, ...}.
+				if dt, ok := optsTbl.RawGetString("discussed").(*lua.LTable); ok && dt != nil {
+					dt.ForEach(func(_, item lua.LValue) {
+						entry, _ := item.(*lua.LTable)
+						if entry == nil {
+							return
+						}
+						var d Discussed
+						if v, ok := entry.RawGetString("tag").(lua.LString); ok {
+							d.Tag = string(v)
+						}
+						if v, ok := entry.RawGetString("value").(lua.LString); ok {
+							d.Value = string(v)
+						}
+						if d.Tag == "" {
+							return
+						}
+						opts.Discussed = append(opts.Discussed, d)
+					})
+				}
+			}
+			if srv.librarian == nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("librarian unavailable"))
+				return 2
+			}
+			res, err := srv.librarian.Recall(inputs, opts)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+
+			resTbl := L.NewTable()
+			if res.Warning != "" {
+				L.SetField(resTbl, "warning", lua.LString(res.Warning))
+			}
+			chunksTbl := L.NewTable()
+			for _, chunk := range res.Chunks {
+				chunkTbl := L.NewTable()
+				L.SetField(chunkTbl, "chunkID", lua.LNumber(chunk.ChunkID))
+				L.SetField(chunkTbl, "path", lua.LString(chunk.Path))
+				L.SetField(chunkTbl, "range", lua.LString(chunk.Range))
+				L.SetField(chunkTbl, "score", lua.LNumber(chunk.Score))
+
+				subTbl := L.NewTable()
+				L.SetField(subTbl, "vectorEc", lua.LNumber(chunk.PerSubstrate.VectorEC))
+				L.SetField(subTbl, "trigramEc", lua.LNumber(chunk.PerSubstrate.TrigramEC))
+				L.SetField(chunkTbl, "perSubstrate", subTbl)
+
+				tagsTbl := L.NewTable()
+				for _, tv := range chunk.Tags {
+					tagTbl := L.NewTable()
+					L.SetField(tagTbl, "tag", lua.LString(tv.Tag))
+					if tv.Value != "" {
+						L.SetField(tagTbl, "value", lua.LString(tv.Value))
+					}
+					tagsTbl.Append(tagTbl)
+				}
+				L.SetField(chunkTbl, "tags", tagsTbl)
+
+				if chunk.Content != "" {
+					L.SetField(chunkTbl, "content", lua.LString(chunk.Content))
+				}
+				chunksTbl.Append(chunkTbl)
+			}
+			L.SetField(resTbl, "chunks", chunksTbl)
+
+			L.Push(resTbl)
+			return 1
+		}))
+
+		// sys.discussed — per-session recall dedup state. Four methods
+		// mirroring `ark discussed add/list/clear/prune`.
+		// CRC: crc-Server.md | Seq: seq-discussed.md | R2661
+		discussedTable := L.NewTable()
+		L.SetField(sysTable, "discussed", discussedTable)
+		L.SetField(discussedTable, "add", L.NewFunction(func(L *lua.LState) int {
+			session := L.CheckString(1)
+			if session == "" {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("session ID required"))
+				return 2
+			}
+			tagsTbl, ok := L.Get(2).(*lua.LTable)
+			if !ok || tagsTbl == nil || tagsTbl.Len() == 0 {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("no tags specified"))
+				return 2
+			}
+			var count int
+			var firstErr error
+			tagsTbl.ForEach(func(_, item lua.LValue) {
+				if firstErr != nil {
+					return
+				}
+				entry, _ := item.(*lua.LTable)
+				if entry == nil {
+					return
+				}
+				tag, _ := entry.RawGetString("tag").(lua.LString)
+				val, _ := entry.RawGetString("value").(lua.LString)
+				if tag == "" {
+					return
+				}
+				if err := srv.db.AddDiscussed(session, string(tag), string(val)); err != nil {
+					firstErr = err
+					return
+				}
+				count++
+			})
+			if firstErr != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(firstErr.Error()))
+				return 2
+			}
+			L.Push(lua.LNumber(count))
+			return 1
+		}))
+		L.SetField(discussedTable, "list", L.NewFunction(func(L *lua.LState) int {
+			session := L.CheckString(1)
+			if session == "" {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("session ID required"))
+				return 2
+			}
+			var since time.Duration
+			if optsTbl, ok := L.Get(2).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("since").(lua.LString); ok && string(v) != "" {
+					d, err := time.ParseDuration(string(v))
+					if err != nil {
+						L.Push(lua.LNil)
+						L.Push(lua.LString("invalid since: " + err.Error()))
+						return 2
+					}
+					since = d
+				}
+			}
+			entries, err := srv.db.ListDiscussed(session, since)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			out := L.NewTable()
+			for _, e := range entries {
+				row := L.NewTable()
+				L.SetField(row, "tag", lua.LString(e.Tag))
+				L.SetField(row, "value", lua.LString(e.Value))
+				L.SetField(row, "timestamp", lua.LString(e.Timestamp.Format(time.RFC3339Nano)))
+				out.Append(row)
+			}
+			L.Push(out)
+			return 1
+		}))
+		L.SetField(discussedTable, "clear", L.NewFunction(func(L *lua.LState) int {
+			session := L.CheckString(1)
+			if session == "" {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("session ID required"))
+				return 2
+			}
+			count, err := srv.db.ClearDiscussed(session)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LNumber(count))
+			return 1
+		}))
+		L.SetField(discussedTable, "prune", L.NewFunction(func(L *lua.LState) int {
+			var ttl time.Duration
+			if optsTbl, ok := L.Get(1).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("ttl").(lua.LString); ok && string(v) != "" {
+					d, err := time.ParseDuration(string(v))
+					if err != nil {
+						L.Push(lua.LNil)
+						L.Push(lua.LString("invalid ttl: " + err.Error()))
+						return 2
+					}
+					ttl = d
+				}
+			}
+			count, err := srv.db.PruneDiscussed(ttl)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LNumber(count))
+			return 1
+		}))
+
 		// R2383: populate the Lua mirror from state loaded during Server.New.
 		srv.curation.refreshLuaTable(L)
 		// R2358: pin mutator — append/move-to-top, refresh mirror.

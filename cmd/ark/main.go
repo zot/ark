@@ -119,6 +119,8 @@ func main() {
 		cmdChats(args)
 	case "cp":
 		cmdBundleCp(args)
+	case "discussed":
+		cmdDiscussed(args)
 	case "dismiss":
 		cmdDismiss(args)
 	case "embed":
@@ -200,6 +202,7 @@ Commands:
               remove-pattern, show-why, add-strategy
   connections Sidecar CLI for find-connections (--wait/--fetch/--result/--error)
   cp          Extract embedded files matching a glob pattern
+  discussed   Per-session recall dedup state (add/list/clear/prune)
   dismiss     Dismiss missing files
   embed       Embedding operations (text, bench, validate)
   fetch       Return full contents of an indexed file
@@ -1704,6 +1707,8 @@ func cmdConnections(args []string) {
 	switch sub {
 	case "find":
 		cmdConnectionsFind(rest)
+	case "recall":
+		cmdConnectionsRecall(rest)
 	case "wait":
 		cmdConnectionsWait(rest)
 	case "show":
@@ -1746,6 +1751,14 @@ Public subcommands:
     Returns the tmp://connections/<id>.md path on stdout. With --wait,
     block until the request completes and print the body. With --json,
     emit JSON when --wait is set.
+
+  recall INPUTS... [--k N] [-all] [--no-content] [--type T] [--json]
+    Retrieve top-K chunks from the corpus ranked by EC similarity
+    (vector + trigram-Jaccard) to the inputs. By default skips
+    tagless chunks since they can't contribute tag information
+    downstream; -all keeps them. INPUTS take the same shapes as
+    find. Substrate primitive for the agent-mediated ark recall
+    (future).
 
   wait PATH [--timeout S] [--json]
     Block until the tmp:// connections doc at PATH reaches a terminal
@@ -2240,7 +2253,7 @@ Embed text using the configured tag model. Prints the vector as JSON.`)
 	text := strings.Join(rest, " ")
 	withDB(func(db *ark.DB) {
 		lib := ark.NewLibrarian(db, arkDir)
-		if lib == nil {
+		if !lib.Available() {
 			fatal(fmt.Errorf("claude not on PATH"))
 		}
 		if !lib.EmbeddingAvailable() {
@@ -2291,7 +2304,7 @@ Options:
 
 	withDB(func(db *ark.DB) {
 		lib := ark.NewLibrarian(db, arkDir)
-		if lib == nil {
+		if !lib.Available() {
 			fatal(fmt.Errorf("claude not on PATH"))
 		}
 		if !lib.EmbeddingAvailable() {
@@ -3188,6 +3201,327 @@ func cmdMissing(args []string) {
 		}
 		printLines(filterPaths(paths, patterns))
 	})
+}
+
+// cmdDiscussed dispatches the `ark discussed` family
+// (add/list/clear/prune). CRC: crc-CLI.md | Seq: seq-discussed.md
+// R2650-R2654
+func cmdDiscussed(args []string) {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Fprintln(os.Stderr, `Usage: ark discussed <subcommand> [options]
+
+Per-session recall dedup state. The recall agent writes here after
+emitting tag suggestions; the substrate reads via
+ark connections recall --session SID.
+
+Subcommands:
+  add    --session SID @tag[:value] [@tag[:value] ...]
+  list   --session SID [--since DUR] [--json]
+  clear  --session SID
+  prune  [--ttl DUR]
+
+Tag syntax: bare @name matches any value (substrate-side);
+@name:value matches the exact pair.`)
+		if len(args) == 0 {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "add":
+		cmdDiscussedAdd(rest)
+	case "list":
+		cmdDiscussedList(rest)
+	case "clear":
+		cmdDiscussedClear(rest)
+	case "prune":
+		cmdDiscussedPrune(rest)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown discussed subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+// parseDiscussedTagArg parses one `@name[:value]` token and returns
+// the (tag, value) pair. The leading `@` is required. Names and
+// values may not contain `\x00`.
+// CRC: crc-CLI.md | R2654
+func parseDiscussedTagArg(arg string) (tag, value string, err error) {
+	if arg == "" || arg[0] != '@' {
+		return "", "", fmt.Errorf("tag must start with '@': %q", arg)
+	}
+	rest := arg[1:]
+	colon := strings.IndexByte(rest, ':')
+	if colon < 0 {
+		tag = rest
+	} else {
+		tag = rest[:colon]
+		value = rest[colon+1:]
+	}
+	if tag == "" {
+		return "", "", fmt.Errorf("empty tag name in %q", arg)
+	}
+	if strings.ContainsRune(tag, 0) || strings.ContainsRune(value, 0) {
+		return "", "", fmt.Errorf("tag arguments may not contain NUL: %q", arg)
+	}
+	return tag, value, nil
+}
+
+// parseDiscussedList parses a comma-separated `@t1[:v1],@t2[:v2],...`
+// string for the --discussed flag on `ark connections recall`. An
+// empty input yields an empty slice. R2654, R2655
+func parseDiscussedList(s string) ([]ark.Discussed, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]ark.Discussed, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		tag, value, err := parseDiscussedTagArg(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ark.Discussed{Tag: tag, Value: value})
+	}
+	return out, nil
+}
+
+// cmdDiscussedAdd implements `ark discussed add`. This is the writer
+// interface for the recall agent's mark-all-N policy — every tag the
+// agent emits for a target session is marked discussed regardless of
+// whether the user engages with it. The substrate itself never writes
+// RD records.
+// CRC: crc-CLI.md | Seq: seq-discussed.md#1.4 | R2650, R2662
+func cmdDiscussedAdd(args []string) {
+	fs := flag.NewFlagSet("discussed add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	session := fs.String("session", "", "session ID (required)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark discussed add --session SID @tag[:value] [@tag[:value] ...]
+
+Mark one or more tags as discussed in the given session. Re-adding an
+existing (session, tag, value) overwrites the timestamp.`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fs.Usage()
+		fatal(err)
+	}
+	if *session == "" {
+		fs.Usage()
+		fatal(fmt.Errorf("session ID required"))
+	}
+	posArgs := fs.Args()
+	if len(posArgs) == 0 {
+		fs.Usage()
+		fatal(fmt.Errorf("no tags specified"))
+	}
+	tags := make([]ark.Discussed, 0, len(posArgs))
+	for _, a := range posArgs {
+		tag, value, err := parseDiscussedTagArg(a)
+		if err != nil {
+			fatal(err)
+		}
+		tags = append(tags, ark.Discussed{Tag: tag, Value: value})
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		body := map[string]any{"session": *session, "tags": tags}
+		if err := proxyOK(client, "POST", "/discussed/add", body); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	withDB(func(db *ark.DB) {
+		for _, t := range tags {
+			if err := db.AddDiscussed(*session, t.Tag, t.Value); err != nil {
+				fatal(err)
+			}
+		}
+	})
+}
+
+// cmdDiscussedList implements `ark discussed list`. R2651
+func cmdDiscussedList(args []string) {
+	fs := flag.NewFlagSet("discussed list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	session := fs.String("session", "", "session ID (required)")
+	sinceStr := fs.String("since", "", "keep entries newer than DUR (e.g. 30m, 24h)")
+	jsonOut := fs.Bool("json", false, "emit JSON array instead of @-line markdown")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark discussed list --session SID [--since DUR] [--json]
+
+List unexpired discussed tags for one session. Lazy expiry applies on
+read using the configured [recall].discussed_ttl (default 24h).`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fs.Usage()
+		fatal(err)
+	}
+	if *session == "" {
+		fs.Usage()
+		fatal(fmt.Errorf("session ID required"))
+	}
+	var since time.Duration
+	if *sinceStr != "" {
+		d, err := time.ParseDuration(*sinceStr)
+		if err != nil {
+			fatal(fmt.Errorf("invalid --since: %w", err))
+		}
+		since = d
+	}
+
+	var entries []ark.Discussed
+	if client := serverClient(arkDir); client != nil {
+		body := map[string]any{"session": *session}
+		if *sinceStr != "" {
+			body["since"] = *sinceStr
+		}
+		if err := proxyDecode(client, "POST", "/discussed/list", body, &entries); err != nil {
+			fatal(err)
+		}
+	} else {
+		withDB(func(db *ark.DB) {
+			es, err := db.ListDiscussed(*session, since)
+			if err != nil {
+				fatal(err)
+			}
+			entries = es
+		})
+	}
+
+	if *jsonOut {
+		data, err := json.MarshalIndent(entries, "", "  ")
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Println(string(data))
+		return
+	}
+	for _, e := range entries {
+		if e.Value == "" {
+			fmt.Printf("@%s\n", e.Tag)
+		} else {
+			fmt.Printf("@%s: %s\n", e.Tag, e.Value)
+		}
+	}
+}
+
+// cmdDiscussedClear implements `ark discussed clear`. R2652
+func cmdDiscussedClear(args []string) {
+	fs := flag.NewFlagSet("discussed clear", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	session := fs.String("session", "", "session ID (required)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark discussed clear --session SID
+
+Delete every discussed-tag record under one session.`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fs.Usage()
+		fatal(err)
+	}
+	if *session == "" {
+		fs.Usage()
+		fatal(fmt.Errorf("session ID required"))
+	}
+
+	var count int
+	if client := serverClient(arkDir); client != nil {
+		var resp struct {
+			Count int `json:"count"`
+		}
+		if err := proxyDecode(client, "POST", "/discussed/clear",
+			map[string]any{"session": *session}, &resp); err != nil {
+			fatal(err)
+		}
+		count = resp.Count
+	} else {
+		withDB(func(db *ark.DB) {
+			c, err := db.ClearDiscussed(*session)
+			if err != nil {
+				fatal(err)
+			}
+			count = c
+		})
+	}
+	fmt.Fprintf(os.Stderr, "cleared %d entries\n", count)
+}
+
+// cmdDiscussedPrune implements `ark discussed prune`. R2653
+func cmdDiscussedPrune(args []string) {
+	fs := flag.NewFlagSet("discussed prune", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	ttlStr := fs.String("ttl", "", "override TTL (e.g. 24h, 7d). Empty uses [recall].discussed_ttl.")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark discussed prune [--ttl DUR]
+
+Sweep RD records across all sessions, deleting entries older than the
+TTL. Without --ttl, uses the configured [recall].discussed_ttl
+(default 24h).`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fs.Usage()
+		fatal(err)
+	}
+	var ttl time.Duration
+	if *ttlStr != "" {
+		d, err := time.ParseDuration(*ttlStr)
+		if err != nil {
+			fatal(fmt.Errorf("invalid --ttl: %w", err))
+		}
+		ttl = d
+	}
+
+	var count int
+	if client := serverClient(arkDir); client != nil {
+		body := map[string]any{}
+		if *ttlStr != "" {
+			body["ttl"] = *ttlStr
+		}
+		var resp struct {
+			Count int `json:"count"`
+		}
+		if err := proxyDecode(client, "POST", "/discussed/prune", body, &resp); err != nil {
+			fatal(err)
+		}
+		count = resp.Count
+	} else {
+		withDB(func(db *ark.DB) {
+			c, err := db.PruneDiscussed(ttl)
+			if err != nil {
+				fatal(err)
+			}
+			count = c
+		})
+	}
+	fmt.Fprintf(os.Stderr, "pruned %d entries\n", count)
 }
 
 func cmdDismiss(args []string) {
@@ -5320,6 +5654,47 @@ func reorderArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
+// reorderArgsForFlagSet reorders args so flags precede positionals,
+// using fs to identify boolean flags (which don't consume the next
+// argument). Required when a command mixes bool flags and value flags
+// with interleaved positionals — the simpler reorderArgs heuristic
+// (treat any non-dash follower as a value) eats a positional after a
+// bool flag.
+func reorderArgsForFlagSet(fs *flag.FlagSet, args []string) []string {
+	type boolFlag interface{ IsBoolFlag() bool }
+	isBool := func(name string) bool {
+		f := fs.Lookup(name)
+		if f == nil {
+			return false
+		}
+		bf, ok := f.Value.(boolFlag)
+		return ok && bf.IsBoolFlag()
+	}
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			positional = append(positional, a)
+			continue
+		}
+		flags = append(flags, a)
+		// Strip leading dashes and any =value suffix to get the name.
+		name := strings.TrimLeft(a, "-")
+		if eq := strings.Index(name, "="); eq >= 0 {
+			continue // value embedded; no follow-up consumption
+		}
+		if isBool(name) {
+			continue // bool flag stands alone
+		}
+		// Value flag — pull in the next arg.
+		if i+1 < len(args) {
+			flags = append(flags, args[i+1])
+			i++
+		}
+	}
+	return append(flags, positional...)
+}
+
 func parseAliases(s string) map[byte]byte {
 	if s == "" {
 		return nil
@@ -6508,4 +6883,199 @@ Requires a running server.`)
 	if result.FromScratch {
 		fmt.Println("  from scratch:  true (bookmark was zero)")
 	}
+}
+
+// cmdConnectionsRecall is the top-level entry: thin wrapper that
+// funnels any runConnectionsRecall error through fatal. The bulk of
+// the logic lives in runConnectionsRecall so tests can drive failure
+// paths without swapping fatal.
+// CRC: crc-CLI.md | Seq: seq-recall.md#1.1 | R2617, R2618, R2619, R2627, R2630, R2631, R2632, R2633, R2634, R2641, R2646, R2647
+func cmdConnectionsRecall(args []string) {
+	if err := runConnectionsRecall(args, os.Stdout); err != nil {
+		fatal(err)
+	}
+}
+
+// runConnectionsRecall implements the `ark connections recall`
+// substrate command: parses flags, optionally proxies to a running
+// server, or runs in-process with the appropriate fallback selected
+// by ark.toml's tag_model setting. Writes markdown or JSON to out;
+// returns errors instead of exiting. The in-process fallback
+// constructs a Librarian unconditionally, relying on NewLibrarian's
+// no-claude contract (R2642).
+// CRC: crc-CLI.md | Seq: seq-recall.md#1.1 | R2617, R2618, R2619, R2627, R2630, R2631, R2632, R2633, R2634, R2641, R2642, R2646, R2647
+func runConnectionsRecall(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("connections recall", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // we own the error path
+	k := fs.Int("k", 20, "top-K chunks (default 20, clamped [1, 200])")
+	noContent := fs.Bool("no-content", false, "sets IncludeContent to false")
+	jsonOut := fs.Bool("json", false, "emits JSON result")
+	all := fs.Bool("all", false, "keep tagless chunks in results (default drops them)")
+	typeFlag := fs.String("type", "", "input type: chunk | text (default: auto-detect)")
+	session := fs.String("session", "", "load the session's discussed-tag set into the exclusion set")
+	discussedFlag := fs.String("discussed", "", "comma-separated @t[:v] exclusions (unioned with --session set)")
+
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections recall INPUTS... [options]
+
+Retrieve the top-K chunks from the corpus relevant to a given set of inputs.
+INPUTS may mix:
+  NNNNNN          chunk ID (decimal)
+  PATH:N-M        file path with line range (1-based inclusive)
+  PATH:N          file path, single line
+  anything else   bare text, embedded on the fly
+
+Without --type, each input is auto-detected. With --type chunk, every
+input is treated as a chunk reference (chunkID or path:locator).
+With --type text, every input is taken literally.
+
+By default, chunks with no tags are dropped from the result (a
+chunk-similarity primitive that returns only tag-bearing chunks is
+the right shape for downstream tag-recall consumers). Pass -all to
+keep tagless chunks.
+
+Options:`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		fs.Usage()
+		return err
+	}
+	posArgs := fs.Args()
+	if len(posArgs) == 0 {
+		fs.Usage()
+		return fmt.Errorf("no inputs given")
+	}
+
+	clampedK := *k
+	if clampedK <= 0 {
+		clampedK = 20
+	}
+	if clampedK > 200 {
+		clampedK = 200
+	}
+
+	inputs, err := parseConnectionsInputs(posArgs, *typeFlag)
+	if err != nil {
+		return err
+	}
+
+	discussed, err := parseDiscussedList(*discussedFlag)
+	if err != nil {
+		return err
+	}
+
+	opts := ark.RecallOpts{
+		K:              clampedK,
+		IncludeContent: !*noContent,
+		KeepTagless:    *all,
+		Session:        *session,
+		Discussed:      discussed,
+	}
+
+	if client := serverClient(arkDir); client != nil {
+		body := map[string]any{
+			"inputs": inputs,
+			"opts":   opts,
+		}
+		var result ark.RecallResult
+		if err := proxyDecode(client, "POST", "/recall", body, &result); err != nil {
+			return err
+		}
+		return printRecallResult(out, &result, *jsonOut)
+	}
+
+	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+	if err != nil {
+		return err
+	}
+
+	// R2632, R2633, R2646: server not running — choose a fallback
+	// based on tag_model. File exists → ask the user to start the
+	// server. File missing → gripe loudly so typos surface. Unset →
+	// silently degrade to in-process trigram-only.
+	if cfg.TagModel != "" {
+		modelPath := filepath.Join(arkDir, cfg.TagModel)
+		switch _, statErr := os.Stat(modelPath); {
+		case statErr == nil:
+			return fmt.Errorf("server not running; model configured. Please start the server with: ark serve")
+		case os.IsNotExist(statErr):
+			return fmt.Errorf("configured tag_model not found at %s", modelPath)
+		default:
+			return statErr
+		}
+	}
+
+	var runErr error
+	withDB(func(db *ark.DB) {
+		lib := ark.NewLibrarian(db, arkDir)
+		res, err := lib.Recall(inputs, opts)
+		if err != nil {
+			runErr = err
+			return
+		}
+		runErr = printRecallResult(out, res, *jsonOut)
+	})
+	return runErr
+}
+
+// printRecallResult writes the RecallResult to out in markdown or JSON.
+// CRC: crc-CLI.md | R2635, R2636, R2637, R2638, R2645
+func printRecallResult(out io.Writer, res *ark.RecallResult, jsonOut bool) error {
+	if jsonOut {
+		data, err := json.MarshalIndent(res, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+
+	if res.Warning != "" {
+		fmt.Fprintf(out, "@recall-warning: %s\n\n", res.Warning)
+	}
+
+	fmt.Fprintln(out, "## Chunks")
+	if len(res.Chunks) == 0 {
+		fmt.Fprintln(out, "\n_no results_")
+		return nil
+	}
+
+	for _, chunk := range res.Chunks {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "- @chunk-id: %d\n", chunk.ChunkID)
+		fmt.Fprintf(out, "  @chunk-path: %s\n", chunk.Path)
+		fmt.Fprintf(out, "  @chunk-range: %s\n", chunk.Range)
+		fmt.Fprintf(out, "  @chunk-score: %.2f\n", chunk.Score)
+		fmt.Fprintf(out, "  @chunk-evidence-vector-ec: %.2f\n", chunk.PerSubstrate.VectorEC)
+		fmt.Fprintf(out, "  @chunk-evidence-trigram-ec: %.2f\n", chunk.PerSubstrate.TrigramEC)
+
+		// R2645: @chunk-tags lists names only; each tag with a non-
+		// empty value emits a sub-list item whose value is the literal
+		// "name: value" so it remains a parseable ark tag whose value
+		// runs to end of line — no quoting acrobatics.
+		names := make([]string, 0, len(chunk.Tags))
+		for _, t := range chunk.Tags {
+			names = append(names, t.Tag)
+		}
+		fmt.Fprintf(out, "  @chunk-tags: %s\n", strings.Join(names, ", "))
+		for _, t := range chunk.Tags {
+			if t.Value != "" {
+				fmt.Fprintf(out, "  - @chunk-tag-value: %s: %s\n", t.Tag, t.Value)
+			}
+		}
+
+		if chunk.Content != "" {
+			lines := strings.Split(chunk.Content, "\n")
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			for _, line := range lines {
+				fmt.Fprintf(out, "  > %s\n", line)
+			}
+		}
+	}
+	return nil
 }

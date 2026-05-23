@@ -184,6 +184,10 @@ const (
 	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
 	prefixSerial        = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
 	prefixHotCorrelation = "HC" // R2226: tag → top-K chunks cosine cache (HC + tag + chunkid:8 → score:float64)
+	// prefixDiscussed is the first occupant of the `R` recall-feature
+	// namespace; future R* records (proposals, processed-stamps, etc.)
+	// follow the same two-letter convention. R2648, R2649
+	prefixDiscussed = "RD"
 )
 
 // Reserved tag names used by the routing/identity machinery.
@@ -3235,6 +3239,177 @@ func (s *Store) RemovePageContents(fileID uint64) error {
 			return cur.Del(0)
 		})
 	})
+}
+
+// --- Recall Discussed-tag (RD) records ---
+
+// Discussed is one (tag, value, timestamp) triple from the RD range.
+// CRC: crc-Store.md | R2650, R2651
+type Discussed struct {
+	Tag       string    `json:"tag"`
+	Value     string    `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// discussedKey builds an RD prefix key: "RD" + session + \x00 + tag + \x00 + value.
+// A bare-tag entry (value == "") encodes with an empty trailing value
+// segment — the key ends `... + \x00 + tag + \x00`. The `RD` prefix
+// is the first occupant of the `R` recall-feature namespace.
+// CRC: crc-Store.md | R2648, R2649
+func discussedKey(session, tag, value string) []byte {
+	key := make([]byte, 0, len(prefixDiscussed)+len(session)+1+len(tag)+1+len(value))
+	key = append(key, prefixDiscussed...)
+	key = append(key, session...)
+	key = append(key, 0)
+	key = append(key, tag...)
+	key = append(key, 0)
+	key = append(key, value...)
+	return key
+}
+
+// discussedSessionPrefix returns the range-scan prefix for one session.
+func discussedSessionPrefix(session string) []byte {
+	prefix := make([]byte, 0, len(prefixDiscussed)+len(session)+1)
+	prefix = append(prefix, prefixDiscussed...)
+	prefix = append(prefix, session...)
+	prefix = append(prefix, 0)
+	return prefix
+}
+
+// parseDiscussedKey extracts the (session, tag, value) triple from an
+// RD key. Returns false if the key isn't a well-formed RD record. R2648
+func parseDiscussedKey(k []byte) (session, tag, value string, ok bool) {
+	if !bytes.HasPrefix(k, []byte(prefixDiscussed)) {
+		return "", "", "", false
+	}
+	rest := k[len(prefixDiscussed):]
+	sep1 := bytes.IndexByte(rest, 0)
+	if sep1 < 0 {
+		return "", "", "", false
+	}
+	session = string(rest[:sep1])
+	rest = rest[sep1+1:]
+	sep2 := bytes.IndexByte(rest, 0)
+	if sep2 < 0 {
+		return "", "", "", false
+	}
+	tag = string(rest[:sep2])
+	value = string(rest[sep2+1:])
+	return session, tag, value, true
+}
+
+// AddDiscussed writes one RD record stamped with NOW. Re-adding an
+// existing (session, tag, value) overwrites the timestamp. The value
+// is exactly 8 bytes (big-endian uint64 unix-nanos), matching the RD
+// record layout.
+// CRC: crc-Store.md | R2648, R2650
+func (s *Store) AddDiscussed(session, tag, value string) error {
+	key := discussedKey(session, tag, value)
+	val := make([]byte, 8)
+	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, key, val, 0)
+	})
+}
+
+// ListDiscussed range-scans `RD + session + \x00` and returns the
+// unexpired entries. `ttl == 0` disables expiry. `since > 0` keeps
+// only entries newer than `NOW - since`. Malformed values (not 8
+// bytes) are silently skipped — see R2663.
+// CRC: crc-Store.md | R2651, R2659, R2663
+func (s *Store) ListDiscussed(session string, since, ttl time.Duration) ([]Discussed, error) {
+	if session == "" {
+		return nil, nil
+	}
+	prefix := discussedSessionPrefix(session)
+	now := time.Now()
+	var entries []Discussed
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			if len(v) != 8 {
+				return nil // R2663
+			}
+			_, tag, value, ok := parseDiscussedKey(k)
+			if !ok {
+				return nil
+			}
+			ts := time.Unix(0, int64(binary.BigEndian.Uint64(v)))
+			if ttl > 0 && ts.Add(ttl).Before(now) {
+				return nil
+			}
+			if since > 0 && ts.Before(now.Add(-since)) {
+				return nil
+			}
+			entries = append(entries, Discussed{Tag: tag, Value: value, Timestamp: ts})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Tag != entries[j].Tag {
+			return entries[i].Tag < entries[j].Tag
+		}
+		return entries[i].Value < entries[j].Value
+	})
+	return entries, nil
+}
+
+// ClearDiscussed deletes every RD record under one session.
+// Returns the deleted count.
+// CRC: crc-Store.md | R2652
+func (s *Store) ClearDiscussed(session string) (int, error) {
+	if session == "" {
+		return 0, nil
+	}
+	prefix := discussedSessionPrefix(session)
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			deleted++
+			return nil
+		})
+	})
+	return deleted, err
+}
+
+// PruneDiscussed sweeps RD records across all sessions, deleting
+// entries older than `ttl` (or, when `ttl == 0`, deletes nothing —
+// "0" means never expire, matching the [recall].discussed_ttl
+// convention). Returns the deleted count.
+// CRC: crc-Store.md | R2653, R2659
+func (s *Store) PruneDiscussed(ttl time.Duration) (int, error) {
+	if ttl <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-ttl)
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixDiscussed), func(cur *lmdb.Cursor, _, v []byte) error {
+			if len(v) != 8 {
+				// Treat malformed as expired too — same outcome as lazy
+				// read, but here we actually clean up. R2663
+				if err := cur.Del(0); err != nil {
+					return err
+				}
+				deleted++
+				return nil
+			}
+			ts := time.Unix(0, int64(binary.BigEndian.Uint64(v)))
+			if ts.Before(cutoff) {
+				if err := cur.Del(0); err != nil {
+					return err
+				}
+				deleted++
+			}
+			return nil
+		})
+	})
+	return deleted, err
 }
 
 // --- float32 ↔ bytes conversion ---

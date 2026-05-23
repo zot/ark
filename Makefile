@@ -74,8 +74,24 @@ $(FRICTIONLESS_BIN):
 	@echo "Building frictionless..."
 	@cd $(FRICTIONLESS_DIR); $(MAKE) build
 
+# Source files whose edits should invalidate the cache. find/wildcard
+# are evaluated at parse time, so adding a new file requires a fresh
+# `make` invocation — but edits to existing files are picked up.
+CACHE_SRC := \
+	$(shell find apps/ark -type f 2>/dev/null) \
+	$(shell find install -type f 2>/dev/null) \
+	.claude/skills/ark/SKILL.md \
+	.claude/skills/ui/SKILL.md \
+	.claude/agents/ark-franklin.md \
+	.claude/agents/ark-messenger.md \
+	.claude/agents/ark-searcher.md \
+	$(wildcard markdown-editor/dist/*) \
+	$(wildcard ark-search/dist/*) \
+	$(wildcard pdf-chunk/dist/*) \
+	$(wildcard tag-overview/dist/*)
+
 #@note: need to scrape emacs backups out of $(CACHE_DIR)/apps/ark after copy
-$(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN)
+$(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@echo "Extracting frictionless assets..."
 	$(FRICTIONLESS_BIN) extract $(CACHE_DIR)
 	@echo "Layering ark app..."

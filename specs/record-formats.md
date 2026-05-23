@@ -27,22 +27,23 @@ change them, we need to update the CLI code so it's up-to-date.
 
 | Prefix | Record class        | Key shape                                         | Value                                   |
 |--------|---------------------|---------------------------------------------------|-----------------------------------------|
-| `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
-| `F`    | Chunk-tag           | `F` + chunkid varint + tagname                    | uint32 count + optional tvids           |
-| `V`    | Tag value           | `V` + tag + `\x00` + value + `\x00` + tvid varint | packed chunkid varints (multi-set)      |
-| `X`    | @ext routing        | `X` + tvid_ext varint + target_chunkid varint     | packed routed_tvid varints              |
 | `D`    | Tag definition      | `D` + tagname + fileid:8                          | description bytes                       |
-| `EV`   | Tag-value embedding | `EV` + tvid varint                                | float32 vector (3072 bytes)             |
+| `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
 | `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
-| `EF`   | File centroid       | `EF` + fileID varint                              | float32 sum (3072 bytes) + uint32 count |
 | `ED`   | Tag-def embedding   | `ED` + tagname + fileid:8                         | float32 vector (3072 bytes)             |
-| `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
+| `EF`   | File centroid       | `EF` + fileID varint                              | float32 sum (3072 bytes) + uint32 count |
+| `EV`   | Tag-value embedding | `EV` + tvid varint                                | float32 vector (3072 bytes)             |
+| `F`    | Chunk-tag           | `F` + chunkid varint + tagname                    | uint32 count + optional tvids           |
 | `HC`   | Hot correlations    | `HC` + tagname + chunkid:8                        | float64 score (8 bytes)                 |
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
-| `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
-| `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
 | `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
+| `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
+| `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
+| `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
+| `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
+| `V`    | Tag value           | `V` + tag + `\x00` + value + `\x00` + tvid varint | packed chunkid varints (multi-set)      |
+| `X`    | @ext routing        | `X` + tvid_ext varint + target_chunkid varint     | packed routed_tvid varints              |
 
 Encoding conventions used throughout:
 - **fileid:8** — 8-byte big-endian `uint64`.
@@ -421,6 +422,34 @@ during `ark init` and by config-mutating commands.
   (currently PDFs). One record per (file, page). Authored by the
   PDF chunker; consumed by the PDF chunk-element viewer. Detail
   spec: `pdf-chunk-element.md`.
+
+## Recall Records (R*)
+
+`R` is reserved as the recall-feature namespace. Future records
+under this prefix carry emission logs, per-session configuration,
+trigger state, and similar recall-only data. Currently:
+
+### RD — Recall discussed-tag
+
+- **Key:** `"RD"` + session-bytes + `\x00` + tagname + `\x00` + value.
+- **Value:** 8 bytes — unix nanoseconds (big-endian `uint64`)
+  recording when the entry was written.
+- **Semantic:** per-session dedup state for the recall pipeline.
+  An entry marks `(session, tag, value)` as "already covered in
+  this conversation" so the substrate can strip it from candidate
+  chunks on subsequent recall calls. A bare-tag entry (no value)
+  is encoded with an empty value segment; matched by the
+  substrate as "any value under this name." TTL is applied lazily
+  on read; default 24 hours, configured via `[recall].discussed_ttl`
+  in `ark.toml`.
+- **Lifecycle:** the recall agent writes after emitting a batch of
+  tag suggestions. `ark discussed add/list/clear/prune` operate
+  directly. `clear` drops all entries for one session; `prune`
+  sweeps across all sessions.
+- **Cross-references:** `session-bytes` is variable-length
+  (Claude Code session UUID, hex), `\x00`-separated from tagname.
+  tagname and value follow the same no-`\x00` constraint as V
+  records. Detail spec: `discussed-tags.md`.
 
 ## Schema Version Protocol
 

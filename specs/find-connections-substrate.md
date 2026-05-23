@@ -155,10 +155,34 @@ configurable).
 ## Score Normalization
 
 Vector cosines are in `[-1, 1]`; we use `(cos + 1) / 2` to map
-to `[0, 1]`. Trigram scores are normalized to `[0, 1]` via
-microfts2's existing fuzzy-match scoring (already documented
-in `specs/fuzzy-search.md`). The four substrate scores are
-directly comparable on a single `[0, 1]` scale.
+to `[0, 1]`.
+
+Trigram scores are computed as **Jaccard similarity over
+trigram sets**:
+
+    score = |Tq ∩ Tc| / |Tq ∪ Tc|
+
+where `Tq` is the trigram set of the input text and `Tc` is the
+trigram set of the candidate chunk (or tag-def) content,
+extracted via microfts2's UTF-8-aware trigram engine. Jaccard
+yields an absolute `[0, 1]` score directly comparable to the
+vector substrate.
+
+To avoid paying for a chunk-content read on candidates that
+share only a stray trigram with the input, the pass first
+checks **query-coverage**:
+
+    coverage = |Tq ∩ Tc| / |Tq|
+
+and short-circuits to score 0 when `coverage <
+trigramCoverageFloor` (default `0.1`).
+
+This replaces the earlier per-input `score / maxScore`
+normalization, which made every input's top trigram hit equal
+1.0 regardless of actual similarity — so the cross-substrate
+max merge was dominated by whichever side had matched anything.
+With Jaccard, the four substrate scores are directly
+comparable on a single `[0, 1]` scale.
 
 ## Empty / Degenerate Inputs
 

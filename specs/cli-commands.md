@@ -26,6 +26,7 @@ name, so always use the absolute path.
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
 | `connections`      | `connections SUBCOMMAND ...`                                                                                          | required                 | substrate + sidecar CLI (subcommands below)          |
 | `cp`               | `cp PATTERN DEST-DIR`                                                                                                | n/a                      | bundled binary only; alias of `bundle cp`            |
+| `discussed`        | `discussed SUBCOMMAND ...`                                                                                            | optional                 | per-session recall dedup state (subcommands below)   |
 | `dismiss`          | `dismiss PATTERN...`                                                                                                 | optional                 | drops M records                                      |
 | `embed`            | `embed SUBCOMMAND ...`                                                                                               | none                     | subcommands below                                    |
 | `fetch`            | `fetch [--wrap N] PATH...`                                                                                           | tmp:// only              | reads file content from index                        |
@@ -321,6 +322,9 @@ ark connections find INPUTS... [--mode normal|turbo] [--k N]
                               [--purpose curate|recall] [--timeout S]
                               [--type chunk|text]
                               [--wait] [--json]
+ark connections recall INPUTS... [--k N] [-all] [--no-content]
+                                 [--type chunk|text] [--json]
+                                 [--session SID] [--discussed @t[:v][,@t[:v]...]]
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -353,6 +357,22 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   Returns the `tmp://connections/<id>.md` path on stdout. With
   `--wait`, blocks until `@connections-status` is terminal and
   prints the body. With `--json`, emits the parsed projection.
+- `recall` is the chunk-similarity substrate primitive (see
+  [recall.md](recall.md)). Same input forms as `find`. Returns the
+  top-K chunks ranked by EC similarity (vector + trigram-Jaccard),
+  with their tags + per-substrate evidence. Output is a baby-food
+  markdown stencil (or JSON with `--json`); not a `tmp://` doc.
+  By default drops tagless chunks since they can't contribute tag
+  information to downstream tag-shaped consumers; `-all` keeps
+  them. `--no-content` omits per-chunk content. `--session SID`
+  reads the session's recall-discussed tags (RD records) and
+  strips them from candidate chunks; `--discussed` carries an
+  explicit caller-supplied list and unions with the session
+  list. Per-chunk filter is permissive — a chunk survives if it
+  has any non-discussed tag left. See
+  [discussed-tags.md](discussed-tags.md) for the dedup story and
+  TTL semantics. The full agent-mediated `ark recall` feature on
+  top of this substrate is still in design.
 - `wait PATH` blocks until terminal. On `--timeout SEC` expiry,
   exits non-zero with the last-seen status on stderr.
 - `show PATH` parses the persisted doc and projects fields. Without
@@ -377,6 +397,35 @@ old `--wait` / `--fetch` / `--result` / `--error` flags):**
 
 The removed flags print a one-line migration hint pointing at the
 new subcommand name and exit with status 2.
+
+### `discussed` — recall dedup state
+
+```
+ark discussed add    --session SID @tag[:value] [@tag[:value] ...]
+ark discussed list   --session SID [--since DUR] [--json]
+ark discussed clear  --session SID
+ark discussed prune  [--ttl DUR]
+```
+
+Per-session "the conversation has already covered this" store
+backing the recall substrate's `--session` flag. The recall
+agent calls `discussed add` after emitting a batch of tag
+suggestions; the substrate skips those tags on subsequent
+recall calls for the same session. TTL applied lazily on read
+(default 24h, configurable via `[recall].discussed_ttl` in
+`ark.toml`); `prune` is the explicit sweep.
+
+| Subcommand | Flags / args                                  | Behavior                                                                 |
+|------------|-----------------------------------------------|--------------------------------------------------------------------------|
+| `add`      | `--session SID @t[:v]...`                     | Write one RD record per tag, stamped with `NOW`                          |
+| `list`     | `--session SID [--since DUR] [--json]`        | Range-scan, drop expired, print one per line (or JSON)                   |
+| `clear`    | `--session SID`                               | Delete every RD record under one session                                 |
+| `prune`    | `[--ttl DUR]`                                 | Sweep across all sessions; drop entries older than TTL                   |
+
+Tag arguments follow ark tag syntax: bare `@name` matches any
+value (substrate-side), `@name:value` matches the exact pair.
+Server-proxy when available; cold-start via `withDB` otherwise.
+Spec: [discussed-tags.md](discussed-tags.md).
 
 ### `embed` — embedding operations
 

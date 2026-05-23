@@ -146,7 +146,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`
 - [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
-- [x] crc-Server.md → `server.go`, `watcher.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
@@ -158,6 +158,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
+- [x] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -180,7 +181,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
 - [x] seq-filter-stack.md → `cmd/ark/main.go`, `server.go`, `search.go`
-- [x] crc-Librarian.md → `librarian.go`, `connections.go`
 - [x] crc-PDFChunker.md → `pdfchunker.go`
 - [x] seq-spectral-expand.md → `librarian.go`, `server.go`
 - [x] seq-tag-embed.md → `librarian.go`, `store.go`, `server.go`
@@ -199,6 +199,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
 - [x] seq-find-connections.md → `connections.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-find-connections-substrate.md → `connections.go`, `connections_substrate.go`, `server.go`, `cmd/ark/main.go`
+- [x] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
+- [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 
@@ -256,7 +258,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TmpSubscription.md → `pubsub_test.go`, `tmp_subscription_test.go`
 - [x] test-FindConnections.md → `connections_test.go`
 - [x] test-FindConnectionsSubstrate.md → `connections_substrate_test.go`
-- [ ] test-ConnectionsCLI.md → `cmd/ark/main_test.go`, `cmd/ark/connections_test.go`
+- [x] test-Recall.md → `recall_test.go`
+- [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
+- [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 
@@ -570,3 +574,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O111: R2579 single-shared-View-txn not implemented: substrate helpers (EmbedQuery, ReadChunkEmbedding, ScanTagDefEmbeddings, ListTagDefs, SearchChunks, SearchFuzzy) each open their own txn. Refactor for a single shared txn once profiling justifies the perf cost.
 - [ ] O112: 1G doc-body migration: apps/ark/curation.lua still parses legacy ## Themes / ## Shared Tag Candidates sections. The renderer emits both shapes in turbo mode (R2597) but the duplicate emission should be removed after a /ui-thorough pass switches the Lua workshop to the unified ## Proposals section.
 - [ ] O113: ark-connections sidecar guard script (.claude/agents/ark-connections.md or equivalent) needs updating to allow sidecar-wait/fetch/result/error positional invocations; old --wait/--fetch/--result/--error flags now exit non-zero.
+- T92: R2587 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
+- T93: R2621 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
+- [ ] O114: discussed-tags: deferred tests from test-Discussed.md — Lua sys.recall + sys.discussed bridge tests, ark.toml TTL config defaults/override/invalid warning, substrate-is-read-only-on-RD snapshot test. Behavior is exercised end-to-end via Go-level tests; add Lua tests when test-Recall.md's Lua harness pattern earns another instance.
