@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2683
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -148,6 +148,45 @@ ark-level settings, and tag tracking.
 - PruneDiscussed(ttl time.Duration) int: full-scan RD prefix, delete
   expired entries across all sessions, return deleted count. (R2653,
   R2659)
+- WriteDerivedProposal(txn *lmdb.Txn, chunkID uint64, tagname string)
+  error: write or increment RC[chunkid + tagname]. If the record
+  exists, increment its 8-byte big-endian uint64 tally; otherwise
+  write tally=1. Called inside the derivation pass's batched write
+  txn. (R2664, R2674, R2675)
+- WriteDerivedFreshness(txn *lmdb.Txn, chunkID, serial uint64) error:
+  write RF[chunkid] = varint(serial). Same batched txn as the RC
+  writes. (R2666, R2669, R2675)
+- ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (serial uint64,
+  found bool, err error): read RF[chunkid]; missing or malformed
+  value returns (0, false, nil) — derivation treats missing as
+  "stale, process this chunk." (R2666, R2669, R2681, R2682)
+- MaxEDSerial() (uint64, error): return `max RecordSerial(ED, *)`
+  across the entire ED prefix via WalkRecordsSinceSerial(ED, 0,
+  ...). Cheap with the existing S substrate. Used once per recall
+  call to establish the freshness comparator for the batch. (R2669)
+- HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string)
+  (bool, error): existence-only probe of RJ[chunkid + tagname]. Used
+  by both the derivation pass (filter candidates) and
+  Store.DerivedProposals (defense-in-depth filter on reads).
+  (R2665, R2673, R2678)
+- DerivedProposals(chunkID uint64) ([]DerivedProposal, error): one
+  View txn. Range-scan `"RC" + chunkid varint`, decode each entry's
+  tagname and 8-byte big-endian tally, skip entries shadowed by
+  an RJ record. Return slice sorted by tally descending. Reader
+  treats RC values that are not exactly 8 bytes as tally=0.
+  (R2664, R2678, R2681)
+- AcceptDerived(chunkID uint64, tagname, value string) (tvid uint64,
+  err error): one write txn through the actor. Delete
+  `RC[chunkid + tagname]`. Resolve or allocate tvid for the
+  (tagname, value) pair. Append chunkID via the existing F/V
+  attach path (the per-chunk append path, same code that handles
+  inline tag writes). Empty value produces a bare-tag attach.
+  Returns the resolved tvid. (R2679)
+- RejectDerived(chunkID uint64, tagname string) error: one write
+  txn through the actor. Delete `RC[chunkid + tagname]`. Write
+  `RJ[chunkid + tagname]` with 8-byte big-endian unix nanoseconds
+  (NOW). Stable — RJ records persist until external removal (no
+  TTL in v1). (R2665, R2680, R2683)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
@@ -316,6 +355,30 @@ ark-level settings, and tag tracking.
 - Value: string — empty means bare-name entry
 - Timestamp: time.Time — derived from the 8-byte RD value
 
+### Derived Tag Records (RC/RJ/RF, R2664-R2666, R2681-R2683)
+- RC key: `"RC" + chunkid varint + tagname` (raw bytes, `[\w][\w\-.]*`,
+  no control bytes). Value: 8 bytes, big-endian `uint64` tally. One
+  record per (chunkid, tagname) statistical candidate; bare-tag in
+  the v1 statistical slice. Malformed value → tally=0 on read. (R2664,
+  R2681)
+- RJ key: `"RJ" + chunkid varint + tagname` — mirrors RC. Value: 8
+  bytes, big-endian `uint64` unix nanoseconds; presence (not the
+  timestamp value) blocks re-proposal. Sticky in v1. (R2665, R2683)
+- RF key: `"RF" + chunkid varint`. Value: varint `uint64` — the
+  `max RecordSerial(ED, *)` observed at last derivation pass.
+  Missing → serial 0 on read (force re-process). Malformed varint
+  → serial 0. Cleaned up lazily via existing chunkid-orphan
+  callback alongside EC/F. (R2666, R2681, R2682)
+- The `R` prefix carries the recall feature namespace; `RP`/`RPE`/`RR`
+  letters are reserved for LLM-driven definition proposals (not in
+  this slice — see ARK-STATE item 1).
+
+### DerivedProposal (R2678)
+- ChunkID: uint64
+- Tagname: string
+- Tally: uint64 — number of derivation passes that have proposed
+  this (chunkid, tagname)
+
 ### Page Content Records (R1720-R1725)
 - WritePageContent(fileID uint64, page uint32, blob []byte): write
   PC[fileID][page] record. Key: `PC` + varint(fileID) + varint(page).
@@ -407,3 +470,4 @@ ark-level settings, and tag tracking.
 - seq-chunk-embed.md
 - seq-tvid-overlay.md
 - seq-discussed.md
+- seq-derived-tags.md

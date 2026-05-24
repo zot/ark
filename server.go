@@ -3411,6 +3411,11 @@ func (srv *Server) registerLuaFunctions() {
 						opts.Discussed = append(opts.Discussed, d)
 					})
 				}
+				// R2677: --propose equivalent — run the statistical
+				// derivation pass and surface proposedTags on result chunks.
+				if v, ok := optsTbl.RawGetString("propose").(lua.LBool); ok {
+					opts.Propose = bool(v)
+				}
 			}
 			if srv.librarian == nil {
 				L.Push(lua.LNil)
@@ -3454,6 +3459,16 @@ func (srv *Server) registerLuaFunctions() {
 
 				if chunk.Content != "" {
 					L.SetField(chunkTbl, "content", lua.LString(chunk.Content))
+				}
+				// R2686: derived-tag candidate names, similarity-desc order.
+				// Present only when opts.propose was set and the chunk has
+				// at least one accumulated RC record.
+				if len(chunk.ProposedTags) > 0 {
+					propTbl := L.NewTable()
+					for _, name := range chunk.ProposedTags {
+						propTbl.Append(lua.LString(name))
+					}
+					L.SetField(chunkTbl, "proposedTags", propTbl)
 				}
 				chunksTbl.Append(chunkTbl)
 			}

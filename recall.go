@@ -4,14 +4,17 @@ package ark
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/bmatsuo/lmdb-go/lmdb"
 )
 
 // RecallOpts configures top-K retrieval, content loading, and the
 // tagless-chunk filter.
-// CRC: crc-Librarian.md | R2627, R2647, R2655, R2660
+// CRC: crc-Librarian.md | R2627, R2647, R2655, R2660, R2667, R2668, R2677
 type RecallOpts struct {
 	K              int  `json:"k"`
 	IncludeContent bool `json:"includeContent"`
@@ -35,6 +38,13 @@ type RecallOpts struct {
 	// records (lazy expiry). Zero falls back to the [recall]
 	// discussed_ttl default (24h). R2659
 	DiscussedTTL time.Duration `json:"discussedTtl,omitempty"`
+	// Propose runs the statistical derivation pass on the substrate's
+	// full scored chunk set as a side effect. Surviving candidates
+	// land as RC records; each processed chunk's RF stamp advances to
+	// the current max ED serial. The caller's surfaced result is not
+	// changed except by the ProposedTags enrichment on RecalledChunk.
+	// R2667, R2668
+	Propose bool `json:"propose,omitempty"`
 }
 
 // discussedExclusion is the per-chunk lookup table built from the
@@ -109,7 +119,7 @@ type RecallResult struct {
 }
 
 // RecalledChunk is one retrieved chunk with similarity scores and metadata.
-// CRC: crc-Librarian.md | R2624
+// CRC: crc-Librarian.md | R2624, R2686
 type RecalledChunk struct {
 	ChunkID      uint64         `json:"chunkID"`
 	Path         string         `json:"path"`
@@ -118,6 +128,11 @@ type RecalledChunk struct {
 	PerSubstrate ChunkSubstrate `json:"perSubstrate"`
 	Tags         []RecallTag    `json:"tags"`
 	Content      string         `json:"content,omitempty"`
+	// ProposedTags carries derived-tag candidates for this chunk,
+	// ordered by chunk-EC ↔ tag-ED cosine similarity desc. Populated
+	// only when RecallOpts.Propose is true and the chunk has at least
+	// one accumulated RC record. R2684, R2685, R2686
+	ProposedTags []string `json:"proposedTags,omitempty"`
 }
 
 // RecallTag is a tag name + value pair for JSON serialization.
@@ -132,6 +147,32 @@ type RecallTag struct {
 type ChunkSubstrate struct {
 	VectorEC  float64 `json:"vectorEc"`
 	TrigramEC float64 `json:"trigramEc"`
+}
+
+// chunkScoresAcc is the per-chunk accumulator built up across the
+// substrate passes inside Recall. Internal to the recall package
+// flow; promoted to package level so the derivation pass can read
+// it (R2668).
+type chunkScoresAcc struct {
+	vectorEC  float64
+	trigramEC float64
+	// tags is the post-filter tag list (discussed entries stripped).
+	// Populated lazily on first encounter so the result-build phase
+	// doesn't re-query AllTagsForChunk. Nil means "not yet looked
+	// up" — only possible when the exclusion set is inactive AND
+	// effective KeepTagless is true (admit short-circuited the lookup).
+	tags []TagValue
+	// hadTags records whether the chunk originally had any tags
+	// (pre-exclusion). Used by the result-build phase's caller-
+	// surfacing filter when admitTagless was forced true by Propose.
+	// R2668
+	hadTags bool
+	// alreadyOn is the set of tagnames present on the chunk via any
+	// source (inline F-records or @ext routing), pre-discussed-
+	// exclusion. Populated only when Propose=true; used by the
+	// derivation pass to filter candidates already attached
+	// (R2671, R2672 unified via AllTagsForChunk's union).
+	alreadyOn map[string]bool
 }
 
 // Recall retrieves the top-K chunks from the corpus relevant to a given set of inputs.
@@ -182,49 +223,58 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	}
 	exclusion := newDiscussedExclusion(discussed)
 
-	type chunkScoresAcc struct {
-		vectorEC  float64
-		trigramEC float64
-		// tags is the post-filter tag list (discussed entries stripped).
-		// Populated lazily on first encounter so the result-build phase
-		// doesn't re-query AllTagsForChunk. Nil means "not yet looked
-		// up" — only possible when the exclusion set is inactive AND
-		// KeepTagless=true (admit short-circuited the lookup).
-		tags []TagValue
-	}
 	scoresMap := make(map[uint64]*chunkScoresAcc)
+
+	// admitTagless decides whether the substrate admits chunks with
+	// no V records. The caller's KeepTagless is the surfacing intent;
+	// Propose forces admission so the derivation pass can also process
+	// tagless chunks (R2668). The result-build phase re-applies the
+	// caller's KeepTagless to drop tagless chunks from the surfaced
+	// output.
+	admitTagless := opts.KeepTagless || opts.Propose
 
 	// admit returns the accumulator for chunkID, creating it on first
 	// encounter. The tag fetch + discussed-filter decision is:
 	//
-	//   - exclusion inactive AND KeepTagless: skip tag fetch entirely
-	//     (existing fast path; result-build phase fills in tags lazily).
-	//   - otherwise: fetch tags, apply the discussed filter, drop the
-	//     chunk if either (a) it was originally tagless and KeepTagless
-	//     is false, or (b) it had tags but the exclusion stripped them
-	//     all (R2656). The discussed filter runs before the
-	//     KeepTagless decision, and -all does not override it (R2658).
+	//   - exclusion inactive AND admitTagless AND !Propose: skip tag
+	//     fetch entirely (fast path; result-build fills in lazily).
+	//   - otherwise: fetch tags, capture hadTags + alreadyOn (Propose),
+	//     apply the discussed filter, drop the chunk if either (a) it
+	//     was originally tagless and admitTagless is false, or (b) it
+	//     had tags but the exclusion stripped them all (R2656).
 	//
-	// R2647, R2656, R2657, R2658
+	// The discussed filter runs before the admitTagless decision; `-all`
+	// does not override discussed exclusion (R2658). When Propose is
+	// set, admitTagless is forced true but the result-build phase will
+	// still apply the caller's KeepTagless to the surfaced output.
+	//
+	// R2647, R2656, R2657, R2658, R2668
+	needFetch := exclusion.active || !admitTagless || opts.Propose
 	admit := func(chunkID uint64) *chunkScoresAcc {
 		if acc, ok := scoresMap[chunkID]; ok {
 			return acc
 		}
 		acc := &chunkScoresAcc{}
-		if exclusion.active || !opts.KeepTagless {
-			tags, err := l.db.store.AllTagsForChunk(chunkID)
+		if needFetch {
+			rawTags, err := l.db.store.AllTagsForChunk(chunkID)
 			if err != nil {
 				return nil
 			}
-			hadTags := len(tags) > 0
-			tags = exclusion.filter(tags)
-			switch {
-			case !hadTags && !opts.KeepTagless:
-				return nil // originally tagless, KeepTagless=false
-			case hadTags && len(tags) == 0:
-				return nil // emptied by exclusion — drops even with KeepTagless (R2658)
+			acc.hadTags = len(rawTags) > 0
+			if opts.Propose {
+				acc.alreadyOn = make(map[string]bool, len(rawTags))
+				for _, tv := range rawTags {
+					acc.alreadyOn[tv.Tag] = true
+				}
 			}
-			acc.tags = tags
+			filtered := exclusion.filter(rawTags)
+			switch {
+			case !acc.hadTags && !admitTagless:
+				return nil // originally tagless, surfacing forbids
+			case acc.hadTags && len(filtered) == 0:
+				return nil // emptied by exclusion — drops regardless (R2658)
+			}
+			acc.tags = filtered
 		}
 		scoresMap[chunkID] = acc
 		return acc
@@ -315,11 +365,33 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		}
 	}
 
+	// 4b. Derivation pass (when --propose is set and embeddings are
+	// available). Runs on the full scored set (tagless chunks included
+	// via admitTagless). Writes RC + RF records as a side effect; the
+	// derived similarity scores are returned for stencil ordering.
+	// R2667, R2669, R2670, R2671, R2672, R2673, R2674, R2675, R2676
+	var derivedScores map[uint64]map[string]float64
+	if opts.Propose && embedAvail {
+		ds, dErr := l.runDerivationPass(scoresMap)
+		if dErr != nil {
+			log.Printf("recall: derivation pass: %v", dErr)
+		}
+		derivedScores = ds
+	}
+
 	// 5. Build results, resolve metadata, tags, and content. R2624, R2625
 	var recalled []RecalledChunk
 	cache := l.db.fts.NewChunkCache()
 
 	for cid, acc := range scoresMap {
+		// Caller-surfacing filter: when Propose forced admitTagless,
+		// drop tagless chunks from the surfaced result if the caller's
+		// KeepTagless is false. The derivation pass already processed
+		// them (their RC/RF records live in LMDB). R2668
+		if !opts.KeepTagless && opts.Propose && needFetch && !acc.hadTags {
+			continue
+		}
+
 		overallScore := acc.vectorEC
 		if acc.trigramEC > overallScore {
 			overallScore = acc.trigramEC
@@ -377,10 +449,220 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		recalled = recalled[:k]
 	}
 
+	// 6. Enrich each surfaced chunk with accumulated derived-tag
+	// candidates ordered by similarity desc. R2684, R2685, R2686
+	if opts.Propose && embedAvail {
+		l.enrichProposedTags(recalled, derivedScores)
+	}
+
 	return &RecallResult{
 		Chunks:  recalled,
 		Warning: warning,
 	}, nil
+}
+
+// scoredTag is one (tagname, similarity) entry. Used by both
+// runDerivationPass (top-N candidate selection) and enrichProposedTags
+// (proposal ordering).
+type scoredTag struct {
+	tag   string
+	score float64
+}
+
+// chunkWork is one chunk's surviving derivation candidates, ordered
+// by similarity desc.
+type chunkWork struct {
+	proposals []string           // tagnames to write (top-N, in order)
+	scores    map[string]float64 // tagname → similarity for stencil
+}
+
+// runDerivationPass is the read+write side effect of --propose. For
+// each chunk in the scored set: skip via RF freshness, else compute
+// cosine vs ED, top-N, filter, write RC + RF in one batched txn.
+// Returns the per-chunk per-tag similarity map for stencil ordering.
+// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.6 | R2669, R2670, R2671, R2672, R2673, R2674, R2675
+func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map[uint64]map[string]float64, error) {
+	maxED, err := l.db.store.MaxEDSerial()
+	if err != nil {
+		return nil, err
+	}
+	eds, err := l.db.store.ScanTagDefEmbeddings()
+	if err != nil {
+		return nil, err
+	}
+	if len(eds) == 0 {
+		// Nothing to derive against — leave RC/RF alone, return empty.
+		return nil, nil
+	}
+
+	const derivationK = 10
+	work := make(map[uint64]*chunkWork, len(scoresMap))
+
+	// Read phase: freshness check, candidate generation, filtering.
+	if err := l.db.store.env.View(func(txn *lmdb.Txn) error {
+		for chunkID, acc := range scoresMap {
+			rf, _, _ := l.db.store.ReadDerivedFreshness(txn, chunkID)
+			if rf >= maxED {
+				continue // fresh — no write
+			}
+			chunkVec, err := l.db.store.ReadChunkEmbedding(chunkID)
+			if err != nil || chunkVec == nil {
+				continue // can't derive without an EC vector
+			}
+			cw := l.selectCandidates(txn, chunkID, chunkVec, eds, acc.alreadyOn, derivationK)
+			work[chunkID] = cw
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	// Write phase: batched RC + RF writes. Routes through the actor
+	// per the all-mutation-through-write-actor rule.
+	if err := SyncVoid(l.db, func(_ *DB) error {
+		return l.db.store.env.Update(func(txn *lmdb.Txn) error {
+			for chunkID, cw := range work {
+				for _, tag := range cw.proposals {
+					if err := l.db.store.WriteDerivedProposal(txn, chunkID, tag); err != nil {
+						return err
+					}
+				}
+				if err := l.db.store.WriteDerivedFreshness(txn, chunkID, maxED); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}); err != nil {
+		return nil, err
+	}
+
+	// Surface this-call scores for stencil ordering. Empty maps are
+	// omitted — enrichProposedTags treats missing entries as "no
+	// fresh score, compute on demand."
+	out := make(map[uint64]map[string]float64, len(work))
+	for chunkID, cw := range work {
+		if len(cw.scores) > 0 {
+			out[chunkID] = cw.scores
+		}
+	}
+	return out, nil
+}
+
+// selectCandidates computes per-tag max cosine vs the chunk vector,
+// drops already-attached and rejected tags, and returns the top-k
+// survivors as a chunkWork ready for the write phase.
+// CRC: crc-Librarian.md | R2670, R2671, R2672, R2673, R2674
+func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int) *chunkWork {
+	// Per-tag max similarity across all ED records for that tag.
+	perTag := make(map[string]float64)
+	for _, ed := range eds {
+		if len(ed.Vec) != len(chunkVec) {
+			continue
+		}
+		score := cosineSimilarity(chunkVec, ed.Vec)
+		if cur, ok := perTag[ed.Tag]; !ok || score > cur {
+			perTag[ed.Tag] = score
+		}
+	}
+	candidates := make([]scoredTag, 0, len(perTag))
+	for tag, score := range perTag {
+		if alreadyOn[tag] {
+			continue // R2671 + R2672 (union via AllTagsForChunk)
+		}
+		rejected, _ := l.db.store.HasDerivedRejection(txn, chunkID, tag)
+		if rejected {
+			continue // R2673
+		}
+		candidates = append(candidates, scoredTag{tag, score})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > k {
+		candidates = candidates[:k]
+	}
+	cw := &chunkWork{
+		proposals: make([]string, 0, len(candidates)),
+		scores:    make(map[string]float64, len(candidates)),
+	}
+	for _, c := range candidates {
+		cw.proposals = append(cw.proposals, c.tag)
+		cw.scores[c.tag] = c.score
+	}
+	return cw
+}
+
+// enrichProposedTags populates RecalledChunk.ProposedTags with the
+// accumulated RC entries for each surfaced chunk, ordered by chunk-EC
+// ↔ tag-ED cosine similarity descending. Reuses this-call scores
+// from derivedScores for chunks the pass derived; computes on-demand
+// for fresh-skip chunks. When neither path yields a score (no EC
+// vector, no ED records), proposals fall back to DerivedProposals'
+// tally-desc order, which sort.SliceStable preserves.
+// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.8 | R2684, R2685, R2686
+func (l *Librarian) enrichProposedTags(chunks []RecalledChunk, derivedScores map[uint64]map[string]float64) {
+	if len(chunks) == 0 {
+		return
+	}
+	var edCache []TagDefEmbedding
+	edCacheLoaded := false
+	for i := range chunks {
+		props, err := l.db.store.DerivedProposals(chunks[i].ChunkID)
+		if err != nil || len(props) == 0 {
+			continue
+		}
+		thisCall := derivedScores[chunks[i].ChunkID]
+		scored := make([]scoredTag, 0, len(props))
+		var chunkVec []float32 // loaded lazily on first on-demand miss
+		for _, p := range props {
+			if s, ok := thisCall[p.Tagname]; ok {
+				scored = append(scored, scoredTag{p.Tagname, s})
+				continue
+			}
+			if chunkVec == nil {
+				v, vErr := l.db.store.ReadChunkEmbedding(chunks[i].ChunkID)
+				if vErr == nil && v != nil {
+					chunkVec = v
+				}
+			}
+			if !edCacheLoaded {
+				if eds, eErr := l.db.store.ScanTagDefEmbeddings(); eErr == nil {
+					edCache = eds
+				}
+				edCacheLoaded = true
+			}
+			scored = append(scored, scoredTag{p.Tagname, bestEDSim(chunkVec, edCache, p.Tagname)})
+		}
+		sort.SliceStable(scored, func(a, b int) bool {
+			return scored[a].score > scored[b].score
+		})
+		names := make([]string, 0, len(scored))
+		for _, sp := range scored {
+			names = append(names, sp.tag)
+		}
+		chunks[i].ProposedTags = names
+	}
+}
+
+// bestEDSim returns max cosine similarity between chunkVec and any
+// ED record for tag. Returns 0 if either input is empty or no ED
+// record matches — callers treat 0 as "no score" and rely on the
+// stable sort to preserve tally-desc order. R2685
+func bestEDSim(chunkVec []float32, eds []TagDefEmbedding, tag string) float64 {
+	if len(chunkVec) == 0 {
+		return 0
+	}
+	var best float64
+	for _, ed := range eds {
+		if ed.Tag != tag || len(ed.Vec) != len(chunkVec) {
+			continue
+		}
+		if s := cosineSimilarity(chunkVec, ed.Vec); s > best {
+			best = s
+		}
+	}
+	return best
 }
 
 // HandleRecall serves HTTP POST /recall requests.

@@ -188,6 +188,13 @@ const (
 	// namespace; future R* records (proposals, processed-stamps, etc.)
 	// follow the same two-letter convention. R2648, R2649
 	prefixDiscussed = "RD"
+	// Derived-tag records (statistical attach-proposal pass). The
+	// derivation pass writes RC + RF as a side effect of
+	// `ark connections recall --propose`; the Tag Forge writes RJ via
+	// Store.RejectDerived. R2664–R2666
+	prefixDerivedCandidate = "RC" // R2664 — RC + chunkid varint + tagname → 8-byte BE tally
+	prefixDerivedRejection = "RJ" // R2665 — RJ + chunkid varint + tagname → 8-byte BE unix nanos
+	prefixDerivedFreshness = "RF" // R2666 — RF + chunkid varint → varint serial
 )
 
 // Reserved tag names used by the routing/identity machinery.
@@ -3410,6 +3417,240 @@ func (s *Store) PruneDiscussed(ttl time.Duration) (int, error) {
 		})
 	})
 	return deleted, err
+}
+
+// DerivedProposal is one RC record decoded for callers.
+// CRC: crc-Store.md | R2678
+type DerivedProposal struct {
+	ChunkID uint64
+	Tagname string
+	Tally   uint64
+}
+
+// derivedKey builds an RC- or RJ-prefixed key. Both record classes
+// share the same key shape: prefix + chunkid varint + tagname.
+// CRC: crc-Store.md | R2664, R2665
+func derivedKey(prefix string, chunkID uint64, tagname string) []byte {
+	key := make([]byte, 0, len(prefix)+binary.MaxVarintLen64+len(tagname))
+	key = append(key, prefix...)
+	key = encodeVarint(key, chunkID)
+	key = append(key, tagname...)
+	return key
+}
+
+// derivedChunkPrefix returns the range-scan prefix for one chunk's
+// RC or RJ records (prefix + chunkid varint, no tagname).
+// CRC: crc-Store.md | R2664, R2665
+func derivedChunkPrefix(prefix string, chunkID uint64) []byte {
+	buf := make([]byte, 0, len(prefix)+binary.MaxVarintLen64)
+	buf = append(buf, prefix...)
+	buf = encodeVarint(buf, chunkID)
+	return buf
+}
+
+// parseDerivedKey decodes a key produced by derivedKey for the
+// given prefix. Returns (chunkID, tagname, ok). Used by
+// DerivedProposals when iterating the RC range.
+// CRC: crc-Store.md | R2664
+func parseDerivedKey(prefix string, k []byte) (chunkID uint64, tagname string, ok bool) {
+	if !bytes.HasPrefix(k, []byte(prefix)) {
+		return 0, "", false
+	}
+	rest := k[len(prefix):]
+	cid, n := binary.Uvarint(rest)
+	if n <= 0 {
+		return 0, "", false
+	}
+	return cid, string(rest[n:]), true
+}
+
+// derivedFreshnessKey returns the RF key for a chunk.
+// CRC: crc-Store.md | R2666
+func derivedFreshnessKey(chunkID uint64) []byte {
+	buf := make([]byte, 0, len(prefixDerivedFreshness)+binary.MaxVarintLen64)
+	buf = append(buf, prefixDerivedFreshness...)
+	buf = encodeVarint(buf, chunkID)
+	return buf
+}
+
+// WriteDerivedProposal writes or increments an RC record's tally
+// inside the caller's write txn. New records start at tally=1; an
+// existing record's 8-byte big-endian tally is incremented by 1.
+// Malformed existing values (not exactly 8 bytes) are overwritten
+// as if starting fresh.
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R2664, R2674, R2675
+func (s *Store) WriteDerivedProposal(txn *lmdb.Txn, chunkID uint64, tagname string) error {
+	key := derivedKey(prefixDerivedCandidate, chunkID, tagname)
+	var tally uint64 = 1
+	existing, err := txn.Get(s.dbi, key)
+	if err == nil && len(existing) == 8 {
+		tally = binary.BigEndian.Uint64(existing) + 1
+	} else if err != nil && !lmdb.IsNotFound(err) {
+		return err
+	}
+	val := make([]byte, 8)
+	binary.BigEndian.PutUint64(val, tally)
+	return txn.Put(s.dbi, key, val, 0)
+}
+
+// WriteDerivedFreshness stamps a chunk's RF record with the given
+// serial inside the caller's write txn.
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R2666, R2669, R2675
+func (s *Store) WriteDerivedFreshness(txn *lmdb.Txn, chunkID, serial uint64) error {
+	key := derivedFreshnessKey(chunkID)
+	val := make([]byte, 0, binary.MaxVarintLen64)
+	val = encodeVarint(val, serial)
+	return txn.Put(s.dbi, key, val, 0)
+}
+
+// ReadDerivedFreshness reads a chunk's RF stamp. Missing or
+// malformed varint returns (0, false, nil) — caller treats both as
+// "stale, force re-process."
+// CRC: crc-Store.md | R2666, R2669, R2681, R2682
+func (s *Store) ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (uint64, bool, error) {
+	key := derivedFreshnessKey(chunkID)
+	v, err := txn.Get(s.dbi, key)
+	if err != nil {
+		if lmdb.IsNotFound(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	serial, n := binary.Uvarint(v)
+	if n <= 0 {
+		return 0, false, nil // malformed varint — treat as stale (R2681)
+	}
+	return serial, true, nil
+}
+
+// HasDerivedRejection probes for an RJ record for the given (chunk,
+// tagname). Existence-only — the timestamp value is not inspected.
+// CRC: crc-Store.md | R2665, R2673
+func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, error) {
+	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
+	_, err := txn.Get(s.dbi, key)
+	if err == nil {
+		return true, nil
+	}
+	if lmdb.IsNotFound(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// MaxEDSerial returns max(RecordSerial(ED, *)) across the ED prefix,
+// or 0 if no ED records exist. Cheap with the S substrate.
+// CRC: crc-Store.md | R2669
+func (s *Store) MaxEDSerial() (uint64, error) {
+	var maxS uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedDef), nil), func(_ *lmdb.Cursor, _, v []byte) error {
+			serial, n := binary.Uvarint(v)
+			if n <= 0 {
+				return nil
+			}
+			if serial > maxS {
+				maxS = serial
+			}
+			return nil
+		})
+	})
+	return maxS, err
+}
+
+// DerivedProposals returns all RC records for one chunk sorted by
+// tally descending. RC entries shadowed by a matching RJ record are
+// filtered as defense-in-depth — the derivation pass already skips
+// them, but a forge view might surface pre-rejection RC records.
+// Malformed RC values surface as tally=0; the next WriteDerivedProposal
+// self-corrects.
+// CRC: crc-Store.md | R2664, R2678, R2681
+func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
+	prefix := derivedChunkPrefix(prefixDerivedCandidate, chunkID)
+	var out []DerivedProposal
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+			_, tagname, ok := parseDerivedKey(prefixDerivedCandidate, k)
+			if !ok {
+				return nil
+			}
+			rejected, err := s.HasDerivedRejection(txn, chunkID, tagname)
+			if err != nil {
+				return err
+			}
+			if rejected {
+				return nil
+			}
+			var tally uint64
+			if len(v) == 8 {
+				tally = binary.BigEndian.Uint64(v)
+			}
+			out = append(out, DerivedProposal{ChunkID: chunkID, Tagname: tagname, Tally: tally})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tally != out[j].Tally {
+			return out[i].Tally > out[j].Tally
+		}
+		return out[i].Tagname < out[j].Tagname
+	})
+	return out, nil
+}
+
+// AcceptDerived promotes a derived proposal to an attached tag:
+// delete RC[chunkid+tagname], then attach (tagname, value) via the
+// existing F/V path (AppendTagValues). Returns the resolved tvid.
+// Empty value produces a bare-tag attach. No-op safe if the RC record
+// is already gone (e.g. concurrent accept). Two writes — the RC
+// deletion isn't part of AppendTagValues' txn — but both run inside
+// Store.env, so a crash between them leaves the chunk with the tag
+// attached and the RC still present; the next derivation pass will
+// drop the stale RC because alreadyOn now contains tagname (R2671).
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#2.2 | R2679
+func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, error) {
+	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
+	if err := s.env.Update(func(txn *lmdb.Txn) error {
+		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	if err := s.AppendTagValues([]ChunkTagValues{{
+		ChunkID: chunkID,
+		Values:  []TagValue{{Tag: tagname, Value: value}},
+	}}); err != nil {
+		return 0, err
+	}
+	// Resolve the tvid the attach produced. The append-path reuses an
+	// existing tvid if the (tag, value) pair already exists; either way
+	// the tvids map now carries the canonical id.
+	tvid, _ := s.tvids.Lookup(tagname, value)
+	return tvid, nil
+}
+
+// RejectDerived persists a sticky no-resurface marker for a derived
+// proposal. In one txn through the actor: delete RC[chunkid+tagname]
+// and write RJ[chunkid+tagname] with NOW unix nanoseconds. No-op
+// safe if RC is already gone. Idempotent — re-rejecting overwrites
+// the timestamp.
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2665, R2680, R2683
+func (s *Store) RejectDerived(chunkID uint64, tagname string) error {
+	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
+	rjKey := derivedKey(prefixDerivedRejection, chunkID, tagname)
+	val := make([]byte, 8)
+	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
+			return err
+		}
+		return txn.Put(s.dbi, rjKey, val, 0)
+	})
 }
 
 // --- float32 ↔ bytes conversion ---

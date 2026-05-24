@@ -15,11 +15,21 @@ import (
 )
 
 // setupRecall sets up a test Indexer, Store, DB, and Librarian
-// with a fake model path so EmbeddingAvailable() is true.
+// with a fake model path so EmbeddingAvailable() is true. The DB
+// actor (svc) is started so paths that route writes through
+// SyncVoid (e.g. the --propose derivation pass) don't hang.
 func setupRecall(t *testing.T) (*Librarian, *DB) {
 	t.Helper()
 	idx, dir := testIndexer(t)
 	db := newTestDB(idx, dir)
+	db.svc = make(chan func(), 16)
+	go runSvc(db.svc)
+	t.Cleanup(func() {
+		if db.svc != nil {
+			close(db.svc)
+			db.svc = nil
+		}
+	})
 
 	l := &Librarian{
 		db:        db,

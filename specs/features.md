@@ -31,7 +31,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
-| Recall                                      | substrate shipping (`ark connections recall`); agent layer in design | `recall.md`, `discussed-tags.md`, `.scratch/CONTEXTUAL-RECALL.md` (agent-layer working notes) |
+| Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) in progress; agent layer in design | `recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/CONTEXTUAL-RECALL.md` (agent-layer working notes) |
 | Curation workshop (Tag Forge UI)            | shipping                                   | `tag-forge.md`, `curation.md`                                                 |
 | CLI-first agent integration                 | shipping                                   | `cli-commands.md`, `VISION.md`                                                |
 | Cross-project messaging                     | shipping                                   | `ARK-MESSAGING.md`                                                            |
@@ -252,15 +252,22 @@ chunk-level signal into tag suggestions and filters against a
 discussion history so the same tag doesn't surface twice in a row.
 
 **Surface.** `ark connections recall` (CLI substrate primitive,
-with `--session` / `--discussed` for the dedup filter),
+with `--session` / `--discussed` for the dedup filter and
+`--propose` for the statistical derivation pass that surfaces
+derived-tag candidates per chunk),
 `ark discussed add/list/clear/prune` (per-session dedup state
 backed by RD records — see `specs/discussed-tags.md`),
-`sys.recall` (Lua bridge), the substrate primitives shared with
-find connections. The agent layer on top — the user-facing
-`ark recall` that produces tag suggestions — is in design; see
-`specs/recall.md` and `.scratch/CONTEXTUAL-RECALL.md`. A V4
-ambient-recall watcher will call the same pipeline on Claude Code
-JSONL chunks; the substrate is the seed.
+`Store.DerivedProposals` / `AcceptDerived` / `RejectDerived` (Go
+API consumed by the Tag Forge — see `specs/derived-tags.md` for
+the RC/RJ/RF record classes), `sys.recall` (Lua bridge), the
+substrate primitives shared with find connections. Statistical
+derivation runs as a side effect of each recall call so curation
+candidates accrue passively. The agent layer on top — the user-
+facing `ark recall` that adds LLM relevance filtering and new-
+tag-definition invention — is in design; see `specs/recall.md`
+and `.scratch/CONTEXTUAL-RECALL.md`. A V4 ambient-recall watcher
+will call the same pipeline on Claude Code JSONL chunks; the
+substrate is the seed.
 
 ## Curation workshop (Tag Forge UI)
 

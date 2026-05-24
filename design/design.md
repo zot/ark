@@ -201,6 +201,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-find-connections-substrate.md → `connections.go`, `connections_substrate.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
+- [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 
@@ -260,6 +261,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-FindConnectionsSubstrate.md → `connections_substrate_test.go`
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
+- [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
@@ -577,3 +579,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T92: R2587 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
 - T93: R2621 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
 - [ ] O114: discussed-tags: deferred tests from test-Discussed.md — Lua sys.recall + sys.discussed bridge tests, ark.toml TTL config defaults/override/invalid warning, substrate-is-read-only-on-RD snapshot test. Behavior is exercised end-to-end via Go-level tests; add Lua tests when test-Recall.md's Lua harness pattern earns another instance.
+- A65: RP/RPE/RR record prefixes reserved for LLM-driven definition proposals (ARK-STATE.md item 1, agent layer). This slice (item 2) covers statistical attach-proposals only — chunkID+tagname keyed via RC/RJ/RF. Definition proposals (tagname+value+definition keyed, with embedding + reasoning) require an LLM and land with the recall agent. Letters chosen now to avoid collision; record-formats.md notes the reservation.
+- [ ] O115: Recall --propose substrate scan: derivation iterates every recalled chunk × every ED record to compute per-tag max cosine. For an N-chunk corpus with M tag values this is O(N·M) cosine compares per --propose invocation. Acceptable at current scale (Bill: "simple first") and amortized by RF freshness skip; revisit if interactive latency degrades when N·M grows. Vector index (HNSW or similar) is the obvious lever.
+- [ ] O116: Lua bridge for AcceptDerived / RejectDerived not yet wired — Store API exists (per Bill's front-load-Go-for-UI preference, [[feedback_frontload-go-for-ui]]) and sys.recall surfaces proposed tags via the Lua bridge, but the write-side bridge (sys.acceptProposal / sys.rejectProposal or similar) lands in the next /ui-thorough pass alongside the curation-view accept/reject UI. No mini-spec/frictionless thrash needed when that pass starts.

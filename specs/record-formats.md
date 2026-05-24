@@ -38,7 +38,10 @@ change them, we need to update the CLI code so it's up-to-date.
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
 | `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
+| `RC`   | Recall Candidate    | `RC` + chunkid varint + tagname                   | 8-byte big-endian uint64 tally counter  |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
+| `RF`   | Recall Freshness    | `RF` + chunkid varint                             | varint uint64 (max S-over-ED at last derivation) |
+| `RJ`   | Recall reJection    | `RJ` + chunkid varint + tagname                   | 8-byte big-endian unix nanos            |
 | `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
 | `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
 | `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
@@ -427,7 +430,28 @@ during `ark init` and by config-mutating commands.
 
 `R` is reserved as the recall-feature namespace. Future records
 under this prefix carry emission logs, per-session configuration,
-trigger state, and similar recall-only data. Currently:
+trigger state, and similar recall-only data. Reserved letters
+include `RP`/`RPE`/`RR` for LLM-driven definition proposals (not
+yet implemented; see `.scratch/CONTEXTUAL-RECALL.md` for the
+agent-layer design). Currently:
+
+### RC — Recall Candidate (derived attach proposal)
+
+- **Key:** `"RC"` + chunkid varint + tagname (raw bytes; `[\w][\w\-.]*`
+  grammar, no control bytes).
+- **Value:** 8 bytes — big-endian `uint64` tally counter.
+- **Semantic:** one record per (chunkid, tagname) statistical
+  derivation candidate. The tagname is the proposed attach; bare-tag
+  shape in the statistical slice (no value segment). Tally counts
+  how many derivation passes have proposed the same (chunkid,
+  tagname); higher tally = stronger signal in the Tag Forge.
+- **Lifecycle:** written by the derivation pass when
+  `ark connections recall --propose` is set. Deleted by
+  `Store.AcceptDerived` (after writing F/V for the attach) or
+  `Store.RejectDerived` (after writing the corresponding RJ
+  record).
+- **Reverse lookup** (proposals for one chunk): prefix scan
+  `"RC"` + chunkid varint. Detail spec: `derived-tags.md`.
 
 ### RD — Recall discussed-tag
 
@@ -450,6 +474,32 @@ trigger state, and similar recall-only data. Currently:
   (Claude Code session UUID, hex), `\x00`-separated from tagname.
   tagname and value follow the same no-`\x00` constraint as V
   records. Detail spec: `discussed-tags.md`.
+
+### RF — Recall Freshness (per-chunk derivation stamp)
+
+- **Key:** `"RF"` + chunkid varint.
+- **Value:** varint-encoded `uint64` — the `max RecordSerial(ED, *)`
+  observed when this chunk was last derivation-processed.
+- **Semantic:** "this chunk has been processed against the ED
+  landscape as of serial N." A chunk is fresh (skip-eligible) for
+  derivation iff its RF stamp `>=` the current max ED serial.
+  Missing RF is treated as serial 0 (force re-process).
+- **Lifecycle:** written by the derivation pass on every chunk
+  it processes, with or without resulting proposals. Cleaned up
+  lazily — RF records for chunkids orphaned by microfts2 are
+  removed alongside EC and F via the existing chunkid-orphan
+  callback path. Detail spec: `derived-tags.md`.
+
+### RJ — Recall reJection (sticky no-resurface marker)
+
+- **Key:** `"RJ"` + chunkid varint + tagname. Mirrors RC exactly.
+- **Value:** 8 bytes — big-endian `uint64` unix nanoseconds
+  (rejection timestamp; presence of the record is what blocks
+  re-proposal, not the timestamp value).
+- **Semantic:** the curator rejected this (chunkid, tagname). The
+  derivation pass checks RJ before writing RC; an RJ hit
+  suppresses re-proposal. Sticky in v1 — no TTL, no
+  un-reject verb. Detail spec: `derived-tags.md`.
 
 ## Schema Version Protocol
 

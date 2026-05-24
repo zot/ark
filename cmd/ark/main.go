@@ -6903,7 +6903,7 @@ func cmdConnectionsRecall(args []string) {
 // returns errors instead of exiting. The in-process fallback
 // constructs a Librarian unconditionally, relying on NewLibrarian's
 // no-claude contract (R2642).
-// CRC: crc-CLI.md | Seq: seq-recall.md#1.1 | R2617, R2618, R2619, R2627, R2630, R2631, R2632, R2633, R2634, R2641, R2642, R2646, R2647
+// CRC: crc-CLI.md | Seq: seq-recall.md#1.1 | R2617, R2618, R2619, R2627, R2630, R2631, R2632, R2633, R2634, R2641, R2642, R2646, R2647, R2667, R2676
 func runConnectionsRecall(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("connections recall", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // we own the error path
@@ -6914,6 +6914,7 @@ func runConnectionsRecall(args []string, out io.Writer) error {
 	typeFlag := fs.String("type", "", "input type: chunk | text (default: auto-detect)")
 	session := fs.String("session", "", "load the session's discussed-tag set into the exclusion set")
 	discussedFlag := fs.String("discussed", "", "comma-separated @t[:v] exclusions (unioned with --session set)")
+	propose := fs.Bool("propose", false, "run the statistical derivation pass; persist derived-tag candidates as RC records and surface them in the result")
 
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, `Usage: ark connections recall INPUTS... [options]
@@ -6973,6 +6974,7 @@ Options:`)
 		KeepTagless:    *all,
 		Session:        *session,
 		Discussed:      discussed,
+		Propose:        *propose,
 	}
 
 	if client := serverClient(arkDir); client != nil {
@@ -7061,6 +7063,12 @@ func printRecallResult(out io.Writer, res *ark.RecallResult, jsonOut bool) error
 			names = append(names, t.Tag)
 		}
 		fmt.Fprintf(out, "  @chunk-tags: %s\n", strings.Join(names, ", "))
+		// R2684: optional `@chunk-proposed-tags` line carrying derived-
+		// tag candidates when --propose is set. Names only, similarity-
+		// desc order; omitted when the chunk has no RC records.
+		if len(chunk.ProposedTags) > 0 {
+			fmt.Fprintf(out, "  @chunk-proposed-tags: %s\n", strings.Join(chunk.ProposedTags, ", "))
+		}
 		for _, t := range chunk.Tags {
 			if t.Value != "" {
 				fmt.Fprintf(out, "  - @chunk-tag-value: %s: %s\n", t.Tag, t.Value)

@@ -187,6 +187,7 @@ Options:
 | `--no-content`   | false   | Omit per-chunk content body (header rows only)                         |
 | `--json`         | false   | Emit JSON instead of markdown stencil                                  |
 | `-all`           | false   | Keep tagless chunks (default drops them, since tag-shaped consumers can't use them) |
+| `--propose`      | false   | Run the statistical derivation pass on returned chunks; persist surviving candidates as RC records. Recall output is unchanged; the proposals are a side effect consumed by the Tag Forge. See [derived-tags.md](derived-tags.md). |
 
 If the server is running, the CLI proxies the `recall` command via HTTP/Unix socket to the server (`POST /recall`), using the warm model if configured.
 
@@ -245,6 +246,19 @@ Content lines are quoted with `> ` (markdown blockquote) so an
 agent reading the stencil sees the chunk text as quoted prose,
 not as freeform markdown that competes with the surrounding
 stencil structure.
+
+When `--propose` is set ([derived-tags.md](derived-tags.md))
+and a surfaced chunk has accumulated RC records, a
+`@chunk-proposed-tags` line is added after `@chunk-tags`,
+carrying comma-separated derived-tag candidates in similarity-
+descending order:
+
+    @chunk-tags: cooking, vegetable, recipe
+    @chunk-proposed-tags: priority, status, axis
+
+The line is omitted (not emitted empty) for chunks with no RC
+records. See [derived-tags.md](derived-tags.md) for the
+derivation pass and the `ProposedTags` JSON field.
 
 When no chunks match:
 

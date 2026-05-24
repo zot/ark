@@ -325,6 +325,7 @@ ark connections find INPUTS... [--mode normal|turbo] [--k N]
 ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--type chunk|text] [--json]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
+                                 [--propose]
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -371,8 +372,14 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   list. Per-chunk filter is permissive — a chunk survives if it
   has any non-discussed tag left. See
   [discussed-tags.md](discussed-tags.md) for the dedup story and
-  TTL semantics. The full agent-mediated `ark recall` feature on
-  top of this substrate is still in design.
+  TTL semantics. `--propose` runs the statistical derivation
+  pass on the substrate's full scored chunk set, persists
+  surviving candidates as RC records, and adds a
+  `@chunk-proposed-tags` line to each surfaced chunk that
+  accumulated proposals (similarity-desc order). See
+  [derived-tags.md](derived-tags.md). The full agent-mediated
+  `ark recall` feature on top of this substrate is still in
+  design.
 - `wait PATH` blocks until terminal. On `--timeout SEC` expiry,
   exits non-zero with the last-seen status on stderr.
 - `show PATH` parses the persisted doc and projects fields. Without

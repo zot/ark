@@ -304,15 +304,13 @@ lands).
   are still in design; see
   [.scratch/CONTEXTUAL-RECALL.md](../.scratch/CONTEXTUAL-RECALL.md)
   "Still blurry."
-- **Accept/reject of substrate-derived tags.** A later pass on
-  the substrate will add tag *derivation* (D-record similarity to
-  chunk embeddings, surfacing tags a chunk could carry but
-  doesn't). The lifecycle of those derived tags — agent
-  accept/reject feeding back into prospecting — uses its own
-  record classes (S/RJ or similar) and command verbs
-  (`ark derived accept|reject`). "Discussed" stays clean for the
-  conversation-covered semantic; derivation lifecycle gets its
-  own surface when it lands.
+- **Accept/reject of substrate-derived tags.** Substrate-derived
+  tags (D-record similarity to chunk embeddings, surfacing tags a
+  chunk could carry but doesn't) have their own record classes
+  (RC, RJ, RF) and lifecycle, owned by
+  [derived-tags.md](derived-tags.md). "Discussed" stays clean for
+  the conversation-covered semantic; derivation has its own
+  surface.
 - **Cross-session dedup.** Each session has its own `RD` range.
   A topic discussed in session A doesn't suppress recall in
   session B. The recall agent could synthesize a cross-session
