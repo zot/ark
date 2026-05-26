@@ -93,14 +93,15 @@ func flattenChunkTags(chunkTags [][]TagValue) []TagValue {
 // post-reconcile — Indexer no longer writes vectors itself.
 // CRC: crc-Indexer.md | R1923, R1926
 type Indexer struct {
-	fts        *microfts2.DB
-	store      *Store
-	pubsub     *PubSub         // nil when running without server
-	scheduler  *EventScheduler // nil when running without server
-	config     *Config         // for schedule tag checks
-	pdfChunker *PDFChunker     // R1720: flushes per-page blobs after microfts2 assigns fileids
-	extmap     *ExtMap         // CRC: crc-ExtMap.md | R1996, R2000-R2008
-	db         *DB             // back-pointer for ExtMap routing — uses ResolveExtTarget + chunkFileID
+	fts           *microfts2.DB
+	store         *Store
+	pubsub        *PubSub         // nil when running without server
+	scheduler     *EventScheduler // nil when running without server
+	config        *Config         // for schedule tag checks
+	pdfChunker    *PDFChunker     // R1720: flushes per-page blobs after microfts2 assigns fileids
+	extmap        *ExtMap         // CRC: crc-ExtMap.md | R1996, R2000-R2008
+	db            *DB             // back-pointer for ExtMap routing — uses ResolveExtTarget + chunkFileID
+	recallWatcher *RecallWatcher  // nil when [recall].enabled=false; CRC: crc-Indexer.md | R2696, R2697
 
 	pendingSchedule []scheduleItem // accumulated during scan, drained after
 }
@@ -118,12 +119,13 @@ type scheduleItem struct {
 // run indexing off the main actor.
 func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
 	return &Indexer{
-		fts:        fts,
-		store:      idx.store,
-		pubsub:     idx.pubsub,
-		scheduler:  idx.scheduler,
-		config:     idx.config,
-		pdfChunker: idx.pdfChunker,
+		fts:           fts,
+		store:         idx.store,
+		pubsub:        idx.pubsub,
+		scheduler:     idx.scheduler,
+		config:        idx.config,
+		pdfChunker:    idx.pdfChunker,
+		recallWatcher: idx.recallWatcher,
 	}
 }
 
@@ -138,6 +140,14 @@ func (idx *Indexer) SetPubSub(ps *PubSub) {
 func (idx *Indexer) SetScheduler(sched *EventScheduler, config *Config) {
 	idx.scheduler = sched
 	idx.config = config
+}
+
+// SetRecallWatcher injects the simple-recall watcher. Called by the
+// server when [recall].enabled is true. Indexer's append path
+// enqueues newly-added chunks for ambient recall.
+// CRC: crc-Indexer.md | R2697
+func (idx *Indexer) SetRecallWatcher(w *RecallWatcher) {
+	idx.recallWatcher = w
 }
 
 // writeDateIndex checks extracted tags against schedule config and
@@ -668,6 +678,18 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 				idx.pubsub.PublishAndWatch("", prep.path, flat)
 			}
 			idx.writeDateIndex(prep.path, flat)
+			// CRC: crc-Indexer.md | Seq: seq-recall-watcher.md#1 | R2696, R2729
+			// Simple-recall watcher hook: hand the freshly-appended
+			// bytes and the chunkIDs the chunker emitted to the
+			// watcher's turn-boundary state machine. The watcher
+			// applies its own enable + source-qualification gates
+			// internally. Live-append is the only path that drives
+			// the watcher — full reindex (executeFullRefresh) and
+			// initial add (AddFile) would amount to backfill, which
+			// R2698 disallows.
+			if idx.recallWatcher != nil {
+				idx.recallWatcher.OnAppend(prep.path, prep.strategy, prep.newBytes, added)
+			}
 		}
 		return nil
 	}
@@ -798,6 +820,29 @@ func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
 // AppendFile indexes only the new content appended to a file.
 // FTS uses AppendChunks with a chunk callback; vectors get a full
 // refresh; tags are chunkid-keyed via the callback's per-chunk slices.
+// Checkpoint advances the indexer's stored FileLength for `path` to
+// the file's current on-disk size, without re-chunking or otherwise
+// touching the file's content. After Checkpoint, the next refresh
+// pass treats only future-appended bytes as new — historical content
+// is "capped off." Returns the new FileLength on success. R2745
+func (idx *Indexer) Checkpoint(path string) (int64, error) {
+	status, err := idx.fts.CheckFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("check file %s: %w", path, err)
+	}
+	if status.FileID == 0 {
+		return 0, fmt.Errorf("file not indexed: %s", path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := idx.fts.SetFileLength(status.FileID, fi.Size()); err != nil {
+		return 0, fmt.Errorf("set file length %s: %w", path, err)
+	}
+	return fi.Size(), nil
+}
+
 // CRC: crc-Indexer.md | R1894, R1895
 func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) error {
 	info, err := idx.fts.FileInfoByID(fileid)

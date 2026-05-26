@@ -946,8 +946,20 @@ func computeCentroidFilters(metas []aboutFilterMeta, centroids map[uint64][]floa
 // Path filters first (cheap), then content filters. Positives intersect,
 // negatives subtract. Returns nil if no filtering is requested.
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
-	// R939, R940: inject search_exclude defaults when no explicit file filters
-	if len(opts.FilterFiles) == 0 && len(opts.ExcludeFiles) == 0 && s.config != nil && len(s.config.SearchExclude) > 0 {
+	// R939, R940: inject search_exclude defaults when no explicit file
+	// filters. A positive `-files` chunk-filter row counts as an explicit
+	// narrowing — the user is asking for a specific set of paths and
+	// shouldn't have the default exclude pattern intersected on top.
+	hasPositiveFilesChunkFilter := false
+	for _, cf := range opts.ChunkFilters {
+		if cf.Polarity == "with" && cf.Mode == "files" {
+			hasPositiveFilesChunkFilter = true
+			break
+		}
+	}
+	if !hasPositiveFilesChunkFilter &&
+		len(opts.FilterFiles) == 0 && len(opts.ExcludeFiles) == 0 &&
+		s.config != nil && len(s.config.SearchExclude) > 0 {
 		opts.ExcludeFiles = s.config.SearchExclude
 	}
 	hasFilters := len(opts.Filter) > 0 || len(opts.Except) > 0 ||

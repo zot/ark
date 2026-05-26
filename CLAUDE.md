@@ -42,6 +42,10 @@ reference docs — update them yourself when their surface changes:
   changes, or its motivation shifts. This is the project's
   capabilities-axis summary; the per-feature specs own the
   behavior.
+- `specs/config.md` — every `ark.toml` key (top-level + every
+  `[table]` and `[[array.table]]`) with type, default, one-line
+  meaning, and the per-feature spec that owns it. Update when a
+  per-feature spec adds, renames, or retires an ark.toml key.
 
 ## Frictionless UI
 

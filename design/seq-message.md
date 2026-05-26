@@ -192,3 +192,44 @@ Lua ──> mcp.readMessage(path)                                ← R773
          │
          └──> return result (or nil + error)                 ← R777
 ```
+
+## Flow: dm (cmdMessageDM + composeDM)
+
+```
+CLI ──> parse flags: --from / --from-service (XOR),               ← R2722
+                     --to (repeatable),                            ← R2725
+                     --subject (optional),                         ← R2726
+                     --ref (optional),
+                     --content (required)
+         │
+         ├──> validate: exactly one of --from / --from-service     ← R2722
+         │              len(--to) >= 1
+         │              if --subject set: text non-empty           ← R2726
+         │
+         ├──> composeDM(sender, recipients, subject, ref, body):
+         │      tagBlock := ""
+         │      tagBlock += "\n@dm: " + join(recipients, " ")
+         │      if subject != "":
+         │        tagBlock += ": " + subject                       ← R2716, R2726
+         │      if sender.kind == "session":
+         │        tagBlock += "\n@from: " + sender.sessionID
+         │      else:                                              ← R2723
+         │        tagBlock += "\n@from-service: " + sender.name
+         │      if ref != "":
+         │        tagBlock += "\n@ref: " + ref
+         │      tagBlock += "\n"
+         │      return tagBlock + body + "\n"
+         │
+         ├──> tmpPath := "tmp://" + sender.identity                ← R2724
+         │             + "/dm-" + recipients[0]
+         │     (sender.identity is sender.sessionID for --from,
+         │      sender.name for --from-service)
+         │
+         └──> proxy POST /tmp/append { path: tmpPath,
+                                       strategy: "markdown",
+                                       content: tagBlock+body }
+```
+
+In-process callers (the simple-recall watcher; see seq-recall-watcher.md)
+invoke `composeDM` directly with the same shape — no shell-out, no
+HTTP round trip needed inside the server. (R2700, R2727)

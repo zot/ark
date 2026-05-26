@@ -179,6 +179,12 @@ For each eligible chunk:
 1. Compute cosine similarity between the chunk's EC vector and
    every ED vector. Take the top-N by similarity (`derivationK`,
    default 10).
+1a. Drop any candidate whose per-tag max cosine is below
+    `[recall].min_propose_similarity` (default 0.70). The floor
+    keeps the top-K from filling with loosely related neighbors
+    when a chunk has few strong matches. Tuning the floor by eye
+    relies on the parenthesized scores the recall stencil renders
+    (`@chunk-proposed-tags: foo (0.72), bar (0.58)`).
 2. Filter out tags the chunk already carries (lookup via F
    records). Reduces noise; the curator doesn't need to see
    suggestions to attach a tag that's already attached.

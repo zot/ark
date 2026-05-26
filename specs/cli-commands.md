@@ -21,7 +21,7 @@ name, so always use the absolute path.
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
 | `chats`            | `chats GLOB [--with-tools] [--sidechain] [--wrap N] [--line-length N]`                                               | none                     | walks `~/.claude/projects/`                          |
-| `chunks`           | `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]`                              | optional                 |                                                      |
+| `chunks`           | `chunks CHUNKID [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE [-before N] [-after N] [-wrap N]` <br> `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]` | optional                 | `CHUNKID` resolves via `db.ChunkInfo`; `PATH:RANGE` accepts `NN` and `NN-MM` range labels |
 | `chunk-chat-jsonl` | `chunk-chat-jsonl FILE`                                                                                              | n/a                      | internal chunker (microfts2 protocol)                |
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
 | `connections`      | `connections SUBCOMMAND ...`                                                                                          | required                 | substrate + sidecar CLI (subcommands below)          |
@@ -140,7 +140,7 @@ server route mappings:
 | `add tmp://...`    | `POST /tmp/add` (or `/tmp/append` with `--append`) |
 | `remove tmp://...` | `POST /tmp/remove`                                 |
 | `fetch tmp://...`  | `POST /fetch` (server reads from memory)           |
-| `message dm`       | `POST /tmp/append` to `tmp://<from>/dm-<to>`       |
+| `message dm`       | `POST /tmp/append` to `tmp://<sender>/dm-<to0>` (sender = `--from` session or `--from-service` identity; `<to0>` = first `--to`) |
 
 ### `reorderArgs`
 
@@ -250,9 +250,16 @@ assistant turns prefix `●`. Exits 1 when no files match.
 ### `chunks` — chunk content / chunk size status
 
 ```
+ark chunks CHUNKID [-before N] [-after N] [-wrap NAME]
+ark chunks PATH:RANGE [-before N] [-after N] [-wrap NAME]
 ark chunks PATH RANGE [-before N] [-after N] [-wrap NAME]
 ark chunks -status [PATTERN...]
 ```
+
+The single-argument forms make it easy to paste a line straight from
+`ark search`, `ark recall`, or recall-DM output. `CHUNKID` (all digits)
+resolves to (path, range) via `db.ChunkInfo`; `PATH:RANGE` splits on
+the last `:` and accepts `NN` or `NN-MM` range labels.
 
 | Flag         | Default | Meaning                                     |
 |--------------|---------|---------------------------------------------|
@@ -330,6 +337,7 @@ ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
 ark connections list [--json]
+ark connections clean [-all] [-checkpoint] [-session ID|project]
 ark connections sidecar-wait
 ark connections sidecar-fetch ID
 ark connections sidecar-result ID            # stdin JSON
@@ -532,6 +540,8 @@ Server-required. Returns markdown crank handles describing fired
 subscriptions. HTTP 204 (no events within timeout) is treated as a
 successful non-event return.
 
+See: `subscribe`
+
 ### `message` — messaging operations
 
 ```
@@ -541,7 +551,7 @@ ark message set-tags      FILE TAG VAL [TAG VAL ...]
 ark message get-tags      FILE [TAG ...]
 ark message check         FILE
 ark message inbox         [--project P] [--to P] [--from P] [--all] [--include-archived] [--counts] [--unmatched]
-ark message dm            --from S --to S [--ref ID] --content TEXT
+ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT
 ```
 
 | Subcommand     | Flags                                                                | Behavior                                                                                                                                        |
@@ -552,7 +562,7 @@ ark message dm            --from S --to S [--ref ID] --content TEXT
 | `get-tags`     | none                                                                 | Alias for `tag get`                                                                                                                             |
 | `check`        | none                                                                 | Calls `tag check` with the standard message heading list                                                                                        |
 | `inbox`        | see below                                                            | Server-first; pairs requests/responses by ID                                                                                                    |
-| `dm`           | `--from`, `--to`, `--ref`, `--content`                               | Server-required; appends a tagged chunk to `tmp://<from>/dm-<to>`                                                                               |
+| `dm`           | `--from` ⨯ `--from-service`, `--to` (repeatable), `--subject`, `--ref`, `--content` | Server-required; appends a tagged chunk to `tmp://<sender>/dm-<to0>` where sender is the `--from` session or the `--from-service` identity (e.g. `ARK-RECALL`). Emits `@dm: r1 r2: subject` per the multi-recipient/subject grammar. See [messaging.md](messaging.md). |
 
 `message inbox` flags:
 
@@ -836,7 +846,7 @@ Reads the PID file, verifies the process is alive, sends SIGTERM (or
 SIGKILL with `-f`), polls every 100ms for up to 10 seconds. Exits 1
 on missing PID file, dead PID, or timeout.
 
-### `subscribe` — manage tag subscriptions
+### `subscribe` — manage tag subscriptions for `listen`
 
 ```
 ark subscribe --session ID [options]
@@ -863,6 +873,8 @@ sigil (`T=V`, `T:V`, `T~V`).
 
 Server-required. Without `--list`/`--stats`/`--cancel`, a register
 call requires `--session` and at least one `--tag` or `--file-tag`.
+
+See: `listen`
 
 ### `tag` — tag operations
 

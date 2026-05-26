@@ -251,14 +251,16 @@ When `--propose` is set ([derived-tags.md](derived-tags.md))
 and a surfaced chunk has accumulated RC records, a
 `@chunk-proposed-tags` line is added after `@chunk-tags`,
 carrying comma-separated derived-tag candidates in similarity-
-descending order:
+descending order with parenthesized cosine scores:
 
     @chunk-tags: cooking, vegetable, recipe
-    @chunk-proposed-tags: priority, status, axis
+    @chunk-proposed-tags: priority (0.72), status (0.61), axis (0.58)
 
-The line is omitted (not emitted empty) for chunks with no RC
-records. See [derived-tags.md](derived-tags.md) for the
-derivation pass and the `ProposedTags` JSON field.
+The score is the chunk-EC ↔ tag-ED max cosine — the same value
+the propose pass uses for its threshold cut. The line is
+omitted (not emitted empty) for chunks with no RC records. See
+[derived-tags.md](derived-tags.md) for the derivation pass and
+the `ProposedTags` / `ProposedTagScores` JSON fields.
 
 When no chunks match:
 

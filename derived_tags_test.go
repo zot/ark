@@ -587,6 +587,171 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	}
 }
 
+// TestStore_ClearAllRecall_WipesAcrossSubstrates verifies the four
+// ClearAll* helpers each remove every record under their respective
+// prefix without touching the others.
+// Refs: R2744
+func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
+	_, db := setupRecall(t)
+
+	// Seed two chunks with RC + RF + RJ records.
+	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		if err := db.store.WriteDerivedProposal(txn, 1, "food"); err != nil {
+			return err
+		}
+		if err := db.store.WriteDerivedProposal(txn, 2, "axis"); err != nil {
+			return err
+		}
+		if err := db.store.WriteDerivedFreshness(txn, 1, 10); err != nil {
+			return err
+		}
+		return db.store.WriteDerivedFreshness(txn, 2, 11)
+	}); err != nil {
+		t.Fatalf("seed RC/RF: %v", err)
+	}
+	if err := db.store.RejectDerived(1, "noise"); err != nil {
+		t.Fatalf("RejectDerived 1: %v", err)
+	}
+	if err := db.store.RejectDerived(2, "noise"); err != nil {
+		t.Fatalf("RejectDerived 2: %v", err)
+	}
+	if err := db.store.AddDiscussed("sess-A", "topic", "x"); err != nil {
+		t.Fatalf("AddDiscussed A: %v", err)
+	}
+	if err := db.store.AddDiscussed("sess-B", "topic", "y"); err != nil {
+		t.Fatalf("AddDiscussed B: %v", err)
+	}
+
+	// ClearAllDerivedProposals — wipes RC for both chunks, leaves
+	// RF/RJ/RD intact.
+	n, err := db.store.ClearAllDerivedProposals()
+	if err != nil {
+		t.Fatalf("ClearAllDerivedProposals: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("RC deleted = %d, want 2", n)
+	}
+	for _, cid := range []uint64{1, 2} {
+		props, _ := db.store.DerivedProposals(cid)
+		if len(props) != 0 {
+			t.Errorf("chunk %d: RC still has %d entries after ClearAllDerivedProposals", cid, len(props))
+		}
+	}
+
+	// ClearAllDerivedFreshness — wipes RF for both chunks.
+	n, err = db.store.ClearAllDerivedFreshness()
+	if err != nil {
+		t.Fatalf("ClearAllDerivedFreshness: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("RF deleted = %d, want 2", n)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		for _, cid := range []uint64{1, 2} {
+			_, ok, _ := db.store.ReadDerivedFreshness(txn, cid)
+			if ok {
+				t.Errorf("chunk %d: RF still present after ClearAllDerivedFreshness", cid)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("verify RF: %v", err)
+	}
+
+	// ClearAllDerivedRejections — wipes RJ for both chunks.
+	n, err = db.store.ClearAllDerivedRejections()
+	if err != nil {
+		t.Fatalf("ClearAllDerivedRejections: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("RJ deleted = %d, want 2", n)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		for _, cid := range []uint64{1, 2} {
+			rej, _ := db.store.HasDerivedRejection(txn, cid, "noise")
+			if rej {
+				t.Errorf("chunk %d: RJ still present after ClearAllDerivedRejections", cid)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("verify RJ: %v", err)
+	}
+
+	// ClearAllDiscussed — wipes RD across every session.
+	n, err = db.store.ClearAllDiscussed()
+	if err != nil {
+		t.Fatalf("ClearAllDiscussed: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("RD deleted = %d, want 2", n)
+	}
+	for _, sess := range []string{"sess-A", "sess-B"} {
+		entries, _ := db.store.ListDiscussed(sess, 0, 0)
+		if len(entries) != 0 {
+			t.Errorf("session %s: RD still has %d entries after ClearAllDiscussed", sess, len(entries))
+		}
+	}
+}
+
+// TestRecall_Propose_MinSimilarityFloor verifies the
+// chunk-EC ↔ tag-ED cosine floor (`[recall].min_propose_similarity`)
+// drops sub-threshold candidates before the top-K cut, never writes
+// them as RC records, and surfaces scores via ProposedTagScores
+// aligned to ProposedTags.
+// Refs: R2742, R2743
+func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
+	l, db := setupRecall(t)
+	floor := 0.5
+	db.config.Recall.MinProposeSimilarity = &floor
+
+	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
+	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
+	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
+	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
+	// Aligned with chunk vector: cosine 1.0, well above floor.
+	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
+	// Mostly orthogonal: cosine 0.3 / √1.09 ≈ 0.287, below floor.
+	db.store.WriteTagDefEmbedding("noise", 11, vecFrom(0.3, 1, 0, 0))
+
+	res, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cInput}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	var target *RecalledChunk
+	for i := range res.Chunks {
+		if res.Chunks[i].ChunkID == cTarget {
+			target = &res.Chunks[i]
+		}
+	}
+	if target == nil {
+		t.Fatalf("target chunk %d not surfaced", cTarget)
+	}
+	if len(target.ProposedTags) != 1 || target.ProposedTags[0] != "food" {
+		t.Fatalf("expected exactly [food]; got %v", target.ProposedTags)
+	}
+	if len(target.ProposedTagScores) != 1 {
+		t.Fatalf("expected one score aligned to one tag; got %v", target.ProposedTagScores)
+	}
+	if target.ProposedTagScores[0] < 0.99 {
+		t.Errorf("expected food cosine ≈ 1.0; got %v", target.ProposedTagScores[0])
+	}
+
+	// "noise" must not have produced an RC record (write-side floor).
+	props, err := db.store.DerivedProposals(cTarget)
+	if err != nil {
+		t.Fatalf("DerivedProposals: %v", err)
+	}
+	for _, p := range props {
+		if p.Tagname == "noise" {
+			t.Errorf("noise should have been filtered by floor; found RC record: %+v", p)
+		}
+	}
+}
+
 // TestRecall_Propose_NoModelIsNoOp verifies --propose without
 // EmbeddingAvailable is silent: no RC writes, recall result unaffected.
 // Refs: R2676

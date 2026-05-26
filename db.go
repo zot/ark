@@ -2579,6 +2579,108 @@ func (db *DB) PruneDiscussed(ttlOverride time.Duration) (int, error) {
 	return db.store.PruneDiscussed(ttl)
 }
 
+// ClearAllDiscussed deletes every RD record across every session,
+// routing through the write actor. Returns the deleted count.
+// CRC: crc-DB.md | R2744
+func (db *DB) ClearAllDiscussed() (int, error) {
+	var count int
+	err := SyncVoid(db, func(_ *DB) error {
+		c, err := db.store.ClearAllDiscussed()
+		count = c
+		return err
+	})
+	return count, err
+}
+
+// ClearAllDerivedProposals wipes every RC record across the corpus,
+// routing through the write actor. Returns the deleted count.
+// CRC: crc-DB.md | R2744
+func (db *DB) ClearAllDerivedProposals() (int, error) {
+	var count int
+	err := SyncVoid(db, func(_ *DB) error {
+		c, err := db.store.ClearAllDerivedProposals()
+		count = c
+		return err
+	})
+	return count, err
+}
+
+// ClearAllDerivedFreshness wipes every RF record across the corpus,
+// routing through the write actor. Returns the deleted count.
+// CRC: crc-DB.md | R2744
+func (db *DB) ClearAllDerivedFreshness() (int, error) {
+	var count int
+	err := SyncVoid(db, func(_ *DB) error {
+		c, err := db.store.ClearAllDerivedFreshness()
+		count = c
+		return err
+	})
+	return count, err
+}
+
+// ClearAllDerivedRejections wipes every RJ record across the corpus,
+// routing through the write actor. Returns the deleted count.
+// CRC: crc-DB.md | R2744
+func (db *DB) ClearAllDerivedRejections() (int, error) {
+	var count int
+	err := SyncVoid(db, func(_ *DB) error {
+		c, err := db.store.ClearAllDerivedRejections()
+		count = c
+		return err
+	})
+	return count, err
+}
+
+// CheckpointFile advances the indexer's stored FileLength for `path`
+// to the file's current on-disk size. Routes through the write actor.
+// Returns the new FileLength.
+// CRC: crc-DB.md | R2745
+func (db *DB) CheckpointFile(path string) (int64, error) {
+	var size int64
+	err := SyncVoid(db, func(_ *DB) error {
+		s, err := db.indexer.Checkpoint(path)
+		size = s
+		return err
+	})
+	return size, err
+}
+
+// SessionJSONLs returns absolute paths of every indexed chat-jsonl
+// file under ~/.claude/projects/. When sessions is non-empty, restricts
+// to files whose basename matches `<UUID>.jsonl` for one of the listed
+// UUIDs. Used by `ark connections clean -checkpoint`.
+// CRC: crc-DB.md | R2745
+func (db *DB) SessionJSONLs(sessions []string) ([]string, error) {
+	all, err := db.Files()
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	projectsRoot := filepath.Join(home, ".claude", "projects") + string(filepath.Separator)
+	wanted := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		wanted[s+".jsonl"] = true
+	}
+	var out []string
+	for _, p := range all {
+		if !strings.HasPrefix(p, projectsRoot) {
+			continue
+		}
+		base := filepath.Base(p)
+		if !strings.HasSuffix(base, ".jsonl") {
+			continue
+		}
+		if len(wanted) > 0 && !wanted[base] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // Resolve dismisses unresolved files by pattern.
 func (db *DB) Resolve(patterns []string) error {
 	return db.store.ResolveByPattern(patterns, db.matcher)

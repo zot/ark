@@ -71,6 +71,83 @@ Reference tags (in any file, for citing messages):
 - `@ark-request-ref: <path-or-id>` — see this request
 - `@ark-response-ref: <path-or-id>` — see this response
 
+## Direct messages (`@dm`)
+
+Request/response messaging routes through files in `requests/`
+directories and uses `@from-project`/`@to-project` for the
+addresses. Direct messaging routes through `tmp://` documents
+and uses the `@dm` tag for the address. The two surfaces share
+no plumbing beyond ark's tag-search machinery; they're separate
+protocols for different audiences (projects vs. agent sessions).
+
+### `@dm` grammar
+
+```
+@dm: RECIPIENT[ RECIPIENT2 RECIPIENT3 ...][: SUBJECT]
+```
+
+- One or more recipients, space-separated. A recipient is
+  typically a Claude Code session UUID, but the value is
+  opaque to the grammar — any string a subscriber can match
+  against is legal.
+- An optional subject, separated from the recipient list by
+  `: `. The subject is freeform text the receiving agent can
+  pre-triage on without reading the message body, since
+  `ark listen` renders the tag value as a `## @dm: <value>`
+  heading at the top of each delivery.
+- The single-recipient, subject-less form (`@dm: <session>`)
+  is unchanged from prior usage and remains the most common
+  shape. Multi-recipient and subject are additive.
+
+Examples:
+
+```
+@dm: 0e2f...
+@dm: 0e2f...: recall
+@dm: 0e2f... 71a3...: standup-ping
+```
+
+Parsing rules:
+
+- Split on `: ` (colon-space) — the substring before is the
+  recipient list, the substring after (if present) is the
+  subject. The subject may itself contain `: ` (the split is
+  on the first occurrence only).
+- The recipient list splits on whitespace runs into
+  individual recipient tokens.
+- A trailing `:` with no subject (`@dm: foo:`) is illegal;
+  reject it at write time.
+
+### Service identities (`@from-service`)
+
+For messages emitted by ark's own internal subsystems
+(watchers, schedulers, background derivation passes), the
+sender identity is `@from-service`, not `@from-project`.
+
+```
+@from-service: ARK-<SUBSYSTEM>
+```
+
+- Values follow `ARK-<SUBSYSTEM>` shape — one identity per
+  service. Examples: `ARK-RECALL` (the simple-recall
+  watcher), `ARK-SCHEDULER` (reserved for future use).
+- Service identities are not shared umbrellas: each emitting
+  subsystem gets its own identity so receivers can subscribe
+  to `@from-service: ARK-RECALL` independently of any other
+  ark-emitted traffic.
+- Mutually exclusive with `@from-project` on the same
+  message. A message either comes from a project (a user-
+  facing entity) or from an ark service (an internal
+  subsystem); never both.
+
+Why split from `@from-project`: ark itself ships as a project
+literally named `ark` and already participates in
+cross-project messaging via `@from-project: ark`. Reusing
+`@from-project` for service traffic would conflate two
+distinct origins. Splitting the tag makes the distinction
+first-class without teaching receivers a value-casing
+convention.
+
 ## Subcommands
 
 All subcommands are under `ark message`. They operate on plain files —
@@ -191,3 +268,65 @@ field is empty.
 
 Uses the server proxy when available, falls back to cold-start
 (`withDB`). Read-only operation.
+
+### dm
+
+```
+ark message dm --from SESSION         --to RECIPIENT [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT
+ark message dm --from-service NAME    --to RECIPIENT [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT
+```
+
+Appends a direct-message chunk to `tmp://<sender>/dm-<to0>`
+where `<sender>` is the `--from` session UUID or the
+`--from-service` identity (e.g. `ARK-RECALL`) and `<to0>` is
+the first recipient. Server-required — DMs live in tmp://
+memory.
+
+The subcommand owns the tag block at the head of each
+appended chunk. The caller supplies the body content; the
+subcommand prepends the chunk boundary, the `@dm`/`@from`
+tags, and the optional `@ref`, then the body, then a
+trailing newline.
+
+Sender flags (mutually exclusive):
+
+| Flag                  | Effect                                                                                                                                |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| `--from SESSION`      | Sender is a Claude Code session UUID. Emits `@from: <session>`. tmp:// path uses `<session>` as the sender segment.                   |
+| `--from-service NAME` | Sender is an ark internal subsystem. Emits `@from-service: NAME` instead of `@from`. tmp:// path uses `NAME` as the sender segment.   |
+
+Recipient and subject flags:
+
+| Flag             | Behavior                                                                                                                                  |
+|------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `--to RECIPIENT` | Required. Repeatable for multi-recipient DMs. Recipients are space-joined into the `@dm` value in the order given.                        |
+| `--subject TEXT` | Optional. When set, appended to `@dm` as `: TEXT` after the recipient list (the `@dm` subject form). Empty text is rejected.              |
+| `--ref ID`       | Optional. Threading reference. Emits `@ref: ID` on its own line in the tag block.                                                         |
+
+Emitted tag block shapes:
+
+```
+@dm: <recipient>
+@from: <session>
+```
+
+```
+@dm: <r1> <r2> <r3>: <subject>
+@from-service: ARK-RECALL
+@ref: <ref-id>
+```
+
+The internal compose function is shared between the CLI and
+ark's in-process callers — the simple-recall watcher emits
+through the same path so the contract stays uniform. The
+CLI is useful for manual testing of a service-emitted DM
+without standing up the watcher:
+
+```
+ark message dm --from-service ARK-RECALL --to <session> \
+  --subject recall --content "$(cat body.md)"
+```
+
+Body content rules match `new-request` / `new-response`:
+`--content` flag (preferred for agents) or stdin until lone
+`.` when stdin is non-TTY and `--content` is unset.

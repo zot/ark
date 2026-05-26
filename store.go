@@ -3384,6 +3384,24 @@ func (s *Store) ClearDiscussed(session string) (int, error) {
 	return deleted, err
 }
 
+// ClearAllDiscussed deletes every RD record across every session.
+// Returns the deleted count. Intended for testing/reset; routine
+// expiry uses PruneDiscussed.
+// CRC: crc-Store.md | R2744
+func (s *Store) ClearAllDiscussed() (int, error) {
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixDiscussed), func(cur *lmdb.Cursor, _, _ []byte) error {
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			deleted++
+			return nil
+		})
+	})
+	return deleted, err
+}
+
 // PruneDiscussed sweeps RD records across all sessions, deleting
 // entries older than `ttl` (or, when `ttl == 0`, deletes nothing —
 // "0" means never expire, matching the [recall].discussed_ttl
@@ -3599,6 +3617,48 @@ func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
 		return out[i].Tagname < out[j].Tagname
 	})
 	return out, nil
+}
+
+// ClearAllDerivedProposals deletes every RC record across the
+// corpus. Returns the deleted count. Intended for testing/reset;
+// the propose pass would otherwise rewrite RC records as chunks
+// become stale.
+// CRC: crc-Store.md | R2744
+func (s *Store) ClearAllDerivedProposals() (int, error) {
+	return s.clearAllByPrefix([]byte(prefixDerivedCandidate))
+}
+
+// ClearAllDerivedFreshness deletes every RF record across the
+// corpus. Pairs with ClearAllDerivedProposals — without clearing
+// RF, the propose pass treats existing chunks as fresh and skips
+// the derivation step. Returns the deleted count.
+// CRC: crc-Store.md | R2744
+func (s *Store) ClearAllDerivedFreshness() (int, error) {
+	return s.clearAllByPrefix([]byte(prefixDerivedFreshness))
+}
+
+// ClearAllDerivedRejections deletes every RJ record across the
+// corpus. Curator-authored rejections are normally durable; this
+// helper exists for testing reset only. Returns the deleted count.
+// CRC: crc-Store.md | R2744
+func (s *Store) ClearAllDerivedRejections() (int, error) {
+	return s.clearAllByPrefix([]byte(prefixDerivedRejection))
+}
+
+// clearAllByPrefix is the shared scan-and-delete used by the
+// recall-substrate Clear* helpers.
+func (s *Store) clearAllByPrefix(prefix []byte) (int, error) {
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			deleted++
+			return nil
+		})
+	})
+	return deleted, err
 }
 
 // AcceptDerived promotes a derived proposal to an attached tag:

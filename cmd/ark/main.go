@@ -1715,6 +1715,8 @@ func cmdConnections(args []string) {
 		cmdConnectionsShow(rest)
 	case "list":
 		cmdConnectionsList(rest)
+	case "clean":
+		cmdConnectionsClean(rest)
 	case "sidecar-wait":
 		cmdConnectionsSidecarWait(rest)
 	case "sidecar-fetch":
@@ -1770,6 +1772,21 @@ Public subcommands:
 
   list [--json]
     List in-flight connections requests.
+
+  clean [-all] [-checkpoint] [-session ID|project]
+    Wipe recall-substrate state to help with testing.
+    Default: RC (derived-tag proposals) + RD (discussed-tag dedup).
+    -all: also wipe RF (derivation freshness), RJ (derived rejections),
+          tmp://connections/* and tmp://ARK-RECALL/* documents.
+    -checkpoint: advance the indexer's FileLength on session JSONLs
+          (scoped by -session) so the next refresh treats only
+          future-appended bytes as new. Also clears the watcher's
+          in-memory pendingChunks.
+    -session ID: restrict RD / checkpoint scope to one session.
+    -session project: restrict RD / checkpoint scope to sessions
+          belonging to the current working directory (resolved via
+          ~/.claude/projects/). RC/RF/RJ and tmp:// are always
+          corpus-wide regardless.
 
 Sidecar subcommands (turbo agent internal protocol):
   sidecar-wait              Lotto tube: drain turbo request queue (JSON)
@@ -2131,6 +2148,178 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// cmdConnectionsClean implements `ark connections clean [-all]
+// [-session ID|project]`. Default scope wipes RC + RD; -all also
+// wipes RF, RJ, and tmp://connections/* / tmp://ARK-RECALL/* docs.
+// CRC: crc-CLI.md | R2744
+func cmdConnectionsClean(args []string) {
+	fs := flag.NewFlagSet("connections clean", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	all := fs.Bool("all", false, "also wipe RF, RJ, tmp://connections/*, tmp://ARK-RECALL/*")
+	session := fs.String("session", "", "restrict RD scope: session UUID, or 'project' for cwd-resolved sessions")
+	checkpoint := fs.Bool("checkpoint", false, "advance the indexer's FileLength on session JSONLs so the next turn starts from current EOF")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark connections clean [-all] [-checkpoint] [-session ID|project]
+
+Wipe recall-substrate state to help with testing.
+
+Default scope: RC (derived-tag proposals) + RD (discussed-tag dedup,
+all sessions).
+
+  -all              also wipe RF (derivation freshness), RJ (derived
+                    rejections), tmp://connections/* and
+                    tmp://ARK-RECALL/* documents
+  -checkpoint       advance the indexer's FileLength on session
+                    JSONLs (scoped by -session) so the next refresh
+                    treats only future-appended bytes as new — caps
+                    off the current session's history. Also clears
+                    the watcher's in-memory pendingChunks.
+  -session ID       restrict RD / checkpoint scope to one session UUID
+  -session project  restrict RD / checkpoint scope to sessions for
+                    the current working directory (resolved via
+                    ~/.claude/projects/<encoded-cwd>/*.jsonl)`)
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fs.SetOutput(os.Stderr)
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	var sessions []string
+	switch *session {
+	case "":
+		sessions = nil
+	case "project":
+		ids, err := projectSessionIDs()
+		if err != nil {
+			fatal(err)
+		}
+		if len(ids) == 0 {
+			fmt.Fprintln(os.Stderr, "no sessions found for this project; RD would be a no-op")
+			os.Exit(1)
+		}
+		sessions = ids
+	default:
+		sessions = []string{*session}
+	}
+
+	var resp struct {
+		Status          string `json:"status"`
+		RC              int    `json:"rc"`
+		RD              int    `json:"rd"`
+		RF              int    `json:"rf"`
+		RJ              int    `json:"rj"`
+		TmpConnections  int    `json:"tmpConnections"`
+		TmpRecall       int    `json:"tmpRecall"`
+		CheckpointFiles int    `json:"checkpointFiles"`
+	}
+	if client := serverClient(arkDir); client != nil {
+		body := map[string]any{"sessions": sessions, "all": *all, "checkpoint": *checkpoint}
+		if err := proxyDecode(client, "POST", "/connections/clean", body, &resp); err != nil {
+			fatal(err)
+		}
+	} else {
+		// Offline path: open the DB directly. tmp:// paths live in
+		// the server process, so without a server they don't exist —
+		// the tmp counters stay zero.
+		withDB(func(db *ark.DB) {
+			rc, err := db.ClearAllDerivedProposals()
+			if err != nil {
+				fatal(err)
+			}
+			resp.RC = rc
+
+			if len(sessions) == 0 {
+				c, err := db.ClearAllDiscussed()
+				if err != nil {
+					fatal(err)
+				}
+				resp.RD = c
+			} else {
+				for _, sess := range sessions {
+					c, err := db.ClearDiscussed(sess)
+					if err != nil {
+						fatal(err)
+					}
+					resp.RD += c
+				}
+			}
+
+			if *all {
+				rf, err := db.ClearAllDerivedFreshness()
+				if err != nil {
+					fatal(err)
+				}
+				resp.RF = rf
+				rj, err := db.ClearAllDerivedRejections()
+				if err != nil {
+					fatal(err)
+				}
+				resp.RJ = rj
+			}
+			if *checkpoint {
+				paths, err := db.SessionJSONLs(sessions)
+				if err != nil {
+					fatal(err)
+				}
+				for _, p := range paths {
+					if _, err := db.CheckpointFile(p); err != nil {
+						fatal(err)
+					}
+					resp.CheckpointFiles++
+				}
+			}
+		})
+	}
+	fmt.Fprintf(os.Stderr, "cleaned: RC=%d RD=%d", resp.RC, resp.RD)
+	if *all {
+		fmt.Fprintf(os.Stderr, " RF=%d RJ=%d tmp-connections=%d tmp-recall=%d",
+			resp.RF, resp.RJ, resp.TmpConnections, resp.TmpRecall)
+	}
+	if *checkpoint {
+		fmt.Fprintf(os.Stderr, " checkpoint-files=%d", resp.CheckpointFiles)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// projectSessionIDs enumerates `<session-uuid>.jsonl` files under
+// ~/.claude/projects/<encoded-cwd>/ where encoded-cwd replaces every
+// "/" with "-" (Claude Code's convention). Returns the basenames
+// without extension. R2744
+func projectSessionIDs() ([]string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	encoded := strings.ReplaceAll(cwd, "/", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var ids []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		ids = append(ids, strings.TrimSuffix(name, ".jsonl"))
+	}
+	return ids, nil
 }
 
 func cmdConnectionsSidecarWait(_ []string) {
@@ -4025,10 +4214,14 @@ func cmdChunks(args []string) {
 	wrap := fs.String("wrap", "", "wrap output in XML tags")
 	showStatus := fs.Bool("status", false, "show SIZE FILE:LOCATION for all chunks matching patterns")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark chunks [options] <path> <range>
+		fmt.Fprintln(os.Stderr, `Usage: ark chunks [options] <chunkid>
+       ark chunks [options] <path>:<range>
+       ark chunks [options] <path> <range>
        ark chunks -status [pattern...]
 
-Show chunk content, or list chunks with sizes.
+Show chunk content, or list chunks with sizes. The single-argument
+forms (decimal chunkID or path:range) make it easy to paste a line
+straight from search/recall output.
 
 Options:`)
 		fs.PrintDefaults()
@@ -4041,14 +4234,24 @@ Options:`)
 	}
 
 	posArgs := fs.Args()
-	if len(posArgs) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: ark chunks <path> <range> [-before N] [-after N]")
+	filePath, chunkRange, err := resolveChunksTarget(posArgs)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "usage: ark chunks <chunkid> | <path>:<range> | <path> <range>  [-before N] [-after N]")
 		os.Exit(1)
 	}
-	filePath := posArgs[0]
-	chunkRange := posArgs[1]
 
 	withDB(func(d *ark.DB) {
+		if filePath == "" {
+			// chunkID-only form: resolve via ChunkInfo.
+			cid, _ := strconv.ParseUint(chunkRange, 10, 64)
+			info, err := d.ChunkInfo(cid)
+			if err != nil {
+				fatal(err)
+			}
+			filePath = info.Path
+			chunkRange = info.Range
+		}
 		results, err := d.GetChunks(filePath, chunkRange, *before, *after)
 		if err != nil {
 			fatal(err)
@@ -4066,6 +4269,63 @@ Options:`)
 			}
 		}
 	})
+}
+
+// resolveChunksTarget parses the positional arguments of `ark chunks`.
+// Returns (path, range, nil) on success. When the input is a bare
+// chunkID, path is empty and range carries the decimal chunkID string —
+// the caller resolves chunkID → (path, range) via db.ChunkInfo.
+//
+// Accepted shapes:
+//   - `<chunkid>`         single all-digits arg
+//   - `<path>:<range>`    single arg with `:NN[-MM]` suffix
+//   - `<path> <range>`    classic two-arg form
+func resolveChunksTarget(posArgs []string) (path, rangeLabel string, err error) {
+	switch len(posArgs) {
+	case 0:
+		return "", "", fmt.Errorf("missing target")
+	case 1:
+		arg := posArgs[0]
+		if isAllDigits(arg) {
+			return "", arg, nil
+		}
+		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx < len(arg)-1 {
+			candidate := arg[idx+1:]
+			if looksLikeRange(candidate) {
+				return arg[:idx], candidate, nil
+			}
+		}
+		return "", "", fmt.Errorf("single argument must be a decimal chunkID or path:range")
+	case 2:
+		return posArgs[0], posArgs[1], nil
+	default:
+		return "", "", fmt.Errorf("too many arguments")
+	}
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// looksLikeRange recognizes `NN` and `NN-MM` shapes (the two range
+// labels every chunker uses today). Stays narrow on purpose — exotic
+// label formats fall back to the two-arg form.
+func looksLikeRange(s string) bool {
+	if s == "" {
+		return false
+	}
+	if idx := strings.IndexByte(s, '-'); idx >= 0 {
+		return idx > 0 && idx < len(s)-1 && isAllDigits(s[:idx]) && isAllDigits(s[idx+1:])
+	}
+	return isAllDigits(s)
 }
 
 func cmdChunksStatus(patterns []string) {
@@ -6305,50 +6565,47 @@ func cmdMessageInbox(args []string) {
 // CRC: crc-CLI.md | Seq: seq-pubsub.md
 func cmdMessageDM(args []string) {
 	fs := flag.NewFlagSet("message dm", flag.ExitOnError)
-	from := fs.String("from", "", "sender session ID (required)")
-	to := fs.String("to", "", "recipient session ID (required)")
+	from := fs.String("from", "", "sender session ID (mutually exclusive with --from-service)")
+	fromService := fs.String("from-service", "", "sender service identity, e.g. ARK-RECALL (mutually exclusive with --from)")
+	var toFlag stringSlice
+	fs.Var(&toFlag, "to", "recipient (repeatable for multi-recipient DMs)")
+	subject := fs.String("subject", "", "optional `@dm` subject suffix")
 	ref := fs.String("ref", "", "reference ID (for threading replies)")
 	content := fs.String("content", "", "message content (markdown)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark message dm --from SESSION --to SESSION [--ref ID] --content CONTENT")
+		fmt.Fprintln(os.Stderr, "Usage:")
+		fmt.Fprintln(os.Stderr, "  ark message dm --from SESSION         --to R [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT")
+		fmt.Fprintln(os.Stderr, "  ark message dm --from-service NAME    --to R [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT")
 		fmt.Fprintln(os.Stderr, "\nSend a direct message between agents via tmp:// files.")
+		fmt.Fprintln(os.Stderr, "--from and --from-service are mutually exclusive.")
 		fmt.Fprintln(os.Stderr, "Content can include newlines (bash allows them in quoted args).")
-		fmt.Fprintln(os.Stderr, "\nExample:")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
 		fmt.Fprintln(os.Stderr, `  ark message dm --from abc123 --to def456 --content "Found 3 @decision: tags"`)
 		fmt.Fprintln(os.Stderr, `  ark message dm --from def456 --to abc123 --ref msg-1 --content "Yes, pull them"`)
+		fmt.Fprintln(os.Stderr, `  ark message dm --from-service ARK-RECALL --to def456 --subject recall --content "$(cat body.md)"`)
 		fmt.Fprintln(os.Stderr)
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
 
-	if *from == "" || *to == "" || *content == "" {
-		fatal(fmt.Errorf("--from, --to, and --content are all required"))
+	if *content == "" {
+		fatal(fmt.Errorf("--content is required"))
+	}
+
+	sender := ark.DMSender{Session: *from, Service: *fromService}
+	path, payload, err := ark.ComposeDM(sender, []string(toFlag), *subject, *ref, *content)
+	if err != nil {
+		fatal(err)
 	}
 
 	client := serverClient(arkDir)
 	if client == nil {
 		fatal(fmt.Errorf("server not running (dm requires server)"))
 	}
-
-	// Build the tagged chunk: blank line (chunk boundary) + tags + content
-	var buf strings.Builder
-	buf.WriteString("\n@dm: ")
-	buf.WriteString(*to)
-	buf.WriteString("\n@from: ")
-	buf.WriteString(*from)
-	if *ref != "" {
-		buf.WriteString("\n@ref: ")
-		buf.WriteString(*ref)
-	}
-	buf.WriteString("\n")
-	buf.WriteString(*content)
-	buf.WriteString("\n")
-
-	tmpPath := fmt.Sprintf("tmp://%s/dm-%s", *from, *to)
 	if err := proxyOK(client, "POST", "/tmp/append", map[string]any{
-		"path":     tmpPath,
+		"path":     path,
 		"strategy": "markdown",
-		"content":  buf.String(),
+		"content":  payload,
 	}); err != nil {
 		fatal(err)
 	}
@@ -7045,45 +7302,6 @@ func printRecallResult(out io.Writer, res *ark.RecallResult, jsonOut bool) error
 		return nil
 	}
 
-	for _, chunk := range res.Chunks {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "- @chunk-id: %d\n", chunk.ChunkID)
-		fmt.Fprintf(out, "  @chunk-path: %s\n", chunk.Path)
-		fmt.Fprintf(out, "  @chunk-range: %s\n", chunk.Range)
-		fmt.Fprintf(out, "  @chunk-score: %.2f\n", chunk.Score)
-		fmt.Fprintf(out, "  @chunk-evidence-vector-ec: %.2f\n", chunk.PerSubstrate.VectorEC)
-		fmt.Fprintf(out, "  @chunk-evidence-trigram-ec: %.2f\n", chunk.PerSubstrate.TrigramEC)
-
-		// R2645: @chunk-tags lists names only; each tag with a non-
-		// empty value emits a sub-list item whose value is the literal
-		// "name: value" so it remains a parseable ark tag whose value
-		// runs to end of line — no quoting acrobatics.
-		names := make([]string, 0, len(chunk.Tags))
-		for _, t := range chunk.Tags {
-			names = append(names, t.Tag)
-		}
-		fmt.Fprintf(out, "  @chunk-tags: %s\n", strings.Join(names, ", "))
-		// R2684: optional `@chunk-proposed-tags` line carrying derived-
-		// tag candidates when --propose is set. Names only, similarity-
-		// desc order; omitted when the chunk has no RC records.
-		if len(chunk.ProposedTags) > 0 {
-			fmt.Fprintf(out, "  @chunk-proposed-tags: %s\n", strings.Join(chunk.ProposedTags, ", "))
-		}
-		for _, t := range chunk.Tags {
-			if t.Value != "" {
-				fmt.Fprintf(out, "  - @chunk-tag-value: %s: %s\n", t.Tag, t.Value)
-			}
-		}
-
-		if chunk.Content != "" {
-			lines := strings.Split(chunk.Content, "\n")
-			if len(lines) > 0 && lines[len(lines)-1] == "" {
-				lines = lines[:len(lines)-1]
-			}
-			for _, line := range lines {
-				fmt.Fprintf(out, "  > %s\n", line)
-			}
-		}
-	}
+	ark.RenderRecallChunks(out, res.Chunks)
 	return nil
 }

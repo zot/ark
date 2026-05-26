@@ -334,3 +334,144 @@ func TestDiscussedCLI_RoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// CRC: crc-CLI.md | Seq: seq-message.md | Test: test-MessageDM.md
+// Covers the composeDM helper that backs `ark message dm` and the
+// in-process emit path used by the simple-recall watcher.
+// R2716-R2727.
+func TestComposeDM_SessionSingleRecipient(t *testing.T) {
+	path, payload, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		[]string{"sess-B"},
+		"", "", "hello\n")
+	if err != nil {
+		t.Fatalf("composeDM: %v", err)
+	}
+	if path != "tmp://sess-A/dm-sess-B" {
+		t.Errorf("path = %q", path)
+	}
+	// R2716 single-recipient @dm shape; R2723 @from for session sender.
+	wantLines := []string{
+		"",
+		"@dm: sess-B",
+		"@from: sess-A",
+		"hello",
+		"",
+		"",
+	}
+	if got := strings.Split(payload, "\n"); !reflect.DeepEqual(got, wantLines) {
+		t.Errorf("payload lines mismatch:\n got %q\nwant %q", got, wantLines)
+	}
+}
+
+func TestComposeDM_ServiceWithSubject(t *testing.T) {
+	path, payload, err := ark.ComposeDM(
+		ark.DMSender{Service: "ARK-RECALL"},
+		[]string{"sess-B"},
+		"recall", "", "body\n")
+	if err != nil {
+		t.Fatalf("composeDM: %v", err)
+	}
+	// R2724 service identity drives the tmp:// sender segment.
+	if path != "tmp://ARK-RECALL/dm-sess-B" {
+		t.Errorf("path = %q", path)
+	}
+	// R2716 subject form; R2723 @from-service in place of @from.
+	if !strings.Contains(payload, "@dm: sess-B: recall\n") {
+		t.Errorf("missing subject form in payload:\n%s", payload)
+	}
+	if !strings.Contains(payload, "@from-service: ARK-RECALL\n") {
+		t.Errorf("missing @from-service in payload:\n%s", payload)
+	}
+	if strings.Contains(payload, "@from:") {
+		t.Errorf("service form should not emit @from")
+	}
+}
+
+func TestComposeDM_MultiRecipient(t *testing.T) {
+	path, payload, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		[]string{"sess-B", "sess-C", "sess-D"},
+		"standup-ping", "", "body")
+	if err != nil {
+		t.Fatalf("composeDM: %v", err)
+	}
+	// R2725 recipients joined by single space.
+	if !strings.Contains(payload, "@dm: sess-B sess-C sess-D: standup-ping\n") {
+		t.Errorf("multi-recipient @dm shape wrong:\n%s", payload)
+	}
+	// R2724 path uses the first recipient.
+	if path != "tmp://sess-A/dm-sess-B" {
+		t.Errorf("path = %q (expected first recipient)", path)
+	}
+}
+
+func TestComposeDM_RefAppended(t *testing.T) {
+	_, payload, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		[]string{"sess-B"},
+		"", "msg-1", "body")
+	if err != nil {
+		t.Fatalf("composeDM: %v", err)
+	}
+	if !strings.Contains(payload, "@ref: msg-1\n") {
+		t.Errorf("missing @ref line:\n%s", payload)
+	}
+}
+
+// R2722 mutex.
+func TestComposeDM_RejectsBothSenderForms(t *testing.T) {
+	_, _, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A", Service: "ARK-RECALL"},
+		[]string{"sess-B"},
+		"", "", "body")
+	if err == nil {
+		t.Fatal("expected error when both --from and --from-service set")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected mutex error, got: %v", err)
+	}
+}
+
+// R2722 required.
+func TestComposeDM_RejectsNoSender(t *testing.T) {
+	_, _, err := ark.ComposeDM(
+		ark.DMSender{},
+		[]string{"sess-B"},
+		"", "", "body")
+	if err == nil {
+		t.Fatal("expected error when neither --from nor --from-service set")
+	}
+}
+
+func TestComposeDM_RejectsEmptyRecipients(t *testing.T) {
+	_, _, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		nil,
+		"", "", "body")
+	if err == nil {
+		t.Fatal("expected error for empty recipients")
+	}
+}
+
+// R2718 single-token recipients.
+func TestComposeDM_RejectsWhitespaceRecipient(t *testing.T) {
+	_, _, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		[]string{"two tokens"},
+		"", "", "body")
+	if err == nil {
+		t.Fatal("expected error when a recipient contains whitespace")
+	}
+}
+
+// R2719 reject trailing-colon "subject" (empty after the colon).
+func TestComposeDM_RejectsEmptySubject(t *testing.T) {
+	_, _, err := ark.ComposeDM(
+		ark.DMSender{Session: "sess-A"},
+		[]string{"sess-B"},
+		"   ", "", "body")
+	if err == nil {
+		t.Fatal("expected error for whitespace-only subject")
+	}
+}

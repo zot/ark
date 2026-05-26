@@ -13,6 +13,14 @@ shows all definitions from all sources.
 
 @tag: tag -- the description of a tag
 
+@tag: dm -- direct message. Value is `RECIPIENT[ RECIPIENT2 ...][: SUBJECT]`: one or more whitespace-separated recipients with an optional `: SUBJECT` suffix for pre-body triage. Single-recipient form (`@dm: <session>`) is the most common shape. When you receive a direct message, read the file. See specs/messaging.md for the full grammar.
+
+@tag: from-service -- A message emitted by an ark internal subsystem (not by a user-facing project). Value is `ARK-<SUBSYSTEM>` (e.g. `ARK-RECALL`). Parallel to `@from-project` and mutually exclusive with it on the same message. See specs/messaging.md.
+
+@tag: ark-recall-turn -- The chunkID of the conversation chunk that triggered an ambient-recall DM. Lets the receiving agent correlate the DM back to the turn that prompted it. See specs/simple-recall.md.
+
+@tag: ark-recall-acted -- The receiving agent's disposition of an ambient-recall DM. Values: `surfaced`, `dropped`, `skipped`. Used by the watcher's per-session calibration logging. See specs/simple-recall.md.
+
 @tag: connection -- A relationship between two ideas, patterns, or systems. Format: `@connection: thing A = thing B`
 
 @tag: pattern -- A recurring approach or solution. Name it.

@@ -57,7 +57,7 @@ type Config struct {
 }
 
 // RecallConfig collects the [recall] section of ark.toml.
-// CRC: crc-Config.md | R2659
+// CRC: crc-Config.md | R2659, R2687, R2688, R2689, R2690, R2691, R2692, R2693, R2694
 type RecallConfig struct {
 	// DiscussedTTL is the lifetime of an RD record before lazy
 	// expiry takes effect. Empty/missing falls back to 24h;
@@ -65,6 +65,93 @@ type RecallConfig struct {
 	// An unparseable value falls back to 24h with a warning at
 	// server startup. R2659, R2663
 	DiscussedTTL string `toml:"discussed_ttl,omitempty"`
+
+	// Enabled is the master switch for the simple-recall watcher.
+	// Default false (opt-in for v1). R2688
+	Enabled bool `toml:"enabled,omitempty"`
+
+	// Propose passes `propose = true` through to the recall
+	// substrate on each watcher fire. Default true. R2689
+	Propose *bool `toml:"propose,omitempty"`
+
+	// MinSimilarity is the per-section similarity gate: sections
+	// whose top recalled chunk scores below this are dropped from
+	// the DM. Default 0.65. R2690, R2739
+	MinSimilarity *float64 `toml:"min_similarity,omitempty"`
+
+	// MinProposeSimilarity is the chunk-EC ↔ tag-ED cosine floor
+	// for derived-tag proposals. Candidates scoring below this are
+	// dropped before the top-K cut in selectCandidates and never
+	// written as RC records. Default 0.70. R2742
+	MinProposeSimilarity *float64 `toml:"min_propose_similarity,omitempty"`
+
+	// ActivationDelay is the seconds the watcher waits after a
+	// `turn_duration` record before firing the recall pass. A
+	// user record arriving inside this window cancels the firing
+	// entirely. Default 15. R2728
+	ActivationDelay *int `toml:"activation_delay,omitempty"`
+
+	// ChunksPerDM caps the recalled chunks per section in the DM
+	// body. Default 5. R2692
+	ChunksPerDM *int `toml:"chunks_per_dm,omitempty"`
+
+	// Sources is an optional whitelist of source root directories
+	// (matching Source.Dir in ark.toml). When non-empty, only
+	// sources whose root is in this list (and whose strategy is
+	// chat-jsonl) qualify. Empty = all chat-jsonl sources qualify.
+	// R2693
+	Sources []string `toml:"sources,omitempty"`
+
+	// AgentCmd is reserved for the deferred agent-layer
+	// follow-up (ARK-STATE item 10). v1 does not consume the
+	// field. R2694
+	AgentCmd string `toml:"agent_cmd,omitempty"`
+}
+
+// EffectivePropose returns Propose with the default applied.
+// CRC: crc-Config.md | R2689
+func (rc RecallConfig) EffectivePropose() bool {
+	if rc.Propose == nil {
+		return true
+	}
+	return *rc.Propose
+}
+
+// EffectiveMinSimilarity returns MinSimilarity with the default applied.
+// CRC: crc-Config.md | R2690
+func (rc RecallConfig) EffectiveMinSimilarity() float64 {
+	if rc.MinSimilarity == nil {
+		return 0.65
+	}
+	return *rc.MinSimilarity
+}
+
+// EffectiveMinProposeSimilarity returns MinProposeSimilarity with the
+// default applied.
+// CRC: crc-Config.md | R2742
+func (rc RecallConfig) EffectiveMinProposeSimilarity() float64 {
+	if rc.MinProposeSimilarity == nil {
+		return 0.70
+	}
+	return *rc.MinProposeSimilarity
+}
+
+// EffectiveActivationDelay returns ActivationDelay with the default applied.
+// CRC: crc-Config.md | R2728
+func (rc RecallConfig) EffectiveActivationDelay() int {
+	if rc.ActivationDelay == nil {
+		return 15
+	}
+	return *rc.ActivationDelay
+}
+
+// EffectiveChunksPerDM returns ChunksPerDM with the default applied.
+// CRC: crc-Config.md | R2692
+func (rc RecallConfig) EffectiveChunksPerDM() int {
+	if rc.ChunksPerDM == nil {
+		return 5
+	}
+	return *rc.ChunksPerDM
 }
 
 // DiscussedTTLDuration parses the [recall].discussed_ttl field and

@@ -60,6 +60,7 @@ type Server struct {
 	scheduler       *EventScheduler     // R805: time-based event queue
 	librarian       *Librarian          // R1235: Haiku co-process for spectral search
 	curation        *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
+	recallWatcher   *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
 
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
@@ -254,6 +255,15 @@ func Serve(dbPath string, opts ServeOpts) error {
 	db.indexer.SetScheduler(sched, db.Config())
 	ps.SetDB(db)
 
+	// CRC: crc-Server.md | Seq: seq-recall-watcher.md#1 | R2687, R2700
+	// Construct the simple-recall watcher and wire the indexer's
+	// post-append hook. The watcher's master switch lives in
+	// [recall].enabled; Enqueue is a no-op when the switch is off, so
+	// we wire it unconditionally and let the watcher gate itself.
+	srv.recallWatcher = NewRecallWatcher(db, lib, db.store)
+	srv.recallWatcher.Start()
+	db.indexer.SetRecallWatcher(srv.recallWatcher)
+
 	// R804: Start pubsub reaper ticker
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
@@ -398,6 +408,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /connections/error", srv.librarian.HandleConnectionsError)
 		mux.HandleFunc("POST /connections/find", srv.librarian.HandleConnectionsFind)
 		mux.HandleFunc("GET /connections/list", srv.librarian.HandleConnectionsList)
+		// Connections cleanup (testing/reset). R2744
+		mux.HandleFunc("POST /connections/clean", srv.handleConnectionsClean)
 		// Recall (Phase 2B) HTTP endpoint.
 		// CRC: crc-Server.md | Seq: seq-recall.md#1.3 | R2629
 		mux.HandleFunc("POST /recall", srv.librarian.HandleRecall)
@@ -1388,6 +1400,129 @@ func (srv *Server) handleDiscussedPrune(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"status": "ok", "count": count})
+}
+
+// connectionsCleanRequest carries the parameters for POST
+// /connections/clean. Sessions limits RD wipes to a specific list
+// (empty = wipe across every session). All toggles whether the
+// optional record classes (RF, RJ) and tmp:// artifacts are wiped
+// alongside the defaults (RC, RD). Checkpoint toggles advancing
+// the indexer's FileLength on session JSONLs scoped by Sessions.
+// CRC: crc-Server.md | R2744, R2745
+type connectionsCleanRequest struct {
+	Sessions   []string `json:"sessions,omitempty"`
+	All        bool     `json:"all,omitempty"`
+	Checkpoint bool     `json:"checkpoint,omitempty"`
+}
+
+// connectionsCleanResponse reports per-class deletion counts. tmp://
+// artifact counts are reported under tmpConnections / tmpRecall when
+// `all` was set. CheckpointFiles reports how many session JSONLs
+// had their FileLength advanced when `checkpoint` was set.
+// CRC: crc-Server.md | R2744, R2745
+type connectionsCleanResponse struct {
+	Status          string `json:"status"`
+	RC              int    `json:"rc"`
+	RD              int    `json:"rd"`
+	RF              int    `json:"rf,omitempty"`
+	RJ              int    `json:"rj,omitempty"`
+	TmpConnections  int    `json:"tmpConnections,omitempty"`
+	TmpRecall       int    `json:"tmpRecall,omitempty"`
+	CheckpointFiles int    `json:"checkpointFiles,omitempty"`
+}
+
+// handleConnectionsClean wipes recall-substrate accumulated state to
+// help with testing. Default scope is RC across the corpus and RD
+// across the specified sessions (or all sessions if Sessions is
+// empty). With All=true, also wipes RF, RJ, tmp://connections/* and
+// tmp://ARK-RECALL/* documents.
+// CRC: crc-Server.md | R2744
+func (srv *Server) handleConnectionsClean(w http.ResponseWriter, r *http.Request) {
+	var req connectionsCleanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var resp connectionsCleanResponse
+	resp.Status = "ok"
+
+	// RC — always
+	rc, err := srv.db.ClearAllDerivedProposals()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resp.RC = rc
+
+	// RD — scoped by Sessions list or wiped globally
+	if len(req.Sessions) == 0 {
+		c, err := srv.db.ClearAllDiscussed()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.RD = c
+	} else {
+		for _, sess := range req.Sessions {
+			c, err := srv.db.ClearDiscussed(sess)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			resp.RD += c
+		}
+	}
+
+	if req.All {
+		rf, err := srv.db.ClearAllDerivedFreshness()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.RF = rf
+
+		rj, err := srv.db.ClearAllDerivedRejections()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.RJ = rj
+
+		for _, path := range srv.db.TmpFiles() {
+			switch {
+			case strings.HasPrefix(path, "tmp://connections/"):
+				if err := srv.db.RemoveTmpFile(path); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				resp.TmpConnections++
+			case strings.HasPrefix(path, "tmp://ARK-RECALL/"):
+				if err := srv.db.RemoveTmpFile(path); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				resp.TmpRecall++
+			}
+		}
+	}
+	if req.Checkpoint {
+		paths, err := srv.db.SessionJSONLs(req.Sessions)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, p := range paths {
+			if _, err := srv.db.CheckpointFile(p); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			resp.CheckpointFiles++
+		}
+		if srv.recallWatcher != nil {
+			srv.recallWatcher.ClearPending(req.Sessions)
+		}
+	}
+	writeJSON(w, resp)
 }
 
 func (srv *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
@@ -3462,13 +3597,20 @@ func (srv *Server) registerLuaFunctions() {
 				}
 				// R2686: derived-tag candidate names, similarity-desc order.
 				// Present only when opts.propose was set and the chunk has
-				// at least one accumulated RC record.
+				// at least one accumulated RC record. R2743 mirrors scores.
 				if len(chunk.ProposedTags) > 0 {
 					propTbl := L.NewTable()
 					for _, name := range chunk.ProposedTags {
 						propTbl.Append(lua.LString(name))
 					}
 					L.SetField(chunkTbl, "proposedTags", propTbl)
+					if len(chunk.ProposedTagScores) > 0 {
+						scoreTbl := L.NewTable()
+						for _, s := range chunk.ProposedTagScores {
+							scoreTbl.Append(lua.LNumber(s))
+						}
+						L.SetField(chunkTbl, "proposedTagScores", scoreTbl)
+					}
 				}
 				chunksTbl.Append(chunkTbl)
 			}

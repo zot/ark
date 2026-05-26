@@ -71,6 +71,12 @@ because they *are* the face of the project — they must be agreed upon
 before design begins. Specs must state the language and environment
 so the AI knows what it's building for.
 
+Most specs are **per-feature** — one spec, one capability, one cohesive
+slice of behavior. A second kind, **summary specs**, indexes existing
+behavior along a cross-cutting axis (CLI surface, storage layout, API
+set, capabilities) without introducing any new behavior of its own.
+See *Summary specs* below.
+
 **Design** is the AI's translation of specs into buildable structure.
 Requirements extract testable statements. CRC cards assign
 responsibilities to components. Sequences show how components
@@ -91,6 +97,50 @@ Each level exists because skipping it has a concrete cost:
 - **Traceability** — The specs→requirements→design chain ensures nothing is lost between what the user asked for and what gets built. When something breaks, you can trace backward to find out why.
 
 The phases are not ceremony. They are cheaper than debugging a misunderstood requirement after 500 lines of code.
+
+### Summary specs
+
+A **summary spec** is a spec that doesn't introduce behavior — it
+*indexes* behavior owned by per-feature specs, along one cross-cutting
+axis. Per-feature specs answer "what does this feature do?"; summary
+specs answer "what's the full set of X in this project?"
+
+Examples that recur across projects:
+
+- A **CLI inventory** spec lists every subcommand and flag (e.g.
+  `specs/cli-commands.md`).
+- A **storage layout** spec lists every record class with key/value
+  layout (e.g. `specs/record-formats.md`).
+- An **API surface** spec lists every public binding exposed to a
+  scripting or extension layer (e.g. `specs/lua-api.md`).
+- A **capabilities** spec lists every named feature with motivation
+  and objective (e.g. `specs/features.md`).
+
+When to create one:
+
+- A question of the form "what's the full set of X across this
+  project?" keeps coming up, and answering it requires touching many
+  per-feature specs.
+- A cross-cutting axis has enough items that someone (or some future
+  you) would want a directory to navigate them.
+
+Maintenance rules:
+
+- **Per-feature specs are canonical; summary specs are mirrors.**
+  When the two disagree, the per-feature spec wins. Update the summary
+  to match.
+- **Per-feature anchoring does not maintain summary specs.** Mini-spec's
+  normal anchoring (specs → requirements → design → code) catches the
+  per-feature edits but cannot tell that a CLI-inventory or
+  capabilities spec should also have been updated. Updating summary
+  specs is the maintainer's job, performed explicitly.
+- **Pin the summary-spec list somewhere persistent** — typically
+  CLAUDE.md or the project's top-level reference doc — so a future
+  agent or maintainer knows which summary specs to keep in sync when
+  they add, rename, or retire something along the relevant axis.
+- **Don't anchor new requirements from a summary spec.** Rn numbers
+  belong to the per-feature spec that owns the behavior. A summary
+  spec entry references that spec; it does not own the contract.
 
 ## Task Tracking
 
@@ -425,6 +475,7 @@ Cover: happy path, errors, edge cases.
 - [ ] UI Specs: ASCII layouts, refs to CRCs and manifest-ui.md
 - [ ] Traceability: design files in Artifacts, code files have checkboxes, all Rn referenced
 - [ ] Tests: test-*.md for key behaviors
+- [ ] Summary specs: any cross-cutting axis touched by this change has been mirrored in the relevant summary spec (CLI inventory, storage layout, API surface, capabilities, …) — see the project's pinned list
 - [ ] Phase validation: `~/.claude/bin/minispec phase <phase>` passes after each phase
 - [ ] Full validation: `~/.claude/bin/minispec validate` passes
 

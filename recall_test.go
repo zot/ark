@@ -36,10 +36,12 @@ func setupRecall(t *testing.T) (*Librarian, *DB) {
 		modelPath: "fake-model.gguf",
 	}
 
+	db.config = &Config{}
+
 	db.search = &Searcher{
 		fts:       db.fts,
 		store:     db.store,
-		config:    &Config{},
+		config:    db.config,
 		librarian: l,
 	}
 

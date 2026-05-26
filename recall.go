@@ -4,9 +4,12 @@ package ark
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
@@ -133,6 +136,11 @@ type RecalledChunk struct {
 	// only when RecallOpts.Propose is true and the chunk has at least
 	// one accumulated RC record. R2684, R2685, R2686
 	ProposedTags []string `json:"proposedTags,omitempty"`
+	// ProposedTagScores is the chunk-EC ↔ tag-ED cosine for each
+	// entry in ProposedTags, same length and ordering. Surfaced in
+	// the recall stencil as `tagname (0.NN)` so the floor can be
+	// tuned by eye. R2743
+	ProposedTagScores []float64 `json:"proposedTagScores,omitempty"`
 }
 
 // RecallTag is a tag name + value pair for JSON serialization.
@@ -147,6 +155,58 @@ type RecallTag struct {
 type ChunkSubstrate struct {
 	VectorEC  float64 `json:"vectorEc"`
 	TrigramEC float64 `json:"trigramEc"`
+}
+
+// RenderRecallChunks writes the per-chunk markdown block for a recall
+// result, matching the stencil documented in specs/recall.md. The
+// caller writes the surrounding header (`## Chunks`, `## Recalled
+// chunks`, etc.). One blank line precedes each chunk.
+//
+// Shared between `ark connections recall` (via cmd/ark/main.go's
+// printRecallResult) and the simple-recall watcher (recall_watcher.go).
+// CRC: crc-Librarian.md | R2645, R2684, R2685, R2704
+func RenderRecallChunks(out io.Writer, chunks []RecalledChunk) {
+	for _, chunk := range chunks {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "- @chunk-id: %d\n", chunk.ChunkID)
+		fmt.Fprintf(out, "  @chunk-path: %s\n", chunk.Path)
+		fmt.Fprintf(out, "  @chunk-range: %s\n", chunk.Range)
+		fmt.Fprintf(out, "  @chunk-score: %.2f\n", chunk.Score)
+		fmt.Fprintf(out, "  @chunk-evidence-vector-ec: %.2f\n", chunk.PerSubstrate.VectorEC)
+		fmt.Fprintf(out, "  @chunk-evidence-trigram-ec: %.2f\n", chunk.PerSubstrate.TrigramEC)
+
+		names := make([]string, 0, len(chunk.Tags))
+		for _, t := range chunk.Tags {
+			names = append(names, t.Tag)
+		}
+		fmt.Fprintf(out, "  @chunk-tags: %s\n", strings.Join(names, ", "))
+		if len(chunk.ProposedTags) > 0 {
+			parts := make([]string, len(chunk.ProposedTags))
+			for j, name := range chunk.ProposedTags {
+				if j < len(chunk.ProposedTagScores) {
+					parts[j] = fmt.Sprintf("%s (%.2f)", name, chunk.ProposedTagScores[j])
+				} else {
+					parts[j] = name
+				}
+			}
+			fmt.Fprintf(out, "  @chunk-proposed-tags: %s\n", strings.Join(parts, ", "))
+		}
+		for _, t := range chunk.Tags {
+			if t.Value != "" {
+				fmt.Fprintf(out, "  - @chunk-tag-value: %s: %s\n", t.Tag, t.Value)
+			}
+		}
+
+		if chunk.Content != "" {
+			lines := strings.Split(chunk.Content, "\n")
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			for _, line := range lines {
+				fmt.Fprintf(out, "  > %s\n", line)
+			}
+		}
+	}
 }
 
 // chunkScoresAcc is the per-chunk accumulator built up across the
@@ -496,6 +556,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 	}
 
 	const derivationK = 10
+	minSim := l.db.Config().Recall.EffectiveMinProposeSimilarity()
 	work := make(map[uint64]*chunkWork, len(scoresMap))
 
 	// Read phase: freshness check, candidate generation, filtering.
@@ -509,7 +570,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 			if err != nil || chunkVec == nil {
 				continue // can't derive without an EC vector
 			}
-			cw := l.selectCandidates(txn, chunkID, chunkVec, eds, acc.alreadyOn, derivationK)
+			cw := l.selectCandidates(txn, chunkID, chunkVec, eds, acc.alreadyOn, derivationK, minSim)
 			work[chunkID] = cw
 		}
 		return nil
@@ -550,10 +611,11 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 }
 
 // selectCandidates computes per-tag max cosine vs the chunk vector,
-// drops already-attached and rejected tags, and returns the top-k
-// survivors as a chunkWork ready for the write phase.
-// CRC: crc-Librarian.md | R2670, R2671, R2672, R2673, R2674
-func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int) *chunkWork {
+// drops already-attached, rejected, and sub-threshold tags, and
+// returns the top-k survivors as a chunkWork ready for the write
+// phase. minSim is the chunk-EC ↔ tag-ED cosine floor (R2742).
+// CRC: crc-Librarian.md | R2670, R2671, R2672, R2673, R2674, R2742
+func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int, minSim float64) *chunkWork {
 	// Per-tag max similarity across all ED records for that tag.
 	perTag := make(map[string]float64)
 	for _, ed := range eds {
@@ -567,6 +629,9 @@ func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []f
 	}
 	candidates := make([]scoredTag, 0, len(perTag))
 	for tag, score := range perTag {
+		if score < minSim {
+			continue // R2742 — sub-threshold floor
+		}
 		if alreadyOn[tag] {
 			continue // R2671 + R2672 (union via AllTagsForChunk)
 		}
@@ -638,10 +703,13 @@ func (l *Librarian) enrichProposedTags(chunks []RecalledChunk, derivedScores map
 			return scored[a].score > scored[b].score
 		})
 		names := make([]string, 0, len(scored))
+		scoresOut := make([]float64, 0, len(scored))
 		for _, sp := range scored {
 			names = append(names, sp.tag)
+			scoresOut = append(scoresOut, sp.score)
 		}
 		chunks[i].ProposedTags = names
+		chunks[i].ProposedTagScores = scoresOut
 	}
 }
 
