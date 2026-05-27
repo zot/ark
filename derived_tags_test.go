@@ -3,7 +3,6 @@ package ark
 // CRC: crc-Store.md, crc-Librarian.md | Test: test-DerivedTags.md
 
 import (
-	"encoding/binary"
 	"testing"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
@@ -98,17 +97,17 @@ func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 // Refs: R2665, R2673
 func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
 	_, db := setupRecall(t)
-	if err := db.store.RejectDerived(42, "bogus"); err != nil {
+	if _, err := db.store.RejectDerived(42, "bogus"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
 	}
 
 	var present, absent bool
 	if err := db.store.env.View(func(txn *lmdb.Txn) error {
-		p, err := db.store.HasDerivedRejection(txn, 42, "bogus")
+		p, _, err := db.store.HasDerivedRejection(txn, 42, "bogus")
 		if err != nil {
 			return err
 		}
-		a, err := db.store.HasDerivedRejection(txn, 42, "missing")
+		a, _, err := db.store.HasDerivedRejection(txn, 42, "missing")
 		if err != nil {
 			return err
 		}
@@ -192,7 +191,7 @@ func TestStore_DerivedProposals_FiltersRJ(t *testing.T) {
 	// Reject one of them (this also drops its RC, but we want to test
 	// the read-side shadow filter — so re-add the RC for status to
 	// simulate a pre-rejection-leftover scenario).
-	if err := db.store.RejectDerived(chunkID, "status"); err != nil {
+	if _, err := db.store.RejectDerived(chunkID, "status"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
 	}
 	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
@@ -299,7 +298,7 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 		t.Fatalf("WriteDerivedProposal: %v", err)
 	}
 
-	if err := db.store.RejectDerived(chunkID, "fluff"); err != nil {
+	if _, err := db.store.RejectDerived(chunkID, "fluff"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
 	}
 
@@ -309,18 +308,22 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 		t.Errorf("expected RC dropped after reject; got %+v", props)
 	}
 
-	// RJ present.
+	// RJ present, v2 shape: varint(counter) + 8-byte BE nanos.
+	// Fresh reject ⇒ counter=1.
 	rjKey := derivedKey(prefixDerivedRejection, chunkID, "fluff")
 	if err := db.store.env.View(func(txn *lmdb.Txn) error {
 		v, err := txn.Get(db.store.dbi, rjKey)
 		if err != nil {
 			return err
 		}
-		if len(v) != 8 {
-			t.Errorf("RJ value: got %d bytes want 8", len(v))
+		counter, nanos, ok := decodeRJValue(v)
+		if !ok {
+			t.Errorf("RJ value malformed: %x", v)
 		}
-		ts := int64(binary.BigEndian.Uint64(v))
-		if ts == 0 {
+		if counter != 1 {
+			t.Errorf("RJ counter: got %d want 1", counter)
+		}
+		if nanos == 0 {
 			t.Error("RJ timestamp is zero")
 		}
 		return nil
@@ -497,7 +500,7 @@ func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
 	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
 
 	// Pre-reject @food on the target chunk.
-	if err := db.store.RejectDerived(cTarget, "food"); err != nil {
+	if _, err := db.store.RejectDerived(cTarget, "food"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
 	}
 
@@ -609,10 +612,10 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed RC/RF: %v", err)
 	}
-	if err := db.store.RejectDerived(1, "noise"); err != nil {
+	if _, err := db.store.RejectDerived(1, "noise"); err != nil {
 		t.Fatalf("RejectDerived 1: %v", err)
 	}
-	if err := db.store.RejectDerived(2, "noise"); err != nil {
+	if _, err := db.store.RejectDerived(2, "noise"); err != nil {
 		t.Fatalf("RejectDerived 2: %v", err)
 	}
 	if err := db.store.AddDiscussed("sess-A", "topic", "x"); err != nil {
@@ -668,7 +671,7 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	}
 	if err := db.store.env.View(func(txn *lmdb.Txn) error {
 		for _, cid := range []uint64{1, 2} {
-			rej, _ := db.store.HasDerivedRejection(txn, cid, "noise")
+			rej, _, _ := db.store.HasDerivedRejection(txn, cid, "noise")
 			if rej {
 				t.Errorf("chunk %d: RJ still present after ClearAllDerivedRejections", cid)
 			}

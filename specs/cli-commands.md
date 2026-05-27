@@ -333,6 +333,10 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--type chunk|text] [--json]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
+ark connections recall reserve-nonce
+ark connections recall surface FIRE -chunk N -range PATH:RANGE -reason TEXT
+ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
+ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -385,9 +389,26 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   surviving candidates as RC records, and adds a
   `@chunk-proposed-tags` line to each surfaced chunk that
   accumulated proposals (similarity-desc order). See
-  [derived-tags.md](derived-tags.md). The full agent-mediated
-  `ark recall` feature on top of this substrate is still in
-  design.
+  [derived-tags.md](derived-tags.md). The simple-recall watcher
+  built on top of this substrate is described in
+  [simple-recall.md](simple-recall.md).
+- `recall reserve-nonce` returns the next monotonic integer for
+  the v2 recall agent's `(fire, nonce)` discovery pattern. The
+  counter is in-memory and resets on `ark serve` restart. See
+  [simple-recall.md](simple-recall.md).
+- `recall surface FIRE -chunk N -range PATH:RANGE -reason TEXT`
+  implicitly opens the result-doc builder for `FIRE` on first
+  call and adds one `## Surface:` item. One item per call;
+  repeated `-chunk` flags are not accepted. Called by the recall
+  agent only.
+- `recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT` —
+  same shape, adds one `## Recommend:` item.
+- `recall close FIRE --nonce N [-preserve-curation]` is the
+  single cleanup verb. Writes `tmp://ARK-RECALL/result-<S>-<F>`
+  iff items were added; removes the curation doc unless
+  `-preserve-curation`; locates the calling subagent's JSONL via
+  the `nonce → .meta.json` lookup, sums tokens, and appends one
+  record to `~/.ark/monitoring/recall.jsonl`.
 - `wait PATH` blocks until terminal. On `--timeout SEC` expiry,
   exits non-zero with the last-seen status on stderr.
 - `show PATH` parses the persisted doc and projects fields. Without

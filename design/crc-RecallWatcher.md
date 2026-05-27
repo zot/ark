@@ -1,17 +1,21 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2694, R2695, R2696, R2698, R2700, R2701, R2702, R2703, R2704, R2705, R2706, R2707, R2708, R2709, R2710, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
-record, accumulates indexed chunks across the turn, and DMs a
-grouped per-input-chunk recall pass back to the originating
-session. No language model in the loop — the watcher is
-deterministic on its inputs.
+record, accumulates indexed chunks across the turn, and writes a
+**curation doc** to `tmp://ARK-RECALL/curation-<session>-<fire>`
+holding per-paragraph recall candidates. No language model in
+the watcher itself — the curation doc is read by a one-shot
+Haiku recall agent (see crc-RecallAgentBuilder.md and
+seq-recall-agent.md) that produces the result doc the assistant
+reads. The watcher is deterministic on its inputs.
 
 The substrate (`Librarian.Recall`) is the actor that does the
 chunk-similarity work; the watcher is plumbing — config + a
-per-session state machine + a worker that composes and emits
-each DM.
+per-session state machine + a fire counter + a worker that
+composes and writes each curation doc via the in-process
+`RecallCurationBuilder`.
 
 ## Knows
 - db: *DB — back-pointer; the watcher reads `[recall]` via
@@ -20,18 +24,22 @@ each DM.
   reload call (R2695)
 - librarian: *Librarian — substrate caller (`Recall(...)`)
 - store: *Store — write actor for RD records
-- composeDM: func — shared internal compose path used by
-  `cmdMessageDM` (see crc-CLI.md) and the watcher (R2700)
+- curationBuilder: func(session, fire) → *RecallCurationBuilder
+  — opens a Go-internal builder for the curation doc; same
+  state machine the agent-facing CLI uses for the result doc
+  (R2754). Owned by crc-RecallAgentBuilder.md.
 - sessions: map[sessionID]*sessionState — per-session state;
   mutex-protected (R2730). Each `sessionState` carries:
   - pendingChunks: []uint64 — indexed chunkIDs accumulated
     since the last fire
   - pendingTimer: *time.Timer — armed when turn_duration is
     seen; nil otherwise
-  - lastTurnDurationChunkID: uint64 — chunkID of the most
-    recent turn_duration record (used for `@ark-recall-fire`
-    when the chunker indexed that line; falls back to a
-    timestamp when not)
+- fireCounter: uint64 — globally monotonic counter scoped to
+  one `ark serve` run, starting at 0; allocated on each timer
+  expiry; written into the curation doc header and used as
+  the cookie that ties curation ↔ result (R2752). Lives at
+  the watcher level (one counter per server), not per
+  session.
 - jobs: chan func() — closure-actor channel; processed by the
   single worker goroutine so all fire-time work serializes
   cleanly (the per-session timer expiry posts a closure
@@ -59,34 +67,38 @@ each DM.
       seconds whose expiry posts the fire closure (R2734).
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
-  lock, then runs the recall pipeline outside the lock
-  (R2735):
-  - For each chunkID in the snapshot, call
-    `librarian.Recall([]ConnectionsInput{{ChunkID: cid}},
+  lock, allocates the next `fireCounter` value (R2752), then
+  runs the recall pipeline outside the lock (R2735):
+  - For each chunkID in the snapshot, fetch the chunk text
+    via `db.ChunkTextByID`, run `microfts2.MarkdownChunker{}`
+    to split into paragraphs ≥ 30 bytes, and call
+    `librarian.Recall([]ConnectionsInput{{Text: paragraph}},
     RecallOpts{K: cfg.EffectiveChunksPerDM(),
     IncludeContent: true, Session: sessionID,
-    Propose: cfg.EffectivePropose()})` (R2736).
-  - For each Recall result whose top chunk clears
-    `min_similarity` (R2708, R2739), build one
-    `## Recalled for chunk <cid>` section:
-    - Section header includes a blockquoted ~200-char
-      excerpt of the input chunk's text (R2738).
-    - Section body is `### Recalled chunks` followed by the
-      `RenderRecallChunks` stencil (R2704, R2737).
-  - If no sections survived, return without emitting a DM
-    (silent success — pendingChunks already cleared).
-  - Otherwise build the body: `@ark-recall-fire: <ref>` line
-    + instruction block + the per-input sections (R2702,
-    R2703, R2737).
-  - Emit via `composeDM(DMSender{Service: "ARK-RECALL"},
-    [sessionID], "recall", "", body)` and append to tmp://
-    via the write actor (R2700, R2701).
-  - Mark-on-send: for every recalled chunk listed in any
+    Propose: cfg.EffectivePropose(),
+    KeepTagless: true})` per paragraph (R2736, R2746).
+  - Open a `RecallCurationBuilder(sessionID, fire)`
+    (R2753, R2754).
+  - For each paragraph whose Recall result's top chunk
+    clears `min_similarity` (R2708, R2739): call
+    `b.Section(sourceChunkID, paragraphText)` to emit the
+    `# Source Chunk:` H1 + blockquoted excerpt (R2749); for
+    each top-K candidate, call `b.Candidate(chunkID, path,
+    rangeLabel, score, tagNames, proposedTagsWithScores,
+    contentExcerpt)` (R2749).
+  - If no sections survived: drop the builder without
+    calling `b.Close()`; the fire completes silently and
+    no curation doc is written (R2753).
+  - Otherwise call `b.Close()` to write
+    `tmp://ARK-RECALL/curation-<session>-<fire>` with the
+    two head-of-chunk tags `@ark-recall-curate: <session>`
+    and `@ark-recall-fire: <fire>` (R2747, R2748).
+  - Mark-on-send: for every candidate chunk written in any
     surfaced section, call `store.AddDiscussed(sessionID,
     tag, value)` for each inline + ext-routed tag (R2711,
     R2712, R2740).
-  - Log `fired` decision with section/recalled/discussed
-    counts (R2713).
+  - Log `fired` decision with section/candidate/discussed
+    counts and the fire number (R2713).
 
 ## Out of scope
 - No subscriber liveness check before emit (R2714)
@@ -100,17 +112,20 @@ each DM.
 ## Collaborators
 - Indexer: `executeRefresh` isAppend path calls `OnAppend`
   with `(path, strategy, newBytes, added)` (R2729).
-- Librarian: substrate `Recall` with `Session` and `Propose`
-  options (already exposed).
+- Librarian: substrate `Recall` with `Session`, `Propose`,
+  and `KeepTagless` options (R2736, R2746).
 - Store: `AddDiscussed(session, tag, value)` writes one RD
   record per surfaced tag (per R2650, R2659).
+- RecallAgentBuilder (crc-RecallAgentBuilder.md): owns the
+  curation-doc builder state machine. The watcher calls
+  `RecallCurationOpen(session, fire)` to get a builder
+  (R2754). The same state machine backs the agent-facing
+  result-doc CLI verbs.
 - Server: registers the watcher subsystem during `Serve()`;
-  wires the shared `composeDM` function for in-process use;
-  reads `[recall]` from ark.toml on startup and reload.
-- CLI (`cmdMessageDM` in crc-CLI.md): shares the
-  `composeDM` function — the watcher invokes the in-process
-  Go path with the same arguments the CLI flag surface
-  produces.
+  wires the in-process curation-builder constructor; reads
+  `[recall]` from ark.toml on startup and reload; owns the
+  `fireCounter` increment under the watcher's lock.
 
 ## Sequences
 - seq-recall-watcher.md
+- seq-recall-agent.md

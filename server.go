@@ -60,7 +60,8 @@ type Server struct {
 	scheduler       *EventScheduler     // R805: time-based event queue
 	librarian       *Librarian          // R1235: Haiku co-process for spectral search
 	curation        *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
-	recallWatcher   *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
+	recallWatcher       *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
+	recallAgentBuilder  *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
 
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
@@ -255,12 +256,15 @@ func Serve(dbPath string, opts ServeOpts) error {
 	db.indexer.SetScheduler(sched, db.Config())
 	ps.SetDB(db)
 
-	// CRC: crc-Server.md | Seq: seq-recall-watcher.md#1 | R2687, R2700
-	// Construct the simple-recall watcher and wire the indexer's
-	// post-append hook. The watcher's master switch lives in
-	// [recall].enabled; Enqueue is a no-op when the switch is off, so
-	// we wire it unconditionally and let the watcher gate itself.
-	srv.recallWatcher = NewRecallWatcher(db, lib, db.store)
+	// CRC: crc-Server.md | Seq: seq-recall-watcher.md#1, seq-recall-agent.md#1 | R2687, R2753, R2754
+	// Construct the simple-recall v2 agent-builder and watcher.
+	// The watcher's master switch lives in [recall].enabled; OnAppend
+	// is a no-op when the switch is off, so we wire unconditionally
+	// and let the watcher gate itself. The builder is wired
+	// unconditionally too — it's a passive state machine until the
+	// watcher or the CLI verbs touch it.
+	srv.recallAgentBuilder = NewRecallAgentBuilder(db)
+	srv.recallWatcher = NewRecallWatcher(db, lib, db.store, srv.recallAgentBuilder)
 	srv.recallWatcher.Start()
 	db.indexer.SetRecallWatcher(srv.recallWatcher)
 
@@ -410,6 +414,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /connections/list", srv.librarian.HandleConnectionsList)
 		// Connections cleanup (testing/reset). R2744
 		mux.HandleFunc("POST /connections/clean", srv.handleConnectionsClean)
+		// Recall v2 result-builder endpoints. R2755, R2756, R2757, R2758
+		// CRC: crc-Server.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md
+		mux.HandleFunc("POST /connections/recall/reserve-nonce", srv.handleRecallReserveNonce)
+		mux.HandleFunc("POST /connections/recall/surface", srv.handleRecallSurface)
+		mux.HandleFunc("POST /connections/recall/recommend", srv.handleRecallRecommend)
+		mux.HandleFunc("POST /connections/recall/close", srv.handleRecallClose)
 		// Recall (Phase 2B) HTTP endpoint.
 		// CRC: crc-Server.md | Seq: seq-recall.md#1.3 | R2629
 		mux.HandleFunc("POST /recall", srv.librarian.HandleRecall)

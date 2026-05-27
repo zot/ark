@@ -31,7 +31,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
-| Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher in design; agent layer deferred | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/CONTEXTUAL-RECALL.md` (agent-layer working notes) |
+| Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher v1 shipping; v2 agent layer in spec (one-shot Haiku curator between watcher and assistant; RJ rejection counter + propose / mention ceiling thresholds) | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/SIMPLE-RECALL.md` (working notes) |
 | Curation workshop (Tag Forge UI)            | shipping                                   | `tag-forge.md`, `curation.md`                                                 |
 | CLI-first agent integration                 | shipping                                   | `cli-commands.md`, `VISION.md`                                                |
 | Cross-project messaging                     | shipping                                   | `ARK-MESSAGING.md`                                                            |
@@ -263,13 +263,22 @@ the RC/RJ/RF record classes), `sys.recall` (Lua bridge), the
 substrate primitives shared with find connections. Statistical
 derivation runs as a side effect of each recall call so curation
 candidates accrue passively. The **simple-recall watcher** — a
-no-AI subsystem of `ark serve` that calls the same pipeline on
-Claude Code JSONL chunks as they land and DMs the results back
-to the originating session — is in design; see
-`specs/simple-recall.md`. The agent layer on top of the watcher
-(LLM relevance filtering, new-tag-definition invention) is
-deferred until the no-AI version earns the upgrade; see
-`specs/recall.md` and `.scratch/CONTEXTUAL-RECALL.md`.
+deterministic subsystem of `ark serve` — runs the substrate
+against Claude Code JSONL chunks as they land and writes a
+**curation doc** to `tmp://ARK-RECALL/`. The **recall agent**
+(one-shot Haiku subagent, spawned via Task by the listening
+assistant on each curation event) filters the candidates and
+writes a **result doc** the assistant reads — keeping an LLM
+out of the high-frequency watcher path while a cheap model
+curates before anything reaches the user. RJ records carry a
+**rejection counter** consulted by two `[recall]` ceilings
+(`reject_propose_ceiling`, `reject_mention_ceiling`) that fade
+chronically-rejected `(chunk, tag)` pairs out of view in two
+stages. Both v1 watcher and v2 agent layer are spec'd in
+`specs/simple-recall.md`; new-tag-definition invention (RP/RPE/RR
+records) remains deferred. Phase 2 (a long-running orchestrator
+named Luhmann that owns the agent and a monitor CLI/view) is in
+`.scratch/SIMPLE-RECALL.md`.
 
 ## Curation workshop (Tag Forge UI)
 

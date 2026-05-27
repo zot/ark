@@ -168,21 +168,21 @@ type TagCount struct {
 
 // Key prefixes for the ark subdatabase.
 const (
-	prefixMissing       = 'M'
-	prefixUnresolved    = 'U'
-	prefixInfo          = 'I'
-	prefixTagTotal      = 'T'
-	prefixTagFile       = 'F'
-	prefixTagDef        = 'D'
-	prefixTagValue      = 'V'
-	prefixEmbedValue    = "EV" // R1290: tag-value compound embeddings
-	prefixEmbedChunk    = "EC" // R1598: chunk-level embeddings
-	prefixEmbedFileCent = "EF" // R1599: file centroid (running sum + count)
-	prefixEmbedDef      = "ED" // R2151: tag-definition embeddings
-	prefixError         = 'E'  // R1543: persistent error conditions (E + name → JSON)
-	prefixPageContent   = "PC" // R1720: per-page zlib-compressed chunk text blob
-	prefixExtRouting    = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
-	prefixSerial        = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
+	prefixMissing        = 'M'
+	prefixUnresolved     = 'U'
+	prefixInfo           = 'I'
+	prefixTagTotal       = 'T'
+	prefixTagFile        = 'F'
+	prefixTagDef         = 'D'
+	prefixTagValue       = 'V'
+	prefixEmbedValue     = "EV" // R1290: tag-value compound embeddings
+	prefixEmbedChunk     = "EC" // R1598: chunk-level embeddings
+	prefixEmbedFileCent  = "EF" // R1599: file centroid (running sum + count)
+	prefixEmbedDef       = "ED" // R2151: tag-definition embeddings
+	prefixError          = 'E'  // R1543: persistent error conditions (E + name → JSON)
+	prefixPageContent    = "PC" // R1720: per-page zlib-compressed chunk text blob
+	prefixExtRouting     = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
+	prefixSerial         = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
 	prefixHotCorrelation = "HC" // R2226: tag → top-K chunks cosine cache (HC + tag + chunkid:8 → score:float64)
 	// prefixDiscussed is the first occupant of the `R` recall-feature
 	// namespace; future R* records (proposals, processed-stamps, etc.)
@@ -193,7 +193,7 @@ const (
 	// `ark connections recall --propose`; the Tag Forge writes RJ via
 	// Store.RejectDerived. R2664–R2666
 	prefixDerivedCandidate = "RC" // R2664 — RC + chunkid varint + tagname → 8-byte BE tally
-	prefixDerivedRejection = "RJ" // R2665 — RJ + chunkid varint + tagname → 8-byte BE unix nanos
+	prefixDerivedRejection = "RJ" // R2665, R2764 — RJ + chunkid varint + tagname → varint(counter) + 8-byte BE unix nanos
 	prefixDerivedFreshness = "RF" // R2666 — RF + chunkid varint → varint serial
 )
 
@@ -3542,18 +3542,54 @@ func (s *Store) ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (uint64, boo
 }
 
 // HasDerivedRejection probes for an RJ record for the given (chunk,
-// tagname). Existence-only — the timestamp value is not inspected.
-// CRC: crc-Store.md | R2665, R2673
-func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, error) {
+// tagname). Returns (rejected, counter, err): when the record
+// exists, decode the v2 value shape `varint(counter) + 8-byte BE
+// unix nanos` and return the counter. v1 records (exactly 8 bytes,
+// raw timestamp) are read as counter=1 for forward-compatibility;
+// the next RejectDerived call upgrades the value to v2 shape.
+// Callers that only need existence may discard the counter.
+// CRC: crc-Store.md | R2665, R2673, R2764, R2765, R2766
+func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, uint64, error) {
 	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	_, err := txn.Get(s.dbi, key)
-	if err == nil {
-		return true, nil
+	v, err := txn.Get(s.dbi, key)
+	if err != nil {
+		if lmdb.IsNotFound(err) {
+			return false, 0, nil
+		}
+		return false, 0, err
 	}
-	if lmdb.IsNotFound(err) {
-		return false, nil
+	counter, _, ok := decodeRJValue(v)
+	if !ok {
+		// Malformed RJ value; treat as rejected with counter 0 so
+		// callers using ceiling > 0 don't accidentally re-propose.
+		return true, 0, nil
 	}
-	return false, err
+	return true, counter, nil
+}
+
+// decodeRJValue parses an RJ record value. v2 shape is
+// `varint(counter) + 8-byte BE unix nanos`. v1 shape (exactly 8
+// bytes, the raw timestamp) is read as counter=1. Returns
+// (counter, nanos, ok); ok=false indicates a malformed value.
+// CRC: crc-Store.md | R2764
+func decodeRJValue(v []byte) (counter uint64, nanos int64, ok bool) {
+	if len(v) == 8 {
+		return 1, int64(binary.BigEndian.Uint64(v)), true
+	}
+	c, n := binary.Uvarint(v)
+	if n <= 0 || len(v)-n != 8 {
+		return 0, 0, false
+	}
+	return c, int64(binary.BigEndian.Uint64(v[n:])), true
+}
+
+// encodeRJValue writes the v2 RJ value shape.
+// CRC: crc-Store.md | R2764
+func encodeRJValue(counter uint64, nanos int64) []byte {
+	buf := make([]byte, binary.MaxVarintLen64+8)
+	n := binary.PutUvarint(buf, counter)
+	binary.BigEndian.PutUint64(buf[n:n+8], uint64(nanos))
+	return buf[:n+8]
 }
 
 // MaxEDSerial returns max(RecordSerial(ED, *)) across the ED prefix,
@@ -3592,7 +3628,7 @@ func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
 			if !ok {
 				return nil
 			}
-			rejected, err := s.HasDerivedRejection(txn, chunkID, tagname)
+			rejected, _, err := s.HasDerivedRejection(txn, chunkID, tagname)
 			if err != nil {
 				return err
 			}
@@ -3695,22 +3731,34 @@ func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, er
 }
 
 // RejectDerived persists a sticky no-resurface marker for a derived
-// proposal. In one txn through the actor: delete RC[chunkid+tagname]
-// and write RJ[chunkid+tagname] with NOW unix nanoseconds. No-op
-// safe if RC is already gone. Idempotent — re-rejecting overwrites
-// the timestamp.
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2665, R2680, R2683
-func (s *Store) RejectDerived(chunkID uint64, tagname string) error {
+// proposal. In one txn: delete RC[chunkid+tagname] and write
+// RJ[chunkid+tagname] with the v2 value shape `varint(counter) +
+// 8-byte BE unix nanos`. The counter is the prior value plus one
+// (v1 8-byte records are read as counter=1; a fresh record starts
+// at 1). Returns the new counter so callers can surface the
+// post-increment value without a separate read. No-op safe if RC
+// is already gone.
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2665, R2680, R2683, R2764
+func (s *Store) RejectDerived(chunkID uint64, tagname string) (uint64, error) {
 	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
 	rjKey := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	val := make([]byte, 8)
-	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	var newCounter uint64
+	err := s.env.Update(func(txn *lmdb.Txn) error {
 		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
 			return err
 		}
-		return txn.Put(s.dbi, rjKey, val, 0)
+		var prior uint64
+		if v, err := txn.Get(s.dbi, rjKey); err == nil {
+			if c, _, ok := decodeRJValue(v); ok {
+				prior = c
+			}
+		} else if !lmdb.IsNotFound(err) {
+			return err
+		}
+		newCounter = prior + 1
+		return txn.Put(s.dbi, rjKey, encodeRJValue(newCounter, time.Now().UnixNano()), 0)
 	})
+	return newCounter, err
 }
 
 // --- float32 ↔ bytes conversion ---

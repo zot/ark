@@ -1759,8 +1759,34 @@ Public subcommands:
     (vector + trigram-Jaccard) to the inputs. By default skips
     tagless chunks since they can't contribute tag information
     downstream; -all keeps them. INPUTS take the same shapes as
-    find. Substrate primitive for the agent-mediated ark recall
-    (future).
+    find. Substrate primitive for the simple-recall watcher and
+    the v2 recall agent.
+
+  recall reserve-nonce
+    Return the next per-server monotonic nonce. The assistant
+    reserves a nonce, embeds it in the recall agent's Task
+    description as "ark-recall fire <F> nonce <N>", and the
+    agent passes it back via close --nonce N so the server
+    can discover the agent's JSONL for token sums.
+
+  recall surface FIRE -chunk N -reason TEXT
+    Append one ## Surface: item to the result-doc builder for
+    FIRE. The chunkID alone identifies the surfaced chunk;
+    path / range / context are resolved on demand via
+    "ark chunks N". One item per invocation. Called by the
+    recall agent only.
+
+  recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
+    Append one ## Recommend: item to the result-doc builder for
+    FIRE. Same one-per-call discipline as surface.
+
+  recall close FIRE --nonce N [-preserve-curation]
+    Single cleanup verb. Writes tmp://ARK-RECALL/result-<S>-<F>
+    iff items were added; removes the curation doc unless
+    -preserve-curation; sweeps older orphan curation docs for
+    the same session; discovers the calling subagent's JSONL
+    via nonce → meta.json lookup; sums tokens; appends one
+    record to ~/.ark/monitoring/recall.jsonl.
 
   wait PATH [--timeout S] [--json]
     Block until the tmp:// connections doc at PATH reaches a terminal
@@ -7148,9 +7174,165 @@ Requires a running server.`)
 // paths without swapping fatal.
 // CRC: crc-CLI.md | Seq: seq-recall.md#1.1 | R2617, R2618, R2619, R2627, R2630, R2631, R2632, R2633, R2634, R2641, R2646, R2647
 func cmdConnectionsRecall(args []string) {
+	// v2 result-builder verbs branch on the first positional arg.
+	// Everything else falls through to the substrate-recall command.
+	// R2755, R2756, R2757, R2758
+	if len(args) > 0 {
+		switch args[0] {
+		case "reserve-nonce":
+			cmdConnectionsRecallReserveNonce(args[1:])
+			return
+		case "surface":
+			cmdConnectionsRecallSurface(args[1:])
+			return
+		case "recommend":
+			cmdConnectionsRecallRecommend(args[1:])
+			return
+		case "close":
+			cmdConnectionsRecallClose(args[1:])
+			return
+		}
+	}
 	if err := runConnectionsRecall(args, os.Stdout); err != nil {
 		fatal(err)
 	}
+}
+
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#2 | R2755
+func cmdConnectionsRecallReserveNonce(args []string) {
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "ark connections recall reserve-nonce: no arguments expected")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	var resp struct {
+		Nonce uint32 `json:"nonce"`
+	}
+	if err := proxyDecode(client, "POST", "/connections/recall/reserve-nonce", struct{}{}, &resp); err != nil {
+		fatal(err)
+	}
+	fmt.Println(resp.Nonce)
+}
+
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#4 | R2756
+func cmdConnectionsRecallSurface(args []string) {
+	fire, rest, err := popFire(args, "surface")
+	if err != nil {
+		fatal(err)
+	}
+	fs := flag.NewFlagSet("connections recall surface", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	chunkID := fs.Uint64("chunk", 0, "candidate chunkID (required)")
+	reason := fs.String("reason", "", "one-line justification (required)")
+	if err := fs.Parse(rest); err != nil {
+		fatal(fmt.Errorf("connections recall: %w", err))
+	}
+	if *chunkID == 0 || *reason == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall surface FIRE -chunk N -reason TEXT")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	body := map[string]any{
+		"fire":   fire,
+		"chunk":  *chunkID,
+		"reason": *reason,
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := proxyDecode(client, "POST", "/connections/recall/surface", body, &resp); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#5 | R2757
+func cmdConnectionsRecallRecommend(args []string) {
+	fire, rest, err := popFire(args, "recommend")
+	if err != nil {
+		fatal(err)
+	}
+	fs := flag.NewFlagSet("connections recall recommend", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	chunkID := fs.Uint64("chunk", 0, "target chunkID (required)")
+	tagSpec := fs.String("tag", "", "@t or @t:value (required)")
+	reason := fs.String("reason", "", "one-line justification (required)")
+	if err := fs.Parse(rest); err != nil {
+		fatal(fmt.Errorf("connections recall: %w", err))
+	}
+	if *chunkID == 0 || *tagSpec == "" || *reason == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	body := map[string]any{
+		"fire":   fire,
+		"chunk":  *chunkID,
+		"tag":    *tagSpec,
+		"reason": *reason,
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := proxyDecode(client, "POST", "/connections/recall/recommend", body, &resp); err != nil {
+		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#7 | R2758
+func cmdConnectionsRecallClose(args []string) {
+	fire, rest, err := popFire(args, "close")
+	if err != nil {
+		fatal(err)
+	}
+	fs := flag.NewFlagSet("connections recall close", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	nonce := fs.Uint("nonce", 0, "nonce reserved by the assistant (required)")
+	preserveCuration := fs.Bool("preserve-curation", false, "leave the curation doc in place after close")
+	if err := fs.Parse(rest); err != nil {
+		fatal(fmt.Errorf("connections recall: %w", err))
+	}
+	if *nonce == 0 {
+		fmt.Fprintln(os.Stderr, "ark connections recall close FIRE --nonce N [-preserve-curation]")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	body := map[string]any{
+		"fire":             fire,
+		"nonce":            *nonce,
+		"preserveCuration": *preserveCuration,
+	}
+	var resp struct {
+		Status  string `json:"status"`
+		Outcome string `json:"outcome"`
+	}
+	if err := proxyDecode(client, "POST", "/connections/recall/close", body, &resp); err != nil {
+		fatal(err)
+	}
+}
+
+// popFire returns (fire, rest, err) for a recall v2 result-builder
+// verb. The fire is the first positional argument before any flags.
+func popFire(args []string, verb string) (uint64, []string, error) {
+	if len(args) == 0 {
+		return 0, nil, fmt.Errorf("ark connections recall %s: FIRE positional argument required", verb)
+	}
+	fire, err := strconv.ParseUint(args[0], 10, 64)
+	if err != nil {
+		return 0, nil, fmt.Errorf("ark connections recall %s: FIRE must be a positive integer, got %q", verb, args[0])
+	}
+	return fire, args[1:], nil
 }
 
 // runConnectionsRecall implements the `ark connections recall`

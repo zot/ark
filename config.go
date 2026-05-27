@@ -57,7 +57,7 @@ type Config struct {
 }
 
 // RecallConfig collects the [recall] section of ark.toml.
-// CRC: crc-Config.md | R2659, R2687, R2688, R2689, R2690, R2691, R2692, R2693, R2694
+// CRC: crc-Config.md | R2659, R2687, R2688, R2689, R2690, R2692, R2693, R2767, R2768
 type RecallConfig struct {
 	// DiscussedTTL is the lifetime of an RD record before lazy
 	// expiry takes effect. Empty/missing falls back to 24h;
@@ -102,10 +102,16 @@ type RecallConfig struct {
 	// R2693
 	Sources []string `toml:"sources,omitempty"`
 
-	// AgentCmd is reserved for the deferred agent-layer
-	// follow-up (ARK-STATE item 10). v1 does not consume the
-	// field. R2694
-	AgentCmd string `toml:"agent_cmd,omitempty"`
+	// RejectProposeCeiling is the RJ-counter threshold above which
+	// the propose pass suppresses a (chunk, tag) pair. `0` (unset)
+	// means infinite — any RJ existence suppresses, preserving v1
+	// behavior. R2767
+	RejectProposeCeiling *int `toml:"reject_propose_ceiling,omitempty"`
+
+	// RejectMentionCeiling is the RJ-counter threshold above which
+	// the assistant suppresses the (chunk, tag) pair from any
+	// user-facing mention. `0` (unset) means infinite. R2768
+	RejectMentionCeiling *int `toml:"reject_mention_ceiling,omitempty"`
 }
 
 // EffectivePropose returns Propose with the default applied.
@@ -152,6 +158,27 @@ func (rc RecallConfig) EffectiveChunksPerDM() int {
 		return 5
 	}
 	return *rc.ChunksPerDM
+}
+
+// EffectiveRejectProposeCeiling returns RejectProposeCeiling with
+// the default applied. `0` (unset) means infinite — suppression is
+// existence-driven, preserving v1 behavior.
+// CRC: crc-Config.md | R2767
+func (rc RecallConfig) EffectiveRejectProposeCeiling() int {
+	if rc.RejectProposeCeiling == nil {
+		return 0
+	}
+	return *rc.RejectProposeCeiling
+}
+
+// EffectiveRejectMentionCeiling returns RejectMentionCeiling with
+// the default applied. `0` (unset) means infinite.
+// CRC: crc-Config.md | R2768
+func (rc RecallConfig) EffectiveRejectMentionCeiling() int {
+	if rc.RejectMentionCeiling == nil {
+		return 0
+	}
+	return *rc.RejectMentionCeiling
 }
 
 // DiscussedTTLDuration parses the [recall].discussed_ttl field and

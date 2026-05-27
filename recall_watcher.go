@@ -1,11 +1,10 @@
 package ark
 
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2694, R2695, R2696, R2698, R2700, R2701, R2702, R2703, R2704, R2705, R2706, R2707, R2708, R2709, R2710, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753
 
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log"
 	"path/filepath"
 	"slices"
@@ -34,28 +33,30 @@ type RecallWatcher struct {
 	db        *DB
 	librarian *Librarian
 	store     *Store
+	builder   *RecallAgentBuilder // R2754: curation-doc builder factory
 
 	jobs chan func()
 
-	mu       sync.Mutex
-	sessions map[string]*recallSessionState // R2730
+	mu          sync.Mutex
+	sessions    map[string]*recallSessionState // R2730
+	fireCounter uint64                         // R2752: per-server monotonic; allocated on timer expiry
 }
 
 // recallSessionState carries the per-session accumulator and timer.
 // R2730
 type recallSessionState struct {
-	pendingChunks           []uint64
-	pendingTimer            *time.Timer
-	lastTurnDurationChunkID uint64 // 0 when unknown; ts is used in @ark-recall-fire
+	pendingChunks []uint64
+	pendingTimer  *time.Timer
 }
 
 // NewRecallWatcher constructs a watcher. The worker goroutine
 // starts when Start is called. R2687
-func NewRecallWatcher(db *DB, lib *Librarian, store *Store) *RecallWatcher {
+func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgentBuilder) *RecallWatcher {
 	return &RecallWatcher{
 		db:        db,
 		librarian: lib,
 		store:     store,
+		builder:   builder,
 		jobs:      make(chan func(), 16),
 		sessions:  make(map[string]*recallSessionState),
 	}
@@ -104,7 +105,6 @@ func (w *RecallWatcher) ClearPending(sessions []string) {
 				st.pendingTimer = nil
 			}
 			st.pendingChunks = nil
-			st.lastTurnDurationChunkID = 0
 		}
 		return
 	}
@@ -118,7 +118,6 @@ func (w *RecallWatcher) ClearPending(sessions []string) {
 			st.pendingTimer = nil
 		}
 		st.pendingChunks = nil
-		st.lastTurnDurationChunkID = 0
 	}
 }
 
@@ -245,14 +244,6 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 			if st.pendingTimer != nil {
 				st.pendingTimer.Stop()
 			}
-			// Record the most recent indexed chunk as the
-			// turn_duration anchor (best-effort: when the
-			// chunker indexed the turn_duration line itself,
-			// it's the last entry in `added`; otherwise we
-			// fall back to 0 and the body uses a timestamp).
-			if len(added) > 0 {
-				st.lastTurnDurationChunkID = added[len(added)-1]
-			}
 			delay := time.Duration(w.config().EffectiveActivationDelay()) * time.Second
 			sid := sessionID
 			st.pendingTimer = time.AfterFunc(delay, func() {
@@ -268,7 +259,7 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 
 // fire is the timer-expiry callback. Runs on the watcher's
 // closure-actor goroutine so concurrent fires across sessions
-// serialize. R2735
+// serialize. R2735, R2752, R2753
 func (w *RecallWatcher) fire(sessionID string) {
 	w.mu.Lock()
 	st := w.sessions[sessionID]
@@ -279,7 +270,8 @@ func (w *RecallWatcher) fire(sessionID string) {
 	snapshot := st.pendingChunks
 	st.pendingChunks = nil
 	st.pendingTimer = nil
-	fireRef := st.lastTurnDurationChunkID
+	w.fireCounter++
+	fire := w.fireCounter
 	w.mu.Unlock()
 
 	if len(snapshot) == 0 {
@@ -291,10 +283,18 @@ func (w *RecallWatcher) fire(sessionID string) {
 	totalRecalled := 0
 	dropped := 0
 	skipped := 0
+	notFound := 0
 	for _, cid := range snapshot {
 		text, err := w.db.ChunkTextByID(cid)
 		if err != nil {
-			log.Printf("recall-watcher: ChunkTextByID session=%s cid=%d: %v", sessionID, cid, err)
+			// "chunk not found" is an expected transient for live
+			// JSONL files mid-rechunk: the file may have been
+			// re-indexed between the OnAppend callback and this
+			// timer-expiry pass, and the chunkIDs we accumulated
+			// were superseded. Skip silently; count for the fired
+			// summary so the rate stays visible without flooding
+			// the log.
+			notFound++
 			continue
 		}
 		// Re-chunk the JSONL chunk's extracted text via the markdown
@@ -348,29 +348,29 @@ func (w *RecallWatcher) fire(sessionID string) {
 	}
 
 	if len(sections) == 0 {
-		Logv(2, "recall-watcher: fired session=%s pending=%d sections=0 dropped=%d skipped-short=%d",
-			sessionID, len(snapshot), dropped, skipped)
+		Logv(2, "recall-watcher: fired session=%s fire=%d pending=%d sections=0 dropped=%d skipped-short=%d not-found=%d",
+			sessionID, fire, len(snapshot), dropped, skipped, notFound)
 		return
 	}
 
-	ref := w.fireRef(fireRef)
-	body := composeRecallBody(ref, sections)
-	dmPath, payload, err := ComposeDM(
-		DMSender{Service: "ARK-RECALL"},
-		[]string{sessionID},
-		"recall",
-		"",
-		body,
-	)
-	if err != nil {
-		log.Printf("recall-watcher: ComposeDM failed: %v", err)
-		return
+	// Build the curation doc via the in-process RecallCurationBuilder.
+	// The same state machine emits identical body shape on the agent
+	// side via the CLI verbs. R2747, R2748, R2749, R2753, R2754
+	cb := w.builder.RecallCurationOpen(sessionID, fire)
+	for _, sec := range sections {
+		cb.Section(sec.sourceChunkID, sec.inputExcerpt)
+		for _, ch := range sec.recalled {
+			tagNames := make([]string, 0, len(ch.Tags))
+			for _, t := range ch.Tags {
+				tagNames = append(tagNames, t.Tag)
+			}
+			pNames, pScores := ch.ProposedTags, ch.ProposedTagScores
+			cb.Candidate(ch.ChunkID, ch.Path, ch.Range,
+				ch.Score, tagNames, pNames, pScores, ch.Content)
+		}
 	}
-	if err := SyncVoid(w.db, func(db *DB) error {
-		_, e := db.AppendTmpFile(dmPath, "markdown", []byte(payload))
-		return e
-	}); err != nil {
-		log.Printf("recall-watcher: AppendTmpFile failed: %v", err)
+	if err := cb.Close(); err != nil {
+		log.Printf("recall-watcher: curation doc write failed: %v", err)
 		return
 	}
 
@@ -388,24 +388,14 @@ func (w *RecallWatcher) fire(sessionID string) {
 		}
 	}
 
-	Logv(2, "recall-watcher: fired session=%s pending=%d sections=%d dropped=%d skipped-short=%d recalled=%d discussed=%d",
-		sessionID, len(snapshot), len(sections), dropped, skipped, totalRecalled, discussedCount)
-}
-
-// fireRef returns the @ark-recall-fire value: the chunkID of the
-// turn_duration record when known, or a Unix-nanosecond timestamp.
-// R2702
-func (w *RecallWatcher) fireRef(chunkID uint64) string {
-	if chunkID != 0 {
-		return fmt.Sprintf("%d", chunkID)
-	}
-	return fmt.Sprintf("t%d", time.Now().UnixNano())
+	Logv(2, "recall-watcher: fired session=%s fire=%d pending=%d sections=%d dropped=%d skipped-short=%d not-found=%d recalled=%d discussed=%d",
+		sessionID, fire, len(snapshot), len(sections), dropped, skipped, notFound, totalRecalled, discussedCount)
 }
 
 // recallSection captures one paragraph's recall result, ready for
-// rendering into the grouped DM body. R2737
+// rendering into the curation doc. R2749
 type recallSection struct {
-	sourceChunkID uint64 // the JSONL chunk the paragraph came from (R2738)
+	sourceChunkID uint64 // the JSONL chunk the paragraph came from
 	inputExcerpt  string // the paragraph text itself, capped at ~200 chars
 	recalled      []RecalledChunk
 }
@@ -426,28 +416,6 @@ func splitParagraphs(text []byte) []string {
 	return paras
 }
 
-// composeRecallBody builds the grouped DM body: the @ark-recall-fire
-// line, then the instruction block, then one section per paragraph
-// that cleared the similarity gate. R2702, R2703, R2704, R2737, R2738
-func composeRecallBody(fireRef string, sections []recallSection) string {
-	var buf strings.Builder
-	fmt.Fprintf(&buf, "@ark-recall-fire: %s\n\n", fireRef)
-	buf.WriteString(recallInstructionBlock)
-	for _, sec := range sections {
-		buf.WriteString("\n## Recalled for paragraph\n")
-		fmt.Fprintf(&buf, "@source-chunk: %d\n\n", sec.sourceChunkID)
-		if sec.inputExcerpt != "" {
-			for _, line := range strings.Split(sec.inputExcerpt, "\n") {
-				fmt.Fprintf(&buf, "> %s\n", line)
-			}
-			buf.WriteString("\n")
-		}
-		buf.WriteString("### Recalled chunks\n")
-		RenderRecallChunks(&buf, sec.recalled)
-	}
-	return buf.String()
-}
-
 // truncateUTF8 returns s truncated to at most maxBytes, never
 // splitting inside a multi-byte rune. R2705, R2738
 func truncateUTF8(s string, maxBytes int) string {
@@ -461,45 +429,6 @@ func truncateUTF8(s string, maxBytes int) string {
 	return s[:cut]
 }
 
-// recallInstructionBlock is the default-to-silence crank-handle
-// text the watcher prepends to every DM body. R2703, R2707, R2709
-const recallInstructionBlock = `## What this is
-
-Ambient recall surfaced by ark. The recent conversation turn
-matched material the corpus has touched before. Each
-` + "`## Recalled for paragraph`" + ` section below covers one paragraph
-of the recent turn: the blockquote is the paragraph that
-prompted the recall, ` + "`@source-chunk`" + ` traces back to the
-indexed JSONL chunk it came from, and the listed chunks are
-what your corpus already has about that topic — with tags,
-excerpts, and any statistical tag-candidates the substrate
-proposed (RC records — see specs/derived-tags.md).
-
-## What to do with it
-
-**Default to silence.** Most recalls won't fit the
-conversation; that's normal. Surface only when the connection
-is *clearly* relevant — not just topically adjacent. If you
-just surfaced something in the last few turns, weight strongly
-against surfacing again. The user doesn't need acknowledgement
-that recall happened — drop is fine. No reply needed.
-
-If you do surface, frame the source naturally — "ark recall
-surfaces …" or similar — so the user understands this came
-from ambient recall, not from your own context.
-
-**Derived-tag candidates.** Each recalled chunk may list
-` + "`@chunk-proposed-tags`" + `. These are statistical proposals the
-substrate generated against the current tag-definition
-landscape; they have no human judgment yet. If a candidate
-genuinely fits the chunk's content, accept it via
-` + "`ark connections recall accept-derived <chunkID> @<tag>:<value>`" + `
-(value picks happen at accept time). Reject obviously bad ones
-with ` + "`ark connections recall reject-derived <chunkID> @<tag>`" + `
-so they don't resurface. Most should drop silently — only
-promote the clear wins.
-
-When you're done with this DM, ` + "`ark remove <path>`" + ` clears it
-from your inbox. ` + "`ark search @dm: <self>`" + ` shows pending DMs
-you haven't processed.
-`
+// The v1 in-body instruction block has been retired (T99). The v2
+// recall agent's persona briefing carries the same default-to-silence
+// guidance (R2769); the curation doc no longer prefixes it.

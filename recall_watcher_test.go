@@ -83,68 +83,58 @@ func TestScanNewBytes_PartialTrailingLine(t *testing.T) {
 	}
 }
 
-// R2702, R2703, R2704, R2737, R2738 — grouped body composition.
-func TestComposeRecallBody_GroupedShape(t *testing.T) {
-	sections := []recallSection{
-		{
-			sourceChunkID: 1001,
-			inputExcerpt: "the user's question about asparagus",
-			recalled: []RecalledChunk{{
-				ChunkID:      4711,
-				Path:         "notes/foo.md",
-				Range:        "12-18",
-				Score:        0.84,
-				PerSubstrate: ChunkSubstrate{VectorEC: 0.91, TrigramEC: 0.62},
-				Tags:         []RecallTag{{Tag: "cooking"}, {Tag: "course", Value: "main"}},
-				Content:      "asparagus risotto",
-			}},
-		},
-		{
-			sourceChunkID: 1002,
-			inputExcerpt: "assistant explanation of risotto technique",
-			recalled: []RecalledChunk{{
-				ChunkID:      5023,
-				Path:         "notes/bar.md",
-				Range:        "1-7",
-				Score:        0.76,
-				PerSubstrate: ChunkSubstrate{VectorEC: 0.81, TrigramEC: 0.55},
-				Tags:         []RecallTag{{Tag: "technique"}},
-				Content:      "toast the rice in fat",
-			}},
-		},
+// R2747, R2748, R2749 — curation-doc shape.
+func TestRecallCurationBuilder_Shape(t *testing.T) {
+	b := &RecallAgentBuilder{
+		curations: make(map[uint64]*RecallCurationBuilder),
+		results:   make(map[uint64]*recallResultDoc),
 	}
-	body := composeRecallBody("42", sections)
+	cb := b.RecallCurationOpen("sess-abc", 17)
+	cb.Section(1001, "the user's question about asparagus")
+	cb.Candidate(
+		4711, "notes/foo.md", "12-18", 0.84,
+		[]string{"cooking", "course"},
+		[]string{"persona"}, []float64{0.72},
+		"asparagus risotto",
+	)
+	cb.Section(1002, "assistant explanation of risotto technique")
+	cb.Candidate(
+		5023, "notes/bar.md", "1-7", 0.76,
+		[]string{"technique"},
+		nil, nil,
+		"toast the rice in fat",
+	)
+	body := cb.buf.String()
 
-	if !strings.HasPrefix(body, "@ark-recall-fire: 42\n\n") {
-		t.Errorf("body must lead with @ark-recall-fire; got:\n%s", body)
+	if !strings.HasPrefix(body, "@ark-recall-curate: sess-abc\n@ark-recall-fire: 17\n") {
+		t.Errorf("body must lead with header tags; got:\n%s", body)
 	}
-	if !strings.Contains(body, "## What this is") {
-		t.Errorf("missing instruction block header")
+	if !strings.Contains(body, "\n# Source Chunk: 1001\n") {
+		t.Errorf("missing section 1 H1")
 	}
-	if !strings.Contains(body, "## Recalled for paragraph\n@source-chunk: 1001") {
-		t.Errorf("missing section 1 header + @source-chunk")
+	if !strings.Contains(body, "\n# Source Chunk: 1002\n") {
+		t.Errorf("missing section 2 H1")
 	}
-	if !strings.Contains(body, "## Recalled for paragraph\n@source-chunk: 1002") {
-		t.Errorf("missing section 2 header + @source-chunk")
+	if !strings.Contains(body, "## Candidate: 4711 notes/foo.md:12-18\n") {
+		t.Errorf("missing candidate 1 H2")
 	}
-	if !strings.Contains(body, "> the user's question about asparagus") {
-		t.Errorf("missing section 1 excerpt blockquote")
+	if !strings.Contains(body, "- score: 0.84\n") {
+		t.Errorf("missing candidate 1 score line")
 	}
-	if !strings.Contains(body, "> assistant explanation of risotto technique") {
-		t.Errorf("missing section 2 excerpt blockquote")
+	if !strings.Contains(body, "- tags: cooking, course\n") {
+		t.Errorf("missing candidate 1 tags line")
 	}
-	if !strings.Contains(body, "### Recalled chunks") {
-		t.Errorf("missing per-section ### Recalled chunks header")
+	if !strings.Contains(body, "- proposed-tags: persona (0.72)\n") {
+		t.Errorf("missing candidate 1 proposed-tags line")
 	}
-	if !strings.Contains(body, "@chunk-id: 4711") {
-		t.Errorf("missing section 1 recalled chunk stencil")
+	if !strings.Contains(body, "```\nasparagus risotto\n```") {
+		t.Errorf("missing candidate 1 fenced content excerpt")
 	}
-	if !strings.Contains(body, "@chunk-id: 5023") {
-		t.Errorf("missing section 2 recalled chunk stencil")
-	}
-	// Sections appear in input order.
-	if i, j := strings.Index(body, "@source-chunk: 1001"), strings.Index(body, "@source-chunk: 1002"); i >= j {
+	if i, j := strings.Index(body, "Source Chunk: 1001"), strings.Index(body, "Source Chunk: 1002"); i < 0 || i >= j {
 		t.Errorf("section ordering wrong: 1001 at %d, 1002 at %d", i, j)
+	}
+	if cb.Sections() != 2 {
+		t.Errorf("Sections() = %d, want 2", cb.Sections())
 	}
 }
 

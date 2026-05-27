@@ -1,0 +1,538 @@
+package ark
+
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// RecallAgentBuilder owns the curation-doc and result-doc builder
+// state machines for the Simple Recall v2 pipeline. The watcher
+// drives the Go-internal curation builder; the recall agent shells
+// out to four CLI verbs (reserve-nonce, surface, recommend, close)
+// that route through this component.
+//
+// All in-flight state lives in this process. tmp:// is per-process,
+// so a server restart wipes the maps and counter cleanly — no
+// persistence required.
+//
+// CRC: crc-RecallAgentBuilder.md | R2754, R2755, R2756, R2757, R2758, R2763, R2772
+type RecallAgentBuilder struct {
+	db *DB
+
+	nonceCounter uint32 // R2755: in-memory monotonic, resets on restart
+
+	mu        sync.Mutex
+	curations map[uint64]*RecallCurationBuilder // keyed by fire
+	results   map[uint64]*recallResultDoc       // keyed by fire
+
+	// Monitoring log paths. Default to ~/.ark/monitoring/ but can
+	// be overridden for testing.
+	monitorPath string
+	fumblePath  string
+	logMu       sync.Mutex // serializes appends across both files
+}
+
+// NewRecallAgentBuilder constructs a builder anchored at db.
+// CRC: crc-RecallAgentBuilder.md
+func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
+	home, _ := os.UserHomeDir()
+	monDir := filepath.Join(home, ".ark", "monitoring")
+	return &RecallAgentBuilder{
+		db:          db,
+		curations:   make(map[uint64]*RecallCurationBuilder),
+		results:     make(map[uint64]*recallResultDoc),
+		monitorPath: filepath.Join(monDir, "recall.jsonl"),
+		fumblePath:  filepath.Join(monDir, "recall-fumbles.jsonl"),
+	}
+}
+
+// ReserveNonce returns the next monotonic nonce for tagging a recall
+// agent's Task description. CRC: crc-RecallAgentBuilder.md | R2755
+func (b *RecallAgentBuilder) ReserveNonce() uint32 {
+	return atomic.AddUint32(&b.nonceCounter, 1)
+}
+
+// --- curation-doc builder (Go-internal, called by watcher) ---
+
+// RecallCurationBuilder buffers the body of one curation doc and
+// writes it via the DB write actor on Close. R2754
+type RecallCurationBuilder struct {
+	parent  *RecallAgentBuilder
+	session string
+	fire    uint64
+
+	buf      strings.Builder
+	sections int
+}
+
+// RecallCurationOpen returns a builder for the given (session, fire).
+// CRC: crc-RecallAgentBuilder.md | R2754
+func (b *RecallAgentBuilder) RecallCurationOpen(session string, fire uint64) *RecallCurationBuilder {
+	cb := &RecallCurationBuilder{
+		parent:  b,
+		session: session,
+		fire:    fire,
+	}
+	// R2748: head-of-chunk tags, no blank line before first section.
+	fmt.Fprintf(&cb.buf, "@ark-recall-curate: %s\n", session)
+	fmt.Fprintf(&cb.buf, "@ark-recall-fire: %d\n", fire)
+	b.mu.Lock()
+	b.curations[fire] = cb
+	b.mu.Unlock()
+	return cb
+}
+
+// Section opens a new `# Source Chunk:` H1 with its blockquoted
+// paragraph excerpt. R2749
+func (c *RecallCurationBuilder) Section(sourceChunkID uint64, paragraph string) {
+	c.sections++
+	excerpt := truncateUTF8(paragraph, 200)
+	fmt.Fprintf(&c.buf, "\n# Source Chunk: %d\n\n> %s\n", sourceChunkID, blockquoteEscape(excerpt))
+}
+
+// Candidate appends one `## Candidate:` H2 with its score, tag list,
+// optional proposed-tag scores, and fenced content excerpt. R2749
+//
+// proposed is a parallel pair of (name, score) slices; both may be
+// nil/empty to suppress the line entirely.
+func (c *RecallCurationBuilder) Candidate(
+	chunkID uint64,
+	path, rangeLabel string,
+	score float64,
+	tagNames []string,
+	proposedNames []string,
+	proposedScores []float64,
+	contentExcerpt string,
+) {
+	fmt.Fprintf(&c.buf, "\n## Candidate: %d %s:%s\n\n", chunkID, path, rangeLabel)
+	fmt.Fprintf(&c.buf, "- score: %.2f\n", score)
+	fmt.Fprintf(&c.buf, "- tags: %s\n", strings.Join(tagNames, ", "))
+	if len(proposedNames) > 0 {
+		parts := make([]string, 0, len(proposedNames))
+		for i, name := range proposedNames {
+			s := 0.0
+			if i < len(proposedScores) {
+				s = proposedScores[i]
+			}
+			parts = append(parts, fmt.Sprintf("%s (%.2f)", name, s))
+		}
+		fmt.Fprintf(&c.buf, "- proposed-tags: %s\n", strings.Join(parts, ", "))
+	}
+	if contentExcerpt != "" {
+		fmt.Fprintf(&c.buf, "\n```\n%s\n```\n", truncateUTF8(contentExcerpt, 500))
+	}
+}
+
+// Sections returns the number of `# Source Chunk:` H1s emitted so
+// far. The watcher checks this before calling Close so it can drop
+// the builder silently when nothing cleared the gate.
+func (c *RecallCurationBuilder) Sections() int { return c.sections }
+
+// Close writes tmp://ARK-RECALL/curation-<session>-<fire> via the
+// DB write actor. The builder's registry entry in
+// `curations[fire]` is NOT deleted here — it stays alive as the
+// fire-registry so the agent's later surface/recommend calls can
+// resolve the session via openResult. CloseResult (the single
+// cleanup verb) deletes both maps atomically.
+// CRC: crc-RecallAgentBuilder.md | R2747, R2748
+func (c *RecallCurationBuilder) Close() error {
+	path := curationDocPath(c.session, c.fire)
+	body := []byte(c.buf.String())
+	return SyncVoid(c.parent.db, func(db *DB) error {
+		_, e := db.AddTmpFile(path, "markdown", body)
+		return e
+	})
+}
+
+// --- result-doc builder (CLI-driven, called by recall agent) ---
+
+// recallResultDoc buffers the body of one result doc. Built up by
+// SurfaceItem / RecommendItem; flushed on Close.
+type recallResultDoc struct {
+	session string
+	buf     strings.Builder
+	items   int
+	opened  time.Time
+}
+
+// SurfaceItem appends a `## Surface:` H2 to the result-doc builder
+// for the given fire, opening it on first call. The session is
+// derived from the in-flight curation doc; an unknown fire returns
+// an error so callers see the lost-state failure rather than
+// silently producing a misaligned result.
+//
+// The chunkID alone identifies the surfaced chunk — the assistant
+// resolves path/range/context on demand via `ark chunks <chunkID>`.
+// CRC: crc-RecallAgentBuilder.md | R2756
+func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason string) error {
+	if reason == "" {
+		return fmt.Errorf("reason required")
+	}
+	doc, err := b.openResult(fire)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&doc.buf, "\n## Surface: %d\n\nreason: %s\n", chunkID, reason)
+	doc.items++
+	return nil
+}
+
+// RecommendItem appends a `## Recommend:` H2 to the result-doc
+// builder for the given fire, opening it on first call. Session is
+// derived from the in-flight curation doc (see SurfaceItem).
+// CRC: crc-RecallAgentBuilder.md | R2757
+func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec, reason string) error {
+	if tagSpec == "" {
+		return fmt.Errorf("tag required")
+	}
+	if reason == "" {
+		return fmt.Errorf("reason required")
+	}
+	doc, err := b.openResult(fire)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %d\n\nreason: %s\n", tagSpec, chunkID, reason)
+	doc.items++
+	return nil
+}
+
+// CloseResult is the single cleanup verb. Writes the result doc iff
+// items were added; removes the curation doc unless preserveCuration;
+// discovers the calling subagent's JSONL via the nonce → meta.json
+// lookup; sums tokens; appends one record to recall.jsonl.
+// CRC: crc-RecallAgentBuilder.md | R2750, R2751, R2758, R2762
+func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCuration bool) error {
+	b.mu.Lock()
+	doc := b.results[fire]
+	cb := b.curations[fire]
+	delete(b.results, fire)
+	delete(b.curations, fire)
+	b.mu.Unlock()
+
+	session := ""
+	if doc != nil {
+		session = doc.session
+	} else if cb != nil {
+		session = cb.session
+	}
+	if session == "" {
+		// We don't know the session — the fire was never opened on
+		// this server. Fall back to writing the monitor log only.
+		b.appendMonitor(fire, "", nonce, 0, 0, 0, 0, 0, "error")
+		return fmt.Errorf("unknown fire %d", fire)
+	}
+
+	outcome := "silent-close"
+	surfaced, recommended := 0, 0
+	if doc != nil && doc.items > 0 {
+		// R2750, R2751: result-doc head tag + Surface/Recommend H2 body.
+		header := fmt.Sprintf("@ark-recall-result: %s\n", session)
+		body := []byte(header + doc.buf.String())
+		path := resultDocPath(session, fire)
+		if err := SyncVoid(b.db, func(db *DB) error {
+			_, e := db.AddTmpFile(path, "markdown", body)
+			return e
+		}); err != nil {
+			b.appendMonitor(fire, session, nonce, 0, 0, 0, 0, 0, "error")
+			return fmt.Errorf("write result doc: %w", err)
+		}
+		outcome = "result-emitted"
+		surfaced, recommended = countItems(doc.buf.String())
+	}
+
+	if !preserveCuration {
+		curPath := curationDocPath(session, fire)
+		_ = SyncVoid(b.db, func(db *DB) error {
+			return db.RemoveTmpFile(curPath)
+		})
+		// Sweep orphan curation docs for the same session (older
+		// fires the assistant missed handling). Same-session scope
+		// protects multi-session deployments from cross-cleanup.
+		b.sweepSessionOrphans(session, fire)
+	}
+
+	in, out := b.lookupSubagentTokens(nonce)
+	latency := 0
+	if doc != nil && !doc.opened.IsZero() {
+		latency = int(time.Since(doc.opened).Milliseconds())
+	}
+	b.appendMonitor(fire, session, nonce, in, out, latency, surfaced, recommended, outcome)
+	return nil
+}
+
+// openResult returns the per-fire result-doc builder, allocating
+// on first call. The session is derived from the in-flight curation
+// doc; an unknown fire returns an error.
+func (b *RecallAgentBuilder) openResult(fire uint64) (*recallResultDoc, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if d, ok := b.results[fire]; ok {
+		return d, nil
+	}
+	cb, ok := b.curations[fire]
+	if !ok {
+		return nil, fmt.Errorf("unknown fire %d (curation doc not in flight)", fire)
+	}
+	d := &recallResultDoc{session: cb.session, opened: time.Now()}
+	b.results[fire] = d
+	return d, nil
+}
+
+// sweepSessionOrphans removes any tmp://ARK-RECALL/curation-<session>-<F>
+// docs whose fire number is less than the closing fire. These are
+// older fires the assistant missed handling — opportunistic cleanup
+// so the orphan list doesn't grow unbounded across a long session.
+//
+// Same-session scope: another session's orphans are not touched
+// (multi-session safety). The closing fire's own doc is removed by
+// the explicit RemoveTmpFile call above this; this sweep only
+// addresses prior fires.
+//
+// CRC: crc-RecallAgentBuilder.md | R2758
+func (b *RecallAgentBuilder) sweepSessionOrphans(session string, currentFire uint64) {
+	prefix := fmt.Sprintf("tmp://ARK-RECALL/curation-%s-", session)
+	var stale []string
+	for _, path := range b.db.TmpFiles() {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(path, prefix)
+		fire, err := strconv.ParseUint(suffix, 10, 64)
+		if err != nil || fire >= currentFire {
+			continue
+		}
+		stale = append(stale, path)
+	}
+	if len(stale) == 0 {
+		return
+	}
+	_ = SyncVoid(b.db, func(db *DB) error {
+		for _, p := range stale {
+			_ = db.RemoveTmpFile(p)
+		}
+		return nil
+	})
+}
+
+// --- subagent JSONL discovery + token sum ---
+
+// lookupSubagentTokens walks the assistant's subagents directory
+// for a .meta.json whose description contains "nonce <N>", then
+// sums usage.input_tokens / usage.output_tokens from the paired
+// JSONL. Returns (0, 0) when discovery fails — close never errors
+// on missing tokens.
+//
+// Source enumeration replaces the older cwd-derived path: the
+// agent's cwd isn't reliable, but ark already knows which
+// `~/.claude/projects/<encoded>` directories are watched (the
+// chat-jsonl sources). We glob under each one for the parent
+// session's subagents directory.
+//
+// meta.json files persist across `ark serve` restarts, but the
+// nonce counter resets — so a stale meta.json from a previous
+// run could collide on the same `nonce <N>` substring. To resolve
+// that, candidates are checked in JSONL-mtime descending order:
+// the just-spawned subagent's transcript is the most recently
+// modified file, so it wins any ambiguity.
+//
+// CRC: crc-RecallAgentBuilder.md | R2759, R2760, R2761
+func (b *RecallAgentBuilder) lookupSubagentTokens(nonce uint32) (in, out int) {
+	parent := os.Getenv("CLAUDE_CODE_SESSION_ID")
+	if parent == "" {
+		return 0, 0
+	}
+	home, _ := os.UserHomeDir()
+	projectsPrefix := filepath.Join(home, ".claude", "projects") + string(os.PathSeparator)
+	needle := fmt.Sprintf("nonce %d", nonce)
+	type candidate struct {
+		meta    string
+		mtime   time.Time
+	}
+	var cands []candidate
+	for _, src := range b.db.Config().Sources {
+		if !strings.HasPrefix(src.Dir, projectsPrefix) {
+			continue
+		}
+		dir := filepath.Join(src.Dir, parent, "subagents")
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.meta.json"))
+		for _, meta := range matches {
+			jsonl := strings.TrimSuffix(meta, ".meta.json") + ".jsonl"
+			info, err := os.Stat(jsonl)
+			if err != nil {
+				continue
+			}
+			cands = append(cands, candidate{meta: meta, mtime: info.ModTime()})
+		}
+	}
+	// Newest JSONL first — the fresh subagent transcript wins any
+	// nonce collision against stale meta.json files left over from
+	// a previous `ark serve` run.
+	sort.Slice(cands, func(i, j int) bool {
+		return cands[i].mtime.After(cands[j].mtime)
+	})
+	for _, c := range cands {
+		data, err := os.ReadFile(c.meta)
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			continue
+		}
+		if !strings.Contains(doc.Description, needle) {
+			continue
+		}
+		jsonl := strings.TrimSuffix(c.meta, ".meta.json") + ".jsonl"
+		return sumSubagentTokens(jsonl)
+	}
+	return 0, 0
+}
+
+// sumSubagentTokens reads a subagent JSONL transcript and totals
+// usage.input_tokens / usage.output_tokens across "type":"assistant"
+// records. R2761, R2762
+func sumSubagentTokens(jsonl string) (in, out int) {
+	data, err := os.ReadFile(jsonl)
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Usage struct {
+					Input  int `json:"input_tokens"`
+					Output int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec.Type != "assistant" {
+			continue
+		}
+		in += rec.Message.Usage.Input
+		out += rec.Message.Usage.Output
+	}
+	return in, out
+}
+
+// --- monitor + fumble logs ---
+
+// monitorRecord is one line in recall.jsonl. Field order matches
+// the spec table for diagnostic-friendliness.
+type monitorRecord struct {
+	Fire        uint64 `json:"fire"`
+	Session     string `json:"session"`
+	Nonce       uint32 `json:"nonce"`
+	InTokens    int    `json:"in_tokens"`
+	OutTokens   int    `json:"out_tokens"`
+	LatencyMs   int    `json:"latency_ms"`
+	Surfaced    int    `json:"surfaced"`
+	Recommended int    `json:"recommended"`
+	Outcome     string `json:"outcome"`
+	Timestamp   string `json:"timestamp"`
+}
+
+func (b *RecallAgentBuilder) appendMonitor(fire uint64, session string, nonce uint32, in, out, latency, surfaced, recommended int, outcome string) {
+	rec := monitorRecord{
+		Fire: fire, Session: session, Nonce: nonce,
+		InTokens: in, OutTokens: out, LatencyMs: latency,
+		Surfaced: surfaced, Recommended: recommended,
+		Outcome: outcome, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	b.appendJSONL(b.monitorPath, rec)
+}
+
+// LogFumble appends one entry to the Fumble Log. Called by the CLI
+// flag-parser on malformed surface/recommend/close invocations.
+// R2772
+func (b *RecallAgentBuilder) LogFumble(fire uint64, nonce uint32, command, args, errMsg string) {
+	rec := struct {
+		Timestamp string `json:"timestamp"`
+		Fire      uint64 `json:"fire"`
+		Nonce     uint32 `json:"nonce"`
+		Command   string `json:"command"`
+		Args      string `json:"args"`
+		Error     string `json:"error"`
+	}{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Fire:      fire, Nonce: nonce,
+		Command: command, Args: args, Error: errMsg,
+	}
+	b.appendJSONL(b.fumblePath, rec)
+}
+
+// appendJSONL serializes one record and appends a single line to
+// path. Errors are logged but not propagated — monitoring is
+// best-effort, never on the critical path.
+func (b *RecallAgentBuilder) appendJSONL(path string, rec any) {
+	b.logMu.Lock()
+	defer b.logMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	enc, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(enc)
+	_, _ = f.Write([]byte{'\n'})
+}
+
+// --- helpers ---
+
+// curationDocPath is the canonical tmp:// path for a curation doc.
+// R2747
+func curationDocPath(session string, fire uint64) string {
+	return fmt.Sprintf("tmp://ARK-RECALL/curation-%s-%d", session, fire)
+}
+
+// resultDocPath is the canonical tmp:// path for a result doc. R2747
+func resultDocPath(session string, fire uint64) string {
+	return fmt.Sprintf("tmp://ARK-RECALL/result-%s-%d", session, fire)
+}
+
+// blockquoteEscape collapses internal newlines so a multi-line
+// excerpt stays on one blockquoted line. Markdown renderers vary
+// in how they handle wrapped blockquotes; one line is the simple
+// invariant. R2749
+func blockquoteEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " ")
+}
+
+// countItems totals the `## Surface:` and `## Recommend:` H2s in a
+// result-doc body. Cheap line scan, used for the monitor record.
+func countItems(body string) (surfaced, recommended int) {
+	for _, line := range strings.Split(body, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## Surface:"):
+			surfaced++
+		case strings.HasPrefix(line, "## Recommend:"):
+			recommended++
+		}
+	}
+	return surfaced, recommended
+}

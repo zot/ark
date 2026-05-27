@@ -1,15 +1,18 @@
-# Sequence: Recall watcher turn-boundary flow
+# Sequence: Recall watcher turn-boundary flow (v2)
 
-**Requirements:** R2696, R2700, R2701, R2702, R2703, R2704, R2705,
-R2706, R2707, R2708, R2711, R2712, R2713, R2729, R2730, R2731,
-R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740,
-R2741
+**Requirements:** R2696, R2705, R2706, R2708, R2711, R2712, R2713,
+R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739,
+R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753, R2754
 
 The watcher hooks into `indexer.executeRefresh`'s isAppend
 branch. OnAppend is synchronous on the indexer's goroutine —
 fast: a JSON line-scan plus a pending-chunks append. The
-heavy work (substrate Recall, DM compose, RD writes) runs on
-the timer-expiry closure-actor goroutine.
+heavy work (substrate Recall per paragraph, curation-doc
+write, RD writes) runs on the timer-expiry closure-actor
+goroutine. v2 replaces the v1 DM emission with a curation-doc
+write via the in-process `RecallCurationBuilder`; downstream
+flow from the curation doc to the recall agent and result doc
+is in `seq-recall-agent.md`.
 
 ## Flow 1: per-append signal handling
 
@@ -46,14 +49,11 @@ the timer-expiry closure-actor goroutine.
          │               activation_delay seconds,
          │               func() { post fire(sessionID) to
          │                        jobs channel })
-         │             lastTurnDurationChunkID = (chunkID of
-         │               the indexed chunk containing this line,
-         │               if any)
          │
          └── 2.6  unlock; return
 ```
 
-## Flow 2: timer expiry → recall pipeline
+## Flow 2: timer expiry → curation-doc write
 
 ```
 3. pendingTimer fires (separate goroutine, Go runtime)
@@ -71,52 +71,61 @@ the timer-expiry closure-actor goroutine.
          │
          ├── 5.2  if len(snapshot) == 0: return                   (no work)
          │
-         ├── 5.3  cfg = db.Config().Recall                        (R2695)
+         ├── 5.3  fire = watcher.nextFireNumber()                 (R2752)
+         │        cfg = db.Config().Recall                        (R2695)
          │
-         ├── 5.4  sections = []
-         │        for each cid in snapshot:                       (R2736)
-         │          result = librarian.Recall(
-         │            [{ChunkID: cid}],
-         │            RecallOpts{
-         │              K: cfg.EffectiveChunksPerDM(),
-         │              IncludeContent: true,
-         │              Session: sessionID,
-         │              Propose: cfg.EffectivePropose(),
-         │            })
-         │          if err: log recall-error; continue
-         │          if len(result.Chunks) == 0
-         │             or result.Chunks[0].Score
-         │                < cfg.EffectiveMinSimilarity():
-         │            continue                                    (R2708, R2739)
-         │          for r in result.Chunks:
-         │            r.Content = truncateUTF8(r.Content, 500)    (R2705)
-         │          inputExcerpt = truncateUTF8(
-         │            chunkText(cid), 200)                        (R2738)
-         │          sections.append({cid, inputExcerpt,
-         │                           recalled: result.Chunks})
+         ├── 5.4  candidates per paragraph:                       (R2736, R2746)
+         │        sections = []
+         │        for each cid in snapshot:
+         │          text = db.ChunkTextByID(cid)
+         │          for each para in
+         │              microfts2.MarkdownChunker{}.Chunks(text)
+         │              where len(para) >= 30:
+         │            result = librarian.Recall(
+         │              [{Text: para}],
+         │              RecallOpts{
+         │                K: cfg.EffectiveChunksPerDM(),
+         │                IncludeContent: true,
+         │                Session: sessionID,
+         │                Propose: cfg.EffectivePropose(),
+         │                KeepTagless: true,
+         │              })
+         │            if err: log recall-error; continue
+         │            if len(result.Chunks) == 0
+         │               or result.Chunks[0].Score
+         │                  < cfg.EffectiveMinSimilarity():
+         │              continue                                  (R2708, R2739)
+         │            for r in result.Chunks:
+         │              r.Content = truncateUTF8(r.Content, 500)  (R2705)
+         │            paraExcerpt = truncateUTF8(para, 200)       (R2749)
+         │            sections.append({sourceCID: cid,
+         │                             paraExcerpt,
+         │                             candidates: result.Chunks})
          │
-         ├── 5.5  if len(sections) == 0:                          (R2739, R2740)
+         ├── 5.5  if len(sections) == 0:                          (R2753)
          │          log fired with sections-emitted=0; return
          │
-         ├── 5.6  body = composeBody(sections,
-         │          ref = lastTurnDurationChunkID or now-nanos)   (R2702, R2737)
+         ├── 5.6  b = db.RecallCurationOpen(sessionID, fire)      (R2754)
+         │        for each section in sections:
+         │          b.Section(section.sourceCID,
+         │                    section.paraExcerpt)
+         │          for each c in section.candidates:
+         │            b.Candidate(c.ChunkID, c.Path, c.Range,
+         │                        c.Score, c.Tags,
+         │                        c.ProposedTagsWithScores,
+         │                        c.Content)
+         │        b.Close()                                       (R2747, R2748)
+         │        → writes tmp://ARK-RECALL/curation-
+         │            <sessionID>-<fire>
+         │          (write actor publishes pubsub event for
+         │           subscribers to @ark-recall-curate)
          │
-         ├── 5.7  composeDM(                                      (R2700, R2701)
-         │          sender = {Service: "ARK-RECALL"},
-         │          recipients = [sessionID],
-         │          subject = "recall",
-         │          body)
-         │        → @dm: <sessionID>: recall
-         │          @from-service: ARK-RECALL
-         │        → POST /tmp/append at
-         │          tmp://ARK-RECALL/dm-<sessionID>
-         │
-         ├── 5.8  mark-on-send: for each section.recalled[*]:     (R2711, R2712, R2740)
+         ├── 5.7  mark-on-send: for each section.candidates[*]:   (R2711, R2712, R2740)
          │          for each (tag, value) in chunk.Tags:
          │            store.AddDiscussed(sessionID, tag, value)
          │
-         └── 5.9  log fired with sections-emitted=N, dropped=M,   (R2713)
-                  discussed-records=K
+         └── 5.8  log fired with fire=<F>, sections-emitted=N,    (R2713)
+                  candidates=K, discussed-records=M
 ```
 
 ## Flow 3: state-machine transitions (informational)
@@ -132,8 +141,9 @@ the timer-expiry closure-actor goroutine.
             ▲                           │
             │                           │ timer expires
             │ pendingChunks cleared,    │
-            │ DM emitted (or all        │
-            │ sections dropped silently)│
+            │ curation doc written (or  │
+            │ all sections dropped      │
+            │ silently)                 │
             │                           ▼
             └─────────────────── ┌──────────┐
                                  │  FIRING  │
@@ -145,12 +155,6 @@ the timer-expiry closure-actor goroutine.
 - user-record in IDLE is a no-op (no timer to cancel,
   pendingChunks keep accumulating).
 - A new turn_duration while ARMED resets the deadline.
-
-## Flow 4: receiving agent action (out-of-band, informational)
-
-The receiving Claude Code session, listening on its own
-`@dm: <self>` subscription, reads the appended chunk and
-decides whether to surface. Layer 4 instrumentation expects
-the agent to append `@ark-recall-acted: surfaced|dropped|skipped`
-to the same tmp:// document; the watcher does not enforce
-this.
+- FIRING allocates the next fire number; the fire number is
+  per `ark serve` run and is consumed whether or not a
+  curation doc gets written.

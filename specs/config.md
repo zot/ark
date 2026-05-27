@@ -86,7 +86,8 @@ ambient watcher.
 | `activation_delay` | int      | `15`    | Seconds the watcher waits after a `turn_duration` record before firing. A user record arriving inside this window cancels the firing entirely.                       | `simple-recall.md`     |
 | `chunks_per_dm`    | int      | `5`     | Per-input top-K cap. Each section in the DM body lists at most this many recalled chunks.                                                                            | `simple-recall.md`     |
 | `sources`          | []string | `[]`    | Optional whitelist of source root directories. Empty means every `chat-jsonl` source qualifies.                                                                      | `simple-recall.md`     |
-| `agent_cmd`        | string   | `""`    | Reserved for the deferred agent-layer follow-up (ARK-STATE item 10). v1 ignores this field.                                                                          | `simple-recall.md`     |
+| `reject_propose_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections (RJ counter), the propose pass stops surfacing it. `0` (unset) = infinite, safe default.                | `simple-recall.md`     |
+| `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections, the assistant stops mentioning the count to the user. `0` = infinite.                                  | `simple-recall.md`     |
 
 ## `[schedule]` — scheduling feature
 

@@ -159,7 +159,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
-- [ ] crc-RecallWatcher.md → `recall_watcher.go`
+- [x] crc-RecallWatcher.md → `recall_watcher.go`
+- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`
+- [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -203,7 +205,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
 - [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
-- [ ] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
+- [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
+- [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 
@@ -589,3 +592,15 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O117: RecallWatcher integration tests deferred — test-RecallWatcher.md lists ~15 pipeline scenarios (cooldown gate, similarity gate, mark-on-send, propose passthrough, source-dir whitelist, live config reload). Unit tests in recall_watcher_test.go cover pure helpers + SourceQualifies; pipeline scenarios need DB + librarian + chat-jsonl chunk scaffolding.
 - T94: R2691 retired (turn-boundary firing makes a separate per-session cooldown redundant (2026-05-25 simple-recall revision))
 - T95: R2697 retired by R2734 (per-chunk trigger replaced by turn_duration-armed debounce (2026-05-25 simple-recall revision))
+- T96: R2702 retired by R2748 (2026-05-26 simple-recall v2 — curation-doc header @ark-recall-curate replaces DM @ark-recall-fire line)
+- T97: R2703 retired (2026-05-26 simple-recall v2 — DM instruction block gone; bias-to-silence is now the recall agent's persona (R2769))
+- T98: R2704 retired by R2749 (2026-05-26 simple-recall v2 — '## Recalled for chunk' DM section shape replaced by curation-doc '# Source Chunk:' + '## Candidate:')
+- T99: R2707 retired (2026-05-26 simple-recall v2 — DM emission gone; Layer 1 @dm-subject pre-triage no longer applicable)
+- T100: R2709 retired (2026-05-26 simple-recall v2 — DM instruction block gone; Layer 3 bias-to-silence is now the recall agent's persona briefing)
+- T101: R2710 retired by R2763 (2026-05-26 simple-recall v2 — Layer 4 @ark-recall-acted instrumentation replaced by ~/.ark/monitoring/recall.jsonl)
+- A67: R2775 and R2776 (assistant subscription pattern: ark subscribe --tag ark-recall-curate / ark-recall-result=<self> + Task spawn with nonce in description) describe behavior of the Claude Code assistant, which is external to ark's Go codebase. The contract is documented in specs/simple-recall.md; enforcement lives in the .claude/agents/* + skill files (anchored via crc-RecallAgent.md). No Go CRC owns these.
+- T102: R2700 retired by R2747 (2026-05-26 simple-recall v2 — composeDM call replaced by RecallCurationBuilder write)
+- T103: R2701 retired by R2748 (2026-05-26 simple-recall v2 — DM recipient/subject/sender identity replaced by curation-doc head tags)
+- T104: R2737 retired by R2749 (2026-05-26 simple-recall v2 — DM ## Recalled for paragraph grouping replaced by curation-doc # Source Chunk / ## Candidate)
+- T105: R2738 retired by R2749 (2026-05-26 simple-recall v2 — DM section excerpt blockquote replaced by curation-doc Source Chunk excerpt)
+- T106: R2694 retired (2026-05-26 simple-recall v2 — [recall].agent_cmd reservation retired; recall agent is invoked by the assistant via the Task tool, not by a configured command)

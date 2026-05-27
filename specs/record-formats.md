@@ -41,7 +41,7 @@ change them, we need to update the CLI code so it's up-to-date.
 | `RC`   | Recall Candidate    | `RC` + chunkid varint + tagname                   | 8-byte big-endian uint64 tally counter  |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
 | `RF`   | Recall Freshness    | `RF` + chunkid varint                             | varint uint64 (max S-over-ED at last derivation) |
-| `RJ`   | Recall reJection    | `RJ` + chunkid varint + tagname                   | 8-byte big-endian unix nanos            |
+| `RJ`   | Recall reJection    | `RJ` + chunkid varint + tagname                   | varint counter + 8-byte big-endian unix nanos |
 | `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
 | `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
 | `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
@@ -490,16 +490,24 @@ agent-layer design). Currently:
   removed alongside EC and F via the existing chunkid-orphan
   callback path. Detail spec: `derived-tags.md`.
 
-### RJ — Recall reJection (sticky no-resurface marker)
+### RJ — Recall reJection (sticky no-resurface marker, with counter)
 
 - **Key:** `"RJ"` + chunkid varint + tagname. Mirrors RC exactly.
-- **Value:** 8 bytes — big-endian `uint64` unix nanoseconds
-  (rejection timestamp; presence of the record is what blocks
-  re-proposal, not the timestamp value).
-- **Semantic:** the curator rejected this (chunkid, tagname). The
-  derivation pass checks RJ before writing RC; an RJ hit
-  suppresses re-proposal. Sticky in v1 — no TTL, no
-  un-reject verb. Detail spec: `derived-tags.md`.
+- **Value:** `varint(counter) + 8-byte BE unix nanos`. Counter
+  increments on every rejection write for the same (chunkid,
+  tagname); the timestamp is updated to "most recently
+  rejected" each write.
+- **Semantic:** the curator rejected this (chunkid, tagname).
+  The derivation pass checks RJ before writing RC; an RJ hit
+  suppresses re-proposal. Two ceiling knobs in `[recall]` —
+  `reject_propose_ceiling` and `reject_mention_ceiling` —
+  consult the counter to decide whether the substrate keeps
+  proposing and whether the assistant keeps mentioning the
+  pair. `0` (unset) on either knob = infinite, the safe
+  default. Sticky — no TTL, no un-reject verb. No migration
+  from v1's count-less format; `ark connections clean -all`
+  resets RJ and the next reject cycle rewrites in v2 shape.
+  Detail spec: `simple-recall.md`.
 
 ## Schema Version Protocol
 
