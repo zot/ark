@@ -89,6 +89,15 @@ ambient watcher.
 | `reject_propose_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections (RJ counter), the propose pass stops surfacing it. `0` (unset) = infinite, safe default.                | `simple-recall.md`     |
 | `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections, the assistant stops mentioning the count to the user. `0` = infinite.                                  | `simple-recall.md`     |
 
+## `[luhmann]` — Luhmann orchestrator
+
+| Key                              | Type     | Default       | Meaning                                                                                                                                              | Owner          |
+|----------------------------------|----------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
+| `context_limit`                  | int      | `150000`      | Token ceiling passed to spawned subagents (used by the subagent's self-recycle check via `ark connections recall context`).                          | `luhmann.md`   |
+| `crash_pause_after`              | int      | `3`           | Consecutive crash count at which the supervisor pauses a class instead of respawning.                                                                | `luhmann.md`   |
+| `backoff_seconds`                | []int    | `[1, 5, 30]`  | Seconds to wait between successive crash respawns. Final value applies to attempts beyond the list length, up to `crash_pause_after`.                | `luhmann.md`   |
+| `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this subagent class (e.g. `class.recall.enabled`).                                                              | `luhmann.md`   |
+
 ## `[schedule]` — scheduling feature
 
 | Key                  | Type                              | Default | Meaning                                                                                          | Owner            |

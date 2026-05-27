@@ -32,6 +32,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
 | Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher v1 shipping; v2 agent layer in spec (one-shot Haiku curator between watcher and assistant; RJ rejection counter + propose / mention ceiling thresholds) | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/SIMPLE-RECALL.md` (working notes) |
+| Luhmann orchestrator (supervisor + chimes)  | Phase 2 in spec (Go-side `ark monitor` / `ark luhmann` CLI, `[luhmann]` config, `@chime-Nm` standard scheduling tags, subscriber-presence gate). Skill / agent files separate. | `luhmann.md`, `monitor.md`, `chimes.md`, `subscriber-presence.md`, `.scratch/LUHMANN-ORCHESTRATOR.md` (working notes) |
 | Curation workshop (Tag Forge UI)            | shipping                                   | `tag-forge.md`, `curation.md`                                                 |
 | CLI-first agent integration                 | shipping                                   | `cli-commands.md`, `VISION.md`                                                |
 | Cross-project messaging                     | shipping                                   | `ARK-MESSAGING.md`                                                            |
@@ -278,7 +279,41 @@ stages. Both v1 watcher and v2 agent layer are spec'd in
 `specs/simple-recall.md`; new-tag-definition invention (RP/RPE/RR
 records) remains deferred. Phase 2 (a long-running orchestrator
 named Luhmann that owns the agent and a monitor CLI/view) is in
-`.scratch/SIMPLE-RECALL.md`.
+`.scratch/SIMPLE-RECALL.md` and the Luhmann orchestrator capability
+below.
+
+## Luhmann orchestrator (supervisor + chimes)
+
+**Motivation.** v2 recall ships ambient curation as a thing the
+assistant *requests* (subscribe, listen, spawn one-shot agent per
+curate event). The orchestrator inverts that: it hosts the recall
+loop continuously so the user-facing assistant just listens for the
+result. Recall becomes a thing that *happens to you* mid-conversation,
+not a thing you *invoke*. Long-running orchestrators run into a
+companion problem — Anthropic's prompt cache TTL expires during long
+idles, so every supervisor decision pays a rebuild cost. The chime
+convention solves that as a generic primitive (useful well beyond
+Luhmann).
+
+**Objective.** A Claude Code session — invoked via the `luhmann`
+skill, or auto-started in a dedicated CC project via a `CLAUDE.md`
+HELLO pattern — supervises lotto-tube subagents per the sublooper
+pattern, optionally chats with the user about the corpus, and stays
+cache-warm via a chime subscription. The Go side of ark provides
+the supporting CLI and configuration; the orchestrator session
+itself is a `.claude/skills/luhmann.md` skill plus a companion
+`.claude/agents/luhmann-researcher.md` (skill / agent files are
+not in this spec's scope).
+
+**Surface.** `ark monitor` (read `~/.ark/monitoring/*.jsonl` — see
+[monitor.md](monitor.md)), `ark luhmann` (write
+`luhmann.jsonl` — see [luhmann.md](luhmann.md)), `ark subscribers`
+(subscriber-presence query consumed by the watcher and recall
+`close` — see [subscriber-presence.md](subscriber-presence.md)),
+the `[luhmann]` `ark.toml` section, and the `@chime-Nm` standard
+scheduling tags (`@chime-1m:` ... `@chime-60m:`, see
+[chimes.md](chimes.md)). The pre-existing `AddChime()` hardcoded
+15-minute event is retired in favor of `@chime-15m:`.
 
 ## Curation workshop (Tag Forge UI)
 

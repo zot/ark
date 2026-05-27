@@ -162,6 +162,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
+- [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
+- [ ] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -209,6 +211,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
+- [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
+- [ ] seq-subscriber-presence.md → `pubsub.go`, `recall_watcher.go`, `recall_agent_builder.go`, `server.go`
+- [ ] seq-chimes.md → `scheduler.go`, `server.go`, `config.go`, `pubsub.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -604,3 +609,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T104: R2737 retired by R2749 (2026-05-26 simple-recall v2 — DM ## Recalled for paragraph grouping replaced by curation-doc # Source Chunk / ## Candidate)
 - T105: R2738 retired by R2749 (2026-05-26 simple-recall v2 — DM section excerpt blockquote replaced by curation-doc Source Chunk excerpt)
 - T106: R2694 retired (2026-05-26 simple-recall v2 — [recall].agent_cmd reservation retired; recall agent is invoked by the assistant via the Task tool, not by a configured command)
+- T107: R810 retired by R2783 (2026-05-27 chime-convention (AddChime hardcoded 15m replaced by @chime-15m as one of six standard cadences routed through normal [schedule] path))

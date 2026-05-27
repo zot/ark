@@ -164,7 +164,7 @@ type ChunkSubstrate struct {
 //
 // Shared between `ark connections recall` (via cmd/ark/main.go's
 // printRecallResult) and the simple-recall watcher (recall_watcher.go).
-// CRC: crc-Librarian.md | R2645, R2684, R2685, R2704
+// CRC: crc-Librarian.md | R2645, R2684, R2685, R2704, R2743
 func RenderRecallChunks(out io.Writer, chunks []RecalledChunk) {
 	for _, chunk := range chunks {
 		fmt.Fprintln(out)

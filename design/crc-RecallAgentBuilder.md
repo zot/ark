@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777
+**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -86,14 +86,19 @@ for these verbs — `ark serve` must be running.
   `reason: ...` line.
 - Close(fire, nonce, preserveCuration bool) error (R2758) —
   the single cleanup verb:
-  - If `results[fire]` exists with at least one item: write
-    `tmp://ARK-RECALL/result-<session>-<fire>` via the write
-    actor with the head tag `@ark-recall-result: <session>`
-    followed by the accumulated body (R2750, R2751). Set
+  - If `results[fire]` exists with at least one item: query
+    `pubsub.SubscriberCount("ark-recall-result", session)`
+    first. If zero, skip the result-doc write and set
+    `outcome := "no-subscriber"` (R2807, R2808). Otherwise
+    write `tmp://ARK-RECALL/result-<session>-<fire>` via the
+    write actor with the head tag `@ark-recall-result: <session>`
+    followed by the accumulated body (R2750, R2751) and set
     `outcome := "result-emitted"`.
   - If no items were ever added: skip the result-doc write
     entirely; the assistant's `ark listen` never sees a
-    matching event. Set `outcome := "silent-close"`.
+    matching event. Set `outcome := "silent-close"`. (No
+    subscriber check is needed here — there is nothing to
+    deliver regardless.)
   - Either way: remove `tmp://ARK-RECALL/curation-<session>-
     <fire>` via the write actor unless `preserveCuration`.
     Also sweep any orphan curation docs for the same session

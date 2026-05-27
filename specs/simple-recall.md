@@ -396,6 +396,30 @@ Discipline:
     `.meta.json` lookup described below; sum tokens; append
     one record to `~/.ark/monitoring/recall.jsonl`.
 
+### Subscriber-presence gate
+
+The watcher and `close` both query subscriber presence before
+writing their respective tmp:// docs. See
+[subscriber-presence.md](subscriber-presence.md) for the API
+(`db.SubscriberCount`) and the CLI form (`ark subscribers --tag T`).
+
+- **Watcher → curation doc.** Before writing
+  `tmp://ARK-RECALL/curation-<session>-<fire>`, the watcher
+  queries `SubscriberCount("ark-recall-curate", "<originating-session-uuid>")`.
+  If zero, the watcher skips the curation write, clears
+  `pendingChunks` as usual, and appends a record to
+  `recall.jsonl` with `outcome: "no-subscriber"`.
+- **`close` → result doc.** Before writing
+  `tmp://ARK-RECALL/result-<session>-<fire>`, `close` queries
+  `SubscriberCount("ark-recall-result", "<originating-session-uuid>")`.
+  If zero, `close` skips the result write, still performs the
+  curation removal + orphan sweep + monitoring-log append, and
+  records `outcome: "no-subscriber"`.
+
+The gate avoids paying the disk write + downstream agent cost when
+no consumer is present. If the lights aren't on, there's nobody
+home.
+
 ### Nonce-in-description format
 
 The Task tool exposes the agent's `description` field in its
@@ -466,8 +490,11 @@ one-shot fires the number is roughly per-fire static; in Phase 2's
 long-running lotto-tube agent it's the load-bearing telemetry
 showing context creep across fires until the agent self-recycles.
 
-`outcome` is one of `result-emitted`, `silent-close`, or
-`error`. `surfaced` and `recommended` are counts of items
+`outcome` is one of `result-emitted`, `silent-close`,
+`no-subscriber`, or `error`. `no-subscriber` covers both gate
+points: the watcher's pre-curation skip and `close`'s
+pre-result skip (see the *Subscriber-presence gate* section
+above). `surfaced` and `recommended` are counts of items
 added before `close`. The format is intentionally append-only
 and forward-compatible; future fields slot in at the end.
 
@@ -644,9 +671,10 @@ the monitoring log written by `close`:
 - **No tag-axis filtering.** Deferred until
   `.scratch/TAG-AXES.md` earns implementation.
 - **No backfill on cold start.** Go-forward only.
-- **No subscriber liveness check.** Curation and result docs
-  persist in tmp:// memory whether or not the assistant is
-  listening; they vanish at `ark serve` restart.
+- **No backfill on subscriber arrival.** The subscriber-presence
+  gate (below) skips the curation / result write entirely when no
+  one is listening. A subscriber that arrives after the skip does
+  not retroactively receive the dropped fire.
 - **No long-running orchestrator.** Phase 1 spawns the agent
   one-shot per fire via Task. Phase 2 (Luhmann, see
   `.scratch/SIMPLE-RECALL.md`) introduces a long-running

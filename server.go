@@ -229,6 +229,15 @@ func Serve(dbPath string, opts ServeOpts) error {
 	db.SetPubSub(ps)
 	schedDir := filepath.Join(dbPath, "schedule")
 	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
+	// R2780: auto-create ~/.ark/chimes.md so the indexer can pick up
+	// chime tag declarations on the normal `[schedule].tags` path.
+	// EnsureUpcoming now enqueues live (R2778), so the events fire in
+	// this session without waiting for a restart. Source-file
+	// duplication (e.g. literal `@chime-15m: every 15m` in code) is
+	// prevented at config level via `[schedule].exclude_files`.
+	if err := EnsureChimesFile(dbPath); err != nil {
+		log.Printf("chimes: ensure file failed: %v", err)
+	}
 
 	// R1235, R1248: Create librarian for spectral search
 	lib := NewLibrarian(db, dbPath)
@@ -331,8 +340,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 			return err
 		})
 	}
-	// R810: Start quarter chime after reconciliation
-	sched.AddChime()
+	// R2783: AddChime() retired. Chime ticks now route through the
+	// normal schedule-log path — see ~/.ark/chimes.md and
+	// EnsureChimesFile (called above before reconcile).
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -379,6 +389,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /tmp/list", srv.handleTmpList)
 	mux.HandleFunc("POST /tmp/append", srv.handleTmpAppend)
 	mux.HandleFunc("POST /subscribe", srv.handleSubscribe)
+	mux.HandleFunc("GET /subscribers", srv.handleSubscribers)
+	mux.HandleFunc("POST /monitor/control", srv.handleMonitorControl)
+	mux.HandleFunc("POST /luhmann/record", srv.handleLuhmannRecord)
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
@@ -2101,7 +2114,7 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSubscribe processes subscribe/cancel/list/stats requests. R778-R788, R814-R820
-// CRC: crc-Server.md | Seq: seq-pubsub.md
+// CRC: crc-Server.md | Seq: seq-pubsub.md | R2782
 func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Session string `json:"session"`
@@ -2187,6 +2200,125 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	srv.pubsub.Subscribe(req.Session, subs)
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleSubscribers returns the count of subscriptions whose predicate
+// would accept a synthesized (tag, value) pair. Read-only.
+// CRC: crc-Server.md | Seq: seq-subscriber-presence.md | R2805
+func (srv *Server) handleSubscribers(w http.ResponseWriter, r *http.Request) {
+	tag := r.URL.Query().Get("tag")
+	if tag == "" {
+		http.Error(w, "tag required", http.StatusBadRequest)
+		return
+	}
+	p, err := ParseMatchSyntax(tag)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("bad tag %q: %v", tag, err), http.StatusBadRequest)
+		return
+	}
+	name := strings.ToLower(p.NameStr)
+	value := ""
+	if p.ValueMode != ValueAny {
+		value = p.ValueStr
+	}
+	count := srv.pubsub.SubscriberCount(name, value)
+	writeJSON(w, map[string]int{"count": count})
+}
+
+// handleMonitorControl appends one pause/resume record to
+// `~/.ark/monitoring/<class>.jsonl` via the write actor. Enforces the
+// state-already-set guard before the append.
+// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2787, R2788
+func (srv *Server) handleMonitorControl(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Class string `json:"class"`
+		Kind  string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !IsKnownMonitorClass(req.Class) {
+		http.Error(w, fmt.Sprintf("unknown monitor class %q", req.Class), http.StatusBadRequest)
+		return
+	}
+	if req.Kind != "pause" && req.Kind != "resume" {
+		http.Error(w, fmt.Sprintf("kind must be pause or resume, got %q", req.Kind), http.StatusBadRequest)
+		return
+	}
+	if err := CheckMonitorControlGuard(srv.db.Path(), req.Class, req.Kind); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err := AppendMonitorControl(srv.db, srv.db.Path(), req.Class, req.Kind); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleLuhmannRecord appends one supervisor record to
+// `~/.ark/monitoring/luhmann.jsonl` via the write actor.
+// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2794, R2795
+func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind    string `json:"kind"`
+		Class   string `json:"class"`
+		Nonce   int    `json:"nonce"`
+		TaskID  string `json:"task_id"`
+		Reason  string `json:"reason"`
+		Crashes *int   `json:"crashes,omitempty"`
+		Backoff int    `json:"backoff"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Class == "" {
+		http.Error(w, "class required", http.StatusBadRequest)
+		return
+	}
+	switch req.Kind {
+	case "spawn", "respawn":
+		if req.TaskID == "" {
+			http.Error(w, "task_id required for spawn/respawn", http.StatusBadRequest)
+			return
+		}
+	case "exit", "crash":
+		if req.Reason == "" {
+			http.Error(w, "reason required for exit/crash", http.StatusBadRequest)
+			return
+		}
+	default:
+		http.Error(w, fmt.Sprintf("kind must be spawn/respawn/exit/crash, got %q", req.Kind), http.StatusBadRequest)
+		return
+	}
+	var crashes int
+	switch {
+	case req.Crashes != nil:
+		crashes = *req.Crashes
+	case req.Kind == "exit":
+		crashes = 0
+	case req.Kind == "crash":
+		prev, _ := PrevCrashes(srv.db.Path(), req.Class)
+		crashes = prev + 1
+	default:
+		crashes, _ = PrevCrashes(srv.db.Path(), req.Class)
+	}
+	rec := LuhmannRecord{
+		Kind:    req.Kind,
+		Class:   req.Class,
+		Nonce:   req.Nonce,
+		TaskID:  req.TaskID,
+		Reason:  req.Reason,
+		Crashes: crashes,
+		Backoff: req.Backoff,
+	}
+	if err := AppendLuhmannRecord(srv.db, srv.db.Path(), rec); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]int{"crashes": crashes})
 }
 
 // handleListen long-polls for notifications. R789-R794

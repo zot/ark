@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471
+**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -107,12 +107,31 @@ no new struct, no new field (R2278).
 - Reap(): called by server ticker. Scan lastListen map, drop any
   session whose lastListen is older than ttl. Close and delete
   queue channel, delete subs.
+- SubscriberCount(tagName, tagValue string) int: walk the
+  subscription registry under the read lock; return the number of
+  entries whose `Predicate` would accept the synthesized
+  `TagValue{Name: tagName, Value: tagValue}` if it were published
+  right now. Name normalization (`@` stripping, trailing-`:`
+  handling) and value-mode handling are identical to the publish
+  path. Per-subscription file filters are intentionally ignored —
+  the query answers "could anyone receive this?", not "would a
+  specific path pass each subscriber's filter?". TTL-expired
+  sessions are not counted (the reaper drops them on its cadence;
+  the query treats whatever remains in the registry as live).
+  Returns zero when no entry matches. (R2802, R2803, R2804)
 
 ## Collaborators
 - Server: owns the PubSub instance, wires HTTP handlers, starts reaper ticker, runs per-session listening goroutines that drain Listen and dispatch into the Lua VM
 - Indexer: calls Publish after tag extraction in AppendFile and prepareRefresh
 - DB: calls PublishTmpDiff from AddTmpFile / UpdateTmpFile / AppendTmpFile after the actor write commits
-- CLI: subscribe and listen commands proxy to server
+- CLI: subscribe and listen commands proxy to server. The new
+  `subscribers` command consumes `SubscriberCount` via an HTTP
+  handler. (R2805)
+- RecallWatcher (crc-RecallWatcher.md): consumes `SubscriberCount`
+  to gate the curation-doc write (R2806).
+- RecallAgentBuilder (crc-RecallAgentBuilder.md): consumes
+  `SubscriberCount` to gate the result-doc write inside `Close`
+  (R2807).
 
 ## Sequences
 - seq-pubsub.md

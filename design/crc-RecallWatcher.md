@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -68,7 +68,14 @@ composes and writes each curation doc via the in-process
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
   lock, allocates the next `fireCounter` value (R2752), then
-  runs the recall pipeline outside the lock (R2735):
+  runs the recall pipeline outside the lock (R2735). Before
+  invoking the substrate or opening the curation builder,
+  queries `pubsub.SubscriberCount("ark-recall-curate", sessionID)`.
+  If zero, skips the substrate call entirely, appends one
+  record to `~/.ark/monitoring/recall.jsonl` with
+  `outcome: "no-subscriber"` (R2806, R2808), and returns. The
+  `pendingChunks` slice is already cleared, so the next OnAppend
+  starts fresh.
   - For each chunkID in the snapshot, fetch the chunk text
     via `db.ChunkTextByID`, run `microfts2.MarkdownChunker{}`
     to split into paragraphs ≥ 30 bytes, and call
@@ -101,7 +108,12 @@ composes and writes each curation doc via the in-process
     counts and the fire number (R2713).
 
 ## Out of scope
-- No subscriber liveness check before emit (R2714)
+- ~~No subscriber liveness check before emit (R2714)~~ — gate added
+  by R2806; the watcher does check `SubscriberCount` before
+  writing a curation doc.
+- No backfill on subscriber arrival: a subscriber that arrives
+  after `outcome: "no-subscriber"` was recorded does not
+  retroactively receive the dropped fire.
 - No backfill on cold start; goes-forward only (R2698)
 - No self-exclusion logic — inherited from substrate (A66)
 - No LLM call, no new-definition tag proposals (RP/RPE/RR
@@ -125,6 +137,8 @@ composes and writes each curation doc via the in-process
   wires the in-process curation-builder constructor; reads
   `[recall]` from ark.toml on startup and reload; owns the
   `fireCounter` increment under the watcher's lock.
+- PubSub (crc-PubSub.md): `SubscriberCount` gates the curation-doc
+  write (R2806).
 
 ## Sequences
 - seq-recall-watcher.md

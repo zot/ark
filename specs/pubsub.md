@@ -176,6 +176,16 @@ Agents that need completeness can also poll the inbox.
 A session does not receive notifications about its own writes
 by default. You know what you just did.
 
+### Subscriber-presence query
+
+Producers of expensive artifacts (recall curation docs, recall
+result docs) can ask "is anyone listening for this tag right now?"
+before doing the work. See [subscriber-presence.md](subscriber-presence.md)
+for the Go API (`db.SubscriberCount`) and the CLI form
+(`ark subscribers --tag T`). The query reads the registry above and
+returns the count of subscriptions whose predicate would accept the
+named tag (and optional value) if such an event were published.
+
 ## Event Scheduler
 
 Ark maintains a priority queue sorted by next-fire time and a
@@ -311,12 +321,16 @@ are picked up in the normal Publish path — the publish hook
 checks for scheduled/recurring subscriptions and feeds the
 scheduler.
 
-### Quarter Chimes
+### Chimes
 
-A built-in recurring event: every 15 minutes, push a chime with
-the full date, day of week, and time of day. One line of markdown.
-Gives agents temporal awareness without asking. Implemented as
-`@recurring: every 15m` internally.
+A small set of standard recurring tags (`@chime-1m:` ... `@chime-60m:`)
+provide periodic ticks for cache warmth, UI clocks, and any
+time-driven feature that wants a content-free "now" pulse. They are
+ordinary schedule-log entries — no special-case code path. See
+[chimes.md](chimes.md) for the convention, the hosting file, and the
+default `ark.toml` shipping list. (The previous "Quarter Chimes"
+hardcoded 15-minute event is retired in favor of the generic
+`@chime-15m:` tag.)
 
 ### Variable-date Holidays
 

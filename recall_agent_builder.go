@@ -241,7 +241,7 @@ func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec,
 // items were added; removes the curation doc unless preserveCuration;
 // discovers the calling subagent's JSONL via the nonce → meta.json
 // lookup; sums tokens; appends one record to recall.jsonl.
-// CRC: crc-RecallAgentBuilder.md | R2750, R2751, R2758, R2762
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-subscriber-presence.md | R2750, R2751, R2758, R2762, R2807, R2808
 func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCuration bool) error {
 	b.mu.Lock()
 	doc := b.results[fire]
@@ -266,19 +266,28 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 	outcome := "silent-close"
 	surfaced, recommended := 0, 0
 	if doc != nil && doc.items > 0 {
-		// R2750, R2751: result-doc head tag + Surface/Recommend H2 body.
-		header := fmt.Sprintf("@ark-recall-result: %s\n", session)
-		body := []byte(header + doc.buf.String())
-		path := resultDocPath(session, fire)
-		if err := SyncVoid(b.db, func(db *DB) error {
-			_, e := db.AddTmpFile(path, "markdown", body)
-			return e
-		}); err != nil {
-			b.appendMonitor(fire, session, nonce, 0, 0, 0, 0, 0, 0, "error")
-			return fmt.Errorf("write result doc: %w", err)
+		// R2807: subscriber-presence gate. Skip the result-doc write
+		// when no listener for this session's result events. Cleanup
+		// (curation removal, orphan sweep, monitor append) still runs.
+		if b.db != nil && b.db.pubsub != nil &&
+			b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
+			outcome = "no-subscriber" // R2808
+			surfaced, recommended = countItems(doc.buf.String())
+		} else {
+			// R2750, R2751: result-doc head tag + Surface/Recommend H2 body.
+			header := fmt.Sprintf("@ark-recall-result: %s\n", session)
+			body := []byte(header + doc.buf.String())
+			path := resultDocPath(session, fire)
+			if err := SyncVoid(b.db, func(db *DB) error {
+				_, e := db.AddTmpFile(path, "markdown", body)
+				return e
+			}); err != nil {
+				b.appendMonitor(fire, session, nonce, 0, 0, 0, 0, 0, 0, "error")
+				return fmt.Errorf("write result doc: %w", err)
+			}
+			outcome = "result-emitted"
+			surfaced, recommended = countItems(doc.buf.String())
 		}
-		outcome = "result-emitted"
-		surfaced, recommended = countItems(doc.buf.String())
 	}
 
 	if !preserveCuration {
@@ -590,8 +599,8 @@ func (b *RecallAgentBuilder) LogFumble(fire uint64, nonce uint32, command, args,
 }
 
 // appendJSONL serializes one record and appends a single line to
-// path. Errors are logged but not propagated — monitoring is
-// best-effort, never on the critical path.
+// path. Errors are swallowed — monitoring is best-effort, never on
+// the critical path.
 func (b *RecallAgentBuilder) appendJSONL(path string, rec any) {
 	b.logMu.Lock()
 	defer b.logMu.Unlock()
@@ -603,12 +612,7 @@ func (b *RecallAgentBuilder) appendJSONL(path string, rec any) {
 		return
 	}
 	defer f.Close()
-	enc, err := json.Marshal(rec)
-	if err != nil {
-		return
-	}
-	_, _ = f.Write(enc)
-	_, _ = f.Write([]byte{'\n'})
+	_ = json.NewEncoder(f).Encode(rec) // Encode writes the trailing newline.
 }
 
 // --- helpers ---

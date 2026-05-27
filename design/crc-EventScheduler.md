@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043, R2780, R2779, R2783, R2778, R2809
 
 Priority queue of time-tagged events with a single timer. Reads
 schedule logs at startup. Delivers events as crank handles through
@@ -80,8 +80,29 @@ PubSub's listen channel. In-memory month buckets serve range queries.
   Writes @ark-event-start:/@ark-event-end: tags in the log chunk
   when bounds are present. Ensures @ark-event-upcoming: entries
   through min(endDate, forward window). Create log file and chunk
-  if needed. (R902, R1006, R1007)
-- AddChime(): add the quarter-chime recurring event (every 15m). (R810)
+  if needed. **Live-enqueues** the next occurrence via
+  `crankForward(chunk, now, true)` so recurring tags armed
+  mid-session fire without waiting for a restart. Add is idempotent
+  per-ID (R808, R809); re-running on an already-armed chunk
+  replaces rather than duplicates. (R902, R1006, R1007, R2778, R2809)
+- ~~AddChime():~~ removed by R2783 (retiring R810). The hardcoded
+  15-minute quarter-chime is subsumed by the `@chime-15m:` tag
+  declared in `~/.ark/chimes.md`, which routes through the same
+  schedule-log path as user-authored schedule tags. No
+  special-case code remains.
+- EnsureChimesFile(): called once by the server during startup,
+  before `ScanScheduleLogs`. Verifies `~/.ark/chimes.md` exists;
+  if missing, writes the canonical six entries (`@chime-1m: every 1m`
+  through `@chime-60m: every 60m`, one per line). The file is
+  owned by ark — if the user deletes it, the next startup
+  re-creates it. (R2779, R2780)
+- maybeOverrideChimeValue(eventID, value) string: called inside
+  `fire()` before delivery. If the tag name (derived from
+  `eventID`) starts with `chime-`, replace the source value (the
+  recurrence spec like `every 15m`) with the current time in
+  RFC 3339 format. Subscribers consuming chimes receive a usable
+  "now" tick rather than the source recurrence string. Non-chime
+  events keep their source value. (R2778)
 - BuildMonthBuckets(): compute month buckets from all schedule log specs.
   One entry per month per event — first occurrence in that month. Called
   on startup after ScanScheduleLogs. (R1023, R1024, R1026)

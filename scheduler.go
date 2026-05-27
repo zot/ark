@@ -664,9 +664,16 @@ func WriteLogFile(path string, chunks []LogChunk) error {
 }
 
 // EnsureUpcoming ensures a schedule log chunk exists for an event with
-// @ark-event-upcoming: entries through the forward window.
-// Called from the indexer when a source file with a schedule tag is indexed.
-// CRC: crc-EventScheduler.md | R902, R905
+// @ark-event-upcoming: entries through the forward window. Enqueues
+// the next occurrence in-memory so the event fires within the current
+// `ark serve` lifetime — same-session firing without waiting for a
+// restart-induced ScanScheduleLogs pass. Idempotent: re-running for an
+// already-armed chunk is a no-op via Add's per-ID dedup.
+// Called from the indexer when a source file with a schedule tag is
+// indexed. Source-file duplication for the same tag (e.g. literal
+// `@chime-15m: every 15m` text in a code file) is prevented at config
+// level via `[schedule].exclude_files`, not in this function.
+// CRC: crc-EventScheduler.md | R902, R905, R2778, R2809
 func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 	isTmp := strings.HasPrefix(sourcePath, "tmp://")
 	var logPath string
@@ -722,7 +729,10 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 	modified := false
 
 	if IsRecurringSpec(spec) {
-		modified = es.crankForward(chunk, now, false) > 0
+		// R2778, R2809: enqueue=true so recurring events fire in the
+		// current `ark serve` session. Add is idempotent per-ID so
+		// re-indexing the same chunk replaces rather than duplicates.
+		modified = es.crankForward(chunk, now, true) > 0
 	} else {
 		// One-shot: add one upcoming if in the future and not already present
 		dr, err := ParseDateValue(value, "", now.Location())
@@ -834,24 +844,53 @@ func (es *EventScheduler) Add(event *ScheduledEvent) {
 	es.resetTimer()
 }
 
-// AddChime adds the quarter-chime recurring event. R810
-func (es *EventScheduler) AddChime() {
-	now := time.Now()
-	// Next quarter hour
-	minute := now.Minute()
-	nextQ := (minute/15 + 1) * 15
-	next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
-	next = next.Add(time.Duration(nextQ) * time.Minute)
-	if next.Before(now) {
-		next = next.Add(15 * time.Minute)
+// isChimeTag returns true when the tag name is one of the standard
+// chime cadences (`chime-1m`, `chime-5m`, …, `chime-60m`). Chime tags
+// route through the normal schedule path but bypass log mutation in
+// fire() and are re-enqueued directly.
+// CRC: crc-EventScheduler.md | R2778, R2783
+func isChimeTag(tag string) bool {
+	return strings.HasPrefix(tag, "chime-")
+}
+
+// chimesFilePath is the canonical hosting file for chime recurrence
+// specs. Owned by ark — auto-created if missing.
+// CRC: crc-EventScheduler.md | R2779, R2780
+func chimesFilePath(arkDir string) string {
+	return filepath.Join(arkDir, "chimes.md")
+}
+
+const chimesFileContent = `# Chimes — standard scheduling tags
+
+This file is auto-created and maintained by ark. It declares the
+recurrence specs for the six standard chime cadences. Subscribers
+attach with plain ` + "`ark subscribe --tag chime-Nm`" + `.
+
+@chime-1m: every 1m
+@chime-5m: every 5m
+@chime-15m: every 15m
+@chime-30m: every 30m
+@chime-45m: every 45m
+@chime-60m: every 60m
+`
+
+// EnsureChimesFile writes ~/.ark/chimes.md if missing, with the
+// canonical six chime entries. Called from server startup before
+// ScanChimes so the file exists when we parse it.
+// CRC: crc-EventScheduler.md | R2779, R2780
+func EnsureChimesFile(arkDir string) error {
+	if arkDir == "" {
+		return nil
 	}
-	es.Add(&ScheduledEvent{
-		ID:        "chime:quarter",
-		Tag:       "chime",
-		Value:     "", // filled at fire time
-		NextFire:  next,
-		Recurring: "every 15m",
-	})
+	path := chimesFilePath(arkDir)
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return os.WriteFile(path, []byte(chimesFileContent), 0644)
 }
 
 // Stop shuts down the scheduler.
@@ -879,7 +918,7 @@ func (es *EventScheduler) resetTimer() {
 }
 
 // fire delivers the head event and reschedules if recurring. R806, R807, R877
-// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md
+// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md | seq-chimes.md | R2778
 func (es *EventScheduler) fire() {
 	es.mu.Lock()
 	if es.queue.Len() == 0 {
@@ -888,8 +927,12 @@ func (es *EventScheduler) fire() {
 	}
 	event := heap.Pop(&es.queue).(*ScheduledEvent)
 
-	if event.Tag == "chime" {
-		event.Value = time.Now().Format("2006-01-02 15:04 MST, Monday")
+	// R2778: chime tags carry an RFC 3339 timestamp at fire time, not
+	// the source recurrence spec. Subscribers receive a usable "now"
+	// tick.
+	isChime := isChimeTag(event.Tag)
+	if isChime {
+		event.Value = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	// Check push record. R811
@@ -902,11 +945,29 @@ func (es *EventScheduler) fire() {
 	}
 
 	delete(es.pushed, event.ID)
-	isChime := event.Tag == "chime"
 	es.mu.Unlock()
 
-	// R877, R964-R968: mutate schedule log for lifecycle tags only
-	if !isChime && event.Path != "" && es.config != nil && es.config.IsLifecycleTag(event.Tag) {
+	if isChime {
+		// R2778: re-enqueue chimes directly; no log mutation, no
+		// @ark-event-fired accumulation. The schedule log file holds
+		// at most one stale @ark-event-upcoming entry; on restart
+		// ScanScheduleLogs reseats the next occurrence in memory via
+		// the same recurrence spec.
+		if event.Recurring != "" {
+			next := ComputeNext(event.Recurring, time.Now(), time.Time{})
+			if !next.IsZero() {
+				es.Add(&ScheduledEvent{
+					ID:        event.ID,
+					Tag:       event.Tag,
+					Value:     next.Format(scheduleDateFmt),
+					Path:      event.Path,
+					NextFire:  next,
+					Recurring: event.Recurring,
+				})
+			}
+		}
+	} else if event.Path != "" && es.config != nil && es.config.IsLifecycleTag(event.Tag) {
+		// R877, R964-R968: mutate schedule log for lifecycle tags only.
 		es.fireLogMutate(event)
 	}
 

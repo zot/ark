@@ -52,8 +52,82 @@ type Config struct {
 	AutoCompact bool           `toml:"auto_compact,omitempty"`
 	Schedule    ScheduleConfig `toml:"schedule"` // R853, R854
 	Recall      RecallConfig   `toml:"recall"`   // R2659
+	Luhmann     LuhmannConfig  `toml:"luhmann"`  // R2797
 	Errors      []string       `toml:"-"`
 	dbPath      string         `toml:"-"`
+}
+
+// LuhmannConfig collects the [luhmann] section of ark.toml — restart-
+// policy knobs read by the Luhmann orchestrator session (a Claude Code
+// session, not Go code) when it acts on managed-subagent completions.
+// CRC: crc-Config.md | R2797, R2798, R2799, R2800, R2801
+type LuhmannConfig struct {
+	// ContextLimit is the token ceiling the orchestrator passes to
+	// each spawned subagent. Used by the subagent's self-recycle
+	// check via `ark connections recall context --limit`. R2797
+	ContextLimit *int `toml:"context_limit,omitempty"`
+
+	// CrashPauseAfter is the consecutive-crash count at which the
+	// supervisor stops respawning and writes a `pause` record to
+	// luhmann.jsonl. R2798
+	CrashPauseAfter *int `toml:"crash_pause_after,omitempty"`
+
+	// BackoffSeconds is the schedule of seconds to wait between
+	// successive crash respawns. Final value reused for further
+	// attempts up to CrashPauseAfter. R2799
+	BackoffSeconds []int `toml:"backoff_seconds,omitempty"`
+
+	// Classes is the per-class enable map; key is the class name
+	// (e.g. "recall"), value carries the enable flag and any
+	// future per-class knobs. R2800
+	Classes map[string]LuhmannClass `toml:"class,omitempty"`
+}
+
+// LuhmannClass is per-managed-subagent-class configuration.
+// CRC: crc-Config.md | R2800
+type LuhmannClass struct {
+	// Enabled declares whether the orchestrator should host this
+	// class. Setting to false disables it without removing
+	// supervisor state from luhmann.jsonl. Default true.
+	Enabled *bool `toml:"enabled,omitempty"`
+}
+
+// EffectiveContextLimit returns ContextLimit with the default applied.
+// CRC: crc-Config.md | R2797
+func (lc LuhmannConfig) EffectiveContextLimit() int {
+	if lc.ContextLimit == nil {
+		return 150000
+	}
+	return *lc.ContextLimit
+}
+
+// EffectiveCrashPauseAfter returns CrashPauseAfter with default.
+// CRC: crc-Config.md | R2798
+func (lc LuhmannConfig) EffectiveCrashPauseAfter() int {
+	if lc.CrashPauseAfter == nil {
+		return 3
+	}
+	return *lc.CrashPauseAfter
+}
+
+// EffectiveBackoffSeconds returns BackoffSeconds with default applied.
+// CRC: crc-Config.md | R2799
+func (lc LuhmannConfig) EffectiveBackoffSeconds() []int {
+	if len(lc.BackoffSeconds) == 0 {
+		return []int{1, 5, 30}
+	}
+	return lc.BackoffSeconds
+}
+
+// ClassEnabled returns true when the named class is enabled (default
+// true when no entry exists).
+// CRC: crc-Config.md | R2800
+func (lc LuhmannConfig) ClassEnabled(name string) bool {
+	c, ok := lc.Classes[name]
+	if !ok || c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // RecallConfig collects the [recall] section of ark.toml.
@@ -430,7 +504,7 @@ func LoadConfig(path string) (*Config, error) {
 // WriteDefaultConfig writes the initial ark.toml.
 // If configSeed is non-nil, uses that (from install/ark.toml bundle).
 // Otherwise falls back to a minimal built-in default.
-// CRC: crc-Config.md | R631, R632, R633
+// CRC: crc-Config.md | R631, R632, R633, R2781
 func WriteDefaultConfig(path string, configSeed []byte) error {
 	if len(configSeed) > 0 {
 		return os.WriteFile(path, configSeed, 0644)
@@ -447,6 +521,10 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 [strategies]
 "*.md" = "markdown"
 "*.jsonl" = "chat-jsonl"
+
+# Schedule tags — chimes ship out of the box (see chimes.md). R2781
+[schedule]
+tags = ["chime-1m", "chime-5m", "chime-15m", "chime-30m", "chime-45m", "chime-60m"]
 `
 	return os.WriteFile(path, []byte(defaultConfig), 0644)
 }

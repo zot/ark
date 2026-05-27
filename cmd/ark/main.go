@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -175,6 +176,12 @@ func main() {
 		cmdNano(args)
 	case "subscribe":
 		cmdSubscribe(args)
+	case "subscribers":
+		cmdSubscribers(args)
+	case "monitor":
+		cmdMonitor(args)
+	case "luhmann":
+		cmdLuhmann(args)
 	case "listen":
 		cmdListen(args)
 	case "ui":
@@ -331,6 +338,16 @@ func proxyOK(client *http.Client, method, path string, body any) error {
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
+}
+
+// requireServer returns a serverClient for arkDir or fatals with a
+// consistent "server not running (op requires server)" message.
+func requireServer(op string) *http.Client {
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (%s requires server)", op))
+	}
+	return client
 }
 
 // Command implementations
@@ -7254,10 +7271,7 @@ func cmdConnectionsRecallSurface(args []string) {
 		"chunk":  *chunkID,
 		"reason": *reason,
 	}
-	var resp struct {
-		Status string `json:"status"`
-	}
-	if err := proxyDecode(client, "POST", "/connections/recall/surface", body, &resp); err != nil {
+	if err := proxyOK(client, "POST", "/connections/recall/surface", body); err != nil {
 		fatal(err)
 	}
 }
@@ -7290,10 +7304,7 @@ func cmdConnectionsRecallRecommend(args []string) {
 		"tag":    *tagSpec,
 		"reason": *reason,
 	}
-	var resp struct {
-		Status string `json:"status"`
-	}
-	if err := proxyDecode(client, "POST", "/connections/recall/recommend", body, &resp); err != nil {
+	if err := proxyOK(client, "POST", "/connections/recall/recommend", body); err != nil {
 		fatal(err)
 	}
 }
@@ -7324,11 +7335,7 @@ func cmdConnectionsRecallClose(args []string) {
 		"nonce":            *nonce,
 		"preserveCuration": *preserveCuration,
 	}
-	var resp struct {
-		Status  string `json:"status"`
-		Outcome string `json:"outcome"`
-	}
-	if err := proxyDecode(client, "POST", "/connections/recall/close", body, &resp); err != nil {
+	if err := proxyOK(client, "POST", "/connections/recall/close", body); err != nil {
 		fatal(err)
 	}
 }
@@ -7534,4 +7541,389 @@ func printRecallResult(out io.Writer, res *ark.RecallResult, jsonOut bool) error
 
 	ark.RenderRecallChunks(out, res.Chunks)
 	return nil
+}
+
+// cmdSubscribers proxies `GET /subscribers?tag=...` and prints the
+// count (or sets the exit code in --quiet mode).
+// CRC: crc-CLI.md | Seq: seq-subscriber-presence.md | R2805
+func cmdSubscribers(args []string) {
+	fs := flag.NewFlagSet("subscribers", flag.ExitOnError)
+	tag := fs.String("tag", "", "sigil-form tag predicate (required)")
+	quiet := fs.Bool("quiet", false, "no stdout; exit code carries presence (0=any, 1=zero)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: ark subscribers --tag TAG [--quiet]")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Print the count of currently-registered subscriptions whose predicate")
+		fmt.Fprintln(os.Stderr, "would accept the tag if it were published right now. Server-required.")
+		fmt.Fprintln(os.Stderr)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+	if *tag == "" {
+		fatal(fmt.Errorf("--tag is required"))
+	}
+	client := requireServer("subscribers")
+	var resp struct {
+		Count int `json:"count"`
+	}
+	path := "/subscribers?tag=" + url.QueryEscape(*tag)
+	if err := proxyDecode(client, "GET", path, nil, &resp); err != nil {
+		fatal(err)
+	}
+	if *quiet {
+		if resp.Count == 0 {
+			os.Exit(1)
+		}
+		return
+	}
+	fmt.Println(resp.Count)
+}
+
+// cmdMonitor dispatches status / recent / pause / resume.
+// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2784, R2785, R2786, R2787, R2788, R2789, R2790
+func cmdMonitor(args []string) {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Fprintln(os.Stderr, `Usage: ark monitor <subcommand> [options]
+
+Subcommands:
+  status [--json]                 Per-class state + counters (cold-start)
+  recent [-n N] [CLASS] [--json]  Tail one or all monitoring logs (cold-start)
+  pause CLASS                     Append a pause control record (server)
+  resume CLASS                    Append a resume control record (server)`)
+		os.Exit(0)
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "status":
+		cmdMonitorStatus(rest)
+	case "recent":
+		cmdMonitorRecent(rest)
+	case "pause", "resume":
+		cmdMonitorControl(sub, rest)
+	default:
+		fatal(fmt.Errorf("unknown monitor subcommand %q", sub))
+	}
+}
+
+func cmdMonitorStatus(args []string) {
+	fs := flag.NewFlagSet("monitor status", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	fs.Parse(args)
+	sums, err := ark.MonitorStatus(arkDir)
+	if err != nil {
+		fatal(err)
+	}
+	if *asJSON {
+		for _, s := range sums {
+			data, _ := json.Marshal(s)
+			fmt.Println(string(data))
+		}
+		return
+	}
+	for _, s := range sums {
+		fmt.Printf("## %s — state: %s\n", s.Class, s.State)
+		if s.LatestTimestamp != "" {
+			fmt.Printf("- latest: %s", s.LatestTimestamp)
+			if s.LatestKind != "" {
+				fmt.Printf(" (kind=%s)", s.LatestKind)
+			}
+			fmt.Println()
+		}
+		// Stable key order for readability.
+		keys := make([]string, 0, len(s.Counters))
+		for k := range s.Counters {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("- %s: %v\n", k, s.Counters[k])
+		}
+		fmt.Println()
+	}
+}
+
+func cmdMonitorRecent(args []string) {
+	fs := flag.NewFlagSet("monitor recent", flag.ExitOnError)
+	n := fs.Int("n", 20, "number of records to show")
+	asJSON := fs.Bool("json", false, "emit raw JSONL")
+	fs.Parse(args)
+	class := ""
+	if fs.NArg() > 0 {
+		class = fs.Arg(0)
+		if !ark.IsKnownMonitorClass(class) {
+			fatal(fmt.Errorf("unknown class %q (known: %s)", class, strings.Join(ark.MonitorClasses, ", ")))
+		}
+	}
+	recs, err := ark.MonitorTail(arkDir, class, *n)
+	if err != nil {
+		fatal(err)
+	}
+	for _, r := range recs {
+		if *asJSON {
+			data, _ := json.Marshal(r)
+			fmt.Println(string(data))
+		} else {
+			fmt.Println(ark.FormatMonitorBullet(r))
+		}
+	}
+}
+
+func cmdMonitorControl(kind string, args []string) {
+	if len(args) == 0 {
+		fatal(fmt.Errorf("ark monitor %s: CLASS is required", kind))
+	}
+	class := args[0]
+	if !ark.IsKnownMonitorClass(class) {
+		fatal(fmt.Errorf("unknown class %q (known: %s)", class, strings.Join(ark.MonitorClasses, ", ")))
+	}
+	client := requireServer(fmt.Sprintf("monitor %s", kind))
+	if err := proxyOK(client, "POST", "/monitor/control", map[string]any{
+		"class": class,
+		"kind":  kind,
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+// cmdLuhmann dispatches spawn-record / exit-record / inspect-exit.
+// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2794, R2795, R2796
+func cmdLuhmann(args []string) {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Fprintln(os.Stderr, `Usage: ark luhmann <subcommand> [options]
+
+Subcommands:
+  spawn-record --class C --nonce N --task-id T   Record a subagent spawn (server)
+  exit-record  --class C --nonce N --reason R [--crashes K] [--backoff S]
+                                                  Record a subagent exit (server)
+  inspect-exit --nonce N [--json]                Classify a subagent exit (cold-start)`)
+		os.Exit(0)
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "spawn-record":
+		cmdLuhmannSpawnRecord(rest)
+	case "exit-record":
+		cmdLuhmannExitRecord(rest)
+	case "inspect-exit":
+		cmdLuhmannInspectExit(rest)
+	default:
+		fatal(fmt.Errorf("unknown luhmann subcommand %q", sub))
+	}
+}
+
+func cmdLuhmannSpawnRecord(args []string) {
+	fs := flag.NewFlagSet("luhmann spawn-record", flag.ExitOnError)
+	class := fs.String("class", "", "managed subagent class (required)")
+	nonce := fs.Int("nonce", 0, "nonce for this spawn (required)")
+	taskID := fs.String("task-id", "", "Claude Code Task identifier (required)")
+	fs.Parse(args)
+	if *class == "" || *nonce == 0 || *taskID == "" {
+		fatal(fmt.Errorf("--class, --nonce, --task-id are required"))
+	}
+	client := requireServer("luhmann spawn-record")
+	if err := proxyOK(client, "POST", "/luhmann/record", map[string]any{
+		"kind":    "spawn",
+		"class":   *class,
+		"nonce":   *nonce,
+		"task_id": *taskID,
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdLuhmannExitRecord(args []string) {
+	fs := flag.NewFlagSet("luhmann exit-record", flag.ExitOnError)
+	class := fs.String("class", "", "managed subagent class (required)")
+	nonce := fs.Int("nonce", 0, "nonce for the exiting subagent (required)")
+	reason := fs.String("reason", "", "exit reason (required; \"context-limit\" classifies as healthy)")
+	crashes := fs.Int("crashes", -1, "override computed crashes counter (default: compute from previous record)")
+	backoff := fs.Int("backoff", 0, "seconds the supervisor will wait before respawn")
+	fs.Parse(args)
+	if *class == "" || *nonce == 0 || *reason == "" {
+		fatal(fmt.Errorf("--class, --nonce, --reason are required"))
+	}
+	kind, _ := ark.ClassifyLuhmannReason(*reason)
+	body := map[string]any{
+		"kind":    kind,
+		"class":   *class,
+		"nonce":   *nonce,
+		"reason":  *reason,
+		"backoff": *backoff,
+	}
+	if *crashes >= 0 {
+		body["crashes"] = *crashes
+	}
+	client := requireServer("luhmann exit-record")
+	if err := proxyOK(client, "POST", "/luhmann/record", body); err != nil {
+		fatal(err)
+	}
+}
+
+func cmdLuhmannInspectExit(args []string) {
+	fs := flag.NewFlagSet("luhmann inspect-exit", flag.ExitOnError)
+	nonce := fs.Int("nonce", 0, "subagent nonce to classify (required)")
+	asJSON := fs.Bool("json", false, "emit JSON object")
+	fs.Parse(args)
+	if *nonce == 0 {
+		fatal(fmt.Errorf("--nonce is required"))
+	}
+	jsonl := findSubagentJSONLCold(*nonce)
+	result := classifySubagentExit(arkDir, jsonl, *nonce)
+	if *asJSON {
+		data, _ := json.Marshal(result)
+		fmt.Println(string(data))
+		return
+	}
+	fmt.Println(result.Label)
+}
+
+// inspectExitResult is the structured output of `ark luhmann inspect-exit`.
+type inspectExitResult struct {
+	Label          string `json:"label"`
+	LastRecordKind string `json:"last_record_kind,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	TokensAtClose  int    `json:"tokens_at_close,omitempty"`
+}
+
+// findSubagentJSONLCold is the CLI-side cold lookup of the subagent
+// JSONL paired with a given nonce. Mirrors RecallAgentBuilder.findSubagentJSONL
+// but reads from disk directly so `ark luhmann inspect-exit` runs without
+// a server. R2796
+func findSubagentJSONLCold(nonce int) string {
+	parent := os.Getenv("CLAUDE_CODE_SESSION_ID")
+	if parent == "" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	root := filepath.Join(home, ".claude", "projects")
+	needle := fmt.Sprintf("nonce %d", nonce)
+	type cand struct {
+		meta  string
+		mtime time.Time
+	}
+	var cands []cand
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name(), parent, "subagents")
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.meta.json"))
+		for _, meta := range matches {
+			jsonl := strings.TrimSuffix(meta, ".meta.json") + ".jsonl"
+			info, err := os.Stat(jsonl)
+			if err != nil {
+				continue
+			}
+			cands = append(cands, cand{meta: meta, mtime: info.ModTime()})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		return cands[i].mtime.After(cands[j].mtime)
+	})
+	for _, c := range cands {
+		data, err := os.ReadFile(c.meta)
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			continue
+		}
+		if !strings.Contains(doc.Description, needle) {
+			continue
+		}
+		return strings.TrimSuffix(c.meta, ".meta.json") + ".jsonl"
+	}
+	return ""
+}
+
+// classifySubagentExit reads the subagent JSONL backwards and applies
+// the inspect-exit classification rules. R2796
+func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
+	if jsonl == "" {
+		return inspectExitResult{Label: "unknown"}
+	}
+	f, err := os.Open(jsonl)
+	if err != nil {
+		return inspectExitResult{Label: "unknown"}
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	var lastKind, lastError string
+	var tokensAtClose int
+	closeSeen := false
+	for scanner.Scan() {
+		var rec map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		if t, ok := rec["type"].(string); ok {
+			lastKind = t
+		}
+		if rec["isError"] == true {
+			if s, ok := rec["error"].(string); ok {
+				lastError = s
+			} else {
+				lastError = "unspecified"
+			}
+		}
+		// Crude marker for close: a tool_result whose tool_use_id
+		// matches a recent ark connections recall close invocation.
+		if t, _ := rec["type"].(string); t == "tool_result" {
+			if input, ok := rec["input"].(map[string]any); ok {
+				if cmd, ok := input["command"].(string); ok && strings.Contains(cmd, "ark connections recall close") {
+					closeSeen = true
+				}
+			}
+		}
+		if usage, ok := rec["usage"].(map[string]any); ok {
+			cc, _ := usage["cache_creation_input_tokens"].(float64)
+			cr, _ := usage["cache_read_input_tokens"].(float64)
+			tokensAtClose = int(cc + cr)
+		}
+	}
+	label := "crash"
+	if closeSeen {
+		label = "healthy"
+	} else if recallOutcomeIs(arkDir, nonce, "result-emitted", "silent-close", "no-subscriber") {
+		label = "healthy"
+	}
+	return inspectExitResult{
+		Label:          label,
+		LastRecordKind: lastKind,
+		LastError:      lastError,
+		TokensAtClose:  tokensAtClose,
+	}
+}
+
+// recallOutcomeIs walks recall.jsonl backwards and returns true when
+// the most recent record matching the nonce has an outcome in the
+// allowed set.
+func recallOutcomeIs(arkDir string, nonce int, allowed ...string) bool {
+	data, err := os.ReadFile(ark.MonitorClassPath(arkDir, "recall"))
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(lines[i]), &rec); err != nil {
+			continue
+		}
+		if n, _ := rec["nonce"].(float64); int(n) != nonce {
+			continue
+		}
+		outcome, _ := rec["outcome"].(string)
+		return slices.Contains(allowed, outcome)
+	}
+	return false
 }

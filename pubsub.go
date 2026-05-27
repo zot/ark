@@ -460,6 +460,33 @@ func (ps *PubSub) SubCount(sessionID string) int {
 	return len(ps.subs[sessionID])
 }
 
+// SubscriberCount returns the number of currently-registered subscriptions
+// whose predicate would accept the (tagName, tagValue) pair if it were
+// published right now. Per-subscription file filters are intentionally
+// ignored — the query answers "could anyone receive this?", not "would
+// this specific file pass each subscriber's filter?". Only Kind ==
+// TagSubChunk subs are counted (FileTag subs depend on per-file state
+// the query has no path for).
+//
+// CRC: crc-PubSub.md | R2802, R2803, R2804
+func (ps *PubSub) SubscriberCount(tagName, tagValue string) int {
+	tv := TagValue{Tag: tagName, Value: tagValue}
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	count := 0
+	for _, subs := range ps.subs {
+		for _, sub := range subs {
+			if sub.Kind != TagSubChunk {
+				continue
+			}
+			if sub.Predicate.Match(tv) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // TagValue is a tag name + value pair for Publish.
 type TagValue struct {
 	Tag   string

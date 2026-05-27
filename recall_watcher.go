@@ -259,7 +259,8 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 
 // fire is the timer-expiry callback. Runs on the watcher's
 // closure-actor goroutine so concurrent fires across sessions
-// serialize. R2735, R2752, R2753
+// serialize.
+// CRC: crc-RecallWatcher.md | Seq: seq-subscriber-presence.md | R2735, R2752, R2753, R2806, R2808
 func (w *RecallWatcher) fire(sessionID string) {
 	w.mu.Lock()
 	st := w.sessions[sessionID]
@@ -276,6 +277,22 @@ func (w *RecallWatcher) fire(sessionID string) {
 
 	if len(snapshot) == 0 {
 		return
+	}
+
+	// R2806: subscriber-presence gate. Skip the substrate call entirely
+	// when nobody is listening for this session's curation events; the
+	// downstream agent cost and disk write would be wasted.
+	if w.db != nil && w.db.pubsub != nil {
+		if w.db.pubsub.SubscriberCount("ark-recall-curate", sessionID) == 0 {
+			Logv(2, "recall-watcher: no curate subscriber session=%s fire=%d pending=%d",
+				sessionID, fire, len(snapshot))
+			if w.builder != nil {
+				// R2808: outcome="no-subscriber" goes into the monitor log so
+				// `ark monitor` can surface skip rate.
+				w.builder.appendMonitor(fire, sessionID, 0, 0, 0, 0, 0, 0, 0, "no-subscriber")
+			}
+			return
+		}
 	}
 
 	cfg := w.config()

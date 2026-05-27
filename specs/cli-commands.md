@@ -36,6 +36,8 @@ name, so always use the absolute path.
 | `install`          | (no flags)                                                                                                           | none                     | alias of `ui install`                                |
 | `listen`           | `listen --session ID [--timeout N]`                                                                                  | required                 | long-poll; outputs markdown                          |
 | `ls`               | `ls`                                                                                                                 | n/a                      | bundled binary only; alias of `bundle ls`            |
+| `luhmann`          | `luhmann SUBCOMMAND ...`                                                                                             | mixed                    | orchestrator supervisor log writer (subcommands below) |
+| `monitor`          | `monitor SUBCOMMAND ...`                                                                                             | mixed                    | inspect `~/.ark/monitoring/*.jsonl` (subcommands below) |
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
 | `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
@@ -53,6 +55,7 @@ name, so always use the absolute path.
 | `status`           | `status [--db] [--chunks] [--tokenize] [--filter-files G] [--exclude-files G]`                                       | preferred                |                                                      |
 | `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
 | `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [--filter-files G] [--exclude-files G]` | required                 |                                                      |
+| `subscribers`      | `subscribers --tag T [--quiet]`                                                                                      | required                 | count subscriptions matching a tag                   |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved`                                                                                                         | optional                 | lists U records                                      |
@@ -574,6 +577,22 @@ successful non-event return.
 
 See: `subscribe`
 
+### `luhmann` — orchestrator supervisor log writer
+
+```
+ark luhmann spawn-record --class C --nonce N --task-id T
+ark luhmann exit-record  --class C --nonce N --reason R [--crashes K]
+ark luhmann inspect-exit --nonce N [--json]
+```
+
+| Subcommand       | Flags                                              | Behavior                                                                                                                                                       |
+|------------------|----------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spawn-record`   | `--class`, `--nonce`, `--task-id` (all required)   | Server-required. Append a `kind: "spawn"` record to `~/.ark/monitoring/luhmann.jsonl` via the write actor.                                                     |
+| `exit-record`    | `--class`, `--nonce`, `--reason` (required); `--crashes` (override) | Server-required. Append `kind: "exit"` when `--reason context-limit` (resets `crashes` to 0), else `kind: "crash"` (increments `crashes`).                     |
+| `inspect-exit`   | `--nonce`; `--json`                                | Cold-start. Classify a subagent exit as `healthy` / `crash` / `unknown` via the nonce → `.meta.json` lookup. Default prints the label; `--json` adds details.  |
+
+See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md)
+
 ### `message` — messaging operations
 
 ```
@@ -673,6 +692,25 @@ No environment variables are read. The standalone nano-go reads
 `NANO_APPROVE`; ark drops those hooks in favor of explicit flags
 (R2515, R2516, R2517, R2518 retired by T88–T91; flags landed as
 R2511, R2561, R2562, R2563).
+
+### `monitor` — inspect monitoring JSONL logs
+
+```
+ark monitor status [--json]
+ark monitor recent [-n N] [CLASS] [--json]
+ark monitor pause CLASS
+ark monitor resume CLASS
+```
+
+| Subcommand        | Flags                  | Behavior                                                                                                                                                                                                                                |
+|-------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `status`          | `--json`               | Cold-start. Read the tail of `~/.ark/monitoring/<class>.jsonl` for every shipped class (`recall`, `luhmann`); report current state, latest timestamp, and class-specific counters. Default is a markdown table; `--json` emits objects. |
+| `recent`          | `-n N`, `[CLASS]`, `--json` | Cold-start. Print the tail of one or all monitoring logs. Default `-n` is `20`. With `CLASS`, restrict to that file. Default output is markdown bullets; `--json` emits raw JSONL records.                                            |
+| `pause CLASS`     | —                      | Server-required. Append `kind: "pause"` to `<class>.jsonl` via the write actor. Exits non-zero if the class is already paused.                                                                                                          |
+| `resume CLASS`    | —                      | Server-required. Append `kind: "resume"`. Exits non-zero if already running.                                                                                                                                                            |
+
+See: [monitor.md](monitor.md), [luhmann.md](luhmann.md),
+[simple-recall.md](simple-recall.md)
 
 ### `missing`, `stale`, `unresolved`, `resolve`
 
@@ -906,7 +944,25 @@ sigil (`T=V`, `T:V`, `T~V`).
 Server-required. Without `--list`/`--stats`/`--cancel`, a register
 call requires `--session` and at least one `--tag` or `--file-tag`.
 
-See: `listen`
+See: `listen`, `subscribers`
+
+### `subscribers` — count subscriptions matching a tag
+
+```
+ark subscribers --tag T [--quiet]
+```
+
+| Flag      | Default | Meaning                                                                                                                            |
+|-----------|---------|------------------------------------------------------------------------------------------------------------------------------------|
+| `--tag T` | required | Sigil-form match `[~|:]NAME[(=|:|~)VALUE]` (same grammar as `subscribe --tag`). Leading `@` is stripped.                          |
+| `--quiet` | `false`  | Suppress stdout; exit code carries the answer (`0` if at least one subscriber, `1` if zero). Designed for shell-pipeline gating. |
+
+Server-required. Returns the count of currently-registered
+subscriptions whose predicate would accept the named tag (and
+optional value) if it were published right now. File filters on
+subscriptions are intentionally ignored — the question is "could
+anyone receive this?", not "would this specific file pass each
+subscriber's filter?". See [subscriber-presence.md](subscriber-presence.md).
 
 ### `tag` — tag operations
 
