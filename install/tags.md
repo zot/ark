@@ -23,8 +23,6 @@ shows all definitions from all sources.
 
 @tag: ark-recall-result -- Marks a tmp://ARK-RECALL/result-* doc the recall agent wrote. Value is the originating Claude Code session UUID. The assistant subscribes value-scoped to its own session UUID so cross-session result docs don't reach the wrong listener. See specs/simple-recall.md.
 
-@tag: ark-recall-acted -- The assistant's disposition of an ambient-recall result doc. Values: `surfaced`, `dropped`, `skipped`. Optional instrumentation alongside the monitoring log; see specs/simple-recall.md.
-
 @tag: connection -- A relationship between two ideas, patterns, or systems. Format: `@connection: thing A = thing B`
 
 @tag: pattern -- A recurring approach or solution. Name it.

@@ -1780,6 +1780,14 @@ Public subcommands:
     Append one ## Recommend: item to the result-doc builder for
     FIRE. Same one-per-call discipline as surface.
 
+  recall context --nonce N [--limit N] [--json]
+    Report the calling subagent's current context fill in tokens
+    (cache_creation_input_tokens + cache_read_input_tokens from
+    the most recent assistant turn in its JSONL). Used by the
+    long-running lotto-tube recall agent (Phase 2) to self-recycle
+    when context grows past a configurable limit. With --limit,
+    exits 1 when tokens >= limit, else 0.
+
   recall close FIRE --nonce N [-preserve-curation]
     Single cleanup verb. Writes tmp://ARK-RECALL/result-<S>-<F>
     iff items were added; removes the curation doc unless
@@ -7191,6 +7199,9 @@ func cmdConnectionsRecall(args []string) {
 		case "close":
 			cmdConnectionsRecallClose(args[1:])
 			return
+		case "context":
+			cmdConnectionsRecallContext(args[1:])
+			return
 		}
 	}
 	if err := runConnectionsRecall(args, os.Stdout); err != nil {
@@ -7319,6 +7330,43 @@ func cmdConnectionsRecallClose(args []string) {
 	}
 	if err := proxyDecode(client, "POST", "/connections/recall/close", body, &resp); err != nil {
 		fatal(err)
+	}
+}
+
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | R2777
+func cmdConnectionsRecallContext(args []string) {
+	fs := flag.NewFlagSet("connections recall context", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	nonce := fs.Uint("nonce", 0, "subagent nonce (required)")
+	limit := fs.Int("limit", 0, "if non-zero, exit 1 when tokens >= limit, else 0")
+	jsonOut := fs.Bool("json", false, "emit JSON instead of bare token count")
+	if err := fs.Parse(args); err != nil {
+		fatal(fmt.Errorf("connections recall context: %w", err))
+	}
+	if *nonce == 0 {
+		fmt.Fprintln(os.Stderr, "ark connections recall context --nonce N [--limit N] [--json]")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	body := map[string]any{"nonce": *nonce}
+	var resp struct {
+		Tokens int  `json:"tokens"`
+		Found  bool `json:"found"`
+	}
+	if err := proxyDecode(client, "POST", "/connections/recall/context", body, &resp); err != nil {
+		fatal(err)
+	}
+	if *jsonOut {
+		enc, _ := json.Marshal(resp)
+		fmt.Println(string(enc))
+	} else {
+		fmt.Println(resp.Tokens)
+	}
+	if *limit > 0 && resp.Tokens >= *limit {
+		os.Exit(1)
 	}
 }
 

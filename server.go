@@ -420,6 +420,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /connections/recall/surface", srv.handleRecallSurface)
 		mux.HandleFunc("POST /connections/recall/recommend", srv.handleRecallRecommend)
 		mux.HandleFunc("POST /connections/recall/close", srv.handleRecallClose)
+		mux.HandleFunc("POST /connections/recall/context", srv.handleRecallContext)
 		// Recall (Phase 2B) HTTP endpoint.
 		// CRC: crc-Server.md | Seq: seq-recall.md#1.3 | R2629
 		mux.HandleFunc("POST /recall", srv.librarian.HandleRecall)

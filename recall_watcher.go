@@ -335,13 +335,19 @@ func (w *RecallWatcher) fire(sessionID string) {
 				dropped++
 				continue
 			}
+			// Capture each chunk's full byte size before truncating
+			// the Content excerpt so the curation doc can stamp it on
+			// the Candidate H2 (R2749 size column).
+			sizes := make([]int, len(result.Chunks))
 			for i := range result.Chunks {
+				sizes[i] = len(result.Chunks[i].Content)
 				result.Chunks[i].Content = truncateUTF8(result.Chunks[i].Content, 500) // R2705
 			}
 			sections = append(sections, recallSection{
 				sourceChunkID: cid,
 				inputExcerpt:  truncateUTF8(para, 200), // R2738
 				recalled:      result.Chunks,
+				sizes:         sizes,
 			})
 			totalRecalled += len(result.Chunks)
 		}
@@ -359,13 +365,13 @@ func (w *RecallWatcher) fire(sessionID string) {
 	cb := w.builder.RecallCurationOpen(sessionID, fire)
 	for _, sec := range sections {
 		cb.Section(sec.sourceChunkID, sec.inputExcerpt)
-		for _, ch := range sec.recalled {
+		for i, ch := range sec.recalled {
 			tagNames := make([]string, 0, len(ch.Tags))
 			for _, t := range ch.Tags {
 				tagNames = append(tagNames, t.Tag)
 			}
 			pNames, pScores := ch.ProposedTags, ch.ProposedTagScores
-			cb.Candidate(ch.ChunkID, ch.Path, ch.Range,
+			cb.Candidate(ch.ChunkID, ch.Path, ch.Range, sec.sizes[i],
 				ch.Score, tagNames, pNames, pScores, ch.Content)
 		}
 	}
@@ -398,6 +404,7 @@ type recallSection struct {
 	sourceChunkID uint64 // the JSONL chunk the paragraph came from
 	inputExcerpt  string // the paragraph text itself, capped at ~200 chars
 	recalled      []RecalledChunk
+	sizes         []int // parallel to recalled; pre-truncation byte sizes
 }
 
 // splitParagraphs runs the supplied text through the markdown chunker
@@ -429,6 +436,3 @@ func truncateUTF8(s string, maxBytes int) string {
 	return s[:cut]
 }
 
-// The v1 in-body instruction block has been retired (T99). The v2
-// recall agent's persona briefing carries the same default-to-silence
-// guidance (R2769); the curation doc no longer prefixes it.

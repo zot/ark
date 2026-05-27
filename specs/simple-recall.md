@@ -248,7 +248,7 @@ ordered by score descending:
 
 > <paragraph excerpt — first ~200 bytes, UTF-8-safe truncation>
 
-## Candidate: <chunkid> <path>:<range>
+## Candidate: <chunkid> (<size>) <path>:<range>
 
 - score: <0.NN>
 - tags: <comma-separated bare tagnames>
@@ -258,7 +258,7 @@ ordered by score descending:
 <~500-char excerpt of chunk content>
 ```
 
-## Candidate: <chunkid> <path>:<range>
+## Candidate: <chunkid> (<size>) <path>:<range>
 - ...
 ```
 
@@ -299,7 +299,7 @@ them. **Surface** items recommend showing a chunk to the user;
 **Recommend** items propose a tag attach worth re-curating.
 
 ```
-## Surface: <chunkid>
+## Surface: <chunkid> (<size>)
 
 reason: <one-line justification>
 
@@ -308,11 +308,15 @@ reason: <one-line justification>
 reason: <one-line justification>
 ```
 
-The Surface H2 carries the chunkID alone — the assistant
-resolves path / range / context on demand via `ark chunks
-<chunkid> [-before N] [-after N]`. Keeping the result doc thin
-preserves the assistant's "scan reasons, drill on demand"
-loop.
+The Surface H2 carries the chunkID plus the chunk's byte size
+in parentheses (e.g. `(33K)`, `(500b)`, `(1.2M)`). The
+assistant resolves path / range / context on demand via
+`ark chunks <chunkid> [-before N] [-after N]`; the size lets it
+glance at the cost of fetching before deciding (some chunks are
+in the tens of kB — markdown nested-list explosions, full
+function definitions in bracket-go chunks). Keeping the result
+doc thin preserves the assistant's "scan reasons, drill on
+demand" loop.
 
 The assistant has final say on whether to surface a chunk to
 the user or to ask the user about a tag recommendation. The
@@ -445,6 +449,7 @@ by every `close` call. Each line is one JSON record:
   "nonce": 5,
   "in_tokens": 1842,
   "out_tokens": 211,
+  "context_tokens": 26139,
   "latency_ms": 1934,
   "surfaced": 2,
   "recommended": 1,
@@ -452,6 +457,14 @@ by every `close` call. Each line is one JSON record:
   "timestamp": "2026-05-26T20:31:14Z"
 }
 ```
+
+`context_tokens` is the agent's cumulative context fill at close
+time (`cache_creation_input_tokens + cache_read_input_tokens` from
+the most recent assistant record in the subagent's JSONL — the
+same value `ark connections recall context` returns). In v2
+one-shot fires the number is roughly per-fire static; in Phase 2's
+long-running lotto-tube agent it's the load-bearing telemetry
+showing context creep across fires until the agent self-recycles.
 
 `outcome` is one of `result-emitted`, `silent-close`, or
 `error`. `surfaced` and `recommended` are counts of items

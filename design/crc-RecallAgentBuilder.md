@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774
+**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -50,11 +50,15 @@ for these verbs — `ark serve` must be running.
   appends the `# Source Chunk:` H1 + `> `-blockquoted
   paragraph excerpt (UTF-8-safe ~200-byte cap) to the
   in-memory doc (R2749).
-- (builder).Candidate(chunkID, path, rangeLabel, score,
-  tagNames, proposedTagsWithScores, contentExcerpt) appends a
-  `## Candidate: <chunkid> <path>:<range>` H2 with score, tag
-  list, parenthesized proposed-tags, and a fenced ~500-char
-  content excerpt to the most recent section (R2749).
+- (builder).Candidate(chunkID, path, rangeLabel, byteSize,
+  score, tagNames, proposedTagsWithScores, contentExcerpt)
+  appends a `## Candidate: <chunkid> (<size>) <path>:<range>`
+  H2 with score, tag list, parenthesized proposed-tags, and a
+  fenced ~500-char content excerpt to the most recent section.
+  `byteSize` is the chunk's full pre-truncation length; the
+  watcher captures it before applying the 500-char excerpt cap
+  and passes it through. Size renders via `friendlySize` (same
+  helper Surface uses). (R2749)
 - (builder).Close() writes
   `tmp://ARK-RECALL/curation-<session>-<fire>` via the write
   actor with the two head tags `@ark-recall-curate: <session>`
@@ -69,10 +73,13 @@ for these verbs — `ark serve` must be running.
 ### Result-doc builder (CLI-driven)
 - SurfaceItem(fire, chunkID, reason) error (R2756) —
   opens `results[fire]` on first call for that fire; appends
-  a `## Surface: <chunkid>` H2 (chunkID alone — the assistant
-  resolves path / range / context via `ark chunks <chunkid>`)
-  with its `reason: ...` line. Errors on missing required args
-  before any state change.
+  a `## Surface: <chunkid> (<size>)` H2 with its `reason: ...`
+  line. The size label is computed server-side by
+  `db.ChunkTextByID` + `friendlySize` (decimal bytes / K /
+  M) so the assistant can decide whether to fetch a big
+  chunk; on lookup failure the size renders as `?` and the
+  surface still emits. Errors on missing required args before
+  any state change.
 - RecommendItem(fire, chunkID, tagSpec, reason) error
   (R2757) — same open-on-first-call semantics; appends a
   `## Recommend: @<tag>[:<value>] on <chunkid>` H2 with its
@@ -116,6 +123,17 @@ for these verbs — `ark serve` must be running.
   record, add `usage.input_tokens` and `usage.output_tokens`.
   No `isSidechain` filter — the file is dedicated to one
   subagent.
+
+### Context introspection
+- ContextTokens(nonce) → (tokens int, found bool) (R2777) —
+  uses `findSubagentJSONL(nonce)` (shared with token-sum
+  lookup), reads the JSONL backwards, returns the
+  `cache_creation_input_tokens + cache_read_input_tokens` sum
+  from the most recent `"type":"assistant"` record carrying a
+  usage object. The lotto-tube recall agent (Phase 2) calls
+  this to self-recycle when context grows past a configurable
+  limit. `(0, false)` on discovery failure so callers
+  distinguish "couldn't measure" from a real 0.
 
 ### Fumble Log
 - LogFumble(fire, nonce uint32, command, args, errMsg string)

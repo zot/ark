@@ -74,6 +74,30 @@ type recallCloseRequest struct {
 	PreserveCuration bool   `json:"preserveCuration"`
 }
 
+// recallContextRequest is the CLI body for `context`. R2777
+type recallContextRequest struct {
+	Nonce uint32 `json:"nonce"`
+}
+
+// handleRecallContext reports the calling subagent's current
+// context fill (cache_creation + cache_read from the most recent
+// assistant turn in its JSONL). Used by the lotto-tube recall
+// agent to self-recycle when context grows past a limit.
+// CRC: crc-Server.md | R2777
+func (srv *Server) handleRecallContext(w http.ResponseWriter, r *http.Request) {
+	var req recallContextRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Nonce == 0 {
+		http.Error(w, "nonce required", http.StatusBadRequest)
+		return
+	}
+	tokens, ok := srv.recallAgentBuilder.ContextTokens(req.Nonce)
+	writeJSON(w, map[string]any{"tokens": tokens, "found": ok})
+}
+
 // handleRecallClose is the single cleanup verb. CRC: crc-Server.md | R2758
 func (srv *Server) handleRecallClose(w http.ResponseWriter, r *http.Request) {
 	var req recallCloseRequest

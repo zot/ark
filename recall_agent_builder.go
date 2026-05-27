@@ -103,18 +103,24 @@ func (c *RecallCurationBuilder) Section(sourceChunkID uint64, paragraph string) 
 // Candidate appends one `## Candidate:` H2 with its score, tag list,
 // optional proposed-tag scores, and fenced content excerpt. R2749
 //
+// byteSize is the full chunk byte length (pre-truncation), stamped
+// after the chunkID so the agent can factor fetch cost into its
+// surface judgment — markdown nested-list explosions and bracket-go
+// function-body chunks can reach tens of kB.
+//
 // proposed is a parallel pair of (name, score) slices; both may be
 // nil/empty to suppress the line entirely.
 func (c *RecallCurationBuilder) Candidate(
 	chunkID uint64,
 	path, rangeLabel string,
+	byteSize int,
 	score float64,
 	tagNames []string,
 	proposedNames []string,
 	proposedScores []float64,
 	contentExcerpt string,
 ) {
-	fmt.Fprintf(&c.buf, "\n## Candidate: %d %s:%s\n\n", chunkID, path, rangeLabel)
+	fmt.Fprintf(&c.buf, "\n## Candidate: %d (%s) %s:%s\n\n", chunkID, friendlySize(byteSize), path, rangeLabel)
 	fmt.Fprintf(&c.buf, "- score: %.2f\n", score)
 	fmt.Fprintf(&c.buf, "- tags: %s\n", strings.Join(tagNames, ", "))
 	if len(proposedNames) > 0 {
@@ -173,6 +179,10 @@ type recallResultDoc struct {
 //
 // The chunkID alone identifies the surfaced chunk — the assistant
 // resolves path/range/context on demand via `ark chunks <chunkID>`.
+// The chunk's byte size is stamped after the chunkID so the
+// assistant can decide whether to fetch (some chunks are tens of
+// kB — PLAN.md has ones in the 33K range — and an assistant
+// scanning surfaces may skip the giants).
 // CRC: crc-RecallAgentBuilder.md | R2756
 func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason string) error {
 	if reason == "" {
@@ -182,9 +192,29 @@ func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason str
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(&doc.buf, "\n## Surface: %d\n\nreason: %s\n", chunkID, reason)
+	sizeLabel := "?"
+	if text, err := b.db.ChunkTextByID(chunkID); err == nil {
+		sizeLabel = friendlySize(len(text))
+	}
+	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)\n\nreason: %s\n", chunkID, sizeLabel, reason)
 	doc.items++
 	return nil
+}
+
+// friendlySize formats a byte count for the result-doc Surface
+// header. Small chunks show as bare bytes; >= 1KB rounds to KB;
+// >= 1MB shows one decimal. Decimal base (1000), not binary —
+// matches the way humans naturally read sizes ("33K", not
+// "32.6Ki").
+func friendlySize(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprintf("%db", n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%dK", (n+500)/1000)
+	default:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
 }
 
 // RecommendItem appends a `## Recommend:` H2 to the result-doc
@@ -229,7 +259,7 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 	if session == "" {
 		// We don't know the session — the fire was never opened on
 		// this server. Fall back to writing the monitor log only.
-		b.appendMonitor(fire, "", nonce, 0, 0, 0, 0, 0, "error")
+		b.appendMonitor(fire, "", nonce, 0, 0, 0, 0, 0, 0, "error")
 		return fmt.Errorf("unknown fire %d", fire)
 	}
 
@@ -244,7 +274,7 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 			_, e := db.AddTmpFile(path, "markdown", body)
 			return e
 		}); err != nil {
-			b.appendMonitor(fire, session, nonce, 0, 0, 0, 0, 0, "error")
+			b.appendMonitor(fire, session, nonce, 0, 0, 0, 0, 0, 0, "error")
 			return fmt.Errorf("write result doc: %w", err)
 		}
 		outcome = "result-emitted"
@@ -263,11 +293,12 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 	}
 
 	in, out := b.lookupSubagentTokens(nonce)
+	contextTokens, _ := b.ContextTokens(nonce)
 	latency := 0
 	if doc != nil && !doc.opened.IsZero() {
 		latency = int(time.Since(doc.opened).Milliseconds())
 	}
-	b.appendMonitor(fire, session, nonce, in, out, latency, surfaced, recommended, outcome)
+	b.appendMonitor(fire, session, nonce, in, out, contextTokens, latency, surfaced, recommended, outcome)
 	return nil
 }
 
@@ -348,16 +379,36 @@ func (b *RecallAgentBuilder) sweepSessionOrphans(session string, currentFire uin
 //
 // CRC: crc-RecallAgentBuilder.md | R2759, R2760, R2761
 func (b *RecallAgentBuilder) lookupSubagentTokens(nonce uint32) (in, out int) {
+	jsonl := b.findSubagentJSONL(nonce)
+	if jsonl == "" {
+		return 0, 0
+	}
+	return sumSubagentTokens(jsonl)
+}
+
+// findSubagentJSONL resolves a nonce to the calling subagent's
+// transcript JSONL path. Returns "" when discovery fails. Shared
+// helper for token sums (close-time) and live context inspection
+// (the lotto-tube agent's self-recycle check).
+//
+// Strategy: enumerate ark sources under ~/.claude/projects, look
+// under each `<source>/<parent_session>/subagents/` for .meta.json
+// files, take JSONL-mtime-descending order (freshest wins to
+// resolve cross-restart nonce collisions), match the first whose
+// description contains "nonce <N>".
+//
+// CRC: crc-RecallAgentBuilder.md | R2759, R2760
+func (b *RecallAgentBuilder) findSubagentJSONL(nonce uint32) string {
 	parent := os.Getenv("CLAUDE_CODE_SESSION_ID")
 	if parent == "" {
-		return 0, 0
+		return ""
 	}
 	home, _ := os.UserHomeDir()
 	projectsPrefix := filepath.Join(home, ".claude", "projects") + string(os.PathSeparator)
 	needle := fmt.Sprintf("nonce %d", nonce)
 	type candidate struct {
-		meta    string
-		mtime   time.Time
+		meta  string
+		mtime time.Time
 	}
 	var cands []candidate
 	for _, src := range b.db.Config().Sources {
@@ -375,9 +426,6 @@ func (b *RecallAgentBuilder) lookupSubagentTokens(nonce uint32) (in, out int) {
 			cands = append(cands, candidate{meta: meta, mtime: info.ModTime()})
 		}
 	}
-	// Newest JSONL first — the fresh subagent transcript wins any
-	// nonce collision against stale meta.json files left over from
-	// a previous `ark serve` run.
 	sort.Slice(cands, func(i, j int) bool {
 		return cands[i].mtime.After(cands[j].mtime)
 	})
@@ -395,10 +443,62 @@ func (b *RecallAgentBuilder) lookupSubagentTokens(nonce uint32) (in, out int) {
 		if !strings.Contains(doc.Description, needle) {
 			continue
 		}
-		jsonl := strings.TrimSuffix(c.meta, ".meta.json") + ".jsonl"
-		return sumSubagentTokens(jsonl)
+		return strings.TrimSuffix(c.meta, ".meta.json") + ".jsonl"
 	}
-	return 0, 0
+	return ""
+}
+
+// ContextTokens returns the subagent's current context fill,
+// computed as `cache_creation_input_tokens + cache_read_input_tokens`
+// from the most recent assistant record in the JSONL that carries a
+// usage object. That sum represents the cumulative input the model
+// just loaded — what Claude Code's status indicator reads off. Used
+// by the lotto-tube recall agent (Phase 2) to self-recycle when its
+// context grows past a configurable limit.
+//
+// Returns (0, false) when discovery or parse fails so callers can
+// distinguish "couldn't measure" from a real 0.
+// CRC: crc-RecallAgentBuilder.md | R2777
+func (b *RecallAgentBuilder) ContextTokens(nonce uint32) (int, bool) {
+	jsonl := b.findSubagentJSONL(nonce)
+	if jsonl == "" {
+		return 0, false
+	}
+	data, err := os.ReadFile(jsonl)
+	if err != nil {
+		return 0, false
+	}
+	// Scan from end so we find the latest assistant turn fast.
+	lines := strings.Split(string(data), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Usage struct {
+					CacheCreation int `json:"cache_creation_input_tokens"`
+					CacheRead     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec.Type != "assistant" {
+			continue
+		}
+		total := rec.Message.Usage.CacheCreation + rec.Message.Usage.CacheRead
+		if total == 0 {
+			// Some assistant records carry no usage block (e.g.,
+			// tool-use-only intermediate records). Keep scanning.
+			continue
+		}
+		return total, true
+	}
+	return 0, false
 }
 
 // sumSubagentTokens reads a subagent JSONL transcript and totals
@@ -438,24 +538,33 @@ func sumSubagentTokens(jsonl string) (in, out int) {
 
 // monitorRecord is one line in recall.jsonl. Field order matches
 // the spec table for diagnostic-friendliness.
+//
+// ContextTokens is the agent's cumulative context at close time
+// (cache_creation_input_tokens + cache_read_input_tokens from the
+// last assistant record). In v2 one-shot fires this is roughly
+// per-fire static; in Phase 2 lotto-tube runs it's the load-
+// bearing signal showing context creep across fires until the
+// agent self-recycles.
 type monitorRecord struct {
-	Fire        uint64 `json:"fire"`
-	Session     string `json:"session"`
-	Nonce       uint32 `json:"nonce"`
-	InTokens    int    `json:"in_tokens"`
-	OutTokens   int    `json:"out_tokens"`
-	LatencyMs   int    `json:"latency_ms"`
-	Surfaced    int    `json:"surfaced"`
-	Recommended int    `json:"recommended"`
-	Outcome     string `json:"outcome"`
-	Timestamp   string `json:"timestamp"`
+	Fire          uint64 `json:"fire"`
+	Session       string `json:"session"`
+	Nonce         uint32 `json:"nonce"`
+	InTokens      int    `json:"in_tokens"`
+	OutTokens     int    `json:"out_tokens"`
+	ContextTokens int    `json:"context_tokens"`
+	LatencyMs     int    `json:"latency_ms"`
+	Surfaced      int    `json:"surfaced"`
+	Recommended   int    `json:"recommended"`
+	Outcome       string `json:"outcome"`
+	Timestamp     string `json:"timestamp"`
 }
 
-func (b *RecallAgentBuilder) appendMonitor(fire uint64, session string, nonce uint32, in, out, latency, surfaced, recommended int, outcome string) {
+func (b *RecallAgentBuilder) appendMonitor(fire uint64, session string, nonce uint32, in, out, context, latency, surfaced, recommended int, outcome string) {
 	rec := monitorRecord{
 		Fire: fire, Session: session, Nonce: nonce,
-		InTokens: in, OutTokens: out, LatencyMs: latency,
-		Surfaced: surfaced, Recommended: recommended,
+		InTokens: in, OutTokens: out, ContextTokens: context,
+		LatencyMs: latency,
+		Surfaced:  surfaced, Recommended: recommended,
 		Outcome: outcome, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	b.appendJSONL(b.monitorPath, rec)

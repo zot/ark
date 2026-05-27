@@ -92,14 +92,14 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	cb := b.RecallCurationOpen("sess-abc", 17)
 	cb.Section(1001, "the user's question about asparagus")
 	cb.Candidate(
-		4711, "notes/foo.md", "12-18", 0.84,
+		4711, "notes/foo.md", "12-18", 1834, 0.84,
 		[]string{"cooking", "course"},
 		[]string{"persona"}, []float64{0.72},
 		"asparagus risotto",
 	)
 	cb.Section(1002, "assistant explanation of risotto technique")
 	cb.Candidate(
-		5023, "notes/bar.md", "1-7", 0.76,
+		5023, "notes/bar.md", "1-7", 480, 0.76,
 		[]string{"technique"},
 		nil, nil,
 		"toast the rice in fat",
@@ -115,8 +115,11 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	if !strings.Contains(body, "\n# Source Chunk: 1002\n") {
 		t.Errorf("missing section 2 H1")
 	}
-	if !strings.Contains(body, "## Candidate: 4711 notes/foo.md:12-18\n") {
-		t.Errorf("missing candidate 1 H2")
+	if !strings.Contains(body, "## Candidate: 4711 (2K) notes/foo.md:12-18\n") {
+		t.Errorf("missing candidate 1 H2 (with size)")
+	}
+	if !strings.Contains(body, "## Candidate: 5023 (480b) notes/bar.md:1-7\n") {
+		t.Errorf("missing candidate 2 H2 (with size)")
 	}
 	if !strings.Contains(body, "- score: 0.84\n") {
 		t.Errorf("missing candidate 1 score line")

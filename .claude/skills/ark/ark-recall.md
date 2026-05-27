@@ -28,12 +28,18 @@ This is what you do, in order:
 3. **Decide per-section.** For each `# Source Chunk:` H1:
    - Read the blockquoted paragraph excerpt — this is what triggered
      the section.
-   - Read each `## Candidate:` H2 below it. Each candidate carries:
+   - Read each `## Candidate: <chunkid> (<size>) <path>:<range>` H2
+     below it. The size and path are filter-time signals: `(33K)`
+     warns this chunk is heavy; the path hints which project the
+     candidate lives in (cross-project hits are the point, not noise).
+     Each candidate carries:
      - `- score:` — aggregate substrate similarity
      - `- tags:` — comma-separated tagnames already attached
      - `- proposed-tags:` — derived candidates with parenthesized
        chunk-EC ↔ tag-ED cosine scores (may be absent)
-     - a fenced excerpt of the candidate's content
+     - a fenced excerpt of the candidate's content (capped at ~500
+       chars; the parenthesized size tells you whether the full chunk
+       is much larger)
    - Ask yourself: does this candidate actually fit the source
      paragraph? Score is a hint, not a verdict.
 

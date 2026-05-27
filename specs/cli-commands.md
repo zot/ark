@@ -337,6 +337,7 @@ ark connections recall reserve-nonce
 ark connections recall surface FIRE -chunk N -range PATH:RANGE -reason TEXT
 ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
 ark connections recall close FIRE --nonce N [-preserve-curation]
+ark connections recall context --nonce N [--limit N] [--json]
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -403,6 +404,16 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   agent only.
 - `recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT` —
   same shape, adds one `## Recommend:` item.
+- `recall context --nonce N [--limit N] [--json]` reports the
+  calling subagent's current context fill (sum of
+  `cache_creation_input_tokens` + `cache_read_input_tokens` from
+  the most recent assistant turn in its JSONL — the same number
+  Claude Code's status indicator reads). Used by the long-running
+  lotto-tube recall agent (Phase 2) to self-recycle when context
+  grows past a configurable limit. Default output is the bare
+  integer; `--json` returns `{tokens, found}`; with `--limit N`
+  the command exits 1 when tokens >= N, else 0 (suitable for
+  shell-pipeline gating).
 - `recall close FIRE --nonce N [-preserve-curation]` is the
   single cleanup verb. Writes `tmp://ARK-RECALL/result-<S>-<F>`
   iff items were added; removes the curation doc unless
