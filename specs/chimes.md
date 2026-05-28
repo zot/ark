@@ -36,12 +36,26 @@ At fire time the value is rewritten to a current RFC 3339 timestamp
 (the only chime-specific code; see `fire()`), so subscribers receive
 a usable "now" tick instead of the source recurrence spec.
 
-`ark.toml` ships the chime tag names in `[schedule].tags`:
+Chime tags are auto-declared by `Config.EnsureDefaultScheduleTags`
+with `lifecycle = "none"` (no audit anywhere — fire through pubsub
+only). The six standard cadences become schedule tags without
+requiring any `[schedule.tag.chime-Nm]` block in `ark.toml`. A user
+who wants audit history overrides per chime:
 
 ```toml
-[schedule]
-tags = ["chime-1m", "chime-5m", "chime-15m", "chime-30m", "chime-45m", "chime-60m", ...]
+[schedule.tag.chime-1m]
+lifecycle = "disk"   # or "tmp" for ephemeral
+log_cap = 1000       # older-half-drop trim (default 1000)
 ```
+
+`@check-gap:` is NOT written for chime fires even when audit is
+opted-in — chimes have no `default_duration`, and R965 gates
+check-gap append on that signal. Heartbeat tags have no human-ack
+loop; check-gap entries for them would accumulate unboundedly and
+poison `ScanCheckGaps`'s missed-events surface.
+
+See [006-schedule-record-only.md](migrations/complete/006-schedule-record-only.md)
+for the full lifecycle model.
 
 A small ark-managed hosting file, `~/.ark/chimes.md`, carries the
 recurrence specs:

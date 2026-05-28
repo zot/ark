@@ -214,6 +214,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
 - [ ] seq-subscriber-presence.md → `pubsub.go`, `recall_watcher.go`, `recall_agent_builder.go`, `server.go`
 - [ ] seq-chimes.md → `scheduler.go`, `server.go`, `config.go`, `pubsub.go`
+- [ ] seq-spec-change.md → `scheduler.go`, `config.go`, `indexer.go`, `server.go`
+- [ ] seq-tmp-audit-trim.md → `scheduler.go`, `db.go`
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
@@ -610,3 +612,21 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T105: R2738 retired by R2749 (2026-05-26 simple-recall v2 — DM section excerpt blockquote replaced by curation-doc Source Chunk excerpt)
 - T106: R2694 retired (2026-05-26 simple-recall v2 — [recall].agent_cmd reservation retired; recall agent is invoked by the assistant via the Task tool, not by a configured command)
 - T107: R810 retired by R2783 (2026-05-27 chime-convention (AddChime hardcoded 15m replaced by @chime-15m as one of six standard cadences routed through normal [schedule] path))
+- T108: R853 retired by R2830 (2026-05-28 schedule-record-only: tag declaration via per-tag blocks)
+- T109: R854 retired by R2831 (2026-05-28 schedule-record-only: default_duration moves to per-tag block)
+- T110: R855 retired by R2833 (2026-05-28 schedule-record-only: IsScheduleTag now block-presence-based)
+- T111: R856 retired by R2830 (2026-05-28 schedule-record-only: adding/removing tag means adding/removing block)
+- T112: R858 retired by R2831 (2026-05-28 schedule-record-only: defaults table relocates)
+- T113: R869 retired (2026-05-28 schedule-record-only: day buckets computed from specs, not from removed @ark-event-upcoming)
+- T114: R874 retired by R2818 (2026-05-28 schedule-record-only: ScanScheduleLogs is audit-only)
+- T115: R875 retired by R2819 (2026-05-28 schedule-record-only: queue populated by EnsureUpcoming pass exclusively)
+- T116: R876 retired by R2818 (2026-05-28 schedule-record-only: no @ark-event-upcoming to convert)
+- T117: R902 retired by R2819 (2026-05-28 schedule-record-only: EnsureUpcoming computes single next, not forward window)
+- T118: R903 retired (2026-05-28 schedule-record-only: @ark-event-upcoming removed; use source @remove)
+- T119: R904 retired (2026-05-28 schedule-record-only: @ark-event-upcoming removed; use ark schedule change + @add/@remove)
+- T120: R905 retired (2026-05-28 schedule-record-only: @ark-event-upcoming removed; no duplicate check needed)
+- T121: R924 retired (2026-05-28 schedule-record-only: no @ark-event-upcoming entry to update)
+- T122: R957 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag)
+- T123: R958 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag)
+- T124: R959 retired by R2825 (2026-05-28 schedule-record-only: lifecycle=false fires through pubsub)
+- T125: R960 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag literal)

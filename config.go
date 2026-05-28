@@ -18,13 +18,23 @@ import (
 
 // arkSourceIncludePatterns is the include list for the hardcoded ~/.ark
 // source. Whitespace-separated so new patterns can be added one per line.
-// CRC: crc-Config.md | R961, R962, R2393
+// Standard top-level files (ark.toml, chimes.md, tags.md) are listed
+// explicitly so ark-managed content is indexed regardless of the user's
+// [[source]] configuration in ark.toml.
+// CRC: crc-Config.md | R961, R962, R2393, R2811
 const arkSourceIncludePatterns = `
 	ark.toml
-	schedule/**
-	apps/**
-	storage/**
-	external/**
+	chimes.md
+	tags.md
+	schedule/**/*.md
+	apps/**/*.lua
+	apps/**/*.js
+	apps/**/*.html
+	apps/**/*.css
+	apps/**/*.md
+	storage/**/*.md
+	storage/**/*.pdf
+	external/**/*.md
 `
 
 // Config represents the parsed ark.toml configuration.
@@ -273,22 +283,46 @@ func (rc RecallConfig) DiscussedTTLDuration() (ttl time.Duration, wasParseError 
 	return d, false
 }
 
-// ScheduleConfig declares which tags carry date values and their defaults.
-// CRC: crc-Config.md | R853, R854, R855, R953-R960
+// ScheduleConfig is the top-level [schedule] section of ark.toml. Tag
+// declarations live in per-tag [schedule.tag.X] blocks; the mere
+// presence of a block declares X as a schedule tag (R2830, R2833).
+// Legacy `tags = [...]` / `[schedule.defaults]` / `lifecycle_include` /
+// `lifecycle_exclude` are not parsed (R2832 — T108-T125 retired).
+// CRC: crc-Config.md | R2830, R2832
 type ScheduleConfig struct {
-	Tags             []string                     `toml:"tags"`
-	Defaults         map[string]string            `toml:"defaults"`
-	FilterFiles      []string                     `toml:"filter_files,omitempty"`      // R953: restrict schedule scanning to matching files
-	ExcludeFiles     []string                     `toml:"exclude_files,omitempty"`     // R954: exclude files from schedule scanning
-	LifecycleInclude []string                     `toml:"lifecycle_include,omitempty"` // R957: tags that get full lifecycle (default "*")
-	LifecycleExclude []string                     `toml:"lifecycle_exclude,omitempty"` // R958: tags excluded from lifecycle
-	TagConfig        map[string]TagScheduleConfig `toml:"tag"`                         // per-tag filter overrides
+	FilterFiles  []string                     `toml:"filter_files,omitempty"`  // R953
+	ExcludeFiles []string                     `toml:"exclude_files,omitempty"` // R954
+	Tag          map[string]ScheduleTagConfig `toml:"tag,omitempty"`           // per-tag blocks (R2830)
 }
 
-// TagScheduleConfig holds per-tag schedule filtering overrides.
-type TagScheduleConfig struct {
-	FilterFiles  []string `toml:"filter_files,omitempty"`
-	ExcludeFiles []string `toml:"exclude_files,omitempty"`
+// ScheduleTagConfig is one [schedule.tag.X] block. The block's
+// presence declares X as a schedule tag; all fields are optional and
+// take per-tag defaults when unset.
+// CRC: crc-Config.md | R2830, R2831
+type ScheduleTagConfig struct {
+	Lifecycle       string   `toml:"lifecycle,omitempty"`        // R2822: "disk" (default), "tmp", or "none"
+	LogCap          *int     `toml:"log_cap,omitempty"`          // R2827: fired-entry cap; default 1000
+	DefaultDuration string   `toml:"default_duration,omitempty"` // R2831: replaces [schedule.defaults]
+	FilterFiles     []string `toml:"filter_files,omitempty"`     // R2831: per-tag filter override
+	ExcludeFiles    []string `toml:"exclude_files,omitempty"`    // R2831: per-tag exclude override
+	Suppress        bool     `toml:"suppress,omitempty"`         // R2835: stop arming without dropping declaration
+}
+
+// Lifecycle constants.
+// CRC: crc-Config.md | R2822
+const (
+	LifecycleDisk = "disk"
+	LifecycleTmp  = "tmp"
+	LifecycleNone = "none"
+)
+
+const defaultLogCap = 1000
+
+// defaultChimeTags is the canonical list of standard chime cadences
+// (R2778, R2779). Mirrors the cadences declared in chimes.md.
+// CRC: crc-Config.md | R2834
+var defaultChimeTags = []string{
+	"chime-1m", "chime-5m", "chime-15m", "chime-30m", "chime-45m", "chime-60m",
 }
 
 // EmbedTier defines a context/parallel pair for chunk embedding.
@@ -484,10 +518,10 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
-	for k, tc := range cfg.Schedule.TagConfig {
+	for k, tc := range cfg.Schedule.Tag {
 		tc.FilterFiles = ExpandTildeSlice(tc.FilterFiles)
 		tc.ExcludeFiles = ExpandTildeSlice(tc.ExcludeFiles)
-		cfg.Schedule.TagConfig[k] = tc
+		cfg.Schedule.Tag[k] = tc
 	}
 	for i := range cfg.Sources {
 		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
@@ -496,7 +530,30 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Sources[i].Exclude.Replace = ExpandTildeSlice(cfg.Sources[i].Exclude.Replace)
 		cfg.Sources[i].Exclude.Add = ExpandTildeSlice(cfg.Sources[i].Exclude.Add)
 	}
+	cfg.EnsureDefaultScheduleTags()
 	return &cfg, nil
+}
+
+// EnsureDefaultScheduleTags injects synthetic [schedule.tag.X] blocks
+// for the six standard chime cadences (defaultChimeTags) if the user
+// hasn't already declared them in ark.toml. The synthetic blocks
+// default to lifecycle="none" (no audit) and no default_duration —
+// chimes are heartbeats, not events; ack tracking and audit history
+// would just be noise. User can override by adding an explicit block
+// to ark.toml (e.g. `[schedule.tag.chime-1m] lifecycle = "disk"` to
+// turn on audit). Mirrors EnsureArkSource — ark adds defaults that
+// the user can override.
+// CRC: crc-Config.md | R2822, R2825, R2834
+func (c *Config) EnsureDefaultScheduleTags() {
+	if c.Schedule.Tag == nil {
+		c.Schedule.Tag = make(map[string]ScheduleTagConfig)
+	}
+	for _, name := range defaultChimeTags {
+		if _, ok := c.Schedule.Tag[name]; ok {
+			continue
+		}
+		c.Schedule.Tag[name] = ScheduleTagConfig{Lifecycle: LifecycleNone}
+	}
 }
 
 // CRC: crc-DB.md | R383
@@ -504,7 +561,7 @@ func LoadConfig(path string) (*Config, error) {
 // WriteDefaultConfig writes the initial ark.toml.
 // If configSeed is non-nil, uses that (from install/ark.toml bundle).
 // Otherwise falls back to a minimal built-in default.
-// CRC: crc-Config.md | R631, R632, R633, R2781
+// CRC: crc-Config.md | R631, R632, R633, R2781, R2834
 func WriteDefaultConfig(path string, configSeed []byte) error {
 	if len(configSeed) > 0 {
 		return os.WriteFile(path, configSeed, 0644)
@@ -522,9 +579,13 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 "*.md" = "markdown"
 "*.jsonl" = "chat-jsonl"
 
-# Schedule tags — chimes ship out of the box (see chimes.md). R2781
+# Schedule tags — declared via [schedule.tag.X] blocks; presence
+# of a block declares X as a schedule tag (R2830). The six standard
+# chime cadences (chime-1m through chime-60m) are auto-declared by
+# EnsureDefaultScheduleTags with lifecycle="none" (no audit); add an
+# explicit block here to override — e.g. lifecycle="disk" to enable
+# fire-history audit, or suppress=true to stop a chime from firing.
 [schedule]
-tags = ["chime-1m", "chime-5m", "chime-15m", "chime-30m", "chime-45m", "chime-60m"]
 `
 	return os.WriteFile(path, []byte(defaultConfig), 0644)
 }
@@ -641,66 +702,78 @@ func (c *Config) ParseSessionTTL() time.Duration {
 	return d
 }
 
-// IsScheduleTag checks if a tag is declared as a schedule tag.
-// Returns the default duration and true if found. R853, R855
-// CRC: crc-Config.md
-func (c *Config) IsScheduleTag(tag string) (defaultDur string, ok bool) {
-	for _, t := range c.Schedule.Tags {
-		if t == tag {
-			dur := c.Schedule.Defaults[tag]
-			return dur, true
-		}
-	}
-	return "", false
+// IsScheduleTag returns true when a [schedule.tag.X] block exists for
+// the given tag. Block presence is the declaration mechanism. (R2833)
+// CRC: crc-Config.md | R2833
+func (c *Config) IsScheduleTag(tag string) bool {
+	_, ok := c.Schedule.Tag[tag]
+	return ok
 }
 
-// ScheduleTags returns the full schedule tag map (tag → default duration).
-// CRC: crc-Config.md | R853
-func (c *Config) ScheduleTags() map[string]string {
-	m := make(map[string]string, len(c.Schedule.Tags))
-	for _, t := range c.Schedule.Tags {
-		m[t] = c.Schedule.Defaults[t]
-	}
-	return m
+// ScheduleTags returns the full per-tag config map. (R2833)
+// CRC: crc-Config.md | R2833
+func (c *Config) ScheduleTags() map[string]ScheduleTagConfig {
+	return c.Schedule.Tag
 }
 
-// IsLifecycleTag returns true if a schedule tag participates in the full
-// lifecycle (log writing, check-gap, gap detection).
-// CRC: crc-Config.md | R957, R958, R960
-func (c *Config) IsLifecycleTag(tag string) bool {
-	inc := c.Schedule.LifecycleInclude
-	if len(inc) == 0 {
-		inc = []string{"*"} // default: all tags
+// Lifecycle returns the audit destination for the given tag: one of
+// LifecycleDisk, LifecycleTmp, LifecycleNone. Empty / missing field
+// defaults to LifecycleDisk. (R2822)
+// CRC: crc-Config.md | R2822
+func (c *Config) Lifecycle(tag string) string {
+	tc, ok := c.Schedule.Tag[tag]
+	if !ok {
+		return LifecycleNone // tag isn't declared — no audit
 	}
-	matched := false
-	for _, pat := range inc {
-		if ok, _ := filepath.Match(pat, tag); ok {
-			matched = true
-			break
-		}
+	switch tc.Lifecycle {
+	case LifecycleTmp:
+		return LifecycleTmp
+	case LifecycleNone:
+		return LifecycleNone
+	default:
+		return LifecycleDisk
 	}
-	if !matched {
-		return false
-	}
-	for _, pat := range c.Schedule.LifecycleExclude {
-		if ok, _ := filepath.Match(pat, tag); ok {
-			return false
-		}
-	}
-	return true
 }
 
-// MatchesScheduleFilter returns true if a file path passes the schedule
-// filter_files/exclude_files. When both are absent, all files pass.
+// LogCap returns the per-tag fired-entry cap. Default 1000. (R2827)
+// CRC: crc-Config.md | R2827
+func (c *Config) LogCap(tag string) int {
+	tc, ok := c.Schedule.Tag[tag]
+	if !ok || tc.LogCap == nil {
+		return defaultLogCap
+	}
+	if *tc.LogCap <= 0 {
+		return 1 // treat 0/negative as "always keep one entry"
+	}
+	return *tc.LogCap
+}
+
+// DefaultDuration returns the per-tag default duration (replaces R854
+// [schedule.defaults]).
+// CRC: crc-Config.md | R2831
+func (c *Config) DefaultDuration(tag string) string {
+	return c.Schedule.Tag[tag].DefaultDuration
+}
+
+// IsSuppressed returns true when [schedule.tag.X] suppress = true.
+// CRC: crc-Config.md | R2835
+func (c *Config) IsSuppressed(tag string) bool {
+	return c.Schedule.Tag[tag].Suppress
+}
+
+// MatchesScheduleFilter returns true if a file path passes the
+// top-level [schedule] filter_files/exclude_files. When both are
+// absent, all files pass.
 // CRC: crc-Config.md | R953, R954, R955, R956
 func (c *Config) MatchesScheduleFilter(path string) bool {
 	return matchesFilterExclude(path, c.Schedule.FilterFiles, c.Schedule.ExcludeFiles)
 }
 
-// MatchesScheduleFilterForTag returns true if a file path passes the schedule
-// filter for a specific tag. Checks per-tag overrides first, falls back to global.
+// MatchesScheduleFilterForTag returns true if a file path passes the
+// schedule filter for a specific tag. Checks per-tag overrides first,
+// falls back to global. (R2831)
 func (c *Config) MatchesScheduleFilterForTag(path, tag string) bool {
-	if tc, ok := c.Schedule.TagConfig[tag]; ok {
+	if tc, ok := c.Schedule.Tag[tag]; ok {
 		hasOverride := len(tc.FilterFiles) > 0 || len(tc.ExcludeFiles) > 0
 		if hasOverride {
 			// Per-tag filter: still apply global excludes, then tag-specific filters

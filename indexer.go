@@ -164,7 +164,7 @@ func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 		return
 	}
 	for _, tv := range tagValues {
-		if _, ok := idx.config.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
+		if idx.config.IsScheduleTag(tv.Tag) && tv.Value != "" {
 			if !idx.config.MatchesScheduleFilterForTag(path, tv.Tag) {
 				continue
 			}

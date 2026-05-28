@@ -4,14 +4,17 @@ package ark
 
 import (
 	"bufio"
+	"bytes"
 	"container/heap"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,7 +209,8 @@ func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool
 					c.Removes, c.Adds = ParseExceptions(content, c.Event)
 				}
 			}
-			if IsRecurringSpec(c.Spec) {
+			spec := c.CurrentSpec()
+			if IsRecurringSpec(spec) {
 				// Crank forward through the range
 				startAfter := start.Add(-1 * time.Second)
 				if !c.NotBefore.IsZero() && c.NotBefore.After(startAfter) {
@@ -216,7 +220,7 @@ func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool
 				if !c.NotAfter.IsZero() && c.NotAfter.Before(notAfter) {
 					notAfter = c.NotAfter
 				}
-				next := ComputeNext(c.Spec, startAfter, notAfter)
+				next := ComputeNext(spec, startAfter, notAfter)
 				for !next.IsZero() && !next.After(end) {
 					// R1039: skip @remove: exceptions
 					if removed, _ := isRemoved(next, c.Removes); !removed {
@@ -226,14 +230,12 @@ func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool
 							Start:  next,
 							End:    next,
 							Source: c.Source,
-							Spec:   c.Spec,
+							Spec:   spec,
 						}
-						if def, ok := es.config.IsScheduleTag(c.Event); ok {
-							applyDefaultDuration(&ev, def, loc)
-						}
+						applyDefaultDuration(&ev, es.config.DefaultDuration(c.Event), loc)
 						events = append(events, ev)
 					}
-					next = ComputeNext(c.Spec, next, notAfter)
+					next = ComputeNext(spec, next, notAfter)
 				}
 				// R1036: add @add: exceptions that fall in range
 				for _, add := range c.Adds {
@@ -245,21 +247,19 @@ func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool
 							End:     add.Date,
 							Summary: add.Text,
 							Source:  c.Source,
-							Spec:    c.Spec,
+							Spec:    spec,
 						}
-						if def, ok := es.config.IsScheduleTag(c.Event); ok {
-							applyDefaultDuration(&ev, def, loc)
-						}
+						applyDefaultDuration(&ev, es.config.DefaultDuration(c.Event), loc)
 						events = append(events, ev)
 					}
 				}
 			} else {
 				// One-shot: parse the spec as a date
-				dr, err := ParseDateValue(c.Spec, "", loc)
+				dr, err := ParseDateValue(spec, "", loc)
 				if err != nil {
 					continue
 				}
-				if def, ok := es.config.IsScheduleTag(c.Event); ok && dr.End == dr.Start {
+				if def := es.config.DefaultDuration(c.Event); def != "" && dr.End == dr.Start {
 					if def == "all-day" {
 						dr.AllDay = true
 						dr.End = time.Date(dr.Start.Year(), dr.Start.Month(), dr.Start.Day(), 23, 59, 59, 0, loc)
@@ -276,7 +276,7 @@ func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool
 						Summary: dr.Description,
 						AllDay:  dr.AllDay,
 						Source:  c.Source,
-						Spec:    c.Spec,
+						Spec:    spec,
 					})
 				}
 			}
@@ -425,6 +425,7 @@ type EventScheduler struct {
 	scheduleDir string                                  // ~/.ark/schedule/
 	config      *Config                                 // schedule tag declarations
 	WriteTmpLog func(path string, content []byte) error // set by caller for tmp:// log writes
+	ReadTmpLog  func(path string) ([]byte, error)       // set by caller for tmp:// log reads
 }
 
 // NewEventScheduler creates a scheduler that delivers through the given PubSub.
@@ -451,19 +452,54 @@ func (es *EventScheduler) reportError(subsystem, message string) {
 // --- Schedule log file operations ---
 
 // LogChunk represents one event definition in a schedule log file.
-// CRC: crc-EventScheduler.md | R899, R900, R901
+// CRC: crc-EventScheduler.md | R899, R900, R901, R2813, R2814, R2815, R2816, R2817
+//
+// The chunk is pure audit: spec history (one initial marker + zero or
+// more changed markers) plus fire entries. The active spec lives in
+// the source file at `@ark-event-source:`, not here. The chunk no
+// longer carries a current-state `@ark-event-spec:` (R2814) or any
+// `@ark-event-upcoming:` (R2813); the in-memory priority queue is
+// the authoritative "what's next" source.
 type LogChunk struct {
-	Event     string          // tag name (e.g., "standup")
-	Source    string          // source file path
-	Spec      string          // recurring spec (e.g., "every Monday at 09:00")
-	NotBefore time.Time       // R1007: @ark-event-start: bound (zero = no bound)
-	NotAfter  time.Time       // R1007: @ark-event-end: bound (zero = no bound)
-	Fired     []string        // @ark-event-fired: date strings
-	Upcoming  []string        // @ark-event-upcoming: date strings
-	CheckGaps []string        // @check-gap: date strings — unresolved fired events (R965, R969)
-	Removes   []DateException // R1035: @remove: exceptions from source file
-	Adds      []DateException // R1036: @add: exceptions from source file
+	Event       string          // tag name (e.g., "standup")
+	Source      string          // source file path (disk path or tmp:// URI)
+	SpecMarkers []SpecMarker    // ordered spec history: index 0 is the initial marker, the rest are changes (R2815, R2816)
+	NotBefore   time.Time       // R1007: @ark-event-start: bound (zero = no bound)
+	NotAfter    time.Time       // R1007: @ark-event-end: bound (zero = no bound)
+	Fired       []string        // @ark-event-fired: timestamp strings, oldest first; subject to LogCap trim (R2827)
+	CheckGaps   []string        // @check-gap: date strings — unresolved fired events (R965, R969)
+	Removes     []DateException // R1035: @remove: exceptions from source file
+	Adds        []DateException // R1036: @add: exceptions from source file
 }
+
+// SpecMarker is one entry in a chunk's spec history. The active spec
+// is read from the source file; the markers preserve what the spec
+// was at each historical change.
+// CRC: crc-EventScheduler.md | R2815, R2816, R2817
+type SpecMarker struct {
+	Kind string    // "initial" (R2815, exactly one per chunk) or "changed" (R2816, zero or more)
+	Time time.Time // when the marker was recorded
+	Spec string    // verbatim spec value at the time of the marker
+}
+
+// CurrentSpec returns the spec value from the most-recent spec marker
+// in the chunk. Empty when the chunk has no markers (e.g. a legacy
+// chunk read before the first EnsureUpcoming migration write).
+// CRC: crc-EventScheduler.md | R2817
+func (c *LogChunk) CurrentSpec() string {
+	if len(c.SpecMarkers) == 0 {
+		return ""
+	}
+	return c.SpecMarkers[len(c.SpecMarkers)-1].Spec
+}
+
+// specMarkerSep separates the timestamp from the spec value in the
+// `@ark-event-spec-initial:` / `@ark-event-spec-changed:` tag value.
+// Unicode em-dash with surrounding spaces; the existing recurrence
+// parser never sees this separator because the log reader splits on
+// it before passing the trailing text anywhere.
+// CRC: crc-EventScheduler.md | R2815
+const specMarkerSep = " — " // " — "
 
 // DateException is a parsed @remove: or @add: tag from a source file.
 // R1035, R1036, R1037
@@ -487,79 +523,53 @@ func eventID(source, tag, dateStr string) string {
 	return fmt.Sprintf("%s:%s:%s", source, tag, dateStr)
 }
 
-// buildDateSet returns a set of date strings already in a chunk (upcoming + fired).
-func buildDateSet(c *LogChunk) map[string]bool {
-	m := make(map[string]bool, len(c.Upcoming)+len(c.Fired))
-	for _, u := range c.Upcoming {
-		m[u] = true
-	}
-	for _, f := range c.Fired {
-		if fields := strings.Fields(f); len(fields) > 0 {
-			if t, err := time.Parse(scheduleDateFmt, fields[0]); err == nil {
-				m[t.Format(scheduleDateFmt)] = true
-			}
-		}
-	}
-	return m
-}
-
-// crankForward fills a chunk's Upcoming with dates through the forward window.
-// Returns the number of new entries added. Optionally enqueues events.
-func (es *EventScheduler) crankForward(c *LogChunk, now time.Time, enqueue bool) int {
-	if !IsRecurringSpec(c.Spec) {
-		return 0
+// crankForwardAndEnqueue computes the next fire from the chunk's
+// current spec and bounds, skips @remove: exceptions, and (when
+// enqueue is true) adds the resulting ScheduledEvent to the priority
+// queue with Recurring populated per R2812.
+//
+// The log chunk no longer carries `@ark-event-upcoming:` (R2813) — the
+// queue is the sole "what's next" source. So this helper only enqueues;
+// no chunk mutation. Returns true when an event was computed and (if
+// enqueue) added; false when the spec is non-recurring, out of bounds,
+// or every candidate falls on a @remove: date.
+//
+// CRC: crc-EventScheduler.md | Seq: seq-spec-change.md#4 | R2820
+func (es *EventScheduler) crankForwardAndEnqueue(c *LogChunk, now time.Time, enqueue bool) bool {
+	spec := c.CurrentSpec()
+	if !IsRecurringSpec(spec) {
+		return false
 	}
 	// R1003: start from notBefore if it's after now
 	startAfter := now
 	if !c.NotBefore.IsZero() && c.NotBefore.After(now) {
-		startAfter = c.NotBefore.Add(-1 * time.Second) // computeNext returns strictly after
+		startAfter = c.NotBefore.Add(-1 * time.Second) // ComputeNext returns strictly after
 	}
 
-	modified := 0
-
-	// Convert past upcoming entries to fired (catch-up after downtime).
-	var futureUpcoming []string
-	for _, u := range c.Upcoming {
-		t, err := ParseDate(u)
-		if err != nil {
-			futureUpcoming = append(futureUpcoming, u)
-			continue
+	next := ComputeNext(spec, startAfter, c.NotAfter)
+	// R1039: skip @remove: exceptions
+	for !next.IsZero() {
+		if removed, _ := isRemoved(next, c.Removes); !removed {
+			break
 		}
-		if t.Before(now) {
-			c.Fired = append(c.Fired, u)
-			modified++
-		} else {
-			futureUpcoming = append(futureUpcoming, u)
-		}
+		next = ComputeNext(spec, next, c.NotAfter)
 	}
-	c.Upcoming = futureUpcoming
-
-	// Ensure exactly one future upcoming entry exists, skipping removed dates.
-	if len(c.Upcoming) == 0 {
-		next := ComputeNext(c.Spec, startAfter, c.NotAfter)
-		// R1039: skip @remove: exceptions
-		for !next.IsZero() {
-			if removed, _ := isRemoved(next, c.Removes); !removed {
-				break
-			}
-			next = ComputeNext(c.Spec, next, c.NotAfter)
-		}
-		if !next.IsZero() {
-			dateStr := next.Format(scheduleDateFmt)
-			c.Upcoming = append(c.Upcoming, dateStr)
-			modified++
-			if enqueue {
-				es.Add(&ScheduledEvent{
-					ID:       eventID(c.Source, c.Event, dateStr),
-					Tag:      c.Event,
-					Value:    dateStr,
-					Path:     c.Source,
-					NextFire: next,
-				})
-			}
-		}
+	if next.IsZero() {
+		return false
 	}
-	return modified
+	if enqueue {
+		dateStr := next.Format(scheduleDateFmt)
+		// R2812, R2820: propagate Recurring so fire() can re-enqueue.
+		es.Add(&ScheduledEvent{
+			ID:        eventID(c.Source, c.Event, dateStr),
+			Tag:       c.Event,
+			Value:     dateStr,
+			Path:      c.Source,
+			NextFire:  next,
+			Recurring: spec,
+		})
+	}
+	return true
 }
 
 // logFileHash returns a stable hash string for a source path.
@@ -578,56 +588,111 @@ func (es *EventScheduler) ensureDir() error {
 	return os.MkdirAll(es.scheduleDir, 0755)
 }
 
-// ReadLogFile reads all chunks from a schedule log file.
+// ReadLogFile parses chunks from a schedule log file. Recognizes the
+// current schema (R2815, R2816: spec-initial / spec-changed markers,
+// no @ark-event-spec, no @ark-event-upcoming) plus a legacy-shape
+// fallback (R2813/R2814 retire @ark-event-spec and @ark-event-upcoming,
+// but pre-migration files still carry them — they get folded into a
+// synthetic initial marker so they survive the next write).
+// CRC: crc-EventScheduler.md | R2813, R2814, R2815, R2816, R2817
 func ReadLogFile(path string) ([]LogChunk, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	return readLogChunks(f)
+}
 
+// readLogChunks parses chunks from any io.Reader. ReadLogFile and
+// parseLogChunks (used for tmp:// in-memory reads) both delegate here
+// so the scanner logic is single-sourced.
+// CRC: crc-EventScheduler.md | R2813, R2814, R2815, R2816, R2817
+func readLogChunks(r io.Reader) ([]LogChunk, error) {
 	var chunks []LogChunk
 	var cur *LogChunk
-	scanner := bufio.NewScanner(f)
+	var legacySpec string // legacy @ark-event-spec: value for the current chunk
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		// Migrate legacy chunk shape: synthesize an initial marker from
+		// the legacy @ark-event-spec: value if no markers were read.
+		if len(cur.SpecMarkers) == 0 && legacySpec != "" {
+			cur.SpecMarkers = []SpecMarker{{Kind: "initial", Time: time.Time{}, Spec: legacySpec}}
+		}
+		chunks = append(chunks, *cur)
+		cur = nil
+		legacySpec = ""
+	}
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "@ark-event:") {
-			if cur != nil {
-				chunks = append(chunks, *cur)
-			}
+			flush()
 			cur = &LogChunk{Event: strings.TrimSpace(line[len("@ark-event:"):])}
-		} else if cur != nil {
-			switch {
-			case strings.HasPrefix(line, "@ark-event-source:"):
-				cur.Source = strings.TrimSpace(line[len("@ark-event-source:"):])
-			case strings.HasPrefix(line, "@ark-event-spec:"):
-				cur.Spec = strings.TrimSpace(line[len("@ark-event-spec:"):])
-			case strings.HasPrefix(line, "@ark-event-start:"):
-				if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-start:"):])); err == nil {
-					cur.NotBefore = t
-				}
-			case strings.HasPrefix(line, "@ark-event-end:"):
-				if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-end:"):])); err == nil {
-					cur.NotAfter = t
-				}
-			case strings.HasPrefix(line, "@ark-event-fired:"):
-				cur.Fired = append(cur.Fired, strings.TrimSpace(line[len("@ark-event-fired:"):]))
-			case strings.HasPrefix(line, "@ark-event-upcoming:"):
-				cur.Upcoming = append(cur.Upcoming, strings.TrimSpace(line[len("@ark-event-upcoming:"):]))
-			case strings.HasPrefix(line, "@check-gap:"):
-				cur.CheckGaps = append(cur.CheckGaps, strings.TrimSpace(line[len("@check-gap:"):]))
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "@ark-event-source:"):
+			cur.Source = strings.TrimSpace(line[len("@ark-event-source:"):])
+		case strings.HasPrefix(line, "@ark-event-spec-initial:"):
+			if m, ok := parseSpecMarker("initial", line[len("@ark-event-spec-initial:"):]); ok {
+				cur.SpecMarkers = append(cur.SpecMarkers, m)
 			}
+		case strings.HasPrefix(line, "@ark-event-spec-changed:"):
+			if m, ok := parseSpecMarker("changed", line[len("@ark-event-spec-changed:"):]); ok {
+				cur.SpecMarkers = append(cur.SpecMarkers, m)
+			}
+		case strings.HasPrefix(line, "@ark-event-spec:"):
+			// Legacy shape (R2814 retired @ark-event-spec). Stash for
+			// migration in flush().
+			legacySpec = strings.TrimSpace(line[len("@ark-event-spec:"):])
+		case strings.HasPrefix(line, "@ark-event-start:"):
+			if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-start:"):])); err == nil {
+				cur.NotBefore = t
+			}
+		case strings.HasPrefix(line, "@ark-event-end:"):
+			if t, err := dateparse.ParseLocal(strings.TrimSpace(line[len("@ark-event-end:"):])); err == nil {
+				cur.NotAfter = t
+			}
+		case strings.HasPrefix(line, "@ark-event-fired:"):
+			cur.Fired = append(cur.Fired, strings.TrimSpace(line[len("@ark-event-fired:"):]))
+		case strings.HasPrefix(line, "@ark-event-upcoming:"):
+			// Legacy shape (R2813 retired @ark-event-upcoming). Silently
+			// drop; the queue is recomputed from spec + now.
+		case strings.HasPrefix(line, "@check-gap:"):
+			cur.CheckGaps = append(cur.CheckGaps, strings.TrimSpace(line[len("@check-gap:"):]))
 		}
 	}
-	if cur != nil {
-		chunks = append(chunks, *cur)
-	}
+	flush()
 	return chunks, scanner.Err()
 }
 
-// WriteLogFile writes chunks to a schedule log file.
-// Caller must ensure the directory exists (via ensureDir).
+// parseSpecMarker parses the `TIMESTAMP — SPECVALUE` body of a
+// spec-initial / spec-changed tag. Returns ok=false if the format
+// doesn't match — caller drops the malformed line silently.
+// CRC: crc-EventScheduler.md | R2815, R2816
+func parseSpecMarker(kind, body string) (SpecMarker, bool) {
+	body = strings.TrimSpace(body)
+	idx := strings.Index(body, specMarkerSep)
+	if idx < 0 {
+		return SpecMarker{}, false
+	}
+	tsStr := strings.TrimSpace(body[:idx])
+	spec := strings.TrimSpace(body[idx+len(specMarkerSep):])
+	t, err := time.ParseInLocation(scheduleDateFmt, tsStr, time.Local)
+	if err != nil {
+		return SpecMarker{}, false
+	}
+	return SpecMarker{Kind: kind, Time: t, Spec: spec}, true
+}
+
 // formatLogChunks renders log chunks as markdown bytes.
+// CRC: crc-EventScheduler.md | R2813, R2814, R2815, R2816
 func formatLogChunks(chunks []LogChunk) []byte {
 	var buf strings.Builder
 	for i, c := range chunks {
@@ -636,9 +701,6 @@ func formatLogChunks(chunks []LogChunk) []byte {
 		}
 		fmt.Fprintf(&buf, "@ark-event: %s\n", c.Event)
 		fmt.Fprintf(&buf, "@ark-event-source: %s\n", c.Source)
-		if c.Spec != "" {
-			fmt.Fprintf(&buf, "@ark-event-spec: %s\n", c.Spec)
-		}
 		if !c.NotBefore.IsZero() {
 			fmt.Fprintf(&buf, "@ark-event-start: %s\n", c.NotBefore.Format("2006-01-02"))
 		}
@@ -646,11 +708,19 @@ func formatLogChunks(chunks []LogChunk) []byte {
 			fmt.Fprintf(&buf, "@ark-event-end: %s\n", c.NotAfter.Format("2006-01-02"))
 		}
 		buf.WriteString("\n")
+		for _, m := range c.SpecMarkers {
+			tag := "@ark-event-spec-initial:"
+			if m.Kind == "changed" {
+				tag = "@ark-event-spec-changed:"
+			}
+			tsStr := m.Time.Format(scheduleDateFmt)
+			if m.Time.IsZero() {
+				tsStr = "0000-00-00 00:00" // migrated legacy chunk, original time unknown
+			}
+			fmt.Fprintf(&buf, "%s %s%s%s\n", tag, tsStr, specMarkerSep, m.Spec)
+		}
 		for _, f := range c.Fired {
 			fmt.Fprintf(&buf, "@ark-event-fired: %s\n", f)
-		}
-		for _, u := range c.Upcoming {
-			fmt.Fprintf(&buf, "@ark-event-upcoming: %s\n", u)
 		}
 		for _, g := range c.CheckGaps {
 			fmt.Fprintf(&buf, "@check-gap: %s\n", g)
@@ -659,55 +729,81 @@ func formatLogChunks(chunks []LogChunk) []byte {
 	return []byte(buf.String())
 }
 
+// WriteLogFile writes chunks to a schedule log file. Caller must
+// ensure the directory exists (via ensureDir).
 func WriteLogFile(path string, chunks []LogChunk) error {
 	return os.WriteFile(path, formatLogChunks(chunks), 0644)
 }
 
-// EnsureUpcoming ensures a schedule log chunk exists for an event with
-// @ark-event-upcoming: entries through the forward window. Enqueues
-// the next occurrence in-memory so the event fires within the current
-// `ark serve` lifetime — same-session firing without waiting for a
-// restart-induced ScanScheduleLogs pass. Idempotent: re-running for an
-// already-armed chunk is a no-op via Add's per-ID dedup.
-// Called from the indexer when a source file with a schedule tag is
-// indexed. Source-file duplication for the same tag (e.g. literal
+// EnsureUpcoming is the sole queue-population path. The indexer calls
+// this when a source file with a schedule tag is indexed. Behavior
+// dispatches on the tag's `lifecycle`:
+//
+//   - "disk" / "tmp": read the audit chunk, append a spec-change marker
+//     if the source's value differs from the chunk's latest recorded
+//     spec (or write an initial marker for a new chunk), then arm the
+//     queue.
+//   - "none": skip log read/write entirely; arm the queue only.
+//
+// Suppressed tags (R2835) become a no-op — neither audit nor queue.
+//
+// Source-file duplication for the same tag (e.g. literal
 // `@chime-15m: every 15m` text in a code file) is prevented at config
 // level via `[schedule].exclude_files`, not in this function.
-// CRC: crc-EventScheduler.md | R902, R905, R2778, R2809
+//
+// CRC: crc-EventScheduler.md | Seq: seq-spec-change.md | R2778, R2809, R2812, R2815, R2816, R2817, R2818, R2819, R2820, R2825, R2826, R2835
 func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
-	isTmp := strings.HasPrefix(sourcePath, "tmp://")
-	var logPath string
-	var chunks []LogChunk
-	if isTmp {
-		logPath = "tmp://schedule/" + logFileHash(sourcePath) + ".md"
-		// tmp:// logs don't persist on disk — read from WriteTmpLog content if available
-		// For now, start fresh each time (tmp:// is ephemeral)
-	} else {
-		if err := es.ensureDir(); err != nil {
-			return err
-		}
-		logPath = es.logFilePath(sourcePath)
-		chunks, _ = ReadLogFile(logPath)
+	if es.config == nil {
+		return nil
+	}
+	// R2835: suppressed tags don't arm.
+	if es.config.IsSuppressed(tag) {
+		return nil
 	}
 
-	// Find or create chunk
-	var chunk *LogChunk
-	for i := range chunks {
-		if chunks[i].Event == tag && chunks[i].Source == sourcePath {
-			chunk = &chunks[i]
-			break
-		}
-	}
 	now := time.Now()
 
-	// R1000-R1004: extract bounds from recurring values
+	// R1000-R1004: extract bounds from recurring values; spec is the
+	// pure recurrence string with bounds stripped.
 	spec := value
 	var notBefore, notAfter time.Time
 	if IsRecurringSpec(value) {
 		notBefore, notAfter, spec = ExtractBounds(value, now.Location())
 	}
 
-	// R1035, R1036: parse scheduling exceptions from source file
+	lifecycle := es.config.Lifecycle(tag)
+
+	// Build the chunk in memory — used both for queue arming and
+	// (for audit-bearing lifecycles) as the persisted shape.
+	chunk := &LogChunk{
+		Event:       tag,
+		Source:      sourcePath,
+		NotBefore:   notBefore,
+		NotAfter:    notAfter,
+		SpecMarkers: []SpecMarker{{Kind: "initial", Time: now, Spec: spec}},
+	}
+
+	if lifecycle == LifecycleNone {
+		// R2825: no audit anywhere. Arm queue only.
+		es.armChunk(chunk, value, now)
+		return nil
+	}
+
+	// Audit-bearing path: read existing chunk (if any), detect spec
+	// changes, write updates.
+	logPath, isTmp := es.auditLogPath(tag, sourcePath, lifecycle)
+	chunks, _ := es.readAuditLog(logPath, isTmp)
+
+	var existing *LogChunk
+	for i := range chunks {
+		if chunks[i].Event == tag && chunks[i].Source == sourcePath {
+			existing = &chunks[i]
+			break
+		}
+	}
+
+	// Load source-file exceptions (disk sources only — tmp:// sources
+	// don't have @remove/@add semantics at the schedule layer).
 	var removes, adds []DateException
 	if !isTmp {
 		if content, err := os.ReadFile(sourcePath); err == nil {
@@ -715,54 +811,138 @@ func (es *EventScheduler) EnsureUpcoming(tag, value, sourcePath string) error {
 		}
 	}
 
-	if chunk == nil {
-		chunks = append(chunks, LogChunk{Event: tag, Source: sourcePath, Spec: spec, NotBefore: notBefore, NotAfter: notAfter, Removes: removes, Adds: adds})
-		chunk = &chunks[len(chunks)-1]
-	} else {
-		chunk.Spec = spec
-		chunk.NotBefore = notBefore
-		chunk.NotAfter = notAfter
+	modified := false
+	if existing == nil {
 		chunk.Removes = removes
 		chunk.Adds = adds
-	}
-
-	modified := false
-
-	if IsRecurringSpec(spec) {
-		// R2778, R2809: enqueue=true so recurring events fire in the
-		// current `ark serve` session. Add is idempotent per-ID so
-		// re-indexing the same chunk replaces rather than duplicates.
-		modified = es.crankForward(chunk, now, true) > 0
+		chunks = append(chunks, *chunk)
+		existing = &chunks[len(chunks)-1]
+		modified = true
 	} else {
-		// One-shot: add one upcoming if in the future and not already present
-		dr, err := ParseDateValue(value, "", now.Location())
-		if err != nil {
-			return nil
-		}
-		if dr.Start.After(now) {
-			dateStr := dr.Start.Format(scheduleDateFmt)
-			existing := buildDateSet(chunk)
-			if !existing[dateStr] {
-				chunk.Upcoming = append(chunk.Upcoming, dateStr)
-				modified = true
+		existing.Removes = removes
+		existing.Adds = adds
+		existing.NotBefore = notBefore
+		existing.NotAfter = notAfter
+		if existing.CurrentSpec() != spec {
+			// R2816: spec change — append a changed marker. Also covers the
+			// legacy-migration case where CurrentSpec() is "" because the
+			// chunk had no markers; the appended marker becomes initial.
+			kind := "changed"
+			if len(existing.SpecMarkers) == 0 {
+				kind = "initial"
 			}
+			existing.SpecMarkers = append(existing.SpecMarkers, SpecMarker{
+				Kind: kind,
+				Time: now,
+				Spec: spec,
+			})
+			modified = true
+		} else if len(existing.SpecMarkers) > 0 && existing.SpecMarkers[0].Time.IsZero() {
+			// Legacy chunk with a synthetic zero-time marker — give it a real
+			// timestamp now so the migration is permanent.
+			existing.SpecMarkers[0].Time = now
+			modified = true
 		}
 	}
+
+	// R2820: arm the queue from the current value, regardless of whether
+	// the log was modified.
+	es.armChunk(existing, value, now)
 
 	if !modified {
-		return nil // R905: no-op write avoided
+		return nil
 	}
-	if isTmp && es.WriteTmpLog != nil {
-		content := formatLogChunks(chunks)
-		return es.WriteTmpLog(logPath, content)
+	return es.writeAuditLog(logPath, chunks, isTmp)
+}
+
+// armChunk computes the next occurrence (recurring) or the one-shot
+// fire time and enqueues the resulting ScheduledEvent with Recurring
+// populated per R2812. Idempotent per-ID via Add (R808, R809, R2809).
+// CRC: crc-EventScheduler.md | R2812, R2820, R2826
+func (es *EventScheduler) armChunk(c *LogChunk, value string, now time.Time) {
+	spec := c.CurrentSpec()
+	if IsRecurringSpec(spec) {
+		es.crankForwardAndEnqueue(c, now, true)
+		return
+	}
+	// One-shot: parse the value and enqueue if in the future.
+	dr, err := ParseDateValue(value, "", now.Location())
+	if err != nil || !dr.Start.After(now) {
+		return
+	}
+	dateStr := dr.Start.Format(scheduleDateFmt)
+	es.Add(&ScheduledEvent{
+		ID:       eventID(c.Source, c.Event, dateStr),
+		Tag:      c.Event,
+		Value:    dateStr,
+		Path:     c.Source,
+		NextFire: dr.Start,
+		// Recurring left empty — one-shot events do not re-enqueue.
+	})
+}
+
+// auditLogPath returns the audit log location for a (tag, source)
+// chunk. Disk: ~/.ark/schedule/HASH.md (one file per source, all that
+// source's tags). tmp: tmp://schedule/TAG/HASH.md (one doc per
+// (tag, source) per R2824).
+// CRC: crc-EventScheduler.md | R2823, R2824
+func (es *EventScheduler) auditLogPath(tag, sourcePath, lifecycle string) (string, bool) {
+	if lifecycle == LifecycleTmp {
+		return "tmp://schedule/" + tag + "/" + logFileHash(sourcePath) + ".md", true
+	}
+	return es.logFilePath(sourcePath), false
+}
+
+// readAuditLog reads chunks from a disk log file or tmp:: overlay
+// document. Returns an empty slice if the log doesn't exist yet
+// (treated as a fresh chunk by the caller).
+// CRC: crc-EventScheduler.md | R2823, R2824
+func (es *EventScheduler) readAuditLog(logPath string, isTmp bool) ([]LogChunk, error) {
+	if isTmp {
+		if es.ReadTmpLog == nil {
+			return nil, nil
+		}
+		content, err := es.ReadTmpLog(logPath)
+		if err != nil || len(content) == 0 {
+			return nil, nil
+		}
+		return parseLogChunks(content)
+	}
+	if err := es.ensureDir(); err != nil {
+		return nil, err
+	}
+	chunks, err := ReadLogFile(logPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return chunks, err
+}
+
+// writeAuditLog serializes chunks and writes them to the destination.
+// Disk: WriteLogFile. tmp:: WriteTmpLog (R2281 actor route).
+// CRC: crc-EventScheduler.md | R2823, R2824
+func (es *EventScheduler) writeAuditLog(logPath string, chunks []LogChunk, isTmp bool) error {
+	if isTmp {
+		if es.WriteTmpLog == nil {
+			return nil
+		}
+		return es.WriteTmpLog(logPath, formatLogChunks(chunks))
 	}
 	return WriteLogFile(logPath, chunks)
 }
 
+// parseLogChunks parses chunks from in-memory bytes (used for tmp:// reads).
+func parseLogChunks(content []byte) ([]LogChunk, error) {
+	return readLogChunks(bytes.NewReader(content))
+}
+
 // ScanScheduleLogs reads all log files in ~/.ark/schedule/ and populates
 // the scheduler queue. Converts past @ark-event-upcoming: to @ark-event-fired:
-// and cranks forward for recurring events.
-// CRC: crc-EventScheduler.md | R874, R875, R876
+// and cranks forward for recurring events. Reconciles each chunk
+// against the current [schedule] config — chunks whose tag is no
+// longer scheduled or whose source no longer passes the schedule
+// filter are dropped; log files with no surviving chunks are deleted.
+// CRC: crc-EventScheduler.md | R874, R875, R876, R2810, R2818, R2821
 func (es *EventScheduler) ScanScheduleLogs() error {
 	if es.scheduleDir == "" {
 		return nil
@@ -775,7 +955,6 @@ func (es *EventScheduler) ScanScheduleLogs() error {
 		return err
 	}
 
-	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
@@ -787,46 +966,159 @@ func (es *EventScheduler) ScanScheduleLogs() error {
 			continue
 		}
 
+		kept := make([]LogChunk, 0, len(chunks))
 		modified := false
 		for i := range chunks {
 			c := &chunks[i]
 
-			// Partition upcoming into past (→fired) and future (→enqueue)
-			var futureUpcoming []string
-			for _, u := range c.Upcoming {
-				t, err := time.Parse(scheduleDateFmt, u)
-				if err != nil {
-					futureUpcoming = append(futureUpcoming, u)
+			// R2810: drop chunks whose tag is no longer scheduled or
+			// whose source no longer passes the schedule filter.
+			if !es.chunkInCurrentConfig(c) {
+				log.Printf("schedule: dropping %s chunk for %s (retired by current config)",
+					c.Event, c.Source)
+				modified = true
+				continue
+			}
+
+			// R2821: drop chunks whose @ark-event-source: file is gone.
+			if c.Source != "" && !strings.HasPrefix(c.Source, "tmp://") {
+				if _, err := os.Stat(c.Source); err != nil {
+					log.Printf("schedule: dropping %s chunk — source unreadable: %s",
+						c.Event, c.Source)
+					modified = true
 					continue
 				}
-				if t.Before(now) {
-					c.Fired = append(c.Fired, u)
-					modified = true
-				} else {
-					futureUpcoming = append(futureUpcoming, u)
-					es.Add(&ScheduledEvent{
-						ID:       eventID(c.Source, c.Event, u),
-						Tag:      c.Event,
-						Value:    u,
-						Path:     c.Source,
-						NextFire: t,
-					})
-				}
 			}
-			c.Upcoming = futureUpcoming
 
-			if es.crankForward(c, now, true) > 0 {
+			// Detect legacy-format migration: ReadLogFile synthesizes an
+			// initial marker with zero time when the chunk had a legacy
+			// `@ark-event-spec:` line but no spec-* markers. Marking the
+			// file modified here forces a rewrite that emits the new
+			// schema and drops any leftover `@ark-event-upcoming:` lines.
+			if len(c.SpecMarkers) > 0 && c.SpecMarkers[0].Time.IsZero() {
+				c.SpecMarkers[0].Time = time.Now()
 				modified = true
 			}
+
+			// R2818, R2819: queue arming is the indexer's EnsureUpcoming
+			// pass — but the indexer only re-indexes stale or changed
+			// files. For schedule tags in files that haven't changed
+			// since the last index, the indexer wouldn't call
+			// EnsureUpcoming and the queue would be empty until the next
+			// source-file edit. Arm here from the chunk's recorded spec
+			// to cover that case. crankForwardAndEnqueue is idempotent
+			// per-ID with Add's R808/R809 dedup, so a later
+			// EnsureUpcoming call from the indexer replaces rather than
+			// duplicates.
+			es.crankForwardAndEnqueue(c, time.Now(), true)
+
+			kept = append(kept, *c)
 		}
 
+		if len(kept) == 0 {
+			if err := os.Remove(logPath); err != nil {
+				log.Printf("schedule: error removing empty log %s: %v", logPath, err)
+			} else {
+				log.Printf("schedule: removed empty log %s", logPath)
+			}
+			continue
+		}
 		if modified {
-			if err := WriteLogFile(logPath, chunks); err != nil {
+			if err := WriteLogFile(logPath, kept); err != nil {
 				log.Printf("schedule: error writing %s: %v", logPath, err)
 			}
 		}
 	}
 	return nil
+}
+
+// chunkInCurrentConfig returns true if a schedule log chunk's tag is
+// still in [schedule].tags and its source still passes the schedule
+// filter for that tag. Used by ScanScheduleLogs to retire entries
+// after the user tightens [schedule].tags or [schedule].exclude_files.
+// CRC: crc-EventScheduler.md | R2810
+func (es *EventScheduler) chunkInCurrentConfig(c *LogChunk) bool {
+	if es.config == nil {
+		return true
+	}
+	if !es.config.IsScheduleTag(c.Event) {
+		return false
+	}
+	return es.config.MatchesScheduleFilterForTag(c.Source, c.Event)
+}
+
+// SetConfig swaps the scheduler's config pointer. Called from the
+// watch loop's config-reload settle path so subsequent IsScheduleTag
+// / Lifecycle / IsSuppressed / DefaultDuration lookups see the
+// reloaded ark.toml. Without this, the scheduler keeps a stale
+// pointer captured at NewEventScheduler time and reload-driven
+// re-arming would use the pre-edit config.
+// CRC: crc-EventScheduler.md
+func (es *EventScheduler) SetConfig(cfg *Config) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	es.config = cfg
+}
+
+// DropAll empties the priority queue. Used by the watch-loop
+// config-reload settle path to force a full re-arm from sources of
+// truth (disk chunks + chimes.md) via subsequent ScanScheduleLogs
+// + ArmChimesFromFile. Cheaper and more uniform than diff-tracking
+// which tags became (un)declared/(un)suppressed.
+// CRC: crc-EventScheduler.md
+func (es *EventScheduler) DropAll() int {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	n := len(es.queue)
+	es.queue = es.queue[:0]
+	if n > 0 {
+		es.resetTimer()
+	}
+	return n
+}
+
+// RemoveByTag drops every queue entry whose Tag matches `tag`. Used
+// by `ark schedule suppress` to take effect immediately (without
+// waiting for a fire) on the priority queue. (R2836)
+// CRC: crc-EventScheduler.md | R2836
+func (es *EventScheduler) RemoveByTag(tag string) int {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	kept := make(eventHeap, 0, len(es.queue))
+	dropped := 0
+	for _, e := range es.queue {
+		if e.Tag == tag {
+			dropped++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	es.queue = kept
+	heap.Init(&es.queue)
+	if dropped > 0 {
+		es.resetTimer()
+	}
+	return dropped
+}
+
+// Upcoming returns a snapshot of armed events, optionally filtered to a
+// single tag. Sorted by NextFire (oldest first). Used by
+// `ark schedule upcoming` (R2838).
+// CRC: crc-EventScheduler.md | R2838
+func (es *EventScheduler) Upcoming(tag string) []ScheduledEvent {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	out := make([]ScheduledEvent, 0, len(es.queue))
+	for _, e := range es.queue {
+		if tag != "" && e.Tag != tag {
+			continue
+		}
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].NextFire.Before(out[j].NextFire)
+	})
+	return out
 }
 
 // Add pushes an event onto the queue. Idempotent — same ID replaces. R808, R809
@@ -893,6 +1185,47 @@ func EnsureChimesFile(arkDir string) error {
 	return os.WriteFile(path, []byte(chimesFileContent), 0644)
 }
 
+// ArmChimesFromFile reads ~/.ark/chimes.md at startup, finds each
+// @chime-Nm: tag, and calls EnsureUpcoming for it. This covers the
+// case where chime tags have lifecycle="none" (the default per
+// R2834) — there's no on-disk audit chunk for ScanScheduleLogs to
+// arm from, and the indexer skips re-processing chimes.md when its
+// mtime hasn't changed since the last indexing pass. Without this,
+// chimes only fire after the next chimes.md edit triggers an
+// indexer notification. The startup arming is idempotent — a later
+// indexer pass replaces the queue entry rather than duplicating.
+// CRC: crc-EventScheduler.md | R2779, R2780, R2825, R2834
+func (es *EventScheduler) ArmChimesFromFile(arkDir string) error {
+	path := chimesFilePath(arkDir)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Match `@chime-Nm: VALUE` lines specifically — the file is
+		// chime-only, so any `@TAG: VALUE` here is fair game.
+		if !strings.HasPrefix(line, "@") {
+			continue
+		}
+		colon := strings.Index(line, ":")
+		if colon < 0 {
+			continue
+		}
+		tag := strings.TrimSpace(line[1:colon])
+		value := strings.TrimSpace(line[colon+1:])
+		if tag == "" || value == "" {
+			continue
+		}
+		if err := es.EnsureUpcoming(tag, value, path); err != nil {
+			log.Printf("schedule: ArmChimesFromFile EnsureUpcoming(@%s) error: %v", tag, err)
+		}
+	}
+	return scanner.Err()
+}
+
 // Stop shuts down the scheduler.
 func (es *EventScheduler) Stop() {
 	close(es.stopCh)
@@ -947,28 +1280,30 @@ func (es *EventScheduler) fire() {
 	delete(es.pushed, event.ID)
 	es.mu.Unlock()
 
-	if isChime {
-		// R2778: re-enqueue chimes directly; no log mutation, no
-		// @ark-event-fired accumulation. The schedule log file holds
-		// at most one stale @ark-event-upcoming entry; on restart
-		// ScanScheduleLogs reseats the next occurrence in memory via
-		// the same recurrence spec.
-		if event.Recurring != "" {
-			next := ComputeNext(event.Recurring, time.Now(), time.Time{})
-			if !next.IsZero() {
-				es.Add(&ScheduledEvent{
-					ID:        event.ID,
-					Tag:       event.Tag,
-					Value:     next.Format(scheduleDateFmt),
-					Path:      event.Path,
-					NextFire:  next,
-					Recurring: event.Recurring,
-				})
-			}
-		}
-	} else if event.Path != "" && es.config != nil && es.config.IsLifecycleTag(event.Tag) {
-		// R877, R964-R968: mutate schedule log for lifecycle tags only.
+	// Audit dispatch — pure lifecycle, no chime special-case. Chimes
+	// now follow the per-tag lifecycle (defaults to "disk" per D1),
+	// with log_cap trim bounding the fired-entry history. The R2778
+	// value override above stays — chime subscribers still receive an
+	// RFC 3339 "now" tick rather than the source recurrence string.
+	switch {
+	case event.Path != "" && es.config != nil && es.config.Lifecycle(event.Tag) != LifecycleNone:
+		// Audit-bearing lifecycle ("disk"/"tmp"): append fired entry
+		// to the audit chunk and re-enqueue. (R2823, R2824, R2826, R2827)
 		es.fireLogMutate(event)
+	case event.Recurring != "":
+		// lifecycle=none: no audit, but recurring events still need to
+		// re-enqueue so the next occurrence fires. (R2825)
+		next := ComputeNext(event.Recurring, time.Now(), time.Time{})
+		if !next.IsZero() {
+			es.Add(&ScheduledEvent{
+				ID:        event.ID,
+				Tag:       event.Tag,
+				Value:     next.Format(scheduleDateFmt),
+				Path:      event.Path,
+				NextFire:  next,
+				Recurring: event.Recurring,
+			})
+		}
 	}
 
 	es.mu.Lock()
@@ -976,60 +1311,76 @@ func (es *EventScheduler) fire() {
 	es.mu.Unlock()
 }
 
-// fireLogMutate converts @ark-event-upcoming: → @ark-event-fired: in the
-// log file and adds the next upcoming for recurring events. R877
+// fireLogMutate appends a fired entry to the audit chunk for the
+// given event, applies log_cap trim, and re-enqueues the next
+// occurrence (recurring tags only). Lifecycle dispatch chooses the
+// audit destination (disk vs tmp:// — never called for "none").
+// CRC: crc-EventScheduler.md | Seq: seq-tmp-audit-trim.md | R2823, R2824, R2827, R2828, R2829
 func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
-	logPath := es.logFilePath(event.Path)
-	chunks, err := ReadLogFile(logPath)
+	if es.config == nil {
+		return
+	}
+	lifecycle := es.config.Lifecycle(event.Tag)
+	if lifecycle == LifecycleNone {
+		return
+	}
+	logPath, isTmp := es.auditLogPath(event.Tag, event.Path, lifecycle)
+	chunks, err := es.readAuditLog(logPath, isTmp)
 	if err != nil {
 		log.Printf("schedule: cannot read log for fire: %v", err)
 		return
 	}
 
-	for i := range chunks {
-		c := &chunks[i]
-		if c.Event != event.Tag || c.Source != event.Path {
-			continue
-		}
-		// Move firedValue from upcoming to fired, append check-gap
-		var newUpcoming []string
-		for _, u := range c.Upcoming {
-			if u == event.Value {
-				c.Fired = append(c.Fired, event.Value)
-				// R965: append @check-gap: in same chunk
-				if !slices.Contains(c.CheckGaps, event.Value) {
-					c.CheckGaps = append(c.CheckGaps, event.Value)
-				}
-			} else {
-				newUpcoming = append(newUpcoming, u)
-			}
-		}
-		c.Upcoming = newUpcoming
+	now := time.Now()
+	stamp := now.Format(scheduleDateFmt)
 
-		// R877: single lookahead for the next occurrence (not full window)
-		if event.Recurring != "" {
-			now := time.Now()
-			next := ComputeNext(event.Recurring, now, time.Time{})
-			if !next.IsZero() {
-				dateStr := next.Format(scheduleDateFmt)
-				if !slices.Contains(c.Upcoming, dateStr) { // R905: exception check
-					c.Upcoming = append(c.Upcoming, dateStr)
-					es.Add(&ScheduledEvent{
-						ID:        eventID(event.Path, event.Tag, dateStr),
-						Tag:       event.Tag,
-						Value:     dateStr,
-						Path:      event.Path,
-						NextFire:  next,
-						Recurring: event.Recurring,
-					})
-				}
-			}
+	var c *LogChunk
+	for i := range chunks {
+		if chunks[i].Event == event.Tag && chunks[i].Source == event.Path {
+			c = &chunks[i]
+			break
 		}
-		break
+	}
+	if c == nil {
+		// Chunk doesn't exist yet — EnsureUpcoming should have created
+		// one before fire(), but be defensive and synthesize a marker.
+		spec := event.Recurring
+		if spec == "" {
+			spec = event.Value
+		}
+		chunks = append(chunks, LogChunk{
+			Event:       event.Tag,
+			Source:      event.Path,
+			SpecMarkers: []SpecMarker{{Kind: "initial", Time: now, Spec: spec}},
+		})
+		c = &chunks[len(chunks)-1]
 	}
 
-	if err := WriteLogFile(logPath, chunks); err != nil {
+	// R2827: log_cap trim — drop older half before append if at cap.
+	cap := es.config.LogCap(event.Tag)
+	if len(c.Fired)+1 > cap {
+		drop := min(len(c.Fired)+1-cap/2, len(c.Fired))
+		c.Fired = c.Fired[drop:]
+	}
+	c.Fired = append(c.Fired, stamp)
+
+	// R965: append @check-gap: only for tags with a default_duration —
+	// the duration is the "this is an event, not a tick" signal.
+	// Heartbeat tags (chimes — no default_duration) have no human-ack
+	// loop, so check-gap entries for them would accumulate unboundedly
+	// and pollute tmp://watchdog/missed-events on every restart's
+	// ScanCheckGaps pass.
+	if es.config.DefaultDuration(event.Tag) != "" && !slices.Contains(c.CheckGaps, stamp) {
+		c.CheckGaps = append(c.CheckGaps, stamp)
+	}
+
+	if err := es.writeAuditLog(logPath, chunks, isTmp); err != nil {
 		log.Printf("schedule: cannot write log for fire: %v", err)
+	}
+
+	// Re-enqueue the next occurrence for recurring events. (R2820)
+	if event.Recurring != "" {
+		es.crankForwardAndEnqueue(c, now, true)
 	}
 }
 

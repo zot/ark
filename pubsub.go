@@ -4,6 +4,7 @@ package ark
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,6 +102,94 @@ func (ps *PubSub) PublishAndWatch(writerID string, path string, tags []TagValue)
 		}
 		ps.db.AppendTmpFile(tmpPath, "markdown", []byte(line))
 	}
+}
+
+// PruneWatchdog removes stale entries from the watchdog tmp docs:
+//
+//   - `tmp://watchdog/orphan-schedules`: drop lines whose `@TAG:`
+//     is now declared as a schedule tag (the user belatedly added
+//     a `[schedule.tag.X]` block).
+//   - `tmp://watchdog/possible-typos`: drop lines whose `@TAG:` is
+//     now subscribed (active session matches the formerly-typo'd
+//     name).
+//
+// Called from the watch loop on config-reload settle so editing
+// `ark.toml` to declare a previously-orphan tag clears its stale
+// watchdog warnings. Cheap (one read + filter + write per doc) and
+// only runs on the rare config-change path.
+func (ps *PubSub) PruneWatchdog(cfg *Config) {
+	if ps.db == nil || cfg == nil {
+		return
+	}
+	ps.pruneWatchdogDoc("tmp://watchdog/orphan-schedules", func(tag string) bool {
+		return cfg.IsScheduleTag(tag)
+	})
+
+	ps.mu.RLock()
+	subscribed := ps.subscribedTagSet()
+	ps.mu.RUnlock()
+	ps.pruneWatchdogDoc("tmp://watchdog/possible-typos", func(tag string) bool {
+		return subscribed[tag]
+	})
+}
+
+// pruneWatchdogDoc walks a watchdog tmp doc line-by-line, drops any
+// line whose `@watchdog:` payload references a tag for which `now`
+// returns true ("this tag is no longer worth warning about"), and
+// rewrites the doc via UpdateTmpFile.
+func (ps *PubSub) pruneWatchdogDoc(tmpPath string, now func(tag string) bool) {
+	content, err := ps.db.TmpContent(tmpPath)
+	if err != nil || len(content) == 0 {
+		return
+	}
+	lines := strings.Split(string(content), "\n")
+	kept := make([]string, 0, len(lines))
+	dropped := 0
+	for _, line := range lines {
+		if line == "" {
+			kept = append(kept, line)
+			continue
+		}
+		tag := extractWatchdogTag(line)
+		if tag != "" && now(tag) {
+			dropped++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if dropped == 0 {
+		return
+	}
+	newContent := strings.Join(kept, "\n")
+	if err := ps.db.UpdateTmpFile(tmpPath, "markdown", []byte(newContent)); err != nil {
+		log.Printf("watchdog prune: UpdateTmpFile %s: %v", tmpPath, err)
+		return
+	}
+	log.Printf("watchdog prune: dropped %d stale entry/entries from %s", dropped, tmpPath)
+}
+
+// extractWatchdogTag parses the tag name out of a watchdog log line.
+// Lines look like:
+//
+//	@watchdog: orphan-schedule @standup: every Monday at 09:00 in /path
+//	@watchdog: possible-typo @standpu: in /path (similar to @standup:, score 0.71)
+//
+// Returns "" if the line doesn't match the expected shape.
+func extractWatchdogTag(line string) string {
+	const prefix = "@watchdog: "
+	if !strings.HasPrefix(line, prefix) {
+		return ""
+	}
+	rest := line[len(prefix):]
+	at := strings.Index(rest, "@")
+	if at < 0 {
+		return ""
+	}
+	colon := strings.Index(rest[at:], ":")
+	if colon < 0 {
+		return ""
+	}
+	return rest[at+1 : at+colon]
 }
 
 // Subscribe adds subscriptions for a session. R778, R781, R782, R783, R784, R2457, R2459

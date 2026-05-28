@@ -6824,10 +6824,14 @@ func cmdSchedule(args []string) {
 	scheduleUsage := `Usage: ark schedule <subcommand> [options]
 
 Subcommands:
-  search    Query scheduled events
-  change    Modify a scheduled event's date
-  tags      Show configured schedule tags
-  parse     Parse a date expression and show the result`
+  search       Query scheduled events
+  change       Modify a scheduled event's date
+  tags         Show configured schedule tags
+  parse        Parse a date expression and show the result
+  upcoming     Show next fire(s) from the in-memory priority queue
+  logs         Show audit log (fired entries + spec history) for a tag
+  suppress     Stop a tag from firing without removing its declaration
+  unsuppress   Resume firing for a suppressed tag`
 
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, scheduleUsage)
@@ -6844,6 +6848,14 @@ Subcommands:
 		cmdScheduleTags(subArgs)
 	case "parse":
 		cmdScheduleParse(subArgs)
+	case "upcoming":
+		cmdScheduleUpcoming(subArgs)
+	case "logs":
+		cmdScheduleLogs(subArgs)
+	case "suppress":
+		cmdScheduleSuppress(subArgs)
+	case "unsuppress":
+		cmdScheduleUnsuppress(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown schedule subcommand: %s\n", sub)
 		fmt.Fprintln(os.Stderr, scheduleUsage)
@@ -6851,7 +6863,7 @@ Subcommands:
 	}
 }
 
-// CRC: crc-CLI.md | Seq: seq-scheduling.md | R914-R920
+// CRC: crc-CLI.md | Seq: seq-scheduling.md | R914-R920, R2845
 func cmdScheduleSearch(args []string) {
 	fs := flag.NewFlagSet("schedule search", flag.ExitOnError)
 	tag := fs.String("tag", "", "filter to a specific schedule tag")
@@ -6911,14 +6923,29 @@ func cmdScheduleSearch(args []string) {
 	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &events); err != nil {
 		fatal(err)
 	}
-	lastDate := ""
+	// R2845: identify suppressed tags so we can mark their events.
+	suppressed := map[string]bool{}
+	withDB(func(db *ark.DB) {
+		cfg := db.Config()
+		for name := range cfg.ScheduleTags() {
+			if cfg.IsSuppressed(name) {
+				suppressed[name] = true
+			}
+		}
+	})
+	lastKey := ""
 	for _, ev := range events {
-		if ev.Date != lastDate {
-			if lastDate != "" {
+		key := ev.Date + "|" + ev.Tag + "|" + ev.Source
+		if key != lastKey {
+			if lastKey != "" {
 				fmt.Println()
 			}
-			fmt.Printf("## %s — @%s: (%s)\n\n", ev.Date, ev.Tag, ev.Source)
-			lastDate = ev.Date
+			marker := ""
+			if suppressed[ev.Tag] {
+				marker = " [suppressed]" // R2845
+			}
+			fmt.Printf("## %s — @%s:%s (%s)\n\n", ev.Date, ev.Tag, marker, ev.Source)
+			lastKey = key
 		}
 		if ev.AllDay {
 			fmt.Printf("- all day: %s\n", ev.Summary)
@@ -6990,6 +7017,7 @@ func cmdScheduleChange(args []string) {
 	}
 }
 
+// CRC: crc-CLI.md | R2844
 func cmdScheduleTags(args []string) {
 	fs := flag.NewFlagSet("schedule tags", flag.ExitOnError)
 	values := fs.Bool("values", false, "show tag values and next upcoming dates")
@@ -7001,30 +7029,39 @@ With --values: also show tag values and next upcoming dates from schedule logs.`
 	}
 	fs.Parse(args)
 	withDB(func(db *ark.DB) {
-		tags := db.Config().ScheduleTags()
+		cfg := db.Config()
+		tags := cfg.ScheduleTags()
 		if len(tags) == 0 {
 			fmt.Println("no schedule tags configured")
-			fmt.Println("add tags to [schedule] in ark.toml")
+			fmt.Println("add [schedule.tag.NAME] blocks to ark.toml")
 			return
 		}
-		cfg := db.Config()
-		for _, t := range cfg.Schedule.Tags {
-			def := tags[t]
-			lifecycle := cfg.IsLifecycleTag(t)
+		// Sorted iteration for stable output (R2844)
+		names := make([]string, 0, len(tags))
+		for k := range tags {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, t := range names {
+			tc := tags[t]
 			line := "@" + t + ":"
-			if def != "" {
+			if def := tc.DefaultDuration; def != "" {
 				line += " (default " + def + ")"
 			}
-			if !lifecycle {
-				line += " [no-lifecycle]"
+			if tc.Suppress {
+				line += " [suppressed]" // R2844
 			}
-			if tc, ok := cfg.Schedule.TagConfig[t]; ok {
-				if len(tc.FilterFiles) > 0 {
-					line += " filter=" + strings.Join(tc.FilterFiles, ",")
-				}
-				if len(tc.ExcludeFiles) > 0 {
-					line += " exclude=" + strings.Join(tc.ExcludeFiles, ",")
-				}
+			switch cfg.Lifecycle(t) {
+			case ark.LifecycleTmp:
+				line += " [lifecycle=tmp]"
+			case ark.LifecycleNone:
+				line += " [lifecycle=none]"
+			}
+			if len(tc.FilterFiles) > 0 {
+				line += " filter=" + strings.Join(tc.FilterFiles, ",")
+			}
+			if len(tc.ExcludeFiles) > 0 {
+				line += " exclude=" + strings.Join(tc.ExcludeFiles, ",")
 			}
 			fmt.Println(line)
 		}
@@ -7051,12 +7088,12 @@ With --values: also show tag values and next upcoming dates from schedule logs.`
 					continue
 				}
 				for _, c := range chunks {
-					upcoming := "(none)"
-					if len(c.Upcoming) > 0 {
-						upcoming = c.Upcoming[0]
+					lastFire := "(no fires)"
+					if n := len(c.Fired); n > 0 {
+						lastFire = c.Fired[n-1]
 					}
-					fmt.Printf("@%s: %s\n  source: %s\n  next: %s\n",
-						c.Event, c.Spec, c.Source, upcoming)
+					fmt.Printf("@%s: %s\n  source: %s\n  last fire: %s\n",
+						c.Event, c.CurrentSpec(), c.Source, lastFire)
 				}
 			}
 		}
@@ -7114,6 +7151,223 @@ Examples:
 	}
 	if dr.Description != "" {
 		fmt.Printf("text:      %s\n", dr.Description)
+	}
+}
+
+// cmdScheduleUpcoming prints next-fire entries from the in-memory
+// priority queue. Server-required (the queue lives in the running
+// scheduler).
+// CRC: crc-CLI.md | R2838
+func cmdScheduleUpcoming(args []string) {
+	fs := flag.NewFlagSet("schedule upcoming", flag.ExitOnError)
+	all := fs.Bool("all", false, "list all upcoming events across tags")
+	asJSON := fs.Bool("json", false, "JSON output")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark schedule upcoming TAG [--all] [--json]
+
+Print the next fire(s) from the in-memory priority queue.
+
+Examples:
+  ark schedule upcoming chime-1m
+  ark schedule upcoming --all
+  ark schedule upcoming chime-15m --json`)
+		fs.PrintDefaults()
+	}
+	args = reorderArgs(args)
+	fs.Parse(args)
+	tag := ""
+	if fs.NArg() > 0 {
+		tag = fs.Arg(0)
+	}
+	if !*all && tag == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (schedule upcoming requires server)"))
+	}
+	var entries []struct {
+		Tag      string    `json:"tag"`
+		Value    string    `json:"value"`
+		Path     string    `json:"path"`
+		NextFire time.Time `json:"next_fire"`
+	}
+	if err := proxyDecode(client, "POST", "/schedule/upcoming",
+		map[string]string{"tag": tag}, &entries); err != nil {
+		fatal(err)
+	}
+	if !*all && len(entries) > 0 {
+		entries = entries[:1] // head only
+	}
+	if *asJSON {
+		data, _ := json.MarshalIndent(entries, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	if len(entries) == 0 {
+		fmt.Println("(no upcoming events)")
+		return
+	}
+	for _, e := range entries {
+		fmt.Printf("@%s: %s  %s\n", e.Tag, e.NextFire.Local().Format("2006-01-02 15:04"), e.Path)
+	}
+}
+
+// cmdScheduleLogs prints the audit log for a tag. Disk-backed tags
+// (lifecycle=disk) can be read cold; tmp:// tags require the server.
+// CRC: crc-CLI.md | R2839
+func cmdScheduleLogs(args []string) {
+	fs := flag.NewFlagSet("schedule logs", flag.ExitOnError)
+	n := fs.Int("n", 50, "max fired entries to show")
+	asJSON := fs.Bool("json", false, "JSON output")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark schedule logs TAG [SOURCE] [-n N] [--json]
+
+Print the audit log for TAG. Without SOURCE, lists all sources with
+a chunk for TAG. With SOURCE, shows the chunk's spec history and the
+most recent N fired entries.
+
+Examples:
+  ark schedule logs standup
+  ark schedule logs chime-1m /home/deck/.ark/chimes.md
+  ark schedule logs standup ~/notes/sched.md -n 10 --json`)
+		fs.PrintDefaults()
+	}
+	args = reorderArgs(args)
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	tag := fs.Arg(0)
+	source := ""
+	if fs.NArg() > 1 {
+		source = fs.Arg(1)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (schedule logs requires server for tmp:// or unknown lifecycle)"))
+	}
+	body := map[string]string{"tag": tag, "source": source}
+	if source == "" {
+		var resp struct {
+			Tag       string   `json:"tag"`
+			Lifecycle string   `json:"lifecycle"`
+			Note      string   `json:"note,omitempty"`
+			Sources   []string `json:"sources"`
+		}
+		if err := proxyDecode(client, "POST", "/schedule/logs", body, &resp); err != nil {
+			fatal(err)
+		}
+		if resp.Note != "" {
+			fmt.Println(resp.Note)
+			return
+		}
+		if *asJSON {
+			data, _ := json.MarshalIndent(resp, "", "  ")
+			fmt.Println(string(data))
+			return
+		}
+		fmt.Printf("@%s  (lifecycle=%s)\n", resp.Tag, resp.Lifecycle)
+		if len(resp.Sources) == 0 {
+			fmt.Println("  (no sources with audit log)")
+			return
+		}
+		for _, s := range resp.Sources {
+			fmt.Printf("  %s\n", s)
+		}
+		return
+	}
+	var resp struct {
+		Tag       string `json:"tag"`
+		Source    string `json:"source"`
+		Lifecycle string `json:"lifecycle"`
+		Fired     []string
+		Specs     []struct {
+			Kind string    `json:"kind"`
+			Time time.Time `json:"time"`
+			Spec string    `json:"spec"`
+		}
+		CheckGaps []string `json:"check_gaps,omitempty"`
+	}
+	if err := proxyDecode(client, "POST", "/schedule/logs", body, &resp); err != nil {
+		fatal(err)
+	}
+	if *asJSON {
+		data, _ := json.MarshalIndent(resp, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	fmt.Printf("@%s  %s  (lifecycle=%s, %d fires)\n",
+		resp.Tag, resp.Source, resp.Lifecycle, len(resp.Fired))
+	if len(resp.Specs) > 0 {
+		fmt.Println("  spec history:")
+		for _, m := range resp.Specs {
+			ts := m.Time.Local().Format("2006-01-02 15:04")
+			if m.Time.IsZero() {
+				ts = "(migrated)"
+			}
+			fmt.Printf("    %-7s %s — %s\n", m.Kind, ts, m.Spec)
+		}
+	}
+	if len(resp.Fired) > 0 {
+		shown := resp.Fired
+		if *n > 0 && len(shown) > *n {
+			shown = shown[len(shown)-*n:]
+		}
+		fmt.Println("  recent fires:")
+		// Most-recent-first display.
+		for i := len(shown) - 1; i >= 0; i-- {
+			fmt.Printf("    %s\n", shown[i])
+		}
+	}
+}
+
+// cmdScheduleSuppress sets `[schedule.tag.TAG] suppress = true`.
+// CRC: crc-CLI.md | R2840
+func cmdScheduleSuppress(args []string) {
+	cmdScheduleSuppressImpl(args, true)
+}
+
+// cmdScheduleUnsuppress sets `[schedule.tag.TAG] suppress = false`.
+// CRC: crc-CLI.md | R2841
+func cmdScheduleUnsuppress(args []string) {
+	cmdScheduleSuppressImpl(args, false)
+}
+
+func cmdScheduleSuppressImpl(args []string, suppress bool) {
+	sub := "unsuppress"
+	action := "resume"
+	if suppress {
+		sub = "suppress"
+		action = "stop"
+	}
+	name := "schedule " + sub
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: ark %s TAG\n\n"+
+			"%s firing for TAG. Tag must already be declared via a [schedule.tag.TAG] block.\n", name, action)
+	}
+	args = reorderArgs(args)
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	tag := fs.Arg(0)
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(fmt.Errorf("server not running (schedule %s requires server)", sub))
+	}
+	if err := proxyOK(client, "POST", "/schedule/suppress",
+		map[string]any{"tag": tag, "suppress": suppress}); err != nil {
+		fatal(err)
+	}
+	if suppress {
+		fmt.Printf("@%s: suppressed\n", tag)
+	} else {
+		fmt.Printf("@%s: unsuppressed\n", tag)
 	}
 }
 

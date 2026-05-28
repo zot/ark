@@ -9,28 +9,38 @@ grammar, recurring format), .scratch/SCHEDULING.md (design brainstorm).
 
 ## Schedule Tag Configuration
 
-ark.toml declares which tags carry dates:
+Schedule tags are declared via per-tag blocks in `ark.toml`. The mere
+presence of a `[schedule.tag.X]` block declares X as a schedule tag.
+Each block accepts per-tag knobs (lifecycle, log_cap,
+default_duration, filter_files, exclude_files, suppress); all are
+optional.
 
 ```toml
 [schedule]
-tags = ["dentist", "standup", "birthday", "release", "review"]
 exclude_files = ["*.jsonl", "~/.claude/**"]
 
-[schedule.defaults]
-dentist = "1h"
-standup = "15m"
-birthday = "all-day"
-
 [schedule.tag.dentist]
+default_duration = "1h"
 filter_files = ["~/notes/**"]
 
 [schedule.tag.standup]
+default_duration = "15m"
 exclude_files = ["~/work/ark/specs/**"]
+
+[schedule.tag.birthday]
+default_duration = "all-day"
+
+[schedule.tag.chime-1m]   # lifecycle defaults to "disk"
 ```
 
-Tags listed in `[schedule]` are parsed for dates at index time. Tags
-not listed are never date-parsed — zero overhead. Default durations
-apply when a tag value has no explicit `..` duration.
+Tags declared via `[schedule.tag.X]` blocks are parsed for dates at
+index time. Tags without a block are never date-parsed — zero
+overhead. Default durations apply when a tag value has no explicit
+`..` duration.
+
+The legacy `tags = [...]` array and `[schedule.defaults]` table are
+not parsed (retired by the schedule-record-only migration; see
+[migrations/complete/006-schedule-record-only.md](migrations/complete/006-schedule-record-only.md)).
 
 ### Per-tag filtering
 
@@ -194,18 +204,31 @@ keeping the names compact and readable.
 
 ### Log format
 
-Each event definition gets a chunk in its log file:
+Each event definition gets a chunk in its log file. The chunk is a
+pure audit record — fires and spec-change history. The active spec
+lives in the source file at `@ark-event-source:`; the chunk's
+spec-history markers preserve what it *was* at each change. There is
+no `@ark-event-upcoming:` — the in-memory priority queue is the
+authoritative "what's next" source.
 
 ```markdown
 @ark-event: standup
 @ark-event-source: ~/notes/schedule.md
-@ark-event-spec: every Monday at 09:00..09:15
 
+@ark-event-spec-initial: 2026-03-01 14:32 — every Monday at 09:00..09:15
 @ark-event-fired: 2026-03-10 09:00
 @ark-event-fired: 2026-03-17 09:00
-@ark-event-upcoming: 2026-03-24 09:00
-@ark-event-upcoming: 2026-03-31 09:00
+@ark-event-spec-changed: 2026-03-20 11:00 — every Tuesday at 09:00..09:15
+@ark-event-fired: 2026-03-24 09:00
 ```
+
+The active spec is read from the source file. Reader contract for the
+chunk: walk in document order; the most-recent `@ark-event-spec-initial:`
+or `@ark-event-spec-changed:` marker before any fired entry was the
+spec in effect when that fire happened.
+
+See [migrations/complete/006-schedule-record-only.md](migrations/complete/006-schedule-record-only.md)
+for the full migration that introduced this shape.
 
 The log file is a regular ark file — tagged, indexed, searchable.
 
@@ -305,6 +328,36 @@ On server start, scan `~/.ark/schedule/` for log files. Read
 `@ark-event-upcoming:` entries, populate the scheduler priority queue. Any
 `@ark-event-upcoming:` in the past gets converted to `@ark-event-fired:` and the next
 occurrence is computed and appended.
+
+### Startup reconcile against current config
+
+The startup scan treats each `@ark-event-upcoming:` entry as
+joint state with `ark.toml` and the recurrence spec — it can be
+correct, incorrect, or missing — and reconciles per chunk against
+the current `[schedule]` configuration. For each chunk in each log
+file:
+
+- If the chunk's tag is no longer in `[schedule].tags`, or the
+  source path no longer passes the schedule filter for that tag
+  (`MatchesScheduleFilterForTag(source, tag)` is false), **drop
+  the chunk**. The tag has been retired or the source excluded
+  since the log was written; the entry no longer reflects user
+  intent.
+- Otherwise, validate the upcoming entries normally: past
+  upcomings convert to fired; if no future upcoming exists for a
+  recurring spec, compute the next occurrence from
+  `@ark-event-spec:` + now and append one
+  `@ark-event-upcoming:`.
+
+If a log file's chunks are all dropped, **delete the log file**.
+Avoids ghost log shells once their last source is excluded.
+
+The dropped-chunk policy is a config-driven retirement: tightening
+`[schedule].tags` or `[schedule].exclude_files` retroactively
+prunes the matching log entries on the next startup. The
+source-removal check is the cheap config check, not "is the
+schedule tag still present in the source file content" — re-
+parsing the source file is the indexer's job on its next refresh.
 
 ### Single upcoming entry
 

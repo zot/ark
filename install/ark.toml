@@ -17,6 +17,43 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 # dir = "~/notes"
 # strategies = {"*.org" = "lines"}  # optional, amends global strategies
 
+# Spec: schedule-lifecycle.md "EnsureArkSource Scoping" | R2811
+# Schedule tags — declared via [schedule.tag.X] blocks. The mere
+# presence of a block declares X as a schedule tag (R2830). The six
+# standard chime cadences (R2778-R2782) are auto-declared by
+# Config.EnsureDefaultScheduleTags with lifecycle="none" (fire
+# through pubsub only, no audit on disk or tmp://). Override by
+# adding an explicit block — for example, to enable fire-history
+# audit for chime-1m:
+#
+#   [schedule.tag.chime-1m]
+#   lifecycle = "disk"   # or "tmp" for ephemeral
+#
+# Or to suppress a chime entirely:
+#
+#   [schedule.tag.chime-5m]
+#   suppress = true
+[schedule]
+
+# ~/.ark itself is always indexed — ark adds a synthetic source for it
+# at startup that you cannot remove. The block below shows the defaults
+# ark applies. Uncomment and edit to override (e.g. to add a new file
+# extension under apps/ or storage/, or to add a top-level ark-managed
+# file). The synthetic source is skipped when a [[source]] for ~/.ark
+# already exists, so your overrides win. Keep this block in sync with
+# `arkSourceIncludePatterns` in config.go — both express the same default.
+#
+# [[source]]
+# dir = "~/.ark"
+# include = [
+#   "ark.toml", "chimes.md", "tags.md",
+#   "schedule/**/*.md",
+#   "apps/**/*.lua", "apps/**/*.js", "apps/**/*.html",
+#   "apps/**/*.css", "apps/**/*.md",
+#   "storage/**/*.md", "storage/**/*.pdf",
+#   "external/**/*.md",
+# ]
+
 # Chunker language definitions
 # type = "bracket" / "indent" — easy form with flat string pairs (default escape \)
 # type = "bracket-full" / "indent-full" — full form with inline table structs

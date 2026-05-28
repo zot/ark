@@ -1386,15 +1386,15 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Schedule Tag Configuration
 
-- **R853:** ark.toml `[schedule]` section declares which tags carry date values; only listed tags are date-parsed at index time
-- **R854:** `[schedule.defaults]` maps tag names to default durations (e.g., `dentist = "1h"`, `standup = "15m"`, `birthday = "all-day"`)
-- **R855:** Tags not listed in `[schedule]` incur zero date-parsing or day-bucket overhead
-- **R856:** Adding or removing a tag from `[schedule]` triggers re-materialization of day-bucket entries for all files containing that tag
+- **~~R853:~~** (Retired T108 — see R2830) ark.toml `[schedule]` section declares which tags carry date values; only listed tags are date-parsed at index time
+- **~~R854:~~** (Retired T109 — see R2831) `[schedule.defaults]` maps tag names to default durations (e.g., `dentist = "1h"`, `standup = "15m"`, `birthday = "all-day"`)
+- **~~R855:~~** (Retired T110 — see R2833) Tags not listed in `[schedule]` incur zero date-parsing or day-bucket overhead
+- **~~R856:~~** (Retired T111 — see R2830) Adding or removing a tag from `[schedule]` triggers re-materialization of day-bucket entries for all files containing that tag
 
 ### Date and Duration Parsing
 
 - **R857:** The `..` range operator expresses durations: `TIME..TIME` (same-day), `TIME..DATE TIME` (multi-day span)
-- **R858:** `DATE TIME` with no `..` uses the default duration from `[schedule.defaults]`; `DATE` alone is all-day
+- **~~R858:~~** (Retired T112 — see R2831) `DATE TIME` with no `..` uses the default duration from `[schedule.defaults]`; `DATE` alone is all-day
 - **R859:** No spaces around `..`; timestamps on both sides. Everything after the time portion is description text.
 - **R860:** Use itlightning/dateparse for structured date parsing — handles dozens of formats without format specification
 - **R861:** Token-trimming loop separates date from description text: parse progressively shorter prefixes until dateparse succeeds
@@ -1500,7 +1500,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R921:** `ark schedule change PATH TAG NEWSTART [NEWEND]` rewrites the date in a schedule tag value
 - **R922:** Description text after the date is preserved on rewrite
 - **R923:** File is re-indexed after modification
-- **R924:** For recurring events, updates the corresponding `@ark-event-upcoming:` entry in the schedule log
+- **~~R924:~~** (Retired T121 — no replacement) For recurring events, updates the corresponding `@ark-event-upcoming:` entry in the schedule log
 - **R925:** `--dry-run` shows what would change without writing
 - **R926:** (inferred) `ark schedule` with no subcommand or `--help` shows usage
 
@@ -1520,7 +1520,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R935:** Embed `acked: true` and `ackText` in the DayBucketEvent when covered
 - **R936:** `@ack:` parsing uses the same date formats as schedule tag parsing (dateparse)
 - **R868:** (inferred) Multi-day events produce one TD entry per day spanned
-- **R869:** (inferred) Day buckets for recurring events are derived from `@ark-event-upcoming:` entries in schedule log files, not materialized directly from the recurring spec
+- **~~R869:~~** (Retired T113 — no replacement) (inferred) Day buckets for recurring events are derived from `@ark-event-upcoming:` entries in schedule log files, not materialized directly from the recurring spec
 - **R870:** Past events are indexed from `@ark-event-fired:` entries in schedule log files as day buckets — the calendar is a historical record
 
 ### Reverse Index for Deletion
@@ -1534,10 +1534,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R899:** `~/.ark/schedule/` directory holds schedule log files — one per source file containing schedule tags
 - **R900:** Each event definition gets a chunk in its log file with `@ark-event:`, `@ark-event-source:`, `@ark-event-spec:` tags identifying it
 - **R901:** `@ark-event-upcoming:` tags in the log represent concrete future instances; `@ark-event-fired:` tags represent past instances
-- **R902:** On index of a source file with a schedule tag, the scheduler ensures `@ark-event-upcoming:` entries exist through the forward window (default 6 months)
-- **R903:** Deleting an `@ark-event-upcoming:` line is a scheduling exception — that occurrence is skipped
-- **R904:** Editing an `@ark-event-upcoming:` date moves that occurrence — just a file edit, indexed normally
-- **R905:** Crank-forward checks for existing `@ark-event-upcoming:` before adding — no duplicates
+- **~~R902:~~** (Retired T117 — see R2819) On index of a source file with a schedule tag, the scheduler ensures `@ark-event-upcoming:` entries exist through the forward window (default 6 months)
+- **~~R903:~~** (Retired T118 — no replacement) Deleting an `@ark-event-upcoming:` line is a scheduling exception — that occurrence is skipped
+- **~~R904:~~** (Retired T119 — no replacement) Editing an `@ark-event-upcoming:` date moves that occurrence — just a file edit, indexed normally
+- **~~R905:~~** (Retired T120 — no replacement) Crank-forward checks for existing `@ark-event-upcoming:` before adding — no duplicates
 - **R906:** Log files are rotatable — old `@ark-event-fired:` entries can be archived; `@ack:` in source files is the durable human record
 - **R907:** Log files are regular ark files — tagged, indexed, searchable
 - **R908:** (inferred) `~/.ark/schedule/*.md` is included in the `~/.ark` source so log files are indexed automatically
@@ -1550,10 +1550,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R954:** `exclude_files` in `[schedule]` excludes files from schedule scanning (glob patterns, tilde expanded)
 - **R955:** `filter_files` and `exclude_files` use the same narrow/carve semantics as search — filter sets scope, exclude carves exceptions
 - **R956:** When both are absent, all indexed files are eligible for schedule scanning
-- **R957:** `lifecycle_include` controls which schedule tags get the full lifecycle (log entries, check-gap, gap detection). Default `"*"`.
-- **R958:** `lifecycle_exclude` carves exceptions from `lifecycle_include`
-- **R959:** Tags outside the lifecycle still fire through pubsub — they just don't get logged or monitored
-- **R960:** (inferred) Lifecycle include/exclude use glob patterns on tag names
+- **~~R957:~~** (Retired T122 — see R2822) `lifecycle_include` controls which schedule tags get the full lifecycle (log entries, check-gap, gap detection). Default `"*"`.
+- **~~R958:~~** (Retired T123 — see R2822) `lifecycle_exclude` carves exceptions from `lifecycle_include`
+- **~~R959:~~** (Retired T124 — see R2825) Tags outside the lifecycle still fire through pubsub — they just don't get logged or monitored
+- **~~R960:~~** (Retired T125 — see R2822) (inferred) Lifecycle include/exclude use glob patterns on tag names
 
 ### EnsureArkSource Scoping
 - **R961:** The hardcoded `~/.ark` source sets `include = ["ark.toml", "schedule/**", "apps/**", "storage/**"]`
@@ -1562,7 +1562,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Log Writing on Fire
 - **R964:** When a lifecycle event fires, convert `@ark-event-upcoming: DATE` to `@ark-event-fired: DATE` in the schedule log
-- **R965:** Append `@check-gap: DATE` in the same paragraph as `@ark-event-fired:` — same chunk after markdown chunking
+- **R965:** Append `@check-gap: DATE` in the same paragraph as `@ark-event-fired:` (same chunk after markdown chunking) **only when the tag has a non-empty `default_duration`**. Tags without a duration are heartbeats (chimes, ticks) and lack a meaningful human-ack loop; appending `@check-gap:` for them would let `ScanCheckGaps` flood `tmp://watchdog/missed-events` on every restart with bogus misses.
 - **R966:** Compute next occurrence, append `@ark-event-upcoming: NEXT` if no exception exists for that date
 - **R967:** Re-index the log file after modification so day buckets update
 - **R968:** For non-lifecycle tags, fire through pubsub but skip log writing (no fired tag, no check-gap)
@@ -1587,9 +1587,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Scheduler Integration
 
-- **R874:** Scheduler reads schedule log files at startup — not subscriptions, not LMDB registries
-- **R875:** On server startup: scan `~/.ark/schedule/` for `@ark-event-upcoming:` entries, populate the priority queue
-- **R876:** On startup: `@ark-event-upcoming:` entries in the past are converted to `@ark-event-fired:`, next occurrences computed and appended
+- **~~R874:~~** (Retired T114 — see R2818) Scheduler reads schedule log files at startup — not subscriptions, not LMDB registries
+- **~~R875:~~** (Retired T115 — see R2819) On server startup: scan `~/.ark/schedule/` for `@ark-event-upcoming:` entries, populate the priority queue
+- **~~R876:~~** (Retired T116 — see R2818) On startup: `@ark-event-upcoming:` entries in the past are converted to `@ark-event-fired:`, next occurrences computed and appended
 - **R877:** On recurring event fire: convert `@ark-event-upcoming:` → `@ark-event-fired:` in log, compute next occurrence, append `@ark-event-upcoming:` if none for that date, re-index log, re-enqueue
 - **R878:** Events delivered through the publisher carry their nature (scheduled fire vs tag-change notification) so receivers can distinguish
 
@@ -4311,4 +4311,92 @@ implementation, not a separate format break.
 - **R2807:** `ark connections recall close` queries `SubscriberCount("ark-recall-result", "<originating-session-uuid>")` before writing the result doc. If the count is zero, `close` skips the result-doc write, still performs the curation removal + orphan sweep + monitoring-log append per R2758, and records `outcome: "no-subscriber"`. The cleanup side of `close` runs regardless of subscriber presence; only the result-doc *write* is gated.
 - **R2808:** The `outcome` field in `~/.ark/monitoring/recall.jsonl` records (R2763) is extended to include the value `"no-subscriber"`. The enumeration becomes `"result-emitted"`, `"silent-close"`, `"no-subscriber"`, `"error"`. The value is written by both gate points (R2806 watcher skip, R2807 close skip). Forward-compatible — R2763's "future fields slot in at the end" property is preserved.
 - **R2809:** `EventScheduler.EnsureUpcoming` enqueues newly-armed recurring events in-memory (`crankForward(chunk, now, true)`) so they fire within the current `ark serve` session — same-session firing for every recurring tag, not just chimes, without waiting for a restart. `Add` is idempotent per-ID (existing R808, R809), so re-running EnsureUpcoming on an already-armed chunk replaces rather than duplicates. Closes the pre-existing latent gap where EnsureUpcoming wrote the on-disk log but the queue was populated only at startup via ScanScheduleLogs; chimes uncovered the gap first because they're the only auto-created schedule source. Source-file duplication for a tag (e.g. literal `@chime-15m: every 15m` text in a code file) is blocked at config level via `[schedule].exclude_files` (`MatchesScheduleFilterForTag` in the indexer), not in the scheduler.
+
+
+## Feature: Startup schedule-log reconcile
+**Source:** specs/scheduling.md
+
+- **R2810:** `EventScheduler.ScanScheduleLogs` reconciles each schedule-log chunk against the current `[schedule]` configuration on startup. For each chunk in each log file: if the chunk's tag is no longer listed in `[schedule].tags` OR the chunk's `@ark-event-source:` no longer passes `Config.MatchesScheduleFilterForTag(source, tag)`, the chunk is dropped; otherwise the chunk's `@ark-event-upcoming:` entries are validated (past upcomings convert to `@ark-event-fired:`, and `crankForward` ensures one future upcoming exists for recurring specs). If all of a log file's chunks are dropped, the log file itself is deleted. This makes tightening `[schedule].tags` or `[schedule].exclude_files` retroactively prune the matching log entries on next startup, without re-parsing the source files. The source-removal check is the cheap config check — re-validating the source file's tag content remains the indexer's job on its next refresh.
+
+
+## Feature: Ark-source standard-file coverage
+**Source:** specs/schedule-lifecycle.md
+
+- **R2811:** The hardcoded synthetic `~/.ark` source (added by `Config.EnsureArkSource`) includes the ark-managed standard files `chimes.md` and `tags.md` alongside the existing top-level `ark.toml`. Content directories under `~/.ark` are whitelisted per file extension rather than as bare `**` recursion: `schedule/**/*.md` for schedule logs; `apps/**/*.lua`, `apps/**/*.js`, `apps/**/*.html`, `apps/**/*.css`, `apps/**/*.md` for Frictionless app sources; `storage/**/*.md`, `storage/**/*.pdf` for app-managed user data; `external/**/*.md` for external-source mirror chunks. Two effects: (a) ark-managed standard files are indexed regardless of the user's `[[source]]` configuration in `ark.toml` — removing `[[source]] dir = "~/.ark"` does not stop chimes from arming or the tag bible from being indexed; (b) Fossil checkout files (`.fslckout`, `*.fossil`), binary office documents (`*.docx`), undo-tree dumps, and other non-text artifacts under `~/.ark/apps/` and `~/.ark/storage/` are excluded by construction, so they no longer surface as `fts add ...: invalid UTF-8` errors on startup.
+
+
+## Feature: Schedule record-only migration
+**Source:** specs/migrations/schedule-record-only.md
+
+### Log chunk schema
+
+- **R2813:** Schedule log chunks no longer carry `@ark-event-upcoming:`. The in-memory priority queue is the authoritative "what's next" source. No reader expects an upcoming tag in a chunk; no writer produces one.
+- **R2814:** Schedule log chunks no longer carry a current-state `@ark-event-spec:` tag. The active spec for a `(tag, source)` pair is always read from the source file's `@TAG:` value. The log never speaks for the current spec.
+- **R2815:** Each log chunk carries exactly one `@ark-event-spec-initial: TIMESTAMP — SPECVALUE` tag recording the chunk's birth time and the spec value at that moment. The timestamp uses `scheduleDateFmt` (`2006-01-02 15:04`); the separator is ` — ` (space, em-dash, space); the trailing text is the verbatim spec value, read as a literal string (never re-parsed through the recurrence parser at read time).
+- **R2816:** Each spec change appends one `@ark-event-spec-changed: TIMESTAMP — SPECVALUE` tag to the chunk, in the same format as R2815. Zero or more per chunk. Appearance order in the chunk reflects timeline order.
+- **R2817:** Reader contract — historical spec at time T is the spec value from the most-recent `@ark-event-spec-initial:` or `@ark-event-spec-changed:` marker with `timestamp ≤ T`. Era attribution for a `@ark-event-fired:` entry: the most-recent spec marker before that fired entry in document order.
+
+### Source-as-truth queue population
+
+- **R2818:** `EventScheduler.ScanScheduleLogs` is audit-log hygiene + startup queue arming. Its responsibilities are: (a) drop chunks whose tag is no longer declared via a `[schedule.tag.X]` block; (b) drop chunks whose source no longer passes `MatchesScheduleFilterForTag`; (c) drop chunks whose `@ark-event-source:` file is missing or unreadable; (d) delete log files with no surviving chunks; (e) scan for unresolved `@check-gap:` entries within the lookback window; (f) for each surviving chunk, arm the priority queue from the chunk's current spec marker via `crankForwardAndEnqueue`. The arm-from-chunk pass exists because the indexer's reconcile only re-indexes stale or changed files — schedules whose source file is unchanged since the previous startup would otherwise have empty queues until the next source-file edit. `Add` is idempotent per-ID (R808, R809, R2809), so a later `EnsureUpcoming` call from an indexer notification replaces rather than duplicates the startup-armed entry.
+- **R2819:** Beyond startup, the priority queue is updated exclusively by the indexer's `EnsureUpcoming` pass — every indexer notification on a source file containing a schedule tag. `EnsureUpcoming(tag, value, sourcePath)` reads the chunk's most-recent spec-marker value, compares it to the incoming `value`, and on difference appends `@ark-event-spec-changed: NOW — value` to the chunk; then re-arms the queue from `value` regardless of whether the log was mutated.
+- **R2820:** `EventScheduler.crankForwardAndEnqueue` and any other queue-add site populate `ScheduledEvent.Recurring` from the chunk's current spec marker (or the value passed by `EnsureUpcoming` when called from there). R2812's invariant (Recurring propagated so `fire()` can re-enqueue) is preserved.
+- **R2821:** When `ScanScheduleLogs` finds a chunk whose `@ark-event-source:` cannot be opened (file removed, permission denied), the chunk is dropped from the log. Companion of R2810: R2810 retires entries the user excluded via config; R2821 retires entries whose source file ceased to exist.
+
+### Lifecycle categories
+
+- **R2822:** Each declared schedule tag has a `lifecycle` field with one of three string values: `"disk"` (default), `"tmp"`, or `"none"`. The field is read from `[schedule.tag.X] lifecycle = ...` in `ark.toml`. Empty / missing key defaults to `"disk"`. The string-only schema avoids the TOML type ambiguity that would arise from mixing string (`"disk"`/`"tmp"`) and bool (`false`) values in a single field. Exception: the six standard chime cadences (`chime-1m` through `chime-60m`) are auto-declared by `Config.EnsureDefaultScheduleTags` with `lifecycle = "none"` and no `default_duration`; users override by adding an explicit `[schedule.tag.chime-Nm]` block.
+- **R2823:** Tags with `lifecycle = "disk"` get an audit log on disk at `~/.ark/schedule/HASH.md` (existing path encoding). The chunk follows R2815-R2817; `@ark-event-fired:` is appended on each fire.
+- **R2824:** Tags with `lifecycle = "tmp"` get an audit log at `tmp://schedule/TAG/SOURCE-ENCODED` using the same tilde/underscore/hyphen path encoding the disk log uses. Same chunk schema as disk. The tmp:// doc is created on first fire (or on first `EnsureUpcoming` write of a spec marker), vanishes on server restart per existing tmp:// semantics, and is routed through the centralized tmp:// publish path (per R2281's write-actor invariant).
+- **R2825:** Tags with `lifecycle = "none"` have no audit anywhere — no disk log, no tmp:// doc, no spec markers, no fire entries. Real-time consumers receive events via `ark subscribe` / `ark listen` only. The priority queue still arms them; the category only affects audit destination.
+- **R2826:** A tag's `lifecycle` value determines audit destination only; arming behavior is identical across categories. `EnsureUpcoming` consults `lifecycle` to decide whether to read/write a log chunk and where; the queue Add is unaffected.
+
+### Audit log trim
+
+- **R2827:** Each `[schedule.tag.X]` block may set `log_cap = N` (positive int, default 1000). At fire time, when appending a `@ark-event-fired:` line would cause the chunk's fired-entry count to exceed `log_cap`, the older half of the existing fired entries is dropped before the new entry is written. Spec markers (`@ark-event-spec-initial:`, `@ark-event-spec-changed:`) are preserved by trim; only fired entries are subject to it.
+- **R2828:** `log_cap` applies identically to `lifecycle = "disk"` and `lifecycle = "tmp"` audit destinations. Disk logs are not exempt from trim; users who want longer history with rotation use `~/.ark/schedule-archive/` per the existing convention.
+- **R2829:** Trim is per-chunk, not per-file. A log file containing chunks for multiple tags (rare in practice) trims each chunk independently.
+
+### Config schema — `[schedule.tag.X]` blocks
+
+- **R2830:** Schedule tags are declared exclusively by the presence of a `[schedule.tag.X]` block in `ark.toml`. The mere presence of the block declares X as a schedule tag; absence means the tag is not scheduled.
+- **R2831:** Per-tag keys recognized in `[schedule.tag.X]`: `lifecycle` (string, R2822), `log_cap` (int, R2827), `default_duration` (string, replaces R854's `[schedule.defaults]`), `filter_files` (string array), `exclude_files` (string array), `suppress` (bool, default false).
+- **R2832:** The legacy `tags = [...]` array under `[schedule]` is not parsed by the new code. The legacy `[schedule.defaults]` table is not parsed. The legacy `lifecycle_include` / `lifecycle_exclude` keys under `[schedule]` are not parsed. Hard switch — no deprecation window; users edit `ark.toml` manually to convert.
+- **R2833:** `Config.IsScheduleTag(tag)` returns true when a `[schedule.tag.X]` block exists for `tag`, false otherwise. `Config.ScheduleTags()` returns the full set of declared tags by enumerating these blocks.
+- **R2834:** `Config.EnsureDefaultScheduleTags` (called at config load) injects synthetic `[schedule.tag.chime-Nm]` entries for the six standard cadences if the user hasn't already declared them. The synthetic entries default to `lifecycle = "none"` (no audit) and no `default_duration` — chimes are heartbeats, not events, and audit + ack-tracking would just accumulate noise (especially `@check-gap:` entries via R965, which is gated by `default_duration != ""`). Users override by adding an explicit `[schedule.tag.chime-Nm]` block to `ark.toml`. `WriteDefault` does NOT ship per-chime blocks; the injection handles the default behavior. Mirrors `EnsureArkSource` (R961) — ark adds defaults that the user can override. The `install/ark.toml` template carries the same blocks.
+
+### Suppress mechanism
+
+- **R2835:** A tag with `suppress = true` is declared (visible to CLI commands, present in the `[schedule.tag.X]` enumeration) but does not arm. `EnsureUpcoming` becomes a no-op for suppressed tags: it neither writes spec markers nor enqueues events.
+- **R2836:** On config reload (startup or ark.toml fsnotify), the priority queue drains entries whose tag is now suppressed. Re-enabling (set `suppress = false`) resumes arming on the next indexer notification or restart.
+- **R2837:** Past audit history for a suppressed tag is preserved unchanged. Suppress affects future firing only.
+
+### New `ark schedule` subcommands
+
+- **R2838:** `ark schedule upcoming TAG [--all]` prints the next fire for TAG from the in-memory priority queue. Without `--all`, only the head entry for TAG. With `--all`, every queued tag's next fire sorted by NextFire. Output is markdown by default: one line per entry as `@TAG: TIMESTAMP  SOURCE_PATH`. `--json` emits one object per entry. Server-required.
+- **R2839:** `ark schedule logs TAG [SOURCE] [-n N] [--json]` reads the audit log for TAG. Without `SOURCE`, lists all sources with a log chunk for TAG. With `SOURCE`, prints the chunk's spec history (all spec markers) and the most recent N fired entries (default 50). Output is markdown by default; `--json` emits a single object `{tag, source, lifecycle, fired: [...], specs: [{kind, ts, value}, ...]}`. For `lifecycle = "none"` tags, prints `(no log — lifecycle = "none")`. For `lifecycle = "tmp"` tags, reads the tmp:// doc (server-required). For `lifecycle = "disk"` tags, the command runs cold (reads the disk log directly, no server required).
+- **R2840:** `ark schedule suppress TAG` sets `[schedule.tag.TAG] suppress = true` in `ark.toml` via the existing config-mutation path. The server reloads config; the queue drains matching entries (R2836). If no `[schedule.tag.TAG]` block exists, the command exits non-zero with a diagnostic instructing the user to declare the block first; suppress modifies an existing declaration, it does not create one. Server-required.
+- **R2841:** `ark schedule unsuppress TAG` sets `suppress = false` (or removes the key) for the tag. Server reloads; arming resumes on the next indexer notification or restart. Server-required.
+
+### `ark schedule change` tmp:// support
+
+- **R2842:** `Server.handleScheduleChange` (`POST /schedule/change`) detects a `tmp://` prefix on the request path and routes the read through the in-memory tmp:: overlay and the write through `db.UpdateTmpFile`. Non-tmp:// paths use the existing `os.ReadFile` / `os.WriteFile` flow unchanged. The pubsub change notification fires for both flows; tmp:// gets it via `UpdateTmpFile`'s existing R2281-routed publish.
+- **R2843:** A tmp:// schedule tag rewrite via `ark schedule change tmp://PATH TAG NEWSTART [NEWEND]` produces the same tag-value-change notification that a disk source produces — subscribers see one `@TAG: NEWVALUE` event, the indexer's deferred schedule processing re-arms the chunk via `EnsureUpcoming`, and the spec-change detection writes a `@ark-event-spec-changed:` marker to the chunk's audit log if the change altered the spec.
+
+### Existing CLI surface updates
+
+- **R2844:** `ark schedule tags` marks suppressed tags with `[suppressed]` and tags with non-default lifecycle with `[lifecycle=tmp]` or `[lifecycle=none]`. The default `[lifecycle=disk]` carries no marker. Output otherwise unchanged.
+- **R2845:** `ark schedule search` renders events whose tag is suppressed with a `[suppressed]` prefix on the output line. The search still computes from the suppressed tag's spec — suppression affects firing only, not query results.
+
+### Retired requirements
+
+Retirements landed via `minispec update retire` — T108-T125 in
+design.md Gaps mark each retired Rn with replacement and migration
+reason.
+
+
+## Feature: Recurring spec propagated to queued events
+**Source:** specs/scheduling.md
+
+- **R2812:** Whenever an event is enqueued from a schedule-log chunk — by `EventScheduler.ScanScheduleLogs` (future-upcoming entries it finds at startup) or by `EventScheduler.crankForward` (the next occurrence it computes after past-upcoming catch-up) — the `Recurring` field of the resulting `ScheduledEvent` is populated with the chunk's `@ark-event-spec:` value (`c.Spec`). Without this, `fire()`'s re-enqueue branch (`if event.Recurring != ""`) never triggers, and a recurring event fires exactly once after server start and then goes silent until the next restart. The bug was latent until chimes (1-minute cadence) exposed it; longer cadences (weekly standups, etc.) were masked by typical server restart frequencies catching the past upcoming on the next boot. Propagating `c.Spec` repairs the contract that both `fire()` and `fireLogMutate` already depend on (each one re-enqueues using `event.Recurring`).
 

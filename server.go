@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +333,32 @@ func Serve(dbPath string, opts ServeOpts) error {
 	if err := sched.ScanScheduleLogs(); err != nil {
 		log.Printf("schedule: scan error: %v", err)
 	}
+	// R2825, R2834: Arm chimes from chimes.md. With chime tags
+	// defaulting to lifecycle="none", there's no on-disk audit
+	// chunk for ScanScheduleLogs to arm from; and the indexer
+	// won't re-process chimes.md if its mtime hasn't changed. This
+	// startup pass closes that gap. Wire the tmp:// callbacks
+	// briefly so EnsureUpcoming works for any chime that the user
+	// overrode to lifecycle="tmp".
+	sched.WriteTmpLog = func(path string, content []byte) error {
+		return SyncVoid(srv.db, func(db *DB) error {
+			err := db.UpdateTmpFile(path, "markdown", content)
+			if err != nil {
+				_, err = db.AddTmpFile(path, "markdown", content)
+			}
+			return err
+		})
+	}
+	sched.ReadTmpLog = func(path string) ([]byte, error) {
+		return Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.TmpContent(path)
+		})
+	}
+	if err := sched.ArmChimesFromFile(dbPath); err != nil {
+		log.Printf("schedule: ArmChimesFromFile error: %v", err)
+	}
+	sched.WriteTmpLog = nil
+	sched.ReadTmpLog = nil
 	// R972, R973: scan for unresolved check-gaps on startup
 	if missed := sched.ScanCheckGaps(7); len(missed) > 0 && srv.db != nil {
 		content := strings.Join(missed, "")
@@ -395,6 +422,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
+	mux.HandleFunc("POST /schedule/upcoming", srv.handleScheduleUpcoming)
+	mux.HandleFunc("POST /schedule/logs", srv.handleScheduleLogs)
+	mux.HandleFunc("POST /schedule/suppress", srv.handleScheduleSuppress)
 	mux.HandleFunc("POST /search/grouped", srv.handleSearchGrouped)
 	mux.HandleFunc("POST /tags/complete", srv.handleTagComplete)
 	mux.HandleFunc("POST /tags/values", srv.handleTagValues)
@@ -652,7 +682,9 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 	if len(items) == 0 || srv.scheduler == nil {
 		return
 	}
-	// Wire tmp:// log writer so EnsureUpcoming can write ephemeral schedule logs
+	// Wire tmp:// log read/write so EnsureUpcoming can shuttle audit
+	// chunks through the centralized tmp:// path (R2281 actor route).
+	// (R2824)
 	srv.scheduler.WriteTmpLog = func(path string, content []byte) error {
 		return SyncVoid(srv.db, func(db *DB) error {
 			err := db.UpdateTmpFile(path, "markdown", content)
@@ -662,12 +694,18 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 			return err
 		})
 	}
+	srv.scheduler.ReadTmpLog = func(path string) ([]byte, error) {
+		return Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.TmpContent(path)
+		})
+	}
 	for _, item := range items {
 		if err := srv.scheduler.EnsureUpcoming(item.tag, item.value, item.path); err != nil {
 			log.Printf("schedule: EnsureUpcoming error for @%s in %s: %v", item.tag, item.path, err)
 		}
 	}
 	srv.scheduler.WriteTmpLog = nil // clean up
+	srv.scheduler.ReadTmpLog = nil
 	// Scan picks up new schedule log files for indexing.
 	SyncVoid(srv.db, func(db *DB) error {
 		if _, err := db.Scan(); err != nil {
@@ -2014,7 +2052,7 @@ func (srv *Server) handleTmpAdd(w http.ResponseWriter, r *http.Request) {
 		var pending []scheduleItem
 		cfg := srv.db.Config()
 		for _, tv := range tagValues {
-			if _, ok := cfg.IsScheduleTag(tv.Tag); ok && tv.Value != "" {
+			if cfg.IsScheduleTag(tv.Tag) && tv.Value != "" {
 				pending = append(pending, scheduleItem{tag: tv.Tag, value: tv.Value, path: req.Path})
 			}
 		}
@@ -2371,8 +2409,11 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, events)
 }
 
-// handleScheduleChange rewrites a date in a schedule tag value. R921-R925
-// CRC: crc-Server.md | Seq: seq-scheduling.md
+// handleScheduleChange rewrites a date in a schedule tag value.
+// Routes disk paths via os.ReadFile/os.WriteFile and tmp:// paths
+// via the tmp:: overlay (db.TmpContent / db.UpdateTmpFile, which
+// goes through the centralized write actor + publish path per R2281).
+// CRC: crc-Server.md | Seq: seq-scheduling.md | R921, R922, R923, R925, R2842, R2843
 func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path     string `json:"path"`
@@ -2390,11 +2431,26 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Read the file
-	content, err := os.ReadFile(req.Path)
-	if err != nil {
-		http.Error(w, "read file: "+err.Error(), http.StatusInternalServerError)
-		return
+	isTmp := strings.HasPrefix(req.Path, "tmp://")
+
+	// Read source content.
+	var content []byte
+	if isTmp {
+		c, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.TmpContent(req.Path)
+		})
+		if err != nil {
+			http.Error(w, "read tmp:// content: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		content = c
+	} else {
+		c, err := os.ReadFile(req.Path)
+		if err != nil {
+			http.Error(w, "read file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		content = c
 	}
 
 	// Find the tag line and rewrite the date portion R922
@@ -2444,16 +2500,334 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Write back and re-index R923
-	if err := os.WriteFile(req.Path, []byte(strings.Join(lines, "\n")), 0644); err != nil {
-		http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
-		return
+	// Write back via the appropriate destination. (R2842, R2843)
+	newContent := []byte(strings.Join(lines, "\n"))
+	if isTmp {
+		if err := SyncVoid(srv.db, func(db *DB) error {
+			return db.UpdateTmpFile(req.Path, "markdown", newContent)
+		}); err != nil {
+			http.Error(w, "write tmp:// content: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if err := os.WriteFile(req.Path, newContent, 0644); err != nil {
+			http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Disk path: trigger re-index via reconcile. tmp:// path
+		// already publishes through UpdateTmpFile's R2281-wired path.
+		srv.reconcile()
 	}
 
-	// Trigger re-index via reconcile
-	srv.reconcile()
-
 	w.WriteHeader(http.StatusOK)
+}
+
+// upcomingEntry is the JSON shape returned by handleScheduleUpcoming.
+type upcomingEntry struct {
+	Tag      string    `json:"tag"`
+	Value    string    `json:"value"`
+	Path     string    `json:"path"`
+	NextFire time.Time `json:"next_fire"`
+}
+
+// handleScheduleUpcoming reports next-fire entries from the in-memory
+// priority queue. POST body: {"tag": "name" or ""} (empty = all tags).
+// CRC: crc-Server.md | R2838
+func (srv *Server) handleScheduleUpcoming(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag string `json:"tag"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if srv.scheduler == nil {
+		writeJSON(w, []upcomingEntry{})
+		return
+	}
+	events := srv.scheduler.Upcoming(req.Tag)
+	out := make([]upcomingEntry, len(events))
+	for i, e := range events {
+		out[i] = upcomingEntry{
+			Tag:      e.Tag,
+			Value:    e.Value,
+			Path:     e.Path,
+			NextFire: e.NextFire,
+		}
+	}
+	writeJSON(w, out)
+}
+
+// scheduleLogResponse is the JSON shape returned by handleScheduleLogs
+// for a single (tag, source) chunk.
+type scheduleLogResponse struct {
+	Tag       string                  `json:"tag"`
+	Source    string                  `json:"source"`
+	Lifecycle string                  `json:"lifecycle"`
+	Fired     []string                `json:"fired"`
+	Specs     []scheduleLogSpecMarker `json:"specs"`
+	CheckGaps []string                `json:"check_gaps,omitempty"`
+}
+
+type scheduleLogSpecMarker struct {
+	Kind string    `json:"kind"`
+	Time time.Time `json:"time"`
+	Spec string    `json:"spec"`
+}
+
+// handleScheduleLogs reads the audit log for a tag and (optional)
+// source. tmp:// reads go through the tmp:: overlay so they only work
+// while the server is up; disk reads also work cold (handled directly
+// by the CLI for disk paths), but the server-side handler covers both
+// for cases where the CLI proxies regardless.
+// CRC: crc-Server.md | R2839
+func (srv *Server) handleScheduleLogs(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag    string `json:"tag"`
+		Source string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Tag == "" {
+		http.Error(w, "tag is required", http.StatusBadRequest)
+		return
+	}
+	cfg := srv.db.Config()
+	if !cfg.IsScheduleTag(req.Tag) {
+		http.Error(w, "tag is not declared in [schedule.tag.*]", http.StatusNotFound)
+		return
+	}
+	lifecycle := cfg.Lifecycle(req.Tag)
+	if lifecycle == LifecycleNone {
+		writeJSON(w, map[string]string{"lifecycle": LifecycleNone, "note": "no log — lifecycle = \"none\""})
+		return
+	}
+	if req.Source == "" {
+		// List sources that have a chunk for this tag.
+		sources := srv.listScheduleLogSources(req.Tag, lifecycle)
+		writeJSON(w, map[string]any{"tag": req.Tag, "lifecycle": lifecycle, "sources": sources})
+		return
+	}
+	chunk, ok := srv.readScheduleLogChunk(req.Tag, req.Source, lifecycle)
+	if !ok {
+		http.Error(w, "no chunk for (tag, source)", http.StatusNotFound)
+		return
+	}
+	out := scheduleLogResponse{
+		Tag:       chunk.Event,
+		Source:    chunk.Source,
+		Lifecycle: lifecycle,
+		Fired:     chunk.Fired,
+		CheckGaps: chunk.CheckGaps,
+	}
+	for _, m := range chunk.SpecMarkers {
+		out.Specs = append(out.Specs, scheduleLogSpecMarker{Kind: m.Kind, Time: m.Time, Spec: m.Spec})
+	}
+	writeJSON(w, out)
+}
+
+// listScheduleLogSources lists source paths with a log chunk for the
+// given tag, by reading the appropriate audit destination.
+func (srv *Server) listScheduleLogSources(tag, lifecycle string) []string {
+	var sources []string
+	if lifecycle == LifecycleDisk {
+		entries, err := os.ReadDir(filepath.Join(srv.db.Path(), "schedule"))
+		if err != nil {
+			return nil
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			chunks, err := ReadLogFile(filepath.Join(srv.db.Path(), "schedule", e.Name()))
+			if err != nil {
+				continue
+			}
+			for _, c := range chunks {
+				if c.Event == tag {
+					sources = append(sources, c.Source)
+				}
+			}
+		}
+		return sources
+	}
+	// tmp:// — enumerate tmp:// paths from the DB and match the schedule prefix.
+	SyncVoid(srv.db, func(db *DB) error {
+		for _, p := range db.TmpFiles() {
+			prefix := "tmp://schedule/" + tag + "/"
+			if !strings.HasPrefix(p, prefix) {
+				continue
+			}
+			content, err := db.TmpContent(p)
+			if err != nil {
+				continue
+			}
+			chunks, err := parseLogChunks(content)
+			if err != nil {
+				continue
+			}
+			for _, c := range chunks {
+				if c.Event == tag {
+					sources = append(sources, c.Source)
+				}
+			}
+		}
+		return nil
+	})
+	return sources
+}
+
+// readScheduleLogChunk reads a single chunk by (tag, source) from the
+// appropriate audit destination.
+func (srv *Server) readScheduleLogChunk(tag, source, lifecycle string) (*LogChunk, bool) {
+	if lifecycle == LifecycleDisk {
+		path := filepath.Join(srv.db.Path(), "schedule", logFileHash(source)+".md")
+		chunks, err := ReadLogFile(path)
+		if err != nil {
+			return nil, false
+		}
+		for i := range chunks {
+			if chunks[i].Event == tag && chunks[i].Source == source {
+				return &chunks[i], true
+			}
+		}
+		return nil, false
+	}
+	path := "tmp://schedule/" + tag + "/" + logFileHash(source) + ".md"
+	content, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+		return db.TmpContent(path)
+	})
+	if err != nil || len(content) == 0 {
+		return nil, false
+	}
+	chunks, err := parseLogChunks(content)
+	if err != nil {
+		return nil, false
+	}
+	for i := range chunks {
+		if chunks[i].Event == tag && chunks[i].Source == source {
+			return &chunks[i], true
+		}
+	}
+	return nil, false
+}
+
+// handleScheduleSuppress toggles `[schedule.tag.X] suppress` in
+// ark.toml. POST body: {"tag": "...", "suppress": true|false}.
+// On successful write, ReloadConfig fires so the scheduler's
+// EnsureUpcoming becomes a no-op for suppressed tags on the next
+// indexer notification (R2836). Past audit history in
+// ~/.ark/schedule/ is left untouched (R2837).
+// CRC: crc-Server.md | R2836, R2837, R2840, R2841
+func (srv *Server) handleScheduleSuppress(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag      string `json:"tag"`
+		Suppress bool   `json:"suppress"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Tag == "" {
+		http.Error(w, "tag is required", http.StatusBadRequest)
+		return
+	}
+	cfg := srv.db.Config()
+	if !cfg.IsScheduleTag(req.Tag) {
+		http.Error(w, fmt.Sprintf("tag %q is not declared — add a [schedule.tag.%s] block first", req.Tag, req.Tag), http.StatusNotFound)
+		return
+	}
+	configPath := filepath.Join(srv.db.Path(), "ark.toml")
+	if err := setScheduleTagSuppress(configPath, req.Tag, req.Suppress); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Reload config so the scheduler sees the change on its next pass.
+	if err := srv.db.ReloadConfig(); err != nil {
+		log.Printf("schedule suppress: config reload failed: %v", err)
+	}
+	// R2836: drain queue entries for the now-suppressed tag so
+	// suppression takes effect immediately, without waiting for the
+	// next scheduled fire. On unsuppress, re-scan schedule logs so
+	// arm-from-chunk picks up the tag without waiting for a source
+	// file edit to trigger the indexer.
+	if srv.scheduler != nil {
+		if req.Suppress {
+			if n := srv.scheduler.RemoveByTag(req.Tag); n > 0 {
+				log.Printf("schedule suppress: drained %d queue entry/entries for @%s", n, req.Tag)
+			}
+		} else {
+			if err := srv.scheduler.ScanScheduleLogs(); err != nil {
+				log.Printf("schedule unsuppress: re-scan error: %v", err)
+			}
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// setScheduleTagSuppress edits `ark.toml` to set or clear the
+// `suppress` key under `[schedule.tag.X]`. Preserves the rest of the
+// file by line-oriented edit; assumes the block already exists (the
+// caller checks via IsScheduleTag). R2840, R2841
+func setScheduleTagSuppress(configPath, tag string, suppress bool) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	header := "[schedule.tag." + tag + "]"
+	lines := strings.Split(string(data), "\n")
+	headerIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			headerIdx = i
+			break
+		}
+	}
+	if headerIdx < 0 {
+		return fmt.Errorf("[schedule.tag.%s] block not found in ark.toml", tag)
+	}
+	// Locate the next [...] header or EOF to scope the block.
+	blockEnd := len(lines)
+	for i := headerIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "[") {
+			blockEnd = i
+			break
+		}
+	}
+	// Find existing `suppress = ...` line in the block (if any).
+	// Match "suppress=" / "suppress " forms; "suppression" etc. won't match.
+	suppressIdx := -1
+	for i := headerIdx + 1; i < blockEnd; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "suppress=") || strings.HasPrefix(trimmed, "suppress ") {
+			suppressIdx = i
+			break
+		}
+	}
+	switch {
+	case suppressIdx >= 0 && suppress:
+		lines[suppressIdx] = "  suppress = true"
+	case suppressIdx >= 0 && !suppress:
+		lines = slices.Delete(lines, suppressIdx, suppressIdx+1)
+	case suppressIdx < 0 && suppress:
+		// Insert right after the header line.
+		lines = slices.Insert(lines, headerIdx+1, "  suppress = true")
+	}
+	// Atomic write — fsnotify watchers (including ark's own
+	// config-reload watch) can fire on the empty intermediate state of
+	// a non-atomic os.WriteFile, causing ReloadConfig to parse a
+	// zero-source config and write a `sources_catastrophe` E-record.
+	// Write to .tmp then rename, mirroring the pattern in db.go:1848.
+	newData := []byte(strings.Join(lines, "\n"))
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s → %s: %w", tmpPath, configPath, err)
+	}
+	return nil
 }
 
 // handleSearchGrouped serves grouped search results for the standalone editor.
@@ -3452,8 +3826,12 @@ func (srv *Server) CheckScheduleConfig() {
 	}
 }
 
-// serializeScheduleConfig produces a deterministic string from the schedule config.
-// R975: includes filter/lifecycle fields so changes trigger re-materialization.
+// serializeScheduleConfig produces a deterministic string from the
+// schedule config — used to detect [schedule] section changes between
+// startups. R975. Updated for the [schedule.tag.X] block schema
+// (R2830, R2831): each tag is serialized as
+// "name:lifecycle:log_cap:default_duration:suppress" so changes to
+// per-tag knobs trigger re-materialization just like tag-set changes.
 func serializeScheduleConfig(cfg *Config) string {
 	tags := cfg.ScheduleTags()
 	keys := make([]string, 0, len(tags))
@@ -3463,26 +3841,26 @@ func serializeScheduleConfig(cfg *Config) string {
 	sort.Strings(keys)
 	var parts []string
 	for _, k := range keys {
-		parts = append(parts, k+"="+tags[k])
+		tc := tags[k]
+		lc := tc.Lifecycle
+		if lc == "" {
+			lc = LifecycleDisk
+		}
+		cap := defaultLogCap
+		if tc.LogCap != nil {
+			cap = *tc.LogCap
+		}
+		parts = append(parts, fmt.Sprintf("%s=lc:%s,cap:%d,dur:%s,sup:%v",
+			k, lc, cap, tc.DefaultDuration, tc.Suppress))
 	}
 	s := cfg.Schedule
-	ff := make([]string, len(s.FilterFiles))
-	copy(ff, s.FilterFiles)
+	ff := slices.Clone(s.FilterFiles)
 	sort.Strings(ff)
-	ef := make([]string, len(s.ExcludeFiles))
-	copy(ef, s.ExcludeFiles)
+	ef := slices.Clone(s.ExcludeFiles)
 	sort.Strings(ef)
-	li := make([]string, len(s.LifecycleInclude))
-	copy(li, s.LifecycleInclude)
-	sort.Strings(li)
-	le := make([]string, len(s.LifecycleExclude))
-	copy(le, s.LifecycleExclude)
-	sort.Strings(le)
 	parts = append(parts,
 		"ff:"+strings.Join(ff, ";"),
 		"ef:"+strings.Join(ef, ";"),
-		"li:"+strings.Join(li, ";"),
-		"le:"+strings.Join(le, ";"),
 	)
 	return strings.Join(parts, ",")
 }

@@ -8,45 +8,105 @@ specs/pubsub.md (event scheduler), .scratch/SCHEDULING.md (brainstorm).
 
 ## Schedule Filtering
 
-The `[schedule]` section in ark.toml gains file and lifecycle filters:
+Top-level `[schedule]` carries cross-cutting filter knobs; per-tag
+overrides and the lifecycle/log_cap/suppress knobs live in
+per-tag `[schedule.tag.X]` blocks. See
+[scheduling.md](scheduling.md) for the full per-tag schema.
 
 ```toml
 [schedule]
-tags = ["standup", "dentist", "birthday", "chime"]
 filter_files = "~/notes/**"
 exclude_files = ["~/notes/drafts/**"]
-lifecycle_include = "*"
-lifecycle_exclude = ["chime"]
+
+[schedule.tag.standup]
+default_duration = "15m"
+
+[schedule.tag.chime-1m]
+lifecycle = "tmp"    # opt this chime into ephemeral audit
 ```
 
-`filter_files` and `exclude_files` control which files are scanned
-for schedule tags. Same narrow/carve semantics as search: filter
-sets the scope, exclude carves exceptions. Tilde expansion applies.
-When both are absent, all indexed files are eligible.
+`filter_files` and `exclude_files` (top-level) control which files
+are scanned for schedule tags. Same narrow/carve semantics as
+search: filter sets the scope, exclude carves exceptions. Tilde
+expansion applies. When both are absent, all indexed files are
+eligible. Per-tag overrides go in `[schedule.tag.X] filter_files` /
+`exclude_files`.
 
-`lifecycle_include` and `lifecycle_exclude` control which schedule
-tags get the full lifecycle treatment: schedule log entries,
-check-gap monitoring, gap detection. Tags outside the lifecycle
-still fire through pubsub — they just don't get logged or
-monitored. Default: `lifecycle_include = "*"` (all schedule tags
-participate in the lifecycle).
-
-Both pairs use glob patterns on their respective domains (file
-paths, tag names).
+`[schedule.tag.X] lifecycle` selects audit destination per tag —
+`"disk"` (default), `"tmp"` (ephemeral, evicted on restart, trimmed
+to `log_cap` lines), or `"none"` (fire-and-forget — no audit
+anywhere). `lifecycle = "none"` tags still fire through pubsub.
+Suppress (`suppress = true`) stops firing without dropping the
+declaration. See
+[migrations/complete/006-schedule-record-only.md](migrations/complete/006-schedule-record-only.md) for the full record-only model.
 
 ## EnsureArkSource Scoping
 
-The hardcoded `~/.ark` source should only index content directories:
+The hardcoded `~/.ark` source's include list whitelists
+ark-managed standard files at the top level and, under each
+content directory, only the file extensions that carry
+text content the indexer can chunk:
 
 ```
-include = ["ark.toml", "schedule/**", "apps/**", "storage/**"]
+include = ["ark.toml", "chimes.md", "tags.md",
+           "schedule/**/*.md",
+           "apps/**/*.lua", "apps/**/*.js", "apps/**/*.html",
+           "apps/**/*.css", "apps/**/*.md",
+           "storage/**/*.md", "storage/**/*.pdf",
+           "external/**/*.md"]
 ```
 
-This keeps data.mdb, lock files, logs, and archive directories
-out of the index. Archived schedule logs go to
-`~/.ark/schedule-archive/` — outside the include list, unindexed,
-still searchable with xzgrep on disk. Rotation is: compress old
-log, move to archive dir, done.
+The top-level entries cover the standard files ark owns directly:
+`ark.toml` (user-edited config), `chimes.md` (auto-created chime
+declarations, see [chimes.md](chimes.md)), and `tags.md`
+(starter tag bible, written from the install seed). Listing them
+explicitly means ark-managed standard files are indexed
+regardless of the user's `[[source]]` configuration — pulling
+`~/.ark` out of `[[source]]` doesn't break chimes or tag
+suggestions.
+
+The directory entries are scoped per file extension, not as a
+bare `**` recursion. Under each content directory ark indexes
+only the extensions whose chunkers it ships:
+
+- `schedule/**/*.md` — schedule log files (markdown chunker).
+- `apps/**/*.{lua,js,html,css,md}` — Frictionless app sources
+  (Lua handlers, web assets, in-app markdown).
+- `storage/**/*.{md,pdf}` — app-managed user data ark can
+  chunk (notes, PDFs handled by the pdf chunker).
+- `external/**/*.md` — mirror chunks from external sources.
+
+This keeps non-text artifacts out of the index by construction:
+Fossil checkout files (`.fslckout`, `*.fossil`), binary office
+documents (`*.docx`), undo-tree dumps, lock files, build outputs,
+LMDB pages, and the like. Each was previously surfaced as an
+`fts add ...: chunk "1-1" contains invalid UTF-8` line on every
+startup — extension-scoped includes drop them before they reach
+the chunker. Archived schedule logs go to
+`~/.ark/schedule-archive/` — outside the include list,
+unindexed, still searchable with xzgrep on disk. Rotation is:
+compress old log, move to archive dir, done.
+
+Adding a new chunkable extension under one of these directories
+means appending the matching `dir/**/*.ext` pattern to
+`arkSourceIncludePatterns` — not flipping to `**` and excluding
+binaries afterward.
+
+### Override path — commented in `install/ark.toml`
+
+The synthetic source is the default behavior, but a user may
+need to override it (add a new extension under `apps/`, add a
+top-level ark-managed file, etc.). `install/ark.toml` carries
+the same include list as a commented `[[source]] dir = "~/.ark"`
+block, in UNIX-config style — uncomment and edit to replace the
+synthetic defaults. `EnsureArkSource` skips its synthetic
+addition when any `[[source]]` already targets the database
+directory, so a user-defined block wins.
+
+The commented example in `install/ark.toml` and the
+`arkSourceIncludePatterns` constant in `config.go` must stay in
+sync — both express the same default. Edits to one are edits to
+the other.
 
 ## Log Writing on Event Fire
 

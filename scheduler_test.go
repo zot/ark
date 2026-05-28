@@ -166,12 +166,13 @@ func TestLogChunkBoundsRoundTrip(t *testing.T) {
 
 	chunks := []LogChunk{
 		{
-			Event:     "standup",
-			Source:    "~/notes/schedule.md",
-			Spec:      "every Monday at 09:00",
+			Event:  "standup",
+			Source: "~/notes/schedule.md",
+			SpecMarkers: []SpecMarker{
+				{Kind: "initial", Time: time.Date(2026, 3, 1, 0, 0, 0, 0, time.Local), Spec: "every Monday at 09:00"},
+			},
 			NotBefore: start,
 			NotAfter:  end,
-			Upcoming:  []string{"2026-03-02 09:00"},
 		},
 	}
 

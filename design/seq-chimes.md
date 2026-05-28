@@ -12,7 +12,7 @@ to end — the only chime-specific code is the value-override branch in
 1.1. Server                             → EnsureChimesFile(dbPath)
 1.1.1. EnsureChimesFile                 → stat `~/.ark/chimes.md`
 1.1.2. EnsureChimesFile                 → exists → return; missing → write canonical 6 lines (`@chime-1m: every 1m` ... `@chime-60m: every 60m`)
-1.2. Server                             → existing scheduler.ScanScheduleLogs (reads any prior schedule logs; chimes.md is indexed as a regular ark file in step 1.3 below)
+1.2. Server                             → existing scheduler.ScanScheduleLogs (reads any prior schedule logs and reconciles each chunk against the current [schedule] config — drops chunks whose tag is no longer scheduled or whose source no longer matches the filter, deletes log files whose chunks are all dropped; R2810. chimes.md is indexed as a regular ark file in step 1.3 below)
 1.3. Server                             → reconcile → indexer scans → ~/.ark/chimes.md indexed → pendingSchedule accumulates one item per chime tag
 1.4. Server.processScheduleItems        → for each pending item, scheduler.EnsureUpcoming(tag, value, sourcePath)
 1.5. EventScheduler.EnsureUpcoming      → crankForward(chunk, now, true) — writes log file with @ark-event-upcoming AND enqueues the next chime occurrence in the priority queue (R2778, R2809)
@@ -26,7 +26,7 @@ to end — the only chime-specific code is the value-override branch in
 2.2. EventScheduler.fire                → isChimeTag(event.Tag)? → override event.Value with time.Now().UTC().Format(time.RFC3339) (R2778)
 2.3. EventScheduler.fire                → PubSub.Publish (existing) with the (maybe-overridden) value
 2.4. PubSub.Publish                     → match against subscribers, enqueue per-session events
-2.5. EventScheduler.fire                → for chime tags: re-enqueue via ComputeNext directly (bypass fireLogMutate so log files don't accumulate @ark-event-fired entries). For non-chime lifecycle tags: fireLogMutate as before.
+2.5. EventScheduler.fire                → dispatch by Config.Lifecycle(event.Tag): "disk"/"tmp" → fireLogMutate appends @ark-event-fired with log_cap trim and re-enqueues next via crankForwardAndEnqueue; "none" → re-enqueue only, no audit. Chimes default to "disk" (R2822, R2823, R2827) so their fires accumulate bounded history.
 2.6. EventScheduler.fire                → resetTimer
 ```
 

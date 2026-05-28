@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	throttleWindow = 1 * time.Second
-	maxWaitCeiling = 30 * time.Second
+	throttleWindow        = 1 * time.Second
+	maxWaitCeiling        = 30 * time.Second
+	configDebounceWindow  = 500 * time.Millisecond // ark.toml fsnotify burst coalescing
 )
 
 // startWatching creates an fsnotify watcher for ark.toml and all source
@@ -107,9 +108,10 @@ func (srv *Server) unwatchDir(dir string) {
 func (srv *Server) watchLoop() {
 	configPath := srv.db.ConfigPath()
 	var (
-		throttle     *time.Timer
-		pending      map[string]struct{}
-		ceilingStart time.Time
+		throttle       *time.Timer
+		pending        map[string]struct{}
+		ceilingStart   time.Time
+		configDebounce *time.Timer // debounces ark.toml ReloadConfig+reconcile
 	)
 
 	for {
@@ -130,16 +132,21 @@ func (srv *Server) watchLoop() {
 				}
 			}
 
-			// ark.toml changed — reload config + full reconcile. (R992)
+			// ark.toml changed — debounce to coalesce fsnotify event
+			// bursts (a single editor save commonly fires 3-7 events)
+			// and consecutive saves. Without this, each event triggers
+			// a full ReloadConfig + reconcile sweep/scan/refresh cycle,
+			// which queues behind itself and blocks the actor for tens
+			// of seconds while the user is still typing. (R992)
 			// Seq: seq-file-change.md#1.2
 			if event.Name == configPath || filepath.Base(event.Name) == "ark.toml" {
-				log.Println("watch: ark.toml changed, reloading config")
-				srv.ignoredPaths = make(map[string]struct{}) // Seq: seq-file-change.md#1.2.2
-				if err := srv.db.ReloadConfig(); err != nil {
-					log.Printf("watch: config reload failed: %v", err)
+				if configDebounce == nil {
+					configDebounce = time.NewTimer(configDebounceWindow)
 				} else {
-					srv.db.Config().EnsureArkSource()
-					srv.reconcile() // Seq: seq-file-change.md#1.2.1
+					if !configDebounce.Stop() {
+						<-configDebounce.C
+					}
+					configDebounce.Reset(configDebounceWindow)
 				}
 				continue
 			}
@@ -188,6 +195,64 @@ func (srv *Server) watchLoop() {
 				return
 			}
 			log.Printf("watch: error: %v", err)
+
+		case <-timerChan(configDebounce):
+			// Quiet period elapsed since the last ark.toml event —
+			// reload config and force a full schedule re-arm. Drop
+			// every queue entry, then re-arm from the sources of
+			// truth: disk schedule chunks (via ScanScheduleLogs's
+			// arm-from-chunk pass) + chimes.md (via
+			// ArmChimesFromFile). Strictly stronger than per-case
+			// pruning: a tag removed from `[schedule.tag.X]` falls
+			// out (no chunk passes chunkInCurrentConfig), a tag
+			// newly suppressed falls out (EnsureUpcoming no-ops), a
+			// chime config flip is re-arming uniformly. Also prune
+			// the watchdog tmp docs so a belatedly-declared tag
+			// clears its stale orphan/typo warnings.
+			log.Println("watch: ark.toml settled, reloading config")
+			srv.ignoredPaths = make(map[string]struct{}) // Seq: seq-file-change.md#1.2.2
+			if err := srv.db.ReloadConfig(); err != nil {
+				log.Printf("watch: config reload failed: %v", err)
+			} else {
+				srv.db.Config().EnsureArkSource()
+				if srv.scheduler != nil {
+					// Re-point scheduler at the new config pointer.
+					// ReloadConfig swaps db.config; the scheduler's
+					// own pointer (captured at NewEventScheduler)
+					// would otherwise stay stale.
+					srv.scheduler.SetConfig(srv.db.Config())
+					if n := srv.scheduler.DropAll(); n > 0 {
+						log.Printf("watch: dropped %d queue entry/entries; re-arming", n)
+					}
+					srv.scheduler.WriteTmpLog = func(path string, content []byte) error {
+						return SyncVoid(srv.db, func(db *DB) error {
+							err := db.UpdateTmpFile(path, "markdown", content)
+							if err != nil {
+								_, err = db.AddTmpFile(path, "markdown", content)
+							}
+							return err
+						})
+					}
+					srv.scheduler.ReadTmpLog = func(path string) ([]byte, error) {
+						return Sync(srv.db, func(db *DB) ([]byte, error) {
+							return db.TmpContent(path)
+						})
+					}
+					if err := srv.scheduler.ScanScheduleLogs(); err != nil {
+						log.Printf("watch: ScanScheduleLogs error: %v", err)
+					}
+					if err := srv.scheduler.ArmChimesFromFile(srv.db.Path()); err != nil {
+						log.Printf("watch: ArmChimesFromFile error: %v", err)
+					}
+					srv.scheduler.WriteTmpLog = nil
+					srv.scheduler.ReadTmpLog = nil
+				}
+				if srv.pubsub != nil {
+					srv.pubsub.PruneWatchdog(srv.db.Config())
+				}
+				srv.reconcile() // Seq: seq-file-change.md#1.2.1
+			}
+			configDebounce = nil
 
 		case <-timerChan(throttle):
 			if len(pending) > 0 {
