@@ -102,6 +102,39 @@ Use itlightning/dateparse — actively maintained fork of
 araddon/dateparse. Handles dozens of date formats without specifying
 which: ISO 8601, `Apr 15 2026`, `4/15/26`, etc.
 
+### Malformed datetime handling
+
+`dateparse` is permissive: for some malformed inputs it silently
+returns a wrong-but-valid time rather than an error. Three cases are
+caught so a typo never becomes a silently mis-scheduled event:
+
+- **Dash-joined date and time.** `2026-05-28-13:45` is a common typo
+  for `2026-05-28T13:45`. `dateparse` reads the `-13:45` as a
+  *timezone offset*, not a time-of-day, and returns midnight. A date
+  token of the shape `YYYY-MM-DD-HH` or `YYYY-MM-DD-HH:MM` is
+  normalized — the separator hyphen is rewritten to `T` — and
+  re-parsed, yielding the intended time. This is forgiving by design:
+  an existing schedule entry written with the dash form starts firing
+  at the right time instead of at midnight.
+
+- **Date with a timezone but no time-of-day is an error.** A value
+  that parses to a date carrying a timezone offset but no clock time
+  (e.g. `2026-05-28Z`, or a dash form that normalization did not
+  rescue) is rejected rather than interpreted as midnight on that
+  date. A bare date with no timezone is still a normal all-day event —
+  only the date-plus-timezone shape is meaningless and errors.
+
+- **Ambiguous month/day ordering is an error.** A value like
+  `3/1/2014` could mean March 1 or January 3. After a permissive parse
+  succeeds, the same token is re-checked with `dateparse.ParseStrict`;
+  if it reports an ambiguous mm/dd vs dd/mm format, the value is
+  rejected rather than guessed. ISO `YYYY-MM-DD` and spelled-out
+  months (`Apr 15 2026`) are unambiguous and unaffected.
+
+These checks apply wherever a schedule tag value is parsed
+(`ParseDateValue`): `ark schedule add`/`change`, the source-file scan,
+and `ark schedule search`'s DATE argument.
+
 ### Date keyword stripping
 
 `dateparse` handles date formats but not English prepositions.
@@ -456,6 +489,20 @@ Output is markdown by default (crank-handle style), JSON with
 `--json`. Events are computed from recurrence specs and month
 buckets — no LMDB day buckets needed. Works without a running
 server.
+
+Each event renders as a bullet. The time range collapses when it
+carries no extra information:
+
+- Start and end differ, with a summary: `- 09:00–10:30: dentist`
+- Start equals end (a point in time): `- 13:45: ping` — the
+  `–END` half is dropped.
+- No summary: the trailing `: ` is dropped — `- 09:00–10:30` or
+  `- 13:45`.
+
+This keeps zero-duration, no-summary events (chime ticks landing in
+the window) from rendering as `- 13:45–13:45:` with a dangling
+colon. All-day events keep the `- all day: SUMMARY` form, with the
+same trailing-colon drop when the summary is empty.
 
 `--tag` filters to a specific schedule tag. `--gaps` shows only
 events with unacknowledged occurrences — computed by comparing

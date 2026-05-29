@@ -6947,13 +6947,22 @@ func cmdScheduleSearch(args []string) {
 			fmt.Printf("## %s — @%s:%s (%s)\n\n", ev.Date, ev.Tag, marker, ev.Source)
 			lastKey = key
 		}
+		// Collapse the time range when start==end and drop the trailing
+		// ": " when there's no summary, so zero-duration ticks don't
+		// render as "- 13:45–13:45:".
+		// CRC: crc-CLI.md | R2849
+		var label string
 		if ev.AllDay {
-			fmt.Printf("- all day: %s\n", ev.Summary)
+			label = "all day"
+		} else if ev.End.Equal(ev.Start) {
+			label = ev.Start.Format("15:04")
 		} else {
-			fmt.Printf("- %s–%s: %s\n",
-				ev.Start.Format("15:04"),
-				ev.End.Format("15:04"),
-				ev.Summary)
+			label = ev.Start.Format("15:04") + "–" + ev.End.Format("15:04")
+		}
+		if ev.Summary != "" {
+			fmt.Printf("- %s: %s\n", label, ev.Summary)
+		} else {
+			fmt.Printf("- %s\n", label)
 		}
 		fmt.Println()
 	}

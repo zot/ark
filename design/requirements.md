@@ -1410,6 +1410,13 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R998:** Keywords are only stripped when followed by a parseable date — `"on time"` does not lose its `on`
 - **R999:** Keyword stripping benefits all date parsing (one-shot events, durations, bounds), not just bounded recurrences
 
+### Malformed Datetime Handling
+
+- **R2846:** A date token of the shape `YYYY-MM-DD-HH` or `YYYY-MM-DD-HH:MM` is normalized before parsing — the separator hyphen is rewritten to `T` and the token re-parsed — because `dateparse` otherwise reads the `-HH:MM` as a timezone offset and returns midnight. Forgiving by design: an existing dash-form schedule entry begins firing at the intended time instead of midnight.
+- **R2847:** A value that parses to a date carrying a timezone offset but no time-of-day (e.g. `2026-05-28Z`, or a dash form normalization did not rescue) is rejected with an error rather than interpreted as midnight. A bare date with no timezone remains a normal all-day event; only the date-plus-timezone shape errors.
+- **R2848:** After a permissive parse succeeds, the same date token is re-checked with `dateparse.ParseStrict`; if it reports an ambiguous mm/dd vs dd/mm format (e.g. `3/1/2014`), the value is rejected rather than guessed. Unambiguous forms (ISO `YYYY-MM-DD`, spelled-out months) are unaffected.
+- **R2849:** `ark schedule search` markdown render collapses the time range when start equals end (`- 13:45:` not `- 13:45–13:45:`) and drops the trailing `: ` when the summary is empty (`- 09:00–10:30`, `- 13:45`). The all-day form (`- all day: SUMMARY`) drops its trailing colon the same way when the summary is empty.
+
 ### Bounded Recurring Events
 
 - **R1000:** Recurring events can have a start bound, an end bound, or both

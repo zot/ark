@@ -777,10 +777,19 @@ ark schedule parse DATE
 
 | Subcommand | Flags | Behavior |
 |------------|-------|----------|
-| `search DATE` | `--tag` (filter), `--gaps` (only past unacked), `--json` (raw response) | Server-required. DATE is a single date or `START..END` range; `dateparse` handles flexible formats. Default output is markdown grouped by date. |
+| `search DATE` | `--tag` (filter), `--gaps` (only past unacked), `--json` (raw response) | Server-required. DATE is a single date or `START..END` range; `dateparse` handles flexible formats (see parse-robustness note below). Default output is markdown grouped by date; each bullet collapses `START–END` when start==end and drops the trailing `: ` when there's no summary (so chime ticks don't render as `- 13:45–13:45:`). |
 | `change PATH TAG NEWSTART [NEWEND]` | `--dry-run` | Server-required. Rewrites date in schedule tag value, preserves trailing description. Re-indexes after write. Updates `@ark-event-upcoming:` for recurring events. |
 | `tags` | `--values` | Cold-start. Lists configured schedule tags from ark.toml. With `--values`, also reads schedule logs (`~/.ark/schedule/`) for next upcoming dates. |
 | `parse DATE` | — | Cold-start (no DB). Parses a date expression, prints start/end/all-day/text. Recognizes recurring specs and computes next occurrence. |
+
+Parse-robustness note (applies to every path that parses a schedule
+tag value — `search`, `change`, `parse`, and the source-file scan):
+the dash-joined form `YYYY-MM-DD-HH:MM` is normalized to its `T` form
+before parsing (`dateparse` otherwise reads the time as a timezone
+offset and returns midnight); a value that parses to a date with a
+timezone but no time-of-day, or an ambiguous mm/dd vs dd/mm value, is
+rejected with an error rather than silently mis-parsed. See
+`specs/scheduling.md`.
 
 ### `search` — search the index
 

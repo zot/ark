@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -1797,6 +1798,9 @@ func parseDateTrimming(s string, loc *time.Location) (time.Time, string, error) 
 }
 
 // parseDateTrimmingRaw is the core trimming loop without keyword stripping.
+// The first candidate that parses is the date; its trailing words become
+// the description. Malformed-datetime guards (R2846, R2847, R2848) run on
+// that successful candidate.
 func parseDateTrimmingRaw(s string, loc *time.Location) (time.Time, string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -1804,14 +1808,74 @@ func parseDateTrimmingRaw(s string, loc *time.Location) (time.Time, string, erro
 	}
 	words := strings.Fields(s)
 	for end := len(words); end > 0; end-- {
-		candidate := strings.Join(words[:end], " ")
+		candidate := normalizeDashDateTime(strings.Join(words[:end], " ")) // R2846
 		t, err := dateparse.ParseIn(candidate, loc)
-		if err == nil {
-			desc := strings.TrimSpace(strings.Join(words[end:], " "))
-			return t, desc, nil
+		if err != nil {
+			continue
 		}
+		// The longest parseable prefix is the date. Reject it outright if
+		// it's a malformed shape dateparse accepted silently — don't fall
+		// back to a shorter prefix that would parse differently.
+		if gerr := guardParsedDate(candidate); gerr != nil { // R2847, R2848
+			return time.Time{}, "", gerr
+		}
+		desc := strings.TrimSpace(strings.Join(words[end:], " "))
+		return t, desc, nil
 	}
 	return time.Time{}, "", &ParseError{"cannot parse date: " + s}
+}
+
+// dashDateTimeRe matches an ISO date whose time-of-day is joined with a
+// hyphen instead of a `T` or space — e.g. 2026-05-28-13:45 or 2026-05-28-13.
+// dateparse reads the trailing -HH:MM as a timezone offset and returns
+// midnight, so the date and time-of-day are separated and rejoined with `T`.
+var dashDateTimeRe = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})-(\d{1,2}(?::\d{2})?)($|\s)`)
+
+// normalizeDashDateTime rewrites the dash-joined date/time form to its
+// `T`-separated equivalent so dateparse reads a time-of-day, not a timezone
+// offset. Tokens that don't match are returned unchanged.
+// CRC: crc-EventScheduler.md | R2846
+func normalizeDashDateTime(token string) string {
+	return dashDateTimeRe.ReplaceAllString(token, "${1}T${2}${3}")
+}
+
+// guardParsedDate rejects two shapes dateparse accepts silently:
+//   - a date carrying a timezone offset but no time-of-day (e.g. 2026-05-28Z),
+//     which would otherwise be read as midnight (R2847);
+//   - an ambiguous mm/dd vs dd/mm value (e.g. 3/1/2014), re-checked with
+//     dateparse.ParseStrict (R2848).
+//
+// CRC: crc-EventScheduler.md | R2847, R2848
+func guardParsedDate(candidate string) error {
+	if layout, err := dateparse.ParseFormat(candidate); err == nil {
+		if layoutHasZone(layout) && !layoutHasClock(layout) {
+			return &ParseError{"date with a timezone but no time-of-day: " + candidate +
+				" (use T or a space before the time, e.g. 2026-05-28T13:45)"}
+		}
+	}
+	if _, err := dateparse.ParseStrict(candidate); err != nil && strings.Contains(err.Error(), "ambiguous") {
+		return &ParseError{"ambiguous date (use an unambiguous form like 2014-03-01): " + candidate}
+	}
+	return nil
+}
+
+// layoutHasZone reports whether a dateparse layout carries a timezone token.
+// In Go's reference layout, "07" appears only in numeric offsets (-0700,
+// -07:00, Z07:00); "Z" and "MST" cover the literal-Z and named-zone forms.
+func layoutHasZone(layout string) bool {
+	return strings.Contains(layout, "07") || strings.Contains(layout, "Z") || strings.Contains(layout, "MST")
+}
+
+// layoutHasClock reports whether a dateparse layout carries a time-of-day.
+// The hour/minute/second reference tokens (15, 03, 04, 05) and AM/PM are
+// distinct from every date and zone token.
+func layoutHasClock(layout string) bool {
+	for _, tok := range []string{"15", "03", "04", "05", "PM", "pm"} {
+		if strings.Contains(layout, tok) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseTimeOnly parses HH:MM format.

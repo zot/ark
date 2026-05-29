@@ -255,6 +255,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-DateParseGuards.md → `scheduler_test.go`
 - [x] test-Config.md → `config_test.go`
 - [x] test-Matcher.md → `match_test.go`
 - [x] test-Searcher.md → `search_test.go`
@@ -630,3 +631,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T123: R958 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag)
 - T124: R959 retired by R2825 (2026-05-28 schedule-record-only: lifecycle=false fires through pubsub)
 - T125: R960 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag literal)
+- [ ] O118: Malformed schedule values (ambiguous mm/dd, date+timezone-no-time) are silently skipped during the source-file scan (scheduler.go ParseDateValue callers return/continue on error). Previously they fired at midnight; now they don't fire at all. Could surface to tmp://watchdog/possible-typos so the user notices the typo. Not blocking — R2846 normalization rescues the common dash-form case; only genuinely malformed values are skipped.
+- A68: @ark-event-start:/@ark-event-end: marker reads (scheduler.go:656/660) call dateparse.ParseLocal directly, bypassing parseDateTrimmingRaw's malformed-datetime guards (R2846-R2848). Intentional: these parse the scheduler's own machine-written canonical ISO markers, not user input, so the dash-typo and mm/dd-ambiguity guards don't apply. All user-facing parse paths (ParseDateValue, ExtractBounds, @ack:) do go through parseDateTrimmingRaw.

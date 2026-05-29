@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,6 +65,79 @@ func TestParseDateTrimmingWithKeywords(t *testing.T) {
 	}
 	if desc2 != "meeting" {
 		t.Errorf("desc = %q, want %q", desc2, "meeting")
+	}
+}
+
+// TestParseDateValueMalformed covers the malformed-datetime guards:
+// dash-form normalization (R2846), date-with-timezone-but-no-time
+// rejection (R2847), and ambiguous mm/dd rejection (R2848).
+func TestParseDateValueMalformed(t *testing.T) {
+	loc := time.UTC
+
+	// R2846: dash-joined date/time normalizes to the intended time-of-day
+	// instead of dateparse's silent midnight (it reads -13:45 as a tz offset).
+	dr, err := ParseDateValue("2026-05-28-13:45", "", loc)
+	if err != nil {
+		t.Fatalf("dash form: unexpected error: %v", err)
+	}
+	if dr.Start.Hour() != 13 || dr.Start.Minute() != 45 {
+		t.Errorf("dash form: got %02d:%02d, want 13:45", dr.Start.Hour(), dr.Start.Minute())
+	}
+
+	// R2846: dash form with trailing description.
+	dr, err = ParseDateValue("2026-05-28-13:45 standup", "", loc)
+	if err != nil {
+		t.Fatalf("dash form + desc: unexpected error: %v", err)
+	}
+	if dr.Start.Hour() != 13 || dr.Description != "standup" {
+		t.Errorf("dash form + desc: got %02d:%02d desc=%q, want 13:xx desc=standup",
+			dr.Start.Hour(), dr.Start.Minute(), dr.Description)
+	}
+
+	// R2846: both sides of a range normalize.
+	dr, err = ParseDateValue("2026-05-28-13:45..2026-05-28-14:00", "", loc)
+	if err != nil {
+		t.Fatalf("dash range: unexpected error: %v", err)
+	}
+	if dr.Start.Hour() != 13 || dr.End.Hour() != 14 {
+		t.Errorf("dash range: got start=%02d end=%02d, want 13..14", dr.Start.Hour(), dr.End.Hour())
+	}
+
+	// R2847: a date with a timezone but no time-of-day is an error, not
+	// midnight. 2026-05-28+0700 parses (as date + tz offset, no clock) and
+	// must be caught by the layout guard — not by ParseIn failing, which is
+	// why we use the +offset form rather than a bare "Z".
+	_, err = ParseDateValue("2026-05-28+0700", "", loc)
+	if err == nil {
+		t.Error("date+timezone+no-time: expected error, got none")
+	} else if !strings.Contains(err.Error(), "timezone but no time-of-day") {
+		t.Errorf("date+timezone+no-time: wrong error path: %v", err)
+	}
+
+	// R2848: ambiguous mm/dd vs dd/mm is rejected rather than guessed.
+	if _, err := ParseDateValue("3/1/2014", "", loc); err == nil {
+		t.Error("ambiguous mm/dd: expected error, got none")
+	}
+
+	// Regressions: well-formed values still parse cleanly.
+	good := []struct {
+		in       string
+		wantHour int // -1 = all-day / don't check
+	}{
+		{"2026-05-28T13:45", 13},
+		{"2026-05-28 13:45", 13},
+		{"2026-04-15", -1},
+		{"April 15 2026", -1},
+	}
+	for _, g := range good {
+		dr, err := ParseDateValue(g.in, "", loc)
+		if err != nil {
+			t.Errorf("%q: unexpected error: %v", g.in, err)
+			continue
+		}
+		if g.wantHour >= 0 && dr.Start.Hour() != g.wantHour {
+			t.Errorf("%q: got hour %d, want %d", g.in, dr.Start.Hour(), g.wantHour)
+		}
 	}
 }
 
