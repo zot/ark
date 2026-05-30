@@ -578,11 +578,12 @@ type extReresolvePlan struct {
 // The ChanSvc executes writes via executeRefresh (LMDB mutations).
 // Tag extraction happens on-actor via chunk callbacks (R1896).
 type refreshPrep struct {
-	path     string
-	strategy string
-	oldID    uint64
-	isAppend bool
-	data     []byte // full file content
+	path      string
+	strategy  string
+	oldID     uint64
+	isAppend  bool
+	unchanged bool   // R2864: byte-identical to last index — skip the full refresh
+	data      []byte // full file content
 	// Append-specific fields
 	newBytes []byte
 	baseLine int
@@ -611,11 +612,11 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 	// Try append detection (LMDB reads are concurrent-safe)
 	ok, _ := idx.DetectAppend(path, fileID)
 	Logv(2, "prepare-refresh: %s detect=%v", path, ok)
+	info, infoErr := idx.fts.FileInfoByID(fileID)
 	if ok {
-		info, err := idx.fts.FileInfoByID(fileID)
 		Logv(2, "prepare-refresh: %s info-err=%v FL=%d data-len=%d",
-			path, err, info.FileLength, len(data))
-		if err == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength {
+			path, infoErr, info.FileLength, len(data))
+		if infoErr == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength {
 			prep.isAppend = true
 			prep.newBytes = data[info.FileLength:]
 			if n := len(info.Chunks); n > 0 {
@@ -631,14 +632,32 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 		}
 	}
 
+	// Not an append. If the file is byte-identical to what we last
+	// indexed — same length AND same content hash — there is nothing to
+	// do, so skip the full re-chunk (R2864). This catches redundant
+	// re-process events (throttle batches, spurious fsnotify) on large
+	// append-only files like chat JSONLs, where a full refresh would be
+	// an expensive no-op.
+	if infoErr == nil && info.FileLength > 0 && int64(len(data)) == info.FileLength &&
+		sha256.Sum256(data) == info.ContentHash {
+		prep.unchanged = true
+		Logv(2, "prepare-refresh: %s unchanged (size==FL, hash match) — skipping refresh", path)
+	}
+
 	return prep, nil
 }
 
 // executeRefresh runs all LMDB writes for a prepared file.
 // Must be called from the ChanSvc goroutine (single writer).
-// CRC: crc-Indexer.md | R1894, R1896, R1898
+// CRC: crc-Indexer.md | R1894, R1896, R1898, R2864
 func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 	Logv(2, "execute-refresh: %s isAppend=%v newBytes=%d", prep.path, prep.isAppend, len(prep.newBytes))
+	if prep.unchanged {
+		// R2864: byte-identical to the last index — a full refresh would
+		// re-chunk the whole file to produce the same index. Skip it.
+		Logv(2, "execute-refresh: %s unchanged — skipped full refresh", prep.path)
+		return nil
+	}
 	if prep.isAppend {
 		acc := chunkAccumulator{strategy: prep.strategy}
 		err := idx.fts.AppendChunks(prep.oldID, prep.newBytes, prep.strategy,

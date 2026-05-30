@@ -53,7 +53,7 @@ include = ["ark.toml", "chimes.md", "tags.md",
            "apps/**/*.lua", "apps/**/*.js", "apps/**/*.html",
            "apps/**/*.css", "apps/**/*.md",
            "storage/**/*.md", "storage/**/*.pdf",
-           "external/**/*.md"]
+           "external/**/*.md", "skills/**/*.md"]
 ```
 
 The top-level entries cover the standard files ark owns directly:
@@ -75,6 +75,16 @@ only the extensions whose chunkers it ships:
 - `storage/**/*.{md,pdf}` — app-managed user data ark can
   chunk (notes, PDFs handled by the pdf chunker).
 - `external/**/*.md` — mirror chunks from external sources.
+- `skills/**/*.md` — ark-managed agent skill files. The
+  `~/.ark/skills/` entries are symlinks into the repo's skill
+  sources; indexing them under the `~/.ark/skills/` path lets a
+  hermetically-sealed subagent bootstrap by fetching its skill
+  (`ark fetch ~/.ark/skills/<skill>.md`) — `fetch` serves only
+  indexed content and does not resolve symlinks, so the
+  symlink path must itself be indexed. The skill content is
+  consequently indexed twice (once under the repo source, once
+  under `~/.ark/skills/`); accepted as the cost of keeping the
+  agent-facing path fetchable.
 
 This keeps non-text artifacts out of the index by construction:
 Fossil checkout files (`.fslckout`, `*.fossil`), binary office

@@ -1,33 +1,38 @@
 #!/bin/bash
-# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2770, R2771
-# PreToolUse hook for ark-recall-agent. Hermetic seal: only the four
-# `ark connections recall` verbs and `ark fetch tmp://ARK-RECALL/...`
-# are permitted. The `Read` denial doubles as the agent's runway —
-# the stderr template names the canonical `ark fetch` command so the
-# agent retries via the allowed path (fumble-onboarding pattern).
+# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2859, R2771
+# PreToolUse hook for ark-recall-agent (the long-running daemon).
+# Hermetic seal: only the four recall verbs the loop uses are permitted —
+#   ark connections recall next                       (the loop driver)
+#   ark connections recall surface | recommend | close   (per-fire work)
+# `next` absorbs subscribe / listen / files / fetch / context entirely,
+# so none of those are allowed. Read / Edit / Write / network: denied.
+# `next` blocks (true lotto-tube), so the harness backgrounds it; the one
+# extra command allowed is `cat <file>` — a single-arg read, no chaining
+# or redirection — so the agent can pick up the backgrounded output.
+# The denials double as the agent's runway: they point back at `next`.
 
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
 if [ "$TOOL" = Bash ]; then
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command')
-    # ark fetch tmp://ARK-RECALL/curation-*
-    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+fetch\s+tmp://ARK-RECALL/curation-'; then
+    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+connections\s+recall\s+(next|surface|recommend|close)(\s|$)'; then
         exit 0
     fi
-    # ark connections recall { surface | recommend | close }
-    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+connections\s+recall\s+(surface|recommend|close)\s'; then
+    # `next` blocks, so the harness backgrounds it; allow reading the
+    # backgrounded command's output file. Single file arg only — the
+    # trailing `\s*$` rejects chaining (`cat x; rm y`) and redirection.
+    if echo "$CMD" | grep -qE '^\s*cat\s+\S+\s*$'; then
         exit 0
     fi
-    echo "BLOCKED: only ark fetch tmp://ARK-RECALL/curation-<F> and ark connections recall { surface | recommend | close } are permitted. See ~/.ark/skills/ark-recall.md." >&2
+    echo "BLOCKED: recall-agent (daemon) may run only — ark connections recall { next | surface | recommend | close }, plus \`cat <file>\` to read a backgrounded \`next\`. Run \`~/.ark/ark connections recall next <your nonce>\`; when it finishes in the background, \`cat\` its output file and act on the curation doc." >&2
     exit 2
 fi
 
-# Read is the runway. Tell the agent to use ark fetch instead.
 if [ "$TOOL" = Read ]; then
-    echo "BLOCKED: use \`~/.ark/ark fetch tmp://ARK-RECALL/curation-<SESSION>-<FIRE>\` to read the curation doc. The Read tool is denied for recall-agent. See ~/.ark/skills/ark-recall.md." >&2
+    echo "BLOCKED: the Read tool is denied. Read \`next\`'s output with \`cat\` instead: run \`~/.ark/ark connections recall next <your nonce>\`, end your turn, and when it completes in the background \`cat\` its output file and act on it. Loop on that." >&2
     exit 2
 fi
 
-echo "BLOCKED: ark-recall-agent has no access to $TOOL. See ~/.ark/skills/ark-recall.md." >&2
+echo "BLOCKED: ark-recall-agent has no access to $TOOL. Run \`~/.ark/ark connections recall next <your nonce>\` and follow its output." >&2
 exit 2

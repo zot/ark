@@ -5,6 +5,7 @@ package ark
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 )
 
 // handleRecallReserveNonce returns the next per-server monotonic
@@ -114,4 +115,50 @@ func (srv *Server) handleRecallClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"status": "ok"})
+}
+
+// handleRecallNext is the daemon's single loop verb (R2857, R2858):
+// idempotent subscribe + context-gate + lowest-fire pending curation
+// doc, blocking (true lotto-tube) until one exists. GET so any client
+// — the agent's CLI, a bash loop, an IDE plugin — drives it the same
+// way. The `X-Recall-Exit` header signals the exit directive; the
+// body is the crank-handle prose.
+// CRC: crc-Server.md | R2857, R2858
+func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
+	n, err := strconv.ParseUint(r.URL.Query().Get("nonce"), 10, 32)
+	if err != nil || n == 0 {
+		http.Error(w, "nonce required", http.StatusBadRequest)
+		return
+	}
+	limit, _ := Sync(srv.db, func(db *DB) (int, error) {
+		return db.Config().Luhmann.EffectiveContextLimit(), nil
+	})
+	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), limit)
+	if rerr != nil {
+		// Client disconnect or transient — nothing to deliver.
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	if exit {
+		w.Header().Set("X-Recall-Exit", "1")
+	}
+	w.Write([]byte(body))
+}
+
+// handleRecallListen is the consumer-side loop verb: subscribe (idempotent)
+// to the session's result tag, block until a result doc arrives, return it
+// plus a crank-handle. CRC: crc-Server.md | R2865
+func (srv *Server) handleRecallListen(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+	body, rerr := srv.recallAgentBuilder.RecallListen(r.Context(), session)
+	if rerr != nil {
+		// Client disconnect or cancellation — nothing to deliver.
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Write([]byte(body))
 }

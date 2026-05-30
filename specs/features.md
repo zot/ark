@@ -31,7 +31,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
-| Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher v1 shipping; v2 agent layer in spec (one-shot Haiku curator between watcher and assistant; RJ rejection counter + propose / mention ceiling thresholds) | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/SIMPLE-RECALL.md` (working notes) |
+| Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher v1 shipping; v2 agent layer in spec (long-running Haiku curator daemon between watcher and assistant, spawned once per generation by the Luhmann orchestrator; RJ rejection counter + propose / mention ceiling thresholds) | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/SIMPLE-RECALL.md` (working notes) |
 | Luhmann orchestrator (supervisor + chimes)  | Phase 2 in spec (Go-side `ark monitor` / `ark luhmann` CLI, `[luhmann]` config, `@chime-Nm` standard scheduling tags, subscriber-presence gate). Skill / agent files separate. | `luhmann.md`, `monitor.md`, `chimes.md`, `subscriber-presence.md`, `.scratch/LUHMANN-ORCHESTRATOR.md` (working notes) |
 | Curation workshop (Tag Forge UI)            | shipping                                   | `tag-forge.md`, `curation.md`                                                 |
 | CLI-first agent integration                 | shipping                                   | `cli-commands.md`, `VISION.md`                                                |
@@ -267,11 +267,19 @@ candidates accrue passively. The **simple-recall watcher** — a
 deterministic subsystem of `ark serve` — runs the substrate
 against Claude Code JSONL chunks as they land and writes a
 **curation doc** to `tmp://ARK-RECALL/`. The **recall agent**
-(one-shot Haiku subagent, spawned via Task by the listening
-assistant on each curation event) filters the candidates and
+(a long-running Haiku daemon, spawned once per generation by the
+Luhmann orchestrator; it subscribes to the curate tag and loops,
+processing one curation doc per fire) filters the candidates and
 writes a **result doc** the assistant reads — keeping an LLM
 out of the high-frequency watcher path while a cheap model
-curates before anything reaches the user. RJ records carry a
+curates before anything reaches the user. The assistant consumes
+that result doc through `ark connections recall listen --session SID`,
+a backgrounded consumer loop the **`/recall` skill** starts: it
+subscribes the session to its result tag and blocks until a doc
+arrives. That subscription is also the daemon's **opt-in gate** —
+until a session calls `listen`, its curation docs pile up
+undispatched, so recall costs nothing for sessions that never asked
+for it. RJ records carry a
 **rejection counter** consulted by two `[recall]` ceilings
 (`reject_propose_ceiling`, `reject_mention_ceiling`) that fade
 chronically-rejected `(chunk, tag)` pairs out of view in two

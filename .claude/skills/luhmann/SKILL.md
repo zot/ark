@@ -73,7 +73,9 @@ assistants don't have to. A long-running recall subagent runs in
 the background, popping curation events from ark's pubsub and
 writing result docs that user-facing assistants pick up as
 ambient recall. You watch over it — respawn on healthy recycle,
-backoff on crash, escalate on repeated failure. When the user
+respawn (no backoff) on a one-off quit-early, backoff on crash,
+escalate with an emergency flag on a repeated crash or quit-early
+storm. When the user
 chats with you, you answer in persona; when they don't, you stay
 quiet and let the subagent work.
 
@@ -114,7 +116,7 @@ silent.
      subagent_type="ark-recall-agent",
      description="ark-recall lotto-tube loop nonce <N>",
      run_in_background=true,
-     prompt="Start the recall loop now. Context limit: 150000."
+     prompt="Start the recall loop now. Nonce: <N>. Context limit: 150000."
    )
    ```
    The Agent tool returns a task ID — that is `<TID>`.
@@ -172,43 +174,67 @@ surfaces the completion. Don't ignore it.
    ```bash
    ~/.ark/ark luhmann inspect-exit --nonce <N> --json
    ```
-   Output classifies as `healthy` (clean turn-boundary close,
-   under context limit reached cleanly) or `crash` (early
-   termination, fumble pattern, error tail).
+   Output classifies as `healthy` (filled and recycled —
+   `tokens_at_close` reached the context limit), `quit-early`
+   (a clean stop but **below** the limit — the agent stopped
+   looping before filling, which is an agent or environment fault,
+   not a crash), `crash` (early termination, fumble pattern, error
+   tail), or `unknown`.
 
 3. **Decide and act:**
    - **Healthy** (label `exit`, reason `context-limit`) →
      respawn immediately. Run startup steps 2–4 again with a
-     fresh nonce.
+     fresh nonce. (A healthy fill resets **both** the crash and
+     quit-early counters.)
+   - **Quit-early, quit_early < 3** → respawn immediately with a
+     fresh nonce, **no backoff** — it isn't a crash, and the agent
+     did useful work before stopping. Track the quit_early count
+     (read it back from `ark monitor recent luhmann`).
+   - **Quit-early, quit_early ≥ 3** → storm pause + escalate:
+     ```bash
+     ~/.ark/ark monitor pause recall --reason quit-early-storm
+     ```
+     This lights the emergency flag (`ark monitor status` shows
+     🚨). Escalate in chat/voice, loudly, in any way available:
+     "The recall agent has quit early three times running — it's
+     not filling its context, which points at an agent or
+     environment fault. I've paused it and raised the emergency
+     flag. Worth a look?" The user resumes via `ark monitor resume
+     recall`.
    - **Crash, crashes < 3** → backoff, then respawn:
      - First crash: wait 1s
      - Second: wait 5s
      - Third: wait 30s
      Then respawn with a fresh nonce. Track the crash count
      mentally (or read it back from `ark monitor recent luhmann`).
-   - **Crash, crashes ≥ 3** → pause:
+   - **Crash, crashes ≥ 3** → storm pause + escalate:
      ```bash
-     ~/.ark/ark monitor pause recall
+     ~/.ark/ark monitor pause recall --reason crash-storm
      ```
-     Surface in chat (if user is present), in voice:
+     Lights the same emergency flag. Surface in chat/voice:
      "The recall agent has crashed three times in a row. I've
-     paused respawning. Worth a look?" The user resumes via
-     `ark monitor resume recall`.
+     paused respawning and raised the emergency flag. Worth a
+     look?" The user resumes via `ark monitor resume recall`.
 
 4. **Record the outcome.** The reason string drives the kind:
-   `context-limit` → kind=`exit` (healthy, crash counter resets);
-   anything else (e.g. `crash`, `error`, `early-termination`)
-   → kind=`crash`, crash counter increments.
+   `context-limit` → kind=`exit` (healthy; **both** counters
+   reset); `quit-early` → kind=`quit-early` (quit_early increments,
+   crashes held); anything else (`crash`, `error`, …) →
+   kind=`crash` (crashes increments, quit_early held).
    ```bash
    ~/.ark/ark luhmann exit-record \
      --class recall --nonce <N> \
      --reason context-limit                              # healthy
    ~/.ark/ark luhmann exit-record \
      --class recall --nonce <N> \
-     --reason crash --crashes <K> --backoff <S>          # failure
+     --reason quit-early                                 # quit-early (no backoff)
+   ~/.ark/ark luhmann exit-record \
+     --class recall --nonce <N> \
+     --reason crash --crashes <K> --backoff <S>          # crash
    ```
-   For pause: the `ark monitor pause` call above is sufficient
-   (it writes the pause record).
+   For pause: the `ark monitor pause … --reason <storm>` call
+   above is sufficient (it writes the pause record and lights the
+   emergency flag).
 
 ### 3. Periodic self-check
 
@@ -270,13 +296,13 @@ the keepalive wiring is the natural next layer.
 
 | Command | Purpose |
 |---------|---------|
-| `~/.ark/ark monitor status [--json]` | Per-class state + counters |
+| `~/.ark/ark monitor status [--json]` | Per-class state + counters; 🚨 emergency flag when a storm pause is active |
 | `~/.ark/ark monitor recent [-n N] [CLASS]` | Tail one or all monitoring logs |
-| `~/.ark/ark monitor pause CLASS` | Pause respawning for this class |
+| `~/.ark/ark monitor pause CLASS [--reason R]` | Pause respawning; pass `--reason crash-storm` / `quit-early-storm` to light the emergency flag |
 | `~/.ark/ark monitor resume CLASS` | Resume respawning |
 | `~/.ark/ark connections recall reserve-nonce` | Get a fresh nonce for a recall subagent |
 | `~/.ark/ark luhmann spawn-record --class C --nonce N --task-id T` | Record a spawn |
-| `~/.ark/ark luhmann exit-record --class C --nonce N --reason R [--crashes K] [--backoff S]` | Record an exit (`context-limit`→exit, else→crash) |
+| `~/.ark/ark luhmann exit-record --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]` | Record an exit (`context-limit`→exit, `quit-early`→quit-early, else→crash) |
 | `~/.ark/ark luhmann inspect-exit --nonce N [--json]` | Classify a subagent exit |
 | `~/.ark/ark subscribers --tag chime-45m` | Confirm a keepalive subscription is registered (when wired) |
 

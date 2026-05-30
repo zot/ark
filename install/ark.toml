@@ -51,7 +51,7 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 #   "apps/**/*.lua", "apps/**/*.js", "apps/**/*.html",
 #   "apps/**/*.css", "apps/**/*.md",
 #   "storage/**/*.md", "storage/**/*.pdf",
-#   "external/**/*.md",
+#   "external/**/*.md", "skills/**/*.md",
 # ]
 
 # Chunker language definitions

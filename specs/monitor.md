@@ -15,7 +15,7 @@ tool: it never writes log files itself, never mutates DB state.
 ```
 ark monitor status [--json]
 ark monitor recent [-n N] [CLASS] [--json]
-ark monitor pause CLASS
+ark monitor pause CLASS [--reason R]
 ark monitor resume CLASS
 ```
 
@@ -39,12 +39,19 @@ log and reports:
   freshness window (default 90 minutes) and `idle` otherwise.
 - The most recent record's timestamp.
 - A small set of class-specific counters derived from the log
-  tail: for `luhmann`, the current crash counter and the current
-  nonce; for `recall`, the recent fire count and the average
-  in/out tokens across the last N records.
+  tail: for `luhmann`, the current crash and quit-early counters
+  and the current nonce; for `recall`, the recent fire count and
+  the average in/out tokens across the last N records.
+- An `emergency` flag — set when the class's latest state-defining
+  record is a *storm* pause (reason `crash-storm` or
+  `quit-early-storm`, written by the supervisor when a crash or
+  quit-early streak trips its ceiling; see [luhmann.md](luhmann.md)).
+  Reported as `{active, class, reason}`; the human output marks it
+  with a 🚨 line. A server-side accessor exposes the same state so
+  Frictionless can reflect it (the downstream emergency-light UI).
 
 The default output is a small markdown table. `--json` emits one
-object per class on stdout.
+object per class on stdout, each including the `emergency` object.
 
 The command runs cold — no server required. Reading the JSONL files
 is sufficient; the DB is not consulted.
@@ -68,14 +75,18 @@ identifying fields.
 
 Cold-start. No server required.
 
-### `pause CLASS` and `resume CLASS`
+### `pause CLASS [--reason R]` and `resume CLASS`
 
 Append a control record to the named class's monitoring log. The
 record carries `"kind": "pause"` or `"kind": "resume"` and a
-timestamp. The consumer of the log (e.g. the Luhmann supervisor for
-`luhmann`) checks the most recent control record at decision time
-and acts accordingly — `monitor` itself does not implement the
-pause/resume effect, it only signals it.
+timestamp. `pause` accepts an optional `--reason R`: empty for a
+plain user pause, or a storm reason (`crash-storm` /
+`quit-early-storm`) when the supervisor pauses on a tripped ceiling —
+the reason `status` reads to raise the `emergency` flag. The consumer
+of the log (e.g. the Luhmann supervisor for `luhmann`) checks the
+most recent control record at decision time and acts accordingly —
+`monitor` itself does not implement the pause/resume effect, it only
+signals it.
 
 `pause` exits non-zero with a diagnostic if the class is already
 paused (the most recent state-defining record was a `pause` not

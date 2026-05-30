@@ -94,7 +94,8 @@ ambient watcher.
 | Key                              | Type     | Default       | Meaning                                                                                                                                              | Owner          |
 |----------------------------------|----------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------|----------------|
 | `context_limit`                  | int      | `150000`      | Token ceiling passed to spawned subagents (used by the subagent's self-recycle check via `ark connections recall context`).                          | `luhmann.md`   |
-| `crash_pause_after`              | int      | `3`           | Consecutive crash count at which the supervisor pauses a class instead of respawning.                                                                | `luhmann.md`   |
+| `crash_pause_after`              | int      | `3`           | Consecutive crash count at which the supervisor pauses a class (storm pause `crash-storm`) instead of respawning.                                    | `luhmann.md`   |
+| `quit_early_pause_after`         | int      | `3`           | Consecutive quit-early count (independent counter) at which the supervisor pauses a class (storm pause `quit-early-storm`) instead of respawning.    | `luhmann.md`   |
 | `backoff_seconds`                | []int    | `[1, 5, 30]`  | Seconds to wait between successive crash respawns. Final value applies to attempts beyond the list length, up to `crash_pause_after`.                | `luhmann.md`   |
 | `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this subagent class (e.g. `class.recall.enabled`).                                                              | `luhmann.md`   |
 

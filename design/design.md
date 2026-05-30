@@ -138,7 +138,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`, `locator.go`
-- [x] crc-Config.md → `config.go`
+- [ ] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
@@ -160,8 +160,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
-- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`
-- [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
+- [ ] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
+- [ ] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 - [ ] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 
@@ -208,7 +208,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
 - [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
-- [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
+- [ ] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
@@ -606,7 +606,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T99: R2707 retired (2026-05-26 simple-recall v2 — DM emission gone; Layer 1 @dm-subject pre-triage no longer applicable)
 - T100: R2709 retired (2026-05-26 simple-recall v2 — DM instruction block gone; Layer 3 bias-to-silence is now the recall agent's persona briefing)
 - T101: R2710 retired by R2763 (2026-05-26 simple-recall v2 — Layer 4 @ark-recall-acted instrumentation replaced by ~/.ark/monitoring/recall.jsonl)
-- A67: R2775 and R2776 (assistant subscription pattern: ark subscribe --tag ark-recall-curate / ark-recall-result=<self> + Task spawn with nonce in description) describe behavior of the Claude Code assistant, which is external to ark's Go codebase. The contract is documented in specs/simple-recall.md; enforcement lives in the .claude/agents/* + skill files (anchored via crc-RecallAgent.md). No Go CRC owns these.
+- A67: The recall orchestrator/assistant/agent-persona control flow that is external to ark's Go codebase: R2850 (daemon spawned once per generation by the Luhmann orchestrator), R2851 (nonce delivered in description + prompt), R2855 (user-facing assistant running only the value-scoped ark-recall-result=<self> subscription), and R2860 (the agent persona that drives the loop). The contract is documented in specs/simple-recall.md; enforcement lives in the .claude/agents/* + skill files (ark-recall-agent.md, recall-agent-guard.sh), anchored via crc-RecallAgent.md. No Go CRC owns these. The loop machinery itself — subscribe / poll / fire-ordering / content / context-gate — moved server-side into `ark connections recall next` (R2857/R2858, Go-owned in crc-RecallAgentBuilder), shrinking this external surface. (Originally scoped R2775/R2776 → retired T128/T129; the daemon-loop reqs R2852/R2853/R2854 → retired T130/T131/T132.)
 - T102: R2700 retired by R2747 (2026-05-26 simple-recall v2 — composeDM call replaced by RecallCurationBuilder write)
 - T103: R2701 retired by R2748 (2026-05-26 simple-recall v2 — DM recipient/subject/sender identity replaced by curation-doc head tags)
 - T104: R2737 retired by R2749 (2026-05-26 simple-recall v2 — DM ## Recalled for paragraph grouping replaced by curation-doc # Source Chunk / ## Candidate)
@@ -633,3 +633,10 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T125: R960 retired by R2822 (2026-05-28 schedule-record-only: lifecycle is per-tag literal)
 - [ ] O118: Malformed schedule values (ambiguous mm/dd, date+timezone-no-time) are silently skipped during the source-file scan (scheduler.go ParseDateValue callers return/continue on error). Previously they fired at midnight; now they don't fire at all. Could surface to tmp://watchdog/possible-typos so the user notices the typo. Not blocking — R2846 normalization rescues the common dash-form case; only genuinely malformed values are skipped.
 - A68: @ark-event-start:/@ark-event-end: marker reads (scheduler.go:656/660) call dateparse.ParseLocal directly, bypassing parseDateTrimmingRaw's malformed-datetime guards (R2846-R2848). Intentional: these parse the scheduler's own machine-written canonical ISO markers, not user input, so the dash-typo and mm/dd-ambiguity guards don't apply. All user-facing parse paths (ParseDateValue, ExtractBounds, @ack:) do go through parseDateTrimmingRaw.
+- T126: R2770 retired by R2853 (2026-05-29 retire-oneshot-recall — daemon guard allowlist adds subscribe/listen/context)
+- T127: R2773 retired by R2854 (2026-05-29 retire-oneshot-recall — bootstrap skill is recall-loop.md, delegating to ark-recall.md)
+- T128: R2775 retired by R2855 (2026-05-29 retire-oneshot-recall — assistant runs result subscription only; daemon owns curate)
+- T129: R2776 retired by R2850 (2026-05-29 retire-oneshot-recall — daemon spawned once per generation by orchestrator, not per-fire by assistant)
+- T130: R2852 retired by R2857 (2026-05-29 recall-next — agent subscribe+listen+fire-derivation absorbed into ark connections recall next)
+- T131: R2853 retired by R2859 (2026-05-29 recall-next — guard allowlist shrinks to next+surface/recommend/close)
+- T132: R2854 retired by R2860 (2026-05-29 recall-next — loop condenses to persona; recall-loop.md retired as loop driver)

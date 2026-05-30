@@ -206,8 +206,8 @@ Commands:
   chunks      Show chunks around a search hit (context expansion)
   config      Show or modify configuration
               add-source, remove-source, add-include, add-exclude,
-              remove-pattern, show-why, add-strategy
-  connections Sidecar CLI for find-connections (--wait/--fetch/--result/--error)
+              remove-pattern, show-why, add-strategy, recover
+  connections Find-connections substrate + recall verbs + sidecar (find, recall, sidecar-*)
   cp          Extract embedded files matching a glob pattern
   discussed   Per-session recall dedup state (add/list/clear/prune)
   dismiss     Dismiss missing files
@@ -218,8 +218,10 @@ Commands:
   init        Create a new database
   install     Connect this project to ark (alias for ui install)
   ls          List embedded assets
+  luhmann     Orchestrator supervisor log writer (spawn-record, exit-record, inspect-exit)
   message     Messaging (new-request, new-response, set-tags, get-tags, check, inbox)
   missing     List missing files
+  monitor     Inspect monitoring logs (status, recent, pause, resume)
   nano        Embedded shell-agent loop (Ollama-backed; -m model, -c/-s session)
   rebuild     Drop and rebuild the entire index
   refresh     Re-index stale files
@@ -230,6 +232,7 @@ Commands:
   search      Search the index (subcommands: expand)
   serve       Start the server
   subscribe   Manage tag subscriptions (requires server)
+  subscribers Count subscriptions matching a tag (requires server)
   listen      Long-poll for tag notifications (requires server)
   setup       Bootstrap ~/.ark/ (extract assets, install skills)
   sources     Manage source directories
@@ -1157,38 +1160,38 @@ Output:`)
 	if client := serverClient(arkDir); client != nil {
 		// R1786: old filter flags removed — filter stack subsumes them
 		req := struct {
-			Query        string               `json:"query"`
-			About        string               `json:"about,omitempty"`
-			Contains     string               `json:"contains,omitempty"`
-			Regex        []string             `json:"regex,omitempty"`
-			LikeFile     string               `json:"likeFile,omitempty"`
-			Fuzzy        bool                 `json:"fuzzy,omitempty"`
-			K            int                  `json:"k"`
-			Scores       bool                 `json:"scores,omitempty"`
-			After        string               `json:"after,omitempty"`
-			Before       string               `json:"before,omitempty"`
-			Chunks       bool                 `json:"chunks,omitempty"`
-			Files        bool                 `json:"files,omitempty"`
-			Tags         bool                 `json:"tags,omitempty"`
-			ChunkFilters []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
-			Session      string               `json:"session,omitempty"`
-			NoTmp           bool   `json:"noTmp,omitempty"`
-			PrimaryTagQuery string `json:"primaryTagQuery,omitempty"`
-			PrimaryFileTag  bool   `json:"primaryFileTag,omitempty"`
+			Query           string               `json:"query"`
+			About           string               `json:"about,omitempty"`
+			Contains        string               `json:"contains,omitempty"`
+			Regex           []string             `json:"regex,omitempty"`
+			LikeFile        string               `json:"likeFile,omitempty"`
+			Fuzzy           bool                 `json:"fuzzy,omitempty"`
+			K               int                  `json:"k"`
+			Scores          bool                 `json:"scores,omitempty"`
+			After           string               `json:"after,omitempty"`
+			Before          string               `json:"before,omitempty"`
+			Chunks          bool                 `json:"chunks,omitempty"`
+			Files           bool                 `json:"files,omitempty"`
+			Tags            bool                 `json:"tags,omitempty"`
+			ChunkFilters    []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
+			Session         string               `json:"session,omitempty"`
+			NoTmp           bool                 `json:"noTmp,omitempty"`
+			PrimaryTagQuery string               `json:"primaryTagQuery,omitempty"`
+			PrimaryFileTag  bool                 `json:"primaryFileTag,omitempty"`
 		}{
-			Query:        primaryQuery,
-			About:        primaryAbout,
-			Contains:     primaryContains,
-			Regex:        primaryRegex,
-			LikeFile:     *likeFile,
-			Fuzzy:        primaryFuzzy,
-			K:            *k,
-			Scores:       *scores,
-			After:        *after,
-			Before:       *before,
-			Chunks:       *chunks,
-			Files:        *files,
-			Tags:         *tags,
+			Query:           primaryQuery,
+			About:           primaryAbout,
+			Contains:        primaryContains,
+			Regex:           primaryRegex,
+			LikeFile:        *likeFile,
+			Fuzzy:           primaryFuzzy,
+			K:               *k,
+			Scores:          *scores,
+			After:           *after,
+			Before:          *before,
+			Chunks:          *chunks,
+			Files:           *files,
+			Tags:            *tags,
 			ChunkFilters:    chunkFilters,
 			Session:         *session,
 			NoTmp:           *noTmp,
@@ -1761,7 +1764,7 @@ Find-connections substrate (curation workshop's "Find Connections" action).
 Requires a running server.
 
 Public subcommands:
-  find INPUTS... [--mode M] [--k N] [--purpose P] [--timeout S] [--wait] [--json]
+  find INPUTS... [--mode M] [--k N] [--purpose P] [--timeout S] [--type T] [--wait] [--json]
     Submit a find-connections request. INPUTS may mix:
       NNNNNN           chunk ID (decimal)
       PATH:N-M         file path with line range (1-based inclusive)
@@ -1785,6 +1788,16 @@ Public subcommands:
     description as "ark-recall fire <F> nonce <N>", and the
     agent passes it back via close --nonce N so the server
     can discover the agent's JSONL for token sums.
+
+  recall next NONCE
+    The recall daemon's entire loop (batteries-included crank handle).
+    Idempotently subscribes to @ark-recall-curate, context-gates, then
+    returns the lowest-fire pending curation doc whose session has a
+    result subscriber. Blocks up to a ~90s keepalive (sized under the
+    harness foreground-Bash auto-background threshold), then returns a
+    keepalive directive; at [luhmann].context_limit returns an exit
+    directive instead. Exit 0 = doc or keepalive (loop), 2 = done.
+    Run by the recall agent — or any while-loop client.
 
   recall surface FIRE -chunk N -reason TEXT
     Append one ## Surface: item to the result-doc builder for
@@ -1812,6 +1825,15 @@ Public subcommands:
     the same session; discovers the calling subagent's JSONL
     via nonce → meta.json lookup; sums tokens; appends one
     record to ~/.ark/monitoring/recall.jsonl.
+
+  recall listen --session SID
+    Consumer-side mirror of next, for the user-facing assistant.
+    Idempotently subscribes the session to @ark-recall-result=<SID>,
+    blocks until a result doc is published, then returns it plus a
+    crank-handle. No keepalive, no context-gate — run it backgrounded;
+    it wakes only on a real result. This subscription is also the
+    daemon's subscriber-gate: until a session listens (via the /recall
+    skill) its curation docs pile up undispatched.
 
   wait PATH [--timeout S] [--json]
     Block until the tmp:// connections doc at PATH reaches a terminal
@@ -1868,7 +1890,7 @@ Without --type, each input is auto-detected. With --type chunk, every
 input is treated as a chunk reference (chunkID or path:locator — the
 shape still selects which). With --type text, every input is taken
 literally — useful when text happens to look like a chunkID or a
-path:locator (e.g. ` + "`--type text 42`" + ` searches for the literal
+path:locator (e.g. `+"`--type text 42`"+` searches for the literal
 string "42" instead of treating it as chunkID 42).
 
 Options:`)
@@ -3791,6 +3813,26 @@ func cmdDismiss(args []string) {
 	})
 }
 
+func printConfigHelp() {
+	fmt.Fprintln(os.Stderr, `Usage: ark config [SUBCOMMAND ...]
+
+Show or modify ark.toml. With no subcommand, prints the current config
+(proxies to the server when running, else reads ~/.ark/ark.toml).
+
+Subcommands:
+  add-source DIR        Append DIR to [sources]
+  remove-source DIR     Drop DIR from [sources] (its files become orphans)
+  add-include PATTERN   Append a global include (--source DIR for per-source)
+  add-exclude PATTERN   Append a global exclude (--source DIR for per-source)
+  remove-pattern PAT    Drop a matching include/exclude (--source DIR to scope)
+  show-why FILE         Which include/exclude rules cover FILE (JSON)
+  add-strategy PAT STR  Append a chunker strategy mapping
+  recover               Rewrite ark.toml from the LMDB config snapshot
+
+Mutating subcommands proxy to the server's /config endpoints when it is
+running so the in-memory config stays current.`)
+}
+
 // Seq: seq-config-mutate.md
 func cmdConfig(args []string) {
 	if len(args) == 0 {
@@ -3799,6 +3841,8 @@ func cmdConfig(args []string) {
 	}
 	// Check for sub-subcommand before flag parsing
 	switch args[0] {
+	case "--help", "-h", "help":
+		printConfigHelp()
 	case "add-source":
 		cmdConfigAddSource(args[1:])
 	case "remove-source":
@@ -4536,9 +4580,8 @@ func uiUsage(prefix string) {
 	fmt.Fprintln(os.Stderr, `Usage: ark ui [subcommand]
 
 Subcommands:
-  (none)                     open browser to UI
+  (none)                     open browser to the current UI session
   audit <app>                run code quality audit
-  browser                    open browser to current session
   checkpoint <cmd> <app>     manage app checkpoints
   display <app>              display app in the browser
   event                      wait for next UI event (120s timeout)
@@ -7482,6 +7525,12 @@ func cmdConnectionsRecall(args []string) {
 		case "context":
 			cmdConnectionsRecallContext(args[1:])
 			return
+		case "next":
+			cmdConnectionsRecallNext(args[1:])
+			return
+		case "listen":
+			cmdConnectionsRecallListen(args[1:])
+			return
 		}
 	}
 	if err := runConnectionsRecall(args, os.Stdout); err != nil {
@@ -7638,6 +7687,80 @@ func cmdConnectionsRecallContext(args []string) {
 	if *limit > 0 && resp.Tokens >= *limit {
 		os.Exit(1)
 	}
+}
+
+// cmdConnectionsRecallNext is the thin CLI proxy for the daemon's loop
+// verb (R2857, R2858). It GETs the blocking long-poll endpoint, prints
+// the crank-handle body, and exits 2 when the server returns the exit
+// directive (X-Recall-Exit header), else 0 — so a bash loop can branch
+// on $?. CRC: crc-CLI.md | Seq: seq-recall-agent.md#3 | R2857, R2858
+func cmdConnectionsRecallNext(args []string) {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "ark connections recall next NONCE")
+		os.Exit(2)
+	}
+	nonce, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil || nonce == 0 {
+		fmt.Fprintln(os.Stderr, "ark connections recall next NONCE (positive integer)")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce), nil)
+	if err != nil {
+		fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("server error (%d): %s", resp.StatusCode, strings.TrimSpace(string(data))))
+	}
+	os.Stdout.Write(data)
+	if resp.Header.Get("X-Recall-Exit") == "1" {
+		os.Exit(2)
+	}
+}
+
+// cmdConnectionsRecallListen is the consumer-side loop verb: block until
+// a recall result arrives for the session, print it + a crank-handle.
+// The user-facing assistant runs this backgrounded; serverClient has no
+// timeout so the GET blocks until the server returns a result.
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | R2865
+func cmdConnectionsRecallListen(args []string) {
+	fs := flag.NewFlagSet("connections recall listen", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	session := fs.String("session", "", "Claude Code session UUID (required)")
+	if err := fs.Parse(args); err != nil {
+		fatal(fmt.Errorf("connections recall: %w", err))
+	}
+	if *session == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall listen --session SID")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://ark/connections/recall/listen?session=%s", *session), nil)
+	if err != nil {
+		fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("server error (%d): %s", resp.StatusCode, strings.TrimSpace(string(data))))
+	}
+	os.Stdout.Write(data)
 }
 
 // popFire returns (fire, rest, err) for a recall v2 result-builder
@@ -7843,7 +7966,7 @@ func cmdSubscribers(args []string) {
 }
 
 // cmdMonitor dispatches status / recent / pause / resume.
-// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2784, R2785, R2786, R2787, R2788, R2789, R2790
+// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2863
 func cmdMonitor(args []string) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprintln(os.Stderr, `Usage: ark monitor <subcommand> [options]
@@ -7886,6 +8009,9 @@ func cmdMonitorStatus(args []string) {
 	}
 	for _, s := range sums {
 		fmt.Printf("## %s — state: %s\n", s.Class, s.State)
+		if s.Emergency != nil && s.Emergency.Active {
+			fmt.Printf("- 🚨 EMERGENCY: %s (since %s)\n", s.Emergency.Reason, s.Emergency.Since)
+		}
 		if s.LatestTimestamp != "" {
 			fmt.Printf("- latest: %s", s.LatestTimestamp)
 			if s.LatestKind != "" {
@@ -7940,24 +8066,28 @@ func cmdMonitorControl(kind string, args []string) {
 	if !ark.IsKnownMonitorClass(class) {
 		fatal(fmt.Errorf("unknown class %q (known: %s)", class, strings.Join(ark.MonitorClasses, ", ")))
 	}
+	fs := flag.NewFlagSet("monitor "+kind, flag.ExitOnError)
+	reason := fs.String("reason", "", "pause reason; storm reasons (crash-storm / quit-early-storm) light the emergency flag")
+	fs.Parse(args[1:])
+	body := map[string]any{"class": class, "kind": kind}
+	if kind == "pause" && *reason != "" {
+		body["reason"] = *reason
+	}
 	client := requireServer(fmt.Sprintf("monitor %s", kind))
-	if err := proxyOK(client, "POST", "/monitor/control", map[string]any{
-		"class": class,
-		"kind":  kind,
-	}); err != nil {
+	if err := proxyOK(client, "POST", "/monitor/control", body); err != nil {
 		fatal(err)
 	}
 }
 
 // cmdLuhmann dispatches spawn-record / exit-record / inspect-exit.
-// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2794, R2795, R2796
+// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2794, R2795, R2796, R2861
 func cmdLuhmann(args []string) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprintln(os.Stderr, `Usage: ark luhmann <subcommand> [options]
 
 Subcommands:
   spawn-record --class C --nonce N --task-id T   Record a subagent spawn (server)
-  exit-record  --class C --nonce N --reason R [--crashes K] [--backoff S]
+  exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
                                                   Record a subagent exit (server)
   inspect-exit --nonce N [--json]                Classify a subagent exit (cold-start)`)
 		os.Exit(0)
@@ -8000,8 +8130,9 @@ func cmdLuhmannExitRecord(args []string) {
 	fs := flag.NewFlagSet("luhmann exit-record", flag.ExitOnError)
 	class := fs.String("class", "", "managed subagent class (required)")
 	nonce := fs.Int("nonce", 0, "nonce for the exiting subagent (required)")
-	reason := fs.String("reason", "", "exit reason (required; \"context-limit\" classifies as healthy)")
+	reason := fs.String("reason", "", "exit reason (required; \"context-limit\"=healthy, \"quit-early\"=quit-early, else crash)")
 	crashes := fs.Int("crashes", -1, "override computed crashes counter (default: compute from previous record)")
+	quitEarly := fs.Int("quit-early", -1, "override computed quit_early counter (default: compute from previous record)")
 	backoff := fs.Int("backoff", 0, "seconds the supervisor will wait before respawn")
 	fs.Parse(args)
 	if *class == "" || *nonce == 0 || *reason == "" {
@@ -8017,6 +8148,9 @@ func cmdLuhmannExitRecord(args []string) {
 	}
 	if *crashes >= 0 {
 		body["crashes"] = *crashes
+	}
+	if *quitEarly >= 0 {
+		body["quit_early"] = *quitEarly
 	}
 	client := requireServer("luhmann exit-record")
 	if err := proxyOK(client, "POST", "/luhmann/record", body); err != nil {
@@ -8155,10 +8289,23 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 		}
 	}
 	label := "crash"
-	if closeSeen {
-		label = "healthy"
-	} else if recallOutcomeIs(arkDir, nonce, "result-emitted", "silent-close", "no-subscriber") {
-		label = "healthy"
+	cleanExit := closeSeen || recallOutcomeIs(arkDir, nonce, "result-emitted", "silent-close", "no-subscriber")
+	if cleanExit {
+		// R2796: a clean turn boundary is only "healthy" when the
+		// generation actually filled — tokens at close at/over the
+		// configured limit (filled-and-recycled). A clean stop below
+		// the limit is "quit-early", not healthy: the agent stopped
+		// before filling. The distinct label keeps the early stop
+		// visible instead of masquerading as a clean recycle.
+		limit := 150000
+		if cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml")); err == nil {
+			limit = cfg.Luhmann.EffectiveContextLimit()
+		}
+		if limit > 0 && tokensAtClose >= limit {
+			label = "healthy"
+		} else {
+			label = "quit-early"
+		}
 	}
 	return inspectExitResult{
 		Label:          label,

@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804
+**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804, R2857
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -41,7 +41,18 @@ no new struct, no new field (R2278).
   Append semantics preserved for HTTP and direct Go callers
   (R2309); the Lua bridge layers replace-by-(session, predicate)
   on top. `-tag` and `-file-tag` arguments arrive already parsed
-  into MatchPredicates and tagged with Kind (R2442, R2462).
+  into MatchPredicates and tagged with Kind (R2442, R2462). Fires
+  the `subChanged` broadcast (close+replace) so waiters gated on
+  subscriber presence — recall `next` — wake at once (R2857).
+- SubChanged() <-chan struct{}: return the current `subChanged`
+  channel; closed when the next Subscribe runs. A caller selects on
+  it to wake on subscription changes instead of polling (R2857).
+- QueueChan(sessionID string) <-chan Event: return a session's event
+  queue (nil if none) so a caller can select on it directly rather
+  than via the blocking Listen (R2857).
+- TouchListen(sessionID string): refresh a session's lastListen so a
+  caller that waits via its own select (not Listen) isn't reaped
+  (R803, R2857).
 - Cancel(sessionID string, predicate MatchPredicate): remove
   subscriptions. A zero predicate cancels all entries for the
   session. A predicate with name-only mode cancels every entry

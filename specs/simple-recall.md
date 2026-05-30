@@ -14,12 +14,15 @@ pipeline has two layers:
   substrate against the indexed chunks of each completed turn,
   and writes a **curation doc** to `tmp://ARK-RECALL/`. No
   language model in this layer.
-- **Recall agent** (Haiku, one-shot). The assistant subscribes
-  to curation events; on event arrival it spawns a one-shot
-  Haiku subagent via the Task tool. The agent reads the
-  curation doc via `ark fetch`, decides which candidates are
-  surface-worthy and which proposed tags are recommendable, and
-  writes a **result doc** the assistant reads.
+- **Recall agent** (Haiku, long-running daemon). The Luhmann
+  orchestrator spawns one persistent curator per generation. Its
+  whole loop is a single verb — `ark connections recall next
+  <nonce>` — which subscribes, dispatches the next curation doc
+  whose session has a result subscriber (blocking up to a ~90-second
+  keepalive otherwise), and context-gates. The agent runs it in the
+  foreground and loops in one continuous turn. The agent decides which
+  candidates are surface-worthy and which proposed tags are
+  recommendable, and writes a **result doc** the assistant reads.
 
 The split keeps an LLM out of the high-frequency watcher path
 while letting a cheap model curate before anything reaches the
@@ -27,8 +30,10 @@ assistant. Three of the open questions that the original
 agent-in-watcher design raised disappear by construction:
 
 - **Process lifecycle.** `ark serve` already runs; the watcher
-  is a tracked subsystem inside it. The agent is one-shot per
-  fire — no daemon to keep alive.
+  is a tracked subsystem inside it, with no LLM to keep alive on
+  the high-frequency path. The curating agent is a separate
+  daemon whose lifecycle (spawn, recycle on context-fill, respawn)
+  is owned by the Luhmann orchestrator, not the watcher.
 - **Target-session discovery.** The JSONL filename *is* the
   session UUID. No env-var dance, no handshake.
 - **Multi-tenancy.** One server per machine watches every
@@ -60,9 +65,11 @@ RecallWatcher.OnAppend(path, strategy, newBytes, added)
   ├─ accumulate `added` into pendingChunks[session]
   │
   ├─ scan newBytes line-by-line:
-  │     - `"type":"user"`             → cancel pendingTimer[session]
-  │     - `"subtype":"turn_duration"` → arm pendingTimer[session]
-  │                                     for activation_delay seconds
+  │     - `"type":"user"`             → cancel pendingTimer[session],
+  │                                     set armReady (re-enable arming)
+  │     - `"subtype":"turn_duration"` → if armReady: arm pendingTimer
+  │                                     for activation_delay, clear
+  │                                     armReady (once per user turn)
   ▼ (timer expiry, separate goroutine)
 RecallWatcher.fire(session)
   │
@@ -90,35 +97,34 @@ RecallWatcher.fire(session)
                                        │
                                        │ pubsub publishes the new tmp:// path
                                        ▼
-                          assistant — running `ark listen` on a
-                          subscription to `@ark-recall-curate`
+                          recall daemon (Haiku, long-running) —
+                          spawned once per generation by the Luhmann
+                          orchestrator, nonce <N> in its prompt. Its
+                          whole loop is one verb:
                                        │
-                                       ├─ inspects the event's tag value;
-                                       │   drops events whose curate value
-                                       │   isn't its own session
-                                       │
-                                       ├─ reserves a nonce:
-                                       │   ark connections recall reserve-nonce → N
-                                       │
-                                       └─ launches the recall agent via Task,
-                                          embedding fire and nonce in description:
-                                          "ark-recall fire <F> nonce <N>"
-                                                  │
-                                                  ▼
-                                       recall agent (Haiku subagent, one-shot)
-                                                  │
-                                                  ├─ reads the curation doc:
-                                                  │   ark fetch tmp://ARK-RECALL/...
-                                                  │   (Read tool is denied by the
-                                                  │    PreToolUse guard; denial
-                                                  │    carries the ark fetch
-                                                  │    template as the runway —
-                                                  │    fumble-onboarding pattern)
+                                       ▼
+                          ark connections recall next <N>
+                                       │  server-side, in one verb:
+                                       │   idempotent subscribe (bare
+                                       │   @ark-recall-curate, session
+                                       │   recall-loop-<N>) → context-gate
+                                       │   → pick lowest-fire pending
+                                       │   curation-<S>-<F> whose session
+                                       │   has a result subscriber → block
+                                       │   up to a ~90s keepalive if none.
+                                       │   Returns inline (foreground) the doc
+                                       │   content + "judge, close, run next",
+                                       │   or a keepalive ("run next again");
+                                       │   at the context limit, EXIT
+                                       │   (status 2) and stop.
+                                       │   Docs with no subscriber pile up.
+                                       ▼
+                                       daemon judges the candidates
                                                   │
                                                   ├─ for each candidate worth surfacing:
                                                   │   ark connections recall surface <F> \
-                                                  │     -chunk N -range PATH:RANGE \
-                                                  │     -reason "..."
+                                                  │     -chunk N -reason "..."
+                                                  │   (server resolves path:range + size)
                                                   │
                                                   ├─ for each proposed tag worth recommending:
                                                   │   ark connections recall recommend <F> \
@@ -173,16 +179,17 @@ each pass, so toggling `enabled` or any other knob takes effect
 on the next turn boundary without a restart.
 
 The retired `agent_cmd` reservation from v1 is gone. The recall
-agent is invoked by the assistant via the Task tool, not by a
-configured command; future orchestrator wiring (Phase 2 /
-Luhmann, see `.scratch/SIMPLE-RECALL.md`) owns its own startup.
+daemon is spawned by the Luhmann orchestrator via the Task tool,
+not by a configured command; the orchestrator owns its own
+startup and respawn lifecycle (`seq-luhmann-supervisor.md`).
 
 ## Trigger semantics
 
 The watcher hooks into `indexer.executeRefresh`'s isAppend
 branch. The indexer hands the watcher `(path, strategy, newBytes,
-added)` for each committed append. Trigger semantics are
-unchanged from v1:
+added)` for each committed append. Trigger semantics, with one
+refinement over v1 — **arm once per user turn** (so the watcher
+never re-triggers on its own consumers' output):
 
 - **Source qualification.** A source qualifies when its
   chunker strategy is `chat-jsonl` and (if `sources` is
@@ -194,11 +201,26 @@ unchanged from v1:
 - **Trigger arming.** The watcher scans `newBytes` line-by-line
   for the assistant's turn-end signal: a line whose top-level
   type is `"system"` with `"subtype":"turn_duration"` arms the
-  `pendingTimer` for `activation_delay` seconds.
-- **Trigger cancellation.** A line whose top-level type is
-  `"user"` cancels any currently-armed `pendingTimer`. The
-  accumulated `pendingChunks` are *not* cleared — they remain
-  pending and roll into the next fire.
+  `pendingTimer` for `activation_delay` seconds — **but only once
+  per user turn**. Arming requires `armReady` (set by a preceding
+  *genuine* user record) and clears it, so a `turn_duration` with no
+  intervening genuine user record (an agent-only turn — e.g. the
+  assistant surfacing recall, woken by a notification) does **not**
+  re-arm. This is what stops the recall ping-pong: the watcher never
+  fires on a turn that no human initiated.
+- **Genuine user records only.** A `type:"user"` line counts as a
+  user turn only when it's a real human message: `message.content` is
+  a JSON string (tool-results are arrays) **and** it has no harness
+  `origin` (Claude Code stamps injected lines — e.g. background-task
+  completions — with `origin.kind` like `"task-notification"`). Tool-
+  results and notification wake-lines are *not* user turns. Without
+  this, a consumer surfacing recall — woken by a `type:"user"`
+  notification — would re-arm the watcher and cascade.
+- **Trigger cancellation.** A genuine user record cancels any
+  currently-armed `pendingTimer` **and sets `armReady`, re-enabling
+  arming for the next `turn_duration`**. The accumulated
+  `pendingChunks` are *not* cleared — they remain pending and roll
+  into the next fire.
 - **Fire on expiry.** When the timer expires, the watcher
   allocates the next global fire number, processes everything
   currently in `pendingChunks[session]`, and clears the slice.
@@ -268,8 +290,9 @@ Notes:
   reading the doc as plain text sees what triggered each
   section.
 - `tags` lists the candidate chunk's inline and ext-routed
-  tag *names* (bare). Values aren't shown in the curation doc;
-  the agent reads them via `ark fetch` if it needs detail.
+  tag *names* (bare). Values aren't shown — the curation doc
+  carries names only, and the sealed daemon works from what
+  `next` hands it inline; it has no path to fetch more.
 - `proposed-tags` lists derived-tag candidates surviving
   `min_propose_similarity`, each rendered with the
   parenthesized chunk-EC ↔ tag-ED cosine score from the
@@ -299,24 +322,27 @@ them. **Surface** items recommend showing a chunk to the user;
 **Recommend** items propose a tag attach worth re-curating.
 
 ```
-## Surface: <chunkid> (<size>)
+## Surface: <chunkid> (<size>) <path>:<range>
 
 reason: <one-line justification>
 
-## Recommend: @<tag>[:<value>] on <chunkid>
+## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>
 
 reason: <one-line justification>
 ```
 
-The Surface H2 carries the chunkID plus the chunk's byte size
-in parentheses (e.g. `(33K)`, `(500b)`, `(1.2M)`). The
-assistant resolves path / range / context on demand via
-`ark chunks <chunkid> [-before N] [-after N]`; the size lets it
-glance at the cost of fetching before deciding (some chunks are
-in the tens of kB — markdown nested-list explosions, full
-function definitions in bracket-go chunks). Keeping the result
-doc thin preserves the assistant's "scan reasons, drill on
-demand" loop.
+Both H2 kinds carry the chunk's `<path>:<range>` (mirroring the
+curation-doc `## Candidate:` line, R2749); Surface additionally
+carries the chunk's byte size in parentheses (e.g. `(33K)`,
+`(500b)`, `(1.2M)`). The path is inline so the consuming
+assistant can prune by file — dropping surfaces for code it
+already has in context, keeping the ones that pull in out-of-view
+code — without resolving every chunk first. A **Recommend** can
+reference a chunk that was never surfaced, so it carries its own
+path for the same judgment. The assistant still resolves full
+content on demand via `ark chunks <chunkid> [-before N] [-after N]`;
+the size lets it glance at fetch cost before drilling. The result
+doc stays a "scan-and-prune, drill on demand" surface.
 
 The assistant has final say on whether to surface a chunk to
 the user or to ask the user about a tag recommendation. The
@@ -347,30 +373,34 @@ b.Candidate(chunkID, path, rangeLabel, score,
 b.Close()                                        // writes tmp:// doc
 ```
 
-**Nonce reservation — CLI, called by the assistant:**
+**Nonce reservation — CLI, called by the orchestrator:**
 
 ```
 ark connections recall reserve-nonce
 ```
 
 Returns a small monotonic integer (`1`, `2`, ...) per `ark
-serve` run. In-memory counter; resets on restart. The assistant
-calls this once before invoking the recall agent via Task; the
-integer is embedded in the Task `description` field as the
-literal string `ark-recall fire <F> nonce <N>` (see
-*Nonce-in-description format* below) and passed into the
-agent's prompt body.
+serve` run. In-memory counter; resets on restart. The Luhmann
+orchestrator calls this once per generation, before spawning the
+daemon via Task; the integer is embedded in the Task
+`description` field as the literal string `ark-recall lotto-tube
+loop nonce <N>` (see *Nonce-in-description format* below) and
+passed into the agent's prompt body.
 
 **Result-doc builder — CLI, called by the recall agent. The
 fire number is the cookie that ties calls together.**
 
 ```
-ark connections recall surface <F> -chunk N -range PATH:RANGE \
-                                   -reason "..."
+ark connections recall surface <F> -chunk N -reason "..."
 ark connections recall recommend <F> -chunk N -tag @t[:v] \
                                      -reason "..."
 ark connections recall close <F> --nonce <N> [-preserve-curation]
 ```
+
+`surface` and `recommend` take the chunkID only; the server
+resolves the chunk's `path:range` (and, for `surface`, its byte
+size) via `chunkLocator` and writes it into the result doc (R2751).
+The agent never passes a path.
 
 Discipline:
 
@@ -423,18 +453,23 @@ home.
 ### Nonce-in-description format
 
 The Task tool exposes the agent's `description` field in its
-`.meta.json` sidecar. The assistant constructs the description
-as the literal string:
+`.meta.json` sidecar. The orchestrator constructs the description
+as a string containing the substring `nonce <N>`:
 
 ```
-ark-recall fire <F> nonce <N>
+ark-recall lotto-tube loop nonce <N>
 ```
 
-`close` discovers the agent's JSONL by scanning
-`<subagents-dir>/*.meta.json` for descriptions whose body
-contains `nonce <N>` as a substring. Trivially
-`strings.Contains` parseable; no JSON parsing of the description
-field is performed.
+(No fire in the description — one daemon generation spans many
+fires.) `close` / `context` discover the agent's JSONL by scanning
+`<subagents-dir>/*.meta.json` for descriptions whose body contains
+`nonce <N>` as a substring. Trivially `strings.Contains`
+parseable; no JSON parsing of the description field is performed.
+
+The same nonce is also passed in the agent's **prompt** (`Nonce:
+<N>`), because a sealed subagent cannot read its own description —
+the prompt copy is what the agent types into its `subscribe`,
+`close`, and `context` calls.
 
 ### Subagent JSONL discovery
 
@@ -485,10 +520,10 @@ by every `close` call. Each line is one JSON record:
 `context_tokens` is the agent's cumulative context fill at close
 time (`cache_creation_input_tokens + cache_read_input_tokens` from
 the most recent assistant record in the subagent's JSONL — the
-same value `ark connections recall context` returns). In v2
-one-shot fires the number is roughly per-fire static; in Phase 2's
-long-running lotto-tube agent it's the load-bearing telemetry
-showing context creep across fires until the agent self-recycles.
+same value `ark connections recall context` returns). For the
+long-running daemon it's the load-bearing telemetry: context
+creep across fires until `next`'s gate recycles the generation at
+`[luhmann].context_limit`.
 
 `outcome` is one of `result-emitted`, `silent-close`,
 `no-subscriber`, or `error`. `no-subscriber` covers both gate
@@ -501,75 +536,145 @@ and forward-compatible; future fields slot in at the end.
 ## Recall agent
 
 The agent definition lives at
-`.claude/agents/ark-recall-agent.md`. Shape mirrors
-`ark-messenger` / `ark-searcher`:
+`.claude/agents/ark-recall-agent.md`. It is a **long-running
+daemon**, spawned once per generation by the Luhmann orchestrator
+(not per-fire by an assistant). Shape mirrors `ark-messenger` /
+`ark-searcher`:
 
 - Model: Haiku 4.5.
 - `memory: local` so MEMORY.md does not leak into the agent.
-- Skill file at `~/.ark/skills/ark-recall.md`, fetched
-  via the fumble-onboarding pattern: the PreToolUse guard
-  denies the agent's first tool attempt and the denial message
-  carries the `ark fetch` template as the runway. A Fumble Log
-  (silent ride-along) records parse failures so we can tighten
-  the curation-doc format over time.
+- No bootstrap skill. The loop is small enough to live in the
+  agent persona: the body says "run `ark connections recall next
+  <your nonce>` and do what its output tells you," looping until
+  `next` returns the exit directive. The surfacing bar — when a
+  candidate genuinely fits its source paragraph vs. merely
+  resembling it — lives in the persona too, since that judgment is
+  the agent's core identity. `recall-loop.md` is retired as the
+  loop driver; `~/.ark/skills/ark-recall.md` remains the
+  standalone one-shot work skill (the preserved capability),
+  untouched. The fumble-onboarding pattern still applies: every
+  denied tool call carries `ark connections recall next <N>` as
+  the runway, and a Fumble Log (silent ride-along) records parse
+  failures so we can tighten the curation-doc format over time.
+
+**Spawn contract.** The orchestrator reserves a nonce `N`, then
+spawns the daemon with the nonce in two places: the Task
+`description` (`ark-recall lotto-tube loop nonce <N>`, for JSONL
+discovery) and the prompt (`Start the recall loop now. Nonce: <N>.
+Context limit: <L>.`). The agent cannot read its own description,
+so the prompt copy is the one it passes to its `next` and `close`
+calls.
 
 **Tool allowlist (hermetic seal, enforced by the PreToolUse
 guard script):**
 
-- `Bash` permitted only for:
-  - `ark fetch tmp://ARK-RECALL/curation-*` (the agent's only
-    read path)
+- `Bash` permitted for the four loop verbs:
+  - `ark connections recall next <N>` (the loop driver — subscribe,
+    block, fire-order, fetch, and context-gate all live inside it)
   - `ark connections recall surface <F> ...`
   - `ark connections recall recommend <F> ...`
-  - `ark connections recall close <F> [-preserve-curation]`
-- `Read`, `Edit`, `Write`, and network tools are all denied.
-  The `Read` denial is the runway — the guard's stderr tells
-  the agent to use `ark fetch` instead.
+  - `ark connections recall close <F> --nonce <N> [-preserve-curation]`
+  — plus `cat <file>` (single arg, no chaining/redirection) so the
+  agent can read the backgrounded `next`'s output file.
+- `Read`, `Edit`, `Write`, network tools, and every other `ark`
+  verb — `subscribe`, `listen`, `files`, `fetch`, `context` — are
+  denied as a class, because `next` absorbs them. Each denial's
+  stderr is the runway: it points back at `ark connections recall
+  next <N>`.
 
 **Persona briefing.** The agent is a curator, not a
-synthesizer. Its job: read the curation doc, decide which
+synthesizer. Its job per fire: read the curation doc, decide which
 candidates fit the source paragraph well enough to surface, and
 which proposed tags fit their chunk well enough to recommend.
 Defaults to silence — better to drop a doc (close with no
-items) than to spam the assistant.
+items) than to spam an assistant.
 
 **Agent does not write RJ records.** Permanent rejection is a
-user-relayed decision. When the assistant surfaces a tag
-recommendation to the user and the user rejects it, the
+user-relayed decision. When an assistant surfaces a tag
+recommendation to its user and the user rejects it, the
 *assistant* calls `ark connections recall reject-derived` (the
 existing path) to write the RJ. The agent's role is filter and
 recommend; the durable rejection state stays under user
 control.
 
-**Subscriptions.** The agent does not subscribe to pubsub. It
-is invoked one-shot per fire by the assistant via the Task
-tool, with the curation doc path and the `(fire, nonce)`
-identifiers passed in its prompt.
+**The loop.** The daemon's entire loop is `ark connections recall
+next <N>`. On its first call `next` idempotently establishes the
+bare `@ark-recall-curate` subscription under session
+`recall-loop-<N>`; thereafter it returns the lowest-fire pending
+curation doc **whose session has a result subscriber**, blocking up
+to a **~90-second keepalive** when none is dispatchable (a doc for a
+session with no subscriber is left to pile up, never dispatched —
+the daemon defers, never discards). On the keepalive timeout it
+returns a "run `next` again" directive; at the context limit it
+returns an exit directive. The agent runs `next` in the **foreground**
+and loops in one continuous turn — the ~90s window keeps `next`
+returning inline before the harness's foreground auto-background
+threshold (~120s), so the subagent never ends its turn mid-loop and
+only "completes" on a true context-limit exit (no per-cycle beats for
+the supervisor to misread). The agent never runs `subscribe`,
+`listen`, `fetch`, or `context`; `next` carries them all. It derives
+each fire from the doc `next` hands it; it never allocates a fire.
 
-## Assistant subscriptions
+## Assistant subscriptions — `recall listen` and `/recall`
 
-The assistant runs two subscriptions, both scoped under its own
-Claude Code session UUID as the subscription session ID:
+Recall is **opt-in per session**. A user-facing assistant taps in by
+running one batteries-included verb — the consumer-side mirror of the
+daemon's `next`:
 
 ```
-ark subscribe --session <claude-code-session-uuid> \
-              --tag ark-recall-curate
-ark subscribe --session <claude-code-session-uuid> \
-              --tag ark-recall-result=<claude-code-session-uuid>
+ark connections recall listen --session <claude-code-session-uuid>
 ```
 
-- The curate subscription is **bare** (no value constraint).
-  The assistant receives every curate event the watcher emits,
-  inspects the `@ark-recall-curate` tag value, and drops events
-  whose value isn't its own Claude Code session. Cheap filter,
-  no false negatives if multi-session deployments later turn
-  on.
-- The result subscription is value-scoped to the assistant's
-  own session so cross-session result docs never reach the
-  wrong listener.
+`listen` carries the whole consumer loop:
 
-`ark listen --session <claude-code-session-uuid>` is the
-blocking wait used to pop events from both subscriptions.
+- **Subscribe (idempotent).** On first call it establishes the
+  value-scoped result subscription `@ark-recall-result=<session>` under
+  session `<session>` (later calls are no-ops). The assistant never runs
+  `ark subscribe` itself.
+- **Block until a result.** It blocks until at least one
+  `tmp://ARK-RECALL/result-<session>-<fire>` doc is published for the
+  session, then returns the doc content (the `## Surface:` /
+  `## Recommend:` items, already path-stamped). Unlike the daemon's
+  `next` there is **no keepalive and no context-gate**: the assistant
+  runs `listen` backgrounded and should wake only on a real result, not
+  on idle ticks (a keepalive would bloat the assistant's context the way
+  per-cycle beats bloat the orchestrator's). A long quiet stretch just
+  blocks; cancellation (request/session end) is the only non-result
+  return.
+- **Crank-handle.** The body ends with prose: "this is ambient recall —
+  decide what genuinely helps the user (you have final say; skip stale /
+  off-topic), then run `recall listen --session <session>` again."
+
+The assistant's downstream judgment is unchanged: it consults the RJ
+counter for each `## Recommend:` (R2765 / R2766) and, on a user
+rejection, calls `ark connections recall reject-derived`. `listen` does
+**not** filter recommends itself — the RJ decision stays the assistant's.
+
+**Opt-in via the subscriber-gate.** Until the assistant runs `listen`
+(no subscriber for `@ark-recall-result=<session>`), the daemon's `next`
+subscriber-gate leaves that session's curation docs pending — they pile
+up, undispatched, and no recall work is done for the session. So a
+session gets ambient recall exactly when (and only when) its assistant
+opts in.
+
+**The `/recall` skill** kicks off the loop. The user types `/recall`,
+and the assistant — using its own session UUID, which the skill provides
+via the `sessionid=${CLAUDE_SESSION_ID}` macro Claude Code fills in
+before delivery — runs `ark connections recall listen` **backgrounded**,
+and on each completion surfaces what helps the user and relaunches the
+background `listen`. If the user never types `/recall`, the assistant
+never subscribes and recall stays dormant for that session. The
+notification-woken surfacing turn does not arm the watcher — its
+`origin.kind` is `task-notification`, not a genuine user message (R2732)
+— so the consumer loop does not feed itself.
+
+The assistant does **not** subscribe to `@ark-recall-curate`, reserve
+nonces, or spawn the recall agent — the curate side and the curation
+work belong to the daemon (whose bare `@ark-recall-curate` subscription
+under `recall-loop-<N>` is established by `next` on its first call).
+(`listen` is built on the same value-scoped subscription + `ark listen`
+the assistant used to run by hand; it just absorbs subscribe + block +
+fetch into one verb, as `next` does for the daemon.)
 
 ## Discussed-tag marking policy
 
@@ -663,7 +768,7 @@ the monitoring log written by `close`:
 ## What this pipeline does not do
 
 - **No LLM in the watcher.** The watcher is deterministic on its
-  inputs. The LLM lives only in the one-shot recall agent.
+  inputs. The LLM lives only in the curating daemon.
 - **No new tag-name invention.** RC records expose statistical
   tag *value* candidates against existing tag definitions.
   Definition-class proposals (RP/RPE/RR records, reserved
@@ -675,10 +780,11 @@ the monitoring log written by `close`:
   gate (below) skips the curation / result write entirely when no
   one is listening. A subscriber that arrives after the skip does
   not retroactively receive the dropped fire.
-- **No long-running orchestrator.** Phase 1 spawns the agent
-  one-shot per fire via Task. Phase 2 (Luhmann, see
-  `.scratch/SIMPLE-RECALL.md`) introduces a long-running
-  orchestrator; out of scope here.
+- **Orchestrator lifecycle is elsewhere.** The Luhmann
+  orchestrator spawns and respawns the recall daemon (one
+  generation per spawn-to-context-fill cycle); those mechanics
+  live in `seq-luhmann-supervisor.md`, not here. This doc owns the
+  watcher, the builder verbs, and the daemon's per-doc work.
 - **Agent does not write RJ records.** The agent recommends;
   the user-via-assistant rejects.
 
@@ -724,9 +830,11 @@ the monitoring log written by `close`:
   suppresses the candidate; counter = 1 — propose pass surfaces.
 - `reject_mention_ceiling = 5`, counter = 5 — assistant's
   "mention rejected" path is silent for this record.
-- Agent allowlist — Haiku attempting `Read tmp://...` triggers
-  the guard's denial; the denial stderr names `ark fetch` as
-  the correct path; the agent's next call uses `ark fetch`.
+- Agent allowlist — Haiku attempting `Read`, or any non-loop
+  command (`ark fetch`, `ark listen`, `ark subscribe`), triggers
+  the guard's denial; the denial stderr names `ark connections
+  recall next <N>` as the loop driver; the agent's next call uses
+  `next`.
 - Fumble Log — agent emits a malformed `surface` flag set;
   parse failure is appended to the Fumble Log; the fire still
   completes (the malformed call is rejected by the CLI; the
@@ -768,8 +876,8 @@ Lands in this pass:
 - `reject_propose_ceiling` and `reject_mention_ceiling`
   `ark.toml` knobs + readers in propose pass and assistant
   flow.
-- `.claude/agents/ark-recall-agent.md` definition (Haiku, ark
-  fetch only, no Read).
+- `.claude/agents/ark-recall-agent.md` definition (Haiku,
+  `memory: local`).
 - PreToolUse guard script for fumble-onboarding the recall
   agent.
 - `~/.ark/skills/ark-recall.md` skill file.

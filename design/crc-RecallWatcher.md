@@ -33,7 +33,9 @@ composes and writes each curation doc via the in-process
   - pendingChunks: []uint64 — indexed chunkIDs accumulated
     since the last fire
   - pendingTimer: *time.Timer — armed when turn_duration is
-    seen; nil otherwise
+    seen (and armReady); nil otherwise
+  - armReady: bool — gates arming to once per user turn (R2734);
+    set by a user record, cleared on arm
 - fireCounter: uint64 — globally monotonic counter scoped to
   one `ark serve` run, starting at 0; allocated on each timer
   expiry; written into the curation doc header and used as
@@ -60,11 +62,19 @@ composes and writes each curation doc via the in-process
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
     (R2729, R2730).
   - Scan `newBytes` line-by-line; parse each line as JSON and
-    inspect top-level `type`/`subtype` (R2731, R2732):
-    - On `type=user` → cancel `pendingTimer` (R2733).
-    - On `type=system, subtype=turn_duration` → cancel any
-      armed timer, arm a fresh one for `activation_delay`
-      seconds whose expiry posts the fire closure (R2734).
+    inspect top-level `type`/`subtype`, plus `message.content` and
+    `origin.kind` for user records (R2731, R2732):
+    - On a *genuine* `type=user` record — string content and no
+      harness `origin` (`isGenuineUserMessage`; excludes tool-results
+      (array content) and injected notifications (`origin.kind` like
+      `task-notification`)) → cancel `pendingTimer`, set `armReady`
+      (R2732, R2733).
+    - On `type=system, subtype=turn_duration` → only if
+      `armReady`: cancel any armed timer and arm a fresh one for
+      `activation_delay` seconds (clearing `armReady`) whose expiry
+      posts the fire closure. If not `armReady`, ignore — an
+      agent-only turn does not re-arm, which stops the recall
+      ping-pong (R2734).
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
   lock, allocates the next `fireCounter` value (R2752), then

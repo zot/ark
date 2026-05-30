@@ -45,24 +45,24 @@ import (
 
 // Server is an HTTP server on a Unix domain socket.
 type Server struct {
-	db              *DB
-	listener        net.Listener
-	pidPath         string
-	noScan          bool
-	uiRuntime       *flib.Runtime
-	watcher         *fsnotify.Watcher
-	ignoredPaths    map[string]struct{} // negative cache: non-indexable paths
-	indexingMu      sync.Mutex
-	indexingSources []string // source dirs currently being indexed
-	uiPort          int      // HTTP port the ui-engine is listening on (0 if not started)
-	sessionsMu      sync.Mutex
-	sessions        map[string]*Session // R641: named sessions, autocreated on demand
-	pubsub          *PubSub             // R799: subscription registry
-	scheduler       *EventScheduler     // R805: time-based event queue
-	librarian       *Librarian          // R1235: Haiku co-process for spectral search
-	curation        *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
-	recallWatcher       *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
-	recallAgentBuilder  *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
+	db                 *DB
+	listener           net.Listener
+	pidPath            string
+	noScan             bool
+	uiRuntime          *flib.Runtime
+	watcher            *fsnotify.Watcher
+	ignoredPaths       map[string]struct{} // negative cache: non-indexable paths
+	indexingMu         sync.Mutex
+	indexingSources    []string // source dirs currently being indexed
+	uiPort             int      // HTTP port the ui-engine is listening on (0 if not started)
+	sessionsMu         sync.Mutex
+	sessions           map[string]*Session // R641: named sessions, autocreated on demand
+	pubsub             *PubSub             // R799: subscription registry
+	scheduler          *EventScheduler     // R805: time-based event queue
+	librarian          *Librarian          // R1235: Haiku co-process for spectral search
+	curation           *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
+	recallWatcher      *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
+	recallAgentBuilder *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
 
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
@@ -464,6 +464,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /connections/recall/recommend", srv.handleRecallRecommend)
 		mux.HandleFunc("POST /connections/recall/close", srv.handleRecallClose)
 		mux.HandleFunc("POST /connections/recall/context", srv.handleRecallContext)
+		// Recall daemon loop verb (batteries-included crank handle). R2857, R2858
+		mux.HandleFunc("GET /connections/recall/next", srv.handleRecallNext)
+		// Recall consumer loop verb (assistant side). R2865
+		mux.HandleFunc("GET /connections/recall/listen", srv.handleRecallListen)
 		// Recall (Phase 2B) HTTP endpoint.
 		// CRC: crc-Server.md | Seq: seq-recall.md#1.3 | R2629
 		mux.HandleFunc("POST /recall", srv.librarian.HandleRecall)
@@ -2159,7 +2163,7 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		Cancel  bool   `json:"cancel"`
 		List    bool   `json:"list"`
 		Stats   bool   `json:"stats"`
-		Subs []struct {
+		Subs    []struct {
 			// R2442, R2457, R2460: sigil-form tag query. The leading
 			// sigil and internal separator carry name/value match
 			// modes. `Kind` selects "tag" (chunk-precise) or
@@ -2266,11 +2270,12 @@ func (srv *Server) handleSubscribers(w http.ResponseWriter, r *http.Request) {
 // handleMonitorControl appends one pause/resume record to
 // `~/.ark/monitoring/<class>.jsonl` via the write actor. Enforces the
 // state-already-set guard before the append.
-// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2787, R2788
+// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2787, R2788, R2863
 func (srv *Server) handleMonitorControl(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Class string `json:"class"`
-		Kind  string `json:"kind"`
+		Class  string `json:"class"`
+		Kind   string `json:"kind"`
+		Reason string `json:"reason,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2288,7 +2293,7 @@ func (srv *Server) handleMonitorControl(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := AppendMonitorControl(srv.db, srv.db.Path(), req.Class, req.Kind); err != nil {
+	if err := AppendMonitorControl(srv.db, srv.db.Path(), req.Class, req.Kind, req.Reason); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2297,16 +2302,17 @@ func (srv *Server) handleMonitorControl(w http.ResponseWriter, r *http.Request) 
 
 // handleLuhmannRecord appends one supervisor record to
 // `~/.ark/monitoring/luhmann.jsonl` via the write actor.
-// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2794, R2795
+// CRC: crc-Server.md | Seq: seq-luhmann-supervisor.md | R2794, R2795, R2861
 func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kind    string `json:"kind"`
-		Class   string `json:"class"`
-		Nonce   int    `json:"nonce"`
-		TaskID  string `json:"task_id"`
-		Reason  string `json:"reason"`
-		Crashes *int   `json:"crashes,omitempty"`
-		Backoff int    `json:"backoff"`
+		Kind      string `json:"kind"`
+		Class     string `json:"class"`
+		Nonce     int    `json:"nonce"`
+		TaskID    string `json:"task_id"`
+		Reason    string `json:"reason"`
+		Crashes   *int   `json:"crashes,omitempty"`
+		QuitEarly *int   `json:"quit_early,omitempty"`
+		Backoff   int    `json:"backoff"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2322,15 +2328,20 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "task_id required for spawn/respawn", http.StatusBadRequest)
 			return
 		}
-	case "exit", "crash":
+	case "exit", "crash", "quit-early":
 		if req.Reason == "" {
-			http.Error(w, "reason required for exit/crash", http.StatusBadRequest)
+			http.Error(w, "reason required for exit/crash/quit-early", http.StatusBadRequest)
 			return
 		}
 	default:
-		http.Error(w, fmt.Sprintf("kind must be spawn/respawn/exit/crash, got %q", req.Kind), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("kind must be spawn/respawn/exit/crash/quit-early, got %q", req.Kind), http.StatusBadRequest)
 		return
 	}
+	// Both counters recompute from the previous record (R2861): a
+	// healthy exit resets both; a crash increments crashes and holds
+	// quit_early; a quit-early increments quit_early and holds crashes;
+	// spawn/respawn carry both forward (the default branches).
+	prevCrashes, prevQuitEarly, _ := PrevCounters(srv.db.Path(), req.Class)
 	var crashes int
 	switch {
 	case req.Crashes != nil:
@@ -2338,25 +2349,36 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 	case req.Kind == "exit":
 		crashes = 0
 	case req.Kind == "crash":
-		prev, _ := PrevCrashes(srv.db.Path(), req.Class)
-		crashes = prev + 1
+		crashes = prevCrashes + 1
 	default:
-		crashes, _ = PrevCrashes(srv.db.Path(), req.Class)
+		crashes = prevCrashes
+	}
+	var quitEarly int
+	switch {
+	case req.QuitEarly != nil:
+		quitEarly = *req.QuitEarly
+	case req.Kind == "exit":
+		quitEarly = 0
+	case req.Kind == "quit-early":
+		quitEarly = prevQuitEarly + 1
+	default:
+		quitEarly = prevQuitEarly
 	}
 	rec := LuhmannRecord{
-		Kind:    req.Kind,
-		Class:   req.Class,
-		Nonce:   req.Nonce,
-		TaskID:  req.TaskID,
-		Reason:  req.Reason,
-		Crashes: crashes,
-		Backoff: req.Backoff,
+		Kind:      req.Kind,
+		Class:     req.Class,
+		Nonce:     req.Nonce,
+		TaskID:    req.TaskID,
+		Reason:    req.Reason,
+		Crashes:   crashes,
+		QuitEarly: quitEarly,
+		Backoff:   req.Backoff,
 	}
 	if err := AppendLuhmannRecord(srv.db, srv.db.Path(), rec); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]int{"crashes": crashes})
+	writeJSON(w, map[string]int{"crashes": crashes, "quit_early": quitEarly})
 }
 
 // handleListen long-polls for notifications. R789-R794

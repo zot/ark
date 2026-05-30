@@ -13,6 +13,24 @@ Language: Go. Binary: `~/.ark/ark` (a `~/.ark` symlink populated by
 `ark setup`). The Linux `ark` archive manager collides with the bare
 name, so always use the absolute path.
 
+**Maintaining this file — and the help strings that shadow it.** This is
+the canonical CLI inventory, but it is *not* auto-maintained, and neither
+is the binary's own `--help` text. The top-level command list in
+`cmd/ark/main.go`'s `usage()` is hand-written (not derived from the
+dispatch switch), and every `--help` printer is an unanchored string
+literal that `minispec validate` cannot see. So a CLI shape change must be
+landed in **four** places, none of which catches the others:
+
+1. the dispatch `switch` (what makes the command work);
+2. the top-level `usage()` command list;
+3. the command's own `--help` printer (`printConnectionsHelp`, `uiUsage`,
+   `printConfigHelp`, the `luhmann` / `schedule` usage blocks, …);
+4. this file.
+
+Cheap completeness check: diff the binary's top-level command names against
+this file's inventory table. A 2026-05-30 audit found nine drifts at once
+after several were missed across these surfaces.
+
 ## Command Inventory
 
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
@@ -56,6 +74,7 @@ name, so always use the absolute path.
 | `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
 | `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [--filter-files G] [--exclude-files G]` | required                 |                                                      |
 | `subscribers`      | `subscribers --tag T [--quiet]`                                                                                      | required                 | count subscriptions matching a tag                   |
+| `sweep`            | `sweep correlations`                                                                                                | required                 | hot-correlations top-K cache refresh (subcommands below) |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved`                                                                                                         | optional                 | lists U records                                      |
@@ -337,10 +356,12 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
 ark connections recall reserve-nonce
-ark connections recall surface FIRE -chunk N -range PATH:RANGE -reason TEXT
+ark connections recall next NONCE
+ark connections recall surface FIRE -chunk N -reason TEXT
 ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
+ark connections recall listen --session SID
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -396,13 +417,33 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   [derived-tags.md](derived-tags.md). The simple-recall watcher
   built on top of this substrate is described in
   [simple-recall.md](simple-recall.md).
-- `recall reserve-nonce` returns the next monotonic integer for
-  the v2 recall agent's `(fire, nonce)` discovery pattern. The
-  counter is in-memory and resets on `ark serve` restart. See
+- `recall reserve-nonce` returns the next monotonic integer the
+  Luhmann orchestrator uses as the recall daemon's per-generation
+  nonce (the `nonce → .meta.json` discovery key). The counter is
+  in-memory and resets on `ark serve` restart. See
   [simple-recall.md](simple-recall.md).
-- `recall surface FIRE -chunk N -range PATH:RANGE -reason TEXT`
-  implicitly opens the result-doc builder for `FIRE` on first
-  call and adds one `## Surface:` item. One item per call;
+- `recall next NONCE` is the recall daemon's entire loop — a
+  batteries-included crank handle. On first call for `NONCE` it
+  idempotently subscribes to `@ark-recall-curate` (session
+  `recall-loop-<NONCE>`); thereafter it context-gates, then
+  returns the lowest-fire pending curation doc **whose session has a
+  result subscriber** (docs for unsubscribed sessions pile up, never
+  dispatched), with crank-handle prose telling the caller to judge,
+  surface / recommend, close, and loop. When none is dispatchable it
+  **blocks up to a ~90-second keepalive**, then returns a keepalive
+  directive ("run `next` again"). The window is sized under the harness
+  foreground-Bash auto-background threshold (~120s) so `next` returns
+  inline and the recall subagent stays in one continuous turn — a
+  detached call would end the turn and emit a per-cycle "completed"
+  beat the orchestrator can't tell from a real exit. At
+  `[luhmann].context_limit` it returns an exit directive instead. Dual
+  output: exit status `0` = doc *or* keepalive (loop), `2` = exit/done;
+  a hand-written `while` loop is as good a client as the agent.
+  Requires `ark serve`.
+- `recall surface FIRE -chunk N -reason TEXT` implicitly opens
+  the result-doc builder for `FIRE` on first call and adds one
+  `## Surface:` item. The server resolves the chunk's `path:range`
+  + size; the caller passes only the chunkID. One item per call;
   repeated `-chunk` flags are not accepted. Called by the recall
   agent only.
 - `recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT` —
@@ -411,18 +452,32 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   calling subagent's current context fill (sum of
   `cache_creation_input_tokens` + `cache_read_input_tokens` from
   the most recent assistant turn in its JSONL — the same number
-  Claude Code's status indicator reads). Used by the long-running
-  lotto-tube recall agent (Phase 2) to self-recycle when context
-  grows past a configurable limit. Default output is the bare
-  integer; `--json` returns `{tokens, found}`; with `--limit N`
-  the command exits 1 when tokens >= N, else 0 (suitable for
-  shell-pipeline gating).
+  Claude Code's status indicator reads). The recall daemon no
+  longer calls it: `recall next` performs the same context-gate
+  internally. It remains the introspection primitive the Luhmann
+  orchestrator's `inspect-exit` builds on, and is available for
+  diagnostics. Default output is the bare integer; `--json`
+  returns `{tokens, found}`; with `--limit N` the command exits 1
+  when tokens >= N, else 0 (suitable for shell-pipeline gating).
 - `recall close FIRE --nonce N [-preserve-curation]` is the
   single cleanup verb. Writes `tmp://ARK-RECALL/result-<S>-<F>`
   iff items were added; removes the curation doc unless
   `-preserve-curation`; locates the calling subagent's JSONL via
   the `nonce → .meta.json` lookup, sums tokens, and appends one
   record to `~/.ark/monitoring/recall.jsonl`.
+- `recall listen --session SID` is the consumer-side loop verb —
+  the mirror of `recall next` for the user-facing assistant rather
+  than the daemon. On first call for `SID` it idempotently subscribes
+  the session to its value-scoped result tag
+  (`@ark-recall-result=<SID>`); thereafter it blocks until at least
+  one result doc is published, then returns the doc content(s) plus
+  crank-handle prose telling the assistant to surface what helps the
+  user and run `listen` again. No keepalive and no context-gate: the
+  assistant runs it backgrounded and wakes only on a real result.
+  This subscription is also what the daemon's subscriber-gate keys on
+  — until a session calls `listen` (via the `/recall` skill) its
+  curation docs pile up undispatched. See
+  [simple-recall.md](simple-recall.md). Requires `ark serve`.
 - `wait PATH` blocks until terminal. On `--timeout SEC` expiry,
   exits non-zero with the last-seen status on stderr.
 - `show PATH` parses the persisted doc and projects fields. Without
@@ -581,15 +636,15 @@ See: `subscribe`
 
 ```
 ark luhmann spawn-record --class C --nonce N --task-id T
-ark luhmann exit-record  --class C --nonce N --reason R [--crashes K]
+ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
 ark luhmann inspect-exit --nonce N [--json]
 ```
 
 | Subcommand       | Flags                                              | Behavior                                                                                                                                                       |
 |------------------|----------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spawn-record`   | `--class`, `--nonce`, `--task-id` (all required)   | Server-required. Append a `kind: "spawn"` record to `~/.ark/monitoring/luhmann.jsonl` via the write actor.                                                     |
-| `exit-record`    | `--class`, `--nonce`, `--reason` (required); `--crashes` (override) | Server-required. Append `kind: "exit"` when `--reason context-limit` (resets `crashes` to 0), else `kind: "crash"` (increments `crashes`).                     |
-| `inspect-exit`   | `--nonce`; `--json`                                | Cold-start. Classify a subagent exit as `healthy` / `crash` / `unknown` via the nonce → `.meta.json` lookup. Default prints the label; `--json` adds details.  |
+| `spawn-record`   | `--class`, `--nonce`, `--task-id` (all required)   | Server-required. Append a `kind: "spawn"` record to `~/.ark/monitoring/luhmann.jsonl` via the write actor (carries both counters forward).                     |
+| `exit-record`    | `--class`, `--nonce`, `--reason` (required); `--crashes` / `--quit-early` (counter overrides); `--backoff S` (records the seconds the supervisor will wait before respawn) | Server-required. Reason → kind: `context-limit`→`exit` (resets both counters), `quit-early`→`quit-early` (increments `quit_early`, holds `crashes`), else→`crash` (increments `crashes`, holds `quit_early`). |
+| `inspect-exit`   | `--nonce`; `--json`                                | Cold-start. Classify a subagent exit as `healthy` / `quit-early` / `crash` / `unknown` via the nonce → `.meta.json` lookup. Default prints the label; `--json` adds details. |
 
 See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md)
 
@@ -698,15 +753,15 @@ R2511, R2561, R2562, R2563).
 ```
 ark monitor status [--json]
 ark monitor recent [-n N] [CLASS] [--json]
-ark monitor pause CLASS
+ark monitor pause CLASS [--reason R]
 ark monitor resume CLASS
 ```
 
 | Subcommand        | Flags                  | Behavior                                                                                                                                                                                                                                |
 |-------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `status`          | `--json`               | Cold-start. Read the tail of `~/.ark/monitoring/<class>.jsonl` for every shipped class (`recall`, `luhmann`); report current state, latest timestamp, and class-specific counters. Default is a markdown table; `--json` emits objects. |
+| `status`          | `--json`               | Cold-start. Read the tail of `~/.ark/monitoring/<class>.jsonl` for every shipped class (`recall`, `luhmann`); report current state, latest timestamp, class-specific counters (incl. `crashes` / `quit_early`), and an `emergency` flag (🚨) when the class is in a storm pause. Default is a markdown table; `--json` emits objects. |
 | `recent`          | `-n N`, `[CLASS]`, `--json` | Cold-start. Print the tail of one or all monitoring logs. Default `-n` is `20`. With `CLASS`, restrict to that file. Default output is markdown bullets; `--json` emits raw JSONL records.                                            |
-| `pause CLASS`     | —                      | Server-required. Append `kind: "pause"` to `<class>.jsonl` via the write actor. Exits non-zero if the class is already paused.                                                                                                          |
+| `pause CLASS`     | `--reason R`           | Server-required. Append `kind: "pause"` (with optional `reason`) to `<class>.jsonl` via the write actor. A storm reason (`crash-storm` / `quit-early-storm`) lights the `status` emergency flag. Exits non-zero if the class is already paused. |
 | `resume CLASS`    | —                      | Server-required. Append `kind: "resume"`. Exits non-zero if already running.                                                                                                                                                            |
 
 See: [monitor.md](monitor.md), [luhmann.md](luhmann.md),
@@ -773,6 +828,10 @@ ark schedule search DATE [--tag T] [--gaps] [--json]
 ark schedule change PATH TAG NEWSTART [NEWEND] [--dry-run]
 ark schedule tags [--values]
 ark schedule parse DATE
+ark schedule upcoming TAG [--all] [--json]
+ark schedule logs TAG [SOURCE] [-n N] [--json]
+ark schedule suppress TAG
+ark schedule unsuppress TAG
 ```
 
 | Subcommand | Flags | Behavior |
@@ -781,6 +840,10 @@ ark schedule parse DATE
 | `change PATH TAG NEWSTART [NEWEND]` | `--dry-run` | Server-required. Rewrites date in schedule tag value, preserves trailing description. Re-indexes after write. Updates `@ark-event-upcoming:` for recurring events. |
 | `tags` | `--values` | Cold-start. Lists configured schedule tags from ark.toml. With `--values`, also reads schedule logs (`~/.ark/schedule/`) for next upcoming dates. |
 | `parse DATE` | — | Cold-start (no DB). Parses a date expression, prints start/end/all-day/text. Recognizes recurring specs and computes next occurrence. |
+| `upcoming TAG` | `--all`, `--json` | Server-required. Print the next fire(s) from the in-memory priority queue for TAG. `--all` lists upcoming events across all tags; `--json` for raw output. |
+| `logs TAG [SOURCE]` | `-n N` (default 50), `--json` | Server-required. Print the audit log for TAG. Without SOURCE, lists every source file with a chunk for TAG; with SOURCE, shows that chunk's spec history plus the most recent N fired entries. |
+| `suppress TAG` | — | Server-required. Stop TAG from firing without removing its `[schedule.tag.TAG]` declaration (sets `suppress = true`). Tag must already be declared. |
+| `unsuppress TAG` | — | Server-required. Resume firing for a suppressed TAG. Tag must already be declared. |
 
 Parse-robustness note (applies to every path that parses a schedule
 tag value — `search`, `change`, `parse`, and the source-file scan):
@@ -972,6 +1035,23 @@ optional value) if it were published right now. File filters on
 subscriptions are intentionally ignored — the question is "could
 anyone receive this?", not "would this specific file pass each
 subscriber's filter?". See [subscriber-presence.md](subscriber-presence.md).
+
+### `sweep` — corpus-wide sweeps
+
+```
+ark sweep correlations
+```
+
+Server-required. A namespace for periodic corpus-wide passes; `correlations`
+is the only subcommand today (future phases may add others, e.g.
+chunk-pairwise). `sweep correlations` refreshes the hot-correlations top-K
+cache per tag: it reads the `I:hcsweep` bookmark, walks the S substrate for
+ED/EC records changed since the bookmark, fully recomputes top-K for tags
+whose definitions moved, and displaces individual changed chunks against
+unchanged tags. Per-tag write transactions; the bookmark advances only on
+full success. Progress publishes through `tmp://sweep/hot-correlations.md`
+(throttled 250ms, terminal status flushed immediately;
+`@tag: sweep-status`). See [hot-correlations.md](hot-correlations.md).
 
 ### `tag` — tag operations
 

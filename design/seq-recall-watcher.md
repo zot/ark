@@ -40,15 +40,20 @@ is in `seq-recall-agent.md`.
          │
          ├── 2.5  for each line in newBytes:                      (R2731, R2732)
          │           obj = json.Unmarshal(line)
-         │           if obj.type == "user":
-         │             cancel pendingTimer                        (R2733)
+         │           if obj.type == "user" && genuine(obj):        (R2732)
+         │             // genuine = string content && no origin.kind
+         │             //   (excludes tool-results + notifications)
+         │             cancel pendingTimer; armReady = true        (R2733)
          │           else if obj.type == "system"
          │                && obj.subtype == "turn_duration":
-         │             cancel any existing pendingTimer
-         │             pendingTimer = time.AfterFunc(             (R2734)
-         │               activation_delay seconds,
-         │               func() { post fire(sessionID) to
-         │                        jobs channel })
+         │             if !armReady: skip (agent-only turn —       (R2734)
+         │               no re-arm; stops the ping-pong)
+         │             else: cancel any existing pendingTimer
+         │               pendingTimer = time.AfterFunc(
+         │                 activation_delay seconds,
+         │                 func() { post fire(sessionID) to
+         │                          jobs channel })
+         │               armReady = false  (once per user turn)
          │
          └── 2.6  unlock; return
 ```
@@ -152,9 +157,16 @@ is in `seq-recall-agent.md`.
 
 - pendingChunks accumulate in IDLE and ARMED equally; only
   FIRING clears them.
-- user-record in IDLE is a no-op (no timer to cancel,
-  pendingChunks keep accumulating).
-- A new turn_duration while ARMED resets the deadline.
+- **armReady gates the IDLE→ARMED transition** (R2734, omitted from
+  the boxes above for simplicity): a user record sets armReady,
+  arming clears it — so IDLE→ARMED fires only on the *first*
+  turn_duration after a user record.
+- user-record sets armReady (enabling the next arm) and cancels any
+  running timer; in IDLE there is no timer to cancel and
+  pendingChunks keep accumulating.
+- A turn_duration with armReady unset — an agent-only turn (no
+  intervening user record, e.g. the assistant surfacing recall) — is
+  ignored: no arm, no fire. This is what stops the recall ping-pong.
 - FIRING allocates the next fire number; the fire number is
   per `ark serve` run and is consumed whether or not a
   curation doc gets written.

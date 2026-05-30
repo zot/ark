@@ -177,13 +177,13 @@ type recallResultDoc struct {
 // an error so callers see the lost-state failure rather than
 // silently producing a misaligned result.
 //
-// The chunkID alone identifies the surfaced chunk — the assistant
-// resolves path/range/context on demand via `ark chunks <chunkID>`.
-// The chunk's byte size is stamped after the chunkID so the
-// assistant can decide whether to fetch (some chunks are tens of
-// kB — PLAN.md has ones in the 33K range — and an assistant
-// scanning surfaces may skip the giants).
-// CRC: crc-RecallAgentBuilder.md | R2756
+// The Surface H2 carries the chunkID, a friendly byte-size label
+// (so the assistant can gauge fetch cost — some chunks are tens of
+// kB, e.g. PLAN.md's 33K range — and may skip the giants), and the
+// chunk's path:range (via chunkLocator) so the consuming assistant
+// can prune by file path without resolving every chunk. Full
+// content stays on-demand via `ark chunks <chunkID>`.
+// CRC: crc-RecallAgentBuilder.md | R2751, R2756
 func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("reason required")
@@ -192,11 +192,8 @@ func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason str
 	if err != nil {
 		return err
 	}
-	sizeLabel := "?"
-	if text, err := b.db.ChunkTextByID(chunkID); err == nil {
-		sizeLabel = friendlySize(len(text))
-	}
-	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)\n\nreason: %s\n", chunkID, sizeLabel, reason)
+	loc, sizeLabel := b.chunkLocator(chunkID, true)
+	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)%s\n\nreason: %s\n", chunkID, sizeLabel, loc, reason)
 	doc.items++
 	return nil
 }
@@ -217,10 +214,33 @@ func friendlySize(n int) string {
 	}
 }
 
+// chunkLocator resolves a chunk's " <path>:<range>" suffix (leading
+// space; empty string when the chunk can't be resolved) so both
+// result-doc H2 kinds can carry the path — the consuming assistant
+// prunes surfaces/recommends by file without resolving every chunk
+// (R2751). When withSize is true it also returns the friendly
+// byte-size label ("?" if unresolved); Recommend passes false to
+// skip the chunk-text read it doesn't need.
+// CRC: crc-RecallAgentBuilder.md | R2751
+func (b *RecallAgentBuilder) chunkLocator(chunkID uint64, withSize bool) (loc, size string) {
+	size = "?"
+	info, err := b.db.ChunkInfo(chunkID)
+	if err != nil {
+		return "", size
+	}
+	loc = " " + info.Path + ":" + info.Range
+	if withSize {
+		if text := b.db.ChunkText(info.Path, info.Range); text != nil {
+			size = friendlySize(len(text))
+		}
+	}
+	return loc, size
+}
+
 // RecommendItem appends a `## Recommend:` H2 to the result-doc
 // builder for the given fire, opening it on first call. Session is
 // derived from the in-flight curation doc (see SurfaceItem).
-// CRC: crc-RecallAgentBuilder.md | R2757
+// CRC: crc-RecallAgentBuilder.md | R2751, R2757
 func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec, reason string) error {
 	if tagSpec == "" {
 		return fmt.Errorf("tag required")
@@ -232,7 +252,8 @@ func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec,
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %d\n\nreason: %s\n", tagSpec, chunkID, reason)
+	loc, _ := b.chunkLocator(chunkID, false)
+	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %d%s\n\nreason: %s\n", tagSpec, chunkID, loc, reason)
 	doc.items++
 	return nil
 }

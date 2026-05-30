@@ -21,7 +21,7 @@ import (
 // Standard top-level files (ark.toml, chimes.md, tags.md) are listed
 // explicitly so ark-managed content is indexed regardless of the user's
 // [[source]] configuration in ark.toml.
-// CRC: crc-Config.md | R961, R962, R2393, R2811
+// CRC: crc-Config.md | R961, R962, R2393, R2811, R2856
 const arkSourceIncludePatterns = `
 	ark.toml
 	chimes.md
@@ -35,6 +35,7 @@ const arkSourceIncludePatterns = `
 	storage/**/*.md
 	storage/**/*.pdf
 	external/**/*.md
+	skills/**/*.md
 `
 
 // Config represents the parsed ark.toml configuration.
@@ -70,7 +71,7 @@ type Config struct {
 // LuhmannConfig collects the [luhmann] section of ark.toml — restart-
 // policy knobs read by the Luhmann orchestrator session (a Claude Code
 // session, not Go code) when it acts on managed-subagent completions.
-// CRC: crc-Config.md | R2797, R2798, R2799, R2800, R2801
+// CRC: crc-Config.md | R2797, R2798, R2799, R2800, R2801, R2862
 type LuhmannConfig struct {
 	// ContextLimit is the token ceiling the orchestrator passes to
 	// each spawned subagent. Used by the subagent's self-recycle
@@ -81,6 +82,12 @@ type LuhmannConfig struct {
 	// supervisor stops respawning and writes a `pause` record to
 	// luhmann.jsonl. R2798
 	CrashPauseAfter *int `toml:"crash_pause_after,omitempty"`
+
+	// QuitEarlyPauseAfter is the consecutive-quit-early count at
+	// which the supervisor stops respawning and writes a storm
+	// `pause` record (reason quit-early-storm). Parallel to
+	// CrashPauseAfter but on the independent quit_early counter. R2862
+	QuitEarlyPauseAfter *int `toml:"quit_early_pause_after,omitempty"`
 
 	// BackoffSeconds is the schedule of seconds to wait between
 	// successive crash respawns. Final value reused for further
@@ -118,6 +125,15 @@ func (lc LuhmannConfig) EffectiveCrashPauseAfter() int {
 		return 3
 	}
 	return *lc.CrashPauseAfter
+}
+
+// EffectiveQuitEarlyPauseAfter returns QuitEarlyPauseAfter with default.
+// CRC: crc-Config.md | R2862
+func (lc LuhmannConfig) EffectiveQuitEarlyPauseAfter() int {
+	if lc.QuitEarlyPauseAfter == nil {
+		return 3
+	}
+	return *lc.QuitEarlyPauseAfter
 }
 
 // EffectiveBackoffSeconds returns BackoffSeconds with default applied.

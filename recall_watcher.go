@@ -47,6 +47,12 @@ type RecallWatcher struct {
 type recallSessionState struct {
 	pendingChunks []uint64
 	pendingTimer  *time.Timer
+	// armReady gates arming to once per user turn (R2734): a user
+	// record sets it; a turn_duration arms only when it is set and then
+	// clears it. An agent-only turn (e.g. an assistant surfacing recall
+	// with no preceding user record) thus does not re-arm — which is
+	// what stops the recall ping-pong cascade.
+	armReady bool
 }
 
 // NewRecallWatcher constructs a watcher. The worker goroutine
@@ -170,18 +176,49 @@ func scanNewBytes(newBytes []byte) []jsonlSignal {
 		var rec struct {
 			Type    string `json:"type"`
 			Subtype string `json:"subtype"`
+			Origin  struct {
+				Kind string `json:"kind"`
+			} `json:"origin"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
 		}
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue // unparseable line — skip silently (could be a partial trailing line)
 		}
 		switch {
 		case rec.Type == "user":
-			sigs = append(sigs, signalUser)
+			// Only a *genuine* human message arms the watcher (R2732).
+			// Tool-results and harness-injected lines are also
+			// `type:"user"` — counting them lets the watcher re-fire on
+			// its own consumers' wake turns (the recall ping-pong).
+			if isGenuineUserMessage(rec.Origin.Kind, rec.Message.Content) {
+				sigs = append(sigs, signalUser)
+			}
 		case rec.Type == "system" && rec.Subtype == "turn_duration":
 			sigs = append(sigs, signalTurnDuration)
 		}
 	}
 	return sigs
+}
+
+// isGenuineUserMessage reports whether a `type:"user"` record is a real
+// human message rather than a tool-result or a harness-injected line.
+// Two structural tells, both from the Claude Code JSONL (R2732):
+//   - genuine prose has STRING content; tool-results are arrays of
+//     `{type:"tool_result", ...}` parts.
+//   - the harness stamps injected user-records (e.g. background-task
+//     completions) with an `origin.kind` ("task-notification"); a typed
+//     message has no `origin`.
+//
+// A notification's content can itself be a string, so the origin check
+// is what excludes it; tool-results are excluded by the array check.
+func isGenuineUserMessage(originKind string, content json.RawMessage) bool {
+	if originKind != "" {
+		return false // harness-injected (task-notification, etc.)
+	}
+	c := bytes.TrimSpace(content)
+	return len(c) > 0 && c[0] == '"' // JSON string ⇒ genuine prose; '[' ⇒ tool-result
 }
 
 // bytesIterLines returns a function that yields each newline-terminated
@@ -240,7 +277,15 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 				Logv(2, "recall-watcher: disarmed session=%s pending=%d",
 					sessionID, len(st.pendingChunks))
 			}
+			st.armReady = true // R2733: a user turn (re-)enables arming
 		case signalTurnDuration:
+			if !st.armReady {
+				// R2734: arm only once per user turn. A turn_duration
+				// with no intervening user record (an agent-only turn)
+				// does not re-arm — this is what stops the ping-pong.
+				Logv(2, "recall-watcher: turn_duration ignored, no user turn since last arm session=%s", sessionID)
+				break
+			}
 			if st.pendingTimer != nil {
 				st.pendingTimer.Stop()
 			}
@@ -249,6 +294,7 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 			st.pendingTimer = time.AfterFunc(delay, func() {
 				svc(w.jobs, func() { w.fire(sid) })
 			})
+			st.armReady = false // R2734: consumed this user turn's single arm
 			Logv(2, "recall-watcher: armed session=%s pending=%d delay=%ds",
 				sessionID, len(st.pendingChunks),
 				w.config().EffectiveActivationDelay())
@@ -452,4 +498,3 @@ func truncateUTF8(s string, maxBytes int) string {
 	}
 	return s[:cut]
 }
-

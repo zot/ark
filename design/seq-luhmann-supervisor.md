@@ -21,25 +21,32 @@ the Claude Code harness does, and the skill drives the next step.
 2. Subagent exits (Claude Code harness notifies the orchestrator)
    2.1. Orchestrator (skill)         → `ark luhmann inspect-exit --nonce N --json`
    2.2. LuhmannCLI                   → discoverSubagentJSONL(N) via RecallAgentBuilder helper
-   2.3. LuhmannCLI                   → read subagent JSONL backwards; classify as healthy / crash / unknown
+   2.3. LuhmannCLI                   → read subagent JSONL backwards; classify as healthy / quit-early / crash / unknown
    2.4. LuhmannCLI                   → emit JSON {label, last_record_kind, last_error, tokens_at_close}
-   2.5. Orchestrator (skill)         → read label; pick R: context-limit (healthy) | error string (crash)
+   2.5. Orchestrator (skill)         → read label; pick R: context-limit (healthy) | quit-early (quit-early) | error string (crash)
 
 3. Record exit
    3.1. Orchestrator (skill)         → `ark luhmann exit-record --class C --nonce N --reason R`
    3.2. LuhmannCLI                   → POST /luhmann/record (kind decided from reason)
-   3.3. Server.HandleLuhmannRecord   → tail luhmann.jsonl for prior crashes
-   3.4a. healthy path                → kind=exit, crashes:=0, append record
-   3.4b. crash path                  → kind=crash, crashes:=prev+1, backoff:=cfg.BackoffSeconds[min(crashes-1, len-1)], append record
+   3.3. Server.HandleLuhmannRecord   → tail luhmann.jsonl for prior crashes + quit_early
+   3.4a. healthy path                → kind=exit, crashes:=0, quit_early:=0 (success resets both), append record
+   3.4b. crash path                  → kind=crash, crashes:=prev+1, quit_early held, backoff:=cfg.BackoffSeconds[min(crashes-1, len-1)], append record
+   3.4c. quit-early path  (R2861)    → kind=quit-early, quit_early:=prev+1, crashes held, backoff:=0, append record
 
 4. Decide next step
    4.1a. healthy path                → orchestrator immediately loops back to step 1 with a fresh nonce
    4.1b. crash path with crashes < cfg.CrashPauseAfter → orchestrator sleeps `backoff` seconds, loops to step 1
-   4.1c. crash path with crashes ≥ cfg.CrashPauseAfter → orchestrator calls `ark monitor pause C` and surfaces in chat
-       4.1c.1. monitor (skill)       → `ark monitor pause C`
-       4.1c.2. Monitor               → POST /monitor/control (kind=pause)
-       4.1c.3. Server.HandleMonitorControl → append-via-write-actor {ts, kind:"pause", class:C, nonce:0}
-       4.1c.4. Orchestrator (skill)  → persona-shaped chat message to the user about the pause
+   4.1c. crash path with crashes ≥ cfg.CrashPauseAfter → storm: orchestrator pauses with reason crash-storm and escalates in chat (R2863)
+       4.1c.1. monitor (skill)       → `ark monitor pause C --reason crash-storm`
+       4.1c.2. Monitor               → POST /monitor/control (kind=pause, reason=crash-storm)
+       4.1c.3. Server.HandleMonitorControl → append-via-write-actor {ts, kind:"pause", class:C, nonce:0, reason:"crash-storm"}
+       4.1c.4. Orchestrator (skill)  → persona-shaped chat/voice escalation about the emergency
+   4.1d. quit-early path with quit_early < cfg.QuitEarlyPauseAfter → orchestrator respawns immediately (fresh nonce, no backoff, not a crash), loops to step 1 (R2862)
+   4.1e. quit-early path with quit_early ≥ cfg.QuitEarlyPauseAfter → storm: orchestrator pauses with reason quit-early-storm and escalates in chat (R2862, R2863)
+       4.1e.1. monitor (skill)       → `ark monitor pause C --reason quit-early-storm`
+       4.1e.2. Monitor               → POST /monitor/control (kind=pause, reason=quit-early-storm)
+       4.1e.3. Server.HandleMonitorControl → append-via-write-actor {ts, kind:"pause", class:C, nonce:0, reason:"quit-early-storm"}
+       4.1e.4. Orchestrator (skill)  → persona-shaped chat/voice escalation; `monitor status` emergency flag now lit for Frictionless (R2863)
 
 5. User clears pause (later)
    5.1. User (in chat)               → "go ahead and resume recall"

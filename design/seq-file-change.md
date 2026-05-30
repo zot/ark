@@ -83,7 +83,12 @@ Indexer.RefreshFile(path, strategy)
   │           └── Store.AppendTags(fileid, newTags)
   │
   └── if not append:
-        └──> full RefreshFile path (existing behavior)
+        ├── unchanged: size == FileLength && SHA-256(data) == ContentHash
+        │     → skip entirely (R2864) — re-chunking byte-identical
+        │       content is an expensive no-op; catches redundant /
+        │       no-growth events on large append-only chat JSONLs
+        └──> else (grew-but-not-append, in-place edit, truncation):
+              full RefreshFile path (existing behavior)
 ```
 
 ## Search Consistency

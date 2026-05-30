@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808
+**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -70,20 +70,79 @@ for these verbs — `ark serve` must be running.
   `nonceCounter`, returns the new value (R2755). Cheap and
   in-memory; no DB write.
 
+### Loop driver — `next` (CLI-driven)
+- RecallNext(nonce) — the daemon's single loop verb (R2857, R2858).
+  On first call for `nonce` it idempotently subscribes to
+  `@ark-recall-curate` under session `recall-loop-<nonce>`. It then
+  checks the nonce's context fill (R2777) against
+  `[luhmann].context_limit`: at or over the limit it returns an
+  **exit** directive (exit status `2`). Otherwise it returns the
+  lowest-fire pending `tmp://ARK-RECALL/curation-<session>-<fire>`
+  doc whose session has a result subscriber
+  (`pubsub.SubscriberCount("ark-recall-result", session) > 0`) —
+  numeric fire ordering decided server-side — with the doc content
+  as the body and exit status `0`. Docs whose session has no result
+  subscriber are skipped (left to pile up): the daemon never
+  dispatches work `Close` would discard, so the subscriber-presence
+  gate moves from `close` to dispatch. When none is dispatchable it
+  **blocks up to a keepalive window (~90s)** via `waitForWork`, a
+  select over the curate queue (`QueueChan`), the subscription-changed
+  broadcast (`SubChanged` — a late result subscriber dispatches piled
+  docs at once, not after the tick), the `recallNextListenWindow`
+  re-check timer, and ctx; it `TouchListen`s each cycle so `Reap`
+  doesn't drop the subscription. On the keepalive deadline it returns a
+  **keepalive** (exit `0`, "no doc yet — run next again"). The window
+  is short so the subagent's foreground `next` returns before the
+  harness's foreground-Bash auto-background threshold (~120s) — a
+  detached `next` would end the subagent's turn and emit a per-cycle
+  "completed" the orchestrator can't tell from a real exit; inline
+  return keeps it in one continuous turn that completes only on a true
+  context-limit exit. Every non-exit return — doc or keepalive —
+  carries crank-handle prose ending in "run next again"; only the exit
+  directive stops (a uniform crank handle, no ambiguous empty). This
+  bounded block supersedes 008's pure no-timeout lotto-tube.
+  Lowest-fire-first keeps `Close`'s
+  same-session orphan sweep (R2758) safe.
+
+### Consumer loop — `listen` (CLI-driven)
+- RecallListen(session) — the consumer-side loop verb (R2865), the
+  mirror of `RecallNext` run by a user-facing assistant rather than the
+  daemon. On first call it idempotently subscribes session `<session>`
+  to its own value-scoped result tag
+  (`ParseMatchSyntax("ark-recall-result=" + session)`); thereafter it
+  blocks (a `pubsub.Listen` loop) until at least one
+  `@ark-recall-result=<session>` event arrives, fetches the published
+  `result-<session>-<fire>` doc(s), and returns their content plus
+  crank-handle prose ("ambient recall — surface what genuinely helps the
+  user, then run `recall listen` again"). **No keepalive, no
+  context-gate, no subscriber-gate** — those are daemon concerns; the
+  only non-result return is ctx cancellation. It does **not** filter
+  `## Recommend:` by RJ ceiling — the assistant owns that (R2765/R2766).
+  The `/recall` skill (`.claude/skills/recall/SKILL.md`, R2866) drives
+  the loop: it supplies the session UUID via the
+  `sessionid=${CLAUDE_SESSION_ID}` macro, runs `listen` backgrounded,
+  and surfaces + relaunches on each completion. Opt-in: no `/recall` →
+  no result subscriber → `RecallNext`'s gate (R2857) defers the
+  session's curation docs.
+
 ### Result-doc builder (CLI-driven)
-- SurfaceItem(fire, chunkID, reason) error (R2756) —
+- SurfaceItem(fire, chunkID, reason) error (R2756, R2751) —
   opens `results[fire]` on first call for that fire; appends
-  a `## Surface: <chunkid> (<size>)` H2 with its `reason: ...`
-  line. The size label is computed server-side by
-  `db.ChunkTextByID` + `friendlySize` (decimal bytes / K /
-  M) so the assistant can decide whether to fetch a big
-  chunk; on lookup failure the size renders as `?` and the
-  surface still emits. Errors on missing required args before
-  any state change.
+  a `## Surface: <chunkid> (<size>) <path>:<range>` H2 with
+  its `reason: ...` line. `chunkLocator(chunkID, true)`
+  resolves the chunk's `path:range` and size server-side via
+  `db.ChunkInfo` + `friendlySize` (decimal bytes / K / M) so
+  the consuming assistant can prune by file path and gauge
+  fetch cost; on lookup failure the path drops and the size
+  renders as `?`, and the surface still emits. Errors on
+  missing required args before any state change.
 - RecommendItem(fire, chunkID, tagSpec, reason) error
-  (R2757) — same open-on-first-call semantics; appends a
-  `## Recommend: @<tag>[:<value>] on <chunkid>` H2 with its
-  `reason: ...` line.
+  (R2757, R2751) — same open-on-first-call semantics; appends
+  a `## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>`
+  H2 with its `reason: ...` line. Uses
+  `chunkLocator(chunkID, false)` — path only, no size read —
+  because a recommend can reference a chunk that was never
+  surfaced and the assistant needs the path to judge it.
 - Close(fire, nonce, preserveCuration bool) error (R2758) —
   the single cleanup verb:
   - If `results[fire]` exists with at least one item: query

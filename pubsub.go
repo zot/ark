@@ -58,8 +58,9 @@ type PubSub struct {
 	mu          sync.RWMutex
 	ttl         time.Duration
 	queueDepth  int
-	db          *DB                            // for watchdog tmp:// writes (nil = watchdog disabled)
-	tagSetCache map[string]map[TagValue]bool   // R2283: path → last-published tag-set, used by PublishTmpDiff
+	db          *DB                          // for watchdog tmp:// writes (nil = watchdog disabled)
+	tagSetCache map[string]map[TagValue]bool // R2283: path → last-published tag-set, used by PublishTmpDiff
+	subChanged  chan struct{}                // R2857: close+replace broadcast fired when a subscription is added
 }
 
 // NewPubSub creates a PubSub with the given TTL and queue depth.
@@ -71,6 +72,7 @@ func NewPubSub(ttl time.Duration, queueDepth int) *PubSub {
 		ttl:         ttl,
 		queueDepth:  queueDepth,
 		tagSetCache: make(map[string]map[TagValue]bool),
+		subChanged:  make(chan struct{}),
 	}
 }
 
@@ -201,6 +203,41 @@ func (ps *PubSub) Subscribe(sessionID string, subs []*TagSub) {
 	}
 	ps.subs[sessionID] = append(ps.subs[sessionID], subs...)
 	ps.lastListen[sessionID] = time.Now()
+	// Wake anyone gated on subscriber presence — e.g. a recall `next`
+	// blocked because a pending curation doc's session had no result
+	// subscriber. close+replace broadcasts to all current waiters. R2857
+	close(ps.subChanged)
+	ps.subChanged = make(chan struct{})
+}
+
+// SubChanged returns a channel closed when the next subscription is
+// added (a close+replace broadcast). A caller gated on subscriber
+// presence — recall `next` — selects on it to wake immediately instead
+// of polling. R2857
+func (ps *PubSub) SubChanged() <-chan struct{} {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.subChanged
+}
+
+// QueueChan returns a session's event queue (nil when it has none), so a
+// caller can select on it directly rather than via the blocking Listen.
+// R2857
+func (ps *PubSub) QueueChan(sessionID string) <-chan Event {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.queues[sessionID]
+}
+
+// TouchListen refreshes a session's last-listen time. A caller that
+// waits via its own select (rather than Listen) calls this each cycle so
+// Reap doesn't drop its subscription. R803, R2857
+func (ps *PubSub) TouchListen(sessionID string) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if _, ok := ps.lastListen[sessionID]; ok {
+		ps.lastListen[sessionID] = time.Now()
+	}
 }
 
 // Cancel removes subscriptions. R786, R787, R2458

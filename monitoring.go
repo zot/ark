@@ -35,7 +35,7 @@ func MonitorClassPath(arkDir, class string) string {
 }
 
 // LuhmannRecord is one append-only entry in ~/.ark/monitoring/luhmann.jsonl.
-// CRC: crc-LuhmannCLI.md | R2791, R2792, R2793
+// CRC: crc-LuhmannCLI.md | R2791, R2792, R2793, R2861
 type LuhmannRecord struct {
 	Timestamp string `json:"ts"`
 	Kind      string `json:"kind"`
@@ -44,19 +44,23 @@ type LuhmannRecord struct {
 	TaskID    string `json:"task_id,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Crashes   int    `json:"crashes"`
+	QuitEarly int    `json:"quit_early"`
 	Backoff   int    `json:"backoff,omitempty"`
 }
 
 // MonitorControlRecord is the tiny record `ark monitor pause/resume`
 // appends to <class>.jsonl. Same JSONL file as the class's other
 // records; the consumer treats `kind` of `pause`/`resume` as a
-// class-level control signal.
-// CRC: crc-Monitor.md | R2787, R2788
+// class-level control signal. A storm pause carries a `reason`
+// (crash-storm / quit-early-storm) that distinguishes it from a plain
+// user pause and lights the emergency flag (R2863).
+// CRC: crc-Monitor.md | R2787, R2788, R2863
 type MonitorControlRecord struct {
 	Timestamp string `json:"ts"`
 	Kind      string `json:"kind"`
 	Class     string `json:"class"`
 	Nonce     int    `json:"nonce"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // appendMonitorJSONL appends one JSON-encoded record (followed by a
@@ -93,12 +97,13 @@ func AppendLuhmannRecord(db *DB, arkDir string, rec LuhmannRecord) error {
 // `<class>.jsonl`. Caller validates the state transition (see
 // MonitorClassState) before invoking; this function does not enforce
 // the guard.
-// CRC: crc-Monitor.md | R2787, R2788
-func AppendMonitorControl(db *DB, arkDir, class, kind string) error {
+// CRC: crc-Monitor.md | R2787, R2788, R2863
+func AppendMonitorControl(db *DB, arkDir, class, kind, reason string) error {
 	rec := MonitorControlRecord{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Kind:      kind,
 		Class:     class,
+		Reason:    reason,
 	}
 	return appendMonitorJSONL(db, MonitorClassPath(arkDir, class), rec)
 }
@@ -178,13 +183,26 @@ func tsString(rec map[string]any) string {
 
 // MonitorClassSummary is the per-class structured view emitted by
 // `ark monitor status`.
-// CRC: crc-Monitor.md | R2784, R2785
+// CRC: crc-Monitor.md | R2784, R2785, R2863
 type MonitorClassSummary struct {
-	Class           string         `json:"class"`
-	State           string         `json:"state"`
-	LatestTimestamp string         `json:"latest_timestamp,omitempty"`
-	LatestKind      string         `json:"latest_kind,omitempty"`
-	Counters        map[string]any `json:"counters,omitempty"`
+	Class           string          `json:"class"`
+	State           string          `json:"state"`
+	LatestTimestamp string          `json:"latest_timestamp,omitempty"`
+	LatestKind      string          `json:"latest_kind,omitempty"`
+	Counters        map[string]any  `json:"counters,omitempty"`
+	Emergency       *EmergencyState `json:"emergency,omitempty"`
+}
+
+// EmergencyState describes a class currently in a storm pause — the
+// loud, machine-visible signal the orchestrator raises when a crash or
+// quit-early streak trips its ceiling. Exposed so Frictionless can
+// reflect it (the downstream emergency-light UI) and so the orchestrator
+// can escalate. R2863
+type EmergencyState struct {
+	Active bool   `json:"active"`
+	Class  string `json:"class"`
+	Reason string `json:"reason"`
+	Since  string `json:"since,omitempty"`
 }
 
 // MonitorStatus computes the per-class state and counters for every
@@ -219,14 +237,20 @@ func deriveClassSummary(class string, recs []map[string]any) MonitorClassSummary
 	switch class {
 	case "luhmann":
 		sum.State = luhmannState(recs)
-		// Most recent crashes and nonce values.
-		haveCrashes, haveNonce := false, false
-		for i := len(recs) - 1; i >= 0 && !(haveCrashes && haveNonce); i-- {
+		// Most recent crashes, quit_early, and nonce values.
+		haveCrashes, haveQuitEarly, haveNonce := false, false, false
+		for i := len(recs) - 1; i >= 0 && !(haveCrashes && haveQuitEarly && haveNonce); i-- {
 			r := recs[i]
 			if !haveCrashes {
 				if v, ok := r["crashes"].(float64); ok {
 					sum.Counters["crashes"] = int(v)
 					haveCrashes = true
+				}
+			}
+			if !haveQuitEarly {
+				if v, ok := r["quit_early"].(float64); ok {
+					sum.Counters["quit_early"] = int(v)
+					haveQuitEarly = true
 				}
 			}
 			if !haveNonce {
@@ -259,7 +283,60 @@ func deriveClassSummary(class string, recs []map[string]any) MonitorClassSummary
 			sum.Counters["avg_context_tokens"] = ctxTok / len(tail)
 		}
 	}
+	// Emergency: a storm pause on this class's log lights the flag,
+	// independent of the activity/lifecycle state above (R2863).
+	if reason, since := stormPause(recs); reason != "" {
+		sum.Emergency = &EmergencyState{Active: true, Class: class, Reason: reason, Since: since}
+	}
 	return sum
+}
+
+// isStormReason reports whether a pause reason is a supervisor storm
+// (a tripped crash or quit-early ceiling) rather than a plain user
+// pause. R2863
+func isStormReason(reason string) bool {
+	return reason == "crash-storm" || reason == "quit-early-storm"
+}
+
+// stormPause returns the reason and timestamp of an active storm pause
+// for a class, or ("", "") when the class is not currently paused on a
+// storm. A class is in a storm pause when its latest control state is
+// "paused" (luhmannState) and the most recent pause record carries a
+// storm reason. R2863
+func stormPause(recs []map[string]any) (reason, since string) {
+	if luhmannState(recs) != "paused" {
+		return "", ""
+	}
+	for i := len(recs) - 1; i >= 0; i-- {
+		if k, _ := recs[i]["kind"].(string); k == "pause" {
+			r, _ := recs[i]["reason"].(string)
+			if isStormReason(r) {
+				return r, tsString(recs[i])
+			}
+			return "", ""
+		}
+	}
+	return "", ""
+}
+
+// MonitorEmergencies returns one EmergencyState per shipped class
+// currently in a storm pause (empty when none). Cold-start, reading the
+// same supervisor logs `monitor status` does, so any in-process caller
+// (the server, exposing it to a Lua bridge for the Frictionless
+// emergency light) sees a flag always consistent with the records.
+// CRC: crc-Monitor.md | R2863
+func MonitorEmergencies(arkDir string) ([]EmergencyState, error) {
+	sums, err := MonitorStatus(arkDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []EmergencyState
+	for _, s := range sums {
+		if s.Emergency != nil && s.Emergency.Active {
+			out = append(out, *s.Emergency)
+		}
+	}
+	return out, nil
 }
 
 func intField(rec map[string]any, name string) int {
@@ -270,15 +347,17 @@ func intField(rec map[string]any, name string) int {
 }
 
 // luhmannState walks records back-to-front; the most recent state-
-// defining record (spawn / exit / respawn / crash / pause / resume)
-// determines current state. R2785
+// defining record (spawn / exit / respawn / crash / quit-early / pause /
+// resume) determines current state. A quit-early is transient — always
+// followed by a respawn — so it maps to running, not a terminal state.
+// R2785, R2861
 func luhmannState(recs []map[string]any) string {
 	for i := len(recs) - 1; i >= 0; i-- {
 		kind, _ := recs[i]["kind"].(string)
 		switch kind {
 		case "pause":
 			return "paused"
-		case "resume", "spawn", "respawn", "exit":
+		case "resume", "spawn", "respawn", "exit", "quit-early":
 			return "running"
 		case "crash":
 			return "crashed"
@@ -362,6 +441,9 @@ func FormatMonitorBullet(rec map[string]any) string {
 		if v := intField(rec, "crashes"); v > 0 {
 			fmt.Fprintf(&sb, " crashes=%d", v)
 		}
+		if v := intField(rec, "quit_early"); v > 0 {
+			fmt.Fprintf(&sb, " quit_early=%d", v)
+		}
 	case "recall":
 		if v := intField(rec, "fire"); v != 0 {
 			fmt.Fprintf(&sb, " fire=%d", v)
@@ -382,31 +464,39 @@ func FormatMonitorBullet(rec map[string]any) string {
 	return sb.String()
 }
 
-// PrevCrashes returns the `crashes` counter on the most recent
-// luhmann.jsonl record for the named class, or 0 when none. Used by
-// `ark luhmann exit-record` to compute the new counter value.
-// CRC: crc-LuhmannCLI.md | R2795
-func PrevCrashes(arkDir, class string) (int, error) {
+// PrevCounters returns the `crashes` and `quit_early` counters on the
+// most recent luhmann.jsonl record for the named class, or (0, 0) when
+// none. One backward scan serves both counters; `exit-record` uses it to
+// compute the new values per R2861.
+// CRC: crc-LuhmannCLI.md | R2795, R2861
+func PrevCounters(arkDir, class string) (crashes, quitEarly int, err error) {
 	recs, err := readMonitorLines(MonitorClassPath(arkDir, "luhmann"))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for i := len(recs) - 1; i >= 0; i-- {
 		if c, ok := recs[i]["class"].(string); !ok || c != class {
 			continue
 		}
-		return intField(recs[i], "crashes"), nil
+		return intField(recs[i], "crashes"), intField(recs[i], "quit_early"), nil
 	}
-	return 0, nil
+	return 0, 0, nil
 }
 
 // ClassifyLuhmannReason maps an exit reason to the supervisor record's
-// kind ("exit" for healthy recycle, "crash" otherwise) and decides
-// whether the crashes counter should reset (true) or increment (false).
-// R2795
+// kind: `context-limit` → "exit" (healthy recycle), `quit-early` →
+// "quit-early" (R2861), anything else → "crash". The boolean return is
+// the legacy reset hint (true only for a healthy exit); the actual
+// counter math is authoritative server-side, keyed on kind (R2861), so
+// the server holds either counter the current kind does not implicate.
+// R2795, R2861
 func ClassifyLuhmannReason(reason string) (kind string, reset bool) {
-	if reason == "context-limit" {
+	switch reason {
+	case "context-limit":
 		return "exit", true
+	case "quit-early":
+		return "quit-early", false
+	default:
+		return "crash", false
 	}
-	return "crash", false
 }
