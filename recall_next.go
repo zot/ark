@@ -158,14 +158,19 @@ func (b *RecallAgentBuilder) lowestPendingCuration() (fire uint64, content strin
 }
 
 // recallDocPrompt wraps a curation doc as a crank-handle (R2858): the
-// content, then the next actions the agent should take.
+// content, then the next actions the agent should take. A candidate
+// marked `- tag-only: true` is the reader's own conversation — the
+// agent may recommend a tag for it but must never surface it.
+// CRC: crc-RecallAgentBuilder.md | R2858, R2870, R2873
 func recallDocPrompt(fire uint64, nonce uint32, content string) string {
 	var sb strings.Builder
 	sb.WriteString(content)
 	fmt.Fprintf(&sb,
 		"\n\n---\nJudge the candidates above for genuine fit with their source paragraph. "+
-			"For each chunk worth showing: `~/.ark/ark connections recall surface %d -chunk <id> -reason \"...\"`. "+
-			"For each tag worth attaching: `~/.ark/ark connections recall recommend %d -chunk <id> -tag @t[:v] -reason \"...\"`. "+
+			"For each candidate worth showing: `~/.ark/ark connections recall surface %d -chunk <CANDIDATE-CHUNKID> -reason \"...\"`. "+
+			"For each tag worth attaching: `~/.ark/ark connections recall recommend %d -chunk <CANDIDATE-CHUNKID> -tag @t[:v] -reason \"...\"`. "+
+			"Always pass a `## Candidate:` chunkid — never the `# Source Chunk:` id (that is the reader's own paragraph; surface will reject it). "+
+			"A candidate marked `- tag-only: true` is from the current conversation — recommend a tag for it if one fits, but do NOT surface it (the reader already has it in context). "+
 			"Then `~/.ark/ark connections recall close %d --nonce %d`. "+
 			"Then run `~/.ark/ark connections recall next %d` again.\n",
 		fire, fire, fire, nonce, nonce)
@@ -226,7 +231,10 @@ func (b *RecallAgentBuilder) RecallListen(ctx context.Context, session string) (
 
 // recallListenPrompt fetches each result doc the events point at and
 // wraps them as a consumer crank-handle (R2865): the result content,
-// then what to do with it and the instruction to listen again.
+// then what to do with it and the instruction to listen again. When a
+// result references a chat-JSONL chunk (a Surface/Recommend path ending
+// in `.jsonl`), it adds external-tag guidance (R2871).
+// CRC: crc-RecallAgentBuilder.md | R2865, R2871
 func (b *RecallAgentBuilder) recallListenPrompt(session string, events []Event) string {
 	var sb strings.Builder
 	for i, ev := range events {
@@ -242,12 +250,23 @@ func (b *RecallAgentBuilder) recallListenPrompt(session string, events []Event) 
 		}
 		sb.Write(data)
 	}
+	// R2871: if any referenced chunk lives in a chat-JSONL file (a past
+	// conversation), remind the assistant to tag those via external (@ext)
+	// tags — the file is append-only source of truth — which is how
+	// conversations enter the hypergraph. Conditional; the internal-vs-@ext
+	// choice stays the assistant's. The `.jsonl:` shape matches a
+	// Surface/Recommend `<path>:<range>` whose path is a session JSONL.
+	extTagNote := ""
+	if strings.Contains(sb.String(), ".jsonl:") {
+		extTagNote = "Some referenced chunks live in chat-JSONL files (past conversations) — apply any tag on those as an external (`@ext`) tag, never an inline edit, since the file is append-only source of truth; that is how conversations enter the hypergraph. "
+	}
 	fmt.Fprintf(&sb,
 		"\n\n---\nThis is ambient recall — material from the corpus related to the current conversation. "+
 			"`## Surface:` items are chunks worth showing the user; `## Recommend:` items are tags worth attaching. "+
 			"Decide what genuinely helps the user right now — you have final say; skip anything stale or off-topic. "+
+			"%s"+
 			"If the user rejects a recommended tag, run `~/.ark/ark connections recall reject-derived`. "+
 			"Then run `~/.ark/ark connections recall listen --session %s` again to keep receiving.\n",
-		session)
+		extTagNote, session)
 	return sb.String()
 }

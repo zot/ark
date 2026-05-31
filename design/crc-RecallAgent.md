@@ -1,5 +1,5 @@
 # RecallAgent
-**Requirements:** R2769, R2771, R2850, R2851, R2859, R2860
+**Requirements:** R2769, R2771, R2850, R2851, R2859, R2860, R2873
 
 Non-Go artifact set that defines the long-running Haiku daemon that
 runs the ambient-recall loop. Three files cooperate (the loop driver
@@ -14,9 +14,11 @@ moved into one server verb plus the agent persona):
 - `.claude/skills/ark/recall-agent-guard.sh` — the PreToolUse guard:
   the hermetic-seal allowlist — the four recall verbs plus `cat
   <file>` for reading the backgrounded `next` output.
-- `~/.ark/skills/ark-recall.md` — the standalone one-shot work skill,
-  untouched (migration-007 preserved capability); not part of the
-  daemon's loop.
+- `~/.ark/skills/ark-recall.md` — the legacy one-shot work skill, now
+  marked **OBSOLETE** (migration-007 unhooked it from the daemon; the
+  persona + `next` crank-handle carry the live instructions). Retained
+  for reference a cycle or two before removal; not the live instruction
+  surface (R2873).
 
 The daemon's loop logic — subscribe, poll, fire-ordering, content,
 context-gate — now lives in one server verb, `ark connections recall
@@ -40,6 +42,9 @@ allowlist, and the persona that drives the verb.
     `close`; on a keepalive, just run `next` again; on an exit
     directive, stop. Loop until exit. (If `next` is ever detached,
     `cat` its output file and carry on — fallback only.)
+    Surface/recommend the `## Candidate:` chunkid (`<CANDIDATE-CHUNKID>`,
+    matching the call) — **never** the `# Source Chunk:` id, which is
+    the reader's own conversation paragraph (R2873).
   - The nonce arrives in the prompt (`Nonce: <N>`) and the Task
     description; the agent passes it to every `next` / `close` call
     (R2851).

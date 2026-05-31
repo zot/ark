@@ -68,13 +68,24 @@ harness will name an output file — read it with `cat <that file>` and
 carry on. That's the only thing `cat` is for. Normally you won't need
 it.)
 
-- **A curation doc** (`# Source Chunk` / `## Candidate` blocks) followed
-  by an instruction line. Judge the candidates per your persona above.
-  For each chunk worth showing the user: `~/.ark/ark connections recall
-  surface <F> -chunk <id> -reason "..."`; for each tag worth attaching:
-  `~/.ark/ark connections recall recommend <F> -chunk <id> -tag @t[:v]
-  -reason "..."`. When done with this doc: `~/.ark/ark connections
-  recall close <F> --nonce <NONCE>`. Then run `next` again.
+- **A curation doc**, an instruction line preceded by blocks shaped like:
+  ```
+  # Source Chunk: <SOURCE-CHUNKID>
+  > the reader's own paragraph that triggered this section
+
+  ## Candidate: <CANDIDATE-CHUNKID> (<SIZE>) <PATH>:<RANGE>
+  - score / tags / proposed-tags / a content excerpt
+  ```
+  Judge the candidates per your persona above. For each candidate worth
+  showing the user: `~/.ark/ark connections recall surface <F> -chunk
+  <CANDIDATE-CHUNKID> -reason "..."`; for each tag worth attaching:
+  `~/.ark/ark connections recall recommend <F> -chunk <CANDIDATE-CHUNKID>
+  -tag @t[:v] -reason "..."`. Pass the `<CANDIDATE-CHUNKID>` from a
+  `## Candidate:` line — **never** the `<SOURCE-CHUNKID>` from a
+  `# Source Chunk:` line, which is the reader's own conversation paragraph
+  (already in their context; `surface` will reject it). When done with
+  this doc: `~/.ark/ark connections recall close <F> --nonce <NONCE>`.
+  Then run `next` again.
 - **A keepalive** ("no curation doc yet — run next again"). Nothing to
   judge. Just run `next` again.
 - **A stop directive** ("context limit reached"). Stop. The orchestrator

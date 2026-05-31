@@ -95,14 +95,14 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 		4711, "notes/foo.md", "12-18", 1834, 0.84,
 		[]string{"cooking", "course"},
 		[]string{"persona"}, []float64{0.72},
-		"asparagus risotto",
+		"asparagus risotto", false,
 	)
 	cb.Section(1002, "assistant explanation of risotto technique")
 	cb.Candidate(
 		5023, "notes/bar.md", "1-7", 480, 0.76,
 		[]string{"technique"},
 		nil, nil,
-		"toast the rice in fat",
+		"toast the rice in fat", false,
 	)
 	body := cb.buf.String()
 
@@ -138,6 +138,33 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	}
 	if cb.Sections() != 2 {
 		t.Errorf("Sections() = %d, want 2", cb.Sections())
+	}
+}
+
+// R2869 — a tag-only candidate (own-session) renders the `- tag-only: true`
+// marker so the agent recommends but never surfaces it; non-tag-only
+// candidates omit the line.
+func TestRecallCurationBuilder_TagOnly(t *testing.T) {
+	b := &RecallAgentBuilder{
+		curations: make(map[uint64]*RecallCurationBuilder),
+		results:   make(map[uint64]*recallResultDoc),
+	}
+	cb := b.RecallCurationOpen("sess-xyz", 3)
+	cb.Section(2001, "user revisiting an earlier point")
+	cb.Candidate(7001, "~/.claude/projects/p/sess-xyz.jsonl", "40-44", 300, 0.81,
+		[]string{"topic"}, nil, nil, "earlier we discussed this", true)
+	cb.Candidate(7002, "notes/ext.md", "1-3", 200, 0.79,
+		[]string{"topic"}, nil, nil, "external knowledge", false)
+	body := cb.buf.String()
+
+	if strings.Count(body, "- tag-only: true\n") != 1 {
+		t.Errorf("expected exactly one tag-only marker; got body:\n%s", body)
+	}
+	own := strings.Index(body, "## Candidate: 7001")
+	ext := strings.Index(body, "## Candidate: 7002")
+	marker := strings.Index(body, "- tag-only: true")
+	if !(own < marker && marker < ext) {
+		t.Errorf("tag-only marker must sit under candidate 7001, not 7002 (own=%d marker=%d ext=%d)", own, marker, ext)
 	}
 }
 

@@ -2,7 +2,8 @@
 
 **Requirements:** R2696, R2705, R2706, R2708, R2711, R2712, R2713,
 R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739,
-R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753, R2754
+R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753, R2754,
+R2806, R2867, R2868, R2869
 
 The watcher hooks into `indexer.executeRefresh`'s isAppend
 branch. OnAppend is synchronous on the indexer's goroutine —
@@ -34,11 +35,21 @@ is in `seq-recall-agent.md`.
          │
          ├── 2.2  sessionID = sessionFromJSONLPath(path)
          │
-         ├── 2.3  lock sessions[sessionID]
+         ├── 2.3  activation gate (R2867):
+         │          curate = pubsub.SubscriberCount("ark-recall-curate", sessionID)
+         │          result = pubsub.SubscriberCount("ark-recall-result", sessionID)
+         │          if curate == 0 || result == 0:
+         │            lock; stop any armed pendingTimer;
+         │              delete sessions[sessionID]; unlock
+         │            return   (unsubscribed → never accumulated, armed,
+         │                      or fired; no leaked state; reactivates at
+         │                      JSONL end, R2868)
          │
-         ├── 2.4  append `added` to pendingChunks                 (R2730)
+         ├── 2.4  lock sessions[sessionID]
          │
-         ├── 2.5  for each line in newBytes:                      (R2731, R2732)
+         ├── 2.5  append `added` to pendingChunks                 (R2730)
+         │
+         ├── 2.6  for each line in newBytes:                      (R2731, R2732)
          │           obj = json.Unmarshal(line)
          │           if obj.type == "user" && genuine(obj):        (R2732)
          │             // genuine = string content && no origin.kind
@@ -55,7 +66,7 @@ is in `seq-recall-agent.md`.
          │                          jobs channel })
          │               armReady = false  (once per user turn)
          │
-         └── 2.6  unlock; return
+         └── 2.7  unlock; return
 ```
 
 ## Flow 2: timer expiry → curation-doc write
@@ -79,7 +90,16 @@ is in `seq-recall-agent.md`.
          ├── 5.3  fire = watcher.nextFireNumber()                 (R2752)
          │        cfg = db.Config().Recall                        (R2695)
          │
-         ├── 5.4  candidates per paragraph:                       (R2736, R2746)
+         ├── 5.4  subscriber backstop (R2806): re-query both
+         │          SubscriberCount("ark-recall-curate", sessionID) and
+         │          SubscriberCount("ark-recall-result", sessionID).
+         │          if either == 0 (consumer dropped during
+         │          activation_delay): append recall.jsonl record with
+         │          outcome="no-subscriber" (R2808); return.
+         │          pendingChunks already cleared at 5.1 → next
+         │          OnAppend starts fresh.
+         │
+         ├── 5.5  candidates per paragraph:                       (R2736, R2746)
          │        sections = []
          │        for each cid in snapshot:
          │          text = db.ChunkTextByID(cid)
@@ -107,29 +127,31 @@ is in `seq-recall-agent.md`.
          │                             paraExcerpt,
          │                             candidates: result.Chunks})
          │
-         ├── 5.5  if len(sections) == 0:                          (R2753)
+         ├── 5.6  if len(sections) == 0:                          (R2753)
          │          log fired with sections-emitted=0; return
          │
-         ├── 5.6  b = db.RecallCurationOpen(sessionID, fire)      (R2754)
+         ├── 5.7  b = db.RecallCurationOpen(sessionID, fire)      (R2754, R2869)
          │        for each section in sections:
          │          b.Section(section.sourceCID,
          │                    section.paraExcerpt)
          │          for each c in section.candidates:
+         │            tagOnly = sessionFromJSONLPath(c.Path)       (R2869)
+         │                      == sessionID  // own-session → no surface
          │            b.Candidate(c.ChunkID, c.Path, c.Range,
          │                        c.Score, c.Tags,
          │                        c.ProposedTagsWithScores,
-         │                        c.Content)
+         │                        c.Content, tagOnly)
          │        b.Close()                                       (R2747, R2748)
          │        → writes tmp://ARK-RECALL/curation-
          │            <sessionID>-<fire>
          │          (write actor publishes pubsub event for
          │           subscribers to @ark-recall-curate)
          │
-         ├── 5.7  mark-on-send: for each section.candidates[*]:   (R2711, R2712, R2740)
+         ├── 5.8  mark-on-send: for each section.candidates[*]:   (R2711, R2712, R2740)
          │          for each (tag, value) in chunk.Tags:
          │            store.AddDiscussed(sessionID, tag, value)
          │
-         └── 5.8  log fired with fire=<F>, sections-emitted=N,    (R2713)
+         └── 5.9  log fired with fire=<F>, sections-emitted=N,    (R2713)
                   candidates=K, discussed-records=M
 ```
 

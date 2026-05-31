@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866
+**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -51,14 +51,17 @@ for these verbs — `ark serve` must be running.
   paragraph excerpt (UTF-8-safe ~200-byte cap) to the
   in-memory doc (R2749).
 - (builder).Candidate(chunkID, path, rangeLabel, byteSize,
-  score, tagNames, proposedTagsWithScores, contentExcerpt)
-  appends a `## Candidate: <chunkid> (<size>) <path>:<range>`
-  H2 with score, tag list, parenthesized proposed-tags, and a
-  fenced ~500-char content excerpt to the most recent section.
-  `byteSize` is the chunk's full pre-truncation length; the
-  watcher captures it before applying the 500-char excerpt cap
-  and passes it through. Size renders via `friendlySize` (same
-  helper Surface uses). (R2749)
+  score, tagNames, proposedTagsWithScores, contentExcerpt,
+  tagOnly) appends a `## Candidate: <chunkid> (<size>)
+  <path>:<range>` H2 with score, tag list, parenthesized
+  proposed-tags, and a fenced ~500-char content excerpt to the
+  most recent section. `byteSize` is the chunk's full
+  pre-truncation length; the watcher captures it before applying
+  the 500-char excerpt cap and passes it through. Size renders
+  via `friendlySize` (same helper Surface uses). When `tagOnly`
+  (the candidate is in the originating session's own JSONL,
+  R2869) the H2 carries a `- tag-only: true` line — the agent may
+  recommend a tag for it but must not surface it. (R2749, R2869)
 - (builder).Close() writes
   `tmp://ARK-RECALL/curation-<session>-<fire>` via the write
   actor with the two head tags `@ark-recall-curate: <session>`
@@ -99,8 +102,13 @@ for these verbs — `ark serve` must be running.
   return keeps it in one continuous turn that completes only on a true
   context-limit exit. Every non-exit return — doc or keepalive —
   carries crank-handle prose ending in "run next again"; only the exit
-  directive stops (a uniform crank handle, no ambiguous empty). This
-  bounded block supersedes 008's pure no-timeout lotto-tube.
+  directive stops (a uniform crank handle, no ambiguous empty). For a
+  doc, the prose instructs the agent to surface and/or recommend per
+  candidate but to **recommend-only** — never surface — any candidate
+  marked `tag-only`, the reader's own conversation (R2870); it also
+  names the surfaceable id as the `## Candidate:` chunkid and warns
+  never to pass the `# Source Chunk:` id to surface/recommend (R2873).
+  This bounded block supersedes 008's pure no-timeout lotto-tube.
   Lowest-fire-first keeps `Close`'s
   same-session orphan sweep (R2758) safe.
 
@@ -114,9 +122,17 @@ for these verbs — `ark serve` must be running.
   `@ark-recall-result=<session>` event arrives, fetches the published
   `result-<session>-<fire>` doc(s), and returns their content plus
   crank-handle prose ("ambient recall — surface what genuinely helps the
-  user, then run `recall listen` again"). **No keepalive, no
-  context-gate, no subscriber-gate** — those are daemon concerns; the
-  only non-result return is ctx cancellation. It does **not** filter
+  user, then run `recall listen` again"). When any returned doc
+  references a chat-JSONL chunk (a `## Surface:`/`## Recommend:` whose
+  `<path>` ends in `.jsonl` — cheap path-shape proxy), the prose
+  additionally instructs applying tags on those chunks as external
+  (`@ext`) tags —
+  append-only source of truth — and notes this is how conversations
+  enter the hypergraph; the prose is omitted when no chat-JSONL chunk is
+  referenced (R2871). The internal-vs-`@ext` choice stays the
+  assistant's. **No keepalive, no context-gate, no subscriber-gate** —
+  those are daemon concerns; the only non-result return is ctx
+  cancellation. It does **not** filter
   `## Recommend:` by RJ ceiling — the assistant owns that (R2765/R2766).
   The `/recall` skill (`.claude/skills/recall/SKILL.md`, R2866) drives
   the loop: it supplies the session UUID via the
@@ -126,16 +142,24 @@ for these verbs — `ark serve` must be running.
   session's curation docs.
 
 ### Result-doc builder (CLI-driven)
-- SurfaceItem(fire, chunkID, reason) error (R2756, R2751) —
-  opens `results[fire]` on first call for that fire; appends
-  a `## Surface: <chunkid> (<size>) <path>:<range>` H2 with
-  its `reason: ...` line. `chunkLocator(chunkID, true)`
-  resolves the chunk's `path:range` and size server-side via
-  `db.ChunkInfo` + `friendlySize` (decimal bytes / K / M) so
-  the consuming assistant can prune by file path and gauge
-  fetch cost; on lookup failure the path drops and the size
-  renders as `?`, and the surface still emits. Errors on
-  missing required args before any state change.
+- SurfaceItem(fire, chunkID, reason) error (R2756, R2751,
+  R2872) — opens `results[fire]` on first call for that fire;
+  **own-session gate (R2872):** if the chunk's path resolves to
+  the fire's own session
+  (`sessionFromJSONLPath(ChunkInfo(chunkID).Path) ==
+  doc.session`) it returns an error instead of emitting — the
+  chunk is a `# Source Chunk:` / conversation paragraph already
+  in the reader's context, and the error names the fix (surface
+  a `## Candidate:` chunkid, not the source id), doubling as
+  fumble-onboarding. Otherwise appends a `## Surface: <chunkid>
+  (<size>) <path>:<range>` H2 with its `reason: ...` line.
+  `chunkLocator(chunkID, true)` resolves the chunk's
+  `path:range` and size server-side via `db.ChunkInfo` +
+  `friendlySize` (decimal bytes / K / M) so the consuming
+  assistant can prune by file path and gauge fetch cost; on
+  lookup failure the path drops and the size renders as `?`, and
+  the surface still emits. Errors on missing required args
+  before any state change.
 - RecommendItem(fire, chunkID, tagSpec, reason) error
   (R2757, R2751) — same open-on-first-call semantics; appends
   a `## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>`

@@ -195,6 +195,16 @@ never re-triggers on its own consumers' output):
   chunker strategy is `chat-jsonl` and (if `sources` is
   non-empty) the chunk's source root matches an entry in the
   whitelist.
+- **Activation gate.** The watcher tracks a session only while
+  *both* ends of the recall pipe are subscribed: a daemon on the
+  bare `@ark-recall-curate` tag and a client on
+  `@ark-recall-result=<session>`. On each `OnAppend`, if either
+  `SubscriberCount("ark-recall-curate", <session>)` or
+  `SubscriberCount("ark-recall-result", <session>)` is zero, the
+  watcher ignores the append and **drops the session's in-memory
+  state** — it stops any armed `pendingTimer` and forgets the
+  session (clearing its `pendingChunks`). An unsubscribed session is
+  therefore never accumulated, armed, or fired; it costs nothing.
 - **Accumulation.** Every `added` chunkID gets appended to
   the per-session `pendingChunks` slice. The watcher does not
   fire per chunk; chunks pile up.
@@ -224,9 +234,25 @@ never re-triggers on its own consumers' output):
 - **Fire on expiry.** When the timer expires, the watcher
   allocates the next global fire number, processes everything
   currently in `pendingChunks[session]`, and clears the slice.
-- **Cold start.** Go-forward only. No backfill of pre-existing
-  JSONL chunks on watcher startup.
-- **Self-exclusion.** Inherited from the recall substrate.
+- **Cold start / (re)activation.** Go-forward only. No backfill of
+  pre-existing JSONL chunks — on watcher startup *or* when a
+  session's watch (re)activates. Because only live appends drive the
+  watcher and the session's state was dropped while unsubscribed,
+  watching resumes at the current end of the JSONL: a session that
+  runs `/recall` mid-conversation gets recall on its next turn, never
+  a replay of the prior transcript.
+- **Self-exclusion.** The substrate already drops the exact input
+  chunk. On top of that, when building the curation doc the watcher
+  classifies each surviving candidate by source: a candidate in the
+  **originating session's own JSONL** is marked *tag-only* — kept for
+  tag suggestions but never surfaced, since that conversation is
+  already in the reader's live context (the model's attention handles
+  it better than a flat similarity hit). Candidates in **another
+  session's JSONL** ("remember when we talked about…") or in
+  **external files** surface normally. Tag suggestions stay available
+  for all three — conversation chunks are taggable via external
+  (`@ext`) tags, which is how past conversations enter the hypergraph
+  (see Result doc shape).
 
 The per-line scan uses lightweight JSON parsing — each JSONL
 line is a self-contained JSON object, so the watcher parses
@@ -275,6 +301,7 @@ ordered by score descending:
 - score: <0.NN>
 - tags: <comma-separated bare tagnames>
 - proposed-tags: <name> (<0.NN>), <name> (<0.NN>), ...
+- tag-only: true        (present only for own-session candidates)
 
 ```
 <~500-char excerpt of chunk content>
@@ -300,6 +327,12 @@ Notes:
 - The content excerpt uses a fenced block (not blockquoted) so
   the agent can distinguish it from the source-paragraph
   excerpt without ambiguity.
+- `tag-only: true` appears only on a candidate whose source is the
+  originating session's own JSONL. The daemon may `recommend` a tag
+  for such a candidate but must **not** `surface` it — it's already
+  in the reader's context. Candidates without the line may be
+  surfaced. The daemon's crank-handle (the prose `next` appends)
+  restates this rule.
 
 When zero paragraphs across `pendingChunks` clear the
 similarity gate, the watcher writes nothing — the fire
@@ -348,6 +381,32 @@ The assistant has final say on whether to surface a chunk to
 the user or to ask the user about a tag recommendation. The
 agent's role is to filter and rank; the assistant's role is to
 present.
+
+**Source chunks are never surfaced.** A `# Source Chunk:` id is the
+conversation paragraph that *triggered* a section — it lives in the
+reader's own session and is already in context. The agent surfaces
+the `## Candidate:` ids beneath it, never the source id. `surface`
+enforces this deterministically: `SurfaceItem` rejects any chunk
+whose path resolves to the fire's own session, and the rejection
+names the fix (pass a `## Candidate:` chunkid, not the source id) —
+doubling as fumble-onboarding. `recommend` is **not** gated: tagging
+an own-session chunk is the intended hypergraph path. The
+recall-agent skill and the curation crank-handle reinforce this by
+naming the surfaceable id `<CANDIDATE-CHUNKID>` (matching the
+`surface`/`recommend` call verbatim) and marking the `# Source Chunk:`
+id as never-surface — two ids in view, one named "do this," the other
+"never this."
+
+**External tags for conversation chunks.** A `## Surface:` or
+`## Recommend:` line can point at a chunk in a chat-JSONL file — a
+past conversation, now within recall's reach. Those files are
+append-only source of truth: a tag on them must be applied as an
+**external (`@ext`) tag**, never an inline edit. When a result doc
+references any chat-JSONL chunk, the consumer crank-handle (the prose
+`recall listen` appends to its reply) carries this reminder. The
+internal-vs-`@ext` choice is the assistant's, made per chunk from its
+`<path>` — and tagging conversation chunks this way is exactly how
+they enter the hypergraph.
 
 When the agent has nothing surface-worthy and nothing to
 recommend, it issues `close` with no prior `surface` /
@@ -433,12 +492,17 @@ writing their respective tmp:// docs. See
 [subscriber-presence.md](subscriber-presence.md) for the API
 (`db.SubscriberCount`) and the CLI form (`ark subscribers --tag T`).
 
-- **Watcher → curation doc.** Before writing
-  `tmp://ARK-RECALL/curation-<session>-<fire>`, the watcher
-  queries `SubscriberCount("ark-recall-curate", "<originating-session-uuid>")`.
-  If zero, the watcher skips the curation write, clears
-  `pendingChunks` as usual, and appends a record to
-  `recall.jsonl` with `outcome: "no-subscriber"`.
+- **Watcher → activation gate.** The watcher processes a session
+  only while *both* a daemon (`@ark-recall-curate`, bare) and a
+  client (`@ark-recall-result=<session>`) are subscribed — both
+  ends of the pipe. The gate is applied primarily at the
+  watch-activation point (`OnAppend`, see Trigger semantics): an
+  append for a session missing either subscription is ignored and
+  the session's in-memory state is dropped, so no curation doc is
+  ever produced for it. `fire()` re-checks both counts as a
+  backstop for the consumer dropping during `activation_delay`; on
+  a zero count it clears `pendingChunks` and appends a
+  `recall.jsonl` record with `outcome: "no-subscriber"`.
 - **`close` → result doc.** Before writing
   `tmp://ARK-RECALL/result-<session>-<fire>`, `close` queries
   `SubscriberCount("ark-recall-result", "<originating-session-uuid>")`.
@@ -651,11 +715,14 @@ rejection, calls `ark connections recall reject-derived`. `listen` does
 **not** filter recommends itself — the RJ decision stays the assistant's.
 
 **Opt-in via the subscriber-gate.** Until the assistant runs `listen`
-(no subscriber for `@ark-recall-result=<session>`), the daemon's `next`
-subscriber-gate leaves that session's curation docs pending — they pile
-up, undispatched, and no recall work is done for the session. So a
-session gets ambient recall exactly when (and only when) its assistant
-opts in.
+(no subscriber for `@ark-recall-result=<session>`), the **watcher's
+activation gate** doesn't track the session at all — no curation doc is
+ever produced for it, so the substrate cost is never paid. (The daemon's
+`next` dispatch gate is the downstream backstop: if a consumer drops
+between a doc being written and dispatched, that doc is left pending —
+deferred, not discarded.) So a session gets ambient recall exactly when
+(and only when) its assistant opts in, and recall begins at the current
+end of its JSONL — never a replay of the prior transcript.
 
 **The `/recall` skill** kicks off the loop. The user types `/recall`,
 and the assistant — using its own session UUID, which the skill provides

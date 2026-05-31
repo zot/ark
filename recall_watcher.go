@@ -243,6 +243,20 @@ func bytesIterLines(b []byte) func(yield func([]byte) bool) {
 	}
 }
 
+// pipeSubscribed reports whether both ends of the recall pipe are
+// subscribed for this session — a daemon on bare @ark-recall-curate and a
+// client on @ark-recall-result=<session>. With no pubsub (e.g. tests) it
+// reports true so the watcher tracks normally. Shared by the OnAppend
+// activation gate and the fire() backstop so the two cannot drift.
+// CRC: crc-RecallWatcher.md | R2806, R2867
+func (w *RecallWatcher) pipeSubscribed(sessionID string) bool {
+	if w.db == nil || w.db.pubsub == nil {
+		return true
+	}
+	return w.db.pubsub.SubscriberCount("ark-recall-curate", sessionID) > 0 &&
+		w.db.pubsub.SubscriberCount("ark-recall-result", sessionID) > 0
+}
+
 // OnAppend is the indexer-side entry. Called synchronously from
 // `executeRefresh`'s isAppend branch. R2729
 func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added []uint64) {
@@ -254,6 +268,25 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 	}
 	sessionID := sessionFromJSONLPath(path)
 	if sessionID == "" {
+		return
+	}
+
+	// Activation gate: track a session only while both ends of the recall
+	// pipe are subscribed — a daemon on bare @ark-recall-curate and a client
+	// on @ark-recall-result=<session>. Either missing → ignore this append
+	// and drop the session's in-memory state, so an unsubscribed session is
+	// never accumulated, armed, or fired and leaks nothing; a later
+	// (re)subscription reactivates at the current JSONL end (no backfill).
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2867, R2868
+	if !w.pipeSubscribed(sessionID) {
+		w.mu.Lock()
+		if st, ok := w.sessions[sessionID]; ok {
+			if st.pendingTimer != nil {
+				st.pendingTimer.Stop()
+			}
+			delete(w.sessions, sessionID)
+		}
+		w.mu.Unlock()
 		return
 	}
 
@@ -325,20 +358,21 @@ func (w *RecallWatcher) fire(sessionID string) {
 		return
 	}
 
-	// R2806: subscriber-presence gate. Skip the substrate call entirely
-	// when nobody is listening for this session's curation events; the
-	// downstream agent cost and disk write would be wasted.
-	if w.db != nil && w.db.pubsub != nil {
-		if w.db.pubsub.SubscriberCount("ark-recall-curate", sessionID) == 0 {
-			Logv(2, "recall-watcher: no curate subscriber session=%s fire=%d pending=%d",
-				sessionID, fire, len(snapshot))
-			if w.builder != nil {
-				// R2808: outcome="no-subscriber" goes into the monitor log so
-				// `ark monitor` can surface skip rate.
-				w.builder.appendMonitor(fire, sessionID, 0, 0, 0, 0, 0, 0, 0, "no-subscriber")
-			}
-			return
+	// Subscriber-presence backstop to the OnAppend activation gate (R2867):
+	// re-check BOTH ends of the pipe in case the consumer dropped during
+	// activation_delay. Either missing → skip the substrate call + disk
+	// write; pendingChunks is already cleared (R2735), so the next OnAppend
+	// starts fresh.
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.4 | R2806
+	if !w.pipeSubscribed(sessionID) {
+		Logv(2, "recall-watcher: no curate/result subscriber session=%s fire=%d pending=%d",
+			sessionID, fire, len(snapshot))
+		if w.builder != nil {
+			// R2808: outcome="no-subscriber" goes into the monitor log so
+			// `ark monitor` can surface skip rate.
+			w.builder.appendMonitor(fire, sessionID, 0, 0, 0, 0, 0, 0, 0, "no-subscriber")
 		}
+		return
 	}
 
 	cfg := w.config()
@@ -434,8 +468,13 @@ func (w *RecallWatcher) fire(sessionID string) {
 				tagNames = append(tagNames, t.Tag)
 			}
 			pNames, pScores := ch.ProposedTags, ch.ProposedTagScores
+			// Classify by source: a candidate in the originating session's
+			// own JSONL is tag-only — recommend, never surface, since the
+			// live conversation is already in the reader's context.
+			// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.7 | R2869
+			tagOnly := sessionFromJSONLPath(ch.Path) == sessionID
 			cb.Candidate(ch.ChunkID, ch.Path, ch.Range, sec.sizes[i],
-				ch.Score, tagNames, pNames, pScores, ch.Content)
+				ch.Score, tagNames, pNames, pScores, ch.Content, tagOnly)
 		}
 	}
 	if err := cb.Close(); err != nil {

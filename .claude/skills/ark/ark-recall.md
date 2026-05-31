@@ -1,8 +1,15 @@
-<!-- CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2854 -->
+<!-- CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2854, R2873 -->
 @knowledge: ark
 @from-service: ARK-RECALL
 
 # Recall agent skill
+
+> **OBSOLETE (R2873).** This standalone one-shot skill was unhooked from
+> the recall daemon in migration 007. The live daemon takes its per-fire
+> instructions from the persona (`.claude/agents/ark-recall-agent.md`)
+> and the `next` crank-handle — not from this file. Kept for reference a
+> cycle or two before removal; do not rely on it as the agent's
+> instruction surface.
 
 This is what you do, in order:
 

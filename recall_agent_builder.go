@@ -119,6 +119,7 @@ func (c *RecallCurationBuilder) Candidate(
 	proposedNames []string,
 	proposedScores []float64,
 	contentExcerpt string,
+	tagOnly bool,
 ) {
 	fmt.Fprintf(&c.buf, "\n## Candidate: %d (%s) %s:%s\n\n", chunkID, friendlySize(byteSize), path, rangeLabel)
 	fmt.Fprintf(&c.buf, "- score: %.2f\n", score)
@@ -133,6 +134,12 @@ func (c *RecallCurationBuilder) Candidate(
 			parts = append(parts, fmt.Sprintf("%s (%.2f)", name, s))
 		}
 		fmt.Fprintf(&c.buf, "- proposed-tags: %s\n", strings.Join(parts, ", "))
+	}
+	// tag-only marks an own-session candidate: the agent may recommend a
+	// tag for it but must never surface it (the reader's own conversation
+	// is already in context). CRC: crc-RecallAgentBuilder.md | R2869
+	if tagOnly {
+		fmt.Fprintf(&c.buf, "- tag-only: true\n")
 	}
 	if contentExcerpt != "" {
 		fmt.Fprintf(&c.buf, "\n```\n%s\n```\n", truncateUTF8(contentExcerpt, 500))
@@ -183,7 +190,7 @@ type recallResultDoc struct {
 // chunk's path:range (via chunkLocator) so the consuming assistant
 // can prune by file path without resolving every chunk. Full
 // content stays on-demand via `ark chunks <chunkID>`.
-// CRC: crc-RecallAgentBuilder.md | R2751, R2756
+// CRC: crc-RecallAgentBuilder.md | R2751, R2756, R2872
 func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("reason required")
@@ -191,6 +198,14 @@ func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason str
 	doc, err := b.openResult(fire)
 	if err != nil {
 		return err
+	}
+	// R2872: never surface a chunk in the reader's own session — it's a
+	// `# Source Chunk:` / conversation paragraph already in context, the
+	// redundant self-echo recall exists to avoid. The error names the fix,
+	// doubling as fumble-onboarding. (recommend is NOT gated — own-session
+	// tagging is the intended hypergraph path.)
+	if info, e := b.db.ChunkInfo(chunkID); e == nil && sessionFromJSONLPath(info.Path) == doc.session {
+		return fmt.Errorf("chunk %d is in the reader's own session (a `# Source Chunk:` conversation chunk, already in context) — surface a `## Candidate:` chunkid instead, never the source id", chunkID)
 	}
 	loc, sizeLabel := b.chunkLocator(chunkID, true)
 	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)%s\n\nreason: %s\n", chunkID, sizeLabel, loc, reason)

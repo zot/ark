@@ -160,8 +160,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
-- [ ] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
-- [ ] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
+- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
+- [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 - [ ] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 
@@ -640,3 +640,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T130: R2852 retired by R2857 (2026-05-29 recall-next — agent subscribe+listen+fire-derivation absorbed into ark connections recall next)
 - T131: R2853 retired by R2859 (2026-05-29 recall-next — guard allowlist shrinks to next+surface/recommend/close)
 - T132: R2854 retired by R2860 (2026-05-29 recall-next — loop condenses to persona; recall-loop.md retired as loop driver)
+- [ ] O119: R2872 SurfaceItem own-session gate has no dedicated unit test (needs DB-backed ChunkInfo); the pure predicate sessionFromJSONLPath is covered by TestSessionFromJSONLPath, and the gate is exercised by live recall runs

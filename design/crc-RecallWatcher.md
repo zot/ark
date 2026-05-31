@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808, R2867, R2868, R2869
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -58,7 +58,13 @@ composes and writes each curation doc via the in-process
 - OnAppend(path, strategy, newBytes, addedChunkIDs):
   indexer-side entry called from `executeRefresh`'s isAppend
   branch. Source-qualifies first (R2741); if not qualified,
-  return immediately. Otherwise:
+  return immediately. Then applies the **activation gate**
+  (R2867): queries `pubsub.SubscriberCount("ark-recall-curate",
+  sid)` and `pubsub.SubscriberCount("ark-recall-result", sid)`;
+  if either is zero, stops any armed `pendingTimer`, deletes
+  `sessions[sid]`, and returns — an unsubscribed session is never
+  accumulated, armed, or fired, and leaks no state (R2867, R2868).
+  Otherwise:
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
     (R2729, R2730).
   - Scan `newBytes` line-by-line; parse each line as JSON and
@@ -80,8 +86,11 @@ composes and writes each curation doc via the in-process
   lock, allocates the next `fireCounter` value (R2752), then
   runs the recall pipeline outside the lock (R2735). Before
   invoking the substrate or opening the curation builder,
-  queries `pubsub.SubscriberCount("ark-recall-curate", sessionID)`.
-  If zero, skips the substrate call entirely, appends one
+  re-queries **both** `pubsub.SubscriberCount("ark-recall-curate",
+  sessionID)` and `pubsub.SubscriberCount("ark-recall-result",
+  sessionID)` as a backstop to the OnAppend activation gate (R2867)
+  — covering a consumer that dropped during `activation_delay`. If
+  either is zero, skips the substrate call entirely, appends one
   record to `~/.ark/monitoring/recall.jsonl` with
   `outcome: "no-subscriber"` (R2806, R2808), and returns. The
   `pendingChunks` slice is already cleared, so the next OnAppend
@@ -100,9 +109,13 @@ composes and writes each curation doc via the in-process
     clears `min_similarity` (R2708, R2739): call
     `b.Section(sourceChunkID, paragraphText)` to emit the
     `# Source Chunk:` H1 + blockquoted excerpt (R2749); for
-    each top-K candidate, call `b.Candidate(chunkID, path,
-    rangeLabel, score, tagNames, proposedTagsWithScores,
-    contentExcerpt)` (R2749).
+    each top-K candidate, classify it by source path (R2869) —
+    `tagOnly = sessionFromJSONLPath(path) == sessionID` (the
+    originating session's own JSONL) — and call
+    `b.Candidate(chunkID, path, rangeLabel, score, tagNames,
+    proposedTagsWithScores, contentExcerpt, tagOnly)`. A
+    tag-only candidate renders `- tag-only: true` and must not
+    be surfaced — only tag-recommended (R2869).
   - If no sections survived: drop the builder without
     calling `b.Close()`; the fire completes silently and
     no curation doc is written (R2753).
@@ -118,9 +131,11 @@ composes and writes each curation doc via the in-process
     counts and the fire number (R2713).
 
 ## Out of scope
-- ~~No subscriber liveness check before emit (R2714)~~ — gate added
-  by R2806; the watcher does check `SubscriberCount` before
-  writing a curation doc.
+- ~~No subscriber liveness check before emit (R2714)~~ — gates added
+  by R2867 (activation, at OnAppend) and R2806 (backstop, at fire);
+  the watcher checks both `@ark-recall-curate` and
+  `@ark-recall-result=<session>` subscriber presence before tracking
+  a session and before writing a curation doc.
 - No backfill on subscriber arrival: a subscriber that arrives
   after `outcome: "no-subscriber"` was recorded does not
   retroactively receive the dropped fire.
@@ -128,8 +143,11 @@ composes and writes each curation doc via the in-process
 - No self-exclusion logic — inherited from substrate (A66)
 - No LLM call, no new-definition tag proposals (RP/RPE/RR
   not written here), no tag-axis filtering (R2715)
-- No per-session state TTL — sessions leak in v1; small leak
-  per closed Claude Code session.
+- Per-session state is bounded to actively-watched sessions: the
+  activation gate (R2867) deletes a session's entry whenever either
+  subscription is absent, so a closed/unsubscribed Claude Code
+  session no longer leaks state. (No TTL for a session that stays
+  subscribed but goes idle.)
 
 ## Collaborators
 - Indexer: `executeRefresh` isAppend path calls `OnAppend`
@@ -147,8 +165,10 @@ composes and writes each curation doc via the in-process
   wires the in-process curation-builder constructor; reads
   `[recall]` from ark.toml on startup and reload; owns the
   `fireCounter` increment under the watcher's lock.
-- PubSub (crc-PubSub.md): `SubscriberCount` gates the curation-doc
-  write (R2806).
+- PubSub (crc-PubSub.md): `SubscriberCount` on both
+  `ark-recall-curate` and `ark-recall-result=<session>` gates
+  session activation at OnAppend (R2867) and the curation-doc
+  write at fire (R2806).
 
 ## Sequences
 - seq-recall-watcher.md

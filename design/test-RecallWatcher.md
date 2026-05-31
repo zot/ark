@@ -137,6 +137,19 @@ accumulation either (source-qualification rejected upstream).
 `turn_duration`-shaped line.
 **Expected:** no timer armed; no accumulation.
 
+## Test: curation_candidate_tag_only_marker
+**Purpose:** R2869 — own-session candidate renders the
+`- tag-only: true` marker (recommend-only, never surface);
+non-own-session candidates omit it.
+**Input:** `RecallCurationBuilder` for session `S`; one
+`Candidate(..., tagOnly=true)` (own-session JSONL chunk) and one
+`Candidate(..., tagOnly=false)` (external file).
+**Expected:** the doc body carries exactly one `- tag-only: true`
+line, sitting under the own-session candidate's `## Candidate:`
+H2, not the external one.
+**Refs:** crc-RecallAgentBuilder.md, crc-RecallWatcher.md
+(implemented as `TestRecallCurationBuilder_TagOnly`).
+
 ## Test: cold_start_no_backfill
 **Purpose:** R2698 — go-forward only.
 **Input:** Start `ark serve` with a `chat-jsonl` source that
