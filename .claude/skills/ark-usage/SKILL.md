@@ -30,47 +30,62 @@ The binary is `~/.ark/ark`. Never bare `ark` (Linux has an archive manager).
 
 ## Searching
 
-**All search flags compose.** `--contains`, `--regex`, `--filter-files`,
-`--exclude-files`, `--filter-file-tags`, `--exclude-file-tags` can all be
-used together. `--contains` drives FTS, `--regex` post-filters, file globs
-restrict scope, tag filters use the index (fast). File globs support
-doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences).
+**Search uses a filter stack, not standalone filter flags.** The first
+filter is the primary search; the rest are chunk-level post-filters.
+Filters are composable and repeatable. Bare terms coalesce into a single
+`-contains`. Run `-parse` to see exactly how your args were interpreted.
+
+Filter modes (each consumes the next arg as its query):
+
+| Mode             | Match                                                  |
+|------------------|--------------------------------------------------------|
+| `-contains TERM` | substring (default for bare terms)                     |
+| `-fuzzy TERM`    | typo-tolerant                                          |
+| `-regex PAT`     | Go RE2 (no lookahead/backreferences)                   |
+| `-tag TAG`       | tag filter (uses tag index, fast)                      |
+| `-file-tag TAG`  | every chunk on a file carrying the tag                 |
+| `-about QUERY`   | vector similarity (server required)                    |
+| `-files GLOB`    | file path glob (doublestar `/**/` supported)           |
+
+Polarity is sticky until changed: `-with` (must match, default) /
+`-without` (subtract). Tag sigils: `name:value` = value-contains,
+`name=value` = value-exact, bare `name` = any value.
 
 ```bash
-# Combined FTS + optional filters
-~/.ark/ark search --exclude-files '*.jsonl' QUERY
+# Bare terms coalesce to -contains
+~/.ark/ark search fred ethel
 
-# Exact text match (FTS-driven, fast)
-~/.ark/ark search --contains "exact phrase"
+# Exclude conversation-log noise (the common one — jsonl floods results)
+~/.ark/ark search QUERY -without -files '*.jsonl'
 
-# Regex post-filter (composable with --contains)
-~/.ark/ark search --contains "phrase" --regex '@tag:.*value'
+# Primary FTS + regex chunk-level post-filter
+~/.ark/ark search -contains "phrase" -regex '@tag:.*value'
 
-# Multiple regex (AND logic), exclude patterns (subtract)
-~/.ark/ark search --regex 'pat1' --regex 'pat2' --except-regex 'noise'
+# Combine: search, drop done items, markdown only
+~/.ark/ark search fred -without -tag status:done -with -files '*.md'
 
-# Restrict to specific files
-~/.ark/ark search --filter-files 'requests/*.md' QUERY
+# Only chunks on files carrying a tag / exclude files carrying a tag
+~/.ark/ark search QUERY -with -file-tag status
+~/.ark/ark search QUERY -without -file-tag msg
 
-# Exclude specific files
-~/.ark/ark search --exclude-files '*.jsonl' QUERY
+# Vector similarity (needs server)
+~/.ark/ark search -about "machine learning" -without -tag project:archive
 
-# Only files with a specific tag (uses tag index, very fast)
-~/.ark/ark search --filter-file-tags status QUERY
+# Verify parse without searching
+~/.ark/ark search -parse fred -without -files '*.md'
+```
 
-# Exclude files with a tag
-~/.ark/ark search --exclude-file-tags msg QUERY
+Output options (conventional flags, after the filter stack):
 
-# Get chunk text (JSONL output)
-~/.ark/ark search --chunks QUERY
+```bash
+~/.ark/ark search QUERY -wrap knowledge          # XML-wrapped (best for context injection)
+~/.ark/ark search QUERY -chunks                  # chunk text as JSONL
+~/.ark/ark search QUERY -file-content            # full file text as JSONL
+~/.ark/ark search QUERY -tags                    # extracted @tag activity as bullets
+~/.ark/ark search QUERY -k 50 -scores            # cap results, show scores
+~/.ark/ark search QUERY -chunks -preview 200     # preview window around match
 
-# Get full file text (JSONL output)
-~/.ark/ark search --files QUERY
-
-# XML-wrapped output (preferred for context injection)
-~/.ark/ark search --wrap knowledge QUERY
-
-# Expand context around a hit
+# Expand context around a hit (separate command)
 ~/.ark/ark chunks /path/to/file 150-175 -before 2 -after 2
 ```
 
@@ -115,7 +130,7 @@ doublestar (`/**/`) for paths. Regex is Go RE2 (no lookahead, no backreferences)
 
 Default output is tab-separated:
 ```
-status  to-project  from-project  summary  path  lag
+date  status  to-project  from-project  summary  path  lag
 ```
 
 The `lag` field shows bookmark lag (empty when current, otherwise
@@ -123,8 +138,8 @@ The `lag` field shows bookmark lag (empty when current, otherwise
 
 ## Gotchas
 
-- **Always `--exclude-files '*.jsonl'`** unless you want conversation logs
-- **Always `--wrap`** when retrieving content — gives source attribution
+- **Always `-without -files '*.jsonl'`** unless you want conversation logs (they flood results)
+- **Always wrap retrieved content** (`-wrap` on search, `--wrap` on fetch) — gives source attribution
 - **`ark tag defs`** not grep — to find tag definitions
 - **`ark fetch`** not Read — to view indexed files from other projects
 - **`ark tag set`/`get`/`check`** not hand-editing — for tag blocks
