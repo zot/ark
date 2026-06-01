@@ -58,7 +58,7 @@ func TestTruncateUTF8(t *testing.T) {
 func TestScanNewBytes_Signals(t *testing.T) {
 	input := []byte(`{"type":"assistant","content":"hi"}
 {"type":"system","subtype":"turn_duration","durationMs":12,"userType":"external"}
-{"type":"user","message":{"role":"user"}}
+{"type":"user","message":{"content":"hello"}}
 {"type":"tool_use","name":"Bash"}
 `)
 	got := scanNewBytes(input)
@@ -75,8 +75,10 @@ func TestScanNewBytes_Signals(t *testing.T) {
 
 func TestScanNewBytes_PartialTrailingLine(t *testing.T) {
 	// Unterminated trailing line — scanner attempts a parse and
-	// silently skips when the JSON is incomplete.
-	input := []byte(`{"type":"user"}` + "\n" + `{"type":"sys`)
+	// silently skips when the JSON is incomplete. The complete line is
+	// a genuine user message (content is a JSON string, no origin —
+	// R2732) so it yields signalUser.
+	input := []byte(`{"type":"user","message":{"content":"hi"}}` + "\n" + `{"type":"sys`)
 	got := scanNewBytes(input)
 	if len(got) != 1 || got[0] != signalUser {
 		t.Errorf("scanNewBytes partial: got %v want [signalUser]", got)

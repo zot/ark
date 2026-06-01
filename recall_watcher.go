@@ -432,6 +432,13 @@ func (w *RecallWatcher) fire(sessionID string) {
 				dropped++
 				continue
 			}
+			// R2893: surface-cooldown floor — drop candidates surfaced within
+			// surface_cooldown so the secretary judges only novel candidates.
+			result.Chunks = w.dropCooledCandidates(sessionID, result.Chunks)
+			if len(result.Chunks) == 0 {
+				dropped++
+				continue
+			}
 			// Capture each chunk's full byte size before truncating
 			// the Content excerpt so the curation doc can stamp it on
 			// the Candidate H2 (R2749 size column).
@@ -498,6 +505,28 @@ func (w *RecallWatcher) fire(sessionID string) {
 
 	Logv(2, "recall-watcher: fired session=%s fire=%d pending=%d sections=%d dropped=%d skipped-short=%d not-found=%d recalled=%d discussed=%d",
 		sessionID, fire, len(snapshot), len(sections), dropped, skipped, notFound, totalRecalled, discussedCount)
+}
+
+// dropCooledCandidates filters out recalled chunks whose (session,
+// chunk) was surfaced within [recall].surface_cooldown — the
+// deterministic surface-cooldown floor that lets the secretary spend
+// judgment only on novel candidates. A zero/negative window disables it.
+// CRC: crc-RecallWatcher.md | R2893
+func (w *RecallWatcher) dropCooledCandidates(sessionID string, chunks []RecalledChunk) []RecalledChunk {
+	window, _ := w.config().SurfaceCooldownDuration()
+	if window <= 0 || w.store == nil {
+		return chunks
+	}
+	now := time.Now()
+	out := chunks[:0]
+	for _, ch := range chunks {
+		nanos, present, err := w.store.LastSurfaced(sessionID, ch.ChunkID)
+		if err == nil && present && now.Sub(time.Unix(0, nanos)) < window {
+			continue
+		}
+		out = append(out, ch)
+	}
+	return out
 }
 
 // recallSection captures one paragraph's recall result, ready for

@@ -1662,3 +1662,163 @@ func TestDiscussed_PruneZeroTTLNoOp(t *testing.T) {
 		t.Errorf("expected entry preserved with ttl=0, got %+v", got)
 	}
 }
+
+// --- Recall surface-cooldown (RM) tests ---
+
+// TestSurfaceCooldown_MarkAndRead verifies MarkSurfaced writes an RM
+// record and LastSurfaced reads its timestamp. R2882, R2883, R2884
+func TestSurfaceCooldown_MarkAndRead(t *testing.T) {
+	s := testStore(t)
+	before := time.Now()
+	if err := s.MarkSurfaced("sess-A", 42); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now()
+	nanos, present, err := s.LastSurfaced("sess-A", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Fatal("expected present=true")
+	}
+	ts := time.Unix(0, nanos)
+	if ts.Before(before) || ts.After(after.Add(time.Second)) {
+		t.Errorf("timestamp %v outside [%v, %v]", ts, before, after)
+	}
+	expectedKey := surfaceCooldownKey("sess-A", 42)
+	if err := s.env.View(func(txn *lmdb.Txn) error {
+		v, getErr := txn.Get(s.dbi, expectedKey)
+		if getErr != nil {
+			t.Errorf("expected key present: %v", getErr)
+			return nil
+		}
+		if len(v) != 8 {
+			t.Errorf("expected 8-byte value, got %d", len(v))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSurfaceCooldown_Absent verifies a never-surfaced (session, chunk)
+// reads as absent. R2884
+func TestSurfaceCooldown_Absent(t *testing.T) {
+	s := testStore(t)
+	nanos, present, err := s.LastSurfaced("sess-A", 999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present || nanos != 0 {
+		t.Errorf("got (%d, %v) want (0, false)", nanos, present)
+	}
+}
+
+// TestSurfaceCooldown_Overwrite verifies a second MarkSurfaced updates
+// the timestamp without duplicating. R2883
+func TestSurfaceCooldown_Overwrite(t *testing.T) {
+	s := testStore(t)
+	if err := s.MarkSurfaced("sess-A", 42); err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := s.LastSurfaced("sess-A", 42)
+	time.Sleep(2 * time.Millisecond)
+	if err := s.MarkSurfaced("sess-A", 42); err != nil {
+		t.Fatal(err)
+	}
+	second, _, _ := s.LastSurfaced("sess-A", 42)
+	if second <= first {
+		t.Errorf("expected timestamp to advance: first=%d second=%d", first, second)
+	}
+}
+
+// TestSurfaceCooldown_SessionIsolation verifies RM is per-session. R2882
+func TestSurfaceCooldown_SessionIsolation(t *testing.T) {
+	s := testStore(t)
+	if err := s.MarkSurfaced("sess-A", 42); err != nil {
+		t.Fatal(err)
+	}
+	if _, present, _ := s.LastSurfaced("sess-B", 42); present {
+		t.Error("sess-B should not see sess-A's surface")
+	}
+	if _, present, _ := s.LastSurfaced("sess-A", 42); !present {
+		t.Error("sess-A should be present")
+	}
+}
+
+// TestSurfaceCooldown_MalformedAbsent verifies a corrupt RM value reads
+// as absent. R2884
+func TestSurfaceCooldown_MalformedAbsent(t *testing.T) {
+	s := testStore(t)
+	key := surfaceCooldownKey("sess-A", 42)
+	if err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, key, []byte{0x01, 0x02, 0x03}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present, err := s.LastSurfaced("sess-A", 42); err != nil || present {
+		t.Errorf("malformed should read absent: present=%v err=%v", present, err)
+	}
+}
+
+// TestSurfaceCooldown_Prune verifies PruneSurfaceCooldown drops entries
+// older than ttl across sessions and keeps fresh ones. R2885
+func TestSurfaceCooldown_Prune(t *testing.T) {
+	s := testStore(t)
+	oldKey := surfaceCooldownKey("sess-A", 1)
+	oldVal := make([]byte, 8)
+	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-48*time.Hour).UnixNano()))
+	if err := s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, oldKey, oldVal, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkSurfaced("sess-B", 2); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.PruneSurfaceCooldown(24 * time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", deleted)
+	}
+	if _, present, _ := s.LastSurfaced("sess-A", 1); present {
+		t.Error("old entry should be pruned")
+	}
+	if _, present, _ := s.LastSurfaced("sess-B", 2); !present {
+		t.Error("fresh entry should survive")
+	}
+}
+
+// TestSurfaceCooldown_ClearScope verifies ClearSurfaceCooldown is
+// per-session and ClearAllSurfaceCooldown wipes everything. R2887
+func TestSurfaceCooldown_ClearScope(t *testing.T) {
+	s := testStore(t)
+	if err := s.MarkSurfaced("sess-A", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkSurfaced("sess-A", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkSurfaced("sess-B", 3); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ClearSurfaceCooldown("sess-A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("ClearSurfaceCooldown: got %d want 2", n)
+	}
+	if _, present, _ := s.LastSurfaced("sess-B", 3); !present {
+		t.Error("sess-B should survive session-scoped clear")
+	}
+	all, err := s.ClearAllSurfaceCooldown()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all != 1 {
+		t.Errorf("ClearAllSurfaceCooldown: got %d want 1", all)
+	}
+}

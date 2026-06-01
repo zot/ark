@@ -2022,7 +2022,6 @@ func (db *DB) chunkIDValues(txn *lmdb.Txn, chunkID uint64) []string {
 	return out
 }
 
-
 // tmpPathForFile resolves a tmp:// fileid to its source path. The
 // overlay does not record per-chunk Locations, so location is empty.
 // CRC: crc-DB.md | R1976
@@ -2432,6 +2431,7 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 		"EF": "file-centroids",
 		"ED": "tag-def-embeds", // R2162
 		"PC": "page-content",
+		"RM": "recall-cooldown", // R2882
 	}
 
 	result := &DBRecordCounts{}
@@ -2586,6 +2586,42 @@ func (db *DB) ClearAllDiscussed() (int, error) {
 	var count int
 	err := SyncVoid(db, func(_ *DB) error {
 		c, err := db.store.ClearAllDiscussed()
+		count = c
+		return err
+	})
+	return count, err
+}
+
+// MarkSurfaced records that a chunk was surfaced to a session,
+// stamping the RM record with NOW (routes through the write actor).
+// CRC: crc-DB.md | R2894
+func (db *DB) MarkSurfaced(session string, chunkID uint64) error {
+	return SyncVoid(db, func(_ *DB) error {
+		return db.store.MarkSurfaced(session, chunkID)
+	})
+}
+
+// LastSurfaced reads the RM surface-cooldown timestamp for
+// (session, chunk). Absent -> (0, false, nil).
+// CRC: crc-DB.md | R2884
+func (db *DB) LastSurfaced(session string, chunkID uint64) (int64, bool, error) {
+	return db.store.LastSurfaced(session, chunkID)
+}
+
+// ClearSurfaceCooldown deletes all RM (surface-cooldown) entries for
+// one session. Mirrors ClearDiscussed.
+// CRC: crc-DB.md | R2887
+func (db *DB) ClearSurfaceCooldown(session string) (int, error) {
+	return db.store.ClearSurfaceCooldown(session)
+}
+
+// ClearAllSurfaceCooldown deletes every RM record across every session,
+// routing through the write actor. Returns the deleted count.
+// CRC: crc-DB.md | R2887
+func (db *DB) ClearAllSurfaceCooldown() (int, error) {
+	var count int
+	err := SyncVoid(db, func(_ *DB) error {
+		c, err := db.store.ClearAllSurfaceCooldown()
 		count = c
 		return err
 	})

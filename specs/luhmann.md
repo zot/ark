@@ -133,10 +133,15 @@ context_limit = 150000
 crash_pause_after = 3
 quit_early_pause_after = 3
 backoff_seconds = [1, 5, 30]
-
-[luhmann.class.recall]
-enabled = true
 ```
+
+**Recall is no longer a Luhmann class.** As of the secretary-pipeline
+migration (seam 3a), the per-session recall secretary is spawned and
+supervised by each session's own assistant via `/recall` (see
+`simple-recall.md`); the orchestrator no longer hosts a `recall` class. The
+supervisor *mechanism* — the `ark luhmann` verbs, the crash/quit-early
+streak machine, and `class.<NAME>.enabled` — remains for a future managed
+class and for Luhmann's promotion to the user-side majordomo role.
 
 | Key                              | Type     | Default       | Meaning                                                                                                                                              |
 |----------------------------------|----------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------|

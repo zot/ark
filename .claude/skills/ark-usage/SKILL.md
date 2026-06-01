@@ -40,7 +40,7 @@ Filter modes (each consumes the next arg as its query):
 | Mode             | Match                                                  |
 |------------------|--------------------------------------------------------|
 | `-contains TERM` | substring (default for bare terms)                     |
-| `-fuzzy TERM`    | typo-tolerant                                          |
+| `-fuzzy TERM`    | trigram similarity (generous)                          |
 | `-regex PAT`     | Go RE2 (no lookahead/backreferences)                   |
 | `-tag TAG`       | tag filter (uses tag index, fast)                      |
 | `-file-tag TAG`  | every chunk on a file carrying the tag                 |
@@ -50,6 +50,15 @@ Filter modes (each consumes the next arg as its query):
 Polarity is sticky until changed: `-with` (must match, default) /
 `-without` (subtract). Tag sigils: `name:value` = value-contains,
 `name=value` = value-exact, bare `name` = any value.
+
+**Match the matcher to the query.** Use `-contains` for an exact,
+distinctive phrase. `-fuzzy` is trigram similarity: it tolerates typos
+*and* medium-length phrases, but it is generous, and the largest prose
+corpus in the index can dominate results for any common-word query.
+Reach for it when you have a specific approximate term and can tolerate
+noise. `-about` is semantic but needs the server and is best-effort:
+vectors are progressive while trigram stays primary, so never rely on
+it as the only pass.
 
 ```bash
 # Bare terms coalesce to -contains
@@ -139,6 +148,8 @@ The `lag` field shows bookmark lag (empty when current, otherwise
 ## Gotchas
 
 - **Always `-without -files '*.jsonl'`** unless you want conversation logs (they flood results)
+- **`-fuzzy` is generous (trigram similarity).** A large project can swamp common-word queries; tighten the query, or use `-contains` for an exact phrase
+- **`-files` globs anchor at the full path's start.** A pattern beginning with a literal segment (`'HollowStuff/**'`) silently matches nothing, since real paths start with `/home/...`; prefix interior dirs with `**/` (`'**/HollowStuff/**'`). Extension globs (`'*.jsonl'`) already lead with a wildcard, so they work as-is
 - **Always wrap retrieved content** (`-wrap` on search, `--wrap` on fetch) — gives source attribution
 - **`ark tag defs`** not grep — to find tag definitions
 - **`ark fetch`** not Read — to view indexed files from other projects

@@ -635,13 +635,13 @@ func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []f
 		if alreadyOn[tag] {
 			continue // R2671 + R2672 (union via AllTagsForChunk)
 		}
-		rejected, counter, _ := l.db.store.HasDerivedRejection(txn, chunkID, tag)
+		rejected, magnitude, _ := l.db.store.HasDerivedRejection(txn, chunkID, tag)
 		if rejected {
 			ceiling := l.db.Config().Recall.EffectiveRejectProposeCeiling()
-			if ceiling == 0 || counter >= uint64(ceiling) {
-				continue // R2673, R2765 — existence suppresses when ceiling=0; counter gates when ceiling>0
+			if ceiling == 0 || magnitude >= uint64(ceiling) {
+				continue // R2673, R2765, R2878 — score<0 suppresses when ceiling=0; magnitude gates when ceiling>0
 			}
-			// counter < ceiling: re-propose despite previous rejection
+			// magnitude < ceiling: re-propose despite previous rejection
 		}
 		candidates = append(candidates, scoredTag{tag, score})
 	}

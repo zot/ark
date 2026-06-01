@@ -178,19 +178,23 @@ Tag Forge UI    Store.RejectDerived       LMDB
                      |  write actor (R2680)     |
 3.2                  |- delete RC[chunk+tag]--->|
                      |                          |- Del RC[chunkid+tagname]
-3.3                  |- write RJ[chunk+tag]     |
-                     |    = 8-byte BE NOW       |
-                     |    unix nanos (R2680) -->|
+3.3                  |- AdjustJudgment(-1):     |
+                     |    read score (absent=0),|
+                     |    score-=1, stamp NOW    |
+                     |    (R2877) ------------->|
                      |                          |- Put RJ[chunkid+tagname]
-                     |                          |   8-byte BE uint64
-                     |                          |   (R2665)
-  |<- ok ------------|                          |
+                     |                          |   signed-varint(score)
+                     |                          |   + 8-byte BE nanos
+                     |                          |   (R2874)
+  |<- magnitude -----|                          |
 ```
 
-RJ records are sticky — there is no automatic removal path. The
-next derivation pass that would propose the same (chunkid, tagname)
-sees the RJ via `HasDerivedRejection` (step 1.7 above) and skips
-the candidate (R2673, R2683).
+The Recall Judgment edge is signed and bidirectional, but there is
+no manual un-reject verb: the next derivation pass that would
+propose the same (chunkid, tagname) sees `score < 0` via
+`HasDerivedRejection` (step 1.7 above) and skips the candidate
+(R2673, R2878, R2881). A reinforcement producer (the secretary, a
+later seam) is the only thing that raises the score back toward 0.
 
 ## Error / edge paths
 
@@ -205,8 +209,10 @@ the candidate (R2673, R2683).
   record: delete-RC no-op; RJ write still runs. The user's intent
   (don't ever propose this again) is honored.
 - `Store.RejectDerived` called twice for the same (chunkid,
-  tagname): the second call overwrites the timestamp; RJ remains
-  the same shape. Idempotent.
+  tagname): each call applies a `-1` delta, so the score walks
+  `-1, -2, …` and the timestamp updates to NOW; the magnitude
+  returned is the rejection strength. (Not idempotent by design —
+  the magnitude feeds `reject_propose_ceiling` / `reject_mention_ceiling`.)
 - Concurrent recall calls with `--propose`: each runs its own
   derivation pass through the write actor. Tally increments
   serialize through the actor; no lost updates.

@@ -39,6 +39,10 @@ type RecallAgentBuilder struct {
 	// be overridden for testing.
 	monitorPath string
 	fumblePath  string
+	// curationDir is where `next` materializes the per-fire curation doc
+	// as a real file the secretary Reads (default ~/.ark/recall-curation).
+	// R2896
+	curationDir string
 	logMu       sync.Mutex // serializes appends across both files
 }
 
@@ -53,6 +57,7 @@ func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
 		results:     make(map[uint64]*recallResultDoc),
 		monitorPath: filepath.Join(monDir, "recall.jsonl"),
 		fumblePath:  filepath.Join(monDir, "recall-fumbles.jsonl"),
+		curationDir: filepath.Join(home, ".ark", "recall-curation"),
 	}
 }
 
@@ -210,6 +215,11 @@ func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason str
 	loc, sizeLabel := b.chunkLocator(chunkID, true)
 	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)%s\n\nreason: %s\n", chunkID, sizeLabel, loc, reason)
 	doc.items++
+	// R2894: start the surface-cooldown clock for (session, chunk) so the
+	// watcher floor (R2893) will not re-offer it within the window.
+	if b.db != nil {
+		_ = b.db.MarkSurfaced(doc.session, chunkID)
+	}
 	return nil
 }
 
@@ -331,6 +341,8 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 		_ = SyncVoid(b.db, func(db *DB) error {
 			return db.RemoveTmpFile(curPath)
 		})
+		// Remove the materialized curation file the secretary Read (R2896).
+		_ = os.Remove(b.curationFilePath(session, fire))
 		// Sweep orphan curation docs for the same session (older
 		// fires the assistant missed handling). Same-session scope
 		// protects multi-session deployments from cross-cleanup.
@@ -657,6 +669,31 @@ func (b *RecallAgentBuilder) appendJSONL(path string, rec any) {
 // R2747
 func curationDocPath(session string, fire uint64) string {
 	return fmt.Sprintf("tmp://ARK-RECALL/curation-%s-%d", session, fire)
+}
+
+// curationFilePath is the real-filesystem path where `next` materializes
+// a curation doc for the secretary to Read (R2896). One keyhole the guard
+// opens for the otherwise Read-denied secretary.
+// CRC: crc-RecallAgentBuilder.md | R2896
+func (b *RecallAgentBuilder) curationFilePath(session string, fire uint64) string {
+	return filepath.Join(b.curationDir, fmt.Sprintf("curation-%s-%d.md", session, fire))
+}
+
+// writeCurationFile materializes the (conversation-injected) curation doc
+// content to curationFilePath so `next` can return a short pointer instead
+// of the large doc inline — keeping it off the agent's foreground-Bash
+// stdout, which the harness truncates. The secretary Reads the file (the
+// Read tool paginates; `cat` would re-overflow). R2896
+// CRC: crc-RecallAgentBuilder.md | R2896
+func (b *RecallAgentBuilder) writeCurationFile(session string, fire uint64, content string) (string, error) {
+	if err := os.MkdirAll(b.curationDir, 0o755); err != nil {
+		return "", err
+	}
+	path := b.curationFilePath(session, fire)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // resultDocPath is the canonical tmp:// path for a result doc. R2747

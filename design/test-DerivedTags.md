@@ -26,10 +26,10 @@
 **Refs:** crc-Store.md, R2681
 
 ## Test: Store.HasDerivedRejection — present and absent
-**Purpose:** Verify HasDerivedRejection returns true iff the RJ record exists.
-**Input:** Call `RejectDerived(chunkID=42, tagname="bogus")`. Then call `HasDerivedRejection(42, "bogus")` and `HasDerivedRejection(42, "different")`.
-**Expected:** First returns (true, nil); second returns (false, nil).
-**Refs:** crc-Store.md, R2665, R2673
+**Purpose:** Verify HasDerivedRejection reports rejected iff the edge score is negative.
+**Input:** Call `RejectDerived(chunkID=42, tagname="bogus")` once. Then call `HasDerivedRejection(42, "bogus")` and `HasDerivedRejection(42, "different")`.
+**Expected:** First returns `(rejected=true, magnitude=1, nil)` (score -1); second returns `(rejected=false, magnitude=0, nil)` (absent ≡ 0).
+**Refs:** crc-Store.md, R2665, R2673, R2878
 
 ## Test: Store.DerivedProposals returns tally-descending
 **Purpose:** Verify DerivedProposals sorts by tally descending.
@@ -39,9 +39,9 @@
 
 ## Test: Store.DerivedProposals filters RJ-shadowed entries
 **Purpose:** Verify DerivedProposals defensive-filters proposals that have an RJ record.
-**Input:** Write RC records `("priority", 2)` and `("status", 1)` for chunk 42. Write `RJ[42 + "status"]`. Call `DerivedProposals(42)`.
-**Expected:** Returns only `priority(2)`. The `status` entry is filtered out.
-**Refs:** crc-Store.md, R2678, R2673
+**Input:** Write RC records `("priority", 2)` and `("status", 1)` for chunk 42. Call `AdjustJudgment(42, "status", -1)` (negative judgment, RC left in place). Call `DerivedProposals(42)`.
+**Expected:** Returns only `priority(2)`. The `status` entry is filtered by the `score < 0` check.
+**Refs:** crc-Store.md, R2678, R2673, R2878
 
 ## Test: Store.DerivedProposals malformed value tally=0
 **Purpose:** Verify a corrupt 4-byte RC value surfaces as tally=0, not as an error.
@@ -67,17 +67,41 @@
 **Expected:** No error. V/F records reflect the attach. The RC delete is a no-op LMDB Del on a missing key.
 **Refs:** crc-Store.md, seq-derived-tags.md error paths, R2679
 
-## Test: Store.RejectDerived drops RC and writes RJ
-**Purpose:** Verify RejectDerived is atomic and writes the rejection marker.
+## Test: Store.RejectDerived drops RC and writes signed RJ
+**Purpose:** Verify RejectDerived is atomic, deletes RC, and writes the v3 signed judgment.
 **Input:** Write `RC[42 + "fluff"] = 1`. Call `RejectDerived(42, "fluff")`. Inspect RC and RJ.
-**Expected:** RC[42+fluff] gone. RJ[42+fluff] exists with an 8-byte big-endian value within 1 second of NOW unix nanoseconds.
-**Refs:** crc-Store.md, seq-derived-tags.md#3.2, seq-derived-tags.md#3.3, R2665, R2680
+**Expected:** RC[42+fluff] gone. RJ[42+fluff] decodes to `score=-1` plus an 8-byte BE nanos within 1 second of NOW. The call returns magnitude=1.
+**Refs:** crc-Store.md, seq-derived-tags.md#3.2, seq-derived-tags.md#3.3, R2680, R2877
 
-## Test: Store.RejectDerived idempotent
-**Purpose:** Verify a second RejectDerived for the same (chunkid, tagname) overwrites the timestamp and does not error.
-**Input:** Call `RejectDerived(42, "fluff")` at T=10. Call it again at T=20.
-**Expected:** Both calls succeed. RJ[42+fluff] value decodes to the T=20 timestamp.
-**Refs:** crc-Store.md, R2680
+## Test: Store.RejectDerived accumulates on repeat (reject parity)
+**Purpose:** Verify repeated RejectDerived walks the score negative — parity with the v2 monotonic counter.
+**Input:** Call `RejectDerived(42, "fluff")` three times.
+**Expected:** The three calls return magnitude 1, 2, 3. RJ[42+fluff] ends at score -3; `HasDerivedRejection(42,"fluff")` reports `(true, 3)`. The timestamp updates to the last call's NOW.
+**Refs:** crc-Store.md, R2877, R2878
+
+## Test: Store.AdjustJudgment round-trip — reinforce and reject
+**Purpose:** Verify AdjustJudgment reads-modifies-writes the signed score and stamps the timestamp.
+**Input:** In write txns: `AdjustJudgment(42,"t",+1)`, then `AdjustJudgment(42,"t",+2)`, then `AdjustJudgment(42,"t",-1)`. `ReadJudgment(42,"t")` after each.
+**Expected:** Returned newScore = 1, then 3, then 2. ReadJudgment returns the matching score with present=true. The stored value decodes to `signed-varint(score) + 8-byte nanos`, timestamp advancing each write.
+**Refs:** crc-Store.md, R2874, R2875
+
+## Test: Store.ReadJudgment — absent, present, malformed
+**Purpose:** Verify ReadJudgment's three paths.
+**Input:** (a) ReadJudgment on an untouched edge. (b) After `AdjustJudgment(42,"t",+2)`. (c) Manually write an RJ value that is not `signed-varint + 8 bytes` (e.g. 3 bytes), then ReadJudgment.
+**Expected:** (a) `(0, false, nil)`. (b) `(2, true, nil)`. (c) a negative score with `present=true` (conservative-rejected), no error.
+**Refs:** crc-Store.md, R2874, R2876
+
+## Test: Store reinforcement hysteresis
+**Purpose:** Verify a reinforced edge survives a single rejection — the axis is bidirectional.
+**Input:** `AdjustJudgment(42,"t",+2)` (score +2). Then `RejectDerived(42,"t")` (delta -1).
+**Expected:** Score is +1; `HasDerivedRejection(42,"t")` returns `(rejected=false, magnitude=0)`. The edge is not suppressed by the propose pass.
+**Refs:** crc-Store.md, R2875, R2877, R2881
+
+## Test: Store neutral score ≡ absent
+**Purpose:** Verify a score driven back to 0 reads as neutral, indistinguishable from an absent record at the contract surface.
+**Input:** `AdjustJudgment(42,"t",+1)` then `AdjustJudgment(42,"t",-1)` (score 0). `ReadJudgment(42,"t")` and `HasDerivedRejection(42,"t")`.
+**Expected:** ReadJudgment returns score 0 (present may be true or false — a 0-store and a delete are both acceptable). HasDerivedRejection returns `(false, 0)` either way.
+**Refs:** crc-Store.md, R2874, R2881
 
 ## Test: Store.MaxEDSerial reflects current ED landscape
 **Purpose:** Verify MaxEDSerial returns the highest serial across all ED records.
@@ -115,11 +139,11 @@
 **Expected:** RC[C+food] is NOT written — the bare-name ext-exclusion rule skips it (R2672). Even though no F record exists at the target, @ext authority shadows the proposal.
 **Refs:** crc-Librarian.md, R2672
 
-## Test: Recall --propose skips RJ-rejected candidates
-**Purpose:** Verify a previously rejected (chunk, tag) is never re-proposed.
-**Input:** Write `RJ[C+food]`. ED for `@food` exists and would otherwise score high against C. Run --propose against C.
-**Expected:** RC[C+food] is NOT written. The derivation pass's HasDerivedRejection check filters the candidate (R2673).
-**Refs:** crc-Librarian.md, seq-derived-tags.md#1.7, R2673
+## Test: Recall --propose skips judgment-rejected candidates
+**Purpose:** Verify a (chunk, tag) with a negative judgment is never re-proposed.
+**Input:** Call `RejectDerived(C, "food")` (score -1). ED for `@food` exists and would otherwise score high against C. Run --propose against C.
+**Expected:** RC[C+food] is NOT written. The derivation pass's HasDerivedRejection check (`score < 0`) filters the candidate (R2673).
+**Refs:** crc-Librarian.md, seq-derived-tags.md#1.7, R2673, R2878
 
 ## Test: Recall --propose without tag_model is a no-op
 **Purpose:** Verify --propose with no tag_model configured exits silently — no RC/RF writes — and the substrate result is unaffected.

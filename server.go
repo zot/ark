@@ -1490,6 +1490,7 @@ type connectionsCleanResponse struct {
 	Status          string `json:"status"`
 	RC              int    `json:"rc"`
 	RD              int    `json:"rd"`
+	RM              int    `json:"rm,omitempty"`
 	RF              int    `json:"rf,omitempty"`
 	RJ              int    `json:"rj,omitempty"`
 	TmpConnections  int    `json:"tmpConnections,omitempty"`
@@ -1536,6 +1537,25 @@ func (srv *Server) handleConnectionsClean(w http.ResponseWriter, r *http.Request
 				return
 			}
 			resp.RD += c
+		}
+	}
+
+	// RM — surface-cooldown, same session scope as RD (R2887)
+	if len(req.Sessions) == 0 {
+		c, err := srv.db.ClearAllSurfaceCooldown()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.RM = c
+	} else {
+		for _, sess := range req.Sessions {
+			c, err := srv.db.ClearSurfaceCooldown(sess)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			resp.RM += c
 		}
 	}
 

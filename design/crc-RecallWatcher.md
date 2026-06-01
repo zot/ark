@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808, R2867, R2868, R2869
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -106,7 +106,12 @@ composes and writes each curation doc via the in-process
   - Open a `RecallCurationBuilder(sessionID, fire)`
     (R2753, R2754).
   - For each paragraph whose Recall result's top chunk
-    clears `min_similarity` (R2708, R2739): call
+    clears `min_similarity` (R2708, R2739): apply the
+    **surface-cooldown floor** via `dropCooledCandidates(sessionID,
+    chunks)` (R2893) — drop any candidate whose `(sessionID, chunk)`
+    was surfaced within `[recall].surface_cooldown` (seam 2
+    `Store.LastSurfaced`), so the secretary judges only novel
+    candidates; if none survive, the paragraph is dropped. Then call
     `b.Section(sourceChunkID, paragraphText)` to emit the
     `# Source Chunk:` H1 + blockquoted excerpt (R2749); for
     each top-K candidate, classify it by source path (R2869) —

@@ -356,7 +356,7 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
 ark connections recall reserve-nonce
-ark connections recall next NONCE
+ark connections recall next [--session SID] NONCE
 ark connections recall surface FIRE -chunk N -reason TEXT
 ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
 ark connections recall close FIRE --nonce N [-preserve-curation]
@@ -422,14 +422,19 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   nonce (the `nonce → .meta.json` discovery key). The counter is
   in-memory and resets on `ark serve` restart. See
   [simple-recall.md](simple-recall.md).
-- `recall next NONCE` is the recall daemon's entire loop — a
-  batteries-included crank handle. On first call for `NONCE` it
-  idempotently subscribes to `@ark-recall-curate` (session
-  `recall-loop-<NONCE>`); thereafter it context-gates, then
-  returns the lowest-fire pending curation doc **whose session has a
-  result subscriber** (docs for unsubscribed sessions pile up, never
-  dispatched), with crank-handle prose telling the caller to judge,
-  surface / recommend, close, and loop. When none is dispatchable it
+- `recall next [--session SID] NONCE` is the recall secretary's entire
+  loop — a batteries-included crank handle. With `--session SID` (the
+  per-session secretary, seam 3a) it subscribes **value-scoped**
+  `@ark-recall-curate=<SID>` and dispatches only that session's curation
+  docs, prepending the session's last-N conversation turns
+  (`[recall].context_turns`) to the doc it hands back; without it, the
+  legacy bare-curate, all-session scan is retained (one-shot/diagnostic).
+  On first call for `NONCE` it idempotently subscribes (subscription
+  session `recall-<NONCE>`); thereafter it context-gates, then returns the
+  lowest-fire pending curation doc **whose session has a result
+  subscriber** (docs for unsubscribed sessions pile up, never dispatched),
+  with crank-handle prose telling the caller to judge, surface /
+  recommend, close, and loop. When none is dispatchable it
   **blocks up to a ~90-second keepalive**, then returns a keepalive
   directive ("run `next` again"). The window is sized under the harness
   foreground-Bash auto-background threshold (~120s) so `next` returns

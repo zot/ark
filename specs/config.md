@@ -86,8 +86,10 @@ ambient watcher.
 | `activation_delay` | int      | `15`    | Seconds the watcher waits after a `turn_duration` record before firing. A user record arriving inside this window cancels the firing entirely.                       | `simple-recall.md`     |
 | `chunks_per_dm`    | int      | `5`     | Per-input top-K cap. Each section in the DM body lists at most this many recalled chunks.                                                                            | `simple-recall.md`     |
 | `sources`          | []string | `[]`    | Optional whitelist of source root directories. Empty means every `chat-jsonl` source qualifies.                                                                      | `simple-recall.md`     |
-| `reject_propose_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections (RJ counter), the propose pass stops surfacing it. `0` (unset) = infinite, safe default.                | `simple-recall.md`     |
-| `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` pair accumulates this many rejections, the assistant stops mentioning the count to the user. `0` = infinite.                                  | `simple-recall.md`     |
+| `reject_propose_ceiling` | int | `0`     | Once a `(chunk, tag)` edge's Recall Judgment rejection magnitude (`-score`) reaches this, the propose pass stops surfacing it. `0` (unset) = infinite, safe default.   | `simple-recall.md`     |
+| `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` edge's rejection magnitude (`-score`) reaches this, the assistant stops mentioning the count to the user. `0` = infinite.                       | `simple-recall.md`     |
+| `surface_cooldown`  | string   | `"24h"` | Surface-cooldown window — a previously-surfaced `(session, chunk)` is suppressed within it. Doubles as the RM record's lazy-expiry TTL. Go duration string.            | `simple-recall.md`     |
+| `context_turns`     | int      | `3`     | How many trailing conversation turns `recall next --session` injects into the curation doc so the per-session secretary judges with the live conversation. `0` = none. | `simple-recall.md`     |
 
 ## `[luhmann]` — Luhmann orchestrator
 

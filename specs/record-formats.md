@@ -41,7 +41,8 @@ change them, we need to update the CLI code so it's up-to-date.
 | `RC`   | Recall Candidate    | `RC` + chunkid varint + tagname                   | 8-byte big-endian uint64 tally counter  |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
 | `RF`   | Recall Freshness    | `RF` + chunkid varint                             | varint uint64 (max S-over-ED at last derivation) |
-| `RJ`   | Recall reJection    | `RJ` + chunkid varint + tagname                   | varint counter + 8-byte big-endian unix nanos |
+| `RJ`   | Recall Judgment     | `RJ` + chunkid varint + tagname                   | signed-varint score + 8-byte big-endian unix nanos |
+| `RM`   | Recall surface-cooldown | `RM` + session-bytes + `\x00` + chunkid varint | 8-byte big-endian unix nanos (last surfaced) |
 | `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
 | `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
 | `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
@@ -490,24 +491,51 @@ agent-layer design). Currently:
   removed alongside EC and F via the existing chunkid-orphan
   callback path. Detail spec: `derived-tags.md`.
 
-### RJ — Recall reJection (sticky no-resurface marker, with counter)
+### RJ — Recall Judgment (signed per-edge relevance)
 
 - **Key:** `"RJ"` + chunkid varint + tagname. Mirrors RC exactly.
-- **Value:** `varint(counter) + 8-byte BE unix nanos`. Counter
-  increments on every rejection write for the same (chunkid,
-  tagname); the timestamp is updated to "most recently
-  rejected" each write.
-- **Semantic:** the curator rejected this (chunkid, tagname).
-  The derivation pass checks RJ before writing RC; an RJ hit
-  suppresses re-proposal. Two ceiling knobs in `[recall]` —
-  `reject_propose_ceiling` and `reject_mention_ceiling` —
-  consult the counter to decide whether the substrate keeps
-  proposing and whether the assistant keeps mentioning the
-  pair. `0` (unset) on either knob = infinite, the safe
-  default. Sticky — no TTL, no un-reject verb. No migration
-  from v1's count-less format; `ark connections clean -all`
-  resets RJ and the next reject cycle rewrites in v2 shape.
-  Detail spec: `simple-recall.md`.
+- **Value (v3):** `signed-varint(score) + 8-byte BE unix nanos`
+  (the score is zigzag-encoded via `binary.PutVarint`). `score < 0`
+  is net-rejected — magnitude `-score` is the rejection strength;
+  `score > 0` is reinforced; `score == 0` is neutral, equivalent to
+  record-absent (a write that lands at 0 may delete the record). The
+  timestamp is the most-recent adjustment (enables decay-on-read as a
+  future knob).
+- **Semantic:** one signed relevance figure per (chunkid, tagname)
+  edge — whether the tag is a derived RC proposal or already attached
+  (live F/V hyperedge). Rejection is the negative tail of a single
+  bidirectional axis; reinforcement raises the score, decay/rejection
+  lowers it. The derivation pass suppresses re-proposal when the score
+  is negative; two ceiling knobs in `[recall]` —
+  `reject_propose_ceiling` and `reject_mention_ceiling` — consult the
+  magnitude (`-score`) to decide whether the substrate keeps proposing
+  and whether the assistant keeps mentioning the pair. `0` (unset) on
+  either knob = infinite, the safe default. No manual un-reject verb;
+  a reinforcement producer is the only thing that raises a negative
+  score back toward 0. **Migration:** the v2 (`varint counter + nanos`)
+  and v3 values are structurally indistinguishable, so there is no
+  automatic drop — `ark connections clean -all -checkpoint` wipes RJ
+  and the next reject/reinforce cycle rewrites in v3 shape. Detail
+  spec: `simple-recall.md`.
+
+### RM — Recall surface-cooldown (per-(session, chunk))
+
+- **Key:** `"RM"` + session-bytes + `\x00` + chunkid varint. RD-family
+  sibling keyed by chunk instead of tag-value; session-bytes is the
+  Claude Code session UUID (variable-length, no `\x00`), `\x00`-
+  separated from the trailing chunkid varint.
+- **Value:** 8 bytes — big-endian `uint64` unix nanoseconds, the most
+  recent time this chunk was surfaced to this session.
+- **Semantic:** the secretary's surface-cooldown substrate. Presence
+  means "surfaced before"; the timestamp drives a deterministic floor
+  that suppresses re-surfacing the same `(session, chunk)` within
+  `[recall].surface_cooldown` (default `"24h"`), which doubles as the
+  RM record's lazy-expiry TTL. The floor wiring lives in the secretary
+  pipeline; this record + its Store API (`MarkSurfaced`, `LastSurfaced`,
+  `PruneSurfaceCooldown`) is the substrate. A value not exactly 8 bytes
+  is treated as absent. `ark connections clean` wipes RM alongside RD.
+  A `varint(match_count)` trailer (the "paint-priority" match-frequency
+  signal) is a deferred extension. Detail spec: `simple-recall.md`.
 
 ## Schema Version Protocol
 

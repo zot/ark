@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2683, R2764, R2765, R2766
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R107, R119, R120, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1105, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2765, R2766, R2874, R2875, R2876, R2877, R2878, R2879, R2881, R2882, R2883, R2884, R2885, R2886, R2887
 
 Ark's own LMDB subdatabase. Manages missing files, unresolved files,
 ark-level settings, and tag tracking.
@@ -148,6 +148,22 @@ ark-level settings, and tag tracking.
 - PruneDiscussed(ttl time.Duration) int: full-scan RD prefix, delete
   expired entries across all sessions, return deleted count. (R2653,
   R2659)
+- MarkSurfaced(session string, chunkID uint64): write/overwrite
+  `RM[session + \x00 + chunkid]` with NOW unix-nanos (one write txn,
+  mirroring AddDiscussed). Records that a chunk was surfaced to a
+  session, for the secretary's surface-cooldown floor. (R2882, R2883)
+- LastSurfaced(session string, chunkID uint64) (nanos int64, present
+  bool, err error): read the RM timestamp. Absent → (0, false, nil).
+  A value not exactly 8 bytes is treated as absent. (R2882, R2884)
+- PruneSurfaceCooldown(ttl time.Duration) (int, error): full-scan RM
+  prefix, delete entries whose timestamp is older than ttl across all
+  sessions, return deleted count (mirrors PruneDiscussed). The cooldown
+  read path treats an entry older than the window as expired. (R2885)
+- ClearSurfaceCooldown(session string) (int, error): delete every RM
+  record under one session (mirrors ClearDiscussed). (R2887)
+- ClearAllSurfaceCooldown() (int, error): delete every RM record across
+  all sessions (mirrors ClearAllDiscussed). Both are the clean-command
+  mechanism for RM. (R2887)
 - WriteDerivedProposal(txn *lmdb.Txn, chunkID uint64, tagname string)
   error: write or increment RC[chunkid + tagname]. If the record
   exists, increment its 8-byte big-endian uint64 tally; otherwise
@@ -164,23 +180,33 @@ ark-level settings, and tag tracking.
   across the entire ED prefix via WalkRecordsSinceSerial(ED, 0,
   ...). Cheap with the existing S substrate. Used once per recall
   call to establish the freshness comparator for the batch. (R2669)
+- AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string,
+  delta int64) (newScore int64, err error): the read-modify-write
+  primitive for the signed **Recall Judgment** edge
+  `RJ[chunkid + tagname]`. Read the current score (absent = 0), add
+  `delta`, stamp the timestamp to NOW, write the v3 value
+  `signed-varint(score) + 8-byte BE unix nanos`. Positive delta
+  reinforces; negative decays/rejects. A score that lands at 0 may
+  be stored or deleted (absent ≡ 0). Runs inside the caller's write
+  txn. (R2874, R2875, R2881)
+- ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string)
+  (score int64, present bool, err error): read the signed score for
+  the edge. Absent → `(0, false, nil)`. A value that does not decode
+  as `signed-varint + 8 bytes` is treated conservatively as rejected
+  (negative score, `present = true`) so a `reject_propose_ceiling==0`
+  caller never re-proposes a corrupt edge. (R2874, R2876)
 - HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string)
-  (rejected bool, counter uint64, err error): probe of
-  `RJ[chunkid + tagname]`. When the record exists, decode the
-  v2 value shape `varint(counter) + 8-byte BE unix nanos` and
-  return `(true, counter, nil)`. Missing record returns
-  `(false, 0, nil)`. Used by:
-  - the derivation pass to filter candidates (existence blocks
-    re-proposal; the counter then gates against
+  (rejected bool, magnitude uint64, err error): thin wrapper over
+  `ReadJudgment`. `rejected = present && score < 0`;
+  `magnitude = max(0, -score)` (the rejection strength, identical to
+  the v2 counter under rejection-only history). Used by:
+  - the derivation pass to filter candidates (`score < 0` blocks
+    re-proposal; the magnitude then gates against
     `reject_propose_ceiling`),
   - `DerivedProposals` (defense-in-depth filter on reads),
-  - the assistant's "mention rejected proposals" path (uses
-    the counter against `reject_mention_ceiling`).
-  Reader is forward-compatible with the v1 8-byte format: when
-  the value length is exactly 8 bytes (no leading varint), the
-  counter is read as `1` and the bytes are decoded as the
-  timestamp. The next reject write upgrades the value to v2
-  shape. (R2665, R2673, R2678, R2764, R2765, R2766)
+  - the assistant's "mention rejected proposals" path (uses the
+    magnitude against `reject_mention_ceiling`).
+  (R2665, R2673, R2678, R2765, R2766, R2876, R2878)
 - DerivedProposals(chunkID uint64) ([]DerivedProposal, error): one
   View txn. Range-scan `"RC" + chunkid varint`, decode each entry's
   tagname and 8-byte big-endian tally, skip entries shadowed by
@@ -194,17 +220,14 @@ ark-level settings, and tag tracking.
   attach path (the per-chunk append path, same code that handles
   inline tag writes). Empty value produces a bare-tag attach.
   Returns the resolved tvid. (R2679)
-- RejectDerived(chunkID uint64, tagname string) (counter uint64,
+- RejectDerived(chunkID uint64, tagname string) (magnitude uint64,
   err error): one write txn through the actor. Delete
-  `RC[chunkid + tagname]`. Read the prior `RJ[chunkid + tagname]`
-  value if it exists, decode the v2 counter (or treat v1 8-byte
-  format as counter=1), increment, and write the v2 shape
-  `varint(counter) + 8-byte BE unix nanos` (NOW). When no prior
-  record existed, the new counter is `1`. Returns the new
-  counter so callers can surface the incremented value without
-  a separate read. Stable — RJ records persist until external
-  removal (no TTL, no un-reject verb). (R2665, R2680, R2683,
-  R2764)
+  `RC[chunkid + tagname]`, then `AdjustJudgment(txn, chunkID,
+  tagname, -1)`. Returns the rejection magnitude (`max(0,
+  -newScore)`) so callers expecting the prior counter are unchanged.
+  With no reinforcement producer present, a rejection-only sequence
+  yields scores `-1, -2, -3, …` — bit-for-bit identical to the v2
+  monotonic counter. (R2680, R2877)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
@@ -368,20 +391,42 @@ ark-level settings, and tag tracking.
   read. Writers always emit 8 bytes; this path keeps readers robust.
   (R2663)
 
+### Recall surface-cooldown records (RM, R2882-R2886)
+- Key: `"RM" + session-bytes + \x00 + chunkid varint`. RD-family
+  sibling keyed by chunk instead of tag-value; session-bytes is the
+  Claude Code session UUID (variable-length, no `\x00`), `\x00`-
+  separated from the trailing chunkid varint. (R2882)
+- Value: 8 bytes, unix nanoseconds as big-endian `uint64` — the most
+  recent time this chunk was surfaced to this session. (R2882)
+- Surface-cooldown substrate: the secretary's deterministic floor
+  suppresses re-surfacing a `(session, chunk)` within
+  `[recall].surface_cooldown` (default `"24h"`), which doubles as the
+  RM lazy-expiry TTL. (R2886)
+- Value bytes not equal to 8 are treated as absent on read (R2884).
+  Match-frequency (a leading `varint(match_count)` trailer) is a
+  deferred extension — not in this seam.
+
 ### Discussed (R2650-R2653, R2659)
 - Tag: string — tag name, no leading `@`
 - Value: string — empty means bare-name entry
 - Timestamp: time.Time — derived from the 8-byte RD value
 
-### Derived Tag Records (RC/RJ/RF, R2664-R2666, R2681-R2683)
+### Derived Tag Records (RC/RJ/RF, R2664-R2666, R2681-R2682, R2874)
 - RC key: `"RC" + chunkid varint + tagname` (raw bytes, `[\w][\w\-.]*`,
   no control bytes). Value: 8 bytes, big-endian `uint64` tally. One
   record per (chunkid, tagname) statistical candidate; bare-tag in
   the v1 statistical slice. Malformed value → tally=0 on read. (R2664,
   R2681)
-- RJ key: `"RJ" + chunkid varint + tagname` — mirrors RC. Value: 8
-  bytes, big-endian `uint64` unix nanoseconds; presence (not the
-  timestamp value) blocks re-proposal. Sticky in v1. (R2665, R2683)
+- RJ key: `"RJ" + chunkid varint + tagname` — mirrors RC. Value
+  (v3): `signed-varint(score) + 8-byte BE unix nanos`. The record is
+  the **Recall Judgment** edge — one signed relevance figure per
+  (chunkid, tagname). `score < 0` is net-rejected (magnitude
+  `-score` = the v2 reject counter); `score > 0` is reinforced;
+  `score == 0` ≡ absent. The trailing timestamp is the most-recent
+  adjustment (decay-on-read is a future knob). Applies to attached
+  F/V hyperedges as well as RC proposals — the key addresses any
+  (chunkid, tagname). Bidirectional via AdjustJudgment; no manual
+  un-reject verb. (R2665, R2874, R2879, R2881)
 - RF key: `"RF" + chunkid varint`. Value: varint `uint64` — the
   `max RecordSerial(ED, *)` observed at last derivation pass.
   Missing → serial 0 on read (force re-process). Malformed varint

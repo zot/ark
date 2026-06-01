@@ -212,6 +212,17 @@ type RecallConfig struct {
 	// the assistant suppresses the (chunk, tag) pair from any
 	// user-facing mention. `0` (unset) means infinite. R2768
 	RejectMentionCeiling *int `toml:"reject_mention_ceiling,omitempty"`
+
+	// SurfaceCooldown is the window within which a previously-surfaced
+	// (session, chunk) is suppressed by the secretary's deterministic
+	// floor; it doubles as the RM record's lazy-expiry TTL. Go duration
+	// string; default "24h". R2886
+	SurfaceCooldown string `toml:"surface_cooldown,omitempty"`
+
+	// ContextTurns is how many trailing conversation turns
+	// `recall next --session` injects into the curation doc so the
+	// secretary judges with the live conversation. Default 3. R2892
+	ContextTurns *int `toml:"context_turns,omitempty"`
 }
 
 // EffectivePropose returns Propose with the default applied.
@@ -279,6 +290,35 @@ func (rc RecallConfig) EffectiveRejectMentionCeiling() int {
 		return 0
 	}
 	return *rc.RejectMentionCeiling
+}
+
+// SurfaceCooldownDuration parses [recall].surface_cooldown and returns
+// the effective window. Empty/unparseable -> 24h. wasParseError is true
+// when the value was set but couldn't be parsed.
+// CRC: crc-Config.md | R2886
+func (rc RecallConfig) SurfaceCooldownDuration() (window time.Duration, wasParseError bool) {
+	const fallback = 24 * time.Hour
+	if rc.SurfaceCooldown == "" {
+		return fallback, false
+	}
+	d, err := time.ParseDuration(rc.SurfaceCooldown)
+	if err != nil {
+		return fallback, true
+	}
+	return d, false
+}
+
+// EffectiveContextTurns returns ContextTurns with the default (3)
+// applied.
+// CRC: crc-Config.md | R2892
+func (rc RecallConfig) EffectiveContextTurns() int {
+	if rc.ContextTurns == nil {
+		return 3
+	}
+	if *rc.ContextTurns < 0 {
+		return 0
+	}
+	return *rc.ContextTurns
 }
 
 // DiscussedTTLDuration parses the [recall].discussed_ttl field and

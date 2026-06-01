@@ -30,7 +30,13 @@ if [ "$TOOL" = Bash ]; then
 fi
 
 if [ "$TOOL" = Read ]; then
-    echo "BLOCKED: the Read tool is denied. Read \`next\`'s output with \`cat\` instead: run \`~/.ark/ark connections recall next <your nonce>\`, end your turn, and when it completes in the background \`cat\` its output file and act on it. Loop on that." >&2
+    FP=$(echo "$INPUT" | jq -r '.tool_input.file_path')
+    # The one keyhole (R2897): the curation doc `next` materialized for this
+    # fire, under .../recall-curation/. Everything else stays denied.
+    if echo "$FP" | grep -qE '/recall-curation/curation-[^/]*\.md$'; then
+        exit 0
+    fi
+    echo "BLOCKED: the Read tool is permitted ONLY for the curation doc \`next\` names (a path under .../recall-curation/). Run \`~/.ark/ark connections recall next --session <S> <your nonce>\`, then Read the curation file it points you to." >&2
     exit 2
 fi
 

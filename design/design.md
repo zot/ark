@@ -275,6 +275,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
+- [x] test-SurfaceCooldown.md → `store_test.go`
+- [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
@@ -606,7 +608,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T99: R2707 retired (2026-05-26 simple-recall v2 — DM emission gone; Layer 1 @dm-subject pre-triage no longer applicable)
 - T100: R2709 retired (2026-05-26 simple-recall v2 — DM instruction block gone; Layer 3 bias-to-silence is now the recall agent's persona briefing)
 - T101: R2710 retired by R2763 (2026-05-26 simple-recall v2 — Layer 4 @ark-recall-acted instrumentation replaced by ~/.ark/monitoring/recall.jsonl)
-- A67: The recall orchestrator/assistant/agent-persona control flow that is external to ark's Go codebase: R2850 (daemon spawned once per generation by the Luhmann orchestrator), R2851 (nonce delivered in description + prompt), R2855 (user-facing assistant running only the value-scoped ark-recall-result=<self> subscription), and R2860 (the agent persona that drives the loop). The contract is documented in specs/simple-recall.md; enforcement lives in the .claude/agents/* + skill files (ark-recall-agent.md, recall-agent-guard.sh), anchored via crc-RecallAgent.md. No Go CRC owns these. The loop machinery itself — subscribe / poll / fire-ordering / content / context-gate — moved server-side into `ark connections recall next` (R2857/R2858, Go-owned in crc-RecallAgentBuilder), shrinking this external surface. (Originally scoped R2775/R2776 → retired T128/T129; the daemon-loop reqs R2852/R2853/R2854 → retired T130/T131/T132.)
+- A67: The recall assistant/agent-persona control flow that is external to ark's Go codebase: R2890 (per-session secretary spawned + respawned by the session's own assistant via /recall, with session+nonce delivered in prompt + Task description), R2855 (the same assistant running the value-scoped ark-recall-result=<self> consumer subscription), R2866 (the /recall skill that starts both roles), and R2860/R2895 (the secretary persona that drives the loop and judges against the injected conversation). The contract is documented in specs/simple-recall.md; enforcement lives in the .claude/agents/* + skill files (ark-recall-agent.md, recall-agent-guard.sh, recall/SKILL.md), anchored via crc-RecallAgent.md. No Go CRC owns these. The loop machinery itself — subscribe / poll / fire-ordering / content / context-gate / conversation-inject — lives server-side in `ark connections recall next` (R2857/R2858/R2888–R2891, Go-owned in crc-RecallAgentBuilder), shrinking this external surface. (Originally scoped R2775/R2776 → retired T128/T129; daemon-loop reqs R2852/R2853/R2854 → retired T130/T131/T132; seam-3a retired the Luhmann-spawned-daemon reqs R2850/R2851 → R2890, T135/T136.)
 - T102: R2700 retired by R2747 (2026-05-26 simple-recall v2 — composeDM call replaced by RecallCurationBuilder write)
 - T103: R2701 retired by R2748 (2026-05-26 simple-recall v2 — DM recipient/subject/sender identity replaced by curation-doc head tags)
 - T104: R2737 retired by R2749 (2026-05-26 simple-recall v2 — DM ## Recalled for paragraph grouping replaced by curation-doc # Source Chunk / ## Candidate)
@@ -641,3 +643,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T131: R2853 retired by R2859 (2026-05-29 recall-next — guard allowlist shrinks to next+surface/recommend/close)
 - T132: R2854 retired by R2860 (2026-05-29 recall-next — loop condenses to persona; recall-loop.md retired as loop driver)
 - [ ] O119: R2872 SurfaceItem own-session gate has no dedicated unit test (needs DB-backed ChunkInfo); the pure predicate sessionFromJSONLPath is covered by TestSessionFromJSONLPath, and the gate is exercised by live recall runs
+- T133: R2764 retired by R2874 (2026-06-01 recall-judgment: v2 reject-counter value superseded by v3 signed score)
+- T134: R2683 retired by R2881 (2026-06-01 recall-judgment: monotonic-sticky RJ superseded by signed bidirectional axis)
+- [ ] O120: ark connections clean has no CLI/handler-level test (RC/RD/RF/RJ/RM wiping in cmdConnectionsClean + handleConnectionsClean). Pre-existing; RM wiring mirrors RD exactly and the Store mechanism (Clear*SurfaceCooldown) is covered by test-SurfaceCooldown.md.
+- [ ] O121: ark status -db omits the recall record family (RC/RD/RF/RJ via unrecognized two-byte prefix in recordPrefixOf -> lumped under unlabeled 'R'; HC under 'H'). Pre-existing; RM was added to recordPrefixOf + arkLabels in seam 2, but RC/RD/RF/RJ/HC remain invisible. Add their cases + labels in a status-db cleanup.
+- T135: R2850 retired by R2890 (2026-06-01 secretary-pipeline: shared Luhmann-spawned daemon -> per-session assistant-spawned secretary)
+- T136: R2851 retired by R2890 (2026-06-01 secretary-pipeline: Luhmann nonce delivery -> assistant delivers session+nonce)

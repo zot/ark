@@ -1848,15 +1848,16 @@ Public subcommands:
 
   clean [-all] [-checkpoint] [-session ID|project]
     Wipe recall-substrate state to help with testing.
-    Default: RC (derived-tag proposals) + RD (discussed-tag dedup).
-    -all: also wipe RF (derivation freshness), RJ (derived rejections),
+    Default: RC (derived-tag proposals) + RD (discussed-tag dedup)
+          + RM (surface-cooldown).
+    -all: also wipe RF (derivation freshness), RJ (recall judgment),
           tmp://connections/* and tmp://ARK-RECALL/* documents.
     -checkpoint: advance the indexer's FileLength on session JSONLs
           (scoped by -session) so the next refresh treats only
           future-appended bytes as new. Also clears the watcher's
           in-memory pendingChunks.
-    -session ID: restrict RD / checkpoint scope to one session.
-    -session project: restrict RD / checkpoint scope to sessions
+    -session ID: restrict RD / RM / checkpoint scope to one session.
+    -session project: restrict RD / RM / checkpoint scope to sessions
           belonging to the current working directory (resolved via
           ~/.claude/projects/). RC/RF/RJ and tmp:// are always
           corpus-wide regardless.
@@ -2224,9 +2225,9 @@ func truncStr(s string, n int) string {
 }
 
 // cmdConnectionsClean implements `ark connections clean [-all]
-// [-session ID|project]`. Default scope wipes RC + RD; -all also
+// [-session ID|project]`. Default scope wipes RC + RD + RM; -all also
 // wipes RF, RJ, and tmp://connections/* / tmp://ARK-RECALL/* docs.
-// CRC: crc-CLI.md | R2744
+// CRC: crc-CLI.md | R2744, R2887
 func cmdConnectionsClean(args []string) {
 	fs := flag.NewFlagSet("connections clean", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -2238,19 +2239,19 @@ func cmdConnectionsClean(args []string) {
 
 Wipe recall-substrate state to help with testing.
 
-Default scope: RC (derived-tag proposals) + RD (discussed-tag dedup,
-all sessions).
+Default scope: RC (derived-tag proposals) + RD (discussed-tag dedup) +
+RM (surface-cooldown), all sessions.
 
-  -all              also wipe RF (derivation freshness), RJ (derived
-                    rejections), tmp://connections/* and
+  -all              also wipe RF (derivation freshness), RJ (recall
+                    judgment), tmp://connections/* and
                     tmp://ARK-RECALL/* documents
   -checkpoint       advance the indexer's FileLength on session
                     JSONLs (scoped by -session) so the next refresh
                     treats only future-appended bytes as new — caps
                     off the current session's history. Also clears
                     the watcher's in-memory pendingChunks.
-  -session ID       restrict RD / checkpoint scope to one session UUID
-  -session project  restrict RD / checkpoint scope to sessions for
+  -session ID       restrict RD / RM / checkpoint scope to one session UUID
+  -session project  restrict RD / RM / checkpoint scope to sessions for
                     the current working directory (resolved via
                     ~/.claude/projects/<encoded-cwd>/*.jsonl)`)
 		fs.SetOutput(os.Stderr)
@@ -2287,6 +2288,7 @@ all sessions).
 		Status          string `json:"status"`
 		RC              int    `json:"rc"`
 		RD              int    `json:"rd"`
+		RM              int    `json:"rm"`
 		RF              int    `json:"rf"`
 		RJ              int    `json:"rj"`
 		TmpConnections  int    `json:"tmpConnections"`
@@ -2325,6 +2327,23 @@ all sessions).
 				}
 			}
 
+			// RM — surface-cooldown, same session scope as RD (R2887)
+			if len(sessions) == 0 {
+				c, err := db.ClearAllSurfaceCooldown()
+				if err != nil {
+					fatal(err)
+				}
+				resp.RM = c
+			} else {
+				for _, sess := range sessions {
+					c, err := db.ClearSurfaceCooldown(sess)
+					if err != nil {
+						fatal(err)
+					}
+					resp.RM += c
+				}
+			}
+
 			if *all {
 				rf, err := db.ClearAllDerivedFreshness()
 				if err != nil {
@@ -2351,7 +2370,7 @@ all sessions).
 			}
 		})
 	}
-	fmt.Fprintf(os.Stderr, "cleaned: RC=%d RD=%d", resp.RC, resp.RD)
+	fmt.Fprintf(os.Stderr, "cleaned: RC=%d RD=%d RM=%d", resp.RC, resp.RD, resp.RM)
 	if *all {
 		fmt.Fprintf(os.Stderr, " RF=%d RJ=%d tmp-connections=%d tmp-recall=%d",
 			resp.RF, resp.RJ, resp.TmpConnections, resp.TmpRecall)
@@ -7695,20 +7714,34 @@ func cmdConnectionsRecallContext(args []string) {
 // directive (X-Recall-Exit header), else 0 — so a bash loop can branch
 // on $?. CRC: crc-CLI.md | Seq: seq-recall-agent.md#3 | R2857, R2858
 func cmdConnectionsRecallNext(args []string) {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "ark connections recall next NONCE")
+	fs := flag.NewFlagSet("connections recall next", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	// R2888: --session value-scopes the curate subscription to one session
+	// (the per-session secretary path). Omitted = legacy bare-curate scan.
+	session := fs.String("session", "", "Claude Code session UUID — value-scope the curate subscription to this session")
+	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
+		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE")
 		os.Exit(2)
 	}
-	nonce, err := strconv.ParseUint(args[0], 10, 32)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE")
+		os.Exit(2)
+	}
+	nonce, err := strconv.ParseUint(rest[0], 10, 32)
 	if err != nil || nonce == 0 {
-		fmt.Fprintln(os.Stderr, "ark connections recall next NONCE (positive integer)")
+		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE (positive integer)")
 		os.Exit(2)
 	}
 	client := serverClient(arkDir)
 	if client == nil {
 		fatal(errors.New("server not running; start with `ark serve`"))
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce), nil)
+	nextURL := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
+	if *session != "" {
+		nextURL += "&session=" + *session
+	}
+	req, err := http.NewRequest("GET", nextURL, nil)
 	if err != nil {
 		fatal(err)
 	}

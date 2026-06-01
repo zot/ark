@@ -93,8 +93,9 @@ func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 	}
 }
 
-// TestStore_HasDerivedRejection_PresentAndAbsent verifies RJ probe.
-// Refs: R2665, R2673
+// TestStore_HasDerivedRejection_PresentAndAbsent verifies the signed
+// judgment probe: one reject gives score -1, so rejected with magnitude 1.
+// Refs: R2665, R2673, R2878
 func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
 	_, db := setupRecall(t)
 	if _, err := db.store.RejectDerived(42, "bogus"); err != nil {
@@ -102,8 +103,9 @@ func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
 	}
 
 	var present, absent bool
+	var mag uint64
 	if err := db.store.env.View(func(txn *lmdb.Txn) error {
-		p, _, err := db.store.HasDerivedRejection(txn, 42, "bogus")
+		p, m, err := db.store.HasDerivedRejection(txn, 42, "bogus")
 		if err != nil {
 			return err
 		}
@@ -111,13 +113,16 @@ func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		present, absent = p, a
+		present, mag, absent = p, m, a
 		return nil
 	}); err != nil {
 		t.Fatalf("HasDerivedRejection: %v", err)
 	}
 	if !present {
 		t.Error("expected present=true for bogus")
+	}
+	if mag != 1 {
+		t.Errorf("magnitude: got %d want 1", mag)
 	}
 	if absent {
 		t.Error("expected absent=false for missing")
@@ -188,16 +193,14 @@ func TestStore_DerivedProposals_FiltersRJ(t *testing.T) {
 		t.Fatalf("WriteDerivedProposal: %v", err)
 	}
 
-	// Reject one of them (this also drops its RC, but we want to test
-	// the read-side shadow filter — so re-add the RC for status to
-	// simulate a pre-rejection-leftover scenario).
-	if _, err := db.store.RejectDerived(chunkID, "status"); err != nil {
-		t.Fatalf("RejectDerived: %v", err)
-	}
+	// Drive status's judgment negative directly (AdjustJudgment leaves
+	// the RC in place) so DerivedProposals must drop a pre-rejection RC
+	// because the edge score is now < 0.
 	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
-		return db.store.WriteDerivedProposal(txn, chunkID, "status")
+		_, err := db.store.AdjustJudgment(txn, chunkID, "status", -1)
+		return err
 	}); err != nil {
-		t.Fatalf("re-write RC after reject: %v", err)
+		t.Fatalf("AdjustJudgment: %v", err)
 	}
 
 	props, err := db.store.DerivedProposals(chunkID)
@@ -286,8 +289,8 @@ func TestStore_AcceptDerived_DropsRCAndAttaches(t *testing.T) {
 }
 
 // TestStore_RejectDerived_DropsRCAndWritesRJ verifies atomic RC
-// delete + RJ write with NOW timestamp.
-// Refs: R2665, R2680
+// delete + signed v3 judgment write (score -1, NOW timestamp).
+// Refs: R2680, R2877
 func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(42)
@@ -298,8 +301,10 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 		t.Fatalf("WriteDerivedProposal: %v", err)
 	}
 
-	if _, err := db.store.RejectDerived(chunkID, "fluff"); err != nil {
+	if mag, err := db.store.RejectDerived(chunkID, "fluff"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
+	} else if mag != 1 {
+		t.Errorf("RejectDerived magnitude: got %d want 1", mag)
 	}
 
 	// RC dropped.
@@ -308,20 +313,20 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 		t.Errorf("expected RC dropped after reject; got %+v", props)
 	}
 
-	// RJ present, v2 shape: varint(counter) + 8-byte BE nanos.
-	// Fresh reject ⇒ counter=1.
+	// RJ present, v3 shape: signed-varint(score) + 8-byte BE nanos.
+	// Fresh reject gives score -1.
 	rjKey := derivedKey(prefixDerivedRejection, chunkID, "fluff")
 	if err := db.store.env.View(func(txn *lmdb.Txn) error {
 		v, err := txn.Get(db.store.dbi, rjKey)
 		if err != nil {
 			return err
 		}
-		counter, nanos, ok := decodeRJValue(v)
+		score, nanos, ok := decodeJudgmentValue(v)
 		if !ok {
 			t.Errorf("RJ value malformed: %x", v)
 		}
-		if counter != 1 {
-			t.Errorf("RJ counter: got %d want 1", counter)
+		if score != -1 {
+			t.Errorf("RJ score: got %d want -1", score)
 		}
 		if nanos == 0 {
 			t.Error("RJ timestamp is zero")
@@ -329,6 +334,202 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("read RJ: %v", err)
+	}
+}
+
+// TestStore_AdjustJudgment_RoundTrip verifies the signed RMW primitive
+// reinforces, accumulates, and decays, persisting the result.
+// Refs: R2874, R2875
+func TestStore_AdjustJudgment_RoundTrip(t *testing.T) {
+	_, db := setupRecall(t)
+	const chunkID = uint64(7)
+	for _, st := range []struct {
+		delta int64
+		want  int64
+	}{{+1, 1}, {+2, 3}, {-1, 2}} {
+		var got int64
+		if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+			n, err := db.store.AdjustJudgment(txn, chunkID, "t", st.delta)
+			got = n
+			return err
+		}); err != nil {
+			t.Fatalf("AdjustJudgment(%d): %v", st.delta, err)
+		}
+		if got != st.want {
+			t.Errorf("after delta %d: got score %d want %d", st.delta, got, st.want)
+		}
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		score, present, err := db.store.ReadJudgment(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if !present || score != 2 {
+			t.Errorf("ReadJudgment: got (%d, %v) want (2, true)", score, present)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ReadJudgment: %v", err)
+	}
+}
+
+// TestStore_ReadJudgment_AbsentPresentMalformed verifies the three read
+// paths, including the conservative malformed-as-rejected rule.
+// Refs: R2874, R2876
+func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
+	_, db := setupRecall(t)
+	// (a) absent
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		score, present, err := db.store.ReadJudgment(txn, 1, "t")
+		if err != nil {
+			return err
+		}
+		if present || score != 0 {
+			t.Errorf("absent: got (%d, %v) want (0, false)", score, present)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("absent read: %v", err)
+	}
+	// (b) present
+	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		_, err := db.store.AdjustJudgment(txn, 1, "t", +2)
+		return err
+	}); err != nil {
+		t.Fatalf("AdjustJudgment: %v", err)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		score, present, err := db.store.ReadJudgment(txn, 1, "t")
+		if err != nil {
+			return err
+		}
+		if !present || score != 2 {
+			t.Errorf("present: got (%d, %v) want (2, true)", score, present)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("present read: %v", err)
+	}
+	// (c) malformed value gives conservative rejected (negative, present)
+	badKey := derivedKey(prefixDerivedRejection, 2, "t")
+	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(db.store.dbi, badKey, []byte{0x01, 0x02, 0x03}, 0)
+	}); err != nil {
+		t.Fatalf("write malformed: %v", err)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		score, present, err := db.store.ReadJudgment(txn, 2, "t")
+		if err != nil {
+			return err
+		}
+		if !present || score >= 0 {
+			t.Errorf("malformed: got (%d, %v) want (negative, true)", score, present)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("malformed read: %v", err)
+	}
+}
+
+// TestStore_Judgment_ReinforcementHysteresis verifies a reinforced edge
+// survives a single rejection (the axis is bidirectional).
+// Refs: R2875, R2877, R2881
+func TestStore_Judgment_ReinforcementHysteresis(t *testing.T) {
+	_, db := setupRecall(t)
+	const chunkID = uint64(9)
+	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		_, err := db.store.AdjustJudgment(txn, chunkID, "t", +2)
+		return err
+	}); err != nil {
+		t.Fatalf("reinforce: %v", err)
+	}
+	if _, err := db.store.RejectDerived(chunkID, "t"); err != nil {
+		t.Fatalf("RejectDerived: %v", err)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if rejected || mag != 0 {
+			t.Errorf("after +2 then reject: rejected=%v mag=%d, want false/0", rejected, mag)
+		}
+		score, _, err := db.store.ReadJudgment(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if score != 1 {
+			t.Errorf("score: got %d want 1", score)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
+// TestStore_RejectDerived_RejectParity verifies repeated rejects walk the
+// score negative, matching the v2 monotonic counter.
+// Refs: R2877, R2878
+func TestStore_RejectDerived_RejectParity(t *testing.T) {
+	_, db := setupRecall(t)
+	const chunkID = uint64(11)
+	for i, want := range []uint64{1, 2, 3} {
+		mag, err := db.store.RejectDerived(chunkID, "t")
+		if err != nil {
+			t.Fatalf("RejectDerived #%d: %v", i+1, err)
+		}
+		if mag != want {
+			t.Errorf("reject #%d magnitude: got %d want %d", i+1, mag, want)
+		}
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if !rejected || mag != 3 {
+			t.Errorf("final: rejected=%v mag=%d want true/3", rejected, mag)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+}
+
+// TestStore_Judgment_NeutralEqualsAbsent verifies a score driven back to
+// 0 reads as neutral, indistinguishable from absent at the contract
+// surface (HasDerivedRejection false/0).
+// Refs: R2874, R2881
+func TestStore_Judgment_NeutralEqualsAbsent(t *testing.T) {
+	_, db := setupRecall(t)
+	const chunkID = uint64(13)
+	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		if _, err := db.store.AdjustJudgment(txn, chunkID, "t", +1); err != nil {
+			return err
+		}
+		_, err := db.store.AdjustJudgment(txn, chunkID, "t", -1)
+		return err
+	}); err != nil {
+		t.Fatalf("Adjust: %v", err)
+	}
+	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+		score, _, err := db.store.ReadJudgment(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if score != 0 {
+			t.Errorf("neutral score: got %d want 0", score)
+		}
+		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
+		if err != nil {
+			return err
+		}
+		if rejected || mag != 0 {
+			t.Errorf("neutral: rejected=%v mag=%d want false/0", rejected, mag)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Sequence: Recall agent — daemon loop: curate → agent → result → assistant
 
-**Requirements:** R2747, R2748, R2750, R2751, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2764, R2765, R2766, R2769, R2771, R2772, R2774, R2850, R2851, R2855, R2857, R2858, R2860
+**Requirements:** R2747, R2748, R2750, R2751, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2877, R2765, R2766, R2769, R2771, R2772, R2774, R2890, R2855, R2857, R2858, R2860
 
 Picks up where `seq-recall-watcher.md` leaves off — after the
 watcher writes `tmp://ARK-RECALL/curation-<session>-<fire>` and the
@@ -34,23 +34,23 @@ step 7.7.
                   @ark-recall-curate (per write-actor
                   responsibilities — not the builder's job)
 
-2. Luhmann orchestrator spawns the daemon once per generation  (R2850)
+2. The session's own assistant spawns its secretary (via /recall) (R2890)
          │
          ├── 2.1  N = `ark connections recall reserve-nonce`
          │          → server's RecallAgentBuilder
          │            increments nonceCounter, returns N (R2755)
          │
-         ├── 2.2  Task(                                         (R2851)
+         ├── 2.2  Task(                                         (R2890)
          │          subagent_type="ark-recall-agent",
-         │          description="ark-recall lotto-tube
+         │          description="ark-recall secretary
          │                       loop nonce <N>",   (R2759)
          │          run_in_background=true,
-         │          prompt="Start the recall loop now.
-         │                  Nonce: <N>. Context limit: <L>.")
-         │          (nonce in prompt: the sealed agent cannot
-         │           read its own description)
+         │          prompt="Start the recall secretary loop now.
+         │                  Session: <S>. Nonce: <N>.")
+         │          (session+nonce in prompt: the sealed agent
+         │           cannot read its own description)
          │
-         └── 2.3  daemon boots (Haiku, memory: local);         (R2769, R2860)
+         └── 2.3  secretary boots (Haiku, memory: local);      (R2769, R2860)
                   its persona says: run `ark connections recall
                   next <N>` and do what it returns. No separate
                   subscribe / fetch / skill-load — `next` carries
@@ -228,9 +228,9 @@ step 7.7.
          └── 9.4  decide whether to surface to user;
                   on user reject, assistant calls
                   ark connections recall reject-derived
-                  → Store.RejectDerived increments RJ
-                  counter (varint counter + 8-byte BE
-                  nanos) (R2764, R2774)
+                  → Store.RejectDerived applies a -1
+                  judgment delta (signed score + 8-byte
+                  BE nanos) (R2877, R2774)
 ```
 
 ## Notes

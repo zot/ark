@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873
+**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -74,17 +74,28 @@ for these verbs — `ark serve` must be running.
   in-memory; no DB write.
 
 ### Loop driver — `next` (CLI-driven)
-- RecallNext(nonce) — the daemon's single loop verb (R2857, R2858).
-  On first call for `nonce` it idempotently subscribes to
-  `@ark-recall-curate` under session `recall-loop-<nonce>`. It then
+- RecallNext(nonce, session) — the secretary's single loop verb (R2857,
+  R2858, R2888, R2889, R2891). With `session` set (the per-session
+  secretary, seam 3a) it subscribes **value-scoped**
+  `@ark-recall-curate=<session>` under subscription session
+  `recall-<nonce>`, `lowestPendingCuration` dispatches only that
+  session's `curation-<session>-<fire>` docs, and the returned doc is
+  prefixed with the session's last-`[recall].context_turns` conversation
+  turns (`injectConversation` / `recentConversation`, best-effort). With
+  no `session` it keeps the legacy bare-`@ark-recall-curate`, all-session
+  scan (subscription session `recall-<nonce>`). It then
   checks the nonce's context fill (R2777) against
   `[luhmann].context_limit`: at or over the limit it returns an
-  **exit** directive (exit status `2`). Otherwise it returns the
+  **exit** directive (exit status `2`). Otherwise it picks the
   lowest-fire pending `tmp://ARK-RECALL/curation-<session>-<fire>`
   doc whose session has a result subscriber
   (`pubsub.SubscriberCount("ark-recall-result", session) > 0`) —
-  numeric fire ordering decided server-side — with the doc content
-  as the body and exit status `0`. Docs whose session has no result
+  numeric fire ordering decided server-side — **materializes it to a
+  real file** `~/.ark/recall-curation/curation-<session>-<fire>.md`
+  (`writeCurationFile`, R2896) and returns a **short pointer** to that
+  file as the body (exit status `0`), NOT the doc content inline — the
+  large content would overflow the agent's truncating foreground-Bash
+  stdout. The secretary Reads the file (R2897). Docs whose session has no result
   subscriber are skipped (left to pile up): the daemon never
   dispatches work `Close` would discard, so the subscriber-presence
   gate moves from `close` to dispatch. When none is dispatchable it
@@ -159,7 +170,10 @@ for these verbs — `ark serve` must be running.
   assistant can prune by file path and gauge fetch cost; on
   lookup failure the path drops and the size renders as `?`, and
   the surface still emits. Errors on missing required args
-  before any state change.
+  before any state change. **Starts the surface cooldown (R2894):**
+  after appending, calls `db.MarkSurfaced(doc.session, chunkID)` so
+  the watcher's cooldown floor (R2893) won't re-offer this chunk
+  within `[recall].surface_cooldown`.
 - RecommendItem(fire, chunkID, tagSpec, reason) error
   (R2757, R2751) — same open-on-first-call semantics; appends
   a `## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>`
@@ -183,7 +197,9 @@ for these verbs — `ark serve` must be running.
     subscriber check is needed here — there is nothing to
     deliver regardless.)
   - Either way: remove `tmp://ARK-RECALL/curation-<session>-
-    <fire>` via the write actor unless `preserveCuration`.
+    <fire>` via the write actor unless `preserveCuration`, and
+    delete the materialized file `~/.ark/recall-curation/
+    curation-<session>-<fire>.md` (`curationFilePath`, R2896).
     Also sweep any orphan curation docs for the same session
     whose fire number is strictly less than the current
     `<fire>` — older fires the assistant missed handling.

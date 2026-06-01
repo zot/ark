@@ -193,8 +193,11 @@ const (
 	// `ark connections recall --propose`; the Tag Forge writes RJ via
 	// Store.RejectDerived. R2664–R2666
 	prefixDerivedCandidate = "RC" // R2664 — RC + chunkid varint + tagname → 8-byte BE tally
-	prefixDerivedRejection = "RJ" // R2665, R2764 — RJ + chunkid varint + tagname → varint(counter) + 8-byte BE unix nanos
+	prefixDerivedRejection = "RJ" // R2665, R2874 (Recall Judgment) -- RJ + chunkid varint + tagname -> signed-varint(score) + 8-byte BE unix nanos
 	prefixDerivedFreshness = "RF" // R2666 — RF + chunkid varint → varint serial
+	// prefixSurfaceCooldown is the per-(session, chunk) surface-cooldown
+	// sibling of RD — keyed by chunk instead of tag-value. R2882
+	prefixSurfaceCooldown = "RM" // R2882 — RM + session + \x00 + chunkid varint → 8-byte BE unix nanos (last surfaced)
 )
 
 // Reserved tag names used by the routing/identity machinery.
@@ -2208,6 +2211,8 @@ func recordPrefixOf(k []byte) string {
 			return "ED"
 		case k[0] == 'P' && k[1] == 'C':
 			return "PC"
+		case k[0] == 'R' && k[1] == 'M':
+			return "RM" // R2882 — RM surfaces in status -db
 		}
 	}
 	if len(k) == 0 {
@@ -3437,6 +3442,145 @@ func (s *Store) PruneDiscussed(ttl time.Duration) (int, error) {
 	return deleted, err
 }
 
+// surfaceCooldownKey builds an RM key: "RM" + session + \x00 + chunkid varint.
+// CRC: crc-Store.md | R2882
+func surfaceCooldownKey(session string, chunkID uint64) []byte {
+	key := make([]byte, 0, len(prefixSurfaceCooldown)+len(session)+1+binary.MaxVarintLen64)
+	key = append(key, prefixSurfaceCooldown...)
+	key = append(key, session...)
+	key = append(key, 0)
+	key = encodeVarint(key, chunkID)
+	return key
+}
+
+// surfaceCooldownSessionPrefix returns the range-scan prefix for one session.
+// CRC: crc-Store.md | R2882
+func surfaceCooldownSessionPrefix(session string) []byte {
+	prefix := make([]byte, 0, len(prefixSurfaceCooldown)+len(session)+1)
+	prefix = append(prefix, prefixSurfaceCooldown...)
+	prefix = append(prefix, session...)
+	prefix = append(prefix, 0)
+	return prefix
+}
+
+// MarkSurfaced writes/overwrites the RM record for (session, chunkID)
+// with NOW unix-nanos, recording that the chunk was surfaced to the
+// session (the secretary's surface-cooldown signal). Mirrors AddDiscussed.
+// CRC: crc-Store.md | R2882, R2883
+func (s *Store) MarkSurfaced(session string, chunkID uint64) error {
+	if session == "" {
+		return nil
+	}
+	key := surfaceCooldownKey(session, chunkID)
+	val := make([]byte, 8)
+	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
+	return s.env.Update(func(txn *lmdb.Txn) error {
+		return txn.Put(s.dbi, key, val, 0)
+	})
+}
+
+// LastSurfaced reads the RM timestamp for (session, chunkID). Absent
+// returns (0, false, nil); a value not exactly 8 bytes is treated as
+// absent (read robustness, mirroring RD).
+// CRC: crc-Store.md | R2882, R2884
+func (s *Store) LastSurfaced(session string, chunkID uint64) (int64, bool, error) {
+	if session == "" {
+		return 0, false, nil
+	}
+	key := surfaceCooldownKey(session, chunkID)
+	var nanos int64
+	var present bool
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		v, err := txn.Get(s.dbi, key)
+		if err != nil {
+			if lmdb.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if len(v) != 8 {
+			return nil // malformed -> absent (R2884)
+		}
+		nanos = int64(binary.BigEndian.Uint64(v))
+		present = true
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return nanos, present, nil
+}
+
+// PruneSurfaceCooldown sweeps RM records across all sessions, deleting
+// entries older than ttl (ttl <= 0 deletes nothing). Malformed values
+// are dropped too. Returns the deleted count. Mirrors PruneDiscussed.
+// CRC: crc-Store.md | R2885
+func (s *Store) PruneSurfaceCooldown(ttl time.Duration) (int, error) {
+	if ttl <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-ttl)
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixSurfaceCooldown), func(cur *lmdb.Cursor, _, v []byte) error {
+			if len(v) != 8 {
+				if err := cur.Del(0); err != nil {
+					return err
+				}
+				deleted++
+				return nil
+			}
+			ts := time.Unix(0, int64(binary.BigEndian.Uint64(v)))
+			if ts.Before(cutoff) {
+				if err := cur.Del(0); err != nil {
+					return err
+				}
+				deleted++
+			}
+			return nil
+		})
+	})
+	return deleted, err
+}
+
+// ClearSurfaceCooldown deletes every RM record under one session.
+// Returns the deleted count. Mirrors ClearDiscussed.
+// CRC: crc-Store.md | R2887
+func (s *Store) ClearSurfaceCooldown(session string) (int, error) {
+	if session == "" {
+		return 0, nil
+	}
+	prefix := surfaceCooldownSessionPrefix(session)
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			deleted++
+			return nil
+		})
+	})
+	return deleted, err
+}
+
+// ClearAllSurfaceCooldown deletes every RM record across all sessions.
+// Returns the deleted count. Mirrors ClearAllDiscussed.
+// CRC: crc-Store.md | R2887
+func (s *Store) ClearAllSurfaceCooldown() (int, error) {
+	var deleted int
+	err := s.env.Update(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, []byte(prefixSurfaceCooldown), func(cur *lmdb.Cursor, _, _ []byte) error {
+			if err := cur.Del(0); err != nil {
+				return err
+			}
+			deleted++
+			return nil
+		})
+	})
+	return deleted, err
+}
+
 // DerivedProposal is one RC record decoded for callers.
 // CRC: crc-Store.md | R2678
 type DerivedProposal struct {
@@ -3541,53 +3685,94 @@ func (s *Store) ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (uint64, boo
 	return serial, true, nil
 }
 
-// HasDerivedRejection probes for an RJ record for the given (chunk,
-// tagname). Returns (rejected, counter, err): when the record
-// exists, decode the v2 value shape `varint(counter) + 8-byte BE
-// unix nanos` and return the counter. v1 records (exactly 8 bytes,
-// raw timestamp) are read as counter=1 for forward-compatibility;
-// the next RejectDerived call upgrades the value to v2 shape.
-// Callers that only need existence may discard the counter.
-// CRC: crc-Store.md | R2665, R2673, R2764, R2765, R2766
-func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, uint64, error) {
+// AdjustJudgment applies a signed delta to the Recall Judgment edge
+// RJ[chunkid+tagname] inside the caller's write txn: read the current
+// score (absent = 0), add delta, stamp NOW, write the v3 value
+// signed-varint(score) + 8-byte BE unix nanos. A score that returns to
+// 0 deletes the record (absent equals 0). Positive delta reinforces;
+// negative decays/rejects. Returns the new score.
+// CRC: crc-Store.md | R2874, R2875, R2879, R2881
+func (s *Store) AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string, delta int64) (int64, error) {
+	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
+	var score int64
+	if v, err := txn.Get(s.dbi, key); err == nil {
+		if cur, _, ok := decodeJudgmentValue(v); ok {
+			score = cur
+		}
+	} else if !lmdb.IsNotFound(err) {
+		return 0, err
+	}
+	score += delta
+	if score == 0 {
+		if err := txn.Del(s.dbi, key, nil); err != nil && !lmdb.IsNotFound(err) {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err := txn.Put(s.dbi, key, encodeJudgmentValue(score, time.Now().UnixNano()), 0); err != nil {
+		return 0, err
+	}
+	return score, nil
+}
+
+// ReadJudgment reads the signed score of the Recall Judgment edge
+// RJ[chunkid+tagname]. Absent gives (0, false, nil). A value that does
+// not decode as signed-varint + 8 bytes is treated conservatively as
+// rejected (a negative score with present=true) so a
+// reject_propose_ceiling==0 caller never re-proposes a corrupt edge.
+// CRC: crc-Store.md | R2874, R2876
+func (s *Store) ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string) (int64, bool, error) {
 	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
 	v, err := txn.Get(s.dbi, key)
 	if err != nil {
 		if lmdb.IsNotFound(err) {
-			return false, 0, nil
+			return 0, false, nil
 		}
-		return false, 0, err
+		return 0, false, err
 	}
-	counter, _, ok := decodeRJValue(v)
+	score, _, ok := decodeJudgmentValue(v)
 	if !ok {
-		// Malformed RJ value; treat as rejected with counter 0 so
-		// callers using ceiling > 0 don't accidentally re-propose.
-		return true, 0, nil
+		return -1, true, nil // corrupt edge reads as rejected (conservative)
 	}
-	return true, counter, nil
+	return score, true, nil
 }
 
-// decodeRJValue parses an RJ record value. v2 shape is
-// `varint(counter) + 8-byte BE unix nanos`. v1 shape (exactly 8
-// bytes, the raw timestamp) is read as counter=1. Returns
-// (counter, nanos, ok); ok=false indicates a malformed value.
-// CRC: crc-Store.md | R2764
-func decodeRJValue(v []byte) (counter uint64, nanos int64, ok bool) {
-	if len(v) == 8 {
-		return 1, int64(binary.BigEndian.Uint64(v)), true
+// HasDerivedRejection reports whether the (chunk, tagname) edge is
+// net-rejected (judgment score < 0) and the rejection magnitude
+// (-score). Thin wrapper over ReadJudgment; the propose pass and the
+// assistant's mention path consume magnitude exactly as they consumed
+// the v2 counter.
+// CRC: crc-Store.md | R2665, R2673, R2765, R2766, R2876, R2878
+func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, uint64, error) {
+	score, present, err := s.ReadJudgment(txn, chunkID, tagname)
+	if err != nil {
+		return false, 0, err
 	}
-	c, n := binary.Uvarint(v)
+	if !present || score >= 0 {
+		return false, 0, nil
+	}
+	return true, uint64(-score), nil
+}
+
+// decodeJudgmentValue parses a v3 Recall Judgment value:
+// signed-varint(score) + 8-byte BE unix nanos. Returns (score, nanos,
+// ok); ok=false signals a value that is not a signed varint followed
+// by exactly 8 bytes.
+// CRC: crc-Store.md | R2874, R2876
+func decodeJudgmentValue(v []byte) (score int64, nanos int64, ok bool) {
+	val, n := binary.Varint(v)
 	if n <= 0 || len(v)-n != 8 {
 		return 0, 0, false
 	}
-	return c, int64(binary.BigEndian.Uint64(v[n:])), true
+	return val, int64(binary.BigEndian.Uint64(v[n:])), true
 }
 
-// encodeRJValue writes the v2 RJ value shape.
-// CRC: crc-Store.md | R2764
-func encodeRJValue(counter uint64, nanos int64) []byte {
+// encodeJudgmentValue writes the v3 Recall Judgment value:
+// signed-varint(score) + 8-byte BE unix nanos.
+// CRC: crc-Store.md | R2874
+func encodeJudgmentValue(score int64, nanos int64) []byte {
 	buf := make([]byte, binary.MaxVarintLen64+8)
-	n := binary.PutUvarint(buf, counter)
+	n := binary.PutVarint(buf, score)
 	binary.BigEndian.PutUint64(buf[n:n+8], uint64(nanos))
 	return buf[:n+8]
 }
@@ -3674,9 +3859,12 @@ func (s *Store) ClearAllDerivedFreshness() (int, error) {
 }
 
 // ClearAllDerivedRejections deletes every RJ record across the
-// corpus. Curator-authored rejections are normally durable; this
-// helper exists for testing reset only. Returns the deleted count.
-// CRC: crc-Store.md | R2744
+// corpus. Curator-authored judgments are normally durable; this
+// helper exists for testing reset and as the v2->v3 migration
+// mechanism (`ark connections clean -all -checkpoint` wipes RJ; the
+// next reject/reinforce cycle rewrites in v3 signed shape). Returns
+// the deleted count.
+// CRC: crc-Store.md | R2744, R2880
 func (s *Store) ClearAllDerivedRejections() (int, error) {
 	return s.clearAllByPrefix([]byte(prefixDerivedRejection))
 }
@@ -3730,35 +3918,30 @@ func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, er
 	return tvid, nil
 }
 
-// RejectDerived persists a sticky no-resurface marker for a derived
-// proposal. In one txn: delete RC[chunkid+tagname] and write
-// RJ[chunkid+tagname] with the v2 value shape `varint(counter) +
-// 8-byte BE unix nanos`. The counter is the prior value plus one
-// (v1 8-byte records are read as counter=1; a fresh record starts
-// at 1). Returns the new counter so callers can surface the
-// post-increment value without a separate read. No-op safe if RC
+// RejectDerived deletes RC[chunkid+tagname] and applies a -1 judgment
+// delta in one txn, returning the rejection magnitude (max(0,
+// -newScore)). With no reinforcement producer present, a
+// rejection-only sequence yields scores -1, -2, -3 ... bit-for-bit
+// identical to the v2 monotonic counter. No-op safe if the RC record
 // is already gone.
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2665, R2680, R2683, R2764
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2680, R2877
 func (s *Store) RejectDerived(chunkID uint64, tagname string) (uint64, error) {
 	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
-	rjKey := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	var newCounter uint64
+	var magnitude uint64
 	err := s.env.Update(func(txn *lmdb.Txn) error {
 		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
 			return err
 		}
-		var prior uint64
-		if v, err := txn.Get(s.dbi, rjKey); err == nil {
-			if c, _, ok := decodeRJValue(v); ok {
-				prior = c
-			}
-		} else if !lmdb.IsNotFound(err) {
+		newScore, err := s.AdjustJudgment(txn, chunkID, tagname, -1)
+		if err != nil {
 			return err
 		}
-		newCounter = prior + 1
-		return txn.Put(s.dbi, rjKey, encodeRJValue(newCounter, time.Now().UnixNano()), 0)
+		if newScore < 0 {
+			magnitude = uint64(-newScore)
+		}
+		return nil
 	})
-	return newCounter, err
+	return magnitude, err
 }
 
 // --- float32 ↔ bytes conversion ---
