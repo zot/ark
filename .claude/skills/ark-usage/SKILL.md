@@ -84,6 +84,35 @@ it as the only pass.
 ~/.ark/ark search -parse fred -without -files '*.md'
 ```
 
+### Searching conversation history (recall)
+
+Conversation logs (`~/.claude/projects/**`) and schedule logs are
+**excluded from search by default** via `[search].search_exclude` — right
+for normal corpus search, but it means a plain `ark search` never returns
+chat history. When the *point* of the search is what was *discussed*
+(recall, clues, "did we mention X?"), do a **second, chat-scoped pass**:
+
+```bash
+# Pass 1 — corpus (chat logs auto-excluded):
+~/.ark/ark search -fuzzy "cerro gordo" -scores -k 20
+
+# Pass 2 — chat history (the positive -files both scopes to chat AND
+# disables the default exclude, so the logs surface):
+~/.ark/ark search -files '~/.claude/projects/**' -fuzzy "cerro gordo" -scores -k 20
+```
+
+Why the `-files` is the trick: an explicit positive `-files` narrowing
+turns OFF the `search_exclude` defaults — so the one flag that scopes to
+chat is also what un-hides it.
+
+- **Two passes, don't merge them.** Fuzzy scores saturate at `1.0000` for
+  short queries (too few trigrams to separate a near-match from an exact
+  one), so a single combined search can't sort the corpus and chat pools
+  into a useful mix — one drowns the other. Keep them separate; merge with
+  judgment.
+- Single-quote globs so the shell doesn't expand them; ark expands a
+  leading `~/` itself (R950), so `'~/.claude/projects/**'` works.
+
 Output options (conventional flags, after the filter stack):
 
 ```bash
@@ -147,8 +176,8 @@ The `lag` field shows bookmark lag (empty when current, otherwise
 
 ## Gotchas
 
-- **Always `-without -files '*.jsonl'`** unless you want conversation logs (they flood results)
-- **`-fuzzy` is generous (trigram similarity).** A large project can swamp common-word queries; tighten the query, or use `-contains` for an exact phrase
+- **Conversation logs are excluded by default** — `[search].search_exclude` (`~/.claude/projects/**`, `~/.ark/schedule/**`) is applied automatically, so you don't exclude them by hand. To *include* chat history, see "Searching conversation history" above (a positive `-files` pass)
+- **`-fuzzy` is generous (trigram similarity).** A large project can swamp common-word queries; tighten the query, or use `-contains` for an exact phrase. Note short queries (≤~3 trigrams) saturate at score `1.0000` — the score won't discriminate, so judge by content
 - **`-files` globs anchor at the full path's start.** A pattern beginning with a literal segment (`'HollowStuff/**'`) silently matches nothing, since real paths start with `/home/...`; prefix interior dirs with `**/` (`'**/HollowStuff/**'`). Extension globs (`'*.jsonl'`) already lead with a wildcard, so they work as-is
 - **Always wrap retrieved content** (`-wrap` on search, `--wrap` on fetch) — gives source attribution
 - **`ark tag defs`** not grep — to find tag definitions

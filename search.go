@@ -721,18 +721,9 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 			}
 			filter = FileTagChunkFilter(p, store)
 		case "files":
-			// R1770: glob match against file paths → file ID set
-			fileIDs := make(map[uint64]bool)
-			for fid, p := range paths {
-				matched, _ := filepath.Match(row.Query, filepath.Base(p))
-				if !matched {
-					matched, _ = doublestar.Match(row.Query, p)
-				}
-				if matched {
-					fileIDs[fid] = true
-				}
-			}
-			filter = fileIDChunkFilter(fileIDs)
+			// R1770: glob match against file paths → file ID set, with a
+			// leading `~/` expanded (R950).
+			filter = fileIDChunkFilter(matchFilesGlob(row.Query, paths))
 		default:
 			continue
 		}
@@ -743,6 +734,27 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 		opts = append(opts, microfts2.WithChunkFilter(filter))
 	}
 	return opts
+}
+
+// matchFilesGlob returns the set of fileIDs whose path matches glob —
+// either by basename (`filepath.Match`) or full-path doublestar. A leading
+// `~/` (or `~user/`) is expanded first, so `-files '~/.claude/projects/**'`
+// works like the `search_exclude` config: shell single-quotes keep the
+// tilde literal, so ark expands it (indexed paths are absolute). R1770, R950
+// CRC: crc-Searcher.md | R1770, R950
+func matchFilesGlob(glob string, paths map[uint64]string) map[uint64]bool {
+	glob = ExpandTilde(glob)
+	fileIDs := make(map[uint64]bool)
+	for fid, p := range paths {
+		matched, _ := filepath.Match(glob, filepath.Base(p))
+		if !matched {
+			matched, _ = doublestar.Match(glob, p)
+		}
+		if matched {
+			fileIDs[fid] = true
+		}
+	}
+	return fileIDs
 }
 
 // AboutResolution bundles everything ResolveAboutFilters returns.
@@ -962,6 +974,12 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 		s.config != nil && len(s.config.SearchExclude) > 0 {
 		opts.ExcludeFiles = s.config.SearchExclude
 	}
+	// R950: expand a leading `~/` on the explicit file-glob flags so they
+	// behave like the (already tilde-expanded) search_exclude config. No-op
+	// for globs without a leading tilde. SearchExclude is pre-expanded at
+	// config load, so re-expanding here is idempotent.
+	opts.FilterFiles = ExpandTildeSlice(opts.FilterFiles)
+	opts.ExcludeFiles = ExpandTildeSlice(opts.ExcludeFiles)
 	hasFilters := len(opts.Filter) > 0 || len(opts.Except) > 0 ||
 		len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 ||
 		len(opts.FilterFileTags) > 0 || len(opts.ExcludeFileTags) > 0
