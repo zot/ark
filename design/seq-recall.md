@@ -1,6 +1,6 @@
 # Sequence: Recall (Phase 2B)
 
-**Requirements:** R2617–R2641
+**Requirements:** R2617–R2641, R2905, R2906, R2907, R2908, R2910
 
 Diagram of the CLI recall routing, server HTTP handling, and in-process database fallback flows.
 
@@ -23,10 +23,10 @@ CLI              Server (HTTP)      Librarian          DB (Local LMDB)
  |  |                  |                |- Normalize inputs
  |  |                  |                |                    |
 1.5
- |  |                  |                |- Perform Vector-EC (if model) & Trigram-EC
+ |  |                  |                |- Score content (Vector-EC if model, Trigram-EC) + tag axis (EV cosine + on-the-fly value trigrams -> V records); 4-component
  |  |                  |                |                    |
 1.6
- |  |                  |                |- Exclude self-chunks, merge & sort top-K
+ |  |                  |                |- Exclude self; allocate 2x2 (source x axis, <=3/cell, <=2/file, vec-larger/tri-smaller tiebreak), dedup+backfill; chat pool via sub-chunk funnel
  |  |                  |                |                    |
 1.7
  |  |                  |                |- Resolve tags & chunk content
@@ -59,7 +59,7 @@ CLI              Server (HTTP)      Librarian          DB (Local LMDB)
  |  |  |  |                             |- Perform Trigram-EC search
  |  |  |  |                             |                    |
 1.16
- |  |  |  |                             |- Exclude self-chunks, merge & sort top-K
+ |  |  |  |                             |- Trigram-EC + tag-trigram only (no model); exclude self; allocate 2x2
  |  |  |  |                             |                    |
 1.17
  |  |  |  |                             |- Resolve tags & chunk content

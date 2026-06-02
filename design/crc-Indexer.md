@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984, R2012, R2016, R2018, R2022, R2024, R2026, R2110, R2111, R2112, R2365, R2374, R2427, R2696, R2729, R2864
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R369, R385, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R754, R755, R756, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1104, R1105, R1106, R1113, R1114, R1115, R1116, R1117, R1118, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1127, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984, R2012, R2016, R2018, R2022, R2024, R2026, R2110, R2111, R2112, R2365, R2374, R2427, R2696, R2729, R2864, R2904
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -54,10 +54,11 @@ R2012, R2016, R2018, R2022, R2024, R2026)
 
 ## Does
 - AddFile(path, strategy): add to microfts2 via AddFileWithContent with
-  WithChunkCallback (R1113) and WithIndexedChunkCallback (R1904).
-  Text-only callback feeds tags/defs/values for file-level pubsub/
-  schedule and D-record writes (R1117, R1118, R1926). Indexed
-  callback feeds chunkid-keyed F/V/T writes (R1904). Embeddings for
+  WithIndexedChunkCallback (R1904). The chunker's content transform (R2904)
+  strips tags into Attrs; indexedCallback decodes them per new chunkid for
+  chunkid-keyed F/V/T writes (R1904). File-level tags + defs for pubsub/
+  schedule and D-record writes are re-extracted from the returned content
+  via fileLevelTags (R1117, R1118, R1926, R2904). Embeddings for
   newly-indexed chunks are written later by Librarian.BatchEmbedChunks.
   Eliminates splitChunks call (R1123).
 - RemoveFile(path): resolve path to fileid via microfts2, use
@@ -69,16 +70,17 @@ R2012, R2016, R2018, R2022, R2024, R2026)
 - RefreshFile(path): check for append-only change first. If append:
   use AppendChunks path. Otherwise full re-add to microfts2 via
   ReindexWithCallback to atomically delete orphaned EC records and
-  track new chunkIDs (R1849, R1852, R1854). WithChunkCallback (R1114)
-  accumulates chunks and extracts tags from clean text. Eliminates
-  splitChunks call (R1124). Tag extraction moves from prepareRefresh
-  to executeFullRefresh (R1126).
+  track new chunkIDs (R1849, R1852, R1854). Per-chunk tags arrive via
+  WithIndexedChunkCallback (decoded from transform-stripped Attrs, R2904);
+  file-level tags + defs are re-extracted from prep.data in
+  executeFullRefresh (R1126, R2904). Eliminates splitChunks call (R1124).
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
   by patterns, refresh each one in parallel. Worker pool (NumCPU goroutines)
-  reads files and detects appends. For full refresh, tag extraction happens
-  in executeRefresh via callback (R1126). For append, tags extracted in
-  prepareRefresh from tagWindowForAppend (R1127). ChanSvc actor serializes
-  all LMDB writes. Errors skip the file and log a warning.
+  reads files and detects appends. Per-chunk tags arrive via the indexed
+  callback (transform-stripped Attrs, R2904); file-level tags + defs are
+  re-extracted in executeRefresh from prep.data (full) or prep.newBytes
+  (append) (R1126, R1127, R2904). ChanSvc actor serializes all LMDB writes.
+  Errors skip the file and log a warning.
 - DetectAppend(path, fileid): get FileInfo from microfts2, check
   FileLength > 0, stat file for growth, hash first FileLength bytes,
   compare to stored ContentHash. Returns true if append-only.
@@ -92,12 +94,13 @@ R2012, R2016, R2018, R2022, R2024, R2026)
   hash and still full-refreshes.
 - AppendFile(path, fileid, strategy): read new bytes from FileLength
   to EOF, parse last ChunkRange for base line, call AppendChunks
-  with WithBaseLine/WithContentHash/WithModTime/WithFileLength,
-  WithAppendChunkCallback (R1115), and WithIndexedChunkCallback
-  (R1894). Embedding refresh is handled by Librarian on the next
-  BatchEmbedChunks pass. Tag extraction proceeds via the callback
-  pair. Store.AppendTagValues writes chunkid-keyed F/V/T records
-  for newly-inserted chunks. (R1104, R1894, R1923)
+  with WithBaseLine/WithContentHash/WithModTime/WithFileLength and
+  WithIndexedChunkCallback (R1894). Embedding refresh is handled by
+  Librarian on the next BatchEmbedChunks pass. Per-chunk tags arrive via
+  the indexed callback (transform-stripped Attrs, R2904); file-level tags +
+  defs are re-extracted from the appended bytes (fileLevelTags).
+  Store.AppendTagValues writes chunkid-keyed F/V/T records for
+  newly-inserted chunks. (R1104, R1894, R1923, R2904)
 - ExtractTags(content []byte): scan content with regex `@[a-zA-Z][\w.-]*:`,
   return map[string]uint32 of tagname → count. Tag name is the part
   between @ and : (lowercase). Matches anywhere in content (inline tags
@@ -110,6 +113,28 @@ R2012, R2016, R2018, R2022, R2024, R2026)
   for `@ext`, future handlers for other tags — interprets its own
   embedded structure. Skips mentions per R1317-R1325. (R1317-R1325,
   R2110, R2111, R2112)
+- (substrate v3, R2904) **Tag-strip via microfts2 ContentTransform.** ark
+  registers a per-chunker content transform (`makeTagTransform`) on every
+  text chunker through `db.addChunker`; PDF is excluded
+  (`IsWritable()==false` — its extracted text carries no ark tags). microfts2
+  fires the transform on every content-producing path, index *and* retrieval
+  (collectChunks, AppendChunks, tmp://, GetChunks/ChunkCache fast + streaming),
+  so it: (a) strips ark-tag spans from the chunk's `Content` (`stripArkTags` —
+  a full-line tag also drops its trailing newline, an inline tag keeps the rest
+  of its line), and (b) appends the tag-value instances as ordered `arktag`
+  Attrs (`appendTagAttrs` — one Pair per occurrence in appearance order, so
+  the marshaled Attrs, now part of microfts2's chunk-dedup hash, are
+  deterministic across index and retrieval). The trigram index and the EC
+  embedding both see the tag-free `Content`. `indexedCallback` decodes the
+  per-chunk tags from Attrs (`decodeTagAttrs`) for chunkid-keyed V records.
+  File-level tags + defs are re-extracted directly from the source bytes
+  (`fileLevelTags`) — faithful to content-dedup'd chunks the indexed callback
+  skips, and keeping the map-typed defs out of Attrs. The transform is a pure
+  function of (content, strategy): microfts2 re-runs it on the re-read raw
+  region at retrieval and must regenerate identical Content + Attrs. Tag
+  *recognition* (ExtractTagValues/ExtractTagDefs, R1317-R1325) is unchanged.
+  Forces a one-time re-index + re-embed (operator-run). Within-file duplicate
+  *defs* still collapse (deferred — ARK-STATE.md #14).
 - isMention(content []byte, atPos int, markdown bool): check whether a
   tag match at the given byte offset is a mention (not a real tag).
   Four heuristics in order: (1) no preceding whitespace and not at line

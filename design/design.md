@@ -143,7 +143,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
-- [x] crc-Indexer.md → `indexer.go`, `ext.go`
+- [ ] crc-Indexer.md → `indexer.go`, `ext.go`
 - [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
@@ -158,7 +158,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
-- [x] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
+- [ ] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
@@ -204,9 +204,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-tmp-subscription.md → `pubsub.go`, `db.go`, `server.go`
 - [x] seq-find-connections.md → `connections.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-find-connections-substrate.md → `connections.go`, `connections_substrate.go`, `server.go`, `cmd/ark/main.go`
-- [x] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
+- [ ] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
-- [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
+- [ ] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
 - [ ] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`

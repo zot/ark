@@ -924,7 +924,7 @@ func TestHC_TagDrift(t *testing.T) {
 // Refs: R2240, R2241, R2244
 func TestHC_ProgressDocLifecycle(t *testing.T) {
 	l, db, dir := suggestSetup(t)
-	if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+	if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
 		t.Fatal(err)
 	}
 	_, chunks := indexFileWithChunks(t, l, dir, "doc.md", "a\n", "line")

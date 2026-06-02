@@ -1,6 +1,6 @@
 # Sequence: Derived Tags — Derive + Accept + Reject
 
-**Requirements:** R2664–R2686
+**Requirements:** R2664–R2686, R2911
 
 Three flows cover the derived-tag lifecycle. The recall substrate's
 *derivation pass* writes RC and RF records as a side effect of

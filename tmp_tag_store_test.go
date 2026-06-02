@@ -91,7 +91,7 @@ func TestAddTmpFileExtractsTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fts.Close()
-	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+	if err := fts.AddChunker("lines", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}, makeTagTransform("lines")); err != nil {
 		t.Fatal(err)
 	}
 

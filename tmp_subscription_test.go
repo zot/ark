@@ -27,7 +27,7 @@ func setupTmpDB(t *testing.T) (*DB, *PubSub, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+	if err := fts.AddChunker("lines", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}, makeTagTransform("lines")); err != nil {
 		t.Fatal(err)
 	}
 	store := testStore(t)

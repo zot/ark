@@ -34,57 +34,95 @@ var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 //
 // CRC: crc-Indexer.md | R1890, R1892
 type chunkAccumulator struct {
-	chunks    [][]byte
-	tagValues [][]TagValue
 	chunkTags []ChunkTagValues
-	defs      map[string]string
-	strategy  string
 }
 
-func (a *chunkAccumulator) callback(chunkText string) {
-	b := []byte(chunkText)
-	a.chunks = append(a.chunks, b)
-	a.tagValues = append(a.tagValues, ExtractTagValues(b, a.strategy))
-	for k, v := range ExtractTagDefs(b) {
-		if a.defs == nil {
-			a.defs = make(map[string]string)
-		}
-		a.defs[k] = v
-	}
-}
-
-// indexedCallback fires only for newly-inserted chunkids. Extracts tags
-// from the chunk content and emits a ChunkTagValues entry keyed by the
-// freshly-allocated chunkid. Content-dedup'd chunks (refcount-bumped C
-// records) do not fire — their F/V/T records already exist.
+// indexedCallback fires only for newly-inserted chunkids. The per-chunker
+// content transform (makeTagTransform) has already stripped ark-tag spans
+// from the chunk's Content and stashed the tag-value instances in its
+// Attrs, so this just decodes them, keyed by the freshly-allocated
+// chunkid. Content-dedup'd chunks (refcount-bumped C records) do not fire
+// — their F/V/T records already exist.
 //
-// Reads only ic.Chunk.Content and ic.CRecord.ChunkID. Overlay-fired
-// CRecord has no LMDB transaction context (Txn() and DB() return nil),
-// so the callback must never traverse the CRecord into LMDB. This
-// makes the same callback shape work for both persistent and tmp://
-// indexing without branching. (R1949)
-// CRC: crc-Indexer.md | R1891, R1949
+// Reads only ic.Chunk.Attrs and ic.CRecord.ChunkID. Overlay-fired CRecord
+// has no LMDB transaction context (Txn() and DB() return nil), so the
+// callback must never traverse the CRecord into LMDB. This makes the same
+// callback shape work for both persistent and tmp:// indexing without
+// branching. (R1949)
+// CRC: crc-Indexer.md | R1891, R1949, R2904
 func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
-	values := ExtractTagValues(ic.Chunk.Content, a.strategy)
 	a.chunkTags = append(a.chunkTags, ChunkTagValues{
 		ChunkID: ic.CRecord.ChunkID,
-		Values:  values,
+		Values:  decodeTagAttrs(ic.Chunk.Attrs),
 	})
 }
 
-// flattenChunkTags collapses per-chunk tag-value slices into a single
-// flat slice. Used at file-level boundaries (writeDateIndex, pubsub).
-// CRC: crc-Indexer.md | R1893
-func flattenChunkTags(chunkTags [][]TagValue) []TagValue {
-	n := 0
-	for _, c := range chunkTags {
-		n += len(c)
+// arkTagAttrKey marks a chunk Attr carrying one ark tag-value instance,
+// encoded as "tag\x00value". One Pair per occurrence (never keyed by tag
+// name) so repeated tags stay faithful, and emitted in appearance order
+// so the marshaled Attrs — now part of microfts2's chunk-dedup hash — are
+// deterministic across index and retrieval. CRC: crc-Indexer.md | R2904
+const arkTagAttrKey = "arktag"
+
+// makeTagTransform returns the per-chunker content transform: strip ark
+// tag spans from a chunk's Content and carry the extracted tag-value
+// instances as ordered Attrs, so the indexed/embedded text is tag-free
+// while the per-chunk tags still reach indexedCallback. It is a
+// deterministic function of (content, strategy): microfts2 re-runs it on
+// the re-read raw region at retrieval and must regenerate identical
+// Content and Attrs. CRC: crc-Indexer.md | R2904
+func makeTagTransform(strategy string) microfts2.ContentTransform {
+	return func(c *microfts2.Chunk) {
+		values := ExtractTagValues(c.Content, strategy)
+		c.Content = stripArkTags(c.Content, strategy)
+		c.Attrs = appendTagAttrs(c.Attrs, values)
 	}
-	out := make([]TagValue, 0, n)
-	for _, c := range chunkTags {
-		out = append(out, c...)
+}
+
+// appendTagAttrs appends one Pair per tag-value instance, preserving
+// repeats and appearance order. CRC: crc-Indexer.md | R2904
+func appendTagAttrs(attrs []microfts2.Pair, values []TagValue) []microfts2.Pair {
+	for _, v := range values {
+		attrs = append(attrs, microfts2.Pair{
+			Key:   []byte(arkTagAttrKey),
+			Value: []byte(v.Tag + "\x00" + v.Value),
+		})
 	}
-	return out
+	return attrs
+}
+
+// decodeTagAttrs reads back the tag-value instances a transform stashed in
+// a chunk's Attrs, preserving every occurrence and its order. Non-tag
+// Attrs (PDF rects, chat-jsonl role/timestamp) are skipped.
+// CRC: crc-Indexer.md | R2904
+func decodeTagAttrs(attrs []microfts2.Pair) []TagValue {
+	var values []TagValue
+	for _, p := range attrs {
+		if string(p.Key) != arkTagAttrKey {
+			continue
+		}
+		tag, val, ok := bytes.Cut(p.Value, []byte{0})
+		if !ok {
+			continue
+		}
+		values = append(values, TagValue{Tag: string(tag), Value: string(val)})
+	}
+	return values
+}
+
+// fileLevelTags extracts file-level tag-value instances and tag
+// definitions directly from source content — the whole file on add/full
+// refresh, the appended bytes on append. Sourcing them here, rather than
+// from the now-stripped chunk callbacks, keeps them faithful to every
+// occurrence (including content-dedup'd chunks the indexed callback skips)
+// and keeps the map-typed defs out of the per-chunk Attrs. Binary content
+// (pdf) carries no ark tags, so it is skipped — regexing raw PDF bytes
+// would only invent spurious matches. CRC: crc-Indexer.md | R2904
+func fileLevelTags(content []byte, strategy string) ([]TagValue, map[string]string) {
+	if strategy == "pdf" {
+		return nil, nil
+	}
+	return ExtractTagValues(content, strategy), ExtractTagDefs(content)
 }
 
 // Indexer coordinates adding, removing, and refreshing files. Drives
@@ -184,15 +222,14 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 	return items
 }
 
-// AddFile adds a file to both engines and extracts tags. Uses two
-// microfts2 callbacks: WithChunkCallback for vector path and file-level
-// publish, WithIndexedChunkCallback for chunkid-keyed F/V/T writes
-// (only fires for genuinely-new chunkids — dedup'd chunks cost zero).
-// CRC: crc-Indexer.md | R1113, R1123, R1891
+// AddFile adds a file to both engines and extracts tags. The chunker's
+// content transform strips ark tags into chunk Attrs;
+// WithIndexedChunkCallback delivers them per new chunkid for F/V/T writes
+// (dedup'd chunks cost zero). File-level tags + defs are re-extracted from
+// the returned source content. CRC: crc-Indexer.md | R1113, R1123, R1891, R2904
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
-	acc := chunkAccumulator{strategy: strategy}
-	fileid, _, err := idx.fts.AddFileWithContent(path, strategy,
-		microfts2.WithChunkCallback(acc.callback),
+	acc := chunkAccumulator{}
+	fileid, content, err := idx.fts.AddFileWithContent(path, strategy,
 		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
@@ -208,11 +245,15 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	// post-reconcile — no synchronous vector write here. (R1923, R1926)
 
 	if idx.store != nil {
+		// File-level tags + defs come straight from the source content
+		// (faithful to dedup'd chunks; keeps map-typed defs out of Attrs).
+		// CRC: crc-Indexer.md | R2904
+		fileVals, fileDefs := fileLevelTags(content, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
 		}
-		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
+		if err := idx.store.UpdateTagDefs(fileid, fileDefs); err != nil {
 			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
 		}
 		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
@@ -220,13 +261,12 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
 			return fileid, fmt.Errorf("ext routing %s: %w", path, err)
 		}
-		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", path, flat)
+			idx.pubsub.PublishAndWatch("", path, fileVals)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(path, flat)
+		idx.writeDateIndex(path, fileVals)
 	}
 
 	return fileid, nil
@@ -659,13 +699,12 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		return nil
 	}
 	if prep.isAppend {
-		acc := chunkAccumulator{strategy: prep.strategy}
+		acc := chunkAccumulator{}
 		err := idx.fts.AppendChunks(prep.oldID, prep.newBytes, prep.strategy,
 			microfts2.WithBaseLine(prep.baseLine),
 			microfts2.WithContentHash(prep.fullHash),
 			microfts2.WithModTime(prep.modTime),
 			microfts2.WithFileLength(prep.fileSize),
-			microfts2.WithAppendChunkCallback(acc.callback),
 			microfts2.WithIndexedChunkCallback(acc.indexedCallback),
 		)
 		Logv(2, "execute-refresh: %s AppendChunks err=%v newChunks=%d", prep.path, err, len(acc.chunkTags))
@@ -679,11 +718,15 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		// post-reconcile (R1923, R1926).
 		// Tags: chunkid-keyed; chunkids arrive via the indexed callback.
 		if idx.store != nil {
+			// Append file-level tags + defs from the appended bytes only
+			// (incremental, matching the prior callback semantics).
+			// CRC: crc-Indexer.md | R2904
+			fileVals, fileDefs := fileLevelTags(prep.newBytes, prep.strategy)
 			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 			if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 				return fmt.Errorf("append tag values %s: %w", prep.path, err)
 			}
-			if err := idx.store.AppendTagDefs(prep.oldID, acc.defs); err != nil {
+			if err := idx.store.AppendTagDefs(prep.oldID, fileDefs); err != nil {
 				return fmt.Errorf("append tag defs %s: %w", prep.path, err)
 			}
 			// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R2007
@@ -691,12 +734,11 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			if err := idx.runExtRouting(prep.oldID, added, nil, acc.chunkTags); err != nil {
 				return fmt.Errorf("ext routing %s: %w", prep.path, err)
 			}
-			flat := flattenChunkTags(acc.tagValues)
 			// R795, R796: publish tag events from appended content
 			if idx.pubsub != nil {
-				idx.pubsub.PublishAndWatch("", prep.path, flat)
+				idx.pubsub.PublishAndWatch("", prep.path, fileVals)
 			}
-			idx.writeDateIndex(prep.path, flat)
+			idx.writeDateIndex(prep.path, fileVals)
 			// CRC: crc-Indexer.md | Seq: seq-recall-watcher.md#1 | R2696, R2729
 			// Simple-recall watcher hook: hand the freshly-appended
 			// bytes and the chunkIDs the chunker emitted to the
@@ -715,18 +757,18 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 	return idx.executeFullRefresh(prep)
 }
 
-// executeFullRefresh does a complete reindex. Tags are extracted from
-// clean chunk text via callback. Orphaned chunkids (delivered by the
-// reindex callback) drop their F/V/T contributions in the same txn.
-// CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899
+// executeFullRefresh does a complete reindex. Per-chunk tags arrive via
+// the indexed callback (decoded from transform-stripped Attrs); file-level
+// tags + defs are re-extracted from prep.data. Orphaned chunkids (delivered
+// by the reindex callback) drop their F/V/T contributions in the same txn.
+// CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899, R2904
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
-	acc := chunkAccumulator{strategy: prep.strategy}
+	acc := chunkAccumulator{}
 	var fileid uint64
 	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
 		var err error
 		fileid, err = idx.fts.ReindexWithCallback(prep.path, prep.strategy, idx.reindexCallback(prep.oldID, tt),
-			microfts2.WithChunkCallback(acc.callback),
 			microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 		return err
 	}); err != nil {
@@ -749,11 +791,14 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemoveTagDefs(prep.oldID)
 			idx.store.RemovePageContents(prep.oldID)
 		}
+		// File-level tags + defs re-extracted from the full file content.
+		// CRC: crc-Indexer.md | R2904
+		fileVals, fileDefs := fileLevelTags(prep.data, prep.strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("update tag values %s: %w", prep.path, err)
 		}
-		if err := idx.store.UpdateTagDefs(fileid, acc.defs); err != nil {
+		if err := idx.store.UpdateTagDefs(fileid, fileDefs); err != nil {
 			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
 		}
 		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
@@ -761,13 +806,12 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
 			return fmt.Errorf("ext routing %s: %w", prep.path, err)
 		}
-		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events from refreshed content
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", prep.path, flat)
+			idx.pubsub.PublishAndWatch("", prep.path, fileVals)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(prep.path, flat)
+		idx.writeDateIndex(prep.path, fileVals)
 	}
 
 	return nil
@@ -887,16 +931,16 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	fullHash := sha256.Sum256(data)
 	fi, _ := os.Stat(path)
 
-	// Append to FTS index, accumulating per-chunk tag values via the
-	// chunkid-aware indexed callback (newly-inserted chunks only) and
-	// the text-only callback (every chunk, for vector + pubsub paths).
-	acc := chunkAccumulator{strategy: strategy}
+	// Append to FTS index. Per-chunk tags arrive via the chunkid-aware
+	// indexed callback (newly-inserted chunks only, decoded from
+	// transform-stripped Attrs); file-level tags + defs are re-extracted
+	// from the appended bytes.
+	acc := chunkAccumulator{}
 	err = idx.fts.AppendChunks(fileid, newBytes, strategy,
 		microfts2.WithBaseLine(baseLine),
 		microfts2.WithContentHash(fmt.Sprintf("%x", fullHash)),
 		microfts2.WithModTime(fi.ModTime().UnixNano()),
 		microfts2.WithFileLength(fi.Size()),
-		microfts2.WithAppendChunkCallback(acc.callback),
 		microfts2.WithIndexedChunkCallback(acc.indexedCallback),
 	)
 	if err != nil {
@@ -908,11 +952,14 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 
 	// Tags and defs: chunkid-keyed via indexed callback.
 	if idx.store != nil {
+		// File-level tags + defs from the appended bytes (incremental).
+		// CRC: crc-Indexer.md | R2904
+		fileVals, fileDefs := fileLevelTags(newBytes, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 		if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("append tag values %s: %w", path, err)
 		}
-		if err := idx.store.AppendTagDefs(fileid, acc.defs); err != nil {
+		if err := idx.store.AppendTagDefs(fileid, fileDefs); err != nil {
 			return fmt.Errorf("append tag defs %s: %w", path, err)
 		}
 		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R2007
@@ -920,13 +967,12 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
 			return fmt.Errorf("ext routing %s: %w", path, err)
 		}
-		flat := flattenChunkTags(acc.tagValues)
 		// R795, R796: publish tag events from appended content
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", path, flat)
+			idx.pubsub.PublishAndWatch("", path, fileVals)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(path, flat)
+		idx.writeDateIndex(path, fileVals)
 	}
 
 	return nil
@@ -1198,6 +1244,55 @@ func ExtractTagValues(content []byte, strategy string) []TagValue {
 		})
 	}
 	return values
+}
+
+// stripArkTags removes real ark-tag spans from chunk content so the text
+// that gets EC-embedded and trigram-indexed is tag-free (tag semantics
+// live in V/EV/ED records, not the content embedding). It reuses the
+// exact tag-recognition of ExtractTagValues — same regex, same
+// isMention filter — so strip and extraction agree on what a tag is.
+//
+// A full-line tag (only whitespace before the `@`) takes its whole line
+// including the trailing newline; an inline tag (content precedes it on
+// the line) takes only the `@tag: …EOL` span, keeping the surrounding
+// line. Mentions are left untouched. Because a value runs to end of line,
+// there is at most one real tag per line. CRC: crc-Indexer.md | R2904
+func stripArkTags(content []byte, strategy string) []byte {
+	markdown := strategy == "markdown"
+	locs := tagValueRegex.FindAllSubmatchIndex(content, -1)
+	if len(locs) == 0 {
+		return content
+	}
+	out := make([]byte, 0, len(content))
+	prev := 0
+	for _, loc := range locs {
+		at, end := loc[0], loc[1] // '@' … end of value (no newline)
+		if isMention(content, at, markdown) {
+			continue
+		}
+		lineStart := at
+		for lineStart > 0 && content[lineStart-1] != '\n' {
+			lineStart--
+		}
+		fullLine := true
+		for i := lineStart; i < at; i++ {
+			if content[i] != ' ' && content[i] != '\t' {
+				fullLine = false
+				break
+			}
+		}
+		removeStart, removeEnd := at, end
+		if fullLine {
+			removeStart = lineStart // eat the leading whitespace too
+			if removeEnd < len(content) && content[removeEnd] == '\n' {
+				removeEnd++ // and the trailing newline
+			}
+		}
+		out = append(out, content[prev:removeStart]...)
+		prev = removeEnd
+	}
+	out = append(out, content[prev:]...)
+	return out
 }
 
 // isMention checks whether a tag at the given byte offset is a mention

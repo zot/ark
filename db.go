@@ -135,10 +135,10 @@ func Init(dbPath string, opts InitOpts) error {
 	// boundary-spanning edits (markdown: paragraph extensions; chat-jsonl:
 	// growing JSONL records) cleanly instead of falling through to full
 	// reindex. (R2273)
-	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}, nil); err != nil {
 		return fmt.Errorf("register strategy markdown: %w", err)
 	}
-	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}, nil); err != nil {
 		return fmt.Errorf("register strategy chat-jsonl: %w", err)
 	}
 	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
@@ -460,13 +460,25 @@ func (db *DB) Close() error {
 // db.chunkerByName so ChunkInfo / SuggestExtLocator can look up
 // ChunkerMetadata by strategy name. microfts2's chunker map is private
 // and exposes no accessor, so ark keeps its own parallel registry.
-// CRC: crc-DB.md | R2386, R2389
+// CRC: crc-DB.md | R2386, R2389, R2904
 func (db *DB) addChunker(name string, c any) error {
-	if err := db.fts.AddChunker(name, c); err != nil {
+	if err := db.fts.AddChunker(name, c, db.tagTransformFor(name, c)); err != nil {
 		return err
 	}
 	db.chunkerByName[name] = c
 	return nil
+}
+
+// tagTransformFor returns the ark tag-stripping content transform for a
+// text chunker, or nil for binary chunkers (pdf, IsWritable()==false)
+// whose extracted content carries no ark tags. Registered alongside the
+// chunker so the strip travels with — and is scoped to — that strategy.
+// CRC: crc-DB.md | R2904
+func (db *DB) tagTransformFor(name string, c any) microfts2.ContentTransform {
+	if m, ok := c.(microfts2.ChunkerMetadata); ok && !m.IsWritable() {
+		return nil
+	}
+	return makeTagTransform(name)
 }
 
 // addStrategyFunc registers a ChunkFunc as a strategy and mirrors a
@@ -665,7 +677,7 @@ func (db *DB) FTS() *microfts2.DB {
 // path → every present tag fires, R2285).
 // CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R663, R666, R667, R1948, R2012, R2016, R2281, R2285
 func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
-	acc := &chunkAccumulator{strategy: strategy}
+	acc := &chunkAccumulator{}
 	fid, err := db.fts.AddTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, err
@@ -699,7 +711,7 @@ func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) 
 // (tag, value) pairs that changed since the prior write (R2284).
 // CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R666, R1948, R2012, R2016, R2023, R2281, R2284
 func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
-	acc := &chunkAccumulator{strategy: strategy}
+	acc := &chunkAccumulator{}
 	if err := db.fts.UpdateTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback)); err != nil {
 		return err
 	}
@@ -737,7 +749,7 @@ func (db *DB) UpdateTmpFile(path, strategy string, content []byte) error {
 // from prior content stay quiet (R2286).
 // CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R1948, R2012, R2016, R2281, R2286
 func (db *DB) AppendTmpFile(path, strategy string, content []byte) (uint64, error) {
-	acc := &chunkAccumulator{strategy: strategy}
+	acc := &chunkAccumulator{}
 	fid, err := db.fts.AppendTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
 		return 0, err

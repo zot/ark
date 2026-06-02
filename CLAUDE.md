@@ -46,6 +46,10 @@ reference docs — update them yourself when their surface changes:
   `[table]` and `[[array.table]]`) with type, default, one-line
   meaning, and the per-feature spec that owns it. Update when a
   per-feature spec adds, renames, or retires an ark.toml key.
+- `specs/chunkers.md` — every registered chunker and the microfts2
+  chunker interfaces it implements (the interface matrix), content
+  source, and registration path. Update when adding/renaming a
+  chunker, or when a chunker's implemented interface set changes.
 
 ## Frictionless UI
 
