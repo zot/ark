@@ -25,15 +25,15 @@ import (
 // so a server restart wipes the maps and counter cleanly — no
 // persistence required.
 //
-// CRC: crc-RecallAgentBuilder.md | R2754, R2755, R2756, R2757, R2758, R2763, R2772
+// CRC: crc-RecallAgentBuilder.md | R2754, R2755, R2900, R2757, R2758, R2763, R2772
 type RecallAgentBuilder struct {
 	db *DB
 
 	nonceCounter uint32 // R2755: in-memory monotonic, resets on restart
 
 	mu        sync.Mutex
-	curations map[uint64]*RecallCurationBuilder // keyed by fire
-	results   map[uint64]*recallResultDoc       // keyed by fire
+	curations map[string]*RecallCurationBuilder // keyed by fire token <session>-<fire> (R2901)
+	results   map[string]*recallResultDoc       // keyed by fire token <session>-<fire> (R2901)
 
 	// Monitoring log paths. Default to ~/.ark/monitoring/ but can
 	// be overridden for testing.
@@ -53,8 +53,8 @@ func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
 	monDir := filepath.Join(home, ".ark", "monitoring")
 	return &RecallAgentBuilder{
 		db:          db,
-		curations:   make(map[uint64]*RecallCurationBuilder),
-		results:     make(map[uint64]*recallResultDoc),
+		curations:   make(map[string]*RecallCurationBuilder),
+		results:     make(map[string]*recallResultDoc),
 		monitorPath: filepath.Join(monDir, "recall.jsonl"),
 		fumblePath:  filepath.Join(monDir, "recall-fumbles.jsonl"),
 		curationDir: filepath.Join(home, ".ark", "recall-curation"),
@@ -92,31 +92,32 @@ func (b *RecallAgentBuilder) RecallCurationOpen(session string, fire uint64) *Re
 	fmt.Fprintf(&cb.buf, "@ark-recall-curate: %s\n", session)
 	fmt.Fprintf(&cb.buf, "@ark-recall-fire: %d\n", fire)
 	b.mu.Lock()
-	b.curations[fire] = cb
+	b.curations[fireToken(session, fire)] = cb
 	b.mu.Unlock()
 	return cb
 }
 
-// Section opens a new `# Source Chunk:` H1 with its blockquoted
-// paragraph excerpt. R2749
-func (c *RecallCurationBuilder) Section(sourceChunkID uint64, paragraph string) {
+// Section opens a new `# Source:` H1 with its blockquoted source
+// paragraph excerpt; the heading carries the source chunk's
+// path:range, no chunkid. R2898
+func (c *RecallCurationBuilder) Section(sourcePath, sourceRange, paragraph string) {
 	c.sections++
 	excerpt := truncateUTF8(paragraph, 200)
-	fmt.Fprintf(&c.buf, "\n# Source Chunk: %d\n\n> %s\n", sourceChunkID, blockquoteEscape(excerpt))
+	fmt.Fprintf(&c.buf, "\n# Source: %s:%s\n\n> %s\n", sourcePath, sourceRange, blockquoteEscape(excerpt))
 }
 
 // Candidate appends one `## Candidate:` H2 with its score, tag list,
-// optional proposed-tag scores, and fenced content excerpt. R2749
+// optional proposed-tag scores, and fenced content excerpt. The H2
+// leads with the candidate's `<path>:<range>` locator, no chunkid. R2898
 //
 // byteSize is the full chunk byte length (pre-truncation), stamped
-// after the chunkID so the agent can factor fetch cost into its
+// after the locator so the agent can factor fetch cost into its
 // surface judgment — markdown nested-list explosions and bracket-go
 // function-body chunks can reach tens of kB.
 //
 // proposed is a parallel pair of (name, score) slices; both may be
 // nil/empty to suppress the line entirely.
 func (c *RecallCurationBuilder) Candidate(
-	chunkID uint64,
 	path, rangeLabel string,
 	byteSize int,
 	score float64,
@@ -126,7 +127,7 @@ func (c *RecallCurationBuilder) Candidate(
 	contentExcerpt string,
 	tagOnly bool,
 ) {
-	fmt.Fprintf(&c.buf, "\n## Candidate: %d (%s) %s:%s\n\n", chunkID, friendlySize(byteSize), path, rangeLabel)
+	fmt.Fprintf(&c.buf, "\n## Candidate: %s:%s (%s)\n\n", path, rangeLabel, friendlySize(byteSize))
 	fmt.Fprintf(&c.buf, "- score: %.2f\n", score)
 	fmt.Fprintf(&c.buf, "- tags: %s\n", strings.Join(tagNames, ", "))
 	if len(proposedNames) > 0 {
@@ -184,41 +185,51 @@ type recallResultDoc struct {
 }
 
 // SurfaceItem appends a `## Surface:` H2 to the result-doc builder
-// for the given fire, opening it on first call. The session is
-// derived from the in-flight curation doc; an unknown fire returns
+// for the given fire token, opening it on first call. The session is
+// derived from the in-flight curation doc; an unknown token returns
 // an error so callers see the lost-state failure rather than
 // silently producing a misaligned result.
 //
-// The Surface H2 carries the chunkID, a friendly byte-size label
-// (so the assistant can gauge fetch cost — some chunks are tens of
-// kB, e.g. PLAN.md's 33K range — and may skip the giants), and the
-// chunk's path:range (via chunkLocator) so the consuming assistant
-// can prune by file path without resolving every chunk. Full
-// content stays on-demand via `ark chunks <chunkID>`.
-// CRC: crc-RecallAgentBuilder.md | R2751, R2756, R2872
-func (b *RecallAgentBuilder) SurfaceItem(fire uint64, chunkID uint64, reason string) error {
+// The Surface H2 leads with the candidate's `<path>:<range>` locator
+// (R2899) and a friendly byte-size label (so the assistant can gauge
+// fetch cost — some chunks are tens of kB, e.g. PLAN.md's 33K range —
+// and may skip the giants) so it can prune by file path without
+// resolving every chunk. Full content stays on-demand via
+// `ark chunks <path>:<range>`.
+// CRC: crc-RecallAgentBuilder.md | R2872, R2899, R2900
+func (b *RecallAgentBuilder) SurfaceItem(fireToken string, loc, reason string) error {
 	if reason == "" {
 		return fmt.Errorf("reason required")
 	}
-	doc, err := b.openResult(fire)
+	doc, err := b.openResult(fireToken)
 	if err != nil {
 		return err
 	}
+	path, rangeLabel := splitLoc(loc)
 	// R2872: never surface a chunk in the reader's own session — it's a
-	// `# Source Chunk:` / conversation paragraph already in context, the
+	// `# Source:` / conversation paragraph already in context, the
 	// redundant self-echo recall exists to avoid. The error names the fix,
 	// doubling as fumble-onboarding. (recommend is NOT gated — own-session
 	// tagging is the intended hypergraph path.)
-	if info, e := b.db.ChunkInfo(chunkID); e == nil && sessionFromJSONLPath(info.Path) == doc.session {
-		return fmt.Errorf("chunk %d is in the reader's own session (a `# Source Chunk:` conversation chunk, already in context) — surface a `## Candidate:` chunkid instead, never the source id", chunkID)
+	if sessionFromJSONLPath(path) == doc.session {
+		return fmt.Errorf("loc %s is in the reader's own session (a `# Source:` conversation chunk, already in context) — surface a `## Candidate:` locator instead, never the source", loc)
 	}
-	loc, sizeLabel := b.chunkLocator(chunkID, true)
-	fmt.Fprintf(&doc.buf, "\n## Surface: %d (%s)%s\n\nreason: %s\n", chunkID, sizeLabel, loc, reason)
+	sizeLabel := "?"
+	if text := b.db.ChunkText(path, rangeLabel); text != nil {
+		sizeLabel = friendlySize(len(text))
+	}
+	// R2899: result-doc Surface H2 leads with the path:range locator and a
+	// friendly size; no chunkid.
+	fmt.Fprintf(&doc.buf, "\n## Surface: %s:%s (%s)\n\nreason: %s\n", path, rangeLabel, sizeLabel, reason)
 	doc.items++
 	// R2894: start the surface-cooldown clock for (session, chunk) so the
-	// watcher floor (R2893) will not re-offer it within the window.
+	// watcher floor (R2893) will not re-offer it within the window. The RM
+	// record is chunkid-keyed; resolve the loc → chunkID just-in-time
+	// (best-effort — a miss merely forgoes the cooldown for this surface).
 	if b.db != nil {
-		_ = b.db.MarkSurfaced(doc.session, chunkID)
+		if cid, ok := b.chunkIDForLoc(path, rangeLabel); ok {
+			_ = b.db.MarkSurfaced(doc.session, cid)
+		}
 	}
 	return nil
 }
@@ -239,46 +250,24 @@ func friendlySize(n int) string {
 	}
 }
 
-// chunkLocator resolves a chunk's " <path>:<range>" suffix (leading
-// space; empty string when the chunk can't be resolved) so both
-// result-doc H2 kinds can carry the path — the consuming assistant
-// prunes surfaces/recommends by file without resolving every chunk
-// (R2751). When withSize is true it also returns the friendly
-// byte-size label ("?" if unresolved); Recommend passes false to
-// skip the chunk-text read it doesn't need.
-// CRC: crc-RecallAgentBuilder.md | R2751
-func (b *RecallAgentBuilder) chunkLocator(chunkID uint64, withSize bool) (loc, size string) {
-	size = "?"
-	info, err := b.db.ChunkInfo(chunkID)
-	if err != nil {
-		return "", size
-	}
-	loc = " " + info.Path + ":" + info.Range
-	if withSize {
-		if text := b.db.ChunkText(info.Path, info.Range); text != nil {
-			size = friendlySize(len(text))
-		}
-	}
-	return loc, size
-}
-
 // RecommendItem appends a `## Recommend:` H2 to the result-doc
 // builder for the given fire, opening it on first call. Session is
 // derived from the in-flight curation doc (see SurfaceItem).
-// CRC: crc-RecallAgentBuilder.md | R2751, R2757
-func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec, reason string) error {
+// CRC: crc-RecallAgentBuilder.md | R2757, R2899, R2900
+func (b *RecallAgentBuilder) RecommendItem(fireToken string, loc, tagSpec, reason string) error {
 	if tagSpec == "" {
 		return fmt.Errorf("tag required")
 	}
 	if reason == "" {
 		return fmt.Errorf("reason required")
 	}
-	doc, err := b.openResult(fire)
+	doc, err := b.openResult(fireToken)
 	if err != nil {
 		return err
 	}
-	loc, _ := b.chunkLocator(chunkID, false)
-	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %d%s\n\nreason: %s\n", tagSpec, chunkID, loc, reason)
+	path, rangeLabel := splitLoc(loc)
+	// R2899: result-doc Recommend H2 references the chunk by path:range.
+	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %s:%s\n\nreason: %s\n", tagSpec, path, rangeLabel, reason)
 	doc.items++
 	return nil
 }
@@ -287,26 +276,31 @@ func (b *RecallAgentBuilder) RecommendItem(fire uint64, chunkID uint64, tagSpec,
 // items were added; removes the curation doc unless preserveCuration;
 // discovers the calling subagent's JSONL via the nonce → meta.json
 // lookup; sums tokens; appends one record to recall.jsonl.
-// CRC: crc-RecallAgentBuilder.md | Seq: seq-subscriber-presence.md | R2750, R2751, R2758, R2762, R2807, R2808
-func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCuration bool) error {
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-subscriber-presence.md | R2750, R2899, R2758, R2762, R2807, R2808
+func (b *RecallAgentBuilder) CloseResult(fireToken string, nonce uint32, preserveCuration bool) error {
 	b.mu.Lock()
-	doc := b.results[fire]
-	cb := b.curations[fire]
-	delete(b.results, fire)
-	delete(b.curations, fire)
+	doc := b.results[fireToken]
+	cb := b.curations[fireToken]
+	delete(b.results, fireToken)
+	delete(b.curations, fireToken)
 	b.mu.Unlock()
 
-	session := ""
-	if doc != nil {
-		session = doc.session
-	} else if cb != nil {
-		session = cb.session
+	// The token is <session>-<fire>; decompose it for the tmp:// paths
+	// and monitor record. Fall back to the in-flight doc's session if the
+	// token is malformed. R2901
+	session, fire, ok := parseFireToken(fireToken)
+	if !ok {
+		if doc != nil {
+			session = doc.session
+		} else if cb != nil {
+			session = cb.session
+		}
 	}
 	if session == "" {
 		// We don't know the session — the fire was never opened on
 		// this server. Fall back to writing the monitor log only.
 		b.appendMonitor(fire, "", nonce, 0, 0, 0, 0, 0, 0, "error")
-		return fmt.Errorf("unknown fire %d", fire)
+		return fmt.Errorf("unknown fire %q", fireToken)
 	}
 
 	outcome := "silent-close"
@@ -320,7 +314,7 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 			outcome = "no-subscriber" // R2808
 			surfaced, recommended = countItems(doc.buf.String())
 		} else {
-			// R2750, R2751: result-doc head tag + Surface/Recommend H2 body.
+			// R2750, R2899: result-doc head tag + Surface/Recommend H2 body.
 			header := fmt.Sprintf("@ark-recall-result: %s\n", session)
 			body := []byte(header + doc.buf.String())
 			path := resultDocPath(session, fire)
@@ -362,18 +356,18 @@ func (b *RecallAgentBuilder) CloseResult(fire uint64, nonce uint32, preserveCura
 // openResult returns the per-fire result-doc builder, allocating
 // on first call. The session is derived from the in-flight curation
 // doc; an unknown fire returns an error.
-func (b *RecallAgentBuilder) openResult(fire uint64) (*recallResultDoc, error) {
+func (b *RecallAgentBuilder) openResult(fireToken string) (*recallResultDoc, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if d, ok := b.results[fire]; ok {
+	if d, ok := b.results[fireToken]; ok {
 		return d, nil
 	}
-	cb, ok := b.curations[fire]
+	cb, ok := b.curations[fireToken]
 	if !ok {
-		return nil, fmt.Errorf("unknown fire %d (curation doc not in flight)", fire)
+		return nil, fmt.Errorf("unknown fire %q (curation doc not in flight)", fireToken)
 	}
 	d := &recallResultDoc{session: cb.session, opened: time.Now()}
-	b.results[fire] = d
+	b.results[fireToken] = d
 	return d, nil
 }
 
@@ -665,6 +659,62 @@ func (b *RecallAgentBuilder) appendJSONL(path string, rec any) {
 
 // --- helpers ---
 
+// fireToken is the composite `<session>-<fire>` identity used as the
+// in-flight map key and the CLI cookie. Per-session fire numbers
+// (R2901) are not globally unique, so the session disambiguates; the
+// token is exactly the curation-doc basename minus the `curation-`
+// prefix. CRC: crc-RecallAgentBuilder.md | R2901
+func fireToken(session string, fire uint64) string {
+	return fmt.Sprintf("%s-%d", session, fire)
+}
+
+// parseFireToken decomposes a `<session>-<fire>` token. The session
+// UUID itself contains dashes, so the fire is the integer after the
+// last dash and the session is everything before it. R2901
+func parseFireToken(token string) (session string, fire uint64, ok bool) {
+	dash := strings.LastIndex(token, "-")
+	if dash < 0 {
+		return "", 0, false
+	}
+	f, err := strconv.ParseUint(token[dash+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return token[:dash], f, true
+}
+
+// splitLoc splits a `<path>:<range>` locator into path and range on the
+// last colon — file paths carry no colon and the range is `N` or `N-M`.
+// R2900
+func splitLoc(loc string) (path, rangeLabel string) {
+	i := strings.LastIndex(loc, ":")
+	if i < 0 {
+		return loc, ""
+	}
+	return loc[:i], loc[i+1:]
+}
+
+// chunkIDForLoc resolves a (path, range) to its chunkID for the
+// chunkid-keyed surface cooldown (R2894), mirroring normalizeInputs'
+// path:range branch. Returns (0, false) when unresolvable — the
+// cooldown is best-effort, so a miss simply forgoes it. R2900
+func (b *RecallAgentBuilder) chunkIDForLoc(path, rangeLabel string) (uint64, bool) {
+	fileID, ok := b.db.PathFileID(path)
+	if !ok {
+		return 0, false
+	}
+	info, err := b.db.fts.FileInfoByID(fileID)
+	if err != nil {
+		return 0, false
+	}
+	for _, c := range info.Chunks {
+		if c.Location == rangeLabel {
+			return c.ChunkID, true
+		}
+	}
+	return 0, false
+}
+
 // curationDocPath is the canonical tmp:// path for a curation doc.
 // R2747
 func curationDocPath(session string, fire uint64) string {
@@ -704,7 +754,7 @@ func resultDocPath(session string, fire uint64) string {
 // blockquoteEscape collapses internal newlines so a multi-line
 // excerpt stays on one blockquoted line. Markdown renderers vary
 // in how they handle wrapped blockquotes; one line is the simple
-// invariant. R2749
+// invariant. R2898
 func blockquoteEscape(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " ")
 }

@@ -9,6 +9,8 @@ package ark
 // scaffolding — see O117 in design.md.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -88,20 +90,20 @@ func TestScanNewBytes_PartialTrailingLine(t *testing.T) {
 // R2747, R2748, R2749 — curation-doc shape.
 func TestRecallCurationBuilder_Shape(t *testing.T) {
 	b := &RecallAgentBuilder{
-		curations: make(map[uint64]*RecallCurationBuilder),
-		results:   make(map[uint64]*recallResultDoc),
+		curations: make(map[string]*RecallCurationBuilder),
+		results:   make(map[string]*recallResultDoc),
 	}
 	cb := b.RecallCurationOpen("sess-abc", 17)
-	cb.Section(1001, "the user's question about asparagus")
+	cb.Section("conv.jsonl", "5-9", "the user's question about asparagus")
 	cb.Candidate(
-		4711, "notes/foo.md", "12-18", 1834, 0.84,
+		"notes/foo.md", "12-18", 1834, 0.84,
 		[]string{"cooking", "course"},
 		[]string{"persona"}, []float64{0.72},
 		"asparagus risotto", false,
 	)
-	cb.Section(1002, "assistant explanation of risotto technique")
+	cb.Section("conv.jsonl", "20-24", "assistant explanation of risotto technique")
 	cb.Candidate(
-		5023, "notes/bar.md", "1-7", 480, 0.76,
+		"notes/bar.md", "1-7", 480, 0.76,
 		[]string{"technique"},
 		nil, nil,
 		"toast the rice in fat", false,
@@ -111,17 +113,17 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	if !strings.HasPrefix(body, "@ark-recall-curate: sess-abc\n@ark-recall-fire: 17\n") {
 		t.Errorf("body must lead with header tags; got:\n%s", body)
 	}
-	if !strings.Contains(body, "\n# Source Chunk: 1001\n") {
+	if !strings.Contains(body, "\n# Source: conv.jsonl:5-9\n") {
 		t.Errorf("missing section 1 H1")
 	}
-	if !strings.Contains(body, "\n# Source Chunk: 1002\n") {
+	if !strings.Contains(body, "\n# Source: conv.jsonl:20-24\n") {
 		t.Errorf("missing section 2 H1")
 	}
-	if !strings.Contains(body, "## Candidate: 4711 (2K) notes/foo.md:12-18\n") {
-		t.Errorf("missing candidate 1 H2 (with size)")
+	if !strings.Contains(body, "## Candidate: notes/foo.md:12-18 (2K)\n") {
+		t.Errorf("missing candidate 1 H2 (path:range + size)")
 	}
-	if !strings.Contains(body, "## Candidate: 5023 (480b) notes/bar.md:1-7\n") {
-		t.Errorf("missing candidate 2 H2 (with size)")
+	if !strings.Contains(body, "## Candidate: notes/bar.md:1-7 (480b)\n") {
+		t.Errorf("missing candidate 2 H2 (path:range + size)")
 	}
 	if !strings.Contains(body, "- score: 0.84\n") {
 		t.Errorf("missing candidate 1 score line")
@@ -135,8 +137,8 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	if !strings.Contains(body, "```\nasparagus risotto\n```") {
 		t.Errorf("missing candidate 1 fenced content excerpt")
 	}
-	if i, j := strings.Index(body, "Source Chunk: 1001"), strings.Index(body, "Source Chunk: 1002"); i < 0 || i >= j {
-		t.Errorf("section ordering wrong: 1001 at %d, 1002 at %d", i, j)
+	if i, j := strings.Index(body, "# Source: conv.jsonl:5-9"), strings.Index(body, "# Source: conv.jsonl:20-24"); i < 0 || i >= j {
+		t.Errorf("section ordering wrong: 5-9 at %d, 20-24 at %d", i, j)
 	}
 	if cb.Sections() != 2 {
 		t.Errorf("Sections() = %d, want 2", cb.Sections())
@@ -148,25 +150,57 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 // candidates omit the line.
 func TestRecallCurationBuilder_TagOnly(t *testing.T) {
 	b := &RecallAgentBuilder{
-		curations: make(map[uint64]*RecallCurationBuilder),
-		results:   make(map[uint64]*recallResultDoc),
+		curations: make(map[string]*RecallCurationBuilder),
+		results:   make(map[string]*recallResultDoc),
 	}
 	cb := b.RecallCurationOpen("sess-xyz", 3)
-	cb.Section(2001, "user revisiting an earlier point")
-	cb.Candidate(7001, "~/.claude/projects/p/sess-xyz.jsonl", "40-44", 300, 0.81,
+	cb.Section("conv.jsonl", "30-34", "user revisiting an earlier point")
+	cb.Candidate("~/.claude/projects/p/sess-xyz.jsonl", "40-44", 300, 0.81,
 		[]string{"topic"}, nil, nil, "earlier we discussed this", true)
-	cb.Candidate(7002, "notes/ext.md", "1-3", 200, 0.79,
+	cb.Candidate("notes/ext.md", "1-3", 200, 0.79,
 		[]string{"topic"}, nil, nil, "external knowledge", false)
 	body := cb.buf.String()
 
 	if strings.Count(body, "- tag-only: true\n") != 1 {
 		t.Errorf("expected exactly one tag-only marker; got body:\n%s", body)
 	}
-	own := strings.Index(body, "## Candidate: 7001")
-	ext := strings.Index(body, "## Candidate: 7002")
+	own := strings.Index(body, "## Candidate: ~/.claude/projects/p/sess-xyz.jsonl:40-44")
+	ext := strings.Index(body, "## Candidate: notes/ext.md:1-3")
 	marker := strings.Index(body, "- tag-only: true")
 	if !(own < marker && marker < ext) {
 		t.Errorf("tag-only marker must sit under candidate 7001, not 7002 (own=%d marker=%d ext=%d)", own, marker, ext)
+	}
+}
+
+// R2901 — the per-session fire counter seeds from the surviving curation
+// files at max+2 (skipping a possibly-unmaterialized in-flight doc), then
+// increments in memory; a session with no survivors starts at 1.
+func TestRecallWatcher_FireSeed(t *testing.T) {
+	tmp := t.TempDir()
+	// Survivors for sess-A up to fire 7 (out of order on disk); none for sess-B.
+	for _, f := range []string{"curation-sess-A-3.md", "curation-sess-A-7.md", "curation-sess-A-5.md"} {
+		if err := os.WriteFile(filepath.Join(tmp, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &RecallWatcher{
+		builder:      &RecallAgentBuilder{curationDir: tmp},
+		fireCounters: make(map[string]uint64),
+	}
+	w.mu.Lock()
+	first := w.nextFireLocked("sess-A")
+	second := w.nextFireLocked("sess-A")
+	bFirst := w.nextFireLocked("sess-B")
+	w.mu.Unlock()
+
+	if first != 9 { // max 7 + 2
+		t.Errorf("sess-A first fire = %d, want 9 (max 7 + 2)", first)
+	}
+	if second != 10 { // in-memory increment, no re-scan
+		t.Errorf("sess-A second fire = %d, want 10", second)
+	}
+	if bFirst != 1 { // no survivors → start at 1
+		t.Errorf("sess-B first fire = %d, want 1", bFirst)
 	}
 }
 

@@ -1,5 +1,5 @@
 # RecallAgent
-**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897
+**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897, R2898
 
 Non-Go artifact set that defines the **per-session Haiku secretary**
 that runs the ambient-recall loop — one per active session, spawned by
@@ -48,9 +48,9 @@ allowlist, and the persona that drives the verb.
     for that one path, R2897), judge, surface/recommend the worthy
     candidates, then `close`; on a keepalive, just run `next` again; on
     an exit directive, stop. Loop until exit.
-    Surface/recommend the `## Candidate:` chunkid (`<CANDIDATE-CHUNKID>`,
-    matching the call) — **never** the `# Source Chunk:` id, which is
-    the reader's own conversation paragraph (R2873).
+    Surface/recommend the `## Candidate:` locator (`<path>:<range>`,
+    matching the call) — **never** the `# Source:` locator, which is
+    the reader's own conversation paragraph (R2873, R2898).
   - The session UUID and nonce arrive in the prompt (`Session: <S>`,
     `Nonce: <N>`) and the nonce also in the Task description; the agent
     passes them to every `next --session <S> <N>` / `close` call (R2890).

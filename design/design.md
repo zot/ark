@@ -649,3 +649,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O121: ark status -db omits the recall record family (RC/RD/RF/RJ via unrecognized two-byte prefix in recordPrefixOf -> lumped under unlabeled 'R'; HC under 'H'). Pre-existing; RM was added to recordPrefixOf + arkLabels in seam 2, but RC/RD/RF/RJ/HC remain invisible. Add their cases + labels in a status-db cleanup.
 - T135: R2850 retired by R2890 (2026-06-01 secretary-pipeline: shared Luhmann-spawned daemon -> per-session assistant-spawned secretary)
 - T136: R2851 retired by R2890 (2026-06-01 secretary-pipeline: Luhmann nonce delivery -> assistant delivers session+nonce)
+- [ ] O122: Stubborn-recall-next deferred coverage: (1) redial (R2903) and session-keyed-subscription-collision (R2902) lack automated tests — redial is CLI-level and the collision is integration-level; the per-session fire dir-seed (R2901) is unit-tested (TestRecallWatcher_FireSeed). (2) RM surface-cooldown stays chunkid-keyed (resolved loc→chunkID JIT); re-keying it on path:range so the cooldown survives a rebuild is a separate record-format migration, not done here.
+- T137: R2749 retired by R2898 (2026-06-02 stubborn-recall-next: curation doc references path:range, not chunkid)
+- T138: R2751 retired by R2899 (2026-06-02 stubborn-recall-next: result doc references path:range, not chunkid)
+- T139: R2752 retired by R2901 (2026-06-02 stubborn-recall-next: fire counter per-session, dir-seeded, not global)
+- T140: R2756 retired by R2900 (2026-06-02 stubborn-recall-next: surface/recommend take -loc path:range, not -chunk N)

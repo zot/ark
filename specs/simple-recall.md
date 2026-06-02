@@ -126,7 +126,7 @@ RecallWatcher.fire(session)
                                        │  server-side, in one verb:
                                        │   idempotent subscribe (value-scoped
                                        │   @ark-recall-curate=<S>, session
-                                       │   recall-<N>) → context-gate
+                                       │   recall-curate-<S>) → context-gate
                                        │   → pick lowest-fire pending
                                        │   curation-<S>-<F> (this session
                                        │   only) → block up to a ~90s
@@ -280,23 +280,39 @@ one line at a time and inspects the top-level `type` and
 
 ## Fire counter
 
-The fire number is a globally monotonic counter scoped to one
-`ark serve` process lifetime, starting at 0 and allocated by
-the watcher at the moment `pendingTimer` expires. The same fire
-number ties the curation doc and the result doc together for
-that turn.
+The fire number is a **per-session** monotonic counter held in memory
+(`map[sessionID]uint64`), allocated by the watcher at the moment
+`pendingTimer` expires. On the first fire for a session after an
+`ark serve` start the counter is seeded by scanning
+`~/.ark/recall-curation/` for that session's
+`curation-<session>-<fire>.md` files and taking `max(fire)+2` (or `1`
+if none); thereafter it increments in memory. The `+2` skips a
+possibly-allocated-but-unmaterialized in-flight doc (one secretary ⇒
+lag ≤ 1); the in-memory hold — not a per-allocation dir recompute —
+closes the allocation→materialization race a constant offset cannot.
+The surviving materialized files are the high-water record (Alibi
+Stamp), so a restart or an `ark rebuild` never re-mints a number a
+surviving file occupies; a cleanly-closed fire leaves no file, so
+reusing its number is safe.
 
-In-flight fires don't survive a server restart — `tmp://` is
-per-process, so the curation/result docs disappear and the
-counter resets. No persistence is needed.
+The composite `<session>-<fire>` token ties the curation doc and the
+result doc together for that turn — globally unique even though the
+fire integer is only per-session — and is the cookie the agent passes
+to `surface` / `recommend` / `close`.
+
+The tmp:// curation/result docs don't survive a server restart
+(`tmp://` is per-process); the materialized curation file does, and
+the per-session dir-seed above is what keeps a reset counter from
+clobbering it.
 
 ## Curation doc shape
 
 Path: `tmp://ARK-RECALL/curation-<session>-<fire>`.
 
-The `<session>` segment is technically redundant (fire is
-globally unique within an `ark serve` run) but the path is more
-diagnostic-friendly when listing the tmp:// directory.
+The `<session>` segment is load-bearing: the fire counter is now
+per-session (R2901), so the fire integer alone is not unique across
+sessions — `<session>-<fire>` is what disambiguates the doc and keys
+the in-flight builder map.
 
 Header tags (one per line, no blank line between them and the
 first body section):
@@ -311,11 +327,11 @@ Body — one `# Source Chunk:` H1 per paragraph that cleared
 ordered by score descending:
 
 ```
-# Source Chunk: <jsonl-chunkid>
+# Source: <path>:<range>
 
 > <paragraph excerpt — first ~200 bytes, UTF-8-safe truncation>
 
-## Candidate: <chunkid> (<size>) <path>:<range>
+## Candidate: <path>:<range> (<size>)
 
 - score: <0.NN>
 - tags: <comma-separated bare tagnames>
@@ -326,7 +342,7 @@ ordered by score descending:
 <~500-char excerpt of chunk content>
 ```
 
-## Candidate: <chunkid> (<size>) <path>:<range>
+## Candidate: <path>:<range> (<size>)
 - ...
 ```
 
@@ -374,47 +390,50 @@ them. **Surface** items recommend showing a chunk to the user;
 **Recommend** items propose a tag attach worth re-curating.
 
 ```
-## Surface: <chunkid> (<size>) <path>:<range>
+## Surface: <path>:<range> (<size>)
 
 reason: <one-line justification>
 
-## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>
+## Recommend: @<tag>[:<value>] on <path>:<range>
 
 reason: <one-line justification>
 ```
 
-Both H2 kinds carry the chunk's `<path>:<range>` (mirroring the
-curation-doc `## Candidate:` line, R2749); Surface additionally
-carries the chunk's byte size in parentheses (e.g. `(33K)`,
-`(500b)`, `(1.2M)`). The path is inline so the consuming
-assistant can prune by file — dropping surfaces for code it
-already has in context, keeping the ones that pull in out-of-view
-code — without resolving every chunk first. A **Recommend** can
-reference a chunk that was never surfaced, so it carries its own
-path for the same judgment. The assistant still resolves full
-content on demand via `ark chunks <chunkid> [-before N] [-after N]`;
-the size lets it glance at fetch cost before drilling. The result
-doc stays a "scan-and-prune, drill on demand" surface.
+Both H2 kinds name the chunk by its `<path>:<range>` locator
+(mirroring the curation-doc `## Candidate:` line, R2898) — never a
+chunkid, which is volatile across a reindex; Surface additionally
+carries the chunk's byte size in parentheses (e.g. `(33K)`, `(500b)`,
+`(1.2M)`). The locator is inline so the consuming assistant can prune
+by file — dropping surfaces for code it already has in context,
+keeping the ones that pull in out-of-view code — without resolving
+every chunk first. A **Recommend** can reference a chunk that was
+never surfaced, so it carries its own locator for the same judgment.
+The assistant still resolves full content on demand via
+`ark chunks <path>:<range> [-before N] [-after N]` (which accepts a
+locator or a chunkid); the size lets it glance at fetch cost before
+drilling. The result doc stays a "scan-and-prune, drill on demand"
+surface.
 
 The assistant has final say on whether to surface a chunk to
 the user or to ask the user about a tag recommendation. The
 agent's role is to filter and rank; the assistant's role is to
 present.
 
-**Source chunks are never surfaced.** A `# Source Chunk:` id is the
+**Source chunks are never surfaced.** A `# Source:` locator is the
 conversation paragraph that *triggered* a section — it lives in the
 reader's own session and is already in context. The agent surfaces
-the `## Candidate:` ids beneath it, never the source id. `surface`
-enforces this deterministically: `SurfaceItem` rejects any chunk
-whose path resolves to the fire's own session, and the rejection
-names the fix (pass a `## Candidate:` chunkid, not the source id) —
-doubling as fumble-onboarding. `recommend` is **not** gated: tagging
-an own-session chunk is the intended hypergraph path. The
-recall-agent skill and the curation crank-handle reinforce this by
-naming the surfaceable id `<CANDIDATE-CHUNKID>` (matching the
-`surface`/`recommend` call verbatim) and marking the `# Source Chunk:`
-id as never-surface — two ids in view, one named "do this," the other
-"never this."
+the `## Candidate:` locators beneath it, never the source one.
+`surface` enforces this deterministically: `SurfaceItem` reads the
+path from the `-loc` it is given and rejects any locator whose path
+resolves to the fire's own session, and the rejection names the fix
+(pass a `## Candidate:` locator, not the source one) — doubling as
+fumble-onboarding. `recommend` is **not** gated: tagging an
+own-session chunk is the intended hypergraph path. The recall-agent
+skill and the curation crank-handle reinforce this by naming the
+surfaceable locator `<CANDIDATE-PATH:RANGE>` (matching the
+`surface`/`recommend` call verbatim) and marking the `# Source:`
+locator as never-surface — two locators in view, one named "do this,"
+the other "never this."
 
 **External tags for conversation chunks.** A `## Surface:` or
 `## Recommend:` line can point at a chunk in a chat-JSONL file — a
@@ -444,12 +463,15 @@ paths produce identical doc shapes.
 
 ```go
 b := db.RecallCurationOpen(session, fire)
-b.Section(sourceChunkID, sourceParagraphText)   // # Source Chunk: H1
-b.Candidate(chunkID, path, rangeLabel, score,
+b.Section(sourcePath, sourceRange, paragraph)    // # Source: H1
+b.Candidate(path, rangeLabel, byteSize, score,
             tagNames, proposedTagsWithScores,
-            contentExcerpt)                      // ## Candidate: H2
+            contentExcerpt, tagOnly)             // ## Candidate: H2
 b.Close()                                        // writes tmp:// doc
 ```
+
+The watcher resolves the source chunk's path:range at build time; no
+chunkid appears anywhere in the curation doc (R2898).
 
 **Nonce reservation — CLI, called by the orchestrator:**
 
@@ -466,23 +488,25 @@ loop nonce <N>` (see *Nonce-in-description format* below) and
 passed into the agent's prompt body.
 
 **Result-doc builder — CLI, called by the recall agent. The
-fire number is the cookie that ties calls together.**
+`<F>` = `<session>-<fire>` token is the cookie that ties calls
+together (R2901); the crank-handle emits it and the agent pastes it
+opaque.**
 
 ```
-ark connections recall surface <F> -chunk N -reason "..."
-ark connections recall recommend <F> -chunk N -tag @t[:v] \
+ark connections recall surface <F> -loc <path>:<range> -reason "..."
+ark connections recall recommend <F> -loc <path>:<range> -tag @t[:v] \
                                      -reason "..."
 ark connections recall close <F> --nonce <N> [-preserve-curation]
 ```
 
-`surface` and `recommend` take the chunkID only; the server
-resolves the chunk's `path:range` (and, for `surface`, its byte
-size) via `chunkLocator` and writes it into the result doc (R2751).
-The agent never passes a path.
+`surface` and `recommend` take the candidate's `<path>:<range>`
+locator (R2900); the server resolves content and (for `surface`) byte
+size via `ChunkText(path, range)` and writes the locator into the
+result doc (R2899). No chunkid crosses the wire.
 
 Discipline:
 
-- One item per `surface` / `recommend` call. Repeated `-chunk`
+- One item per `surface` / `recommend` call. Repeated `-loc`
   flags are not accepted. The one-per-call shape keeps the
   agent's flag generation simple and the in-flight state
   machine boring.
@@ -687,7 +711,9 @@ control.
 **The loop.** The secretary's entire loop is `ark connections recall
 next --session <S> <N>`. On its first call `next` idempotently
 establishes the **value-scoped** `@ark-recall-curate=<S>` subscription
-under session `recall-<N>`; thereafter it returns the lowest-fire pending
+under session `recall-curate-<S>` — keyed on the durable session, not
+the volatile nonce, so a restart can't recycle the key and two
+generations share it (R2902); thereafter it returns the lowest-fire pending
 curation doc **for session S** (whose result subscriber is the assistant
 that spawned the secretary), blocking up to a **~90-second keepalive**
 when none is dispatchable (a doc with no result subscriber is left to
@@ -701,6 +727,18 @@ threshold (~120s), so the subagent never ends its turn mid-loop and only
 spawning assistant to misread as an exit). The secretary never runs
 `subscribe`, `listen`, `fetch`, or `context`; `next` carries them all. It
 derives each fire from the doc `next` hands it; it never allocates a fire.
+
+**Riding out a server bounce.** The `next` CLI treats an `ark serve`
+restart as a wait, not an error (R2903): on a cold dial it redials with
+bounded backoff; on a mid-block drop or budget exhaustion it returns a
+keepalive (exit 0) — never a fatal error and never the context-limit
+exit — so the loop re-invokes `next` and rides out the bounce across
+iterations, never hanging and always within the foreground window. The
+durable `recall-curate-<S>` subscription key (R2902) and the per-session
+dir-seeded fire counter (R2901) are what make that reconnection land
+safely: the resumed subscription can't collide with a recycled nonce,
+and a reset counter can't clobber a surviving curation file. This is
+Stubborn Plumbing applied to the recall loop.
 
 **Doc delivery — by file, not inline (R2896/R2897).** When `next`
 dispatches a doc it does **not** print the doc to stdout — a large doc

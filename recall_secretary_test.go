@@ -98,7 +98,7 @@ func TestDropCooledCandidates_Disabled(t *testing.T) {
 // (potentially huge) doc content — the core of the R2896 delivery fix.
 func TestWriteCurationFile_AndPointer(t *testing.T) {
 	b := &RecallAgentBuilder{curationDir: t.TempDir()}
-	content := "## Recent conversation\n\n**user:** big\n\n# Source Chunk: 1\n\n## Candidate: 99 (500b) x.md:1-9\n- score: 0.9\n" + strings.Repeat("padding ", 1000)
+	content := "## Recent conversation\n\n**user:** big\n\n# Source: x.md:1\n\n## Candidate: x.md:1-9 (500b)\n- score: 0.9\n" + strings.Repeat("padding ", 1000)
 	path, err := b.writeCurationFile("sess-A", 7, content)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestWriteCurationFile_AndPointer(t *testing.T) {
 	if !strings.HasSuffix(path, "curation-sess-A-7.md") {
 		t.Errorf("unexpected path: %s", path)
 	}
-	prompt := recallDocPrompt(7, "sess-A", 2, path)
+	prompt := recallDocPrompt(7, "sess-A", "sess-A", 2, path)
 	if strings.Contains(prompt, "padding padding") {
 		t.Error("recallDocPrompt must NOT embed the doc content — it should point to the file")
 	}
@@ -126,18 +126,25 @@ func TestWriteCurationFile_AndPointer(t *testing.T) {
 // cooldown clock for the surfaced (session, chunk). R2894
 func TestSurfaceItem_MarksSurfaced(t *testing.T) {
 	_, db := setupRecall(t)
+	// Index a real chunk so the loc → chunkID resolution (R2900) the
+	// surface cooldown depends on has something to find.
+	cid, _ := indexLine(t, db, "x.md", "some genuinely relevant content")
+	info, err := db.ChunkInfo(cid)
+	if err != nil {
+		t.Fatalf("ChunkInfo(%d): %v", cid, err)
+	}
+	loc := info.Path + ":" + info.Range
 	b := &RecallAgentBuilder{
 		db:        db,
-		curations: make(map[uint64]*RecallCurationBuilder),
-		results:   make(map[uint64]*recallResultDoc),
+		curations: make(map[string]*RecallCurationBuilder),
+		results:   make(map[string]*recallResultDoc),
 	}
-	const fire = uint64(5)
-	b.RecallCurationOpen("sess-A", fire) // registers the fire so openResult resolves the session
-	if err := b.SurfaceItem(fire, 100, "genuinely relevant"); err != nil {
+	b.RecallCurationOpen("sess-A", 5) // registers the fire so openResult resolves the session
+	if err := b.SurfaceItem(fireToken("sess-A", 5), loc, "genuinely relevant"); err != nil {
 		t.Fatal(err)
 	}
-	nanos, present, err := db.store.LastSurfaced("sess-A", 100)
+	nanos, present, err := db.store.LastSurfaced("sess-A", cid)
 	if err != nil || !present || nanos == 0 {
-		t.Errorf("SurfaceItem should MarkSurfaced(sess-A,100); got present=%v nanos=%d err=%v", present, nanos, err)
+		t.Errorf("SurfaceItem should MarkSurfaced(sess-A,%d); got present=%v nanos=%d err=%v", cid, present, nanos, err)
 	}
 }

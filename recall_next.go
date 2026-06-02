@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#3 | R2857, R2858
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#3 | R2857, R2858, R2902
 
 import (
 	"bytes"
@@ -41,10 +41,20 @@ const recallNextKeepalive = 90 * time.Second
 // — blocking (true lotto-tube) until one exists. Returns the
 // crank-handle body and whether the directive is an exit.
 func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int) (body string, exit bool, err error) {
+	// R2902: key the curate subscription on the durable session
+	// (`recall-curate-<session>`), not the volatile `recall-<nonce>`, so
+	// two secretary generations across a restart share one stable, unique
+	// key and the SubCount re-subscribe guard never no-ops a colliding
+	// subscriber. Distinct prefix from the consumer's result-subscription
+	// key (bare `<session>`, R2865) so curate and result never cross-wake.
+	// The legacy bare-curate path (no session) keeps `recall-<nonce>`.
 	subSession := fmt.Sprintf("recall-%d", nonce)
+	if session != "" {
+		subSession = "recall-curate-" + session
+	}
 
-	// Idempotent subscribe to @ark-recall-curate (bare). Subscribe
-	// appends, so guard with SubCount to keep later calls no-ops.
+	// Idempotent subscribe to @ark-recall-curate. Subscribe appends, so
+	// guard with SubCount to keep later calls no-ops.
 	if b.db.pubsub.SubCount(subSession) == 0 {
 		match := "ark-recall-curate"
 		if session != "" {
@@ -86,11 +96,11 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 			if werr != nil {
 				return "", false, werr
 			}
-			return recallDocPrompt(fire, session, nonce, path), false, nil
+			return recallDocPrompt(fire, docSession, session, nonce, path), false, nil
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return recallKeepalivePrompt(nonce), false, nil
+			return recallKeepalivePrompt(session, nonce), false, nil
 		}
 		window := min(recallNextListenWindow, remaining)
 		if !b.waitForWork(ctx, subSession, window) {
@@ -186,21 +196,25 @@ func (b *RecallAgentBuilder) lowestPendingCuration(targetSession string) (fire u
 // re-overflow). A candidate marked `- tag-only: true` is the reader's own
 // conversation — recommend a tag for it but never surface it.
 // CRC: crc-RecallAgentBuilder.md | R2858, R2870, R2873, R2896
-func recallDocPrompt(fire uint64, session string, nonce uint32, path string) string {
+func recallDocPrompt(fire uint64, docSession, session string, nonce uint32, path string) string {
+	// The surface/recommend/close cookie is the composite <session>-<fire>
+	// token (R2901), built from the doc's own session so it matches the
+	// in-flight map key even on the legacy all-session scan.
+	token := fireToken(docSession, fire)
 	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
 	if session != "" {
 		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
 	}
 	return fmt.Sprintf(
-		"Curation doc for fire %d is at:\n%s\n\n"+
-			"Read that file with the Read tool (permitted for this path). It opens with the recent conversation, then `# Source Chunk:` / `## Candidate:` blocks. Judge each candidate for genuine fit with the live conversation.\n"+
-			"For each candidate worth showing: `~/.ark/ark connections recall surface %d -chunk <CANDIDATE-CHUNKID> -reason \"...\"`.\n"+
-			"For each tag worth attaching: `~/.ark/ark connections recall recommend %d -chunk <CANDIDATE-CHUNKID> -tag @t[:v] -reason \"...\"`.\n"+
-			"Always pass a `## Candidate:` chunkid — never the `# Source Chunk:` id (surface will reject it).\n"+
+		"Curation doc %s is at:\n%s\n\n"+
+			"Read that file with the Read tool (permitted for this path). It opens with the recent conversation, then `# Source:` / `## Candidate:` blocks, each headed by a `<path>:<range>` locator. Judge each candidate for genuine fit with the live conversation.\n"+
+			"For each candidate worth showing: `~/.ark/ark connections recall surface %s -loc <CANDIDATE-PATH:RANGE> -reason \"...\"`.\n"+
+			"For each tag worth attaching: `~/.ark/ark connections recall recommend %s -loc <CANDIDATE-PATH:RANGE> -tag @t[:v] -reason \"...\"`.\n"+
+			"Always pass a `## Candidate:` locator — never the `# Source:` locator (surface will reject it).\n"+
 			"A candidate marked `- tag-only: true` is from the current conversation — recommend a tag if one fits, but do NOT surface it.\n"+
-			"Then `~/.ark/ark connections recall close %d --nonce %d`.\n"+
+			"Then `~/.ark/ark connections recall close %s --nonce %d`.\n"+
 			"Then run `%s` again.\n",
-		fire, path, fire, fire, fire, nonce, nextCmd)
+		token, path, token, token, token, nonce, nextCmd)
 }
 
 // recallExitPrompt is the crank-handle returned when the nonce's
@@ -214,8 +228,15 @@ func recallExitPrompt(tokens, limit int) string {
 // the agent to run `next` again; the short window keeps `next` returning
 // inline (foreground) before the harness auto-backgrounds it, never
 // reading as a stop.
-func recallKeepalivePrompt(nonce uint32) string {
-	return fmt.Sprintf("No curation doc is pending yet (no work, or no result subscriber). This is normal. Run `~/.ark/ark connections recall next %d` again now to keep watching — do not stop, do not wait.\n", nonce)
+func recallKeepalivePrompt(session string, nonce uint32) string {
+	// Carry --session so the agent's next loop iteration stays on the
+	// per-session curate subscription (R2902), never falling back to the
+	// legacy bare-curate path.
+	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
+	if session != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	}
+	return fmt.Sprintf("No curation doc is pending yet (no work, or no result subscriber). This is normal. Run `%s` again now to keep watching — do not stop, do not wait.\n", nextCmd)
 }
 
 // recallListenWindow bounds each blocking Listen inside RecallListen so

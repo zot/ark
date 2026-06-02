@@ -1,6 +1,6 @@
 # Sequence: Recall agent — daemon loop: curate → agent → result → assistant
 
-**Requirements:** R2747, R2748, R2750, R2751, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2877, R2765, R2766, R2769, R2771, R2772, R2774, R2890, R2855, R2857, R2858, R2860
+**Requirements:** R2747, R2748, R2750, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2877, R2765, R2766, R2769, R2771, R2772, R2774, R2890, R2855, R2857, R2858, R2860, R2899, R2900, R2901, R2902, R2903
 
 Picks up where `seq-recall-watcher.md` leaves off — after the
 watcher writes `tmp://ARK-RECALL/curation-<session>-<fire>` and the
@@ -60,9 +60,11 @@ step 7.7.
 ## Flow 2: daemon loop iteration — `next` returns the doc
 
 ```
-3. ark connections recall next <N>   (the whole loop)        (R2857, R2858)
-         │  server-side, in one verb: idempotent subscribe on
-         │  first call → context-gate (R2777 vs
+3. ark connections recall next --session <S> <N>             (R2857, R2902)
+         │  (the whole loop; the CLI redials on an ark serve
+         │   bounce, R2903) server-side, in one verb: idempotent
+         │  subscribe keyed on <S> (R2902) on first call →
+         │  context-gate (R2777 vs
          │  [luhmann].context_limit) → pick lowest-fire pending
          │  curation-<S>-<F> whose session has a result subscriber
          │  → block up to a keepalive window (~90s) if none
@@ -96,31 +98,32 @@ step 7.7.
 
 ```
 4. for each surface-worthy candidate:
-         ark connections recall surface <F>             (R2756)
-           -chunk <CID> -reason "<one-line>"
+         ark connections recall surface <S>-<F>         (R2900)
+           -loc <path>:<range> -reason "<one-line>"
          │
          ├── 4.1  CLI POSTs to server's recall handler
+         │          (redialing if the server is bouncing, R2903)
          │
-         └── 4.2  RecallAgentBuilder.SurfaceItem(           (R2751)
-                    fire=<F>, chunkID=<CID>, reason)
-                  - opens results[<F>] on first call
-                  - chunkLocator(chunkID): server-side
-                    ChunkInfo → path:range (+ size); the
-                    daemon never passes the path
-                  - appends "## Surface: <CID> (<size>)
-                    <path>:<range>" H2 + "reason: ..." line
+         └── 4.2  RecallAgentBuilder.SurfaceItem(           (R2899)
+                    fireToken=<S>-<F>, loc=<path>:<range>,
+                    reason)
+                  - opens results[<S>-<F>] on first call
+                  - own-session gate reads path from loc (R2872)
+                  - size via ChunkText(path,range); no chunkid
+                  - appends "## Surface: <path>:<range>
+                    (<size>)" H2 + "reason: ..." line
 
 5. for each recommend-worthy tag candidate:
-         ark connections recall recommend <F>           (R2757)
-           -chunk <CID> -tag @<t>[:<v>]
+         ark connections recall recommend <S>-<F>       (R2900)
+           -loc <path>:<range> -tag @<t>[:<v>]
            -reason "<one-line>"
          │
-         └── 5.1  RecallAgentBuilder.RecommendItem(...)       (R2751)
-                  - opens results[<F>] on first call if
+         └── 5.1  RecallAgentBuilder.RecommendItem(...)       (R2899)
+                  - opens results[<S>-<F>] on first call if
                     not already open
-                  - chunkLocator(chunkID) → path:range
+                  - loc supplied by the agent (no resolution)
                   - appends "## Recommend: @<t>[:<v>] on
-                    <CID> <path>:<range>" H2 + "reason: ..."
+                    <path>:<range>" H2 + "reason: ..."
                     line
 
 6. on any malformed call:
@@ -136,15 +139,15 @@ step 7.7.
 ## Flow 4: close → result doc + monitor log → self-recycle check
 
 ```
-7. ark connections recall close <F> --nonce <N>          (R2758)
-   [-preserve-curation]
+7. ark connections recall close <S>-<F> --nonce <N>      (R2758)
+   [-preserve-curation]                       (redial on bounce, R2903)
          │
-         ├── 7.1  RecallAgentBuilder.Close(fire=<F>,
+         ├── 7.1  RecallAgentBuilder.Close(fireToken=<S>-<F>,
          │          nonce=<N>, preserveCuration)
          │
          ├── 7.2  if results[<F>] has items:
          │          write tmp://ARK-RECALL/
-         │            result-<S>-<F> via write actor:    (R2750, R2751)
+         │            result-<S>-<F> via write actor:    (R2750, R2899)
          │            @ark-recall-result: <S>
          │            (body: ## Surface: / ## Recommend:
          │             H2 sequence)
@@ -240,7 +243,7 @@ step 7.7.
   (value-scoped) and consumes them (R2852, R2855). The curate
   subscription moved from the assistant (retired one-shot path) to
   the daemon.
-- The daemon **never mints fires** (the watcher does, R2752) and
+- The daemon **never mints fires** (the watcher does, R2901) and
   **never writes RJ records** (R2774). Permanent rejection state
   stays user-controlled through the assistant.
 - The `(fire, nonce)` pair joins three identifier layers: the

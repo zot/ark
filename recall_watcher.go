@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2746, R2747, R2748, R2898, R2901, R2753
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +38,9 @@ type RecallWatcher struct {
 
 	jobs chan func()
 
-	mu          sync.Mutex
-	sessions    map[string]*recallSessionState // R2730
-	fireCounter uint64                         // R2752: per-server monotonic; allocated on timer expiry
+	mu           sync.Mutex
+	sessions     map[string]*recallSessionState // R2730
+	fireCounters map[string]uint64              // R2901: per-session monotonic, dir-seeded on first use; allocated on timer expiry
 }
 
 // recallSessionState carries the per-session accumulator and timer.
@@ -59,12 +60,13 @@ type recallSessionState struct {
 // starts when Start is called. R2687
 func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgentBuilder) *RecallWatcher {
 	return &RecallWatcher{
-		db:        db,
-		librarian: lib,
-		store:     store,
-		builder:   builder,
-		jobs:      make(chan func(), 16),
-		sessions:  make(map[string]*recallSessionState),
+		db:           db,
+		librarian:    lib,
+		store:        store,
+		builder:      builder,
+		jobs:         make(chan func(), 16),
+		sessions:     make(map[string]*recallSessionState),
+		fireCounters: make(map[string]uint64),
 	}
 }
 
@@ -339,7 +341,7 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 // fire is the timer-expiry callback. Runs on the watcher's
 // closure-actor goroutine so concurrent fires across sessions
 // serialize.
-// CRC: crc-RecallWatcher.md | Seq: seq-subscriber-presence.md | R2735, R2752, R2753, R2806, R2808
+// CRC: crc-RecallWatcher.md | Seq: seq-subscriber-presence.md | R2735, R2901, R2753, R2806, R2808
 func (w *RecallWatcher) fire(sessionID string) {
 	w.mu.Lock()
 	st := w.sessions[sessionID]
@@ -350,8 +352,7 @@ func (w *RecallWatcher) fire(sessionID string) {
 	snapshot := st.pendingChunks
 	st.pendingChunks = nil
 	st.pendingTimer = nil
-	w.fireCounter++
-	fire := w.fireCounter
+	fire := w.nextFireLocked(sessionID)
 	w.mu.Unlock()
 
 	if len(snapshot) == 0 {
@@ -441,7 +442,7 @@ func (w *RecallWatcher) fire(sessionID string) {
 			}
 			// Capture each chunk's full byte size before truncating
 			// the Content excerpt so the curation doc can stamp it on
-			// the Candidate H2 (R2749 size column).
+			// the Candidate H2 (R2898 size column).
 			sizes := make([]int, len(result.Chunks))
 			for i := range result.Chunks {
 				sizes[i] = len(result.Chunks[i].Content)
@@ -465,10 +466,14 @@ func (w *RecallWatcher) fire(sessionID string) {
 
 	// Build the curation doc via the in-process RecallCurationBuilder.
 	// The same state machine emits identical body shape on the agent
-	// side via the CLI verbs. R2747, R2748, R2749, R2753, R2754
+	// side via the CLI verbs. R2747, R2748, R2898, R2753, R2754
 	cb := w.builder.RecallCurationOpen(sessionID, fire)
 	for _, sec := range sections {
-		cb.Section(sec.sourceChunkID, sec.inputExcerpt)
+		// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.7 | R2898
+		// The curation doc references chunks by path:range, not chunkid;
+		// the watcher resolves the source chunk's path:range at build time.
+		srcPath, srcRange := w.sourceLocator(sec.sourceChunkID)
+		cb.Section(srcPath, srcRange, sec.inputExcerpt)
 		for i, ch := range sec.recalled {
 			tagNames := make([]string, 0, len(ch.Tags))
 			for _, t := range ch.Tags {
@@ -480,7 +485,7 @@ func (w *RecallWatcher) fire(sessionID string) {
 			// live conversation is already in the reader's context.
 			// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.7 | R2869
 			tagOnly := sessionFromJSONLPath(ch.Path) == sessionID
-			cb.Candidate(ch.ChunkID, ch.Path, ch.Range, sec.sizes[i],
+			cb.Candidate(ch.Path, ch.Range, sec.sizes[i],
 				ch.Score, tagNames, pNames, pScores, ch.Content, tagOnly)
 		}
 	}
@@ -507,6 +512,64 @@ func (w *RecallWatcher) fire(sessionID string) {
 		sessionID, fire, len(snapshot), len(sections), dropped, skipped, notFound, totalRecalled, discussedCount)
 }
 
+// nextFireLocked returns the next per-session fire number. Must be
+// called with w.mu held. On the first fire for a session this server
+// run it seeds the counter from the curation dir (so a restart/rebuild
+// never re-mints a number a surviving materialized file occupies), then
+// increments in memory — the in-memory hold (not a per-allocation dir
+// recompute) is what closes the allocation→materialization race a
+// constant offset cannot. CRC: crc-RecallWatcher.md | R2901
+func (w *RecallWatcher) nextFireLocked(sessionID string) uint64 {
+	if w.fireCounters == nil {
+		w.fireCounters = make(map[string]uint64)
+	}
+	n, seeded := w.fireCounters[sessionID]
+	if !seeded {
+		n = w.seedFire(sessionID)
+	}
+	n++
+	w.fireCounters[sessionID] = n
+	return n
+}
+
+// seedFire computes the initial per-session fire counter from the
+// surviving materialized curation files in ~/.ark/recall-curation/.
+// Returns max(fire)+1 when any survive — so the first allocation is
+// max+2, skipping a possibly-unmaterialized in-flight doc (one
+// secretary ⇒ lag ≤ 1) — else 0, so the first allocation is 1. The
+// surviving files are the high-water record (Alibi Stamp); a
+// cleanly-closed fire leaves no file, so reusing its number is safe.
+// CRC: crc-RecallWatcher.md | R2901
+func (w *RecallWatcher) seedFire(sessionID string) uint64 {
+	if w.builder == nil {
+		return 0
+	}
+	prefix := "curation-" + sessionID + "-"
+	matches, _ := filepath.Glob(filepath.Join(w.builder.curationDir, prefix+"*.md"))
+	var max uint64
+	for _, m := range matches {
+		s := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), prefix), ".md")
+		if f, err := strconv.ParseUint(s, 10, 64); err == nil && f > max {
+			max = f
+		}
+	}
+	if max == 0 {
+		return 0
+	}
+	return max + 1
+}
+
+// sourceLocator resolves a source chunk's path:range for the
+// `# Source:` heading (R2898). Best-effort: ("", "") when the chunk
+// can't be resolved.
+func (w *RecallWatcher) sourceLocator(chunkID uint64) (path, rangeLabel string) {
+	info, err := w.db.ChunkInfo(chunkID)
+	if err != nil {
+		return "", ""
+	}
+	return info.Path, info.Range
+}
+
 // dropCooledCandidates filters out recalled chunks whose (session,
 // chunk) was surfaced within [recall].surface_cooldown — the
 // deterministic surface-cooldown floor that lets the secretary spend
@@ -530,7 +593,7 @@ func (w *RecallWatcher) dropCooledCandidates(sessionID string, chunks []Recalled
 }
 
 // recallSection captures one paragraph's recall result, ready for
-// rendering into the curation doc. R2749
+// rendering into the curation doc. R2898
 type recallSection struct {
 	sourceChunkID uint64 // the JSONL chunk the paragraph came from
 	inputExcerpt  string // the paragraph text itself, capped at ~200 chars

@@ -2,8 +2,8 @@
 
 **Requirements:** R2696, R2705, R2706, R2708, R2711, R2712, R2713,
 R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739,
-R2740, R2741, R2746, R2747, R2748, R2749, R2752, R2753, R2754,
-R2806, R2867, R2868, R2869
+R2740, R2741, R2746, R2747, R2748, R2753, R2754,
+R2806, R2867, R2868, R2869, R2898, R2901
 
 The watcher hooks into `indexer.executeRefresh`'s isAppend
 branch. OnAppend is synchronous on the indexer's goroutine —
@@ -87,7 +87,9 @@ is in `seq-recall-agent.md`.
          │
          ├── 5.2  if len(snapshot) == 0: return                   (no work)
          │
-         ├── 5.3  fire = watcher.nextFireNumber()                 (R2752)
+         ├── 5.3  fire = watcher.nextFire(sessionID)              (R2901)
+         │        (per-session counter; seeded max+2 from the
+         │         curation-dir on first use, then in-memory)
          │        cfg = db.Config().Recall                        (R2695)
          │
          ├── 5.4  subscriber backstop (R2806): re-query both
@@ -122,7 +124,7 @@ is in `seq-recall-agent.md`.
          │              continue                                  (R2708, R2739)
          │            for r in result.Chunks:
          │              r.Content = truncateUTF8(r.Content, 500)  (R2705)
-         │            paraExcerpt = truncateUTF8(para, 200)       (R2749)
+         │            paraExcerpt = truncateUTF8(para, 200)       (R2898)
          │            sections.append({sourceCID: cid,
          │                             paraExcerpt,
          │                             candidates: result.Chunks})
@@ -132,12 +134,13 @@ is in `seq-recall-agent.md`.
          │
          ├── 5.7  b = db.RecallCurationOpen(sessionID, fire)      (R2754, R2869)
          │        for each section in sections:
-         │          b.Section(section.sourceCID,
+         │          srcPath, srcRange = ChunkInfo(section.sourceCID)
+         │          b.Section(srcPath, srcRange,                   (R2898)
          │                    section.paraExcerpt)
          │          for each c in section.candidates:
          │            tagOnly = sessionFromJSONLPath(c.Path)       (R2869)
          │                      == sessionID  // own-session → no surface
-         │            b.Candidate(c.ChunkID, c.Path, c.Range,
+         │            b.Candidate(c.Path, c.Range,                 (R2898)
          │                        c.Score, c.Tags,
          │                        c.ProposedTagsWithScores,
          │                        c.Content, tagOnly)
@@ -189,6 +192,6 @@ is in `seq-recall-agent.md`.
 - A turn_duration with armReady unset — an agent-only turn (no
   intervening user record, e.g. the assistant surfacing recall) — is
   ignored: no arm, no fire. This is what stops the recall ping-pong.
-- FIRING allocates the next fire number; the fire number is
-  per `ark serve` run and is consumed whether or not a
-  curation doc gets written.
+- FIRING allocates the next fire number; the fire counter is
+  per-session (R2901), seeded from the curation-dir on first
+  use, and is consumed whether or not a curation doc gets written.

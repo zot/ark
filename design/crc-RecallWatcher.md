@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2749, R2752, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -36,12 +36,18 @@ composes and writes each curation doc via the in-process
     seen (and armReady); nil otherwise
   - armReady: bool — gates arming to once per user turn (R2734);
     set by a user record, cleared on arm
-- fireCounter: uint64 — globally monotonic counter scoped to
-  one `ark serve` run, starting at 0; allocated on each timer
-  expiry; written into the curation doc header and used as
-  the cookie that ties curation ↔ result (R2752). Lives at
-  the watcher level (one counter per server), not per
-  session.
+- fireCounters: map[sessionID]uint64 — per-session monotonic
+  fire counters, mutex-protected (R2901). Seeded on the first
+  fire for a session after an `ark serve` start by scanning
+  `~/.ark/recall-curation/` for that session's
+  `curation-<session>-<fire>.md` files and taking `max(fire)+2`
+  (or `1` if none); thereafter incremented in memory. The `+2`
+  skips a possibly-unmaterialized in-flight doc (one secretary ⇒
+  lag ≤ 1); the in-memory hold — not a per-allocation dir
+  recompute — closes the allocation→materialization race. The
+  composite `<session>-<fire>` is the cookie tying curation ↔
+  result, globally unique even though the fire integer is only
+  per-session. Replaces the global `fireCounter` (R2752, R2901).
 - jobs: chan func() — closure-actor channel; processed by the
   single worker goroutine so all fire-time work serializes
   cleanly (the per-session timer expiry posts a closure
@@ -83,8 +89,10 @@ composes and writes each curation doc via the in-process
       ping-pong (R2734).
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
-  lock, allocates the next `fireCounter` value (R2752), then
-  runs the recall pipeline outside the lock (R2735). Before
+  lock, allocates the next per-session fire value
+  (`fireCounters[sessionID]`, seeded from the curation-dir on
+  first use, R2901), then runs the recall pipeline outside the
+  lock (R2735). Before
   invoking the substrate or opening the curation builder,
   re-queries **both** `pubsub.SubscriberCount("ark-recall-curate",
   sessionID)` and `pubsub.SubscriberCount("ark-recall-result",
@@ -112,15 +120,18 @@ composes and writes each curation doc via the in-process
     was surfaced within `[recall].surface_cooldown` (seam 2
     `Store.LastSurfaced`), so the secretary judges only novel
     candidates; if none survive, the paragraph is dropped. Then call
-    `b.Section(sourceChunkID, paragraphText)` to emit the
-    `# Source Chunk:` H1 + blockquoted excerpt (R2749); for
-    each top-K candidate, classify it by source path (R2869) —
-    `tagOnly = sessionFromJSONLPath(path) == sessionID` (the
-    originating session's own JSONL) — and call
-    `b.Candidate(chunkID, path, rangeLabel, score, tagNames,
-    proposedTagsWithScores, contentExcerpt, tagOnly)`. A
-    tag-only candidate renders `- tag-only: true` and must not
-    be surfaced — only tag-recommended (R2869).
+    `b.Section(sourcePath, sourceRange, paragraphText)` to emit
+    the `# Source: <path>:<range>` H1 + blockquoted excerpt — the
+    watcher resolves the source chunk's path:range at build time;
+    no chunkid in the heading (R2898). For each top-K candidate,
+    classify it by source path (R2869) — `tagOnly =
+    sessionFromJSONLPath(path) == sessionID` (the originating
+    session's own JSONL) — and call `b.Candidate(path, rangeLabel,
+    byteSize, score, tagNames, proposedTagsWithScores,
+    contentExcerpt, tagOnly)`; the H2 leads with `<path>:<range>`,
+    not a chunkid (R2898). A tag-only candidate renders
+    `- tag-only: true` and must not be surfaced — only
+    tag-recommended (R2869).
   - If no sections survived: drop the builder without
     calling `b.Close()`; the fire completes silently and
     no curation doc is written (R2753).

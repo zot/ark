@@ -15,36 +15,36 @@ func (srv *Server) handleRecallReserveNonce(w http.ResponseWriter, _ *http.Reque
 	writeJSON(w, map[string]any{"nonce": n})
 }
 
-// recallSurfaceRequest mirrors the CLI body for `surface`. R2756
+// recallSurfaceRequest mirrors the CLI body for `surface`. R2900
 type recallSurfaceRequest struct {
-	Fire   uint64 `json:"fire"`
-	Chunk  uint64 `json:"chunk"`
+	Fire   string `json:"fire"` // composite <session>-<fire> token (R2901)
+	Loc    string `json:"loc"`  // candidate <path>:<range> (R2900)
 	Reason string `json:"reason"`
 }
 
 // handleRecallSurface appends one `## Surface:` item to the
-// in-flight result-doc builder. CRC: crc-Server.md | R2756
+// in-flight result-doc builder. CRC: crc-Server.md | R2900
 func (srv *Server) handleRecallSurface(w http.ResponseWriter, r *http.Request) {
 	var req recallSurfaceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Fire == 0 || req.Chunk == 0 || req.Reason == "" {
-		http.Error(w, "fire, chunk, reason required", http.StatusBadRequest)
+	if req.Fire == "" || req.Loc == "" || req.Reason == "" {
+		http.Error(w, "fire, loc, reason required", http.StatusBadRequest)
 		return
 	}
-	if err := srv.recallAgentBuilder.SurfaceItem(req.Fire, req.Chunk, req.Reason); err != nil {
+	if err := srv.recallAgentBuilder.SurfaceItem(req.Fire, req.Loc, req.Reason); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{"status": "ok"})
 }
 
-// recallRecommendRequest mirrors the CLI body for `recommend`. R2757
+// recallRecommendRequest mirrors the CLI body for `recommend`. R2757, R2900
 type recallRecommendRequest struct {
-	Fire   uint64 `json:"fire"`
-	Chunk  uint64 `json:"chunk"`
+	Fire   string `json:"fire"` // composite <session>-<fire> token (R2901)
+	Loc    string `json:"loc"`  // candidate <path>:<range> (R2900)
 	Tag    string `json:"tag"`
 	Reason string `json:"reason"`
 }
@@ -57,11 +57,11 @@ func (srv *Server) handleRecallRecommend(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Fire == 0 || req.Chunk == 0 || req.Tag == "" || req.Reason == "" {
-		http.Error(w, "fire, chunk, tag, reason required", http.StatusBadRequest)
+	if req.Fire == "" || req.Loc == "" || req.Tag == "" || req.Reason == "" {
+		http.Error(w, "fire, loc, tag, reason required", http.StatusBadRequest)
 		return
 	}
-	if err := srv.recallAgentBuilder.RecommendItem(req.Fire, req.Chunk, req.Tag, req.Reason); err != nil {
+	if err := srv.recallAgentBuilder.RecommendItem(req.Fire, req.Loc, req.Tag, req.Reason); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -70,7 +70,7 @@ func (srv *Server) handleRecallRecommend(w http.ResponseWriter, r *http.Request)
 
 // recallCloseRequest mirrors the CLI body for `close`. R2758
 type recallCloseRequest struct {
-	Fire             uint64 `json:"fire"`
+	Fire             string `json:"fire"` // composite <session>-<fire> token (R2901)
 	Nonce            uint32 `json:"nonce"`
 	PreserveCuration bool   `json:"preserveCuration"`
 }
@@ -106,7 +106,7 @@ func (srv *Server) handleRecallClose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Fire == 0 {
+	if req.Fire == "" {
 		http.Error(w, "fire required", http.StatusBadRequest)
 		return
 	}

@@ -77,22 +77,23 @@ act on one of three cases:
   allowed to Read, and the Read tool (not `cat`) is how you open it. It
   opens with a `## Recent conversation` block, then blocks shaped like:
   ```
-  # Source Chunk: <SOURCE-CHUNKID>
+  # Source: <PATH>:<RANGE>
   > the reader's own paragraph that triggered this section
 
-  ## Candidate: <CANDIDATE-CHUNKID> (<SIZE>) <PATH>:<RANGE>
+  ## Candidate: <PATH>:<RANGE> (<SIZE>)
   - score / tags / proposed-tags / a content excerpt
   ```
   Judge the candidates against the recent conversation per your persona.
-  For each candidate worth showing the user: `~/.ark/ark connections
-  recall surface <F> -chunk <CANDIDATE-CHUNKID> -reason "..."`; for each
-  tag worth attaching: `~/.ark/ark connections recall recommend <F>
-  -chunk <CANDIDATE-CHUNKID> -tag @t[:v] -reason "..."`. Pass the
-  `<CANDIDATE-CHUNKID>` from a `## Candidate:` line — **never** the
-  `<SOURCE-CHUNKID>` from a `# Source Chunk:` line (the reader's own
-  paragraph; `surface` will reject it). When done with this doc:
-  `~/.ark/ark connections recall close <F> --nonce <NONCE>`. Then run
-  `next` again.
+  Chunks are named by **locator** (`<PATH>:<RANGE>`), never a chunkid,
+  and the fire cookie is the `<S>-<F>` token `next` hands you. For each
+  candidate worth showing the user: `~/.ark/ark connections recall
+  surface <S>-<F> -loc <CANDIDATE-PATH:RANGE> -reason "..."`; for each
+  tag worth attaching: `~/.ark/ark connections recall recommend <S>-<F>
+  -loc <CANDIDATE-PATH:RANGE> -tag @t[:v] -reason "..."`. Pass the
+  `<PATH>:<RANGE>` from a `## Candidate:` line — **never** the one from a
+  `# Source:` line (the reader's own paragraph; `surface` will reject
+  it). When done with this doc: `~/.ark/ark connections recall close
+  <S>-<F> --nonce <NONCE>`. Then run `next` again.
 - **A keepalive** ("no curation doc yet — run next again"). Nothing to
   judge. Just run `next` again.
 - **A stop directive** ("context limit reached"). Stop. Your assistant

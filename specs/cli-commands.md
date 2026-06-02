@@ -357,8 +357,8 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--propose]
 ark connections recall reserve-nonce
 ark connections recall next [--session SID] NONCE
-ark connections recall surface FIRE -chunk N -reason TEXT
-ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
+ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT
+ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
 ark connections recall listen --session SID
@@ -429,8 +429,10 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   docs, prepending the session's last-N conversation turns
   (`[recall].context_turns`) to the doc it hands back; without it, the
   legacy bare-curate, all-session scan is retained (one-shot/diagnostic).
-  On first call for `NONCE` it idempotently subscribes (subscription
-  session `recall-<NONCE>`); thereafter it context-gates, then returns the
+  On first call it idempotently subscribes — subscription session
+  `recall-curate-<SID>` with `--session` (keyed on the durable session so a
+  restart can't recycle it, R2902), else legacy `recall-<NONCE>`; thereafter
+  it context-gates, then returns the
   lowest-fire pending curation doc **whose session has a result
   subscriber** (docs for unsubscribed sessions pile up, never dispatched),
   with crank-handle prose telling the caller to judge, surface /
@@ -444,14 +446,18 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   `[luhmann].context_limit` it returns an exit directive instead. Dual
   output: exit status `0` = doc *or* keepalive (loop), `2` = exit/done;
   a hand-written `while` loop is as good a client as the agent.
-  Requires `ark serve`.
-- `recall surface FIRE -chunk N -reason TEXT` implicitly opens
+  Requires `ark serve` — but an `ark serve` bounce is absorbed as a
+  wait condition: the CLI redials (cold dial) or returns a keepalive
+  (mid-block / budget), never a fatal error and never the exit
+  directive, so the loop rides out a restart (R2903).
+- `recall surface FIRE -loc PATH:RANGE -reason TEXT` implicitly opens
   the result-doc builder for `FIRE` on first call and adds one
-  `## Surface:` item. The server resolves the chunk's `path:range`
-  + size; the caller passes only the chunkID. One item per call;
-  repeated `-chunk` flags are not accepted. Called by the recall
-  agent only.
-- `recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT` —
+  `## Surface:` item. `FIRE` is the composite `<session>-<fire>` token
+  the crank-handle emits (R2901); the caller passes the candidate's
+  `<path>:<range>` and the server resolves size + content (R2900). One
+  item per call; repeated `-loc` flags are not accepted. Called by the
+  recall agent only.
+- `recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT` —
   same shape, adds one `## Recommend:` item.
 - `recall context --nonce N [--limit N] [--json]` reports the
   calling subagent's current context fill (sum of

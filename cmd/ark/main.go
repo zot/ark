@@ -7526,7 +7526,7 @@ Requires a running server.`)
 func cmdConnectionsRecall(args []string) {
 	// v2 result-builder verbs branch on the first positional arg.
 	// Everything else falls through to the substrate-recall command.
-	// R2755, R2756, R2757, R2758
+	// R2755, R2900, R2757, R2758
 	if len(args) > 0 {
 		switch args[0] {
 		case "reserve-nonce":
@@ -7576,7 +7576,7 @@ func cmdConnectionsRecallReserveNonce(args []string) {
 	fmt.Println(resp.Nonce)
 }
 
-// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#4 | R2756
+// CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#4 | R2900
 func cmdConnectionsRecallSurface(args []string) {
 	fire, rest, err := popFire(args, "surface")
 	if err != nil {
@@ -7584,13 +7584,13 @@ func cmdConnectionsRecallSurface(args []string) {
 	}
 	fs := flag.NewFlagSet("connections recall surface", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	chunkID := fs.Uint64("chunk", 0, "candidate chunkID (required)")
+	loc := fs.String("loc", "", "candidate <path>:<range> (required)")
 	reason := fs.String("reason", "", "one-line justification (required)")
 	if err := fs.Parse(rest); err != nil {
 		fatal(fmt.Errorf("connections recall: %w", err))
 	}
-	if *chunkID == 0 || *reason == "" {
-		fmt.Fprintln(os.Stderr, "ark connections recall surface FIRE -chunk N -reason TEXT")
+	if *loc == "" || *reason == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT")
 		os.Exit(2)
 	}
 	client := serverClient(arkDir)
@@ -7599,7 +7599,7 @@ func cmdConnectionsRecallSurface(args []string) {
 	}
 	body := map[string]any{
 		"fire":   fire,
-		"chunk":  *chunkID,
+		"loc":    *loc,
 		"reason": *reason,
 	}
 	if err := proxyOK(client, "POST", "/connections/recall/surface", body); err != nil {
@@ -7615,14 +7615,14 @@ func cmdConnectionsRecallRecommend(args []string) {
 	}
 	fs := flag.NewFlagSet("connections recall recommend", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	chunkID := fs.Uint64("chunk", 0, "target chunkID (required)")
+	loc := fs.String("loc", "", "target <path>:<range> (required)")
 	tagSpec := fs.String("tag", "", "@t or @t:value (required)")
 	reason := fs.String("reason", "", "one-line justification (required)")
 	if err := fs.Parse(rest); err != nil {
 		fatal(fmt.Errorf("connections recall: %w", err))
 	}
-	if *chunkID == 0 || *tagSpec == "" || *reason == "" {
-		fmt.Fprintln(os.Stderr, "ark connections recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT")
+	if *loc == "" || *tagSpec == "" || *reason == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT")
 		os.Exit(2)
 	}
 	client := serverClient(arkDir)
@@ -7631,7 +7631,7 @@ func cmdConnectionsRecallRecommend(args []string) {
 	}
 	body := map[string]any{
 		"fire":   fire,
-		"chunk":  *chunkID,
+		"loc":    *loc,
 		"tag":    *tagSpec,
 		"reason": *reason,
 	}
@@ -7733,10 +7733,6 @@ func cmdConnectionsRecallNext(args []string) {
 		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE (positive integer)")
 		os.Exit(2)
 	}
-	client := serverClient(arkDir)
-	if client == nil {
-		fatal(errors.New("server not running; start with `ark serve`"))
-	}
 	nextURL := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
 	if *session != "" {
 		nextURL += "&session=" + *session
@@ -7745,19 +7741,70 @@ func cmdConnectionsRecallNext(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fatal(err)
+	// R2903: stubborn plumbing — an `ark serve` bounce is a wait
+	// condition, not an error. On a cold dial against a restarting server
+	// (no socket yet) redial with backoff up to a bounded budget; on a
+	// mid-block drop, or once the budget is exhausted, hand back a
+	// keepalive (exit 0) so the secretary's loop re-invokes `next` and
+	// rides out the bounce across iterations — never fatal, never the
+	// context-limit exit, and always well under the harness foreground
+	// auto-background threshold.
+	deadline := time.Now().Add(recallNextRedialBudget)
+	backoff := recallNextRedialBackoff
+	for {
+		client := serverClient(arkDir)
+		if client == nil {
+			if time.Now().After(deadline) {
+				os.Stdout.WriteString(recallRedialKeepalive(*session, nonce))
+				return
+			}
+			time.Sleep(backoff)
+			backoff = min(backoff*2, recallNextRedialMaxBackoff)
+			continue
+		}
+		resp, derr := client.Do(req)
+		if derr != nil {
+			// Connection refused / mid-block EOF — the server bounced.
+			// Don't reissue a fresh blocking request (it could push the
+			// call past the foreground window); pace briefly and return a
+			// keepalive so the loop re-dials on its next iteration.
+			time.Sleep(backoff)
+			os.Stdout.WriteString(recallRedialKeepalive(*session, nonce))
+			return
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			// A genuine HTTP error (e.g. bad nonce) — not a bounce.
+			fatal(fmt.Errorf("server error (%d): %s", resp.StatusCode, strings.TrimSpace(string(data))))
+		}
+		os.Stdout.Write(data)
+		if resp.Header.Get("X-Recall-Exit") == "1" {
+			os.Exit(2)
+		}
+		return
 	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fatal(fmt.Errorf("server error (%d): %s", resp.StatusCode, strings.TrimSpace(string(data))))
+}
+
+// recallNextRedial* bound the CLI-side stubborn-plumbing retry for
+// `recall next` (R2903): redial within the budget on a cold dial,
+// backing off geometrically, then fall back to a keepalive.
+const (
+	recallNextRedialBudget     = 20 * time.Second
+	recallNextRedialBackoff    = 1 * time.Second
+	recallNextRedialMaxBackoff = 5 * time.Second
+)
+
+// recallRedialKeepalive is the CLI-synthesized keepalive returned when
+// `next` cannot reach the server (a bounce). Shaped like the server's
+// own keepalive so the secretary loops without ever seeing an error.
+// CRC: crc-RecallAgentBuilder.md | R2903
+func recallRedialKeepalive(session string, nonce uint64) string {
+	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
+	if session != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
 	}
-	os.Stdout.Write(data)
-	if resp.Header.Get("X-Recall-Exit") == "1" {
-		os.Exit(2)
-	}
+	return fmt.Sprintf("The ark server is restarting or briefly unreachable — no work yet. This is normal. Run `%s` again now to keep watching; do not stop, do not wait.\n", nextCmd)
 }
 
 // cmdConnectionsRecallListen is the consumer-side loop verb: block until
@@ -7796,17 +7843,15 @@ func cmdConnectionsRecallListen(args []string) {
 	os.Stdout.Write(data)
 }
 
-// popFire returns (fire, rest, err) for a recall v2 result-builder
-// verb. The fire is the first positional argument before any flags.
-func popFire(args []string, verb string) (uint64, []string, error) {
+// popFire returns (fireToken, rest, err) for a recall result-builder
+// verb. The fire token is the first positional argument before any
+// flags — the composite `<session>-<fire>` cookie the crank-handle
+// emits (R2901). It is opaque to the CLI; the server decomposes it.
+func popFire(args []string, verb string) (string, []string, error) {
 	if len(args) == 0 {
-		return 0, nil, fmt.Errorf("ark connections recall %s: FIRE positional argument required", verb)
+		return "", nil, fmt.Errorf("ark connections recall %s: FIRE positional argument required", verb)
 	}
-	fire, err := strconv.ParseUint(args[0], 10, 64)
-	if err != nil {
-		return 0, nil, fmt.Errorf("ark connections recall %s: FIRE must be a positive integer, got %q", verb, args[0])
-	}
-	return fire, args[1:], nil
+	return args[0], args[1:], nil
 }
 
 // runConnectionsRecall implements the `ark connections recall`

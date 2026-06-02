@@ -457,7 +457,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /connections/list", srv.librarian.HandleConnectionsList)
 		// Connections cleanup (testing/reset). R2744
 		mux.HandleFunc("POST /connections/clean", srv.handleConnectionsClean)
-		// Recall v2 result-builder endpoints. R2755, R2756, R2757, R2758
+		// Recall v2 result-builder endpoints. R2755, R2900, R2757, R2758
 		// CRC: crc-Server.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md
 		mux.HandleFunc("POST /connections/recall/reserve-nonce", srv.handleRecallReserveNonce)
 		mux.HandleFunc("POST /connections/recall/surface", srv.handleRecallSurface)

@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2749, R2750, R2751, R2754, R2755, R2756, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -11,7 +11,7 @@ share the same builder family:
 - The **recall agent** (a Haiku subagent, see
   seq-recall-agent.md) shells out to four CLI verbs —
   `reserve-nonce`, `surface`, `recommend`, `close` — that route
-  through this component (R2755, R2756, R2757, R2758).
+  through this component (R2755, R2900, R2757, R2758).
 
 Both paths produce identical doc shapes; the file is the
 contract, and the same builder code emits it in both cases.
@@ -26,13 +26,14 @@ for these verbs — `ark serve` must be running.
 - store: *Store — write actor; used to publish tmp:// docs and
   to read the recall agent's `.meta.json` / JSONL pair when
   computing the monitor log entry.
-- curations: map[fireID]*curationDoc — open curation-doc
-  builders. Keyed by fire number; populated by
-  `RecallCurationOpen` and dropped on `Close()`.
-- results: map[fireID]*resultDoc — open result-doc builders.
-  Keyed by fire number; populated lazily on the first
-  `surface` or `recommend` call for that fire; dropped on
-  `Close`.
+- curations: map[fireToken]*curationDoc — open curation-doc
+  builders. Keyed by the composite `<session>-<fire>` token
+  (per-session fire numbers aren't globally unique, R2901);
+  populated by `RecallCurationOpen` and dropped on `Close()`.
+- results: map[fireToken]*resultDoc — open result-doc builders.
+  Keyed by the same `<session>-<fire>` token; populated lazily
+  on the first `surface` or `recommend` call for that token;
+  dropped on `Close` (R2901).
 - nonceCounter: uint32 — in-memory monotonic counter for
   `reserve-nonce`. Resets on `ark serve` restart (R2755).
 - monitorLog: *MonitorLogWriter — append-only writer over
@@ -46,22 +47,24 @@ for these verbs — `ark serve` must be running.
 - RecallCurationOpen(session, fire) → *RecallCurationBuilder
   (R2754). Initializes an empty in-memory doc keyed by `fire`,
   registers it in `curations[fire]`, returns the builder.
-- (builder).Section(sourceChunkID, sourceParagraphText)
-  appends the `# Source Chunk:` H1 + `> `-blockquoted
+- (builder).Section(sourcePath, sourceRange, sourceParagraphText)
+  appends the `# Source: <path>:<range>` H1 + `> `-blockquoted
   paragraph excerpt (UTF-8-safe ~200-byte cap) to the
-  in-memory doc (R2749).
-- (builder).Candidate(chunkID, path, rangeLabel, byteSize,
+  in-memory doc — no chunkid in the heading (R2898). The watcher
+  resolves the source chunk's path:range at build time.
+- (builder).Candidate(path, rangeLabel, byteSize,
   score, tagNames, proposedTagsWithScores, contentExcerpt,
-  tagOnly) appends a `## Candidate: <chunkid> (<size>)
-  <path>:<range>` H2 with score, tag list, parenthesized
-  proposed-tags, and a fenced ~500-char content excerpt to the
-  most recent section. `byteSize` is the chunk's full
-  pre-truncation length; the watcher captures it before applying
-  the 500-char excerpt cap and passes it through. Size renders
-  via `friendlySize` (same helper Surface uses). When `tagOnly`
+  tagOnly) appends a `## Candidate: <path>:<range> (<size>)`
+  H2 — path:range first, no chunkid (R2898) — with score, tag
+  list, parenthesized proposed-tags, and a fenced ~500-char
+  content excerpt to the most recent section. `byteSize` is the
+  chunk's full pre-truncation length; the watcher captures it
+  before applying the 500-char excerpt cap and passes it through.
+  Size renders via `friendlySize` (same helper Surface uses).
+  When `tagOnly`
   (the candidate is in the originating session's own JSONL,
   R2869) the H2 carries a `- tag-only: true` line — the agent may
-  recommend a tag for it but must not surface it. (R2749, R2869)
+  recommend a tag for it but must not surface it. (R2898, R2869)
 - (builder).Close() writes
   `tmp://ARK-RECALL/curation-<session>-<fire>` via the write
   actor with the two head tags `@ark-recall-curate: <session>`
@@ -78,7 +81,12 @@ for these verbs — `ark serve` must be running.
   R2858, R2888, R2889, R2891). With `session` set (the per-session
   secretary, seam 3a) it subscribes **value-scoped**
   `@ark-recall-curate=<session>` under subscription session
-  `recall-<nonce>`, `lowestPendingCuration` dispatches only that
+  `<session>` — keyed on the durable session, not `recall-<nonce>`,
+  so two secretary generations across a restart share one stable,
+  unique key and the `SubCount == 0` re-subscribe guard never
+  no-ops a colliding subscriber (R2902, mirroring the consumer's
+  session-keyed result subscription). `lowestPendingCuration`
+  dispatches only that
   session's `curation-<session>-<fire>` docs, and the returned doc is
   prefixed with the session's last-`[recall].context_turns` conversation
   turns (`injectConversation` / `recentConversation`, best-effort). With
@@ -122,6 +130,22 @@ for these verbs — `ark serve` must be running.
   This bounded block supersedes 008's pure no-timeout lotto-tube.
   Lowest-fire-first keeps `Close`'s
   same-session orphan sweep (R2758) safe.
+- **CLI-side redial (R2903).** The `recall next` CLI command
+  (`cmd/ark/main.go`) — not the server handler above — treats an
+  `ark serve` bounce as a wait condition: it reclassifies
+  dial-refused (cold dial against a restarting server) and
+  mid-block EOF from error to not-yet, redials with bounded
+  backoff, and re-issues the request (whose subscribe is
+  idempotent, R2902), so the secretary's loop never sees a failed
+  call. On a cold dial it redials with bounded geometric backoff up
+  to a budget (~20s); on a mid-block drop, or once the budget is
+  exhausted, it returns a **keepalive** (exit 0) — never fatal,
+  never the context-limit exit — so the loop re-invokes `next` and
+  rides out the bounce across iterations. It never hangs and never
+  reissues a fresh blocking request in the failure path, so each
+  call stays under the foreground threshold. An in-flight fire
+  abandoned across a bounce is not recovered; the loop re-syncs to a
+  fresh doc.
 
 ### Consumer loop — `listen` (CLI-driven)
 - RecallListen(session) — the consumer-side loop verb (R2865), the
@@ -153,43 +177,43 @@ for these verbs — `ark serve` must be running.
   session's curation docs.
 
 ### Result-doc builder (CLI-driven)
-- SurfaceItem(fire, chunkID, reason) error (R2756, R2751,
-  R2872) — opens `results[fire]` on first call for that fire;
-  **own-session gate (R2872):** if the chunk's path resolves to
-  the fire's own session
-  (`sessionFromJSONLPath(ChunkInfo(chunkID).Path) ==
-  doc.session`) it returns an error instead of emitting — the
-  chunk is a `# Source Chunk:` / conversation paragraph already
-  in the reader's context, and the error names the fix (surface
-  a `## Candidate:` chunkid, not the source id), doubling as
-  fumble-onboarding. Otherwise appends a `## Surface: <chunkid>
-  (<size>) <path>:<range>` H2 with its `reason: ...` line.
-  `chunkLocator(chunkID, true)` resolves the chunk's
-  `path:range` and size server-side via `db.ChunkInfo` +
-  `friendlySize` (decimal bytes / K / M) so the consuming
-  assistant can prune by file path and gauge fetch cost; on
-  lookup failure the path drops and the size renders as `?`, and
-  the surface still emits. Errors on missing required args
-  before any state change. **Starts the surface cooldown (R2894):**
-  after appending, calls `db.MarkSurfaced(doc.session, chunkID)` so
-  the watcher's cooldown floor (R2893) won't re-offer this chunk
-  within `[recall].surface_cooldown`.
-- RecommendItem(fire, chunkID, tagSpec, reason) error
-  (R2757, R2751) — same open-on-first-call semantics; appends
-  a `## Recommend: @<tag>[:<value>] on <chunkid> <path>:<range>`
-  H2 with its `reason: ...` line. Uses
-  `chunkLocator(chunkID, false)` — path only, no size read —
-  because a recommend can reference a chunk that was never
-  surfaced and the assistant needs the path to judge it.
-- Close(fire, nonce, preserveCuration bool) error (R2758) —
-  the single cleanup verb:
-  - If `results[fire]` exists with at least one item: query
+- SurfaceItem(fireToken, loc, reason) error (R2900, R2899,
+  R2872) — opens `results[fireToken]` on first call for that
+  token; `loc` is the candidate's `<path>:<range>` (R2900).
+  **own-session gate (R2872):** if `loc`'s path resolves to the
+  fire's own session (`sessionFromJSONLPath(path) == doc.session`)
+  it returns an error instead of emitting — the loc is a
+  `# Source:` / conversation paragraph already in the reader's
+  context, and the error names the fix (surface a `## Candidate:`
+  locator, not the source one), doubling as fumble-onboarding.
+  Otherwise appends a `## Surface: <path>:<range> (<size>)` H2
+  with its `reason: ...` line (R2899). Size is read server-side
+  via `ChunkText(path, range)` + `friendlySize` (decimal bytes /
+  K / M) so the consuming assistant can gauge fetch cost; on
+  lookup failure the size renders as `?` and the surface still
+  emits. Errors on missing required args before any state change.
+  **Starts the surface cooldown (R2894):** after appending,
+  resolves `loc` → chunkID just-in-time and calls
+  `db.MarkSurfaced(doc.session, chunkID)` so the watcher's
+  cooldown floor (R2893) won't re-offer this chunk within
+  `[recall].surface_cooldown`.
+- RecommendItem(fireToken, loc, tagSpec, reason) error
+  (R2757, R2899) — same open-on-first-call semantics; appends
+  a `## Recommend: @<tag>[:<value>] on <path>:<range>` H2 with
+  its `reason: ...` line (R2899). `loc` is the candidate's
+  path:range — no server-side resolution and no size read needed,
+  since the agent already supplies it.
+- Close(fireToken, nonce, preserveCuration bool) error (R2758,
+  R2901) — the single cleanup verb. `fireToken` is the composite
+  `<session>-<fire>`; it decomposes to the session and fire for
+  the tmp:// paths below.
+  - If `results[fireToken]` exists with at least one item: query
     `pubsub.SubscriberCount("ark-recall-result", session)`
     first. If zero, skip the result-doc write and set
     `outcome := "no-subscriber"` (R2807, R2808). Otherwise
     write `tmp://ARK-RECALL/result-<session>-<fire>` via the
     write actor with the head tag `@ark-recall-result: <session>`
-    followed by the accumulated body (R2750, R2751) and set
+    followed by the accumulated body (R2750, R2899) and set
     `outcome := "result-emitted"`.
   - If no items were ever added: skip the result-doc write
     entirely; the assistant's `ark listen` never sees a
@@ -210,7 +234,7 @@ for these verbs — `ark serve` must be running.
     `~/.ark/monitoring/recall.jsonl` (R2763). If discovery
     fails, log zeros and continue — `close` never fails on
     discovery alone.
-  - Drop `results[fire]` and the originating session map
+  - Drop `results[fireToken]` and the originating session map
     entry.
 
 ### Subagent JSONL discovery
