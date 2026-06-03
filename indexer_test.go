@@ -408,7 +408,7 @@ func TestRefreshFileFallsBackToFullReindex(t *testing.T) {
 // TestAtIDSectionResolution verifies that @id values land in the
 // chunk produced by the markdown chunker for their containing section
 // — preamble vs heading-scoped — and resolve back to the correct
-// chunkid via Store.TagValueFiles.
+// chunkid via Store.TagValueChunks.
 // CRC: crc-Indexer.md | R1970 | R1971 | R1972 | R1973
 func TestAtIDSectionResolution(t *testing.T) {
 	idx, dir := testIndexer(t)
@@ -439,11 +439,11 @@ func TestAtIDSectionResolution(t *testing.T) {
 	}
 	idx.store.LoadTvidMap()
 
-	preChunks, err := idx.store.TagValueFiles("id", preambleUUID)
+	preChunks, err := idx.store.TagValueChunks("id", preambleUUID)
 	if err != nil || len(preChunks) != 1 {
 		t.Fatalf("preamble id: want 1 chunk, got %d (err=%v)", len(preChunks), err)
 	}
-	secChunks, err := idx.store.TagValueFiles("id", sectionAUUID)
+	secChunks, err := idx.store.TagValueChunks("id", sectionAUUID)
 	if err != nil || len(secChunks) != 1 {
 		t.Fatalf("section id: want 1 chunk, got %d (err=%v)", len(secChunks), err)
 	}
@@ -466,7 +466,7 @@ func TestAtIDSectionResolution(t *testing.T) {
 }
 
 // TestAtIDTmpResolution confirms @id declared in tmp:// content
-// resolves through Store.TagValueFiles via the unified read path.
+// resolves through Store.TagValueChunks via the unified read path.
 // CRC: crc-Indexer.md | R1975
 func TestAtIDTmpResolution(t *testing.T) {
 	idx, _ := testIndexer(t)
@@ -483,7 +483,7 @@ func TestAtIDTmpResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chunks, err := idx.store.TagValueFiles("id", uuid)
+	chunks, err := idx.store.TagValueChunks("id", uuid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestAtIDDuplicateUUIDReturnsAll(t *testing.T) {
 	}
 	idx.store.LoadTvidMap()
 
-	chunks, err := idx.store.TagValueFiles("id", uuid)
+	chunks, err := idx.store.TagValueChunks("id", uuid)
 	if err != nil {
 		t.Fatal(err)
 	}

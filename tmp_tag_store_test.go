@@ -28,7 +28,7 @@ func TestTmpTagStoreUpdateAndRead(t *testing.T) {
 		t.Errorf("want 2 status records, got %d (%+v)", len(tagFiles), tagFiles)
 	}
 
-	ids := store.TagValueFiles("status", "open")
+	ids := store.TagValueChunks("status", "open")
 	if len(ids) != 2 {
 		t.Errorf("want 2 chunkids for status:open, got %d", len(ids))
 	}

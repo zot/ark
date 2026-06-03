@@ -383,7 +383,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O43: handleTagValues reads files to extract values — O(files) I/O on each completion request. Store tag values in LMDB during indexing for O(1) lookup when this becomes slow.
 - [ ] O44: handleSave allows writing to any indexed file — no authorization check. Acceptable for local use; revisit if ark ever serves untrusted clients.
 - A24: R1098 (CORS) — same-origin, no explicit headers needed for localhost. Revisit if editor loaded from file:// origin.
-- [ ] O45: No unit tests for V record Store methods: UpdateTagValues, AppendTagValues, RemoveTagValues, QueryTagValues, TagValueFiles
+- [ ] O45: No unit tests for V record Store methods: UpdateTagValues, AppendTagValues, RemoveTagValues, QueryTagValues, TagValueChunks
 - [ ] O46: RemoveTagValues scans all V keys to find one fileid — O(total V records). Add reverse index (VF prefix) if profiling shows this is slow.
 - A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
 - A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
@@ -656,3 +656,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T140: R2756 retired by R2900 (2026-06-02 stubborn-recall-next: surface/recommend take -loc path:range, not -chunk N)
 - T141: R2904 retired by R2913 (2026-06-03 content-transform rollback — trigram is full-text (tags kept), strip only at EC embed, dedup hash over original content)
 - [ ] O123: R2913 test coverage: (1) full-text trigram keeps tags — an indexed chunk with a literal @tag: is found by FTS search; (2) BatchEmbedChunks skips an all-@tag (empty-after-strip) chunk. (1) is harness-only; (2) needs the embedding model. TestStripArkTags already covers the strip primitive.
+- [x] O124: crc-Store.md UpdateTagValues/AppendTagValues/RemoveTagValues inline (Rxxx) refs still cite pre-chunkid-migration requirements (some retired: R1099/R1100/R1110/R1311-R1314). Signatures+prose corrected during the TagValueFiles->TagValueChunks reconciliation, but inline refs left as-is to avoid destabilizing minispec coverage. Reconcile to the live code refs (R1873-R1876/R1883 for Update, R1884/R1947 for Append, R1899/R1900/R1947 for Remove) in a focused pass after confirming how validate treats retired-requirement coverage.
+- [x] O125: R1102 'Count of files with a given (tag,value) = number of varints' is semantically stale post-chunkid-migration: the V blob is a chunkid multi-set, so the varint count is chunk-contributions, not distinct files (and QueryTagValues' returned Count inherits this). Needs a deliberate semantic correction (files->chunk-contributions), distinct from the fileid->chunkid wording swaps already applied to R1101/R1103/R1105/R1143.

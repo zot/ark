@@ -40,9 +40,9 @@ Lives for the server's lifetime; no LMDB writes, no schema marker.
   return per-fileid match info for the requested tag names. Used
   by `Store.TagFiles` to contribute the overlay's results to the
   union read. (R1945)
-- TagValueFiles(tag, value string) []uint64: walk entries for the
-  given tag, return fileids whose chunks carry the value. Used by
-  `Store.TagValueFiles`. (R1945)
+- TagValueChunks(tag, value string) []uint64: walk entries for the
+  given tag, return the chunkids that carry the value. Used by
+  `Store.TagValueChunks`. (R1945)
 - FileTagValues(fileid uint64, tags []string) []TagValue: return
   the file's values for the requested tag names. Used by inbox via
   `Store.FileTagValues`. (R1945)

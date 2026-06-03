@@ -61,7 +61,7 @@ func (f *parityFixture) addInline(t *testing.T, tag, value string) {
 // addExt records an ext-routed (tag, value) pair targeting chunkID
 // `target` with `count` virtual contributions. Wires the minimum ExtMap
 // state required by VirtualTagNames/VirtualTagValues/RoutedTagsForChunk
-// /ExtTagFiles/ExtTagValueFiles.
+// /ExtTagFiles/ExtTagValueChunks.
 func (f *parityFixture) addExt(t *testing.T, tvidExt, target uint64, tag, value string, count int) {
 	t.Helper()
 	f.ext.mu.Lock()

@@ -978,7 +978,9 @@ func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
 
 // --- Tag value index (V records) ---
 
-// TagValueCount is a tag value with its file count.
+// TagValueCount is a tag value with its prevalence: the multi-set
+// count of chunk-contributions carrying it across the corpus (the
+// number of V-blob varints, not distinct files).
 // CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1102
 type TagValueCount struct {
 	Value string `json:"value"`
@@ -1640,7 +1642,7 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 			if prefix != "" && !strings.HasPrefix(value, prefix) {
 				continue
 			}
-			counts[value] += len(s.extmap.ExtTagValueFiles(tag, value))
+			counts[value] += len(s.extmap.ExtTagValueChunks(tag, value))
 		}
 	}
 	if s.tmp != nil {
@@ -1648,7 +1650,7 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 			if prefix != "" && !strings.HasPrefix(value, prefix) {
 				continue
 			}
-			counts[value] += len(s.tmp.TagValueFiles(tag, value))
+			counts[value] += len(s.tmp.TagValueChunks(tag, value))
 		}
 	}
 	results := make([]TagValueCount, 0, len(counts))
@@ -1662,11 +1664,11 @@ func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 	return results, nil
 }
 
-// TagValueFiles returns chunkids for a specific (tag, value) pair.
+// TagValueChunks returns chunkids for a specific (tag, value) pair.
 // Resolves the tvid via TvidMap.Lookup and reads the V record by exact
 // key — no prefix scan.
 // CRC: crc-Store.md | Seq: seq-tag-value-index.md | R1110, R1309, R1955
-func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
+func (s *Store) TagValueChunks(tag, value string) ([]uint64, error) {
 	var ids []uint64
 	if tvid, ok := s.tvids.Lookup(tag, value); ok {
 		fullKey := tagValueFullKey(tag, value, tvid)
@@ -1686,10 +1688,10 @@ func (s *Store) TagValueFiles(tag, value string) ([]uint64, error) {
 		}
 	}
 	if s.tmp != nil {
-		ids = append(ids, s.tmp.TagValueFiles(tag, value)...)
+		ids = append(ids, s.tmp.TagValueChunks(tag, value)...)
 	}
 	if s.extmap != nil {
-		ids = append(ids, s.extmap.ExtTagValueFiles(tag, value)...)
+		ids = append(ids, s.extmap.ExtTagValueChunks(tag, value)...)
 	}
 	return ids, nil
 }
@@ -1763,7 +1765,7 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 			}
 			for _, value := range s.extmap.VirtualTagValues(tag) {
 				hit := false
-				for _, cid := range s.extmap.ExtTagValueFiles(tag, value) {
+				for _, cid := range s.extmap.ExtTagValueChunks(tag, value) {
 					if chunkSet[cid] {
 						hit = true
 						break
@@ -1954,12 +1956,12 @@ func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, er
 	}
 	if s.extmap != nil {
 		for _, value := range s.extmap.VirtualTagValues(tag) {
-			consider(value, s.extmap.ExtTagValueFiles(tag, value))
+			consider(value, s.extmap.ExtTagValueChunks(tag, value))
 		}
 	}
 	if s.tmp != nil {
 		for _, value := range s.tmp.TagValuesForTag(tag) {
-			consider(value, s.tmp.TagValueFiles(tag, value))
+			consider(value, s.tmp.TagValueChunks(tag, value))
 		}
 	}
 	results := make([]TagValueMatch, 0, len(matches))

@@ -290,11 +290,11 @@ func (t *TmpTagStore) TagFiles(tags []string) []TagFileRecord {
 	return out
 }
 
-// TagValueFiles returns the overlay's chunkids carrying the given
+// TagValueChunks returns the overlay's chunkids carrying the given
 // (tag, value). Resolves via TvidMap.Lookup so the lookup is O(1) in
 // the in-memory map plus a per-entry membership check.
 // CRC: crc-TmpTagStore.md | R1945, R1964
-func (t *TmpTagStore) TagValueFiles(tag, value string) []uint64 {
+func (t *TmpTagStore) TagValueChunks(tag, value string) []uint64 {
 	tvid, ok := t.tvids.Lookup(tag, value)
 	if !ok {
 		return nil

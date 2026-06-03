@@ -445,21 +445,28 @@ func (l *Librarian) HandleEmbedMatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, matches)
 }
 
-// resolveTagValuePaths resolves V record fileids to file paths,
-// filtering out paths that match the default search exclude patterns.
+// resolveTagValuePaths resolves a (tag, value)'s V-record chunkids to
+// the file paths that own them, filtering out paths that match the
+// default search exclude patterns. The V blob holds chunkids, so it
+// resolves chunkid → fileid via Store.FilesForChunks (overlay-aware)
+// before mapping each fileid → path.
+// CRC: crc-Librarian.md | Seq: seq-tag-value-index.md | R1887
 func (l *Librarian) resolveTagValuePaths(tag, value string) []string {
-	fileids, err := l.db.store.TagValueFiles(tag, value)
+	chunkids, err := l.db.store.TagValueChunks(tag, value)
 	if err != nil {
 		return nil
 	}
+	chunkSet := make(map[uint64]bool, len(chunkids))
+	for _, cid := range chunkids {
+		chunkSet[cid] = true
+	}
 	excludes := l.db.Config().SearchExclude
 	var paths []string
-	for _, fid := range fileids {
-		info, err := l.db.fts.FileInfoByID(fid)
-		if err != nil || len(info.Names) == 0 {
+	for fid := range l.db.store.FilesForChunks(chunkSet) {
+		path, ok := l.db.resolveFilePath(fid)
+		if !ok {
 			continue
 		}
-		path := info.Names[0]
 		if matchesAnyGlob(path, excludes) {
 			continue
 		}

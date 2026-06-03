@@ -40,7 +40,7 @@ sources index, dropped as overlay items disappear.
   multiple chunks share the same compound @ext text, any one is an
   acceptable source; the map holds one. (R2108)
 - routedTagsByTvidExt: map[uint64][]TagValue — tvid_ext → routed
-  (tag, value) pairs. Cache used by ExtTagFiles / ExtTagValueFiles
+  (tag, value) pairs. Cache used by ExtTagFiles / ExtTagValueChunks
   to avoid re-reading X records or re-resolving routed_tvids on the
   tag-query hot path. (R2121, R2122)
 - overlayRoutings: map[uint64]map[uint64][]uint64 — tvid_ext →
@@ -129,11 +129,11 @@ sources index, dropped as overlay items disappear.
   alike. (R2010, R2021)
 - VirtualTagCounts(tags []string) map[string]int: batched
   accessor under one RLock for hot-path callers. (R2010)
-- ExtTagValueFiles(tag, value) []uint64: walk
+- ExtTagValueChunks(tag, value) []uint64: walk
   `routedTagsByTvidExt`; for each tvid_ext whose routed pairs
   contain (tag, value), append `targetToChunk[tvid_ext]` to the
   result. Covers both persistent and overlay routings under a
-  single RLock. Used by Store.TagValueFiles. (R2120, R2124)
+  single RLock. Used by Store.TagValueChunks. (R2120, R2124)
 - ExtTagFiles(tags []string) []TagFileRecord: walk
   `routedTagsByTvidExt`; for each (tvid_ext, routed) where any
   routed.Tag is in `tags`, emit a TagFileRecord per

@@ -91,8 +91,8 @@ Server.Inbox / cmd inbox
         │     └── union both → []TagFileInfo
         │
         ├── For non-showAll: build exclusion set
-        │     Store.TagValueFiles("status", "completed")
-        │     Store.TagValueFiles("status", "denied")
+        │     Store.TagValueChunks("status", "completed")
+        │     Store.TagValueChunks("status", "denied")
         │       (each unions persistent + overlay results)
         │
         └── For each surviving fileid:

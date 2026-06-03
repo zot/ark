@@ -80,7 +80,7 @@ operations complete) document this on the API. (R986, R993, R995)
 - TagDefs(tags): delegate to Store.ListTagDefs, resolve fileids to paths
 - Inbox(showAll, includeArchived): query TagFiles("status") for candidate
   fileids, filter to /requests/ paths. When !showAll, build exclusion set
-  from TagValueFiles("status","completed") and TagValueFiles("status","denied").
+  from TagValueChunks("status","completed") and TagValueChunks("status","denied").
   For each remaining candidate, call Store.FileTagValues to get tag values
   from V records (no file reads). Build []InboxEntry from indexed values.
   RequestID from ark-request or ark-response tag. Kind is "request",

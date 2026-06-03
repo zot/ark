@@ -86,31 +86,39 @@ ark-level settings, and tag tracking.
   I record "schedule_config". (R927, R932, R1572)
 - RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
   return map[byte]int64. Single LMDB View transaction. (R2481)
-- UpdateTagValues(fileid, values []TagValue): replace V records for
-  fileid. Within one LMDB txn: read F records for fileid to get
-  existing tvids, remove fileid from exactly those V records (targeted
-  cleanup via R1312-R1314), delete empty V keys. Then for each new
-  (tag, value), look up existing V record by prefix scan
-  V[tag]\x00[value]\x00 to get tvid, or allocate new tvid if none
-  exists. Write V[tag]\x00[value]\x00[tvid] with fileid appended.
-  Update F record with new tvids. (R1099, R1100, R1101, R1103, R1281,
-  R1309, R1311, R1312, R1313)
-- AppendTagValues(fileid, values []TagValue): add V records without
-  removing — append path. For each (tag, value), prefix scan to find
-  existing tvid or allocate new. Append fileid varint to value blob.
-  Append tvids to F record value. (R1104, R1281, R1311)
-- RemoveTagValues(fileid): read F records for fileid to get tvids,
-  remove fileid from exactly those V records. Delete V keys whose
-  blob becomes empty. (R1105, R1312, R1313, R1314)
+- UpdateTagValues(chunkTags []ChunkTagValues): write the V records for
+  the given chunks (idempotent — orphaned-chunk cleanup is a separate
+  path, RemoveTagValues via microfts2's removed-chunk callback).
+  partitionChunkTags splits the groups by chunkid
+  high bit: persistent chunkids write to LMDB, overlay chunkids
+  dispatch to TmpTagStore. For each persistent chunk, resolve the
+  existing tvid for each (tag, value) by prefix scan
+  V[tag]\x00[value]\x00 (or allocate a new tvid), then append the
+  chunkid to V[tag]\x00[value]\x00[tvid] (multi-set, via
+  addChunkIDToVRecord) and record the chunk's tvids in its F record.
+  Idempotent — re-writing the same chunkid is safe. (R1873, R1874,
+  R1875, R1876, R1883)
+- AppendTagValues(chunkTags []ChunkTagValues): the append path. Same
+  per-chunk persistent write as UpdateTagValues (chunkid-keyed records
+  don't distinguish first-write from append); overlay chunks route to
+  TmpTagStore.AppendTagValues so prior chunks for the fileid survive.
+  Appends the chunkid varint to the value blob and the tvids to the
+  F record. (R1884, R1947)
+- RemoveTagValues(chunkID): drop all F/V/T contributions of one chunkid.
+  Overlay chunkids route to TmpTagStore.RemoveChunk; persistent chunkids
+  read F records for the chunkid to get its tvids, remove the chunkid
+  from exactly those V records, and delete V keys whose blob becomes
+  empty. Driven by microfts2's orphan-chunkid callback. (R1899, R1900,
+  R1947)
 - QueryTagValues(tag, prefix string) []TagValueCount: prefix scan
   V[tag]\x00[prefix] for inline values, then union with
   ExtMap.VirtualTagValues(tag) and TmpTagStore.TagValuesForTag(tag),
   prefix-filtered. Return {value, count} pairs. Honors tag source
   parity. (R1108, R1109, R2344, R2347)
-- TagValueFiles(tag, value string) []uint64: prefix scan
+- TagValueChunks(tag, value string) []uint64: prefix scan
   V[tag]\x00[value]\x00, decode varints from value blob of the one
-  matching record, union with ExtMap.ExtTagValueFiles and
-  TmpTagStore.TagValueFiles. Honors tag source parity. (R1110, R1309,
+  matching record, union with ExtMap.ExtTagValueChunks and
+  TmpTagStore.TagValueChunks. Honors tag source parity. (R1110, R1309,
   R2120, R2344)
 - FileTagValues(fileid uint64, tags []string) map[string]string:
   for each requested tag, return the first observed value: scan V
@@ -133,7 +141,7 @@ ark-level settings, and tag tracking.
   V records for inline matches, then union with ExtMap.VirtualTagValues
   and TmpTagStore.TagValuesForTag matches. Filter by token containment.
   Each match carries chunkIDs (inline from V blob, ExtMap from
-  ExtTagValueFiles, tmp from TmpTagStore.TagValueFiles). Honors tag
+  ExtTagValueChunks, tmp from TmpTagStore.TagValueChunks). Honors tag
   source parity. (R1468, R2344, R2350)
 - AddDiscussed(session, tag, value string): write one RD record with
   NOW unix-nanos as the value. Overwrites the timestamp on re-add.
@@ -455,11 +463,11 @@ ark-level settings, and tag tracking.
   (R1724) and from the file-removal path (R1725).
 
 ### Tmp tag overlay union (R1946, R1947, R1952, R2019)
-- TagFiles, TagValueFiles, FileTagValues union persistent LMDB
+- TagFiles, TagValueChunks, FileTagValues union persistent LMDB
   results with `TmpTagStore` results before returning. Callers stay
   unaware of the tmp:// distinction.
-- TagFiles and TagValueFiles add two ExtMap legs covering routed
-  contributions: `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueFiles`
+- TagFiles and TagValueChunks add two ExtMap legs covering routed
+  contributions: `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueChunks`
   walk `routedTagsByTvidExt` and `targetToChunk` in one pass to
   surface every persistent and overlay ext-routed target chunk that
   carries a requested tag. Without these, F records (which never
@@ -469,9 +477,10 @@ ark-level settings, and tag tracking.
   union without coordination — chunkids do not collide. (R2019,
   R2120, R2124)
 - UpdateTagValues, AppendTagValues, RemoveTagValues dispatch each
-  fileid by its high bit (set when interpreted as int64): persistent
-  fileids go to LMDB, overlay-issued fileids (counting down from
-  `MaxUint64`) go to TmpTagStore.
+  chunkid by its high bit (set when interpreted as int64): persistent
+  chunkids go to LMDB, overlay-issued chunkids (counting down from
+  `MaxUint64`) go to TmpTagStore (partitionChunkTags buckets the
+  overlay groups by their fileid for the TmpTagStore dispatcher).
 - FileTagValues is the call inbox uses to resolve message tags
   without re-reading file content; tmp:// messages flow through the
   same path.

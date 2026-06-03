@@ -3201,7 +3201,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 	}
 
 	// R1148: build exclusion set from V records for cheap filtering.
-	// Post-migration TagValueFiles returns chunkids; resolve to fileids
+	// Post-migration TagValueChunks returns chunkids; resolve to fileids
 	// via microfts2 C-records so excludeIDs stays file-level.
 	addExcluded := func(excludeIDs map[uint64]bool, chunkIDs []uint64) error {
 		return db.fts.Env().View(func(txn *lmdb.Txn) error {
@@ -3221,7 +3221,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 	if !showAll {
 		excludeIDs = make(map[uint64]bool)
 		for _, status := range []string{"completed", "denied"} {
-			ids, err := db.store.TagValueFiles("status", status)
+			ids, err := db.store.TagValueChunks("status", status)
 			if err != nil {
 				return nil, err
 			}
@@ -3231,7 +3231,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 		}
 	}
 	if !includeArchived {
-		ids, err := db.store.TagValueFiles("archived", "true")
+		ids, err := db.store.TagValueChunks("archived", "true")
 		if err != nil {
 			return nil, err
 		}
@@ -3342,6 +3342,10 @@ type TagValueFileInfo struct {
 }
 
 // TagValuesWithFiles returns values for a tag with resolved file paths.
+// V records hold chunkids, so each value's chunkids resolve to their
+// owning fileids via Store.FilesForChunks (overlay-aware) before each
+// fileid is mapped to a path.
+// CRC: crc-DB.md | Seq: seq-tag-value-index.md | R1887
 func (db *DB) TagValuesWithFiles(tag, prefix string) ([]TagValueFileInfo, error) {
 	values, err := db.store.QueryTagValues(tag, prefix)
 	if err != nil {
@@ -3349,17 +3353,19 @@ func (db *DB) TagValuesWithFiles(tag, prefix string) ([]TagValueFileInfo, error)
 	}
 	var results []TagValueFileInfo
 	for _, v := range values {
-		ids, err := db.store.TagValueFiles(tag, v.Value)
+		chunkids, err := db.store.TagValueChunks(tag, v.Value)
 		if err != nil {
 			continue
 		}
+		chunkSet := make(map[uint64]bool, len(chunkids))
+		for _, cid := range chunkids {
+			chunkSet[cid] = true
+		}
 		var paths []string
-		for _, id := range ids {
-			info, err := db.fts.FileInfoByID(id)
-			if err != nil {
-				continue
+		for fid := range db.store.FilesForChunks(chunkSet) {
+			if path, ok := db.resolveFilePath(fid); ok {
+				paths = append(paths, path)
 			}
-			paths = append(paths, info.Names[0])
 		}
 		results = append(results, TagValueFileInfo{
 			Value: v.Value,

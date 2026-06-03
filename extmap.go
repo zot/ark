@@ -180,15 +180,15 @@ func (m *ExtMap) RoutedTagsForChunk(targetChunkID uint64) []TagValue {
 	return out
 }
 
-// ExtTagValueFiles returns target chunkids carrying (tag, value) via
+// ExtTagValueChunks returns target chunkids carrying (tag, value) via
 // any @ext routing — persistent or overlay. Walks
 // routedTagsByTvidExt (the cache populated by Rebuild and maintained
 // alongside writes) and emits the target chunkids for each tvid_ext
 // whose routed pairs include (tag, value). Unioned by
-// Store.TagValueFiles with the persistent V record scan and
-// TmpTagStore.TagValueFiles results.
+// Store.TagValueChunks with the persistent V record scan and
+// TmpTagStore.TagValueChunks results.
 // CRC: crc-ExtMap.md | R2120, R2124
-func (m *ExtMap) ExtTagValueFiles(tag, value string) []uint64 {
+func (m *ExtMap) ExtTagValueChunks(tag, value string) []uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []uint64

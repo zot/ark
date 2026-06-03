@@ -13,8 +13,10 @@ for tags like `status` that appear in hundreds of files.
 ## V Records
 
 The `V` prefix stores tag values. Each unique (tag, value) pair gets
-one LMDB entry whose value bytes list the fileids with that
+one LMDB entry whose value bytes list the chunkids that carry that
 (tag, value), enabling fast value completion without disk I/O.
+File-level callers resolve those chunkids → fileids (via microfts2
+C records) when they need file paths.
 
 Record key/value layout: see [record-formats.md](record-formats.md)
 (V section). Note: V keys also carry a trailing tvid varint that
@@ -26,18 +28,18 @@ joins to EV records (tag-value embeddings) — see
 V records follow the same lifecycle as F and D records:
 
 - **Index/Refresh:** extract tag values from file content (already
-  done by `ExtractTagValues`), remove old V entries for the file,
-  add new V entries.
+  done by `ExtractTagValues`), remove the file's old chunkid entries
+  from V records, add new V entries for the freshly extracted chunks.
 - **Append:** extract tag values from appended content, add V entries
   (no removal — appended tags are additive).
-- **Remove:** remove the fileid from all V entries. If a V entry's
-  fileid list becomes empty, delete the key.
+- **Remove:** remove the chunkid from all V entries. If a V entry's
+  chunkid list becomes empty, delete the key.
 
 ## Querying
 
 V records support three query patterns: all-values-for-a-tag (count
-varint fileids per record), prefix-filtered values (LMDB sorted-key
-range scan), and (tag, value) → fileids direct lookup. See
+varint chunkids per record), prefix-filtered values (LMDB sorted-key
+range scan), and (tag, value) → chunkids direct lookup. See
 [record-formats.md](record-formats.md) (V section) for the exact
 prefix scan keys.
 

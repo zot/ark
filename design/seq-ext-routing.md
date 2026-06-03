@@ -242,16 +242,16 @@ DB.Open
 
 ## Flow: query unification
 
-`Store.TagValueFiles(tag, value)` and `Store.TagFiles(tags)` union
+`Store.TagValueChunks(tag, value)` and `Store.TagFiles(tags)` union
 three sources without coordination:
 
 ```
-Store.TagValueFiles(tag, value)
+Store.TagValueChunks(tag, value)
    │
    ├── persistent LMDB:
    │      prefix scan V[tag]\x00[value]\x00 → []chunkid
    │
-   ├── TmpTagStore.TagValueFiles(tag, value) → []chunkid
+   ├── TmpTagStore.TagValueChunks(tag, value) → []chunkid
    │      // overlay-direct content
    │
    └── ExtMap.OverlayTagValueFiles(tag, value) → []chunkid

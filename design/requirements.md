@@ -1745,13 +1745,13 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### V Record Structure
 - **~~R1099:~~** (Retired T8 — see R1281) V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
 - **~~R1100:~~** (Retired T12 — see R1873) V record value: packed varint-encoded fileids (unsigned LEB128)
-- **R1101:** One LMDB entry per unique (tag, value) pair — fileids accumulate in the value
-- **R1102:** Count of files with a given (tag, value) = number of varints decoded from the value
+- **R1101:** One LMDB entry per unique (tag, value) pair — chunkids accumulate in the value
+- **R1102:** Prevalence of a (tag, value) = number of varints decoded from the value — a multi-set count of the chunk-contributions carrying it across the corpus, not distinct files
 
 ### V Record Lifecycle
-- **R1103:** On index/refresh: remove all V entries for the file's old fileids, then add V entries from freshly extracted tag values
+- **R1103:** On index/refresh: remove all V entries for the file's old chunkids, then add V entries from freshly extracted tag values
 - **R1104:** On append: add V entries for newly extracted tag values (no removal — appended tags are additive)
-- **R1105:** On remove: remove the fileid from all V entries; delete the key if fileid list becomes empty
+- **R1105:** On remove: remove the chunkid from all V entries; delete the key if chunkid list becomes empty
 - **R1106:** `ExtractTagValues` (already called during index/refresh/append) provides the source data — no new extraction logic needed
 - **R1107:** (inferred) V records are rebuilt from scratch by `ark rebuild`, same as T/F/D records
 
@@ -1822,14 +1822,14 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### New Store Method
 - **R1142:** `Store.FileTagValues(fileid uint64, tags []string) (map[string]string, error)` returns the first value found per tag by scanning V records for the fileid
-- **R1143:** For each requested tag, scans V record prefix `V[tag]\x00` entries checking if fileid is in the varint list
+- **R1143:** For each requested tag, scans V record prefix `V[tag]\x00` entries checking if any of the file's chunkids is in the varint list
 - **R1144:** (inferred) Returns empty string for tags with no value for the fileid — callers treat missing values as absent, not errors
 
 ### Inbox Rewrite
 - **R1145:** `DB.Inbox` uses `TagFiles(["status"])` for candidate fileids and path resolution (unchanged)
 - **R1146:** `DB.Inbox` filters to `/requests/` paths before per-file tag lookup (unchanged)
 - **R1147:** `DB.Inbox` calls `Store.FileTagValues` instead of `os.ReadFile` + `ParseTagBlock` for each candidate
-- **R1148:** When `showAll` is false, `DB.Inbox` uses `TagValueFiles("status", "completed")` and `TagValueFiles("status", "denied")` to build an exclusion set before per-file tag lookup
+- **R1148:** When `showAll` is false, `DB.Inbox` uses `TagValueChunks("status", "completed")` and `TagValueChunks("status", "denied")` to build an exclusion set before per-file tag lookup
 - **R1149:** (inferred) InboxEntry fields are populated from the map returned by `FileTagValues` — same field mapping as current code
 - **R1150:** (inferred) Existing Inbox output, sort order, and filtering behavior are preserved — this is a performance change, not a behavior change
 
@@ -2203,7 +2203,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Filter Constructors
 - **R1397:** `ContainsChunkFilter(term, cache, paths)` returns a ChunkFilter that substring-matches chunk text (case-insensitive)
 - **R1398:** `FuzzyChunkFilter(term, cache, paths)` returns a ChunkFilter that fuzzy-matches chunk text (typo-tolerant)
-- **R1399:** `TagChunkFilter(tag, value, mode, store)` returns a chunk-precise ChunkFilter built from T/V records — F-record ChunkID for name-only, V-record chunkIDs (`TagValueFiles`) for name+value. `chunkIDChunkFilter(set)` provides the chunkID membership predicate over `crec.ChunkID`. No chunk text reads.
+- **R1399:** `TagChunkFilter(tag, value, mode, store)` returns a chunk-precise ChunkFilter built from T/V records — F-record ChunkID for name-only, V-record chunkIDs (`TagValueChunks`) for name+value. `chunkIDChunkFilter(set)` provides the chunkID membership predicate over `crec.ChunkID`. No chunk text reads.
 - **R1400:** `without` polarity negates the filter: `func(c) { return !filter(c) }`
 - **R1401:** If chunk text cannot be read (cache miss), the filter returns true (keep — can't verify, don't reject)
 
@@ -3075,7 +3075,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Reverse lookups
 
-- **R1887:** `TagValueFiles(tag, value) []uint64` returns chunkids (post-migration). File-level callers resolve via microfts2 `FilesForChunk` and dedupe.
+- **R1887:** `TagValueChunks(tag, value) []uint64` returns chunkids (post-migration). File-level callers resolve via microfts2 `FilesForChunk` and dedupe.
 - **R1888:** `TagFiles(tags) []TagFileInfo` returns chunk-attributed entries (`{ChunkID, FileID, …}`). File-level callers dedupe by FileID.
 - **R1889:** `FileTagValues(fileid, tags) (map[string]string, error)` is implemented chunkid-internally with a fileid-input wrapper; wired into Inbox per R1142, R1147, R1149. Inbox no longer reads files from disk for tag lookups.
 
@@ -3200,8 +3200,8 @@ implementation, not a separate format break.
 - **R1942:** `TmpTagStore.UpdateTagValues(chunkTags []ChunkTagValues)` replaces a tmp:// fileid's per-chunk tag entries. Same `ChunkTagValues` shape as the persistent store.
 - **R1943:** `TmpTagStore.AppendTagValues(chunkTags []ChunkTagValues)` adds per-chunk tag entries for newly emitted chunks during `AppendTmpFile`, leaving existing chunk-tag entries untouched.
 - **R1944:** `TmpTagStore.RemoveFile(fileid)` drops all V/F entries for the fileid and decrements T counters. Called from `DB.RemoveTmpFile` before microfts2's overlay removal so the tag overlay is consistent with the trigram overlay.
-- **R1945:** `TmpTagStore.TagFiles(tags) []TagFileInfo`, `TmpTagStore.TagValueFiles(tag, value) []uint64`, and `TmpTagStore.FileTagValues(fileid, tags) []TagValue` provide the overlay's read contributions, matching the persistent store's signatures.
-- **R1946:** `Store`'s read methods (`TagFiles`, `TagValueFiles`, `FileTagValues`) union the persistent LMDB results with `TmpTagStore` results before returning. Callers do not branch on tmp://.
+- **R1945:** `TmpTagStore.TagFiles(tags) []TagFileInfo`, `TmpTagStore.TagValueChunks(tag, value) []uint64`, and `TmpTagStore.FileTagValues(fileid, tags) []TagValue` provide the overlay's read contributions, matching the persistent store's signatures.
+- **R1946:** `Store`'s read methods (`TagFiles`, `TagValueChunks`, `FileTagValues`) union the persistent LMDB results with `TmpTagStore` results before returning. Callers do not branch on tmp://.
 - **R1947:** `Store.UpdateTagValues`, `Store.AppendTagValues`, and `Store.RemoveTagValues` (chunkid-keyed) dispatch by the high bit of the chunkid. `Store.RemoveFileTagValues(fileid)` (file-level cleanup, called from `DB.RemoveTmpFile`) dispatches by the high bit of the fileid. Overlay-issued ids (chunkids and fileids alike) count down from `MaxUint64`, so the high bit set when interpreted as int64 marks them as overlay-routed; everything else goes to LMDB.
 - **R1948:** `DB.AddTmpFile`, `DB.UpdateTmpFile`, and `DB.AppendTmpFile` instantiate a `chunkAccumulator` and pass `microfts2.WithIndexedChunkCallback(acc.callback)` to the overlay call. The callback fires once per genuinely-new chunk (hash-dedup miss), in chunk order. After the call returns, the accumulator's chunk-tag pairs are written to `Store.UpdateTagValues` (add/update) or `Store.AppendTagValues` (append).
 - **R1949:** Overlay-fired `IndexedChunk.CRecord` has no LMDB transaction context — `CRecord.Txn()` and `CRecord.DB()` return nil. The chunkAccumulator reads only `ChunkID`, `Hash`, `ContentLen`, `Attrs`, `FileIDs`, and `Trigrams`, never traversing the CRecord into LMDB.
@@ -3234,7 +3234,7 @@ implementation, not a separate format break.
 
 ### Tmp:// integration
 
-- **R1964:** `TmpTagStore` per-chunk entries store tvids instead of `(tag, value)` strings. Read methods (`TagValueFiles`, `FileTagValues`, etc.) resolve tvids via the shared `TvidMap` before returning results.
+- **R1964:** `TmpTagStore` per-chunk entries store tvids instead of `(tag, value)` strings. Read methods (`TagValueChunks`, `FileTagValues`, etc.) resolve tvids via the shared `TvidMap` before returning results.
 - **R1965:** `TvidMap.AllocOverlay(tag, value)` allocates a fresh overlay tvid when `Lookup(tag, value)` finds none. Overlay tvids count down from `MaxUint64` using a separate in-memory counter, mirroring the chunkid/fileid overlay convention; the high bit (set when read as int64) marks a tvid as overlay-issued.
 - **R1966:** `TmpTagStore.UpdateTagValues` and `AppendTagValues` resolve each `(tag, value)` to a tvid (existing via `Lookup`, new via `AllocOverlay`) before writing per-chunk entries.
 - **R1967:** `TmpTagStore.RemoveFile` drops the file's per-chunk tvid contributions. If a tvid loses its last `tmp://` producer AND its origin is `OriginOverlay`, it is removed from the live `TvidMap`. `OriginPersistent` tvids are never dropped on `tmp://` removal — the LMDB record still owns them.
@@ -3250,9 +3250,9 @@ implementation, not a separate format break.
 - **R1970:** `@id: UUID` extracts and indexes as a regular tag through the existing `ExtractTagValues` pipeline. No special record type — V/F/T records use the same shape as any other tag.
 - **R1971:** The chunk that contains the `@id:` declaration *is* the resolved target. No separate section-anchor concept; the chunker's granularity (markdown heading, lines window, JSONL message, PDF block, etc.) determines the resolved scope.
 - **R1972:** Markdown preamble (content before the first heading) resolves to the file's first chunk. An `@id:` in the preamble identifies the whole leading section. An `@id:` under a heading identifies that heading's chunk.
-- **R1973:** Resolution chain: `TvidMap.Lookup("id", UUID)` → tvid; `Store.TagValueFiles("id", UUID)` → chunkids; microfts2 `CRecord.FileIDs` → fileid; `FileInfoByID` → path + chunk Location. Each leg already exists; no new code beyond consumers.
+- **R1973:** Resolution chain: `TvidMap.Lookup("id", UUID)` → tvid; `Store.TagValueChunks("id", UUID)` → chunkids; microfts2 `CRecord.FileIDs` → fileid; `FileInfoByID` → path + chunk Location. Each leg already exists; no new code beyond consumers.
 - **R1974:** Multiple chunks with the same UUID resolve to all matching chunks. The index returns the full list; callers choose by policy (all, first, error). The index does not enforce UUID uniqueness — duplicates are an authoring concern.
-- **R1975:** `tmp://` content participates in `@id` indexing via the unified read path. `Store.TagValueFiles` unions persistent and overlay results, so a UUID declared in `tmp://` content resolves alongside disk content for the server's lifetime.
+- **R1975:** `tmp://` content participates in `@id` indexing via the unified read path. `Store.TagValueChunks` unions persistent and overlay results, so a UUID declared in `tmp://` content resolves alongside disk content for the server's lifetime.
 
 ## Feature: @link rendering
 **Source:** specs/at-link.md
@@ -3328,7 +3328,7 @@ implementation, not a separate format break.
 - **R2016:** `applyIndexExt` decides per-target. For each accepted target chunkid, compute `bothPersistent`; if true, write X record plus multi-set-append target chunkid to each routed tag's V record (existing path); otherwise write `overlayRoutings[tvid_ext][target_chunkid] = routed_tvids` and append target chunkid to `overlayValues[tag][value]` for each routed tag. Either branch updates the six original maps (`targetToChunk`, `chunkToTargets`, `fileidToTvids`, `extByAnchor`, `virtualTagCount`).
 - **R2017:** Routed-tag tvid allocation stays unified. Persistent sources allocate via `allocIDInTxn(IFieldNextTvid)` through the supplied `TvidTxn`; overlay sources allocate via `TmpTagStore.resolveOrAlloc` / `TvidMap.AllocOverlay`. Both paths reuse existing tvids when `(tag, value)` already resolves.
 - **R2018:** (inferred) Self-reference rejection fires on every routing regardless of overlay-ness. A `tmp://` source whose @ext resolves to a chunk in the same `tmp://` fileid is rejected; the @ext tag's V/F/T records still land but no chunks are routed. Extends R1998 to overlay sources.
-- **R2019:** `Store.TagValueFiles(tag, value)` and `Store.TagFiles(tags)` gain a third union leg by consulting `ExtMap.OverlayTagValueFiles(tag, value)` and `ExtMap.OverlayTagFiles(tags)` alongside persistent LMDB results and `TmpTagStore` overlay-direct results. Chunkids do not collide across the three sources.
+- **R2019:** `Store.TagValueChunks(tag, value)` and `Store.TagFiles(tags)` gain a third union leg by consulting `ExtMap.OverlayTagValueFiles(tag, value)` and `ExtMap.OverlayTagFiles(tags)` alongside persistent LMDB results and `TmpTagStore` overlay-direct results. Chunkids do not collide across the three sources.
 - **R2020:** `ExtMap.OverlayTagValueFiles(tag, value) []uint64` returns a copy of `overlayValues[tag][value]` under RLock. `ExtMap.OverlayTagFiles(tags []string)` walks `overlayValues` for the requested tag names and returns chunkid + tag entries for each match.
 - **R2021:** `virtualTagCount[tag]` counts every routed contribution regardless of overlay-ness; the existing `T_total = LMDB_T[tag] + virtualTagCount[tag]` formula stays correct without modification.
 - **R2022:** Persistent source orphan callback uses the existing F→V cleanup to obtain the source's tvid_ext list, then invokes `ExtMap.CleanupSource(sourceChunkID, tvidExt, txn, tt)` for each tvid_ext.
@@ -3463,11 +3463,11 @@ implementation, not a separate format break.
 ## Feature: ext-routed targets visible to tag queries
 **Source:** specs/at-ext-storage.md
 
-- **R2120:** `Store.TagFiles(tags)` and `Store.TagValueFiles(tag, value)` union four legs: F records (inline source-chunk), `TmpTagStore` (overlay-direct), `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueFiles` (persistent ext-routed targets), and the same ExtMap accessor for overlay-routed targets. The accessor walks one set of in-memory maps and emits chunkids for both persistence kinds in a single pass. The four legs union without coordination — chunkids do not collide across sources.
+- **R2120:** `Store.TagFiles(tags)` and `Store.TagValueChunks(tag, value)` union four legs: F records (inline source-chunk), `TmpTagStore` (overlay-direct), `ExtMap.ExtTagFiles` / `ExtMap.ExtTagValueChunks` (persistent ext-routed targets), and the same ExtMap accessor for overlay-routed targets. The accessor walks one set of in-memory maps and emits chunkids for both persistence kinds in a single pass. The four legs union without coordination — chunkids do not collide across sources.
 - **R2121:** ExtMap maintains `routedTagsByTvidExt[tvid_ext] → []TagValue` — the routed (tag, value) pairs each tvid_ext contributes. The cache eliminates the need for tag-query callers to read X records or re-resolve routed_tvids on the hot path.
 - **R2122:** `Rebuild` populates `routedTagsByTvidExt` while scanning X records: for each X record's routed_tvids list, decode each tvid via `TvidMap.Resolve` to (tag, value) and accumulate into the map under the tvid_ext key. Multiple X records sharing the same tvid_ext write the same routed list (routed-tags are a property of the tvid_ext, not the target_chunkid), so later writes are idempotent.
 - **R2123:** `applyIndexExt` and `applyReresolve` keep `routedTagsByTvidExt` current alongside the other maps — Adds populate the entry, the Empty-new-set branch drops it. `CleanupSource` drops the entry when the tvid_ext is evicted from the other ExtMap maps.
-- **R2124:** `ExtMap.ExtTagFiles(tags []string)` returns `[]TagFileRecord` for every (tvid_ext, target_chunkid) pair where the cached routed-tag set intersects the requested tags. `ExtMap.ExtTagValueFiles(tag, value string)` returns `[]uint64` of target chunkids when `routedTagsByTvidExt[tvid_ext]` contains a matching (tag, value) pair. Both accessors walk persistent and overlay routings in a single pass under one RLock — they replace the historical `OverlayTagFiles` / `OverlayTagValueFiles` pair which only saw overlay routings.
+- **R2124:** `ExtMap.ExtTagFiles(tags []string)` returns `[]TagFileRecord` for every (tvid_ext, target_chunkid) pair where the cached routed-tag set intersects the requested tags. `ExtMap.ExtTagValueChunks(tag, value string)` returns `[]uint64` of target chunkids when `routedTagsByTvidExt[tvid_ext]` contains a matching (tag, value) pair. Both accessors walk persistent and overlay routings in a single pass under one RLock — they replace the historical `OverlayTagFiles` / `OverlayTagValueFiles` pair which only saw overlay routings.
 
 ## Feature: auto_compact in ark.toml
 **Source:** specs/serve-compact.md, specs/cli-commands.md
