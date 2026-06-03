@@ -30,6 +30,7 @@ axes (this is the pinned list CLAUDE.md refers to).
 - [features.md](features.md) — every capability: motivation + objective
 - [config.md](config.md) — every `ark.toml` key
 - [chunkers.md](chunkers.md) — every chunker + the interface matrix
+- [future.md](future.md) — deferred ideas not yet built (`@future:` holding pen, until mini-spec tracks them natively)
 
 ## Systems (seed — not exhaustive)
 

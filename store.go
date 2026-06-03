@@ -3799,6 +3799,28 @@ func (s *Store) MaxEDSerial() (uint64, error) {
 	return maxS, err
 }
 
+// MaxEVSerial returns max(RecordSerial(EV, *)) across the EV prefix, or 0 if
+// no EV records exist. Mirrors MaxEDSerial; the propose pass's EV leg folds it
+// into the derivation-freshness threshold so derivation re-triggers when
+// tag-value embeddings change (not only definitions).
+// CRC: crc-Store.md | R2911
+func (s *Store) MaxEVSerial() (uint64, error) {
+	var maxS uint64
+	err := s.env.View(func(txn *lmdb.Txn) error {
+		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedValue), nil), func(_ *lmdb.Cursor, _, v []byte) error {
+			serial, n := binary.Uvarint(v)
+			if n <= 0 {
+				return nil
+			}
+			if serial > maxS {
+				maxS = serial
+			}
+			return nil
+		})
+	})
+	return maxS, err
+}
+
 // DerivedProposals returns all RC records for one chunk sorted by
 // tally descending. RC entries shadowed by a matching RJ record are
 // filtered as defense-in-depth — the derivation pass already skips

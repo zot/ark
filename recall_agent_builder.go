@@ -121,6 +121,8 @@ func (c *RecallCurationBuilder) Candidate(
 	path, rangeLabel string,
 	byteSize int,
 	score float64,
+	cell string,
+	sub ChunkSubstrate,
 	tagNames []string,
 	proposedNames []string,
 	proposedScores []float64,
@@ -129,6 +131,13 @@ func (c *RecallCurationBuilder) Candidate(
 ) {
 	fmt.Fprintf(&c.buf, "\n## Candidate: %s:%s (%s)\n\n", path, rangeLabel, friendlySize(byteSize))
 	fmt.Fprintf(&c.buf, "- score: %.2f\n", score)
+	// Per-result originating cell + per-component scores, logged for
+	// data-driven tuning of the 2×2 allocation. R2909
+	if cell != "" {
+		fmt.Fprintf(&c.buf, "- cell: %s\n", cell)
+	}
+	fmt.Fprintf(&c.buf, "- evidence: text-vec=%.2f text-tri=%.2f tag-vec=%.2f tag-tri=%.2f\n",
+		sub.VectorEC, sub.TrigramEC, sub.TagVector, sub.TagTrigram)
 	fmt.Fprintf(&c.buf, "- tags: %s\n", strings.Join(tagNames, ", "))
 	if len(proposedNames) > 0 {
 		parts := make([]string, 0, len(proposedNames))

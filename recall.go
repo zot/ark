@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
+	"github.com/zot/microfts2"
 )
 
 // RecallOpts configures top-K retrieval, content loading, and the
@@ -122,15 +123,19 @@ type RecallResult struct {
 }
 
 // RecalledChunk is one retrieved chunk with similarity scores and metadata.
-// CRC: crc-Librarian.md | R2624, R2686
+// CRC: crc-Librarian.md | R2624, R2686, R2907, R2909
 type RecalledChunk struct {
 	ChunkID      uint64         `json:"chunkID"`
 	Path         string         `json:"path"`
 	Range        string         `json:"range"`
 	Score        float64        `json:"score"`
 	PerSubstrate ChunkSubstrate `json:"perSubstrate"`
-	Tags         []RecallTag    `json:"tags"`
-	Content      string         `json:"content,omitempty"`
+	// Cell is the 2×2 grid cell this chunk was surfaced in:
+	// "{main|conversation}-{meaning|tags}" (R2907), logged per-result
+	// for data-driven tuning (R2909). Empty until the 2×2 allocation.
+	Cell    string      `json:"cell,omitempty"`
+	Tags    []RecallTag `json:"tags"`
+	Content string      `json:"content,omitempty"`
 	// ProposedTags carries derived-tag candidates for this chunk,
 	// ordered by chunk-EC ↔ tag-ED cosine similarity desc. Populated
 	// only when RecallOpts.Propose is true and the chunk has at least
@@ -150,11 +155,15 @@ type RecallTag struct {
 	Value string `json:"value,omitempty"`
 }
 
-// ChunkSubstrate carries similarity scores per substrate.
-// CRC: crc-Librarian.md | R2620
+// ChunkSubstrate carries similarity scores per substrate. The text pair
+// (VectorEC, TrigramEC) is the content axis; the tag pair (TagVector,
+// TagTrigram) is the value→chunk tag axis (R2905, R2906).
+// CRC: crc-Librarian.md | R2620, R2905, R2906
 type ChunkSubstrate struct {
-	VectorEC  float64 `json:"vectorEc"`
-	TrigramEC float64 `json:"trigramEc"`
+	VectorEC   float64 `json:"vectorEc"`
+	TrigramEC  float64 `json:"trigramEc"`
+	TagVector  float64 `json:"tagVector"`
+	TagTrigram float64 `json:"tagTrigram"`
 }
 
 // RenderRecallChunks writes the per-chunk markdown block for a recall
@@ -164,7 +173,7 @@ type ChunkSubstrate struct {
 //
 // Shared between `ark connections recall` (via cmd/ark/main.go's
 // printRecallResult) and the simple-recall watcher (recall_watcher.go).
-// CRC: crc-Librarian.md | R2645, R2684, R2685, R2704, R2743
+// CRC: crc-Librarian.md | R2645, R2684, R2685, R2704, R2743, R2906, R2907, R2909
 func RenderRecallChunks(out io.Writer, chunks []RecalledChunk) {
 	for _, chunk := range chunks {
 		fmt.Fprintln(out)
@@ -172,8 +181,13 @@ func RenderRecallChunks(out io.Writer, chunks []RecalledChunk) {
 		fmt.Fprintf(out, "  @chunk-path: %s\n", chunk.Path)
 		fmt.Fprintf(out, "  @chunk-range: %s\n", chunk.Range)
 		fmt.Fprintf(out, "  @chunk-score: %.2f\n", chunk.Score)
+		if chunk.Cell != "" {
+			fmt.Fprintf(out, "  @chunk-cell: %s\n", chunk.Cell)
+		}
 		fmt.Fprintf(out, "  @chunk-evidence-vector-ec: %.2f\n", chunk.PerSubstrate.VectorEC)
 		fmt.Fprintf(out, "  @chunk-evidence-trigram-ec: %.2f\n", chunk.PerSubstrate.TrigramEC)
+		fmt.Fprintf(out, "  @chunk-evidence-tag-vector: %.2f\n", chunk.PerSubstrate.TagVector)
+		fmt.Fprintf(out, "  @chunk-evidence-tag-trigram: %.2f\n", chunk.PerSubstrate.TagTrigram)
 
 		names := make([]string, 0, len(chunk.Tags))
 		for _, t := range chunk.Tags {
@@ -216,6 +230,11 @@ func RenderRecallChunks(out io.Writer, chunks []RecalledChunk) {
 type chunkScoresAcc struct {
 	vectorEC  float64
 	trigramEC float64
+	// tagVector / tagTrigram are the tag-axis components (R2906): the max
+	// EV-cosine and max value-string-trigram across the top tag values
+	// whose chunks include this one (R2905). Zero when no tag matched.
+	tagVector  float64
+	tagTrigram float64
 	// tags is the post-filter tag list (discussed entries stripped).
 	// Populated lazily on first encounter so the result-build phase
 	// doesn't re-query AllTagsForChunk. Nil means "not yet looked
@@ -236,7 +255,7 @@ type chunkScoresAcc struct {
 }
 
 // Recall retrieves the top-K chunks from the corpus relevant to a given set of inputs.
-// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658
+// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658, R2905, R2906
 func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallResult, error) {
 	// 1. Clamping K. R2641
 	k := opts.K
@@ -340,7 +359,19 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		return acc
 	}
 
+	// Tag-axis value universe (R2905), scanned once: every (tag, value)
+	// attached to chunks, plus their EV vectors when embeddings are
+	// available. The trigram leg works without a model (seq-recall #1.16).
+	tagUniverse, _ := l.db.store.ScanVRecordTvids()
+	var tagValueVecs map[uint64][]float32
+	if embedAvail {
+		tagValueVecs, _ = l.db.store.ScanTagValueEmbeddings()
+	}
+
 	// 4. Substrate passes. R2620, R2622, R2643, R2644
+	// inputQueries collects each input's query vector + trigram set for the
+	// chat funnel (R2910), which re-scores conversation sub-chunks below.
+	var inputQueries []inputQuery
 	for _, in := range normInputs {
 		var queryVec []float32
 		var queryText string
@@ -370,6 +401,12 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 				queryText = txt
 			}
 		}
+
+		iq := inputQuery{vec: queryVec}
+		if queryText != "" {
+			iq.tris = queryTrigramSet(queryText)
+		}
+		inputQueries = append(inputQueries, iq)
 
 		// Vector-EC pass
 		if len(queryVec) > 0 {
@@ -423,6 +460,69 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 				}
 			}
 		}
+
+		// Tag-axis pass (R2905, R2906): value -> chunk retrieval. Score
+		// each attached tag-value against this input — EV cosine (vector
+		// leg) and on-the-fly trigram-Jaccard of the value string (trigram
+		// leg) — take the top values and pull the chunks carrying them via
+		// V records, each chunk taking the value's scores as its tag-axis
+		// components. Discussed values are skipped so they cannot drive
+		// retrieval (R2658).
+		if len(tagUniverse) > 0 && (queryText != "" || len(queryVec) > 0) {
+			var queryTris map[uint32]bool
+			if queryText != "" {
+				queryTris = queryTrigramSet(queryText)
+			}
+			type tagValScore struct {
+				tag, value     string
+				vec, tri, best float64
+			}
+			scoredVals := make([]tagValScore, 0, len(tagUniverse))
+			for tvid, ta := range tagUniverse {
+				if exclusion.excludes(ta.Tag, ta.Value) {
+					continue
+				}
+				var vec, tri float64
+				if len(queryVec) > 0 {
+					if ev, ok := tagValueVecs[tvid]; ok && len(ev) == len(queryVec) {
+						vec = normalizeCos(cosineSimilarity(queryVec, ev))
+					}
+				}
+				if queryTris != nil {
+					tri = trigramJaccardWithFloor(queryTris, ta.Value)
+				}
+				best := max(vec, tri)
+				if best <= 0 {
+					continue
+				}
+				scoredVals = append(scoredVals, tagValScore{ta.Tag, ta.Value, vec, tri, best})
+			}
+			sort.Slice(scoredVals, func(i, j int) bool { return scoredVals[i].best > scoredVals[j].best })
+			if len(scoredVals) > 50 { // tag-axis internal K, mirrors the content passes
+				scoredVals = scoredVals[:50]
+			}
+			for _, sv := range scoredVals {
+				chunkIDs, cerr := l.db.store.TagValueChunks(sv.tag, sv.value)
+				if cerr != nil {
+					continue
+				}
+				for _, cid := range chunkIDs {
+					if selfChunks[cid] {
+						continue
+					}
+					acc := admit(cid)
+					if acc == nil {
+						continue
+					}
+					if sv.vec > acc.tagVector {
+						acc.tagVector = sv.vec
+					}
+					if sv.tri > acc.tagTrigram {
+						acc.tagTrigram = sv.tri
+					}
+				}
+			}
+		}
 	}
 
 	// 4b. Derivation pass (when --propose is set and embeddings are
@@ -439,10 +539,19 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		derivedScores = ds
 	}
 
-	// 5. Build results, resolve metadata, tags, and content. R2624, R2625
-	var recalled []RecalledChunk
-	cache := l.db.fts.NewChunkCache()
-
+	// 5. Build the candidate set with the metadata the 2×2 allocation
+	// needs — source via file strategy (chat-jsonl = conversation), byte
+	// size for the tiebreak. Conversation splits by axis: its tag match
+	// surfaces as the whole turn (tags attach to turns, R2905), its meaning
+	// is funneled to sub-chunks (R2910); main-corpus chunks surface whole.
+	// Tag + content resolution is deferred to the surfaced set. R2907, R2910
+	var rc RecallConfig
+	if cfg := l.db.Config(); cfg != nil {
+		rc = cfg.Recall
+	}
+	var candidates []recallCandidate
+	var convTurns []recallCandidate // conversation turns whose meaning the funnel refines
+	strategyByPath := make(map[string]string)
 	for cid, acc := range scoresMap {
 		// Caller-surfacing filter: when Propose forced admitTagless,
 		// drop tagless chunks from the surfaced result if the caller's
@@ -452,21 +561,83 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 			continue
 		}
 
-		overallScore := acc.vectorEC
-		if acc.trigramEC > overallScore {
-			overallScore = acc.trigramEC
-		}
-
 		info, err := l.db.ChunkInfo(cid)
 		if err != nil {
 			continue
 		}
 
+		strat, ok := strategyByPath[info.Path]
+		if !ok {
+			strat = l.db.FileStrategy(info.Path)
+			strategyByPath[info.Path] = strat
+		}
+		size := info.ByteEnd - info.ByteStart
+
+		if strat == "chat-jsonl" {
+			// Tag axis surfaces the whole turn; meaning goes to the funnel.
+			if acc.tagVector > 0 || acc.tagTrigram > 0 {
+				candidates = append(candidates, recallCandidate{
+					acc:     &chunkScoresAcc{tagVector: acc.tagVector, tagTrigram: acc.tagTrigram},
+					key:     info.Path + ":" + info.Range,
+					chunkID: cid,
+					path:    info.Path,
+					rangeID: info.Range,
+					fileID:  info.FileID,
+					source:  sourceConversation,
+					size:    size,
+				})
+			}
+			if acc.vectorEC > 0 || acc.trigramEC > 0 {
+				convTurns = append(convTurns, recallCandidate{
+					acc:     acc,
+					chunkID: cid,
+					path:    info.Path,
+					rangeID: info.Range,
+					fileID:  info.FileID,
+					source:  sourceConversation,
+					size:    size,
+				})
+			}
+			continue
+		}
+
+		candidates = append(candidates, recallCandidate{
+			acc:     acc,
+			key:     info.Path + ":" + info.Range,
+			chunkID: cid,
+			path:    info.Path,
+			rangeID: info.Range,
+			fileID:  info.FileID,
+			source:  sourceMain,
+			size:    size,
+		})
+	}
+
+	// 5a. Funnel conversation meaning into sub-chunk candidates (R2910;
+	// R2912 gate). Trigram-only when no model is available.
+	if len(convTurns) > 0 {
+		candidates = append(candidates,
+			l.chatFunnel(convTurns, inputQueries, rc.EffectiveChatFunnelGate(), embedAvail)...)
+	}
+
+	// 5b. Allocate across the 2×2 (source × axis) grid — per-cell ranking
+	// with the size tiebreak, ≤2/file within a cell, dedup dual-members to
+	// their stronger cell, backfill starved cells to the 4×N target, then
+	// cap at the caller's K. R2907, R2908
+	perCell := rc.EffectivePerCellCount()
+	surfaced := allocate2x2(candidates, perCell, k)
+
+	// 5c. Resolve tags + content for the surfaced set only, then build the
+	// result chunks. R2624, R2625
+	cache := l.db.fts.NewChunkCache()
+	recalled := make([]RecalledChunk, 0, len(surfaced))
+	for _, sc := range surfaced {
+		acc := sc.cand.acc
 		// Reuse the cached tag lookup from admit when present
 		// (KeepTagless=false path); otherwise query now. R2647
 		allTags := acc.tags
 		if allTags == nil {
-			allTags, _ = l.db.store.AllTagsForChunk(cid)
+			allTags, _ = l.db.store.AllTagsForChunk(sc.cand.chunkID)
 		}
 		var tags []RecallTag
 		for _, tv := range allTags {
@@ -478,35 +649,28 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 
 		var content string
 		if opts.IncludeContent {
-			if txt, ok := cache.ChunkText(info.Path, info.Range); ok {
+			if sc.cand.content != "" {
+				content = sc.cand.content // pre-resolved chat sub-chunk text (R2910)
+			} else if txt, ok := cache.ChunkText(sc.cand.path, sc.cand.rangeID); ok {
 				content = string(txt)
 			}
 		}
 
 		recalled = append(recalled, RecalledChunk{
-			ChunkID: cid,
-			Path:    info.Path,
-			Range:   info.Range,
-			Score:   overallScore,
+			ChunkID: sc.cand.chunkID,
+			Path:    sc.cand.path,
+			Range:   sc.cand.rangeID,
+			Score:   sc.cand.overallScore(),
+			Cell:    sc.cell,
 			PerSubstrate: ChunkSubstrate{
-				VectorEC:  acc.vectorEC,
-				TrigramEC: acc.trigramEC,
+				VectorEC:   acc.vectorEC,
+				TrigramEC:  acc.trigramEC,
+				TagVector:  acc.tagVector,
+				TagTrigram: acc.tagTrigram,
 			},
 			Tags:    tags,
 			Content: content,
 		})
-	}
-
-	// Sort descending by score. R2626
-	sort.Slice(recalled, func(i, j int) bool {
-		if recalled[i].Score == recalled[j].Score {
-			return recalled[i].ChunkID < recalled[j].ChunkID
-		}
-		return recalled[i].Score > recalled[j].Score
-	})
-
-	if len(recalled) > k {
-		recalled = recalled[:k]
 	}
 
 	// 6. Enrich each surfaced chunk with accumulated derived-tag
@@ -519,6 +683,378 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		Chunks:  recalled,
 		Warning: warning,
 	}, nil
+}
+
+// recallSource classifies a candidate's corpus for the 2×2 grid:
+// conversation (chat-jsonl strategy) vs the main corpus (everything
+// else). R2907
+type recallSource int
+
+const (
+	sourceMain recallSource = iota
+	sourceConversation
+)
+
+// recallAxis is one of the grid's two scoring axes. R2907
+type recallAxis int
+
+const (
+	axisMeaning recallAxis = iota
+	axisTags
+)
+
+// Recall 2×2 cell labels, "{source}-{axis}" (R2907), surfaced on each
+// result as RecalledChunk.Cell for per-result tuning logs (R2909).
+const (
+	cellMainMeaning         = "main-meaning"
+	cellMainTags            = "main-tags"
+	cellConversationMeaning = "conversation-meaning"
+	cellConversationTags    = "conversation-tags"
+)
+
+// recallCandidate is a scored chunk plus the metadata the 2×2 allocation
+// needs. The four similarity components live on acc. R2907
+type recallCandidate struct {
+	acc *chunkScoresAcc
+	// key is the dedup/identity = the surfaced-unit locator (path:range,
+	// or path:range:N for a chat sub-chunk). A conversation turn can
+	// surface both as a whole turn (tags) and as a sub-chunk (meaning),
+	// so identity is the surfaced unit, not the source chunkID. R2908, R2910
+	key     string
+	chunkID uint64
+	path    string
+	rangeID string
+	fileID  uint64
+	source  recallSource
+	size    uint64
+	// content is the pre-resolved text for chat sub-chunk candidates
+	// (R2910); empty for ordinary chunks, whose content is resolved from
+	// the cache in the surfaced set.
+	content string
+}
+
+// axisScore returns the candidate's score on an axis and whether the
+// vector substrate (vs trigram) produced it — the latter drives the size
+// tiebreak (vector → larger first, trigram → smaller first; SIGNAL Q2.1).
+func (c recallCandidate) axisScore(axis recallAxis) (score float64, vectorWon bool) {
+	if axis == axisMeaning {
+		if c.acc.vectorEC >= c.acc.trigramEC {
+			return c.acc.vectorEC, true
+		}
+		return c.acc.trigramEC, false
+	}
+	if c.acc.tagVector >= c.acc.tagTrigram {
+		return c.acc.tagVector, true
+	}
+	return c.acc.tagTrigram, false
+}
+
+// overallScore is the max across all four components — the flat
+// presentation score (the per-result ordering, distinct from the
+// per-cell axis ranking). R2906
+func (c recallCandidate) overallScore() float64 {
+	return max(c.acc.vectorEC, c.acc.trigramEC, c.acc.tagVector, c.acc.tagTrigram)
+}
+
+// surfacedChunk pairs a chosen candidate with the cell it filled. R2907
+type surfacedChunk struct {
+	cand recallCandidate
+	cell string
+}
+
+// cellLabel composes the "{source}-{axis}" cell label. R2907
+func cellLabel(source recallSource, axis recallAxis) string {
+	switch {
+	case source == sourceMain && axis == axisMeaning:
+		return cellMainMeaning
+	case source == sourceMain:
+		return cellMainTags
+	case axis == axisMeaning:
+		return cellConversationMeaning
+	default:
+		return cellConversationTags
+	}
+}
+
+// allocate2x2 distributes candidates across the 2×2 (source × axis) grid.
+// Each cell ranks its eligible candidates (that axis's score > 0) by
+// score with the size tiebreak, capped at ≤2 chunks per file within the
+// cell. A candidate's primary cell is its stronger axis within its source
+// (R2908 dedup); primaries fill first, up to perCell each. Remaining slots
+// toward the 4×perCell target are backfilled round-robin across the cells
+// from each cell's next-best unsurfaced candidate (R2908). The surfaced
+// set is returned sorted by overall score desc, capped at k.
+// CRC: crc-Librarian.md | R2907, R2908
+func allocate2x2(cands []recallCandidate, perCell, k int) []surfacedChunk {
+	type cellKey struct {
+		source recallSource
+		axis   recallAxis
+	}
+	cells := []cellKey{
+		{sourceMain, axisMeaning}, {sourceMain, axisTags},
+		{sourceConversation, axisMeaning}, {sourceConversation, axisTags},
+	}
+
+	// Per-cell ranked eligibility: candidates of the cell's source whose
+	// axis score is > 0, sorted by (score desc, size tiebreak).
+	ranked := make(map[cellKey][]recallCandidate, len(cells))
+	for _, ck := range cells {
+		var elig []recallCandidate
+		for _, c := range cands {
+			if c.source != ck.source {
+				continue
+			}
+			if s, _ := c.axisScore(ck.axis); s > 0 {
+				elig = append(elig, c)
+			}
+		}
+		axis := ck.axis
+		sort.Slice(elig, func(i, j int) bool {
+			si, vi := elig[i].axisScore(axis)
+			sj, vj := elig[j].axisScore(axis)
+			if si != sj {
+				return si > sj
+			}
+			switch {
+			case vi && vj:
+				return elig[i].size > elig[j].size // vector: larger first
+			case !vi && !vj:
+				return elig[i].size < elig[j].size // trigram: smaller first
+			default:
+				return elig[i].key < elig[j].key // mixed: stable
+			}
+		})
+		ranked[ck] = elig
+	}
+
+	// primaryCell is a candidate's stronger axis within its source.
+	primaryCell := func(c recallCandidate) (cellKey, bool) {
+		m, _ := c.axisScore(axisMeaning)
+		t, _ := c.axisScore(axisTags)
+		if m <= 0 && t <= 0 {
+			return cellKey{}, false
+		}
+		if m >= t {
+			return cellKey{c.source, axisMeaning}, true
+		}
+		return cellKey{c.source, axisTags}, true
+	}
+
+	surfacedIDs := make(map[string]bool)
+	fileInCell := make(map[cellKey]map[uint64]int)
+	var out []surfacedChunk
+	take := func(ck cellKey, c recallCandidate) {
+		surfacedIDs[c.key] = true
+		fc := fileInCell[ck]
+		if fc == nil {
+			fc = make(map[uint64]int)
+			fileInCell[ck] = fc
+		}
+		fc[c.fileID]++
+		out = append(out, surfacedChunk{cand: c, cell: cellLabel(ck.source, ck.axis)})
+	}
+	eligibleNow := func(ck cellKey, c recallCandidate) bool {
+		return !surfacedIDs[c.key] && fileInCell[ck][c.fileID] < 2
+	}
+
+	// Primary pass: each cell takes up to perCell of its own primaries.
+	for _, ck := range cells {
+		n := 0
+		for _, c := range ranked[ck] {
+			if n >= perCell {
+				break
+			}
+			if pc, ok := primaryCell(c); !ok || pc != ck {
+				continue
+			}
+			if !eligibleNow(ck, c) {
+				continue
+			}
+			take(ck, c)
+			n++
+		}
+	}
+
+	// Backfill pass: round-robin across the cells until the per-call
+	// target (4×perCell) is met or no cell can contribute more.
+	target := perCell * len(cells)
+	for len(out) < target {
+		added := 0
+		for _, ck := range cells {
+			if len(out) >= target {
+				break
+			}
+			for _, c := range ranked[ck] {
+				if !eligibleNow(ck, c) {
+					continue
+				}
+				take(ck, c)
+				added++
+				break
+			}
+		}
+		if added == 0 {
+			break
+		}
+	}
+
+	// Final flat order: overall score desc, tiebreak chunkID.
+	sort.SliceStable(out, func(i, j int) bool {
+		si, sj := out[i].cand.overallScore(), out[j].cand.overallScore()
+		if si != sj {
+			return si > sj
+		}
+		return out[i].cand.key < out[j].cand.key
+	})
+	if k > 0 && len(out) > k {
+		out = out[:k]
+	}
+	return out
+}
+
+// inputQuery carries one recall input's query vector and trigram set,
+// collected during the scoring passes for reuse by the chat funnel. R2910
+type inputQuery struct {
+	vec  []float32
+	tris map[uint32]bool
+}
+
+// chatSubchunks re-chunks a chat-jsonl turn's indexed content into markdown
+// sub-chunks in document order. The N-th element is the unit a path:range:N
+// recall locator addresses; the funnel and `ark chunks PATH:RANGE:N` re-derive
+// it identically because markdown chunking is deterministic. R2910
+func chatSubchunks(content string) []microfts2.Chunk {
+	var subs []microfts2.Chunk
+	_ = microfts2.MarkdownChunker{}.Chunks("", []byte(content), func(c microfts2.Chunk) bool {
+		subs = append(subs, c)
+		return true
+	})
+	return subs
+}
+
+// ChatSubchunk returns the markdown sub-chunk of the chat turn at
+// path:rangeLabel whose content contains the anchor snippet, re-derived from
+// the indexed turn content. It is the resolve side of the recall
+// path:range:"<snippet>" locator (R2914): the funnel emits the matched
+// paragraph's first line as the anchor, and the same deterministic
+// chatSubchunks here finds the sub-chunk carrying it. Dropping the snippet
+// (fetching path:range via `ark chunks`) returns the whole turn instead — the
+// zoom-out for fuller context. ok is false when the turn or anchor is absent.
+// CRC: crc-DB.md | R2914
+func (db *DB) ChatSubchunk(path, rangeLabel, anchor string) (string, bool) {
+	if anchor == "" {
+		return "", false
+	}
+	txt, ok := db.fts.NewChunkCache().ChunkText(path, rangeLabel)
+	if !ok || len(txt) == 0 {
+		return "", false
+	}
+	for _, sc := range chatSubchunks(string(txt)) {
+		if strings.Contains(string(sc.Content), anchor) {
+			return string(sc.Content), true
+		}
+	}
+	return "", false
+}
+
+// firstLineSnippet is the first non-blank line of text, trimmed and capped —
+// the string anchor in a chat sub-chunk's path:range:"<snippet>" locator. R2914
+func firstLineSnippet(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			if r := []rune(s); len(r) > 60 {
+				s = string(r[:60])
+			}
+			return s
+		}
+	}
+	return ""
+}
+
+// chatFunnel implements the conversation sub-chunk funnel (R2910). It pools
+// the markdown sub-chunks of every matched conversation turn, sorts the pool
+// by trigram similarity to the inputs, embeds only the top-`gate` survivors
+// (R2912, the cost bound), vector-checks each against the inputs, and returns
+// sub-chunk candidates — meaning components only; the tag axis surfaces whole
+// turns separately — located by path:range:"<snippet>". Trigram-only, no model.
+// CRC: crc-Librarian.md | R2910, R2912
+func (l *Librarian) chatFunnel(turns []recallCandidate, inputs []inputQuery, gate int, embedAvail bool) []recallCandidate {
+	type sub struct {
+		turn recallCandidate
+		text string
+		tri  float64
+	}
+	var pool []sub
+	for _, t := range turns {
+		content, err := substrateChunkText(l.db, t.chunkID)
+		if err != nil || content == "" {
+			continue
+		}
+		for _, sc := range chatSubchunks(content) {
+			text := string(sc.Content)
+			if text == "" {
+				continue
+			}
+			var tri float64
+			for _, iq := range inputs {
+				if iq.tris == nil {
+					continue
+				}
+				if s := trigramJaccardWithFloor(iq.tris, text); s > tri {
+					tri = s
+				}
+			}
+			if tri <= 0 {
+				continue // trigram pre-filter: only lexical matches proceed to embed
+			}
+			pool = append(pool, sub{turn: t, text: text, tri: tri})
+		}
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	// Trigram-sort; the gate caps how many survivors get embedded (R2912).
+	sort.Slice(pool, func(i, j int) bool { return pool[i].tri > pool[j].tri })
+	if gate > 0 && len(pool) > gate {
+		pool = pool[:gate]
+	}
+
+	// Embed the survivors once (off the model when available) and vector-check.
+	var vecs [][]float32
+	if embedAvail {
+		texts := make([]string, len(pool))
+		for i, s := range pool {
+			texts[i] = s.text
+		}
+		vecs, _ = l.EmbedBatch(texts)
+	}
+
+	out := make([]recallCandidate, 0, len(pool))
+	for i, s := range pool {
+		var vec float64
+		if i < len(vecs) {
+			for _, iq := range inputs {
+				if len(iq.vec) == len(vecs[i]) && len(iq.vec) > 0 {
+					if c := normalizeCos(cosineSimilarity(vecs[i], iq.vec)); c > vec {
+						vec = c
+					}
+				}
+			}
+		}
+		rangeID := fmt.Sprintf("%s:%q", s.turn.rangeID, firstLineSnippet(s.text))
+		out = append(out, recallCandidate{
+			acc:     &chunkScoresAcc{vectorEC: vec, trigramEC: s.tri},
+			key:     s.turn.path + ":" + rangeID,
+			chunkID: s.turn.chunkID,
+			path:    s.turn.path,
+			rangeID: rangeID,
+			fileID:  s.turn.fileID,
+			source:  sourceConversation,
+			size:    uint64(len(s.text)),
+			content: s.text,
+		})
+	}
+	return out
 }
 
 // scoredTag is one (tagname, similarity) entry. Used by both
@@ -546,9 +1082,32 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 	if err != nil {
 		return nil, err
 	}
+	// Part 5 (R2911): also score chunk-EC against tag-value (EV) embeddings,
+	// so a chunk earns a tag for resembling an existing *value*, not only a
+	// definition. Freshness tracks max(ED, EV) serial so the leg re-triggers
+	// when either substrate changes.
+	maxEV, err := l.db.store.MaxEVSerial()
+	if err != nil {
+		return nil, err
+	}
+	maxSerial := maxED
+	if maxEV > maxSerial {
+		maxSerial = maxEV
+	}
 	eds, err := l.db.store.ScanTagDefEmbeddings()
 	if err != nil {
 		return nil, err
+	}
+	// Fold EV vectors into the candidate scan as additional per-tag vectors
+	// (tag resolved via the TvidMap); selectCandidates' per-tag max then spans
+	// definitions and values alike, under the same min floor (R2911).
+	if evs, eerr := l.db.store.ScanTagValueEmbeddings(); eerr == nil && len(evs) > 0 {
+		tvids := l.db.store.TvidMap().Snapshot()
+		for tvid, vec := range evs {
+			if ta, ok := tvids[tvid]; ok {
+				eds = append(eds, TagDefEmbedding{Tag: ta.Tag, Vec: vec})
+			}
+		}
 	}
 	if len(eds) == 0 {
 		// Nothing to derive against — leave RC/RF alone, return empty.
@@ -563,7 +1122,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 	if err := l.db.store.env.View(func(txn *lmdb.Txn) error {
 		for chunkID, acc := range scoresMap {
 			rf, _, _ := l.db.store.ReadDerivedFreshness(txn, chunkID)
-			if rf >= maxED {
+			if rf >= maxSerial {
 				continue // fresh — no write
 			}
 			chunkVec, err := l.db.store.ReadChunkEmbedding(chunkID)
@@ -588,7 +1147,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 						return err
 					}
 				}
-				if err := l.db.store.WriteDerivedFreshness(txn, chunkID, maxED); err != nil {
+				if err := l.db.store.WriteDerivedFreshness(txn, chunkID, maxSerial); err != nil {
 					return err
 				}
 			}

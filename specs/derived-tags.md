@@ -159,26 +159,32 @@ caller's surfaced output.
 For each chunk in the derivation chunk set:
 
 1. Read `RF[chunkid]`. If absent, treat as serial 0.
-2. Compute `maxED = max(RecordSerial(ED, key)) across all ED keys`.
-   The existing `S` substrate makes this a single bookmark
-   computation; the recall pass holds the result for the batch.
-3. If `RF[chunkid] >= maxED`, the chunk is fresh — skip derivation
-   for this chunk. The chunk still appears in the recall result;
-   only the proposal pass is skipped.
+2. Compute `maxSerial = max(maxED, maxEV)` where `maxED` /
+   `maxEV` are the max `RecordSerial` across all ED / EV keys
+   (`Store.MaxEDSerial` / `MaxEVSerial`). The `S` substrate makes
+   each a single bookmark computation; the recall pass holds the
+   result for the batch. EV is folded in because the propose pass
+   now scores against tag *values* too (R2911), so a value change
+   must also invalidate freshness.
+3. If `RF[chunkid] >= maxSerial`, the chunk is fresh — skip
+   derivation for this chunk. The chunk still appears in the recall
+   result; only the proposal pass is skipped.
 4. Otherwise, run derivation on this chunk. After it completes
-   (with or without proposals), write `RF[chunkid] = maxED`.
+   (with or without proposals), write `RF[chunkid] = maxSerial`.
 
 The skip keeps re-runs cheap. The common case — recall called many
-times across a session without tag-definition changes — runs
-derivation only once per chunk.
+times across a session without tag-definition or tag-value changes
+— runs derivation only once per chunk.
 
 ### Candidate generation
 
 For each eligible chunk:
 
 1. Compute cosine similarity between the chunk's EC vector and
-   every ED vector. Take the top-N by similarity (`derivationK`,
-   default 10).
+   every tag vector — both ED (tag *definitions*) and EV (existing
+   tag *values*, R2911) — aggregating per tag by max, so a chunk
+   earns a tag for resembling a definition *or* an existing value.
+   Take the top-N by similarity (`derivationK`, default 10).
 1a. Drop any candidate whose per-tag max cosine is below
     `[recall].min_propose_similarity` (default 0.70). The floor
     keeps the top-K from filling with loosely related neighbors
@@ -426,9 +432,10 @@ default `K=20`; this is amortized across future passes.
 - A second `recall --propose` immediately after, without ED
   changes, skips derivation (RF freshness check); RC records and
   their tallies are unchanged.
-- A tag-definition change (write a new ED record) invalidates RF
-  on the next recall — the affected chunks re-derive and tally
-  increments where the same candidate survives.
+- A tag-definition change (new ED record) **or a tag-value change
+  (new EV record)** invalidates RF on the next recall — the
+  affected chunks re-derive and tally increments where the same
+  candidate survives.
 - External-tag exclusion: a chunk carrying an ext-routed `@food`
   doesn't get `@food` proposals even when ED-similarity is high.
 - Already-attached filter: a chunk with an `@cooking` F record

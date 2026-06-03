@@ -586,6 +586,56 @@ func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
 	}
 }
 
+// TestRecall_Propose_EVLeg verifies R2911: a chunk resembling an existing tag
+// *value* (EV) — with no definition (ED) for that tag — still gets the tag
+// proposed. Without the EV leg there is no ED to derive against, so the pass
+// would propose nothing.
+func TestRecall_Propose_EVLeg(t *testing.T) {
+	l, db := setupRecall(t)
+	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
+	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
+	cHolder, _ := indexLine(t, db, "holder.txt", "unrelated note text")
+	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
+	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
+
+	// A tag VALUE "cuisine: italian" carried by another chunk, with an EV
+	// embedding aligned to cTarget — and NO definition (ED) for "cuisine".
+	// Only the EV leg can propose it.
+	if err := db.store.UpdateTagValues([]ChunkTagValues{
+		{ChunkID: cHolder, Values: []TagValue{{Tag: "cuisine", Value: "italian"}}},
+	}); err != nil {
+		t.Fatalf("UpdateTagValues: %v", err)
+	}
+	tvid, ok := db.store.TvidMap().Lookup("cuisine", "italian")
+	if !ok {
+		t.Fatalf("tvid for cuisine:italian not allocated")
+	}
+	if err := db.store.WriteTagValueEmbedding(tvid, vecFrom(1, 0, 0, 0)); err != nil {
+		t.Fatalf("WriteTagValueEmbedding: %v", err)
+	}
+
+	if _, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cInput}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	); err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+
+	props, err := db.store.DerivedProposals(cTarget)
+	if err != nil {
+		t.Fatalf("DerivedProposals: %v", err)
+	}
+	found := false
+	for _, p := range props {
+		if p.Tagname == "cuisine" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cuisine proposed for cTarget via the EV leg; got %+v", props)
+	}
+}
+
 // TestRecall_Propose_FreshnessSkipsRedundantWork verifies a second
 // --propose call with no ED change leaves the tally unchanged
 // (freshness skip).

@@ -486,7 +486,7 @@ func (w *RecallWatcher) fire(sessionID string) {
 			// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.7 | R2869
 			tagOnly := sessionFromJSONLPath(ch.Path) == sessionID
 			cb.Candidate(ch.Path, ch.Range, sec.sizes[i],
-				ch.Score, tagNames, pNames, pScores, ch.Content, tagOnly)
+				ch.Score, ch.Cell, ch.PerSubstrate, tagNames, pNames, pScores, ch.Content, tagOnly)
 		}
 	}
 	if err := cb.Close(); err != nil {

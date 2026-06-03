@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	lua "github.com/yuin/gopher-lua"
@@ -810,5 +812,305 @@ func TestRecall_EmptyDiscussedNoFilter(t *testing.T) {
 	}
 	if !sawC2 || !sawC3 {
 		t.Errorf("expected both c2 and c3 to surface with no filter (sawC2=%v sawC3=%v)", sawC2, sawC3)
+	}
+}
+
+// TestRecall_TagAxisRetrieval verifies the part-2 tag axis: an input
+// matching a tag *value* surfaces a chunk carrying that value via its V
+// record, even when the chunk's prose doesn't match and it has no content
+// embedding — so it can only enter the candidate set through the tag axis
+// (the @cuisine: italian case). R2905, R2906
+func TestRecall_TagAxisRetrieval(t *testing.T) {
+	l, db := setupRecall(t)
+
+	// The query chunk's EC vector doubles as the "about italian" query.
+	cQuery, _ := indexLine(t, db, "query.txt", "what should we cook tonight")
+	italianVec := vecFrom(0.0, 0.0, 1.0, 0.0)
+	if err := db.store.WriteChunkEmbedding(cQuery, italianVec); err != nil {
+		t.Fatalf("WriteChunkEmbedding(query): %v", err)
+	}
+
+	// The target chunk's prose shares nothing with the query and it gets
+	// NO content embedding, so neither content pass can surface it. It
+	// carries @cuisine: italian via a V record only.
+	cTarget, _ := indexLine(t, db, "recipe.txt", "zzz qqq wibble")
+	if err := db.store.UpdateTagValues([]ChunkTagValues{
+		{ChunkID: cTarget, Values: []TagValue{{Tag: "cuisine", Value: "italian"}}},
+	}); err != nil {
+		t.Fatalf("UpdateTagValues: %v", err)
+	}
+
+	// EV record for the value "italian", aligned with the query vector so
+	// the tag-axis vector leg scores it high.
+	tvid, ok := db.store.TvidMap().Lookup("cuisine", "italian")
+	if !ok {
+		t.Fatalf("tvid for cuisine:italian not allocated")
+	}
+	if err := db.store.WriteTagValueEmbedding(tvid, italianVec); err != nil {
+		t.Fatalf("WriteTagValueEmbedding: %v", err)
+	}
+
+	inputs := []ConnectionsInput{{ChunkID: cQuery}}
+	res, err := l.Recall(inputs, RecallOpts{K: 10})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+
+	var got *RecalledChunk
+	for i := range res.Chunks {
+		if res.Chunks[i].ChunkID == cTarget {
+			got = &res.Chunks[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("target chunk did not surface via the tag axis")
+	}
+	if got.PerSubstrate.TagVector < 0.9 {
+		t.Errorf("expected high TagVector (vector leg), got %.3f", got.PerSubstrate.TagVector)
+	}
+	if got.PerSubstrate.VectorEC != 0 || got.PerSubstrate.TrigramEC != 0 {
+		t.Errorf("expected zero content components (entered via tag axis only), got vectorEC=%.3f trigramEC=%.3f",
+			got.PerSubstrate.VectorEC, got.PerSubstrate.TrigramEC)
+	}
+	if got.Score < 0.9 {
+		t.Errorf("expected overall score folded from the tag axis >= 0.9, got %.3f", got.Score)
+	}
+}
+
+// mkCand builds a recallCandidate with a synthetic score accumulator —
+// for the pure allocate2x2 unit tests (no DB). Component order:
+// vectorEC, trigramEC, tagVector, tagTrigram.
+func mkCand(id, file uint64, src recallSource, size uint64, vec, tri, tvec, ttri float64) recallCandidate {
+	return recallCandidate{
+		acc:     &chunkScoresAcc{vectorEC: vec, trigramEC: tri, tagVector: tvec, tagTrigram: ttri},
+		key:     fmt.Sprintf("%d", id),
+		chunkID: id,
+		fileID:  file,
+		source:  src,
+		size:    size,
+	}
+}
+
+// TestAllocate2x2_FillsFourCells: one candidate dominant in each of the
+// four (source × axis) cells lands in its own cell. R2907
+func TestAllocate2x2_FillsFourCells(t *testing.T) {
+	cands := []recallCandidate{
+		mkCand(1, 1, sourceMain, 10, 0.9, 0, 0, 0),         // main-meaning
+		mkCand(2, 2, sourceMain, 10, 0, 0, 0.9, 0),         // main-tags
+		mkCand(3, 3, sourceConversation, 10, 0.9, 0, 0, 0), // conversation-meaning
+		mkCand(4, 4, sourceConversation, 10, 0, 0, 0.9, 0), // conversation-tags
+	}
+	got := allocate2x2(cands, 1, 20)
+	if len(got) != 4 {
+		t.Fatalf("want 4 surfaced, got %d", len(got))
+	}
+	cellByID := map[uint64]string{}
+	for _, s := range got {
+		cellByID[s.cand.chunkID] = s.cell
+	}
+	want := map[uint64]string{
+		1: cellMainMeaning, 2: cellMainTags,
+		3: cellConversationMeaning, 4: cellConversationTags,
+	}
+	for id, w := range want {
+		if cellByID[id] != w {
+			t.Errorf("chunk %d: want cell %s, got %s", id, w, cellByID[id])
+		}
+	}
+}
+
+// TestAllocate2x2_TwoPerFileWithinCell: a cell admits at most two chunks
+// from the same file, even with perCell budget to spare. R2907
+func TestAllocate2x2_TwoPerFileWithinCell(t *testing.T) {
+	cands := []recallCandidate{
+		mkCand(1, 7, sourceMain, 10, 0.9, 0, 0, 0),
+		mkCand(2, 7, sourceMain, 10, 0.8, 0, 0, 0),
+		mkCand(3, 7, sourceMain, 10, 0.7, 0, 0, 0),
+	}
+	got := allocate2x2(cands, 3, 20)
+	if len(got) != 2 {
+		t.Fatalf("want 2 (≤2/file within cell), got %d", len(got))
+	}
+	for _, s := range got {
+		if s.cand.chunkID == 3 {
+			t.Errorf("third same-file chunk should be capped out")
+		}
+	}
+}
+
+// TestAllocate2x2_DedupKeepsStrongerCell: a chunk eligible in both its
+// meaning and tags cells surfaces once, in the higher-scoring cell. R2908
+func TestAllocate2x2_DedupKeepsStrongerCell(t *testing.T) {
+	cands := []recallCandidate{
+		mkCand(1, 1, sourceMain, 10, 0.9, 0, 0.5, 0), // meaning 0.9 > tags 0.5
+	}
+	got := allocate2x2(cands, 3, 20)
+	if len(got) != 1 {
+		t.Fatalf("want 1 (surfaced once), got %d", len(got))
+	}
+	if got[0].cell != cellMainMeaning {
+		t.Errorf("want stronger cell %s, got %s", cellMainMeaning, got[0].cell)
+	}
+}
+
+// TestAllocate2x2_BackfillStarvedCell: when three cells are empty, their
+// budget redistributes to the populated cell up to the 4×perCell target. R2908
+func TestAllocate2x2_BackfillStarvedCell(t *testing.T) {
+	var cands []recallCandidate
+	for i := uint64(1); i <= 5; i++ {
+		cands = append(cands, mkCand(i, i, sourceMain, 10, 0.9, 0, 0, 0))
+	}
+	got := allocate2x2(cands, 1, 20)
+	if len(got) != 4 {
+		t.Fatalf("want 4 (target 4×1 backfilled into one cell), got %d", len(got))
+	}
+	for _, s := range got {
+		if s.cell != cellMainMeaning {
+			t.Errorf("want all main-meaning, got %s", s.cell)
+		}
+	}
+}
+
+// TestAllocate2x2_SizeTiebreakVector: among equal vector-won scores, larger
+// chunks win the size tiebreak — so when the target caps the cell, the
+// smallest is dropped. R2907 (SIGNAL Q2.1)
+func TestAllocate2x2_SizeTiebreakVector(t *testing.T) {
+	var cands []recallCandidate
+	for _, sz := range []uint64{10, 20, 30, 40, 50} {
+		cands = append(cands, mkCand(sz, sz, sourceMain, sz, 0.8, 0, 0, 0)) // vector-won
+	}
+	got := allocate2x2(cands, 1, 20)
+	ids := map[uint64]bool{}
+	for _, s := range got {
+		ids[s.cand.chunkID] = true
+	}
+	if len(got) != 4 || ids[10] {
+		t.Errorf("vector tiebreak: want 4 surfaced excluding smallest(10), got ids=%v", ids)
+	}
+}
+
+// TestAllocate2x2_SizeTiebreakTrigram: among equal trigram-won scores,
+// smaller chunks win the size tiebreak — so the largest is dropped at the
+// cap. R2907 (SIGNAL Q2.1)
+func TestAllocate2x2_SizeTiebreakTrigram(t *testing.T) {
+	var cands []recallCandidate
+	for _, sz := range []uint64{10, 20, 30, 40, 50} {
+		cands = append(cands, mkCand(sz, sz, sourceMain, sz, 0, 0.8, 0, 0)) // trigram-won
+	}
+	got := allocate2x2(cands, 1, 20)
+	ids := map[uint64]bool{}
+	for _, s := range got {
+		ids[s.cand.chunkID] = true
+	}
+	if len(got) != 4 || ids[50] {
+		t.Errorf("trigram tiebreak: want 4 surfaced excluding largest(50), got ids=%v", ids)
+	}
+}
+
+// TestChatSubchunks verifies the deterministic, document-order re-chunk that
+// underpins the path:range:N locator (funnel and `ark chunks PATH:RANGE:N`
+// must agree on which paragraph N names). R2910
+func TestChatSubchunks(t *testing.T) {
+	content := "First paragraph about apples.\n\nSecond paragraph about zebras.\n\nThird paragraph about oranges."
+	subs := chatSubchunks(content)
+	if len(subs) != 3 {
+		t.Fatalf("want 3 sub-chunks, got %d", len(subs))
+	}
+	for i, w := range []string{"apples", "zebras", "oranges"} {
+		if !bytes.Contains(subs[i].Content, []byte(w)) {
+			t.Errorf("sub-chunk %d: want content containing %q, got %q", i, w, subs[i].Content)
+		}
+	}
+	subs2 := chatSubchunks(content)
+	for i := range subs {
+		if string(subs[i].Content) != string(subs2[i].Content) {
+			t.Errorf("sub-chunk %d not deterministic across re-chunks", i)
+		}
+	}
+}
+
+// TestRecall_ChatFunnel verifies the conversation funnel (R2910): a long
+// matched turn surfaces the relevant paragraph as a path:range:N sub-chunk in
+// the conversation-meaning cell, not the whole turn. Runs trigram-only here
+// (the test's fake model can't embed), exercising the no-model funnel path.
+func TestRecall_ChatFunnel(t *testing.T) {
+	l, db := setupRecall(t)
+	if err := db.fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+		t.Fatalf("register chat-jsonl chunker: %v", err)
+	}
+
+	// One chat-jsonl turn, three paragraphs; only the middle one matches.
+	turn := `{"type":"user","content":"The orchard notes cover apples and pears in careful detail.\n\nWe also discussed zebras and giraffes roaming the savanna grasslands.\n\nFinally the talk turned to oranges and citrus cultivation methods."}`
+	fp := filepath.Join(db.dbPath, "session-abc.jsonl")
+	if err := os.WriteFile(fp, []byte(turn+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(fp, "chat-jsonl"); err != nil {
+		t.Fatalf("AddFile chat-jsonl: %v", err)
+	}
+
+	inputs := []ConnectionsInput{{Text: "zebras and giraffes roaming the savanna grasslands"}}
+	res, err := l.Recall(inputs, RecallOpts{K: 10, IncludeContent: true, KeepTagless: true})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+
+	var sub *RecalledChunk
+	for i := range res.Chunks {
+		if strings.Contains(res.Chunks[i].Range, ":") { // turnRange:N sub-chunk locator
+			sub = &res.Chunks[i]
+			break
+		}
+	}
+	if sub == nil {
+		t.Fatalf("no sub-chunk surfaced via the funnel; chunks=%+v", res.Chunks)
+	}
+	if !strings.Contains(sub.Content, "zebras") {
+		t.Errorf("sub-chunk should be the matching paragraph, got %q", sub.Content)
+	}
+	if strings.Contains(sub.Content, "apples") || strings.Contains(sub.Content, "oranges") {
+		t.Errorf("sub-chunk should be just the matched paragraph, not the whole turn: %q", sub.Content)
+	}
+	if sub.Cell != cellConversationMeaning {
+		t.Errorf("want cell %s, got %s", cellConversationMeaning, sub.Cell)
+	}
+}
+
+// TestChatSubchunkResolve verifies the resolve side of the path:range:N
+// locator (`ark chunks PATH:RANGE:N` → DB.ChatSubchunk): the N-th paragraph
+// of the turn, deterministic and indexed-faithful; dropping N would fetch
+// the whole turn. R2914
+func TestChatSubchunkResolve(t *testing.T) {
+	_, db := setupRecall(t)
+	if err := db.fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
+		t.Fatalf("register chat-jsonl: %v", err)
+	}
+	turn := `{"type":"user","content":"Alpha paragraph here.\n\nBeta paragraph here.\n\nGamma paragraph here."}`
+	fp := filepath.Join(db.dbPath, "sess.jsonl")
+	if err := os.WriteFile(fp, []byte(turn+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileid, err := db.indexer.AddFile(fp, "chat-jsonl")
+	if err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	info, err := db.fts.FileInfoByID(fileid)
+	if err != nil || len(info.Chunks) == 0 {
+		t.Fatalf("FileInfoByID: %v", err)
+	}
+	ci, err := db.ChunkInfo(info.Chunks[0].ChunkID)
+	if err != nil {
+		t.Fatalf("ChunkInfo: %v", err)
+	}
+
+	if got, ok := db.ChatSubchunk(ci.Path, ci.Range, "Beta"); !ok || !strings.Contains(got, "Beta") {
+		t.Errorf("anchor Beta = %q ok=%v; want the Beta paragraph", got, ok)
+	}
+	if got, ok := db.ChatSubchunk(ci.Path, ci.Range, "Alpha"); !ok || !strings.Contains(got, "Alpha") {
+		t.Errorf("anchor Alpha = %q ok=%v; want the Alpha paragraph", got, ok)
+	}
+	if _, ok := db.ChatSubchunk(ci.Path, ci.Range, "no-such-text-xyz"); ok {
+		t.Errorf("missing anchor should be ok=false")
 	}
 }

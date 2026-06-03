@@ -4330,12 +4330,18 @@ func cmdChunks(args []string) {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, `Usage: ark chunks [options] <chunkid>
        ark chunks [options] <path>:<range>
+       ark chunks [options] <path>:<range>:"<snippet>"
        ark chunks [options] <path> <range>
        ark chunks -status [pattern...]
 
 Show chunk content, or list chunks with sizes. The single-argument
 forms (decimal chunkID or path:range) make it easy to paste a line
 straight from search/recall output.
+
+A recall chat sub-chunk locator path:range:"<snippet>" returns just that
+one markdown sub-chunk (the matched paragraph) of the conversation turn.
+Drop the :"<snippet>" — fetch path:range — to get the whole turn instead,
+the zoom-out for fuller context.
 
 Options:`)
 		fs.PrintDefaults()
@@ -4348,14 +4354,31 @@ Options:`)
 	}
 
 	posArgs := fs.Args()
-	filePath, chunkRange, err := resolveChunksTarget(posArgs)
+	filePath, chunkRange, anchor, err := resolveChunksTarget(posArgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, "usage: ark chunks <chunkid> | <path>:<range> | <path> <range>  [-before N] [-after N]")
+		fmt.Fprintln(os.Stderr, `usage: ark chunks <chunkid> | <path>:<range> | <path>:<range>:"<snippet>" | <path> <range>  [-before N] [-after N]`)
 		os.Exit(1)
 	}
 
 	withDB(func(d *ark.DB) {
+		if anchor != "" {
+			// Chat sub-chunk locator path:range:"<snippet>" — return the
+			// matched markdown sub-chunk of the turn (R2914). Drop the snippet
+			// (fetch path:range) for the whole turn — the zoom-out for context.
+			text, ok := d.ChatSubchunk(filePath, chunkRange, anchor)
+			if !ok {
+				fatal(fmt.Errorf("no sub-chunk matching %q at %s:%s", anchor, filePath, chunkRange))
+			}
+			if *wrap != "" {
+				fmt.Printf("<%s source=%q range=%q>\n", *wrap, filePath, fmt.Sprintf("%s:%q", chunkRange, anchor))
+				writeEscaped(os.Stdout, text, *wrap)
+				fmt.Printf("</%s>\n", *wrap)
+			} else {
+				fmt.Println(text)
+			}
+			return
+		}
 		if filePath == "" {
 			// chunkID-only form: resolve via ChunkInfo.
 			cid, _ := strconv.ParseUint(chunkRange, 10, 64)
@@ -4386,34 +4409,48 @@ Options:`)
 }
 
 // resolveChunksTarget parses the positional arguments of `ark chunks`.
-// Returns (path, range, nil) on success. When the input is a bare
+// Returns (path, range, anchor) on success. When the input is a bare
 // chunkID, path is empty and range carries the decimal chunkID string —
 // the caller resolves chunkID → (path, range) via db.ChunkInfo.
 //
 // Accepted shapes:
-//   - `<chunkid>`         single all-digits arg
-//   - `<path>:<range>`    single arg with `:NN[-MM]` suffix
-//   - `<path> <range>`    classic two-arg form
-func resolveChunksTarget(posArgs []string) (path, rangeLabel string, err error) {
+//   - `<chunkid>`               single all-digits arg
+//   - `<path>:<range>`          single arg with `:NN[-MM]` suffix
+//   - `<path>:<range>:"snip"`   recall chat sub-chunk locator (R2914)
+//   - `<path> <range>`          classic two-arg form
+//
+// anchor is the chat sub-chunk snippet from a path:range:"<snippet>" locator,
+// or "" when absent; it selects the matched markdown sub-chunk within the
+// turn. Dropping it (path:range) fetches the whole turn.
+func resolveChunksTarget(posArgs []string) (path, rangeLabel, anchor string, err error) {
 	switch len(posArgs) {
 	case 0:
-		return "", "", fmt.Errorf("missing target")
+		return "", "", "", fmt.Errorf("missing target")
 	case 1:
 		arg := posArgs[0]
 		if isAllDigits(arg) {
-			return "", arg, nil
+			return "", arg, "", nil
 		}
-		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx < len(arg)-1 {
-			candidate := arg[idx+1:]
-			if looksLikeRange(candidate) {
-				return arg[:idx], candidate, nil
+		// path:range:"snippet" — a quoted string anchor after a path:range
+		// is the recall chat sub-chunk locator (R2914).
+		if i := strings.Index(arg, `:"`); i > 0 && strings.HasSuffix(arg, `"`) && len(arg) > i+2 {
+			base, snip := arg[:i], arg[i+2:len(arg)-1]
+			if j := strings.LastIndexByte(base, ':'); j > 0 && j < len(base)-1 {
+				if looksLikeRange(base[j+1:]) {
+					return base[:j], base[j+1:], snip, nil
+				}
 			}
 		}
-		return "", "", fmt.Errorf("single argument must be a decimal chunkID or path:range")
+		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx < len(arg)-1 {
+			if cand := arg[idx+1:]; looksLikeRange(cand) {
+				return arg[:idx], cand, "", nil
+			}
+		}
+		return "", "", "", fmt.Errorf(`single argument must be a decimal chunkID, path:range, or path:range:"snippet"`)
 	case 2:
-		return posArgs[0], posArgs[1], nil
+		return posArgs[0], posArgs[1], "", nil
 	default:
-		return "", "", fmt.Errorf("too many arguments")
+		return "", "", "", fmt.Errorf("too many arguments")
 	}
 }
 

@@ -116,6 +116,17 @@ specific paragraph that matched, at bounded embed cost. The pre-embed
 gate (how many sub-chunks survive trigram before the embed step) is a
 config knob, logged, tuned from data (SIGNAL Q2.3).
 
+The surfaced sub-chunk's locator is `PATH:RANGE:"<snippet>"` — the turn's
+path:range plus a string anchor (the matched paragraph's first line), the
+same anchor grammar `@ext` uses (at-ext-parsing.md). `ark chunks
+PATH:RANGE:"<snippet>"` resolves it; dropping the snippet fetches the whole
+turn (zoom-out for fuller context).
+
+@future: chat-jsonl is append-only ⇒ chunk ranges are stable, so a positional
+locator (`:N` sub-index or the markdown line-range `:5-7`) would round-trip
+reliably and resolve by slicing instead of re-scanning for the snippet —
+deferred behind the string-anchor form. See [../future.md](../future.md).
+
 ### 5. Propose pass gains an EV leg
 
 The derived-tag propose pass scores chunk-EC against tag-**EV** (existing

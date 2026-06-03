@@ -97,6 +97,7 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	cb.Section("conv.jsonl", "5-9", "the user's question about asparagus")
 	cb.Candidate(
 		"notes/foo.md", "12-18", 1834, 0.84,
+		"main-meaning", ChunkSubstrate{VectorEC: 0.84, TrigramEC: 0.40},
 		[]string{"cooking", "course"},
 		[]string{"persona"}, []float64{0.72},
 		"asparagus risotto", false,
@@ -104,6 +105,7 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	cb.Section("conv.jsonl", "20-24", "assistant explanation of risotto technique")
 	cb.Candidate(
 		"notes/bar.md", "1-7", 480, 0.76,
+		"main-tags", ChunkSubstrate{TagVector: 0.76, TagTrigram: 0.30},
 		[]string{"technique"},
 		nil, nil,
 		"toast the rice in fat", false,
@@ -127,6 +129,12 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	}
 	if !strings.Contains(body, "- score: 0.84\n") {
 		t.Errorf("missing candidate 1 score line")
+	}
+	if !strings.Contains(body, "- cell: main-meaning\n") {
+		t.Errorf("missing candidate 1 cell line (R2909)")
+	}
+	if !strings.Contains(body, "- evidence: text-vec=0.84 text-tri=0.40 tag-vec=0.00 tag-tri=0.00\n") {
+		t.Errorf("missing candidate 1 evidence line (R2909)")
 	}
 	if !strings.Contains(body, "- tags: cooking, course\n") {
 		t.Errorf("missing candidate 1 tags line")
@@ -156,8 +164,10 @@ func TestRecallCurationBuilder_TagOnly(t *testing.T) {
 	cb := b.RecallCurationOpen("sess-xyz", 3)
 	cb.Section("conv.jsonl", "30-34", "user revisiting an earlier point")
 	cb.Candidate("~/.claude/projects/p/sess-xyz.jsonl", "40-44", 300, 0.81,
+		"conversation-tags", ChunkSubstrate{TagVector: 0.81},
 		[]string{"topic"}, nil, nil, "earlier we discussed this", true)
 	cb.Candidate("notes/ext.md", "1-3", 200, 0.79,
+		"main-tags", ChunkSubstrate{TagVector: 0.79},
 		[]string{"topic"}, nil, nil, "external knowledge", false)
 	body := cb.buf.String()
 

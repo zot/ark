@@ -82,16 +82,19 @@ type RecallResult struct {
 type RecalledChunk struct {
     ChunkID      uint64           `json:"chunkID"`
     Path         string           `json:"path"`
-    Range        string           `json:"range"`           // chunker's range label (e.g. "12-18")
-    Score        float64          `json:"score"`           // max across substrates and inputs
-    PerSubstrate ChunkSubstrate   `json:"perSubstrate"`    // per-substrate scores after cross-input max
+    Range        string           `json:"range"`           // chunker's range label (e.g. "12-18"); a chat sub-chunk appends :"snippet"
+    Score        float64          `json:"score"`           // max across the four components
+    Cell         string           `json:"cell,omitempty"`  // 2×2 grid cell: {main|conversation}-{meaning|tags}
+    PerSubstrate ChunkSubstrate   `json:"perSubstrate"`    // four per-component scores after cross-input max
     Tags         []TagValue       `json:"tags"`            // chunk's V records (AllTagsForChunk)
     Content      string           `json:"content,omitempty"` // empty when opts.IncludeContent=false
 }
 
 type ChunkSubstrate struct {
-    VectorEC  float64 `json:"vectorEc"`
-    TrigramEC float64 `json:"trigramEc"`
+    VectorEC   float64 `json:"vectorEc"`   // text-vector
+    TrigramEC  float64 `json:"trigramEc"`  // text-trigram
+    TagVector  float64 `json:"tagVector"`  // tag axis: EV cosine
+    TagTrigram float64 `json:"tagTrigram"` // tag axis: value-string trigram
 }
 ```
 
@@ -101,56 +104,59 @@ plus bare-integer-array sugar).
 
 ## Algorithm
 
+Recall scores each candidate chunk on **four similarity components** —
+`<text-trigram, text-vector, tag-trigram, tag-vector>` (`ChunkSubstrate`) —
+then allocates results across a **2×2 grid** rather than one ranked pool.
+
+**Embedding is tag-free.** The EC (meaning) vector is built from
+tag-stripped chunk text (`stripArkTags` at embed; see
+[chunk-embeddings.md](chunk-embeddings.md)), while the trigram index stays
+full-text (tags kept). So the *text* axis is pure prose and the *tag* axis
+carries tag semantics, with no double-count (see index.md theme "Text vs
+meaning").
+
 For each normalized input:
 
-1. **vector(input, EC)** — `SearchChunks(queryVec, K')` where
-   K' is `substrateInternalK` (50 by default). Returns ranked
-   chunks with cosine scores (normalized `(cos+1)/2` to `[0,1]`).
-2. **trigram(input, EC)** — `SearchFuzzy(queryText, K')` returns
-   candidate chunks. Each candidate is re-scored as a Jaccard
-   similarity over trigram sets: `score = |Tq ∩ Tc| / |Tq ∪ Tc|`,
-   where `Tq` is the trigram set of the query text and `Tc` is
-   the trigram set of the candidate chunk's content (via
-   microfts2's UTF-8-aware trigram engine). To skip the union
-   computation for candidates that only marginally overlap the
-   query, the pass first checks **query-coverage** —
-   `|Tq ∩ Tc| / |Tq|` — and short-circuits to score 0 when
-   coverage is below `trigramCoverageFloor` (default `0.1`).
-   Resolves each `SearchResultEntry` to a global chunkID via
-   `FileInfoByID`.
+1. **text-vector** — `SearchChunks(queryVec, 50)`; cosine normalized
+   `(cos+1)/2` to `[0,1]`.
+2. **text-trigram** — `SearchFuzzy(queryText, 50)`, each candidate
+   re-scored as Jaccard `|Tq∩Tc|/|Tq∪Tc|` with a query-coverage floor
+   (`trigramCoverageFloor`, `0.1`) short-circuiting marginal overlaps to 0.
+3. **tag axis (value→chunk, retrieval)** — score each attached tag-value
+   against the input: tag-vector = EV-cosine (normalized), tag-trigram =
+   on-the-fly Jaccard of the value string. Pull the chunks carrying the
+   top-scoring values via the V hyperedge records (`TagValueChunks`, which
+   unions inline V + ext-routed + overlay), each chunk taking the value's
+   scores as its tag-axis components. A chunk surfaces *because its tags
+   match the input* even when its prose does not. ~1162 short values →
+   brute-force scan, no stored TV record (deferred; see future.md).
 
-   This gives the trigram pass an absolute score on the same
-   `[0, 1]` scale as the vector pass's `(cos + 1) / 2`, so the
-   per-chunk max merge across substrates is meaningful instead
-   of being dominated by the trigram side. (The earlier
-   per-input `score / maxScore` normalization made every input's
-   top trigram hit equal to 1.0 regardless of actual similarity;
-   Jaccard removes that asymmetry.)
+Each component aggregates across inputs by max.
 
-Per-chunk aggregate **across substrates** (per input): max.
-Per-chunk aggregate **across inputs**: max.
+**2×2 allocation.** Results fill a grid of (main-corpus, conversation) ×
+(meaning, tags) — source via the file's chunker strategy (`chat-jsonl` =
+conversation), N chunks per cell (default 3, `[recall].per_cell_count`).
+Within a cell, rank by that axis's score (meaning = max(text-tri, text-vec);
+tags = max(tag-tri, tag-vec)), ≤2 chunks per file, sort `<score, size>` with
+the size tiebreak **larger on a vector win, smaller on a trigram win**
+(vector cosine is size-robust; Jaccard size-sensitive). A chunk eligible in
+both its meaning and tags cell dedups to its stronger cell; underfilling
+cells backfill round-robin toward the 4×N target; a final flat sort by
+overall score caps at K. Each surfaced result records its originating cell
+(`@chunk-cell`) and per-component scores, logged for data-driven tuning.
 
-After aggregation, resolve each surviving chunk's:
+**Conversation funnel.** A chat-jsonl turn is a whole "chunk" — too coarse.
+Its *meaning* is funneled to sub-chunks: pool the markdown sub-chunks of
+matched turns, trigram-sort, embed only the top `[recall].chat_funnel_gate`
+survivors, vector-check against the input, and surface the matched paragraph
+located by `path:range:"<snippet>"` (resolve via `ark chunks`, see
+[cli-commands.md](cli-commands.md); drop the snippet for the whole turn). Its
+*tags* surface the whole turn (tags attach to turns). Main-corpus chunks
+surface whole.
 
-- path / range / tags via `ChunkInfo` + `AllTagsForChunk`
-- content (if `IncludeContent`) via the chunk cache —
-  `db.fts.NewChunkCache().ChunkText(path, range)`. The trigram
-  pass has already loaded the same content for Jaccard scoring,
-  so the cache hit is warm.
-
-Sort descending by aggregate score, return top K. Self-chunkID
-is skipped from the output: any input that normalizes to a
-chunkID — whether passed directly as `{ChunkID: c}` or resolved
-from `{Path: p, Range: r}` — is excluded from its own recall
-results. Recall surfaces *other* chunks, not the input chunk
-itself.
-
-ED-side substrates (`vector_ed` / `trigram_ed`) are NOT run.
-Recall's purpose is "what other chunks does my corpus have
-about this," and the ED detour through tag definitions adds
-recall noise without payoff at this phase. If a future use
-case wants ED-driven chunk surfacing, layer it on top of
-`ChunksForTag` rather than redesigning recall.
+After allocation, resolve each surfaced chunk's path/range/tags
+(`ChunkInfo` + `AllTagsForChunk`) and content (if `IncludeContent`) from the
+chunk cache. Self-chunkID is excluded from its own results.
 
 ## Empty / Error Cases
 
@@ -205,8 +211,11 @@ If the server is not running:
   @chunk-path: notes/asparagus.md
   @chunk-range: 12-18
   @chunk-score: 0.84
+  @chunk-cell: main-meaning
   @chunk-evidence-vector-ec: 0.91
   @chunk-evidence-trigram-ec: 0.62
+  @chunk-evidence-tag-vector: 0.55
+  @chunk-evidence-tag-trigram: 0.00
   @chunk-tags: cooking, vegetable, recipe, course, cuisine
   - @chunk-tag-value: course: main
   - @chunk-tag-value: cuisine: italian
@@ -217,8 +226,11 @@ If the server is not running:
   @chunk-path: notes/risotto-techniques.md
   @chunk-range: 1-7
   @chunk-score: 0.76
+  @chunk-cell: main-meaning
   @chunk-evidence-vector-ec: 0.81
   @chunk-evidence-trigram-ec: 0.55
+  @chunk-evidence-tag-vector: 0.00
+  @chunk-evidence-tag-trigram: 0.00
   @chunk-tags: cooking, technique
   > Risotto starts by toasting the rice in fat, then deglazing.
 ```
@@ -256,8 +268,9 @@ descending order with parenthesized cosine scores:
     @chunk-tags: cooking, vegetable, recipe
     @chunk-proposed-tags: priority (0.72), status (0.61), axis (0.58)
 
-The score is the chunk-EC ↔ tag-ED max cosine — the same value
-the propose pass uses for its threshold cut. The line is
+The score is the chunk-EC ↔ tag max cosine — over the tag's ED
+definitions *and* its EV values (R2911) — the same value the
+propose pass uses for its threshold cut. The line is
 omitted (not emitted empty) for chunks with no RC records. See
 [derived-tags.md](derived-tags.md) for the derivation pass and
 the `ProposedTags` / `ProposedTagScores` JSON fields.
@@ -292,7 +305,8 @@ Single JSON object matching `RecallResult` exactly:
       "path": "notes/asparagus.md",
       "range": "12-18",
       "score": 0.84,
-      "perSubstrate": {"vectorEc": 0.91, "trigramEc": 0.62},
+      "cell": "main-meaning",
+      "perSubstrate": {"vectorEc": 0.91, "trigramEc": 0.62, "tagVector": 0.55, "tagTrigram": 0.0},
       "tags": [{"tag": "cooking"}, {"tag": "vegetable"}, {"tag": "recipe"}],
       "content": "Asparagus risotto pairs well..."
     }
@@ -313,13 +327,17 @@ not here.
 - **No tmp:// doc.** Stdout-only. The agent-mediated layer (or
   a watcher) decides whether to write a tmp:// doc; this
   substrate doesn't commit.
-- **No ED substrate.** ED-vector and ED-trigram detours through
-  tag definitions are out of scope; this surface returns chunks
-  via EC only. ED-driven chunk recall is a future call (via
-  `ChunksForTag` if it earns a CLI).
-- **No theme detection, no proposals, no acceptance loop.** The
-  substrate is read-only surfacing. The workshop's accept flow
-  belongs to the find-connections phase.
+- **Tag axis is value→chunk, not ED-def ranking.** Recall's tag
+  axis pulls chunks by their *values* (EV value→chunk, R2905); it
+  does not rank chunks by scoring against tag *definitions* (ED).
+  ED is consulted only by the `--propose` derivation pass
+  (alongside EV; see [derived-tags.md](derived-tags.md)), never to
+  rank recall results.
+- **No theme detection, no acceptance loop.** Recall surfaces
+  chunks; the workshop's accept flow belongs to find-connections.
+  (`--propose` writes derived-tag candidates as a *side effect* —
+  see [derived-tags.md](derived-tags.md) — but does not change what
+  recall surfaces.)
 - **No fancy snippet extraction.** Chunk content is emitted whole
   (or omitted via `--no-content`). The substrate doesn't compute
   context-relevant snippets; the chunk content *is* the

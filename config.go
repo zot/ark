@@ -223,6 +223,16 @@ type RecallConfig struct {
 	// `recall next --session` injects into the curation doc so the
 	// secretary judges with the live conversation. Default 3. R2892
 	ContextTurns *int `toml:"context_turns,omitempty"`
+
+	// PerCellCount is the number of chunks allocated per cell in the
+	// recall 2×2 (source × axis) grid; the per-call target is 4×this.
+	// Default 3. R2907, R2912
+	PerCellCount *int `toml:"per_cell_count,omitempty"`
+
+	// ChatFunnelGate caps how many conversation sub-chunks survive the
+	// trigram pre-filter and get embedded per recall fire — the chat
+	// funnel's cost bound (SIGNAL Q2.3). Default 8. R2910, R2912
+	ChatFunnelGate *int `toml:"chat_funnel_gate,omitempty"`
 }
 
 // EffectivePropose returns Propose with the default applied.
@@ -251,6 +261,24 @@ func (rc RecallConfig) EffectiveMinProposeSimilarity() float64 {
 		return 0.70
 	}
 	return *rc.MinProposeSimilarity
+}
+
+// EffectivePerCellCount returns PerCellCount with the default applied.
+// CRC: crc-Config.md | R2907, R2912
+func (rc RecallConfig) EffectivePerCellCount() int {
+	if rc.PerCellCount == nil {
+		return 3
+	}
+	return *rc.PerCellCount
+}
+
+// EffectiveChatFunnelGate returns ChatFunnelGate with the default applied.
+// CRC: crc-Config.md | R2910, R2912
+func (rc RecallConfig) EffectiveChatFunnelGate() int {
+	if rc.ChatFunnelGate == nil {
+		return 8
+	}
+	return *rc.ChatFunnelGate
 }
 
 // EffectiveActivationDelay returns ActivationDelay with the default applied.

@@ -39,7 +39,7 @@ after several were missed across these surfaces.
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
 | `chats`            | `chats GLOB [--with-tools] [--sidechain] [--wrap N] [--line-length N]`                                               | none                     | walks `~/.claude/projects/`                          |
-| `chunks`           | `chunks CHUNKID [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE [-before N] [-after N] [-wrap N]` <br> `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]` | optional                 | `CHUNKID` resolves via `db.ChunkInfo`; `PATH:RANGE` accepts `NN` and `NN-MM` range labels |
+| `chunks`           | `chunks CHUNKID [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE:"SNIPPET" [-wrap N]` <br> `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]` | optional                 | `CHUNKID` resolves via `db.ChunkInfo`; `PATH:RANGE` accepts `NN` and `NN-MM` range labels; `PATH:RANGE:"SNIPPET"` is the recall chat sub-chunk locator (R2914) — returns the matched paragraph; drop the snippet for the whole turn |
 | `chunk-chat-jsonl` | `chunk-chat-jsonl FILE`                                                                                              | n/a                      | internal chunker (microfts2 protocol)                |
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
 | `connections`      | `connections SUBCOMMAND ...`                                                                                          | required                 | substrate + sidecar CLI (subcommands below)          |
@@ -274,6 +274,7 @@ assistant turns prefix `●`. Exits 1 when no files match.
 ```
 ark chunks CHUNKID [-before N] [-after N] [-wrap NAME]
 ark chunks PATH:RANGE [-before N] [-after N] [-wrap NAME]
+ark chunks PATH:RANGE:"SNIPPET" [-wrap NAME]
 ark chunks PATH RANGE [-before N] [-after N] [-wrap NAME]
 ark chunks -status [PATTERN...]
 ```
@@ -282,6 +283,13 @@ The single-argument forms make it easy to paste a line straight from
 `ark search`, `ark recall`, or recall-DM output. `CHUNKID` (all digits)
 resolves to (path, range) via `db.ChunkInfo`; `PATH:RANGE` splits on
 the last `:` and accepts `NN` or `NN-MM` range labels.
+
+`PATH:RANGE:"SNIPPET"` is the **recall chat sub-chunk locator** (R2914):
+the quoted snippet selects the matched markdown sub-chunk (paragraph)
+within a conversation turn — `db.ChatSubchunk` re-chunks the turn and
+returns the sub-chunk whose content contains the snippet. **Drop the
+`:"SNIPPET"` (fetch `PATH:RANGE`) for the whole turn** — the zoom-out
+for fuller context.
 
 | Flag         | Default | Meaning                                     |
 |--------------|---------|---------------------------------------------|

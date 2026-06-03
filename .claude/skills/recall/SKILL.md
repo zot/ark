@@ -55,6 +55,11 @@ completes and the harness notifies you. The result is:
 - `## Surface:` items — chunks worth showing the user (each with `path:range`).
 - `## Recommend:` items — tags worth attaching to a chunk.
 
+A `path:range` may be a chat sub-chunk locator — `path:range:"<snippet>"`. The
+snippet is the matched paragraph of a (large) conversation turn; `ark chunks
+path:range:"<snippet>"` fetches just it. **Drop the `:"<snippet>"`** (fetch
+`path:range`) to get the whole turn for fuller context.
+
 **You decide what, if anything, to show the user.** A recollection is an
 offer, not an obligation. Skip what's stale, off-topic, or just discussed.
 When something genuinely helps, weave it in naturally ("related — you wrote

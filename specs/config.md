@@ -82,7 +82,7 @@ ambient watcher.
 | `enabled`          | bool     | `false` | Master switch for the simple-recall watcher.                                                                                                                          | `simple-recall.md`     |
 | `propose`          | bool     | `true`  | Pass `--propose` to the recall substrate so RC records accrue.                                                                                                       | `simple-recall.md`     |
 | `min_similarity`   | float64  | `0.65`  | Per-section similarity gate. Sections whose top recalled chunk scores below this are dropped from the DM.                                                            | `simple-recall.md`     |
-| `min_propose_similarity` | float64 | `0.70` | Chunk-EC ↔ tag-ED cosine floor for the propose pass. Tag candidates below this are dropped before the top-K cut and never written as RC records.                | `derived-tags.md`      |
+| `min_propose_similarity` | float64 | `0.70` | Chunk-EC ↔ tag cosine floor for the propose pass — over the tag's ED definitions *and* EV values (R2911). Tag candidates below this are dropped before the top-K cut and never written as RC records. | `derived-tags.md`      |
 | `activation_delay` | int      | `15`    | Seconds the watcher waits after a `turn_duration` record before firing. A user record arriving inside this window cancels the firing entirely.                       | `simple-recall.md`     |
 | `chunks_per_dm`    | int      | `5`     | Per-input top-K cap. Each section in the DM body lists at most this many recalled chunks.                                                                            | `simple-recall.md`     |
 | `sources`          | []string | `[]`    | Optional whitelist of source root directories. Empty means every `chat-jsonl` source qualifies.                                                                      | `simple-recall.md`     |
@@ -90,6 +90,8 @@ ambient watcher.
 | `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` edge's rejection magnitude (`-score`) reaches this, the assistant stops mentioning the count to the user. `0` = infinite.                       | `simple-recall.md`     |
 | `surface_cooldown`  | string   | `"24h"` | Surface-cooldown window — a previously-surfaced `(session, chunk)` is suppressed within it. Doubles as the RM record's lazy-expiry TTL. Go duration string.            | `simple-recall.md`     |
 | `context_turns`     | int      | `3`     | How many trailing conversation turns `recall next --session` injects into the curation doc so the per-session secretary judges with the live conversation. `0` = none. | `simple-recall.md`     |
+| `per_cell_count`    | int      | `3`     | Chunks per cell in the recall 2×2 (source × axis) grid; the per-call target is 4×this (R2907).                                                                        | `recall.md`            |
+| `chat_funnel_gate`  | int      | `8`     | Max conversation sub-chunks that survive the trigram pre-filter and get embedded per recall fire — the chat funnel's cost bound (R2910).                              | `recall.md`            |
 
 ## `[luhmann]` — Luhmann orchestrator
 
