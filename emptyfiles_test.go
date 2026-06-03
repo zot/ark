@@ -76,7 +76,7 @@ func testScanner(t *testing.T) (*Scanner, string, *EmptyFiles) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}, makeTagTransform("line"))
+	fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc})
 	t.Cleanup(func() { fts.Close() })
 
 	ef := NewEmptyFiles()

@@ -62,8 +62,15 @@ Every chunk carries attributes:
 - `tag_rects` — per-tag bounding boxes for `@name: value` patterns
   found in the block's text, used by `<pdf-chunk>` to overlay
   interactive `<ark-tag>` widgets. Optional (absent when the chunk
-  has no tags). Format spec: `specs/pdf-chunk-element.md` §Chunker
-  Extension.
+  has no tags). Compact format `name=value@x,y,w,h;…` — semicolon
+  between tags, name/value URL-encode `=` `@` `;` `,` `%`. Full
+  spec: `specs/pdf-chunk-element.md` §Chunker Extension.
+- `tag_segments` — per-tag bounds split into `@` / name / `:` /
+  value segments (the value as one rect per wrapped line),
+  index-aligned with `tag_rects`, so `<pdf-chunk>` can recolor tag
+  glyphs precisely. Format `atRect|nameRect|colonRect|valRect1|…;…`
+  (each rect `x,y,w,h`). Optional. Full spec:
+  `specs/pdf-chunk-element.md` §Exact Bounds From The Chunker.
 - `content_offset` — byte offset of this chunk's text within the
   page's cached text blob.
 - `content_len` — byte length of this chunk's text within the blob.
@@ -75,6 +82,24 @@ normalized form. Ligatures (`ﬁ`, `ﬀ`, `ﬂ`) decompose to plain
 ASCII (`fi`, `ff`, `fl`) in the indexed text, so a search for
 `financial` matches without any normalization step on ark's side.
 Fullwidth Latin and digit superscripts decompose the same way.
+
+### Tag Extraction
+
+A PDF chunk's text is ordinary tag-bearing text. The same generic
+per-chunk ark-tag extraction that runs on any text chunk runs here: each
+`@name: value` in the block's text (or its prepended `Caption`) is
+extracted into the normal T/F/V/D index records. PDF is **not**
+tag-excluded at the chunk level — a chunk's content is extracted prose,
+not raw bytes. (Only *file-level* tag extraction skips pdf, because that
+path sees the raw PDF byte stream, where the tag regex would invent only
+spurious matches.)
+
+The `tag_rects` attribute below — and the `<pdf-chunk>` overlay it feeds
+([specs/pdf-chunk-element.md](pdf-chunk-element.md)) — is a
+**presentation enrichment on top of** this generic extraction, not a
+replacement for it: it adds per-tag bounding boxes so tags can be drawn
+and clicked on the rendered page. A salvage chunk with no rects still
+gets normal tag extraction.
 
 ### Tag Rect Extraction
 

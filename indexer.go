@@ -34,90 +34,43 @@ var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 //
 // CRC: crc-Indexer.md | R1890, R1892
 type chunkAccumulator struct {
+	strategy  string // chunker strategy, for tag re-extraction (R2913)
 	chunkTags []ChunkTagValues
 }
 
-// indexedCallback fires only for newly-inserted chunkids. The per-chunker
-// content transform (makeTagTransform) has already stripped ark-tag spans
-// from the chunk's Content and stashed the tag-value instances in its
-// Attrs, so this just decodes them, keyed by the freshly-allocated
-// chunkid. Content-dedup'd chunks (refcount-bumped C records) do not fire
-// — their F/V/T records already exist.
+// indexedCallback fires only for newly-inserted chunkids. microfts2 indexes
+// chunk content verbatim (the trigram index is full-text — tags kept, R2913),
+// so this re-extracts the chunk's ark tags from its original content,
+// keyed by the freshly-allocated chunkid. Content-dedup'd chunks
+// (refcount-bumped C records) do not fire — they share the chunkid and its
+// F/V/T records, so the single fire that lands suffices. Runs for every
+// strategy including pdf: a pdf chunk's Content is extracted text, where
+// ark tags are real (unlike the raw bytes fileLevelTags sees, which it
+// skips).
 //
-// Reads only ic.Chunk.Attrs and ic.CRecord.ChunkID. Overlay-fired CRecord
+// Reads only ic.Chunk.Content and ic.CRecord.ChunkID. Overlay-fired CRecord
 // has no LMDB transaction context (Txn() and DB() return nil), so the
 // callback must never traverse the CRecord into LMDB. This makes the same
 // callback shape work for both persistent and tmp:// indexing without
 // branching. (R1949)
-// CRC: crc-Indexer.md | R1891, R1949, R2904
+// CRC: crc-Indexer.md | R1891, R1949, R2913
 func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 	a.chunkTags = append(a.chunkTags, ChunkTagValues{
 		ChunkID: ic.CRecord.ChunkID,
-		Values:  decodeTagAttrs(ic.Chunk.Attrs),
+		Values:  ExtractTagValues(ic.Chunk.Content, a.strategy),
 	})
-}
-
-// arkTagAttrKey marks a chunk Attr carrying one ark tag-value instance,
-// encoded as "tag\x00value". One Pair per occurrence (never keyed by tag
-// name) so repeated tags stay faithful, and emitted in appearance order
-// so the marshaled Attrs — now part of microfts2's chunk-dedup hash — are
-// deterministic across index and retrieval. CRC: crc-Indexer.md | R2904
-const arkTagAttrKey = "arktag"
-
-// makeTagTransform returns the per-chunker content transform: strip ark
-// tag spans from a chunk's Content and carry the extracted tag-value
-// instances as ordered Attrs, so the indexed/embedded text is tag-free
-// while the per-chunk tags still reach indexedCallback. It is a
-// deterministic function of (content, strategy): microfts2 re-runs it on
-// the re-read raw region at retrieval and must regenerate identical
-// Content and Attrs. CRC: crc-Indexer.md | R2904
-func makeTagTransform(strategy string) microfts2.ContentTransform {
-	return func(c *microfts2.Chunk) {
-		values := ExtractTagValues(c.Content, strategy)
-		c.Content = stripArkTags(c.Content, strategy)
-		c.Attrs = appendTagAttrs(c.Attrs, values)
-	}
-}
-
-// appendTagAttrs appends one Pair per tag-value instance, preserving
-// repeats and appearance order. CRC: crc-Indexer.md | R2904
-func appendTagAttrs(attrs []microfts2.Pair, values []TagValue) []microfts2.Pair {
-	for _, v := range values {
-		attrs = append(attrs, microfts2.Pair{
-			Key:   []byte(arkTagAttrKey),
-			Value: []byte(v.Tag + "\x00" + v.Value),
-		})
-	}
-	return attrs
-}
-
-// decodeTagAttrs reads back the tag-value instances a transform stashed in
-// a chunk's Attrs, preserving every occurrence and its order. Non-tag
-// Attrs (PDF rects, chat-jsonl role/timestamp) are skipped.
-// CRC: crc-Indexer.md | R2904
-func decodeTagAttrs(attrs []microfts2.Pair) []TagValue {
-	var values []TagValue
-	for _, p := range attrs {
-		if string(p.Key) != arkTagAttrKey {
-			continue
-		}
-		tag, val, ok := bytes.Cut(p.Value, []byte{0})
-		if !ok {
-			continue
-		}
-		values = append(values, TagValue{Tag: string(tag), Value: string(val)})
-	}
-	return values
 }
 
 // fileLevelTags extracts file-level tag-value instances and tag
 // definitions directly from source content — the whole file on add/full
 // refresh, the appended bytes on append. Sourcing them here, rather than
-// from the now-stripped chunk callbacks, keeps them faithful to every
+// from the per-chunk indexed callback, keeps them faithful to every
 // occurrence (including content-dedup'd chunks the indexed callback skips)
-// and keeps the map-typed defs out of the per-chunk Attrs. Binary content
-// (pdf) carries no ark tags, so it is skipped — regexing raw PDF bytes
-// would only invent spurious matches. CRC: crc-Indexer.md | R2904
+// and keeps the map-typed defs out of the per-chunk Attrs. pdf is skipped
+// *here* only: this file-level path sees the raw PDF byte stream, where the
+// tag regex would invent only spurious matches. A pdf's real tags live in
+// its extracted chunk text and are picked up per-chunk (indexedCallback),
+// not at file level. CRC: crc-Indexer.md | R2913
 func fileLevelTags(content []byte, strategy string) ([]TagValue, map[string]string) {
 	if strategy == "pdf" {
 		return nil, nil
@@ -222,13 +175,13 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 	return items
 }
 
-// AddFile adds a file to both engines and extracts tags. The chunker's
-// content transform strips ark tags into chunk Attrs;
-// WithIndexedChunkCallback delivers them per new chunkid for F/V/T writes
-// (dedup'd chunks cost zero). File-level tags + defs are re-extracted from
-// the returned source content. CRC: crc-Indexer.md | R1113, R1123, R1891, R2904
+// AddFile adds a file to both engines and extracts tags. Per-chunk tags are
+// re-extracted from each new chunk's original content in
+// WithIndexedChunkCallback for F/V/T writes (dedup'd chunks cost zero).
+// File-level tags + defs are re-extracted from the returned source content.
+// CRC: crc-Indexer.md | R1113, R1123, R1891, R2913
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
-	acc := chunkAccumulator{}
+	acc := chunkAccumulator{strategy: strategy}
 	fileid, content, err := idx.fts.AddFileWithContent(path, strategy,
 		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {
@@ -247,7 +200,7 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	if idx.store != nil {
 		// File-level tags + defs come straight from the source content
 		// (faithful to dedup'd chunks; keeps map-typed defs out of Attrs).
-		// CRC: crc-Indexer.md | R2904
+		// CRC: crc-Indexer.md | R2913
 		fileVals, fileDefs := fileLevelTags(content, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
@@ -699,7 +652,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		return nil
 	}
 	if prep.isAppend {
-		acc := chunkAccumulator{}
+		acc := chunkAccumulator{strategy: prep.strategy}
 		err := idx.fts.AppendChunks(prep.oldID, prep.newBytes, prep.strategy,
 			microfts2.WithBaseLine(prep.baseLine),
 			microfts2.WithContentHash(prep.fullHash),
@@ -720,7 +673,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		if idx.store != nil {
 			// Append file-level tags + defs from the appended bytes only
 			// (incremental, matching the prior callback semantics).
-			// CRC: crc-Indexer.md | R2904
+			// CRC: crc-Indexer.md | R2913
 			fileVals, fileDefs := fileLevelTags(prep.newBytes, prep.strategy)
 			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 			if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
@@ -758,13 +711,13 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 }
 
 // executeFullRefresh does a complete reindex. Per-chunk tags arrive via
-// the indexed callback (decoded from transform-stripped Attrs); file-level
-// tags + defs are re-extracted from prep.data. Orphaned chunkids (delivered
+// the indexed callback (re-extracted from each chunk's original content);
+// file-level tags + defs are re-extracted from prep.data. Orphaned chunkids (delivered
 // by the reindex callback) drop their F/V/T contributions in the same txn.
-// CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899, R2904
+// CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899, R2913
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
-	acc := chunkAccumulator{}
+	acc := chunkAccumulator{strategy: prep.strategy}
 	var fileid uint64
 	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
 		var err error
@@ -792,7 +745,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 			idx.store.RemovePageContents(prep.oldID)
 		}
 		// File-level tags + defs re-extracted from the full file content.
-		// CRC: crc-Indexer.md | R2904
+		// CRC: crc-Indexer.md | R2913
 		fileVals, fileDefs := fileLevelTags(prep.data, prep.strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
@@ -932,10 +885,10 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	fi, _ := os.Stat(path)
 
 	// Append to FTS index. Per-chunk tags arrive via the chunkid-aware
-	// indexed callback (newly-inserted chunks only, decoded from
-	// transform-stripped Attrs); file-level tags + defs are re-extracted
+	// indexed callback (newly-inserted chunks only, re-extracted from each
+	// chunk's original content); file-level tags + defs are re-extracted
 	// from the appended bytes.
-	acc := chunkAccumulator{}
+	acc := chunkAccumulator{strategy: strategy}
 	err = idx.fts.AppendChunks(fileid, newBytes, strategy,
 		microfts2.WithBaseLine(baseLine),
 		microfts2.WithContentHash(fmt.Sprintf("%x", fullHash)),
@@ -953,7 +906,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	// Tags and defs: chunkid-keyed via indexed callback.
 	if idx.store != nil {
 		// File-level tags + defs from the appended bytes (incremental).
-		// CRC: crc-Indexer.md | R2904
+		// CRC: crc-Indexer.md | R2913
 		fileVals, fileDefs := fileLevelTags(newBytes, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 		if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
@@ -1256,7 +1209,7 @@ func ExtractTagValues(content []byte, strategy string) []TagValue {
 // including the trailing newline; an inline tag (content precedes it on
 // the line) takes only the `@tag: …EOL` span, keeping the surrounding
 // line. Mentions are left untouched. Because a value runs to end of line,
-// there is at most one real tag per line. CRC: crc-Indexer.md | R2904
+// there is at most one real tag per line. CRC: crc-Indexer.md | R2913
 func stripArkTags(content []byte, strategy string) []byte {
 	markdown := strategy == "markdown"
 	locs := tagValueRegex.FindAllSubmatchIndex(content, -1)

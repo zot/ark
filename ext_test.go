@@ -73,7 +73,7 @@ func TestParseExtTargetEmptyTarget(t *testing.T) {
 func extTestDB(t *testing.T) (*DB, string, string) {
 	t.Helper()
 	idx, dir := testIndexer(t)
-	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		t.Fatal(err)
 	}
 	const uuid = "ext-target-9911"

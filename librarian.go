@@ -2046,8 +2046,10 @@ func (l *Librarian) createTierCtx(tier EmbedTier) (*llama.Context, error) {
 // BatchEmbedChunks embeds all chunks missing EC records, using tier
 // contexts for adaptive batching. Called post-reconcile after BatchEmbed.
 // chunkid is the embedding key; chunkids arrive via the indexed
-// callback delivered to the indexer at write time.
-// CRC: crc-Librarian.md | R1609-R1617, R1913, R1914
+// callback delivered to the indexer at write time. The meaning axis is
+// tag-free: each chunk's content is stripped of ark tags (stripArkTags)
+// before embedding, and an all-@tag chunk (empty after strip) is skipped.
+// CRC: crc-Librarian.md | R1609-R1617, R1913, R1914, R2913
 func (l *Librarian) BatchEmbedChunks() error {
 	if !l.EmbeddingAvailable() || len(l.tiers) == 0 {
 		return nil
@@ -2212,6 +2214,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 
 		var cachedFileID uint64
 		var cachedChunks []microfts2.ChunkResult
+		var cachedStrategy string
 		chunkCache := l.db.fts.NewChunkCache()
 		for i := 0; i < len(refs); i += tier.Parallel {
 			end := min(i+tier.Parallel, len(refs))
@@ -2222,15 +2225,25 @@ func (l *Librarian) BatchEmbedChunks() error {
 			for _, ref := range batch {
 				if ref.fileID != cachedFileID {
 					cachedChunks = nil
+					cachedStrategy = ""
 					finfo, err := l.db.fts.FileInfoByID(ref.fileID)
 					if err == nil && len(finfo.Chunks) > 0 {
 						cachedChunks, _ = chunkCache.GetChunks(ref.path, finfo.Chunks[0].Location, 0, len(finfo.Chunks))
+						cachedStrategy = finfo.Strategy
 					}
 					cachedFileID = ref.fileID
 				}
-				if ref.chunkIdx < len(cachedChunks) && cachedChunks[ref.chunkIdx].Content != "" {
-					texts = append(texts, cachedChunks[ref.chunkIdx].Content)
-					valid = append(valid, ref)
+				if ref.chunkIdx < len(cachedChunks) {
+					// R2913: the meaning axis is tag-free — strip ark tags
+					// before embedding (every text strategy, pdf included: a
+					// pdf chunk's content is extracted text). An all-@tag chunk
+					// strips to empty and is skipped (the tag axis carries it);
+					// retrieval and the trigram index keep the original content.
+					stripped := string(stripArkTags([]byte(cachedChunks[ref.chunkIdx].Content), cachedStrategy))
+					if stripped != "" {
+						texts = append(texts, stripped)
+						valid = append(valid, ref)
+					}
 				}
 			}
 			if len(texts) == 0 {

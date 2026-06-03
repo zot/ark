@@ -32,15 +32,15 @@ interfaces; microfts2 type-asserts for them at index and retrieval time.
 
 ## Interface matrix
 
-| Chunker          | reg. name      | Chunks | AppendChunks | GetChunk | FileChunks | IsWritable | owner spec |
-|------------------|----------------|:------:|:------------:|:--------:|:----------:|:----------:|------------|
-| MarkdownChunker  | `markdown`     |   ✓    |      ✓       |    ✓     |     ✓      | true       | chunker-strategies.md, indexing.md |
-| LineChunker      | (full line)    |   ✓    |      ✓       |    ✓     |     ✓      | true       | chunker-strategies.md |
-| bracketChunker   | `bracket-*`    |   ✓    |      ✓       |    ✓     |     ✓      | true       | chunker-strategies.md |
-| indentChunker    | `indent-*`     |   ✓    |      ✓       |    ✓     |     ✓      | true       | chunker-strategies.md |
-| FuncChunker      | `lines`        |   ✓    |      ✗       |    ✗     |     ✗      | (def true) | chunker-strategies.md |
-| JSONLChunker     | `chat-jsonl`   |   ✓    |      ✓       |    ✗     |     ✗      | (def true) | chat-transcript.md |
-| PDFChunker       | `pdf`          |   ✓    |      ✗       |    ✓     |     ✓      | **false**  | pdf-chunker.md |
+| Chunker         | reg. name    | Chunks | AppendChunks | GetChunk | FileChunks | IsWritable | owner spec                         |
+|-----------------|--------------|:------:|:------------:|:--------:|:----------:|:----------:|------------------------------------|
+| MarkdownChunker | `markdown`   | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md, indexing.md |
+| LineChunker     | (full line)  | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
+| bracketChunker  | `bracket-*`  | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
+| indentChunker   | `indent-*`   | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
+| FuncChunker     | `lines`      | ✓      | ✗            | ✗        | ✗          | (def true) | chunker-strategies.md              |
+| JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | chat-transcript.md                 |
+| PDFChunker      | `pdf`        | ✓      | ✗            | ✓        | ✓          | **false**  | pdf-chunker.md                     |
 
 Notes:
 - The four microfts2 *text* chunkers (Markdown, Line, bracket, indent) are

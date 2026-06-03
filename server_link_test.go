@@ -17,7 +17,7 @@ import (
 func linkTestDB(t *testing.T, fileName, content string) (*DB, string) {
 	t.Helper()
 	idx, dir := testIndexer(t)
-	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		t.Fatal(err)
 	}
 	fp := writeFile(t, dir, fileName, content)

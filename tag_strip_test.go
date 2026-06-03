@@ -2,7 +2,7 @@ package ark
 
 import "testing"
 
-// R2904 — stripArkTags removes real ark-tag spans (full-line tags take
+// R2913 — stripArkTags removes real ark-tag spans (full-line tags take
 // their whole line + newline; inline tags take just the span, keeping the
 // line) while leaving mentions untouched, so the strip agrees with the
 // ExtractTagValues notion of a tag.

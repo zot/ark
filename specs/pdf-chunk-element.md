@@ -187,8 +187,10 @@ panels.
 
 ## Tag Interactivity
 
-PDFs contain `@name: value` tags in their extracted text. The
-text is indexed and searchable, but when the chunk renders as
+PDFs contain `@name: value` tags in their extracted text, which get
+the same generic per-chunk tag extraction (T/F/V/D records) as any
+text chunk — see `specs/pdf-chunker.md` §Tag Extraction (canonical).
+The text is indexed and searchable, but when the chunk renders as
 pixels, the tag text is unclickable. `<pdf-chunk>` preserves
 drill-down by overlaying real `<ark-tag>` elements on the
 rendered page, and slicing itself when a tag opens a search
@@ -205,12 +207,12 @@ chunk as a `tag_rects` attribute.
 Format (one compact string per chunk, semicolon-separated):
 
 ```
-tag_rects = "name=value@X:Y:W:H;name=value@X:Y:W:H;..."
+tag_rects = "name=value@x,y,w,h;name=value@x,y,w,h;..."
 ```
 
 Coordinates are PDF points, origin bottom-left — same convention
-as the chunk-level `rect`. Values are URL-encoded when they
-contain `;`, `=`, `@`, or `:`.
+as the chunk-level `rect`. Name and value are URL-encoded when they
+contain `=`, `@`, `;`, `,`, or `%`.
 
 When a tag's value wraps across multiple lines in the PDF
 layout, only the first line's rect is emitted (the hand we're
@@ -613,8 +615,8 @@ encoding so it round-trips through microfts2 pair storage:
 tag_rects = "name=value@x,y,w,h;name=value@x,y,w,h;..."
 ```
 
-Tag `name` and `value` URL-encode any of `=`, `@`, `;`, `,` that
-appear in them (ark's tag grammar already restricts `name`, so
+Tag `name` and `value` URL-encode any of `=`, `@`, `;`, `,`, `%`
+that appear in them (ark's tag grammar already restricts `name`, so
 this matters mainly for values containing commas or semicolons).
 Coordinates are floats in PDF points, origin bottom-left — same
 convention as chunk-level `rect`.
@@ -629,12 +631,14 @@ record). Generic tag extraction from chunk text — T/F/V/D
 records in the LMDB index — continues unchanged for all PDF
 chunks including salvage; `tag_rects` is a presentation enrichment
 on top of the existing tag tracking, not a replacement for it.
+That generic extraction is owned by `specs/pdf-chunker.md`
+§Tag Extraction; this section adds only the presentation rects.
 
 ## Cross-Reference
 
-`specs/pdf-chunker.md` §Chunk Attributes must be updated to
-list `tag_rects` alongside `page`, `rect`, and `font_size`, with
-a pointer back here for the format spec.
+`specs/pdf-chunker.md` §Chunk Attributes lists `tag_rects` and
+`tag_segments` alongside `page`, `rect`, and `font_size`, with a
+pointer back here for the format spec.
 
 ## Script Loading
 

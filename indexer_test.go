@@ -201,7 +201,7 @@ func testIndexer(t *testing.T) (*Indexer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}, makeTagTransform("line"))
+	fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc})
 
 	// Store (shares the LMDB env)
 	store, err := OpenStore(fts.Env())
@@ -412,7 +412,7 @@ func TestRefreshFileFallsBackToFullReindex(t *testing.T) {
 // CRC: crc-Indexer.md | R1970 | R1971 | R1972 | R1973
 func TestAtIDSectionResolution(t *testing.T) {
 	idx, dir := testIndexer(t)
-	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -497,7 +497,7 @@ func TestAtIDTmpResolution(t *testing.T) {
 // CRC: crc-Indexer.md | R1974
 func TestAtIDDuplicateUUIDReturnsAll(t *testing.T) {
 	idx, dir := testIndexer(t)
-	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		t.Fatal(err)
 	}
 

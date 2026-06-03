@@ -654,3 +654,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T138: R2751 retired by R2899 (2026-06-02 stubborn-recall-next: result doc references path:range, not chunkid)
 - T139: R2752 retired by R2901 (2026-06-02 stubborn-recall-next: fire counter per-session, dir-seeded, not global)
 - T140: R2756 retired by R2900 (2026-06-02 stubborn-recall-next: surface/recommend take -loc path:range, not -chunk N)
+- T141: R2904 retired by R2913 (2026-06-03 content-transform rollback — trigram is full-text (tags kept), strip only at EC embed, dedup hash over original content)
+- [ ] O123: R2913 test coverage: (1) full-text trigram keeps tags — an indexed chunk with a literal @tag: is found by FTS search; (2) BatchEmbedChunks skips an all-@tag (empty-after-strip) chunk. (1) is harness-only; (2) needs the embedding model. TestStripArkTags already covers the strip primitive.

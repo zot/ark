@@ -45,10 +45,10 @@ func setupConnections(t *testing.T) (*Librarian, *DB, *PubSub) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}, makeTagTransform("line")); err != nil {
+	if err := fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}); err != nil {
 		t.Fatal(err)
 	}
-	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}, makeTagTransform("markdown")); err != nil {
+	if err := fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 		t.Fatal(err)
 	}
 	store := testStore(t)

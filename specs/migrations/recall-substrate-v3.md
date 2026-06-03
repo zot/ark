@@ -44,24 +44,31 @@ contains tags, and ranks them in **one undifferentiated pool**:
 
 Per SIGNAL.md Ideas 1–3. Five coupled changes; implement in this order.
 
-### 1. Tag-strip via a microfts2 per-chunker ContentTransform → re-index + re-embed
+### 1. Tags stay in full-text; only the EC embedding strips them → re-embed
 
-ark registers a per-chunker content transform on every text chunker it
-reuses (through `db.addChunker`; PDF is excluded, its extracted text has no
-ark tags). microfts2 fires the transform on **every content-producing path,
-index *and* retrieval** (collectChunks, AppendChunks, tmp://,
-GetChunks/ChunkCache), so it strips ark tags from the chunk's text (full-line
-tags also remove their newline; inline tags keep the rest of the line) and
-carries the tag-value instances in the chunk's **attributes** as ordered
-`arktag` Pairs (one per occurrence, deterministic order). EC embedding and
-the trigram index then see **tag-free content**, consistently at index and
-retrieval. The hook was added to microfts2 on request
-(`AddChunker(name, c, transform)`, commit c5f89d9); the strip + tag
-recognition stay ark-side. Per-chunk tags reach the indexer by decoding the
-Attrs in `WithIndexedChunkCallback`; file-level tags + defs are re-extracted
-directly from the source bytes (faithful to content-dedup'd chunks, and
-keeping the map-typed defs out of Attrs). This forces a one-time **re-index
-+ re-embed** of the corpus.
+The trigram index is **full-text**: chunk content is indexed verbatim, ark
+tags and all, so an FTS query for `@note: bubba` still finds the chunk that
+literally carries it — a full-text index that drops its own text lies about
+its corpus. **Stripping happens on the meaning axis only.** ark removes ark
+tag spans (`stripArkTags`) from the chunk text it feeds to the EC embedder
+(`BatchEmbedChunks`) — full-line tags also remove their newline, inline tags
+keep the rest of the line — so the chunk *embedding* is tag-free while the
+trigram index is not. A chunk that is **all** `@tag:` lines strips to empty
+and is skipped at embed time (the tag axis carries it).
+
+microfts2 holds no ark-tag logic. The per-chunker ContentTransform hook
+(added in commit c5f89d9, made index-only in 586a0ae) was **rolled back** —
+it asked a full-text index to hide text from itself. microfts2 now indexes
+original content, retrieval returns original content, and the chunk-dedup
+hash is SHA-256 over original content. Per-chunk tags reach the indexer by
+**re-extracting** (`ExtractTagValues`) from the chunk's original content in
+`WithIndexedChunkCallback` (the callback carries original content; dedup'd
+chunks share a chunkid, so the one fire that lands writes the shared F/V
+records); file-level tags + defs are re-extracted from the source bytes.
+ark's `F`/`V` records are the canonical per-chunk tag store, so no tags are
+duplicated into microfts2 Attrs. The conversion is a one-time **re-index +
+re-embed** (`ark rebuild`): re-index so the trigram index keeps the tag text
+it previously stripped, re-embed so the EC side is tag-free.
 
 ### 2. Tag axis in recall (retrieval) + 4-component score
 
@@ -121,15 +128,16 @@ first, index later."
 
 ## Migration (full re-index + re-embed; no ark record-format change)
 
-Part 1 changes the chunk text the trigram index and EC are built from
-*and* the chunk identity: microfts2 now folds chunk Attrs into its
-chunk-dedup hash, so a tagged chunk's stripped content + `arktag` Attrs
-hash to a *new* chunkid. So the one-time conversion is a full **`ark
-rebuild`** (re-index + re-embed), not a re-embed alone — re-indexing
-rewrites the stored tag-free content and the new chunkids, then
-re-embedding makes the EC side tag-free. No ark record class or key
-encoding changes; EV / ED / V are unaffected (tags already lived in their
-own records). Scoring (parts 2–4) and the propose EV leg (part 5) take
+Part 1 changes what the trigram index and EC are built from. The trigram
+index now keeps the tag text it previously stripped (the rolled-back hook
+had stripped it); the EC side is rebuilt from tag-free text. So the one-time
+conversion is a full **`ark rebuild`** (re-index + re-embed), not a re-embed
+alone — re-indexing rewrites the stored content with tags kept, then
+re-embedding makes the EC side tag-free. Chunk identity is the SHA-256 of the
+original content (no Attrs in the hash), so a tag edit changes the content
+and re-indexes naturally. No ark record class or key encoding changes; EV /
+ED / V are unaffected (tags already lived in their own records). Scoring
+(parts 2–4) and the propose EV leg (part 5) take
 effect with the new binary.
 
 The rebuild is **operator-run by Bill** — the code change does not
@@ -150,11 +158,13 @@ trigger it, and no session should auto-`ark rebuild` the corpus.
 
 ## Test strategy
 
-- **tag-strip transform** — `stripArkTags` on a full-line `@tag: v` and an
+- **embed-time tag-strip** — `stripArkTags` on a full-line `@tag: v` and an
   inline tag yields tag-free text (full-line newline gone, inline line kept;
-  mentions untouched); the transform carries the tags as ordered `arktag`
-  Attrs that `decodeTagAttrs` round-trips. (TestStripArkTags + the harness
-  indexing tests assert per-chunk extraction still lands in V records.)
+  mentions untouched), and a chunk that is all `@tag:` lines strips to empty
+  and is skipped at embed (TestStripArkTags + an embed test). The trigram
+  index keeps the tag text (full-text search for a literal tag still hits).
+  Per-chunk tags re-extracted from original content in the indexed callback
+  still land in F/V records (harness indexing tests).
 - **tag axis retrieval** — an input matching a value surfaces a chunk
   carrying that value via V, even when the chunk's prose doesn't match
   (the `@cuisine: italian` case).
@@ -172,11 +182,12 @@ trigger it, and no session should auto-`ark rebuild` the corpus.
    axis value→chunk), the output stencil, and add the 2×2 allocation +
    chat funnel; note tag-free embedding.
 2. **`specs/derived-tags.md`** — add the EV leg to the propose pass.
-3. **`specs/chunkers.md`** (summary spec, already updated) + microfts2's
-   per-chunker `ContentTransform` — the tag-strip transform (tags→`arktag`
-   Attrs, text tag-free, full-line eats newline; PDF excluded). Within-file
-   duplicate *defs* stay collapsed (deferred, ARK-STATE #14).
-4. **`specs/chunk-embeddings.md`** — EC is built from tag-free text.
+3. **`specs/chunkers.md`** (summary spec) — note the trigram index is
+   full-text (tags kept); the microfts2 ContentTransform hook was rolled
+   back. Within-file duplicate *defs* stay collapsed (deferred, ARK-STATE
+   #14).
+4. **`specs/chunk-embeddings.md`** — EC is built from tag-free text
+   (`stripArkTags` at embed); all-`@tag:` chunks are skipped.
 5. **`specs/config.md`** — new `[recall]` keys (per-cell count, chat-funnel
    gate, any tiebreak/weight knobs).
 6. **`specs/record-formats.md`** — confirm unchanged (no new record).
