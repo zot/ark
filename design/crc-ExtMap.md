@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915
 
 Owns the in-memory state and orchestration for `@ext` routing.
 Six core maps maintained alongside DB X-record writes; canonical
@@ -84,7 +84,13 @@ sources index, dropped as overlay items disappear.
   update the six core maps; bump `virtualTagCount[routed_tag]` once
   per added entry. Records an overlay info entry when the routing
   takes an overlay-touched branch. (R1996, R1997, R1998, R1999,
-  R2012, R2016, R2017, R2018, R2030)
+  R2012, R2016, R2017, R2018, R2030) The self-reference check (step 3)
+  and the `fileidToTvids` update both resolve each target's fileid via
+  `DB.chunkFileID(txn, …)`; for a *persistent* target that is an
+  `fts.ReadCRecord` read needing a live txn, so the overlay caller
+  (`runOverlayExtRouting`) supplies a read-only `env.View`. An overlay
+  source writes nothing (`bothPersistent` false), so the read-only txn
+  and a nil `TvidTxn` suffice. (R2915)
 - ReresolveOnReindex(fileid, addedChunkIDs, orphanedChunkIDs, txn,
   tt): canonical re-resolution flow. Step 1: collect candidate
   tvid_exts from `fileidToTvids[fileid]`, `extByAnchor[F.path]`,

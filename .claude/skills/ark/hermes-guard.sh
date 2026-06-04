@@ -7,9 +7,27 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
 if [ "$TOOL" = Bash ]; then
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command')
-    # Reject heredocs and pipes — even in ark commands
-    if echo "$CMD" | grep -q '<<\|[|]'; then
-        echo "BLOCKED: No heredocs or pipes. Use --content flag: ~/.ark/ark message new-request --from X --to Y --issue '...' --content 'body text' requests/file.md" >&2
+    # Reject *shell* pipes and heredocs — but allow a '|' inside a quoted
+    # --content/--issue value (legitimate in markdown tables, code, prose).
+    # A crude grep can't tell a shell pipe from a pipe character inside a
+    # quoted argument; shlex tokenizes the command so a quoted '|' stays
+    # inside its token while a real pipe operator becomes a standalone '|'.
+    # Unparseable (unbalanced quotes) → reject, the safe default.
+    SHELLOP=$(printf '%s' "$CMD" | python3 -c '
+import shlex, sys
+try:
+    toks = shlex.split(sys.stdin.read())
+except ValueError:
+    print("parse"); sys.exit(0)
+if "|" in toks or any(t.startswith("<<") for t in toks):
+    print("op")
+')
+    if [ "$SHELLOP" = op ]; then
+        echo "BLOCKED: shell pipes/heredocs are not allowed. Put body text in a quoted --content value (a '|' inside the quotes is fine). To filter inbox, use ark's own flags (--from/--to/--unmatched), not '| grep'." >&2
+        exit 2
+    fi
+    if [ "$SHELLOP" = parse ]; then
+        echo "BLOCKED: could not parse the command (unbalanced quotes?). Re-issue with balanced quotes around --content/--issue values." >&2
         exit 2
     fi
     if echo "$CMD" | grep -q '^\s*~/.ark/ark\b\|^\s*\$HOME/.ark/ark\b\|^\s*/home/[^/]*/.ark/ark\b'; then

@@ -441,6 +441,20 @@ don't appear in X records, but defensive) or during indexing
 self-reference checks (a `tmp://` source routing to a `tmp://`
 target needs to know both fileids to compare).
 
+An overlay source can also route to a **persistent** target (the
+source-overlay/target-persistent scope cell). There `chunkFileID`
+takes the persistent branch (`fts.ReadCRecord`), which needs a live
+read transaction to resolve the target's fileid (for the
+self-reference check and `fileidToTvids`). So the overlay indexing
+path opens a **read-only** transaction and threads it down: "an
+overlay source writes no LMDB records" (`bothPersistent` always
+false) does not mean it touches no LMDB — the persistent-target
+fileid read still needs a txn. A read-only `env.View` suffices and
+mirrors the self-contained read in `ExtRoutingsForTargetChunk`.
+`CleanupSource` keeps its nil txn: for an overlay source it branches
+on `bothPersistent` before any LMDB access, so it never does a
+persistent read.
+
 ### Overlay error log
 
 Overlay routings are best-effort: their target may vanish before the

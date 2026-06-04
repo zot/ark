@@ -461,11 +461,16 @@ func (idx *Indexer) sourceDirFor(fileID uint64) string {
 }
 
 // runOverlayExtRouting handles @ext routing for overlay (tmp://)
-// source content. Mirrors runExtRouting but skips the LMDB
-// transaction since every routing for an overlay source has
-// bothPersistent=false — applyIndexExt accepts nil txn/tt and writes
-// only to in-memory ExtMap state.
-// CRC: crc-Indexer.md | R2012, R2016, R2018
+// source content. An overlay source writes no LMDB records
+// (bothPersistent is always false), but it can route to a *persistent*
+// target whose fileid must be resolved via chunkFileID → ReadCRecord —
+// an LMDB read that needs a live txn. So it opens a read-only env.View
+// and threads that txn into applyIndexExt; the read-only txn (and a nil
+// TvidTxn) suffice because no writes can fire. Mirrors the
+// self-contained read in ExtMap.ExtRoutingsForTargetChunk. The txn is
+// born inside the actor closure that drove AddTmpFile (R986), so it
+// never nests inside another env.Update.
+// CRC: crc-Indexer.md | R2012, R2016, R2018, R2915
 func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValues) error {
 	if idx.extmap == nil || idx.db == nil {
 		return nil
@@ -474,12 +479,14 @@ func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValu
 	if len(plans) == 0 {
 		return nil
 	}
-	for _, p := range plans {
-		if err := idx.extmap.applyIndexExt(nil, nil, idx.db, p); err != nil {
-			return err
+	return idx.db.store.env.View(func(txn *lmdb.Txn) error {
+		for _, p := range plans {
+			if err := idx.extmap.applyIndexExt(txn, nil, idx.db, p); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // collectReresolvePlans determines which tvid_exts need re-resolution

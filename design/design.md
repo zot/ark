@@ -143,7 +143,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`
-- [ ] crc-Indexer.md → `indexer.go`, `ext.go`
+- [x] crc-Indexer.md → `indexer.go`, `ext.go`
 - [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
@@ -663,3 +663,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O128: Tag-axis tuning knobs (standing; informed by the now-landed R2909 per-cell logging): tagAxisInternalK hardcoded at 50 (top tag-values pulled per input); the shared trigramJaccardWithFloor 0.1 query-coverage floor can zero the tag-trigram leg for short values against long inputs (the vector leg compensates when a model is present). Revisit if the per-cell logs show distortion.
 - [ ] O129: Recall chat sub-chunk locator (part 4): the snippet anchor (matched paragraph's first line, capped 60) resolves to the FIRST sub-chunk containing it; a rare collision (two paragraphs sharing that line) resolves to the first — the ext [N] modifier would disambiguate but is deferred with the offset locator (specs/future.md, R2914). Funnel embeds on-the-fly only with a model; no-model path is trigram-only. specs/recall.md algorithm/stencil fold deferred to migration on-completion (after part 5).
 - [ ] O130: Part 5 EV leg: enrichProposedTags recomputes display scores for fresh-skip chunks via bestEDSim (ED-only), so an EV-leg-derived proposal shows its ED similarity (possibly 0) rather than its EV similarity. This-call derivations carry the correct EV-inclusive score; the propose decision itself is EV-correct. Display-only, fresh-skip path.
+- [ ] O131: Ext-routing threads a raw nilable *lmdb.Txn through runExtRouting/runOverlayExtRouting/applyIndexExt/chunkFileID; a wrong nil reaches fts.ReadCRecord and panics (the R2915 crash). Enhancement: model the transaction as a scope object (Monadic Wrapper) constructed only inside an actor closure, so 'inside a txn' is non-nilable by construction and this whole bug class disappears. Also covers librarian.go flushNow, which today relies on a documented 'call me from the write goroutine' contract rather than a local guard.

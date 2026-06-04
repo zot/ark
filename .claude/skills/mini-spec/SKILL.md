@@ -265,6 +265,20 @@ Use minispec to add requirement references:
 ~/.claude/bin/minispec update add-ref crc-Store.md R5
 ```
 
+**Where requirement refs count.** `minispec validate` computes
+requirements→design coverage from each CRC card's **top-line
+`**Requirements:**` field only** (plus approved gaps). Refs written
+anywhere else in the card body — e.g. a per-method `(R5, R6)`
+annotation on a `## Does` bullet — are documentation; the validator
+does not parse them, so they earn a requirement no coverage. A
+requirement counts as covered only when it appears in some artifact's
+top-line field, which is what `add-ref` maintains. Body-level
+annotations are fine as human notes, but never let them be the *only*
+home for a ref. (Requirements→code coverage is separate: it comes
+from inline `Rn` refs in code traceability comments. Retired
+requirements are skipped by both coverage checks yet still resolve as
+references, so a ref to a retired Rn is never flagged as unknown.)
+
 **Artifacts Format** (must be exact for `minispec` tool parsing):
 ```markdown
 ## Artifacts
@@ -421,7 +435,22 @@ To keep `specs/` from accumulating stale migration narratives:
    code that was removed are fine — the comment went with the
    code.)
 
-6. **Move the migration spec(s)** by running:
+6. **Reconcile obsoleted design prose.** Retiring a requirement has a
+   forcing function — the `retire` command, the Tn entry, the
+   `~~Rn:~~` marker. Design *prose* has none. CRC `## Does`
+   descriptions, method signatures, and sequence diagrams that
+   described state A do not flag themselves as stale; they rot
+   silently until someone reads them, long after the migration looks
+   done. Before moving the migration spec, grep `design/` for the
+   changed method names, old signatures, and renamed types, and
+   rewrite every CRC bullet and seq diagram that still describes the
+   old behavior to match state B. `minispec validate` cannot catch
+   this: it checks that requirements are *referenced*, not that the
+   prose around the reference is accurate. (Step 5 reconciles the
+   *Rn references*; this step reconciles the *descriptions* those
+   references annotate — a distinct, easily-missed pass.)
+
+7. **Move the migration spec(s)** by running:
 
    ```
    ~/.claude/bin/minispec update migration-complete <name>

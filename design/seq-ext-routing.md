@@ -75,6 +75,14 @@ Indexer (indexed-chunk callback for source chunk)
                         for each routed_tag: virtualTagCount[tag]++
 ```
 
+Overlay (`tmp://`) sources run this same flow via
+`Indexer.runOverlayExtRouting`, which wraps the `applyIndexExt` calls
+in a read-only `env.View`: an overlay source can route to a
+persistent target whose fileid resolution (`chunkFileID` →
+`ReadCRecord`) is an LMDB read needing a live txn. No writes fire
+(`bothPersistent` always false), so the read-only txn and a nil
+`TvidTxn` suffice. (R2915)
+
 ## Flow: canonical re-resolution on file reindex
 
 microfts2 fires the reindex callback once per file with

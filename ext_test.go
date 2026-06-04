@@ -221,3 +221,49 @@ func TestResolveExtTargetEmpty(t *testing.T) {
 		t.Errorf("blank target should be nil, got %v", chunks)
 	}
 }
+
+// TestOverlayExtRoutingToPersistentTarget reproduces the recall-curation
+// server crash: an overlay (tmp://) @ext source routing to a *persistent*
+// target. Before the fix, runOverlayExtRouting passed a nil txn to
+// applyIndexExt → chunkFileID → fts.ReadCRecord(nil) → nil-pointer panic
+// in lmdb.Txn.Get. The read-only env.View lets the persistent target's
+// fileid resolve and the routed tag reach it.
+// CRC: crc-Indexer.md | R2915
+func TestOverlayExtRoutingToPersistentTarget(t *testing.T) {
+	idx, dir := testIndexer(t)
+	if err := idx.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatal(err)
+	}
+	const uuid = "ext-tgt-77"
+	fp := writeFile(t, dir, "target.md", "@id: "+uuid+"\n\nPreamble.\n")
+	if _, err := idx.AddFile(fp, "markdown"); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.store.LoadTvidMap(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Overlay machinery + ExtMap, mirroring DB.Open's wiring.
+	tmpStore := NewTmpTagStore(idx.store.TvidMap())
+	idx.store.SetTmpTagStore(tmpStore)
+	db := newTestDB(idx, dir)
+	db.extmap = NewExtMap()
+	if err := db.extmap.Rebuild(db); err != nil {
+		t.Fatal(err)
+	}
+	idx.extmap = db.extmap
+	idx.db = db
+	idx.store.SetExtMap(db.extmap)
+	tmpStore.SetExtMap(db.extmap, db)
+
+	// Overlay (tmp://) @ext source routing to the persistent target.
+	src := "@ext: %" + uuid + " @topic: routed\n\nsource body.\n"
+	if _, err := db.AddTmpFile("tmp://ext-src.md", "markdown", []byte(src)); err != nil {
+		t.Fatalf("AddTmpFile (overlay @ext to persistent target): %v", err)
+	}
+
+	// The routed tag must have reached the persistent target chunk.
+	if chunks := db.extmap.ExtTagValueChunks("topic", "routed"); len(chunks) == 0 {
+		t.Fatal("overlay @ext routing did not reach the persistent target")
+	}
+}
