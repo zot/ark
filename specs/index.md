@@ -15,8 +15,10 @@ invariant, but the owning feature spec wins on any disagreement; fix the
 mirror. Rationale, drift strategy, and open questions:
 [.scratch/SPEC-INDEX.md](../.scratch/SPEC-INDEX.md).
 
-**This is a seed.** The Systems list is not exhaustive, and Themes are
-added when a real navigation failure names one — not enumerated up front.
+**Systems are complete; Themes are earned.** The Systems list maps every
+per-feature spec — a spec missing from it is drift, surfaced by the
+`minispec` spec-index check. Themes are added only when a real navigation
+failure names one — not enumerated up front.
 
 ## Summary specs (cross-cutting inventories)
 
@@ -32,18 +34,25 @@ axes (this is the pinned list CLAUDE.md refers to).
 - [chunkers.md](chunkers.md) — every chunker + the interface matrix
 - [future.md](future.md) — deferred ideas not yet built (`@future:` holding pen, until mini-spec tracks them natively)
 
-## Systems (seed — not exhaustive)
+## Systems
 
-- **Indexing & chunking** — chunkers.md, chunker-strategies.md, pdf-chunker.md, chunk-callback.md, chunk-context.md, parallel-indexing.md, source-monitoring.md, indexing.md
-- **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, at-id.md, at-link.md
-- **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md
-- **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md
-- **Recall & substrate** — recall.md, simple-recall.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md
+Every per-feature spec has a home here, placed by primary concern (a few
+could sit in two; cross-listing is kept minimal).
+
+- **Indexing & chunking** — chunkers.md, chunker-strategies.md, pdf-chunker.md, chunk-callback.md, chunk-context.md, parallel-indexing.md, source-monitoring.md, indexing.md, v25-enhancements.md
+- **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md
+- **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md, embed-subcommands.md
+- **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md, search-profiling.md, chunk-filters.md, file-tag-filter.md
+- **Recall & substrate** — recall.md, simple-recall.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md
+- **Scheduling & monitoring** — scheduling.md, schedule-lifecycle.md, chimes.md, monitor.md
 - **PDF** — pdf-chunker.md, pdf-chunk-element.md *(see Theme: Dealing with PDFs)*
-- **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md
+- **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md, inbox-bookmark-fields.md, inbox-entry-enrichment.md
 - **tmp:// documents** — tmp-documents.md, tmp-subscription.md, tmp-tag-overlay.md
-- **Storage & concurrency** — record-formats.md, db-write-actor.md, db-concurrency.md, chunk-cache-threading.md
-- **UI / Frictionless** — embedded-ui.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md
+- **Storage & concurrency** — record-formats.md, db-write-actor.md, db-concurrency.md, chunk-cache-threading.md, pubsub.md, tvid-map-overlay.md, serve-compact.md
+- **UI / Frictionless** — embedded-ui.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md, ark-search.md, chunked-content-view.md, content-fetching.md, content-iframe.md, editor-endpoints.md, tag-overview.md, tag-search-panel.md, table-sort.md, chat-transcript.md
+- **Nano (local LLM agent)** — nano-overview.md, nano-cli.md, nano-library.md, nano-sessions.md, nano-tool-loop.md
+- **Status & diagnostics** — status-db.md, status-enhanced.md, files-status.md, chunk-stats.md, tag-inspect.md, tag-verify.md, verbose-flags.md
+- **Server, config & infrastructure** — main.md, sessions.md, subscriber-presence.md, config-flag-bug.md, config-tracking.md, bundle-assets.md, infrastructure.md
 
 ## Cross-cutting themes
 
