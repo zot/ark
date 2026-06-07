@@ -5,9 +5,9 @@ description: "**MANDATORY: Invoke BEFORE writing or modifying any code.** Withou
 
 # Mini-spec
 
-## Design Docs First — Not Code
+## Load the model first
 
-**When understanding a feature or planning a change, start with `design/design.md` and the relevant CRC cards/sequences BEFORE using code exploration tools.** Design docs are the project index — they show component relationships, responsibilities, and code file mappings more efficiently than code search. Only drop into code-level tools (Serena, Grep, etc.) after the design docs have oriented you.
+**IMMEDIATELY invoke `/minimap` using the Skill tool before doing anything else.** It carries the structural *model* this skill builds on: the 3-level spec→design→code layout, what each level is for, where artifacts live, the **root spec index**, what a **summary spec** is, and the **traceability links** (`Rn` → CRC card → code `// CRC:/Seq:` comment) that stitch the levels together. Start at the design docs and the root index, not at code — drop into code-level tools (Serena, Grep, etc.) only after they've oriented you. This skill adds the **process** — phases, traceability *maintenance*, gaps, migrations, trajectory tracking — on top of that model.
 
 ## Prerequisite: Version Check and Comment Patterns
 
@@ -47,46 +47,11 @@ Migrations are temporary by design — see "Migration Workflow" below.
 
 ---
 
-## Overview
+## Why the levels matter
 
-3-level architecture: specs → design → code.
-
-```
-specs/                # Human intent — current state of the project, in the user's own words
-  migrations/         # In-flight migrations — temporary, get moved on completion
-    complete/         # Completed migrations, numbered in landing order
-design/               # AI translation — requirements.md, crc-*, seq-*, ui-*, test-*, manifest-ui.md
-docs/                 # user-manual.md, developer-guide.md
-src/                  # Code with traceability comments
-```
-
-### What each level is for
-
-**Specs** are the human's voice. They describe what the system should
-do in natural language, organized by feature area. The user writes or
-approves them. They communicate intent — not implementation, not
-internal structure. A spec should read like someone explaining the
-feature to a colleague. For libraries, API signatures belong in specs
-because they *are* the face of the project — they must be agreed upon
-before design begins. Specs must state the language and environment
-so the AI knows what it's building for.
-
-Most specs are **per-feature** — one spec, one capability, one cohesive
-slice of behavior. A second kind, **summary specs**, indexes existing
-behavior along a cross-cutting axis (CLI surface, storage layout, API
-set, capabilities) without introducing any new behavior of its own.
-See *Summary specs* below.
-
-**Design** is the AI's translation of specs into buildable structure.
-Requirements extract testable statements. CRC cards assign
-responsibilities to components. Sequences show how components
-interact. The user reviews this translation before code is written —
-catching a misunderstanding here costs minutes, not hours.
-
-**Code** implements the design with traceability comments linking back
-to the design artifacts that justify each component's existence.
-
-### Why this matters
+(*The 3-level model itself — what specs, design, and code each are, and where
+they live — is in `/minimap`. This skill is the **process** that builds and
+maintains them.*)
 
 Each level exists because skipping it has a concrete cost:
 
@@ -98,23 +63,11 @@ Each level exists because skipping it has a concrete cost:
 
 The phases are not ceremony. They are cheaper than debugging a misunderstood requirement after 500 lines of code.
 
-### Summary specs
+## Summary specs — maintenance
 
-A **summary spec** is a spec that doesn't introduce behavior — it
-*indexes* behavior owned by per-feature specs, along one cross-cutting
-axis. Per-feature specs answer "what does this feature do?"; summary
-specs answer "what's the full set of X in this project?"
-
-Examples that recur across projects:
-
-- A **CLI inventory** spec lists every subcommand and flag (e.g.
-  `specs/cli-commands.md`).
-- A **storage layout** spec lists every record class with key/value
-  layout (e.g. `specs/record-formats.md`).
-- An **API surface** spec lists every public binding exposed to a
-  scripting or extension layer (e.g. `specs/lua-api.md`).
-- A **capabilities** spec lists every named feature with motivation
-  and objective (e.g. `specs/features.md`).
+(*What a summary spec **is**, and the recurring kinds — CLI inventory, storage
+layout, API surface, capabilities — are in `/minimap`. This is the maintenance
+side: when to create one, and how to keep it true.*)
 
 When to create one:
 
@@ -214,6 +167,14 @@ area. Specs are the user's intent in their own words. For applications,
 this means behavior and user-facing concepts. For libraries, include
 the public API signatures — they are the contract that design must
 satisfy. Do not include internal structure or implementation choices.
+
+**Reconcile the root spec index.** Whenever you add, rename, or retire a
+per-feature spec, straighten out the root index (the project's
+`specs/index.md`) in the same pass: create it if it doesn't exist yet, then
+make sure every spec has an entry under a system, with new summary specs and
+themes registered. Run `~/.claude/bin/minispec query unindexed-specs` — it
+lists any per-feature spec missing from the index (the spec-level analog of
+`query uncovered`); the pass is clean when that list is empty.
 
 **Upon completion**, run `~/.claude/bin/minispec phase spec` to verify spec files exist, then offer Requirements Phase. Do not jump to Design.
 
@@ -467,6 +428,104 @@ To keep `specs/` from accumulating stale migration narratives:
 chronological record of what changed and why. `specs/` always
 reflects the present.
 
+## Trajectory Tracking (PENDING / CURRENT / DONE)
+
+Specs → design → code anchor the project's **structure** — what exists and
+why. They do not track its **trajectory**: what's queued, what's in flight,
+what just landed. The harness task tool (`TaskCreate`/`TaskUpdate`) is
+session-local and dies with the session. Trajectory tracking is the durable,
+cross-session spine the structural docs and the ephemeral tasks both lack.
+
+It is **tool-agnostic**: it tracks any kind of work — a mini-spec pass, a UI
+pass, a plain investigation — each item naming the skill that runs it, or
+none. It ships with mini-spec but is not about mini-spec.
+
+### The three files
+
+Named for the states an item passes through: **pending → current → done**
+(future → present → past). Default location
+`specs/migrations/{PENDING,CURRENT,DONE}.md`; a project may site them
+elsewhere (e.g. at top level) and keep a project prefix. The vocabulary
+below refers to the project's files **wherever they live**, so a path never
+needs qualifying:
+
+- **the pending file** — the work queue.
+- **the current file** — working context for the active item.
+- **the done file** — the completion ledger.
+
+The standing ledger (exactly one PENDING, one CURRENT, one DONE) sits in the
+same `migrations/` directory as the in-flight migration specs. Two kinds of
+file share that directory — say so, so `PENDING.md` is never mistaken for a
+migration spec.
+
+### Lifecycle rules
+
+- **The pending file is ordered by intent** — the top item is active. Each
+  item is a `##` heading, so a paused item's context can nest as a sub-item
+  beneath it.
+- **Finishing an item:** first mark it done in its **source file** (the
+  plan/spec/design doc where the work lives); then reset the current file;
+  then move the item from the pending file to the done file.
+- **The current file is for the active item only** — never a log of finished
+  work (that is the done file). With nothing active, it holds a one-line
+  placeholder.
+- **Entries are status indicators only** — the source file holds the
+  content, design, and rules. No instructions in entries.
+- **The done file is most-recent-first.** Each entry records date, title,
+  and what landed (commit, requirement ranges, gaps banked, sources) —
+  enough to reconstruct the change without re-reading the code.
+- **The pending file is the index** back to the roadmap, planning scratch,
+  and feature designs.
+
+### File shapes
+
+```markdown
+# Pending
+<lifecycle rules>
+---
+## 1. **<title>** (<skill that runs it — or omit>). <one-line status>.
+   Source: [<doc>](<path>). Next: <next action>.
+## 2. **<title>** …
+```
+```markdown
+# Current
+Working context for the active item only — never a log (that's the done
+file). To pause: lift this into a sub-item under that item's `##` heading in
+the pending file, then reset here, freeing it for what you pick up next.
+---
+_No active item._
+```
+```markdown
+# Done
+Completed items, most-recent first.
+- **YYYY-MM-DD — <title>.** <commit, R-range, gaps banked, sources touched>.
+```
+
+### Interleaving with migrations
+
+A **state item** and a **migration** are two orthogonal lifecycles,
+composable as the work demands:
+
+- A **migration** distills a brainstorm into a concise A→B document that may
+  span several steps; it runs the phases and lands in `complete/NNN-`. It
+  can be done all-at-once and may never enter the pending queue.
+- A **state item** is a unit of queued work, paused and resumed via the
+  current file.
+
+They compose; they do not nest by rule. The current file is a **resume
+buffer**: to change styles mid-flight, park the active item's context as a
+sub-item under its `##` heading (the pending file is a stack you can push
+onto), freeing the current file for the migration, then resume later from the
+parked sub-item. The freedom to intermix is the point — neither style is
+imposed.
+
+### What's reusable vs. project-specific
+
+Reusable core: the three files, the lifecycle, the interleaving model. Each
+project parameterizes the rest — routing labels (which skill runs an item),
+the planning-scratch location, any batching rules, file siting and case
+convention, and whether the files carry a project prefix.
+
 ## CRC Card Format
 ```markdown
 # ClassName
@@ -505,6 +564,7 @@ Cover: happy path, errors, edge cases.
 - [ ] Traceability: design files in Artifacts, code files have checkboxes, all Rn referenced
 - [ ] Tests: test-*.md for key behaviors
 - [ ] Summary specs: any cross-cutting axis touched by this change has been mirrored in the relevant summary spec (CLI inventory, storage layout, API surface, capabilities, …) — see the project's pinned list
+- [ ] Root spec index: every per-feature spec is mapped under a system in the root index (created if absent); `~/.claude/bin/minispec query unindexed-specs` returns empty
 - [ ] Phase validation: `~/.claude/bin/minispec phase <phase>` passes after each phase
 - [ ] Full validation: `~/.claude/bin/minispec validate` passes
 
