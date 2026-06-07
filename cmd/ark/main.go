@@ -124,6 +124,7 @@ var migratedCommands = map[string]bool{
 	"monitor":     true,
 	"luhmann":     true,
 	"embed":       true,
+	"discussed":   true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -176,6 +177,7 @@ func arkCommands() []*ucli.Command {
 		monitorCommand(),
 		luhmannCommand(),
 		embedCommand(),
+		discussedCommand(),
 	}
 }
 
@@ -200,8 +202,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdChats(args)
 	case "cp":
 		cmdBundleCp(args)
-	case "discussed":
-		cmdDiscussed(args)
 	case "dismiss":
 		cmdDismiss(args)
 	case "fetch":
@@ -2713,47 +2713,6 @@ func cmdMissing(args []string) {
 	})
 }
 
-// cmdDiscussed dispatches the `ark discussed` family
-// (add/list/clear/prune). CRC: crc-CLI.md | Seq: seq-discussed.md
-// R2650-R2654
-func cmdDiscussed(args []string) {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, `Usage: ark discussed <subcommand> [options]
-
-Per-session recall dedup state. The recall agent writes here after
-emitting tag suggestions; the substrate reads via
-ark connections recall --session SID.
-
-Subcommands:
-  add    --session SID @tag[:value] [@tag[:value] ...]
-  list   --session SID [--since DUR] [--json]
-  clear  --session SID
-  prune  [--ttl DUR]
-
-Tag syntax: bare @name matches any value (substrate-side);
-@name:value matches the exact pair.`)
-		if len(args) == 0 {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "add":
-		cmdDiscussedAdd(rest)
-	case "list":
-		cmdDiscussedList(rest)
-	case "clear":
-		cmdDiscussedClear(rest)
-	case "prune":
-		cmdDiscussedPrune(rest)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown discussed subcommand: %s\n", sub)
-		os.Exit(1)
-	}
-}
-
 // parseDiscussedTagArg parses one `@name[:value]` token and returns
 // the (tag, value) pair. The leading `@` is required. Names and
 // values may not contain `\x00`.
@@ -2801,237 +2760,6 @@ func parseDiscussedList(s string) ([]ark.Discussed, error) {
 		out = append(out, ark.Discussed{Tag: tag, Value: value})
 	}
 	return out, nil
-}
-
-// cmdDiscussedAdd implements `ark discussed add`. This is the writer
-// interface for the recall agent's mark-all-N policy — every tag the
-// agent emits for a target session is marked discussed regardless of
-// whether the user engages with it. The substrate itself never writes
-// RD records.
-// CRC: crc-CLI.md | Seq: seq-discussed.md#1.4 | R2650, R2662
-func cmdDiscussedAdd(args []string) {
-	fs := flag.NewFlagSet("discussed add", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	session := fs.String("session", "", "session ID (required)")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark discussed add --session SID @tag[:value] [@tag[:value] ...]
-
-Mark one or more tags as discussed in the given session. Re-adding an
-existing (session, tag, value) overwrites the timestamp.`)
-		fs.SetOutput(os.Stderr)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fs.Usage()
-		fatal(err)
-	}
-	if *session == "" {
-		fs.Usage()
-		fatal(fmt.Errorf("session ID required"))
-	}
-	posArgs := fs.Args()
-	if len(posArgs) == 0 {
-		fs.Usage()
-		fatal(fmt.Errorf("no tags specified"))
-	}
-	tags := make([]ark.Discussed, 0, len(posArgs))
-	for _, a := range posArgs {
-		tag, value, err := parseDiscussedTagArg(a)
-		if err != nil {
-			fatal(err)
-		}
-		tags = append(tags, ark.Discussed{Tag: tag, Value: value})
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{"session": *session, "tags": tags}
-		if err := proxyOK(client, "POST", "/discussed/add", body); err != nil {
-			fatal(err)
-		}
-		return
-	}
-	withDB(func(db *ark.DB) {
-		for _, t := range tags {
-			if err := db.AddDiscussed(*session, t.Tag, t.Value); err != nil {
-				fatal(err)
-			}
-		}
-	})
-}
-
-// cmdDiscussedList implements `ark discussed list`. R2651
-func cmdDiscussedList(args []string) {
-	fs := flag.NewFlagSet("discussed list", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	session := fs.String("session", "", "session ID (required)")
-	sinceStr := fs.String("since", "", "keep entries newer than DUR (e.g. 30m, 24h)")
-	jsonOut := fs.Bool("json", false, "emit JSON array instead of @-line markdown")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark discussed list --session SID [--since DUR] [--json]
-
-List unexpired discussed tags for one session. Lazy expiry applies on
-read using the configured [recall].discussed_ttl (default 24h).`)
-		fs.SetOutput(os.Stderr)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fs.Usage()
-		fatal(err)
-	}
-	if *session == "" {
-		fs.Usage()
-		fatal(fmt.Errorf("session ID required"))
-	}
-	var since time.Duration
-	if *sinceStr != "" {
-		d, err := time.ParseDuration(*sinceStr)
-		if err != nil {
-			fatal(fmt.Errorf("invalid --since: %w", err))
-		}
-		since = d
-	}
-
-	var entries []ark.Discussed
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{"session": *session}
-		if *sinceStr != "" {
-			body["since"] = *sinceStr
-		}
-		if err := proxyDecode(client, "POST", "/discussed/list", body, &entries); err != nil {
-			fatal(err)
-		}
-	} else {
-		withDB(func(db *ark.DB) {
-			es, err := db.ListDiscussed(*session, since)
-			if err != nil {
-				fatal(err)
-			}
-			entries = es
-		})
-	}
-
-	if *jsonOut {
-		data, err := json.MarshalIndent(entries, "", "  ")
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Println(string(data))
-		return
-	}
-	for _, e := range entries {
-		if e.Value == "" {
-			fmt.Printf("@%s\n", e.Tag)
-		} else {
-			fmt.Printf("@%s: %s\n", e.Tag, e.Value)
-		}
-	}
-}
-
-// cmdDiscussedClear implements `ark discussed clear`. R2652
-func cmdDiscussedClear(args []string) {
-	fs := flag.NewFlagSet("discussed clear", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	session := fs.String("session", "", "session ID (required)")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark discussed clear --session SID
-
-Delete every discussed-tag record under one session.`)
-		fs.SetOutput(os.Stderr)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fs.Usage()
-		fatal(err)
-	}
-	if *session == "" {
-		fs.Usage()
-		fatal(fmt.Errorf("session ID required"))
-	}
-
-	var count int
-	if client := serverClient(arkDir); client != nil {
-		var resp struct {
-			Count int `json:"count"`
-		}
-		if err := proxyDecode(client, "POST", "/discussed/clear",
-			map[string]any{"session": *session}, &resp); err != nil {
-			fatal(err)
-		}
-		count = resp.Count
-	} else {
-		withDB(func(db *ark.DB) {
-			c, err := db.ClearDiscussed(*session)
-			if err != nil {
-				fatal(err)
-			}
-			count = c
-		})
-	}
-	fmt.Fprintf(os.Stderr, "cleared %d entries\n", count)
-}
-
-// cmdDiscussedPrune implements `ark discussed prune`. R2653
-func cmdDiscussedPrune(args []string) {
-	fs := flag.NewFlagSet("discussed prune", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	ttlStr := fs.String("ttl", "", "override TTL (e.g. 24h, 7d). Empty uses [recall].discussed_ttl.")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark discussed prune [--ttl DUR]
-
-Sweep RD records across all sessions, deleting entries older than the
-TTL. Without --ttl, uses the configured [recall].discussed_ttl
-(default 24h).`)
-		fs.SetOutput(os.Stderr)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(reorderArgsForFlagSet(fs, args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fs.Usage()
-		fatal(err)
-	}
-	var ttl time.Duration
-	if *ttlStr != "" {
-		d, err := time.ParseDuration(*ttlStr)
-		if err != nil {
-			fatal(fmt.Errorf("invalid --ttl: %w", err))
-		}
-		ttl = d
-	}
-
-	var count int
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{}
-		if *ttlStr != "" {
-			body["ttl"] = *ttlStr
-		}
-		var resp struct {
-			Count int `json:"count"`
-		}
-		if err := proxyDecode(client, "POST", "/discussed/prune", body, &resp); err != nil {
-			fatal(err)
-		}
-		count = resp.Count
-	} else {
-		withDB(func(db *ark.DB) {
-			c, err := db.PruneDiscussed(ttl)
-			if err != nil {
-				fatal(err)
-			}
-			count = c
-		})
-	}
-	fmt.Fprintf(os.Stderr, "pruned %d entries\n", count)
 }
 
 func cmdDismiss(args []string) {
