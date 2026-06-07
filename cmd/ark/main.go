@@ -152,6 +152,18 @@ var migratedCommands = map[string]bool{
 	"cp":               true,
 	"nano":             true,
 	"sweep":            true,
+	// flat top-level commands (batch 2: flag-bearing + install)
+	"add":     true,
+	"bundle":  true,
+	"chunks":  true,
+	"chats":   true,
+	"fetch":   true,
+	"files":   true,
+	"init":    true,
+	"serve":   true,
+	"status":  true,
+	"stop":    true,
+	"install": true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -222,30 +234,8 @@ func arkCommands() []*ucli.Command {
 // CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#5.2 | R2930
 func legacyDispatch(cmd string, args []string) {
 	switch cmd {
-	case "add":
-		cmdAdd(args)
-	case "bundle":
-		cmdBundle(args)
-	case "chunks":
-		cmdChunks(args)
-	case "chats":
-		cmdChats(args)
-	case "fetch":
-		cmdFetch(args)
-	case "files":
-		cmdFiles(args)
-	case "init":
-		cmdInit(args)
 	case "search":
 		cmdSearch(args)
-	case "serve":
-		cmdServe(args)
-	case "status":
-		cmdStatus(args)
-	case "stop":
-		cmdStop(args)
-	case "install":
-		cmdUIInstall(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()

@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 
 	ucli "github.com/urfave/cli/v3"
 )
@@ -62,5 +63,256 @@ func flatCommands() []*ucli.Command {
 				{Name: "correlations", Usage: "refresh the hot-correlations top-K cache per tag (requires server)", Action: flatDelegate(cmdSweepCorrelations)},
 			},
 		},
+
+		// --- batch 2: flag-bearing commands (declare flags, reconstruct argv) ---
+		{
+			Name: "add", Usage: "add files to the index", ArgsUsage: "PATH...",
+			Flags: []ucli.Flag{
+				&ucli.StringFlag{Name: "strategy", Usage: "chunking strategy"},
+				&ucli.StringFlag{Name: "content", Usage: "inline content for tmp:// documents"},
+				&ucli.StringFlag{Name: "from-file", Usage: "read content from file for tmp:// documents"},
+				&ucli.BoolFlag{Name: "append", Usage: "append to existing tmp:// document instead of replacing"},
+			},
+			Action: flatAddAction,
+		},
+		{
+			Name: "bundle", Usage: "graft a directory onto a binary as a zip appendix (build-time)",
+			Flags: []ucli.Flag{
+				&ucli.StringFlag{Name: "o", Usage: "output path for bundled binary (required)"},
+				&ucli.StringFlag{Name: "src", Usage: "source binary to bundle (default: current executable)"},
+			},
+			Action: flatBundleAction,
+		},
+		{
+			Name: "chunks", Usage: "show chunks around a search hit (context expansion)", ArgsUsage: "PATTERN...",
+			Flags: []ucli.Flag{
+				&ucli.IntFlag{Name: "before", Usage: "number of chunks before target"},
+				&ucli.IntFlag{Name: "after", Usage: "number of chunks after target"},
+				&ucli.StringFlag{Name: "wrap", Usage: "wrap output in XML tags"},
+				&ucli.BoolFlag{Name: "status", Usage: "show SIZE FILE:LOCATION for all chunks matching patterns"},
+			},
+			Action: flatChunksAction,
+		},
+		{
+			Name: "chats", Usage: "show conversation transcripts from JSONL logs", ArgsUsage: "[PATH...]",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "with-tools", Usage: "display tool calls and results"},
+				&ucli.BoolFlag{Name: "sidechain", Usage: "display sidechain chatter"},
+				&ucli.StringFlag{Name: "wrap", Usage: "wrap output with a name tag"},
+				&ucli.IntFlag{Name: "line-length", Value: 100, Usage: "word-wrap line length"},
+			},
+			Action: flatChatsAction,
+		},
+		{
+			Name: "fetch", Usage: "return full contents of an indexed file", ArgsUsage: "PATH",
+			Flags:  []ucli.Flag{&ucli.StringFlag{Name: "wrap", Usage: "wrap output in XML tags (e.g. memory, knowledge)"}},
+			Action: flatFetchAction,
+		},
+		{
+			Name: "files", Usage: "list indexed files",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "status", Usage: "show file status, bytes, and chunk count"},
+				&ucli.BoolFlag{Name: "detail", Usage: "show per-file chunk size stats (with --status)"},
+				&ucli.StringSliceFlag{Name: "filter-files", Usage: "path-based positive filter (repeatable, glob pattern)"},
+				&ucli.StringSliceFlag{Name: "exclude-files", Usage: "path-based negative filter (repeatable, glob pattern)"},
+			},
+			Action: flatFilesAction,
+		},
+		{
+			Name: "init", Usage: "create a new database",
+			Flags: []ucli.Flag{
+				&ucli.StringFlag{Name: "embed-cmd", Usage: "embedding command (optional, enables vector search)"},
+				&ucli.StringFlag{Name: "query-cmd", Usage: "query embedding command (optional)"},
+				&ucli.BoolFlag{Name: "case-insensitive", Value: true, Usage: "case-insensitive indexing"},
+				&ucli.StringFlag{Name: "aliases", Usage: "byte aliases (from=to,...)"},
+				&ucli.BoolFlag{Name: "no-setup", Usage: "skip automatic setup"},
+				&ucli.BoolFlag{Name: "if-needed", Usage: "skip if database already exists"},
+			},
+			Action: flatInitAction,
+		},
+		{
+			Name: "serve", Usage: "start the server",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "no-scan", Usage: "skip startup reconciliation"},
+				&ucli.BoolFlag{Name: "force", Usage: "accept config changes, clear error conditions"},
+				&ucli.BoolFlag{Name: "compact", Usage: "compact LMDB via mdb_env_copy2 before opening (overrides ark.toml auto_compact)"},
+			},
+			Action: flatServeAction,
+		},
+		{
+			Name: "status", Usage: "show database status",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "db", Usage: "show LMDB record counts by type"},
+				&ucli.BoolFlag{Name: "chunks", Usage: "show chunk size statistics"},
+				&ucli.BoolFlag{Name: "tokenize", Usage: "measure in tokens (requires tag_model)"},
+				&ucli.StringSliceFlag{Name: "filter-files", Usage: "path-based positive filter (repeatable, glob pattern)"},
+				&ucli.StringSliceFlag{Name: "exclude-files", Usage: "path-based negative filter (repeatable, glob pattern)"},
+			},
+			Action: flatStatusAction,
+		},
+		{
+			Name: "stop", Usage: "stop the running server",
+			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "f", Usage: "send SIGKILL instead of SIGTERM"}},
+			Action: flatStopAction,
+		},
+		{Name: "install", Usage: "connect this project to ark (alias for ui install)", Action: flatDelegate(cmdUIInstall)},
 	}
+}
+
+// Batch-2 actions: declare flags on the node (self-documenting help), then
+// reconstruct the argv the kept cmdX body expects (flags first, then the
+// positional args), so the index-core bodies stay untouched in main.go.
+
+func flatAddAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if v := c.String("strategy"); v != "" {
+		a = append(a, "--strategy", v)
+	}
+	if v := c.String("content"); v != "" {
+		a = append(a, "--content", v)
+	}
+	if v := c.String("from-file"); v != "" {
+		a = append(a, "--from-file", v)
+	}
+	if c.Bool("append") {
+		a = append(a, "--append")
+	}
+	cmdAdd(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatBundleAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if v := c.String("o"); v != "" {
+		a = append(a, "--o", v)
+	}
+	if v := c.String("src"); v != "" {
+		a = append(a, "--src", v)
+	}
+	cmdBundle(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatChunksAction(_ context.Context, c *ucli.Command) error {
+	a := []string{"--before", strconv.Itoa(c.Int("before")), "--after", strconv.Itoa(c.Int("after"))}
+	if v := c.String("wrap"); v != "" {
+		a = append(a, "--wrap", v)
+	}
+	if c.Bool("status") {
+		a = append(a, "--status")
+	}
+	cmdChunks(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatChatsAction(_ context.Context, c *ucli.Command) error {
+	a := []string{"--line-length", strconv.Itoa(c.Int("line-length"))}
+	if c.Bool("with-tools") {
+		a = append(a, "--with-tools")
+	}
+	if c.Bool("sidechain") {
+		a = append(a, "--sidechain")
+	}
+	if v := c.String("wrap"); v != "" {
+		a = append(a, "--wrap", v)
+	}
+	cmdChats(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatFetchAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if v := c.String("wrap"); v != "" {
+		a = append(a, "--wrap", v)
+	}
+	cmdFetch(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatFilesAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("status") {
+		a = append(a, "--status")
+	}
+	if c.Bool("detail") {
+		a = append(a, "--detail")
+	}
+	for _, v := range c.StringSlice("filter-files") {
+		a = append(a, "--filter-files", v)
+	}
+	for _, v := range c.StringSlice("exclude-files") {
+		a = append(a, "--exclude-files", v)
+	}
+	cmdFiles(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatInitAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if v := c.String("embed-cmd"); v != "" {
+		a = append(a, "--embed-cmd", v)
+	}
+	if v := c.String("query-cmd"); v != "" {
+		a = append(a, "--query-cmd", v)
+	}
+	// case-insensitive defaults true in cmdInit; only pass when disabled.
+	if !c.Bool("case-insensitive") {
+		a = append(a, "--case-insensitive=false")
+	}
+	if v := c.String("aliases"); v != "" {
+		a = append(a, "--aliases", v)
+	}
+	if c.Bool("no-setup") {
+		a = append(a, "--no-setup")
+	}
+	if c.Bool("if-needed") {
+		a = append(a, "--if-needed")
+	}
+	cmdInit(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatServeAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("no-scan") {
+		a = append(a, "--no-scan")
+	}
+	if c.Bool("force") {
+		a = append(a, "--force")
+	}
+	if c.Bool("compact") {
+		a = append(a, "--compact")
+	}
+	cmdServe(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatStatusAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("db") {
+		a = append(a, "--db")
+	}
+	if c.Bool("chunks") {
+		a = append(a, "--chunks")
+	}
+	if c.Bool("tokenize") {
+		a = append(a, "--tokenize")
+	}
+	for _, v := range c.StringSlice("filter-files") {
+		a = append(a, "--filter-files", v)
+	}
+	for _, v := range c.StringSlice("exclude-files") {
+		a = append(a, "--exclude-files", v)
+	}
+	cmdStatus(append(a, c.Args().Slice()...))
+	return nil
+}
+
+func flatStopAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("f") {
+		a = append(a, "--f")
+	}
+	cmdStop(append(a, c.Args().Slice()...))
+	return nil
 }
