@@ -32,6 +32,7 @@ import (
 	"github.com/zot/ark"
 	"github.com/zot/microfts2"
 
+	ucli "github.com/urfave/cli/v3"
 	cli "github.com/zot/ui-engine/cli"
 )
 
@@ -101,6 +102,81 @@ func main() {
 	}
 	args := filtered[1:]
 
+	// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.3 | R2916, R2930
+	// urfave-migrated commands route through the command tree; everything
+	// else falls through to the legacy hand-rolled dispatch. Routing by
+	// name here (not urfave's CommandNotFound) keeps an un-migrated
+	// command's own flags from tripping the urfave root.
+	if migratedCommands[cmd] {
+		runArkCommandTree(cmd, args)
+		return
+	}
+	legacyDispatch(cmd, args)
+}
+
+// migratedCommands names the commands handled by the urfave command tree.
+// As each group migrates, its name moves here and its case leaves
+// legacyDispatch; when legacyDispatch is empty, both it and this routing
+// are deleted and the root takes over main() outright.
+// CRC: crc-CLITree.md | R2930
+var migratedCommands = map[string]bool{
+	"connections": true,
+}
+
+// runArkCommandTree builds the urfave root and runs the migrated command
+// through it. The root's ExitErrHandler renders urfave-raised errors and
+// exits; command bodies os.Exit directly as before.
+// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.4 | R2916
+func runArkCommandTree(cmd string, args []string) {
+	root := buildArkCommand()
+	// Errors are handled by ExitErrHandler (which exits); a returned error
+	// here would already have been rendered, so just fall through.
+	_ = root.Run(context.Background(), append([]string{"ark", cmd}, args...))
+}
+
+// buildArkCommand constructs the ark urfave command tree: the migrated
+// command nodes plus the cross-cutting CLI conventions (error format,
+// exit codes). Global flags + a Before hook join the root only in the end
+// state, once the legacy pre-parse in main() is retired.
+// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#4.2 | R2916, R2926, R2927
+func buildArkCommand() *ucli.Command {
+	return &ucli.Command{
+		Name:  "ark",
+		Usage: "digital zettelkasten — hybrid trigram + vector search",
+		// ExitErrHandler renders errors urfave itself raises (flag-parse
+		// failures, unknown flags) as `error: <msg>` on stderr — the
+		// fatal() shape — and exits with the error's ExitCoder code (else
+		// 1). It must exit here, or the code is lost and the message
+		// double-prints. (R2926, R2927)
+		ExitErrHandler: func(_ context.Context, _ *ucli.Command, err error) {
+			if err == nil {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			code := 1
+			var ec ucli.ExitCoder
+			if errors.As(err, &ec) {
+				code = ec.ExitCode()
+			}
+			os.Exit(code)
+		},
+		Commands: arkCommands(),
+	}
+}
+
+// arkCommands returns the migrated command nodes. Empty until the first
+// group lands; grows group by group through the migration.
+// CRC: crc-CLITree.md | R2916
+func arkCommands() []*ucli.Command {
+	return []*ucli.Command{
+		connectionsCommand(),
+	}
+}
+
+// legacyDispatch is the original hand-rolled command switch, extracted so
+// un-migrated commands keep working during the staged urfave migration.
+// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#5.2 | R2930
+func legacyDispatch(cmd string, args []string) {
 	switch cmd {
 	case "add":
 		cmdAdd(args)
@@ -114,8 +190,6 @@ func main() {
 		cmdChunks(args)
 	case "config":
 		cmdConfig(args)
-	case "connections":
-		cmdConnections(args)
 	case "chats":
 		cmdChats(args)
 	case "cp":
@@ -1714,6 +1788,9 @@ Options:`)
 	fmt.Println()
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md | Seq: seq-find-connections-substrate.md | R2313, R2315, R2316, R2317, R2318, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616
 func cmdConnections(args []string) {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -1758,6 +1835,9 @@ func cmdConnections(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 func printConnectionsHelp() {
 	fmt.Fprintln(os.Stderr, `Usage: ark connections SUBCOMMAND [...]
 
@@ -1873,6 +1953,9 @@ Sidecar subcommands (turbo agent internal protocol):
   sidecar-error ID MESSAGE  Post an error message`)
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 func cmdConnectionsFind(args []string) {
 	fs := flag.NewFlagSet("connections find", flag.ExitOnError)
 	mode := fs.String("mode", "normal", "mode: normal | turbo")
@@ -1946,6 +2029,9 @@ Options:`)
 	fmt.Print(out)
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // splitConnectionsFindArgs separates positional input tokens from flag
 // tokens, since Go's flag package stops at the first non-flag argument.
 // Bare integers, PATH:N-M tokens, and any token without a leading dash
@@ -2020,6 +2106,9 @@ func splitPathLocator(tok string) (path, rng string, ok bool) {
 	return tok[:colon], tok[colon+1:], true
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 func cmdConnectionsWait(args []string) {
 	fs := flag.NewFlagSet("connections wait", flag.ExitOnError)
 	timeout := fs.Int("timeout", 60, "timeout in seconds before giving up")
@@ -2076,6 +2165,9 @@ func waitConnectionsDoc(client *http.Client, path string, timeoutSec int, asJSON
 	return "", nil
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 func cmdConnectionsShow(args []string) {
 	fs := flag.NewFlagSet("connections show", flag.ExitOnError)
 	statusOnly := fs.Bool("status", false, "print only @connections-status")
@@ -2171,6 +2263,9 @@ func renderConnectionsShow(doc *ark.ConnectionsDoc) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 func cmdConnectionsList(args []string) {
 	fs := flag.NewFlagSet("connections list", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "emit JSON array instead of markdown table")
@@ -2228,6 +2323,9 @@ func truncStr(s string, n int) string {
 	return s[:n]
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // cmdConnectionsClean implements `ark connections clean [-all]
 // [-session ID|project]`. Default scope wipes RC + RD + RM; -all also
 // wipes RF, RJ, and tmp://connections/* / tmp://ARK-RECALL/* docs.
@@ -7559,6 +7657,9 @@ Requires a running server.`)
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // cmdConnectionsRecall is the top-level entry: thin wrapper that
 // funnels any runConnectionsRecall error through fatal. The bulk of
 // the logic lives in runConnectionsRecall so tests can drive failure
@@ -7598,6 +7699,9 @@ func cmdConnectionsRecall(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#2 | R2755
 func cmdConnectionsRecallReserveNonce(args []string) {
 	if len(args) > 0 {
@@ -7617,6 +7721,9 @@ func cmdConnectionsRecallReserveNonce(args []string) {
 	fmt.Println(resp.Nonce)
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#4 | R2900
 func cmdConnectionsRecallSurface(args []string) {
 	fire, rest, err := popFire(args, "surface")
@@ -7648,6 +7755,9 @@ func cmdConnectionsRecallSurface(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#5 | R2757
 func cmdConnectionsRecallRecommend(args []string) {
 	fire, rest, err := popFire(args, "recommend")
@@ -7681,6 +7791,9 @@ func cmdConnectionsRecallRecommend(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md, crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#7 | R2758
 func cmdConnectionsRecallClose(args []string) {
 	fire, rest, err := popFire(args, "close")
@@ -7712,6 +7825,9 @@ func cmdConnectionsRecallClose(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // CRC: crc-CLI.md, crc-RecallAgentBuilder.md | R2777
 func cmdConnectionsRecallContext(args []string) {
 	fs := flag.NewFlagSet("connections recall context", flag.ContinueOnError)
@@ -7749,6 +7865,9 @@ func cmdConnectionsRecallContext(args []string) {
 	}
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // cmdConnectionsRecallNext is the thin CLI proxy for the daemon's loop
 // verb (R2857, R2858). It GETs the blocking long-poll endpoint, prints
 // the crank-handle body, and exits 2 when the server returns the exit
@@ -7848,6 +7967,9 @@ func recallRedialKeepalive(session string, nonce uint64) string {
 	return fmt.Sprintf("The ark server is restarting or briefly unreachable — no work yet. This is normal. Run `%s` again now to keep watching; do not stop, do not wait.\n", nextCmd)
 }
 
+// DEAD CODE (CLI urfave migration): superseded by the urfave connections
+// tree in connections_cli.go; unreachable now that "connections" is in
+// migratedCommands. Slated for removal in the Simplification phase. R2917, R2931
 // cmdConnectionsRecallListen is the consumer-side loop verb: block until
 // a recall result arrives for the session, print it + a crank-handle.
 // The user-facing assistant runs this backgrounded; serverClient has no
@@ -7976,6 +8098,16 @@ Options:`)
 		Propose:        *propose,
 	}
 
+	return runConnectionsRecallParsed(inputs, opts, *jsonOut, out)
+}
+
+// runConnectionsRecallParsed runs the substrate recall for already-parsed
+// inputs/opts: proxy to a running server, or pick a cold fallback by
+// tag_model. Writes markdown or JSON to out. Shared by the legacy
+// runConnectionsRecall (its flag prologue) and the urfave recall node's
+// default Action (cmdConnectionsRecallDefault).
+// CRC: crc-CLITree.md | Seq: seq-recall.md#1.1 | R2630, R2631, R2632, R2633, R2634, R2646, R2647
+func runConnectionsRecallParsed(inputs []ark.ConnectionsInput, opts ark.RecallOpts, jsonOut bool, out io.Writer) error {
 	if client := serverClient(arkDir); client != nil {
 		body := map[string]any{
 			"inputs": inputs,
@@ -7985,7 +8117,7 @@ Options:`)
 		if err := proxyDecode(client, "POST", "/recall", body, &result); err != nil {
 			return err
 		}
-		return printRecallResult(out, &result, *jsonOut)
+		return printRecallResult(out, &result, jsonOut)
 	}
 
 	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
@@ -8017,7 +8149,7 @@ Options:`)
 			runErr = err
 			return
 		}
-		runErr = printRecallResult(out, res, *jsonOut)
+		runErr = printRecallResult(out, res, jsonOut)
 	})
 	return runErr
 }

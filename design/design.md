@@ -148,6 +148,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`
+- [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -170,6 +171,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-search.md → `search.go`
 - [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
 - [x] seq-cli-dispatch.md → `cmd/ark/main.go`, `server.go`
+- [ ] seq-cli-urfave.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`

@@ -10,6 +10,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godeps/gollama v0.1.8
 	github.com/itlightning/dateparse v0.2.1
+	github.com/urfave/cli/v3 v3.9.0
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zot/frictionless v0.29.0
