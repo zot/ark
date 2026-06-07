@@ -125,6 +125,7 @@ var migratedCommands = map[string]bool{
 	"luhmann":     true,
 	"embed":       true,
 	"discussed":   true,
+	"tag":         true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -178,6 +179,7 @@ func arkCommands() []*ucli.Command {
 		luhmannCommand(),
 		embedCommand(),
 		discussedCommand(),
+		tagCommand(),
 	}
 }
 
@@ -244,8 +246,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdStop(args)
 	case "sweep":
 		cmdSweep(args)
-	case "tag":
-		cmdTag(args)
 	case "install":
 		cmdUIInstall(args)
 	case "message":
@@ -4414,161 +4414,6 @@ func normalizeTagNames(names []string) []string {
 	return names
 }
 
-// CRC: crc-CLI.md | R607, R608, R609, R610, R611, R612, R615
-func cmdTag(args []string) {
-	tagUsage := `Usage: ark tag <subcommand>
-
-Subcommands:
-  list              List all known tags with counts
-  counts <tag>...   Show count for each specified tag
-  files <tag>...    Show files containing specified tags
-  values <tag>...   Show known values for tags
-  defs [TAG...]     Show tag definitions (from tags.md)
-  set FILE TAG VAL  Update or add tags in a file's tag block
-  get FILE [TAG...] Read tags from a file's tag block
-  check FILE [H...] Validate tag block structure
-  verify            Verify ext routings, X records, and tag counts
-  inspect           Dump @ext disk + in-memory state (read-only)`
-
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(os.Stderr, tagUsage)
-		os.Exit(0)
-	}
-
-	sub := args[0]
-	subArgs := args[1:]
-
-	switch sub {
-	case "list":
-		cmdTagList(subArgs)
-	case "counts":
-		cmdTagCounts(subArgs)
-	case "files":
-		cmdTagFiles(subArgs)
-	case "values":
-		cmdTagValues(subArgs)
-	case "defs":
-		cmdTagDefs(subArgs)
-	case "set":
-		cmdTagSet(subArgs)
-	case "get":
-		cmdTagGet(subArgs)
-	case "check":
-		cmdTagCheck(subArgs)
-	case "verify":
-		cmdTagVerify(subArgs)
-	case "inspect":
-		cmdTagInspect(subArgs)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown tag subcommand: %s\n", sub)
-		fmt.Fprintln(os.Stderr, tagUsage)
-		os.Exit(1)
-	}
-}
-
-func cmdTagList(args []string) {
-	fs := flag.NewFlagSet("tag list", flag.ExitOnError)
-	fs.Parse(args)
-
-	if client := serverClient(arkDir); client != nil {
-		var tags []ark.TagCount
-		if err := proxyDecode(client, "GET", "/tags", nil, &tags); err != nil {
-			fatal(err)
-		}
-		for _, t := range tags {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		tags, err := d.TagList()
-		if err != nil {
-			fatal(err)
-		}
-		for _, t := range tags {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-	})
-}
-
-func cmdTagCounts(args []string) {
-	fs := flag.NewFlagSet("tag counts", flag.ExitOnError)
-	fs.Parse(args)
-
-	tags := normalizeTagNames(fs.Args())
-	if len(tags) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no tags specified")
-		os.Exit(1)
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		var counts []ark.TagCount
-		if err := proxyDecode(client, "POST", "/tags/counts", map[string]any{"tags": tags}, &counts); err != nil {
-			fatal(err)
-		}
-		for _, t := range counts {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		counts, err := d.TagCounts(tags)
-		if err != nil {
-			fatal(err)
-		}
-		for _, t := range counts {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-	})
-}
-
-func cmdTagFiles(args []string) {
-	fs := flag.NewFlagSet("tag files", flag.ExitOnError)
-	context := fs.Bool("context", false, "show tag occurrences with context")
-	var filterFiles, excludeFiles stringSlice
-	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
-	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
-	fs.Parse(args)
-
-	tags := normalizeTagNames(fs.Args())
-	if len(tags) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no tags specified")
-		os.Exit(1)
-	}
-
-	if *context {
-		cmdTagFilesContext(tags, filterFiles, excludeFiles)
-		return
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		var files []ark.TagFileInfo
-		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": tags}, &files); err != nil {
-			fatal(err)
-		}
-		for _, f := range files {
-			if matchPath(f.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%d\n", f.Path, f.Size)
-			}
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		files, err := d.TagFiles(tags)
-		if err != nil {
-			fatal(err)
-		}
-		for _, f := range files {
-			if matchPath(f.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%d\n", f.Path, f.Size)
-			}
-		}
-	})
-}
-
 // matchPath returns true if a path passes the include/exclude filters.
 func matchPath(path string, include, exclude []string) bool {
 	include = ark.ExpandTildeSlice(include)
@@ -4592,67 +4437,6 @@ func matchPath(path string, include, exclude []string) bool {
 		}
 	}
 	return true
-}
-
-// R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138
-func cmdTagValues(args []string) {
-	fs := flag.NewFlagSet("tag values", flag.ExitOnError)
-	files := fs.Bool("files", false, "show file paths for each value")
-	var filterFiles, excludeFiles stringSlice
-	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
-	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark tag values [-files] [-filter-files GLOB] [-exclude-files GLOB] <tag>...")
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-
-	tags := normalizeTagNames(fs.Args())
-	if len(tags) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no tags specified")
-		os.Exit(1)
-	}
-
-	filtering := len(filterFiles) > 0 || len(excludeFiles) > 0
-
-	withDB(func(d *ark.DB) {
-		for _, tag := range tags {
-			if *files || filtering {
-				values, err := d.TagValuesWithFiles(tag, "")
-				if err != nil {
-					fatal(err)
-				}
-				for _, v := range values {
-					matched := v.Files
-					if filtering {
-						matched = nil
-						for _, f := range v.Files {
-							if matchPath(f, filterFiles, excludeFiles) {
-								matched = append(matched, f)
-							}
-						}
-						if len(matched) == 0 {
-							continue
-						}
-					}
-					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, len(matched))
-					if *files {
-						for _, f := range matched {
-							fmt.Printf("\t%s\n", f)
-						}
-					}
-				}
-			} else {
-				values, err := d.TagValues(tag, "")
-				if err != nil {
-					fatal(err)
-				}
-				for _, v := range values {
-					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, v.Count)
-				}
-			}
-		}
-	})
 }
 
 func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
@@ -4681,65 +4465,6 @@ func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
 				fmt.Printf("%s\t%s\n", e.Path, e.Line)
 			}
 		}
-	})
-}
-
-// CRC: crc-CLI.md
-func cmdTagDefs(args []string) {
-	fs := flag.NewFlagSet("tag defs", flag.ExitOnError)
-	showPath := fs.Bool("path", false, "show source file path, not deduplicated")
-	fs.Parse(args)
-	tags := normalizeTagNames(fs.Args())
-
-	printDefs := func(defs []ark.TagDefInfo) {
-		if *showPath {
-			sort.Slice(defs, func(i, j int) bool {
-				if defs[i].Path != defs[j].Path {
-					return defs[i].Path < defs[j].Path
-				}
-				if defs[i].Tag != defs[j].Tag {
-					return defs[i].Tag < defs[j].Tag
-				}
-				return defs[i].Description < defs[j].Description
-			})
-			for _, d := range defs {
-				path := strings.ReplaceAll(d.Path, " ", "\\ ")
-				fmt.Printf("%s %s %s\n", path, d.Tag, d.Description)
-			}
-		} else {
-			sort.Slice(defs, func(i, j int) bool {
-				if defs[i].Tag != defs[j].Tag {
-					return defs[i].Tag < defs[j].Tag
-				}
-				return defs[i].Description < defs[j].Description
-			})
-			seen := make(map[string]bool)
-			for _, d := range defs {
-				key := d.Tag + "\t" + d.Description
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				fmt.Printf("%s %s\n", d.Tag, d.Description)
-			}
-		}
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		var defs []ark.TagDefInfo
-		if err := proxyDecode(client, "POST", "/tags/defs", map[string]any{"tags": tags}, &defs); err != nil {
-			fatal(err)
-		}
-		printDefs(defs)
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		defs, err := d.TagDefs(tags)
-		if err != nil {
-			fatal(err)
-		}
-		printDefs(defs)
 	})
 }
 
@@ -4864,113 +4589,6 @@ func cmdTagCheck(args []string) {
 		fmt.Fprintf(os.Stderr, "- %s\n", p)
 	}
 	os.Exit(1)
-}
-
-// CRC: crc-CLI.md | R2092, R2093, R2099
-func cmdTagVerify(args []string) {
-	fs := flag.NewFlagSet("tag verify", flag.ExitOnError)
-	repair := fs.Bool("repair", false, "write corrections (default: read-only)")
-	scope := fs.String("scope", "all", "ext | tag-totals | all")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark tag verify [--repair] [--scope SCOPE]
-
-Cross-checks F, V, T, and X records and the in-memory ExtMap.
-Reports drift; with --repair, writes corrections in a single
-write transaction.
-
-  --scope ext         only @ext routings + ExtMap consistency
-  --scope tag-totals  only T-record drift vs V multi-set + ExtMap virtuals
-  --scope all         both (default)`)
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-
-	switch *scope {
-	case "ext", "tag-totals", "all":
-	default:
-		fmt.Fprintf(os.Stderr, "error: invalid --scope %q (want ext, tag-totals, or all)\n", *scope)
-		os.Exit(2)
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		fmt.Fprintln(os.Stderr, "error: ark tag verify requires the server to be stopped (uses LMDB write txn)")
-		fmt.Fprintln(os.Stderr, "       run 'ark stop' first")
-		os.Exit(2)
-	}
-
-	var result ark.VerifyResult
-	var verifyErr error
-	withDB(func(d *ark.DB) {
-		result, verifyErr = d.Verify(ark.VerifyOptions{Repair: *repair, Scope: *scope}, os.Stdout)
-	})
-	if verifyErr != nil {
-		fmt.Fprintf(os.Stderr, "verify failed: %v\n", verifyErr)
-		os.Exit(2)
-	}
-	if result.Issues > result.Repaired {
-		os.Exit(1)
-	}
-}
-
-// cmdTagInspect dumps @ext on-disk + in-memory state. Read-only.
-// CRC: crc-CLI.md | R2113, R2115, R2116, R2117
-func cmdTagInspect(args []string) {
-	fs := flag.NewFlagSet("tag inspect", flag.ExitOnError)
-	scope := fs.String("scope", ark.ScopeExt, "ext (v1 only)")
-	target := fs.String("target", "", "path filter (narrow output to one file)")
-	asJSON := fs.Bool("json", false, "machine-readable output")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark tag inspect [--scope SCOPE] [--target PATH] [--json]
-
-Read-only observability for @ext state. Sibling of ark tag verify.
-Server-aware: proxies via the running server when up, opens LMDB
-read-only when the server is stopped (in-memory ExtMap section is
-unavailable in the latter mode).
-
-  --scope ext       what to dump (only ext supported in v1)
-  --target PATH     narrow output to one file's chunks
-  --json            JSON output instead of grouped plain text`)
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-	if *scope != ark.ScopeExt {
-		fmt.Fprintf(os.Stderr, "error: invalid --scope %q (only %q supported in v1)\n", *scope, ark.ScopeExt)
-		os.Exit(2)
-	}
-
-	emit := func(rep *ark.ExtInspectReport) {
-		if *asJSON {
-			if err := rep.WriteJSON(os.Stdout); err != nil {
-				fatal(err)
-			}
-			return
-		}
-		rep.WriteText(os.Stdout)
-	}
-
-	if client := serverClient(arkDir); client != nil {
-		var rep ark.ExtInspectReport
-		body := map[string]any{"scope": *scope}
-		if *target != "" {
-			body["target"] = *target
-		}
-		if err := proxyDecode(client, "POST", "/tags/inspect", body, &rep); err != nil {
-			fatal(err)
-		}
-		emit(&rep)
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		rep, err := d.InspectExt(ark.InspectOptions{Scope: *scope, Target: *target})
-		if err != nil {
-			fatal(err)
-		}
-		rep.ServerSide = false
-		rep.UnavailNote = "ExtMap state unavailable — server not running. Disk view only."
-		rep.InMemory = nil
-		emit(rep)
-	})
 }
 
 // cmdChunkJSONL is a chunking strategy command: splits a file on newline
