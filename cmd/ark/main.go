@@ -932,6 +932,7 @@ Filter modes (composable, repeatable):
   -fuzzy TERM       typo-tolerant match
   -regex PATTERN    regular expression match
   -tag TAG          tag filter (@name:value or name:value, @ optional)
+  -file-tag TAG     file-tag filter (every chunk on a file with the tag)
   -about QUERY      vector similarity match
   -files GLOB       file path glob filter
 
@@ -1775,12 +1776,15 @@ Public subcommands:
     emit JSON when --wait is set.
 
   recall INPUTS... [--k N] [-all] [--no-content] [--type T] [--json]
+                   [--session SID] [--discussed @t[:v][,...]] [--propose]
     Retrieve top-K chunks from the corpus ranked by EC similarity
     (vector + trigram-Jaccard) to the inputs. By default skips
     tagless chunks since they can't contribute tag information
     downstream; -all keeps them. INPUTS take the same shapes as
-    find. Substrate primitive for the simple-recall watcher and
-    the v2 recall agent.
+    find. --session/--discussed exclude already-surfaced tags from
+    candidates; --propose runs the statistical derivation pass and
+    surfaces derived-tag candidates. Substrate primitive for the
+    simple-recall watcher and the v2 recall agent.
 
   recall reserve-nonce
     Return the next per-server monotonic nonce. The assistant
@@ -1799,14 +1803,14 @@ Public subcommands:
     directive instead. Exit 0 = doc or keepalive (loop), 2 = done.
     Run by the recall agent — or any while-loop client.
 
-  recall surface FIRE -chunk N -reason TEXT
+  recall surface FIRE -loc PATH:RANGE -reason TEXT
     Append one ## Surface: item to the result-doc builder for
-    FIRE. The chunkID alone identifies the surfaced chunk;
-    path / range / context are resolved on demand via
-    "ark chunks N". One item per invocation. Called by the
-    recall agent only.
+    FIRE. The caller passes the candidate's <path>:<range> and
+    the server resolves size + content. One item per invocation;
+    repeated -loc flags are not accepted. Called by the recall
+    agent only.
 
-  recall recommend FIRE -chunk N -tag @t[:v] -reason TEXT
+  recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
     Append one ## Recommend: item to the result-doc builder for
     FIRE. Same one-per-call discipline as surface.
 
