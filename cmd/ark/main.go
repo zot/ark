@@ -121,6 +121,8 @@ func main() {
 // CRC: crc-CLITree.md | R2930
 var migratedCommands = map[string]bool{
 	"connections": true,
+	"monitor":     true,
+	"luhmann":     true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -170,6 +172,8 @@ func buildArkCommand() *ucli.Command {
 func arkCommands() []*ucli.Command {
 	return []*ucli.Command{
 		connectionsCommand(),
+		monitorCommand(),
+		luhmannCommand(),
 	}
 }
 
@@ -252,10 +256,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdSubscribe(args)
 	case "subscribers":
 		cmdSubscribers(args)
-	case "monitor":
-		cmdMonitor(args)
-	case "luhmann":
-		cmdLuhmann(args)
 	case "listen":
 		cmdListen(args)
 	case "ui":
@@ -7303,217 +7303,6 @@ func cmdSubscribers(args []string) {
 		return
 	}
 	fmt.Println(resp.Count)
-}
-
-// cmdMonitor dispatches status / recent / pause / resume.
-// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2863
-func cmdMonitor(args []string) {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, `Usage: ark monitor <subcommand> [options]
-
-Subcommands:
-  status [--json]                 Per-class state + counters (cold-start)
-  recent [-n N] [CLASS] [--json]  Tail one or all monitoring logs (cold-start)
-  pause CLASS                     Append a pause control record (server)
-  resume CLASS                    Append a resume control record (server)`)
-		os.Exit(0)
-	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "status":
-		cmdMonitorStatus(rest)
-	case "recent":
-		cmdMonitorRecent(rest)
-	case "pause", "resume":
-		cmdMonitorControl(sub, rest)
-	default:
-		fatal(fmt.Errorf("unknown monitor subcommand %q", sub))
-	}
-}
-
-func cmdMonitorStatus(args []string) {
-	fs := flag.NewFlagSet("monitor status", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "emit JSON")
-	fs.Parse(args)
-	sums, err := ark.MonitorStatus(arkDir)
-	if err != nil {
-		fatal(err)
-	}
-	if *asJSON {
-		for _, s := range sums {
-			data, _ := json.Marshal(s)
-			fmt.Println(string(data))
-		}
-		return
-	}
-	for _, s := range sums {
-		fmt.Printf("## %s — state: %s\n", s.Class, s.State)
-		if s.Emergency != nil && s.Emergency.Active {
-			fmt.Printf("- 🚨 EMERGENCY: %s (since %s)\n", s.Emergency.Reason, s.Emergency.Since)
-		}
-		if s.LatestTimestamp != "" {
-			fmt.Printf("- latest: %s", s.LatestTimestamp)
-			if s.LatestKind != "" {
-				fmt.Printf(" (kind=%s)", s.LatestKind)
-			}
-			fmt.Println()
-		}
-		// Stable key order for readability.
-		keys := make([]string, 0, len(s.Counters))
-		for k := range s.Counters {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Printf("- %s: %v\n", k, s.Counters[k])
-		}
-		fmt.Println()
-	}
-}
-
-func cmdMonitorRecent(args []string) {
-	fs := flag.NewFlagSet("monitor recent", flag.ExitOnError)
-	n := fs.Int("n", 20, "number of records to show")
-	asJSON := fs.Bool("json", false, "emit raw JSONL")
-	fs.Parse(args)
-	class := ""
-	if fs.NArg() > 0 {
-		class = fs.Arg(0)
-		if !ark.IsKnownMonitorClass(class) {
-			fatal(fmt.Errorf("unknown class %q (known: %s)", class, strings.Join(ark.MonitorClasses, ", ")))
-		}
-	}
-	recs, err := ark.MonitorTail(arkDir, class, *n)
-	if err != nil {
-		fatal(err)
-	}
-	for _, r := range recs {
-		if *asJSON {
-			data, _ := json.Marshal(r)
-			fmt.Println(string(data))
-		} else {
-			fmt.Println(ark.FormatMonitorBullet(r))
-		}
-	}
-}
-
-func cmdMonitorControl(kind string, args []string) {
-	if len(args) == 0 {
-		fatal(fmt.Errorf("ark monitor %s: CLASS is required", kind))
-	}
-	class := args[0]
-	if !ark.IsKnownMonitorClass(class) {
-		fatal(fmt.Errorf("unknown class %q (known: %s)", class, strings.Join(ark.MonitorClasses, ", ")))
-	}
-	fs := flag.NewFlagSet("monitor "+kind, flag.ExitOnError)
-	reason := fs.String("reason", "", "pause reason; storm reasons (crash-storm / quit-early-storm) light the emergency flag")
-	fs.Parse(args[1:])
-	body := map[string]any{"class": class, "kind": kind}
-	if kind == "pause" && *reason != "" {
-		body["reason"] = *reason
-	}
-	client := requireServer(fmt.Sprintf("monitor %s", kind))
-	if err := proxyOK(client, "POST", "/monitor/control", body); err != nil {
-		fatal(err)
-	}
-}
-
-// cmdLuhmann dispatches spawn-record / exit-record / inspect-exit.
-// CRC: crc-CLI.md | Seq: seq-luhmann-supervisor.md | R2794, R2795, R2796, R2861
-func cmdLuhmann(args []string) {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, `Usage: ark luhmann <subcommand> [options]
-
-Subcommands:
-  spawn-record --class C --nonce N --task-id T   Record a subagent spawn (server)
-  exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
-                                                  Record a subagent exit (server)
-  inspect-exit --nonce N [--json]                Classify a subagent exit (cold-start)`)
-		os.Exit(0)
-	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "spawn-record":
-		cmdLuhmannSpawnRecord(rest)
-	case "exit-record":
-		cmdLuhmannExitRecord(rest)
-	case "inspect-exit":
-		cmdLuhmannInspectExit(rest)
-	default:
-		fatal(fmt.Errorf("unknown luhmann subcommand %q", sub))
-	}
-}
-
-func cmdLuhmannSpawnRecord(args []string) {
-	fs := flag.NewFlagSet("luhmann spawn-record", flag.ExitOnError)
-	class := fs.String("class", "", "managed subagent class (required)")
-	nonce := fs.Int("nonce", 0, "nonce for this spawn (required)")
-	taskID := fs.String("task-id", "", "Claude Code Task identifier (required)")
-	fs.Parse(args)
-	if *class == "" || *nonce == 0 || *taskID == "" {
-		fatal(fmt.Errorf("--class, --nonce, --task-id are required"))
-	}
-	client := requireServer("luhmann spawn-record")
-	if err := proxyOK(client, "POST", "/luhmann/record", map[string]any{
-		"kind":    "spawn",
-		"class":   *class,
-		"nonce":   *nonce,
-		"task_id": *taskID,
-	}); err != nil {
-		fatal(err)
-	}
-}
-
-func cmdLuhmannExitRecord(args []string) {
-	fs := flag.NewFlagSet("luhmann exit-record", flag.ExitOnError)
-	class := fs.String("class", "", "managed subagent class (required)")
-	nonce := fs.Int("nonce", 0, "nonce for the exiting subagent (required)")
-	reason := fs.String("reason", "", "exit reason (required; \"context-limit\"=healthy, \"quit-early\"=quit-early, else crash)")
-	crashes := fs.Int("crashes", -1, "override computed crashes counter (default: compute from previous record)")
-	quitEarly := fs.Int("quit-early", -1, "override computed quit_early counter (default: compute from previous record)")
-	backoff := fs.Int("backoff", 0, "seconds the supervisor will wait before respawn")
-	fs.Parse(args)
-	if *class == "" || *nonce == 0 || *reason == "" {
-		fatal(fmt.Errorf("--class, --nonce, --reason are required"))
-	}
-	kind, _ := ark.ClassifyLuhmannReason(*reason)
-	body := map[string]any{
-		"kind":    kind,
-		"class":   *class,
-		"nonce":   *nonce,
-		"reason":  *reason,
-		"backoff": *backoff,
-	}
-	if *crashes >= 0 {
-		body["crashes"] = *crashes
-	}
-	if *quitEarly >= 0 {
-		body["quit_early"] = *quitEarly
-	}
-	client := requireServer("luhmann exit-record")
-	if err := proxyOK(client, "POST", "/luhmann/record", body); err != nil {
-		fatal(err)
-	}
-}
-
-func cmdLuhmannInspectExit(args []string) {
-	fs := flag.NewFlagSet("luhmann inspect-exit", flag.ExitOnError)
-	nonce := fs.Int("nonce", 0, "subagent nonce to classify (required)")
-	asJSON := fs.Bool("json", false, "emit JSON object")
-	fs.Parse(args)
-	if *nonce == 0 {
-		fatal(fmt.Errorf("--nonce is required"))
-	}
-	jsonl := findSubagentJSONLCold(*nonce)
-	result := classifySubagentExit(arkDir, jsonl, *nonce)
-	if *asJSON {
-		data, _ := json.Marshal(result)
-		fmt.Println(string(data))
-		return
-	}
-	fmt.Println(result.Label)
 }
 
 // inspectExitResult is the structured output of `ark luhmann inspect-exit`.
