@@ -192,6 +192,74 @@ caches independently of the underlying bytes.
 
 ---
 
+## The documentation tells the truth
+
+**Statement.** Every level of ark's documentation is kept
+faithful to what ark actually does, so a reader can act on the
+docs without re-verifying them against the source. This spans the
+whole descriptive surface — the `README`, the per-feature
+`specs/*`, the `design/*` artifacts, and the CLI's own help
+(the `specs/cli-commands.md` inventory, the top-level `usage()`,
+and every `--help` string). When ark changes, the documentation
+that describes the changed surface is corrected in the *same*
+change. Drift between the docs and the code is treated as a
+defect, not an expected condition to be worked around.
+
+**Why.** Assistants and agents are primary consumers of ark's
+documentation — the whole point of ark as a force multiplier is
+that a detective can read what ark says about itself and *act*,
+not audit. If the docs drift, every consumer must defensively
+re-check the source before trusting anything, which burns tokens
+on every investigation and quietly erodes trust in the entire
+reference. Documentation that can't be relied upon is
+documentation that gets ignored — and then re-derived from the
+code on every read, by every reader, forever. Making the docs
+authoritative-by-maintenance turns them into a contract a reader
+can lean on, not a description that might be stale. The cost of
+keeping the docs in sync at change time is paid once, by the
+author who has the context; the cost of drift is paid repeatedly,
+by everyone who doesn't.
+
+**Consequences.**
+
+- **A change isn't done until its docs are.** A code change is
+  incomplete until the README, the relevant `specs/*` and
+  `design/*`, and — for a CLI change — `cli-commands.md`,
+  `usage()`, and the affected `--help` text all reflect the new
+  form. The code edit and the doc edits are one unit of work.
+- **Two regimes, one commitment.** The `specs/ → requirements →
+  design/ → code` chain is enforced by a *mechanism*: mini-spec's
+  per-feature anchoring, checked by `minispec validate`, catches
+  per-feature drift automatically. The `README` and the CLI help
+  surface (`usage()`, `--help`) have *no* such validator — they
+  are hand-maintained and invisible to the checker, so their
+  fidelity is owed by deliberate diligence. The absence of a tool
+  raises the bar for care; it does not lower the obligation.
+- **The CLI's three surfaces move together.** The CLI is
+  documented in the summary spec (`specs/cli-commands.md`), the
+  top-level `usage()`, and per-command `--help`. They are not
+  ranked into a "real one" and "stale ones"; all three describe
+  the same interface and all move at once. This is the most
+  drift-prone surface — see the cross-cutting reference list in
+  `CLAUDE.md`.
+- **The docs are authoritative.** A reader can trust them.
+  Nothing in ark's own skills or agent prompts should teach
+  consumers to distrust the docs and cross-check the source as a
+  matter of course — that defensive habit is exactly the cost
+  this principle exists to remove.
+
+**Boundary.** This principle governs ark's *descriptive*
+documentation — what it publishes about how the system works and
+how to operate it. It does not bind working state that is openly
+provisional by design: the trajectory files (`PENDING.md`,
+`CURRENT.md`, `DONE.md`), `.scratch/` planning notes, and
+in-flight migration narratives are allowed to run ahead of or
+behind the code — that's their job. Nor does it make every inline
+comment a contract. The published surface tells the truth; the
+scratch pad is free to think out loud.
+
+---
+
 <!-- More principles accrete here as they are named in design
 discussions. Candidates already implicit in the codebase:
 "local-first" (no cloud dependency), "human-readable embeddings"

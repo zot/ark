@@ -22,9 +22,21 @@ The ark CLI should have nice --help. All subcommands should support --help.
 Mini-spec's per-feature anchoring won't catch the canonical
 reference docs — update them yourself when their surface changes:
 
+- `README.md` — the public front door, part of the released
+  files. Keep its capability claims, install/run instructions,
+  command examples, and feature descriptions consistent with the
+  code **and** with the rest of the public docs (especially
+  `specs/features.md`). A contradiction here is the most damaging
+  kind — it's the first thing a new user reads. The released
+  project must have no contradictions at all.
 - `specs/cli-commands.md` — every CLI subcommand/flag and its
   semantics. Update when adding, renaming, or changing flags or
-  subcommands.
+  subcommands. **This is a project commitment** (principles.md, "The
+  documentation tells the truth"): the CLI's *whole*
+  documentation surface moves in lockstep with the code, so a CLI
+  change also corrects the top-level `usage()` (`cmd/ark/main.go`)
+  and every affected `--help` printer — not just this spec. The docs
+  are authoritative; readers shouldn't have to re-check the source.
 - `specs/record-formats.md` — every LMDB record prefix, key shape,
   and value layout in the `ark` subdatabase. Update when adding a
   new record class, changing a key/value encoding, or retiring a
