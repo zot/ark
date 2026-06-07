@@ -129,6 +129,7 @@ var migratedCommands = map[string]bool{
 	"config":      true,
 	"schedule":    true,
 	"message":     true,
+	"ui":          true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -186,6 +187,7 @@ func arkCommands() []*ucli.Command {
 		configCommand(),
 		scheduleCommand(),
 		messageCommand(),
+		uiCommand(),
 	}
 }
 
@@ -258,8 +260,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdSubscribers(args)
 	case "listen":
 		cmdListen(args)
-	case "ui":
-		cmdUI(args)
 	case "unresolved":
 		cmdUnresolved(args)
 	default:
@@ -3240,83 +3240,6 @@ func cmdStop(args []string) {
 
 	fmt.Fprintf(os.Stderr, "server did not stop within timeout (pid %d)\n", pid)
 	os.Exit(1)
-}
-
-// CRC: crc-CLI.md
-func cmdUI(args []string) {
-	if len(args) == 0 {
-		cmdUIOpen(nil)
-		return
-	}
-	sub := args[0]
-	if sub == "--help" || sub == "-h" {
-		uiUsage("")
-		os.Exit(0)
-	}
-	subArgs := args[1:]
-	switch sub {
-	case "audit":
-		cmdUIAudit(subArgs)
-	case "open":
-		cmdUIOpen(subArgs)
-	case "checkpoint":
-		cmdUICheckpoint(subArgs)
-	case "display":
-		cmdUIDisplay(subArgs)
-	case "event":
-		cmdUIEvent(subArgs)
-	case "install":
-		cmdUIInstall(subArgs)
-	case "linkapp":
-		cmdUILinkapp(subArgs)
-	case "patterns":
-		cmdUIPatterns(subArgs)
-	case "progress":
-		cmdUIProgress(subArgs)
-	case "reload":
-		cmdUIReload(subArgs)
-	case "run":
-		cmdUIRun(subArgs)
-	case "state":
-		cmdUIState(subArgs)
-	case "status":
-		cmdUIStatus(subArgs)
-	case "theme":
-		cmdUITheme(subArgs)
-	case "update":
-		cmdUIUpdate(subArgs)
-	case "variables":
-		cmdUIVariables(subArgs)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown ui subcommand: %s\n", sub)
-		uiUsage("")
-		os.Exit(1)
-	}
-}
-
-func uiUsage(prefix string) {
-	if prefix != "" {
-		fmt.Fprintln(os.Stderr, prefix)
-	}
-	fmt.Fprintln(os.Stderr, `Usage: ark ui [subcommand]
-
-Subcommands:
-  (none)                     open browser to the current UI session
-  audit <app>                run code quality audit
-  checkpoint <cmd> <app>     manage app checkpoints
-  display <app>              display app in the browser
-  event                      wait for next UI event (120s timeout)
-  install                    connect this project to ark
-  linkapp add|remove <app>   manage app symlinks
-  patterns                   list available patterns
-  progress <app> <pct> <msg> report build progress
-  reload                     reload UI (fresh Lua VM)
-  run '<lua>'                execute Lua code in UI session
-  state                      get current session state
-  status                     ui-engine server status
-  theme list|classes|audit   theme management
-  update [-t]                smart update or version check
-  variables                  get current variable values`)
 }
 
 // uiClient returns an http.Client connected to the ark unix socket.
