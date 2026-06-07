@@ -50,8 +50,8 @@ type Librarian struct {
 	modelPath  string         // full path to GGUF file
 	modelTimer *time.Timer
 	modelTTL   time.Duration
-	ctxSize    int // embedding context window size override (bench only) R1587
-	parallel   int // parallel sequences override (bench only) R1587
+	ctxSize    int // embedding context window size override (bench only) R1793
+	parallel   int // parallel sequences override (bench only) R1793
 
 	// Find Connections (1G) — second lotto tube + orchestrator state.
 	// CRC: crc-Librarian.md | Seq: seq-find-connections.md
@@ -121,10 +121,10 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 	return l
 }
 
-// SetCtxSize sets the embedding context window size. R1587
+// SetCtxSize sets the embedding context window size. R1793
 func (l *Librarian) SetCtxSize(n int) { l.ctxSize = n }
 
-// SetParallel sets the number of parallel sequences per batch. R1587
+// SetParallel sets the number of parallel sequences per batch. R1793
 func (l *Librarian) SetParallel(n int) { l.parallel = n }
 
 // Available returns whether spectral search is possible (i.e., whether

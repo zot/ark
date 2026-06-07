@@ -23,7 +23,7 @@ import (
 	"github.com/zot/ark"
 )
 
-// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-cli-urfave.md#3.3 | R1302-R1305, R1790, R1791, R1792, R1793, R1794
+// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-cli-urfave.md#3.3 | R1790, R1791, R1792, R1793, R1794
 func embedCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "embed",

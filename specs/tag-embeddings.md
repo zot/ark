@@ -129,13 +129,13 @@ trigram as fallback.
 
 ## CLI
 
-`ark embed TEXT` — embed a text string, print the vector as JSON.
+`ark embed text TEXT...` — embed a text string, print the vector as JSON.
 Verifies the model loads and produces output.
 
-`ark embed --bench tags` — embed all tag values, report timing.
+`ark embed bench tags` — embed all tag values, report timing.
 Shows per-value and total time.
 
-`ark embed --bench chunks` — read chunks from random indexed files,
+`ark embed bench chunks` — read chunks from random indexed files,
 embed them, report timing. Benchmarks the model on realistic
 content.
 

@@ -8,7 +8,7 @@ work?" also matches chunks about "HTTP route handlers."
 
 Different chunk sizes embed most efficiently at different context
 window / parallelism settings. The user benchmarks their hardware
-with `ark embed --bench chunks --ctx N --parallel N` and configures
+with `ark embed bench chunks --ctx N --parallel N` and configures
 the results in ark.toml.
 
 ```toml
@@ -117,7 +117,7 @@ EC/EF records are stale and should be dropped on next reconcile
 
 ## Benchmark Tuning
 
-`ark embed --bench chunks` accepts `--ctx` and `--parallel` flags to
+`ark embed bench chunks` accepts `--ctx` and `--parallel` flags to
 test different configurations. It samples 200 real chunks (via
 `AllChunks`, real chunker boundaries), reports batch vs single
 throughput, skip rate, and chunk size distribution. Use this to find

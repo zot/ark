@@ -20,7 +20,7 @@ moved under a subcommand for consistency.
 
 Benchmark embedding performance. MODE is `tags` or `chunks`.
 
-This is the current `ark embed --bench tags|chunks` behavior, promoted
+This was the `ark embed --bench tags|chunks` flag behavior, now promoted
 from a flag to a subcommand.
 
 - `--ctx N` — context window size in tokens (default 2048)

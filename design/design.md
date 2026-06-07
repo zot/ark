@@ -666,3 +666,10 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O129: Recall chat sub-chunk locator (part 4): the snippet anchor (matched paragraph's first line, capped 60) resolves to the FIRST sub-chunk containing it; a rare collision (two paragraphs sharing that line) resolves to the first — the ext [N] modifier would disambiguate but is deferred with the offset locator (specs/future.md, R2914). Funnel embeds on-the-fly only with a model; no-model path is trigram-only. specs/recall.md algorithm/stencil fold deferred to migration on-completion (after part 5).
 - [ ] O130: Part 5 EV leg: enrichProposedTags recomputes display scores for fresh-skip chunks via bestEDSim (ED-only), so an EV-leg-derived proposal shows its ED similarity (possibly 0) rather than its EV similarity. This-call derivations carry the correct EV-inclusive score; the propose decision itself is EV-correct. Display-only, fresh-skip path.
 - [ ] O131: Ext-routing threads a raw nilable *lmdb.Txn through runExtRouting/runOverlayExtRouting/applyIndexExt/chunkFileID; a wrong nil reaches fts.ReadCRecord and panics (the R2915 crash). Enhancement: model the transaction as a scope object (Monadic Wrapper) constructed only inside an actor closure, so 'inside a txn' is non-nilable by construction and this whole bug class disappears. Also covers librarian.go flushNow, which today relies on a documented 'call me from the write goroutine' contract rather than a local guard.
+- T142: R1302 retired by R1791 (2026-06-07 cli-urfave: ark embed text subcommand)
+- T143: R1303 retired by R1792 (2026-06-07 cli-urfave: ark embed bench tags subcommand)
+- T144: R1304 retired by R1792 (2026-06-07 cli-urfave: ark embed bench chunks subcommand)
+- T145: R1305 retired (2026-06-07 cli-urfave: embed uses local Librarian via withDB, no server (was false))
+- T146: R1587 retired by R1793 (2026-06-07 cli-urfave: ark embed bench --ctx subcommand flag)
+- T147: R1621 retired by R1792 (2026-06-07 cli-urfave: ark embed bench chunks --parallel subcommand flag)
+- T148: R1622 retired by R1792 (2026-06-07 cli-urfave: ark embed bench output (subcommand))

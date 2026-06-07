@@ -2078,11 +2078,11 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1301:** (inferred) When both are available, embedding is the default with trigram as fallback
 
 ### CLI
-- **R1302:** `ark embed TEXT` embeds a text string and prints the vector as JSON
-- **R1303:** `ark embed --bench tags` embeds all tag values, reports per-value and total timing
-- **R1304:** `ark embed --bench chunks` reads real chunks from random indexed files via AllChunks (real chunker boundaries, not fixed-size slices), embeds them, reports timing
-- **R1587:** `ark embed --bench` accepts `--ctx N` to set the embedding context window size (default 2048). Passed through to Librarian model loading for benchmarking different context sizes.
-- **R1305:** (inferred) `ark embed` requires a running server (model lives in the Librarian)
+- **~~R1302:~~** (Retired T142 — see R1791) `ark embed TEXT` embeds a text string and prints the vector as JSON
+- **~~R1303:~~** (Retired T143 — see R1792) `ark embed --bench tags` embeds all tag values, reports per-value and total timing
+- **~~R1304:~~** (Retired T144 — see R1792) `ark embed --bench chunks` reads real chunks from random indexed files via AllChunks (real chunker boundaries, not fixed-size slices), embeds them, reports timing
+- **~~R1587:~~** (Retired T146 — see R1793) `ark embed --bench` accepts `--ctx N` to set the embedding context window size (default 2048). Passed through to Librarian model loading for benchmarking different context sizes.
+- **~~R1305:~~** (Retired T145 — no replacement) (inferred) `ark embed` requires a running server (model lives in the Librarian)
 
 ### Build
 - **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
@@ -2598,8 +2598,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Benchmark
 
-- **R1621:** `ark embed --bench chunks` accepts `--parallel N` to set sequences per batch (default 8).
-- **R1622:** Bench output reports context size, parallel count, tokens/seq, batch vs single throughput, skip rate, and chunk size distribution (min/max/avg).
+- **~~R1621:~~** (Retired T147 — see R1792) `ark embed --bench chunks` accepts `--parallel N` to set sequences per batch (default 8).
+- **~~R1622:~~** (Retired T148 — see R1792) Bench output reports context size, parallel count, tokens/seq, batch vs single throughput, skip rate, and chunk size distribution (min/max/avg).
 
 ## Feature: PDF Chunker
 **Source:** specs/pdf-chunker.md
