@@ -133,6 +133,25 @@ var migratedCommands = map[string]bool{
 	"subscribe":   true,
 	"subscribers": true,
 	"listen":      true,
+	// flat top-level commands (batch 1: no-flag/thin-delegate + nano + sweep)
+	"setup":            true,
+	"rebuild":          true,
+	"scan":             true,
+	"refresh":          true,
+	"remove":           true,
+	"resolve":          true,
+	"dismiss":          true,
+	"stale":            true,
+	"missing":          true,
+	"unresolved":       true,
+	"sources":          true,
+	"grams":            true,
+	"chunk-chat-jsonl": true,
+	"ls":               true,
+	"cat":              true,
+	"cp":               true,
+	"nano":             true,
+	"sweep":            true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -180,7 +199,7 @@ func buildArkCommand() *ucli.Command {
 // group lands; grows group by group through the migration.
 // CRC: crc-CLITree.md | R2916
 func arkCommands() []*ucli.Command {
-	return []*ucli.Command{
+	cmds := []*ucli.Command{
 		connectionsCommand(),
 		monitorCommand(),
 		luhmannCommand(),
@@ -195,6 +214,7 @@ func arkCommands() []*ucli.Command {
 		subscribersCommand(),
 		listenCommand(),
 	}
+	return append(cmds, flatCommands()...)
 }
 
 // legacyDispatch is the original hand-rolled command switch, extracted so
@@ -206,62 +226,26 @@ func legacyDispatch(cmd string, args []string) {
 		cmdAdd(args)
 	case "bundle":
 		cmdBundle(args)
-	case "cat":
-		cmdBundleCat(args)
-	case "chunk-chat-jsonl":
-		cmdChunkJSONL(args)
 	case "chunks":
 		cmdChunks(args)
 	case "chats":
 		cmdChats(args)
-	case "cp":
-		cmdBundleCp(args)
-	case "dismiss":
-		cmdDismiss(args)
 	case "fetch":
 		cmdFetch(args)
 	case "files":
 		cmdFiles(args)
-	case "grams":
-		cmdGrams(args)
 	case "init":
 		cmdInit(args)
-	case "rebuild":
-		cmdRebuild(args)
-	case "ls":
-		cmdBundleLs(args)
-	case "missing":
-		cmdMissing(args)
-	case "refresh":
-		cmdRefresh(args)
-	case "remove":
-		cmdRemove(args)
-	case "resolve":
-		cmdResolve(args)
-	case "scan":
-		cmdScan(args)
 	case "search":
 		cmdSearch(args)
 	case "serve":
 		cmdServe(args)
-	case "setup":
-		cmdSetup(args)
-	case "sources":
-		cmdSources(args)
-	case "stale":
-		cmdStale(args)
 	case "status":
 		cmdStatus(args)
 	case "stop":
 		cmdStop(args)
-	case "sweep":
-		cmdSweep(args)
 	case "install":
 		cmdUIInstall(args)
-	case "nano":
-		cmdNano(args)
-	case "unresolved":
-		cmdUnresolved(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
@@ -4502,34 +4486,6 @@ func cmdBundleCp(args []string) {
 
 	if copied == 0 {
 		fmt.Fprintln(os.Stderr, "No files matched the pattern")
-		os.Exit(1)
-	}
-}
-
-// cmdSweep dispatches the `ark sweep` subcommands. Currently only
-// `ark sweep correlations` is implemented; future phases may add other
-// sweep types (e.g. chunk-pairwise).
-// CRC: crc-CLI.md | R2247
-func cmdSweep(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, `Usage: ark sweep SUBCOMMAND
-
-Subcommands:
-  correlations    Run the hot-correlations sweep (refreshes the HC top-K cache per tag).`)
-		os.Exit(1)
-	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "correlations":
-		cmdSweepCorrelations(rest)
-	case "-h", "--help":
-		fmt.Println(`Usage: ark sweep SUBCOMMAND
-
-Subcommands:
-  correlations    Run the hot-correlations sweep (refreshes the HC top-K cache per tag).`)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown sweep subcommand: %s\n", sub)
 		os.Exit(1)
 	}
 }
