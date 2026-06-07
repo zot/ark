@@ -17,7 +17,7 @@ import (
 	"github.com/zot/ark"
 )
 
-// CRC: crc-CLITree.md, crc-Monitor.md | Seq: seq-cli-urfave.md#3 | R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2863
+// CRC: crc-CLITree.md, crc-Monitor.md | Seq: seq-cli-urfave.md#3.3 | R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2863
 func monitorCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "monitor",

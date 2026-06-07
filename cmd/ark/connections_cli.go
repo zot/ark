@@ -26,7 +26,7 @@ import (
 )
 
 // connectionsCommand builds the `ark connections` node tree.
-// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#3 | R2916, R2917, R2919
+// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#3.3 | R2916, R2917, R2919
 func connectionsCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "connections",

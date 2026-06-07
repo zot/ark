@@ -123,6 +123,7 @@ var migratedCommands = map[string]bool{
 	"connections": true,
 	"monitor":     true,
 	"luhmann":     true,
+	"embed":       true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -174,6 +175,7 @@ func arkCommands() []*ucli.Command {
 		connectionsCommand(),
 		monitorCommand(),
 		luhmannCommand(),
+		embedCommand(),
 	}
 }
 
@@ -202,8 +204,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdDiscussed(args)
 	case "dismiss":
 		cmdDismiss(args)
-	case "embed":
-		cmdEmbed(args)
 	case "fetch":
 		cmdFetch(args)
 	case "files":
@@ -2005,123 +2005,6 @@ func cmdConnectionsSidecarError(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md | R1302-R1305
-// CRC: crc-CLI.md | Seq: seq-cli-dispatch.md | R1790
-func cmdEmbed(args []string) {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(os.Stderr, `Usage: ark embed <command> [options]
-
-Commands:
-  text       Embed text, print vector as JSON
-  bench      Benchmark embedding performance (tags or chunks)
-  validate   Cross-reference embedding records against FTS chunks`)
-		os.Exit(0)
-	}
-	sub := args[0]
-	subArgs := args[1:]
-	switch sub {
-	case "text":
-		cmdEmbedText(subArgs)
-	case "bench":
-		cmdEmbedBench(subArgs)
-	case "validate":
-		cmdEmbedValidate(subArgs)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown embed subcommand: %s\n", sub)
-		os.Exit(1)
-	}
-}
-
-// CRC: crc-CLI.md | R1791, R1795, R1796, R1797
-func cmdEmbedText(args []string) {
-	fs := flag.NewFlagSet("embed text", flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark embed text TEXT...
-
-Embed text using the configured tag model. Prints the vector as JSON.`)
-	}
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fs.Usage()
-		os.Exit(0)
-	}
-	fs.Parse(args)
-	rest := fs.Args()
-	if len(rest) < 1 {
-		fs.Usage()
-		os.Exit(1)
-	}
-	text := strings.Join(rest, " ")
-	withDB(func(db *ark.DB) {
-		lib := ark.NewLibrarian(db, arkDir)
-		if !lib.Available() {
-			fatal(fmt.Errorf("claude not on PATH"))
-		}
-		if !lib.EmbeddingAvailable() {
-			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
-		}
-		vec, err := lib.EmbedQuery(text)
-		if err != nil {
-			fatal(err)
-		}
-		out, err := json.Marshal(vec)
-		if err != nil {
-			fatal(err)
-		}
-		os.Stdout.Write(out)
-		fmt.Fprintln(os.Stdout)
-	})
-}
-
-// CRC: crc-CLI.md | R1792, R1793, R1798, R1799, R1800, R1801
-func cmdEmbedBench(args []string) {
-	fs := flag.NewFlagSet("embed bench", flag.ExitOnError)
-	ctxSize := fs.Int("ctx", 2048, "embedding context window size in tokens")
-	parallel := fs.Int("parallel", 8, "number of parallel sequences per batch")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark embed bench <tags|chunks> [options]
-
-Benchmark embedding performance.
-
-Options:
-  --ctx N          Embedding context window size (default 2048)
-  --parallel N     Parallel sequences per batch (default 8)`)
-	}
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fs.Usage()
-		os.Exit(0)
-	}
-	// Extract mode before flag parsing
-	if len(args) < 1 {
-		fs.Usage()
-		os.Exit(1)
-	}
-	mode := args[0]
-	if mode != "tags" && mode != "chunks" {
-		fmt.Fprintf(os.Stderr, "unknown bench mode: %s (expected tags or chunks)\n", mode)
-		os.Exit(1)
-	}
-	fs.Parse(args[1:])
-
-	withDB(func(db *ark.DB) {
-		lib := ark.NewLibrarian(db, arkDir)
-		if !lib.Available() {
-			fatal(fmt.Errorf("claude not on PATH"))
-		}
-		if !lib.EmbeddingAvailable() {
-			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
-		}
-		lib.SetCtxSize(*ctxSize)
-		lib.SetParallel(*parallel)
-
-		switch mode {
-		case "tags":
-			cmdEmbedBenchTags(db, lib)
-		case "chunks":
-			cmdEmbedBenchChunks(db, lib, *ctxSize, *parallel)
-		}
-	})
-}
-
 func cmdEmbedBenchTags(db *ark.DB, lib *ark.Librarian) {
 	tags, err := db.TagList()
 	if err != nil {
@@ -2276,179 +2159,6 @@ func cmdEmbedBenchChunks(db *ark.DB, lib *ark.Librarian, ctxSize, parallel int) 
 		embedded, singleElapsed,
 		float64(singleElapsed.Milliseconds())/float64(max(embedded, 1)))
 	fmt.Printf("speedup: %.1fx\n", float64(singleElapsed)/float64(batchElapsed))
-}
-
-// CRC: crc-CLI.md | Seq: seq-embed-validate.md | R1794, R1802-R1813
-func cmdEmbedValidate(args []string) {
-	fs := flag.NewFlagSet("embed validate", flag.ExitOnError)
-	fix := fs.Bool("fix", false, "delete orphan and wrong-dimension records")
-	verbose := fs.Bool("v", false, "show per-file detail")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark embed validate [options]
-
-Cross-reference embedding records (EC/EF) against FTS chunks.
-Reports orphans, mismatches, gaps, and dimension inconsistencies.
-
-Options:
-  --fix       Delete orphan EC/EF records and wrong-dimension EC records
-  -v          Show per-file detail`)
-	}
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fs.Usage()
-		os.Exit(0)
-	}
-	fs.Parse(args)
-
-	problems := 0
-	withDB(func(db *ark.DB) {
-		store := db.Store()
-
-		// R1855: scan EC records (keyed by chunkID)
-		ecDims, err := store.ScanChunkEmbeddingKeys()
-		if err != nil {
-			fatal(fmt.Errorf("scan EC records: %w", err))
-		}
-
-		// R1856, R1865: collect chunkIDs partitioned by search_exclude
-		excludePatterns := db.Config().SearchExclude
-		ftsChunkIDs, excludedChunkIDs, err := db.AllChunkIDsPartitioned(excludePatterns)
-		if err != nil {
-			fatal(fmt.Errorf("scan chunk IDs: %w", err))
-		}
-
-		// Scan EF records
-		efCounts, err := store.ScanFileCentroidCounts()
-		if err != nil {
-			fatal(fmt.Errorf("scan EF records: %w", err))
-		}
-
-		// R1855: orphan EC — chunkID has EC record but no C record
-		var orphanIDs []uint64
-		for chunkID := range ecDims {
-			if !ftsChunkIDs[chunkID] {
-				orphanIDs = append(orphanIDs, chunkID)
-			}
-		}
-		if len(orphanIDs) > 0 {
-			fmt.Printf("orphan EC records: %d (chunkID without C record)\n", len(orphanIDs))
-			problems += len(orphanIDs)
-			if *verbose {
-				for _, id := range orphanIDs {
-					fmt.Printf("  chunkID=%d\n", id)
-				}
-			}
-		}
-
-		// R1856, R1865: missing EC — embeddable chunkID has C record but no EC record
-		var missingCount int
-		for chunkID := range ftsChunkIDs {
-			if _, has := ecDims[chunkID]; !has {
-				missingCount++
-			}
-		}
-		if missingCount > 0 {
-			fmt.Printf("missing EC records: %d (unique chunks without embeddings)\n", missingCount)
-			problems += missingCount
-		}
-		// R1866: report excluded chunks separately
-		if len(excludedChunkIDs) > 0 {
-			fmt.Printf("excluded chunks: %d (in search_exclude files only, not embedded)\n", len(excludedChunkIDs))
-		}
-
-		// R1857: EF consistency — check centroid counts
-		ftsFiles, err := db.FileChunkCounts()
-		if err != nil {
-			fatal(fmt.Errorf("scan FTS files: %w", err))
-		}
-		var orphanEFIDs []uint64
-		for fid := range efCounts {
-			if _, hasFTS := ftsFiles[fid]; !hasFTS {
-				orphanEFIDs = append(orphanEFIDs, fid)
-			}
-		}
-		if len(orphanEFIDs) > 0 {
-			fmt.Printf("orphan EF records: %d\n", len(orphanEFIDs))
-			problems += len(orphanEFIDs)
-		}
-
-		// Separate sentinels (dim=0) from real embeddings
-		sentinelCount := 0
-		dimCounts := make(map[int]int)
-		for _, dim := range ecDims {
-			if dim == 0 {
-				sentinelCount++
-			} else {
-				dimCounts[dim]++
-			}
-		}
-		if sentinelCount > 0 {
-			fmt.Printf("sentinel EC records: %d (chunks exceeding all embed tiers)\n", sentinelCount)
-		}
-
-		// Dimension consistency (R1806) — sentinels excluded
-		var majorityDim, majorityCount int
-		for d, c := range dimCounts {
-			if c > majorityCount {
-				majorityDim = d
-				majorityCount = c
-			}
-		}
-		realEC := len(ecDims) - sentinelCount
-		wrongDim := realEC - majorityCount
-		if len(dimCounts) > 1 {
-			fmt.Printf("dimension inconsistency: majority dim=%d (%d records)\n", majorityDim, majorityCount)
-			for d, c := range dimCounts {
-				if d != majorityDim {
-					fmt.Printf("  dim=%d: %d records\n", d, c)
-				}
-			}
-			problems += wrongDim
-		}
-
-		if problems == 0 {
-			fmt.Printf("clean: %d EC records (%d embedded, %d sentinel), %d embeddable chunks, %d excluded chunks, %d EF records\n",
-				len(ecDims), realEC, sentinelCount, len(ftsChunkIDs), len(excludedChunkIDs), len(efCounts))
-		}
-
-		// R1858: fix
-		if *fix && problems > 0 {
-			var fixedOrphanEC, fixedOrphanEF, fixedWrongDim int
-
-			for _, chunkID := range orphanIDs {
-				if err := store.DeleteChunkEmbedding(chunkID); err != nil {
-					fmt.Fprintf(os.Stderr, "fix: delete EC chunkID=%d: %v\n", chunkID, err)
-				} else {
-					fixedOrphanEC++
-				}
-			}
-
-			for _, fid := range orphanEFIDs {
-				if err := store.DeleteFileCentroid(fid); err != nil {
-					fmt.Fprintf(os.Stderr, "fix: delete EF fileID=%d: %v\n", fid, err)
-				} else {
-					fixedOrphanEF++
-				}
-			}
-
-			if len(dimCounts) > 1 {
-				for chunkID, dim := range ecDims {
-					if dim != majorityDim {
-						if err := store.DeleteChunkEmbedding(chunkID); err != nil {
-							fmt.Fprintf(os.Stderr, "fix: delete wrong-dim EC chunkID=%d: %v\n", chunkID, err)
-						} else {
-							fixedWrongDim++
-						}
-					}
-				}
-			}
-
-			fmt.Printf("fixed: %d orphan EC, %d orphan EF, %d wrong-dim EC deleted\n",
-				fixedOrphanEC, fixedOrphanEF, fixedWrongDim)
-		}
-	})
-	if problems > 0 {
-		os.Exit(1)
-	}
 }
 
 // CRC: crc-CLI.md | R2085
