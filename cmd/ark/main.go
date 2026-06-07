@@ -130,6 +130,9 @@ var migratedCommands = map[string]bool{
 	"schedule":    true,
 	"message":     true,
 	"ui":          true,
+	"subscribe":   true,
+	"subscribers": true,
+	"listen":      true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -188,6 +191,9 @@ func arkCommands() []*ucli.Command {
 		scheduleCommand(),
 		messageCommand(),
 		uiCommand(),
+		subscribeCommand(),
+		subscribersCommand(),
+		listenCommand(),
 	}
 }
 
@@ -254,12 +260,6 @@ func legacyDispatch(cmd string, args []string) {
 		cmdUIInstall(args)
 	case "nano":
 		cmdNano(args)
-	case "subscribe":
-		cmdSubscribe(args)
-	case "subscribers":
-		cmdSubscribers(args)
-	case "listen":
-		cmdListen(args)
 	case "unresolved":
 		cmdUnresolved(args)
 	default:
@@ -4506,163 +4506,6 @@ func cmdBundleCp(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md | Seq: seq-pubsub.md | R937, R2442, R2457, R2458, R2459, R2460, R2461
-func cmdSubscribe(args []string) {
-	fs := flag.NewFlagSet("subscribe", flag.ExitOnError)
-	session := fs.String("session", "", "session ID (required)")
-	cancel := fs.Bool("cancel", false, "cancel subscriptions")
-	list := fs.Bool("list", false, "list active subscriptions")
-	stats := fs.Bool("stats", false, "show hit/drop statistics")
-	var tagArgs, fileTagArgs stringSlice
-	fs.Var(&tagArgs, "tag", "tag match in sigil form `[~|:]NAME[(=|:|~)VALUE]` (repeatable)")
-	fs.Var(&fileTagArgs, "file-tag", "file-tag match: every chunk on a file with the tag (repeatable)")
-	var filterFiles, excludeFiles stringSlice
-	fs.Var(&filterFiles, "filter-files", "only match files matching glob (repeatable)")
-	fs.Var(&excludeFiles, "exclude-files", "exclude files matching glob (repeatable)") // R944
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark subscribe [options]")
-		fmt.Fprintln(os.Stderr, "\nSubscribe to tag notifications, manage subscriptions.")
-		fmt.Fprintln(os.Stderr, "\nMatch syntax: `[~|:]NAME[(=|:|~)VALUE]`")
-		fmt.Fprintln(os.Stderr, "  name side  — bare = exact, `:` prefix = contains, `~` prefix = regex")
-		fmt.Fprintln(os.Stderr, "  value side — `=V` exact, `:V` contains, `~V` regex")
-		fmt.Fprintln(os.Stderr, "\nExamples:")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag status~'^(open|accepted)$'")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --tag to-project=ark")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --file-tag to-project=ark")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --cancel --tag dm")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --session $ID --cancel")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --list")
-		fmt.Fprintln(os.Stderr, "  ark subscribe --stats")
-		fmt.Fprintln(os.Stderr)
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-
-	client := serverClient(arkDir)
-	if client == nil {
-		fatal(fmt.Errorf("server not running (subscribe requires server)"))
-	}
-
-	if *list {
-		var infos []ark.SubInfo
-		if err := proxyDecode(client, "POST", "/subscribe", map[string]any{
-			"session": *session,
-			"list":    true,
-		}, &infos); err != nil {
-			fatal(err)
-		}
-		for _, info := range infos {
-			fmt.Printf("%s\t%s\t%s\t%d\t%d\n", info.SessionID, info.Kind, info.Tag, info.Hits, info.Drops)
-		}
-		return
-	}
-
-	if *stats {
-		var st []ark.SubStats
-		if err := proxyDecode(client, "POST", "/subscribe", map[string]any{
-			"session": *session,
-			"stats":   true,
-		}, &st); err != nil {
-			fatal(err)
-		}
-		for _, s := range st {
-			fmt.Printf("%s\t%d subs\t%d hits\t%d drops\n", s.SessionID, s.SubCount, s.Hits, s.Drops)
-		}
-		return
-	}
-
-	if *session == "" {
-		fatal(fmt.Errorf("--session is required"))
-	}
-
-	if *cancel {
-		// R2458: at most one --tag is meaningful for cancel; the
-		// server parses the sigil and drops every entry whose stored
-		// predicate accepts the (name, value) pair.
-		cancelTag := ""
-		if len(tagArgs) > 0 {
-			cancelTag = tagArgs[0]
-		}
-		if err := proxyOK(client, "POST", "/subscribe", map[string]any{
-			"session": *session,
-			"cancel":  true,
-			"tag":     cancelTag,
-		}); err != nil {
-			fatal(err)
-		}
-		return
-	}
-
-	if len(tagArgs) == 0 && len(fileTagArgs) == 0 {
-		fatal(fmt.Errorf("--tag or --file-tag is required for subscribe"))
-	}
-
-	subs := make([]any, 0, len(tagArgs)+len(fileTagArgs))
-	for _, t := range tagArgs {
-		sub := map[string]any{"tag": t, "kind": "tag"}
-		if len(filterFiles) > 0 {
-			sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
-		}
-		if len(excludeFiles) > 0 {
-			sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
-		}
-		subs = append(subs, sub)
-	}
-	for _, t := range fileTagArgs {
-		sub := map[string]any{"tag": t, "kind": "file-tag"}
-		if len(filterFiles) > 0 {
-			sub["filter_files"] = ark.ExpandTildeSlice([]string(filterFiles))
-		}
-		if len(excludeFiles) > 0 {
-			sub["exclude_files"] = ark.ExpandTildeSlice([]string(excludeFiles))
-		}
-		subs = append(subs, sub)
-	}
-
-	if err := proxyOK(client, "POST", "/subscribe", map[string]any{
-		"session": *session,
-		"subs":    subs,
-	}); err != nil {
-		fatal(err)
-	}
-}
-
-// CRC: crc-CLI.md | Seq: seq-pubsub.md
-func cmdListen(args []string) {
-	fs := flag.NewFlagSet("listen", flag.ExitOnError)
-	session := fs.String("session", "", "session ID (required)")
-	timeout := fs.Int("timeout", 120, "long-poll timeout in seconds")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark listen --session ID [--timeout N]")
-		fmt.Fprintln(os.Stderr, "\nLong-poll for tag notifications. Outputs markdown crank handles.")
-		fmt.Fprintln(os.Stderr)
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-
-	if *session == "" {
-		fatal(fmt.Errorf("--session is required"))
-	}
-
-	client := serverClient(arkDir)
-	if client == nil {
-		fatal(fmt.Errorf("server not running (listen requires server)"))
-	}
-
-	path := fmt.Sprintf("/listen?session=%s&timeout=%d", url.QueryEscape(*session), *timeout)
-	data, err := proxyRaw(client, "GET", path, nil)
-	if err != nil {
-		// 204 No Content = timeout with no events, not an error
-		errMsg := err.Error()
-		if strings.HasPrefix(errMsg, "server error (204)") {
-			return
-		}
-		fatal(err)
-	}
-	fmt.Print(string(data))
-}
-
 // cmdSweep dispatches the `ark sweep` subcommands. Currently only
 // `ark sweep correlations` is implemented; future phases may add other
 // sweep types (e.g. chunk-pairwise).
@@ -4932,42 +4775,6 @@ func printRecallResult(out io.Writer, res *ark.RecallResult, jsonOut bool) error
 
 	ark.RenderRecallChunks(out, res.Chunks)
 	return nil
-}
-
-// cmdSubscribers proxies `GET /subscribers?tag=...` and prints the
-// count (or sets the exit code in --quiet mode).
-// CRC: crc-CLI.md | Seq: seq-subscriber-presence.md | R2805
-func cmdSubscribers(args []string) {
-	fs := flag.NewFlagSet("subscribers", flag.ExitOnError)
-	tag := fs.String("tag", "", "sigil-form tag predicate (required)")
-	quiet := fs.Bool("quiet", false, "no stdout; exit code carries presence (0=any, 1=zero)")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark subscribers --tag TAG [--quiet]")
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Print the count of currently-registered subscriptions whose predicate")
-		fmt.Fprintln(os.Stderr, "would accept the tag if it were published right now. Server-required.")
-		fmt.Fprintln(os.Stderr)
-		fs.PrintDefaults()
-	}
-	fs.Parse(args)
-	if *tag == "" {
-		fatal(fmt.Errorf("--tag is required"))
-	}
-	client := requireServer("subscribers")
-	var resp struct {
-		Count int `json:"count"`
-	}
-	path := "/subscribers?tag=" + url.QueryEscape(*tag)
-	if err := proxyDecode(client, "GET", path, nil, &resp); err != nil {
-		fatal(err)
-	}
-	if *quiet {
-		if resp.Count == 0 {
-			os.Exit(1)
-		}
-		return
-	}
-	fmt.Println(resp.Count)
 }
 
 // inspectExitResult is the structured output of `ark luhmann inspect-exit`.
