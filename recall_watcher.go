@@ -289,17 +289,38 @@ func bytesIterLines(b []byte) func(yield func([]byte) bool) {
 	}
 }
 
-// pipeSubscribed reports whether both ends of the recall pipe are
-// subscribed for this session — a daemon on bare @ark-recall-curate and a
-// client on @ark-recall-result=<session>. With no pubsub (e.g. tests) it
-// reports true so the watcher tracks normally. Shared by the OnAppend
-// activation gate and the fire() backstop so the two cannot drift.
-// CRC: crc-RecallWatcher.md | R2806, R2867
-func (w *RecallWatcher) pipeSubscribed(sessionID string) bool {
+// secretaryPresent reports whether the secretary (its `next` loop) is
+// subscribed to the work tube for this session — the prerequisite for any
+// watcher output, since an unsubscribed work tube means no worker to drain it.
+// With no pubsub (e.g. tests) it reports true so the watcher tracks normally.
+// CRC: crc-RecallWatcher.md | R2948
+func (w *RecallWatcher) secretaryPresent(sessionID string) bool {
 	if w.db == nil || w.db.pubsub == nil {
 		return true
 	}
-	return w.db.pubsub.SubscriberCount("ark-recall-curate", sessionID) > 0 &&
+	return w.db.pubsub.SubscriberCount("ark-secretary-work", sessionID) > 0
+}
+
+// bloodhoundEnabled gates directed-search recognition/dispatch: the secretary
+// present AND the assistant subscribed to the bloodhound-result tag (the level-3
+// opt-in). CRC: crc-RecallWatcher.md | R2947
+func (w *RecallWatcher) bloodhoundEnabled(sessionID string) bool {
+	if w.db == nil || w.db.pubsub == nil {
+		return true
+	}
+	return w.secretaryPresent(sessionID) &&
+		w.db.pubsub.SubscriberCount("ark-bloodhound-result", sessionID) > 0
+}
+
+// ambientEnabled gates ambient curation (arm/accumulate/fire): the secretary
+// present AND the assistant subscribed to the recall-result tag (the level-4
+// opt-in). Shared by the OnAppend arming gate and the fire() backstop so the two
+// cannot drift. CRC: crc-RecallWatcher.md | R2806, R2949
+func (w *RecallWatcher) ambientEnabled(sessionID string) bool {
+	if w.db == nil || w.db.pubsub == nil {
+		return true
+	}
+	return w.secretaryPresent(sessionID) &&
 		w.db.pubsub.SubscriberCount("ark-recall-result", sessionID) > 0
 }
 
@@ -317,14 +338,13 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 		return
 	}
 
-	// Activation gate: track a session only while both ends of the recall
-	// pipe are subscribed — a daemon on bare @ark-recall-curate and a client
-	// on @ark-recall-result=<session>. Either missing → ignore this append
-	// and drop the session's in-memory state, so an unsubscribed session is
-	// never accumulated, armed, or fired and leaks nothing; a later
-	// (re)subscription reactivates at the current JSONL end (no backfill).
-	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2867, R2868
-	if !w.pipeSubscribed(sessionID) {
+	// Per-capability gate (R2947, R2949): drop the session only when the
+	// secretary is absent (level ≤2) — no worker, nothing to produce; a later
+	// (re)subscription reactivates at the current JSONL end (no backfill). With
+	// the secretary present, ambient and bloodhound gate independently on the
+	// assistant's per-capability result subs.
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2868, R2947, R2949
+	if !w.secretaryPresent(sessionID) {
 		w.mu.Lock()
 		if st, ok := w.sessions[sessionID]; ok {
 			if st.pendingTimer != nil {
@@ -337,61 +357,76 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 	}
 
 	w.mu.Lock()
-	st, ok := w.sessions[sessionID]
-	if !ok {
-		st = &recallSessionState{}
-		w.sessions[sessionID] = st
-	}
-	if len(added) > 0 {
-		st.pendingChunks = append(st.pendingChunks, added...) // R2730
-	}
+	defer w.mu.Unlock()
 
-	// Apply each signal in order. R2731, R2732, R2733, R2734
-	for _, sig := range scanNewBytes(newBytes) {
-		switch sig {
-		case signalUser:
+	// Ambient (R2949): accumulate + arm only when the recall-result sub is
+	// present; otherwise tear down any lingering ambient state so a dropped
+	// recall-result doesn't leave an armed timer or stale pendingChunks.
+	if !w.ambientEnabled(sessionID) {
+		if st, ok := w.sessions[sessionID]; ok {
 			if st.pendingTimer != nil {
 				st.pendingTimer.Stop()
 				st.pendingTimer = nil
-				Logv(2, "recall-watcher: disarmed session=%s pending=%d",
-					sessionID, len(st.pendingChunks))
 			}
-			st.armReady = true // R2733: a user turn (re-)enables arming
-		case signalTurnDuration:
-			if !st.armReady {
-				// R2734: arm only once per user turn. A turn_duration
-				// with no intervening user record (an agent-only turn)
-				// does not re-arm — this is what stops the ping-pong.
-				Logv(2, "recall-watcher: turn_duration ignored, no user turn since last arm session=%s", sessionID)
-				break
+			st.pendingChunks = nil
+		}
+	} else {
+		st, ok := w.sessions[sessionID]
+		if !ok {
+			st = &recallSessionState{}
+			w.sessions[sessionID] = st
+		}
+		if len(added) > 0 {
+			st.pendingChunks = append(st.pendingChunks, added...) // R2730
+		}
+
+		// Apply each signal in order. R2731, R2732, R2733, R2734
+		for _, sig := range scanNewBytes(newBytes) {
+			switch sig {
+			case signalUser:
+				if st.pendingTimer != nil {
+					st.pendingTimer.Stop()
+					st.pendingTimer = nil
+					Logv(2, "recall-watcher: disarmed session=%s pending=%d",
+						sessionID, len(st.pendingChunks))
+				}
+				st.armReady = true // R2733: a user turn (re-)enables arming
+			case signalTurnDuration:
+				if !st.armReady {
+					// R2734: arm only once per user turn. A turn_duration
+					// with no intervening user record (an agent-only turn)
+					// does not re-arm — this is what stops the ping-pong.
+					Logv(2, "recall-watcher: turn_duration ignored, no user turn since last arm session=%s", sessionID)
+					break
+				}
+				if st.pendingTimer != nil {
+					st.pendingTimer.Stop()
+				}
+				delay := time.Duration(w.config().EffectiveActivationDelay()) * time.Second
+				sid := sessionID
+				st.pendingTimer = time.AfterFunc(delay, func() {
+					svc(w.jobs, func() { w.fire(sid) })
+				})
+				st.armReady = false // R2734: consumed this user turn's single arm
+				Logv(2, "recall-watcher: armed session=%s pending=%d delay=%ds",
+					sessionID, len(st.pendingChunks),
+					w.config().EffectiveActivationDelay())
 			}
-			if st.pendingTimer != nil {
-				st.pendingTimer.Stop()
-			}
-			delay := time.Duration(w.config().EffectiveActivationDelay()) * time.Second
-			sid := sessionID
-			st.pendingTimer = time.AfterFunc(delay, func() {
-				svc(w.jobs, func() { w.fire(sid) })
-			})
-			st.armReady = false // R2734: consumed this user turn's single arm
-			Logv(2, "recall-watcher: armed session=%s pending=%d delay=%ds",
-				sessionID, len(st.pendingChunks),
-				w.config().EffectiveActivationDelay())
 		}
 	}
 
-	// Bloodhound recognition (R2934, R2935, R2936): scan the same newBytes
-	// for directed-search watermarks in assistant output. Orthogonal to the
-	// arm/fire machinery above — it touches no timer/armReady/pendingChunks,
-	// so a watermark neither triggers nor suppresses a curation fire. For each
-	// payload, allocate <B> under the lock and dispatch the task off the
-	// indexer goroutine (the regex match is the only added synchronous work).
-	for _, payload := range scanBloodhounds(newBytes) {
-		bid := w.nextBloodhoundLocked(sessionID)
-		p, sid := payload, sessionID
-		svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, p) })
+	// Bloodhound recognition (R2934, R2935, R2936, R2947): scan the same
+	// newBytes for directed-search watermarks in assistant output — gated on
+	// the bloodhound-result sub, independent of the ambient arm/fire machinery
+	// above (it touches no timer/armReady/pendingChunks). For each payload,
+	// allocate <B> under the lock and dispatch off the indexer goroutine.
+	if w.bloodhoundEnabled(sessionID) {
+		for _, payload := range scanBloodhounds(newBytes) {
+			bid := w.nextBloodhoundLocked(sessionID)
+			p, sid := payload, sessionID
+			svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, p) })
+		}
 	}
-	w.mu.Unlock()
 }
 
 // fire is the timer-expiry callback. Runs on the watcher's
@@ -415,14 +450,14 @@ func (w *RecallWatcher) fire(sessionID string) {
 		return
 	}
 
-	// Subscriber-presence backstop to the OnAppend activation gate (R2867):
-	// re-check BOTH ends of the pipe in case the consumer dropped during
-	// activation_delay. Either missing → skip the substrate call + disk
-	// write; pendingChunks is already cleared (R2735), so the next OnAppend
-	// starts fresh.
-	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.4 | R2806
-	if !w.pipeSubscribed(sessionID) {
-		Logv(2, "recall-watcher: no curate/result subscriber session=%s fire=%d pending=%d",
+	// Ambient backstop to the OnAppend arming gate (R2949): re-check the
+	// secretary + recall-result subs in case the consumer dropped during
+	// activation_delay. Missing → skip the substrate call + disk write;
+	// pendingChunks is already cleared (R2735), so the next OnAppend starts
+	// fresh.
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.4 | R2806, R2949
+	if !w.ambientEnabled(sessionID) {
+		Logv(2, "recall-watcher: no secretary/recall-result subscriber session=%s fire=%d pending=%d",
 			sessionID, fire, len(snapshot))
 		if w.builder != nil {
 			// R2808: outcome="no-subscriber" goes into the monitor log so
@@ -600,12 +635,12 @@ func (w *RecallWatcher) nextBloodhoundLocked(sessionID string) uint64 {
 }
 
 // dispatchBloodhound runs on the watcher's worker goroutine. It re-checks the
-// activation gate (write-time backstop, R2933), then hands the payload to the
-// builder, which writes the task doc in the ARK-BLOODHOUND namespace and
-// retains the clue for the finding header.
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937
+// bloodhound gate (write-time backstop — secretary + bloodhound-result sub,
+// R2947), then hands the payload to the builder, which writes the task doc in
+// the ARK-BLOODHOUND namespace and retains the clue for the finding header.
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947
 func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string) {
-	if w.builder == nil || !w.pipeSubscribed(sessionID) {
+	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
 	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload); err != nil {

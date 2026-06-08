@@ -112,7 +112,7 @@ func TestRecallCurationBuilder_Shape(t *testing.T) {
 	)
 	body := cb.buf.String()
 
-	if !strings.HasPrefix(body, "@ark-recall-curate: sess-abc\n@ark-recall-fire: 17\n") {
+	if !strings.HasPrefix(body, "@ark-secretary-work: sess-abc\n@ark-recall-fire: 17\n") {
 		t.Errorf("body must lead with header tags; got:\n%s", body)
 	}
 	if !strings.Contains(body, "\n# Source: conv.jsonl:5-9\n") {

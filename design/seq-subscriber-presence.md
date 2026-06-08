@@ -13,7 +13,7 @@ same `SubscriberCount` query and both record the same
 ```
 1. Watcher fire
    1.1. RecallWatcher.fire(sessionID)        → snapshot pendingChunks, clear slice, allocate fireCounter
-   1.2. RecallWatcher.fire                   → pubsub.SubscriberCount("ark-recall-curate", sessionID)
+   1.2. RecallWatcher.fire                   → pubsub.SubscriberCount("ark-secretary-work", sessionID)
    1.3. RecallWatcher.fire                   → branch on count (>0 builds sections via existing seq-recall-watcher.md; 0 falls through to 1.4)
    1.4. RecallWatcher.fire                   → recallMonitor.Append({fire, session, nonce:0, in_tokens:0, out_tokens:0, outcome:"no-subscriber", ...}) (only when count==0)
    1.5. recallMonitor                        → write-actor append to ~/.ark/monitoring/recall.jsonl

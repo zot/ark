@@ -18,7 +18,7 @@ pipeline has two layers:
   spawns a secretary for it via `/recall`. Its whole loop is a single
   verb — `ark connections recall next --session <S> <nonce>` — which
   subscribes value-scoped to that session's curation docs
-  (`@ark-recall-curate=<S>`), dispatches the next one (blocking up to a
+  (`@ark-secretary-work=<S>`), dispatches the next one (blocking up to a
   ~90-second keepalive otherwise), context-gates, and **prepends the
   session's last-N conversation turns** so the secretary judges with the
   live conversation, not excerpts alone. The agent runs it in the
@@ -60,7 +60,7 @@ a thin set of result-builder CLI verbs.
 > `/recall` — not a single shared daemon spawned by the Luhmann
 > orchestrator. Where prose below says "the agent" or "the daemon", read
 > "the per-session secretary": it subscribes **value-scoped** to its
-> session's curation docs (`@ark-recall-curate=<S>`), its loop verb is
+> session's curation docs (`@ark-secretary-work=<S>`), its loop verb is
 > `ark connections recall next --session <S> <nonce>`, and the server
 > prepends the session's recent conversation (`[recall].context_turns`) to
 > each doc it hands over. The watcher, the curation/result doc shapes, the
@@ -106,7 +106,7 @@ RecallWatcher.fire(session)
   ├─ else: watcher writes curation doc directly via Go-internal
   │     RecallDocBuilder (no CLI roundtrip):
   │       tmp://ARK-RECALL/curation-<session>-<fire>
-  │       @ark-recall-curate: <session>
+  │       @ark-secretary-work: <session>
   │       @ark-recall-fire: <fire>
   │       # Source Chunk: <jsonl-chunkid>
   │       ## Candidate: ...
@@ -125,7 +125,7 @@ RecallWatcher.fire(session)
                           ark connections recall next --session <S> <N>
                                        │  server-side, in one verb:
                                        │   idempotent subscribe (value-scoped
-                                       │   @ark-recall-curate=<S>, session
+                                       │   @ark-secretary-work=<S>, session
                                        │   recall-curate-<S>) → context-gate
                                        │   → pick lowest-fire pending
                                        │   curation-<S>-<F> (this session
@@ -216,9 +216,9 @@ never re-triggers on its own consumers' output):
   whitelist.
 - **Activation gate.** The watcher tracks a session only while
   *both* ends of the recall pipe are subscribed: the session's secretary
-  on `@ark-recall-curate=<session>` (value-scoped) and a client on
+  on `@ark-secretary-work=<session>` (value-scoped) and a client on
   `@ark-recall-result=<session>`. On each `OnAppend`, if either
-  `SubscriberCount("ark-recall-curate", <session>)` or
+  `SubscriberCount("ark-secretary-work", <session>)` or
   `SubscriberCount("ark-recall-result", <session>)` is zero, the
   watcher ignores the append and **drops the session's in-memory
   state** — it stops any armed `pendingTimer` and forgets the
@@ -318,7 +318,7 @@ Header tags (one per line, no blank line between them and the
 first body section):
 
 ```
-@ark-recall-curate: <originating-session-uuid>
+@ark-secretary-work: <originating-session-uuid>
 @ark-recall-fire: <fire>
 ```
 
@@ -537,7 +537,7 @@ writing their respective tmp:// docs. See
 
 - **Watcher → activation gate.** The watcher processes a session
   only while *both* the session's secretary
-  (`@ark-recall-curate=<session>`, value-scoped) and a client
+  (`@ark-secretary-work=<session>`, value-scoped) and a client
   (`@ark-recall-result=<session>`) are subscribed — both ends of the
   pipe. The gate is applied primarily at the
   watch-activation point (`OnAppend`, see Trigger semantics): an
@@ -710,7 +710,7 @@ control.
 
 **The loop.** The secretary's entire loop is `ark connections recall
 next --session <S> <N>`. On its first call `next` idempotently
-establishes the **value-scoped** `@ark-recall-curate=<S>` subscription
+establishes the **value-scoped** `@ark-secretary-work=<S>` subscription
 under session `recall-curate-<S>` — keyed on the durable session, not
 the volatile nonce, so a restart can't recycle the key and two
 generations share it (R2902); thereafter it returns the lowest-fire pending
@@ -762,19 +762,23 @@ results by running one batteries-included verb — the consumer-side mirror
 of the secretary's `next`:
 
 ```
-ark connections recall listen --session <claude-code-session-uuid>
+ark connections recall listen --session <claude-code-session-uuid> [--ambient]
 ```
 
 `listen` carries the whole consumer loop:
 
-- **Subscribe (idempotent).** On first call it establishes the
-  value-scoped result subscription `@ark-recall-result=<session>` under
-  session `<session>` (later calls are no-ops). The assistant never runs
-  `ark subscribe` itself.
-- **Block until a result.** It blocks until at least one
-  `tmp://ARK-RECALL/result-<session>-<fire>` doc is published for the
-  session, then returns the doc content (the `## Surface:` /
-  `## Recommend:` items, already path-stamped). Unlike the daemon's
+- **Subscribe (idempotent), per capability.** On first call `listen`
+  establishes the value-scoped **bloodhound** subscription
+  `@ark-bloodhound-result=<session>` — findings, the base (see
+  [bloodhound.md](bloodhound.md)). With **`--ambient`** it *also* establishes
+  `@ark-recall-result=<session>` (ambient surfaces) — and **that** recall-result
+  subscription is the **ambient opt-in** the watcher's curation gate keys on.
+  Later calls are no-ops; the assistant never runs `ark subscribe` itself.
+- **Block until a result.** It blocks until at least one result doc is published
+  for the session — a `tmp://ARK-BLOODHOUND/finding-<session>-<B>` (a
+  `## Finding:`) or, with `--ambient`, a `tmp://ARK-RECALL/result-<session>-<fire>`
+  (`## Surface:` / `## Recommend:` items) — and returns its content,
+  path-stamped. Unlike the daemon's
   `next` there is **no keepalive and no context-gate**: the assistant
   runs `listen` backgrounded and should wake only on a real result, not
   on idle ticks (a keepalive would bloat the assistant's context the way
@@ -790,38 +794,38 @@ counter for each `## Recommend:` (R2765 / R2766) and, on a user
 rejection, calls `ark connections recall reject-derived`. `listen` does
 **not** filter recommends itself — the RJ decision stays the assistant's.
 
-**Opt-in via the subscriber-gate.** Until the assistant runs `listen`
-(no subscriber for `@ark-recall-result=<session>`), the **watcher's
-activation gate** doesn't track the session at all — no curation doc is
-ever produced for it, so the substrate cost is never paid. (The daemon's
+**Opt-in via the subscriber-gate.** Until the assistant runs `listen --ambient`
+(no subscriber for `@ark-recall-result=<session>`), the **watcher's ambient
+gate** doesn't fire for the session — no curation doc is ever produced, so the
+substrate cost is never paid. (Plain `listen` opts into the bloodhound, not
+ambient.) (The daemon's
 `next` dispatch gate is the downstream backstop: if a consumer drops
 between a doc being written and dispatched, that doc is left pending —
 deferred, not discarded.) So a session gets ambient recall exactly when
 (and only when) its assistant opts in, and recall begins at the current
 end of its JSONL — never a replay of the prior transcript.
 
-**The `/recall` skill** kicks off both roles. The user types `/recall`,
-and the assistant — using its own session UUID, which the skill provides
-via the `sessionid=${CLAUDE_SESSION_ID}` macro Claude Code fills in before
-delivery — (1) reserves a nonce and **spawns its session's secretary** as
-a background Task (`subagent_type: ark-recall-agent`, session + nonce in
-the prompt), respawning it on its context-limit exit; and (2) runs `ark
-connections recall listen` **backgrounded**, surfacing what helps the user
-on each completion and relaunching the `listen`. If the user never types
-`/recall`, neither role starts and recall stays dormant for that session.
+**The `/recall` skill** turns ambient on (level 4) atop the bloodhound. It
+**requires `/bloodhound`** — which spawns the session's secretary (a background
+Task, `subagent_type: ark-recall-agent`, session + nonce in the prompt,
+respawned on context-limit exit) and runs the base `listen` — then runs `ark
+connections recall listen --ambient` **backgrounded** so the
+`@ark-recall-result` subscription is established and the watcher fires ambient,
+surfacing what helps the user on each completion and relaunching the `listen`.
+Idempotent: if `/bloodhound` already spawned the secretary, `/recall` reuses it
+and only adds the ambient subscription. If the user opts into neither, both stay
+dormant for that session.
 The notification-woken surfacing turn does not arm the watcher — its
 `origin.kind` is `task-notification`, not a genuine user message (R2732)
 — so the consumer loop does not feed itself.
 
-The assistant owns **both** ends for its session: it reserves the nonce
-and spawns the secretary (which establishes the value-scoped
-`@ark-recall-curate=<S>` subscription via `next`), and it runs `listen`
-for the value-scoped `@ark-recall-result=<S>` results. These are two
-separate subagent/loop roles in the one session — the secretary curates,
-the assistant consumes. (`listen` is built on the same value-scoped
-subscription + `ark listen` the assistant used to run by hand; it just
-absorbs subscribe + block + fetch into one verb, as `next` does for the
-secretary.)
+The assistant owns **both** ends for its session: via `/bloodhound` it spawns
+the secretary (which establishes `@ark-secretary-work=<S>` via `next`) and runs
+the base `listen` (`@ark-bloodhound-result=<S>`); via `/recall` it adds
+`--ambient` (`@ark-recall-result=<S>`). These are two separate subagent/loop
+roles in the one session — the secretary curates and hunts, the assistant
+consumes. (`listen` absorbs subscribe + block + fetch into one verb, as `next`
+does for the secretary.)
 
 ## Discussed-tag marking policy
 

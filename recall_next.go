@@ -47,7 +47,7 @@ const recallNextKeepalive = 90 * time.Second
 // crank-handle body and whether the directive is an exit.
 func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int) (body string, exit bool, err error) {
 	// R2902: key the curate subscription on the durable session
-	// (`recall-curate-<session>`), not the volatile `recall-<nonce>`, so
+	// (`secretary-work-<session>`), not the volatile `recall-<nonce>`, so
 	// two secretary generations across a restart share one stable, unique
 	// key and the SubCount re-subscribe guard never no-ops a colliding
 	// subscriber. Distinct prefix from the consumer's result-subscription
@@ -55,15 +55,15 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 	// The legacy bare-curate path (no session) keeps `recall-<nonce>`.
 	subSession := fmt.Sprintf("recall-%d", nonce)
 	if session != "" {
-		subSession = "recall-curate-" + session
+		subSession = "secretary-work-" + session
 	}
 
-	// Idempotent subscribe to @ark-recall-curate. Subscribe appends, so
+	// Idempotent subscribe to @ark-secretary-work. Subscribe appends, so
 	// guard with SubCount to keep later calls no-ops.
 	if b.db.pubsub.SubCount(subSession) == 0 {
-		match := "ark-recall-curate"
+		match := "ark-secretary-work"
 		if session != "" {
-			match = "ark-recall-curate=" + session // R2888: per-session value-scope
+			match = "ark-secretary-work=" + session // R2888: per-session value-scope
 		}
 		p, perr := ParseMatchSyntax(match)
 		if perr != nil {
@@ -227,8 +227,8 @@ func (b *RecallAgentBuilder) lowestPendingBloodhound(targetSession string) (bid 
 		if targetSession != "" && session != targetSession {
 			continue
 		}
-		if b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
-			continue // defer until the consumer is present
+		if b.db.pubsub.SubscriberCount("ark-bloodhound-result", session) == 0 {
+			continue // R2947: defer until a bloodhound-result consumer is present
 		}
 		if !ok || n < bid {
 			path, bid, bestSession, ok = p, n, session, true
@@ -260,11 +260,11 @@ func recallSearchTaskPrompt(session string, nonce uint32, content string) string
 		body, nextCmd)
 }
 
-// stripCurateTagLine drops a leading `@ark-recall-curate:` head-tag line (and
+// stripCurateTagLine drops a leading `@ark-secretary-work:` head-tag line (and
 // the blank after it) so the inline task reads cleanly for the agent.
 func stripCurateTagLine(s string) string {
 	first, rest, found := strings.Cut(s, "\n")
-	if found && strings.HasPrefix(first, "@ark-recall-curate:") {
+	if found && strings.HasPrefix(first, "@ark-secretary-work:") {
 		return strings.TrimLeft(rest, "\n")
 	}
 	return s
@@ -334,15 +334,30 @@ const recallListenWindow = 60 * time.Second
 // keepalive and no context-gate: the assistant runs this backgrounded
 // and should wake only on a real result; the sole non-result return is
 // ctx cancellation.
-func (b *RecallAgentBuilder) RecallListen(ctx context.Context, session string) (body string, err error) {
-	// Idempotent subscribe to the value-scoped result tag (mirrors the
-	// hand-run `ark subscribe --tag ark-recall-result=<session>`).
-	if b.db.pubsub.SubCount(session) == 0 {
+func (b *RecallAgentBuilder) RecallListen(ctx context.Context, session string, ambient bool) (body string, err error) {
+	// Idempotent subscribe **per capability** (R2950): always to the
+	// bloodhound-result tag (findings); plus the recall-result tag (ambient
+	// surfaces) when `ambient` is set — that recall-result sub is the ambient
+	// opt-in the watcher keys on. Each is added only if not already present, so
+	// a `/bloodhound` listen upgrades to `/recall`'s `listen --ambient` without
+	// dropping the loop.
+	var subs []*TagSub
+	if b.db.pubsub.SubscriberCount("ark-bloodhound-result", session) == 0 {
+		p, perr := ParseMatchSyntax("ark-bloodhound-result=" + session)
+		if perr != nil {
+			return "", perr
+		}
+		subs = append(subs, &TagSub{Kind: TagSubChunk, Predicate: p})
+	}
+	if ambient && b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
 		p, perr := ParseMatchSyntax("ark-recall-result=" + session)
 		if perr != nil {
 			return "", perr
 		}
-		b.db.pubsub.Subscribe(session, []*TagSub{{Kind: TagSubChunk, Predicate: p}})
+		subs = append(subs, &TagSub{Kind: TagSubChunk, Predicate: p})
+	}
+	if len(subs) > 0 {
+		b.db.pubsub.Subscribe(session, subs)
 	}
 	for {
 		events := b.db.pubsub.Listen(session, recallListenWindow)

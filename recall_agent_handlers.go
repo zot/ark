@@ -176,15 +176,17 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRecallListen is the consumer-side loop verb: subscribe (idempotent)
-// to the session's result tag, block until a result doc arrives, return it
-// plus a crank-handle. CRC: crc-Server.md | R2865
+// per capability (bloodhound-result always; recall-result with --ambient),
+// block until a result doc arrives, return it plus a crank-handle.
+// CRC: crc-Server.md | R2865, R2950
 func (srv *Server) handleRecallListen(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
 		http.Error(w, "session required", http.StatusBadRequest)
 		return
 	}
-	body, rerr := srv.recallAgentBuilder.RecallListen(r.Context(), session)
+	ambient := r.URL.Query().Get("ambient") == "true" // R2950: ambient opt-in
+	body, rerr := srv.recallAgentBuilder.RecallListen(r.Context(), session, ambient)
 	if rerr != nil {
 		// Client disconnect or cancellation — nothing to deliver.
 		return

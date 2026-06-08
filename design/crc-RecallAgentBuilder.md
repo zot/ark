@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -79,7 +79,7 @@ for these verbs — `ark serve` must be running.
   recommend a tag for it but must not surface it. (R2898, R2869)
 - (builder).Close() writes
   `tmp://ARK-RECALL/curation-<session>-<fire>` via the write
-  actor with the two head tags `@ark-recall-curate: <session>`
+  actor with the two head tags `@ark-secretary-work: <session>`
   and `@ark-recall-fire: <fire>` followed by the accumulated
   body (R2747, R2748). Removes `curations[fire]`.
 
@@ -92,7 +92,7 @@ for these verbs — `ark serve` must be running.
 - RecallNext(nonce, session) — the secretary's single loop verb (R2857,
   R2858, R2888, R2889, R2891). With `session` set (the per-session
   secretary, seam 3a) it subscribes **value-scoped**
-  `@ark-recall-curate=<session>` under subscription session
+  `@ark-secretary-work=<session>` under subscription session
   `<session>` — keyed on the durable session, not `recall-<nonce>`,
   so two secretary generations across a restart share one stable,
   unique key and the `SubCount == 0` re-subscribe guard never
@@ -102,7 +102,7 @@ for these verbs — `ark serve` must be running.
   session's `curation-<session>-<fire>` docs, and the returned doc is
   prefixed with the session's last-`[recall].context_turns` conversation
   turns (`injectConversation` / `recentConversation`, best-effort). With
-  no `session` it keeps the legacy bare-`@ark-recall-curate`, all-session
+  no `session` it keeps the legacy bare-`@ark-secretary-work`, all-session
   scan (subscription session `recall-<nonce>`). It then
   checks the nonce's context fill (R2777) against
   `[luhmann].context_limit`: at or over the limit it returns an
@@ -160,15 +160,17 @@ for these verbs — `ark serve` must be running.
   fresh doc.
 
 ### Consumer loop — `listen` (CLI-driven)
-- RecallListen(session) — the consumer-side loop verb (R2865), the
-  mirror of `RecallNext` run by a user-facing assistant rather than the
-  daemon. On first call it idempotently subscribes session `<session>`
-  to its own value-scoped result tag
-  (`ParseMatchSyntax("ark-recall-result=" + session)`); thereafter it
-  blocks (a `pubsub.Listen` loop) until at least one
-  `@ark-recall-result=<session>` event arrives, fetches the published
-  `result-<session>-<fire>` doc(s), and returns their content plus
-  crank-handle prose ("ambient recall — surface what genuinely helps the
+- RecallListen(session, ambient) — the consumer-side loop verb (R2865,
+  R2950), the mirror of `RecallNext` run by a user-facing assistant. On
+  first call it idempotently subscribes session `<session>` **per
+  capability**: always to `@ark-bloodhound-result=<session>` (findings —
+  the level-3 base); and, with `ambient` set (`listen --ambient`), also to
+  `@ark-recall-result=<session>` (surfaces) — that recall-result sub is the
+  **ambient opt-in** the watcher keys on (R2949). Thereafter it blocks (a
+  `pubsub.Listen` loop) until a result event arrives, fetches the published
+  doc(s) — a `finding-<session>-<B>` (`## Finding:`) or, with ambient, a
+  `result-<session>-<fire>` (`## Surface:` / `## Recommend:`) — and returns
+  their content plus crank-handle prose ("surface what genuinely helps the
   user, then run `recall listen` again"). When any returned doc
   references a chat-JSONL chunk (a `## Surface:`/`## Recommend:` whose
   `<path>` ends in `.jsonl` — cheap path-shape proxy), the prose
@@ -183,10 +185,11 @@ for these verbs — `ark serve` must be running.
   `## Recommend:` by RJ ceiling — the assistant owns that (R2765/R2766).
   The `/recall` skill (`.claude/skills/recall/SKILL.md`, R2866) drives
   the loop: it supplies the session UUID via the
-  `sessionid=${CLAUDE_SESSION_ID}` macro, runs `listen` backgrounded,
-  and surfaces + relaunches on each completion. Opt-in: no `/recall` →
-  no result subscriber → `RecallNext`'s gate (R2857) defers the
-  session's curation docs.
+  `sessionid=${CLAUDE_SESSION_ID}` macro, runs `listen --ambient`
+  backgrounded (requiring `/bloodhound`, which spawns the secretary + runs
+  the base `listen`), and surfaces + relaunches on each completion. Opt-in:
+  no `/recall` → no `ark-recall-result` subscriber → ambient stays off
+  (`/bloodhound`'s base `listen` still opts into findings).
 
 ### Result-doc builder (CLI-driven)
 - SurfaceItem(fireToken, loc, reason) error (R2900, R2899,
@@ -290,14 +293,16 @@ for these verbs — `ark serve` must be running.
 The directed-search half of the warm secretary. Lives in the
 `ARK-BLOODHOUND` tmp:// namespace, separate from recall's
 `ARK-RECALL`, with its own in-flight maps — so a bloodhound `<B>`
-and a recall `<F>` can never collide on a path or a map key. The
-pubsub tags are shared (`@ark-recall-curate` in, `@ark-recall-result`
-out), so the same tube and the same `listen` carry it.
+and a recall `<F>` can never collide on a path or a map key. Input rides
+the shared `@ark-secretary-work` tube; the bloodhound's output is its
+**own** `@ark-bloodhound-result` subscription (distinct from recall's
+`@ark-recall-result`) — the secretary's one `next` and the assistant's one
+`listen` carry all of it.
 
 - RecallBloodhoundOpen(session, B, payload) (R2937, R2938) —
   Go-internal, called by the watcher's `dispatchBloodhound`. Writes
   `tmp://ARK-BLOODHOUND/task-<session>-<B>` (tag
-  `@ark-recall-curate: <session>`) whose body is the **search crank
+  `@ark-secretary-work: <session>`) whose body is the **search crank
   handle** with the raw payload pasted under a `## Search task
   <cookie>` first line, and stores `bloodhoundClues[cookie] =
   payload` for the finding header. The crank handle is a Go const
@@ -306,7 +311,10 @@ out), so the same tube and the same `listen` carry it.
   `db.Files()` once and prioritizes a pending
   `ARK-BLOODHOUND/task-` doc over any `ARK-RECALL/curation-` doc for
   the session (`lowestPendingBloodhound` before
-  `lowestPendingCuration`); within a kind, lowest id first. A
+  `lowestPendingCuration`); within a kind, lowest id first.
+  `lowestPendingBloodhound` dispatches a task only while the session has an
+  `ark-bloodhound-result` subscriber (R2947), mirroring how
+  `lowestPendingCuration` gates on `ark-recall-result`. A
   bloodhound doc is small (crank handle + payload), so `next`
   returns its body **inline** (no `writeCurationFile`, no Read
   keyhole) with the close directive framed by the `<session>-b<B>`
@@ -323,7 +331,7 @@ out), so the same tube and the same `listen` carry it.
 - Close routing (R2945): `Close` detects a bloodhound by the
   cookie's `b<B>` kind-marker (`parseBloodhoundToken`). For a
   bloodhound it writes `tmp://ARK-BLOODHOUND/finding-<session>-<B>`
-  (tag `@ark-recall-result: <session>`) iff `bloodhounds[cookie]`
+  (tag `@ark-bloodhound-result: <session>`, R2945) iff `bloodhounds[cookie]`
   has items — stamping the `## Finding: <clue>` header from
   `bloodhoundClues[cookie]` (R2946) — else silent-close; removes
   `task-<session>-<B>`; drops both bloodhound maps; and appends the

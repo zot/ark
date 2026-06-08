@@ -210,7 +210,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
 - [ ] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
-- [ ] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
+- [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
@@ -604,7 +604,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O117: RecallWatcher integration tests deferred — test-RecallWatcher.md lists ~15 pipeline scenarios (cooldown gate, similarity gate, mark-on-send, propose passthrough, source-dir whitelist, live config reload). Unit tests in recall_watcher_test.go cover pure helpers + SourceQualifies; pipeline scenarios need DB + librarian + chat-jsonl chunk scaffolding.
 - T94: R2691 retired (turn-boundary firing makes a separate per-session cooldown redundant (2026-05-25 simple-recall revision))
 - T95: R2697 retired by R2734 (per-chunk trigger replaced by turn_duration-armed debounce (2026-05-25 simple-recall revision))
-- T96: R2702 retired by R2748 (2026-05-26 simple-recall v2 — curation-doc header @ark-recall-curate replaces DM @ark-recall-fire line)
+- T96: R2702 retired by R2748 (2026-05-26 simple-recall v2 — curation-doc header @ark-secretary-work replaces DM @ark-recall-fire line)
 - T97: R2703 retired (2026-05-26 simple-recall v2 — DM instruction block gone; bias-to-silence is now the recall agent's persona (R2769))
 - T98: R2704 retired by R2749 (2026-05-26 simple-recall v2 — '## Recalled for chunk' DM section shape replaced by curation-doc '# Source Chunk:' + '## Candidate:')
 - T99: R2707 retired (2026-05-26 simple-recall v2 — DM emission gone; Layer 1 @dm-subject pre-triage no longer applicable)
@@ -675,3 +675,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T148: R1622 retired by R1792 (2026-06-07 cli-urfave: ark embed bench output (subcommand))
 - T149: R2930 retired (2026-06-08 cli-urfave migration complete: legacyDispatch + migratedCommands name-routing deleted; root Action owns unknown-command handling)
 - [ ] O132: Bloodhound integration tests deferred: the full OnAppend->jobs->dispatchBloodhound->task-doc path and next's bloodhound-before-curation dispatch priority (both kinds pending) are unit-covered piecewise (scanBloodhounds, RecallBloodhoundOpen/FindingItem/closeBloodhound round-trip) but not end-to-end. R2935/R2936/R2939.
+- T150: R2933 retired by R2947 (2026-06-08 level-decoupling: bloodhound gated on its own @ark-bloodhound-result sub, not the shared activation gate)
+- [ ] O133: Per-capability gate decoupling lacks an integration test: secretaryPresent/bloodhoundEnabled/ambientEnabled gate OnAppend recognition vs ambient-arming independently, but the helpers short-circuit to true when pubsub is nil (the test harness), so verifying 'bloodhound fires without ambient and vice versa' needs a pubsub+subscription harness. R2947/R2949.

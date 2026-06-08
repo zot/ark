@@ -78,7 +78,7 @@ func TestBuildSearchTask(t *testing.T) {
 	cookie := bloodhoundToken("sess-A", 3)
 	body := buildSearchTask("sess-A", cookie, "where is the tag-strip logic? pointers")
 	for _, want := range []string{
-		"@ark-recall-curate: sess-A",
+		"@ark-secretary-work: sess-A",
 		"## Search task " + cookie,
 		"where is the tag-strip logic? pointers",
 		"finding " + cookie,
@@ -93,7 +93,7 @@ func TestBuildSearchTask(t *testing.T) {
 		t.Errorf("buildSearchTask left COOKIE unsubstituted")
 	}
 	stripped := stripCurateTagLine(body)
-	if strings.HasPrefix(stripped, "@ark-recall-curate:") || !strings.HasPrefix(stripped, "## Search task") {
+	if strings.HasPrefix(stripped, "@ark-secretary-work:") || !strings.HasPrefix(stripped, "## Search task") {
 		t.Errorf("stripCurateTagLine: got %.40q", stripped)
 	}
 }
@@ -145,7 +145,7 @@ func TestBloodhoundRoundTrip(t *testing.T) {
 	}
 	out := string(data)
 	for _, want := range []string{
-		"@ark-recall-result: " + sess,
+		"@ark-bloodhound-result: " + sess,
 		"## Finding: where is the tag-strip logic? pointers",
 		"It's in stripArkTags at embed time.",
 		info.Path + ":" + info.Range,

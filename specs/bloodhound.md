@@ -25,17 +25,22 @@ optional stop condition; the canonical `want`-words (answer / passages /
 pointers / inventory / verdict) are the reliable anchor. The watermark
 **displays to the user by design** — they follow the hunt.
 
-## Precondition: recall must be running
+## Precondition: the bloodhound's own subscription
 
-The bloodhound is the warm path, and warmth comes from recall already standing
-(`/recall` running its secretary + the assistant's `listen`). Recognition lives
-in the watcher and is therefore subject to the **same activation gate** as
-ambient recall: a session is processed only while *both* the secretary
-(`@ark-recall-curate=<S>`) and a result consumer (`@ark-recall-result=<S>`) are
-subscribed. When recall is off, no watermark is recognized — the assistant's
-fallback is the ephemeral `ark-searcher` Hermes spawn (an `ark-search`-skill
-concern, not this service's). No new config knob: the bloodhound is active
-exactly when the watcher is (`[recall].enabled` + both ends subscribed).
+The bloodhound is the warm path, and warmth comes from the secretary already
+standing. But it has its **own opt-in**, independent of ambient recall: the
+assistant subscribes to **`@ark-bloodhound-result=<S>`** (via `/bloodhound`'s
+`listen`). Recognition + dispatch are gated on *both* the secretary
+(`@ark-secretary-work=<S>`, established by its `next` loop) **and** that
+bloodhound-result subscription — so the watcher recognizes a watermark and
+produces a task exactly when someone is opted in to receive findings. This is
+**decoupled** from ambient recall (which gates on `@ark-recall-result=<S>`,
+its own subscription): a session can run the bloodhound (level 3) with no
+ambient firehose (level 4). When neither the secretary nor the bloodhound-sub
+is present, no watermark is recognized — the assistant's fallback is the
+ephemeral `ark-searcher` Hermes spawn (an `ark-search`-skill concern, not this
+service's). No config knob: the bloodhound is active exactly when its
+subscription is.
 
 ## Recognition (watcher)
 
@@ -67,7 +72,7 @@ sequence) and writes a task doc onto the **curate tube** so the secretary's
   namespace**, separate from recall's `ARK-RECALL/`. tmp:// path segments are
   namespaces; giving the bloodhound its own is what keeps its docs from ever
   colliding with recall's, with no naming tricks and recall's paths untouched.
-- Header `@ark-recall-curate: <S>` — the same *tag* the secretary already
+- Header `@ark-secretary-work: <S>` — the same *tag* the secretary already
   subscribes to, so the doc rides the existing tube. The namespace files the
   doc; the **tag** drives delivery — the two are orthogonal, so no new
   subscription is needed.
@@ -120,12 +125,12 @@ The sealed Haiku secretary gains the ability to *run* a search task:
 
 A finding is a **directed response** — unlike `surface` / `recommend`, which are
 *ambient* (the recall agent volunteers them; the assistant never asked), a
-finding answers a search the assistant *specifically called for*. It rides the
-same **`@ark-recall-result=<S>` channel** and the same `listen` (the assistant's
-one inbound lane), but nothing is *reused* at the doc level: like recall result
-docs, findings are their own docs that **pile up** on the channel and are
-drained one at a time — the channel is shared, the docs are not. Because a
-finding is a *response to a request*, it must tie back to that request: the
+finding answers a search the assistant *specifically called for*. It rides its
+**own `@ark-bloodhound-result=<S>` channel** — distinct from recall's
+`@ark-recall-result` — but the assistant's single `listen` subscribes to both,
+so it's one inbound lane. Findings are their own docs that **pile up** on the
+channel and are drained one at a time. Because a finding is a *response to a
+request*, it must tie back to that request: the
 `## Finding:` header **echoes the originating clue** (below), and the assistant
 consumes it as the answer it asked for — folding it into its own reasoning —
 rather than as a user-facing suggestion to gate.
@@ -150,7 +155,7 @@ ark connections recall close <B> --nonce <N>
   the requester's own session (unlike pushed recall, which suppresses
   own-session candidates).
 - `close <cookie>` writes `tmp://ARK-BLOODHOUND/finding-<S>-<B>` tagged
-  `@ark-recall-result: <S>` iff any finding was added (else silent-close),
+  `@ark-bloodhound-result: <S>` iff any finding was added (else silent-close),
   removes the `tmp://ARK-BLOODHOUND/task-<S>-<B>` doc, and appends a monitoring
   record — the same close machinery curation uses. The bloodhound's own tmp://
   namespace (`ARK-BLOODHOUND/`, separate from `ARK-RECALL/`) means the two
@@ -165,11 +170,13 @@ shape") gains a third H2 kind, `## Finding:`, alongside `## Surface:` /
 `## Recommend:`. A given doc instance is one kind or the other: a recall fire's
 `close` writes a `tmp://ARK-RECALL/result-<S>-<F>` doc of surface/recommend
 items; a bloodhound `close` writes a `tmp://ARK-BLOODHOUND/finding-<S>-<B>` doc
-of finding items. Both carry `@ark-recall-result=<S>`, so one `listen` drains
-both — the namespace files them apart, the shared tag delivers them together.
+of finding items. A recall result carries `@ark-recall-result=<S>`, a bloodhound
+finding carries `@ark-bloodhound-result=<S>`; the assistant's `listen` subscribes
+to both, so one lane drains both — distinct tags, distinct namespaces, one
+consumer.
 
 ```
-@ark-recall-result: <S>
+@ark-bloodhound-result: <S>
 
 ## Finding: <originating clue, echoed verbatim>
 
@@ -203,8 +210,11 @@ it. Recorded for a later seam.
 - **No sync/blocking delivery.** Async via `listen` only (above).
 - **No `/minimap` at warm spawn.** The crank handle's scope mapping suffices;
   the richer navigation primer is a later step.
-- **No new tube or subscription.** Bloodhound rides `@ark-recall-curate` /
-  `@ark-recall-result`; the assistant adds no new `listen`.
+- **Own result subscription, shared input tube.** The bloodhound's *input*
+  rides the shared `@ark-secretary-work` tube (one secretary `next` for all task
+  types); its *output* gets its own `@ark-bloodhound-result` subscription, which
+  the assistant's `listen` subscribes to and which gates recognition — decoupled
+  from ambient recall's `@ark-recall-result` gate.
 - **No watcher interaction with the ambient fire.** Recognition is orthogonal
   to arm/cancel/fire; it neither triggers nor suppresses a curation pass.
 - **No new-tag invention, no RJ writes** — inherited non-goals from
@@ -223,15 +233,17 @@ it. Recorded for a later seam.
 - **Independence from fire** — a watermark with no `turn_duration` still
   dispatches a task; it does not arm or cancel `pendingTimer`, and does not
   alter `pendingChunks`.
-- **Activation gate** — with no `@ark-recall-result=<S>` subscriber, a watermark
-  writes no task doc (gate parity with curation).
+- **Bloodhound gate (decoupled)** — with no `@ark-bloodhound-result=<S>`
+  subscriber, a watermark writes no task doc *even if* `@ark-recall-result` is
+  subscribed; with the bloodhound-sub present, it does. Independent of the
+  ambient gate.
 - **Dispatch priority** — with both a pending curation doc and a pending
   bloodhound doc, `next` returns the bloodhound doc first; lowest id within kind.
 - **Seal** — the secretary running `ark search` / `ark chunks` is permitted;
   `Read` of an arbitrary path, `ark fetch`, and mutating verbs are still denied,
   and the denial stderr names the loop driver.
 - **finding → result** — a `-loc` finding then `close` emits a `## Finding:`
-  result doc tagged `@ark-recall-result=<S>`; `-answer` carries synthesized
+  result doc tagged `@ark-bloodhound-result=<S>`; `-answer` carries synthesized
   text; `close` with no prior finding is a silent-close that still removes the
   task doc and logs.
 - **No own-session gate on finding** — a finding whose `-loc` resolves to the

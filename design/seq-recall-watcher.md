@@ -36,7 +36,7 @@ is in `seq-recall-agent.md`.
          ├── 2.2  sessionID = sessionFromJSONLPath(path)
          │
          ├── 2.3  activation gate (R2867):
-         │          curate = pubsub.SubscriberCount("ark-recall-curate", sessionID)
+         │          curate = pubsub.SubscriberCount("ark-secretary-work", sessionID)
          │          result = pubsub.SubscriberCount("ark-recall-result", sessionID)
          │          if curate == 0 || result == 0:
          │            lock; stop any armed pendingTimer;
@@ -93,7 +93,7 @@ is in `seq-recall-agent.md`.
          │        cfg = db.Config().Recall                        (R2695)
          │
          ├── 5.4  subscriber backstop (R2806): re-query both
-         │          SubscriberCount("ark-recall-curate", sessionID) and
+         │          SubscriberCount("ark-secretary-work", sessionID) and
          │          SubscriberCount("ark-recall-result", sessionID).
          │          if either == 0 (consumer dropped during
          │          activation_delay): append recall.jsonl record with
@@ -148,7 +148,7 @@ is in `seq-recall-agent.md`.
          │        → writes tmp://ARK-RECALL/curation-
          │            <sessionID>-<fire>
          │          (write actor publishes pubsub event for
-         │           subscribers to @ark-recall-curate)
+         │           subscribers to @ark-secretary-work)
          │
          ├── 5.8  mark-on-send: for each section.candidates[*]:   (R2711, R2712, R2740)
          │          for each (tag, value) in chunk.Tags:
@@ -196,7 +196,7 @@ is in `seq-recall-agent.md`.
   per-session (R2901), seeded from the curation-dir on first
   use, and is consumed whether or not a curation doc gets written.
 
-## Flow 4: bloodhound recognition (R2934–R2937)
+## Flow 4: bloodhound recognition (R2934–R2937, R2947)
 
 Independent of the arm/fire state machine above, in the same `OnAppend`
 pass (after the activation gate, so a watermark is recognized only while
@@ -211,9 +211,10 @@ both pipe ends are subscribed — R2933):
   lock and post `dispatchBloodhound(session, B, payload)` to `jobs`.
   Nothing touches `pendingTimer`/`armReady`/`pendingChunks` (R2935), so a
   watermark neither arms nor suppresses a curation fire.
-- `dispatchBloodhound` (worker goroutine): re-check `pipeSubscribed`
-  (write-time backstop), then `RecallBloodhoundOpen(session, B, payload)`
-  writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag `@ark-recall-curate=<S>`,
+- `dispatchBloodhound` (worker goroutine): re-check the **bloodhound gate**
+  (secretary present + `ark-bloodhound-result` subscribed, R2947) as the
+  write-time backstop, then `RecallBloodhoundOpen(session, B, payload)`
+  writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag `@ark-secretary-work=<S>`,
   body = search crank handle + payload) and retains the clue. The write
-  actor publishes the curate event → wakes the secretary's `next`
+  actor publishes the secretary-work event → wakes the secretary's `next`
   (seq-recall-agent.md, Flow 6).

@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2933, R2934, R2935, R2936, R2937
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -68,13 +68,17 @@ composes and writes each curation doc via the in-process
 - OnAppend(path, strategy, newBytes, addedChunkIDs):
   indexer-side entry called from `executeRefresh`'s isAppend
   branch. Source-qualifies first (R2741); if not qualified,
-  return immediately. Then applies the **activation gate**
-  (R2867): queries `pubsub.SubscriberCount("ark-recall-curate",
-  sid)` and `pubsub.SubscriberCount("ark-recall-result", sid)`;
-  if either is zero, stops any armed `pendingTimer`, deletes
-  `sessions[sid]`, and returns — an unsubscribed session is never
-  accumulated, armed, or fired, and leaks no state (R2867, R2868).
-  Otherwise:
+  return immediately. Then the **per-capability gate** (R2947, R2949,
+  superseding the old both-ends R2867): if the secretary is absent
+  (`SubscriberCount("ark-secretary-work", sid) == 0`, level ≤2), stop
+  any armed `pendingTimer`, delete `sessions[sid]`, and return — no
+  worker, nothing to produce (R2868). With the secretary present,
+  recognition and ambient gate **independently** on the assistant's
+  per-capability result subs: scan bloodhounds iff
+  `ark-bloodhound-result` is subscribed (R2947); accumulate
+  `pendingChunks` + arm the timer iff `ark-recall-result` is subscribed
+  (R2949). The ambient bullets below run under the recall-result gate;
+  bloodhound recognition under its own:
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
     (R2729, R2730).
   - Scan `newBytes` line-by-line; parse each line as JSON and
@@ -91,8 +95,9 @@ composes and writes each curation doc via the in-process
       posts the fire closure. If not `armReady`, ignore — an
       agent-only turn does not re-arm, which stops the recall
       ping-pong (R2734).
-  - **Bloodhound recognition** (R2934, R2935, R2936): alongside the
-    signal scan, `scanBloodhounds(newBytes)` parses each
+  - **Bloodhound recognition** (R2934, R2935, R2936, R2947) — gated on
+    `ark-bloodhound-result`, independent of the ambient bullets above:
+    `scanBloodhounds(newBytes)` parses each
     `type:"assistant"` line's text (reusing `assistantText`) and
     regex-matches `<BLOODHOUND>(.*?)</BLOODHOUND>` (non-greedy,
     DOTALL) — each capture is one payload. Deterministic, once-only
@@ -105,8 +110,9 @@ composes and writes each curation doc via the in-process
     to `jobs` → `dispatchBloodhound`, keeping OnAppend a fast
     line-scan (R2936).
 - dispatchBloodhound(sessionID, B, payload): worker-goroutine job.
-  Re-checks `pipeSubscribed` (the write-time backstop to the
-  activation gate, R2933), then calls
+  Re-checks the **bloodhound gate** as the write-time backstop —
+  secretary present (`ark-secretary-work`) AND `ark-bloodhound-result`
+  subscribed (R2947); then calls
   `builder.RecallBloodhoundOpen(sessionID, B, payload)` — writes the
   task doc in the `ARK-BLOODHOUND` namespace and retains the clue for
   the finding header (R2937, owned by crc-RecallAgentBuilder.md).
@@ -117,7 +123,7 @@ composes and writes each curation doc via the in-process
   first use, R2901), then runs the recall pipeline outside the
   lock (R2735). Before
   invoking the substrate or opening the curation builder,
-  re-queries **both** `pubsub.SubscriberCount("ark-recall-curate",
+  re-queries **both** `pubsub.SubscriberCount("ark-secretary-work",
   sessionID)` and `pubsub.SubscriberCount("ark-recall-result",
   sessionID)` as a backstop to the OnAppend activation gate (R2867)
   — covering a consumer that dropped during `activation_delay`. If
@@ -160,7 +166,7 @@ composes and writes each curation doc via the in-process
     no curation doc is written (R2753).
   - Otherwise call `b.Close()` to write
     `tmp://ARK-RECALL/curation-<session>-<fire>` with the
-    two head-of-chunk tags `@ark-recall-curate: <session>`
+    two head-of-chunk tags `@ark-secretary-work: <session>`
     and `@ark-recall-fire: <fire>` (R2747, R2748).
   - Mark-on-send: for every candidate chunk written in any
     surfaced section, call `store.AddDiscussed(sessionID,
@@ -172,7 +178,7 @@ composes and writes each curation doc via the in-process
 ## Out of scope
 - ~~No subscriber liveness check before emit (R2714)~~ — gates added
   by R2867 (activation, at OnAppend) and R2806 (backstop, at fire);
-  the watcher checks both `@ark-recall-curate` and
+  the watcher checks both `@ark-secretary-work` and
   `@ark-recall-result=<session>` subscriber presence before tracking
   a session and before writing a curation doc.
 - No backfill on subscriber arrival: a subscriber that arrives
@@ -205,7 +211,7 @@ composes and writes each curation doc via the in-process
   `[recall]` from ark.toml on startup and reload; owns the
   `fireCounter` increment under the watcher's lock.
 - PubSub (crc-PubSub.md): `SubscriberCount` on both
-  `ark-recall-curate` and `ark-recall-result=<session>` gates
+  `ark-secretary-work` and `ark-recall-result=<session>` gates
   session activation at OnAppend (R2867) and the curation-doc
   write at fire (R2806).
 

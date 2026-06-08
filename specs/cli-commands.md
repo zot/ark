@@ -375,7 +375,7 @@ ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
 ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
-ark connections recall listen --session SID
+ark connections recall listen --session SID [--ambient]
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -499,15 +499,17 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   `-preserve-curation`; locates the calling subagent's JSONL via
   the `nonce → .meta.json` lookup, sums tokens, and appends one
   record to `~/.ark/monitoring/recall.jsonl`.
-- `recall listen --session SID` is the consumer-side loop verb —
-  the mirror of `recall next` for the user-facing assistant rather
-  than the daemon. On first call for `SID` it idempotently subscribes
-  the session to its value-scoped result tag
-  (`@ark-recall-result=<SID>`); thereafter it blocks until at least
-  one result doc is published, then returns the doc content(s) plus
-  crank-handle prose telling the assistant to surface what helps the
-  user and run `listen` again. No keepalive and no context-gate: the
-  assistant runs it backgrounded and wakes only on a real result.
+- `recall listen --session SID [--ambient]` is the consumer-side loop
+  verb — the mirror of `recall next` for the user-facing assistant. On
+  first call it idempotently subscribes **per capability**: always to
+  `@ark-bloodhound-result=<SID>` (findings — level 3), and, with
+  `--ambient`, also to `@ark-recall-result=<SID>` (ambient surfaces —
+  level 4); the recall-result sub is the ambient opt-in the watcher keys
+  on. Thereafter it blocks until a result doc is published, then returns
+  the content(s) plus crank-handle prose telling the assistant to surface
+  what helps the user and run `listen` again. No keepalive and no
+  context-gate: the assistant runs it backgrounded and wakes only on a
+  real result.
   This subscription is also what the daemon's subscriber-gate keys on
   — until a session calls `listen` (via the `/recall` skill) its
   curation docs pile up undispatched. See

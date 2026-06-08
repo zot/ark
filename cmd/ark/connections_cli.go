@@ -218,9 +218,12 @@ func recallCommand() *ucli.Command {
 				Action:    connRecallNextAction,
 			},
 			{
-				Name:   "listen",
-				Usage:  "consumer loop verb: block until a recall result arrives for the session",
-				Flags:  []ucli.Flag{&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (required)"}},
+				Name:  "listen",
+				Usage: "consumer loop verb: block until a result arrives (findings; + ambient surfaces with --ambient)",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (required)"},
+					&ucli.BoolFlag{Name: "ambient", Usage: "also subscribe to ambient surfaces (level 4); without it, findings only"},
+				},
 				Action: connRecallListenAction,
 			},
 		},
@@ -775,7 +778,11 @@ func connRecallListenAction(_ context.Context, c *ucli.Command) error {
 	if client == nil {
 		fatal(errors.New("server not running; start with `ark serve`"))
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://ark/connections/recall/listen?session=%s", session), nil)
+	listenURL := fmt.Sprintf("http://ark/connections/recall/listen?session=%s", session)
+	if c.Bool("ambient") {
+		listenURL += "&ambient=true" // R2950: ambient opt-in
+	}
+	req, err := http.NewRequest("GET", listenURL, nil)
 	if err != nil {
 		fatal(err)
 	}

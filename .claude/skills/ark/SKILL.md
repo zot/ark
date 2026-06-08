@@ -6,6 +6,12 @@ description: "Query the ark digital zettelkasten and write tagged content. Use w
 sessionid=${CLAUDE_SESSION_ID}
 session8 is the prefix.
 
+**Searching is baseline ark literacy — invoke `/ark-search` first.** It carries
+the detective's craft: the filter-stack, the investigation loop, and how to
+direct the warm `<BLOODHOUND>` bloodhound (turn the bloodhound on with
+`/bloodhound`; ambient recall with `/recall`). Everything below assumes you can
+search well.
+
 ## Bootstrap
 
 At session start, start ark, load tags, then run the dead drop:

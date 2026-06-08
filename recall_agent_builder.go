@@ -97,7 +97,7 @@ func (b *RecallAgentBuilder) RecallCurationOpen(session string, fire uint64) *Re
 		fire:    fire,
 	}
 	// R2748: head-of-chunk tags, no blank line before first section.
-	fmt.Fprintf(&cb.buf, "@ark-recall-curate: %s\n", session)
+	fmt.Fprintf(&cb.buf, "@ark-secretary-work: %s\n", session)
 	fmt.Fprintf(&cb.buf, "@ark-recall-fire: %d\n", fire)
 	b.mu.Lock()
 	b.curations[fireToken(session, fire)] = cb
@@ -837,7 +837,7 @@ const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue i
 // and the search crank handle with the cookie filled. R2937, R2938
 func buildSearchTask(session, cookie, payload string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "@ark-recall-curate: %s\n\n", session)
+	fmt.Fprintf(&sb, "@ark-secretary-work: %s\n\n", session)
 	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, payload)
 	sb.WriteString(strings.ReplaceAll(searchCrankHandle, "COOKIE", cookie))
 	return sb.String()
@@ -925,11 +925,11 @@ func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64,
 	if doc != nil && doc.items > 0 {
 		found = doc.items
 		if b.db != nil && b.db.pubsub != nil &&
-			b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
+			b.db.pubsub.SubscriberCount("ark-bloodhound-result", session) == 0 {
 			outcome = "no-subscriber" // R2808 parity
 		} else {
 			headerClue := strings.TrimSpace(strings.ReplaceAll(clue, "\n", " "))
-			header := fmt.Sprintf("@ark-recall-result: %s\n\n## Finding: %s\n", session, headerClue)
+			header := fmt.Sprintf("@ark-bloodhound-result: %s\n\n## Finding: %s\n", session, headerClue)
 			body := []byte(header + doc.buf.String())
 			path := bloodhoundFindingPath(session, bid)
 			if err := SyncVoid(b.db, func(db *DB) error {

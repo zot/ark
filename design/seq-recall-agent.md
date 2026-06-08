@@ -5,7 +5,7 @@
 Picks up where `seq-recall-watcher.md` leaves off — after the
 watcher writes `tmp://ARK-RECALL/curation-<session>-<fire>` and the
 write actor publishes the matching pubsub event for the
-`@ark-recall-curate` tag.
+`@ark-secretary-work` tag.
 
 The recall agent is a **long-running daemon**, spawned once per
 generation by the Luhmann orchestrator (respawn lifecycle in
@@ -31,7 +31,7 @@ step 7.7.
          │  (the watcher minted <F>; no consumer allocates fires)
          │
          └── 1.1  publishes pubsub event matching
-                  @ark-recall-curate (per write-actor
+                  @ark-secretary-work (per write-actor
                   responsibilities — not the builder's job)
 
 2. The session's own assistant spawns its secretary (via /recall) (R2890)
@@ -254,14 +254,16 @@ step 7.7.
   "no result builder was opened" path — silent-close is a valid
   outcome (R2758).
 
-## Flow 6: bloodhound — directed search (R2939–R2946)
+## Flow 6: bloodhound — directed search (R2939–R2947, R2950)
 
-Rides the same tube and the same `listen` as ambient recall; differs only
-in tmp:// namespace (`ARK-BLOODHOUND`) and the finding return.
+Rides the same `@ark-secretary-work` input tube and the same `listen` as
+ambient recall, but gates on its **own** `@ark-bloodhound-result` sub and
+returns findings on it (distinct from recall's `@ark-recall-result`).
 
-- `next` dispatch (R2939, R2940): the loop scans `db.Files()` once and
-  prefers a pending `ARK-BLOODHOUND/task-<S>-<B>` over any
-  `ARK-RECALL/curation-<S>-<F>` for the session (lowest id within a kind).
+- `next` dispatch (R2939, R2940, R2947): the loop scans `db.Files()` once and
+  prefers a pending `ARK-BLOODHOUND/task-<S>-<B>` (gated on an
+  `ark-bloodhound-result` subscriber) over any `ARK-RECALL/curation-<S>-<F>`
+  (gated on `ark-recall-result`) for the session (lowest id within a kind).
   A task doc is small, so `next` returns its body (the search crank
   handle) **inline** with the close directive framed by the `<S>-b<B>`
   cookie — no file materialization, no Read keyhole.
@@ -272,7 +274,7 @@ in tmp:// namespace (`ARK-BLOODHOUND`) and the finding return.
   passage/pointer, or `-answer "…"` for an answer/verdict — one item per
   call, no own-session gate.
 - close (R2945, R2946): `close <S>-b<B> --nonce <N>` writes
-  `tmp://ARK-BLOODHOUND/finding-<S>-<B>` (tag `@ark-recall-result=<S>`)
+  `tmp://ARK-BLOODHOUND/finding-<S>-<B>` (tag `@ark-bloodhound-result=<S>`)
   with a `## Finding: <clue>` header stamped from the retained clue,
   removes the task doc, and appends the monitor record. The assistant's
   existing `listen` (Flow 5) drains it, recognizes `## Finding:`, and

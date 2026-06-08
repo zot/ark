@@ -295,14 +295,16 @@ corpus surfaces material unasked. Its *pull* counterpart, the
 **bloodhound**, lets the assistant *direct* a search: it emits a
 `<BLOODHOUND>…</BLOODHOUND>` watermark in its normal output, the watcher
 recognizes it (deterministically, no LLM) and drops a directed-search task
-onto the same tube the warm secretary already drains — in its own
+onto the secretary's shared `@ark-secretary-work` tube — in its own
 `tmp://ARK-BLOODHOUND/` namespace. The secretary runs the search (a
 self-contained crank handle carries the CLI craft) and returns a curated
-**finding** on the same `@ark-recall-result` channel the assistant's
-`listen` already watches — a *response* the assistant called for,
-correlated by the echoed clue, distinct from the ambient surface/recommend
-it didn't ask for. Async by default; the warm path is available whenever
-recall is running. The secretary is one agent doing both — a
+**finding** on its **own** `@ark-bloodhound-result` channel (distinct from
+ambient recall's `@ark-recall-result`), which the assistant's `listen`
+subscribes to — a *response* the assistant called for, correlated by the
+echoed clue, distinct from the ambient surface/recommend it didn't ask for.
+The two are independent opt-ins (each its own subscription), so the
+bloodhound (level 3) can run without the ambient firehose (level 4). Async
+by default. The secretary is one agent doing both — a
 zettelkasten-keeper on an eternal hunt to flesh out the collection, curating
 what drifts past and tracking what it's sent after. Spec'd in
 `specs/bloodhound.md`.
