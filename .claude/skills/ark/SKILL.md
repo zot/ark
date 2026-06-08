@@ -160,9 +160,13 @@ Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a requ
 Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale. Use --unmatched for unanswered items.")
 ```
 
-**Search** — spawn ark-searcher. Finding notes, exploring tags, retrieval.
-Hermes expands queries and curates results. Never interpret raw search
-results yourself.
+**Search** — to search *well yourself* — the filter-stack craft, the
+investigation loop, and directing the warm **bloodhound** (emit a `<BLOODHOUND>`
+watermark; it runs the hunt and returns a curated finding via `recall listen`) —
+**invoke `/ark-search`.** The detective's craft lives there.
+
+To *delegate* a question instead, spawn ark-searcher — it expands queries and
+curates results, so you never interpret raw search results yourself:
 ```
 Agent(subagent_type="ark-searcher", prompt="Find notes about append detection.")
 Agent(subagent_type="ark-searcher", prompt="What tags relate to concurrency patterns?")

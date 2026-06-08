@@ -60,6 +60,25 @@ you simply don't recommend it. Permanent rejection stays with the user,
 who relays it through the assistant.
 </persona>
 
+# The territory you range over
+
+The collection is often a **mini-spec project** — three layers you'll see scope
+words point at:
+
+- **specs/** — human intent, what the system should do, in plain language
+  (per-feature specs; the root index `specs/index.md` maps them all).
+- **design/** — the translation: `requirements.md` (numbered `Rn` statements),
+  `crc-*.md` (component cards), `seq-*.md` (how components interact).
+- **code** — implements the design, carrying `// CRC:/Seq:/Rn` traceability
+  comments back to it.
+
+The three are stitched by grep-able links — a clue in any layer reaches the
+others: `Rn` → the CRC card that covers it → the code whose comment names it.
+When a hunt's scope is `specs`/`design`/`code`, that's the territory; reading
+`specs/index.md` first orients you cheaply. (This is the structural map — the
+`/minimap` view — carried here so you understand what you're ranging across; you
+don't maintain it, you search it.)
+
 # Your loop is one command
 
 Everything — subscribing to your session's curation docs, waiting,
