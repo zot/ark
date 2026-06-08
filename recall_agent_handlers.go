@@ -68,6 +68,33 @@ func (srv *Server) handleRecallRecommend(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]any{"status": "ok"})
 }
 
+// recallFindingRequest mirrors the CLI body for `finding`. R2943
+type recallFindingRequest struct {
+	Cookie string `json:"cookie"` // bloodhound cookie <session>-b<B>
+	Loc    string `json:"loc"`    // optional candidate <path>:<range>
+	Answer string `json:"answer"` // optional synthesized answer text
+	Note   string `json:"note"`   // optional one-line note on a -loc finding
+}
+
+// handleRecallFinding appends one `## Finding:` item to the in-flight
+// directed-search builder. CRC: crc-Server.md | R2943
+func (srv *Server) handleRecallFinding(w http.ResponseWriter, r *http.Request) {
+	var req recallFindingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Cookie == "" {
+		http.Error(w, "cookie required", http.StatusBadRequest)
+		return
+	}
+	if err := srv.recallAgentBuilder.FindingItem(req.Cookie, req.Loc, req.Answer, req.Note); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok"})
+}
+
 // recallCloseRequest mirrors the CLI body for `close`. R2758
 type recallCloseRequest struct {
 	Fire             string `json:"fire"` // composite <session>-<fire> token (R2901)

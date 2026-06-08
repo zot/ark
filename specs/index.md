@@ -43,7 +43,7 @@ could sit in two; cross-listing is kept minimal).
 - **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md
 - **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md, embed-subcommands.md
 - **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md, search-profiling.md, chunk-filters.md, file-tag-filter.md
-- **Recall & substrate** — recall.md, simple-recall.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md
+- **Recall & substrate** — recall.md, simple-recall.md, bloodhound.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md
 - **Scheduling & monitoring** — scheduling.md, schedule-lifecycle.md, chimes.md, monitor.md
 - **PDF** — pdf-chunker.md, pdf-chunk-element.md *(see Theme: Dealing with PDFs)*
 - **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md, inbox-bookmark-fields.md, inbox-entry-enrichment.md

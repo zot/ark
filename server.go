@@ -462,6 +462,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("POST /connections/recall/reserve-nonce", srv.handleRecallReserveNonce)
 		mux.HandleFunc("POST /connections/recall/surface", srv.handleRecallSurface)
 		mux.HandleFunc("POST /connections/recall/recommend", srv.handleRecallRecommend)
+		mux.HandleFunc("POST /connections/recall/finding", srv.handleRecallFinding)
 		mux.HandleFunc("POST /connections/recall/close", srv.handleRecallClose)
 		mux.HandleFunc("POST /connections/recall/context", srv.handleRecallContext)
 		// Recall daemon loop verb (batteries-included crank handle). R2857, R2858

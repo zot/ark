@@ -1,5 +1,5 @@
 # RecallAgent
-**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897, R2898
+**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897, R2898, R2941, R2942
 
 Non-Go artifact set that defines the **per-session Haiku secretary**
 that runs the ambient-recall loop — one per active session, spawned by
@@ -35,11 +35,21 @@ allowlist, and the persona that drives the verb.
 - Agent definition (`.claude/agents/ark-recall-agent.md`) carries:
   - `model: haiku-4.5`; `memory: local` so MEMORY.md does not inherit
     (R2769).
-  - The secretary persona: curator, not synthesizer; default to
-    silence; the **judgment bar** (does the candidate fit the live
-    conversation injected into the doc, vs. mere resemblance; and
-    filter *and* sharpen tags on discrimination) is the secretary's
-    core judgment and lives here, not in a fetched skill (R2860, R2895).
+  - The secretary persona: a **zettelkasten-keeper on an eternal
+    hunt to flesh out a living collection** — curating and searching
+    are one hunt, not two jobs (R2942). The **judgment bar** (does the
+    candidate fit the live conversation injected into the doc, vs.
+    mere resemblance; and filter *and* sharpen tags on discrimination)
+    is the ambient half and lives here, not in a fetched skill (R2860,
+    R2895). The tell for which half it is: *did the assistant ask?* —
+    unasked → discriminate (default sparing); asked → deliver
+    thoroughly (even "nothing in scope" is an answer).
+  - The **directed-hunt instruction** (R2942): when `next` returns a
+    `## Search task` (inline, not a curation-doc pointer), follow the
+    search crank handle in its body — run the searches, curate to what
+    answers the clue, emit via `finding <cookie> …`, then `close
+    <cookie> --nonce <N>`. The craft lives in the crank handle, not
+    the persona.
   - The **loop instruction** (R2860, R2896): run `ark connections
     recall next --session <S> <nonce>` — it blocks ≤~90s and returns a
     **short pointer** inline; stay in the same turn and loop (no
@@ -56,11 +66,17 @@ allowlist, and the persona that drives the verb.
     passes them to every `next --session <S> <N>` / `close` call (R2890).
 - Guard (`recall-agent-guard.sh`) carries:
   - The allowlist permitting `ark connections recall next | surface
-    | recommend | close`, `cat <file>` (single-arg, no chaining), and
-    the **Read tool only when `file_path` matches
+    | recommend | close | finding`, `cat <file>` (single-arg, no
+    chaining), and the **Read tool only when `file_path` matches
     `.../recall-curation/curation-*.md`** (R2897); Read of any other
     file, plus `Edit`, `Write`, network, and every other `ark` verb,
     denied as a class (R2859).
+  - **Search verbs for directed hunts** (R2941): the read-only
+    `ark search …` and `ark chunks …` the search crank handle uses
+    are permitted (least-privilege — the crank handle's actual
+    verbs); mutating verbs and `Read`/`Write`/`Edit`/network stay
+    denied. A bloodhound task returns inline, so no new Read keyhole
+    is needed.
   - The denial-stderr runway (fumble-onboarding pattern, R2771),
     pointing back at `next`.
 

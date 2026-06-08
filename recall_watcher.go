@@ -1,12 +1,13 @@
 package ark
 
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2746, R2747, R2748, R2898, R2901, R2753
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2746, R2747, R2748, R2898, R2901, R2753, R2933, R2934, R2935, R2936, R2937
 
 import (
 	"bytes"
 	"encoding/json"
 	"log"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/zot/microfts2"
 )
+
+// bloodhoundRe recognizes a directed-search watermark in assistant output.
+// Non-greedy + DOTALL so a multi-line payload is captured whole. R2934
+var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND>(.*?)</BLOODHOUND>`)
 
 // recallMinParagraphBytes is the floor on paragraph length before a
 // paragraph earns its own Recall call. Drops one-liners like "yes." /
@@ -41,6 +46,10 @@ type RecallWatcher struct {
 	mu           sync.Mutex
 	sessions     map[string]*recallSessionState // R2730
 	fireCounters map[string]uint64              // R2901: per-session monotonic, dir-seeded on first use; allocated on timer expiry
+	// bloodhoundCounters: per-session monotonic <B> for directed-search
+	// tasks. In-memory only, no dir-seeding (task docs are ephemeral
+	// tmp://), reset on restart — distinct from fireCounters. R2937
+	bloodhoundCounters map[string]uint64
 }
 
 // recallSessionState carries the per-session accumulator and timer.
@@ -60,13 +69,14 @@ type recallSessionState struct {
 // starts when Start is called. R2687
 func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgentBuilder) *RecallWatcher {
 	return &RecallWatcher{
-		db:           db,
-		librarian:    lib,
-		store:        store,
-		builder:      builder,
-		jobs:         make(chan func(), 16),
-		sessions:     make(map[string]*recallSessionState),
-		fireCounters: make(map[string]uint64),
+		db:                 db,
+		librarian:          lib,
+		store:              store,
+		builder:            builder,
+		jobs:               make(chan func(), 16),
+		sessions:           make(map[string]*recallSessionState),
+		fireCounters:       make(map[string]uint64),
+		bloodhoundCounters: make(map[string]uint64),
 	}
 }
 
@@ -204,6 +214,40 @@ func scanNewBytes(newBytes []byte) []jsonlSignal {
 	return sigs
 }
 
+// scanBloodhounds walks newBytes for directed-search watermarks in assistant
+// output: each `type:"assistant"` line's text (decoded via assistantText) is
+// regex-matched for `<BLOODHOUND>…</BLOODHOUND>`, and every capture is one
+// payload. Deterministic and once-only by construction — newBytes is the
+// newly-appended slice, so a given line is scanned exactly once (two identical
+// watermarks are two requests). R2934
+func scanBloodhounds(newBytes []byte) []string {
+	var payloads []string
+	for line := range bytesIterLines(newBytes) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
+			continue
+		}
+		text := assistantText(rec.Message.Content)
+		if text == "" {
+			continue
+		}
+		for _, m := range bloodhoundRe.FindAllStringSubmatch(text, -1) {
+			if p := strings.TrimSpace(m[1]); p != "" {
+				payloads = append(payloads, p)
+			}
+		}
+	}
+	return payloads
+}
+
 // isGenuineUserMessage reports whether a `type:"user"` record is a real
 // human message rather than a tool-result or a harness-injected line.
 // Two structural tells, both from the Claude Code JSONL (R2732):
@@ -334,6 +378,18 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 				sessionID, len(st.pendingChunks),
 				w.config().EffectiveActivationDelay())
 		}
+	}
+
+	// Bloodhound recognition (R2934, R2935, R2936): scan the same newBytes
+	// for directed-search watermarks in assistant output. Orthogonal to the
+	// arm/fire machinery above — it touches no timer/armReady/pendingChunks,
+	// so a watermark neither triggers nor suppresses a curation fire. For each
+	// payload, allocate <B> under the lock and dispatch the task off the
+	// indexer goroutine (the regex match is the only added synchronous work).
+	for _, payload := range scanBloodhounds(newBytes) {
+		bid := w.nextBloodhoundLocked(sessionID)
+		p, sid := payload, sessionID
+		svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, p) })
 	}
 	w.mu.Unlock()
 }
@@ -530,6 +586,33 @@ func (w *RecallWatcher) nextFireLocked(sessionID string) uint64 {
 	n++
 	w.fireCounters[sessionID] = n
 	return n
+}
+
+// nextBloodhoundLocked returns the next per-session bloodhound id. Must be
+// called with w.mu held. In-memory only (task docs are ephemeral tmp://), so
+// no dir-seeding — it simply increments. R2937
+func (w *RecallWatcher) nextBloodhoundLocked(sessionID string) uint64 {
+	if w.bloodhoundCounters == nil {
+		w.bloodhoundCounters = make(map[string]uint64)
+	}
+	w.bloodhoundCounters[sessionID]++
+	return w.bloodhoundCounters[sessionID]
+}
+
+// dispatchBloodhound runs on the watcher's worker goroutine. It re-checks the
+// activation gate (write-time backstop, R2933), then hands the payload to the
+// builder, which writes the task doc in the ARK-BLOODHOUND namespace and
+// retains the clue for the finding header.
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937
+func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string) {
+	if w.builder == nil || !w.pipeSubscribed(sessionID) {
+		return
+	}
+	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload); err != nil {
+		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
+		return
+	}
+	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d", sessionID, bid)
 }
 
 // seedFire computes the initial per-session fire counter from the

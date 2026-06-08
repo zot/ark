@@ -195,3 +195,25 @@ is in `seq-recall-agent.md`.
 - FIRING allocates the next fire number; the fire counter is
   per-session (R2901), seeded from the curation-dir on first
   use, and is consumed whether or not a curation doc gets written.
+
+## Flow 4: bloodhound recognition (R2934–R2937)
+
+Independent of the arm/fire state machine above, in the same `OnAppend`
+pass (after the activation gate, so a watermark is recognized only while
+both pipe ends are subscribed — R2933):
+
+- `scanBloodhounds(newBytes)` walks each `type:"assistant"` line, pulls
+  its text via `assistantText`, and regex-matches
+  `<BLOODHOUND>(.*?)</BLOODHOUND>` (non-greedy, DOTALL). Each capture is
+  one payload — deterministic, once-only (newBytes is the newly-appended
+  slice).
+- For each payload: allocate `<B>` from `bloodhoundCounters` under the
+  lock and post `dispatchBloodhound(session, B, payload)` to `jobs`.
+  Nothing touches `pendingTimer`/`armReady`/`pendingChunks` (R2935), so a
+  watermark neither arms nor suppresses a curation fire.
+- `dispatchBloodhound` (worker goroutine): re-check `pipeSubscribed`
+  (write-time backstop), then `RecallBloodhoundOpen(session, B, payload)`
+  writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag `@ark-recall-curate=<S>`,
+  body = search crank handle + payload) and retains the clue. The write
+  actor publishes the curate event → wakes the secretary's `next`
+  (seq-recall-agent.md, Flow 6).

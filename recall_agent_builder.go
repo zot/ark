@@ -34,6 +34,12 @@ type RecallAgentBuilder struct {
 	mu        sync.Mutex
 	curations map[string]*RecallCurationBuilder // keyed by fire token <session>-<fire> (R2901)
 	results   map[string]*recallResultDoc       // keyed by fire token <session>-<fire> (R2901)
+	// Bloodhound (directed search) in-flight state, keyed by the kind-marked
+	// cookie <session>-b<B> so it never collides with a recall fire token. The
+	// ARK-BLOODHOUND namespace + these separate maps are what keep the two
+	// independent per-session counters apart. R2937, R2943, R2946
+	bloodhounds     map[string]*recallResultDoc // open finding-doc builders
+	bloodhoundClues map[string]string           // cookie -> originating clue
 
 	// Monitoring log paths. Default to ~/.ark/monitoring/ but can
 	// be overridden for testing.
@@ -52,12 +58,14 @@ func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
 	home, _ := os.UserHomeDir()
 	monDir := filepath.Join(home, ".ark", "monitoring")
 	return &RecallAgentBuilder{
-		db:          db,
-		curations:   make(map[string]*RecallCurationBuilder),
-		results:     make(map[string]*recallResultDoc),
-		monitorPath: filepath.Join(monDir, "recall.jsonl"),
-		fumblePath:  filepath.Join(monDir, "recall-fumbles.jsonl"),
-		curationDir: filepath.Join(home, ".ark", "recall-curation"),
+		db:              db,
+		curations:       make(map[string]*RecallCurationBuilder),
+		results:         make(map[string]*recallResultDoc),
+		bloodhounds:     make(map[string]*recallResultDoc),
+		bloodhoundClues: make(map[string]string),
+		monitorPath:     filepath.Join(monDir, "recall.jsonl"),
+		fumblePath:      filepath.Join(monDir, "recall-fumbles.jsonl"),
+		curationDir:     filepath.Join(home, ".ark", "recall-curation"),
 	}
 }
 
@@ -287,6 +295,11 @@ func (b *RecallAgentBuilder) RecommendItem(fireToken string, loc, tagSpec, reaso
 // lookup; sums tokens; appends one record to recall.jsonl.
 // CRC: crc-RecallAgentBuilder.md | Seq: seq-subscriber-presence.md | R2750, R2899, R2758, R2762, R2807, R2808
 func (b *RecallAgentBuilder) CloseResult(fireToken string, nonce uint32, preserveCuration bool) error {
+	// A kind-marked bloodhound cookie (<session>-b<B>) routes to the
+	// directed-search close in its own namespace. R2945
+	if session, bid, ok := parseBloodhoundToken(fireToken); ok {
+		return b.closeBloodhound(fireToken, session, bid, nonce)
+	}
 	b.mu.Lock()
 	doc := b.results[fireToken]
 	cb := b.curations[fireToken]
@@ -758,6 +771,192 @@ func (b *RecallAgentBuilder) writeCurationFile(session string, fire uint64, cont
 // resultDocPath is the canonical tmp:// path for a result doc. R2747
 func resultDocPath(session string, fire uint64) string {
 	return fmt.Sprintf("tmp://ARK-RECALL/result-%s-%d", session, fire)
+}
+
+// --- bloodhound: directed search (ARK-BLOODHOUND namespace) ---
+
+// bloodhoundToken is the kind-marked cookie <session>-b<B>; the `b` is what
+// keeps it from colliding with a recall fire token in the in-flight maps and
+// what routes `close`/`finding` to the bloodhound side. R2945
+func bloodhoundToken(session string, bid uint64) string {
+	return fmt.Sprintf("%s-b%d", session, bid)
+}
+
+// parseBloodhoundToken decomposes a bloodhound cookie <session>-b<B>. ok=false
+// for a plain recall fire token (whose last segment is bare digits), so the
+// same `close` verb routes both kinds. R2945
+func parseBloodhoundToken(token string) (session string, bid uint64, ok bool) {
+	dash := strings.LastIndex(token, "-")
+	if dash < 0 || dash+2 > len(token) || token[dash+1] != 'b' {
+		return "", 0, false
+	}
+	n, err := strconv.ParseUint(token[dash+2:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return token[:dash], n, true
+}
+
+func bloodhoundTaskPath(session string, bid uint64) string {
+	return fmt.Sprintf("tmp://ARK-BLOODHOUND/task-%s-%d", session, bid)
+}
+
+func bloodhoundFindingPath(session string, bid uint64) string {
+	return fmt.Sprintf("tmp://ARK-BLOODHOUND/finding-%s-%d", session, bid)
+}
+
+// searchCrankHandle is the self-contained CLI craft handed to the warm
+// secretary for a directed hunt (Stencil: the weak agent executes without
+// planning). COOKIE is substituted with the task's cookie; the agent fills its
+// own nonce. R2938
+const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue is the ## Search task above. Read its fields — clue, scope, depth, want, and any stop condition — then work the trail. Don't plan; do these in order, using ~/.ark/ark.
+
+1. SCOPE -> filters. Turn the scope word into search filters:
+     code   -> -with -files '*.go'
+     specs  -> -with -files 'specs/**'      design -> -with -files 'design/**'
+     notes  -> prose: top-level *.md, .scratch/**, knowledge/**
+     chat   -> step 3 only (never the corpus pass)
+     all    -> no -files narrowing
+2. SEARCH. Match the matcher: exact phrase -> -contains, approx/typo -> -fuzzy, meaning -> -about.
+     ~/.ark/ark search "<clue terms>" <scope filters> -k 20 -scores
+3. CHAT (only if scope=chat, or the clue says "did we discuss / in the chat"): a SEPARATE pass that un-hides the logs —
+     ~/.ark/ark search -files '~/.claude/projects/**' -fuzzy "<clue>" -k 20 -scores
+   Keep it apart from the corpus pool; don't merge (fuzzy scores saturate).
+4. TUNE (depth=investigate only). Too noisy? narrow: -without -files '*.jsonl', -with -files '*.md', -with -tag NAME[:VALUE]. Too thin? widen: -fuzzy, drop a filter, -about. -parse shows how args parsed. Loop until the stop condition holds (or 2 dry rounds). depth=lookup: one pass.
+5. READ the top hits: ~/.ark/ark chunks <path:range> -before 2 -after 2.
+6. CURATE to the few that actually answer the clue. Drop the rest — no dumps.
+7. EMIT per want — one item per call:
+     answer / verdict            -> ~/.ark/ark connections recall finding COOKIE -answer "1-3 sentences" -loc <path:range>
+     passages/pointers/inventory -> ~/.ark/ark connections recall finding COOKIE -loc <path:range> [-note "..."]   (repeat per item)
+   "no — not in <scope>" is a valid answer; emit it with -answer.
+8. ~/.ark/ark connections recall close COOKIE --nonce <your nonce>
+`
+
+// buildSearchTask renders the bloodhound task doc: the curate head tag (so it
+// rides the tube), the ## Search task header with the cookie, the raw payload,
+// and the search crank handle with the cookie filled. R2937, R2938
+func buildSearchTask(session, cookie, payload string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "@ark-recall-curate: %s\n\n", session)
+	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, payload)
+	sb.WriteString(strings.ReplaceAll(searchCrankHandle, "COOKIE", cookie))
+	return sb.String()
+}
+
+// RecallBloodhoundOpen writes the directed-search task doc into the
+// ARK-BLOODHOUND namespace and retains the clue for the finding header.
+// Go-internal, called by the watcher's dispatchBloodhound.
+// CRC: crc-RecallAgentBuilder.md | R2937, R2938
+func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload string) error {
+	cookie := bloodhoundToken(session, bid)
+	b.mu.Lock()
+	b.bloodhoundClues[cookie] = payload
+	b.mu.Unlock()
+	body := buildSearchTask(session, cookie, payload)
+	path := bloodhoundTaskPath(session, bid)
+	return SyncVoid(b.db, func(db *DB) error {
+		_, e := db.AddTmpFile(path, "markdown", []byte(body))
+		return e
+	})
+}
+
+// openBloodhound returns the per-cookie finding-doc builder, allocating on
+// first call. Reuses recallResultDoc as a plain item accumulator.
+func (b *RecallAgentBuilder) openBloodhound(cookie string) *recallResultDoc {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if d, ok := b.bloodhounds[cookie]; ok {
+		return d
+	}
+	session, _, _ := parseBloodhoundToken(cookie)
+	d := &recallResultDoc{session: session, opened: time.Now()}
+	b.bloodhounds[cookie] = d
+	return d
+}
+
+// FindingItem appends one finding to the cookie's finding doc, opening it on
+// first call. A -loc finding renders a "- <path>:<range> (<size>) — <note>"
+// line (size via ChunkText, no chunkid); an -answer carries synthesized text.
+// One item per call. **No own-session gate** — a directed search may point at
+// the requester's own session, unlike SurfaceItem.
+// CRC: crc-RecallAgentBuilder.md | R2943, R2944
+func (b *RecallAgentBuilder) FindingItem(cookie, loc, answer, note string) error {
+	if loc == "" && answer == "" {
+		return fmt.Errorf("finding requires -loc or -answer")
+	}
+	if _, _, ok := parseBloodhoundToken(cookie); !ok {
+		return fmt.Errorf("not a bloodhound cookie: %q", cookie)
+	}
+	doc := b.openBloodhound(cookie)
+	if answer != "" {
+		fmt.Fprintf(&doc.buf, "\n%s\n", answer)
+	}
+	if loc != "" {
+		path, rangeLabel := splitLoc(loc)
+		sizeLabel := "?"
+		if text := b.db.ChunkText(path, rangeLabel); text != nil {
+			sizeLabel = friendlySize(len(text))
+		}
+		line := fmt.Sprintf("- %s:%s (%s)", path, rangeLabel, sizeLabel)
+		if note != "" {
+			line += " — " + note
+		}
+		fmt.Fprintf(&doc.buf, "%s\n", line)
+	}
+	doc.items++
+	return nil
+}
+
+// closeBloodhound finalizes a directed search: writes the finding doc into
+// ARK-BLOODHOUND (stamping the ## Finding: header from the retained clue) iff
+// any finding was added, removes the task doc, and logs. The clue is collapsed
+// to one line for the header so the assistant correlates verbatim.
+// CRC: crc-RecallAgentBuilder.md | R2945, R2946
+func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64, nonce uint32) error {
+	b.mu.Lock()
+	doc := b.bloodhounds[cookie]
+	clue := b.bloodhoundClues[cookie]
+	delete(b.bloodhounds, cookie)
+	delete(b.bloodhoundClues, cookie)
+	b.mu.Unlock()
+
+	outcome := "silent-close"
+	found := 0
+	if doc != nil && doc.items > 0 {
+		found = doc.items
+		if b.db != nil && b.db.pubsub != nil &&
+			b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
+			outcome = "no-subscriber" // R2808 parity
+		} else {
+			headerClue := strings.TrimSpace(strings.ReplaceAll(clue, "\n", " "))
+			header := fmt.Sprintf("@ark-recall-result: %s\n\n## Finding: %s\n", session, headerClue)
+			body := []byte(header + doc.buf.String())
+			path := bloodhoundFindingPath(session, bid)
+			if err := SyncVoid(b.db, func(db *DB) error {
+				_, e := db.AddTmpFile(path, "markdown", body)
+				return e
+			}); err != nil {
+				b.appendMonitor(bid, session, nonce, 0, 0, 0, 0, 0, 0, "error")
+				return fmt.Errorf("write finding doc: %w", err)
+			}
+			outcome = "result-emitted"
+		}
+	}
+	// Remove the task doc — no orphan sweep (bloodhound tasks don't pile the
+	// way curation docs do).
+	_ = SyncVoid(b.db, func(db *DB) error {
+		return db.RemoveTmpFile(bloodhoundTaskPath(session, bid))
+	})
+
+	in, out := b.lookupSubagentTokens(nonce)
+	contextTokens, _ := b.ContextTokens(nonce)
+	latency := 0
+	if doc != nil && !doc.opened.IsZero() {
+		latency = int(time.Since(doc.opened).Milliseconds())
+	}
+	// findings counted in the surfaced slot of the monitor record.
+	b.appendMonitor(bid, session, nonce, in, out, contextTokens, latency, found, 0, outcome)
+	return nil
 }
 
 // blockquoteEscape collapses internal newlines so a multi-line

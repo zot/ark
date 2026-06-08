@@ -180,6 +180,17 @@ func recallCommand() *ucli.Command {
 				Action: connRecallRecommendAction,
 			},
 			{
+				Name:      "finding",
+				Usage:     "append one ## Finding: item to the directed-search builder for COOKIE",
+				ArgsUsage: "COOKIE",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "loc", Usage: "candidate <path>:<range>"},
+					&ucli.StringFlag{Name: "answer", Usage: "synthesized answer/verdict text"},
+					&ucli.StringFlag{Name: "note", Usage: "one-line note on a -loc finding"},
+				},
+				Action: connRecallFindingAction,
+			},
+			{
 				Name:      "close",
 				Usage:     "single cleanup verb: finalize the result doc for FIRE",
 				ArgsUsage: "FIRE",
@@ -612,6 +623,31 @@ func connRecallRecommendAction(_ context.Context, c *ucli.Command) error {
 	}
 	if err := proxyOK(client, "POST", "/connections/recall/recommend", map[string]any{
 		"fire": fire, "loc": loc, "tag": tagSpec, "reason": reason,
+	}); err != nil {
+		fatal(err)
+	}
+	return nil
+}
+
+// CRC: crc-CLITree.md | Seq: seq-recall-agent.md | R2943
+func connRecallFindingAction(_ context.Context, c *ucli.Command) error {
+	cookie, _, err := popFire(c.Args().Slice(), "finding")
+	if err != nil {
+		fatal(err)
+	}
+	loc := c.String("loc")
+	answer := c.String("answer")
+	note := c.String("note")
+	if loc == "" && answer == "" {
+		fmt.Fprintln(os.Stderr, "ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)")
+		os.Exit(2)
+	}
+	client := serverClient(arkDir)
+	if client == nil {
+		fatal(errors.New("server not running; start with `ark serve`"))
+	}
+	if err := proxyOK(client, "POST", "/connections/recall/finding", map[string]any{
+		"cookie": cookie, "loc": loc, "answer": answer, "note": note,
 	}); err != nil {
 		fatal(err)
 	}

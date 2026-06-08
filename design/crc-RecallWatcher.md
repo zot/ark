@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2933, R2934, R2935, R2936, R2937
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -52,6 +52,10 @@ composes and writes each curation doc via the in-process
   single worker goroutine so all fire-time work serializes
   cleanly (the per-session timer expiry posts a closure
   here)
+- bloodhoundCounters: map[sessionID]uint64 — per-session
+  monotonic **bloodhound id** (`<B>`) counter (R2937). In-memory
+  only, no dir-seeding (task docs are ephemeral tmp://), reset on
+  restart — distinct from the dir-seeded `fireCounters`.
 
 ## Does
 - Enabled() bool: true when `db.Config().Recall.Enabled` is
@@ -87,6 +91,25 @@ composes and writes each curation doc via the in-process
       posts the fire closure. If not `armReady`, ignore — an
       agent-only turn does not re-arm, which stops the recall
       ping-pong (R2734).
+  - **Bloodhound recognition** (R2934, R2935, R2936): alongside the
+    signal scan, `scanBloodhounds(newBytes)` parses each
+    `type:"assistant"` line's text (reusing `assistantText`) and
+    regex-matches `<BLOODHOUND>(.*?)</BLOODHOUND>` (non-greedy,
+    DOTALL) — each capture is one payload. Deterministic, once-only
+    (newBytes is the newly-appended slice), and orthogonal to the
+    turn machinery: it never reads or touches
+    `pendingTimer`/`armReady`/`pendingChunks`, so a watermark
+    dispatches on its own schedule and neither triggers nor
+    suppresses a curation fire (R2935). For each payload, allocate
+    `<B>` (`nextBloodhoundLocked`) under the lock and post a closure
+    to `jobs` → `dispatchBloodhound`, keeping OnAppend a fast
+    line-scan (R2936).
+- dispatchBloodhound(sessionID, B, payload): worker-goroutine job.
+  Re-checks `pipeSubscribed` (the write-time backstop to the
+  activation gate, R2933), then calls
+  `builder.RecallBloodhoundOpen(sessionID, B, payload)` — writes the
+  task doc in the `ARK-BLOODHOUND` namespace and retains the clue for
+  the finding header (R2937, owned by crc-RecallAgentBuilder.md).
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
   lock, allocates the next per-session fire value

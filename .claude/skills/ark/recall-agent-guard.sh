@@ -1,5 +1,5 @@
 #!/bin/bash
-# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2859, R2771
+# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2859, R2771, R2941
 # PreToolUse hook for ark-recall-agent (the long-running daemon).
 # Hermetic seal: only the four recall verbs the loop uses are permitted —
 #   ark connections recall next                       (the loop driver)
@@ -16,7 +16,12 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name')
 
 if [ "$TOOL" = Bash ]; then
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command')
-    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+connections\s+recall\s+(next|surface|recommend|close)(\s|$)'; then
+    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+connections\s+recall\s+(next|surface|recommend|close|finding)(\s|$)'; then
+        exit 0
+    fi
+    # Directed-hunt search verbs (read-only) the search crank handle uses
+    # (R2941). Only `search` and `chunks` — mutating verbs stay denied.
+    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+(search|chunks)(\s|$)'; then
         exit 0
     fi
     # `next` blocks, so the harness backgrounds it; allow reading the
@@ -25,7 +30,7 @@ if [ "$TOOL" = Bash ]; then
     if echo "$CMD" | grep -qE '^\s*cat\s+\S+\s*$'; then
         exit 0
     fi
-    echo "BLOCKED: recall-agent (daemon) may run only — ark connections recall { next | surface | recommend | close }, plus \`cat <file>\` to read a backgrounded \`next\`. Run \`~/.ark/ark connections recall next <your nonce>\`; when it finishes in the background, \`cat\` its output file and act on the curation doc." >&2
+    echo "BLOCKED: recall-agent may run only — ark connections recall { next | surface | recommend | close | finding }, the read-only ark { search | chunks } for a directed hunt, plus \`cat <file>\`. Run \`~/.ark/ark connections recall next <your nonce>\` and follow what it returns." >&2
     exit 2
 fi
 

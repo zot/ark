@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -36,6 +36,18 @@ for these verbs — `ark serve` must be running.
   dropped on `Close` (R2901).
 - nonceCounter: uint32 — in-memory monotonic counter for
   `reserve-nonce`. Resets on `ark serve` restart (R2755).
+- bloodhounds: map[bhToken]*recallResultDoc — open **finding**-doc
+  builders for directed search (R2943), in the `ARK-BLOODHOUND`
+  namespace. Keyed by the kind-marked cookie `<session>-b<B>` so it
+  never collides with a `<session>-<fire>` recall token in the maps
+  above; populated lazily on first `finding`. Reuses the
+  `recallResultDoc` accumulator (same one-item-per-call shape as
+  results), but its items are `## Finding:` H2s with no own-session
+  gate (R2944).
+- bloodhoundClues: map[bhToken]string — the originating clue
+  retained when the watcher's `RecallBloodhoundOpen` mints `<B>`
+  (R2937), stamped into the finding doc's `## Finding:` header at
+  close so the assistant correlates verbatim (R2946).
 - monitorLog: *MonitorLogWriter — append-only writer over
   `~/.ark/monitoring/recall.jsonl` (R2763) and the Fumble
   Log at `~/.ark/monitoring/recall-fumbles.jsonl` (R2772).
@@ -272,6 +284,52 @@ for these verbs — `ark serve` must be running.
   `close` invocation. The fire still completes — the
   malformed call is rejected by the CLI but the surrounding
   pipeline continues.
+
+### Bloodhound — directed search (R2937–R2946)
+
+The directed-search half of the warm secretary. Lives in the
+`ARK-BLOODHOUND` tmp:// namespace, separate from recall's
+`ARK-RECALL`, with its own in-flight maps — so a bloodhound `<B>`
+and a recall `<F>` can never collide on a path or a map key. The
+pubsub tags are shared (`@ark-recall-curate` in, `@ark-recall-result`
+out), so the same tube and the same `listen` carry it.
+
+- RecallBloodhoundOpen(session, B, payload) (R2937, R2938) —
+  Go-internal, called by the watcher's `dispatchBloodhound`. Writes
+  `tmp://ARK-BLOODHOUND/task-<session>-<B>` (tag
+  `@ark-recall-curate: <session>`) whose body is the **search crank
+  handle** with the raw payload pasted under a `## Search task
+  <cookie>` first line, and stores `bloodhoundClues[cookie] =
+  payload` for the finding header. The crank handle is a Go const
+  (the CLI craft travels in the doc, Stencil-style).
+- `next` dispatch priority (R2939, R2940): `RecallNext`'s loop scans
+  `db.Files()` once and prioritizes a pending
+  `ARK-BLOODHOUND/task-` doc over any `ARK-RECALL/curation-` doc for
+  the session (`lowestPendingBloodhound` before
+  `lowestPendingCuration`); within a kind, lowest id first. A
+  bloodhound doc is small (crank handle + payload), so `next`
+  returns its body **inline** (no `writeCurationFile`, no Read
+  keyhole) with the close directive framed by the `<session>-b<B>`
+  cookie. Keepalive / context-gate / redial / foreground window
+  unchanged.
+- FindingItem(cookie, loc, answer, note, reason) error (R2943,
+  R2944) — opens `bloodhounds[cookie]` lazily on first call;
+  appends one `- <path>:<range> (<size>) — <note>` line for a
+  `-loc` finding (size via `ChunkText`, no chunkid on the wire) or
+  the synthesized `-answer` text for an answer/verdict. **No
+  own-session gate** — unlike `SurfaceItem`, a directed search may
+  point at the requester's own session (R2944). One item per call,
+  mirroring surface.
+- Close routing (R2945): `Close` detects a bloodhound by the
+  cookie's `b<B>` kind-marker (`parseBloodhoundToken`). For a
+  bloodhound it writes `tmp://ARK-BLOODHOUND/finding-<session>-<B>`
+  (tag `@ark-recall-result: <session>`) iff `bloodhounds[cookie]`
+  has items — stamping the `## Finding: <clue>` header from
+  `bloodhoundClues[cookie]` (R2946) — else silent-close; removes
+  `task-<session>-<B>`; drops both bloodhound maps; and appends the
+  same monitor record (no orphan sweep — bloodhound tasks don't
+  pile the way curations do). A plain `<session>-<fire>` cookie
+  routes to the existing recall close unchanged.
 
 ## Out of scope
 - Does **not** spawn or supervise the recall agent process.

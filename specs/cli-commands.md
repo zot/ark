@@ -372,6 +372,7 @@ ark connections recall reserve-nonce
 ark connections recall next [--session SID] NONCE
 ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT
 ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
+ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
 ark connections recall listen --session SID
@@ -472,6 +473,15 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   recall agent only.
 - `recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT` —
   same shape, adds one `## Recommend:` item.
+- `recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)`
+  adds one `## Finding:` item to the **directed-search** (bloodhound)
+  builder for `COOKIE` — the kind-marked `<session>-b<B>` token the search
+  crank-handle emits. A `-loc` finding renders a curated `<path>:<range>`
+  line (server-resolved size; optional `-note`); an `-answer` carries a
+  synthesized answer/verdict. One item per call, no own-session gate
+  (unlike `surface`). The same `recall close COOKIE --nonce N` finalizes
+  it, writing `tmp://ARK-BLOODHOUND/finding-<S>-<B>`. Called by the
+  secretary on a directed hunt; see [bloodhound.md](bloodhound.md).
 - `recall context --nonce N [--limit N] [--json]` reports the
   calling subagent's current context fill (sum of
   `cache_creation_input_tokens` + `cache_read_input_tokens` from

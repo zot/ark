@@ -674,3 +674,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T147: R1621 retired by R1792 (2026-06-07 cli-urfave: ark embed bench chunks --parallel subcommand flag)
 - T148: R1622 retired by R1792 (2026-06-07 cli-urfave: ark embed bench output (subcommand))
 - T149: R2930 retired (2026-06-08 cli-urfave migration complete: legacyDispatch + migratedCommands name-routing deleted; root Action owns unknown-command handling)
+- [ ] O132: Bloodhound integration tests deferred: the full OnAppend->jobs->dispatchBloodhound->task-doc path and next's bloodhound-before-curation dispatch priority (both kinds pending) are unit-covered piecewise (scanBloodhounds, RecallBloodhoundOpen/FindingItem/closeBloodhound round-trip) but not end-to-end. R2935/R2936/R2939.

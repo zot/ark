@@ -253,3 +253,27 @@ step 7.7.
 - `close` is idempotent in the sense that it never errors on the
   "no result builder was opened" path — silent-close is a valid
   outcome (R2758).
+
+## Flow 6: bloodhound — directed search (R2939–R2946)
+
+Rides the same tube and the same `listen` as ambient recall; differs only
+in tmp:// namespace (`ARK-BLOODHOUND`) and the finding return.
+
+- `next` dispatch (R2939, R2940): the loop scans `db.Files()` once and
+  prefers a pending `ARK-BLOODHOUND/task-<S>-<B>` over any
+  `ARK-RECALL/curation-<S>-<F>` for the session (lowest id within a kind).
+  A task doc is small, so `next` returns its body (the search crank
+  handle) **inline** with the close directive framed by the `<S>-b<B>`
+  cookie — no file materialization, no Read keyhole.
+- The secretary (persona R2942) recognizes the `## Search task` and
+  follows the crank handle: `ark search …` / `ark chunks …` (the guard
+  opens these read-only verbs, R2941), curating to what answers the clue.
+- Emit (R2943, R2944): `finding <S>-b<B> -loc … [-note …]` per
+  passage/pointer, or `-answer "…"` for an answer/verdict — one item per
+  call, no own-session gate.
+- close (R2945, R2946): `close <S>-b<B> --nonce <N>` writes
+  `tmp://ARK-BLOODHOUND/finding-<S>-<B>` (tag `@ark-recall-result=<S>`)
+  with a `## Finding: <clue>` header stamped from the retained clue,
+  removes the task doc, and appends the monitor record. The assistant's
+  existing `listen` (Flow 5) drains it, recognizes `## Finding:`, and
+  folds the digest into its own reasoning.

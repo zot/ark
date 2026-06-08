@@ -17,6 +17,11 @@ import (
 // docs: tmp://ARK-RECALL/curation-<session>-<fire>.
 const curationPrefix = "tmp://ARK-RECALL/curation-"
 
+// bloodhoundTaskPrefix is the tmp:// path prefix for watcher-written directed-
+// search task docs: tmp://ARK-BLOODHOUND/task-<session>-<B>. Its own namespace
+// keeps it from colliding with curation docs. R2939
+const bloodhoundTaskPrefix = "tmp://ARK-BLOODHOUND/task-"
+
 // recallNextListenWindow bounds each blocking Listen inside RecallNext.
 // The loop re-checks pending docs and honors request cancellation
 // between windows.
@@ -84,6 +89,12 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 	// empty to misread.
 	deadline := time.Now().Add(recallNextKeepalive)
 	for {
+		// R2939: directed search served ahead of ambient recall — dispatch a
+		// pending bloodhound task before any curation doc. Small doc, so it
+		// returns inline (no file materialization, no Read keyhole).
+		if _, _, content, ok := b.lowestPendingBloodhound(session); ok {
+			return recallSearchTaskPrompt(session, nonce, content), false, nil
+		}
 		fire, docSession, content, ok := b.lowestPendingCuration(session)
 		if ok {
 			if session != "" {
@@ -187,6 +198,76 @@ func (b *RecallAgentBuilder) lowestPendingCuration(targetSession string) (fire u
 		return 0, "", "", false
 	}
 	return fire, bestSession, string(data), true
+}
+
+// lowestPendingBloodhound finds the lowest-id pending directed-search task doc
+// for the session, gated on a result subscriber like curation. Mirrors
+// lowestPendingCuration but over the ARK-BLOODHOUND task namespace. R2939
+// CRC: crc-RecallAgentBuilder.md | R2939
+func (b *RecallAgentBuilder) lowestPendingBloodhound(targetSession string) (bid uint64, docSession, content string, ok bool) {
+	files, err := Sync(b.db, func(db *DB) ([]string, error) { return db.Files() })
+	if err != nil {
+		return 0, "", "", false
+	}
+	var path, bestSession string
+	for _, p := range files {
+		if !strings.HasPrefix(p, bloodhoundTaskPrefix) {
+			continue
+		}
+		rest := p[len(bloodhoundTaskPrefix):]
+		dash := strings.LastIndex(rest, "-")
+		if dash < 0 {
+			continue
+		}
+		n, perr := strconv.ParseUint(rest[dash+1:], 10, 64)
+		if perr != nil {
+			continue
+		}
+		session := rest[:dash]
+		if targetSession != "" && session != targetSession {
+			continue
+		}
+		if b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
+			continue // defer until the consumer is present
+		}
+		if !ok || n < bid {
+			path, bid, bestSession, ok = p, n, session, true
+		}
+	}
+	if !ok {
+		return 0, "", "", false
+	}
+	data, err := b.db.TmpContent(path)
+	if err != nil {
+		return 0, "", "", false
+	}
+	return bid, bestSession, string(data), true
+}
+
+// recallSearchTaskPrompt wraps a dispatched bloodhound task for inline return:
+// strip the leading curate head-tag, substitute the agent's nonce into the
+// crank handle's close line, and tail with the loop instruction. R2940
+// CRC: crc-RecallAgentBuilder.md | R2940
+func recallSearchTaskPrompt(session string, nonce uint32, content string) string {
+	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
+	if session != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	}
+	body := stripCurateTagLine(content)
+	body = strings.ReplaceAll(body, "<your nonce>", strconv.FormatUint(uint64(nonce), 10))
+	return fmt.Sprintf(
+		"A directed search came in — run it now, in this same turn:\n\n%s\n\nWhen you have closed it, run %s again.\n",
+		body, nextCmd)
+}
+
+// stripCurateTagLine drops a leading `@ark-recall-curate:` head-tag line (and
+// the blank after it) so the inline task reads cleanly for the agent.
+func stripCurateTagLine(s string) string {
+	first, rest, found := strings.Cut(s, "\n")
+	if found && strings.HasPrefix(first, "@ark-recall-curate:") {
+		return strings.TrimLeft(rest, "\n")
+	}
+	return s
 }
 
 // recallDocPrompt is the crank-handle for a dispatched curation doc
