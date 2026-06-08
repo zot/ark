@@ -66,128 +66,57 @@ func (s *stringSlice) Set(v string) error {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
-	}
-
-	// R724, R725, R726, R727: Parse --dir and -v globally before subcommand dispatch
-	expanded := cli.ExpandVerbosityFlags(os.Args[1:])
-	arkDir = defaultDB()
-	var verbosity int
-	var filtered []string
-	for i := 0; i < len(expanded); i++ {
-		arg := expanded[i]
-		if arg == "--dir" && i+1 < len(expanded) {
-			arkDir = expanded[i+1]
-			i++ // skip value
-		} else if strings.HasPrefix(arg, "--dir=") {
-			arkDir = strings.TrimPrefix(arg, "--dir=")
-		} else if arg == "-v" {
-			verbosity++
-		} else {
-			filtered = append(filtered, arg)
-		}
-	}
-	ark.SetVerbosity(verbosity)
-	if len(filtered) == 0 {
-		usage()
-		os.Exit(0)
-	}
-
-	cmd := filtered[0]
-	if cmd == "--help" || cmd == "-h" || cmd == "help" {
-		usage()
-		os.Exit(0)
-	}
-	args := filtered[1:]
-
-	// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.3 | R2916, R2930
-	// urfave-migrated commands route through the command tree; everything
-	// else falls through to the legacy hand-rolled dispatch. Routing by
-	// name here (not urfave's CommandNotFound) keeps an un-migrated
-	// command's own flags from tripping the urfave root.
-	if migratedCommands[cmd] {
-		runArkCommandTree(cmd, args)
-		return
-	}
-	legacyDispatch(cmd, args)
-}
-
-// migratedCommands names the commands handled by the urfave command tree.
-// As each group migrates, its name moves here and its case leaves
-// legacyDispatch; when legacyDispatch is empty, both it and this routing
-// are deleted and the root takes over main() outright.
-// CRC: crc-CLITree.md | R2930
-var migratedCommands = map[string]bool{
-	"connections": true,
-	"monitor":     true,
-	"luhmann":     true,
-	"embed":       true,
-	"discussed":   true,
-	"tag":         true,
-	"config":      true,
-	"schedule":    true,
-	"message":     true,
-	"ui":          true,
-	"subscribe":   true,
-	"subscribers": true,
-	"listen":      true,
-	// flat top-level commands (batch 1: no-flag/thin-delegate + nano + sweep)
-	"setup":            true,
-	"rebuild":          true,
-	"scan":             true,
-	"refresh":          true,
-	"remove":           true,
-	"resolve":          true,
-	"dismiss":          true,
-	"stale":            true,
-	"missing":          true,
-	"unresolved":       true,
-	"sources":          true,
-	"grams":            true,
-	"chunk-chat-jsonl": true,
-	"ls":               true,
-	"cat":              true,
-	"cp":               true,
-	"nano":             true,
-	"sweep":            true,
-	// flat top-level commands (batch 2: flag-bearing + install)
-	"add":     true,
-	"bundle":  true,
-	"chunks":  true,
-	"chats":   true,
-	"fetch":   true,
-	"files":   true,
-	"init":    true,
-	"serve":   true,
-	"status":  true,
-	"stop":    true,
-	"install": true,
-	// the filter-stack DSL keeper (custom-parsed via SkipFlagParsing)
-	"search": true,
-}
-
-// runArkCommandTree builds the urfave root and runs the migrated command
-// through it. The root's ExitErrHandler renders urfave-raised errors and
-// exits; command bodies os.Exit directly as before.
-// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.4 | R2916
-func runArkCommandTree(cmd string, args []string) {
+	// R725, R726: ExpandVerbosityFlags pre-tokenizes a bundled -vvvv into
+	// -v -v -v -v (urfave does not bundle short flags); the root's -v count
+	// flag accumulates them. The root then parses --dir/-v as global flags
+	// before the subcommand and routes to the matching node's Action.
+	// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.4 | R2916, R2923
+	args := cli.ExpandVerbosityFlags(os.Args[1:])
 	root := buildArkCommand()
-	// Errors are handled by ExitErrHandler (which exits); a returned error
-	// here would already have been rendered, so just fall through.
-	_ = root.Run(context.Background(), append([]string{"ark", cmd}, args...))
+	// Errors are handled by the root's ExitErrHandler (which exits); a
+	// returned error here would already have been rendered.
+	_ = root.Run(context.Background(), append([]string{"ark"}, args...))
 }
 
-// buildArkCommand constructs the ark urfave command tree: the migrated
-// command nodes plus the cross-cutting CLI conventions (error format,
-// exit codes). Global flags + a Before hook join the root only in the end
-// state, once the legacy pre-parse in main() is retired.
-// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#4.2 | R2916, R2926, R2927
+// buildArkCommand constructs the ark urfave command tree: the command
+// nodes, the global flags (--dir/-v) with a Before hook that copies them
+// into the arkDir/verbosity package globals handler bodies already read,
+// and the cross-cutting CLI conventions (error format, exit codes). The
+// root help (NAME/USAGE/COMMANDS/OPTIONS) replaces the retired usage().
+// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.5, seq-cli-urfave.md#4.2 | R2916, R2923, R2926, R2927
 func buildArkCommand() *ucli.Command {
+	// -v count, accumulated by urfave across repeated/expanded -v flags and
+	// read by the Before hook. (R724, R727)
+	var verbosity int
 	return &ucli.Command{
 		Name:  "ark",
 		Usage: "digital zettelkasten — hybrid trigram + vector search",
+		// Global flags recognized before the subcommand (R2923). --dir
+		// defaults to ~/.ark/; -v is a repeatable count flag.
+		Flags: []ucli.Flag{
+			&ucli.StringFlag{Name: "dir", Value: defaultDB(), Usage: "database directory (default ~/.ark/)"},
+			&ucli.BoolFlag{Name: "v", Usage: "increase verbosity (repeatable, up to -vvvv)", Config: ucli.BoolConfig{Count: &verbosity}},
+		},
+		// Before runs ahead of any subcommand Action, so the bodies that
+		// read arkDir / the verbosity level see the parsed globals. (R724,
+		// R727, R2923)
+		Before: func(ctx context.Context, c *ucli.Command) (context.Context, error) {
+			arkDir = c.String("dir")
+			ark.SetVerbosity(verbosity)
+			return ctx, nil
+		},
+		// Action runs only when no subcommand matched: bare `ark` shows the
+		// root help (exit 0); an unknown command name reports cleanly and
+		// exits 1 — the state-A "unknown command" UX, since urfave's default
+		// would otherwise emit a cryptic "No help topic for '<name>'".
+		// CRC: crc-CLITree.md | R2916
+		Action: func(_ context.Context, c *ucli.Command) error {
+			if c.Args().Present() {
+				fmt.Fprintf(os.Stderr, "unknown command: %s\n", c.Args().First())
+				os.Exit(1)
+			}
+			return ucli.ShowRootCommandHelp(c)
+		},
 		// ExitErrHandler renders errors urfave itself raises (flag-parse
 		// failures, unknown flags) as `error: <msg>` on stderr — the
 		// fatal() shape — and exits with the error's ExitCoder code (else
@@ -209,8 +138,8 @@ func buildArkCommand() *ucli.Command {
 	}
 }
 
-// arkCommands returns the migrated command nodes. Empty until the first
-// group lands; grows group by group through the migration.
+// arkCommands returns every ark command node — the full CLI surface, now
+// that the urfave migration is complete (no legacy dispatch remains).
 // CRC: crc-CLITree.md | R2916
 func arkCommands() []*ucli.Command {
 	cmds := []*ucli.Command{
@@ -230,73 +159,6 @@ func arkCommands() []*ucli.Command {
 		searchCommand(),
 	}
 	return append(cmds, flatCommands()...)
-}
-
-// legacyDispatch is the transitional fallback for the staged urfave
-// migration. With `search` migrated, every real command now routes through
-// the urfave tree, so this only reports an unknown command. It — together
-// with the main()-level name routing and the `migratedCommands` set — is
-// deleted in the final globals step.
-// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#5.2 | R2930
-func legacyDispatch(cmd string, _ []string) {
-	fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-	usage()
-	os.Exit(1)
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, `Usage: ark <command> [options]
-
-Commands:
-  add         Add files to the index
-  bundle      Graft a directory onto a binary as a zip appendix (build-time)
-  cat         Print an embedded file to stdout
-  chats       Show conversation transcripts from JSONL logs
-  chunks      Show chunks around a search hit (context expansion)
-  config      Show or modify configuration
-              add-source, remove-source, add-include, add-exclude,
-              remove-pattern, show-why, add-strategy, recover
-  connections Find-connections substrate + recall verbs + sidecar (find, recall, sidecar-*)
-  cp          Extract embedded files matching a glob pattern
-  discussed   Per-session recall dedup state (add/list/clear/prune)
-  dismiss     Dismiss missing files
-  embed       Embedding operations (text, bench, validate)
-  fetch       Return full contents of an indexed file
-  files       List indexed files
-  grams       Show trigrams for a query (active/inactive, frequency)
-  init        Create a new database
-  install     Connect this project to ark (alias for ui install)
-  ls          List embedded assets
-  luhmann     Orchestrator supervisor log writer (spawn-record, exit-record, inspect-exit)
-  message     Messaging (new-request, new-response, set-tags, get-tags, check, inbox)
-  missing     List missing files
-  monitor     Inspect monitoring logs (status, recent, pause, resume)
-  nano        Embedded shell-agent loop (Ollama-backed; -m model, -c/-s session)
-  rebuild     Drop and rebuild the entire index
-  refresh     Re-index stale files
-  remove      Remove files from the index
-  resolve     Dismiss unresolved files by pattern
-  scan        Walk directories, index new files
-  schedule    Query and modify scheduled events (requires server)
-  search      Search the index (subcommands: expand)
-  serve       Start the server
-  subscribe   Manage tag subscriptions (requires server)
-  subscribers Count subscriptions matching a tag (requires server)
-  listen      Long-poll for tag notifications (requires server)
-  setup       Bootstrap ~/.ark/ (extract assets, install skills)
-  sources     Manage source directories
-  stale       List stale files
-  status      Show database status
-  stop        Stop the running server
-  sweep       Run a corpus-wide sweep (correlations: refresh HC top-K cache)
-  tag         Tag operations (list, counts, files, defs)
-  ui          UI operations (run, display, event, checkpoint, ...)
-  unresolved  List unresolved files
-
-Global flags:
-  --dir PATH  Database directory (default ~/.ark/)
-  -v          Increase verbosity (up to -vvvv)`)
-
 }
 
 func defaultDB() string {

@@ -70,7 +70,7 @@ func searchCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:            "search",
 		Usage:           "search the index (filter-stack DSL; subcommand: expand)",
-		ArgsUsage:       "[TERM...] [filters] [options]",
+		ArgsUsage:       "[TERM...] [filters]",
 		Description:     searchHelp,
 		SkipFlagParsing: true,
 		Action:          flatDelegate(cmdSearch),
