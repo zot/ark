@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2930, R2931, R2932
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -12,12 +12,11 @@ CLITree owns how those bodies are *reached* and how their help is
 *produced*.
 
 ## Knows
-- root: `*cli.Command` named `ark` — the tree root carrying the migrated
-  command nodes and the error/exit hook (`ExitErrHandler`); in the end
-  state it also carries the global flags. The legacy catch-all lives in
-  `main()`, not on the root (R2916).
-- migrated: the set of command names handled by the urfave tree; `main()`
-  consults it to route un-migrated names to `legacyDispatch` (R2930).
+- root: `*cli.Command` named `ark` — the tree root carrying every command
+  node, the global flags (`--dir`/`-v`), the `Before` hook, the unknown-
+  command/bare-invocation `Action`, and the error/exit hook
+  (`ExitErrHandler`). `main()` builds it and runs every invocation through
+  it (R2916).
 - node shape: each command/subcommand is a `*cli.Command` with `Name`, a
   one-line `Usage` (synopsis), and `Flags` (each a typed `cli.*Flag` with
   its own `Usage`). Children nest in a node's `Commands` slice (R2916,
@@ -30,10 +29,10 @@ CLITree owns how those bodies are *reached* and how their help is
   (R2923, R2928).
 
 ## Does
-- BuildRoot(): construct the `ark` root `*cli.Command` — the migrated
-  command nodes and `ExitErrHandler` (plus global flags + `Before` in the
-  end state). `main()` runs it via `root.Run(ctx, args)` for a migrated
-  command, else calls `legacyDispatch` (R2916, R2930).
+- BuildRoot(): construct the `ark` root `*cli.Command` — every command
+  node, the global flags + `Before` hook, the unknown-command `Action`,
+  and `ExitErrHandler`. `main()` runs every invocation via
+  `root.Run(ctx, ["ark"]+args)` (R2916).
 - Self-documenting help (R2917, R2918, R2919, R2920): help is generated
   from the tree. Each node's `--help`/`-h` is produced from its own
   `Name` + `Usage` + flags' `Usage`; it resolves at every node (root,
@@ -42,17 +41,13 @@ CLITree owns how those bodies are *reached* and how their help is
   from the flag declarations, so adding/renaming a flag needs no second
   edit. Retires `usage()`, `printConnectionsHelp`, `uiUsage`,
   `printConfigHelp`, and the `luhmann`/`schedule` usage blocks (R2931).
-- Global flags, two-phase (R2923). End state: `&cli.StringFlag{Name:
-  "dir"}` (default `~/.ark/`) and `&cli.BoolFlag{Name: "v", Config:
-  cli.BoolConfig{Count: &verbosity}}` for repeated-`-v` counting; a root
-  `Before` hook copies the parsed values into the `arkDir` / verbosity
-  package globals before any `Action` runs. During the staged transition,
-  `main()` instead keeps the existing pre-parse (the `--dir`/`-v` strip
-  loop) so global handling is byte-identical to state A, and the root
-  declares **no** global flags (they are already consumed). Either way
-  `cli.ExpandVerbosityFlags` pre-tokenizes a bundled `-vvvv` into `-v -v -v
-  -v` (urfave does not bundle short flags), and `--dir`/`-v` are recognized
-  before the subcommand runs.
+- Global flags (R2923): `&cli.StringFlag{Name: "dir"}` (default `~/.ark/`)
+  and `&cli.BoolFlag{Name: "v", Config: cli.BoolConfig{Count: &verbosity}}`
+  for repeated-`-v` counting sit on the root; a root `Before` hook copies
+  the parsed values into the `arkDir` / verbosity package globals before
+  any `Action` runs. `cli.ExpandVerbosityFlags` pre-tokenizes a bundled
+  `-vvvv` into `-v -v -v -v` (urfave does not bundle short flags), so
+  `--dir`/`-v` are recognized before the subcommand runs.
 - Single-dash-long preserved (R2922): urfave/cli rides stdlib `flag`, so
   every node's flags accept one or two dashes (`-scores` ≡ `--scores`)
   with no per-flag work — the property is inherited.
@@ -91,15 +86,14 @@ CLITree owns how those bodies are *reached* and how their help is
   `Aliases`. The legacy connections flag shims (`--wait`/`--fetch`/
   `--result`/`--error` → hint + exit 2, R2615) are preserved by the
   connections node (hidden flags detected in its `Action`, or a pre-check).
-- Legacy catch-all (R2930): during the staged migration `main()` checks
-  the command name against a `migrated` set; an un-migrated name routes to
-  the existing hand-rolled `switch` (extracted into a `legacyDispatch`
-  function) **before urfave parses it**, so an un-migrated command's own
-  flags never trip the urfave root. (urfave's `CommandNotFound` hook was
-  rejected — it fires only for flagless unknown commands; `ark stop -f`
-  trips root flag parsing first. Spike-verified.) Cases move from
-  `legacyDispatch` into the tree group by group; when it is empty, the
-  main-level catch-all and `legacyDispatch` are deleted.
+- Unknown command / bare invocation (R2916): a first positional that
+  matches no command node falls through to the root `Action`, which prints
+  `unknown command: <name>` on stderr and exits 1, or — with no args —
+  shows the generated root help (exit 0). (The staged migration's
+  transitional `legacyDispatch` name-routing — formerly R2930, retired —
+  is gone now that every command is a tree node. urfave's `CommandNotFound`
+  hook was rejected for that routing because it fires only for flagless
+  unknown commands; the root `Action` covers all cases.)
 - Flag surface frozen (R2932): the migration adds, removes, renames no
   flag and switches none to GNU-only `--long`; it only re-homes existing
   flags onto their nodes.

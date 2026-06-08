@@ -32,11 +32,16 @@ reference docs — update them yourself when their surface changes:
 - `specs/cli-commands.md` — every CLI subcommand/flag and its
   semantics. Update when adding, renaming, or changing flags or
   subcommands. **This is a project commitment** (principles.md, "The
-  documentation tells the truth"): the CLI's *whole*
-  documentation surface moves in lockstep with the code, so a CLI
-  change also corrects the top-level `usage()` (`cmd/ark/main.go`)
-  and every affected `--help` printer — not just this spec. The docs
-  are authoritative; readers shouldn't have to re-check the source.
+  documentation tells the truth"). Since the `urfave/cli` migration
+  (2026-06-08), the binary's own `--help` is **generated from the
+  command tree** (`cmd/ark/*_cli.go` + `arkCommands()`): a flag/subcommand
+  declared on its node documents itself, so help can no longer drift from
+  the code and there is no `usage()` or per-command `--help` printer to
+  hand-maintain. Two surfaces remain — the command tree (which both makes
+  a command work and generates its help) and this spec (the hand-kept
+  inventory mirror). So a CLI change touches the node declaration **and**
+  this spec; the help text follows for free. The docs are authoritative;
+  readers shouldn't have to re-check the source.
 - `specs/record-formats.md` — every LMDB record prefix, key shape,
   and value layout in the `ark` subdatabase. Update when adding a
   new record class, changing a key/value encoding, or retiring a

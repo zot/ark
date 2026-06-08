@@ -2,7 +2,7 @@
 
 How an `ark` invocation flows through the `urfave/cli` v3 tree — global
 flags, routing to a handler `Action`, the DSL custom-parse path, error/
-exit handling, help generation, and the transitional legacy catch-all.
+exit handling, help generation, and unknown-command handling.
 Complements seq-cli-dispatch.md, which still owns the proxy-vs-cold-start
 decision *inside* a command body (unchanged by this migration).
 
@@ -17,12 +17,11 @@ decision *inside* a command body (unchanged by this migration).
 ## 1. Main dispatch (declared-flag command)
 
 ```
-1.1  main: args = cli.ExpandVerbosityFlags(os.Args)   # bundled -vvv → -v -v -v
-1.2  main: [transition] pre-parse --dir/-v → arkDir, verbosity, filtered (state-A loop, unchanged)
-1.3  main: if cmd not in `migrated` set → legacyDispatch(cmd, args) and return (see 5)
-1.4  main: root = BuildRoot(); root.Run(ctx, ["ark"]+filtered)
-       # end state: root carries --dir/-v global flags + Before hook; pre-parse dropped
-1.5  root: route to the named node (end state: parse globals, Before sets arkDir/verbosity)
+1.1  main: args = cli.ExpandVerbosityFlags(os.Args[1:])   # bundled -vvvv → -v -v -v -v
+1.2  main: root = buildArkCommand()   # the urfave tree owns every command + the global flags
+1.3  main: (no legacy path — an unknown name falls to the root Action, see 5)
+1.4  main: root.Run(ctx, ["ark"]+args)
+1.5  root: parse globals (--dir/-v) before the subcommand; Before sets arkDir/verbosity; route to the named node
 1.6  node: parse this node's declared flags (single-or-double dash, stdlib flag)
 1.7  node: Action reads c.Bool/String/Int/StringSlice/Count + c.Args().Slice()
 1.8  node: Action calls body(...) with those values
@@ -59,12 +58,10 @@ decision *inside* a command body (unchanged by this migration).
       then os.Exit(ExitCoder code, else 1) — must exit itself or the code is lost
 ```
 
-## 5. Legacy catch-all (transitional, in main())
+## 5. Unknown command / bare invocation (root Action)
 
 ```
-5.1  main: cmd name not in the `migrated` set (checked before urfave parses anything)
-5.2  main: legacyDispatch(cmd, args)  # the extracted hand-rolled switch
-5.3  legacyDispatch: run the un-migrated cmd* handler exactly as before
-5.4  (as each group migrates, its case leaves legacyDispatch and joins `migrated`;
-      when legacyDispatch is empty, it and the main-level catch-all are deleted)
+5.1  root: first positional matches no command node → fall through to the root Action
+5.2  root Action: args present → "unknown command: <name>" on stderr, os.Exit(1)
+5.3  root Action: no args → ShowRootCommandHelp (the generated command list), exit 0
 ```

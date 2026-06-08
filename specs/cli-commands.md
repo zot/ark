@@ -13,23 +13,25 @@ Language: Go. Binary: `~/.ark/ark` (a `~/.ark` symlink populated by
 `ark setup`). The Linux `ark` archive manager collides with the bare
 name, so always use the absolute path.
 
-**Maintaining this file — and the help strings that shadow it.** This is
-the canonical CLI inventory, but it is *not* auto-maintained, and neither
-is the binary's own `--help` text. The top-level command list in
-`cmd/ark/main.go`'s `usage()` is hand-written (not derived from the
-dispatch switch), and every `--help` printer is an unanchored string
-literal that `minispec validate` cannot see. So a CLI shape change must be
-landed in **four** places, none of which catches the others:
+**Maintaining this file.** This is the canonical CLI inventory. Since the
+2026-06-08 `urfave/cli` v3 migration, the binary's own `--help` is
+**generated from the command tree** — one self-documenting source per
+command (its node's `Name` / `Usage` / `Flags`, or, for the `search` DSL,
+a single hand-written `Description`) — so it can no longer drift from the
+code. The hand-maintained `usage()` and the per-command `--help` printers
+(`printConnectionsHelp`, `uiUsage`, `printConfigHelp`, the `luhmann` /
+`schedule` usage blocks) no longer exist. Two surfaces remain, and only
+one is hand-kept:
 
-1. the dispatch `switch` (what makes the command work);
-2. the top-level `usage()` command list;
-3. the command's own `--help` printer (`printConnectionsHelp`, `uiUsage`,
-   `printConfigHelp`, the `luhmann` / `schedule` usage blocks, …);
-4. this file.
+1. the `urfave/cli` command tree (`cmd/ark/*_cli.go` + `arkCommands()`) —
+   makes each command work **and** generates its help;
+2. this file — the hand-kept inventory mirror and behavioral contract.
 
-Cheap completeness check: diff the binary's top-level command names against
-this file's inventory table. A 2026-05-30 audit found nine drifts at once
-after several were missed across these surfaces.
+Cheap completeness check: diff the binary's top-level command names
+(`ark --help`) against this file's inventory table. (Before the migration,
+a CLI change had to be landed in four hand-maintained places that freely
+diverged; a 2026-05-30 audit found nine drifts at once. That class of bug
+is now structurally impossible for the binary's own help.)
 
 ## Command Inventory
 
@@ -91,17 +93,20 @@ after several were missed across these surfaces.
 
 ## Global Flags
 
-Parsed in `main()` before subcommand dispatch:
+`urfave/cli` root flags, recognized **before** the subcommand; a root
+`Before` hook copies them into the package globals the handler bodies read:
 
 | Flag                         | Default                                  | Meaning                                                                                                           |
 |------------------------------|------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | `--dir PATH` or `--dir=PATH` | `~/.ark` (or `.ark` if HOME unavailable) | Database directory                                                                                                |
 | `-v` (repeatable)            | `0`                                      | Increase verbosity. `-vv`, `-vvv`, `-vvvv` are equivalent to repeating. Bound to package-level `Logv(level, ...)` |
-| `--help` / `-h` / `help`     | —                                        | Print top-level usage and exit 0                                                                                  |
+| `--help` / `-h`              | —                                        | Show tree-generated help and exit 0 — at any node (`ark --help`, `ark connections --help`, `ark connections recall close --help`), each with the full command path |
 
-Verbosity expansion: `-vvv` is preprocessed into `-v -v -v` by
-`cli.ExpandVerbosityFlags` so users can stack the flag without
-worrying about the underlying tokenization.
+`help [COMMAND]` and bare `ark` also print the generated command list
+(exit 0); an unknown command name prints `unknown command: <name>` and
+exits 1. Verbosity expansion: `-vvvv` is preprocessed into `-v -v -v -v`
+by `cli.ExpandVerbosityFlags` (urfave does not bundle short flags), and the
+root's `-v` count flag accumulates them.
 
 ## Conventions
 
