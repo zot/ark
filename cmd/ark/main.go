@@ -164,6 +164,8 @@ var migratedCommands = map[string]bool{
 	"status":  true,
 	"stop":    true,
 	"install": true,
+	// the filter-stack DSL keeper (custom-parsed via SkipFlagParsing)
+	"search": true,
 }
 
 // runArkCommandTree builds the urfave root and runs the migrated command
@@ -225,22 +227,21 @@ func arkCommands() []*ucli.Command {
 		subscribeCommand(),
 		subscribersCommand(),
 		listenCommand(),
+		searchCommand(),
 	}
 	return append(cmds, flatCommands()...)
 }
 
-// legacyDispatch is the original hand-rolled command switch, extracted so
-// un-migrated commands keep working during the staged urfave migration.
+// legacyDispatch is the transitional fallback for the staged urfave
+// migration. With `search` migrated, every real command now routes through
+// the urfave tree, so this only reports an unknown command. It — together
+// with the main()-level name routing and the `migratedCommands` set — is
+// deleted in the final globals step.
 // CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#5.2 | R2930
-func legacyDispatch(cmd string, args []string) {
-	switch cmd {
-	case "search":
-		cmdSearch(args)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-		usage()
-		os.Exit(1)
-	}
+func legacyDispatch(cmd string, _ []string) {
+	fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
+	usage()
+	os.Exit(1)
 }
 
 func usage() {
@@ -973,48 +974,10 @@ func cmdSearch(args []string) {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	// CRC: crc-CLI.md | R1788, R1789
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark search [TERM...] [filters] [options]
-
-Filter modes (composable, repeatable):
-  -contains TERM    substring match (default for bare terms)
-  -fuzzy TERM       typo-tolerant match
-  -regex PATTERN    regular expression match
-  -tag TAG          tag filter (@name:value or name:value, @ optional)
-  -file-tag TAG     file-tag filter (every chunk on a file with the tag)
-  -about QUERY      vector similarity match
-  -files GLOB       file path glob filter
-
-Polarity (default: -with):
-  -with             subsequent filters intersect (must match)
-  -without          subsequent filters subtract (must not match)
-
-Per-filter tuning:
-  --filter-k N      after an -about filter, override the top-K chunk
-                    cap for that row (default: about_filter_top_k=200)
-
-  -parse            print disambiguated command and exit
-
-Bare terms coalesce into a single -contains. The first filter is the
-primary search; the rest are chunk-level post-filters. Use -parse to
-verify how your args are interpreted.
-
-Examples:
-  ark search fred ethel
-      Searches for "fred ethel" (bare terms coalesce)
-
-  ark search fred -without -tag status:done -with -files '*.md'
-      Search "fred", exclude done items, limit to markdown files
-
-  ark search -fuzzy concurency -without -regex '(?i)test'
-      Fuzzy primary, exclude chunks matching "test"
-
-  ark search -about "machine learning" -without -tag project:archive
-      Vector similarity search, exclude archived project
-
-  ark search -parse fred -without -tag done -files '*.md'
-      Print disambiguated command and exit
-
-Output:`)
+		// DSL help is the shared searchHelp const (also the search node's
+		// Description), so the authored blurb has one source (R2921); the
+		// flag-by-flag list follows under "Output:".
+		fmt.Fprintln(os.Stderr, searchHelp+"\n\nOutput:")
 		fs.PrintDefaults()
 	}
 	k := fs.Int("k", 20, "max results")
