@@ -73,6 +73,11 @@ func main() {
 	// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.4 | R2916, R2923
 	args := cli.ExpandVerbosityFlags(os.Args[1:])
 	root := buildArkCommand()
+	// R2953: order every subcommand list alphabetically so help is easy to
+	// scan. urfave renders commands in slice order; dispatch matches by name,
+	// so this affects only the help display, not routing.
+	// CRC: crc-CLITree.md | R2953
+	sortCommandTree(root.Commands)
 	// Errors are handled by the root's ExitErrHandler (which exits); a
 	// returned error here would already have been rendered.
 	_ = root.Run(context.Background(), append([]string{"ark"}, args...))
@@ -135,6 +140,18 @@ func buildArkCommand() *ucli.Command {
 			os.Exit(code)
 		},
 		Commands: arkCommands(),
+	}
+}
+
+// sortCommandTree orders every command node's subcommands alphabetically by
+// Name, recursively, so help lists are easy to scan at every depth. urfave/cli
+// v3 renders commands in slice order; dispatch matches by name, so this affects
+// only the help display, not routing.
+// CRC: crc-CLITree.md | R2953
+func sortCommandTree(cmds []*ucli.Command) {
+	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
+	for _, c := range cmds {
+		sortCommandTree(c.Commands)
 	}
 }
 
@@ -2016,8 +2033,15 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	}
 	if len(status.Strategies) > 0 {
 		fmt.Print("strategies:")
-		for name, count := range status.Strategies {
-			fmt.Printf(" %s=%d", name, count)
+		// R2953: sort by name — Go map iteration is otherwise random, making the
+		// strategies line non-deterministic and hard to scan.
+		names := make([]string, 0, len(status.Strategies))
+		for name := range status.Strategies {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Printf(" %s=%d", name, status.Strategies[name])
 		}
 		fmt.Println()
 	}
@@ -2178,8 +2202,14 @@ func cmdStatus(args []string) {
 		eRecords, _ := d.Store().ReadERecords()
 		if len(eRecords) > 0 {
 			fmt.Println("warnings:")
-			for name, payload := range eRecords {
-				fmt.Printf("  %s: %s\n", name, string(payload))
+			// R2953: sort by name for deterministic, scannable output.
+			warnNames := make([]string, 0, len(eRecords))
+			for name := range eRecords {
+				warnNames = append(warnNames, name)
+			}
+			sort.Strings(warnNames)
+			for _, name := range warnNames {
+				fmt.Printf("  %s: %s\n", name, string(eRecords[name]))
 			}
 		}
 

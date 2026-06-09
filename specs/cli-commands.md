@@ -33,6 +33,12 @@ a CLI change had to be landed in four hand-maintained places that freely
 diverged; a 2026-05-30 audit found nine drifts at once. That class of bug
 is now structurally impossible for the binary's own help.)
 
+**Output ordering.** Human-facing list output is sorted deterministically so it
+is easy to scan: the binary's `--help` lists subcommands alphabetically at every
+depth (matching this inventory's order below), and `ark status` sorts its
+`strategies:` and `warnings:` lines by name (both back onto Go maps, which
+otherwise emit a different order each run). R2953.
+
 ## Command Inventory
 
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |

@@ -4523,6 +4523,12 @@ reason.
 - **R2932:** (inferred) the migration freezes the flag surface — no flag is added, removed, renamed, or switched to GNU-only `--long`. The change is to how a command is *reached* and how its help is *produced*, never to the flags themselves.
 
 
+## Feature: Sorted human-facing list output
+**Source:** specs/cli-commands.md
+
+- **R2953:** human-facing list output is ordered deterministically rather than declaration- or map-iteration order, so it is easy to scan. Every subcommand list in `ark --help` is sorted alphabetically by name at each depth of the command tree (urfave renders commands in slice order; dispatch matches by name, so the sort changes only the help display, not routing). The `strategies:` and `warnings:` lines of `ark status` are sorted by name (both iterate Go maps, which otherwise emit a different order on each run).
+
+
 ## Feature: Bloodhound — directed search via the warm secretary
 **Source:** specs/bloodhound.md
 
