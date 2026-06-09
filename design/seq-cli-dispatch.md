@@ -49,8 +49,8 @@ CLI ──> CLI.DetectServer(dbPath)
          └──> CLI.ColdStart(dbPath)
                ├── DB.Open(dbPath)
                │    ├── microfts2.Open (loads LMDB env)
-               │    ├── microvec.Open (receives env)
-               │    └── Store.Open
+               │    └── Store.Open (env shared with the Librarian; EC
+               │         embeddings live in the ark subdatabase)
                │
                ├── execute the requested operation
                │    (search, add, remove, etc.)

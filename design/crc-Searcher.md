@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R191, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -128,10 +128,35 @@ Optionally retrieves chunk text or full file content.
   by reading C records (FileID), looking up paths via FileIDPaths,
   and recovering Range from the F record's chunk list. Stale chunkIDs
   (deleted/replaced chunks) are silently skipped. No FTS pass. (R2442)
+- SearchTagChunks(chunkIDs, opts): flat SearchResultEntry list from a
+  tag-derived chunkID set. R2951: the post-filter funnel for index-lookup
+  primaries — injects the default search_exclude scope (effectiveExcludeFiles),
+  runs the chunkIDs through postFilterChunkIDs (the user filter stack), calls
+  ChunksByID, then filterByPathGlobs (file scope + default exclude), then -k.
+  Shared by the server short-circuit and the CLI-direct fallback. (R2442, R2951)
 - GroupTagChunks(chunkIDs, opts): build GroupedResult straight from
-  a tag-derived chunkID set — calls ChunksByID, applies FilterFiles/
-  ExcludeFiles, fills chunk text via cache, groups via groupResults.
-  Used when a sigil-form primary tag query has no other text primary. (R2442)
+  a tag-derived chunkID set — calls SearchTagChunks (so it inherits the
+  R2951 funnel), fills chunk text via cache, groups via groupResults.
+  Used when a sigil-form primary tag query has no other text primary. (R2442, R2951)
+- postFilterChunkIDs(chunkIDs, opts, cache): the post-hoc half of the
+  post-filter funnel. Builds per-row predicates for opts.ChunkFilters
+  (excluding about-mode rows) via rowChunkFilter, reads each candidate's
+  CRecord once, and returns the chunkIDs passing every row predicate.
+  Lets an index-lookup primary (tag/file-tag, and the about vec-only path)
+  apply the same filter stack the FTS scan applies inline. (R2951)
+- rowChunkFilter(row, cache, paths, store): shared per-row predicate
+  constructor for contains/fuzzy/regex/tag/file-tag/files, polarity applied.
+  Single source of truth for filter semantics — both BuildChunkFilters
+  (wraps each as a microfts2 option) and postFilterChunkIDs (applies them
+  post-hoc) build from it, so the funnel cannot drift from the FTS path. (R2951)
+- effectiveExcludeFiles(opts): the R939/R940 default-scope rule extracted
+  for reuse — returns config.SearchExclude when no explicit/positive file
+  filter is present, else nil. Used by resolveFilters and the index-lookup
+  funnel. (R939, R940, R2951)
+- filterByPathGlobs(results, opts): apply FilterFiles/ExcludeFiles (incl.
+  the injected default scope) to a resolved candidate set via the shared
+  Matcher. Extracted from SearchTagChunks so the about vec-only path reuses
+  it. (R2951)
 - groupResults(results, tokenPatterns): factored grouping/preview
   pipeline shared by SearchGrouped and GroupTagChunks. Sorts files
   and chunks by score (descending). (R2442)

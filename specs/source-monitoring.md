@@ -67,6 +67,20 @@ recursive — subdirectories are watched too. When Reconcile() adds
 new sources, new watches start. When sources are removed, watches
 stop.
 
+**Watch coverage equals scan coverage.** The recursive watch descends
+into exactly the directory set the Scanner walks. A subdirectory is
+watched iff the directory-classification rule does not mark it
+Excluded — the same `Classify` call (with `isDir=true`, respecting
+`dotfiles` and the source's include/exclude) the Scanner uses to
+decide descent during Scan(). Both go through one rule
+(`DB.IsWatchableDir`), so neither descends a directory the other
+skips. Concretely, with `dotfiles=true` a dot-directory such as
+`.scratch/` is watched (it is not excluded, so the Scanner indexes
+files inside it), while a directory excluded *as a directory* such as
+`.git/` is skipped by watcher and Scanner alike. Every directory that
+can contain an indexable file is watched; an edit to a file in such a
+directory triggers live re-indexing without a manual scan/refresh.
+
 File events use throttled on-notify: the first notification triggers
 an immediate index update, then imposes a throttle window. Events
 during the window are ignored — the filesystem is the source of
@@ -95,8 +109,13 @@ include/exclude patterns, and runs the same Classify check that the
 Scanner uses during Scan(). If the file wouldn't be included, the
 event is ignored.
 
-Directory creation events bypass this filter — new directories need
-watches regardless of whether their contents match patterns yet.
+Directory creation events skip the *file*-indexability filter, but a
+newly created directory is still watched only when it is watchable as
+a directory (the `Classify` isDir=true rule above is not Excluded). A
+new ordinary directory is Unresolved — no include pattern matches it
+yet — and is watched so later indexable files are caught; a new
+directory that is excluded as a directory (e.g. `node_modules/`) is
+not watched, matching the Scanner.
 
 ark.toml changes have their own code path and also bypass this filter.
 

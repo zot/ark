@@ -114,15 +114,16 @@ Add files to the index:
 - For each file matching include/exclude patterns:
   - Check staleness via microfts2 (skip if fresh)
   - Add to microfts2 synchronously (gets fileid, chunk offsets)
-  - Queue for microvec embedding (background)
+  - Embed the new chunks via the Librarian/EC pipeline (background;
+    EC records keyed by chunkid)
 
 FTS is live the moment a file is added. Embedding happens
 asynchronously — a background goroutine works through the queue.
 This means scan/add never blocks on embedding, which can be very
 slow on resource-constrained hardware.
 
-microfts2 is the source of truth for file identity — microvec
-receives fileids from it.
+microfts2 is the source of truth for file identity; chunk embeddings
+(EC records) are keyed by chunkid (R1914).
 
 ### Background embedding
 
@@ -136,16 +137,17 @@ receives fileids from it.
 
 ## Remove Files
 
-Remove a file from both engines by path. microfts2 resolves the path
-to a fileid, microvec removes by fileid.
+Remove a file by path. microfts2 resolves the path to a fileid and
+drops its chunks; each chunk's EC embedding record is reclaimed via
+microfts2's orphan callbacks (chunkid-keyed, R1914).
 
 ## Refresh
 
 Re-index stale files. Uses microfts2's staleness detection (modtime +
 content hash). For each stale file:
 - Re-add to microfts2 (gets new chunk offsets)
-- Remove old vectors from microvec
-- Add new vectors to microvec
+- Re-embed the file's chunks via the Librarian/EC pipeline (EC records,
+  chunkid-keyed)
 
 Missing files are not auto-deleted. They're added to ark's missing
 files list for review. The user or agent decides what to do.

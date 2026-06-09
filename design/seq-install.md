@@ -70,8 +70,8 @@ CLI.cmdInit(flags)
   │
   ├──> seed from ark.toml if present
   ├──> microfts2.Create(dbPath, opts)
-  ├──> microvec.Create(env, opts)
-  ├──> Store.Init(env)
+  ├──> Store.Init(env)   (no separate vector DB — EC embeddings are
+  │     ark-subdatabase records; R1912)
   ├──> write ark.toml
   │
   └──> print "initialized ark database at <dbPath>"

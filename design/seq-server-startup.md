@@ -27,8 +27,8 @@ CLI ──> Server.Serve(dbPath, opts)
          │
          ├──> DB.Open(dbPath)
          │     ├── microfts2.Open (creates LMDB env)
-         │     ├── microvec.Open (receives env)
-         │     └── Store.Open (receives env)
+         │     └── Store.Open (receives env) — Store + Librarian share it;
+         │          EC chunk embeddings live in the ark subdatabase (R1910)
          │
          ├──> Server.EnsureArkSource()
          │     └── ensure ~/.ark is a source (hardcoded, not in ark.toml)
@@ -99,7 +99,6 @@ Signal (SIGTERM/SIGINT)
   │     └── stops accepting new ark API requests
   │
   └──> db.Close()
-        ├── Store.Close
-        ├── microvec.Close
+        ├── Store.Close (ark subdatabase — EC records included)
         └── microfts2.Close (closes LMDB env)
 ```

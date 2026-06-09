@@ -4,11 +4,13 @@ Benchmark in-process embedding performance against real chunks from
 the LMDB index. The goal is to answer: "Is vector search viable at
 ark's scale on this hardware?"
 
-The current architecture shells out to an external command for every
-embedding (microvec's Embedder). This means every embedding pays
-model-load cost. For benchmarking, we need the model loaded once and
-held warm across all embeddings, which requires in-process embedding
-via gollama (the llama.cpp Go binding already used in microvec's CLI).
+This benchmark validated **in-process** embedding — load the model
+once and hold it warm across all embeddings via gollama (the llama.cpp
+Go binding) — against the prior design that shelled out to an external
+embedder per chunk (paying model-load cost every time). The in-process
+approach measured here is now ark's production vector path: the
+Librarian/EC pipeline (R1913–R1916); the external-command embedder
+(microvec's Embedder) is retired.
 
 ## `ark vec bench`
 

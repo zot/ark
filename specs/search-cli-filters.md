@@ -40,6 +40,15 @@ ark search TERM...
   in its extracted tag set.
 - `-about QUERY`: vector similarity match on chunk content.
 - `-files GLOB`: match files whose path matches the glob pattern.
+  An explicit `-files` filter also changes the default scope: a
+  **positive** `-files GLOB` *replaces* the default `search_exclude`
+  scope rather than adding to it — so a positive `-files` pointed at a
+  path `search_exclude` would normally hide includes it. A
+  `-without -files GLOB` subtracts the glob *without* disabling the
+  default scope. With no positive `-files` (and no structural
+  `filter_files`/`exclude_files`), `search_exclude` applies as the
+  default exclude. The `search_exclude` config itself is owned by
+  [search-filtering.md](search-filtering.md) §"Default search excludes".
 
 ### Polarity
 
@@ -61,6 +70,19 @@ The first filter entry becomes the primary search — it drives the
 initial trigram index lookup that produces the candidate result set.
 All subsequent entries become chunk-level post-filters that narrow
 the results.
+
+**Post-filtering is primary-mode-independent.** The choice of mode for
+the primary entry determines *only* the initial candidate set. Every
+subsequent filter row — and the default `search_exclude` scope (see
+[search-filtering.md](search-filtering.md)) — applies identically to
+that candidate set regardless of whether the primary is `-contains`,
+`-fuzzy`, `-regex`, `-tag`, `-file-tag`, or `-about`. There is no
+primary mode for which post-filters are skipped. In particular the
+three index-lookup primaries (`-tag` / `-file-tag` resolve via the tag
+index; `-about` ranks via embeddings) do not return their hits
+directly: their candidate set passes through the same post-filter
+stack and default exclude that the content-scan primaries
+(`-contains` / `-fuzzy` / `-regex`) go through.
 
 ### The `-parse` flag
 

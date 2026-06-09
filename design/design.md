@@ -1,7 +1,7 @@
 # Ark Design
 
-Orchestration layer over microfts2 and microvec. Digital zettelkasten
-with hybrid search.
+Orchestration layer over microfts2 (trigram) and the Librarian/EC
+embedding pipeline (vector). Digital zettelkasten with hybrid search.
 
 ## Intent
 
@@ -38,14 +38,15 @@ index synchronously in the actor. See seq-write-actor.md.
 
 ### LMDB Lifecycle
 microfts2 owns the LMDB environment. Ark opens microfts2 first
-(which creates the env), passes the env to microvec, then opens its
-own subdatabase. All three share one env with MaxDBs=8. Closing
-follows reverse order.
+(which creates the env), then opens its own subdatabase; the Store
+and the Librarian (EC chunk embeddings) share that env (R1910).
+MaxDBs covers microfts2 + the ark subdatabase — no separate vector
+subDB (R1911). Closing follows reverse order.
 
 ### File Identity
-microfts2 allocates fileids. microvec and ark's subdatabase both
-reference files by fileid. microfts2 is the single source of truth
-for path→fileid mapping.
+microfts2 allocates fileids and is the single source of truth for
+path→fileid mapping. The ark subdatabase references files by fileid;
+chunk embeddings (EC records) are keyed by chunkid (R1914).
 
 ### Pattern Matching
 Doublestar glob patterns (`github.com/bmatcuk/doublestar/v4`) with
@@ -260,7 +261,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DateParseGuards.md → `scheduler_test.go`
 - [x] test-Config.md → `config_test.go`
 - [x] test-Matcher.md → `match_test.go`
-- [x] test-Searcher.md → `search_test.go`
+- [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`
 - [x] test-Store.md → `store_test.go`
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
@@ -282,6 +283,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
+- [x] test-WatchCoverage.md → `watch_coverage_test.go`
 - [ ] test-RecallWatcher.md → `recall_watcher_test.go`
 
 ### CRC Cards (Nano)
@@ -313,7 +315,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O2: serverClient TOCTOU race — probe can succeed but actual request fails if server dies between. Acceptable for v1
 - A1: IndexBuilt field removed from StatusInfo during simplification — spec still mentions it, update spec
 - A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from LMDB key on read)
-- [ ] O3: Integration tests need live microfts2+microvec: merge/intersect (test-Searcher), FillChunks/FillFiles (test-ChunkRetrieval)
+- [ ] O3: Integration tests need live microfts2 + the Librarian/EC pipeline: merge/intersect (test-Searcher), FillChunks/FillFiles (test-ChunkRetrieval)
 - [ ] O4: Fetch uses O(n) StaleFiles scan — add direct path lookup to microfts2 when performance matters
 - [ ] O5: ark stop does not verify process is ark (PID rollover could kill wrong process) — check /proc/PID/cmdline on Linux
 - A3: R187 (vector search) deferred to V4 — no design artifact needed until then
@@ -389,7 +391,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O46: RemoveTagValues scans all V keys to find one fileid — O(total V records). Add reverse index (VF prefix) if profiling shows this is slow.
 - A25: R1107 (V records rebuilt by ark rebuild) — rebuild already regenerates T/F/D; V follows same pattern, no separate design artifact needed
 - A26: R1112 (Lua mcp:tagComplete should use V records) — deferred until Lua-side tag completion is implemented
-- [ ] O47: R1115: WithAppendChunkCallback not yet wired in append paths — tags still extracted from tagWindowForAppend (R1127). Wire when microvec supports incremental chunk updates
+- [ ] O47: R1115: WithAppendChunkCallback not yet wired in append paths — tags still extracted from tagWindowForAppend (R1127). Wire when the append path gains incremental chunk re-embedding (EC records)
 - [ ] O48: Editor JS bundle not in release pipeline — Makefile must copy ark-markdown-editor.js to zip-graft for ark install
 - [ ] O49: No unit tests for content fetching: handleContentFetch, handleContentView, handleContentRaw, contentPath
 - A27: handleContentView reads file even for markdown (only needs path validation) — acceptable, keeps contentPath shared

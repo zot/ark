@@ -401,8 +401,8 @@
 
 ### Default Search Excludes
 - **R938:** `search_exclude` is a top-level list of glob patterns in ark.toml
-- **R939:** `search_exclude` patterns are applied as `--exclude-files` defaults when the user provides no explicit `--filter-files` or `--exclude-files`
-- **R940:** When the user provides explicit `--filter-files` or `--exclude-files`, `search_exclude` is not applied — explicit flags replace the default scope entirely
+- **R939:** `search_exclude` patterns apply as the default exclude scope when the search carries no explicit file filter — no positive `-files GLOB` row and no structural `filter_files`/`exclude_files` (the `SearchOpts` fields the Lua UI sets). (Flag rename: the user-facing `--filter-files`/`--exclude-files` were subsumed by the filter stack's `-files` / `-without -files` — see search-cli-filters.md; the `filter_files`/`exclude_files` struct fields and JSON remain for the Lua UI.)
+- **R940:** An explicit file filter replaces the default scope entirely: a **positive** `-files GLOB` row (or a structural `filter_files`/`exclude_files`) disables `search_exclude`, so a positive `-files` pointed at a default-excluded path includes it. A `-without -files GLOB` subtracts the glob *without* disabling the default scope. Implemented by `Searcher.effectiveExcludeFiles` (R2951's funnel injects the same default on the index-lookup paths).
 - **R941:** Subscriptions without explicit file filters inherit `search_exclude` as their exclude-files list
 - **R942:** Subscriptions with explicit `--filter-files` or `--exclude-files` use those instead of `search_exclude`
 - **R943:** (inferred) `search_exclude` is loaded from config at startup and on config reload
@@ -599,6 +599,7 @@
 - **R349:** The server watches each resolved source directory with fsnotify
 - **R350:** Watches are recursive — subdirectories within sources are watched
 - **R351:** When Reconcile adds new sources, new watches start; when sources are removed, watches stop
+- **R2952:** Watch coverage equals scan coverage. The recursive watch descends into exactly the directory set the Scanner walks: a subdirectory is watched iff `Classify` (with `isDir=true`, respecting `dotfiles` and the source's effective include/exclude) does not mark it Excluded — the same rule the Scanner uses to descend. The watcher and Scanner share one predicate (`DB.IsWatchableDir`), so neither descends a directory the other skips. With `dotfiles=true`, a non-excluded dot-directory (e.g. `.scratch/`) is watched (the Scanner indexes files inside it), while a directory excluded as a directory (e.g. `.git/`) is skipped by both. Refines R350; the prior recursive watch unconditionally skipped every dot-prefixed subdirectory, so files under `.scratch/` never auto-indexed.
 - **R352:** File events use throttled on-notify: first event triggers immediate index update, then a throttle window starts
 - **R353:** Events during the throttle window are ignored — the filesystem is the source of truth
 - **R354:** When the throttle window expires, one re-index of current state runs
@@ -612,7 +613,7 @@
 - **R387:** Before triggering reconcile on a file event, the watcher checks whether the file is indexable — same Classify check the Scanner uses during Scan()
 - **R388:** The watcher finds which source directory the file belongs to, gets effective include/exclude patterns, and calls Classify
 - **R389:** If the file would not be included by any source's patterns, the event is ignored (no reconcile)
-- **R390:** Directory creation events bypass the indexability check — new directories need watches regardless of pattern match
+- **R390:** Directory creation events bypass the *file*-indexability check — a new directory is watched without any file matching an include pattern yet (it is Unresolved, and may later hold indexable files). It is still subject to the directory rule (R2952): a new directory excluded *as a directory* (e.g. `node_modules/`) is not watched.
 - **R391:** ark.toml changes have their own code path and bypass the indexability check
 - **R392:** DB exposes an IsIndexable(path) method that encapsulates the source lookup and pattern check
 - **R393:** Non-indexable paths are cached in a set (negative cache) — subsequent events for the same path skip Classify in favor of a set lookup
@@ -2873,6 +2874,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1776:** The first filter entry becomes the primary search — it maps to the existing request fields (`query`, `contains`, `about`, `regex`, `fuzzy`).
 - **R1777:** All subsequent filter entries become `ChunkFilterRow` entries in the `chunk_filters` field.
 - **R1778:** The primary search drives the initial trigram index lookup. Filter rows narrow the result set post-search.
+- **R2951:** Post-filter application is independent of the primary mode. The primary mode (`-contains`/`-fuzzy`/`-regex`/`-tag`/`-file-tag`/`-about`) selects only the initial candidate set; every subsequent filter row AND the default `search_exclude` scope (R939/R940) apply identically to that candidate set. No primary mode skips the post-filter stack or the default exclude — including the index-lookup modes `-tag`/`-file-tag` (tag-index resolution via `SearchTagChunks`) and `-about` (vector-only resolution), which historically returned their hits directly.
 
 ### Tag Syntax
 

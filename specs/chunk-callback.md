@@ -3,6 +3,17 @@
 Extract tags from clean chunk text instead of raw file content.
 Language: Go. Environment: ark indexer, microfts2 dependency.
 
+> **Superseded in part (R1926).** This spec was written when the chunk
+> callback served *two* purposes — tag extraction **and** feeding chunk
+> text to microvec for embedding. The microvec→EC migration (R1909–R1926)
+> split those: the text-only callback now feeds **only** tags/defs
+> (`acc.tagValues`/`acc.defs`); chunk **embeddings** go through a separate
+> chunkid-aware indexed callback and `Librarian.BatchEmbedChunks` (EC
+> records, keyed by chunkid). Every "pass chunks to microvec" /
+> "`splitChunks` for microvec" mention below is **historical** — that
+> coupling no longer exists. Read this spec for the tag-extraction
+> behavior; for embeddings see R1913/R1926.
+
 ## Problem
 
 Tag value (V) records have noise from JSONL raw-file extraction.
@@ -30,9 +41,10 @@ Wire the callback into ark's indexer to:
 ## AddFile
 
 Pass `WithChunkCallback` to `AddFileWithContent`. In the callback,
-append chunk text to a slice and run `ExtractTagValues` on the chunk.
-After the call returns, pass accumulated chunks to microvec and
-accumulated tag values to Store. Remove the `splitChunks` call.
+run `ExtractTagValues` on the chunk's clean text. After the call
+returns, pass accumulated tag values to Store. (Historical: this path
+once also accumulated chunk text for microvec; embeddings now ride the
+separate chunkid-aware path — see the header note.)
 
 ## RefreshFile (full refresh)
 

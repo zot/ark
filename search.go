@@ -443,11 +443,27 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	var results []SearchResultEntry
 
 	if hasAbout && hasFTS {
-		// Intersect
+		// Intersect (the FTS side already carries the inline post-filter stack)
 		results = s.intersect(ftsResults, vecResults)
 	} else if hasAbout {
-		// Vector only
-		results = s.vecOnly(vecResults)
+		// Vector only: the candidate set skipped the FTS scan, so apply the
+		// post-filter stack + default scope post-hoc before resolving. R2951
+		if def := s.effectiveExcludeFiles(opts); def != nil {
+			opts.ExcludeFiles = def
+		}
+		keptIDs, ferr := s.postFilterChunkIDs(chunkScoreIDs(vecResults), opts, opts.Cache)
+		if ferr != nil {
+			return nil, ferr
+		}
+		resolved, ferr := s.filterAndResolve(s.vecOnly(filterChunkScores(vecResults, keptIDs)), opts)
+		if ferr != nil {
+			return nil, ferr
+		}
+		resolved = filterByPathGlobs(resolved, opts)
+		if len(resolved) > k {
+			resolved = resolved[:k]
+		}
+		return resolved, nil
 	} else {
 		// FTS only
 		results = s.ftsOnly(ftsResults)
@@ -672,8 +688,78 @@ func matchingTagNames(p MatchPredicate, store *Store) []string {
 	}
 }
 
-// BuildChunkFilters converts UI filter rows into microfts2 search options.
-// CRC: crc-Searcher.md | R1403, R1471, R2452
+// rowChunkFilter builds the polarity-applied ChunkFilter predicate for one
+// filter row, or (nil, false) when the row has no predicate form (empty
+// query, or about-mode, which resolves via the embedding pipeline). Single
+// source of truth for filter-row semantics: BuildChunkFilters wraps each as
+// a microfts2 option for the inline FTS scan, and postFilterChunkIDs applies
+// them post-hoc for index-lookup primaries (tag/file-tag/about), so the two
+// paths cannot drift apart.
+// CRC: crc-Searcher.md | R1403, R1471, R2452, R2951
+func rowChunkFilter(row ChunkFilterRow, cache *microfts2.ChunkCache, paths map[uint64]string, store *Store) (microfts2.ChunkFilter, bool) {
+	if row.Query == "" {
+		return nil, false
+	}
+	var filter microfts2.ChunkFilter
+	switch row.Mode {
+	case "contains":
+		filter = ContainsChunkFilter(row.Query, cache, paths)
+	case "fuzzy":
+		filter = FuzzyChunkFilter(row.Query, cache, paths)
+	case "regex":
+		// On the post-hoc path regex is a chunk-text predicate; the inline
+		// FTS path keeps the dedicated microfts2 regex option (more efficient
+		// over the candidate posting lists). Same RE2 semantics either way.
+		re, err := regexp.Compile(row.Query)
+		if err != nil {
+			return nil, false
+		}
+		filter = func(crec microfts2.CRecord) bool {
+			text := chunkText(crec, cache, paths)
+			if text == nil {
+				return true // R1401: can't verify -> keep
+			}
+			return re.Match(text)
+		}
+	case "tag":
+		// R2442, R2451, R2452: sigil match syntax [~|:]NAME [(=|:|~) VALUE].
+		if store == nil {
+			return nil, false
+		}
+		p, err := ParseMatchSyntax(row.Query)
+		if err != nil {
+			return nil, false
+		}
+		filter = TagChunkFilter(p, store)
+	case "file-tag":
+		// R2453: file-level predicate -- every chunk in a file that has the
+		// tag is accepted, regardless of the chunk's own content.
+		if store == nil {
+			return nil, false
+		}
+		p, err := ParseMatchSyntax(row.Query)
+		if err != nil {
+			return nil, false
+		}
+		filter = FileTagChunkFilter(p, store)
+	case "files":
+		// R1770/R950: glob match against file paths -> file ID set.
+		filter = fileIDChunkFilter(matchFilesGlob(row.Query, paths))
+	default:
+		return nil, false
+	}
+	if row.Polarity == "without" { // R1400
+		orig := filter
+		filter = func(crec microfts2.CRecord) bool { return !orig(crec) }
+	}
+	return filter, true
+}
+
+// BuildChunkFilters converts UI filter rows into microfts2 search options
+// for the inline FTS scan. Regex keeps the dedicated microfts2 option; every
+// other mode is built from rowChunkFilter so the inline semantics match the
+// post-hoc funnel exactly (R2951).
+// CRC: crc-Searcher.md | R1403, R1471, R2452, R2951
 func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths map[uint64]string, store *Store) []microfts2.SearchOption {
 	var opts []microfts2.SearchOption
 	for _, row := range rows {
@@ -689,51 +775,192 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 			}
 			continue
 		}
-		var filter microfts2.ChunkFilter
-		switch row.Mode {
-		case "contains":
-			filter = ContainsChunkFilter(row.Query, cache, paths)
-		case "fuzzy":
-			filter = FuzzyChunkFilter(row.Query, cache, paths)
-		case "tag":
-			// R2442, R2451, R2452: sigil match syntax —
-			// `[~|:]NAME [(=|:|~) VALUE]`. Single mode covers every
-			// name/value match combination; the retired `tag-contains`
-			// mode is no longer accepted.
-			if store == nil {
-				continue
-			}
-			p, err := ParseMatchSyntax(row.Query)
-			if err != nil {
-				continue
-			}
-			filter = TagChunkFilter(p, store)
-		case "file-tag":
-			// R2453: file-level predicate — every chunk in a file that
-			// has the tag is accepted, regardless of the chunk's own
-			// content.
-			if store == nil {
-				continue
-			}
-			p, err := ParseMatchSyntax(row.Query)
-			if err != nil {
-				continue
-			}
-			filter = FileTagChunkFilter(p, store)
-		case "files":
-			// R1770: glob match against file paths → file ID set, with a
-			// leading `~/` expanded (R950).
-			filter = fileIDChunkFilter(matchFilesGlob(row.Query, paths))
-		default:
+		filter, ok := rowChunkFilter(row, cache, paths, store)
+		if !ok {
 			continue
-		}
-		if row.Polarity == "without" { // R1400
-			orig := filter
-			filter = func(crec microfts2.CRecord) bool { return !orig(crec) }
 		}
 		opts = append(opts, microfts2.WithChunkFilter(filter))
 	}
 	return opts
+}
+
+// effectiveExcludeFiles returns the default search_exclude scope to inject
+// when the caller supplied no explicit file filter. A positive `-files`
+// chunk-filter row (the user asking for a specific path set) or any explicit
+// --filter-files/--exclude-files disables it. Shared by resolveFilters (FTS
+// path) and the index-lookup funnel so every primary mode applies the same
+// default. R939, R940.
+// CRC: crc-Searcher.md | R939, R940, R2951
+func (s *Searcher) effectiveExcludeFiles(opts SearchOpts) []string {
+	if s.config == nil || len(s.config.SearchExclude) == 0 {
+		return nil
+	}
+	if len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 {
+		return nil
+	}
+	for _, cf := range opts.ChunkFilters {
+		if cf.Polarity == "with" && cf.Mode == "files" {
+			return nil
+		}
+	}
+	return s.config.SearchExclude
+}
+
+// postFilterChunkIDs applies the user post-filter stack to a non-FTS
+// candidate set. Index-lookup primaries (tag/file-tag, and the about
+// vec-only path) skip the inline FTS WithChunkFilter scan, so they route
+// their resolved chunkIDs through here: every opts.ChunkFilters row except
+// about-mode (resolved via the embedding pipeline, applied separately)
+// becomes a rowChunkFilter predicate, evaluated against each candidate's
+// CRecord. Returns the chunkIDs passing every predicate, order preserved.
+// CRC: crc-Searcher.md | Seq: seq-search.md | R2951
+func (s *Searcher) postFilterChunkIDs(chunkIDs []uint64, opts SearchOpts, cache *microfts2.ChunkCache) ([]uint64, error) {
+	if len(chunkIDs) == 0 {
+		return chunkIDs, nil
+	}
+	paths, err := s.fts.FileIDPaths()
+	if err != nil {
+		return nil, err
+	}
+	if cache == nil {
+		cache = s.fts.NewChunkCache()
+	}
+	var preds []microfts2.ChunkFilter
+	for _, row := range opts.ChunkFilters {
+		// about: resolved via the embedding pipeline, applied separately.
+		// files: a path predicate, applied at the resolved-path level by
+		// filterByPathGlobs (a deduplicated chunk belongs to several files,
+		// so the path it is reported under is what `-files` must match).
+		if row.Mode == "about" || row.Mode == "files" {
+			continue
+		}
+		if f, ok := rowChunkFilter(row, cache, paths, s.store); ok {
+			preds = append(preds, f)
+		}
+	}
+	if len(preds) == 0 {
+		return chunkIDs, nil
+	}
+	kept := make([]uint64, 0, len(chunkIDs))
+	err = s.fts.Env().View(func(txn *lmdb.Txn) error {
+		for _, cid := range chunkIDs {
+			crec, rerr := s.fts.ReadCRecord(txn, cid)
+			if rerr != nil {
+				continue // stale chunkID -- ChunksByID would skip it anyway
+			}
+			// ReadCRecord decodes the value; the chunkID is the key, so set
+			// it here -- chunkText/tag predicates resolve via crec.ChunkID.
+			crec.ChunkID = cid
+			keep := true
+			for _, p := range preds {
+				if !p(crec) {
+					keep = false
+					break
+				}
+			}
+			if keep {
+				kept = append(kept, cid)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return kept, nil
+}
+
+// filterByPathGlobs applies the structural FilterFiles (with) and
+// ExcludeFiles (without, including the injected default search_exclude
+// scope) path globs to a resolved candidate set via the shared Matcher.
+// Extracted from SearchTagChunks so the about vec-only path reuses it.
+// CRC: crc-Searcher.md | R2951
+func filterByPathGlobs(results []SearchResultEntry, opts SearchOpts) []SearchResultEntry {
+	// R2951: -files post-filter rows are path predicates, applied here against
+	// the reported path (with => must match its glob; without => must not).
+	type filesRow struct {
+		glob   string
+		negate bool
+	}
+	var fileRows []filesRow
+	for _, row := range opts.ChunkFilters {
+		if row.Mode == "files" && row.Query != "" {
+			fileRows = append(fileRows, filesRow{ExpandTilde(row.Query), row.Polarity == "without"})
+		}
+	}
+	if len(opts.FilterFiles) == 0 && len(opts.ExcludeFiles) == 0 && len(fileRows) == 0 {
+		return results
+	}
+	m := &Matcher{Dotfiles: true}
+	filtered := results[:0]
+	for _, r := range results {
+		if len(opts.FilterFiles) > 0 {
+			include := false
+			for _, pat := range opts.FilterFiles {
+				if m.Match(pat, r.Path, "", false) {
+					include = true
+					break
+				}
+			}
+			if !include {
+				continue
+			}
+		}
+		excluded := false
+		for _, pat := range opts.ExcludeFiles {
+			if m.Match(pat, r.Path, "", false) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		// -files rows AND together at their polarity against the reported path.
+		passes := true
+		for _, fr := range fileRows {
+			if pathMatchesGlob(fr.glob, r.Path) == fr.negate {
+				passes = false
+				break
+			}
+		}
+		if !passes {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+// chunkScoreIDs extracts the chunkID slice from a ChunkScore list (order
+// preserved) so the vec-only candidate set can run through the funnel.
+// CRC: crc-Searcher.md | R2951
+func chunkScoreIDs(scores []ChunkScore) []uint64 {
+	ids := make([]uint64, len(scores))
+	for i, cs := range scores {
+		ids[i] = cs.ChunkID
+	}
+	return ids
+}
+
+// filterChunkScores keeps only the ChunkScores whose chunkID survived the
+// post-filter funnel, preserving order.
+// CRC: crc-Searcher.md | R2951
+func filterChunkScores(scores []ChunkScore, keep []uint64) []ChunkScore {
+	if len(keep) == len(scores) {
+		return scores // funnel dropped nothing
+	}
+	set := make(map[uint64]struct{}, len(keep))
+	for _, id := range keep {
+		set[id] = struct{}{}
+	}
+	out := scores[:0]
+	for _, cs := range scores {
+		if _, ok := set[cs.ChunkID]; ok {
+			out = append(out, cs)
+		}
+	}
+	return out
 }
 
 // matchFilesGlob returns the set of fileIDs whose path matches glob —
@@ -746,15 +973,25 @@ func matchFilesGlob(glob string, paths map[uint64]string) map[uint64]bool {
 	glob = ExpandTilde(glob)
 	fileIDs := make(map[uint64]bool)
 	for fid, p := range paths {
-		matched, _ := filepath.Match(glob, filepath.Base(p))
-		if !matched {
-			matched, _ = doublestar.Match(glob, p)
-		}
-		if matched {
+		if pathMatchesGlob(glob, p) {
 			fileIDs[fid] = true
 		}
 	}
 	return fileIDs
+}
+
+// pathMatchesGlob reports whether one path matches an (already tilde-expanded)
+// glob, by basename (filepath.Match) or full-path doublestar — the same test
+// matchFilesGlob applies per file. Used by the path-level `-files` post-filter
+// (filterByPathGlobs) so a `-files` row matches the file each result is
+// reported under, not any file a content-deduplicated chunk happens to share.
+// CRC: crc-Searcher.md | R1770, R950, R2951
+func pathMatchesGlob(glob, path string) bool {
+	if matched, _ := filepath.Match(glob, filepath.Base(path)); matched {
+		return true
+	}
+	matched, _ := doublestar.Match(glob, path)
+	return matched
 }
 
 // AboutResolution bundles everything ResolveAboutFilters returns.
@@ -958,21 +1195,12 @@ func computeCentroidFilters(metas []aboutFilterMeta, centroids map[uint64][]floa
 // Path filters first (cheap), then content filters. Positives intersect,
 // negatives subtract. Returns nil if no filtering is requested.
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
-	// R939, R940: inject search_exclude defaults when no explicit file
-	// filters. A positive `-files` chunk-filter row counts as an explicit
-	// narrowing — the user is asking for a specific set of paths and
-	// shouldn't have the default exclude pattern intersected on top.
-	hasPositiveFilesChunkFilter := false
-	for _, cf := range opts.ChunkFilters {
-		if cf.Polarity == "with" && cf.Mode == "files" {
-			hasPositiveFilesChunkFilter = true
-			break
-		}
-	}
-	if !hasPositiveFilesChunkFilter &&
-		len(opts.FilterFiles) == 0 && len(opts.ExcludeFiles) == 0 &&
-		s.config != nil && len(s.config.SearchExclude) > 0 {
-		opts.ExcludeFiles = s.config.SearchExclude
+	// R939, R940: inject the default search_exclude scope when the caller
+	// supplied no explicit file filter. Shared with the index-lookup funnel
+	// via effectiveExcludeFiles so every primary mode applies the same
+	// default; a positive `-files` row or explicit flags disable it.
+	if def := s.effectiveExcludeFiles(opts); def != nil {
+		opts.ExcludeFiles = def
 	}
 	// R950: expand a leading `~/` on the explicit file-glob flags so they
 	// behave like the (already tilde-expanded) search_exclude config. No-op
@@ -1291,44 +1519,24 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 }
 
 // SearchTagChunks resolves a tag-derived chunkID set to a flat
-// SearchResultEntry list — bypasses FTS. Applies FilterFiles/ExcludeFiles
-// post-hoc and caps to opts.K. Caller fills chunks/files as needed.
-// CRC: crc-Searcher.md | R2442
+// SearchResultEntry list -- bypasses FTS. R2951: routes the candidate set
+// through the post-filter funnel (default search_exclude scope + the user
+// post-filter stack + path globs) so post-filtering is
+// primary-mode-independent. Caps to opts.K. Caller fills chunks/files.
+// CRC: crc-Searcher.md | Seq: seq-search.md | R2442, R2951
 func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
+	if def := s.effectiveExcludeFiles(opts); def != nil {
+		opts.ExcludeFiles = def
+	}
+	chunkIDs, err := s.postFilterChunkIDs(chunkIDs, opts, opts.Cache)
+	if err != nil {
+		return nil, err
+	}
 	results, err := s.ChunksByID(chunkIDs)
 	if err != nil {
 		return nil, err
 	}
-	if len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 {
-		m := &Matcher{Dotfiles: true}
-		filtered := results[:0]
-		for _, r := range results {
-			if len(opts.FilterFiles) > 0 {
-				include := false
-				for _, pat := range opts.FilterFiles {
-					if m.Match(pat, r.Path, "", false) {
-						include = true
-						break
-					}
-				}
-				if !include {
-					continue
-				}
-			}
-			excluded := false
-			for _, pat := range opts.ExcludeFiles {
-				if m.Match(pat, r.Path, "", false) {
-					excluded = true
-					break
-				}
-			}
-			if excluded {
-				continue
-			}
-			filtered = append(filtered, r)
-		}
-		results = filtered
-	}
+	results = filterByPathGlobs(results, opts)
 	k := opts.K
 	if k == 0 {
 		k = 20

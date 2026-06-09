@@ -2,7 +2,8 @@
 
 Your one digital zettelkasten. One database, one server, one index
 for everything — notes, code, conversations, decisions. Orchestration
-layer over microfts2 (trigram) and microvec (vector). Go CLI and server.
+layer over microfts2 (trigram) and the Librarian/EC embedding pipeline
+(vector). Go CLI and server.
 
 ## Principles
 
@@ -20,16 +21,17 @@ layer over microfts2 (trigram) and microvec (vector). Go CLI and server.
 ## Language and Environment
 
 - Go
-- microfts2 and microvec as library dependencies
+- microfts2 as a library dependency; vector search via the internal Librarian/EC embedding pipeline (no separate vector library)
 - LMDB via microfts2's environment (shared)
 - Unix domain socket for server communication
 
 ## Shared LMDB Environment
 
 Ark opens microfts2 first (which creates the LMDB environment), then
-passes the env to microvec. Ark also opens its own named subdatabase
-for metadata (missing files list, etc.). MaxDBs set to 8 to leave
-room: microfts2 uses 2, microvec uses 1, ark uses 1+.
+opens its own named subdatabase for metadata (missing files list,
+etc.), tags, and chunk embeddings (EC records). The Store and the
+Librarian share that env. MaxDBs leaves room: microfts2 uses 2, the
+ark subdatabase uses 1+ — no separate vector subDB (R1911).
 
 ## Source Configuration
 
@@ -193,8 +195,8 @@ Default: `~/.ark/` or specified via `--dir` flag.
 
 On init and open, ark inserts the database directory into `PATH`
 just before `/usr/bin` (or `/usr/local/bin`). This ensures that
-companion binaries in the ark directory (`microfts`, `microvec`,
-chunking commands) are found before system commands with the same
+companion binaries in the ark directory (`microfts`, chunking
+commands) are found before system commands with the same
 name — notably `ark` itself, which is an archive manager on some
 Linux distributions (e.g. Steam Deck). User-installed paths
 (`~/.local/bin`, etc.) still take priority since they appear
@@ -204,7 +206,8 @@ earlier in PATH.
 
 Create a new ark database:
 - Initialize microfts2 (case insensitivity, byte aliases)
-- Initialize microvec (embedding command — optional, can be added later)
+- Embeddings are config-gated (the Librarian/EC pipeline runs when
+  `tag_model` is set) — no separate vector-store init step
 - Create ark's own subdatabase
 - Write default config
 
@@ -516,8 +519,8 @@ current binary. The bundled assets are the source of truth.
 ### `ark init` — database creation
 
 `ark init` creates a new ark database. Existing behavior is
-unchanged: initializes microfts2, microvec, ark subdatabase, writes
-default config.
+unchanged: initializes microfts2 and the ark subdatabase, writes
+default config (no microvec init step; R1912).
 
 By default, `ark init` runs `ark setup` first if `~/.ark/` has not
 been bootstrapped (no `html/` directory present). This means the

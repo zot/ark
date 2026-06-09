@@ -16,7 +16,10 @@ and append detection.
 1. fsnotify event (CREATE | WRITE | REMOVE | RENAME)
   │
   ├── 1.1. if new directory created:
-  │     └── 1.1.1. watchDirRecursive (bypass indexability check)
+  │     └── 1.1.1. watchDirRecursive — descend/watch each subdir iff
+  │               DB.IsWatchableDir (Classify isDir=true != Excluded):
+  │               bypasses the file-indexability check but honors dir
+  │               excludes. Watch coverage == scan coverage (R2952).
   │
   ├── 1.2. if ark.toml changed:
   │     ├── 1.2.1. Config.Load() + Server.Reconcile()
@@ -78,7 +81,8 @@ Indexer.RefreshFile(path, strategy)
   │           ├── parse last ChunkRange for base line
   │           ├── microfts2.AppendChunks(fileid, newBytes, strategy,
   │           │     WithBaseLine, WithContentHash, WithModTime, WithFileLength)
-  │           ├── microvec: remove + re-add all vectors (full refresh)
+  │           ├── EC embeddings re-computed for the file's chunks
+  │           │     (Librarian.BatchEmbedChunks; chunkid-keyed, R1914)
   │           ├── ExtractTags(newBytes) → newTags
   │           └── Store.AppendTags(fileid, newTags)
   │

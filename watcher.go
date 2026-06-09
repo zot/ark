@@ -6,16 +6,15 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 const (
-	throttleWindow        = 1 * time.Second
-	maxWaitCeiling        = 30 * time.Second
-	configDebounceWindow  = 500 * time.Millisecond // ark.toml fsnotify burst coalescing
+	throttleWindow       = 1 * time.Second
+	maxWaitCeiling       = 30 * time.Second
+	configDebounceWindow = 500 * time.Millisecond // ark.toml fsnotify burst coalescing
 )
 
 // startWatching creates an fsnotify watcher for ark.toml and all source
@@ -57,7 +56,12 @@ func (srv *Server) watchSourceDirs() {
 	}
 }
 
-// watchDirRecursive adds a watch for dir and all its subdirectories.
+// watchDirRecursive adds a watch for dir and all its watchable subdirectories.
+// R2952: descent matches the Scanner — a subtree is watched iff
+// DB.IsWatchableDir (Classify isDir=true is not Excluded), so dot-dirs like
+// .scratch/ are watched (dotfiles=true) while directory excludes like .git/
+// are skipped. Replaces the prior unconditional dot-prefix skip, which made
+// edits under .scratch/ never auto-index (watch coverage ⊊ scan coverage).
 func (srv *Server) watchDirRecursive(dir string) {
 	if srv.watcher == nil {
 		return
@@ -67,8 +71,7 @@ func (srv *Server) watchDirRecursive(dir string) {
 			return nil // skip inaccessible paths
 		}
 		if info.IsDir() {
-			// Skip hidden directories (except the root dir itself)
-			if path != dir && strings.HasPrefix(filepath.Base(path), ".") {
+			if !srv.db.IsWatchableDir(path) {
 				return filepath.SkipDir
 			}
 			if watchErr := srv.watcher.Add(path); watchErr != nil {
@@ -167,7 +170,7 @@ func (srv *Server) watchLoop() {
 				// Immediate mode — process this path now, start throttle.
 				// Seq: seq-file-change.md#1.4.1
 				log.Printf("watch: file changed: %s", event.Name)
-				srv.indexPaths([]string{event.Name})    // Seq: seq-file-change.md#1.4.1.1
+				srv.indexPaths([]string{event.Name})     // Seq: seq-file-change.md#1.4.1.1
 				throttle = time.NewTimer(throttleWindow) // Seq: seq-file-change.md#1.4.1.2
 				pending = nil
 				ceilingStart = time.Now()
@@ -259,7 +262,7 @@ func (srv *Server) watchLoop() {
 				// Events arrived during window — single re-index of accumulated paths.
 				// Seq: seq-file-change.md#1.4.3.1
 				log.Println("watch: throttle expired with pending changes, re-indexing")
-				srv.indexPaths(pathSetToSlice(pending))   // Seq: seq-file-change.md#1.4.3.1.1
+				srv.indexPaths(pathSetToSlice(pending)) // Seq: seq-file-change.md#1.4.3.1.1
 				pending = nil
 				throttle = time.NewTimer(throttleWindow) // Seq: seq-file-change.md#1.4.3.1.2
 				// ceilingStart unchanged — keep the original burst

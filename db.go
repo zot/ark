@@ -653,6 +653,32 @@ func (db *DB) IsIndexable(path string) bool {
 	return false
 }
 
+// IsWatchableDir reports whether the live watcher should descend into and
+// watch dir. It is the directory analog of IsIndexable: it applies the same
+// directory-classification rule the Scanner uses to descend (Classify with
+// isDir=true is not Excluded), so watch coverage equals scan coverage. Unlike
+// IsIndexable it passes isDir=true (directory patterns) and accepts Unresolved
+// as well as Included — the Scanner descends into Unresolved directories. With
+// dotfiles=true a non-excluded dot-directory (e.g. .scratch/) is watchable
+// while a directory excluded as a directory (e.g. .git/) is not.
+// CRC: crc-DB.md | Seq: seq-file-change.md#1.1.1 | R2952
+func (db *DB) IsWatchableDir(path string) bool {
+	for _, src := range db.config.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		relPath, err := filepath.Rel(src.Dir, path)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			continue // path not under this source
+		}
+		includes, excludes := db.config.EffectivePatterns(src)
+		if db.matcher.Classify(includes, excludes, path, src.Dir, true) != Excluded {
+			return true
+		}
+	}
+	return false
+}
+
 // FTS returns the microfts2 database (for creating ChunkCaches).
 func (db *DB) FTS() *microfts2.DB {
 	return db.fts

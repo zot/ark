@@ -26,9 +26,9 @@
 **Refs:** crc-Searcher.md, R57
 
 ## Test: single flag returns single engine results
-**Purpose:** --about alone returns microvec results without intersection
+**Purpose:** --about alone returns EC (Librarian.SearchChunks) results without intersection
 **Input:** about="concept", no contains/regex
-**Expected:** microvec results passed through directly
+**Expected:** EC vector results passed through directly
 **Refs:** crc-Searcher.md, R56
 
 ## Test: contains and regex compose
@@ -48,3 +48,15 @@
 **Input:** results with various timestamps, after=yesterday
 **Expected:** only results newer than yesterday
 **Refs:** crc-Searcher.md, R60
+
+## Test: post-filter funnel applies to a tag primary (Sleeping Sentry)
+**Purpose:** R2951 — an index-lookup primary (-tag/-file-tag) routes its
+candidate set through the same post-filter stack and default search_exclude
+scope as a content-scan primary. Guards against the F2 bypass where
+SearchTagChunks returned the tag set directly.
+**Input:** three @guard chunks (keep.md/other.md/excluded.md); config
+search_exclude=`**/excluded.md`; SearchTagChunks invoked with (a) `-files
+'**/keep.md'`, (b) `-contains needle`, (c) no explicit filter.
+**Expected:** (a) {keep.md}; (b) {keep.md}; (c) {keep.md, other.md}.
+**Refs:** crc-Searcher.md, seq-search.md, R2951
+**Code:** search_tag_funnel_test.go

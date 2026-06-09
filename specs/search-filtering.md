@@ -3,6 +3,20 @@
 Two-pass scoped search. A filter query narrows the file set before
 the main query runs. Composes with path-based file filtering.
 
+> **Flag names vs. mechanism.** The user-facing `ark search` flag
+> *names* in this doc (`--filter`, `--except`, `--filter-files`,
+> `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`) were
+> **removed** from `ark search` and subsumed by the unified filter
+> stack — see [search-cli-filters.md](search-cli-filters.md), which
+> owns the user-facing `ark search` filter syntax (`-contains`, `-tag`,
+> `-files`, …) and the alias map. What persists, and what this spec
+> documents, is the underlying file-ID filter **mechanism**: the
+> `SearchOpts` structural fields (`FilterFiles`/`ExcludeFiles`, used by
+> the Lua UI for sidebar source filtering), the `search_exclude` config
+> (this doc is its canonical home), and the subscription/pubsub filter
+> flags. Read the flag-named sections below as describing that
+> mechanism, not current `ark search` CLI surface.
+
 ## Content filtering
 
 `--filter <query>` runs a preliminary FTS search. The matching file
@@ -98,11 +112,17 @@ search_exclude = [
 ]
 ```
 
-These patterns are applied as `--exclude-files` defaults. They are
-**not applied** when the user provides explicit `--filter-files` or
-`--exclude-files` flags — those replace the default scope entirely.
-When the caller has narrowed to an explicit file set, the global
-excludes are irrelevant.
+These patterns apply as the default exclude scope. They are
+**not applied** when the search carries an explicit *narrowing* file
+filter — a positive `-files GLOB` in the filter stack, or a structural
+`filter_files`/`exclude_files` (the `SearchOpts` fields the Lua UI
+sets). Such a filter *replaces* the default scope entirely (R940):
+when the caller has narrowed to an explicit file set, the global
+excludes are irrelevant, so a positive `-files` pointed at a normally
+`search_exclude`-hidden path includes it. A `-without -files GLOB`
+only *adds* a subtraction and leaves `search_exclude` in effect. The
+filter stack's user-facing surface is specified in
+[search-cli-filters.md](search-cli-filters.md); this is its config home.
 
 Subscriptions should respect `search_exclude` too, via
 `--except-files` defaults. A subscription without explicit file

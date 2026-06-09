@@ -1115,6 +1115,11 @@ func cmdSearch(args []string) {
 			Fuzzy:     primaryFuzzy,
 			Proximity: *proximity,
 			NoTmp:     *noTmp,
+			// R2951: index-lookup primaries (tag/file-tag/about) apply the
+			// post-filter stack via opts.ChunkFilters in SearchTagChunks /
+			// the vec-only path — the server path sets this in buildSearchOpts;
+			// the local path must too, or the funnel sees an empty stack.
+			ChunkFilters: chunkFilters,
 		}
 
 		// CRC: crc-CLI.md | R1936 — about queries (primary or filter)

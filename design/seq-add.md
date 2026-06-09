@@ -12,7 +12,7 @@ walks per config and classifies files before indexing.
 - Store
 - Indexer
 - microfts2
-- microvec
+- Librarian (EC chunk embeddings)
 
 ## Flow: ark add <directory>
 
@@ -48,7 +48,9 @@ CLI ──> DB.Add(path)
                │
                ├──> read chunk text from file using offsets
                │
-               ├──> microvec.AddFile(fileid, chunks)
+               ├──> Librarian.BatchEmbedChunks → EC records, keyed by
+               │     chunkid (R1913); embedding rides the chunkid-aware
+               │     indexed callback, not this text read
                │
                ├──> Indexer.ExtractTags(content)
                │     └── regex scan for @[a-zA-Z][\w-]*:
@@ -72,7 +74,9 @@ CLI ──> DB.Add(path)
                │
                ├──> read chunk text from file using offsets
                │
-               ├──> microvec.AddFile(fileid, chunks)
+               ├──> Librarian.BatchEmbedChunks → EC records, keyed by
+               │     chunkid (R1913); embedding rides the chunkid-aware
+               │     indexed callback, not this text read
                │
                ├──> Indexer.ExtractTags(content)
                │     └── returns map[string]uint32
