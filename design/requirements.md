@@ -33,6 +33,8 @@
 - **R20:** Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
 - **~~R21:~~** (Retired T48 — see R2133) Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
 - **R22:** `ark init` ships default excludes for `.git/`, `.env`, etc.
+- **R2954:** Explicit `ark add` of a single file with no `--strategy` resolves the chunking strategy from the file's enclosing source via `StrategyForFile` (per-source map over global, default `lines`), matching the directory-walk resolution — not the empty strategy passed straight to microfts2.
+- **R2955:** Adding a file outside every configured source with no `--strategy` is a client error (no source to resolve against) reported as HTTP 400, not a server 500; an explicit `--strategy` is always honored regardless of source membership.
 
 ### Config File
 

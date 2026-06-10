@@ -65,7 +65,14 @@ CLI ──> DB.Add(path)
 ## Flow: ark add <file>
 
 ```
-CLI ──> DB.Add(path)
+CLI ──> DB.Add(path, strategy)
+         │
+         ├──> if strategy == "":  [R2954, R2955]
+         │     findSourceForPath(path)
+         │     ├── in a source ──> Config.StrategyForFile(rel, src.Strategies)
+         │     │                    (per-source over global, default "lines")
+         │     └── outside all sources ──> return ErrFileOutsideSource
+         │                                  (handleAdd → HTTP 400)
          │
          └──> Indexer.AddFile(path, strategy)
                │

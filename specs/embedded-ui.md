@@ -52,6 +52,17 @@ coexist without collision.
    server. Serves HTML, handles WebSocket connections for live UI
    updates. The user's browser connects here.
 
+The embedded ui-engine also opens its own backend control socket
+(the legacy packet-protocol transport). In embedded mode nothing
+dials it — the browser uses the HTTP port, the CLI uses `ark.sock`,
+and `ark ui` runs Lua in-process — so it is vestigial, but it is
+still created. `flib` sites it per-instance at `$DIR/ui.sock` (rather
+than the ui-engine's shared `/tmp/ui.sock` default), so `--dir`
+isolates the **whole** socket layer: a disposable or second `ark`
+can run alongside the live one without the two colliding. The
+publisher port (`25283`, the bookmarklet channel) stays global by
+design.
+
 ## Server lifecycle
 
 The ark API server starts first (bind socket, open DB, begin

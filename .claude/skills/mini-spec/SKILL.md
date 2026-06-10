@@ -115,6 +115,7 @@ TaskCreate: "Update design docs"
 - write idiomatic code for the language you use
 - avoid holding locks in sections that have significant functionality
 - **No unanchored design:** every design artifact must trace back to a spec item and requirement. If you need to add something to the design, add it to specs first, then requirements, then design. This applies regardless of direction — even when documenting existing code, verify the spec anchor exists before updating design. This prevents features from existing only in the AI's interpretation.
+- **Supersede at the source:** the mirror of "No unanchored design." A change is complete only when every directive describing the *old* behavior is removed or rewritten **at its source** — across specs, requirements, AND design prose. Anchoring keeps features from vanishing; superseding keeps stale directives from causing reverts: a future agent reads a leftover spec sentence or design bullet as current intent and "fixes" the code back to match, undoing the change that obsoleted it. Completion test for any change: could an agent reading only specs + design be led to undo it? If yes, a trap remains.
 - in HTML, use the slimmest DOM Possible. Fewer elements makes everything in the browser better: less memory, more speed, better responsiveness
 
 ### Why anchoring matters
@@ -130,6 +131,20 @@ Anchoring is cheap (a few lines of spec + a requirement number). The cost
 of *not* anchoring is discovering, three sessions later, that a feature
 vanished during an unrelated refactor and no one noticed because the design
 never mentioned it. The spec is the pin that says "this must survive."
+
+### Why superseding matters
+
+Anchoring and superseding guard opposite failure directions. Anchoring fights
+*omission* — a feature with no spec silently disappears. Superseding fights
+*contradiction* — a directive that outlived the behavior it described silently
+reappears. The second is the more dangerous: a contradiction in the design is a
+trap that springs in the *revert* direction. A retired requirement has a forcing
+function (the `retire` command strikes it through, appends the Tn, and prints a
+reconcile reminder), but the *prose* that spawned it — the originating spec
+sentence, the CRC bullet, the sequence step — has none. It rots in place until a
+future agent reads it as current intent and "fixes" the code back to match. So
+retirement is not done when the `Rn` is struck out; it is done when every
+sentence that described the old behavior is gone or rewritten at its source.
 
 ## Cross-cutting Concerns
 
@@ -390,28 +405,55 @@ To keep `specs/` from accumulating stale migration narratives:
    appends a new Tn entry to `design.md` Gaps in one atomic step.
    Outputs the assigned Tn.
 
+   To stderr it also prints a **supersede-at-source reminder** naming
+   `R<old>`'s originating spec (its feature's `**Source:**`). Treat
+   that reminder as a checklist item, not noise — it points at step 6,
+   which applies to *every* retirement, not just migrations.
+
    If a CRC card or inline code comment still references the
    retired Rn but the code no longer fulfills it, update the
    reference to the replacement Rn. (References to retired Rn in
    code that was removed are fine — the comment went with the
    code.)
 
-6. **Reconcile obsoleted design prose.** Retiring a requirement has a
-   forcing function — the `retire` command, the Tn entry, the
-   `~~Rn:~~` marker. Design *prose* has none. CRC `## Does`
-   descriptions, method signatures, and sequence diagrams that
-   described state A do not flag themselves as stale; they rot
-   silently until someone reads them, long after the migration looks
-   done. Before moving the migration spec, grep `design/` for the
-   changed method names, old signatures, and renamed types, and
-   rewrite every CRC bullet and seq diagram that still describes the
-   old behavior to match state B. `minispec validate` cannot catch
-   this: it checks that requirements are *referenced*, not that the
+6. **Reconcile obsoleted spec *and* design prose — at the source.**
+   Retiring a requirement has a forcing function — the `retire`
+   command, the Tn entry, the `~~Rn:~~` marker, and the stderr
+   reminder. The *prose* that described the old behavior has none.
+   Two layers rot silently:
+   - **Originating spec prose.** The requirement was born from a
+     sentence in its feature's `**Source:**` spec — "current truth,
+     the human's intent," the most authoritative trap of all. Follow
+     the `**Source:**` the reminder names and rewrite or delete the
+     sentence that spawned the retired `Rn`.
+   - **Design prose.** CRC `## Does` descriptions, method signatures,
+     and sequence diagrams that described state A do not flag
+     themselves as stale. Grep `design/` for the changed method
+     names, old signatures, and renamed types, and rewrite every CRC
+     bullet and seq diagram that still describes the old behavior to
+     match state B.
+
+   This is **not migration-only.** Every retirement — standalone or
+   part of a migration — owes this reconciliation, and the `retire`
+   reminder prompts it each time. `minispec validate` cannot catch
+   it: it checks that requirements are *referenced*, not that the
    prose around the reference is accurate. (Step 5 reconciles the
    *Rn references*; this step reconciles the *descriptions* those
    references annotate — a distinct, easily-missed pass.)
 
-7. **Move the migration spec(s)** by running:
+7. **Move the migration spec(s).**
+
+   **Precondition — the prose grep.** Before completing, grep the
+   retired module/type/old-behavior names across **both** `specs/`
+   and `design/`. Every hit must be either gone or framed as a
+   historical record (a retirement note, a `complete/` migration
+   spec) — **zero stale-as-live mentions.** A grep alone can't tell a
+   trap from an accurate "documents the absence" record, so this is
+   your judgment, not the tool's. Apply the completion test: could an
+   agent reading only specs + design be led to undo the migration? If
+   yes, a trap remains — fix it before moving the spec.
+
+   Then run:
 
    ```
    ~/.claude/bin/minispec update migration-complete <name>

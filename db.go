@@ -866,8 +866,16 @@ func (db *DB) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, error
 	return db.search.FillFiles(results)
 }
 
+// ErrFileOutsideSource is returned by Add when a single file with no
+// explicit strategy lies outside every configured source — there is no
+// source to resolve a chunking strategy from. handleAdd maps it to a
+// 400 client error: the caller must pass --strategy. (R2955)
+var ErrFileOutsideSource = errors.New("file is outside every configured source; pass --strategy")
+
 // Add indexes files. If path is a directory, walks per config.
 // If a file, adds directly with the given strategy.
+//
+// CRC: crc-DB.md | Seq: seq-add.md | R2954, R2955
 func (db *DB) Add(paths []string, strategy string) error {
 	if db.config.HasErrors() {
 		return fmt.Errorf("config errors: %v", db.config.Errors)
@@ -887,12 +895,38 @@ func (db *DB) Add(paths []string, strategy string) error {
 				return err
 			}
 		} else {
-			if _, err := db.indexer.AddFile(path, strategy); err != nil {
+			fileStrategy, err := db.resolveAddStrategy(path, strategy)
+			if err != nil {
+				return err
+			}
+			if _, err := db.indexer.AddFile(path, fileStrategy); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// resolveAddStrategy picks the chunking strategy for an explicit single-file
+// Add. An explicit strategy is used as-is. An empty strategy is resolved from
+// the file's enclosing source the way the watcher does (findSourceForPath +
+// Config.StrategyForFile, default "lines"); a file outside every source has
+// nothing to resolve against and yields ErrFileOutsideSource.
+//
+// CRC: crc-DB.md | Seq: seq-add.md | R2954, R2955
+func (db *DB) resolveAddStrategy(path, strategy string) (string, error) {
+	if strategy != "" {
+		return strategy, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	src, rel, ok := db.findSourceForPath(abs)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrFileOutsideSource, path)
+	}
+	return db.config.StrategyForFile(rel, src.Strategies), nil
 }
 
 func (db *DB) addDirectory(dir string) error {

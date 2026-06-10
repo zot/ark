@@ -78,6 +78,18 @@ pattern → chunking strategy name) that amends the global strategies
 table for files in that source. This lets a source override or
 extend strategy assignments without affecting other sources.
 
+**Explicit `add` resolves the strategy from the source.** When
+`ark add PATH` names a single file and no `--strategy` is given, the
+strategy is resolved the same way the directory walk resolves it: the
+file's enclosing source is located and the source's strategy map
+(over the global map) picks the match, defaulting to `lines` when no
+glob matches. A file that lies **outside every configured source** has
+no source to resolve against; added with no explicit `--strategy` this
+is a client error — the caller must say how to chunk it — reported as
+HTTP 400, never a server-side 500. An explicit `--strategy` is always
+honored, so any file (in or out of a source) can still be added by
+naming its strategy.
+
 **No rule means no action.** Files that don't match any include or
 exclude pattern are not indexed and not ignored — they're held in an
 "unresolved" list. The user must provide a rule or explicit decision.

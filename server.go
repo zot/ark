@@ -1030,6 +1030,7 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// CRC: crc-Server.md | Seq: seq-add.md | R2955
 func (srv *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	var req addRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1039,7 +1040,13 @@ func (srv *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if err := SyncVoid(srv.db, func(db *DB) error {
 		return db.Add(req.Paths, req.Strategy)
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// R2955: a file outside every source with no strategy is a
+		// client error (nothing to chunk against), not a server fault.
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrFileOutsideSource) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

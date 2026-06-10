@@ -225,14 +225,19 @@ ark add [options] PATH...
 
 | Flag               | Default          | Meaning                                                    |
 |--------------------|------------------|------------------------------------------------------------|
-| `--strategy NAME`  | (chunker config) | Override chunking strategy                                 |
+| `--strategy NAME`  | (resolved from source) | Override the chunking strategy; required for a file outside every source |
 | `--content TEXT`   | —                | Inline content for tmp:// paths                            |
 | `--from-file PATH` | —                | Read tmp:// content from file                              |
 | `--append`         | `false`          | Append to an existing tmp:// document instead of replacing |
 
 For tmp:// paths: server is required; content comes from `--content`,
 `--from-file`, or stdin in that order; default strategy is `lines`.
-For ordinary paths: server-proxy if running, otherwise `withDB`.
+For ordinary paths: server-proxy if running, otherwise `withDB`. With
+no `--strategy`, a single file's strategy is resolved from its
+enclosing source (the same resolution the directory walk uses,
+default `lines`); a file outside every configured source has nothing
+to resolve against and is rejected as a client error (HTTP 400) — pass
+`--strategy` to add it anyway.
 
 ### `bundle` — graft assets onto binary
 
