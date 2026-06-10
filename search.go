@@ -512,7 +512,7 @@ type ChunkFilterRow struct {
 }
 
 // resolveChunkLocation resolves a CRecord to (path, range) using the fileIDPaths map.
-// CRC: crc-Searcher.md | R1395, R1867
+// CRC: crc-Searcher.md | R1395, R1867, R2959
 func resolveChunkLocation(crec microfts2.CRecord, paths map[uint64]string) (string, string, bool) {
 	if len(crec.FileIDs) == 0 {
 		return "", "", false
@@ -520,6 +520,14 @@ func resolveChunkLocation(crec microfts2.CRecord, paths map[uint64]string) (stri
 	fileid := crec.FileIDs[0].FileID
 	path, ok := paths[fileid]
 	if !ok {
+		return "", "", false
+	}
+	// An overlay (tmp://) CRecord is never attach'd to a DB, so its db is nil;
+	// calling FileRecord would deref it and panic the search actor (crashing the
+	// server). Treat a DB-less record as unresolved — chunkText then returns nil
+	// and the chunk filter keeps it, the existing "can't verify" degradation
+	// (R1401, R2959). See TestResolveChunkLocationNilDB.
+	if crec.DB() == nil {
 		return "", "", false
 	}
 	frec, err := crec.FileRecord(fileid)

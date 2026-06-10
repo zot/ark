@@ -34,6 +34,16 @@ so the chunk cache can read its text. Steps:
 The `fileIDPaths` map is captured in the filter closure — computed
 once at filter construction time, not per-chunk.
 
+An overlay (`tmp://`) `CRecord` is never attached to a DB, so step 3 has
+no `*microfts2.DB` to navigate: `CRecord.FileRecord` would dereference a
+nil receiver and panic the search actor (crashing the server). Before
+step 3, resolveChunkLocation guards on `CRecord.DB() == nil` and returns
+*unresolved* for such a record. The caller's `chunkText` then returns
+nil and the chunk filter keeps the chunk — the same "can't verify, don't
+reject" degradation as a cache miss (R1401). This matters because any
+`-fuzzy`/`-contains` chunk-filter search runs against the overlay, so
+tmp:// documents reach the filter on every such query.
+
 ## Filter Closure Constructors
 
 Functions that return `microfts2.ChunkFilter` (i.e.,

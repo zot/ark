@@ -261,7 +261,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DateParseGuards.md → `scheduler_test.go`
 - [x] test-Config.md → `config_test.go`
 - [x] test-Matcher.md → `match_test.go`
-- [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`
+- [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`, `search_nildb_test.go`
 - [x] test-Store.md → `store_test.go`
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`

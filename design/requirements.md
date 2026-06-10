@@ -2211,6 +2211,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1399:** `TagChunkFilter(tag, value, mode, store)` returns a chunk-precise ChunkFilter built from T/V records — F-record ChunkID for name-only, V-record chunkIDs (`TagValueChunks`) for name+value. `chunkIDChunkFilter(set)` provides the chunkID membership predicate over `crec.ChunkID`. No chunk text reads.
 - **R1400:** `without` polarity negates the filter: `func(c) { return !filter(c) }`
 - **R1401:** If chunk text cannot be read (cache miss), the filter returns true (keep — can't verify, don't reject)
+- **R2959:** `resolveChunkLocation` returns unresolved for a `CRecord` with no attached DB (`CRecord.DB() == nil`) instead of calling `FileRecord` on it. Overlay (tmp://) records are unattached, so a `-fuzzy`/`-contains` chunk filter over the overlay would otherwise dereference a nil `*microfts2.DB` and panic the search actor (crash the server); the guard folds into the R1401 can't-verify-keep degradation.
 
 ### Endpoint Integration
 - **R1402:** `handleSearchGrouped` gains a `chunk_filters` request field: array of `{polarity, mode, query}` objects

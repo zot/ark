@@ -60,3 +60,18 @@ search_exclude=`**/excluded.md`; SearchTagChunks invoked with (a) `-files
 **Expected:** (a) {keep.md}; (b) {keep.md}; (c) {keep.md, other.md}.
 **Refs:** crc-Searcher.md, seq-search.md, R2951
 **Code:** search_tag_funnel_test.go
+
+## Test: resolveChunkLocation guards a DB-less (overlay) record
+**Purpose:** A `tmp://` overlay `CRecord` is never attached to a DB, so its
+`db` is nil. resolveChunkLocation must treat it as unresolved rather than call
+`FileRecord` on it — a `-fuzzy`/`-contains` chunk filter over the overlay
+otherwise dereferences a nil `*microfts2.DB` and panics the search actor,
+crashing the server. Sleeping Sentry against the overlay nil-DB crash.
+**Input:** `microfts2.CRecord{ChunkID:1, FileIDs:[{FileID:42}]}` with `db`
+nil (unattached, as overlay records are), and `paths{42: "/tmp/overlay-doc.md"}`
+so the fileid resolves to a path — leaving the nil-DB guard as the only thing
+between the call and a nil-receiver deref.
+**Expected:** returns `("", "", false)` (unresolved), no panic. Before the
+guard the call panicked at `microfts2.(*DB).readFRecord` on a nil receiver.
+**Refs:** crc-Searcher.md, R2959, R1401
+**Code:** search_nildb_test.go
