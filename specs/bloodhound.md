@@ -109,9 +109,12 @@ docs; the bloodhound adds one ordering rule:
 The sealed Haiku secretary gains the ability to *run* a search task:
 
 - **Seal (guard script).** `recall-agent-guard.sh` permits the **read-only**
-  search verbs the crank handle uses — `ark search …`, `ark chunks …`, and the
-  read-only `tag` / `files` / `grams` lookups. `Read`, `Write`, `Edit`,
-  network, and every mutating verb stay denied as a class. Each denial's stderr
+  verbs a directed hunt needs — `ark search …`, `ark chunks …`, `ark fetch …`
+  (open any indexed file, with no path-approval friction — unlike `cat`, which
+  only reaches user-approved paths), and the read-only lookups `ark files …`
+  (locate by name) and `ark grams …` (trigram debug). `Read`, `Write`, `Edit`,
+  network, and every other verb stay denied as a class — including `ark tag`,
+  since bare `tag` would admit the mutating `tag set`. Each denial's stderr
   remains the runway (Fumble Onboarding).
 - **Persona.** The secretary recognizes a `## Search task` doc and follows the
   crank handle in its body — it does not need the search *craft* in its persona

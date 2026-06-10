@@ -4,8 +4,11 @@
 # Hermetic seal: only the four recall verbs the loop uses are permitted —
 #   ark connections recall next                       (the loop driver)
 #   ark connections recall surface | recommend | close   (per-fire work)
-# `next` absorbs subscribe / listen / files / fetch / context entirely,
-# so none of those are allowed. Read / Edit / Write / network: denied.
+# `next` absorbs the whole loop — subscribe, listen, files, fetching its own
+# doc, injecting context — so the agent never calls those verbs manually.
+# Read / Edit / Write / network: denied. (The directed hunt below separately
+# allows `ark fetch` to open an indexed corpus file — a different use than
+# next's own doc-fetch.)
 # `next` blocks (true lotto-tube), so the harness backgrounds it; the one
 # extra command allowed is `cat <file>` — a single-arg read, no chaining
 # or redirection — so the agent can pick up the backgrounded output.
@@ -19,9 +22,12 @@ if [ "$TOOL" = Bash ]; then
     if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+connections\s+recall\s+(next|surface|recommend|close|finding)(\s|$)'; then
         exit 0
     fi
-    # Directed-hunt search verbs (read-only) the search crank handle uses
-    # (R2941). Only `search` and `chunks` — mutating verbs stay denied.
-    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+(search|chunks)(\s|$)'; then
+    # Directed-hunt read verbs (R2941): search, chunks, fetch (open any indexed
+    # file — no path-approval friction, unlike `cat`), plus the read-only
+    # lookups files (locate by name) and grams (trigram debug). Mutating verbs
+    # stay denied — note `tag` is excluded because bare `ark tag` would admit
+    # the mutating `tag set`.
+    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+(search|chunks|fetch|files|grams)(\s|$)'; then
         exit 0
     fi
     # `next` blocks, so the harness backgrounds it; allow reading the
@@ -30,7 +36,7 @@ if [ "$TOOL" = Bash ]; then
     if echo "$CMD" | grep -qE '^\s*cat\s+\S+\s*$'; then
         exit 0
     fi
-    echo "BLOCKED: recall-agent may run only — ark connections recall { next | surface | recommend | close | finding }, the read-only ark { search | chunks } for a directed hunt, plus \`cat <file>\`. Run \`~/.ark/ark connections recall next <your nonce>\` and follow what it returns." >&2
+    echo "BLOCKED: recall-agent may run only — ark connections recall { next | surface | recommend | close | finding }, the read-only ark { search | chunks | fetch | files | grams } for a directed hunt, plus \`cat <file>\`. Open indexed files with ark chunks/fetch, not cat or Read. Run \`~/.ark/ark connections recall next <your nonce>\` and follow what it returns." >&2
     exit 2
 fi
 

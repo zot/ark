@@ -811,19 +811,22 @@ func bloodhoundFindingPath(session string, bid uint64) string {
 // own nonce. R2938
 const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue is the ## Search task above. Read its fields — clue, scope, depth, want, and any stop condition — then work the trail. Don't plan; do these in order, using ~/.ark/ark.
 
-1. SCOPE -> filters. Turn the scope word into search filters:
-     code   -> -with -files '*.go'
+Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search with ~/.ark/ark search; open any indexed file with ~/.ark/ark chunks <path:range> (a scoped range) or ~/.ark/ark fetch <path> (the whole file); locate files by name with ~/.ark/ark files <pattern>; report with ~/.ark/ark connections recall (surface / recommend / finding / close). The Read tool, grep, find, ls, and awk are DENIED, and cat only reaches user-approved paths (it stalls on anything else) — so to look inside any indexed file use ~/.ark/ark chunks or ~/.ark/ark fetch, never Read or cat.
+
+1. SCOPE -> filters. Turn the scope word into search filters (-files globs are cwd-relative: 'specs/**' = this project's specs; '**/' for any depth):
+     code   -> -with -files '**/*.go'
      specs  -> -with -files 'specs/**'      design -> -with -files 'design/**'
      notes  -> prose: top-level *.md, .scratch/**, knowledge/**
      chat   -> step 3 only (never the corpus pass)
      all    -> no -files narrowing
 2. SEARCH. Match the matcher: exact phrase -> -contains, approx/typo -> -fuzzy, meaning -> -about.
      ~/.ark/ark search "<clue terms>" <scope filters> -k 20 -scores
+   One or two searches per scope, then go READ the hits (step 5). Don't re-phrase the same query with synonyms — trigram matches words, not meanings, so synonym swaps rarely add hits. Trust the index; read what it gave you.
 3. CHAT (only if scope=chat, or the clue says "did we discuss / in the chat"): a SEPARATE pass that un-hides the logs —
      ~/.ark/ark search -files '~/.claude/projects/**' -fuzzy "<clue>" -k 20 -scores
    Keep it apart from the corpus pool; don't merge (fuzzy scores saturate).
-4. TUNE (depth=investigate only). Too noisy? narrow: -without -files '*.jsonl', -with -files '*.md', -with -tag NAME[:VALUE]. Too thin? widen: -fuzzy, drop a filter, -about. -parse shows how args parsed. Loop until the stop condition holds (or 2 dry rounds). depth=lookup: one pass.
-5. READ the top hits: ~/.ark/ark chunks <path:range> -before 2 -after 2.
+4. TUNE (depth=investigate only). Too noisy? narrow: -with -files '**/*.md', -with -tag NAME[:VALUE]. Too thin? widen: -fuzzy, drop a filter, -about. -parse shows how args parsed. Loop until the stop condition holds (or 2 dry rounds). depth=lookup: one pass.
+5. READ the top hits with ~/.ark/ark chunks <path:range> -before 2 -after 2 — NEVER the Read tool (denied here for everything but your own task doc). Corpus files open with ark chunks/fetch, not Read.
 6. CURATE to the few that actually answer the clue. Drop the rest — no dumps.
 7. EMIT per want — one item per call:
      answer / verdict            -> ~/.ark/ark connections recall finding COOKIE -answer "1-3 sentences" -loc <path:range>
