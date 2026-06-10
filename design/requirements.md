@@ -784,6 +784,8 @@
 - **R849:** `--content TEXT` flag provides body text as a command-line argument (alternative to stdin)
 - **R850:** If `--content` is set, stdin body reading is skipped
 - **R851:** `--content` body is appended after the heading scaffold, same position as stdin body
+- **R2956:** `--issue-file PATH` on `new-request` reads the `@issue` value verbatim from a file (trailing newlines trimmed); mutually exclusive with `--issue`, exactly one of the two required; the value must be a single line (a multi-line `--issue-file` is an error). Lets a caller hand the messenger a path so the issue line is never retyped.
+- **R2957:** `--content-file PATH` on `new-request` and `new-response` reads the body verbatim from a file (trailing newlines trimmed); mutually exclusive with `--content`; when set, stdin body reading is skipped. The structural verbatim-body path so a relaying agent never retypes the payload.
 
 ### new-response
 - **R454:** `ark message new-response --from PROJECT --to PROJECT --request ID FILE` creates a new response file

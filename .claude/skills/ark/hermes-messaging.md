@@ -95,6 +95,13 @@ for byte. Never shorten, summarize, drop a parenthetical, or reword to
 "improve" them. You carry the message without altering what it says; a
 messenger who garbles the message wastes the researcher's time.
 
+**Verbatim via a file beats retyping.** When the caller hands you a *file
+path* for the issue line or the body (because the exact wording matters),
+pass it straight through with `--issue-file PATH` / `--content-file PATH`
+instead of copying the text into `--issue`/`--content`. The CLI reads the
+file byte-for-byte, so you never retype — and so cannot alter — the payload.
+Each `*-file` flag is mutually exclusive with its inline twin.
+
 **`@issue:` is the card name.** The `--issue` flag on `new-request` sets it
 at creation time. When you are *composing* a fresh issue from a vague
 description, aim for 5-8 words for dashboard display — but a caller-provided

@@ -698,8 +698,8 @@ See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md)
 ### `message` — messaging operations
 
 ```
-ark message new-request   --from P --to P --issue TEXT [--content BODY] FILE
-ark message new-response  --from P --to P --request ID [--content BODY] FILE
+ark message new-request   --from P --to P (--issue TEXT | --issue-file PATH) [--content BODY | --content-file PATH] FILE
+ark message new-response  --from P --to P --request ID [--content BODY | --content-file PATH] FILE
 ark message set-tags      FILE TAG VAL [TAG VAL ...]
 ark message get-tags      FILE [TAG ...]
 ark message check         FILE
@@ -709,8 +709,8 @@ ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] 
 
 | Subcommand     | Flags                                                                | Behavior                                                                                                                                        |
 |----------------|----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| `new-request`  | `--from`, `--to`, `--issue`, `--content` (else stdin until lone `.`) | Create FILE (must not exist), set ark-request/from-project/to-project/status=open/status-date=today/issue tags. Body from `--content` or stdin. |
-| `new-response` | `--from`, `--to`, `--request`, `--content` (else stdin)              | Create FILE, set ark-response=ID/status=accepted/status-date=today.                                                                             |
+| `new-request`  | `--from`, `--to`, `--issue`\|`--issue-file`, `--content`\|`--content-file` (else stdin until lone `.`) | Create FILE (must not exist), set ark-request/from-project/to-project/status=open/status-date=today/issue tags. Issue from `--issue` or verbatim `--issue-file` (one required). Body from `--content`, verbatim `--content-file`, or stdin. `*-file` flags read verbatim (trailing newline trimmed) and are mutually exclusive with their inline twin. |
+| `new-response` | `--from`, `--to`, `--request`, `--content`\|`--content-file` (else stdin)              | Create FILE, set ark-response=ID/status=accepted/status-date=today. Body from `--content`, verbatim `--content-file`, or stdin.                                                                             |
 | `set-tags`     | none                                                                 | Alias for `tag set`                                                                                                                             |
 | `get-tags`     | none                                                                 | Alias for `tag get`                                                                                                                             |
 | `check`        | none                                                                 | Calls `tag check` with the standard message heading list                                                                                        |

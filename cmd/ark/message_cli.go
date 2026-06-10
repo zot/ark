@@ -39,8 +39,10 @@ func messageCommand() *ucli.Command {
 				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "from", Usage: "source project name (required)"},
 					&ucli.StringFlag{Name: "to", Usage: "target project name (required)"},
-					&ucli.StringFlag{Name: "issue", Usage: "one-line issue description (required)"},
+					&ucli.StringFlag{Name: "issue", Usage: "one-line issue description (required unless --issue-file)"},
+					&ucli.StringFlag{Name: "issue-file", Usage: "read the @issue line verbatim from a file (mutually exclusive with --issue)"},
 					&ucli.StringFlag{Name: "content", Usage: "body text (alternative to stdin)"},
+					&ucli.StringFlag{Name: "content-file", Usage: "read the body verbatim from a file (mutually exclusive with --content)"},
 				},
 				Action: messageNewRequestAction,
 			},
@@ -53,6 +55,7 @@ func messageCommand() *ucli.Command {
 					&ucli.StringFlag{Name: "to", Usage: "target project name (required)"},
 					&ucli.StringFlag{Name: "request", Usage: "request ID being responded to (required)"},
 					&ucli.StringFlag{Name: "content", Usage: "body text (alternative to stdin)"},
+					&ucli.StringFlag{Name: "content-file", Usage: "read the body verbatim from a file (mutually exclusive with --content)"},
 				},
 				Action: messageNewResponseAction,
 			},
@@ -75,8 +78,8 @@ func messageCommand() *ucli.Command {
 				Action:    messageCheckAction,
 			},
 			{
-				Name:   "inbox",
-				Usage:  "list non-completed messages",
+				Name:  "inbox",
+				Usage: "list non-completed messages",
 				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "project", Usage: "filter by either to-project or from-project"},
 					&ucli.StringFlag{Name: "to", Usage: "filter by to-project"},
@@ -129,6 +132,54 @@ func readStdinBody() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// readMessageFile reads a *-file flag's file verbatim, trimming trailing
+// newlines so a file saved with a trailing newline matches the shape of
+// the inline --issue/--content flags. The point of the *-file flags is
+// fidelity: a caller writes the exact text and hands over the path, so a
+// relaying agent never retypes the payload.
+// CRC: crc-CLI.md | R2956, R2957
+func readMessageFile(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		fatal(fmt.Errorf("read %s: %w", path, err))
+	}
+	return strings.TrimRight(string(b), "\n")
+}
+
+// resolveIssue returns the @issue value from --issue or --issue-file
+// (mutually exclusive). --issue-file is read verbatim and must be a single
+// line, since @issue runs to end of line.
+// CRC: crc-CLI.md | R2956
+func resolveIssue(c *ucli.Command) string {
+	issue, file := c.String("issue"), c.String("issue-file")
+	if issue != "" && file != "" {
+		fatal(fmt.Errorf("--issue and --issue-file are mutually exclusive"))
+	}
+	if file == "" {
+		return issue
+	}
+	v := readMessageFile(file)
+	if strings.Contains(v, "\n") {
+		fatal(fmt.Errorf("--issue-file must be a single line (the @issue value runs to end of line)"))
+	}
+	return v
+}
+
+// resolveContent returns the body from --content or --content-file
+// (mutually exclusive) and whether either flag was set — when set, stdin
+// is skipped even if the file is empty.
+// CRC: crc-CLI.md | R2957
+func resolveContent(c *ucli.Command) (body string, set bool) {
+	content, file := c.String("content"), c.String("content-file")
+	if content != "" && file != "" {
+		fatal(fmt.Errorf("--content and --content-file are mutually exclusive"))
+	}
+	if file != "" {
+		return readMessageFile(file), true
+	}
+	return content, content != ""
+}
+
 // writeAtomicNew writes data to filePath atomically: write to a sibling
 // temp file in the same directory, fsync-close, then rename into place.
 // The destination either appears with full content or not at all — no
@@ -160,11 +211,13 @@ func writeAtomicNew(filePath string, data []byte) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R849, R850, R851, R2485
+// CRC: crc-CLITree.md, crc-CLI.md | R849, R850, R851, R2485, R2956, R2957
 func messageNewRequestAction(_ context.Context, c *ucli.Command) error {
-	from, to, issue, content := c.String("from"), c.String("to"), c.String("issue"), c.String("content")
+	from, to := c.String("from"), c.String("to")
+	issue := resolveIssue(c)
+	content, contentSet := resolveContent(c)
 	if from == "" || to == "" || issue == "" {
-		fatal(fmt.Errorf("--from, --to, and --issue are required"))
+		fatal(fmt.Errorf("--from, --to, and --issue (or --issue-file) are required"))
 	}
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("FILE path required"))
@@ -190,11 +243,14 @@ func messageNewRequestAction(_ context.Context, c *ucli.Command) error {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# %s\n\n%s\n", id, issue)
-	// R849-R851: --content flag preferred over stdin
+	// R849-R851: --content preferred over stdin. R2957: --content-file is the
+	// verbatim alternative; either flag (even an empty file) skips stdin.
 	if content != "" {
 		fmt.Fprintf(&buf, "\n%s\n", content)
-	} else if body := readStdinBody(); body != "" {
-		fmt.Fprintf(&buf, "\n%s", body)
+	} else if !contentSet {
+		if body := readStdinBody(); body != "" {
+			fmt.Fprintf(&buf, "\n%s", body)
+		}
 	}
 
 	// R2485: atomic create — no 0-byte husk if writing fails.
@@ -206,9 +262,10 @@ func messageNewRequestAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R852, R2485
+// CRC: crc-CLITree.md, crc-CLI.md | R852, R2485, R2957
 func messageNewResponseAction(_ context.Context, c *ucli.Command) error {
-	from, to, request, content := c.String("from"), c.String("to"), c.String("request"), c.String("content")
+	from, to, request := c.String("from"), c.String("to"), c.String("request")
+	content, contentSet := resolveContent(c)
 	if from == "" || to == "" || request == "" {
 		fatal(fmt.Errorf("--from, --to, and --request are required"))
 	}
@@ -231,11 +288,14 @@ func messageNewResponseAction(_ context.Context, c *ucli.Command) error {
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
 	fmt.Fprintf(&buf, "# RESP %s\n\n", request)
-	// R852: --content flag preferred over stdin
+	// R852: --content preferred over stdin. R2957: --content-file is the
+	// verbatim alternative; either flag (even an empty file) skips stdin.
 	if content != "" {
 		fmt.Fprintf(&buf, "%s\n", content)
-	} else if body := readStdinBody(); body != "" {
-		buf.WriteString(body)
+	} else if !contentSet {
+		if body := readStdinBody(); body != "" {
+			buf.WriteString(body)
+		}
 	}
 
 	// R2485: atomic create — no 0-byte husk if writing fails.

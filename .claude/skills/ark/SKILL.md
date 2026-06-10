@@ -154,6 +154,15 @@ paths, tag blocks, or file structure — the messenger knows the ark
 message format, the correct `requests/` directory, and will scaffold,
 read, and write correctly. Overriding these produces malformed or
 misplaced messages.
+**When exact wording matters, hand over a file.** The rule above is
+describe-don't-format — but if the issue line or body must be transcribed
+*verbatim* (a precise spec sentence, a quoted error, anything a paraphrase
+would corrupt), write the exact text to a temp file yourself and tell the
+messenger to pass it through `--issue-file` / `--content-file`. The CLI reads
+the file byte-for-byte, so the Haiku never retypes the payload — fidelity by
+construction, not by trust. This is the one path where you *do* give the
+messenger a file path; it's the content's path, not the message file's
+location.
 **Be explicit about direction.** Hermes is Haiku — it answers what
 you ask, not what you meant. Say exactly what you need:
 - "unanswered requests TO project" — `--to PROJECT --unmatched`

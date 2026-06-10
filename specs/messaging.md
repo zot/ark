@@ -163,19 +163,33 @@ Creates a new request file with the correct tag block and body scaffold.
 Errors if FILE already exists. The request ID is derived from the
 filename (basename without extension).
 
-Body content can be provided two ways:
+The `@issue` value comes from either `--issue "..."` or, for exact
+wording, `--issue-file PATH` — which reads the issue line verbatim from
+a file (trailing newlines trimmed; the value must be a single line,
+since `@issue` runs to end of line). The two are mutually exclusive and
+exactly one is required. `--issue-file` lets a caller agent hand the
+messenger a path instead of re-typing the line, so the text is never
+altered in transit — the structural complement to the messenger's
+"transcribe, don't edit" rule.
+
+Body content can be provided three ways:
 
 1. **`--content "body text"`** — pass the body as a flag value. This is
    the primary path for agents: the body is a command-line argument,
    so no file writes or stdin pipes are needed. Multiline strings work
    naturally in tool calls.
 
-2. **Stdin** — if `--content` is not set and stdin is not a terminal,
-   the command reads body text from stdin until a lone `.` on a line
-   (like UNIX `mail` and `ed`).
+2. **`--content-file PATH`** — read the body verbatim from a file
+   (trailing newlines trimmed). Mutually exclusive with `--content`.
+   The verbatim path: a caller writes the exact body to a file and
+   passes the path, so a relaying agent never retypes it.
 
-If `--content` is set, stdin is ignored. If neither is provided, the
-command produces heading + issue text only (no body).
+3. **Stdin** — if neither `--content` nor `--content-file` is set and
+   stdin is not a terminal, the command reads body text from stdin
+   until a lone `.` on a line (like UNIX `mail` and `ed`).
+
+If `--content` or `--content-file` is set, stdin is ignored. If no body
+source is provided, the command produces heading + issue text only.
 
 Output file:
 ```
@@ -203,7 +217,9 @@ response file's existence is the acknowledgment — creating it means
 "I saw the request."
 
 Body content works the same as new-request: `--content` flag
-(preferred for agents) or stdin if `--content` is not set.
+(preferred for agents), `--content-file PATH` for a verbatim body read
+from a file (mutually exclusive with `--content`), or stdin if neither
+is set.
 
 Output file:
 ```
