@@ -13,6 +13,10 @@ if [ "$TOOL" = Bash ]; then
     # quoted argument; shlex tokenizes the command so a quoted '|' stays
     # inside its token while a real pipe operator becomes a standalone '|'.
     # Unparseable (unbalanced quotes) → reject, the safe default.
+    # One tokenization decides three guards: shell pipes/heredocs, unbalanced
+    # quotes, and server-lifecycle subcommands. shlex keeps a quoted '|' (or a
+    # quoted "serve") inside its own token, so a message *about* the server
+    # never false-trips the lifecycle guard.
     SHELLOP=$(printf '%s' "$CMD" | python3 -c '
 import shlex, sys
 try:
@@ -20,7 +24,14 @@ try:
 except ValueError:
     print("parse"); sys.exit(0)
 if "|" in toks or any(t.startswith("<<") for t in toks):
-    print("op")
+    print("op"); sys.exit(0)
+# The messenger never manages the server lifecycle — server-down is a clean
+# stop, not a restart trigger. Deny serve/stop/restart as the ark subcommand.
+for i, t in enumerate(toks):
+    if t == "ark" or t.endswith("/ark"):
+        if i + 1 < len(toks) and toks[i + 1] in ("serve", "stop", "restart"):
+            print("lifecycle")
+        break
 ')
     if [ "$SHELLOP" = op ]; then
         echo "BLOCKED: shell pipes/heredocs are not allowed. Put body text in a quoted --content value (a '|' inside the quotes is fine). To filter inbox, use ark's own flags (--from/--to/--unmatched), not '| grep'." >&2
@@ -28,6 +39,10 @@ if "|" in toks or any(t.startswith("<<") for t in toks):
     fi
     if [ "$SHELLOP" = parse ]; then
         echo "BLOCKED: could not parse the command (unbalanced quotes?). Re-issue with balanced quotes around --content/--issue values." >&2
+        exit 2
+    fi
+    if [ "$SHELLOP" = lifecycle ]; then
+        echo "BLOCKED: the messenger never starts, stops, or restarts the server — that is not your job. If a command reports the server is down, stop and report that cleanly. Creating and checking message files writes/reads files directly and works without the server (the file in requests/ is the whole message)." >&2
         exit 2
     fi
     if echo "$CMD" | grep -q '^\s*~/.ark/ark\b\|^\s*\$HOME/.ark/ark\b\|^\s*/home/[^/]*/.ark/ark\b'; then

@@ -4,7 +4,13 @@ Your tools are `~/.ark/ark` commands. Do not use grep, awk, wc, find,
 or shell loops when an ark command exists.
 
 The database is at `~/.ark`. The ark command is at `~/.ark/ark`.
-If the server is not running, start it with `~/.ark/ark serve`.
+
+**Never start, stop, or restart the server.** That is not your job — the
+guard blocks `ark serve`/`stop`/`restart`. Creating and checking message
+files writes and reads files directly and does not need the server (the file
+in `requests/` is the whole message; it indexes when the server next runs).
+If a command reports the server is down, stop and report that plainly — do
+not run `ark serve`.
 
 ## Inbox Commands
 
@@ -83,8 +89,17 @@ status	count
 Always write to YOUR project's `requests/` directory. Never write to
 another project's folder.
 
-**`@issue:` is the card name.** The `--issue` flag on `new-request`
-sets it at creation time. Keep it short (5-8 words) for dashboard display.
+**Transcribe, don't edit.** When you are handed the issue line and the
+body, pass them through `--issue` and `--content` exactly as given — byte
+for byte. Never shorten, summarize, drop a parenthetical, or reword to
+"improve" them. You carry the message without altering what it says; a
+messenger who garbles the message wastes the researcher's time.
+
+**`@issue:` is the card name.** The `--issue` flag on `new-request` sets it
+at creation time. When you are *composing* a fresh issue from a vague
+description, aim for 5-8 words for dashboard display — but a caller-provided
+issue line is preserved verbatim even when it runs longer. Fidelity beats
+brevity.
 
 **One command creates the full message.** Use `--content` to pass the
 body text directly — no Read/Write tools, no heredocs, no stdin piping.
