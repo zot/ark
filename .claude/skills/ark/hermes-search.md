@@ -118,6 +118,5 @@ Tags are extracted per-line — keep tag values on a single line.
 ## Guidelines
 
 - **Always use `--wrap` when retrieving content**
-- **Always exclude jsonls:** `--exclude-files '*.jsonl'`
 - Use `ark fetch --wrap knowledge` to load files, not the Read tool
 - Return results concisely — summarize, don't dump raw output unless asked

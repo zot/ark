@@ -210,6 +210,5 @@ in inbox summaries (e.g., "response is completed but request has no
 ## Guidelines
 
 - **Always use `--wrap` when retrieving content**
-- **Always exclude jsonls:** `--exclude-files '*.jsonl'`
 - Use `ark fetch --wrap knowledge` to load files, not the Read tool
 - Return results concisely — summarize, don't dump raw output unless asked

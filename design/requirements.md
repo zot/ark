@@ -2872,6 +2872,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1773:** Bare terms (no leading `-`) are shorthand for `-contains`. Consecutive bare terms coalesce into a single `-contains` argument.
 - **R1774:** A mode flag or polarity toggle closes the current bare-term group and starts a new filter entry.
 - **R1775:** Bare terms following an explicit `-contains` coalesce into that contains group.
+- **R2958:** `-files`/`-exclude-files` globs are resolved **cwd-relative in the CLI** before dispatch: a pattern not starting with `/`, `~`, or `tmp://` is joined with the current working directory (`filepath.Join(cwd, glob)`), making it absolute. `/`, `~/`, and `tmp://` patterns are left as-is. Resolution is CLI-side so both cold-start and server-proxied searches receive absolute globs (the server cannot know the client cwd). Consequence: bare `*.jsonl` matches cwd top-level only; `**/*.jsonl` for any depth.
 
 ### Primary Search and Filter Stack
 

@@ -835,6 +835,27 @@ func formatFilterStack(entries []filterEntry) string {
 	return strings.Join(parts, " ")
 }
 
+// anchorFilterToCwd resolves a -files/-exclude-files glob to an absolute
+// pattern relative to cwd, the way UNIX tools treat relative paths. Patterns
+// that are already absolute (`/`), home-relative (`~`), or virtual tmp://
+// overlay docs are left untouched. CLI-side only — the server cannot know the
+// client's cwd. A trailing slash (directory marker) is preserved across the
+// join, which filepath.Join would otherwise strip.
+// CRC: crc-CLI.md | R2958
+func anchorFilterToCwd(glob, cwd string) string {
+	if glob == "" ||
+		strings.HasPrefix(glob, "/") ||
+		strings.HasPrefix(glob, "~") ||
+		strings.HasPrefix(glob, "tmp://") {
+		return glob
+	}
+	joined := filepath.Join(cwd, glob)
+	if strings.HasSuffix(glob, "/") {
+		joined += "/"
+	}
+	return joined
+}
+
 func cmdSearch(args []string) {
 	// Subcommand dispatch
 	if len(args) > 0 && args[0] == "expand" {
@@ -848,6 +869,17 @@ func cmdSearch(args []string) {
 	if parseOnly {
 		fmt.Println(formatFilterStack(filterEntries))
 		return
+	}
+
+	// R2958: resolve -files/-exclude-files globs cwd-relative, CLI-side, so
+	// both cold-start and server-proxied searches receive absolute patterns
+	// (only the CLI knows the client's working directory).
+	if cwd, err := os.Getwd(); err == nil {
+		for i := range filterEntries {
+			if filterEntries[i].mode == "files" {
+				filterEntries[i].query = anchorFilterToCwd(filterEntries[i].query, cwd)
+			}
+		}
 	}
 
 	fs := flag.NewFlagSet("search", flag.ExitOnError)

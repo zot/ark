@@ -164,12 +164,12 @@ value-exact, bare `name` = any value.
 
 ```bash
 ~/.ark/ark search fred ethel                          # bare terms → -contains
-~/.ark/ark search QUERY -without -files '*.jsonl'     # drop chat-log flood (the common one)
+~/.ark/ark search QUERY -with -files 'specs/**'       # scope to specs/ under the current project
 ~/.ark/ark search -contains "phrase" -regex '@tag:.*value'   # FTS + regex post-filter
-~/.ark/ark search fred -without -tag status:done -with -files '*.md'
+~/.ark/ark search fred -without -tag status:done -with -files '**/*.md'
 ~/.ark/ark search QUERY -with -file-tag status        # only chunks on files carrying a tag
 ~/.ark/ark search -about "machine learning" -without -tag project:archive
-~/.ark/ark search -parse fred -without -files '*.md'  # verify the parse, don't search
+~/.ark/ark search -parse fred -without -files '**/*.md'  # verify the parse, don't search
 ```
 
 ### Searching conversation history (chat recall)
@@ -224,9 +224,9 @@ For anything past a single lookup, work the trail in this order:
 1. **Orient** — if it's a mini-spec project, load `/minimap` and read the root
    index first; one small read replaces grepping the tree.
 2. **Find** — match the matcher to the clue; cast with `-fuzzy`, then tighten.
-3. **Narrow** — too noisy? add `-without -files '*.jsonl'`, `-with -files
-   '*.md'`, or `-with -tag NAME`. Too thin? widen: `-fuzzy`, drop a filter,
-   `-about`.
+3. **Narrow** — too noisy? scope by path or tag: `-with -files '**/*.md'`,
+   `-with -files 'specs/**'`, or `-with -tag NAME`. Too thin? widen: `-fuzzy`,
+   drop a filter, `-about`.
 4. **Read** — pull the top hits with `chunks … -before 2 -after 2`.
 5. **Follow tags** — a shared tag is a cross-file link; `tag files --context
    TAG` walks the link graph to every section that carries it.
@@ -239,7 +239,7 @@ Before planning or building a feature, ask ark what it already knows — it
 connects dots across projects and old design conversations you've forgotten:
 
 ```bash
-~/.ark/ark search --contains "topic keywords" --chunks --wrap recall --exclude-files '*.jsonl'
+~/.ark/ark search --contains "topic keywords" --chunks --wrap recall
 ```
 
 Read the results before writing anything; they often change the approach.
@@ -249,9 +249,11 @@ Read the results before writing anything; they often change the approach.
 - **Chat is excluded by default** — use the positive `-files` pass to include it.
 - **`-fuzzy` is generous** — a big project swamps common-word queries; short
   queries (≤~3 trigrams) saturate at `1.0000`, so judge by content, not score.
-- **`-files` globs anchor at the path start** — `'HollowStuff/**'` matches
-  nothing (real paths start `/home/...`); prefix interior dirs with `**/`.
-  Extension globs (`'*.jsonl'`) already lead with a wildcard.
+- **`-files` globs are cwd-relative** — a relative glob resolves under the
+  directory you ran ark from (UNIX-style): `'specs/**'` matches this project's
+  `specs/`. A bare `'*.md'` is cwd top-level only — use `'**/*.md'` for any
+  depth. Reach outside the cwd with an absolute path or `~/`; `tmp://` passes
+  through untouched.
 - **Always wrap retrieved content** (`-wrap` / `--wrap`) — gives source attribution.
 - **`ark tag defs`** not grep, for tag definitions. **`ark fetch`** not Read,
   for indexed files from other projects.

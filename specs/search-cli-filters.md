@@ -40,6 +40,18 @@ ark search TERM...
   in its extracted tag set.
 - `-about QUERY`: vector similarity match on chunk content.
 - `-files GLOB`: match files whose path matches the glob pattern.
+  **Path resolution is cwd-relative, done CLI-side.** A glob that is
+  *relative* — not starting with `/`, `~`, or `tmp://` — is joined with the
+  current working directory by the CLI before dispatch
+  (`filepath.Join(cwd, glob)`), so it matches paths under the directory you
+  ran `ark` from, the way UNIX tools behave. `/abs/...` matches absolutely,
+  `~/...` expands to home, and `tmp://...` (virtual overlay docs) is left
+  untouched; to reach outside the cwd use an absolute path or `../`.
+  Resolution happens in the CLI because only the CLI knows the cwd — the
+  server and the cold-start path both receive already-absolute globs.
+  Consequence: a bare `*.jsonl` matches only the cwd's top level; write
+  `**/*.jsonl` to exclude jsonls at any depth (UNIX globstar). Same rule for
+  `-exclude-files`. (R2958)
   An explicit `-files` filter also changes the default scope: a
   **positive** `-files GLOB` *replaces* the default `search_exclude`
   scope rather than adding to it — so a positive `-files` pointed at a

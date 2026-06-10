@@ -118,7 +118,7 @@ The zettelkasten connects dots across projects, old plans, and design
 conversations you may have forgotten.
 
 ```bash
-~/.ark/ark search --contains "topic keywords" --chunks --wrap recall --exclude-files '*.jsonl'
+~/.ark/ark search --contains "topic keywords" --chunks --wrap recall
 ```
 
 `--wrap recall` marks retrieved content as stored knowledge. `--chunks`
