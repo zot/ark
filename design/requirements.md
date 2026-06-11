@@ -49,6 +49,10 @@
 - **R28:** Ark stores everything in one directory: LMDB env, `ark.toml`, Unix socket
 - **R29:** Default database directory is `~/.ark/`, overridden via `--dir` flag
 
+### Version
+
+- **R2960:** `ark version` prints the build version as `ark <version>`. The version is the `**Version: X.Y.Z**` line in `README.md`, injected at build time by the Makefile via `-ldflags "-X github.com/zot/ark.Version=..."` (full module path); a plain `go build` leaves the `ark.Version` var as `dev`.
+
 ### Init
 
 - **~~R30:~~** (Retired T28 — see R1912) `ark init` creates a new database: initializes microfts2, microvec, ark subdatabase, and writes default config

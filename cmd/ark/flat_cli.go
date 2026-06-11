@@ -34,6 +34,7 @@ func flatDelegate(fn func([]string)) ucli.ActionFunc {
 func flatCommands() []*ucli.Command {
 	return []*ucli.Command{
 		// --- no-flag, positional-only (thin-delegate) ---
+		{Name: "version", Usage: "print the ark version", Action: flatDelegate(cmdVersion)},
 		{Name: "setup", Usage: "bootstrap ~/.ark/ (extract assets, install skills)", Action: flatDelegate(cmdSetup)},
 		{Name: "rebuild", Usage: "drop and rebuild the entire index", Action: flatDelegate(cmdRebuild)},
 		{Name: "scan", Usage: "walk source directories, index new files", Action: flatDelegate(cmdScan)},

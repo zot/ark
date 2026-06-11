@@ -178,6 +178,14 @@ func arkCommands() []*ucli.Command {
 	return append(cmds, flatCommands()...)
 }
 
+// cmdVersion prints the build version. ark.Version is injected at build time
+// from README.md's "Version:" line by the Makefile (-X ark.Version=...), and
+// falls back to "dev" for plain `go build`.
+// CRC: crc-CLI.md | R2960
+func cmdVersion(_ []string) {
+	fmt.Printf("ark %s\n", ark.Version)
+}
+
 func defaultDB() string {
 	home, err := os.UserHomeDir()
 	if err != nil {

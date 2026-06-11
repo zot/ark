@@ -1,5 +1,5 @@
 VERSION := $(shell grep -oP 'Version: \K[0-9]+\.[0-9]+\.[0-9]+' README.md)
-LDFLAGS := -ldflags "-X ark.Version=$(VERSION)"
+LDFLAGS := -ldflags "-X github.com/zot/ark.Version=$(VERSION)"
 BUILDFLAGS := -buildvcs=false
 GOTAGS :=
 

@@ -1,5 +1,7 @@
 # Ark
 
+**Version: 0.9.0**
+
 A [zettelkasten](https://en.wikipedia.org/wiki/Zettelkasten) is a personal knowledge system -- cards in a box,
 connected by cross-references, that grows with you. This one is
 digital and connected to your AI. Files on disk, LMDB index, hybrid

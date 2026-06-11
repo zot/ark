@@ -383,6 +383,13 @@ All commands accept `[--dir <path>]` (default `~/.ark/`). This is a global
 flag parsed before the subcommand — it can appear anywhere in the
 argument list.
 
+The release version is the single line `**Version: X.Y.Z**` in `README.md`.
+The Makefile extracts it and injects it into the binary via
+`-ldflags "-X github.com/zot/ark.Version=..."` (the `-X` path is the full
+module path, not `ark`); a plain `go build` leaves it as `dev`.
+
+- `ark version`
+  Print the build version (`ark <version>`).
 - `ark init [--dir <path>] [-embed-cmd <command>] [-query-cmd <command>] [-case-insensitive] [-aliases <from=to,...>]`
   Create a new database. Without `-embed-cmd`, creates an FTS-only
   database (vector search disabled). Embed command can be added later

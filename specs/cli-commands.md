@@ -86,6 +86,7 @@ otherwise emit a different order each run). R2953.
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved`                                                                                                         | optional                 | lists U records                                      |
+| `version`          | `version`                                                                                                           | none                     | prints `ark <version>` (from README.md)              |
 
 "Server" column:
 - **none** — never proxies, never opens DB
