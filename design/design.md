@@ -161,6 +161,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [ ] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
+- [ ] crc-LlamaLibs.md → `llamalibs.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
@@ -679,3 +680,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O132: Bloodhound integration tests deferred: the full OnAppend->jobs->dispatchBloodhound->task-doc path and next's bloodhound-before-curation dispatch priority (both kinds pending) are unit-covered piecewise (scanBloodhounds, RecallBloodhoundOpen/FindingItem/closeBloodhound round-trip) but not end-to-end. R2935/R2936/R2939.
 - T150: R2933 retired by R2947 (2026-06-08 level-decoupling: bloodhound gated on its own @ark-bloodhound-result sub, not the shared activation gate)
 - [ ] O133: Per-capability gate decoupling lacks an integration test: secretaryPresent/bloodhoundEnabled/ambientEnabled gate OnAppend recognition vs ambient-arming independently, but the helpers short-circuit to true when pubsub is nil (the test harness), so verifying 'bloodhound fires without ambient and vice versa' needs a pubsub+subscription harness. R2947/R2949.
+- T151: R1274 retired by R2964 (2026-06-11 yzma-embedding: tag_model -> [embedding] model)
+- T152: R1588 retired by R2965 (2026-06-11 yzma-embedding: embed_tiers -> [embedding] tiers)
+- T153: R1595 retired by R2962 (2026-06-11 yzma-embedding: gollama context API -> yzma ContextParams)
+- A69: R2971-R2972 (Makefile pure-Go CGO_ENABLED=0 build + cross-platform release target) — Makefile build/release infrastructure, not Go code (mirrors A11)

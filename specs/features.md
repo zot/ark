@@ -40,6 +40,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Sidecar agents (spectral, curation, recall) | spectral shipping; others growing          | `spectral-search.md`, `find-connections-substrate.md`                         |
 | Frictionless UI                             | shipping                                   | `ACCESSING-FRICTIONLESS.md`, `lua-api.md`                                     |
 | Bundle distribution                         | shipping                                   | `cli-commands.md` (bundle/setup commands)                                     |
+| Cross-platform binaries + self-provisioned inference | migration in spec (gollama→yzma): pure-Go `CGO_ENABLED=0` build, frictionless-style release sweep, runtime-loaded llama.cpp libs | `yzma-embedding.md`, `llama-libs.md` |
 
 The columns:
 

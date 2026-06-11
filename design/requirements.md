@@ -2037,9 +2037,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 **Source:** specs/tag-embeddings.md
 
 ### Model Configuration
-- **R1274:** `tag_model` field in ark.toml specifies the GGUF embedding model filename
+- **~~R1274:~~** (Retired T151 — see R2964) `tag_model` field in ark.toml specifies the GGUF embedding model filename
 - **R1275:** The path is relative to the database directory (`~/.ark/`)
-- **R1276:** If `tag_model` is empty or the file doesn't exist, embedding is disabled — trigram fuzzy is the fallback
+- **R1276:** If `[embedding] model` is empty or the file doesn't exist, embedding is disabled — trigram fuzzy is the fallback
 - **R1277:** The model is loaded by the Librarian on first embedding query
 - **R1278:** The model stays warm in memory; unloaded on TTL expiry with no queries
 - **R1279:** (inferred) Next query after TTL expiry reloads the model
@@ -2556,17 +2556,17 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Configuration
 
-- **R1588:** `ark.toml` accepts an `[[embed_tiers]]` array. Each entry has `ctx` (context window tokens) and `parallel` (sequences per batch).
+- **~~R1588:~~** (Retired T152 — see R2965) `ark.toml` accepts an `[[embed_tiers]]` array. Each entry has `ctx` (context window tokens) and `parallel` (sequences per batch).
 - **R1589:** Tokens-per-sequence is derived: `ctx / parallel`. Byte limit is derived: `tokens_per_seq * 3`.
 - **R1590:** Tiers are sorted by byte limit ascending at load time. Chunks route to the smallest tier that fits.
-- **R1591:** When `embed_tiers` is absent but `tag_model` is set, default tiers are used (1024/32, 2048/16, 2048/8, 16384/12, 16384/8).
+- **R1591:** When `[embedding] tiers` is absent but `[embedding] model` is set, default tiers are used (1024/32, 2048/16, 2048/8, 16384/12, 16384/8).
 - **R1592:** (inferred) Invalid tier configs (ctx <= 0, parallel <= 0, parallel > ctx) are rejected at config load.
 
 ### Model and Context Lifecycle
 
-- **R1593:** One embedding model is loaded from `tag_model`, shared across all tier contexts.
+- **R1593:** One embedding model is loaded from `[embedding] model`, shared across all tier contexts.
 - **R1594:** All tier contexts are pre-allocated from the loaded model on first embedding use (lazy).
-- **R1595:** Each context is created with `WithEmbeddings()`, `WithContext(ctx)`, `WithBatch(ctx)`, and `WithParallel(parallel)`.
+- **~~R1595:~~** (Retired T153 — see R2962) Each context is created with `WithEmbeddings()`, `WithContext(ctx)`, `WithBatch(ctx)`, and `WithParallel(parallel)`.
 - **R1596:** The model TTL timer unloads the model and all contexts when the embedding queue is idle.
 - **R1597:** Tag and query embedding use the tier with 256 tokens/seq (2048/8 default).
 
@@ -4565,3 +4565,28 @@ reason.
 - **R2948:** The secretary's input tube tag is **`@ark-secretary-work=<S>`** (renamed from `@ark-recall-curate`): a single value-scoped work feed the secretary subscribes to via `next`, carrying **all task types** (curation docs + bloodhound tasks), the type distinguished by the doc's tmp:// namespace (`ARK-RECALL/` vs `ARK-BLOODHOUND/`) rather than the tag. Named for the consumer (the secretary), since it feeds hunting as well as curating. The durable subscription-session key aligns to `secretary-work-<S>`.
 - **R2949:** Ambient curation firing is gated on the secretary present (`@ark-secretary-work`) **and** `@ark-recall-result=<S>` (the ambient opt-in) — independent of the bloodhound. The watcher accumulates `pendingChunks` and arms the turn-boundary timer only when the recall-result subscriber is present; `OnAppend` drops a session only when the secretary is absent (`@ark-secretary-work` count 0), and within an active session scans bloodhounds iff the bloodhound-result sub is present and arms ambient iff the recall-result sub is present.
 - **R2950:** `ark connections recall listen [--ambient]` subscribes **per capability**: the base call establishes `@ark-bloodhound-result=<S>` (findings — level 3); `--ambient` additionally establishes `@ark-recall-result=<S>` (ambient surfaces — level 4), and that recall-result subscription is the ambient opt-in the watcher keys on (R2949). `/bloodhound` runs the base `listen`; `/recall` requires `/bloodhound` and runs `listen --ambient`, reusing the already-spawned secretary (idempotent). Findings and surfaces are distinct tmp:// doc families on distinct tags; one `listen` drains both.
+
+
+## Feature: yzma embedding engine
+**Source:** specs/migrations/yzma-embedding.md
+
+- **R2961:** The in-process embedding engine binds llama.cpp via yzma (`pkg/llama`, purego/ffi), loading the shared library at runtime; embeddings require no CGO.
+- **R2962:** (supersedes R1595) Each tier context is a yzma `ContextParams` — `NCtx` from the tier `ctx`, `NSeqMax` from `parallel`, `NBatch`/`NUbatch` sized for the encoder ubatch, `Embeddings=1`, `PoolingType=Mean`; the model loads with GPU offload via `NGpuLayers`.
+- **R2963:** Embedding reads copy the `GetEmbeddingsSeq` result, which aliases llama.cpp's internal buffer; the alias is never retained across calls, so distinct inputs yield distinct embeddings.
+- **R2964:** (supersedes R1274) `[embedding] model` specifies the GGUF embedding model filename under the ark dir — used for chunk, tag, and query embeddings; empty disables vector-EC.
+- **R2965:** (supersedes R1588) `[embedding] tiers` is an array of `{ctx, parallel}` entries configuring the adaptive embedding tiers (`ctx`→`NCtx`, `parallel`→`NSeqMax`).
+
+## Feature: llama.cpp library provisioning
+**Source:** specs/llama-libs.md
+
+- **R2966:** `[embedding] lib_dir` (default `<dir>/lib`, beside the LMDB env) holds the llama.cpp shared libs; the engine `dlopen`s them at startup.
+- **R2967:** `[embedding] backend` selects the llama.cpp build — `auto`, `cpu`, `vulkan`, `cuda`, `metal`, `rocm`. `auto` detects CUDA, else ROCm, else Metal (macOS), else Vulkan when a device exists, else CPU.
+- **R2968:** `[embedding] llama_version` pins the llama.cpp release build to provision (within yzma's tested range), keeping release builds reproducible.
+- **R2969:** Provisioning downloads the libs for `(platform, backend, version)` into `lib_dir`; it runs during `ark setup` and as a standalone command, is idempotent (skipped when present unless an upgrade is requested), and may fetch the GGUF model when absent.
+- **R2970:** When a `model` is configured but `lib_dir` lacks the libs, embedding operations fail with a clear error naming the provisioning command — not a silent drop to FTS-only.
+
+## Feature: Pure-Go build & cross-platform release
+**Source:** specs/migrations/yzma-embedding.md
+
+- **R2971:** Ark builds with `CGO_ENABLED=0`; the Makefile no longer builds gollama/llama.cpp from source (the `gollama`/cmake/Vulkan recipe and the `build: gollama` dependency are removed).
+- **R2972:** The Makefile provides a `release` target that cross-compiles ark across the supported `GOOS/GOARCH` targets and grafts bundled assets onto each via `ark bundle -src`, producing per-platform release archives.

@@ -33,7 +33,6 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 | `strategies`              | map<str,str> | `{}`               | Glob-pattern → chunker-name map applied across all sources.                                                          | `chunker-strategies.md`                                                     |
 | `session_ttl`             | string     | `"30s"`              | Lifetime of named session caches before eviction. Go duration string.                                                | `session-status.md`                                                         |
 | `search_exclude`          | []string   | `[]`                 | Glob patterns excluded from search results by default.                                                               | `search.md`                                                                 |
-| `tag_model`               | string     | `""`                 | Filename of the GGUF embedding model under the ark dir. Empty disables vector-EC.                                    | `chunk-embeddings.md`, `embed-subcommands.md`                               |
 | `auto_compact`            | bool       | `false`              | Run `mdb_env_copy2` before `Open` on every server start.                                                             | `record-formats.md`                                                         |
 | `about_centroid_filter`   | bool       | `false`              | Enable the EF centroid prefilter on `-about` search queries.                                                         | `search.md`                                                                 |
 | `about_centroid_threshold`| float64    | (mode-dep.)          | Cosine threshold for the EF centroid prefilter.                                                                      | `search.md`                                                                 |
@@ -60,15 +59,29 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 | `line_comments`  | []string    | `[]`    | Line-comment prefixes the chunker should ignore when measuring structure.                        | `chunker-strategies.md`     |
 | `block_comments` | [][]string  | `[]`    | Block-comment delimiter pairs (open, close).                                                     | `chunker-strategies.md`     |
 
-## `embed_tiers` — array of inline tables
+## `[embedding]` — embedding engine + llama.cpp libs
 
-Tuned per-bucket context/parallel pairs for chunk embedding.
-See `chunk-embeddings.md` for the four-bucket adaptive design.
+In-process embedding via yzma (purego → llama.cpp loaded at runtime; see
+`yzma-embedding.md`). Gathers the model, the adaptive tiers, and the
+shared-lib provisioning keys. `model` and `tiers` were formerly the top-level
+`tag_model` and `embed_tiers` keys.
 
-| Key        | Type | Default | Meaning                                                                | Owner                  |
-|------------|------|---------|------------------------------------------------------------------------|------------------------|
-| `ctx`      | int  | (req.)  | llama.cpp `n_ctx` for this tier.                                       | `chunk-embeddings.md`  |
-| `parallel` | int  | (req.)  | llama.cpp `n_parallel` (per-sequence ctx budget = `ctx / parallel`).   | `chunk-embeddings.md`  |
+| Key             | Type   | Default     | Meaning                                                                                                     | Owner                                          |
+|-----------------|--------|-------------|-------------------------------------------------------------------------------------------------------------|------------------------------------------------|
+| `model`         | string | `""`        | Filename of the GGUF embedding model under the ark dir — embeds chunks, tags, and queries. Empty disables vector-EC. | `chunk-embeddings.md`, `embed-subcommands.md`  |
+| `lib_dir`       | string | `<dir>/lib` | Directory of llama.cpp shared libs yzma `dlopen`s at runtime.                                                | `llama-libs.md`                                |
+| `backend`       | string | `"auto"`    | llama.cpp backend to provision/load: `auto`, `cpu`, `vulkan`, `cuda`, `metal`, `rocm`.                      | `llama-libs.md`                                |
+| `llama_version` | string | (pinned)    | llama.cpp release build to provision (e.g. `b9592`), within yzma's tested range.                            | `llama-libs.md`                                |
+
+### `embedding.tiers` — array of inline tables
+
+Tuned per-bucket context/parallel pairs for chunk embedding. See
+`chunk-embeddings.md` for the four-bucket adaptive design.
+
+| Key        | Type | Default | Meaning                                                                                  | Owner                  |
+|------------|------|---------|------------------------------------------------------------------------------------------|------------------------|
+| `ctx`      | int  | (req.)  | llama.cpp `n_ctx` for this tier (yzma `NCtx`).                                            | `chunk-embeddings.md`  |
+| `parallel` | int  | (req.)  | sequences per batch (yzma `NSeqMax`); per-sequence ctx budget = `ctx / parallel`.        | `chunk-embeddings.md`  |
 
 ## `[recall]` — recall feature
 
