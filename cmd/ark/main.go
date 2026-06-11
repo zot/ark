@@ -338,6 +338,18 @@ func runSetup() error {
 		fmt.Println("Installed:", item)
 	}
 
+	// R2969: provision the llama.cpp libs if a model is configured and the
+	// libs are absent. Best-effort — a download failure leaves the rest of
+	// setup intact; `ark embed install` retries.
+	if cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml")); err == nil && cfg.Embedding.Model != "" {
+		libs := ark.NewLlamaLibs(cfg.Embedding, arkDir)
+		if err := libs.Provision(false); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not provision llama.cpp libs: %v\n  run `ark embed install` to retry\n", err)
+		} else {
+			fmt.Println("llama.cpp libraries ready in", libs.LibDir())
+		}
+	}
+
 	return nil
 }
 
@@ -498,7 +510,7 @@ func cmdRebuild(args []string) {
 	fmt.Println("rebuild complete")
 	// R1294: embeddings regenerate on next server start (batch embed post-reconcile)
 	cfg, _ := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
-	if cfg != nil && cfg.TagModel != "" {
+	if cfg != nil && cfg.Embedding.Model != "" {
 		fmt.Println("embeddings (tags + chunks) will regenerate on next 'ark serve'")
 	}
 }
@@ -2266,12 +2278,12 @@ func cmdStatus(args []string) {
 		modelName := ""
 
 		if *tokenize {
-			tagModel := d.Config().TagModel
-			if tagModel == "" {
-				fatal(fmt.Errorf("--tokenize requires tag_model in ark.toml"))
+			emb := d.Config().Embedding
+			if emb.Model == "" {
+				fatal(fmt.Errorf("--tokenize requires [embedding] model in ark.toml"))
 			}
-			modelPath := filepath.Join(arkDir, tagModel)
-			tok, err := ark.NewTokenizer(modelPath)
+			modelPath := filepath.Join(arkDir, emb.Model)
+			tok, err := ark.NewTokenizer(emb.ResolveLibDir(arkDir), modelPath)
 			if err != nil {
 				fatal(err)
 			}
@@ -4569,16 +4581,16 @@ func runConnectionsRecallParsed(inputs []ark.ConnectionsInput, opts ark.RecallOp
 	}
 
 	// R2632, R2633, R2646: server not running — choose a fallback
-	// based on tag_model. File exists → ask the user to start the
-	// server. File missing → gripe loudly so typos surface. Unset →
+	// based on the embedding model. File exists → ask the user to start
+	// the server. File missing → gripe loudly so typos surface. Unset →
 	// silently degrade to in-process trigram-only.
-	if cfg.TagModel != "" {
-		modelPath := filepath.Join(arkDir, cfg.TagModel)
+	if cfg.Embedding.Model != "" {
+		modelPath := filepath.Join(arkDir, cfg.Embedding.Model)
 		switch _, statErr := os.Stat(modelPath); {
 		case statErr == nil:
 			return fmt.Errorf("server not running; model configured. Please start the server with: ark serve")
 		case os.IsNotExist(statErr):
-			return fmt.Errorf("configured tag_model not found at %s", modelPath)
+			return fmt.Errorf("configured embedding model not found at %s", modelPath)
 		default:
 			return statErr
 		}

@@ -586,10 +586,12 @@ Spec: [discussed-tags.md](discussed-tags.md).
 ark embed text TEXT...
 ark embed bench (tags|chunks) [--ctx N] [--parallel N]
 ark embed validate [--fix] [-v]
+ark embed install [--force] [--backend B] [--version bNNNN]
 ```
 
-All embed subcommands run via `withDB`; they require `tag_model`
-configured in ark.toml.
+The `text`/`bench`/`validate` subcommands run via `withDB` and require
+`[embedding] model` configured in ark.toml; `install` provisions the
+llama.cpp shared libs and needs only the `[embedding]` config.
 
 | Subcommand     | Flags                                                | Behavior                                                           |
 |----------------|------------------------------------------------------|--------------------------------------------------------------------|
@@ -597,6 +599,7 @@ configured in ark.toml.
 | `bench tags`   | `--ctx N` (default 2048), `--parallel N` (default 8) | Embed every (tag,value) compound, compare batch vs single          |
 | `bench chunks` | as above                                             | Sample 200 chunks via file-first sampling, compare batch vs single |
 | `validate`     | `--fix`, `-v`                                        | Cross-check EC/EF records against FTS chunks                       |
+| `install`      | `--force`, `--backend B`, `--version bNNNN`          | Provision the llama.cpp libs into the lib dir (R2969); `--force` re-downloads, flags override `[embedding]` backend/llama_version |
 
 `embed validate` exits 1 if any problem is found (orphan EC, missing
 EC, orphan EF, dimension inconsistency); `--fix` deletes orphan EC,

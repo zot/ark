@@ -192,7 +192,7 @@ func TestResolveByPattern(t *testing.T) {
 
 func TestConfigRoundTrip(t *testing.T) {
 	s := testStore(t)
-	cfg := &Config{Dotfiles: true, TagModel: "nomic.gguf"}
+	cfg := &Config{Dotfiles: true, Embedding: EmbeddingConfig{Model: "nomic.gguf"}}
 	if err := s.WriteConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +206,8 @@ func TestConfigRoundTrip(t *testing.T) {
 	if got.Dotfiles != true {
 		t.Error("expected dotfiles=true")
 	}
-	if got.TagModel != "nomic.gguf" {
-		t.Errorf("expected tag_model=nomic.gguf, got %q", got.TagModel)
+	if got.Embedding.Model != "nomic.gguf" {
+		t.Errorf("expected embedding.model=nomic.gguf, got %q", got.Embedding.Model)
 	}
 }
 

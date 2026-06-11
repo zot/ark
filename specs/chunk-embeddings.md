@@ -12,25 +12,26 @@ with `ark embed bench chunks --ctx N --parallel N` and configures
 the results in ark.toml.
 
 ```toml
-tag_model = "nomic-embed-text-v1.5.Q8_0.gguf"
+[embedding]
+model = "nomic-embed-text-v1.5.Q8_0.gguf"
 
-[[embed_tiers]]
+[[embedding.tiers]]
 ctx = 1024
 parallel = 32
 
-[[embed_tiers]]
+[[embedding.tiers]]
 ctx = 2048
 parallel = 16
 
-[[embed_tiers]]
+[[embedding.tiers]]
 ctx = 2048
 parallel = 8
 
-[[embed_tiers]]
+[[embedding.tiers]]
 ctx = 16384
 parallel = 12
 
-[[embed_tiers]]
+[[embedding.tiers]]
 ctx = 16384
 parallel = 8
 ```
@@ -40,14 +41,14 @@ system derives tokens-per-sequence (`ctx / parallel`) and a byte
 limit (`tokens_per_seq * 3`, ~3 bytes/token for BERT WordPiece).
 Tiers are sorted by byte limit ascending at load time. Default tiers
 (the five above, tuned for Steam Deck Vulkan GPU) are used when
-`embed_tiers` is absent but `tag_model` is set.
+`embedding.tiers` is absent but `embedding.model` is set.
 
 Tag and query embedding use the tier with 256 tokens/seq (2048/8)
 since all tag values are under 460 bytes and queries are short.
 
 ## Model and Context Lifecycle
 
-One embedding model is loaded from `tag_model`. All tier contexts
+One embedding model is loaded from `embedding.model`. All tier contexts
 are pre-allocated from it on first embedding use (lazy, same as
 today). The model TTL timer unloads the model and all contexts when
 the embedding queue is idle.
@@ -101,7 +102,7 @@ embedding). Only the LMDB writes go through the actor.
 ## Embedding Model Mismatch
 
 The existing model-mismatch detection (E condition records) extends
-to chunk embeddings. If the configured `tag_model` changes, all
+to chunk embeddings. If the configured `embedding.model` changes, all
 EC/EF records are stale and should be dropped on next reconcile
 (same behavior as T/EV records today).
 
@@ -121,7 +122,7 @@ EC/EF records are stale and should be dropped on next reconcile
 test different configurations. It samples 200 real chunks (via
 `AllChunks`, real chunker boundaries), reports batch vs single
 throughput, skip rate, and chunk size distribution. Use this to find
-the sweet spot for your hardware before setting `embed_tiers`.
+the sweet spot for your hardware before setting `embedding.tiers`.
 
 ## What This Does NOT Cover
 

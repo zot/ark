@@ -10,25 +10,35 @@ lib directory beside the database, and reports clearly when libs are missing.
 - backend: string — `[embedding] backend`: auto|cpu|vulkan|cuda|metal|rocm (R2967)
 - version: string — `[embedding] llama_version`, pinned llama.cpp build (R2968)
 
+Implemented with a **slim, dependency-free downloader** (a plain `net/http`
+fetch + stdlib `archive/tar`/`archive/zip` extraction), **not** yzma's
+`pkg/download` — that package drags in go-getter plus the AWS and GCP SDKs to
+fetch a single tarball, none of which would link into the binary's value. The
+release-asset URL/filename map is ported from yzma so the same archives are
+pulled.
+
 ## Does
-- Provision(): if libDir lacks the libs (`download.AlreadyInstalled`), download
-  the (platform, backend, version) release into libDir via yzma `pkg/download`;
-  idempotent — skipped when present unless an upgrade is requested; may also
-  fetch the GGUF model when absent. Runs during `ark setup` and as a standalone
-  command. (R2969)
-- resolveBackend(): when backend is `auto`, detect CUDA (`download.HasCUDA`),
-  else ROCm (`download.HasROCm`), else Metal on darwin, else Vulkan when a
-  device exists, else CPU. (R2967)
+- Provision(force): if libDir lacks the libs (`llamaLibsInstalled`), resolve the
+  (platform, backend, version) ggml-org release via `llamaAsset`, download and
+  extract it into libDir (`downloadAndExtract` → tar.gz or zip); idempotent —
+  skipped when libs are present unless `force` requests a re-download. Runs
+  during `ark setup` (best-effort) and as `ark embed install`. (Model auto-fetch
+  is permitted by R2969 but not implemented — the model is configured
+  separately; see Gaps.) (R2969)
+- resolveBackend(): when backend is `auto`/empty, detect CUDA (`nvidia-smi`),
+  else ROCm (`rocminfo`), else Metal on darwin, else Vulkan when a GPU render
+  node exists, else CPU. (R2967)
 - LibDir() string: the directory yzma's `Load()` points at. (R2966)
-- requireLibs(): when a model is configured but libDir has no libs, return a
-  clear error naming the provisioning command — never a silent FTS fallback.
-  (R2970)
+- requireLlamaLibs(libDir) (package-level, embed.go): when a model is configured
+  but libDir has no libs, return a clear error naming `ark embed install` —
+  never a silent FTS fallback. (R2970)
 
 ## Collaborators
 - Config: reads the `[embedding]` lib_dir/backend/llama_version keys
-- yzma `pkg/download`: AlreadyInstalled, Get/GetWithContext, HasCUDA, HasROCm, GetModel
-- Librarian: loads the model only after libs are provisioned; calls `Load(LibDir())`
-- Setup (`ark setup`): invokes Provision() during bootstrap
+- net/http + archive/tar + archive/zip + compress/gzip (stdlib): the fetch and extract
+- embed engine (embed.go): `ensureLlamaLoaded` calls yzma `Load(LibDir())`; the
+  Librarian loads the model only after `requireLlamaLibs` passes
+- Setup (`ark setup`) / `ark embed install`: invoke Provision()
 
 ## Sequences
 - (none yet)

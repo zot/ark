@@ -453,7 +453,7 @@ func (s *Store) WriteConfig(cfg *Config) error {
 		if err := put(IFieldQueryCmd, cfg.QueryCmd); err != nil {
 			return err
 		}
-		if err := put(IFieldTagModel, cfg.TagModel); err != nil {
+		if err := put(IFieldTagModel, cfg.Embedding.Model); err != nil {
 			return err
 		}
 		if err := put(IFieldSessionTTL, cfg.SessionTTL); err != nil {
@@ -477,7 +477,7 @@ func (s *Store) WriteConfig(cfg *Config) error {
 		if err := putJSON(IFieldSearchExclude, cfg.SearchExclude); err != nil {
 			return err
 		}
-		if err := putJSON(IFieldEmbedTiers, cfg.EmbedTiers); err != nil {
+		if err := putJSON(IFieldEmbedTiers, cfg.Embedding.Tiers); err != nil {
 			return err
 		}
 		return putJSON(IFieldSchedule, cfg.Schedule)
@@ -510,7 +510,7 @@ func (s *Store) ReadConfig() (*Config, error) {
 		cfg.CaseInsensitive, _ = strconv.ParseBool(get(IFieldCaseInsensitive))
 		cfg.EmbedCmd = get(IFieldEmbedCmd)
 		cfg.QueryCmd = get(IFieldQueryCmd)
-		cfg.TagModel = get(IFieldTagModel)
+		cfg.Embedding.Model = get(IFieldTagModel)
 		cfg.SessionTTL = get(IFieldSessionTTL)
 		getJSON(IFieldDefaultInclude, &cfg.DefaultInclude)
 		getJSON(IFieldDefaultExclude, &cfg.DefaultExclude)
@@ -518,7 +518,7 @@ func (s *Store) ReadConfig() (*Config, error) {
 		getJSON(IFieldSources, &cfg.Sources)
 		getJSON(IFieldChunkers, &cfg.Chunkers)
 		getJSON(IFieldSearchExclude, &cfg.SearchExclude)
-		getJSON(IFieldEmbedTiers, &cfg.EmbedTiers)
+		getJSON(IFieldEmbedTiers, &cfg.Embedding.Tiers)
 		getJSON(IFieldSchedule, &cfg.Schedule)
 		return nil
 	})

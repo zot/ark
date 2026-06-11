@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	ucli "github.com/urfave/cli/v3"
@@ -54,8 +55,42 @@ func embedCommand() *ucli.Command {
 				},
 				Action: embedValidateAction,
 			},
+			{
+				Name:  "install",
+				Usage: "provision the llama.cpp shared libraries into the lib dir",
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{Name: "force", Usage: "re-download even if libs are already present"},
+					&ucli.StringFlag{Name: "backend", Usage: "override backend: auto|cpu|vulkan|cuda|metal|rocm"},
+					&ucli.StringFlag{Name: "version", Usage: "override the pinned llama.cpp build (bNNNN)"},
+				},
+				Action: embedInstallAction,
+			},
 		},
 	}
+}
+
+// embedInstallAction provisions the llama.cpp shared libs the yzma engine
+// dlopens at runtime — the standalone half of R2969 (the other being
+// `ark setup`). Backend/version flags override the [embedding] config.
+// CRC: crc-LlamaLibs.md | R2967, R2968, R2969
+func embedInstallAction(_ context.Context, c *ucli.Command) error {
+	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+	if err != nil {
+		fatal(err)
+	}
+	emb := cfg.Embedding
+	if v := c.String("backend"); v != "" {
+		emb.Backend = v
+	}
+	if v := c.String("version"); v != "" {
+		emb.LlamaVersion = v
+	}
+	libs := ark.NewLlamaLibs(emb, arkDir)
+	if err := libs.Provision(c.Bool("force")); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("llama.cpp libraries ready in %s\n", libs.LibDir())
+	return nil
 }
 
 // CRC: crc-CLITree.md, crc-CLI.md | R1791, R1795, R1796, R1797
@@ -71,7 +106,7 @@ func embedTextAction(_ context.Context, c *ucli.Command) error {
 			fatal(fmt.Errorf("claude not on PATH"))
 		}
 		if !lib.EmbeddingAvailable() {
-			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
+			fatal(fmt.Errorf("[embedding] model not configured in ark.toml or model file not found"))
 		}
 		vec, err := lib.EmbedQuery(text)
 		if err != nil {
@@ -104,7 +139,7 @@ func embedBenchAction(_ context.Context, c *ucli.Command) error {
 			fatal(fmt.Errorf("claude not on PATH"))
 		}
 		if !lib.EmbeddingAvailable() {
-			fatal(fmt.Errorf("tag_model not configured in ark.toml or model file not found"))
+			fatal(fmt.Errorf("[embedding] model not configured in ark.toml or model file not found"))
 		}
 		lib.SetCtxSize(ctxSize)
 		lib.SetParallel(parallel)

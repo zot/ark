@@ -40,7 +40,8 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Sidecar agents (spectral, curation, recall) | spectral shipping; others growing          | `spectral-search.md`, `find-connections-substrate.md`                         |
 | Frictionless UI                             | shipping                                   | `ACCESSING-FRICTIONLESS.md`, `lua-api.md`                                     |
 | Bundle distribution                         | shipping                                   | `cli-commands.md` (bundle/setup commands)                                     |
-| Cross-platform binaries + self-provisioned inference | migration in spec (gollama→yzma): pure-Go `CGO_ENABLED=0` build, frictionless-style release sweep, runtime-loaded llama.cpp libs | `yzma-embedding.md`, `llama-libs.md` |
+| Self-provisioned in-process inference | engine landed (gollama→yzma): llama.cpp via yzma purego/`dlopen`, runtime-provisioned libs (`ark embed install`), no GPU-native compile-time dep | `yzma-embedding.md`, `llama-libs.md` |
+| Cross-platform `CGO_ENABLED=0` binaries | blocked: `lmdb-go` (ark store + microfts2) still links C — pending the LMDB→pure-Go (BBolt) migration; then the frictionless-style release sweep | `yzma-embedding.md` |
 
 The columns:
 

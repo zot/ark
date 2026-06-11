@@ -1,6 +1,6 @@
 module github.com/zot/ark
 
-go 1.25.3
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.5.0
@@ -8,7 +8,7 @@ require (
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/chzyer/readline v1.5.1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/godeps/gollama v0.1.8
+	github.com/hybridgroup/yzma v1.16.1
 	github.com/itlightning/dateparse v0.2.1
 	github.com/urfave/cli/v3 v3.9.0
 	github.com/yuin/goldmark v1.7.16
@@ -22,10 +22,12 @@ require (
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
+	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/google/codesearch v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
+	github.com/jupiterrider/ffi v0.6.0 // indirect
 	github.com/layeh/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mark3labs/mcp-go v0.43.2 // indirect

@@ -24,7 +24,6 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/bmatsuo/lmdb-go/lmdb"
-	llama "github.com/godeps/gollama"
 	"github.com/zot/microfts2"
 )
 
@@ -44,10 +43,11 @@ type Librarian struct {
 	results map[string]*ExpandResult // requestID → result
 
 	// Embedding model (R1277, R1278, R1593, R1594)
-	model      *llama.Model
-	modelCtx   *llama.Context // default context for tags/queries (2048/8)
-	tiers      []EmbedTier    // sorted by byte limit ascending
-	modelPath  string         // full path to GGUF file
+	model      *embedModel
+	modelCtx   *embedContext // default context for tags/queries (2048/8)
+	tiers      []EmbedTier   // sorted by byte limit ascending
+	modelPath  string        // full path to GGUF file
+	libDir     string        // dir holding the runtime-loaded llama.cpp libs (R2966)
 	modelTimer *time.Timer
 	modelTTL   time.Duration
 	ctxSize    int // embedding context window size override (bench only) R1793
@@ -107,13 +107,14 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 		results:                make(map[string]*ExpandResult),
 		modelTTL:               5 * time.Minute,
 		ctxSize:                2048,
-		tiers:                  cfg.EmbedTiers, // R1594: sorted at config load
+		tiers:                  cfg.Embedding.Tiers, // R1594: sorted at config load
+		libDir:                 cfg.Embedding.ResolveLibDir(dbPath),
 		connectionsResults:     make(map[string]*ConnectionsRecord),
 		connectionsAvailWindow: 60 * time.Second, // R2320
 	}
-	// R1274: resolve tag_model path
-	if tagModel := cfg.TagModel; tagModel != "" {
-		modelPath := filepath.Join(dbPath, tagModel)
+	// R2964: resolve the embedding model path
+	if model := cfg.Embedding.Model; model != "" {
+		modelPath := filepath.Join(dbPath, model)
 		if _, err := os.Stat(modelPath); err == nil {
 			l.modelPath = modelPath
 		}
@@ -1788,7 +1789,7 @@ func (l *Librarian) EmbedQuery(text string) ([]float32, error) {
 	}
 	l.resetModelTimer()
 
-	vec, err := l.modelCtx.GetEmbeddings(text)
+	vec, err := l.modelCtx.embed(text)
 	if err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
 	}
@@ -1809,7 +1810,7 @@ func (l *Librarian) EmbedBatch(texts []string) ([][]float32, error) {
 	}
 	l.resetModelTimer()
 
-	vecs, err := l.modelCtx.GetEmbeddingsBatch(texts)
+	vecs, err := l.modelCtx.embedBatch(texts)
 	if err != nil {
 		return nil, fmt.Errorf("embed batch: %w", err)
 	}
@@ -2023,11 +2024,11 @@ func (l *Librarian) BatchEmbed() error {
 }
 
 // embedWithCtx embeds a batch using the given context. R1614
-func (l *Librarian) embedWithCtx(ctx *llama.Context, texts []string) ([][]float32, error) {
+func (l *Librarian) embedWithCtx(ctx *embedContext, texts []string) ([][]float32, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.resetModelTimer()
-	vecs, err := ctx.GetEmbeddingsBatch(texts)
+	vecs, err := ctx.embedBatch(texts)
 	if err != nil {
 		return nil, fmt.Errorf("embed batch: %w", err)
 	}
@@ -2035,19 +2036,18 @@ func (l *Librarian) embedWithCtx(ctx *llama.Context, texts []string) ([][]float3
 }
 
 // createTierCtx creates a temporary context for one embedding tier.
-// Caller must Close() when done. R1594
-func (l *Librarian) createTierCtx(tier EmbedTier) (*llama.Context, error) {
+// Caller must close() when done. R1594, R2962
+func (l *Librarian) createTierCtx(tier EmbedTier) (*embedContext, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.model == nil {
 		return nil, fmt.Errorf("model not loaded")
 	}
-	return l.model.NewContext(
-		llama.WithEmbeddings(),
-		llama.WithContext(tier.Ctx),
-		llama.WithBatch(tier.Ctx),
-		llama.WithParallel(tier.Parallel),
-	)
+	return l.model.newContext(embedParams{
+		ctx:        tier.Ctx,
+		parallel:   tier.Parallel,
+		embeddings: true,
+	})
 }
 
 // BatchEmbedChunks embeds all chunks missing EC records, using tier
@@ -2275,7 +2275,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 			totalEmbedded += len(valid)
 		}
 
-		ctx.Close()
+		ctx.close()
 	}
 
 	// R1848: recompute EF centroids for files that got new embeddings
@@ -2317,50 +2317,37 @@ func (l *Librarian) BatchEmbedChunks() error {
 }
 
 // flushBucket embeds all chunks in a bucket and writes EC records. R1614, R1615
-// Tokenizer wraps a llama model+context for tokenization only.
+// Tokenizer wraps a llama model for tokenization only. yzma tokenizes
+// from the model vocab directly, so no inference context is needed.
 // CRC: crc-Librarian.md | R1529, R1530
 type Tokenizer struct {
-	model     *llama.Model
-	ctx       *llama.Context
+	model     *embedModel
 	modelPath string
 }
 
-// NewTokenizer loads a GGUF model and creates a minimal context for
-// tokenization only (no embeddings, tiny KV cache).
+// NewTokenizer loads a GGUF model for tokenization only.
 // Caller must call Close() when done.
 // CRC: crc-Librarian.md | R1529, R1530
-func NewTokenizer(modelPath string) (*Tokenizer, error) {
+func NewTokenizer(libDir, modelPath string) (*Tokenizer, error) {
 	if modelPath == "" {
-		return nil, fmt.Errorf("no embedding model configured (tag_model)")
+		return nil, fmt.Errorf("no embedding model configured")
 	}
-	model, err := llama.LoadModel(modelPath)
+	model, err := loadEmbedModel(libDir, modelPath)
 	if err != nil {
-		return nil, fmt.Errorf("load model %s: %w", modelPath, err)
+		return nil, err
 	}
-	ctx, err := model.NewContext(llama.WithContext(64))
-	if err != nil {
-		model.Close()
-		return nil, fmt.Errorf("create tokenizer context: %w", err)
-	}
-	return &Tokenizer{model: model, ctx: ctx, modelPath: modelPath}, nil
+	return &Tokenizer{model: model, modelPath: modelPath}, nil
 }
 
 // CountTokens returns the number of tokens in text.
 func (t *Tokenizer) CountTokens(text string) int {
-	tokens, err := t.ctx.Tokenize(text)
-	if err != nil {
-		return 0
-	}
-	return len(tokens)
+	return t.model.countTokens(text)
 }
 
-// Close releases the tokenizer's model and context.
+// Close releases the tokenizer's model.
 func (t *Tokenizer) Close() {
-	if t.ctx != nil {
-		t.ctx.Close()
-	}
 	if t.model != nil {
-		t.model.Close()
+		t.model.close()
 	}
 }
 
@@ -2377,11 +2364,16 @@ func (l *Librarian) ensureModel() error {
 	if l.model != nil {
 		return nil
 	}
-	model, err := llama.LoadModel(l.modelPath)
-	if err != nil {
-		return fmt.Errorf("load model %s: %w", l.modelPath, err)
+	// R2970: a configured model with no provisioned libs fails with a
+	// clear error naming the provisioning command — never a silent drop.
+	if err := requireLlamaLibs(l.libDir); err != nil {
+		return err
 	}
-	// Default context for tags/queries (or bench override) R1595, R1597
+	model, err := loadEmbedModel(l.libDir, l.modelPath)
+	if err != nil {
+		return err
+	}
+	// Default context for tags/queries (or bench override) R1595, R1597, R2962
 	ctxSize := l.ctxSize
 	if ctxSize <= 0 {
 		ctxSize = 2048
@@ -2390,14 +2382,9 @@ func (l *Librarian) ensureModel() error {
 	if par <= 0 {
 		par = 8
 	}
-	ctx, err := model.NewContext(
-		llama.WithEmbeddings(),
-		llama.WithContext(ctxSize),
-		llama.WithBatch(ctxSize),
-		llama.WithParallel(par),
-	)
+	ctx, err := model.newContext(embedParams{ctx: ctxSize, parallel: par, embeddings: true})
 	if err != nil {
-		model.Close()
+		model.close()
 		return fmt.Errorf("create context: %w", err)
 	}
 	l.model = model
@@ -2421,11 +2408,11 @@ func (l *Librarian) resetModelTimer() {
 
 func (l *Librarian) unloadModel() {
 	if l.modelCtx != nil {
-		l.modelCtx.Close()
+		l.modelCtx.close()
 		l.modelCtx = nil
 	}
 	if l.model != nil {
-		l.model.Close()
+		l.model.close()
 		l.model = nil
 		log.Printf("librarian: unloaded embedding model")
 	}

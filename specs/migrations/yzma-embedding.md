@@ -2,6 +2,31 @@
 
 **Source spike:** `.scratch/YZMA.md` (proven on Steam Deck / Vulkan, 2026-06-11).
 
+## Status (2026-06-11) — IN-FLIGHT, engine landed
+
+- **Landed & validated:** the embedding engine (`embed.go` wraps yzma
+  `pkg/llama`; `librarian.go` swapped), the `[embedding]` config table, the
+  lib provisioner (`llamalibs.go` + `ark embed install`), go.mod (yzma in,
+  gollama out). Smoke test green on Deck/Vulkan. R2961–R2970 satisfied.
+- **Provisioner uses a slim, dependency-free downloader**, NOT yzma
+  `pkg/download` — that package pulls go-getter + the AWS/GCP SDKs to fetch one
+  tarball. A plain `net/http` + stdlib tar/zip fetch (URL map ported from yzma)
+  links zero of that weight. `crc-LlamaLibs.md` reflects this.
+- **CGO_ENABLED=0 is NOT achieved (R2971/R2972 deferred).** Removing gollama
+  removed one CGO dep, but `bmatsuo/lmdb-go` (ark's own store **and**
+  `microfts2`) still links C. The pure-Go binary + release sweep are blocked on
+  the **LMDB → pure-Go (BBolt) migration** (a separate item) covering both
+  modules. The Makefile is therefore left untouched for now.
+- **Remaining before `migration-complete`:** (1) the LMDB→BBolt work, then
+  R2971/R2972 + the Makefile `release` target; (2) the prose-supersede sweep —
+  residual `tag_model`/`embed_tiers` key names and gollama engine descriptions
+  across per-feature specs (`recall.md`, `derived-tags.md`, `config-tracking.md`,
+  `vector-freshness.md`, `vec-bench.md`, `tag-embeddings.md` static-link note,
+  `tag-def-embeddings.md`, `seq-tag-embed.md`, `main.md`) and personal notes.
+  The authoritative summary specs (`config.md`, `cli-commands.md`,
+  `record-formats.md`, `features.md`) and the copy-pasteable `ark.toml` examples
+  are already reconciled.
+
 ## Problem
 
 Ark's embedding engine links `github.com/godeps/gollama` → llama.cpp as a

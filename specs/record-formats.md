@@ -354,7 +354,7 @@ during `ark init` and by config-mutating commands.
 | `case_insensitive` | bool→string                  | `Config.CaseInsensitive` |
 | `embed_cmd`        | string                       | `Config.EmbedCmd`        |
 | `query_cmd`        | string                       | `Config.QueryCmd`        |
-| `tag_model`        | string (GGUF filename)       | `Config.TagModel`        |
+| `tag_model`        | string (GGUF filename)       | `Config.Embedding.Model` |
 | `global_include`   | JSON array                   | `Config.GlobalInclude`   |
 | `global_exclude`   | JSON array                   | `Config.GlobalExclude`   |
 | `strategies`       | JSON map                     | `Config.Strategies`      |
@@ -362,7 +362,7 @@ during `ark init` and by config-mutating commands.
 | `chunkers`         | JSON array                   | `Config.Chunkers`        |
 | `session_ttl`      | string                       | `Config.SessionTTL`      |
 | `search_exclude`   | JSON array                   | `Config.SearchExclude`   |
-| `embed_tiers`      | JSON array                   | `Config.EmbedTiers`      |
+| `embed_tiers`      | JSON array                   | `Config.Embedding.Tiers` |
 | `schedule`         | JSON                         | `Config.Schedule`        |
 | `schedule_config`  | JSON                         | `Config.ScheduleConfig`  |
 

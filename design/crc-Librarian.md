@@ -356,8 +356,11 @@ global top-K.
 - DB: AllChunks for chunk content retrieval, enqueueWrite for actor
   writes, AddTmpFile/UpdateTmpFile for the sweep progress doc
 - Searcher: fetch grouped results for curated tags
-- gollama: model loading, multi-context creation, embedding computation
-- Config: tag_model path, embed_tiers, search_exclude patterns
+- embed engine (embed.go): yzma `pkg/llama` model loading, context creation,
+  and embedding computation via runtime `dlopen` — pure-Go, no CGO (R2961, R2962, R2963)
+- LlamaLibs (llamalibs.go): provisions the llama.cpp shared libs the engine
+  dlopens; `requireLlamaLibs` gates model load when libs are absent (R2970)
+- Config: `[embedding]` model path, tiers, lib_dir, search_exclude patterns (R2964, R2965)
 
 ## Sequences
 - seq-spectral-expand.md

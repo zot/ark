@@ -24,7 +24,8 @@ The embedding model is a GGUF file stored in `~/.ark/`. Config:
 
 ```toml
 # ark.toml
-tag_model = "nomic-embed-text-v1.5.Q8_0.gguf"
+[embedding]
+model = "nomic-embed-text-v1.5.Q8_0.gguf"
 ```
 
 The path is relative to the database directory (`~/.ark/`). If

@@ -2174,7 +2174,7 @@ func (db *DB) DiffConfig() ([]ConfigChange, error) {
 	check(IFieldCaseInsensitive, strconv.FormatBool(stored.CaseInsensitive), strconv.FormatBool(db.config.CaseInsensitive))
 	check(IFieldEmbedCmd, stored.EmbedCmd, db.config.EmbedCmd)
 	check(IFieldQueryCmd, stored.QueryCmd, db.config.QueryCmd)
-	check(IFieldTagModel, stored.TagModel, db.config.TagModel)
+	check(IFieldTagModel, stored.Embedding.Model, db.config.Embedding.Model)
 	check(IFieldSessionTTL, stored.SessionTTL, db.config.SessionTTL)
 	checkJSON(IFieldDefaultInclude, stored.DefaultInclude, db.config.DefaultInclude)
 	checkJSON(IFieldDefaultExclude, stored.DefaultExclude, db.config.DefaultExclude)
@@ -2183,7 +2183,7 @@ func (db *DB) DiffConfig() ([]ConfigChange, error) {
 	checkJSON(IFieldChunkers, stored.Chunkers, db.config.Chunkers)
 	checkJSON(IFieldSearchExclude, stored.SearchExclude, db.config.SearchExclude)
 	checkJSON(IFieldSchedule, stored.Schedule, db.config.Schedule)
-	checkJSON(IFieldEmbedTiers, stored.EmbedTiers, db.config.EmbedTiers)
+	checkJSON(IFieldEmbedTiers, stored.Embedding.Tiers, db.config.Embedding.Tiers)
 
 	// Check for catastrophe: all sources gone
 	if len(stored.Sources) > 0 && len(db.config.Sources) == 0 {

@@ -139,7 +139,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### CRC Cards
 - [x] crc-DB.md → `db.go`, `locator.go`
-- [ ] crc-Config.md → `config.go`
+- [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
@@ -160,8 +160,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagVerify.md → `cmd/ark/main.go`, `verify.go`
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
-- [ ] crc-Librarian.md → `librarian.go`, `connections.go`, `recall.go`
-- [ ] crc-LlamaLibs.md → `llamalibs.go`
+- [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
+- [x] crc-LlamaLibs.md → `llamalibs.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
@@ -684,3 +684,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T152: R1588 retired by R2965 (2026-06-11 yzma-embedding: embed_tiers -> [embedding] tiers)
 - T153: R1595 retired by R2962 (2026-06-11 yzma-embedding: gollama context API -> yzma ContextParams)
 - A69: R2971-R2972 (Makefile pure-Go CGO_ENABLED=0 build + cross-platform release target) — Makefile build/release infrastructure, not Go code (mirrors A11)
+- [ ] D10: R2971/R2972 (CGO_ENABLED=0 build + frictionless-style release sweep) deferred — blocked on the LMDB->BBolt migration: lmdb-go links C in BOTH ark's store and microfts2. Makefile left untouched until that lands.
+- [ ] O134: yzma migration prose-supersede sweep pending (precondition for migration-complete): residual tag_model/embed_tiers key names + gollama engine descriptions in recall.md, derived-tags.md, config-tracking.md, vector-freshness.md, vec-bench.md, tag-embeddings.md static-link note, tag-def-embeddings.md, seq-tag-embed.md, main.md. Summary specs + ark.toml examples already reconciled.
+- [ ] O135: LlamaLibs model auto-fetch (R2969 permits but does not require fetching the GGUF when absent) not implemented — slim downloader fetches libs only; model is configured separately.

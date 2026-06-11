@@ -12,7 +12,7 @@ Embed text using the configured tag model. Prints the embedding vector
 as JSON to stdout. This is the current bare `ark embed <text>` behavior,
 moved under a subcommand for consistency.
 
-- Requires `tag_model` configured in ark.toml
+- Requires `[embedding] model` configured in ark.toml
 - Joins all positional args with spaces
 - Output: JSON array of float32
 

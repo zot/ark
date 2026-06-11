@@ -52,8 +52,7 @@ type Config struct {
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
 	SessionTTL      string            `toml:"session_ttl,omitempty"`    // R646: duration string, default "30s"
 	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
-	TagModel        string            `toml:"tag_model,omitempty"`      // R1274: GGUF embedding model filename
-	EmbedTiers      []EmbedTier       `toml:"embed_tiers,omitempty"`    // R1588: ctx/parallel per tier
+	Embedding       EmbeddingConfig   `toml:"embedding"`                // R2964-R2968: model, tiers, lib provisioning
 	// CRC: crc-Config.md | R1919, R1920, R1938
 	AboutCentroidFilter    bool    `toml:"about_centroid_filter,omitempty"`
 	AboutCentroidThreshold float64 `toml:"about_centroid_threshold,omitempty"`
@@ -407,6 +406,43 @@ const defaultLogCap = 1000
 // CRC: crc-Config.md | R2834
 var defaultChimeTags = []string{
 	"chime-1m", "chime-5m", "chime-15m", "chime-30m", "chime-45m", "chime-60m",
+}
+
+// EmbeddingConfig collects the [embedding] section of ark.toml — the GGUF
+// model, the adaptive tiers, and the runtime-provisioned llama.cpp shared
+// libraries the yzma engine dlopens.
+// CRC: crc-Config.md, crc-LlamaLibs.md | R2964, R2965, R2966, R2967, R2968
+type EmbeddingConfig struct {
+	// Model is the GGUF embedding model filename under the ark dir, used
+	// for chunk, tag, and query embeddings. Empty disables vector-EC.
+	// Renamed from the top-level tag_model. R2964
+	Model string `toml:"model,omitempty"`
+
+	// Tiers configures the adaptive embedding tiers; each entry's ctx
+	// maps to the context NCtx and parallel to NSeqMax. Renamed from the
+	// top-level embed_tiers. R2965
+	Tiers []EmbedTier `toml:"tiers,omitempty"`
+
+	// LibDir holds the llama.cpp shared libs the engine dlopens at
+	// startup. Empty resolves to <ark-dir>/lib, beside the LMDB env. R2966
+	LibDir string `toml:"lib_dir,omitempty"`
+
+	// Backend selects the llama.cpp build: auto|cpu|vulkan|cuda|metal|
+	// rocm. auto detects the platform GPU. R2967
+	Backend string `toml:"backend,omitempty"`
+
+	// LlamaVersion pins the llama.cpp release build to provision, within
+	// yzma's tested range, keeping release builds reproducible. R2968
+	LlamaVersion string `toml:"llama_version,omitempty"`
+}
+
+// ResolveLibDir returns the configured lib_dir or the default <dbPath>/lib,
+// with leading ~ expanded. R2966
+func (e EmbeddingConfig) ResolveLibDir(dbPath string) string {
+	if e.LibDir != "" {
+		return ExpandTilde(e.LibDir)
+	}
+	return filepath.Join(dbPath, "lib")
 }
 
 // EmbedTier defines a context/parallel pair for chunk embedding.
@@ -968,22 +1004,22 @@ func (c *Config) checkDuplicates(includes, excludes []string, context string) {
 
 // initEmbedTiers applies defaults and sorts tiers by byte limit. R1590, R1591, R1592
 func (c *Config) initEmbedTiers() {
-	if len(c.EmbedTiers) == 0 && c.TagModel != "" {
-		c.EmbedTiers = DefaultEmbedTiers()
+	if len(c.Embedding.Tiers) == 0 && c.Embedding.Model != "" {
+		c.Embedding.Tiers = DefaultEmbedTiers()
 	}
-	valid := c.EmbedTiers[:0]
-	for _, t := range c.EmbedTiers {
+	valid := c.Embedding.Tiers[:0]
+	for _, t := range c.Embedding.Tiers {
 		if t.Ctx > 0 && t.Parallel > 0 && t.Parallel <= t.Ctx {
 			valid = append(valid, t)
 		} else {
 			c.Errors = append(c.Errors, fmt.Sprintf(
-				"embed_tiers: invalid tier ctx=%d parallel=%d (need ctx>0, 0<parallel<=ctx)", t.Ctx, t.Parallel))
+				"embedding.tiers: invalid tier ctx=%d parallel=%d (need ctx>0, 0<parallel<=ctx)", t.Ctx, t.Parallel))
 		}
 	}
-	c.EmbedTiers = valid
+	c.Embedding.Tiers = valid
 	// Sort by byte limit ascending
-	sort.Slice(c.EmbedTiers, func(i, j int) bool {
-		return c.EmbedTiers[i].ByteLimit() < c.EmbedTiers[j].ByteLimit()
+	sort.Slice(c.Embedding.Tiers, func(i, j int) bool {
+		return c.Embedding.Tiers[i].ByteLimit() < c.Embedding.Tiers[j].ByteLimit()
 	})
 }
 
