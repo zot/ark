@@ -8,10 +8,11 @@ package ark
 // gollama API the Librarian relies on, so librarian.go's call sites are
 // unchanged by the migration.
 //
-// CRC: crc-Librarian.md | R2961, R2962, R2963
+// CRC: crc-Librarian.md | R2961, R2962, R2963, R2973
 // R2961 yzma/purego binding (runtime dlopen, no CGO)
 // R2962 tier context = ContextParams (NCtx/NSeqMax/NBatch/NUbatch, Mean pool, GPU offload)
 // R2963 copy the aliasing GetEmbeddingsSeq result
+// R2973 llama.cpp logging silenced by default; -vvv (verbosity ≥ 3) leaves it on
 
 import (
 	"fmt"
@@ -78,11 +79,22 @@ func ensureLlamaLoaded(libDir string) error {
 	if err := yz.Load(libDir); err != nil {
 		return fmt.Errorf("load llama.cpp libraries from %s: %w", libDir, err)
 	}
-	yz.LogSet(yz.LogSilent()) // silence llama.cpp's own per-tensor load logging
+	// llama.cpp logs the backend device, GPU offload, and per-tensor load
+	// to stderr by default. Silence it unless the global verbosity is at
+	// least llamaVerboseLevel (-vvv) — there the user has explicitly asked
+	// for engine internals (confirming GPU offload, debugging). Set once;
+	// LogSet is process-global, as is this load. R2973
+	if verbosity < llamaVerboseLevel {
+		yz.LogSet(yz.LogSilent())
+	}
 	yz.Init()
 	llamaLoaded = true
 	return nil
 }
+
+// llamaVerboseLevel is the global verbosity (-v count) at and above which
+// llama.cpp's own stderr logging is left on. R2973
+const llamaVerboseLevel = 3
 
 // embedModel wraps a yzma-loaded GGUF model. Multiple contexts share the
 // model's weights (one model + small per-context state). R2962
@@ -127,6 +139,19 @@ func loadEmbedModel(libDir, modelPath string) (*embedModel, error) {
 		vocab: yz.ModelGetVocab(model),
 		nEmbd: yz.ModelNEmbd(model),
 	}, nil
+}
+
+// runBatch evaluates a batch through the right path. A context with no KV
+// cache (mem == 0) is a pooled encoder: llama.cpp's own decode() redirects
+// such a batch to encode() and logs a warning on every call, so we call
+// encode() directly — quiet, and the exact condition llama.cpp uses
+// (`if (!memory) return encode(...)`). A context with a KV cache decodes.
+// R2962
+func (c *embedContext) runBatch(batch yz.Batch) (int32, error) {
+	if c.mem == 0 {
+		return yz.Encode(c.ctx, batch)
+	}
+	return yz.Decode(c.ctx, batch)
 }
 
 // newContext creates an inference context from the model. For embedding
@@ -202,9 +227,9 @@ func (c *embedContext) embed(text string) ([]float32, error) {
 			// global position, sequence 0, logits on every token (pooling)
 			batch.Add(tokens[i+j], yz.Pos(i+j), []yz.SeqId{0}, true)
 		}
-		if ret, err := yz.Decode(c.ctx, batch); err != nil || ret != 0 {
+		if ret, err := c.runBatch(batch); err != nil || ret != 0 {
 			yz.BatchFree(batch)
-			return nil, fmt.Errorf("decode failed (ret=%d): %w", ret, err)
+			return nil, fmt.Errorf("embed eval failed (ret=%d): %w", ret, err)
 		}
 		yz.BatchFree(batch)
 	}
@@ -241,8 +266,8 @@ func (c *embedContext) embedBatch(texts []string) ([][]float32, error) {
 		if s == 0 {
 			return nil
 		}
-		if ret, err := yz.Decode(c.ctx, batch); err != nil || ret != 0 {
-			return fmt.Errorf("decode batch failed (ret=%d): %w", ret, err)
+		if ret, err := c.runBatch(batch); err != nil || ret != 0 {
+			return fmt.Errorf("embed batch eval failed (ret=%d): %w", ret, err)
 		}
 		for seq := 0; seq < s; seq++ {
 			vec, err := c.readSeq(yz.SeqId(seq))

@@ -4590,3 +4590,4 @@ reason.
 
 - **R2971:** Ark builds with `CGO_ENABLED=0`; the Makefile no longer builds gollama/llama.cpp from source (the `gollama`/cmake/Vulkan recipe and the `build: gollama` dependency are removed).
 - **R2972:** The Makefile provides a `release` target that cross-compiles ark across the supported `GOOS/GOARCH` targets and grafts bundled assets onto each via `ark bundle -src`, producing per-platform release archives.
+- **R2973:** The embedding engine silences llama.cpp's own stderr logging (backend device, GPU offload, per-tensor load) by default; the global verbosity at level 3 or above (`-vvv`, above ark's own `Logv` usage which tops out at level 2) leaves it on for confirming GPU offload or debugging the engine.

@@ -66,6 +66,11 @@ In-process embedding via yzma (purego → llama.cpp loaded at runtime; see
 shared-lib provisioning keys. `model` and `tiers` were formerly the top-level
 `tag_model` and `embed_tiers` keys.
 
+llama.cpp's own stderr logging (backend device, GPU offload, per-tensor load)
+is silenced by default to keep server output clean. Run at verbosity level 3 or
+above (`ark serve -vvv`) to leave it on — useful for confirming GPU offload.
+(R2973; gated on the global `-v` count, not an ark.toml key.)
+
 | Key             | Type   | Default     | Meaning                                                                                                     | Owner                                          |
 |-----------------|--------|-------------|-------------------------------------------------------------------------------------------------------------|------------------------------------------------|
 | `model`         | string | `""`        | Filename of the GGUF embedding model under the ark dir — embeds chunks, tags, and queries. Empty disables vector-EC. | `chunk-embeddings.md`, `embed-subcommands.md`  |
