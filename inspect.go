@@ -6,7 +6,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // CRC: crc-TagInspect.md | R2113, R2114, R2115, R2116, R2117, R2118, R2119
@@ -32,21 +32,21 @@ type InspectOptions struct {
 // ExtInspectReport is the wire and CLI shape — three sections plus
 // metadata. Marshals cleanly to JSON.
 type ExtInspectReport struct {
-	Scope        string                  `json:"scope"`
-	Target       string                  `json:"target,omitempty"`
-	ServerSide   bool                    `json:"server_side"`
-	Disk         ExtDiskSection          `json:"disk"`
-	InMemory     *ExtInMemorySection     `json:"in_memory,omitempty"`
-	Bridges      []ExtBridgeEntry        `json:"bridges"`
-	UnavailNote  string                  `json:"unavailable_note,omitempty"`
+	Scope       string              `json:"scope"`
+	Target      string              `json:"target,omitempty"`
+	ServerSide  bool                `json:"server_side"`
+	Disk        ExtDiskSection      `json:"disk"`
+	InMemory    *ExtInMemorySection `json:"in_memory,omitempty"`
+	Bridges     []ExtBridgeEntry    `json:"bridges"`
+	UnavailNote string              `json:"unavailable_note,omitempty"`
 }
 
 // ExtDiskSection — every X record, every V[ext] record, every
 // F[chunkid][ext] record, decoded enough to be readable.
 type ExtDiskSection struct {
-	XRecords []ExtXRecord  `json:"x_records"`
-	VRecords []ExtVRecord  `json:"v_records"`
-	FRecords []ExtFRecord  `json:"f_records"`
+	XRecords []ExtXRecord `json:"x_records"`
+	VRecords []ExtVRecord `json:"v_records"`
+	FRecords []ExtFRecord `json:"f_records"`
 }
 
 // ExtXRecord — one decoded X record. Routed_tvids resolved to (tag, value).
@@ -60,17 +60,17 @@ type ExtXRecord struct {
 
 // ExtVRecord — V[ext][value][tvid_ext] → []source_chunkid.
 type ExtVRecord struct {
-	Value         string   `json:"value"`
-	TvidExt       uint64   `json:"tvid_ext"`
-	SourceChunks  []uint64 `json:"source_chunks"`
+	Value        string   `json:"value"`
+	TvidExt      uint64   `json:"tvid_ext"`
+	SourceChunks []uint64 `json:"source_chunks"`
 }
 
 // ExtFRecord — F[source_chunkid][ext] → []tvid_ext.
 type ExtFRecord struct {
-	SourceChunkID uint64     `json:"source_chunkid"`
-	SourceFileID  uint64     `json:"source_fileid,omitempty"`
-	SourcePath    string     `json:"source_path,omitempty"`
-	Decls         []ExtDecl  `json:"decls"`
+	SourceChunkID uint64    `json:"source_chunkid"`
+	SourceFileID  uint64    `json:"source_fileid,omitempty"`
+	SourcePath    string    `json:"source_path,omitempty"`
+	Decls         []ExtDecl `json:"decls"`
 }
 
 // ExtDecl — one @ext declaration on a source chunk, decoded.
@@ -97,15 +97,15 @@ type ExtInMemorySection struct {
 // ExtBridgeEntry — per-tvid_ext consolidated view linking on-disk
 // and in-memory state with full path/tag decoding.
 type ExtBridgeEntry struct {
-	TvidExt        uint64     `json:"tvid_ext"`
-	Value          string     `json:"value"`
-	SourceChunkID  uint64     `json:"source_chunkid"`
-	SourcePath     string     `json:"source_path,omitempty"`
-	DiskTargets    []uint64   `json:"disk_targets"`
-	MapTargets     []uint64   `json:"map_targets"`
-	TargetPaths    []string   `json:"target_paths,omitempty"`
-	Routed         []TagValue `json:"routed"`
-	Unresolved     bool       `json:"unresolved,omitempty"`
+	TvidExt       uint64     `json:"tvid_ext"`
+	Value         string     `json:"value"`
+	SourceChunkID uint64     `json:"source_chunkid"`
+	SourcePath    string     `json:"source_path,omitempty"`
+	DiskTargets   []uint64   `json:"disk_targets"`
+	MapTargets    []uint64   `json:"map_targets"`
+	TargetPaths   []string   `json:"target_paths,omitempty"`
+	Routed        []TagValue `json:"routed"`
+	Unresolved    bool       `json:"unresolved,omitempty"`
 }
 
 // InspectExt collects the report. Read-only. Uses one View txn for
@@ -132,7 +132,7 @@ func (db *DB) InspectExt(opts InspectOptions) (*ExtInspectReport, error) {
 		}
 	}
 
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		disk, err := db.collectExtDisk(txn, targetChunkSet)
 		if err != nil {
 			return err
@@ -159,7 +159,7 @@ func (db *DB) InspectExt(opts InspectOptions) (*ExtInspectReport, error) {
 // derives a "relevant tvid_ext" set from those two memberships, then
 // includes every section entry tied to a relevant tvid.
 // CRC: crc-Store.md | R2114, R2115
-func (db *DB) collectExtDisk(txn *lmdb.Txn, pathChunks map[uint64]bool) (ExtDiskSection, error) {
+func (db *DB) collectExtDisk(txn *bbolt.Tx, pathChunks map[uint64]bool) (ExtDiskSection, error) {
 	var out ExtDiskSection
 	relevant := make(map[uint64]bool)
 
@@ -191,7 +191,7 @@ func (db *DB) collectExtDisk(txn *lmdb.Txn, pathChunks map[uint64]bool) (ExtDisk
 	// First pass: V[ext] — collect entries; mark tvid relevant if any source is in pathChunks.
 	allV := make([]ExtVRecord, 0)
 	prefix := tagValuePrefix(tagExt, "")
-	err = scanPrefix(txn, db.store.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err = scanPrefix(txn, prefix, func(k, v []byte) error {
 		tag, value, tvid, ok := parseVKey(k)
 		if !ok || tag != tagExt {
 			return nil

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // CRC: crc-TagVerify.md | R2092, R2093, R2094, R2095, R2096, R2097, R2098, R2099, R2100, R2101, R2102
@@ -114,9 +114,9 @@ func (db *DB) verifyExt(repair bool, w io.Writer, res *VerifyResult) error {
 // CRC: crc-TagVerify.md | R2094, R2095
 func (db *DB) loadExtState() (map[uint64]*extDecl, []extOrphan, error) {
 	decls := make(map[uint64]*extDecl)
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		prefix := tagValuePrefix(tagExt, "")
-		return scanPrefix(txn, db.store.dbi, prefix, func(_ *lmdb.Cursor, k, _ []byte) error {
+		return scanPrefix(txn, prefix, func(k, _ []byte) error {
 			tag, value, tvid, ok := parseVKey(k)
 			if !ok || tag != tagExt {
 				return nil
@@ -160,7 +160,7 @@ func (db *DB) loadExtState() (map[uint64]*extDecl, []extOrphan, error) {
 	}
 
 	var orphans []extOrphan
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		return db.store.ScanAllExtRecords(txn, func(tvidExt, targetChunk uint64, routedTvids []uint64) error {
 			if _, ok := decls[tvidExt]; !ok {
 				orphans = append(orphans, extOrphan{tvidExt, targetChunk, routedTvids})
@@ -273,7 +273,7 @@ func (db *DB) crossCheckExtMap(decls map[uint64]*extDecl) []string {
 // CRC: crc-TagVerify.md | R2100, R2101
 func (db *DB) repairExt(decls map[uint64]*extDecl, issues []extIssue, orphans []extOrphan, w io.Writer, res *VerifyResult) error {
 	return db.store.WithTvidTxn(func(tt *TvidTxn) error {
-		return db.store.env.Update(func(txn *lmdb.Txn) error {
+		return db.store.bolt.Update(func(txn *bbolt.Tx) error {
 			for _, iss := range issues {
 				d := decls[iss.tvidExt]
 				if d == nil {
@@ -343,7 +343,7 @@ func (db *DB) repairExt(decls map[uint64]*extDecl, issues []extIssue, orphans []
 	// touch in-memory ExtMap state from inside this txn.
 }
 
-func allocRoutedTvids(txn *lmdb.Txn, tt *TvidTxn, db *DB, routedTvs []TagValue, targetChunk uint64) ([]uint64, error) {
+func allocRoutedTvids(txn *bbolt.Tx, tt *TvidTxn, db *DB, routedTvs []TagValue, targetChunk uint64) ([]uint64, error) {
 	tvids := make([]uint64, 0, len(routedTvs))
 	for _, rt := range routedTvs {
 		t, err := db.store.addChunkIDToVRecord(txn, tt, rt.Tag, rt.Value, targetChunk)
@@ -364,8 +364,8 @@ func resolveTvidLookup(tt *TvidTxn, db *DB, tvid uint64) (string, string, bool) 
 // CRC: crc-TagVerify.md | R2097
 func (db *DB) verifyTagTotals(repair bool, w io.Writer, res *VerifyResult) error {
 	stored := make(map[string]uint32)
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, db.store.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) < 2 || len(v) < 4 {
 				return nil
 			}
@@ -381,8 +381,8 @@ func (db *DB) verifyTagTotals(repair bool, w io.Writer, res *VerifyResult) error
 	// (+1 to T) but two V multi-set slots, so V counts overcount T.
 	// Walk F records directly to compute the right number.
 	computed := make(map[string]int)
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, db.store.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, _ []byte) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagFile)}, func(k, _ []byte) error {
 			_, tag, ok := parseFKey(k)
 			if !ok {
 				return nil
@@ -420,18 +420,18 @@ func (db *DB) verifyTagTotals(repair bool, w io.Writer, res *VerifyResult) error
 	if !repair || len(drifts) == 0 {
 		return nil
 	}
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		for _, d := range drifts {
 			tk := tagTotalKey(d.tag)
 			if d.computed == 0 {
-				if err := txn.Del(db.store.dbi, tk, nil); err != nil && !lmdb.IsNotFound(err) {
+				if err := bDel(txn, tk); err != nil && !isNotFound(err) {
 					return err
 				}
 				continue
 			}
 			buf := make([]byte, 4)
 			encodeUint32(buf, uint32(d.computed))
-			if err := txn.Put(db.store.dbi, tk, buf, 0); err != nil {
+			if err := bPut(txn, tk, buf); err != nil {
 				return err
 			}
 		}

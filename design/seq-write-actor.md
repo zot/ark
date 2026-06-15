@@ -16,7 +16,7 @@ directly; writes go through a copy-index-reconcile cycle.
 Caller ──> svcSync(fn)
             │
             DB actor executes fn directly
-            │  (LMDB MVCC: readers see consistent snapshot
+            │  (bbolt MVCC: readers see consistent snapshot
             │   even while a write goroutine is in flight)
             │
             └── return result to caller

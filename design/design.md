@@ -186,6 +186,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-pubsub.md → `pubsub.go`, `scheduler.go`, `server.go`, `indexer.go`, `cmd/ark/main.go`
 - [x] seq-scheduling.md → `scheduler.go`, `store.go`, `indexer.go`, `server.go`, `config.go`, `cmd/ark/main.go`
 - [x] seq-write-actor.md → `db.go`, `svc.go`, `indexer.go`, `server.go`
+- [x] seq-rebuild-read-serve.md → `cmd/ark/main.go`, `server.go`, `db.go`
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`
 - [x] seq-content-fetching.md → `server.go`
@@ -687,3 +688,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] D10: R2971/R2972 (CGO_ENABLED=0 build + frictionless-style release sweep) deferred — blocked on the LMDB->BBolt migration: lmdb-go links C in BOTH ark's store and microfts2. Makefile left untouched until that lands.
 - [ ] O134: yzma migration prose-supersede sweep pending (precondition for migration-complete): residual tag_model/embed_tiers key names + gollama engine descriptions in recall.md, derived-tags.md, config-tracking.md, vector-freshness.md, vec-bench.md, tag-embeddings.md static-link note, tag-def-embeddings.md, seq-tag-embed.md, main.md. Summary specs + ark.toml examples already reconciled.
 - [ ] O135: LlamaLibs model auto-fetch (R2969 permits but does not require fetching the GGUF when absent) not implemented — slim downloader fetches libs only; model is configured separately.
+- [ ] O136: Rebuild read-only serve (R2984-R2990): no automated test yet — verified empirically (status/search return live + growing counts during rebuild ~30-66ms vs ~14s block; writes refused 503; exit-on-idle). Add a test for WaitWritesIdle and the read-only window.
+- [ ] O137: No automated test for the NUL-byte embed guard (R2991/R2992): the path needs a loaded embedding model (GGUF + llama.cpp libs), unavailable in CI. Verified by construction (single tokenize chokepoint strips NUL before yzma) + live re-run of the rebuild that crashed.

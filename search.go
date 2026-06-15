@@ -20,8 +20,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 
 	"github.com/yuin/goldmark"
 )
@@ -850,7 +850,7 @@ func (s *Searcher) postFilterChunkIDs(chunkIDs []uint64, opts SearchOpts, cache 
 		return chunkIDs, nil
 	}
 	kept := make([]uint64, 0, len(chunkIDs))
-	err = s.fts.Env().View(func(txn *lmdb.Txn) error {
+	err = s.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, cid := range chunkIDs {
 			crec, rerr := s.fts.ReadCRecord(txn, cid)
 			if rerr != nil {
@@ -1586,7 +1586,7 @@ func (s *Searcher) ChunksByID(chunkIDs []uint64) ([]SearchResultEntry, error) {
 	}
 	rangeCache := make(map[uint64]map[uint64]string) // fileID → chunkID → range
 	var entries []SearchResultEntry
-	err = s.fts.Env().View(func(txn *lmdb.Txn) error {
+	err = s.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, cid := range chunkIDs {
 			crec, rerr := s.fts.ReadCRecord(txn, cid)
 			if rerr != nil || len(crec.FileIDs) == 0 {

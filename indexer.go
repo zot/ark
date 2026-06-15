@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 	"sync"
 )
 
@@ -290,7 +290,7 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 // wipes F[orphan][ext], and CleanupSource must run before tt.Commit
 // drops tvid_exts whose source V records emptied. (R1899, R2008,
 // R2009, R2022, R2024)
-func (idx *Indexer) cleanupOrphans(txn *lmdb.Txn, tt *TvidTxn, orphanedChunkIDs []uint64) error {
+func (idx *Indexer) cleanupOrphans(txn *bbolt.Tx, tt *TvidTxn, orphanedChunkIDs []uint64) error {
 	type extPair struct {
 		sourceChunkID uint64
 		tvidExt       uint64
@@ -333,7 +333,7 @@ func (idx *Indexer) removeCallback(fileID uint64, tt *TvidTxn) microfts2.RemoveC
 	if idx.store == nil {
 		return nil
 	}
-	return func(txn *lmdb.Txn, orphanedChunkIDs []uint64) error {
+	return func(txn *bbolt.Tx, orphanedChunkIDs []uint64) error {
 		if err := idx.cleanupOrphans(txn, tt, orphanedChunkIDs); err != nil {
 			return err
 		}
@@ -353,7 +353,7 @@ func (idx *Indexer) reindexCallback(fileID uint64, tt *TvidTxn) microfts2.Reinde
 	if idx.store == nil {
 		return nil
 	}
-	return func(txn *lmdb.Txn, orphanedChunkIDs, _ []uint64) error {
+	return func(txn *bbolt.Tx, orphanedChunkIDs, _ []uint64) error {
 		if err := idx.cleanupOrphans(txn, tt, orphanedChunkIDs); err != nil {
 			return err
 		}
@@ -387,7 +387,7 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 		return nil
 	}
 	return idx.store.WithTvidTxn(func(tt *TvidTxn) error {
-		return idx.store.env.Update(func(txn *lmdb.Txn) error {
+		return idx.store.bolt.Update(func(txn *bbolt.Tx) error {
 			for _, p := range idxPlans {
 				if err := idx.extmap.applyIndexExt(txn, tt, idx.db, p); err != nil {
 					return err
@@ -479,7 +479,7 @@ func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValu
 	if len(plans) == 0 {
 		return nil
 	}
-	return idx.db.store.env.View(func(txn *lmdb.Txn) error {
+	return idx.db.store.bolt.View(func(txn *bbolt.Tx) error {
 		for _, p := range plans {
 			if err := idx.extmap.applyIndexExt(txn, nil, idx.db, p); err != nil {
 				return err
@@ -540,7 +540,7 @@ func (idx *Indexer) reresolveSourceDir(tvidExt uint64, cache map[uint64]string) 
 	}
 	var srcFileID uint64
 	var fileOK bool
-	_ = idx.db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = idx.db.fts.DB().View(func(txn *bbolt.Tx) error {
 		srcFileID, fileOK = idx.db.chunkFileID(txn, srcChunk)
 		return nil
 	})

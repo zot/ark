@@ -13,9 +13,16 @@ Three concurrent accessors share one `ark.DB` with no coordination:
 3. **Lua/UI goroutine** — search_grouped and other registered
    functions. Runs in the flib event loop.
 
-LMDB is safe internally (MVCC). The Go-side caches above it are
-not. Go maps are not safe for concurrent read/write — this is a
-data race.
+bbolt is safe internally (MVCC: one writer plus many concurrent
+readers within a process). The Go-side caches above it are not. Go
+maps are not safe for concurrent read/write — this is a data race.
+
+bbolt is also **single-process** — a process opening the database
+holds an exclusive file lock — so the cross-process concurrency LMDB
+allowed (e.g. `ark status` reading while a standalone `ark rebuild`
+writes) is gone. rebuild-read-serve.md covers how rebuild preserves
+that observe-during-rebuild behavior with an in-process read-only
+server.
 
 ## Solution
 

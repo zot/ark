@@ -6,16 +6,23 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
-// CRC: crc-DB.md | R2086, R2087, R2088, R2090
+// CRC: crc-DB.md | R2086, R2087, R2088, R2090, R2981
 //
-// CompactDB rewrites the LMDB environment at dbPath via mdb_env_copy2
-// with MDB_CP_COMPACT, replacing the live data.mdb on success. Must
-// run before the env is opened by microfts2/store. Failure is logged
-// and ignored — startup continues with the uncompacted DB.
+// CompactDB rewrites microfts2's bbolt database at IndexPath(dbPath) using
+// bolt.Compact, which copies every key/value into a fresh file and so drops
+// the free pages bbolt does not reclaim in place. The compacted copy replaces
+// the live file on success. Must run before the file is opened by
+// microfts2/store. Failure is logged and ignored — startup continues with the
+// uncompacted DB. (R2981)
 func CompactDB(dbPath string) error {
+	live := IndexPath(dbPath)
+	if _, err := os.Stat(live); err != nil {
+		return nil // nothing to compact yet (fresh install)
+	}
+
 	compactDir := filepath.Join(dbPath, ".compact-tmp")
 	if err := os.RemoveAll(compactDir); err != nil {
 		return fmt.Errorf("clear compact dir: %w", err)
@@ -25,58 +32,32 @@ func CompactDB(dbPath string) error {
 	}
 	defer os.RemoveAll(compactDir)
 
-	env, err := lmdb.NewEnv()
-	if err != nil {
-		return fmt.Errorf("new env: %w", err)
-	}
-	if err := env.SetMapSize(2 << 30); err != nil {
-		env.Close()
-		return fmt.Errorf("set map size: %w", err)
-	}
-	if err := env.SetMaxDBs(8); err != nil {
-		env.Close()
-		return fmt.Errorf("set max dbs: %w", err)
-	}
-	if err := env.Open(dbPath, lmdb.Readonly|lmdb.NoSubdir, 0644); err != nil {
-		// Try with subdir form (default LMDB layout)
-		env2, err2 := lmdb.NewEnv()
-		if err2 != nil {
-			env.Close()
-			return fmt.Errorf("new env retry: %w", err2)
-		}
-		if err2 := env2.SetMapSize(2 << 30); err2 != nil {
-			env.Close()
-			env2.Close()
-			return fmt.Errorf("set map size: %w", err2)
-		}
-		if err2 := env2.SetMaxDBs(8); err2 != nil {
-			env.Close()
-			env2.Close()
-			return fmt.Errorf("set max dbs: %w", err2)
-		}
-		if err2 := env2.Open(dbPath, lmdb.Readonly, 0644); err2 != nil {
-			env.Close()
-			env2.Close()
-			return fmt.Errorf("open env: %w (subdir retry: %w)", err, err2)
-		}
-		env.Close()
-		env = env2
-	}
-	defer env.Close()
+	compacted := filepath.Join(compactDir, IndexFileName)
 
-	if err := env.CopyFlag(compactDir, lmdb.CopyCompact); err != nil {
-		return fmt.Errorf("copy compact: %w", err)
+	src, err := bbolt.Open(live, 0644, &bbolt.Options{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("open live db: %w", err)
 	}
+	dst, err := bbolt.Open(compacted, 0644, nil)
+	if err != nil {
+		src.Close()
+		return fmt.Errorf("open compact db: %w", err)
+	}
+	if err := bbolt.Compact(dst, src, 0); err != nil {
+		dst.Close()
+		src.Close()
+		return fmt.Errorf("compact: %w", err)
+	}
+	dst.Close()
+	src.Close()
 
-	oldData := filepath.Join(dbPath, "data.mdb")
-	newData := filepath.Join(compactDir, "data.mdb")
-	oldSize, err := fileSize(oldData)
+	oldSize, err := fileSize(live)
 	if err != nil {
-		return fmt.Errorf("stat live data.mdb: %w", err)
+		return fmt.Errorf("stat live db: %w", err)
 	}
-	newSize, err := fileSize(newData)
+	newSize, err := fileSize(compacted)
 	if err != nil {
-		return fmt.Errorf("stat compact data.mdb: %w", err)
+		return fmt.Errorf("stat compacted db: %w", err)
 	}
 
 	log.Printf("compacting ark: %s → %s", formatBytesInternal(oldSize), formatBytesInternal(newSize))
@@ -87,14 +68,11 @@ func CompactDB(dbPath string) error {
 		return nil
 	}
 
-	// Close env before swapping data.mdb
-	env.Close()
-
-	if err := os.Rename(newData, oldData); err != nil {
-		return fmt.Errorf("rename compacted data.mdb: %w", err)
+	// bbolt is a single file with no lock sidecar; both files live under
+	// dbPath, so the rename is atomic on the same filesystem.
+	if err := os.Rename(compacted, live); err != nil {
+		return fmt.Errorf("rename compacted db: %w", err)
 	}
-	// lock.mdb is rebuilt on next open; remove the old one to avoid stale state
-	_ = os.Remove(filepath.Join(dbPath, "lock.mdb"))
 	return nil
 }
 

@@ -80,6 +80,13 @@ type ServeOpts struct {
 	Verbosity int  // R735: verbose level (0–4)
 	Force     bool // R1558: accept config changes, clear E records
 	Compact   bool // R2085: compact LMDB via mdb_env_copy2 before opening
+	// R2988: rebuild read-only mode. Background subsystems (watcher, UI
+	// engine, scheduler scans, pubsub reaper, recall watcher, startup
+	// reconcile) are not started; the mux is read-only; Serve runs the
+	// scan once and exits when the write queue drains. Used by cmdRebuild
+	// so reads stay live during a rebuild despite bbolt's single-process
+	// file lock. See rebuild-read-serve.md.
+	Rebuild bool
 }
 
 // ServerAlreadyRunning is returned when `ark serve` finds an existing server.
@@ -275,17 +282,25 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// watcher or the CLI verbs touch it.
 	srv.recallAgentBuilder = NewRecallAgentBuilder(db)
 	srv.recallWatcher = NewRecallWatcher(db, lib, db.store, srv.recallAgentBuilder)
-	srv.recallWatcher.Start()
 	db.indexer.SetRecallWatcher(srv.recallWatcher)
 
-	// R804: Start pubsub reaper ticker
-	go func() {
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			ps.Reap()
-		}
-	}()
+	// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.2 | R2988
+	// In rebuild read-only mode, skip every background subsystem — recall
+	// watcher, pubsub reaper, UI engine, scheduler scans, startup reconcile.
+	// The objects above are constructed (so handlers and the indexer have
+	// non-nil references) but their goroutines never start.
+	if !opts.Rebuild {
+		srv.recallWatcher.Start()
+
+		// R804: Start pubsub reaper ticker
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				ps.Reap()
+			}
+		}()
+	}
 
 	// Reconciliation goes through the DB actor via srv.reconcile() (R990)
 
@@ -311,65 +326,85 @@ func Serve(dbPath string, opts ServeOpts) error {
 		os.Exit(0)
 	}()
 
-	// Start embedded UI engine (optional — failure is non-fatal)
-	srv.startUIEngine(dbPath)
+	// Start embedded UI engine (optional — failure is non-fatal). R2988:
+	// skipped in rebuild mode.
+	if !opts.Rebuild {
+		srv.startUIEngine(dbPath)
+	}
 
 	// Start filesystem watches BEFORE reconciliation (R358) so nothing
 	// changes unseen during the scan. Watching is optional — failure
-	// is non-fatal.
-	if !opts.NoScan {
+	// is non-fatal. R2988: a rebuild does not watch (it runs the scan
+	// once and exits).
+	if !opts.NoScan && !opts.Rebuild {
 		srv.startWatching()
 	}
 
-	// Startup reconciliation — background so server accepts requests immediately
-	if !opts.NoScan {
+	// Startup reconciliation — background so server accepts requests
+	// immediately. R2988: a rebuild drives its own scan in runRebuildScan
+	// (below) so it can wait for the write queue to drain, so skip the
+	// background reconcile here.
+	if !opts.NoScan && !opts.Rebuild {
 		srv.reconcile()
 	}
 
-	// R927-R932: Check for schedule config changes, re-materialize if needed
-	srv.CheckScheduleConfig()
+	// R2988: the schedule subsystem (config check, log scan, chime arming,
+	// check-gap sweep) is background work a rebuild has no use for.
+	if !opts.Rebuild {
+		// R927-R932: Check for schedule config changes, re-materialize if needed
+		srv.CheckScheduleConfig()
 
-	// R874, R875, R876: Scan schedule logs and populate queue
-	if err := sched.ScanScheduleLogs(); err != nil {
-		log.Printf("schedule: scan error: %v", err)
+		// R874, R875, R876: Scan schedule logs and populate queue
+		if err := sched.ScanScheduleLogs(); err != nil {
+			log.Printf("schedule: scan error: %v", err)
+		}
+		// R2825, R2834: Arm chimes from chimes.md. With chime tags
+		// defaulting to lifecycle="none", there's no on-disk audit
+		// chunk for ScanScheduleLogs to arm from; and the indexer
+		// won't re-process chimes.md if its mtime hasn't changed. This
+		// startup pass closes that gap. Wire the tmp:// callbacks
+		// briefly so EnsureUpcoming works for any chime that the user
+		// overrode to lifecycle="tmp".
+		sched.WriteTmpLog = func(path string, content []byte) error {
+			return SyncVoid(srv.db, func(db *DB) error {
+				err := db.UpdateTmpFile(path, "markdown", content)
+				if err != nil {
+					_, err = db.AddTmpFile(path, "markdown", content)
+				}
+				return err
+			})
+		}
+		sched.ReadTmpLog = func(path string) ([]byte, error) {
+			return Sync(srv.db, func(db *DB) ([]byte, error) {
+				return db.TmpContent(path)
+			})
+		}
+		if err := sched.ArmChimesFromFile(dbPath); err != nil {
+			log.Printf("schedule: ArmChimesFromFile error: %v", err)
+		}
+		sched.WriteTmpLog = nil
+		sched.ReadTmpLog = nil
+		// R972, R973: scan for unresolved check-gaps on startup
+		if missed := sched.ScanCheckGaps(7); len(missed) > 0 && srv.db != nil {
+			content := strings.Join(missed, "")
+			SyncVoid(srv.db, func(db *DB) error {
+				_, err := db.AppendTmpFile("tmp://watchdog/missed-events", "markdown", []byte(content))
+				return err
+			})
+		}
+		// R2783: AddChime() retired. Chime ticks now route through the
+		// normal schedule-log path — see ~/.ark/chimes.md and
+		// EnsureChimesFile (called above before reconcile).
+	} // end if !opts.Rebuild — schedule subsystem (R2988)
+
+	// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.5 | R2985, R2986, R2989
+	// Rebuild read-only mode: serve a read-only mux, run the scan once, and
+	// exit when the write queue drains. The socket stays live so reads from
+	// another terminal return live progress instead of blocking on bbolt's
+	// single-process file lock.
+	if opts.Rebuild {
+		return srv.runRebuildScan(listener)
 	}
-	// R2825, R2834: Arm chimes from chimes.md. With chime tags
-	// defaulting to lifecycle="none", there's no on-disk audit
-	// chunk for ScanScheduleLogs to arm from; and the indexer
-	// won't re-process chimes.md if its mtime hasn't changed. This
-	// startup pass closes that gap. Wire the tmp:// callbacks
-	// briefly so EnsureUpcoming works for any chime that the user
-	// overrode to lifecycle="tmp".
-	sched.WriteTmpLog = func(path string, content []byte) error {
-		return SyncVoid(srv.db, func(db *DB) error {
-			err := db.UpdateTmpFile(path, "markdown", content)
-			if err != nil {
-				_, err = db.AddTmpFile(path, "markdown", content)
-			}
-			return err
-		})
-	}
-	sched.ReadTmpLog = func(path string) ([]byte, error) {
-		return Sync(srv.db, func(db *DB) ([]byte, error) {
-			return db.TmpContent(path)
-		})
-	}
-	if err := sched.ArmChimesFromFile(dbPath); err != nil {
-		log.Printf("schedule: ArmChimesFromFile error: %v", err)
-	}
-	sched.WriteTmpLog = nil
-	sched.ReadTmpLog = nil
-	// R972, R973: scan for unresolved check-gaps on startup
-	if missed := sched.ScanCheckGaps(7); len(missed) > 0 && srv.db != nil {
-		content := strings.Join(missed, "")
-		SyncVoid(srv.db, func(db *DB) error {
-			_, err := db.AppendTmpFile("tmp://watchdog/missed-events", "markdown", []byte(content))
-			return err
-		})
-	}
-	// R2783: AddChime() retired. Chime ticks now route through the
-	// normal schedule-log path — see ~/.ark/chimes.md and
-	// EnsureChimesFile (called above before reconcile).
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -476,6 +511,72 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	log.Printf("ark server listening on %s", socketPath)
 	return http.Serve(listener, mux)
+}
+
+// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.3 | R2987
+// registerReadOnlyRoutes mounts only the database-read endpoints used
+// during a rebuild's read-only window. A catch-all returns HTTP 503
+// "rebuild in progress" for every other path, so writes can't race the
+// rebuild (R2987). The handlers are the normal server handlers — they
+// ride the DB actor, so they stay responsive and race-free against the
+// concurrent scan (R2986).
+func (srv *Server) registerReadOnlyRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /status", srv.handleStatus)
+	mux.HandleFunc("POST /search", srv.handleSearch)
+	mux.HandleFunc("GET /files", srv.handleFiles)
+	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
+	mux.HandleFunc("GET /stale", srv.handleStale)
+	mux.HandleFunc("GET /missing", srv.handleMissing)
+	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)
+	mux.HandleFunc("GET /config", srv.handleConfig)
+	mux.HandleFunc("GET /tags", srv.handleTags)
+	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
+	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rebuild in progress", http.StatusServiceUnavailable)
+	})
+}
+
+// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.5 | R2985, R2986, R2989
+// runRebuildScan serves the read-only mux in the background while running
+// the scan once on the DB actor, then exits when the write queue drains.
+// The socket stays live so `ark status` / `ark search` from another
+// terminal proxy in and see live, growing progress instead of blocking on
+// bbolt's single-process file lock. Returns when indexing is committed.
+func (srv *Server) runRebuildScan(listener net.Listener) error {
+	mux := http.NewServeMux()
+	srv.registerReadOnlyRoutes(mux)
+
+	httpSrv := &http.Server{Handler: mux}
+	go func() {
+		if err := httpSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("rebuild: read-only server: %v", err)
+		}
+	}()
+	log.Printf("ark rebuild: read-only server listening on %s", listener.Addr())
+
+	// ScanAsync runs ON the actor (enqueueWrite's contract) but only does
+	// the filesystem walk + small metadata writes there; the heavy chunking
+	// and bbolt writes are enqueued for the off-actor write goroutine, so
+	// Sync returns quickly and the actor stays free to answer reads while
+	// indexing drains. (The synchronous db.Scan would hold the actor for the
+	// whole rebuild and block every read.) (R2986)
+	results, err := Sync(srv.db, func(db *DB) (*ScanResults, error) {
+		return db.ScanAsync()
+	})
+	if err != nil {
+		httpSrv.Close()
+		srv.db.Close()
+		return fmt.Errorf("rebuild scan: %w", err)
+	}
+	// Block until every enqueued write has committed. (R2989)
+	srv.db.WaitWritesIdle()
+	log.Printf("ark rebuild: %d files indexed, %d unresolved",
+		len(results.NewFiles), len(results.NewUnresolved))
+
+	httpSrv.Close()
+	return srv.db.Close()
 }
 
 // startUIEngine configures and starts the embedded Frictionless runtime.

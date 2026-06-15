@@ -444,15 +444,13 @@ func cmdInit(args []string) {
 
 	// --if-needed: exit silently if DB exists
 	if *ifNeeded {
-		if _, err := os.Stat(filepath.Join(arkDir, "data.mdb")); err == nil {
+		if _, err := os.Stat(filepath.Join(arkDir, ark.IndexFileName)); err == nil {
 			return
 		}
 	}
 
-	// Remove existing database files before creating fresh
-	for _, f := range []string{"data.mdb", "lock.mdb"} {
-		os.Remove(filepath.Join(arkDir, f))
-	}
+	// Remove existing database file before creating fresh
+	os.Remove(filepath.Join(arkDir, ark.IndexFileName))
 
 	// Auto-setup if not bootstrapped (unless --no-setup)
 	if !*noSetup && !isBootstrapped() {
@@ -505,8 +503,14 @@ func cmdRebuild(args []string) {
 	}
 	// init --no-setup handles db removal and recreation, reading settings from ark.toml
 	cmdInit([]string{"--no-setup"})
-	// scan to re-index all sources
-	cmdScan(nil)
+	// CRC: crc-CLI.md | Seq: seq-rebuild-read-serve.md#1.3 | R2984, R2985, R2990
+	// Run the scan under a read-only server so `ark status` / `ark search`
+	// from another terminal return live progress instead of blocking on
+	// bbolt's single-process file lock. Serve returns when indexing drains.
+	// The brief init→socket-bind drop window above is uncovered (R2990).
+	if err := ark.Serve(arkDir, ark.ServeOpts{Rebuild: true}); err != nil {
+		fatal(err)
+	}
 	fmt.Println("rebuild complete")
 	// R1294: embeddings regenerate on next server start (batch embed post-reconcile)
 	cfg, _ := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))

@@ -72,7 +72,10 @@ func testScanner(t *testing.T) (*Scanner, string, *EmptyFiles) {
 	matcher := &Matcher{}
 
 	dbPath := filepath.Join(t.TempDir(), "db")
-	fts, err := microfts2.Create(dbPath, microfts2.Options{MaxDBs: 8})
+	if err := os.MkdirAll(dbPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fts, err := microfts2.Create(IndexPath(dbPath), microfts2.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

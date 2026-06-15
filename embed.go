@@ -19,10 +19,25 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	yz "github.com/hybridgroup/yzma/pkg/llama"
 )
+
+// tokenizeText tokenizes text after replacing NUL bytes with spaces. yzma's
+// Tokenize hands the string to llama.cpp as a C string; a NUL byte (`\x00`)
+// ends it early at the C boundary and aborts the process — and yzma swallows
+// the underlying BytePtrFromString EINVAL rather than reporting it. Every
+// embedding path (single embed, batch embed, token count) tokenizes through
+// here, so no caller can pass a NUL to yzma. A space (not deletion) keeps
+// adjacent tokens from fusing; ReplaceAll returns text unchanged (no
+// allocation) on the common no-NUL path. The trigram index and retrieval keep
+// the original bytes; only the tokenizer sees the cleaned text.
+// CRC: crc-Librarian.md | R2991
+func tokenizeText(vocab yz.Vocab, text string) []yz.Token {
+	return yz.Tokenize(vocab, strings.ReplaceAll(text, "\x00", " "), true, true)
+}
 
 // llamaLibName is the platform's llama.cpp shared-library filename — the
 // sentinel that marks a provisioned lib dir. Mirrors the name yzma's
@@ -214,7 +229,7 @@ func (c *embedContext) clearMemory() {
 func (c *embedContext) embed(text string) ([]float32, error) {
 	c.clearMemory()
 
-	tokens := yz.Tokenize(c.parent.vocab, text, true, true)
+	tokens := tokenizeText(c.parent.vocab, text)
 	if len(tokens) == 0 {
 		return nil, fmt.Errorf("tokenize produced no tokens")
 	}
@@ -250,7 +265,7 @@ func (c *embedContext) embedBatch(texts []string) ([][]float32, error) {
 
 	tokenized := make([][]yz.Token, len(texts))
 	for i, t := range texts {
-		toks := yz.Tokenize(c.parent.vocab, t, true, true)
+		toks := tokenizeText(c.parent.vocab, t)
 		if len(toks) == 0 {
 			return nil, fmt.Errorf("tokenize produced no tokens for text %d", i)
 		}
@@ -323,5 +338,5 @@ func (c *embedContext) readSeq(seq yz.SeqId) ([]float32, error) {
 // countTokens returns the token count for text — tokenization needs only
 // the model vocab, no inference context. R1529, R1530
 func (m *embedModel) countTokens(text string) int {
-	return len(yz.Tokenize(m.vocab, text, true, true))
+	return len(tokenizeText(m.vocab, text))
 }

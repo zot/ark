@@ -23,7 +23,7 @@ func setupTmpDB(t *testing.T) (*DB, *PubSub, func()) {
 	if err := os.MkdirAll(ftsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fts, err := microfts2.Create(ftsDir, microfts2.Options{})
+	fts, err := microfts2.Create(IndexPath(ftsDir), microfts2.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

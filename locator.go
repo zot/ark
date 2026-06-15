@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // LocatorSuggestion is the workshop's recommended (base, locator) for
@@ -128,7 +128,7 @@ func (db *DB) pickLocator(suggestion *LocatorSuggestion, info ChunkInfo, targetC
 // CRC: crc-DB.md | R2400
 func (db *DB) chunkIDValuesSync(chunkID uint64) []string {
 	var out []string
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		out = db.chunkIDValues(txn, chunkID)
 		return nil
 	})
@@ -145,7 +145,7 @@ func (db *DB) countWithinFileDups(fileID, selfChunkID uint64, idValues []string)
 	}
 	chunkIDs := db.ChunkIDsForFile(fileID)
 	count := 0
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, cid := range chunkIDs {
 			if cid == selfChunkID {
 				continue
@@ -405,7 +405,7 @@ func (db *DB) computeCrossFileScope(suggestion LocatorSuggestion, targetPath str
 	}
 	chunks := db.ResolveExtTarget(target, filepath.Dir(targetPath))
 	files := make(map[uint64]struct{})
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, cid := range chunks {
 			if fid, ok := db.chunkFileID(txn, cid); ok {
 				files[fid] = struct{}{}
@@ -415,4 +415,3 @@ func (db *DB) computeCrossFileScope(suggestion LocatorSuggestion, targetPath str
 	})
 	return CrossFileScope{Chunks: len(chunks), Files: len(files)}
 }
-

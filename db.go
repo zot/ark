@@ -23,7 +23,7 @@ import (
 	"github.com/zot/microfts2"
 
 	"github.com/BurntSushi/toml"
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // Version is set by ldflags at build time from README.md.
@@ -59,9 +59,10 @@ type DB struct {
 	chunkerByName map[string]any    // R2386, R2389: mirror of microfts2's chunker registry for ChunkerMetadata lookup by strategy name
 
 	// Write actor: read/write path separation. R1051-R1068
-	writeQueue      []func(*microfts2.DB) // queued write closures
-	writing         bool                  // true while a write goroutine is in flight
-	onWriteComplete func([]scheduleItem)  // callback for schedule items from write goroutines
+	writeQueue       []func(*microfts2.DB) // queued write closures
+	writing          bool                  // true while a write goroutine is in flight
+	onWriteComplete  func([]scheduleItem)  // callback for schedule items from write goroutines
+	writeIdleWaiters []chan struct{}       // R2989: one-shot signals when the write queue drains; actor-only
 }
 
 // InitOpts are options for creating a new ark database.
@@ -73,6 +74,15 @@ type InitOpts struct {
 	TagsSeed        []byte // seed content for tags.md (falls back to built-in default)
 	ConfigSeed      []byte // seed content for ark.toml (falls back to built-in default)
 }
+
+// IndexFileName is the bbolt database file inside the ark home directory.
+// microfts2 owns the file (it holds both the `fts` and `ark` buckets); ark
+// passes IndexPath(dbPath) — not the directory — to microfts2.Create/Open
+// because bbolt opens a single file, not an LMDB-style directory. (R2974, R2975)
+const IndexFileName = "index.db"
+
+// IndexPath returns the bbolt database file path for an ark home directory.
+func IndexPath(dbPath string) string { return filepath.Join(dbPath, IndexFileName) }
 
 // Init creates a new ark database at the given path.
 func Init(dbPath string, opts InitOpts) error {
@@ -108,23 +118,22 @@ func Init(dbPath string, opts InitOpts) error {
 		aliases['\n'] = '\x01'
 	}
 
-	// Initialize microfts2 (creates the LMDB environment).
-	// CRC: crc-DB.md | R1911, R1912 — microfts2 owns its own subDBs; ark's
-	// store shares the same env. No microvec subDB is allocated.
+	// Initialize microfts2 (creates the bbolt database).
+	// CRC: crc-DB.md | R1911, R1912, R2978 — microfts2 owns the bbolt file and
+	// its `fts` bucket; ark opens its `ark` bucket in the same DB. bbolt has no
+	// MaxDBs/MapSize ceiling, so those Options fields are gone (R2978).
 	ftsOpts := microfts2.Options{
 		CaseInsensitive: opts.CaseInsensitive,
 		Aliases:         aliases,
-		MaxDBs:          8,
-		MapSize:         8 << 30, // 8GB — conversation logs can be large
 	}
-	fts, err := microfts2.Create(dbPath, ftsOpts)
+	fts, err := microfts2.Create(IndexPath(dbPath), ftsOpts)
 	if err != nil {
 		return fmt.Errorf("init microfts2: %w", err)
 	}
 	defer fts.Close()
 
 	// Initialize ark subdatabase
-	store, err := OpenStore(fts.Env())
+	store, err := OpenStore(fts.DB())
 	if err != nil {
 		return fmt.Errorf("init ark store: %w", err)
 	}
@@ -225,14 +234,14 @@ func Open(dbPath string) (*DB, error) {
 	}
 	config.dbPath = dbPath
 
-	// Open microfts2 (opens the LMDB environment)
-	fts, err := microfts2.Open(dbPath, microfts2.Options{MaxDBs: 8, MapSize: 2 << 30})
+	// Open microfts2 (opens the bbolt database)
+	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("open microfts2: %w", err)
 	}
 
 	// Open ark subdatabase
-	store, err := OpenStore(fts.Env())
+	store, err := OpenStore(fts.DB())
 	if err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("open ark store: %w", err)
@@ -323,12 +332,14 @@ func Open(dbPath string) (*DB, error) {
 	}
 
 	// R1887, R1888, R1889: wire bidirectional chunkID↔fileID resolvers.
-	// Both run inside the caller's txn to avoid nested Views.
-	// Overlay-issued ids (high bit set) route to TmpTagStore so the
-	// chunkid↔fileid mapping for tmp:// content stays first-class.
-	// CRC: crc-DB.md | R1948, R1950
+	// Both run inside the caller's txn to avoid nested Views. The resolver
+	// takes microfts2's *bbolt.Tx and reads C-records via fts.ReadCRecord(tx)
+	// — the consumed bbolt API (R2977). Overlay-issued ids (high bit set)
+	// route to TmpTagStore so the chunkid↔fileid mapping for tmp:// content
+	// stays first-class.
+	// CRC: crc-DB.md | R1948, R1950, R2977
 	store.SetChunkResolver(
-		func(txn *lmdb.Txn, chunkID uint64) []uint64 {
+		func(txn *bbolt.Tx, chunkID uint64) []uint64 {
 			if IsOverlayID(chunkID) {
 				return tmpTags.FilesForChunk(chunkID)
 			}
@@ -415,6 +426,8 @@ func (db *DB) startNextWrite() {
 					db.writing = false
 					if len(db.writeQueue) > 0 {
 						db.startNextWrite()
+					} else {
+						db.signalWriteIdle() // R2989
 					}
 				})
 			}
@@ -429,9 +442,40 @@ func (db *DB) startNextWrite() {
 			db.writing = false
 			if len(db.writeQueue) > 0 {
 				db.startNextWrite() // R1058: continuation
+			} else {
+				db.signalWriteIdle() // R2989
 			}
 		})
 	}()
+}
+
+// CRC: crc-DB.md | Seq: seq-rebuild-read-serve.md#2.6 | R2989
+// signalWriteIdle closes and clears all write-idle waiter channels.
+// Called from inside the actor when the write queue has just drained.
+func (db *DB) signalWriteIdle() {
+	for _, ch := range db.writeIdleWaiters {
+		close(ch)
+	}
+	db.writeIdleWaiters = nil
+}
+
+// CRC: crc-DB.md | Seq: seq-rebuild-read-serve.md#2.6 | R2986, R2989
+// WaitWritesIdle blocks until the write queue has drained — every
+// enqueued write committed (!writing && empty queue). The completion
+// signal a rebuild's read-only server waits on before exiting. If
+// already idle it returns at once; otherwise it registers a one-shot
+// waiter inside the actor that the write-completion path closes.
+func (db *DB) WaitWritesIdle() {
+	ch := make(chan struct{})
+	SyncVoid(db, func(db *DB) error {
+		if !db.writing && len(db.writeQueue) == 0 {
+			close(ch)
+			return nil
+		}
+		db.writeIdleWaiters = append(db.writeIdleWaiters, ch)
+		return nil
+	})
+	<-ch
 }
 
 // drainWriteSchedule drains accumulated schedule items from a write
@@ -1489,8 +1533,8 @@ func (db *DB) resolveLinkUUID(value string) (path, location string, ok bool) {
 // same View. Returns zero values when the record is missing or empty.
 // CRC: crc-DB.md | R1976, R1977
 func (db *DB) lookupIDChunk(value string, tvid uint64) (chunkID, fileID uint64) {
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
-		blob, err := txn.Get(db.store.dbi, tagValueFullKey("id", value, tvid))
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
+		blob, err := bGet(txn, tagValueFullKey("id", value, tvid))
 		if err != nil {
 			return nil
 		}
@@ -1655,7 +1699,7 @@ func (db *DB) filterChunksByAnchor(chunks []uint64, kind, text string) []uint64 
 func (db *DB) chunkContent(chunkID uint64) (string, bool) {
 	var fileID uint64
 	var ok bool
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		fileID, ok = db.chunkFileID(txn, chunkID)
 		return nil
 	})
@@ -1727,8 +1771,8 @@ func (db *DB) resolveExtUUID(value string) []uint64 {
 		return nil
 	}
 	var chunks []uint64
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
-		blob, err := txn.Get(db.store.dbi, tagValueFullKey(tagID, value, tvid))
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
+		blob, err := bGet(txn, tagValueFullKey(tagID, value, tvid))
 		if err == nil {
 			chunks = decodeVarints(blob)
 		}
@@ -1743,7 +1787,7 @@ func (db *DB) resolveExtUUID(value string) []uint64 {
 // the C record inside the supplied txn. ok=false when the chunk is
 // unknown or has no file linkage.
 // CRC: crc-DB.md | R1990, R2028
-func (db *DB) chunkFileID(txn *lmdb.Txn, chunkID uint64) (uint64, bool) {
+func (db *DB) chunkFileID(txn *bbolt.Tx, chunkID uint64) (uint64, bool) {
 	if IsOverlayID(chunkID) {
 		if db.store != nil && db.store.filesForChunk != nil {
 			if fids := db.store.filesForChunk(txn, chunkID); len(fids) > 0 {
@@ -1794,7 +1838,7 @@ type ChunkInfo struct {
 func (db *DB) ChunkInfo(chunkID uint64) (ChunkInfo, error) {
 	var fileID uint64
 	var ok bool
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		fileID, ok = db.chunkFileID(txn, chunkID)
 		return nil
 	})
@@ -1939,7 +1983,7 @@ func (db *DB) resolveExtTargetFile(targetSpec string) (string, error) {
 	}
 	var fileID uint64
 	var found bool
-	_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		fileID, found = db.chunkFileID(txn, chunks[0])
 		return nil
 	})
@@ -2068,9 +2112,9 @@ func (db *DB) RemoveExtTag(targetSpec, tag string) error {
 // chunkID, derived from F[chunkID][id]. Used by ExtMap candidate
 // collection to drive the "appearing UUID" lookup.
 // CRC: crc-DB.md | R2000
-func (db *DB) chunkIDValues(txn *lmdb.Txn, chunkID uint64) []string {
+func (db *DB) chunkIDValues(txn *bbolt.Tx, chunkID uint64) []string {
 	key := tagFileKey(chunkID, "id")
-	v, err := txn.Get(db.store.dbi, key)
+	v, err := bGet(txn, key)
 	if err != nil || len(v) <= 4 {
 		return nil
 	}
@@ -2390,14 +2434,13 @@ func (db *DB) Status() (*StatusInfo, error) {
 	// DB format version
 	dbFormat, _ := db.fts.Version()
 
-	// LMDB map usage
+	// Database file size on disk. bbolt has no LMDB-style preallocated map
+	// ceiling — the file itself is the storage — so used and total both
+	// report the on-disk size of microfts2's bbolt file. (R2982)
 	var mapUsed, mapTotal int64
-	env := db.fts.Env()
-	if envInfo, err := env.Info(); err == nil {
-		mapTotal = envInfo.MapSize
-		if stat, err := env.Stat(); err == nil {
-			mapUsed = (envInfo.LastPNO + 1) * int64(stat.PSize)
-		}
+	if fi, err := os.Stat(db.fts.DB().Path()); err == nil {
+		mapTotal = fi.Size()
+		mapUsed = fi.Size()
 	}
 
 	db.tmpMu.RLock()
@@ -3264,7 +3307,7 @@ func (db *DB) Inbox(showAll, includeArchived bool) ([]InboxEntry, error) {
 	// Post-migration TagValueChunks returns chunkids; resolve to fileids
 	// via microfts2 C-records so excludeIDs stays file-level.
 	addExcluded := func(excludeIDs map[uint64]bool, chunkIDs []uint64) error {
-		return db.fts.Env().View(func(txn *lmdb.Txn) error {
+		return db.fts.DB().View(func(txn *bbolt.Tx) error {
 			for _, cid := range chunkIDs {
 				crec, err := db.fts.ReadCRecord(txn, cid)
 				if err != nil {

@@ -123,7 +123,7 @@ func TestRecallCLI(t *testing.T) {
 	// Case C: server down + tag_model configured AND file exists →
 	// "server not running" error.
 	configPath := filepath.Join(tempDir, "ark.toml")
-	if err := os.WriteFile(configPath, []byte("tag_model = \"fake-model.gguf\"\n"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("[embedding]\nmodel = \"fake-model.gguf\"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	modelPath := filepath.Join(tempDir, "fake-model.gguf")
@@ -143,7 +143,7 @@ func TestRecallCLI(t *testing.T) {
 	}
 	buf.Reset()
 	err = runConnectionsRecall([]string{"quick brown"}, &buf)
-	if err == nil || !strings.Contains(err.Error(), "configured tag_model not found at") {
+	if err == nil || !strings.Contains(err.Error(), "configured embedding model not found at") {
 		t.Errorf("expected missing-model error, got %v", err)
 	}
 
@@ -221,10 +221,10 @@ func TestParseDiscussedTagArg(t *testing.T) {
 		{"@status:in progress", "status", "in progress", false},
 		{"@nested:foo:bar", "nested", "foo:bar", false}, // only first colon splits
 		{"", "", "", true},
-		{"topic", "", "", true},     // missing @ sigil
-		{"@", "", "", true},         // empty name
-		{"@:value", "", "", true},   // empty name with colon
-		{"@bad\x00name", "", "", true}, // NUL in name
+		{"topic", "", "", true},           // missing @ sigil
+		{"@", "", "", true},               // empty name
+		{"@:value", "", "", true},         // empty name with colon
+		{"@bad\x00name", "", "", true},    // NUL in name
 		{"@tag:bad\x00val", "", "", true}, // NUL in value
 	}
 	for _, tc := range cases {

@@ -11,29 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
-// testStore creates a temporary LMDB env and Store for testing.
+// testStore creates a temporary bbolt database and Store for testing.
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
-	env, err := lmdb.NewEnv()
+	db, err := bbolt.Open(filepath.Join(dir, IndexFileName), 0644, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := env.SetMaxDBs(8); err != nil {
-		t.Fatal(err)
-	}
-	if err := env.SetMapSize(1 << 20); err != nil {
-		t.Fatal(err)
-	}
-	if err := env.Open(dir, 0, 0644); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { env.Close() })
+	t.Cleanup(func() { db.Close() })
 
-	store, err := OpenStore(env)
+	store, err := OpenStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1106,8 +1097,8 @@ func TestS_CounterSurvivesDropChunkEmbeddings(t *testing.T) {
 func TestS_NoBackfill(t *testing.T) {
 	s := testStore(t)
 	// Simulate a pre-substrate write — bypass WriteChunkEmbedding.
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, chunkEmbedKey(42), float32ToBytes(fakeVec(1)), 0)
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, chunkEmbedKey(42), float32ToBytes(fakeVec(1)))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1310,8 +1301,8 @@ func TestHC_DropClearsAllAndStamps(t *testing.T) {
 	}
 	// No SHC entries either.
 	visited := 0
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(_ *lmdb.Cursor, _, _ []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, serialKey([]byte(prefixHotCorrelation), nil), func(_, _ []byte) error {
 			visited++
 			return nil
 		})
@@ -1345,8 +1336,8 @@ func TestHC_DropEmbeddingsCascadesToHC(t *testing.T) {
 		t.Errorf("expected HC empty after DropEmbeddings, got %+v", got)
 	}
 	visited := 0
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(_ *lmdb.Cursor, _, _ []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, serialKey([]byte(prefixHotCorrelation), nil), func(_, _ []byte) error {
 			visited++
 			return nil
 		})
@@ -1407,8 +1398,8 @@ func TestDiscussed_AddListRoundTrip(t *testing.T) {
 
 	// Verify the key layout: "RD" + "sess-1" + \x00 + "topic" + \x00 + "messaging"
 	expectedKey := append([]byte("RD"), []byte("sess-1\x00topic\x00messaging")...)
-	err = s.env.View(func(txn *lmdb.Txn) error {
-		v, getErr := txn.Get(s.dbi, expectedKey)
+	err = s.bolt.View(func(txn *bbolt.Tx) error {
+		v, getErr := bGet(txn, expectedKey)
 		if getErr != nil {
 			t.Errorf("expected key %q present: %v", expectedKey, getErr)
 			return nil
@@ -1431,8 +1422,8 @@ func TestDiscussed_BareTagEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectedKey := append([]byte("RD"), []byte("sess-1\x00topic\x00")...)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		_, getErr := txn.Get(s.dbi, expectedKey)
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		_, getErr := bGet(txn, expectedKey)
 		if getErr != nil {
 			t.Errorf("expected bare-tag key %q present: %v", expectedKey, getErr)
 		}
@@ -1496,8 +1487,8 @@ func TestDiscussed_LazyTTL(t *testing.T) {
 	oldKey := discussedKey("sess-1", "topic", "messaging")
 	oldVal := make([]byte, 8)
 	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-25*time.Hour).UnixNano()))
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, oldKey, oldVal, 0)
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, oldKey, oldVal)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1509,8 +1500,8 @@ func TestDiscussed_LazyTTL(t *testing.T) {
 	}
 
 	// Raw record still present (lazy expiry only).
-	err = s.env.View(func(txn *lmdb.Txn) error {
-		_, gerr := txn.Get(s.dbi, oldKey)
+	err = s.bolt.View(func(txn *bbolt.Tx) error {
+		_, gerr := bGet(txn, oldKey)
 		if gerr != nil {
 			t.Errorf("expected RD record still present pre-prune, got %v", gerr)
 		}
@@ -1537,11 +1528,11 @@ func TestDiscussed_SinceFilter(t *testing.T) {
 	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-2*time.Hour).UnixNano()))
 	recentVal := make([]byte, 8)
 	binary.BigEndian.PutUint64(recentVal, uint64(time.Now().Add(-10*time.Minute).UnixNano()))
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		if e := txn.Put(s.dbi, old, oldVal, 0); e != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		if e := bPut(txn, old, oldVal); e != nil {
 			return e
 		}
-		return txn.Put(s.dbi, recent, recentVal, 0)
+		return bPut(txn, recent, recentVal)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1558,8 +1549,8 @@ func TestDiscussed_SinceFilter(t *testing.T) {
 func TestDiscussed_SkipsMalformedValue(t *testing.T) {
 	s := testStore(t)
 	bad := discussedKey("sess-1", "topic", "messaging")
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, bad, []byte{1, 2, 3, 4}, 0)
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, bad, []byte{1, 2, 3, 4})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1605,8 +1596,8 @@ func TestDiscussed_PruneCrossSession(t *testing.T) {
 		k := discussedKey(session, tag, value)
 		v := make([]byte, 8)
 		binary.BigEndian.PutUint64(v, uint64(ts.UnixNano()))
-		s.env.Update(func(txn *lmdb.Txn) error {
-			return txn.Put(s.dbi, k, v, 0)
+		s.bolt.Update(func(txn *bbolt.Tx) error {
+			return bPut(txn, k, v)
 		})
 	}
 	writeStamped("sess-A", "topic", "old1", old)
@@ -1643,8 +1634,8 @@ func TestDiscussed_PruneZeroTTLNoOp(t *testing.T) {
 	old := discussedKey("sess-1", "topic", "old")
 	oldVal := make([]byte, 8)
 	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-1000*time.Hour).UnixNano()))
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, old, oldVal, 0)
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, old, oldVal)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1686,8 +1677,8 @@ func TestSurfaceCooldown_MarkAndRead(t *testing.T) {
 		t.Errorf("timestamp %v outside [%v, %v]", ts, before, after)
 	}
 	expectedKey := surfaceCooldownKey("sess-A", 42)
-	if err := s.env.View(func(txn *lmdb.Txn) error {
-		v, getErr := txn.Get(s.dbi, expectedKey)
+	if err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, getErr := bGet(txn, expectedKey)
 		if getErr != nil {
 			t.Errorf("expected key present: %v", getErr)
 			return nil
@@ -1751,8 +1742,8 @@ func TestSurfaceCooldown_SessionIsolation(t *testing.T) {
 func TestSurfaceCooldown_MalformedAbsent(t *testing.T) {
 	s := testStore(t)
 	key := surfaceCooldownKey("sess-A", 42)
-	if err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, []byte{0x01, 0x02, 0x03}, 0)
+	if err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, key, []byte{0x01, 0x02, 0x03})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1768,8 +1759,8 @@ func TestSurfaceCooldown_Prune(t *testing.T) {
 	oldKey := surfaceCooldownKey("sess-A", 1)
 	oldVal := make([]byte, 8)
 	binary.BigEndian.PutUint64(oldVal, uint64(time.Now().Add(-48*time.Hour).UnixNano()))
-	if err := s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, oldKey, oldVal, 0)
+	if err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, oldKey, oldVal)
 	}); err != nil {
 		t.Fatal(err)
 	}

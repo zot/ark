@@ -195,16 +195,19 @@ func testIndexer(t *testing.T) (*Indexer, string) {
 	t.Helper()
 	dir := t.TempDir()
 
-	// microfts2
+	// microfts2 (bbolt opens a file inside dbPath; the dir must exist first)
 	dbPath := filepath.Join(dir, "db")
-	fts, err := microfts2.Create(dbPath, microfts2.Options{MaxDBs: 8})
+	if err := os.MkdirAll(dbPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fts, err := microfts2.Create(IndexPath(dbPath), microfts2.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc})
 
 	// Store (shares the LMDB env)
-	store, err := OpenStore(fts.Env())
+	store, err := OpenStore(fts.DB())
 	if err != nil {
 		t.Fatal(err)
 	}

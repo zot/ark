@@ -5,7 +5,7 @@ package ark
 import (
 	"testing"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // --- Store-level tests ---
@@ -19,7 +19,7 @@ func TestStore_WriteDerivedProposal_TallyIncrements(t *testing.T) {
 
 	// Two writes for the same (chunkID, tag).
 	for range 2 {
-		if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 			return db.store.WriteDerivedProposal(txn, chunkID, "priority")
 		}); err != nil {
 			t.Fatalf("WriteDerivedProposal: %v", err)
@@ -48,7 +48,7 @@ func TestStore_WriteAndReadDerivedFreshness(t *testing.T) {
 	const chunkID = uint64(42)
 	const serial = uint64(12345)
 
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		return db.store.WriteDerivedFreshness(txn, chunkID, serial)
 	}); err != nil {
 		t.Fatalf("WriteDerivedFreshness: %v", err)
@@ -56,7 +56,7 @@ func TestStore_WriteAndReadDerivedFreshness(t *testing.T) {
 
 	var got uint64
 	var found bool
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		s, ok, err := db.store.ReadDerivedFreshness(txn, chunkID)
 		got, found = s, ok
 		return err
@@ -78,7 +78,7 @@ func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 	_, db := setupRecall(t)
 	var got uint64
 	var found bool
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		s, ok, err := db.store.ReadDerivedFreshness(txn, 999)
 		got, found = s, ok
 		return err
@@ -104,7 +104,7 @@ func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
 
 	var present, absent bool
 	var mag uint64
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		p, m, err := db.store.HasDerivedRejection(txn, 42, "bogus")
 		if err != nil {
 			return err
@@ -135,7 +135,7 @@ func TestStore_DerivedProposals_SortByTallyDesc(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(42)
 
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		// priority gets tally=3
 		for range 3 {
 			if err := db.store.WriteDerivedProposal(txn, chunkID, "priority"); err != nil {
@@ -184,7 +184,7 @@ func TestStore_DerivedProposals_FiltersRJ(t *testing.T) {
 	const chunkID = uint64(42)
 
 	// Write two RC entries.
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		if err := db.store.WriteDerivedProposal(txn, chunkID, "priority"); err != nil {
 			return err
 		}
@@ -196,7 +196,7 @@ func TestStore_DerivedProposals_FiltersRJ(t *testing.T) {
 	// Drive status's judgment negative directly (AdjustJudgment leaves
 	// the RC in place) so DerivedProposals must drop a pre-rejection RC
 	// because the edge score is now < 0.
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		_, err := db.store.AdjustJudgment(txn, chunkID, "status", -1)
 		return err
 	}); err != nil {
@@ -252,7 +252,7 @@ func TestStore_AcceptDerived_DropsRCAndAttaches(t *testing.T) {
 	chunkID, _ := indexLine(t, db, "1.txt", "apple banana")
 
 	// Seed an RC record.
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		return db.store.WriteDerivedProposal(txn, chunkID, "priority")
 	}); err != nil {
 		t.Fatalf("WriteDerivedProposal: %v", err)
@@ -295,7 +295,7 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(42)
 
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		return db.store.WriteDerivedProposal(txn, chunkID, "fluff")
 	}); err != nil {
 		t.Fatalf("WriteDerivedProposal: %v", err)
@@ -316,8 +316,8 @@ func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
 	// RJ present, v3 shape: signed-varint(score) + 8-byte BE nanos.
 	// Fresh reject gives score -1.
 	rjKey := derivedKey(prefixDerivedRejection, chunkID, "fluff")
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(db.store.dbi, rjKey)
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, rjKey)
 		if err != nil {
 			return err
 		}
@@ -348,7 +348,7 @@ func TestStore_AdjustJudgment_RoundTrip(t *testing.T) {
 		want  int64
 	}{{+1, 1}, {+2, 3}, {-1, 2}} {
 		var got int64
-		if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+		if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 			n, err := db.store.AdjustJudgment(txn, chunkID, "t", st.delta)
 			got = n
 			return err
@@ -359,7 +359,7 @@ func TestStore_AdjustJudgment_RoundTrip(t *testing.T) {
 			t.Errorf("after delta %d: got score %d want %d", st.delta, got, st.want)
 		}
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		score, present, err := db.store.ReadJudgment(txn, chunkID, "t")
 		if err != nil {
 			return err
@@ -379,7 +379,7 @@ func TestStore_AdjustJudgment_RoundTrip(t *testing.T) {
 func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
 	_, db := setupRecall(t)
 	// (a) absent
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		score, present, err := db.store.ReadJudgment(txn, 1, "t")
 		if err != nil {
 			return err
@@ -392,13 +392,13 @@ func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
 		t.Fatalf("absent read: %v", err)
 	}
 	// (b) present
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		_, err := db.store.AdjustJudgment(txn, 1, "t", +2)
 		return err
 	}); err != nil {
 		t.Fatalf("AdjustJudgment: %v", err)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		score, present, err := db.store.ReadJudgment(txn, 1, "t")
 		if err != nil {
 			return err
@@ -412,12 +412,12 @@ func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
 	}
 	// (c) malformed value gives conservative rejected (negative, present)
 	badKey := derivedKey(prefixDerivedRejection, 2, "t")
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(db.store.dbi, badKey, []byte{0x01, 0x02, 0x03}, 0)
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, badKey, []byte{0x01, 0x02, 0x03})
 	}); err != nil {
 		t.Fatalf("write malformed: %v", err)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		score, present, err := db.store.ReadJudgment(txn, 2, "t")
 		if err != nil {
 			return err
@@ -437,7 +437,7 @@ func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
 func TestStore_Judgment_ReinforcementHysteresis(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(9)
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		_, err := db.store.AdjustJudgment(txn, chunkID, "t", +2)
 		return err
 	}); err != nil {
@@ -446,7 +446,7 @@ func TestStore_Judgment_ReinforcementHysteresis(t *testing.T) {
 	if _, err := db.store.RejectDerived(chunkID, "t"); err != nil {
 		t.Fatalf("RejectDerived: %v", err)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
 		if err != nil {
 			return err
@@ -482,7 +482,7 @@ func TestStore_RejectDerived_RejectParity(t *testing.T) {
 			t.Errorf("reject #%d magnitude: got %d want %d", i+1, mag, want)
 		}
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
 		if err != nil {
 			return err
@@ -503,7 +503,7 @@ func TestStore_RejectDerived_RejectParity(t *testing.T) {
 func TestStore_Judgment_NeutralEqualsAbsent(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(13)
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		if _, err := db.store.AdjustJudgment(txn, chunkID, "t", +1); err != nil {
 			return err
 		}
@@ -512,7 +512,7 @@ func TestStore_Judgment_NeutralEqualsAbsent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Adjust: %v", err)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		score, _, err := db.store.ReadJudgment(txn, chunkID, "t")
 		if err != nil {
 			return err
@@ -574,7 +574,7 @@ func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
 	}
 
 	var rf uint64
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		s, _, err := db.store.ReadDerivedFreshness(txn, cTarget)
 		rf = s
 		return err
@@ -819,7 +819,7 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
 
 	// Pre-existing RC record on the target from an earlier (simulated) pass.
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		return db.store.WriteDerivedProposal(txn, cTarget, "leftover")
 	}); err != nil {
 		t.Fatalf("WriteDerivedProposal: %v", err)
@@ -849,7 +849,7 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	_, db := setupRecall(t)
 
 	// Seed two chunks with RC + RF + RJ records.
-	if err := db.store.env.Update(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		if err := db.store.WriteDerivedProposal(txn, 1, "food"); err != nil {
 			return err
 		}
@@ -900,7 +900,7 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	if n != 2 {
 		t.Errorf("RF deleted = %d, want 2", n)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		for _, cid := range []uint64{1, 2} {
 			_, ok, _ := db.store.ReadDerivedFreshness(txn, cid)
 			if ok {
@@ -920,7 +920,7 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	if n != 2 {
 		t.Errorf("RJ deleted = %d, want 2", n)
 	}
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		for _, cid := range []uint64{1, 2} {
 			rej, _, _ := db.store.HasDerivedRejection(txn, cid, "noise")
 			if rej {
@@ -1034,7 +1034,7 @@ func TestRecall_Propose_NoModelIsNoOp(t *testing.T) {
 		t.Errorf("expected no RC writes without embedding; got %+v", props)
 	}
 	var rf uint64
-	if err := db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
 		s, _, err := db.store.ReadDerivedFreshness(txn, cTarget)
 		rf = s
 		return err

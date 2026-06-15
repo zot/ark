@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 )
 
 // RecallOpts configures top-K retrieval, content loading, and the
@@ -1119,7 +1119,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 	work := make(map[uint64]*chunkWork, len(scoresMap))
 
 	// Read phase: freshness check, candidate generation, filtering.
-	if err := l.db.store.env.View(func(txn *lmdb.Txn) error {
+	if err := l.db.store.bolt.View(func(txn *bbolt.Tx) error {
 		for chunkID, acc := range scoresMap {
 			rf, _, _ := l.db.store.ReadDerivedFreshness(txn, chunkID)
 			if rf >= maxSerial {
@@ -1140,7 +1140,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 	// Write phase: batched RC + RF writes. Routes through the actor
 	// per the all-mutation-through-write-actor rule.
 	if err := SyncVoid(l.db, func(_ *DB) error {
-		return l.db.store.env.Update(func(txn *lmdb.Txn) error {
+		return l.db.store.bolt.Update(func(txn *bbolt.Tx) error {
 			for chunkID, cw := range work {
 				for _, tag := range cw.proposals {
 					if err := l.db.store.WriteDerivedProposal(txn, chunkID, tag); err != nil {
@@ -1174,7 +1174,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 // returns the top-k survivors as a chunkWork ready for the write
 // phase. minSim is the chunk-EC ↔ tag-ED cosine floor (R2742).
 // CRC: crc-Librarian.md | R2670, R2671, R2672, R2673, R2674, R2742
-func (l *Librarian) selectCandidates(txn *lmdb.Txn, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int, minSim float64) *chunkWork {
+func (l *Librarian) selectCandidates(txn *bbolt.Tx, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int, minSim float64) *chunkWork {
 	// Per-tag max similarity across all ED records for that tag.
 	perTag := make(map[string]float64)
 	for _, ed := range eds {

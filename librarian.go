@@ -23,8 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 )
 
 // Librarian manages the expansion request queue for spectral search.
@@ -591,7 +591,7 @@ func (l *Librarian) SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error
 		heaps[i] = h
 	}
 
-	err := l.db.store.ViewChunkEmbeddings(func(txn *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+	err := l.db.store.ViewChunkEmbeddings(func(txn *bbolt.Tx, chunkID uint64, raw []byte) (bool, error) {
 		if len(raw) != dim {
 			return true, nil
 		}
@@ -635,7 +635,7 @@ func (l *Librarian) SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error
 	}
 
 	if len(topQueue) > 0 {
-		if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+		if err := l.db.fts.DB().View(func(txn *bbolt.Tx) error {
 			for _, p := range topQueue {
 				crec, err := l.db.fts.ReadCRecord(txn, p.chunkID)
 				if err != nil || len(crec.FileIDs) == 0 {
@@ -861,7 +861,7 @@ func (l *Librarian) chunksForDefs(defs []TagDefEmbedding, k int) ([]ChunkSuggest
 	h := &chunkAggHeap{}
 	heap.Init(h)
 
-	err := l.db.store.ViewChunkEmbeddings(func(_ *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+	err := l.db.store.ViewChunkEmbeddings(func(_ *bbolt.Tx, chunkID uint64, raw []byte) (bool, error) {
 		if len(raw) != dimBytes {
 			return true, nil
 		}
@@ -905,7 +905,7 @@ func (l *Librarian) chunksForDefs(defs []TagDefEmbedding, k int) ([]ChunkSuggest
 		fileID uint64
 	}
 	var resolved []resolvedChunk
-	if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+	if err := l.db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, c := range drained {
 			crec, rerr := l.db.fts.ReadCRecord(txn, c.chunkID)
 			if rerr != nil || len(crec.FileIDs) == 0 {
@@ -1259,7 +1259,7 @@ func (l *Librarian) TopKChunksForTag(tag string, k int) ([]ChunkSuggestion, erro
 	}
 
 	// Resolve primary FileID per chunk via fts.ReadCRecord.
-	if err := l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+	if err := l.db.fts.DB().View(func(txn *bbolt.Tx) error {
 		filtered := survivors[:0]
 		for _, s := range survivors {
 			crec, rerr := l.db.fts.ReadCRecord(txn, s.chunkID)
@@ -1718,7 +1718,7 @@ func (l *Librarian) computeTagTopK(defs []TagDefEmbedding) ([]HotCorrelation, er
 	h := &chunkAggHeap{}
 	heap.Init(h)
 
-	err := l.db.store.ViewChunkEmbeddings(func(_ *lmdb.Txn, chunkID uint64, raw []byte) (bool, error) {
+	err := l.db.store.ViewChunkEmbeddings(func(_ *bbolt.Tx, chunkID uint64, raw []byte) (bool, error) {
 		if len(raw) != dimBytes {
 			return true, nil
 		}
@@ -2247,6 +2247,15 @@ func (l *Librarian) BatchEmbedChunks() error {
 					// strips to empty and is skipped (the tag axis carries it);
 					// retrieval and the trigram index keep the original content.
 					stripped := string(stripArkTags([]byte(cachedChunks[ref.chunkIdx].Content), cachedStrategy))
+					// CRC: crc-Librarian.md | R2992
+					// NUL bytes abort the embedding tokenizer; tokenizeText
+					// replaces them with spaces before tokenizing. Name the
+					// offending chunk here (we have the path/id) so a malformed
+					// source file can be found — NULs seen so far originate
+					// upstream in PDF text extraction (pdftext).
+					if strings.IndexByte(stripped, 0) >= 0 {
+						log.Printf("chunk embed: NUL byte(s) in %s (chunkID=%d) — replaced with spaces before embedding", ref.path, ref.chunkID)
+					}
 					if stripped != "" {
 						texts = append(texts, stripped)
 						valid = append(valid, ref)

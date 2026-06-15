@@ -398,7 +398,10 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   Delete and recreate the database, then re-scan all sources. Reads
   init settings (case_insensitive, aliases, embed_cmd) from ark.toml
   so the new database matches the old one. Sources and strategies
-  are preserved — only the index is rebuilt.
+  are preserved — only the index is rebuilt. During the re-scan a
+  read-only server stays up on the socket, so `ark status` / `ark
+  search` from another terminal return live progress instead of
+  blocking on bbolt's single-process file lock (rebuild-read-serve.md).
 - `ark add [--dir <path>] [-strategy <name>] <file-or-dir>...`
   Add files. If directory, walk per config. If file, add directly.
 - `ark remove [--dir <path>] <file-or-pattern>...`
@@ -547,7 +550,7 @@ common case — first install — is a single command. `--no-setup`
 skips the bootstrap for callers who only want the database.
 
 When the database already exists, `ark init` removes it first (deletes
-`data.mdb` and `lock.mdb`) before creating a fresh one. This applies
+`index.db`) before creating a fresh one. This applies
 regardless of `--no-setup`. Use `ark rebuild` for the common
 "delete and re-scan" workflow — it handles the full cycle.
 

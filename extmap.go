@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // OverlayError captures a session-scoped diagnostic for an overlay
@@ -31,34 +31,34 @@ type OverlayError struct {
 // ExtMap holds the in-memory state that supports @ext routing.
 // CRC: crc-ExtMap.md | R1992, R2013, R2014, R2029
 type ExtMap struct {
-	mu                sync.RWMutex
-	targetToChunk     map[uint64][]uint64            // tvid_ext → chunkids
-	chunkToTargets    map[uint64][]uint64            // chunkid → tvid_exts
-	fileidToTvids     map[uint64][]uint64            // fileid → tvid_exts (target file)
-	extByAnchor       map[string][]uint64            // anchor spec text → tvid_exts
-	unresolvedTargets map[uint64]bool                // tvid_exts whose target spec resolves to nothing
-	virtualTagCount   map[string]int                 // ext-routed contributions per tag (persistent + overlay)
-	extSource         map[uint64]uint64              // tvid_ext → source chunkID (R2024, R2026)
-	routedTagsByTvidExt map[uint64][]TagValue        // tvid_ext → routed (tag, value) pairs (R2121)
-	overlayRoutings   map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
-	overlayValues     map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
-	overlayErrors     []OverlayError                 // session diagnostics (R2029)
+	mu                  sync.RWMutex
+	targetToChunk       map[uint64][]uint64            // tvid_ext → chunkids
+	chunkToTargets      map[uint64][]uint64            // chunkid → tvid_exts
+	fileidToTvids       map[uint64][]uint64            // fileid → tvid_exts (target file)
+	extByAnchor         map[string][]uint64            // anchor spec text → tvid_exts
+	unresolvedTargets   map[uint64]bool                // tvid_exts whose target spec resolves to nothing
+	virtualTagCount     map[string]int                 // ext-routed contributions per tag (persistent + overlay)
+	extSource           map[uint64]uint64              // tvid_ext → source chunkID (R2024, R2026)
+	routedTagsByTvidExt map[uint64][]TagValue          // tvid_ext → routed (tag, value) pairs (R2121)
+	overlayRoutings     map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
+	overlayValues       map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
+	overlayErrors       []OverlayError                 // session diagnostics (R2029)
 }
 
 // NewExtMap constructs an empty ExtMap.
 // CRC: crc-ExtMap.md | R1992, R2013, R2014
 func NewExtMap() *ExtMap {
 	return &ExtMap{
-		targetToChunk:     make(map[uint64][]uint64),
-		chunkToTargets:    make(map[uint64][]uint64),
-		fileidToTvids:     make(map[uint64][]uint64),
-		extByAnchor:       make(map[string][]uint64),
-		unresolvedTargets: make(map[uint64]bool),
-		virtualTagCount:   make(map[string]int),
-		extSource:         make(map[uint64]uint64),
+		targetToChunk:       make(map[uint64][]uint64),
+		chunkToTargets:      make(map[uint64][]uint64),
+		fileidToTvids:       make(map[uint64][]uint64),
+		extByAnchor:         make(map[string][]uint64),
+		unresolvedTargets:   make(map[uint64]bool),
+		virtualTagCount:     make(map[string]int),
+		extSource:           make(map[uint64]uint64),
 		routedTagsByTvidExt: make(map[uint64][]TagValue),
-		overlayRoutings:   make(map[uint64]map[uint64][]uint64),
-		overlayValues:     make(map[string]map[string][]uint64),
+		overlayRoutings:     make(map[uint64]map[uint64][]uint64),
+		overlayValues:       make(map[string]map[string][]uint64),
 	}
 }
 
@@ -121,7 +121,7 @@ func (m *ExtMap) SourceChunkID(tvidExt uint64) (uint64, bool) {
 // extByAnchor BASE keying for relative-path absolutization.
 // Caller must hold m.mu (Lock or RLock).
 // CRC: crc-ExtMap.md | R2374, R2380
-func (m *ExtMap) sourceDirLocked(txn *lmdb.Txn, db *DB, tvidExt uint64) string {
+func (m *ExtMap) sourceDirLocked(txn *bbolt.Tx, db *DB, tvidExt uint64) string {
 	srcChunk, ok := m.extSource[tvidExt]
 	if !ok {
 		return ""
@@ -312,7 +312,7 @@ func (m *ExtMap) ExtRoutingsForTargetChunk(targetChunkID uint64, db *DB) []Incom
 	}
 
 	out := make([]IncomingExtRouting, 0, len(pendings))
-	_ = db.store.env.View(func(txn *lmdb.Txn) error {
+	_ = db.store.bolt.View(func(txn *bbolt.Tx) error {
 		for _, p := range pendings {
 			srcPath := ""
 			if fid, ok := db.chunkFileID(txn, p.sourceChunkID); ok {
@@ -412,7 +412,7 @@ func (m *ExtMap) Rebuild(db *DB) error {
 	m.overlayValues = make(map[string]map[string][]uint64)
 	m.overlayErrors = nil
 
-	return db.store.env.View(func(txn *lmdb.Txn) error {
+	return db.store.bolt.View(func(txn *bbolt.Tx) error {
 		return db.store.ScanAllExtRecords(txn, func(tvidExt, targetChunk uint64, routedTvids []uint64) error {
 			m.targetToChunk[tvidExt] = append(m.targetToChunk[tvidExt], targetChunk)
 			m.chunkToTargets[targetChunk] = appendUnique(m.chunkToTargets[targetChunk], tvidExt)
@@ -425,7 +425,7 @@ func (m *ExtMap) Rebuild(db *DB) error {
 				// path absolutization (R2374, R2380).
 				// CRC: crc-ExtMap.md | R2108, R2109
 				if _, have := m.extSource[tvidExt]; !have {
-					if vbytes, gerr := txn.Get(db.store.dbi, tagValueFullKey(tag, value, tvidExt)); gerr == nil {
+					if vbytes, gerr := bGet(txn, tagValueFullKey(tag, value, tvidExt)); gerr == nil {
 						if srcs := decodeVarints(vbytes); len(srcs) > 0 {
 							m.extSource[tvidExt] = srcs[0]
 						}
@@ -471,7 +471,7 @@ func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, o
 	path, _ := db.fileIDPath(fileID)
 	var addedUUIDs []string
 	if len(addedChunkIDs) > 0 {
-		_ = db.fts.Env().View(func(txn *lmdb.Txn) error {
+		_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
 			for _, cid := range addedChunkIDs {
 				addedUUIDs = append(addedUUIDs, db.chunkIDValues(txn, cid)...)
 			}
@@ -506,7 +506,7 @@ func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, o
 // updates. txn and tt may be nil for fully-overlay-source flows
 // where no LMDB writes can fire.
 // CRC: crc-ExtMap.md | R1995, R1996, R1997, R1998, R1999, R2012, R2016, R2017, R2018, R2030
-func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPlan) error {
+func (m *ExtMap) applyIndexExt(txn *bbolt.Tx, tt *TvidTxn, db *DB, p extIndexPlan) error {
 	sourceOverlay := IsOverlayID(p.sourceChunkID)
 	if len(p.targets) == 0 {
 		m.mu.Lock()
@@ -619,7 +619,7 @@ func (m *ExtMap) applyIndexExt(txn *lmdb.Txn, tt *TvidTxn, db *DB, p extIndexPla
 // AllocOverlay) without LMDB writes — the caller handles
 // overlayValues bookkeeping.
 // CRC: crc-ExtMap.md | R2017
-func (m *ExtMap) allocRoutedTvid(txn *lmdb.Txn, tt *TvidTxn, db *DB, tag, value string, targetChunk uint64, bothPersistent bool) (uint64, error) {
+func (m *ExtMap) allocRoutedTvid(txn *bbolt.Tx, tt *TvidTxn, db *DB, tag, value string, targetChunk uint64, bothPersistent bool) (uint64, error) {
 	if bothPersistent {
 		return db.store.addChunkIDToVRecord(txn, tt, tag, value, targetChunk)
 	}
@@ -682,7 +682,7 @@ func (m *ExtMap) strikeOverlayValueLocked(tag, value string, chunkID uint64) {
 // bothPersistent dispatches Adds and Removes between LMDB and overlay
 // state.
 // CRC: crc-ExtMap.md | R1994, R2002, R2003, R2004, R2005, R2006, R2026
-func (m *ExtMap) applyReresolve(txn *lmdb.Txn, tt *TvidTxn, db *DB, fileID uint64, p extReresolvePlan) error {
+func (m *ExtMap) applyReresolve(txn *bbolt.Tx, tt *TvidTxn, db *DB, fileID uint64, p extReresolvePlan) error {
 	tvidExt := p.tvidExt
 	newTargets := p.newTargets
 	routed := p.routedTags
@@ -853,7 +853,7 @@ func (m *ExtMap) applyReresolve(txn *lmdb.Txn, tt *TvidTxn, db *DB, fileID uint6
 // txn and tt may be nil for overlay sources: every routing has
 // bothPersistent=false so no LMDB writes fire.
 // CRC: crc-ExtMap.md | R2008, R2009, R2022, R2023, R2024, R2025
-func (m *ExtMap) CleanupSource(txn *lmdb.Txn, tt *TvidTxn, db *DB, sourceChunkID, tvidExt uint64) error {
+func (m *ExtMap) CleanupSource(txn *bbolt.Tx, tt *TvidTxn, db *DB, sourceChunkID, tvidExt uint64) error {
 	sourceOverlay := IsOverlayID(sourceChunkID)
 	m.mu.RLock()
 	targets := append([]uint64(nil), m.targetToChunk[tvidExt]...)
@@ -1009,7 +1009,7 @@ func setDiff(a, b []uint64) []uint64 {
 // returns the chunkid→fileid map for reuse downstream (the map covers
 // every chunk in the input, not only matches, so callers can index
 // fileids without repeating the C-record read).
-func filterByFileWithIDs(txn *lmdb.Txn, db *DB, chunks []uint64, fileID uint64) ([]uint64, map[uint64]uint64) {
+func filterByFileWithIDs(txn *bbolt.Tx, db *DB, chunks []uint64, fileID uint64) ([]uint64, map[uint64]uint64) {
 	if len(chunks) == 0 {
 		return nil, nil
 	}

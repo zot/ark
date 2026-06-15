@@ -67,7 +67,7 @@ otherwise emit a different order each run). R2953.
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
 | `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
-| `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up       |
+| `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up; read-only serve during scan |
 | `refresh`          | `refresh [PATTERN...]`                                                                                               | optional                 | re-index stale files                                 |
 | `remove`           | `remove PATTERN...`                                                                                                  | optional                 | tmp:// requires server                               |
 | `resolve`          | `resolve PATTERN...`                                                                                                 | optional                 | dismisses unresolved files                           |
@@ -842,8 +842,11 @@ ark rebuild
 ```
 
 Refuses if the server is running. Calls `init --no-setup` (which
-clears `data.mdb`/`lock.mdb` and re-creates from ark.toml), then
-`scan`. Embeddings regenerate on the next `ark serve`.
+clears `index.db` and re-creates from ark.toml), then `scan`. During
+the scan a read-only server stays up on the socket so `status` /
+`search` from another terminal return live progress instead of
+blocking on bbolt's single-process file lock (rebuild-read-serve.md).
+Embeddings regenerate on the next `ark serve`.
 
 ### `refresh` — re-index stale files
 

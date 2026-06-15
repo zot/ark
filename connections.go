@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 )
 
 // ConnectionsRequest is a queued find-connections request handed
@@ -69,11 +69,11 @@ type ConnectionsRecord struct {
 	Path          string // tmp://connections/<id>.md
 	Timer         *time.Timer
 	Done          bool
-	Mode          string // "normal" | "turbo" (R2591)
-	Purpose       string // "curate" | "recall" | ... (R2590)
-	K             int    // top-K for normal-mode proposal output (R2585)
-	Warning       string // surfaced as @connections-warning (R2588)
-	ProposalCount int    // populated on completed write (R2592)
+	Mode          string        // "normal" | "turbo" (R2591)
+	Purpose       string        // "curate" | "recall" | ... (R2590)
+	K             int           // top-K for normal-mode proposal output (R2585)
+	Warning       string        // surfaced as @connections-warning (R2588)
+	ProposalCount int           // populated on completed write (R2592)
 	stop          chan struct{} // closed when the record reaches terminal state
 }
 
@@ -126,8 +126,10 @@ func (l *Librarian) ConnectionsAvailable() bool {
 // modes. Normalizes inputs (chunkID, path+range, text), validates at
 // enqueue, allocates a request ID, writes the pending tmp:// doc with
 // @purpose / @connections-mode headers, then dispatches:
-//   normal → launches in-process substrate worker, returns ID
-//   turbo  → queues for sidecar (existing 1G path), returns ID
+//
+//	normal → launches in-process substrate worker, returns ID
+//	turbo  → queues for sidecar (existing 1G path), returns ID
+//
 // CRC: crc-Librarian.md | Seq: seq-find-connections-substrate.md | R2567, R2569, R2570, R2571, R2572, R2573, R2585, R2590, R2591, R2598, R2600, R2601, R2602, R2603
 func (l *Librarian) FindConnections(inputs []ConnectionsInput, opts FindConnectionsOpts) (string, error) {
 	if l == nil {
@@ -390,7 +392,7 @@ func (l *Librarian) BuildFetchPayload(id string) ([]ChunkFetchEntry, error) {
 
 	out := make([]ChunkFetchEntry, 0, len(rec.ChunkIDs))
 	cache := l.db.fts.NewChunkCache()
-	err = l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+	err = l.db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, chunkID := range rec.ChunkIDs {
 			crec, rerr := l.db.fts.ReadCRecord(txn, chunkID)
 			if rerr != nil || len(crec.FileIDs) == 0 {

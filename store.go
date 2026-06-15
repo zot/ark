@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -15,20 +16,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
-// Store manages ark's own LMDB subdatabase for missing files,
-// unresolved files, settings, and tag tracking.
+// Store manages ark's own `ark` bucket inside microfts2's bbolt database for
+// missing files, unresolved files, settings, and tag tracking. (R2975)
 type Store struct {
-	env *lmdb.Env
-	dbi lmdb.DBI
+	// bolt is microfts2's shared *bbolt.DB; ark does not own it. The `ark`
+	// bucket is obtained per txn via tx.Bucket(arkBucketName) — there is no
+	// persistent handle (DBIs do not exist in bbolt). (R2975, R2976)
+	bolt *bbolt.DB
 	// filesForChunk resolves a chunkID to the fileids that reference it,
-	// using the provided LMDB txn (must read microfts2's C records).
+	// using the provided bbolt txn (must read microfts2's C records).
 	// Set by the DB during Open via SetChunkResolver. May be nil during
 	// Init (e.g. in tests that exercise Store directly without microfts2).
 	// CRC: crc-Store.md | R1887, R1888
-	filesForChunk func(txn *lmdb.Txn, chunkID uint64) []uint64
+	filesForChunk func(txn *bbolt.Tx, chunkID uint64) []uint64
 	// chunksForFile resolves a fileID to the chunkids it references.
 	// Opens its own View (microfts2 FileInfoByID isn't txn-aware). Called
 	// before the V-record scan so the resolver runs outside the scan's
@@ -87,7 +90,7 @@ func (s *Store) LoadTvidMap() error {
 //     called by FileTagValues before its main scan.
 //
 // CRC: crc-Store.md | R1887, R1889
-func (s *Store) SetChunkResolver(toFiles func(txn *lmdb.Txn, chunkID uint64) []uint64, toChunks func(fileID uint64) []uint64) {
+func (s *Store) SetChunkResolver(toFiles func(txn *bbolt.Tx, chunkID uint64) []uint64, toChunks func(fileID uint64) []uint64) {
 	s.filesForChunk = toFiles
 	s.chunksForFile = toChunks
 }
@@ -206,18 +209,50 @@ const (
 	tagID  = "id"  // R1986: @id identity tag (UUID branch of ext target resolution)
 )
 
-// OpenStore opens or creates the ark subdatabase within the given LMDB environment.
-func OpenStore(env *lmdb.Env) (*Store, error) {
-	var dbi lmdb.DBI
-	err := env.Update(func(txn *lmdb.Txn) error {
-		var err error
-		dbi, err = txn.OpenDBI("ark", lmdb.Create)
+// arkBucketName is ark's bucket inside microfts2's shared bbolt database.
+// A bbolt.Tx spans this bucket and microfts2's "fts" bucket, so cross-repo
+// reads/writes stay atomic. (R2975, R2976)
+var arkBucketName = []byte("ark")
+
+// errNotFound mirrors lmdb.IsNotFound's sentinel so the ported read paths
+// keep their original (value, err) control flow. bbolt's Bucket.Get returns
+// a nil slice for an absent key; bGet maps that to errNotFound. (R2979)
+var errNotFound = errors.New("ark: key not found")
+
+func isNotFound(err error) bool { return errors.Is(err, errNotFound) }
+
+// bGet reads key from the ark bucket. Returns errNotFound when the key is
+// absent (bbolt Get → nil), preserving the lmdb.Txn.Get contract callers
+// were written against. The returned slice is valid only within txn. (R2979)
+func bGet(txn *bbolt.Tx, key []byte) ([]byte, error) {
+	if v := txn.Bucket(arkBucketName).Get(key); v != nil {
+		return v, nil
+	}
+	return nil, errNotFound
+}
+
+// bPut writes key→val into the ark bucket. (R2979)
+func bPut(txn *bbolt.Tx, key, val []byte) error {
+	return txn.Bucket(arkBucketName).Put(key, val)
+}
+
+// bDel removes key from the ark bucket. bbolt returns no error for a missing
+// key, so the lmdb IsNotFound delete-guards become no-ops. (R2979)
+func bDel(txn *bbolt.Tx, key []byte) error {
+	return txn.Bucket(arkBucketName).Delete(key)
+}
+
+// OpenStore opens or creates ark's bucket inside microfts2's bbolt database.
+// ark does not own the database — db is microfts2's handle (fts.DB()). (R2975)
+func OpenStore(db *bbolt.DB) (*Store, error) {
+	err := db.Update(func(txn *bbolt.Tx) error {
+		_, err := txn.CreateBucketIfNotExists(arkBucketName)
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open ark subdatabase: %w", err)
+		return nil, fmt.Errorf("open ark bucket: %w", err)
 	}
-	return &Store{env: env, dbi: dbi, tvids: NewTvidMap()}, nil
+	return &Store{bolt: db, tvids: NewTvidMap()}, nil
 }
 
 // AddMissing records a missing file.
@@ -228,24 +263,24 @@ func (s *Store) AddMissing(fileid uint64, path string, lastSeen time.Time) error
 		return err
 	}
 	key := missingKey(fileid)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, val, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, key, val)
 	})
 }
 
 // RemoveMissing removes a missing file record.
 func (s *Store) RemoveMissing(fileid uint64) error {
 	key := missingKey(fileid)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Del(s.dbi, key, nil)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bDel(txn, key)
 	})
 }
 
 // ListMissing returns all missing file records.
 func (s *Store) ListMissing() ([]MissingRecord, error) {
 	var records []MissingRecord
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixMissing)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixMissing)}, func(k, v []byte) error {
 			if len(k) < 9 {
 				return nil
 			}
@@ -268,24 +303,24 @@ func (s *Store) AddUnresolved(path, dir string) error {
 		return err
 	}
 	key := unresolvedKey(path)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, val, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, key, val)
 	})
 }
 
 // RemoveUnresolved removes an unresolved file record.
 func (s *Store) RemoveUnresolved(path string) error {
 	key := unresolvedKey(path)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Del(s.dbi, key, nil)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bDel(txn, key)
 	})
 }
 
 // ListUnresolved returns all unresolved file records.
 func (s *Store) ListUnresolved() ([]UnresolvedRecord, error) {
 	var records []UnresolvedRecord
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixUnresolved)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixUnresolved)}, func(k, v []byte) error {
 			var rec UnresolvedRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				records = append(records, rec)
@@ -316,8 +351,8 @@ func (s *Store) CleanUnresolved() error {
 // Returns the dismissed records (with FileID populated) for engine cleanup.
 func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]MissingRecord, error) {
 	var dismissed []MissingRecord
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixMissing)}, func(cur *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixMissing)}, func(k, v []byte) error {
 			if len(k) < 9 {
 				return nil
 			}
@@ -327,7 +362,7 @@ func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]Missing
 					if matcher.Match(pat, rec.Path, "", false) {
 						rec.FileID = binary.BigEndian.Uint64(k[1:9])
 						dismissed = append(dismissed, rec)
-						return cur.Del(0)
+						return bDel(txn, k)
 					}
 				}
 			}
@@ -339,13 +374,13 @@ func (s *Store) DismissByPattern(patterns []string, matcher *Matcher) ([]Missing
 
 // ResolveByPattern removes unresolved records where the path matches any pattern.
 func (s *Store) ResolveByPattern(patterns []string, matcher *Matcher) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixUnresolved)}, func(cur *lmdb.Cursor, k, v []byte) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixUnresolved)}, func(k, v []byte) error {
 			var rec UnresolvedRecord
 			if e := json.Unmarshal(v, &rec); e == nil {
 				for _, pat := range patterns {
 					if matcher.Match(pat, rec.Path, "", false) {
-						return cur.Del(0)
+						return bDel(txn, k)
 					}
 				}
 			}
@@ -367,15 +402,15 @@ func makeIKey(name string) []byte {
 // IGet reads a single I record string value. Returns "" if not found.
 func (s *Store) IGet(name string) (string, error) {
 	var val string
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, makeIKey(name))
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, makeIKey(name))
 		if err != nil {
 			return err
 		}
 		val = string(v)
 		return nil
 	})
-	if lmdb.IsNotFound(err) {
+	if isNotFound(err) {
 		return "", nil
 	}
 	return val, err
@@ -383,16 +418,16 @@ func (s *Store) IGet(name string) (string, error) {
 
 // IPut writes a single I record string value.
 func (s *Store) IPut(name, value string) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, makeIKey(name), []byte(value), 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, makeIKey(name), []byte(value))
 	})
 }
 
 // IDel deletes a single I record.
 func (s *Store) IDel(name string) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, makeIKey(name), nil)
-		if lmdb.IsNotFound(err) {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		err := bDel(txn, makeIKey(name))
+		if isNotFound(err) {
 			return nil
 		}
 		return err
@@ -404,23 +439,23 @@ func (s *Store) IDel(name string) error {
 // hot-correlations sweep advancing I:hcsweep to its high-water serial).
 // CRC: crc-Store.md | R2230, R2236
 func (s *Store) ISetCounter(name string, val uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, makeIKey(name), []byte(strconv.FormatUint(val, 10)), 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, makeIKey(name), []byte(strconv.FormatUint(val, 10)))
 	})
 }
 
 // IGetCounter reads a uint64 counter I record. Returns 0 if not found.
 func (s *Store) IGetCounter(name string) (uint64, error) {
 	var val uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, makeIKey(name))
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, makeIKey(name))
 		if err != nil {
 			return err
 		}
 		val, _ = strconv.ParseUint(string(v), 10, 64)
 		return nil
 	})
-	if lmdb.IsNotFound(err) {
+	if isNotFound(err) {
 		return 0, nil
 	}
 	return val, err
@@ -429,9 +464,9 @@ func (s *Store) IGetCounter(name string) (uint64, error) {
 // WriteConfig writes all Config fields to per-name I records.
 // CRC: crc-Store.md | R1532, R1534, R1535, R1539
 func (s *Store) WriteConfig(cfg *Config) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		put := func(name, value string) error {
-			return txn.Put(s.dbi, makeIKey(name), []byte(value), 0)
+			return bPut(txn, makeIKey(name), []byte(value))
 		}
 		putJSON := func(name string, v any) error {
 			data, err := json.Marshal(v)
@@ -490,9 +525,9 @@ func (s *Store) WriteConfig(cfg *Config) error {
 func (s *Store) ReadConfig() (*Config, error) {
 	var cfg Config
 	found := false
-	err := s.env.View(func(txn *lmdb.Txn) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		get := func(name string) string {
-			v, err := txn.Get(s.dbi, makeIKey(name))
+			v, err := bGet(txn, makeIKey(name))
 			if err != nil {
 				return ""
 			}
@@ -549,46 +584,29 @@ func (s *Store) WriteERecord(name string, payload any) error {
 	if err != nil {
 		return err
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, makeEKey(name), data, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, makeEKey(name), data)
 	})
 }
 
 // ReadERecords scans all E: prefix records.
 func (s *Store) ReadERecords() (map[string]json.RawMessage, error) {
 	result := make(map[string]json.RawMessage)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		cursor, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cursor.Close()
-
-		prefix := []byte{byte(prefixError), ':'}
-		k, v, err := cursor.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) < 2 || k[0] != byte(prefixError) || k[1] != ':' {
-				break
-			}
-			name := string(k[2:])
-			cp := make([]byte, len(v))
-			copy(cp, v)
-			result[name] = json.RawMessage(cp)
-			k, v, err = cursor.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixError), ':'}, func(k, v []byte) error {
+			// scanPrefix hands fn its own copy of v, safe to retain.
+			result[string(k[2:])] = json.RawMessage(v)
 			return nil
-		}
-		return err
+		})
 	})
 	return result, err
 }
 
 // DeleteERecord removes one E record.
 func (s *Store) DeleteERecord(name string) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, makeEKey(name), nil)
-		if lmdb.IsNotFound(err) {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		err := bDel(txn, makeEKey(name))
+		if isNotFound(err) {
 			return nil
 		}
 		return err
@@ -597,28 +615,10 @@ func (s *Store) DeleteERecord(name string) error {
 
 // ClearERecords deletes all E: prefix records.
 func (s *Store) ClearERecords() error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		cursor, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cursor.Close()
-
-		prefix := []byte{byte(prefixError), ':'}
-		k, _, err := cursor.Get(prefix, nil, lmdb.SetRange)
-		for err == nil {
-			if len(k) < 2 || k[0] != byte(prefixError) || k[1] != ':' {
-				break
-			}
-			if err := cursor.Del(0); err != nil {
-				return err
-			}
-			k, _, err = cursor.Get(nil, nil, lmdb.Next)
-		}
-		if lmdb.IsNotFound(err) {
-			return nil
-		}
-		return err
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixError), ':'}, func(k, _ []byte) error {
+			return bDel(txn, k)
+		})
 	})
 }
 
@@ -633,8 +633,8 @@ func (s *Store) ClearERecords() error {
 // CRC: crc-Store.md | R2344, R2345
 func (s *Store) ListTags() ([]TagCount, error) {
 	counts := make(map[string]uint32)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) >= 2 && len(v) >= 4 {
 				count := binary.BigEndian.Uint32(v[:4])
 				if count > 0 {
@@ -682,12 +682,12 @@ func (s *Store) TagCounts(tags []string) ([]TagCount, error) {
 		overlay = s.tmp.TagCounts(tags)
 	}
 	var results []TagCount
-	err := s.env.View(func(txn *lmdb.Txn) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		for _, tag := range tags {
 			tk := tagTotalKey(tag)
-			v, err := txn.Get(s.dbi, tk)
+			v, err := bGet(txn, tk)
 			extra := uint32(virtual[tag]) + uint32(overlay[tag])
-			if lmdb.IsNotFound(err) {
+			if isNotFound(err) {
 				results = append(results, TagCount{Tag: tag, Count: extra})
 				continue
 			}
@@ -718,8 +718,8 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 	}
 
 	var records []TagFileRecord
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagFile)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		if err := scanPrefix(txn, []byte{byte(prefixTagFile)}, func(k, v []byte) error {
 			if len(v) < 4 {
 				return nil
 			}
@@ -774,31 +774,31 @@ func (s *Store) TagFiles(tags []string) ([]TagFileRecord, error) {
 }
 
 // adjustTagTotal increments or decrements a T record within an existing transaction.
-func (s *Store) adjustTagTotal(txn *lmdb.Txn, tag string, delta int64) error {
+func (s *Store) adjustTagTotal(txn *bbolt.Tx, tag string, delta int64) error {
 	tk := tagTotalKey(tag)
 	var current uint32
 	var trailing []byte // preserves embedding vector if present
-	v, err := txn.Get(s.dbi, tk)
+	v, err := bGet(txn, tk)
 	if err == nil && len(v) >= 4 {
 		current = binary.BigEndian.Uint32(v[:4])
 		if len(v) > 4 {
 			trailing = v[4:]
 		}
-	} else if !lmdb.IsNotFound(err) && err != nil {
+	} else if !isNotFound(err) && err != nil {
 		return err
 	}
 
 	newVal := int64(current) + delta
 	if newVal <= 0 {
 		// Remove the T record entirely (including any embedding)
-		txn.Del(s.dbi, tk, nil)
+		bDel(txn, tk)
 		return nil
 	}
 
 	val := make([]byte, 4, 4+len(trailing))
 	binary.BigEndian.PutUint32(val, uint32(newVal))
 	val = append(val, trailing...)
-	return txn.Put(s.dbi, tk, val, 0)
+	return bPut(txn, tk, val)
 }
 
 func tagTotalKey(tag string) []byte {
@@ -831,27 +831,26 @@ func parseFKey(k []byte) (uint64, string, bool) {
 
 // scanPrefix iterates all keys with the given prefix, calling fn for each.
 // fn receives the cursor (for mutations like Del), key, and value.
-func scanPrefix(txn *lmdb.Txn, dbi lmdb.DBI, prefix []byte, fn func(cur *lmdb.Cursor, k, v []byte) error) error {
-	cur, err := txn.OpenCursor(dbi)
-	if err != nil {
-		return err
+// scanPrefix walks every key under prefix in ark's bucket. bbolt forbids
+// mutating a bucket while a cursor over it is live, so it first collects all
+// matching (key, value) pairs — copying the bytes so they outlive the walk —
+// then invokes fn for each. This lets a delete-during-scan caller safely call
+// bDel(txn, k) (or any write) from fn against the now-cursorless bucket,
+// replacing the lmdb cur.Del(0) idiom. The snapshot also means deletes made
+// during the callback phase never perturb the iteration. (R2980)
+func scanPrefix(txn *bbolt.Tx, prefix []byte, fn func(k, v []byte) error) error {
+	type kv struct{ k, v []byte }
+	var items []kv
+	c := txn.Bucket(arkBucketName).Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		items = append(items, kv{append([]byte(nil), k...), append([]byte(nil), v...)})
 	}
-	defer cur.Close()
-
-	k, v, err := cur.Get(prefix, nil, lmdb.SetRange)
-	for err == nil {
-		if !bytes.HasPrefix(k, prefix) {
-			break
-		}
-		if err := fn(cur, k, v); err != nil {
+	for _, it := range items {
+		if err := fn(it.k, it.v); err != nil {
 			return err
 		}
-		k, v, err = cur.Get(nil, nil, lmdb.Next)
 	}
-	if lmdb.IsNotFound(err) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 func missingKey(fileid uint64) []byte {
@@ -891,17 +890,17 @@ type TagDefRecord struct {
 // entries for the dropped EDs are also removed.
 // CRC: crc-Store.md | R2154, R2186
 func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		// Both D and ED keys end with an 8-byte big-endian fileid.
 		// Walking each prefix and matching the suffix is bounded by
 		// tag-def count (~270 today), not file count.
 		delByFileid := func(prefix []byte, prefixLen int) {
-			_ = scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, _ []byte) error {
+			_ = scanPrefix(txn, prefix, func(k, _ []byte) error {
 				if len(k) < prefixLen+8 {
 					return nil
 				}
 				if binary.BigEndian.Uint64(k[len(k)-8:]) == fileid {
-					return cur.Del(0)
+					return bDel(txn, k)
 				}
 				return nil
 			})
@@ -911,7 +910,7 @@ func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 		delByFileid(serialKey([]byte(prefixEmbedDef), nil), 1+len(prefixEmbedDef)) // R2186
 
 		for tag, desc := range defs {
-			if err := txn.Put(s.dbi, tagDefKey(tag, fileid), []byte(desc), 0); err != nil {
+			if err := bPut(txn, tagDefKey(tag, fileid), []byte(desc)); err != nil {
 				return err
 			}
 		}
@@ -934,10 +933,10 @@ func (s *Store) AppendTagDefs(fileid uint64, defs map[string]string) error {
 	if len(defs) == 0 {
 		return nil
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		for tag, desc := range defs {
 			dk := tagDefKey(tag, fileid)
-			if err := txn.Put(s.dbi, dk, []byte(desc), 0); err != nil {
+			if err := bPut(txn, dk, []byte(desc)); err != nil {
 				return err
 			}
 		}
@@ -954,9 +953,9 @@ func (s *Store) ListTagDefs(tags []string) ([]TagDefRecord, error) {
 		tagSet[t] = true
 	}
 
-	err := s.env.View(func(txn *lmdb.Txn) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		prefix := []byte{byte(prefixTagDef)}
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			if len(k) < 9 {
 				return nil
 			}
@@ -1113,7 +1112,7 @@ func (s *Store) UpdateTagValues(chunkTags []ChunkTagValues) error {
 		return nil
 	}
 	tt := s.tvids.Begin()
-	err := s.env.Update(func(txn *lmdb.Txn) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
 		for _, ct := range persistent {
 			if err := s.writeChunkTagValuesInTxn(txn, tt, ct.ChunkID, ct.Values); err != nil {
 				return err
@@ -1166,7 +1165,7 @@ func (s *Store) AppendTagValues(chunkTags []ChunkTagValues) error {
 		return nil
 	}
 	tt := s.tvids.Begin()
-	err := s.env.Update(func(txn *lmdb.Txn) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
 		for _, ct := range persistent {
 			if err := s.writeChunkTagValuesInTxn(txn, tt, ct.ChunkID, ct.Values); err != nil {
 				return err
@@ -1195,7 +1194,7 @@ func (s *Store) RemoveTagValues(chunkID uint64) error {
 		return nil
 	}
 	tt := s.tvids.Begin()
-	err := s.env.Update(func(txn *lmdb.Txn) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
 		return s.removeChunkIDInTxn(txn, tt, chunkID)
 	})
 	if err != nil {
@@ -1223,7 +1222,7 @@ func (s *Store) RemoveFileTagValues(fileID uint64) {
 // or aborting it on error — this keeps the in-memory tvid map
 // consistent with LMDB even if microfts2's commit fails.
 // CRC: crc-Store.md | R1899, R1962, R1963
-func (s *Store) RemoveTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) error {
+func (s *Store) RemoveTagValuesInTxn(txn *bbolt.Tx, tt *TvidTxn, chunkID uint64) error {
 	return s.removeChunkIDInTxn(txn, tt, chunkID)
 }
 
@@ -1248,7 +1247,7 @@ func (s *Store) WithTvidTxn(fn func(*TvidTxn) error) error {
 // Tvid registrations are recorded in the supplied TvidTxn; the caller
 // commits or aborts to publish them to the live TvidMap.
 // CRC: crc-Store.md | R1874, R1875, R1876, R1959, R1963, R1991
-func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64, values []TagValue) error {
+func (s *Store) writeChunkTagValuesInTxn(txn *bbolt.Tx, tt *TvidTxn, chunkID uint64, values []TagValue) error {
 	// Group values by tag
 	perTag := make(map[string][]TagValue)
 	for _, tv := range values {
@@ -1260,8 +1259,8 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uin
 
 	for tag, vals := range perTag {
 		fk := tagFileKey(chunkID, tag)
-		_, err := txn.Get(s.dbi, fk)
-		isNew := lmdb.IsNotFound(err)
+		_, err := bGet(txn, fk)
+		isNew := isNotFound(err)
 		if err != nil && !isNew {
 			return err
 		}
@@ -1293,7 +1292,7 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uin
 		for _, tv := range tvids {
 			val = encodeVarint(val, tv)
 		}
-		if err := txn.Put(s.dbi, fk, val, 0); err != nil {
+		if err := bPut(txn, fk, val); err != nil {
 			return err
 		}
 
@@ -1315,15 +1314,15 @@ func (s *Store) writeChunkTagValuesInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uin
 // removeOneVarint via removeOneChunkIDFromVRecord (ext) or removeVarint
 // via removeChunkIDInTxn (inline orphan path). Returns the tvid.
 // CRC: crc-Store.md | R1873, R1281, R1955, R1963, R1988
-func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value string, chunkID uint64) (uint64, error) {
+func (s *Store) addChunkIDToVRecord(txn *bbolt.Tx, tt *TvidTxn, tag, value string, chunkID uint64) (uint64, error) {
 	if tvid, ok := tt.Lookup(tag, value); ok {
 		fullKey := tagValueFullKey(tag, value, tvid)
-		existing, err := txn.Get(s.dbi, fullKey)
-		if err != nil && !lmdb.IsNotFound(err) {
+		existing, err := bGet(txn, fullKey)
+		if err != nil && !isNotFound(err) {
 			return 0, err
 		}
 		blob := encodeVarint(bytes.Clone(existing), chunkID)
-		if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+		if err := bPut(txn, fullKey, blob); err != nil {
 			return 0, err
 		}
 		return tvid, nil
@@ -1334,7 +1333,7 @@ func (s *Store) addChunkIDToVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value strin
 	}
 	fullKey := tagValueFullKey(tag, value, tvid)
 	blob := encodeVarint(nil, chunkID)
-	if err := txn.Put(s.dbi, fullKey, blob, 0); err != nil {
+	if err := bPut(txn, fullKey, blob); err != nil {
 		return 0, err
 	}
 	tt.Add(tvid, tag, value, OriginPersistent)
@@ -1373,11 +1372,11 @@ func removeOneVarint(data []byte, target uint64) ([]byte, bool) {
 // records tvid removal in the TvidTxn. Returns whether anything was
 // removed.
 // CRC: crc-Store.md | R1988, R2005, R2008
-func (s *Store) removeOneChunkIDFromVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, value string, tvid, chunkID uint64) (bool, error) {
+func (s *Store) removeOneChunkIDFromVRecord(txn *bbolt.Tx, tt *TvidTxn, tag, value string, tvid, chunkID uint64) (bool, error) {
 	fullKey := tagValueFullKey(tag, value, tvid)
-	existing, err := txn.Get(s.dbi, fullKey)
+	existing, err := bGet(txn, fullKey)
 	if err != nil {
-		if lmdb.IsNotFound(err) {
+		if isNotFound(err) {
 			return false, nil
 		}
 		return false, err
@@ -1387,13 +1386,13 @@ func (s *Store) removeOneChunkIDFromVRecord(txn *lmdb.Txn, tt *TvidTxn, tag, val
 		return false, nil
 	}
 	if len(newV) == 0 {
-		if err := txn.Del(s.dbi, fullKey, nil); err != nil {
+		if err := bDel(txn, fullKey); err != nil {
 			return false, err
 		}
 		tt.Remove(tvid)
 		return true, nil
 	}
-	return true, txn.Put(s.dbi, fullKey, newV, 0)
+	return true, bPut(txn, fullKey, newV)
 }
 
 // extRoutingKey builds an X record key: X + varint(tvid_ext) + varint(target_chunkid).
@@ -1441,23 +1440,23 @@ type ExtRouting struct {
 
 // WriteExtRecord writes X[tvid_ext][target_chunkid] = packed routed_tvid varints.
 // CRC: crc-Store.md | R1989
-func (s *Store) WriteExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64, routedTvids []uint64) error {
+func (s *Store) WriteExtRecord(txn *bbolt.Tx, tvidExt, targetChunk uint64, routedTvids []uint64) error {
 	key := extRoutingKey(tvidExt, targetChunk)
 	var blob []byte
 	for _, t := range routedTvids {
 		blob = encodeVarint(blob, t)
 	}
-	return txn.Put(s.dbi, key, blob, 0)
+	return bPut(txn, key, blob)
 }
 
 // ReadExtRecord returns the routed tvids for one (tvid_ext, target_chunkid).
 // Returns (nil, nil) when the record is absent.
 // CRC: crc-Store.md | R1989
-func (s *Store) ReadExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) ([]uint64, error) {
+func (s *Store) ReadExtRecord(txn *bbolt.Tx, tvidExt, targetChunk uint64) ([]uint64, error) {
 	key := extRoutingKey(tvidExt, targetChunk)
-	blob, err := txn.Get(s.dbi, key)
+	blob, err := bGet(txn, key)
 	if err != nil {
-		if lmdb.IsNotFound(err) {
+		if isNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -1467,10 +1466,10 @@ func (s *Store) ReadExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) ([]uin
 
 // ScanExtRecords prefix-scans X[tvid_ext], decoding each routing.
 // CRC: crc-Store.md | R1989
-func (s *Store) ScanExtRecords(txn *lmdb.Txn, tvidExt uint64) ([]ExtRouting, error) {
+func (s *Store) ScanExtRecords(txn *bbolt.Tx, tvidExt uint64) ([]ExtRouting, error) {
 	prefix := extRoutingPrefix(tvidExt)
 	var out []ExtRouting
-	err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := scanPrefix(txn, prefix, func(k, v []byte) error {
 		te, tc, ok := parseExtRoutingKey(k)
 		if !ok || te != tvidExt {
 			return nil
@@ -1483,10 +1482,10 @@ func (s *Store) ScanExtRecords(txn *lmdb.Txn, tvidExt uint64) ([]ExtRouting, err
 
 // DeleteExtRecord removes one X record.
 // CRC: crc-Store.md | R1989
-func (s *Store) DeleteExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) error {
+func (s *Store) DeleteExtRecord(txn *bbolt.Tx, tvidExt, targetChunk uint64) error {
 	key := extRoutingKey(tvidExt, targetChunk)
-	if err := txn.Del(s.dbi, key, nil); err != nil {
-		if lmdb.IsNotFound(err) {
+	if err := bDel(txn, key); err != nil {
+		if isNotFound(err) {
 			return nil
 		}
 		return err
@@ -1497,9 +1496,9 @@ func (s *Store) DeleteExtRecord(txn *lmdb.Txn, tvidExt, targetChunk uint64) erro
 // ScanAllExtRecords iterates every X record in the store. Used by
 // ExtMap.Rebuild on startup to repopulate the in-memory maps.
 // CRC: crc-Store.md | R1990, R1993
-func (s *Store) ScanAllExtRecords(txn *lmdb.Txn, fn func(tvidExt, targetChunk uint64, routedTvids []uint64) error) error {
+func (s *Store) ScanAllExtRecords(txn *bbolt.Tx, fn func(tvidExt, targetChunk uint64, routedTvids []uint64) error) error {
 	prefix := []byte{byte(prefixExtRouting)}
-	return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	return scanPrefix(txn, prefix, func(k, v []byte) error {
 		te, tc, ok := parseExtRoutingKey(k)
 		if !ok {
 			return nil
@@ -1512,11 +1511,11 @@ func (s *Store) ScanAllExtRecords(txn *lmdb.Txn, fn func(tvidExt, targetChunk ui
 // chunkID's F record. Used by orphan callbacks to capture source-side
 // ext routings before the F records are dropped.
 // CRC: crc-Store.md | R2008
-func (s *Store) ReadExtTvidsForChunk(txn *lmdb.Txn, chunkID uint64) ([]uint64, error) {
+func (s *Store) ReadExtTvidsForChunk(txn *bbolt.Tx, chunkID uint64) ([]uint64, error) {
 	key := tagFileKey(chunkID, tagExt)
-	v, err := txn.Get(s.dbi, key)
+	v, err := bGet(txn, key)
 	if err != nil {
-		if lmdb.IsNotFound(err) {
+		if isNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -1532,7 +1531,7 @@ func (s *Store) ReadExtTvidsForChunk(txn *lmdb.Txn, chunkID uint64) ([]uint64, e
 // identified by the F-record tvid trail. When a V record is fully
 // emptied, its tvid is recorded in the TvidTxn for removal from the
 // live map on commit. CRC: crc-Store.md | R1900, R1963
-func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) error {
+func (s *Store) removeChunkIDInTxn(txn *bbolt.Tx, tt *TvidTxn, chunkID uint64) error {
 	fPrefix := []byte{byte(prefixTagFile)}
 	fPrefix = encodeVarint(fPrefix, chunkID)
 
@@ -1542,7 +1541,7 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 		tvids []uint64
 	}
 	var entries []fEntry
-	if err := scanPrefix(txn, s.dbi, fPrefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	if err := scanPrefix(txn, fPrefix, func(k, v []byte) error {
 		_, tag, ok := parseFKey(k)
 		if !ok {
 			return nil
@@ -1577,8 +1576,8 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 	}
 
 	// Drop the F records for this chunkid
-	if err := scanPrefix(txn, s.dbi, fPrefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-		return cur.Del(0)
+	if err := scanPrefix(txn, fPrefix, func(k, _ []byte) error {
+		return bDel(txn, k)
 	}); err != nil {
 		return err
 	}
@@ -1586,7 +1585,7 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 	// Walk V records, remove chunkid from values where tvid matches
 	if len(tvidSet) > 0 {
 		vPrefix := []byte{byte(prefixTagValue)}
-		if err := scanPrefix(txn, s.dbi, vPrefix, func(cur *lmdb.Cursor, k, v []byte) error {
+		if err := scanPrefix(txn, vPrefix, func(k, v []byte) error {
 			_, _, tvid, ok := parseVKey(k)
 			if !ok || !tvidSet[tvid] {
 				return nil
@@ -1596,13 +1595,13 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 				return nil
 			}
 			if len(newV) == 0 {
-				if err := cur.Del(0); err != nil {
+				if err := bDel(txn, k); err != nil {
 					return err
 				}
 				tt.Remove(tvid)
 				return nil
 			}
-			return txn.Put(s.dbi, k, newV, 0)
+			return bPut(txn, k, newV)
 		}); err != nil {
 			return err
 		}
@@ -1620,8 +1619,8 @@ func (s *Store) removeChunkIDInTxn(txn *lmdb.Txn, tt *TvidTxn, chunkID uint64) e
 func (s *Store) QueryTagValues(tag, prefix string) ([]TagValueCount, error) {
 	counts := make(map[string]int)
 	scanKey := tagValuePrefix(tag, prefix)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, scanKey, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, scanKey, func(k, v []byte) error {
 			// Key format: V[tag]\x00[value]\x00[tvid] — parse with two null separators
 			_, value, _, ok := parseVKey(k)
 			if !ok {
@@ -1672,9 +1671,9 @@ func (s *Store) TagValueChunks(tag, value string) ([]uint64, error) {
 	var ids []uint64
 	if tvid, ok := s.tvids.Lookup(tag, value); ok {
 		fullKey := tagValueFullKey(tag, value, tvid)
-		err := s.env.View(func(txn *lmdb.Txn) error {
-			v, err := txn.Get(s.dbi, fullKey)
-			if lmdb.IsNotFound(err) {
+		err := s.bolt.View(func(txn *bbolt.Tx) error {
+			v, err := bGet(txn, fullKey)
+			if isNotFound(err) {
 				return nil
 			}
 			if err != nil {
@@ -1727,13 +1726,13 @@ func (s *Store) FileTagValues(fileid uint64, tags []string) (map[string]string, 
 
 	// Inline path: persistent V records.
 	if !IsOverlayID(fileid) && len(chunkSet) > 0 {
-		err := s.env.View(func(txn *lmdb.Txn) error {
+		err := s.bolt.View(func(txn *bbolt.Tx) error {
 			for _, tag := range tags {
 				if _, found := result[tag]; found {
 					continue
 				}
 				prefix := tagValuePrefix(tag, "")
-				err := scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+				err := scanPrefix(txn, prefix, func(k, v []byte) error {
 					_, value, _, ok := parseVKey(k)
 					if !ok {
 						return nil
@@ -1814,8 +1813,8 @@ func (s *Store) TagsForChunk(chunkID uint64) ([]TagValue, error) {
 	prefix = encodeVarint(prefix, chunkID)
 
 	var result []TagValue
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			_, tag, ok := parseFKey(k)
 			if !ok || len(v) < 4 {
 				return nil
@@ -1889,8 +1888,8 @@ func (s *Store) MatchTagNames(tokens []string) ([]string, error) {
 		}
 		seen[name] = struct{}{}
 	}
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) < 2 || len(v) < 4 {
 				return nil
 			}
@@ -1941,8 +1940,8 @@ func (s *Store) MatchTagValues(tag string, tokens []string) ([]TagValueMatch, er
 		matches[value] = append(matches[value], chunkIDs...)
 	}
 	prefix := tagValuePrefix(tag, "")
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			_, value, _, ok := parseVKey(k)
 			if !ok {
 				return nil
@@ -1989,8 +1988,8 @@ func (s *Store) MatchNamesRegex(re *regexp.Regexp) []string {
 			seen[name] = struct{}{}
 		}
 	}
-	_ = s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	_ = s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) < 2 {
 				return nil
 			}
@@ -2055,7 +2054,7 @@ func (s *Store) FilesForChunks(chunkIDs map[uint64]bool) map[uint64]bool {
 	if s.filesForChunk == nil || len(chunkIDs) == 0 {
 		return fileIDs
 	}
-	_ = s.env.View(func(txn *lmdb.Txn) error {
+	_ = s.bolt.View(func(txn *bbolt.Tx) error {
 		for cid := range chunkIDs {
 			for _, fid := range s.filesForChunk(txn, cid) {
 				fileIDs[fid] = true
@@ -2228,14 +2227,9 @@ func recordPrefixOf(k []byte) string {
 // CRC: crc-Store.md | R2479, R2481
 func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 	counts := make(map[string]RecordStats)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		cur, err := txn.OpenCursor(s.dbi)
-		if err != nil {
-			return err
-		}
-		defer cur.Close()
-		k, v, err := cur.Get(nil, nil, lmdb.First)
-		for err == nil {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		c := txn.Bucket(arkBucketName).Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
 			if len(k) > 0 {
 				p := recordPrefixOf(k)
 				st := counts[p]
@@ -2244,12 +2238,8 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 				st.ValueBytes += int64(len(v))
 				counts[p] = st
 			}
-			k, v, err = cur.Get(nil, nil, lmdb.Next)
 		}
-		if lmdb.IsNotFound(err) {
-			return nil
-		}
-		return err
+		return nil
 	})
 	return counts, err
 }
@@ -2257,18 +2247,18 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 // --- Tag Value ID allocation (R1280-R1284) ---
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
-func (s *Store) allocIDInTxn(txn *lmdb.Txn, iFieldName string) (uint64, error) {
+func (s *Store) allocIDInTxn(txn *bbolt.Tx, iFieldName string) (uint64, error) {
 	key := makeIKey(iFieldName)
 	var id uint64
-	val, err := txn.Get(s.dbi, key)
-	if err != nil && !lmdb.IsNotFound(err) {
+	val, err := bGet(txn, key)
+	if err != nil && !isNotFound(err) {
 		return 0, err
 	}
 	if val != nil {
 		id, _ = strconv.ParseUint(string(val), 10, 64)
 	}
 	id++
-	if err := txn.Put(s.dbi, key, []byte(strconv.FormatUint(id, 10)), 0); err != nil {
+	if err := bPut(txn, key, []byte(strconv.FormatUint(id, 10))); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -2293,7 +2283,7 @@ func serialKey(prefix, key []byte) []byte {
 // txn share one serial; serials are strictly monotonic across txns. The
 // substrate does not backfill pre-existing records.
 // CRC: crc-Store.md | R2176, R2177, R2184, R2192
-func (s *Store) allocSerial(txn *lmdb.Txn) (uint64, error) {
+func (s *Store) allocSerial(txn *bbolt.Tx) (uint64, error) {
 	return s.allocIDInTxn(txn, "serial")
 }
 
@@ -2302,42 +2292,38 @@ func (s *Store) allocSerial(txn *lmdb.Txn) (uint64, error) {
 // txn.Put. Used by batch writers that allocate one serial and stamp many
 // records with it.
 // CRC: crc-Store.md | R2174, R2175
-func stampWriteWith(txn *lmdb.Txn, dbi lmdb.DBI, prefix, key []byte, serial uint64) error {
+func stampWriteWith(txn *bbolt.Tx, prefix, key []byte, serial uint64) error {
 	var buf [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(buf[:], serial)
-	return txn.Put(dbi, serialKey(prefix, key), buf[:n], 0)
+	return bPut(txn, serialKey(prefix, key), buf[:n])
 }
 
 // stampWrite is the convenience wrapper for single-record callers: alloc a
 // serial and stamp in one call.
 // CRC: crc-Store.md | R2174-R2176
-func (s *Store) stampWrite(txn *lmdb.Txn, prefix, key []byte) error {
+func (s *Store) stampWrite(txn *bbolt.Tx, prefix, key []byte) error {
 	serial, err := s.allocSerial(txn)
 	if err != nil {
 		return err
 	}
-	return stampWriteWith(txn, s.dbi, prefix, key, serial)
+	return stampWriteWith(txn, prefix, key, serial)
 }
 
 // deleteStamp removes the S-side-index entry for (prefix + key). No-op if
 // absent. Used by embedding-record delete paths to keep the side index in
 // sync. No tombstone serials are introduced.
 // CRC: crc-Store.md | R2185, R2186, R2191
-func deleteStamp(txn *lmdb.Txn, dbi lmdb.DBI, prefix, key []byte) error {
-	err := txn.Del(dbi, serialKey(prefix, key), nil)
-	if lmdb.IsNotFound(err) {
-		return nil
-	}
-	return err
+func deleteStamp(txn *bbolt.Tx, prefix, key []byte) error {
+	return bDel(txn, serialKey(prefix, key))
 }
 
 // RecordSerial returns the stamped serial of the record at (prefix + key).
 // found is false iff no S-entry exists for that (prefix, key).
 // CRC: crc-Store.md | R2188
 func (s *Store) RecordSerial(prefix, key []byte) (serial uint64, found bool, err error) {
-	err = s.env.View(func(txn *lmdb.Txn) error {
-		v, gerr := txn.Get(s.dbi, serialKey(prefix, key))
-		if lmdb.IsNotFound(gerr) {
+	err = s.bolt.View(func(txn *bbolt.Tx) error {
+		v, gerr := bGet(txn, serialKey(prefix, key))
+		if isNotFound(gerr) {
 			return nil
 		}
 		if gerr != nil {
@@ -2358,8 +2344,8 @@ func (s *Store) RecordSerial(prefix, key []byte) (serial uint64, found bool, err
 // CRC: crc-Store.md | R2189, R2190
 func (s *Store) WalkRecordsSinceSerial(prefix []byte, since uint64, fn func(originalKey []byte, serial uint64) error) error {
 	sPrefix := serialKey(prefix, nil) // 'S' + prefix
-	return s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, sPrefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	return s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, sPrefix, func(k, v []byte) error {
 			serial, _ := binary.Uvarint(v)
 			if serial <= since {
 				return nil
@@ -2400,9 +2386,9 @@ type TagDefRef struct {
 // CRC: crc-Store.md | R1289, R2178, R2179
 func (s *Store) WriteTagNameEmbedding(tag string, vec []float32) error {
 	tk := tagTotalKey(tag)
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, tk)
-		if err != nil && !lmdb.IsNotFound(err) {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, tk)
+		if err != nil && !isNotFound(err) {
 			return err
 		}
 		val := make([]byte, 4)
@@ -2410,7 +2396,7 @@ func (s *Store) WriteTagNameEmbedding(tag string, vec []float32) error {
 			copy(val, v[:4]) // preserve count
 		}
 		val = append(val, float32ToBytes(vec)...)
-		if err := txn.Put(s.dbi, tk, val, 0); err != nil {
+		if err := bPut(txn, tk, val); err != nil {
 			return err
 		}
 		return s.stampWrite(txn, []byte{byte(prefixTagTotal)}, []byte(tag))
@@ -2421,9 +2407,9 @@ func (s *Store) WriteTagNameEmbedding(tag string, vec []float32) error {
 // by stamping. Stamps SEV<tvid-varint> in the same txn.
 // CRC: crc-Store.md | R1290, R2178, R2180
 func (s *Store) WriteTagValueEmbedding(tvid uint64, vec []float32) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		key := embedValueKey(tvid)
-		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+		if err := bPut(txn, key, float32ToBytes(vec)); err != nil {
 			return err
 		}
 		return s.stampWrite(txn, []byte(prefixEmbedValue), key[len(prefixEmbedValue):])
@@ -2435,9 +2421,9 @@ func (s *Store) WriteTagValueEmbedding(tvid uint64, vec []float32) error {
 func (s *Store) ReadTagNameEmbedding(tag string) ([]float32, error) {
 	tk := tagTotalKey(tag)
 	var vec []float32
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, tk)
-		if lmdb.IsNotFound(err) {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, tk)
+		if isNotFound(err) {
 			return nil
 		}
 		if err != nil {
@@ -2454,9 +2440,9 @@ func (s *Store) ReadTagNameEmbedding(tag string) ([]float32, error) {
 // ReadTagValueEmbedding reads an EV record.
 func (s *Store) ReadTagValueEmbedding(tvid uint64) ([]float32, error) {
 	var vec []float32
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, embedValueKey(tvid))
-		if lmdb.IsNotFound(err) {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, embedValueKey(tvid))
+		if isNotFound(err) {
 			return nil
 		}
 		if err != nil {
@@ -2471,8 +2457,8 @@ func (s *Store) ReadTagValueEmbedding(tvid uint64) ([]float32, error) {
 // ScanTagNameEmbeddings returns all T records that have embeddings as tag → vector.
 func (s *Store) ScanTagNameEmbeddings() (map[string][]float32, error) {
 	result := make(map[string][]float32)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) >= 2 && len(v) > 4 {
 				result[string(k[1:])] = bytesToFloat32(v[4:])
 			}
@@ -2496,8 +2482,8 @@ type TagDefEmbedding struct {
 // CRC: crc-Store.md | R2164
 func (s *Store) ScanTagDefEmbeddings() ([]TagDefEmbedding, error) {
 	var out []TagDefEmbedding
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixEmbedDef), func(k, v []byte) error {
 			if len(k) < len(prefixEmbedDef)+8 {
 				return nil
 			}
@@ -2513,8 +2499,8 @@ func (s *Store) ScanTagDefEmbeddings() ([]TagDefEmbedding, error) {
 // ScanTagValueEmbeddings returns all EV records as tvid → vector.
 func (s *Store) ScanTagValueEmbeddings() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixEmbedValue), func(k, v []byte) error {
 			if len(k) <= len(prefixEmbedValue) {
 				return nil
 			}
@@ -2531,8 +2517,8 @@ func (s *Store) ScanTagValueEmbeddings() (map[uint64][]float32, error) {
 // MissingTagNameEmbeddings returns tag names from T records that lack embeddings.
 func (s *Store) MissingTagNameEmbeddings() ([]string, error) {
 	var missing []string
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(k) >= 2 && len(v) >= 4 && len(v) == 4 {
 				// Has count but no embedding
 				missing = append(missing, string(k[1:]))
@@ -2547,10 +2533,10 @@ func (s *Store) MissingTagNameEmbeddings() ([]string, error) {
 // CRC: crc-Store.md | R1292
 func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 	var missing []uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		// Collect all tvids from V records
 		tvids := make(map[uint64]bool)
-		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagValue)}, func(_ *lmdb.Cursor, k, _ []byte) error {
+		if err := scanPrefix(txn, []byte{byte(prefixTagValue)}, func(k, _ []byte) error {
 			_, _, tvid, ok := parseVKey(k)
 			if ok && tvid > 0 {
 				tvids[tvid] = true
@@ -2560,7 +2546,7 @@ func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 			return err
 		}
 		// Remove tvids that already have EV records
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(_ *lmdb.Cursor, k, _ []byte) error {
+		if err := scanPrefix(txn, []byte(prefixEmbedValue), func(k, _ []byte) error {
 			if len(k) > len(prefixEmbedValue) {
 				id, _ := binary.Uvarint(k[len(prefixEmbedValue):])
 				if id > 0 {
@@ -2585,9 +2571,9 @@ func (s *Store) MissingTagValueEmbeddings() ([]uint64, error) {
 // the same txn.
 // CRC: crc-Store.md | R2151, R2153, R2159, R2178, R2181
 func (s *Store) WriteTagDefEmbedding(tag string, fileid uint64, vec []float32) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		key := embedDefKey(tag, fileid)
-		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+		if err := bPut(txn, key, float32ToBytes(vec)); err != nil {
 			return err
 		}
 		return s.stampWrite(txn, []byte(prefixEmbedDef), key[len(prefixEmbedDef):])
@@ -2598,9 +2584,9 @@ func (s *Store) WriteTagDefEmbedding(tag string, fileid uint64, vec []float32) e
 // CRC: crc-Store.md | R2159
 func (s *Store) ReadTagDefEmbedding(tag string, fileid uint64) ([]float32, error) {
 	var vec []float32
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, embedDefKey(tag, fileid))
-		if lmdb.IsNotFound(err) {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, embedDefKey(tag, fileid))
+		if isNotFound(err) {
 			return nil
 		}
 		if err != nil {
@@ -2624,9 +2610,9 @@ func (s *Store) MissingTagDefEmbeddings() ([]TagDefRef, error) {
 		fileid uint64
 	}
 	missing := make(map[tdKey]string)
-	err := s.env.View(func(txn *lmdb.Txn) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		// Collect every D record as a candidate.
-		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagDef)}, func(_ *lmdb.Cursor, k, v []byte) error {
+		if err := scanPrefix(txn, []byte{byte(prefixTagDef)}, func(k, v []byte) error {
 			if len(k) < 9 {
 				return nil
 			}
@@ -2638,7 +2624,7 @@ func (s *Store) MissingTagDefEmbeddings() ([]TagDefRef, error) {
 			return err
 		}
 		// Strip pairs that already have an ED record.
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(_ *lmdb.Cursor, k, _ []byte) error {
+		return scanPrefix(txn, []byte(prefixEmbedDef), func(k, _ []byte) error {
 			if len(k) < len(prefixEmbedDef)+8 {
 				return nil
 			}
@@ -2670,8 +2656,8 @@ func (s *Store) ScanVRecordTvids() (map[uint64]TagAlt, error) {
 // CRC: crc-Store.md | R1958
 func (s *Store) scanVRecordTvidsRaw() (map[uint64]TagAlt, error) {
 	result := make(map[uint64]TagAlt)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte{byte(prefixTagValue)}, func(_ *lmdb.Cursor, k, _ []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixTagValue)}, func(k, _ []byte) error {
 			tag, value, tvid, ok := parseVKey(k)
 			if ok && tvid > 0 {
 				result[tvid] = TagAlt{Tag: tag, Value: value}
@@ -2689,35 +2675,35 @@ func (s *Store) scanVRecordTvidsRaw() (map[uint64]TagAlt, error) {
 // part of DropEmbeddings).
 // CRC: crc-Store.md | R1294, R2160, R2187
 func (s *Store) DropEmbeddings() error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		// Strip vectors from T records (keep count)
-		if err := scanPrefix(txn, s.dbi, []byte{byte(prefixTagTotal)}, func(_ *lmdb.Cursor, k, v []byte) error {
+		if err := scanPrefix(txn, []byte{byte(prefixTagTotal)}, func(k, v []byte) error {
 			if len(v) > 4 {
 				val := make([]byte, 4)
 				copy(val, v[:4])
-				return txn.Put(s.dbi, k, val, 0)
+				return bPut(txn, k, val)
 			}
 			return nil
 		}); err != nil {
 			return err
 		}
 		// Delete all EV records
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedValue), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		if err := scanPrefix(txn, []byte(prefixEmbedValue), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
 		// Delete all ED records. R2160
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedDef), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		if err := scanPrefix(txn, []byte(prefixEmbedDef), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
 		// Delete every ST*, SEV*, SED* side-index entry. SEC* is preserved
 		// (DropEmbeddings does not touch EC). R2187
 		dropSerial := func(prefix []byte) error {
-			return scanPrefix(txn, s.dbi, serialKey(prefix, nil), func(cur *lmdb.Cursor, _, _ []byte) error {
-				return cur.Del(0)
+			return scanPrefix(txn, serialKey(prefix, nil), func(k, _ []byte) error {
+				return bDel(txn, k)
 			})
 		}
 		if err := dropSerial([]byte{byte(prefixTagTotal)}); err != nil {
@@ -2730,8 +2716,8 @@ func (s *Store) DropEmbeddings() error {
 			return err
 		}
 		// Delete all HC records and their SHC stamps. R2231
-		if err := scanPrefix(txn, s.dbi, []byte(prefixHotCorrelation), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		if err := scanPrefix(txn, []byte(prefixHotCorrelation), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
@@ -2783,9 +2769,9 @@ func hotCorrParse(v []byte) float64 {
 // freshness check time (R2229).
 // CRC: crc-Store.md | R2226, R2227, R2229
 func (s *Store) WriteHotCorrelation(tag string, chunkID uint64, score float64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		key := hotCorrKey(tag, chunkID)
-		if err := txn.Put(s.dbi, key, hotCorrValue(score), 0); err != nil {
+		if err := bPut(txn, key, hotCorrValue(score)); err != nil {
 			return err
 		}
 		return s.stampWrite(txn, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
@@ -2802,8 +2788,8 @@ func (s *Store) ReadHotCorrelations(tag string) ([]HotCorrelation, error) {
 	suffixOffset := len(prefix)
 	tagLen := len(tag)
 	var out []HotCorrelation
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			// Reject keys whose tag portion is longer than ours — scanPrefix
 			// matches by byte prefix, so HC<tag>foo<chunkid> would also match
 			// when querying HC<tag>. Re-check the tag boundary.
@@ -2826,12 +2812,12 @@ func (s *Store) ReadHotCorrelations(tag string) ([]HotCorrelation, error) {
 // in the same txn. No-op if the entry is absent.
 // CRC: crc-Store.md | R2229
 func (s *Store) DeleteHotCorrelation(tag string, chunkID uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		key := hotCorrKey(tag, chunkID)
-		if err := txn.Del(s.dbi, key, nil); err != nil && !lmdb.IsNotFound(err) {
+		if err := bDel(txn, key); err != nil && !isNotFound(err) {
 			return err
 		}
-		return deleteStamp(txn, s.dbi, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
+		return deleteStamp(txn, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):])
 	})
 }
 
@@ -2841,13 +2827,13 @@ func (s *Store) DeleteHotCorrelation(tag string, chunkID uint64) error {
 // sweep's phase-3 tag rebuild.
 // CRC: crc-Store.md | R2229, R2238
 func (s *Store) ReplaceHotCorrelations(tag string, entries []HotCorrelation) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		// Delete every existing HC entry for this tag, plus its stamp.
 		prefix := make([]byte, len(prefixHotCorrelation)+len(tag))
 		copy(prefix, prefixHotCorrelation)
 		copy(prefix[len(prefixHotCorrelation):], tag)
 		tagLen := len(tag)
-		if err := scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, k, _ []byte) error {
+		if err := scanPrefix(txn, prefix, func(k, _ []byte) error {
 			if len(k) != len(prefixHotCorrelation)+tagLen+8 {
 				return nil
 			}
@@ -2855,10 +2841,10 @@ func (s *Store) ReplaceHotCorrelations(tag string, entries []HotCorrelation) err
 				return nil
 			}
 			origKey := append([]byte(nil), k...)
-			if err := cur.Del(0); err != nil {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
-			return deleteStamp(txn, s.dbi, []byte(prefixHotCorrelation), origKey[len(prefixHotCorrelation):])
+			return deleteStamp(txn, []byte(prefixHotCorrelation), origKey[len(prefixHotCorrelation):])
 		}); err != nil {
 			return err
 		}
@@ -2872,10 +2858,10 @@ func (s *Store) ReplaceHotCorrelations(tag string, entries []HotCorrelation) err
 		}
 		for _, e := range entries {
 			key := hotCorrKey(tag, e.ChunkID)
-			if err := txn.Put(s.dbi, key, hotCorrValue(e.Score), 0); err != nil {
+			if err := bPut(txn, key, hotCorrValue(e.Score)); err != nil {
 				return err
 			}
-			if err := stampWriteWith(txn, s.dbi, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):], serial); err != nil {
+			if err := stampWriteWith(txn, []byte(prefixHotCorrelation), key[len(prefixHotCorrelation):], serial); err != nil {
 				return err
 			}
 		}
@@ -2892,8 +2878,8 @@ func (s *Store) MaxTagDefSerial(tag string) (uint64, error) {
 	prefix := serialKey([]byte(prefixEmbedDef), []byte(tag))
 	wantKeyLen := len(prefix) + 8
 	var maxSerial uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			if len(k) != wantKeyLen {
 				return nil
 			}
@@ -2911,14 +2897,14 @@ func (s *Store) MaxTagDefSerial(tag string) (uint64, error) {
 // entry. Called by DropEmbeddings on model swap.
 // CRC: crc-Store.md | R2231
 func (s *Store) DropHotCorrelations() error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		if err := scanPrefix(txn, s.dbi, []byte(prefixHotCorrelation), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		if err := scanPrefix(txn, []byte(prefixHotCorrelation), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixHotCorrelation), nil), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		return scanPrefix(txn, serialKey([]byte(prefixHotCorrelation), nil), func(k, _ []byte) error {
+			return bDel(txn, k)
 		})
 	})
 }
@@ -2947,9 +2933,9 @@ type ChunkVec struct {
 // same txn.
 // CRC: crc-Store.md | R1836, R2178, R2182
 func (s *Store) WriteChunkEmbedding(chunkID uint64, vec []float32) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		key := chunkEmbedKey(chunkID)
-		if err := txn.Put(s.dbi, key, float32ToBytes(vec), 0); err != nil {
+		if err := bPut(txn, key, float32ToBytes(vec)); err != nil {
 			return err
 		}
 		return s.stampWrite(txn, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
@@ -2964,17 +2950,17 @@ func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 	if len(chunks) == 0 {
 		return nil
 	}
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		serial, err := s.allocSerial(txn)
 		if err != nil {
 			return err
 		}
 		for _, c := range chunks {
 			key := chunkEmbedKey(c.ChunkID)
-			if err := txn.Put(s.dbi, key, float32ToBytes(c.Vec), 0); err != nil {
+			if err := bPut(txn, key, float32ToBytes(c.Vec)); err != nil {
 				return err
 			}
-			if err := stampWriteWith(txn, s.dbi, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):], serial); err != nil {
+			if err := stampWriteWith(txn, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):], serial); err != nil {
 				return err
 			}
 		}
@@ -2985,8 +2971,8 @@ func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 // ReadChunkEmbedding reads one EC record by chunkID. R1838
 func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 	var vec []float32
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, chunkEmbedKey(chunkID))
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, chunkEmbedKey(chunkID))
 		if err != nil {
 			return err
 		}
@@ -2995,7 +2981,7 @@ func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 		vec = bytesToFloat32(data)
 		return nil
 	})
-	if lmdb.IsNotFound(err) {
+	if isNotFound(err) {
 		return nil, nil
 	}
 	return vec, err
@@ -3004,9 +2990,9 @@ func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 // ReadChunkEmbeddings batch reads EC records for centroid computation. R1842
 func (s *Store) ReadChunkEmbeddings(chunkIDs []uint64) [][]float32 {
 	result := make([][]float32, len(chunkIDs))
-	s.env.View(func(txn *lmdb.Txn) error {
+	s.bolt.View(func(txn *bbolt.Tx) error {
 		for i, id := range chunkIDs {
-			v, err := txn.Get(s.dbi, chunkEmbedKey(id))
+			v, err := bGet(txn, chunkEmbedKey(id))
 			if err != nil {
 				continue
 			}
@@ -3023,7 +3009,7 @@ func (s *Store) ReadChunkEmbeddings(chunkIDs []uint64) [][]float32 {
 // SEC side-index entry.
 // CRC: crc-Store.md | R1839, R2185
 func (s *Store) DeleteChunkEmbedding(chunkID uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		return s.DeleteChunkEmbeddingInTxn(txn, chunkID)
 	})
 }
@@ -3031,21 +3017,21 @@ func (s *Store) DeleteChunkEmbedding(chunkID uint64) error {
 // DeleteChunkEmbeddingInTxn deletes one EC record using an existing
 // transaction; also drops the matching SEC side-index entry.
 // CRC: crc-Store.md | R1840, R2185
-func (s *Store) DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64) error {
+func (s *Store) DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID uint64) error {
 	key := chunkEmbedKey(chunkID)
-	err := txn.Del(s.dbi, key, nil)
-	if err != nil && !lmdb.IsNotFound(err) {
+	err := bDel(txn, key)
+	if err != nil && !isNotFound(err) {
 		return err
 	}
-	return deleteStamp(txn, s.dbi, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
+	return deleteStamp(txn, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
 }
 
 // WriteFileCentroid writes one EF record (running sum + count). R1835
 func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		if count == 0 {
-			err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
-			if lmdb.IsNotFound(err) {
+			err := bDel(txn, fileCentroidKey(fileID))
+			if isNotFound(err) {
 				return nil
 			}
 			return err
@@ -3054,7 +3040,7 @@ func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) er
 		countBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(countBuf, count)
 		buf = append(buf, countBuf...)
-		return txn.Put(s.dbi, fileCentroidKey(fileID), buf, 0)
+		return bPut(txn, fileCentroidKey(fileID), buf)
 	})
 }
 
@@ -3062,8 +3048,8 @@ func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) er
 func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 	var sum []float32
 	var count uint32
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, fileCentroidKey(fileID))
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, fileCentroidKey(fileID))
 		if err != nil {
 			return err
 		}
@@ -3076,7 +3062,7 @@ func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 		sum = bytesToFloat32(data[:len(data)-4])
 		return nil
 	})
-	if lmdb.IsNotFound(err) {
+	if isNotFound(err) {
 		return nil, 0, nil
 	}
 	return sum, count, err
@@ -3084,9 +3070,9 @@ func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 
 // DeleteFileCentroid deletes one EF record.
 func (s *Store) DeleteFileCentroid(fileID uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
-		if lmdb.IsNotFound(err) {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		err := bDel(txn, fileCentroidKey(fileID))
+		if isNotFound(err) {
 			return nil
 		}
 		return err
@@ -3094,9 +3080,9 @@ func (s *Store) DeleteFileCentroid(fileID uint64) error {
 }
 
 // DeleteFileCentroidInTxn deletes one EF record using an existing transaction. R1841
-func (s *Store) DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID uint64) error {
-	err := txn.Del(s.dbi, fileCentroidKey(fileID), nil)
-	if lmdb.IsNotFound(err) {
+func (s *Store) DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID uint64) error {
+	err := bDel(txn, fileCentroidKey(fileID))
+	if isNotFound(err) {
 		return nil
 	}
 	return err
@@ -3105,8 +3091,8 @@ func (s *Store) DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID uint64) error {
 // ScanFileCentroids returns all EF records as fileID → centroid (sum/count). R1605
 func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixEmbedFileCent), func(k, v []byte) error {
 			rest := k[len(prefixEmbedFileCent):]
 			fileID, _ := binary.Uvarint(rest)
 			data := make([]byte, len(v))
@@ -3133,8 +3119,8 @@ func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 // ScanFileCentroidCounts scans all EF records, returning fileID → stored count.
 func (s *Store) ScanFileCentroidCounts() (map[uint64]uint32, error) {
 	result := make(map[uint64]uint32)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixEmbedFileCent), func(k, v []byte) error {
 			rest := k[len(prefixEmbedFileCent):]
 			fileID, _ := binary.Uvarint(rest)
 			data := make([]byte, len(v))
@@ -3156,11 +3142,16 @@ func (s *Store) ScanFileCentroidCounts() (map[uint64]uint32, error) {
 // records inside the same txn (e.g. fts.ReadCRecord) is safe.
 // Returning false stops the scan; returning an error aborts.
 // CRC: crc-Store.md | R1915
-func (s *Store) ViewChunkEmbeddings(fn func(txn *lmdb.Txn, chunkID uint64, vec []byte) (cont bool, err error)) error {
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
-			rest := k[len(prefixEmbedChunk):]
-			chunkID, _ := binary.Uvarint(rest)
+func (s *Store) ViewChunkEmbeddings(fn func(txn *bbolt.Tx, chunkID uint64, vec []byte) (cont bool, err error)) error {
+	// Read-only streaming scan with early-exit: walk a live cursor directly
+	// rather than via scanPrefix (collect-then-delete), so a large EC corpus
+	// is not materialized up front and the cont=false early-exit still pays
+	// off. Safe because a bbolt View txn cannot mutate the bucket. (R2979)
+	prefix := []byte(prefixEmbedChunk)
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		c := txn.Bucket(arkBucketName).Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			chunkID, _ := binary.Uvarint(k[len(prefix):])
 			cont, err := fn(txn, chunkID, v)
 			if err != nil {
 				return err
@@ -3168,8 +3159,8 @@ func (s *Store) ViewChunkEmbeddings(fn func(txn *lmdb.Txn, chunkID uint64, vec [
 			if !cont {
 				return errStopScan
 			}
-			return nil
-		})
+		}
+		return nil
 	})
 	if err == errStopScan {
 		return nil
@@ -3180,8 +3171,8 @@ func (s *Store) ViewChunkEmbeddings(fn func(txn *lmdb.Txn, chunkID uint64, vec [
 // ScanChunkEmbeddingKeys scans all EC records, returning chunkID → vector dimension. R1845
 func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
 	result := make(map[uint64]int)
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixEmbedChunk), func(k, v []byte) error {
 			rest := k[len(prefixEmbedChunk):]
 			chunkID, _ := binary.Uvarint(rest)
 			result[chunkID] = len(v) / 4
@@ -3195,20 +3186,20 @@ func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
 // side-index entry alongside the EC sweep. EF is not stamped.
 // CRC: crc-Store.md | R1844, R2193
 func (s *Store) DropChunkEmbeddings() error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedChunk), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		if err := scanPrefix(txn, []byte(prefixEmbedChunk), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
-		if err := scanPrefix(txn, s.dbi, []byte(prefixEmbedFileCent), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		if err := scanPrefix(txn, []byte(prefixEmbedFileCent), func(k, _ []byte) error {
+			return bDel(txn, k)
 		}); err != nil {
 			return err
 		}
 		// Drop SEC* side-index entries. R2193
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedChunk), nil), func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		return scanPrefix(txn, serialKey([]byte(prefixEmbedChunk), nil), func(k, _ []byte) error {
+			return bDel(txn, k)
 		})
 	})
 }
@@ -3222,17 +3213,17 @@ func pageContentKey(fileID uint64, page uint32) []byte {
 
 // WritePageContent stores a per-page compressed chunk-text blob. R1720, R1721, R1722
 func (s *Store) WritePageContent(fileID uint64, page uint32, blob []byte) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, pageContentKey(fileID, page), blob, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, pageContentKey(fileID, page), blob)
 	})
 }
 
 // ReadPageContent fetches a stored page blob. Returns (nil, nil) when absent.
 func (s *Store) ReadPageContent(fileID uint64, page uint32) ([]byte, error) {
 	var out []byte
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, pageContentKey(fileID, page))
-		if lmdb.IsNotFound(err) {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, pageContentKey(fileID, page))
+		if isNotFound(err) {
 			return nil
 		}
 		if err != nil {
@@ -3246,11 +3237,11 @@ func (s *Store) ReadPageContent(fileID uint64, page uint32) ([]byte, error) {
 
 // RemovePageContents deletes every PC record for a file. R1724, R1725
 func (s *Store) RemovePageContents(fileID uint64) error {
-	return s.env.Update(func(txn *lmdb.Txn) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		prefix := []byte(prefixPageContent)
 		prefix = encodeVarint(prefix, fileID)
-		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			return cur.Del(0)
+		return scanPrefix(txn, prefix, func(k, _ []byte) error {
+			return bDel(txn, k)
 		})
 	})
 }
@@ -3321,8 +3312,8 @@ func (s *Store) AddDiscussed(session, tag, value string) error {
 	key := discussedKey(session, tag, value)
 	val := make([]byte, 8)
 	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, val, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, key, val)
 	})
 }
 
@@ -3338,8 +3329,8 @@ func (s *Store) ListDiscussed(session string, since, ttl time.Duration) ([]Discu
 	prefix := discussedSessionPrefix(session)
 	now := time.Now()
 	var entries []Discussed
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			if len(v) != 8 {
 				return nil // R2663
 			}
@@ -3379,9 +3370,9 @@ func (s *Store) ClearDiscussed(session string) (int, error) {
 	}
 	prefix := discussedSessionPrefix(session)
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			if err := cur.Del(0); err != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, _ []byte) error {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
 			deleted++
@@ -3397,9 +3388,9 @@ func (s *Store) ClearDiscussed(session string) (int, error) {
 // CRC: crc-Store.md | R2744
 func (s *Store) ClearAllDiscussed() (int, error) {
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixDiscussed), func(cur *lmdb.Cursor, _, _ []byte) error {
-			if err := cur.Del(0); err != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixDiscussed), func(k, _ []byte) error {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
 			deleted++
@@ -3420,12 +3411,12 @@ func (s *Store) PruneDiscussed(ttl time.Duration) (int, error) {
 	}
 	cutoff := time.Now().Add(-ttl)
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixDiscussed), func(cur *lmdb.Cursor, _, v []byte) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixDiscussed), func(k, v []byte) error {
 			if len(v) != 8 {
 				// Treat malformed as expired too — same outcome as lazy
 				// read, but here we actually clean up. R2663
-				if err := cur.Del(0); err != nil {
+				if err := bDel(txn, k); err != nil {
 					return err
 				}
 				deleted++
@@ -3433,7 +3424,7 @@ func (s *Store) PruneDiscussed(ttl time.Duration) (int, error) {
 			}
 			ts := time.Unix(0, int64(binary.BigEndian.Uint64(v)))
 			if ts.Before(cutoff) {
-				if err := cur.Del(0); err != nil {
+				if err := bDel(txn, k); err != nil {
 					return err
 				}
 				deleted++
@@ -3476,8 +3467,8 @@ func (s *Store) MarkSurfaced(session string, chunkID uint64) error {
 	key := surfaceCooldownKey(session, chunkID)
 	val := make([]byte, 8)
 	binary.BigEndian.PutUint64(val, uint64(time.Now().UnixNano()))
-	return s.env.Update(func(txn *lmdb.Txn) error {
-		return txn.Put(s.dbi, key, val, 0)
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, key, val)
 	})
 }
 
@@ -3492,10 +3483,10 @@ func (s *Store) LastSurfaced(session string, chunkID uint64) (int64, bool, error
 	key := surfaceCooldownKey(session, chunkID)
 	var nanos int64
 	var present bool
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		v, err := txn.Get(s.dbi, key)
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, key)
 		if err != nil {
-			if lmdb.IsNotFound(err) {
+			if isNotFound(err) {
 				return nil
 			}
 			return err
@@ -3523,10 +3514,10 @@ func (s *Store) PruneSurfaceCooldown(ttl time.Duration) (int, error) {
 	}
 	cutoff := time.Now().Add(-ttl)
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixSurfaceCooldown), func(cur *lmdb.Cursor, _, v []byte) error {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixSurfaceCooldown), func(k, v []byte) error {
 			if len(v) != 8 {
-				if err := cur.Del(0); err != nil {
+				if err := bDel(txn, k); err != nil {
 					return err
 				}
 				deleted++
@@ -3534,7 +3525,7 @@ func (s *Store) PruneSurfaceCooldown(ttl time.Duration) (int, error) {
 			}
 			ts := time.Unix(0, int64(binary.BigEndian.Uint64(v)))
 			if ts.Before(cutoff) {
-				if err := cur.Del(0); err != nil {
+				if err := bDel(txn, k); err != nil {
 					return err
 				}
 				deleted++
@@ -3554,9 +3545,9 @@ func (s *Store) ClearSurfaceCooldown(session string) (int, error) {
 	}
 	prefix := surfaceCooldownSessionPrefix(session)
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			if err := cur.Del(0); err != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, _ []byte) error {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
 			deleted++
@@ -3571,9 +3562,9 @@ func (s *Store) ClearSurfaceCooldown(session string) (int, error) {
 // CRC: crc-Store.md | R2887
 func (s *Store) ClearAllSurfaceCooldown() (int, error) {
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, []byte(prefixSurfaceCooldown), func(cur *lmdb.Cursor, _, _ []byte) error {
-			if err := cur.Del(0); err != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte(prefixSurfaceCooldown), func(k, _ []byte) error {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
 			deleted++
@@ -3643,39 +3634,39 @@ func derivedFreshnessKey(chunkID uint64) []byte {
 // Malformed existing values (not exactly 8 bytes) are overwritten
 // as if starting fresh.
 // CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R2664, R2674, R2675
-func (s *Store) WriteDerivedProposal(txn *lmdb.Txn, chunkID uint64, tagname string) error {
+func (s *Store) WriteDerivedProposal(txn *bbolt.Tx, chunkID uint64, tagname string) error {
 	key := derivedKey(prefixDerivedCandidate, chunkID, tagname)
 	var tally uint64 = 1
-	existing, err := txn.Get(s.dbi, key)
+	existing, err := bGet(txn, key)
 	if err == nil && len(existing) == 8 {
 		tally = binary.BigEndian.Uint64(existing) + 1
-	} else if err != nil && !lmdb.IsNotFound(err) {
+	} else if err != nil && !isNotFound(err) {
 		return err
 	}
 	val := make([]byte, 8)
 	binary.BigEndian.PutUint64(val, tally)
-	return txn.Put(s.dbi, key, val, 0)
+	return bPut(txn, key, val)
 }
 
 // WriteDerivedFreshness stamps a chunk's RF record with the given
 // serial inside the caller's write txn.
 // CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R2666, R2669, R2675
-func (s *Store) WriteDerivedFreshness(txn *lmdb.Txn, chunkID, serial uint64) error {
+func (s *Store) WriteDerivedFreshness(txn *bbolt.Tx, chunkID, serial uint64) error {
 	key := derivedFreshnessKey(chunkID)
 	val := make([]byte, 0, binary.MaxVarintLen64)
 	val = encodeVarint(val, serial)
-	return txn.Put(s.dbi, key, val, 0)
+	return bPut(txn, key, val)
 }
 
 // ReadDerivedFreshness reads a chunk's RF stamp. Missing or
 // malformed varint returns (0, false, nil) — caller treats both as
 // "stale, force re-process."
 // CRC: crc-Store.md | R2666, R2669, R2681, R2682
-func (s *Store) ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (uint64, bool, error) {
+func (s *Store) ReadDerivedFreshness(txn *bbolt.Tx, chunkID uint64) (uint64, bool, error) {
 	key := derivedFreshnessKey(chunkID)
-	v, err := txn.Get(s.dbi, key)
+	v, err := bGet(txn, key)
 	if err != nil {
-		if lmdb.IsNotFound(err) {
+		if isNotFound(err) {
 			return 0, false, nil
 		}
 		return 0, false, err
@@ -3694,24 +3685,24 @@ func (s *Store) ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (uint64, boo
 // 0 deletes the record (absent equals 0). Positive delta reinforces;
 // negative decays/rejects. Returns the new score.
 // CRC: crc-Store.md | R2874, R2875, R2879, R2881
-func (s *Store) AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string, delta int64) (int64, error) {
+func (s *Store) AdjustJudgment(txn *bbolt.Tx, chunkID uint64, tagname string, delta int64) (int64, error) {
 	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
 	var score int64
-	if v, err := txn.Get(s.dbi, key); err == nil {
+	if v, err := bGet(txn, key); err == nil {
 		if cur, _, ok := decodeJudgmentValue(v); ok {
 			score = cur
 		}
-	} else if !lmdb.IsNotFound(err) {
+	} else if !isNotFound(err) {
 		return 0, err
 	}
 	score += delta
 	if score == 0 {
-		if err := txn.Del(s.dbi, key, nil); err != nil && !lmdb.IsNotFound(err) {
+		if err := bDel(txn, key); err != nil && !isNotFound(err) {
 			return 0, err
 		}
 		return 0, nil
 	}
-	if err := txn.Put(s.dbi, key, encodeJudgmentValue(score, time.Now().UnixNano()), 0); err != nil {
+	if err := bPut(txn, key, encodeJudgmentValue(score, time.Now().UnixNano())); err != nil {
 		return 0, err
 	}
 	return score, nil
@@ -3723,11 +3714,11 @@ func (s *Store) AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string, de
 // rejected (a negative score with present=true) so a
 // reject_propose_ceiling==0 caller never re-proposes a corrupt edge.
 // CRC: crc-Store.md | R2874, R2876
-func (s *Store) ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string) (int64, bool, error) {
+func (s *Store) ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string) (int64, bool, error) {
 	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	v, err := txn.Get(s.dbi, key)
+	v, err := bGet(txn, key)
 	if err != nil {
-		if lmdb.IsNotFound(err) {
+		if isNotFound(err) {
 			return 0, false, nil
 		}
 		return 0, false, err
@@ -3745,7 +3736,7 @@ func (s *Store) ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string) (int
 // assistant's mention path consume magnitude exactly as they consumed
 // the v2 counter.
 // CRC: crc-Store.md | R2665, R2673, R2765, R2766, R2876, R2878
-func (s *Store) HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string) (bool, uint64, error) {
+func (s *Store) HasDerivedRejection(txn *bbolt.Tx, chunkID uint64, tagname string) (bool, uint64, error) {
 	score, present, err := s.ReadJudgment(txn, chunkID, tagname)
 	if err != nil {
 		return false, 0, err
@@ -3784,8 +3775,8 @@ func encodeJudgmentValue(score int64, nanos int64) []byte {
 // CRC: crc-Store.md | R2669
 func (s *Store) MaxEDSerial() (uint64, error) {
 	var maxS uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedDef), nil), func(_ *lmdb.Cursor, _, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, serialKey([]byte(prefixEmbedDef), nil), func(_, v []byte) error {
 			serial, n := binary.Uvarint(v)
 			if n <= 0 {
 				return nil
@@ -3806,8 +3797,8 @@ func (s *Store) MaxEDSerial() (uint64, error) {
 // CRC: crc-Store.md | R2911
 func (s *Store) MaxEVSerial() (uint64, error) {
 	var maxS uint64
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, serialKey([]byte(prefixEmbedValue), nil), func(_ *lmdb.Cursor, _, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, serialKey([]byte(prefixEmbedValue), nil), func(_, v []byte) error {
 			serial, n := binary.Uvarint(v)
 			if n <= 0 {
 				return nil
@@ -3831,8 +3822,8 @@ func (s *Store) MaxEVSerial() (uint64, error) {
 func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
 	prefix := derivedChunkPrefix(prefixDerivedCandidate, chunkID)
 	var out []DerivedProposal
-	err := s.env.View(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(_ *lmdb.Cursor, k, v []byte) error {
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, v []byte) error {
 			_, tagname, ok := parseDerivedKey(prefixDerivedCandidate, k)
 			if !ok {
 				return nil
@@ -3897,9 +3888,9 @@ func (s *Store) ClearAllDerivedRejections() (int, error) {
 // recall-substrate Clear* helpers.
 func (s *Store) clearAllByPrefix(prefix []byte) (int, error) {
 	var deleted int
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		return scanPrefix(txn, s.dbi, prefix, func(cur *lmdb.Cursor, _, _ []byte) error {
-			if err := cur.Del(0); err != nil {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, prefix, func(k, _ []byte) error {
+			if err := bDel(txn, k); err != nil {
 				return err
 			}
 			deleted++
@@ -3921,8 +3912,8 @@ func (s *Store) clearAllByPrefix(prefix []byte) (int, error) {
 // CRC: crc-Store.md | Seq: seq-derived-tags.md#2.2 | R2679
 func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, error) {
 	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
-	if err := s.env.Update(func(txn *lmdb.Txn) error {
-		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
+	if err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		if err := bDel(txn, rcKey); err != nil && !isNotFound(err) {
 			return err
 		}
 		return nil
@@ -3952,8 +3943,8 @@ func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, er
 func (s *Store) RejectDerived(chunkID uint64, tagname string) (uint64, error) {
 	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
 	var magnitude uint64
-	err := s.env.Update(func(txn *lmdb.Txn) error {
-		if err := txn.Del(s.dbi, rcKey, nil); err != nil && !lmdb.IsNotFound(err) {
+	err := s.bolt.Update(func(txn *bbolt.Tx) error {
+		if err := bDel(txn, rcKey); err != nil && !isNotFound(err) {
 			return err
 		}
 		newScore, err := s.AdjustJudgment(txn, chunkID, tagname, -1)

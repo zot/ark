@@ -2596,6 +2596,11 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1616:** After all chunks for a file are embedded, the EF centroid is updated (running sum approach).
 - **R1617:** When all files are processed, all buckets are flushed — no embedded content is left in a partial bucket.
 
+### Input Sanitization
+
+- **R2991:** Ark replaces NUL bytes (`\x00`) with spaces at the single point where any embedding path tokenizes, so no NUL byte reaches the yzma/llama.cpp tokenizer (a NUL ends the C string early and aborts the process); a space rather than deletion keeps adjacent tokens from fusing. Query embedding, batch chunk embedding, and the standalone token counter are all covered by the one guard.
+- **R2992:** When the batch-embed pipeline finds a NUL byte in a chunk it logs the offending chunk's path and id.
+
 ### Incremental Centroid Updates
 
 - **R1618:** File centroids use running sum for O(1) updates: add chunk adds vec to sum and increments count, remove chunk subtracts vec and decrements count.
@@ -4591,3 +4596,28 @@ reason.
 - **R2971:** Ark builds with `CGO_ENABLED=0`; the Makefile no longer builds gollama/llama.cpp from source (the `gollama`/cmake/Vulkan recipe and the `build: gollama` dependency are removed).
 - **R2972:** The Makefile provides a `release` target that cross-compiles ark across the supported `GOOS/GOARCH` targets and grafts bundled assets onto each via `ark bundle -src`, producing per-platform release archives.
 - **R2973:** The embedding engine silences llama.cpp's own stderr logging (backend device, GPU offload, per-tensor load) by default; the global verbosity at level 3 or above (`-vvv`, above ark's own `Logv` usage which tops out at level 2) leaves it on for confirming GPU offload or debugging the engine.
+
+## Feature: LMDB→BBolt Migration (ark consumer half)
+**Source:** specs/migrations/lmdb-to-bbolt.md
+
+- **R2974:** ark binds `go.etcd.io/bbolt` instead of `github.com/bmatsuo/lmdb-go` — removing the last CGO dependency in the ecosystem (the enabler for the `CGO_ENABLED=0` build and release sweep, R2971/R2972).
+- **R2975:** ark does not own the database; `OpenStore` takes microfts2's `*bbolt.DB` (`fts.DB()`) and opens/creates an `"ark"` bucket inside it (was: an `ark` named DBI inside microfts2's shared LMDB env). `Store.bolt *bbolt.DB`; the `ark` bucket is obtained per txn via `tx.Bucket`.
+- **R2976:** Cross-repo atomicity is preserved — a `bbolt.Tx` spans the `fts` and `ark` buckets, so the ~18 sites reading microfts2 C-records and ark records in one transaction use `tx.Bucket("fts")`/`tx.Bucket("ark")` on a single `*bbolt.Tx`.
+- **R2977:** ark consumes microfts2's bbolt API: `fts.DB()` (was `Env()`); `fts.ReadCRecord(tx *bbolt.Tx, …)`; `RemoveCallback`/`ReindexCallback` closures and the `SetChunkResolver` closure take `*bbolt.Tx`.
+- **R2978:** ark stops passing `microfts2.Options{MaxDBs, MapSize}` — both fields are removed from microfts2's Options.
+- **R2979:** ark store operations map to bbolt: `env.Update/View`→`bolt.Update/View(tx)` deriving the `ark` bucket via `tx.Bucket`; `txn.Get`+`lmdb.IsNotFound`→`bucket.Get` returning nil for absent keys; `txn.Del`(+IsNotFound guard)→`bucket.Delete` (no error on missing, guard dropped); `txn.Put(…,0)`→`bucket.Put`; cursors→`bucket.Cursor()` with `Seek`/`First`/`Next`. The value-valid-only-within-txn contract is unchanged; the existing copy-out discipline is preserved.
+- **R2980:** `scanPrefix` is reimplemented delete-safe (collect-then-delete): it walks the prefix range read-only collecting matches (copying key bytes), invokes the per-item callback, and applies any deletes by key after the walk — so the ~15 delete-during-scan callers remain correct under bbolt's page-rebalancing.
+- **R2981:** `compact.go` replaces `env.CopyFlag(lmdb.CopyCompact)` with `bolt.Tx.WriteTo` (or a no-op); the `SetMapSize(2<<30)` calls are removed.
+- **R2982:** `StatusInfo` reports the database file size (`os.Stat`) in place of LMDB MapSize/MapUsed; `ark status` output adjusts accordingly.
+- **R2983:** Before committing, a full `ark rebuild` + search-workload benchmark (BBolt vs LMDB) is run as the gate; the batched write actor (`enqueueWrite`) is expected to neutralize bbolt's fsync-per-commit cost on bulk writes.
+
+## Feature: Rebuild read-only serve
+**Source:** specs/rebuild-read-serve.md
+
+- **R2984:** bbolt is single-process — opening `index.db` holds an exclusive file lock, so a standalone `ark rebuild` blocks any other process that opens the database directly (the cross-process MVCC LMDB allowed is gone).
+- **R2985:** During the scan phase of a rebuild, ark keeps a read-only server listening on the unix socket, so read commands (`status`, `search`, …) proxy to it and return live, growing results instead of blocking on the file lock.
+- **R2986:** The rebuild's indexing runs through the normal write-actor path so co-resident reads stay responsive (heavy indexing off the actor), race-free (reads ride the actor like any server read), and consistent (each read sees a committed snapshot).
+- **R2987:** The rebuild's read-only window refuses write/mutation requests (`add`, `remove`, config changes, tmp:// writes) with a "rebuild in progress" error rather than racing the rebuild.
+- **R2988:** The rebuild server is the normal server with background subsystems switched off (filesystem watcher, scheduler, embedded UI engine, recall watcher, spectral-search librarian / pubsub reaper); the switches live in the serve options (ServeOpts), each defaulting to on for `ark serve` and off for rebuild.
+- **R2989:** A rebuild server runs the scan once and exits when the write queue has drained — every file the scan enqueued indexed and committed; "write queue drained" is the completion signal the rebuild waits on (the idle primitive).
+- **R2990:** (inferred) The drop window — while `ark init` deletes and recreates the database file, before the read-only server binds the socket — is not covered by the read window; a read arriving then may briefly block on the file lock. Accepted as short and self-clearing.

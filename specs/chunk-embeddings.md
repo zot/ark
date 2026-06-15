@@ -99,6 +99,22 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
 The GPU compute happens outside the actor (same pattern as tag
 embedding). Only the LMDB writes go through the actor.
 
+## NUL Bytes in Content
+
+The tokenizer underneath embedding (llama.cpp, reached through yzma)
+takes its text as a C string, so a NUL byte (`\x00`) in the content
+ends the string early at the C boundary and aborts the process. Ark
+replaces NUL bytes with spaces — a space, not deletion, keeps adjacent
+tokens from fusing — at the single point where any embedding path
+tokenizes, so no caller can hand one through: query embedding, batch
+chunk embedding, and the standalone token counter are all covered by
+the one guard.
+
+When the batch chunk-embed pipeline finds a NUL byte in a chunk it
+logs the offending chunk's path and id, so a malformed source file
+names itself. As everywhere else, the trigram index and retrieval keep
+the original bytes; only the embedding tokenizer sees the cleaned text.
+
 ## Embedding Model Mismatch
 
 The existing model-mismatch detection (E condition records) extends

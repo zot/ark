@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // ConnectionsInput is one normalized input to the substrate pipeline.
@@ -117,7 +117,7 @@ func (l *Librarian) normalizeInputs(raw []ConnectionsInput, strict bool) ([]subs
 	}
 	out := make([]substrateInput, 0, len(raw))
 	originalChunkIDs := make([]uint64, 0, len(raw))
-	err = l.db.fts.Env().View(func(txn *lmdb.Txn) error {
+	err = l.db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, in := range raw {
 			switch {
 			case in.ChunkID != 0:

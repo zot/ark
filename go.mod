@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
-	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/chzyer/readline v1.5.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/hybridgroup/yzma v1.16.1
@@ -14,9 +13,10 @@ require (
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zot/frictionless v0.29.0
-	github.com/zot/microfts2 v0.2.0
+	github.com/zot/microfts2 v0.4.0
 	github.com/zot/pdftext v0.1.0
 	github.com/zot/ui-engine v0.21.0
+	go.etcd.io/bbolt v1.4.3
 )
 
 require (

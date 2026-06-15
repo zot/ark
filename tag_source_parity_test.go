@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/bmatsuo/lmdb-go/lmdb"
+	"go.etcd.io/bbolt"
 )
 
 // paritySetup wires a Store with an ExtMap and TmpTagStore so that
@@ -34,7 +34,7 @@ func setupParity(t *testing.T) *parityFixture {
 	// chunkID 0xFFF0. TmpTagStore handles the overlay mapping internally;
 	// the inline side gets a minimal resolver stub.
 	s.SetChunkResolver(
-		func(_ *lmdb.Txn, _ uint64) []uint64 { return nil },
+		func(_ *bbolt.Tx, _ uint64) []uint64 { return nil },
 		func(fileID uint64) []uint64 {
 			if fileID == 1 {
 				return []uint64{100}
