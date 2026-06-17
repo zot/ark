@@ -171,7 +171,7 @@ flush). Not 20 — the throttle suppresses sub-window updates.
 
 ## Test: Read-only — Top-K and tag-tag queries don't mutate
 **Purpose:** R2252, R2253, R2256 — none of the read APIs writes
-LMDB.
+to the index.
 **Input:** populate HC, EC, ED. Snapshot RecordCounts; run
 `TopKChunksForTag`, `RelatedTags`, `TagPairConflict`, `TagDrift`;
 snapshot again.

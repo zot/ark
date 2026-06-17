@@ -1,18 +1,18 @@
-# LMDB Record Formats
+# Record Formats
 
-Canonical reference for ark's LMDB record layouts.
+Canonical reference for ark's index record layouts.
 
 This document describes the **current** state of the database. Migration
 specs in `specs/migrations/` describe how to *get to* the current state;
 this document describes what the current state *is*.
 
-Language: Go. Environment: ark LMDB subdatabase named `ark`. The
-microfts2 subdatabase has its own record formats documented in
+Language: Go. Environment: ark bucket named `ark`. The
+microfts2 bucket has its own record formats documented in
 microfts2's corpus and is not duplicated here.
 
-## Subdatabase
+## Bucket
 
-A single LMDB environment hosts two named subdatabases:
+A single `*bbolt.DB` hosts two named buckets:
 
 - **`ark`** — primary store: tags, embeddings, file state, config,
   page content. All records described in this document live here.
@@ -76,9 +76,9 @@ Encoding conventions used throughout:
   drops its F record. When the count would reach zero, the entire
   record is deleted (embedding goes with it).
 - **Query-time augmentation:** `Store.TagCounts` returns
-  `LMDB_T[tag] + ExtMap.VirtualTagCount[tag]`. Ext-routed
+  `T[tag] + ExtMap.VirtualTagCount[tag]`. Ext-routed
   contributions don't write F records (target's F is inline-only),
-  so the LMDB T count doesn't see them; the in-memory virtual count
+  so the indexed T count doesn't see them; the in-memory virtual count
   fills the gap. See "X — @ext routing" below.
 
 ### F — Per-(chunk, tag) records (with optional tvid trailer)
@@ -169,7 +169,7 @@ Encoding conventions used throughout:
   spec). See `specs/at-ext-storage.md` for the canonical
   re-resolution flow and `design/seq-ext-routing.md` for the
   sequence diagram.
-- **What lives in memory, not LMDB:** the ExtMap's six
+- **What lives in memory, not the index:** the ExtMap's six
   in-memory maps (`targetToChunk`, `chunkToTargets`,
   `fileidToTvids`, `extByAnchor`, `unresolvedTargets`,
   `virtualTagCount`) are derived from the X records and rebuilt at
@@ -216,7 +216,7 @@ Encoding conventions used throughout:
   `FilesForChunk` API.
 - **Lifecycle:** orphan EC = chunkID with no C record in microfts2.
   `RemoveFileWithCallback` and `ReindexWithCallback` deliver
-  orphaned chunkIDs that ark deletes inside the same LMDB
+  orphaned chunkIDs that ark deletes inside the same
   transaction. New chunkIDs (from re-index) are picked up by the
   next `BatchEmbedChunks` pass; EC writes happen out of the actor
   transaction (GPU compute mustn't block the actor).
@@ -266,21 +266,19 @@ Encoding conventions used throughout:
   `SED<tagname><fileid:8>`, `SHC<tagname><chunkid:8>` (any
   stamped prefix gets a parallel `S<prefix>` entry).
 - **Value:** varint-encoded uint64 — the txn serial allocated to
-  the LMDB transaction that wrote the stamped record. Multiple
+  the transaction that wrote the stamped record. Multiple
   records written in one txn share one serial; later txns have
   strictly greater serials.
 - **Source counter:** `I:serial` (varint uint64). Maintained
-  explicitly rather than from `txn.ID()` because ark's startup
-  compact-copy (`mdb_env_copy(MDB_CP_COMPACT)`) may reset
-  `mt_txnid` on the destination, but the I-record counter sits
-  in the live B-tree and is preserved across compactions.
+  explicitly so the counter sits in the live B-tree and is
+  preserved across compactions.
 - **Semantic:** monotonic freshness stamp. "Records that moved
   together carry the same mark." Used by derived caches (HC,
   future) to identify which records changed since a bookmark —
   `RecordSerial(prefix, key)` and
   `WalkRecordsSinceSerial(prefix, since, fn)`.
 - **Lifecycle:** written via `stampWrite` / `stampWriteWith`
-  alongside the original record's `txn.Put`, inside the same
+  alongside the original record's `b.Put`, inside the same
   txn (atomic). Deleted alongside the original record
   (`DeleteChunkEmbedding`, `UpdateTagDefs` def-replacement,
   `DropEmbeddings` model swap, `DropChunkEmbeddings` rebuild).
@@ -371,7 +369,7 @@ during `ark init` and by config-mutating commands.
 | Name | Encoding | Purpose |
 |------|----------|---------|
 | `next_tvid` | uint64 counter | Tag-value-id allocation (V record tvid suffix, EV record key). Incremented when a new (tag, value) pair is first indexed. |
-| `serial` | varint uint64 | Per-txn monotonic serial counter for the S freshness substrate. Allocated once per write txn that stamps records; preserved across LMDB compact-copy (unlike `txn.ID()`). |
+| `serial` | varint uint64 | Per-txn monotonic serial counter for the S freshness substrate. Allocated once per write txn that stamps records; preserved across compaction. |
 | `hcsweep` | varint uint64 | High-water serial of the last successful `SweepHotCorrelations` run. Zero means from-scratch on next sweep; reset by `ark rebuild` and by `DropEmbeddings` (model swap). |
 
 ### Schema markers

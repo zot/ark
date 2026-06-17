@@ -4,7 +4,7 @@ Observability for the tag system: dump on-disk state, in-memory
 state, and the decoded bridges that connect them. Read-only — never
 mutates. Server-aware: proxies through the running server when one
 is up (so the in-memory view matches what's actually serving), opens
-LMDB read-only when the server is stopped.
+the index read-only when the server is stopped.
 
 Distinct from `ark tag verify`:
 
@@ -76,10 +76,10 @@ consolidated entry:
 The CLI tries the server first. When `ark serve` is up, it `POST
 /tags/inspect` with `{scope, target}` and prints the response. The
 in-memory ExtMap section is meaningful only via this path —
-direct-LMDB inspection cannot read the running server's
+direct-index inspection cannot read the running server's
 reconstructed state.
 
-When the server is down, the CLI opens LMDB read-only and dumps the
+When the server is down, the CLI opens the index read-only and dumps the
 on-disk sections directly. The in-memory section is replaced with a
 note: "ExtMap state unavailable — server not running. Disk view only."
 

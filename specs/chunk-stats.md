@@ -60,11 +60,11 @@ For `--tokenize`, create a minimal llama context (small `n_ctx`, no
 `WithEmbeddings()`) — just enough to access the tokenizer. The model
 must be loaded for its vocabulary, but no KV cache or embedding
 extraction is needed. Use the same model path as the configured
-`tag_model` in ark.toml.
+`[embedding] model` in ark.toml.
 
 ## Error cases
 
-- `--tokenize` without a configured `tag_model`: print error and exit.
+- `--tokenize` without a configured `[embedding] model`: print error and exit.
 - Files that fail to read (missing from disk): skip silently, they'll
   show up in the normal missing count.
 - Zero chunks after filtering: print "no chunks found" and exit the

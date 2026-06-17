@@ -7,13 +7,13 @@
 
 - **R1:** Ark is written in Go
 - **~~R2:~~** (Retired T18 — no replacement) Ark uses microfts2 (trigram) and microvec (vector) as library dependencies
-- **R3:** LMDB access is via microfts2's shared environment
+- **R3:** Index access is via microfts2's shared `*bbolt.DB`
 - **R4:** Server communication uses Unix domain sockets
 
-### Shared LMDB Environment
+### Shared `*bbolt.DB`
 
 - **~~R5:~~** (Retired T19 — no replacement) Ark opens microfts2 first (creates LMDB env), then passes the env to microvec
-- **R6:** Ark opens its own named subdatabase for metadata (missing files, unresolved files, settings)
+- **R6:** Ark opens its own named bucket for metadata (missing files, unresolved files, settings)
 - **~~R7:~~** (Retired T27 — see R1911) MaxDBs is set to 8 (microfts2: 2, microvec: 1, ark: 1+, room to grow)
 
 ### Source Configuration
@@ -46,7 +46,7 @@
 
 ### Database Directory
 
-- **R28:** Ark stores everything in one directory: LMDB env, `ark.toml`, Unix socket
+- **R28:** Ark stores everything in one directory: the index, `ark.toml`, Unix socket
 - **R29:** Default database directory is `~/.ark/`, overridden via `--dir` flag
 
 ### Version
@@ -156,9 +156,9 @@
 - **R101:** `GET /unresolved` — unresolved files list
 - **R102:** `POST /resolve` — dismiss unresolved files by pattern
 
-### Ark Subdatabase
+### Ark Bucket
 
-- **R103:** LMDB subdatabase named `ark`
+- **~~R103:~~** (Retired T154 — see R2975) LMDB subdatabase named `ark`
 - **R104:** `M` prefix + fileid (8 bytes) → JSON missing file record (path, lastSeen timestamp)
 - **R105:** `U` prefix + path bytes → JSON unresolved file record (path, firstSeen timestamp, dir)
 - **R106:** Unresolved files that no longer exist on disk are removed silently during scans
@@ -223,10 +223,10 @@
 
 ### Tag Definitions
 - **R502:** Tag definitions are lines matching `@tag: <name> <description>` — first word after `@tag:` is the tag name, rest is description
-- **R503:** Definitions are extracted at index time and cached in LMDB as `D` prefix records
+- **R503:** Definitions are extracted at index time and cached in the index as `D` prefix records
 - **R504:** Storage: `D` [tagname] [fileid: 8] → description bytes. One record per definition per source file
 - **R505:** When a file is re-indexed, its D records are removed and re-extracted (same lifecycle as F records)
-- **R506:** `ark tag defs [TAG...]` outputs tag definitions from the LMDB cache
+- **R506:** `ark tag defs [TAG...]` outputs tag definitions from the index
 - **R507:** No args: all definitions. With args: only those tags
 - **R508:** Default output: `tagname description` per line, deduplicated, sorted alphabetically
 - **R509:** `--path` output: `path tagname description` per line, lexically sorted, not deduplicated. Spaces in paths are backslash-escaped
@@ -395,7 +395,7 @@
 - **R512:** `--filter-file-tags <tag>` restricts search to files that contain the given tag, using the tag index to resolve file IDs
 - **R513:** `--exclude-file-tags <tag>` excludes files that contain the given tag
 - **R514:** Multiple tag patterns supported (same composition rules as other filters: positive intersect, negative subtract)
-- **R515:** Tag filters use the LMDB tag index (T records via Store.TagFiles) — no FTS query or chunk scanning needed
+- **R515:** Tag filters use the tag index (T records via Store.TagFiles) — no FTS query or chunk scanning needed
 - **R516:** (inferred) Tag filters evaluate after path filters and before content filters in the resolveFilters pipeline
 
 ### Composition
@@ -455,9 +455,9 @@
 ## Feature: Enhanced Status
 **Source:** specs/status-enhanced.md
 
-- **R249:** `ark status` reports LMDB map usage: used bytes, total map size, and percentage
+- **~~R249:~~** (Retired T155 — see R2982) `ark status` reports LMDB map usage: used bytes, total map size, and percentage
 - **R250:** Map usage is displayed in human-readable units (MB/GB)
-- **R251:** Map usage is computed from LMDB env info: (LastPNO + 1) * PageSize = used bytes
+- **~~R251:~~** (Retired T156 — see R2982) Map usage is computed from LMDB env info: (LastPNO + 1) * PageSize = used bytes
 - **R252:** `ark status` reports total chunk count across all indexed files
 - **R253:** `ark status` reports file count per chunking strategy (e.g., lines=1200 chat-jsonl=73)
 - **R254:** `ark status` reports number of configured source directories
@@ -476,7 +476,7 @@
 - **R260:** No separate frictionless binary is required — one ark binary serves everything
 
 ### Unified Home Directory
-- **R261:** `~/.ark/` contains both ark data (data.mdb, ark.toml, ark.sock, logs/) and UI assets (html/, lua/, viewdefs/, apps/)
+- **R261:** `~/.ark/` contains both ark data (index.db, ark.toml, ark.sock, logs/) and UI assets (html/, lua/, viewdefs/, apps/)
 - **R262:** The ui-engine's `Server.Dir` is set to `~/.ark/`
 - **R263:** UI directories (html/, lua/, viewdefs/, apps/) coexist with ark files without namespace collision
 
@@ -523,7 +523,7 @@
 - **R327:** `ark init` runs `ark setup` first if `~/.ark/` has not been bootstrapped (no `html/` directory present)
 - **R328:** `ark init --no-setup` skips the automatic setup, only creates the database
 - **R329:** `ark init --if-needed` skips database creation when a database already exists (exits silently)
-- **R330:** (inferred) `--if-needed` checks for `data.mdb` in the database directory
+- **R330:** (inferred) `--if-needed` checks for `index.db` in the database directory
 
 ### ark ui install — Per-project Setup
 - **R331:** `ark ui install` is the single entry point for connecting a project to ark
@@ -664,18 +664,18 @@
 - **R1648:** The caller of Scan() removes the path from the index by calling `microfts2.RemoveFile(path)`; microfts2 handles chunk refcounting (multiple paths may share a fileid, so the chunks must not be forcibly deleted at the ark level)
 - **R1649:** Non-zero-size files go through the normal CheckFile flow unchanged
 - **R1650:** The empty-file set is process-lifetime only — not persisted across restarts
-- **R1651:** Access to the empty-file set is serialized through the DB actor (Scanner.Scan runs on the actor goroutine); LMDB evictions from ScanAsync are routed through the write queue (`enqueueWrite`), so no mutex is needed
+- **R1651:** Access to the empty-file set is serialized through the DB actor (Scanner.Scan runs on the actor goroutine); index evictions from ScanAsync are routed through the write queue (`enqueueWrite`), so no mutex is needed
 
 ## Feature: Cluster 1 — Config/CLI Fixes
 **Source:** specs/main.md
 
 ### ark rebuild
-- **R396:** `ark rebuild` deletes `data.mdb` and `lock.mdb`, then re-runs init (reading settings from ark.toml) and scan
+- **R396:** `ark rebuild` deletes `index.db`, then re-runs init (reading settings from ark.toml) and scan
 - **R397:** `ark rebuild` preserves ark.toml — only the index is destroyed and recreated
 - **R398:** (inferred) `ark rebuild` refuses to run if the server is running — the server holds the DB open
 
 ### ark init --no-setup db nuke
-- **R399:** `ark init` removes the existing database files (`data.mdb`, `lock.mdb`) before creating a fresh database, regardless of `--no-setup`
+- **R399:** `ark init` removes the existing database file (`index.db`) before creating a fresh database, regardless of `--no-setup`
 - **R400:** (inferred) `ark init --if-needed` does NOT remove existing database — its purpose is the opposite (skip if exists)
 
 ### ark ui open rename
@@ -805,7 +805,7 @@
 ### Multi-strategy search
 - **R585:** `--multi` flag on `ark search` runs the query through all four scoring strategies in a single pass
 - **R586:** The four strategies are: coverage, density, overlap, bm25
-- **R587:** `--multi` calls microfts2 `SearchMulti` which collects candidates once (single LMDB transaction) and scores with each strategy independently
+- **R587:** `--multi` calls microfts2 `SearchMulti` which collects candidates once (single transaction) and scores with each strategy independently
 - **R588:** Results from all strategies are deduplicated by (fileid, chunknum), keeping the best score per chunk
 - **R589:** `-k` applies to the final merged set, not per-strategy
 - **R590:** `--multi` is mutually exclusive with `--score` — using both is an error
@@ -918,7 +918,7 @@
 **Source:** specs/parallel-indexing.md
 
 - **R517:** Rebuild and refresh prepare files in parallel — read, chunk, extract tags/trigrams are independent per file
-- **R518:** LMDB writes are serialized through a ChanSvc actor — workers send closures that capture prepared data
+- **R518:** Index writes are serialized through a ChanSvc actor — workers send closures that capture prepared data
 - **R519:** Worker count defaults to `runtime.NumCPU()`
 - **R520:** Worker errors (file read, chunk failure) skip the file and log a warning — do not abort the batch
 - **R521:** Missing files are collected and returned as before (no behavior change)
@@ -930,7 +930,7 @@
 **Source:** specs/vec-bench.md
 
 ### ark vec bench
-- **R547:** `ark vec bench --model PATH` loads a GGUF model in-process via gollama and benchmarks embedding against real LMDB chunks
+- **R547:** `ark vec bench --model PATH` loads a GGUF model in-process via yzma and benchmarks embedding against real index chunks
 - **R548:** `--n N` controls how many chunks to embed (default 10)
 - **R549:** `--random` selects chunks randomly; without it, chunks are sequential from start of index
 - **R550:** `--ctx N` sets context window size in tokens (default 2048)
@@ -953,7 +953,7 @@
 **Source:** .scratch/MSG-DASHBOARD.md
 
 ### Go Data Pipe
-- **R563:** `mcp:inbox(show_all)` Lua function returns a table of message entries from the LMDB tag index
+- **R563:** `mcp:inbox(show_all)` Lua function returns a table of message entries from the tag index
 - **R564:** Each entry contains: status, to (project), from (project), summary, path
 - **R565:** Messages are filtered to `requests/` paths only
 - **R566:** By default excludes completed/done/denied; `show_all=true` includes them
@@ -1081,7 +1081,7 @@
 - **R665:** Tmp documents exist for the lifetime of the running server — server stops, they're gone
 - **R666:** Ark delegates tmp storage to microfts2's in-memory overlay (`AddTmpFile`, `UpdateTmpFile`, `RemoveTmpFile`)
 - **R667:** Tags are extracted from tmp document content using the same regex as persistent files
-- **R668:** (inferred) Tag counts for tmp documents are tracked in memory by the overlay, not in LMDB
+- **R668:** (inferred) Tag counts for tmp documents are tracked in memory by the overlay, not in the index
 
 ### Seamless CLI Integration
 
@@ -1454,7 +1454,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Month Buckets (replaces Day Buckets)
 
-- **R1023:** Remove LMDB day bucket records (TD/TF). Replace with in-memory month buckets computed from schedule log specs.
+- **R1023:** Remove the day-bucket records (TD/TF). Replace with in-memory month buckets computed from schedule log specs.
 - **R1024:** One month bucket entry per month per recurring event — the first occurrence in that month
 - **R1025:** Query: find month bucket at or before range start, crank forward to generate all events in range
 - **R1026:** Month buckets computed on startup from schedule log files. Recomputable on restart.
@@ -1496,7 +1496,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1049:** Sidechain messages (subagent traffic) filtered out
 - **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
 
-### Day-Bucket LMDB Indexing
+### Day-Bucket Indexing
 
 - **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag
 - **R867:** Calendar range query: seek `TD|start`, scan to `TD|end` — no post-filtering needed
@@ -1522,12 +1522,12 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Config Change Detection
 
-- **R927:** Store serialized `[schedule]` section in LMDB settings record (I prefix) on server startup
+- **R927:** Store serialized `[schedule]` section in the index settings record (I prefix) on server startup
 - **R928:** On config reload (startup, ark.toml fsnotify), compare current `[schedule]` vs stored
 - **R929:** Tags added: scan files with the new tag, write day buckets
 - **R930:** Tags removed: clear day buckets for files with that tag
 - **R931:** Defaults changed: re-materialize affected day buckets with new durations
-- **R932:** (inferred) After re-materialization, update the stored `[schedule]` in LMDB
+- **R932:** (inferred) After re-materialization, update the stored `[schedule]` in the index
 
 ### Acknowledgment Indexing
 
@@ -1573,7 +1573,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### EnsureArkSource Scoping
 - **R961:** The hardcoded `~/.ark` source sets `include = ["ark.toml", "schedule/**", "apps/**", "storage/**"]`
-- **R962:** Directories outside the include list (data.mdb, lock files, logs) are not indexed
+- **R962:** Directories outside the include list (index.db, logs) are not indexed
 - **R963:** (inferred) Archived schedule logs in `~/.ark/schedule-archive/` are unindexed — rotated logs leave the index automatically
 
 ### Log Writing on Fire
@@ -1644,9 +1644,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ## Feature: Status DB Records
 **Source:** specs/status-db.md
 
-- **R2473:** `ark status --db` shows LMDB record counts grouped by subdatabase (microfts2, ark)
+- **R2473:** `ark status --db` shows index record counts grouped by bucket (microfts2, ark)
 - **R2474:** Each record type displays prefix letter, purpose label, count, key bytes, and value bytes
-- **R2475:** Record types are sorted alphabetically within each subdatabase
+- **R2475:** Record types are sorted alphabetically within each bucket
 - **R2476:** Counts are right-aligned for readability
 - **R2477:** Without `--db`, status output is unchanged
 - **R2478:** microfts2 record types: C (chunks), F (files), H (hashes), I (config), N (paths), T (trigrams), W (tokens)
@@ -1654,7 +1654,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R2480:** `GET /status?db=true` includes record counts in the JSON StatusInfo response
 - **R2481:** (inferred) Store needs a RecordCounts method that returns counts keyed by full prefix string. Known multi-byte prefixes (`E:`, `EV`, `EC`, `EF`, `PC`) are matched before falling back to a single-byte prefix.
 - **R2482:** (inferred) microfts2 needs a RecordCounts method returning counts per prefix byte
-- **R1130:** A total summary line shows aggregate record count, key bytes, value bytes, and proportion of LMDB map
+- **R1130:** A total summary line shows aggregate record count, key bytes, value bytes, and proportion of the database file size
 
 ## Feature: Search Profiling
 **Source:** specs/search-profiling.md
@@ -1682,10 +1682,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ## Feature: DB Write Actor
 **Source:** specs/db-write-actor.md
 
-- **R1051:** Reads execute directly in the main actor and return immediately — LMDB MVCC ensures consistent snapshots during writes
+- **R1051:** Reads execute directly in the main actor and return immediately — bbolt MVCC ensures consistent snapshots during writes
 - **R1052:** Config files (ark.toml) are indexed in-place in the main actor, synchronously, before any normal writes that depend on them
 - **R1053:** Normal file writes are queued as closures; if the queue was empty, the first closure is dequeued and run in a goroutine
-- **R1054:** The write goroutine calls `db.Copy()` to get a shallow copy sharing the LMDB env but with nil caches
+- **R1054:** The write goroutine calls `db.Copy()` to get a shallow copy sharing the index but with nil caches
 - **R1055:** The write goroutine opens a write transaction on the copy and indexes the batch (file I/O off the actor)
 - **R1056:** After indexing, the goroutine sends a reconcile closure back to the main actor channel
 - **R1057:** The reconcile closure calls `InvalidateCaches()`, commits the write transaction, and dequeues the next write if available
@@ -1694,7 +1694,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1060:** On reconcile error: log the failure, skip the batch, dequeue next — system self-heals on next write request
 - **R1061:** Errors must be logged visibly — silent drops cause confusion about why files aren't indexed
 - **R1062:** When a scan produces N files: partition into config files vs content files, process config first (synchronous), then queue content as write batches
-- **R1063:** microfts2 needs `Copy() *DB` — shallow copy sharing LMDB env, overlay pointer shared (has its own mutex), caches set to nil, chunker registry shared (read-only)
+- **R1063:** microfts2 needs `Copy() *DB` — shallow copy sharing the index, overlay pointer shared (has its own mutex), caches set to nil, chunker registry shared (read-only)
 - **R1064:** microfts2 needs `InvalidateCaches()` — nils pathCache, pathToID, frecordCache, forcing lazy reload on next access
 - **R1065:** The write actor is a goroutine, not a separate ChanSvc — no lifetime management, no second channel
 - **R1066:** (inferred) The deferred-schedule pattern (pendingSchedule / DrainSchedule / processScheduleItems) can be removed once schedule I/O moves into the write goroutine
@@ -1754,7 +1754,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### V Record Structure
 - **~~R1099:~~** (Retired T8 — see R1281) V record key format: `V[tagname]\x00[value]` — null byte separates tag from value
 - **~~R1100:~~** (Retired T12 — see R1873) V record value: packed varint-encoded fileids (unsigned LEB128)
-- **R1101:** One LMDB entry per unique (tag, value) pair — chunkids accumulate in the value
+- **R1101:** One index entry per unique (tag, value) pair — chunkids accumulate in the value
 - **R1102:** Prevalence of a (tag, value) = number of varints decoded from the value — a multi-set count of the chunk-contributions carrying it across the corpus, not distinct files
 
 ### V Record Lifecycle
@@ -1766,11 +1766,11 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### V Record Queries
 - **R1108:** Prefix scan `V[tagname]\x00` returns all values for a tag with counts
-- **R1109:** Prefix scan `V[tagname]\x00[prefix]` filters values by prefix — LMDB sorted keys make this a range scan
+- **R1109:** Prefix scan `V[tagname]\x00[prefix]` filters values by prefix — sorted keys make this a range scan
 - **~~R1110:~~** (Retired T9 — see R1309) Direct key lookup `V[tagname]\x00[value]` returns fileids for a specific (tag, value) pair
 
 ### Endpoint Integration
-- **R1111:** `POST /tags/values` switches from file-reading to V record queries — O(1) LMDB lookup instead of O(files) disk reads
+- **R1111:** `POST /tags/values` switches from file-reading to V record queries — O(1) index lookup instead of O(files) disk reads
 - **R1112:** (inferred) Lua `mcp:tagComplete` should also use V records for value completion when wired
 
 ## Feature: Chunk Callback Tag Extraction
@@ -1988,7 +1988,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1243:** `POST /search/expand` accepts JSON body with `mode`, `tag`, `value` fields
 - **R1244:** Returns JSON `{results: [{path, strategy, chunks, source: "expansion"}]}` — curated search results marked as expansion-sourced
 - **R1245:** The pipeline runs server-side in three steps: Haiku expands → search → Haiku curates
-- **R1246:** For tag mode (Phase A): step 2 is trigram fuzzy matching against V records (tag-value index in LMDB)
+- **R1246:** For tag mode (Phase A): step 2 is trigram fuzzy matching against V records (the tag-value index)
 - **R1270:** Haiku expand step: given user's tag name and value, suggests alternative tag names and values
 - **R1271:** Fuzzy match step: each alternative is fuzzy-matched against V records, producing (tag, value, count, score) tuples
 - **R1272:** Haiku curate step: sees matched tag/value pairs with scores, prunes false positives, returns curated subset
@@ -2047,7 +2047,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Tag Value IDs
 - **R1280:** Each unique (tag, value) pair gets a sequential tag-value-id (varint)
 - **~~R1281:~~** (Retired T13 — see R1873) The tag-value-id is part of the V record key: `V[tag]\x00[value]\x00[tvid: varint]` → packed fileids
-- **R1282:** The ID counter (`next_tvid`) is stored as an ark LMDB setting (`I` prefix)
+- **R1282:** The ID counter (`next_tvid`) is stored as an ark index setting (`I` prefix)
 - **R1283:** The tag-value-id is stable: assigned on first index, reused if the same (tag, value) pair persists
 - **R1284:** (inferred) On rebuild, tag-value-ids are reassigned from 1
 - **R1309:** Forward lookup: prefix scan `V[tag]\x00[value]\x00` returns one record with tvid in key suffix
@@ -2094,9 +2094,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **~~R1305:~~** (Retired T145 — no replacement) (inferred) `ark embed` requires a running server (model lives in the Librarian)
 
 ### Build
-- **R1306:** The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
-- **R1307:** The go workspace includes a local gollama with Vulkan-compiled llama.cpp
-- **R1308:** (inferred) For non-Zen 2 platforms, the standard CPU gollama build should work without Vulkan
+- **~~R1306:~~** (Retired T159 — see R2969) The Vulkan build of gollama avoids SIGILL on Zen 2 (Steam Deck)
+- **~~R1307:~~** (Retired T160 — see R2961) The go workspace includes a local gollama with Vulkan-compiled llama.cpp
+- **~~R1308:~~** (Retired T161 — see R2967) (inferred) For non-Zen 2 platforms, the standard CPU gollama build should work without Vulkan
 
 ### Use vs Mention Filtering
 - **R1317:** Mentioned tags are skipped entirely during extraction — no V, T, F, or EV records
@@ -2448,8 +2448,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R1528:** `--tokenize` loads the configured embedding model and counts tokens per chunk instead of bytes.
 - **R1529:** Create a minimal llama context (small `n_ctx`, no `WithEmbeddings()`) for tokenization only — no KV cache or embedding overhead.
-- **R1530:** Use the `tag_model` path from ark.toml as the model path.
-- **R1531:** `--tokenize` without a configured `tag_model`: print error and exit.
+- **R1530:** Use the `[embedding] model` path from ark.toml as the model path.
+- **R1531:** `--tokenize` without a configured `[embedding] model`: print error and exit.
 
 ## Feature: config-tracking
 **Source:** specs/config-tracking.md
@@ -2461,7 +2461,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1534:** Scalar config fields (dotfiles, case_insensitive, etc.) store their string representation as the I record value.
 - **R1535:** Compound config fields (sources, chunkers, global_include, etc.) store JSON as the I record value.
 - **R1536:** Operational fields (next_tvid counter, etc.) also use I records, same key format.
-- **R1537:** `makeIKey(name)` builds the LMDB key: `I` prefix byte + name bytes. Same pattern as microfts2.
+- **R1537:** `makeIKey(name)` builds the index key: `I` prefix byte + name bytes. Same pattern as microfts2.
 - **R1538:** `iGet`/`iPut`/`iDel` helpers for string values. `iGetCounter`/`iSetCounter` for uint64 counters.
 
 ### I Record Lifecycle
@@ -2486,7 +2486,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1550:** `case_insensitive` change is classified as deferred (option 1).
 - **R1551:** `chunkers` change is classified as deferred (option 1).
 - **R1552:** All sources removed is classified as deferred (option 1) — likely accidental config wipe.
-- **R1553:** `tag_model` change is classified as fix-minimal (option 2): delete all T vector and EV embedding records, update I record to new model.
+- **R1553:** `[embedding] model` change is classified as fix-minimal (option 2): delete all T vector and EV embedding records, update I record to new model.
 - **R1554:** `sources` add/remove, `global_include`/`global_exclude`, `dotfiles`, `search_exclude`, `session_ttl`, `schedule`, `strategies`, `embed_cmd`/`query_cmd` are classified as benign.
 - **R1555:** Benign changes update I records immediately and proceed normally.
 
@@ -2549,7 +2549,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Tokenize
 
 - **R1585:** `--tokenize` loads the embedding model tokenizer and counts tokens instead of bytes for chunk size stats.
-- **R1586:** `--tokenize` without a configured `tag_model`: print error and exit.
+- **R1586:** `--tokenize` without a configured `[embedding] model`: print error and exit.
 
 ## Feature: Chunk Embeddings
 **Source:** specs/chunk-embeddings.md
@@ -2570,7 +2570,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1596:** The model TTL timer unloads the model and all contexts when the embedding queue is idle.
 - **R1597:** Tag and query embedding use the tier with 256 tokens/seq (2048/8 default).
 
-### LMDB Records
+### Index Records
 
 - **~~R1598:~~** (Retired T1 — see R1833) EC records store chunk vectors. Key: `EC` + varint(fileID) + varint(chunkIdx). Value: float32 vector (768 dims).
 - **R1599:** EF records store file centroids. Key: `EF` + varint(fileID). Value: float32 running sum (768 dims) + uint32 chunk count.
@@ -2592,7 +2592,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1612:** Each chunk routes to the smallest tier whose byte limit fits `len(content)`.
 - **R1613:** Chunks exceeding all tiers' byte limits are skipped (logged at verbose level).
 - **R1614:** When a tier's bucket reaches its `parallel` count, the batch is dispatched through that tier's context via `EmbedBatch`.
-- **R1615:** EC records are written to LMDB through the DB actor (GPU compute happens off-actor).
+- **R1615:** EC records are written to the index through the DB actor (GPU compute happens off-actor).
 - **R1616:** After all chunks for a file are embedded, the EF centroid is updated (running sum approach).
 - **R1617:** When all files are processed, all buckets are flushed — no embedded content is left in a partial bucket.
 
@@ -2609,7 +2609,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Model Mismatch
 
-- **R1620:** If `tag_model` changes, all EC and EF records are stale and dropped on next reconcile (extends existing E condition mismatch detection).
+- **R1620:** If `[embedding] model` changes, all EC and EF records are stale and dropped on next reconcile (extends existing E condition mismatch detection).
 
 ### Benchmark
 
@@ -2668,7 +2668,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Chunk Text Cache
 
-- **R1720:** At index time, the PDF chunker writes each page's extracted chunk text into a compressed blob stored in ark's LMDB subdatabase, keyed by `(fileid, page)`.
+- **R1720:** At index time, the PDF chunker writes each page's extracted chunk text into a compressed blob stored in ark's bucket, keyed by `(fileid, page)`.
 - **R1721:** Each page's blob contains the concatenated text of every chunk on that page, in emission order, separated by a single null byte.
 - **R1722:** Blobs are compressed with zstd.
 - @obsolete-req: R1723 -- superseded by R1737 (salvage blocks keyed at their actual page alongside structured blocks)
@@ -2753,7 +2753,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - @obsolete-req: R1674 -- superseded by R1736 (pdftext consolidates wrapped lines into one Block.Text; the rect now unions all covered glyph BBoxes)
 - **R1674:** When a tag's value wraps across multiple lines in the PDF layout, only the first line's rect is recorded; wrapped tails are not emitted.
 - **R1675:** Salvage chunks (R1657) produce no `tag_rects` — no coordinates exist to record.
-- **R1676:** Generic tag extraction — T/F/V/D LMDB records — continues unchanged for all PDF chunks including salvage. `tag_rects` is a presentation enrichment, not a replacement for tag indexing.
+- **R1676:** Generic tag extraction — T/F/V/D index records — continues unchanged for all PDF chunks including salvage. `tag_rects` is a presentation enrichment, not a replacement for tag indexing.
 
 ### Source URL
 
@@ -2930,13 +2930,13 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### embed text
 
-- **R1795:** Requires `tag_model` configured in ark.toml.
+- **R1795:** Requires `[embedding] model` configured in ark.toml.
 - **R1796:** Joins all positional args with spaces.
 - **R1797:** Output is a JSON array of float32 to stdout.
 
 ### embed bench tags
 
-- **R1798:** Collects all tag values from LMDB, embeds via batch and single paths, reports timing comparison and speedup ratio.
+- **R1798:** Collects all tag values from the index, embeds via batch and single paths, reports timing comparison and speedup ratio.
 
 ### embed bench chunks
 
@@ -3017,8 +3017,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1837:** `WriteChunkEmbeddingBatch(chunks []ChunkVec)` where ChunkVec is `{ChunkID uint64, Vec []float32}`.
 - **R1838:** `ReadChunkEmbedding(chunkID)` reads one EC record by chunkID.
 - **R1839:** `DeleteChunkEmbedding(chunkID)` deletes one EC record by chunkID.
-- **R1840:** `DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID)` deletes one EC record using an existing transaction. Used inside microfts2 callbacks.
-- **R1841:** `DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID)` deletes one EF record using an existing transaction.
+- **R1840:** `DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID)` deletes one EC record using an existing transaction. Used inside microfts2 callbacks.
+- **R1841:** `DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID)` deletes one EF record using an existing transaction.
 - **R1842:** `ReadChunkEmbeddings(chunkIDs []uint64) [][]float32` batch reads EC records for centroid computation.
 - **R1843:** `RemoveFileChunkEmbeddings(fileID)` is removed. Replaced by per-chunkID deletion in callbacks.
 - **R1844:** `DropChunkEmbeddings()` unchanged — drops all EC and EF records.
@@ -3035,7 +3035,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1849:** The indexer's `executeFullRefresh` uses `ReindexWithCallback` instead of `ReindexWithContent`. The callback deletes EC records for orphaned chunkIDs via `DeleteChunkEmbeddingInTxn`.
 - **R1850:** The indexer's `RemoveFile` uses `RemoveFileWithCallback`. The callback deletes EC records for orphaned chunkIDs via `DeleteChunkEmbeddingInTxn`.
 - **R1851:** The indexer's `RemoveByID` uses `RemoveFileWithCallback`. Same callback as R1850.
-- **R1852:** Orphaned chunk cleanup and C record deletion happen in the same LMDB transaction (atomic).
+- **R1852:** Orphaned chunk cleanup and C record deletion happen in the same transaction (atomic).
 - **R1853:** The EF centroid for a removed file is deleted in the same callback.
 - **R1854:** New chunkIDs from `ReindexCallback` are embedded in the next `BatchEmbedChunks` pass, not in the callback. GPU compute does not belong inside a transaction.
 
@@ -3080,7 +3080,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R1879:** Add an I record `tag_store_version`. Value `"1"` marks the post-migration state.
 - **R1880:** On `DB.Open`, after the existing `ec_version` check, read `tag_store_version`. If empty or != `"1"`, refuse to start with the error: "tag store schema upgrade required — run `ark rebuild`". Do not auto-drop V/F/T records.
-- **R1881:** `cmdRebuild` already removes the LMDB env (via `cmdInit --no-setup`); no V/F/T-specific drop code is needed. After re-creating the DB, write `tag_store_version = "1"` unconditionally on first Open of a new DB.
+- **R1881:** `cmdRebuild` already removes the index (via `cmdInit --no-setup`); no V/F/T-specific drop code is needed. After re-creating the DB, write `tag_store_version = "1"` unconditionally on first Open of a new DB.
 - **R1882:** New DBs from `ark init` are tagged `tag_store_version = "1"` at creation time.
 
 ### Store API
@@ -3145,16 +3145,16 @@ implementation, not a separate format break.
 ### Dependencies and lifetime
 
 - **R1909:** Ark uses microfts2 (trigram) and an internal embedding pipeline (Librarian + EC chunk-embedding records) as its search engines. (replaces R2)
-- **R1910:** Ark opens microfts2 first (creates LMDB env). The Store and Librarian share that env. (replaces R5)
-- **R1911:** MaxDBs is set to the count microfts2 + the ark subdatabase require — no microvec subDB is allocated. (replaces R7)
-- **R1912:** `ark init` creates a new database: initializes microfts2, the ark subdatabase, and writes default config. No microvec initialization step. (replaces R30)
+- **R1910:** Ark opens microfts2 first (opens the `*bbolt.DB`). The Store and Librarian share that DB. (replaces R5)
+- **~~R1911:~~** (Retired T158 — see R2978) MaxDBs is set to the count microfts2 + the ark subdatabase require — no microvec subDB is allocated. (replaces R7)
+- **R1912:** `ark init` creates a new database: initializes microfts2, the ark bucket, and writes default config. No microvec initialization step. (replaces R30)
 
 ### Vector search via Librarian + EC
 
 - **R1913:** Chunk embeddings are written to EC records by `Librarian.BatchEmbedChunks`; chunkid is the key. The text-only chunk callback no longer carries chunk text for embedding. (replaces R39, R1116)
 - **R1914:** chunkid (not fileid) is the source of truth for embedding identity. `Librarian.BatchEmbedChunks` reads chunks by chunkid via the indexed callback path; orphan cleanup uses microfts2 callbacks (R1899–R1901). (replaces R40)
-- **R1915:** `Librarian.SearchChunks(queryVec []float32, k int) ([]ChunkScore, error)` returns the top-k EC records by cosine similarity, found via a single LMDB View with a cursor walk over the EC prefix and a min-heap of size k. (replaces R48)
-- **R1916:** `--about <text>` routes through `Librarian.EmbedQuery` for the query vector and `Librarian.SearchChunks` for ranking. When `tag_model` is unconfigured, `--about` returns an actionable error (existing `Librarian.EmbeddingAvailable()` gate). (replaces R52)
+- **R1915:** `Librarian.SearchChunks(queryVec []float32, k int) ([]ChunkScore, error)` returns the top-k EC records by cosine similarity, found via a single `db.View` with a cursor walk over the EC prefix and a min-heap of size k. (replaces R48)
+- **R1916:** `--about <text>` routes through `Librarian.EmbedQuery` for the query vector and `Librarian.SearchChunks` for ranking. When `[embedding] model` is unconfigured, `--about` returns an actionable error (existing `Librarian.EmbeddingAvailable()` gate). (replaces R52)
 - **R1917:** `ChunkScore` is `{ChunkID uint64, FileID uint64, Score float64}`. `FileID` is recovered from `CRecord.FileIDs[0]` inside the search txn. Merge/intersect by (FileID, ChunkID) tuple — the same key shape microvec used.
 - **R1918:** `Searcher.merge`, `Searcher.intersect`, and `Searcher.vecOnly` retype from `[]microvec.SearchResult` to `[]ChunkScore`. The merge/intersect math is unchanged.
 
@@ -3169,7 +3169,7 @@ implementation, not a separate format break.
 
 - **R1923:** `Searcher.vec`, `DB.vec`, `DB.Vec()`, and `Indexer.vec` are removed. `microvec.Open` / `microvec.Create` calls in `db.go` are deleted, as is the `microvec` import from every Go file that loses its last reference.
 - **R1924:** `go.mod` no longer depends on `github.com/zot/microvec`; `go mod tidy` drops it.
-- **R1925:** Pre-existing microvec records inside the LMDB env are orphaned blobs reclaimed on the next `ark init` / rebuild. No schema marker bump is required (the record formats ark *writes* don't change).
+- **R1925:** Pre-existing microvec records inside the index are orphaned blobs reclaimed on the next `ark init` / rebuild. No schema marker bump is required (the record formats ark *writes* don't change).
 
 ### Indexer callback wording
 
@@ -3213,15 +3213,15 @@ implementation, not a separate format break.
 ## Feature: tmp tag overlay
 **Source:** specs/tmp-tag-overlay.md
 
-- **R1941:** `DB` owns a `TmpTagStore` collaborator that mirrors the persistent V/F/T runtime API for tmp:// content. The overlay lives in process memory; no LMDB writes, no schema marker, no `ark rebuild` interaction.
+- **R1941:** `DB` owns a `TmpTagStore` collaborator that mirrors the persistent V/F/T runtime API for tmp:// content. The overlay lives in process memory; no index writes, no schema marker, no `ark rebuild` interaction.
 - **R1942:** `TmpTagStore.UpdateTagValues(chunkTags []ChunkTagValues)` replaces a tmp:// fileid's per-chunk tag entries. Same `ChunkTagValues` shape as the persistent store.
 - **R1943:** `TmpTagStore.AppendTagValues(chunkTags []ChunkTagValues)` adds per-chunk tag entries for newly emitted chunks during `AppendTmpFile`, leaving existing chunk-tag entries untouched.
 - **R1944:** `TmpTagStore.RemoveFile(fileid)` drops all V/F entries for the fileid and decrements T counters. Called from `DB.RemoveTmpFile` before microfts2's overlay removal so the tag overlay is consistent with the trigram overlay.
 - **R1945:** `TmpTagStore.TagFiles(tags) []TagFileInfo`, `TmpTagStore.TagValueChunks(tag, value) []uint64`, and `TmpTagStore.FileTagValues(fileid, tags) []TagValue` provide the overlay's read contributions, matching the persistent store's signatures.
-- **R1946:** `Store`'s read methods (`TagFiles`, `TagValueChunks`, `FileTagValues`) union the persistent LMDB results with `TmpTagStore` results before returning. Callers do not branch on tmp://.
-- **R1947:** `Store.UpdateTagValues`, `Store.AppendTagValues`, and `Store.RemoveTagValues` (chunkid-keyed) dispatch by the high bit of the chunkid. `Store.RemoveFileTagValues(fileid)` (file-level cleanup, called from `DB.RemoveTmpFile`) dispatches by the high bit of the fileid. Overlay-issued ids (chunkids and fileids alike) count down from `MaxUint64`, so the high bit set when interpreted as int64 marks them as overlay-routed; everything else goes to LMDB.
+- **R1946:** `Store`'s read methods (`TagFiles`, `TagValueChunks`, `FileTagValues`) union the persistent index results with `TmpTagStore` results before returning. Callers do not branch on tmp://.
+- **R1947:** `Store.UpdateTagValues`, `Store.AppendTagValues`, and `Store.RemoveTagValues` (chunkid-keyed) dispatch by the high bit of the chunkid. `Store.RemoveFileTagValues(fileid)` (file-level cleanup, called from `DB.RemoveTmpFile`) dispatches by the high bit of the fileid. Overlay-issued ids (chunkids and fileids alike) count down from `MaxUint64`, so the high bit set when interpreted as int64 marks them as overlay-routed; everything else goes to the index.
 - **R1948:** `DB.AddTmpFile`, `DB.UpdateTmpFile`, and `DB.AppendTmpFile` instantiate a `chunkAccumulator` and pass `microfts2.WithIndexedChunkCallback(acc.callback)` to the overlay call. The callback fires once per genuinely-new chunk (hash-dedup miss), in chunk order. After the call returns, the accumulator's chunk-tag pairs are written to `Store.UpdateTagValues` (add/update) or `Store.AppendTagValues` (append).
-- **R1949:** Overlay-fired `IndexedChunk.CRecord` has no LMDB transaction context — `CRecord.Txn()` and `CRecord.DB()` return nil. The chunkAccumulator reads only `ChunkID`, `Hash`, `ContentLen`, `Attrs`, `FileIDs`, and `Trigrams`, never traversing the CRecord into LMDB.
+- **R1949:** Overlay-fired `IndexedChunk.CRecord` has no transaction context — `CRecord.Tx()` and `CRecord.DB()` return nil. The chunkAccumulator reads only `ChunkID`, `Hash`, `ContentLen`, `Attrs`, `FileIDs`, and `Trigrams`, never traversing the CRecord into the index.
 - **R1950:** Overlay chunkids count down from `MaxUint64`. The high bit (set when read as int64) is the per-record origin discriminator alongside the fileid high bit.
 - **R1951:** Tvid resolution shares a single map with the persistent tvid resolver (subpoint 3). Each entry is annotated with its origin (persistent vs overlay) so `RemoveFile` cleans up only tvids introduced solely by tmp:// content.
 - **R1952:** Inbox queries (`ark message inbox`) resolve their tag lookups via `Store.FileTagValues`, exercising the unified read path. `FileTagValues` is no longer orphaned: R1142, R1147, and R1149 are wired through inbox as part of this feature.
@@ -3233,7 +3233,7 @@ implementation, not a separate format break.
 
 - **R1953:** `Store` owns a `TvidMap` collaborator: an in-memory map `tvid → (tag, value, origin)` covering every tvid the index has seen, persistent and `tmp://` alike. The map lives in process memory; V records are the source of truth.
 - **R1954:** `TvidMap.Resolve(tvid uint64) (tag, value string, ok bool)` returns the `(tag, value)` for a tvid in O(1) under read lock, replacing V-prefix scans for tvid resolution.
-- **R1955:** `TvidMap.Lookup(tag, value string) (tvid uint64, ok bool)` provides the reverse lookup so callers with a `(tag, value)` pair can find an existing tvid without an LMDB scan.
+- **R1955:** `TvidMap.Lookup(tag, value string) (tvid uint64, ok bool)` provides the reverse lookup so callers with a `(tag, value)` pair can find an existing tvid without an index scan.
 - **R1956:** `TvidMap.Snapshot() map[uint64]TagAlt` returns a copy for diagnostics; `Store.ScanVRecordTvids` becomes a thin wrapper over `Snapshot`.
 - **R1957:** Each entry carries a `TvidOrigin` of `OriginPersistent` or `OriginOverlay`, fixed at the tvid's first registration. A persistent tvid that later acquires an overlay producer keeps `OriginPersistent`; origin marks where the tvid was born, not who currently uses it.
 
@@ -3243,10 +3243,10 @@ implementation, not a separate format break.
 
 ### Transaction overlay
 
-- **R1959:** `TvidTxn` is an overlay struct scoped to one LMDB write transaction. `Store.tvids.Begin()` returns a fresh `TvidTxn`; the write actor's `env.Update` block calls `Begin`, then `Commit` on success or `Abort` on error/panic.
+- **R1959:** `TvidTxn` is an overlay struct scoped to one write transaction. `Store.tvids.Begin()` returns a fresh `TvidTxn`; the write actor's `db.Update` block calls `Begin`, then `Commit` on success or `Abort` on error/panic.
 - **R1960:** `TvidTxn.Add(tvid, tag, value, origin)` records a tvid registration in the overlay. `TvidTxn.Remove(tvid)` records a removal. Neither touches the live map directly.
 - **R1961:** `TvidTxn.Resolve(tvid)` consults the overlay first (added entries visible, removed entries hidden) and falls through to the live map. Used by code running inside the txn that needs to resolve tvids it has just added or is about to remove.
-- **R1962:** `TvidTxn.Commit` merges added/removed entries into the live map under write lock. `TvidTxn.Abort` discards the overlay. Reads outside the txn never observe overlay state. The write-actor invariant (one `env.Update` at a time) guarantees only one `TvidTxn` is ever live, so commit-merge never contends with another writer.
+- **R1962:** `TvidTxn.Commit` merges added/removed entries into the live map under write lock. `TvidTxn.Abort` discards the overlay. Reads outside the txn never observe overlay state. The write-actor invariant (one `db.Update` at a time) guarantees only one `TvidTxn` is ever live, so commit-merge never contends with another writer.
 - **R1963:** `Store.addChunkIDToVRecord` calls `tt.Add(tvid, tag, value, OriginPersistent)` whenever it allocates a new tvid via `allocIDInTxn`. `Store.removeChunkIDInTxn` calls `tt.Remove(tvid)` whenever it deletes a V record entirely (orphan cleanup).
 
 ### Tmp:// integration
@@ -3254,12 +3254,12 @@ implementation, not a separate format break.
 - **R1964:** `TmpTagStore` per-chunk entries store tvids instead of `(tag, value)` strings. Read methods (`TagValueChunks`, `FileTagValues`, etc.) resolve tvids via the shared `TvidMap` before returning results.
 - **R1965:** `TvidMap.AllocOverlay(tag, value)` allocates a fresh overlay tvid when `Lookup(tag, value)` finds none. Overlay tvids count down from `MaxUint64` using a separate in-memory counter, mirroring the chunkid/fileid overlay convention; the high bit (set when read as int64) marks a tvid as overlay-issued.
 - **R1966:** `TmpTagStore.UpdateTagValues` and `AppendTagValues` resolve each `(tag, value)` to a tvid (existing via `Lookup`, new via `AllocOverlay`) before writing per-chunk entries.
-- **R1967:** `TmpTagStore.RemoveFile` drops the file's per-chunk tvid contributions. If a tvid loses its last `tmp://` producer AND its origin is `OriginOverlay`, it is removed from the live `TvidMap`. `OriginPersistent` tvids are never dropped on `tmp://` removal — the LMDB record still owns them.
+- **R1967:** `TmpTagStore.RemoveFile` drops the file's per-chunk tvid contributions. If a tvid loses its last `tmp://` producer AND its origin is `OriginOverlay`, it is removed from the live `TvidMap`. `OriginPersistent` tvids are never dropped on `tmp://` removal — the index record still owns them.
 
 ### Lifetime and recovery
 
 - **R1968:** No persistence beyond V records. Server restart triggers `LoadTvidMap` again. No schema marker, no version check, no `ark rebuild` interaction.
-- **R1969:** Crash safety: a process death mid-write rolls back the LMDB transaction. The next startup reloads from V records. Overlay entries from an aborted `TvidTxn` never enter the live map because `Commit` was never called.
+- **R1969:** Crash safety: a process death mid-write rolls back the transaction. The next startup reloads from V records. Overlay entries from an aborted `TvidTxn` never enter the live map because `Commit` was never called.
 
 ## Feature: @id indexing
 **Source:** specs/at-id.md
@@ -3275,7 +3275,7 @@ implementation, not a separate format break.
 **Source:** specs/at-link.md
 
 - **R1976:** `DB.ResolveLink(value string) (path, location string, ok bool)` resolves an `@link:` value to a `/content/` URL target. UUID branch first (in-memory `TvidMap.Lookup("id", value)` → tvid → V record → chunkid → fileid → path + Location); path branch second (`microfts2.CheckFile(value)` returns the indexed path with empty Location). Returns `ok=false` when neither resolves.
-- **R1977:** UUID resolution uses the live `TvidMap` and a single LMDB `txn.Get` against the exact V key — no prefix scan. Chunkid → fileid uses the existing `chunkID→fileIDs` resolver wired in `DB.Open`.
+- **R1977:** UUID resolution uses the live `TvidMap` and a single `bucket.Get` against the exact V key — no prefix scan. Chunkid → fileid uses the existing `chunkID→fileIDs` resolver wired in `DB.Open`.
 - **R1978:** Path resolution accepts the value as a literal path. No anchor parsing (`path:line`, `path:/regex/`, `path[N]:`) and no content-hash fallback in v1; both are deferred to a follow-up.
 - **R1979:** `wrapTagElements(html string, db *DB) string` consumes a `*DB` so it can call `ResolveLink`. A nil `db` short-circuits the link branch to the broken renderer; tests that bypass the server pass nil.
 - **R1980:** When `name == "link"` and `ResolveLink` returns ok, the rendered output is `<a class="ark-link" href="/content/{path}?range={loc}">@link: VALUE</a>` — replacing the would-be `<ark-tag>` wrapper. The `?range=` query param is omitted when location is empty (path-only resolution).
@@ -3331,24 +3331,24 @@ implementation, not a separate format break.
 - **R2007:** Append-only file changes use the same canonical re-resolution flow. The diff is empty for unchanged chunks; Adds fire only when newly-resolvable anchors land in the appended content; Removes fire only when the chunker drops and replaces the previous last chunk. No "is this an append?" branch in the ext code.
 - **R2008:** Source-side cleanup runs when a source chunk is orphaned. The existing F→V cleanup gives `tvid_ext` from `F[source][ext]`. For each (target_chunkid, routed_tvids) pair under `X[tvid_ext]`, strike target_chunkid from each routed tag's V record (one occurrence), decrement `virtualTagCount`, and drop the X record. Then drop tvid_ext from all ExtMap structures.
 - **R2009:** During source-side cleanup and re-resolution, `TvidMap.Resolve(tvid_ext)` MUST be called BEFORE `tt.Commit` drops the tvid; otherwise spec recovery fails when the V record empties.
-- **R2010:** T-totals under multi-set V are computed at query time as `LMDB_T[tag] + virtualTagCount[tag]`. The existing `adjustTagTotal` path stays unchanged for inline contributions; `virtualTagCount[tag]` is incremented on each routed-tag entry written and decremented on each removed.
-- **R2011:** Ext routing rides inside microfts2's per-file `env.Update` transaction. X record mutations and V record updates from the ext flow use the supplied txn and the same `TvidTxn` that the @ext tag's own tvid lifecycle uses. Multi-file batch convergence is acceptable; some redundant resolution work is tolerated.
+- **R2010:** T-totals under multi-set V are computed at query time as `index_T[tag] + virtualTagCount[tag]`. The existing `adjustTagTotal` path stays unchanged for inline contributions; `virtualTagCount[tag]` is incremented on each routed-tag entry written and decremented on each removed.
+- **R2011:** Ext routing rides inside microfts2's per-file `db.Update` transaction. X record mutations and V record updates from the ext flow use the supplied txn and the same `TvidTxn` that the @ext tag's own tvid lifecycle uses. Multi-file batch convergence is acceptable; some redundant resolution work is tolerated.
 - **R2380:** `extByAnchor` is keyed by the BASE of the TARGET only — the absolutized path or the `%UUID_VALUE` — not by the full TARGET text. The narrower (anchor + modifier) is recovered from the tvid_ext's stored TARGET text via `TvidMap.Resolve(tvid_ext)` and re-evaluated at resolve time. This guarantees that target-side reindexing fires re-resolution for narrower-bearing source declarations whose narrowers may now be satisfiable, including the "initially unresolved → satisfiable on later target change" path that `fileidToTvids` cannot cover.
 
 ## Feature: @ext overlay target routing
 **Source:** specs/at-ext-storage.md
 
-- **R2012:** Each `@ext` routing falls into one of four scope cases by `(sourcePersistent, targetPersistent)` where `IsOverlayID(id)` (high bit set) marks an id as overlay-issued. LMDB X and V records are written iff `bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(targetChunkID)`. Any overlay involvement on either end keeps the routing entirely in ExtMap's in-memory state.
+- **R2012:** Each `@ext` routing falls into one of four scope cases by `(sourcePersistent, targetPersistent)` where `IsOverlayID(id)` (high bit set) marks an id as overlay-issued. Index X and V records are written iff `bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(targetChunkID)`. Any overlay involvement on either end keeps the routing entirely in ExtMap's in-memory state.
 - **R2013:** ExtMap gains `overlayRoutings map[uint64]map[uint64][]uint64` (`tvid_ext → target_chunkid → routed_tvids`) — in-memory parallel to X records, populated only when `!bothPersistent`. Session-scoped; never persisted; empty on every startup.
 - **R2014:** ExtMap gains `overlayValues map[string]map[string][]uint64` (`tag → value → target_chunkids`) — in-memory parallel to V records, populated only when `!bothPersistent`. Multi-set semantics: each contribution adds an entry; removal strikes one occurrence. Session-scoped; never persisted; empty on every startup.
 - **R2015:** `ExtMap.Rebuild` is unchanged — it scans X records and populates only the six original maps. `overlayRoutings` and `overlayValues` start empty on each session and fill as overlay sources index.
 - **R2016:** `applyIndexExt` decides per-target. For each accepted target chunkid, compute `bothPersistent`; if true, write X record plus multi-set-append target chunkid to each routed tag's V record (existing path); otherwise write `overlayRoutings[tvid_ext][target_chunkid] = routed_tvids` and append target chunkid to `overlayValues[tag][value]` for each routed tag. Either branch updates the six original maps (`targetToChunk`, `chunkToTargets`, `fileidToTvids`, `extByAnchor`, `virtualTagCount`).
 - **R2017:** Routed-tag tvid allocation stays unified. Persistent sources allocate via `allocIDInTxn(IFieldNextTvid)` through the supplied `TvidTxn`; overlay sources allocate via `TmpTagStore.resolveOrAlloc` / `TvidMap.AllocOverlay`. Both paths reuse existing tvids when `(tag, value)` already resolves.
 - **R2018:** (inferred) Self-reference rejection fires on every routing regardless of overlay-ness. A `tmp://` source whose @ext resolves to a chunk in the same `tmp://` fileid is rejected; the @ext tag's V/F/T records still land but no chunks are routed. Extends R1998 to overlay sources.
-- **R2915:** Overlay `@ext` indexing (`Indexer.runOverlayExtRouting`) opens a read-only `env.View` transaction and threads it into `applyIndexExt`, so resolving a persistent target's fileid (`chunkFileID` → `fts.ReadCRecord` — needed for the R2018 self-reference check and the `fileidToTvids` update) has a valid txn. Overlay sources write no LMDB records (`bothPersistent` always false), so a read-only txn suffices and the `TvidTxn` stays nil. Distinct from R2023's cleanup path, which keeps its nil txn because `CleanupSource` branches on `bothPersistent` before any LMDB access.
-- **R2019:** `Store.TagValueChunks(tag, value)` and `Store.TagFiles(tags)` gain a third union leg by consulting `ExtMap.OverlayTagValueFiles(tag, value)` and `ExtMap.OverlayTagFiles(tags)` alongside persistent LMDB results and `TmpTagStore` overlay-direct results. Chunkids do not collide across the three sources.
+- **R2915:** Overlay `@ext` indexing (`Indexer.runOverlayExtRouting`) opens a read-only `db.View` transaction and threads it into `applyIndexExt`, so resolving a persistent target's fileid (`chunkFileID` → `fts.ReadCRecord` — needed for the R2018 self-reference check and the `fileidToTvids` update) has a valid txn. Overlay sources write no index records (`bothPersistent` always false), so a read-only txn suffices and the `TvidTxn` stays nil. Distinct from R2023's cleanup path, which keeps its nil txn because `CleanupSource` branches on `bothPersistent` before any index access.
+- **R2019:** `Store.TagValueChunks(tag, value)` and `Store.TagFiles(tags)` gain a third union leg by consulting `ExtMap.OverlayTagValueFiles(tag, value)` and `ExtMap.OverlayTagFiles(tags)` alongside persistent index results and `TmpTagStore` overlay-direct results. Chunkids do not collide across the three sources.
 - **R2020:** `ExtMap.OverlayTagValueFiles(tag, value) []uint64` returns a copy of `overlayValues[tag][value]` under RLock. `ExtMap.OverlayTagFiles(tags []string)` walks `overlayValues` for the requested tag names and returns chunkid + tag entries for each match.
-- **R2021:** `virtualTagCount[tag]` counts every routed contribution regardless of overlay-ness; the existing `T_total = LMDB_T[tag] + virtualTagCount[tag]` formula stays correct without modification.
+- **R2021:** `virtualTagCount[tag]` counts every routed contribution regardless of overlay-ness; the existing `T_total = index_T[tag] + virtualTagCount[tag]` formula stays correct without modification.
 - **R2022:** Persistent source orphan callback uses the existing F→V cleanup to obtain the source's tvid_ext list, then invokes `ExtMap.CleanupSource(sourceChunkID, tvidExt, txn, tt)` for each tvid_ext.
 - **R2023:** Overlay source removal hooks into `TmpTagStore.RemoveFile` and `TmpTagStore.RemoveChunk`. Before TmpTagStore drops the chunk, it enumerates the chunk's `tvids["ext"]` and invokes `ExtMap.CleanupSource(sourceChunkID, tvidExt, nil, nil)` for each — txn and TvidTxn are unused because every routing for an overlay source has `bothPersistent=false`.
 - **R2024:** `CleanupSource(sourceChunkID, tvidExt, txn, tt)` walks `targetToChunk[tvidExt]` (in-memory). For each target_chunkid: compute `bothPersistent`; if true, read routed_tvids from the X record, strike target_chunkid from each routed tag's V record (one occurrence), and delete the X record; otherwise read routed_tvids from `overlayRoutings[tvidExt][target_chunkid]`, strike target_chunkid from `overlayValues[tag][value]` (one occurrence), and delete the `overlayRoutings` entry. Decrement `virtualTagCount[tag]` per routed tag.
@@ -3423,7 +3423,7 @@ implementation, not a separate format break.
 **Source:** specs/serve-compact.md
 
 - **R2085:** `ark serve` accepts a `-compact` flag. When absent, startup is unchanged.
-- **R2086:** When `-compact` is set, startup runs `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB environment under `~/.ark/` (microfts2 and ark) before the server begins handling requests.
+- **~~R2086:~~** (Retired T157 — see R2981) When `-compact` is set, startup runs `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB environment under `~/.ark/` (microfts2 and ark) before the server begins handling requests.
 - **R2087:** Compaction copies into a sibling path (`<dbpath>.compact`); on success the original is replaced via atomic rename. On failure, the original is left in place, the partial copy is removed, and the error is logged.
 - **R2088:** Compaction failure must not block service. Startup continues with the uncompacted database.
 - **R2089:** Compaction occurs while the file lock on `~/.ark/` is held and the server is not yet listening; no read-only or read-write transactions are in flight from clients.
@@ -3442,7 +3442,7 @@ implementation, not a separate format break.
 - **R2098:** `--scope all` runs both ext and tag-totals checks.
 - **R2099:** Output is plain text, one issue per line, ending with a summary `verify: N issues found, M repaired`. Exit code 0 = no issues, 1 = issues (read-only) or partial repair, 2 = verify itself failed.
 - **R2100:** With `--repair`: missing X records are written via `WriteExtRecord` plus matching `addChunkIDToVRecord` per routed_tvid; stale or orphan X records are removed via `DeleteExtRecord` plus matching `removeOneChunkIDFromVRecord`; routed-tvid drift is corrected by deleting and rewriting; tag-total drift rewrites the T value; ExtMap drift triggers `ExtMap.Rebuild`.
-- **R2101:** Repair operations execute inside a single LMDB write transaction. Partial repair (some issues fixable, others not) is reported per-issue and surfaces via exit code 1.
+- **R2101:** Repair operations execute inside a single write transaction. Partial repair (some issues fixable, others not) is reported per-issue and surfaces via exit code 1.
 - **R2102:** `verify` is linear in the number of F records carrying `ext`, X records, and T records; not on any hot path.
 
 ## Feature: CLI commands central reference
@@ -3470,11 +3470,11 @@ implementation, not a separate format break.
 ## Feature: ark tag inspect (observability)
 **Source:** specs/tag-inspect.md
 
-- **R2113:** `ark tag inspect [--scope SCOPE] [--target PATH] [--json]` is a read-only observability subcommand. It never mutates LMDB or in-memory state. It is a sibling of `ark tag verify`; verify validates and repairs, inspect reveals.
+- **R2113:** `ark tag inspect [--scope SCOPE] [--target PATH] [--json]` is a read-only observability subcommand. It never mutates the index or in-memory state. It is a sibling of `ark tag verify`; verify validates and repairs, inspect reveals.
 - **R2114:** `--scope ext` (the default and only v1 scope) dumps three sections: on-disk @ext state (X records, V[ext] records, F[chunkid][ext] records); in-memory ExtMap state (every map ExtMap holds); bridges (per-tvid_ext consolidated view linking on-disk and in-memory entries with decoded tag/value/path).
 - **R2115:** `--target PATH` filters output to one file: X records whose target_chunkid is in PATH's chunkid set, V[ext] entries whose source chunk is in PATH's chunkid set, and ExtMap entries that reference PATH's fileid. Absence of `--target` means dump everything.
 - **R2116:** `--json` emits a machine-readable shape with the same three sections. Default output is plain text grouped by section, suitable for terminal reading.
-- **R2117:** `inspect` is server-aware. When `ark serve` is running, the CLI proxies via `POST /tags/inspect` so the in-memory ExtMap section reflects the live server's reconstructed state. When the server is stopped, the CLI opens LMDB read-only and emits only the on-disk sections plus a note that in-memory state is unavailable.
+- **R2117:** `inspect` is server-aware. When `ark serve` is running, the CLI proxies via `POST /tags/inspect` so the in-memory ExtMap section reflects the live server's reconstructed state. When the server is stopped, the CLI opens the index read-only and emits only the on-disk sections plus a note that in-memory state is unavailable.
 - **R2118:** Inspect is linear in X records, V[ext] records, and F[chunkid][ext] records. Not on any hot path.
 - **R2119:** Dropping the temporary `cmd/extdiag` diagnostic is part of inspect landing — its functionality is fully subsumed by `ark tag inspect --scope ext`.
 
@@ -3490,7 +3490,7 @@ implementation, not a separate format break.
 ## Feature: auto_compact in ark.toml
 **Source:** specs/serve-compact.md, specs/cli-commands.md
 
-- **R2125:** `ark.toml` accepts a top-level `auto_compact = true|false` boolean. When set to `true`, `ark serve` runs the LMDB compaction step on startup as if `-compact` had been passed.
+- **R2125:** `ark.toml` accepts a top-level `auto_compact = true|false` boolean. When set to `true`, `ark serve` runs the compaction step (R2981) on startup as if `-compact` had been passed.
 - **R2126:** When the user supplies `-compact` (or `-compact=false`) on the `ark serve` command line, the flag value wins regardless of `auto_compact` in ark.toml. The CLI distinguishes "flag supplied" from "flag absent at default" via `flag.FlagSet.Visit` after `Parse`.
 - **R2127:** When `-compact` is not supplied and `auto_compact` is absent from ark.toml, the default is `false` — preserving the historical opt-in compaction behaviour.
 
@@ -3526,13 +3526,13 @@ implementation, not a separate format break.
 - **R2151:** Each tag-definition (D record) has a parallel ED record holding a float32 vector embedding of the definition's description text. One ED per (tag, fileid), keyed `ED` + tagname + fileid:8.
 - **R2152:** ED embeds the description text alone — not the tag name. The chunk → tag-name query direction makes the name's lexical surface bias the vector against the description's meaning, so the name is excluded.
 - **R2153:** ED uses the same float32 vector format and dimensionality as EV and EC (3072 bytes for nomic-768).
-- **R2154:** When a fileid's D records are replaced (`Store.UpdateTagDefs`), the fileid's ED records are dropped in the same LMDB transaction. Mirrors D's R505 lifecycle.
-- **R2155:** When a fileid's D records are removed (`Store.RemoveTagDefs`), the fileid's ED records are dropped in the same LMDB transaction.
+- **R2154:** When a fileid's D records are replaced (`Store.UpdateTagDefs`), the fileid's ED records are dropped in the same transaction. Mirrors D's R505 lifecycle.
+- **R2155:** When a fileid's D records are removed (`Store.RemoveTagDefs`), the fileid's ED records are dropped in the same transaction.
 - **R2156:** When D records are appended (`Store.AppendTagDefs`), no ED writes occur synchronously — newly added (tag, fileid) pairs are picked up by the next batch-embed pass via `Store.MissingTagDefEmbeddings`. Mirrors D's R511 append path.
 - **R2157:** `Store.MissingTagDefEmbeddings` returns `(tag, fileid)` pairs that have a D record but no ED record. Used by the post-reconcile batch-embed pass.
 - **R2158:** The Librarian's batch-embed pass (the same pass that writes T-name and EV vectors) embeds each missing description via `EmbedQuery` and writes ED via `Store.WriteTagDefEmbedding(tag, fileid, vec)`.
 - **R2159:** `Store.WriteTagDefEmbedding(tag, fileid, vec)` writes one ED record. `Store.ReadTagDefEmbedding(tag, fileid)` reads one back; `(nil, nil)` if absent.
-- **R2160:** `Store.DropEmbeddings` deletes all ED records alongside dropping T-name vectors and EV records. ED is gated by `tag_model` — a model swap drops T-name, EV, and ED together. No separate ED schema marker.
+- **R2160:** `Store.DropEmbeddings` deletes all ED records alongside dropping T-name vectors and EV records. ED is gated by `[embedding] model` — a model swap drops T-name, EV, and ED together. No separate ED schema marker.
 - **R2161:** (inferred) ED records are rebuilt from scratch by `ark rebuild`, same as T/F/V/D records.
 - **R2162:** `ark status -db` prefix listing includes ED alongside T/F/V/D/EV/EC/EF.
 
@@ -3540,31 +3540,31 @@ implementation, not a separate format break.
 **Source:** specs/suggest-tag-names.md
 
 - **R2163:** `Librarian.SuggestTagNames(chunkID, k)` returns up to `k` tag names whose ED vectors are nearest to the chunk's EC vector, ranked by cosine similarity. Lives on Librarian (not DB) — vector queries belong to the embedding layer; HTTP callers reach it via `srv.librarian` like `SearchChunks` and `EmbedSimilarTagValues`.
-- **R2164:** Implementation reads `EC[chunkID]`, walks the ED prefix once, computes cosine per record, and resolves fileid → path via a single `db.fts.FileIDPaths()` call. No re-entrant LMDB writes.
+- **R2164:** Implementation reads `EC[chunkID]`, walks the ED prefix once, computes cosine per record, and resolves fileid → path via a single `db.fts.FileIDPaths()` call. No re-entrant index writes.
 - **R2165:** Per-tag aggregation uses **max** across that tag's ED records — the tag's score is the score of the best-matching definition file. Averaging is rejected: it dilutes a sharp single-file match with weaker definitions in other files.
 - **R2166:** `TagSuggestion` carries `Tag`, aggregate `Score`, and `MotivatingFiles []TagSuggestionRef` ranked by per-file score descending. `TagSuggestionRef` carries `FileID`, `Path`, and that file's `Score`.
 - **R2167:** `MotivatingFiles[].Path` is resolved via `db.FTS().FileIDPaths()` — one map lookup per call, not N point reads. A fileid with no path entry leaves Path empty rather than failing the call.
 - **R2168:** `k <= 0` returns `(nil, nil)`. Not an error.
 - **R2169:** Chunk has no EC record → return `(nil, nil)`. Not an error: chunks embed lazily, the UI may call before the chunk has been processed.
-- **R2170:** Embedding unavailable (no `tag_model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully to manual tag entry.
+- **R2170:** Embedding unavailable (no `[embedding] model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully to manual tag entry.
 - **R2171:** ED prefix empty (no tag defs indexed yet) → return `(nil, nil)`.
 - **R2172:** A single ED record with vector dimension mismatched against the chunk's EC vector is skipped, not surfaced as an error. Mirrors `SearchChunksMulti`'s same-dim guard, covering mid-flight model swaps.
-- **R2173:** SuggestTagNames is read-only. No writes to LMDB, no model invocation, no agent call, no spectral expansion.
+- **R2173:** SuggestTagNames is read-only. No writes to the index, no model invocation, no agent call, no spectral expansion.
 
 ## Feature: vector freshness substrate (S records)
 **Source:** specs/vector-freshness.md
 
 - **R2174:** The vector freshness side index lives under single-byte prefix `S` (`prefixSerial = 'S'`), disjoint from every existing prefix's first byte. Keys: `S + <original-prefix-bytes> + <original-key-tail>`.
 - **R2175:** S-record values are varint-encoded uint64 (`binary.PutUvarint` / `binary.Uvarint`).
-- **R2176:** Serial values come from a maintained counter stored in I record `I:serial`. `allocSerial(txn)` reads the counter, advances it by 1, writes the new value back, and returns the value used for stamps in that txn. Sourced from the I-record (not from `lmdb.Txn.ID()`) because LMDB's compact-copy may reset `mt_txnid` on the destination.
-- **R2177:** The serial counter is never reset over the database's lifetime. Preserved across `ark rebuild`, `Store.DropEmbeddings`, model swaps, and `mdb_env_copy(MDB_CP_COMPACT)` because the I-record lives in the active B-tree.
+- **R2176:** Serial values come from a maintained counter stored in I record `I:serial`. `allocSerial(txn)` reads the counter, advances it by 1, writes the new value back, and returns the value used for stamps in that txn. Sourced from the I-record (not from `bbolt.Tx.ID()`) because compaction may reset the transaction id on the destination.
+- **R2177:** The serial counter is never reset over the database's lifetime. Preserved across `ark rebuild`, `Store.DropEmbeddings`, model swaps, and compaction because the I-record lives in the active B-tree.
 - **R2178:** Original record values (T, EV, ED, EC) are unchanged by stamping. Existing readers (`ReadTagNameEmbedding`, `ReadTagValueEmbedding`, `ReadTagDefEmbedding`, `ReadChunkEmbedding`, scan/walk variants) continue to work without modification.
-- **R2179:** `Store.WriteTagNameEmbedding(tag, vec)` stamps `ST<tag>` in the same LMDB transaction as the T-record put.
-- **R2180:** `Store.WriteTagValueEmbedding(tvid, vec)` stamps `SEV<tvid-varint>` in the same LMDB transaction as the EV put.
-- **R2181:** `Store.WriteTagDefEmbedding(tag, fileid, vec)` stamps `SED<tag><fileid:8>` in the same LMDB transaction as the ED put.
-- **R2182:** `Store.WriteChunkEmbedding(chunkID, vec)` stamps `SEC<chunkID-varint>` in the same LMDB transaction as the EC put.
+- **R2179:** `Store.WriteTagNameEmbedding(tag, vec)` stamps `ST<tag>` in the same transaction as the T-record put.
+- **R2180:** `Store.WriteTagValueEmbedding(tvid, vec)` stamps `SEV<tvid-varint>` in the same transaction as the EV put.
+- **R2181:** `Store.WriteTagDefEmbedding(tag, fileid, vec)` stamps `SED<tag><fileid:8>` in the same transaction as the ED put.
+- **R2182:** `Store.WriteChunkEmbedding(chunkID, vec)` stamps `SEC<chunkID-varint>` in the same transaction as the EC put.
 - **R2183:** `Store.WriteChunkEmbeddingBatch(chunks)` allocates one serial via `allocSerial` at the top of its callback and stamps every batch record's `SEC<...>` entry with that single allocated serial in the same txn.
-- **R2184:** All records stamped within one LMDB write transaction share a single serial — "records that moved together carry the same mark." Across transactions, serials are strictly monotonic.
+- **R2184:** All records stamped within one write transaction share a single serial — "records that moved together carry the same mark." Across transactions, serials are strictly monotonic.
 - **R2185:** `Store.DeleteChunkEmbedding(chunkID)` and `Store.DeleteChunkEmbeddingInTxn(txn, chunkID)` drop the matching `SEC<chunkID>` entry in the same txn as the EC delete.
 - **R2186:** `Store.UpdateTagDefs`'s existing `delByFileid` loop is extended to drop `SED<tag><fileid>` entries alongside the fileid's old D and ED records.
 - **R2187:** `Store.DropEmbeddings` drops every `ST*`, `SEV*`, and `SED*` entry alongside its existing T-name vector strip and EV/ED record drops. `SEC*` entries are not touched, consistent with `DropEmbeddings` not touching EC.
@@ -3592,11 +3592,11 @@ implementation, not a separate format break.
 - **R2205:** `ChunkSuggestion` carries `ChunkID`, `FileID` (chunk's primary), `Path` (for `FileID`), aggregate `Score`, and `MotivatingDefs []DefMatch`.
 - **R2206:** `DefMatch` carries `FileID` (the definition file), `Path` (for `FileID`), and `Score` (this def's cosine against the chunk).
 - **R2207:** `k <= 0` returns `(nil, nil)`. Not an error.
-- **R2208:** Embedding unavailable (no `tag_model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully.
+- **R2208:** Embedding unavailable (no `[embedding] model` configured, model file missing) → return `(nil, nil)`. The UI degrades gracefully.
 - **R2209:** `ChunksForTag` — tag has no ED records → return `(nil, nil)`. Not an error.
 - **R2210:** `ChunksForTagDef` — `ED[tag, fileid]` absent → return `(nil, nil)`. Not an error.
 - **R2211:** EC prefix empty (no chunks embedded yet) → return `(nil, nil)`.
-- **R2212:** `ChunksForTag` and `ChunksForTagDef` are read-only. No writes to LMDB, no model invocation, no agent call, no spectral expansion.
+- **R2212:** `ChunksForTag` and `ChunksForTagDef` are read-only. No writes to the index, no model invocation, no agent call, no spectral expansion.
 - **R2213:** Neither call gates results by absolute score threshold; `k` is the only cardinality bound. The UI may apply a minimum display threshold.
 - **R2214:** Neither call filters chunks already carrying the tag. Orphan-detection policy belongs to the caller (UI) or to the Phase 1E hot-correlations cache.
 - **R2215:** (inferred) Neither call maintains a hot-correlations cache. Both are live, on-demand queries each time they are called.
@@ -3606,7 +3606,7 @@ implementation, not a separate format break.
 
 - **R2216:** `Librarian.SweepHotCorrelations() (*SweepResult, error)` runs the incremental corpus-wide sweep, using S-record serials (Phase 1C) to skip unchanged work. Synchronous; intended to be invoked from a background goroutine. Progress is published through the `tmp://sweep/hot-correlations.md` document.
 - **R2217:** `SweepResult` carries `StartedAt`, `CompletedAt`, `DurationMS`, `ChangedEDs`, `ChangedECs`, `TagsRebuilt`, `TagsTouched`, `OrphanTotal`, `FromScratch`. Same numbers also land in the tmp:// progress doc as `@sweep-*` tags.
-- **R2218:** `Librarian.TopKChunksForTag(tag, k) ([]ChunkSuggestion, error)` reads the cached top-K chunks for a tag from the HC cache. Sub-millisecond LMDB lookup. Same `ChunkSuggestion` shape as `ChunksForTag` (R2205) — callers can treat the two interchangeably.
+- **R2218:** `Librarian.TopKChunksForTag(tag, k) ([]ChunkSuggestion, error)` reads the cached top-K chunks for a tag from the HC cache. Sub-millisecond index lookup. Same `ChunkSuggestion` shape as `ChunksForTag` (R2205) — callers can treat the two interchangeably.
 - **R2219:** `TopKChunksForTag` filters stale entries at read time using the alibi-stamp pattern: an HC entry is dropped if `RecordSerial(HC, key)` is less than `RecordSerial(EC, chunkid)` *or* less than the maximum `RecordSerial(ED, tag||fileid)` across the tag's defs. Result may be shorter than `k` until the next sweep refreshes it.
 - **R2220:** `TopKChunksForTag` returns `(nil, nil)` for: no HC entries for the tag, `k <= 0`, embedding unavailable.
 - **R2221:** `Librarian.RelatedTags(tag, k) ([]TagSimilarity, error)` returns up to `k` tags whose ED vectors are nearest to any of the named tag's ED vectors. Per-other-tag aggregate is the max cosine across all (def_a, def_b) pairs. Live; no cache.
@@ -3617,7 +3617,7 @@ implementation, not a separate format break.
 - **R2226:** HC keys use the same variable-tag + fixed-suffix scheme as ED records: `HC<tag-bytes><chunkid:8-bytes-big-endian>`.
 - **R2227:** HC values are flat `score:float64` (8 bytes). No version metadata embedded in the value — freshness lives in the S substrate.
 - **R2228:** Top-K bound `K_TOP_HC` is fixed at **20** for this slice. Configuration is a future tuning question, not part of 1E.
-- **R2229:** HC writes are stamped through the existing S-substrate machinery (Phase 1C). The HC record's own stamp serves as its alibi at freshness check time — `Store.WriteHotCorrelation` (or its equivalent) writes the value and stamps `S<HC<key>>` in the same LMDB transaction, on the same path as `WriteChunkEmbedding`, `WriteTagDefEmbedding`, etc. (R2179–R2183).
+- **R2229:** HC writes are stamped through the existing S-substrate machinery (Phase 1C). The HC record's own stamp serves as its alibi at freshness check time — `Store.WriteHotCorrelation` (or its equivalent) writes the value and stamps `S<HC<key>>` in the same transaction, on the same path as `WriteChunkEmbedding`, `WriteTagDefEmbedding`, etc. (R2179–R2183).
 - **R2230:** `I:hcsweep` is the persistence anchor for the sweep — a uint64 holding the last successful sweep's high-water serial.
 - **R2231:** `I:hcsweep` is cleared by `ark rebuild` (full corpus rebuild) and by `Store.DropEmbeddings` (model swap), forcing a from-scratch sweep on the next invocation. `Store.DropEmbeddings` also drops every `HC*` record and its matching `SHC*` stamp, alongside the existing `T*`/`EV*`/`ED*` and `ST*`/`SEV*`/`SED*` drops (R2187).
 - **R2232:** Sweep phase 1 — read `last_sweep_serial` from `I:hcsweep`. A zero value indicates from-scratch.
@@ -3626,7 +3626,7 @@ implementation, not a separate format break.
 - **R2235:** Sweep phase 4 (chunk displace) — for each EC chunk advancing past the bookmark that wasn't already covered by phase 3, compute cosines vs each ED record, max-aggregate per tag, and displace the lowest-scoring HC entry if exceeded.
 - **R2236:** Sweep phase 5 — write `I:hcsweep = max(seen_serial)` only on full success. A mid-sweep error leaves the bookmark unchanged so the next run picks up where this one stopped.
 - **R2237:** Sweep phase 6 — update the tmp:// progress doc to `@sweep-status: complete` with final counts (or `@sweep-status: error` with `@sweep-error:`).
-- **R2238:** Phases 3 and 4 use per-tag LMDB write transactions, not a single transaction across the entire sweep. Reasons: long write transactions block the closure actor; per-tag txns leave the cache in a consistent partially-updated state on crash.
+- **R2238:** Phases 3 and 4 use per-tag write transactions, not a single transaction across the entire sweep. Reasons: long write transactions block the closure actor; per-tag txns leave the cache in a consistent partially-updated state on crash.
 - **R2239:** The sweep is idempotent per `(tag, chunkid)`: rerunning the same work produces the same HC contents.
 - **R2240:** Progress is surfaced through `tmp://sweep/hot-correlations.md` — a single-chunk tmp:// document rewritten in place on each progress tick.
 - **R2241:** Progress doc tags: `@sweep`, `@sweep-status` (`idle` | `running` | `complete` | `error`), `@sweep-started`, `@sweep-progress` (fraction in `[0, 1]`), `@sweep-phase` (`tag-rebuild` | `chunk-displace` | `done`), `@sweep-changed-eds`, `@sweep-changed-ecs`, `@sweep-tags-rebuilt`, `@sweep-tags-touched`, `@sweep-orphan-total`, `@sweep-eta-seconds`, `@sweep-duration-ms`, `@sweep-completed`, `@sweep-error` (present only when status = error).
@@ -3637,15 +3637,15 @@ implementation, not a separate format break.
 - **R2246:** A Lua API `mcp.sweepHotCorrelations()` is a thin wrapper that invokes the Librarian method on the server.
 - **R2247:** A CLI subcommand `ark sweep correlations` is a thin wrapper that proxies to the running server (matches the pattern of other long-running ops).
 - **R2248:** (inferred — scope boundary) Cron-via-tag triggering is **deferred** to a follow-up slice. The 1E engine knows nothing about the scheduler; an external subscriber will invoke `SweepHotCorrelations()` when cron-via-tag wiring lands.
-- **R2249:** An HC entry is considered stale if any of: the EC record at `chunkid` is missing; `RecordSerial(EC, chunkid)` is greater than `RecordSerial(HC, key)`; or any `RecordSerial(ED, tag||fileid)` across the tag's defs is greater than `RecordSerial(HC, key)`. The HC record's own stamp is the comparison reference — there is no per-entry version metadata to track. The check is a single LMDB lookup per axis (HC, EC, and one per def of the tag).
+- **R2249:** An HC entry is considered stale if any of: the EC record at `chunkid` is missing; `RecordSerial(EC, chunkid)` is greater than `RecordSerial(HC, key)`; or any `RecordSerial(ED, tag||fileid)` across the tag's defs is greater than `RecordSerial(HC, key)`. The HC record's own stamp is the comparison reference — there is no per-entry version metadata to track. The check is a single index lookup per axis (HC, EC, and one per def of the tag).
 - **R2250:** The read-time staleness filter (R2219, R2249) is the only invalidation path during normal operation. No active sweep on EC delete is performed.
 - **R2251:** The next sweep's tag-rebuild (phase 3) and chunk-displace (phase 4) passes naturally replace stale entries with current ones; no separate cleanup pass is needed.
-- **R2252:** `SweepHotCorrelations`, `TopKChunksForTag`, `RelatedTags`, `TagPairConflict`, and `TagDrift` do not invoke a search agent and do not call the embedding model. They operate purely on vectors and serials already in LMDB.
+- **R2252:** `SweepHotCorrelations`, `TopKChunksForTag`, `RelatedTags`, `TagPairConflict`, and `TagDrift` do not invoke a search agent and do not call the embedding model. They operate purely on vectors and serials already in the index.
 - **R2253:** Hot correlations does not filter chunks already carrying the tag at the storage layer. Same decision as `ChunksForTag` (R2214): orphan-detection policy is caller-side. The curation view applies the filter when rendering.
 - **R2254:** EC and ED writes do not actively invalidate HC entries. The substrate's monotonic stamping plus the read-time alibi-stamp filter handle staleness without coupling the write path to HC.
 - **R2255:** (deferred — scope boundary) Persistent completion history (e.g. `~/.ark/sweep/correlations-history.md`) is **not** written by 1E. The tmp:// progress doc holds in-memory state only and vanishes on server restart.
 - **R2256:** Sweep does not auto-trigger on indexer activity, file changes, model loads, or any other corpus event. It runs on explicit invocation only.
-- **R2257:** No in-memory mirror of HC is maintained. All reads go through LMDB. The "in-memory tail of recent S records" question (1C deferred decision) becomes actionable through profiling 1E against real workloads, not in this slice.
+- **R2257:** No in-memory mirror of HC is maintained. All reads go through the index. The "in-memory tail of recent S records" question (1C deferred decision) becomes actionable through profiling 1E against real workloads, not in this slice.
 
 ## Feature: curation Lua bridge (mcp:* methods for 1B/1D/1E reads + sweep)
 **Source:** specs/suggest-tag-names.md, specs/chunks-for-tag.md, specs/hot-correlations.md
@@ -4053,7 +4053,7 @@ implementation, not a separate format break.
 - **R2576:** `trigram(input, ED)` is a trigram match against tag-definition text via microfts2; per-tag aggregate is max across defining files. Normalized overlap drives the score.
 - **R2577:** `vector(input, EC)` is a cosine scan over EC records via `SearchChunks(queryVec, K')` (K' = 50 by default). For each returned chunk, its V records cast tag votes; per-tag aggregate is the max chunk-similarity score across chunks carrying that tag.
 - **R2578:** `trigram(input, EC)` is a trigram-fuzzy match against chunk text; for each returned chunk, V records cast tag votes; per-tag aggregate is max trigram-score across contributing chunks.
-- **R2579:** All four substrate passes for a single request share one LMDB View txn to avoid lock churn. Multi-input requests use the existing `SearchChunksMulti` batched cursor walk where applicable.
+- **R2579:** All four substrate passes for a single request share one `db.View` txn to avoid lock churn. Multi-input requests use the existing `SearchChunksMulti` batched cursor walk where applicable.
 - **R2580:** Per-input merge across substrates: a tag's per-input aggregate score is **max** across the four substrate scores after normalization.
 - **R2581:** Cross-input merge across inputs: a tag's overall score is **max** across its per-input aggregate scores.
 - **R2582:** Per-substrate per-input scores are retained in the result for the evidence display: `vector_ed`, `trigram_ed`, `vector_ec`, `trigram_ec`. The pipeline does not collapse them into the single aggregate.
@@ -4062,7 +4062,7 @@ implementation, not a separate format break.
 - **R2585:** Output is the top-k candidates by overall score. `k` defaults to 20 and is clamped to `[1, 200]` via `opts.k`.
 - **R2586:** Vector cosine scores are normalized to `[0, 1]` via `(cos + 1) / 2`.
 - **~~R2587:~~** (Retired T92 — see R2643) Trigram scores are normalized to `[0, 1]` using microfts2's existing fuzzy-match scoring. Vector and trigram scores are directly comparable on the same scale.
-- **R2588:** When embedding is unavailable (no `tag_model` configured, model file missing, or model load fails), vector substrates skip; trigram substrates still run. The doc header carries `@connections-warning: embedding unavailable`.
+- **R2588:** When embedding is unavailable (no `[embedding] model` configured, model file missing, or model load fails), vector substrates skip; trigram substrates still run. The doc header carries `@connections-warning: embedding unavailable`.
 - **R2589:** When the ED prefix is empty (no tag defs indexed), ED substrates contribute nothing; EC substrates still run; no warning header is emitted.
 - **R2590:** Connections docs carry a `@purpose` header: `curate` (default for `sys.findConnections`), `recall` (Phase 2B), or another consumer-chosen value. The curation workshop subscribes filtered to `@purpose: curate`.
 - **R2591:** Connections docs carry a `@connections-mode` header: `normal` (this phase) or `turbo` (2C / 1G). `normal` is the default for `sys.findConnections`.
@@ -4073,7 +4073,7 @@ implementation, not a separate format break.
 - **R2596:** `@proposal-kind: shared-tag` rows include `@proposal-tag`, `@proposal-value`, and `@proposal-evidence-chunks`, replacing the legacy `## Shared Tag Candidates` section in turbo mode.
 - **R2597:** During the 1G migration window, the server emits **both** the new `## Proposals` rows and the legacy `## Themes` / `## Shared Tag Candidates` sections in turbo mode so either parser can read the doc; the duplication is removed once the Lua workshop migrates to the unified section.
 - **R2598:** Normal-mode requests may transition `pending → completed` directly without an intermediate `working` state; the elapsed-ticker and progress-text updates from R2328 are skipped for normal mode.
-- **R2599:** Internal pipeline failure (LMDB read error, embedding mid-flight failure) flips the doc to `errored` with `@connections-error: <message>` via the existing write-actor path.
+- **R2599:** Internal pipeline failure (index read error, embedding mid-flight failure) flips the doc to `errored` with `@connections-error: <message>` via the existing write-actor path.
 - **R2600:** `sys.findConnections` returns `(requestID, nil)` on success or `(nil, errstring)` on caller error (empty inputs, unknown chunk, path miss, range parse error) or agent unavailability for turbo mode.
 - **R2601:** `opts.mode` defaults to `"normal"`. `opts.purpose` defaults to `"curate"`. `opts.timeoutSeconds` defaults to 30 and is clamped to `[5, 300]`.
 - **R2602:** Normal-mode `sys.findConnections` calls never block the Lua VM; the call returns sub-millisecond after enqueueing.
@@ -4109,9 +4109,9 @@ implementation, not a separate format break.
 - **R2628:** The Lua API exposes `sys.recall(inputs, opts)` which delegates to `Librarian.Recall` with the same input parsing and options.
 - **R2629:** The HTTP server exposes `POST /recall` (mapped to `Librarian.HandleRecall`), parsing inputs and opts, invoking `Recall`, and returning the JSON result.
 - **R2630:** If the server is running, the CLI proxies the `recall` command via HTTP/Unix socket to the server (`POST /recall`), using the warm model if configured.
-- **R2631:** If the server is **not** running, the CLI checks `ark.toml` for a configured `tag_model`.
+- **R2631:** If the server is **not** running, the CLI checks `ark.toml` for a configured `[embedding] model`.
 - **R2632:** If the server is not running and a model is configured in `ark.toml` (and the model file exists), the CLI exits non-zero with `error: server not running; model configured. Please start the server with: ark serve`.
-- **R2633:** If the server is not running and **no** model is configured, the CLI opens the LMDB database locally in-process via `withDB` in read-only mode and executes a local trigram-only recall query.
+- **R2633:** If the server is not running and **no** model is configured, the CLI opens the index database locally in-process via `withDB` in read-only mode and executes a local trigram-only recall query.
 - **R2634:** If an embedding model is unavailable during execution (either locally during in-process execution, or on the server due to configuration or missing files), the Vector-EC pass is skipped, the Trigram-EC pass is run, and the result carries the warning `"embedding unavailable"`.
 - **R2635:** By default, the CLI output is a markdown stencil starting with the `## Chunks` header. Each chunk is formatted with `@chunk-` markers (`@chunk-id`, `@chunk-path`, `@chunk-range`, `@chunk-score`, `@chunk-evidence-vector-ec`, `@chunk-evidence-trigram-ec`, `@chunk-tags`) followed by the content lines blockquoted using `> `.
 - **R2636:** If no chunks match, the CLI output is `## Chunks\n\n_no results_`.
@@ -4124,7 +4124,7 @@ implementation, not a separate format break.
 - **R2643:** Trigram-EC scoring uses Jaccard similarity over trigram sets, `score = |Tq ∩ Tc| / |Tq ∪ Tc|`, where `Tq` is the trigram set of the input text and `Tc` is the trigram set of the candidate chunk content (extracted via microfts2's UTF-8-aware trigram engine). This replaces the prior per-input `score / maxScore` normalization. Vector and trigram substrate scores are then directly comparable on a single `[0, 1]` scale. Applies to both Tag Forge Phase 2A's trigram-EC substrate pass and Phase 2B's recall.
 - **R2644:** Before computing the full Jaccard score, the trigram-EC pass checks query-coverage `coverage = |Tq ∩ Tc| / |Tq|` and short-circuits to score `0` when `coverage < trigramCoverageFloor` (default `0.1`). The intersection used for the coverage check is reused for the Jaccard computation on survivors.
 - **R2645:** When a chunk has tags that carry non-empty values, the markdown stencil emits one sub-list item per such tag under the chunk: `- @chunk-tag-value: <name>: <value>`. `@chunk-tags` carries names only (comma-separated). `@chunk-tag-value` is a legal ark tag whose value is the literal `<name>: <value>` text; an agent splits on the first `": "` to recover the original tag's name and value. Sub-items appear in the same order as the names in `@chunk-tags`.
-- **R2646:** If the server is not running and `tag_model` is configured in `ark.toml` but the model file at `<arkDir>/<tag_model>` is missing, the CLI exits non-zero with `error: configured tag_model not found at <PATH>`. Distinct from the "server not running; model configured" case (R2632), which assumes the file exists.
+- **R2646:** If the server is not running and `[embedding] model` is configured in `ark.toml` but the model file at `<arkDir>/<model>` is missing, the CLI exits non-zero with `error: configured embedding model not found at <PATH>`. Distinct from the "server not running; model configured" case (R2632), which assumes the file exists.
 - **R2647:** The recall substrate's chunk-similarity pipeline drops candidate chunks with no V records (tagless chunks) during scoring, since they cannot contribute tag information to downstream tag-shaped recall. The `RecallOpts.KeepTagless` field defaults to false (drop tagless); setting it to true retains tagless chunks. The CLI exposes this as `ark connections recall -all`; the Lua bridge exposes `keepTagless`. The filter happens during admission to the scoring map so the substrate's top-K contract is honored against tagged candidates only (no padding fog). The tag lookup performed for the filter is cached on the per-chunk accumulator and reused during result enrichment.
 
 ## Feature: Discussed Tags (Recall dedup)
@@ -4154,7 +4154,7 @@ implementation, not a separate format break.
 - **R2664:** The `RC` record class (Recall Candidate) stores derived attach proposals. Key: `"RC" + chunkid varint + tagname`. Value: 8 bytes, big-endian `uint64` tally counter. One record per (chunkid, tagname) candidate; tagname follows the standard `[\w][\w\-.]*` grammar and contains no control bytes.
 - **R2665:** The `RJ` record class (Recall reJection) marks (chunkid, tagname) pairs the curator has rejected. Key: `"RJ" + chunkid varint + tagname` — mirrors RC. Value: 8 bytes, big-endian `uint64` unix nanoseconds (rejection timestamp; the presence of the record is what blocks re-proposal, not the timestamp value).
 - **R2666:** The `RF` record class (Recall Freshness) stamps each chunk with the max `RecordSerial(ED, *)` observed at its last derivation pass. Key: `"RF" + chunkid varint`. Value: varint `uint64` — the txn serial that was "current" against the ED record set when this chunk was last processed.
-- **R2667:** `ark connections recall --propose` (default false) runs the statistical derivation pass alongside the substrate's chunk-scoring pass and persists surviving candidates as RC records. The flag also surfaces accumulated proposals per surfaced chunk in the result stencil (R2684, R2685, R2686); chunks that aren't surfaced (tagless chunks without `-all`) still get their proposals written to LMDB but are invisible in the stencil. `--propose` does not change which chunks appear in the surfaced output — `-all` still controls that.
+- **R2667:** `ark connections recall --propose` (default false) runs the statistical derivation pass alongside the substrate's chunk-scoring pass and persists surviving candidates as RC records. The flag also surfaces accumulated proposals per surfaced chunk in the result stencil (R2684, R2685, R2686); chunks that aren't surfaced (tagless chunks without `-all`) still get their proposals written to the index but are invisible in the stencil. `--propose` does not change which chunks appear in the surfaced output — `-all` still controls that.
 - **R2668:** When `RecallOpts.Propose` is true, the substrate internally runs with `KeepTagless=true` so the derivation pass sees the full scored chunk set including tagless chunks. The caller's surfacing filter (default drop, `-all` keep) is applied as a separate step to the result stencil; the derivation pass's chunk set is orthogonal to the caller's `KeepTagless` value.
 - **R2669:** For each chunk in the derivation chunk set, the pass reads `RF[chunkid]` (treating absent as serial 0) and computes `maxED = max RecordSerial(ED, *)` for the batch. If `RF[chunkid] >= maxED`, the chunk is skipped for derivation. Otherwise the pass derives candidates and writes `RF[chunkid] = maxED` after processing (with or without resulting proposals).
 - **R2670:** Candidate generation per chunk: cosine-compare the chunk's EC vector against every ED record's vector and take the top-N by similarity, where N is `derivationK` (default 10).
@@ -4163,7 +4163,7 @@ implementation, not a separate format break.
 - **R2673:** Rejection filter: each candidate is dropped if `RJ[chunkid + tagname]` exists. The substrate never re-proposes a previously rejected (chunkid, tagname).
 - **R2674:** RC tally: for each surviving candidate, if `RC[chunkid + tagname]` exists the tally is incremented by 1; otherwise the record is written with tally `1`.
 - **R2675:** All RC and RF writes produced by one recall call are committed in a single batched write transaction through the write actor.
-- **R2676:** `--propose` without `tag_model` configured: derivation is silently skipped (no ED records to score against); the caller's recall result is unaffected.
+- **R2676:** `--propose` without `[embedding] model` configured: derivation is silently skipped (no ED records to score against); the caller's recall result is unaffected.
 - **R2677:** The Go API exposes `RecallOpts.Propose bool`. The Lua bridge exposes the same shape via `sys.recall(inputs, {propose = true, ...})`.
 - **R2678:** `Store.DerivedProposals(chunkID uint64) ([]DerivedProposal, error)` returns all RC records for a chunk sorted by tally descending. `DerivedProposal{ChunkID, Tagname, Tally}` carries each entry. The reader excludes any (chunkid, tagname) shadowed by an RJ record as defense-in-depth against pre-rejection RC records.
 - **R2679:** `Store.AcceptDerived(chunkID uint64, tagname, value string) (uint64, error)` atomically deletes `RC[chunkid + tagname]` and attaches the (tag, value) to the chunk via the existing F/V tag-attach path. Returns the resolved tvid for the (tag, value) pair. An empty `value` produces a bare-tag attach.
@@ -4308,8 +4308,8 @@ implementation, not a separate format break.
 **Source:** specs/migrations/complete/011-recall-judgment.md
 
 - **R2874:** The RJ record value format becomes v3: `signed-varint(score) + 8-byte BE unix nanos`, where `score` is a signed integer zigzag-encoded via Go's `binary.PutVarint` / `binary.Varint`. `score < 0` is net-rejected (the magnitude `-score` reproduces the v2 reject counter: N rejections with no reinforcement → score `-N`); `score > 0` is reinforced; `score == 0` is neutral and equivalent to record-absent. The trailing timestamp records the most-recent adjustment (enabling decay-on-read as a future knob). The RJ key shape is unchanged. Supersedes the v2 counter format (R2764). The record class is reframed as **Recall Judgment** — "reJection" is its negative tail.
-- **R2875:** `Store.AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string, delta int64) (newScore int64, err error)` is the single read-modify-write primitive for the Judgment edge: it reads the current score (absent = 0), adds `delta`, stamps the timestamp to NOW, writes the v3 value, and returns the new score. Positive `delta` reinforces; negative decays/rejects. Runs inside the caller's write txn. This is the bidirectional substrate; it has no in-tree caller with a positive delta in this seam.
-- **R2876:** `Store.ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string) (score int64, present bool, err error)` reads the signed score for a `(chunkid, tagname)` edge. Absent → `(0, false, nil)`. A value that does not decode as `signed-varint + 8 bytes` is treated conservatively as rejected — returned as a negative score with `present = true` — so a `reject_propose_ceiling == 0` caller never re-proposes a corrupt edge. "Rejected" is defined as `present && score < 0`.
+- **R2875:** `Store.AdjustJudgment(txn *bbolt.Tx, chunkID uint64, tagname string, delta int64) (newScore int64, err error)` is the single read-modify-write primitive for the Judgment edge: it reads the current score (absent = 0), adds `delta`, stamps the timestamp to NOW, writes the v3 value, and returns the new score. Positive `delta` reinforces; negative decays/rejects. Runs inside the caller's write txn. This is the bidirectional substrate; it has no in-tree caller with a positive delta in this seam.
+- **R2876:** `Store.ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string) (score int64, present bool, err error)` reads the signed score for a `(chunkid, tagname)` edge. Absent → `(0, false, nil)`. A value that does not decode as `signed-varint + 8 bytes` is treated conservatively as rejected — returned as a negative score with `present = true` — so a `reject_propose_ceiling == 0` caller never re-proposes a corrupt edge. "Rejected" is defined as `present && score < 0`.
 - **R2877:** `Store.RejectDerived(chunkID, tagname)` is reimplemented on the primitive: in one txn it deletes `RC[chunkid+tagname]` then applies `AdjustJudgment(..., -1)`, returning the rejection magnitude (`max(0, -newScore)`) so callers expecting the prior `uint64` counter are unchanged. With no reinforcement producer present, a rejection-only sequence on a fresh edge yields scores `-1, -2, -3, …` — bit-for-bit identical to the v2 monotonic counter. Supersedes the value-write half of R2680 (the RC-deletion half is unchanged).
 - **R2878:** `Store.HasDerivedRejection(txn, chunkID, tagname) (rejected bool, magnitude uint64, err error)` is reimplemented on `ReadJudgment`: `rejected = present && score < 0`, `magnitude = max(0, -score)`. Signature and caller-visible meaning are unchanged; the propose-pass (R2673/R2765) and mention-path (R2766) readers consume `magnitude` exactly as they consumed the v2 counter.
 - **R2879:** The Recall Judgment edge applies to **attached** tags (live F/V hyperedges) as well as derived RC proposals. The key shape (`"RJ" + chunkid varint + tagname`) already addresses any `(chunkid, tagname)`; no key change is required. Reinforcement and pruning of attached-tag edges have no in-tree producer in this seam — the secretary that drives them is a later seam.
@@ -4584,7 +4584,7 @@ reason.
 ## Feature: llama.cpp library provisioning
 **Source:** specs/llama-libs.md
 
-- **R2966:** `[embedding] lib_dir` (default `<dir>/lib`, beside the LMDB env) holds the llama.cpp shared libs; the engine `dlopen`s them at startup.
+- **R2966:** `[embedding] lib_dir` (default `<dir>/lib`, beside the index) holds the llama.cpp shared libs; the engine `dlopen`s them at startup.
 - **R2967:** `[embedding] backend` selects the llama.cpp build — `auto`, `cpu`, `vulkan`, `cuda`, `metal`, `rocm`. `auto` detects CUDA, else ROCm, else Metal (macOS), else Vulkan when a device exists, else CPU.
 - **R2968:** `[embedding] llama_version` pins the llama.cpp release build to provision (within yzma's tested range), keeping release builds reproducible.
 - **R2969:** Provisioning downloads the libs for `(platform, backend, version)` into `lib_dir`; it runs during `ark setup` and as a standalone command, is idempotent (skipped when present unless an upgrade is requested), and may fetch the GGUF model when absent.

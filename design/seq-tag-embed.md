@@ -5,7 +5,7 @@
 ## Query Path (warm model, two-step narrowing)
 
 ```
-Browser/CLI       Server           Librarian              Store/LMDB
+Browser/CLI       Server           Librarian              Store/index
   |                  |                  |                      |
   |--embed query---->|                  |                      |
   |                  |--EmbedSimilar--->|                      |
@@ -33,7 +33,7 @@ Browser/CLI       Server           Librarian              Store/LMDB
 ## Cold Start (model not loaded)
 
 ```
-Browser/CLI       Librarian              gollama
+Browser/CLI       Librarian              yzma
   |                  |                      |
   |--EmbedQuery()--->|                      |
   |                  |--loadModel()         |
@@ -49,7 +49,7 @@ Browser/CLI       Librarian              gollama
 ## TTL Expiry (unload model)
 
 ```
-                  Librarian              gollama
+                  Librarian              yzma
                       |                      |
                       |--timer fires         |
                       |--unloadModel()       |
@@ -118,7 +118,7 @@ Server              DB Actor            Store           Librarian
 ```
 DB.Open              Store
   |                    |
-  |--tag_model         |
+  |--[embedding] model |
   |  changed?--------->|
   |                    |
   |<--yes--------------|

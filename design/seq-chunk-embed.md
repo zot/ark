@@ -16,7 +16,7 @@ Librarian.ensureModel()
   │
   ├─ model.NewContext(2048/8)                # default ctx for tags/queries
   │
-  ├─ for each tier in config.EmbedTiers:
+  ├─ for each tier in config.Embedding.Tiers:
   │    model.NewContext(tier.ctx, tier.parallel)   # tier contexts
   │
   └─ start TTL timer
@@ -103,7 +103,7 @@ Server startup
   ├─ check ec_version I record
   │   if absent or "1": drop all EC + EF, set ec_version = "2"
   │
-  ├─ detect tag_model changed (E condition "model_mismatch")
+  ├─ detect [embedding] model changed (E condition "model_mismatch")
   │   store.DropEmbeddings()           # T vectors + EV records
   │   store.DropChunkEmbeddings()      # EC + EF records
   │

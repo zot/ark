@@ -8,7 +8,7 @@ Language: Go. Environment: Linux CLI + HTTP server.
 (`os.ReadFile` + `ParseTagBlock`) to extract tag values for filtering
 and display. Most of these files are completed/denied messages that
 get filtered out immediately. The V record index already has every
-tag value mapped to fileids — the data is in LMDB, no disk reads
+tag value mapped to fileids — the data is in the index, no disk reads
 needed.
 
 ## Current flow
@@ -32,7 +32,7 @@ needed.
 For each requested tag name, scan V records with prefix
 `V[tag]\x00` and check if fileid is in the varint list. Return
 the first value found per tag (a file typically has one value per
-tag). This is O(values-per-tag × tags) LMDB reads per file.
+tag). This is O(values-per-tag × tags) index reads per file.
 
 For the inbox case with ~10 tags and small value sets, this is
 fast. For tags with thousands of values it would be slow — but

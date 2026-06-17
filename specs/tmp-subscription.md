@@ -7,7 +7,7 @@ async ark feature that surfaces in Frictionless: find-connections,
 the sweep retrofit, the V4 inspiration prospector, and the Ark
 monitor.
 
-Language: Go. Environment: ark server (LMDB + pubsub + flib Lua
+Language: Go. Environment: ark server (the index + pubsub + flib Lua
 runtime). All work is server-side; no HTTP from the browser.
 
 ## What it enables

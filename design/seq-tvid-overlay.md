@@ -9,7 +9,7 @@ and tmp:// overlay tvid allocation.
 - Store
 - TvidMap
 - TvidTxn
-- LMDB (env.Update / env.View)
+- index (db.Update / db.View)
 - TmpTagStore
 
 ## Flow: Startup load (R1958)
@@ -19,7 +19,7 @@ DB.Open()
   ├── Store.Open(env)
   ├── tvids := NewTvidMap()
   ├── tvids.LoadFromStore(store)
-  │     └── env.View:
+  │     └── db.View:
   │           scanPrefix(V) → for each (tag, value, tvid):
   │             entries[tvid]    = {tag, value, OriginPersistent}
   │             byPair[{t,v}]    = tvid
@@ -31,7 +31,7 @@ DB.Open()
 
 ```
 Store.UpdateTagValues(chunkTags)
-  └── env.Update(func(txn) error {
+  └── db.Update(func(txn) error {
         tt := store.tvids.Begin()
         defer func() { if !committed { tt.Abort() } }()
 
@@ -54,7 +54,7 @@ Store.UpdateTagValues(chunkTags)
 ```
 
 If `writeChunkTagValuesInTxn` returns an error, the deferred
-`tt.Abort` discards the overlay. LMDB's `env.Update` rolls back the
+`tt.Abort` discards the overlay. `db.Update` rolls back the
 txn. The live map never sees the in-flight tvids. (R1962, R1969)
 
 ## Flow: Persistent removal — orphan-chunk cleanup (R1963)
@@ -63,7 +63,7 @@ txn. The live map never sees the in-flight tvids. (R1962, R1969)
 microfts2 RemovedChunkCallback(txn, chunkID)
   └── Store.RemoveTagValuesInTxn(txn, chunkID)
         └── tt := store.tvids.Begin()  // NB: nested under microfts2's
-                                       // env.Update — same one-writer
+                                       // db.Update — same one-writer
                                        // invariant holds
 
             removeChunkIDInTxn(txn, tt, chunkID)
@@ -126,7 +126,7 @@ TmpTagStore.RemoveFile(fileID)
   │             if entry.Origin == OriginOverlay:
   │                 delete(store.tvids.entries, tvid)
   │                 delete(store.tvids.byPair, {t,v})
-  │             // OriginPersistent: leave it; LMDB still owns it
+  │             // OriginPersistent: leave it; the index still owns it
   └── delete fileChunks[fileID]
 ```
 
@@ -145,7 +145,7 @@ caller has tvid t (e.g. from F record, or ext map in EXT.md step 7)
         └── return entry.Tag, entry.Value, true
 ```
 
-No LMDB transaction needed. Reads see only committed state. Reads
+No transaction needed. Reads see only committed state. Reads
 inside a write txn must use `tt.Resolve` instead so they see
 in-flight allocations.
 

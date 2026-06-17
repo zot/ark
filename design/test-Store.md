@@ -2,7 +2,7 @@
 **Source:** crc-Store.md
 
 ## Test: add and list missing
-**Purpose:** Missing file records round-trip through LMDB
+**Purpose:** Missing file records round-trip through the index
 **Input:** AddMissing(fileid=42, path="/foo/bar.md", lastSeen=now)
 **Expected:** ListMissing returns record with matching fields
 **Refs:** crc-Store.md, R104

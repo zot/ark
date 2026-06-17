@@ -126,10 +126,10 @@ RefreshStale (parallel workers):
   ├── Workers send prepared closures to actor via svc()
   │     └── actor receives: classifyForWrite or direct enqueueWrite
   │
-  └── Write goroutine batches LMDB mutations
+  └── Write goroutine batches index mutations
 
 Note: The worker pool (NumCPU goroutines) in RefreshStale
 prepares data in parallel. The write actor serializes the
-LMDB mutations. These compose naturally — workers feed the
+index mutations. These compose naturally — workers feed the
 queue, the actor drains it one batch at a time.
 ```

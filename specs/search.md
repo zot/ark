@@ -10,7 +10,7 @@ Both engines query the same text. Results merged and re-ranked.
 - Ark merges by (fileid, chunkid), combining scores
 - Results sorted by combined score descending
 - Output: filepath:startline-endline with score
-- When the embedding pipeline is unavailable (no `tag_model`
+- When the embedding pipeline is unavailable (no `[embedding] model`
   configured, model file missing), combined search falls back to
   FTS-only — same shape, no semantic component
 
@@ -27,7 +27,7 @@ Targeted queries:
 - Both `--about` + `--contains`/`--regex` — results intersected
   by (fileid, chunkid)
 - Output: same format as combined
-- `--about` requires `tag_model` to be configured; otherwise it
+- `--about` requires `[embedding] model` to be configured; otherwise it
   errors with an actionable message
 
 ## File-centroid pre-filter (config-gated)

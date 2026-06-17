@@ -79,8 +79,8 @@ dispatches operations via proxy or cold-start.
   syscalls, GC, blocked time). All optional and independent.
   (R981, R982, R983, R984, R985)
   Server-first dispatch: always tries proxy to running server first,
-  falls back to local LMDB search if server unavailable or proxy fails.
-  Server keeps caches warm (file name map, LMDB pages), avoiding
+  falls back to local search if server unavailable or proxy fails.
+  Server keeps caches warm (file name map, index pages), avoiding
   cold-start DB open cost. All flags sent in one request struct.
   --session NAME included in the server request (no longer requires
   special dispatch — just another field).
@@ -126,7 +126,7 @@ dispatches operations via proxy or cold-start.
   check accepts optional heading arguments for allowed-heading validation.
   cmdTagSet: when setting `status`, also auto-sets `status-date` to today
   (YYYY-MM-DD). Only triggers for the exact tag name "status".
-- cmdTagDefs: query D records from LMDB. Optional tag name args filter.
+- cmdTagDefs: query D records from the index. Optional tag name args filter.
   Default: `tagname description`, deduplicated, sorted alphabetically.
   --path: `path tagname description`, lexically sorted, not deduplicated,
   spaces in paths backslash-escaped.
@@ -146,14 +146,14 @@ dispatches operations via proxy or cold-start.
   Missing files show 0 for bytes and chunks, skip verbose line.
   (R1573-R1586)
 - cmdStatus: --db flag triggers DB.StatusDB() and prints record counts
-  per subdatabase. Without --db, unchanged. When proxied, sets
+  per bucket. Without --db, unchanged. When proxied, sets
   ?db=true query parameter. (R2473, R2474, R2475, R2476, R2477, R2480)
   --chunks activates chunk size statistics. Iterates files (scoped by
   --filter-files/--exclude-files), calls DB.ChunkStats() to collect
   sizes, prints right-aligned table with "all" row + per-strategy rows.
   Columns: strategy, count, min, max, mean, median, p90, p95, p99.
   Unit is bytes (default) or tokens (--tokenize). --tokenize requires
-  configured tag_model; creates a minimal Librarian tokenizer context.
+  configured [embedding] model; creates a minimal Librarian tokenizer context.
   Zero chunks prints "no chunks found". (R1514-R1531)
   After normal output, if E records exist, print a "warnings:" section
   with each condition name, description, and remediation advice. (R1565,
@@ -182,8 +182,8 @@ dispatches operations via proxy or cold-start.
 - cmdInit: seed case_insensitive/aliases from ark.toml if present;
   CLI flags override seeded values. Runs setup first if ~/.ark/
   not bootstrapped (no html/ dir). --no-setup skips setup.
-  --if-needed skips DB creation when data.mdb already exists.
-  Without --if-needed, removes existing data.mdb and lock.mdb
+  --if-needed skips DB creation when index.db already exists.
+  Without --if-needed, removes the existing index.db
   before creating a fresh database. Creates ~/.ark/searching/
   with default CLAUDE.md if not present. (R1252)
 - cmdUIInstall: single entry point for per-project setup. Runs
@@ -299,10 +299,10 @@ dispatches operations via proxy or cold-start.
   No subcommand → print usage, exit 0.
 - cmdEmbedText: join positional args with spaces, embed via
   Librarian.EmbedQuery, print JSON vector to stdout. Requires
-  tag_model. Uses withDB.
+  [embedding] model. Uses withDB.
 - cmdEmbedBench: dispatches by MODE arg (tags or chunks).
   --ctx N (default 2048), --parallel N (default 8).
-- cmdEmbedBenchTags: collect all tag values from LMDB, embed via
+- cmdEmbedBenchTags: collect all tag values from the index, embed via
   batch and single paths, report timing comparison and speedup ratio.
 - cmdEmbedBenchChunks: sample 200 chunks via file-first random
   sampling, embed via batch and single paths, report timing,
@@ -374,7 +374,7 @@ dispatches operations via proxy or cold-start.
   parser populates the kind-specific fields (R2593–R2596).
   Lives next to connections.go so the server can use the same
   parser for its own projections. (R2607)
-- cmdRecall: entry point for the recall subcommand (R2617). Parses CLI flags: --k (default 20, clamped to [1, 200]), --type (auto, chunk, text), --no-content, and --json (R2627). Normalizes positional inputs (R2618, R2619). If the server is running, proxies to GET/POST /recall (R2630). If the server is not running, checks config for tag_model (R2631): if configured (and exists), exits non-zero warning the user to start server (R2632); if no model, opens the DB locally in-process via withDB and runs the trigram-only recall (R2633, R2634). Outputs markdown stencil by default (R2635), showing warnings (R2637) or "_no results_" (R2636), or prints raw JSON if --json is set (R2638). Clamps K parameter (R2641).
+- cmdRecall: entry point for the recall subcommand (R2617). Parses CLI flags: --k (default 20, clamped to [1, 200]), --type (auto, chunk, text), --no-content, and --json (R2627). Normalizes positional inputs (R2618, R2619). If the server is running, proxies to GET/POST /recall (R2630). If the server is not running, checks config for the [embedding] model (R2631): if configured (and exists), exits non-zero warning the user to start server (R2632); if no model, opens the DB locally in-process via withDB and runs the trigram-only recall (R2633, R2634). Outputs markdown stencil by default (R2635), showing warnings (R2637) or "_no results_" (R2636), or prints raw JSON if --json is set (R2638). Clamps K parameter (R2641).
 - cmdRecall also parses `--session SID` (load discussed-tag set
   from the session's RD records) and `--discussed @t[:v][,...]`
   (caller-supplied exclusion list). Both flags populate the

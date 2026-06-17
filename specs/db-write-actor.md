@@ -14,7 +14,7 @@ status queries and UI responsiveness.
 All requests go through the main DB actor. The main actor routes:
 
 ### Reads
-Execute directly in the main actor, return immediately. LMDB MVCC
+Execute directly in the main actor, return immediately. MVCC
 ensures readers see consistent snapshots even while a write is
 in flight.
 
@@ -32,7 +32,7 @@ Main Actor receives write request
   └── Queue write closure
       └── If queue was empty, dequeue and run in goroutine:
             goroutine:
-              ├── db.Copy() — same LMDB env, nil caches
+              ├── db.Copy() — same index, nil caches
               ├── Open write transaction on the copy
               ├── Index batch (file I/O happens here, off the actor)
               └── Send reconcile closure to Main Actor channel
@@ -82,9 +82,9 @@ When a scan produces N files to index:
 
 Two methods needed:
 
-- `Copy() *DB` — creates a shallow copy sharing the LMDB env.
+- `Copy() *DB` — creates a shallow copy sharing the `*bbolt.DB`.
   Overlay pointer shared (has its own mutex). Caches set to nil
-  (will lazy-load from committed LMDB state). Chunker registry
+  (will lazy-load from committed index state). Chunker registry
   shared (read-only during writes, updated only by config files
   which run in the main actor).
 

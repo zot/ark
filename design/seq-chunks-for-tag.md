@@ -80,7 +80,7 @@ matching the existing pattern for `SuggestTagNames` and `SearchChunks`.
 
 ```
 k <= 0                                 → (nil, nil)         R2207
-no tag_model configured                → (nil, nil)         R2208
+no [embedding] model configured        → (nil, nil)         R2208
 ChunksForTag — tag has no ED records   → (nil, nil)         R2209
 ChunksForTagDef — ED[tag,fid] absent   → (nil, nil)         R2210
 EC prefix empty                        → (nil, nil)         R2211

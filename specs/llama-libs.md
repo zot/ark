@@ -15,7 +15,7 @@ The user downloads one binary; ark assembles the rest.
 ## Behavior
 
 ### Lib directory
-- `[embedding] lib_dir` (default `<dir>/lib`, beside the LMDB env) holds the
+- `[embedding] lib_dir` (default `<dir>/lib`, beside the index) holds the
   llama.cpp shared libs. The engine loads from there at startup.
 
 ### Backend selection

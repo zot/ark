@@ -105,7 +105,7 @@ the call.
 ## Empty and Error Cases
 
 - `k <= 0` → return `(nil, nil)`.
-- Embedding unavailable (no `tag_model` configured, model file
+- Embedding unavailable (no `[embedding] model` configured, model file
   missing) → return `(nil, nil)`.
 - `ChunksForTag`: tag has no ED records → return `(nil, nil)`.
 - `ChunksForTagDef`: `ED[tag, fileid]` absent → return
@@ -122,7 +122,7 @@ the call.
 ## What This Does Not Do
 
 - Does not call the embedding model. The ED vectors and EC
-  vectors are read from LMDB. Pure cosine math.
+  vectors are read from the index. Pure cosine math.
 - Does not invoke a search agent. No spectral expansion, no
   reranking.
 - Does not propose new tags or new tag values. Read-only over
@@ -147,7 +147,7 @@ the call.
   - `ChunksForTag` (1–5 defs typical): max cosine across all
     defs per EC record → expected 200–700 ms depending on def
     count.
-- One LMDB View txn for the EC walk; one fts.View txn for
+- One View transaction for the EC walk; one fts.View txn for
   CRecord lookups across all surviving chunks; one
   `FileIDPaths` call.
 - Result cardinality bounded by `k`; per-chunk

@@ -30,7 +30,7 @@ deliberately deferred; see "What This Spec Does Not Cover."
 Language: Go (Store + Librarian + CLI subcommand flag). Environment:
 ark server with the embedding model loaded on demand. The CLI works
 in-process via `withDB` when the server is not running, gated by
-the same `tag_model` checks as the underlying recall substrate.
+the same `[embedding] model` checks as the underlying recall substrate.
 
 ## Why this exists
 
@@ -135,7 +135,7 @@ item 1 (agent layer) and do not appear in this slice.
 
 Triggered by `ark connections recall --propose`. Runs alongside
 the substrate's chunk-scoring pass; produces no caller-visible
-output (proposals land in LMDB as a side effect).
+output (proposals land in the index as a side effect).
 
 ### Chunk set
 
@@ -228,7 +228,7 @@ Per processed chunk:
 
 Per recall call:
 - One `max(S over ED)` bookmark computation.
-- Per-chunk freshness check (cheap LMDB get).
+- Per-chunk freshness check (cheap index get).
 - Derivation only on stale chunks. In steady state, most chunks
   are fresh — the marginal cost of `--propose` on a recall call
   is near zero.
@@ -247,7 +247,7 @@ line for each surfaced chunk that has any RC records (see
 *Stencil additions* below). Proposals for tagless chunks (which
 are present in the derivation chunk set but absent from the
 surfaced output when `-all` is off) are not visible in the
-stencil but are persisted to LMDB for the Tag Forge to pick up.
+stencil but are persisted to the index for the Tag Forge to pick up.
 
 `--propose` does **not** alter which chunks appear in the
 caller's surfaced output — `-all` still controls that. The
@@ -377,7 +377,7 @@ isn't here yet. When it lands, `sys.derived` exposes `proposals`,
 
 ## Empty / Error Cases
 
-- `--propose` without `tag_model` configured → recall succeeds
+- `--propose` without `[embedding] model` configured → recall succeeds
   with the trigram-only fallback path; derivation is silently
   skipped (no ED records to score against). The caller's recall
   result is unaffected.
@@ -416,7 +416,7 @@ The derivation pass cost on a recall call:
   math is fast (768-dim float32); under 5 ms per chunk in
   practice.
 - Warm (chunk already processed against current ED set): single
-  LMDB get for `RF[chunkid]`, near-zero cost.
+  index get for `RF[chunkid]`, near-zero cost.
 - Per-batch fixed cost: `max(S over ED)` bookmark computation,
   cheap with the existing S substrate (`WalkRecordsSinceSerial`).
 
@@ -449,7 +449,7 @@ default `K=20`; this is amortized across future passes.
   derivation skips the candidate.
 - RF malformed-value tolerance: corrupt an RF value to 1 byte;
   next derivation re-runs the chunk and overwrites RF correctly.
-- `--propose` without `tag_model` → recall result unchanged, no
+- `--propose` without `[embedding] model` → recall result unchanged, no
   RC records written, no error.
 
 ## Lifecycle: substrate writes RC + RF; forge writes RJ via Store API
@@ -464,7 +464,7 @@ default `K=20`; this is amortized across future passes.
                                └──── writes RF ──────┤
                                                      ▼
                                           ┌──────────────────┐
-                                          │ LMDB store       │
+                                          │ index store      │
                                           └──────────────────┘
                                                      ▲
                   ┌────────────────────────────────┐ │

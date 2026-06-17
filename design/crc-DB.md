@@ -18,7 +18,7 @@ operations complete) document this on the API. (R986, R993, R995)
 
 ## Knows
 - fts: *microfts2.DB — trigram search engine
-- store: *Store — ark's own subdatabase (R1909, R1910)
+- store: *Store — ark's own bucket (R1909, R1910)
 - config: *Config — parsed source configuration
 - dbPath: string — database directory path
 - svc: ChanSvc — closure actor channel, serializes all DB access
@@ -29,7 +29,7 @@ operations complete) document this on the API. (R986, R993, R995)
 
 ## Does
 - Init(path, opts): create new database — open microfts2, create ark
-  subdatabase, write default config, register func strategies (lines,
+  bucket, write default config, register func strategies (lines,
   chat-jsonl, markdown), register chunker strategies from ark.toml
   [[chunker]] entries, create starter tags.md. Seed ark.toml from
   install/ark.toml via BundleReadFile if not present. Write full
@@ -44,7 +44,7 @@ operations complete) document this on the API. (R986, R993, R995)
   fix-minimal, benign), and old/new values. (R1540, R1550-R1555)
 - ApplyConfigChanges(changes []ConfigChange): process classified changes.
   Benign: update I records. Fix-minimal: apply fix (e.g. drop embeddings
-  for tag_model), update I record. Deferred: write E record, do not
+  for the [embedding] model), update I record. Deferred: write E record, do not
   update I record. (R1553, R1554, R1555)
 - registerChunkers(cfg): iterate cfg.Chunkers, construct BracketLang
   from TOML fields, call AddChunker with BracketChunker or IndentChunker
@@ -94,13 +94,13 @@ operations complete) document this on the API. (R986, R993, R995)
   StatusDate from status-date tag (empty if absent).
 - Fetch(path): verify file is indexed in microfts2, read and return full content
 - Status(): return StatusInfo with file counts, total size, chunk count,
-  strategy breakdown, source count, LMDB map usage (used/total/percent).
-  Computes map usage from env.Info() and env.Stat(). Computes chunk
+  strategy breakdown, source count, database file size.
+  Computes the file size from os.Stat on the database file. Computes chunk
   count by summing ChunkRanges from FileInfoByID per file. Computes
   total size by summing FileLength from FileInfoByID per file. Counts
   files per strategy from StaleFiles.
 - StatusDB(): return DBRecordCounts with per-prefix counts for both
-  subdatabases. Delegates to microfts2.RecordCounts() and
+  buckets. Delegates to microfts2.RecordCounts() and
   Store.RecordCounts(). (R2473, R2478, R2479, R2480, R2481, R2482)
 - ChunkStats(filterFiles, excludeFiles []string, tokenize func(string) int):
   iterate all indexed files (filtered by path globs), call AllChunks(path)
@@ -300,7 +300,7 @@ operations complete) document this on the API. (R986, R993, R995)
 
 ## Collaborators
 - Config: loads and validates ark.toml
-- Store: ark's own LMDB subdatabase (missing, unresolved, tags, EC, EF)
+- Store: ark's own bucket (missing, unresolved, tags, EC, EF)
 - Scanner: walks directories (uses Config + Matcher)
 - Indexer: adds/removes files in microfts2 and ark store, extracts tags
 - Searcher: queries microfts2 + Librarian and merges results

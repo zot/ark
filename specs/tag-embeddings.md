@@ -4,7 +4,7 @@ Embed tag values with a local nomic model for sub-second spectral
 hypergraph traversal. Given a query, find semantically similar tag
 values without an LLM round-trip.
 
-Language: Go. Environment: ark server, gollama with Vulkan build.
+Language: Go. Environment: ark server, yzma (llama.cpp loaded at runtime).
 
 ## Context
 
@@ -195,18 +195,16 @@ special meaning in code files or chat logs.
 
 ## Build
 
-Two build issues resolved:
+Ark builds pure-Go (`CGO_ENABLED=0`) — the embedding engine (yzma) loads
+llama.cpp's shared libraries at runtime via `dlopen` rather than linking them
+at compile time. The libs are provisioned per host by `ark embed install`
+(`[embedding] lib_dir` / `backend` / `llama_version`), so there is no C
+cross-toolchain and no per-platform native build, and no SIGILL-from-`-march=native`
+class of problem (the prebuilt libs target a safe instruction baseline).
 
-1. **GGML_NATIVE=OFF** — llama.cpp's `-march=native` enables
-   instructions that Zen 2 reports but can't execute (SIGILL).
-   Disabling native detection and using explicit AVX/AVX2 flags
-   fixes the crash on all platforms.
-
-2. **Vulkan GPU acceleration** — offloads embedding compute to
-   the GPU. 45ms/chunk on GPU vs 235ms/chunk on CPU (5x). The
-   binary is larger (69MB vs 28MB) due to SPIR-V shader blobs,
-   but the performance gain justifies it. Only runtime dependency
-   is `libvulkan.so.1` (standard on GPU-capable systems).
-
-The gollama build is statically linked (BUILD_SHARED_LIBS=OFF)
-so the ark binary is self-contained — no shared lib management.
+GPU acceleration comes from the provisioned backend (`[embedding] backend`:
+`auto`/`cpu`/`vulkan`/`cuda`/`metal`/`rocm`). Offloading embedding compute to the
+GPU runs ~45 ms/chunk vs ~235 ms/chunk on CPU (≈5×). The ark binary stays small —
+no SPIR-V shader blobs are baked in; the GPU shaders live in the provisioned
+shared libs, and the only host requirement is the matching GPU runtime (e.g.
+`libvulkan.so.1`, standard on GPU-capable systems).

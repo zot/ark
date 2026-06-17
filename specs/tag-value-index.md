@@ -1,7 +1,7 @@
 # Tag Value Index
 
-LMDB index for tag values, enabling fast completion without reading
-files from disk. Language: Go. Environment: ark LMDB subdatabase.
+Index for tag values, enabling fast completion without reading
+files from disk. Language: Go. Environment: ark bucket.
 
 ## Problem
 
@@ -13,7 +13,7 @@ for tags like `status` that appear in hundreds of files.
 ## V Records
 
 The `V` prefix stores tag values. Each unique (tag, value) pair gets
-one LMDB entry whose value bytes list the chunkids that carry that
+one index entry whose value bytes list the chunkids that carry that
 (tag, value), enabling fast value completion without disk I/O.
 File-level callers resolve those chunkids → fileids (via microfts2
 C records) when they need file paths.
@@ -38,7 +38,7 @@ V records follow the same lifecycle as F and D records:
 ## Querying
 
 V records support three query patterns: all-values-for-a-tag (count
-varint chunkids per record), prefix-filtered values (LMDB sorted-key
+varint chunkids per record), prefix-filtered values (sorted-key
 range scan), and (tag, value) → chunkids direct lookup. See
 [record-formats.md](record-formats.md) (V section) for the exact
 prefix scan keys.

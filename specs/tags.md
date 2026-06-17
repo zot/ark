@@ -4,7 +4,7 @@ Ark extracts `@tag:` patterns from file content during scan/add.
 The trailing colon is required — disambiguates from emails and
 mentions. Tags are an ark-level concept, not a microfts2 concern.
 
-## Storage (ark subdatabase)
+## Storage (ark bucket)
 
 T records hold tag vocabulary with global counts. F records hold
 per-file tag occurrences. Tags are updated whenever a file is
@@ -54,7 +54,7 @@ query patterns; record key/value layout in
 - `ark tag files <tag>...` — filename and size per file
   - `--context` shows each occurrence with tag to end of line
   - includes tag definitions from tags.md alongside usage
-- `ark tag defs [TAG...]` — tag definitions from LMDB cache
+- `ark tag defs [TAG...]` — tag definitions from the index
   - No args: all definitions. With args: only those tags.
   - Default output: `tagname description` per line, deduplicated,
     sorted alphabetically.
@@ -71,7 +71,7 @@ query patterns; record key/value layout in
 Tags reach the index from three sources:
 
 1. **Inline** — `@tag:` text extracted from chunks during indexing, stored
-   as T/F/V records in LMDB.
+   as T/F/V records in the index.
 2. **Ext-routed (virtual)** — `@ext:` directives that project (tag, value)
    pairs onto target chunks. May originate in inline files (persistent X
    records) or in tmp:// documents (overlay routings); both are merged

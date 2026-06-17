@@ -24,8 +24,8 @@ DB.AddTmpFile(path, strategy, content)
   │         genuinely-new chunk, in chunk order
   │           - ChunkID, Hash, ContentLen, Attrs, FileIDs,
   │             Trigrams populated
-  │           - CRecord.Txn() and CRecord.DB() return nil
-  │             — callback must NOT traverse to LMDB (R1949)
+  │           - CRecord.Tx() and CRecord.DB() return nil
+  │             — callback must NOT traverse to the index (R1949)
   │           - acc extracts tag values from chunk text,
   │             accumulates {ChunkID, []TagValue}
   │     └── returns fileid (counts down from MaxUint64)
@@ -86,7 +86,7 @@ overlay never disagree on which fileids exist.
 Server.Inbox / cmd inbox
   └── DB.Inbox(showAll, includeArchived)
         ├── Store.TagFiles(["status"])
-        │     ├── persistent: scan F prefix (LMDB)
+        │     ├── persistent: scan F prefix (the index)
         │     ├── overlay:    TmpTagStore.TagFiles(["status"])
         │     └── union both → []TagFileInfo
         │
@@ -101,7 +101,7 @@ Server.Inbox / cmd inbox
                 "issue", "status", "status-date",
                 "response-handled", "request-handled"])
               ├── high bit set → TmpTagStore.FileTagValues
-              └── high bit clear → LMDB scan
+              └── high bit clear → index scan
 ```
 
 This wires the orphaned `FileTagValues` (R1142, R1147, R1149) into

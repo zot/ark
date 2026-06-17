@@ -7,7 +7,7 @@ Optionally retrieves chunk text or full file content.
 ## Knows
 - fts: *microfts2.DB — trigram engine
 - librarian: *Librarian — embeds query text and ranks chunks via EC records (R1915, R1916)
-- store: *Store — LMDB store for tag index queries and centroid (EF) reads
+- store: *Store — store for tag index queries and centroid (EF) reads
 
 ## Does
 - SearchCombined(query, opts): send same query to both engines,
@@ -88,7 +88,7 @@ Optionally retrieves chunk text or full file content.
 - SearchResultEntry and GroupedChunk carry a chunk attributes field
   populated from microfts2.CRecord.Attrs so the pdf case of
   RenderPreview can read `page`, `rect`, and `tag_rects` without
-  an extra LMDB read. FillChunks propagates the attrs alongside
+  an extra index read. FillChunks propagates the attrs alongside
   chunk text. (R1705)
 - SearchMulti(query, opts): run query through all four strategies
   (coverage, density, overlap, bm25) via a single microfts2
@@ -187,7 +187,7 @@ Optionally retrieves chunk text or full file content.
 ## Collaborators
 - microfts2.DB: trigram search, file info resolution, ChunkCache for chunk text retrieval
 - Librarian: embeds queries (EmbedQuery) and ranks chunks via EC records (SearchChunks) (R1915, R1916)
-- Store: LMDB tag index (TagFiles queries for tag-based filtering, MatchTagNames/MatchTagValues for contains-tokens), file centroid (EF) reads (R1921)
+- Store: the tag index (TagFiles queries for tag-based filtering, MatchTagNames/MatchTagValues for contains-tokens), file centroid (EF) reads (R1921)
 - Indexer: re-index stale files during consistent search
 - goldmark: markdown → HTML rendering for previews
 

@@ -1,14 +1,13 @@
 # `ark serve -compact`
 
-LMDB grows monotonically: free pages from deletions and overwrites
-are reused for new writes, but the file itself never shrinks. After
-months of indexing, reindexing, and removal the on-disk size drifts
-well above what the live data needs.
+The index file grows monotonically: free pages from deletions and
+overwrites are reused for new writes, but the file itself never
+shrinks. After months of indexing, reindexing, and removal the
+on-disk size drifts well above what the live data needs.
 
-`mdb_env_copy2` with the `MDB_CP_COMPACT` flag writes a fresh copy
-of an LMDB environment containing only live pages. The result is a
-defragmented database byte-equivalent to the original from the
-caller's perspective.
+`Tx.WriteTo` writes a fresh copy of the database containing only
+live pages. The result is a defragmented database byte-equivalent
+to the original from the caller's perspective.
 
 `ark serve -compact` runs that compaction as a startup step before
 the server begins handling requests. When the flag is absent,
@@ -21,8 +20,8 @@ When `-compact` is passed:
 1. Acquire the file lock on `~/.ark/` (the same one that prevents
    two `ark serve` instances from running simultaneously). If
    another process holds it, fail with the usual error.
-2. Open the existing LMDB environment read-only.
-3. Copy via `mdb_env_copy2` into a sibling path (`<dbpath>.compact`).
+2. Open the existing database read-only.
+3. Copy via `Tx.WriteTo` into a sibling path (`<dbpath>.compact`).
 4. On success: atomic rename of the compacted file into the
    live database path, replacing the original. The original is
    removed.
@@ -30,14 +29,14 @@ When `-compact` is passed:
    copy, log the error, and continue startup with the
    uncompacted DB. Compaction is best-effort — a failure here
    must not block service.
-6. Reopen the environment and proceed with normal startup.
+6. Reopen the database and proceed with normal startup.
 
 The compaction window is single-process: server is not yet
 listening, no clients are connected. No write transactions can be
-in flight. Read-only is sufficient for the source environment.
+in flight. Read-only is sufficient for the source database.
 
 Both microfts2 and ark databases are compacted (each is a separate
-LMDB environment under `~/.ark/`).
+`index.db` file under `~/.ark/`).
 
 ## Why startup, not on-demand
 
@@ -56,7 +55,7 @@ compacting ark: 188 KB → 188 KB
 ```
 
 When the post-compaction size is within 5% of the original, log
-"already compact" and skip the rename for that environment. Avoids
+"already compact" and skip the rename for that database. Avoids
 unnecessary I/O on a fresh DB or one compacted recently.
 
 ## `auto_compact` in ark.toml
@@ -94,6 +93,6 @@ table was) and the value is ignored.
 ## Out of scope
 
 - Scheduled compaction (cron-style). The toml setting is binary.
-- Compaction of any non-LMDB storage (the file tree itself, blob
+- Compaction of any non-index storage (the file tree itself, blob
   files, etc.).
 - Online compaction during a running session.

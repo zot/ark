@@ -55,7 +55,7 @@ Other tag names render unchanged.
 `DB.ResolveLink(value string) (path, location string, ok bool)`:
 
 1. UUID branch: `Lookup("id", value)` → tvid. If found, read
-   `V[id][value][tvid]` directly (single LMDB Get) and decode the
+   `V[id][value][tvid]` directly (single index Get) and decode the
    first chunkid. Resolve chunkid → fileid via the existing
    `chunkID→fileIDs` resolver, then `FileInfoByID(fileid)` for path
    and chunk Location.
@@ -65,7 +65,7 @@ Other tag names render unchanged.
 3. Neither: return `("", "", false)`.
 
 `ResolveLink` is called inside the rendering hot path. The TvidMap
-lookup is in-memory; the LMDB Get is a single B-tree probe;
+lookup is in-memory; the index Get is a single B-tree probe;
 FileInfoByID is microfts2's existing per-file index lookup. No
 prefix scans, no full-table walks.
 

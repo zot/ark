@@ -13,7 +13,7 @@ The CLI sends `Tags: true` to `POST /search`. The server returns a
 JSON array of `TagResult` (`tag`, `count`, `bestScore`). The CLI
 previously decoded the response into `[]SearchResultEntry`, then
 ran `ExtractResultTags` *again* on the empty entries — so every
-proxied `-tags` invocation returned nothing. The local LMDB path
+proxied `-tags` invocation returned nothing. The local index path
 (`ark serve` not running) worked correctly because it never crossed
 the wire.
 

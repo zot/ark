@@ -7,7 +7,7 @@ Diagram of the CLI recall routing, server HTTP handling, and in-process database
 ## 1. Recall CLI Routing & Local Fallback
 
 ```
-CLI              Server (HTTP)      Librarian          DB (Local LMDB)
+CLI              Server (HTTP)      Librarian          DB (Local index)
  |                     |                |                    |
 1.1
  |- ark recall ------->|                |                    |
@@ -42,7 +42,7 @@ CLI              Server (HTTP)      Librarian          DB (Local LMDB)
  |                     |                |                    |
  |--- [If Server is Down] -----------------------------------|
 1.11
- |  |- Check tag_model config           |                    |
+ |  |- Check [embedding] model config   |                    |
  |  |                                                        |
  |  |--- [If model is configured] ---------------------------|
 1.12

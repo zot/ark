@@ -3,7 +3,7 @@
 A live in-memory map `tvid → (tag, value)` covering every `(tag, value)`
 pair the index has seen, persistent and `tmp://` alike. Loaded at
 startup from V records, maintained by an indexing-time overlay that
-mirrors LMDB's transaction semantics.
+mirrors the index's transaction semantics.
 
 This spec is point 3 of the external-tags roadmap (`.scratch/EXT.md`).
 It is the foundation for fast tvid resolution and for the ext map
@@ -26,14 +26,14 @@ inbox/search readers stop branching on origin.
 
 ## Why a transaction overlay
 
-Tvid allocations happen inside LMDB write transactions (the write
-actor's `env.Update`). If a transaction aborts, the I[next_tvid]
+Tvid allocations happen inside write transactions (the write
+actor's `db.Update`). If a transaction aborts, the I[next_tvid]
 counter rolls back with it, but a naively-mutated in-memory map would
-keep the doomed tvid. Mirroring LMDB's MVCC semantics — writes
+keep the doomed tvid. Mirroring the index's MVCC semantics — writes
 accumulate in a scoped overlay struct, visible to reads inside the
 transaction, merged into the live map on commit, discarded on abort —
 keeps the map honest under crashes and aborts and matches what the
-write actor already does for LMDB itself. Also, uncommitted changes
+write actor already does for the index itself. Also, uncommitted changes
 are only visible within the transaction until the actual commit.
 
 ## Surface
@@ -45,7 +45,7 @@ A new collaborator `TvidMap` owned by `Store`:
   Reads the live map under RLock.
 - `TvidMap.Lookup(tag, value string) (tvid uint64, ok bool)` —
   reverse lookup for callers that have a `(tag, value)` and want the
-  existing tvid without an LMDB scan. Optional sibling map.
+  existing tvid without an index scan. Optional sibling map.
 - `TvidMap.Snapshot() map[uint64]TagAlt` — returns a copy for
   diagnostics (`ScanVRecordTvids` becomes a thin wrapper).
 
@@ -85,10 +85,10 @@ per process lifetime.
 
 ## Transaction integration
 
-The write actor's `env.Update` blocks become:
+The write actor's `db.Update` blocks become:
 
 ```go
-return s.env.Update(func(txn *lmdb.Txn) error {
+return s.db.Update(func(txn *bbolt.Tx) error {
     tt := s.tvids.Begin()
     err := writeChunkTagValuesInTxn(txn, tt, ...)
     if err != nil {
@@ -128,15 +128,15 @@ Reads outside any write txn use `TvidMap.Resolve` directly.
 3. `RemoveFile` enumerates the file's tvids; for each, it removes the
    chunk's contribution. If a tvid loses its last `tmp://` producer
    AND its origin is `OriginOverlay`, it is dropped from the live map.
-   `OriginPersistent` tvids persist regardless — the LMDB record still
+   `OriginPersistent` tvids persist regardless — the index record still
    owns them.
 
-Overlay tvid allocation uses a separate counter from the LMDB
-`I[next_tvid]`. The natural choice is to count down from `MaxUint64`,
+Overlay tvid allocation uses a separate counter from the
+`I[next_tvid]` index counter. The natural choice is to count down from `MaxUint64`,
 mirroring the chunkid/fileid overlay convention: the high bit (set
 when read as int64) marks a tvid as overlay-issued. This makes the
 overlay/persistent distinction available without consulting any
-external map, and guarantees no collision with the LMDB counter that
+external map, and guarantees no collision with the persistent counter that
 counts up from 1.
 
 ## Lifetime and recovery
@@ -145,7 +145,7 @@ counts up from 1.
   load again. No persistence beyond V records themselves.
 - No schema marker, no version check, no `ark rebuild` interaction.
   The V records are the source of truth; the map is a view.
-- Crash safety: if the process dies mid-write, LMDB rolls back the
+- Crash safety: if the process dies mid-write, the index rolls back the
   write txn. The next startup reloads from V records. Overlay entries
   for that aborted txn never enter the live map because `Commit` was
   never called.

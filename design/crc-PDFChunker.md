@@ -16,7 +16,7 @@ re-parse.
 - Caption prepended to Text with newline separator when Block.Caption is non-empty (R1731)
 - the ark tag pattern `@([a-zA-Z][\w.-]*):\s*([^\n]*)` — matched against Block.Text and Block.Caption (R1735)
 - per-kind counters: each page restarts para/heading/table/list/salvage counters at 1 (R1738)
-- store: *Store — reference to ark's subdatabase, held so FileChunks can write page blobs and GetChunk can read them (R1720, R1726)
+- store: *Store — reference to ark's bucket, held so FileChunks can write page blobs and GetChunk can read them (R1720, R1726)
 
 ## Does
 - Chunks(path, content, yield): open with `pdftext.Open`, walk pages → blocks, yield one chunk per non-Image block (R1730, R1733, R1734)

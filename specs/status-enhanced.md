@@ -4,16 +4,14 @@
 unresolved) and whether the server is running. That's useful but
 doesn't tell you how full the database is or what's in it.
 
-## LMDB Map Usage
+## Database File Size
 
-Status should report how much of the LMDB map is consumed. LMDB
-pre-allocates a memory-mapped region (the "map size") and writes
-pages into it. When it fills up, writes fail. Knowing current usage
-vs capacity tells you when to rebuild with a larger map or run
-`ark grow`.
+Status should report the on-disk size of the database file
+(`index.db`), read via `os.Stat`. Knowing how large the index has
+grown tells you when to run `ark compact` to reclaim space from
+deletions and overwrites.
 
-Display: used bytes, total map size, and percentage. Human-readable
-units (MB/GB).
+Display: the database file size in human-readable units (MB/GB).
 
 ## Index Composition
 
@@ -46,13 +44,13 @@ unresolved: 3
 chunks: 8451
 sources: 5
 strategies: lines=1200 chat-jsonl=73
-map: 511 MB / 8 GB (6%)
+db: 511 MB
 server: not running
 ```
 
 The total size appears parenthesized after the file count. The
 `strategies` line lists each strategy with its file count,
-space-separated. The `map` line shows used/total with percentage.
+space-separated. The `db` line shows the database file size.
 
 ## Server Endpoint
 

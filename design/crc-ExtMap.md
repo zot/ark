@@ -8,7 +8,7 @@ source-side cleanup runs from the orphan callback. Rebuilt at
 startup by scanning X records.
 
 Two extension maps and an error log handle overlay (tmp://)
-routings whose records cannot live in LMDB. Overlay state is
+routings whose records cannot live in the index. Overlay state is
 session-scoped — empty at every startup, populated as overlay
 sources index, dropped as overlay items disappear.
 
@@ -88,7 +88,7 @@ sources index, dropped as overlay items disappear.
   and the `fileidToTvids` update both resolve each target's fileid via
   `DB.chunkFileID(txn, …)`; for a *persistent* target that is an
   `fts.ReadCRecord` read needing a live txn, so the overlay caller
-  (`runOverlayExtRouting`) supplies a read-only `env.View`. An overlay
+  (`runOverlayExtRouting`) supplies a read-only `db.View`. An overlay
   source writes nothing (`bothPersistent` false), so the read-only txn
   and a nil `TvidTxn` suffice. (R2915)
 - ReresolveOnReindex(fileid, addedChunkIDs, orphanedChunkIDs, txn,
@@ -128,7 +128,7 @@ sources index, dropped as overlay items disappear.
   TvidMap.Resolve is needed for spec recovery (when called from
   re-resolution paths) and the V record empties trigger
   tt.Remove(tvid_ext); reversing the order loses the spec. txn and
-  tt may be nil for fully-overlay sources because no LMDB writes
+  tt may be nil for fully-overlay sources because no index writes
   fire. (R2008, R2009, R2022, R2023, R2024, R2025)
 - VirtualTagCount(tag) int: read-only accessor for T-total queries.
   Returns 0 if tag absent. Counts persistent and overlay routings
@@ -170,9 +170,9 @@ sources index, dropped as overlay items disappear.
   `chunkToTargets[targetChunkID]`, returns the source chunkid, source
   file path, target anchor (currently always empty — anchored target
   forms are deferred), and the routed (tag, value) pairs. Branches
-  on `bothPersistent` to read routed tvids from X records (LMDB)
+  on `bothPersistent` to read routed tvids from X records (the index)
   vs `overlayRoutings`. Self-contained — opens its own read txn via
-  `db.store.env.View`. Used by Server.enrichContent to emit
+  `db.store.bolt.View`. Used by Server.enrichContent to emit
   `<ark-ext-tags>` blocks. (R2065, R2073, R2079)
 - AppendIsDegenerate: append-only file changes use ReresolveOnReindex
   unchanged — the diff is empty for unchanged chunks; Adds fire only

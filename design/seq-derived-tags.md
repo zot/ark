@@ -13,7 +13,7 @@ RJ to suppress re-proposal).
 ## Derive — `ark connections recall --propose`
 
 ```
-Caller        CLI               Server (Lib.Recall)              Store                    LMDB
+Caller        CLI               Server (Lib.Recall)              Store                    index
 (user/agent)  (cmdRecall)       substrate + derivation worker    (helpers)                (RC/RJ/RF + EC/ED)
   |                |                    |                              |                          |
   |- ark connections recall ...         |                              |                          |
@@ -23,7 +23,7 @@ Caller        CLI               Server (Lib.Recall)              Store          
                            |  (R2667)                                  |                          |
 1.2                        |- proxy POST  |                              |                          |
                            |  /recall --->|                              |                          |
-1.3                        |              |- env.View(txn):                |                          |
+1.3                        |              |- db.View(txn):               |                          |
                            |              |  force                       |                          |
                            |              |  KeepTagless=true            |                          |
                            |              |  internally for              |                          |
@@ -117,7 +117,7 @@ proposals (R2684, R2685). Tagless chunks are derivation candidates
 when `--propose` is set (R2668), but their proposals are invisible
 in the stencil unless `-all` is also set.
 
-When `--propose` is set but no `tag_model` is configured, the
+When `--propose` is set but no `[embedding] model` is configured, the
 derivation pass exits silently — there are no ED records to score
 against (R2676); the recall result is unaffected.
 
@@ -128,7 +128,7 @@ candidate. No CLI surface in this slice — the forge calls the Store
 API directly.
 
 ```
-Tag Forge UI    Store.AcceptDerived       LMDB
+Tag Forge UI    Store.AcceptDerived       index
 (item 6)        (write actor)             (RC + V/F)
   |                  |                          |
   |- accept(c,t,v)-->|                          |
@@ -169,7 +169,7 @@ candidate. Persists an RJ record so the derivation pass never
 re-proposes the same (chunkid, tagname).
 
 ```
-Tag Forge UI    Store.RejectDerived       LMDB
+Tag Forge UI    Store.RejectDerived       index
 (item 6)        (write actor)             (RC + RJ)
   |                  |                          |
   |- reject(c,t) --->|                          |
@@ -198,10 +198,10 @@ later seam) is the only thing that raises the score back toward 0.
 
 ## Error / edge paths
 
-- `--propose` without `tag_model` configured: derivation pass
+- `--propose` without `[embedding] model` configured: derivation pass
   exits before any cosine work; recall result unaffected (R2676).
 - `Store.AcceptDerived` on a (chunkid, tagname) that has no RC
-  record: the delete-RC step is a no-op (LMDB delete on missing
+  record: the delete-RC step is a no-op (index delete on missing
   key); F/V write still runs. The user's intent (attach this tag)
   is honored even if the RC vanished between forge-list and
   accept (e.g. another concurrent accept).

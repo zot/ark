@@ -13,14 +13,14 @@ transition. Three pieces in motion:
   writes the tmp:// doc through the write actor, runs the
   substrate pipeline in-process.
 - **Substrate pipeline**: four passes per input (vector+trigram
-  against ED, vector+trigram against EC) over one shared LMDB
+  against ED, vector+trigram against EC) over one shared
   View txn. Merges per-substrate, per-input, sorts top-K.
 
 ## Happy Path (single chunkID input)
 
 ```
 Curation       Server (Lua bridge       Librarian.FindConnections      Substrate pipeline      Write actor + DB     PubSub +
-workshop       + HTTP handlers)         orchestrator                    (in-process worker)     (LMDB)               listener
+workshop       + HTTP handlers)         orchestrator                    (in-process worker)     (index)              listener
   |                  |                          |                              |                       |                  |
   |- mcp.onpublish + mcp.subscribe(             |                              |                       |                  |
   |  session, {tag="connections-status"...})--->|                              |                       |                  |
@@ -51,7 +51,7 @@ workshop       + HTTP handlers)         orchestrator                    (in-proc
                      |<- requestID -------------|                              |                       |                  |
 1.8                  |<- requestID -----------|                                |                       |                  |
                      |                                                         |                       |                  |
-                     |                                                  1.9    |- env.View(txn):       |                  |
+                     |                                                  1.9    |- db.View(txn):        |                  |
                      |                                                         |    for each input I:  |                  |
                      |                                                         |      EC[I] or embed   |                  |
                      |                                                         |      vector(I, ED) -> |                  |
@@ -100,7 +100,7 @@ workshop       + HTTP handlers)         orchestrator                    (in-proc
 ## Multi-Input Merge
 
 ```
-Substrate pipeline (in env.View txn)
+Substrate pipeline (in db.View txn)
   |
   |- inputs = [{chunkID=4711}, {chunkID=5023}, {text="asparagus"}]
   |
@@ -137,7 +137,7 @@ Substrate pipeline (in env.View txn)
 ```
 Substrate pipeline                 Librarian.FindConnections
   |                                       |
-  |- env.View(txn):                       |
+  |- db.View(txn):                        |
   |  EmbeddingAvailable()? -> false       |
   |  vector_ed, vector_ec: skip           |
   |  trigram_ed, trigram_ec: run normally |

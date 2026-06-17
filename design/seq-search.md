@@ -162,7 +162,7 @@ CLI ──> Searcher.SearchMulti(query, opts)
          ├──> if --proximity: append WithProximityRerank(2*k)
          │
          ├──> microfts2.SearchMulti(query, strategies, k, ...filterOpts)
-         │     ├── single LMDB View transaction
+         │     ├── single read transaction
          │     ├── collect candidates once (trigram intersection)
          │     ├── score with each strategy independently
          │     └── if proximity: rerank top-N per strategy by term span

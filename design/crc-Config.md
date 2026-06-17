@@ -41,7 +41,7 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
 - aboutCentroidFilter: bool — enable file-centroid pre-filtering for "about" queries; default false (R1919, R1921, R1922)
 - aboutCentroidThreshold: float64 — cosine similarity gate for the centroid filter; default 0.3, consulted only when aboutCentroidFilter is true (R1920, R1921)
 - aboutFilterTopK: int — default chunk count retained per about-mode filter row; default 200 (R1938)
-- autoCompact: bool — when true, `ark serve` runs LMDB compaction on startup as if `-compact` had been passed. The CLI flag (when supplied) wins over this setting. Default false. (R2125)
+- autoCompact: bool — when true, `ark serve` runs database compaction on startup as if `-compact` had been passed. The CLI flag (when supplied) wins over this setting. Default false. (R2125)
 - luhmann: LuhmannConfig — orchestrator restart-policy knobs (R2797, R2798, R2799, R2800, R2862). Carries `ContextLimit int` (default 150000, R2797), `CrashPauseAfter int` (default 3, R2798), `QuitEarlyPauseAfter int` (default 3, R2862 — consecutive-quit-early ceiling on the independent `quit_early` counter), `BackoffSeconds []int` (default `[1, 5, 30]`, R2799), and `Classes map[string]LuhmannClass` (per-class enable flag, R2800). Live reload picks up changes on the next supervisor decision (R2801).
 - errors: []string — validation errors (identical include/exclude)
 

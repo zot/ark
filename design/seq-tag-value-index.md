@@ -9,7 +9,7 @@ section). File-level callers resolve chunkids → fileids afterward.
 ## Index/Refresh via Chunk Callback (R1103, R1113-R1124, R1873-R1876)
 
 ```
-Indexer                 microfts2            Store              LMDB
+Indexer                 microfts2            Store              index
   |                        |                   |                  |
   |--AddFileWithContent--->|                   |                  |
   |  (path, strategy,      |                   |                  |
@@ -44,7 +44,7 @@ Driven by microfts2's removed-chunk callback when a chunk is orphaned
 (file removed or re-indexed). Targeted, not a full V scan.
 
 ```
-microfts2                 Store                        LMDB
+microfts2                 Store                        index
   |                          |                          |
   |--RemovedChunkCallback--->|                          |
   |  (chunkID)               |                          |
@@ -63,7 +63,7 @@ microfts2                 Store                        LMDB
 ## Query — Tag Value Completion (R1108, R1109, R1111)
 
 ```
-Browser         Server              Store           LMDB
+Browser         Server              Store           index
   |                |                   |               |
   |--POST /tags/values--------------->|               |
   |  {tag,prefix}  |                   |               |

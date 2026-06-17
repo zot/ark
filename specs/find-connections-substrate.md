@@ -193,7 +193,7 @@ comparable on a single `[0, 1]` scale.
   first unknown ID. (Mirrors `BuildFetchPayload`'s pattern but
   applied at enqueue time, because the substrate pipeline needs
   EC vectors immediately.)
-- Embedding unavailable (no `tag_model` configured, or model
+- Embedding unavailable (no `[embedding] model` configured, or model
   file missing) → the ED-vector and EC-vector substrates skip;
   trigram substrates still run. The result includes the two
   trigram-side rankings with a note in the doc header
@@ -306,7 +306,7 @@ progress-text updates are skipped in normal mode.
 - `unknown chunk <id>` → reject at enqueue with named ID.
 - `path "<p>" not found` → reject at enqueue.
 - `path:range parse error` → reject at enqueue.
-- Internal pipeline failure (LMDB read error, embedding model
+- Internal pipeline failure (index read error, embedding model
   error mid-flight) → write the doc with
   `@connections-status: errored`, `@connections-error: <message>`.
 
@@ -491,14 +491,14 @@ Steam Deck. Breakdown:
 - Vote aggregation, sort, render: ~5 ms.
 
 For larger input sets the EC pass dominates; the four substrate
-passes share a single LMDB View txn to avoid lock churn (the
+passes share a single View transaction to avoid lock churn (the
 `SearchChunksMulti` pattern). Per-input passes are sequential
 within the txn but the multi-request batched form
 (`SearchChunksMulti`) processes all inputs in one cursor walk.
 
 Ad-hoc embedding (bare text input) adds ~10–25 ms (one model
 dispatch on the default tier; see
-`project_gollama-fork.md`/Embedding Benchmarks).
+`project_gollama-fork.md`/Embedding Benchmarks — historical, gollama fork retired).
 
 ## Test Strategy
 

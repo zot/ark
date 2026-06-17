@@ -5,13 +5,13 @@
 Two flows for the per-session recall dedup state: the recall agent
 *writing* RD records via `ark discussed add`, and the recall
 substrate *reading* them via `--session SID` on
-`ark connections recall`. Both routes share `Store` as the LMDB
+`ark connections recall`. Both routes share `Store` as the index
 front, the write actor for mutations, and view txns for reads.
 
 ## Write — `ark discussed add --session SID @t1 @t2:v ...`
 
 ```
-Recall agent /          CLI                Server            Store                 LMDB
+Recall agent /          CLI                Server            Store                 index
 caller (humans)         (cmdDiscussed)     (HTTP bridge)     (helpers)             (RD records)
   |                          |                   |                  |                    |
   |- ark discussed add ----->|                   |                  |                    |
@@ -54,7 +54,7 @@ segment (R2648).
 ## Read — `ark connections recall --session SID --discussed @t...`
 
 ```
-Caller          CLI               Server (Lib.Recall)        Store                LMDB
+Caller          CLI               Server (Lib.Recall)        Store                index
 (user / agent)  (cmdRecall)       substrate worker           (helpers)            (RD + V + EC)
   |                  |                    |                       |                    |
   |- ark connections recall ...           |                       |                    |
@@ -70,7 +70,7 @@ Caller          CLI               Server (Lib.Recall)        Store              
 2.2                      |- proxy to      |                       |                    |
                          |  POST /recall  |                       |                    |
                          |  with opts --->|                       |                    |
-2.3                      |                |- env.View(txn):       |                    |
+2.3                      |                |- db.View(txn):        |                    |
                          |                |  if opts.Session != "":                   |
                          |                |    ListDiscussed(s,   |                    |
                          |                |    since=0, ttl) ---->|                    |
@@ -121,7 +121,7 @@ exact pair (R2657).
 ## Lazy expiry — `ark discussed list` and prune
 
 ```
-Caller        CLI                Store                 LMDB
+Caller        CLI                Store                 index
               (cmdDiscussed)     (helpers)             (RD records)
   |                |                  |                     |
   |- ark discussed list --session SID                       |

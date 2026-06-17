@@ -3,7 +3,7 @@
 
 ## Test: Store.AddDiscussed round-trip
 **Purpose:** Verify AddDiscussed writes the RD record with the expected key shape and 8-byte unix-nanos value.
-**Input:** Call `AddDiscussed("sess-1", "topic", "messaging")`, then directly read the key `"RD" + "sess-1" + \x00 + "topic" + \x00 + "messaging"` from the ark subdatabase.
+**Input:** Call `AddDiscussed("sess-1", "topic", "messaging")`, then directly read the key `"RD" + "sess-1" + \x00 + "topic" + \x00 + "messaging"` from the ark bucket.
 **Expected:** Record exists; value is 8 bytes; decoded big-endian uint64 is within 1 second of the test's NOW. Key bytes match exactly.
 **Refs:** crc-Store.md, seq-discussed.md#1.4, R2648, R2650
 
@@ -34,7 +34,7 @@
 ## Test: ListDiscussed lazy TTL drop
 **Purpose:** Verify entries past their TTL are skipped on read without being deleted.
 **Input:** Add entry at T=NOW-25h. Call `ListDiscussed("sess-1", 0, 24h)`.
-**Expected:** Returns empty slice. Raw LMDB scan still finds the record (not yet pruned).
+**Expected:** Returns empty slice. Raw index scan still finds the record (not yet pruned).
 **Refs:** crc-Store.md, R2659
 
 ## Test: ListDiscussed skips malformed values
@@ -73,7 +73,7 @@
 ## Test: `ark discussed prune --ttl` invalid value
 **Purpose:** Verify an unparseable `--ttl` value exits non-zero before any RD delete.
 **Input:** Populate one session with one entry. Run `ark discussed prune --ttl foo`.
-**Expected:** Exit non-zero with parse-error message. The entry is still present in LMDB after the call.
+**Expected:** Exit non-zero with parse-error message. The entry is still present in the index after the call.
 **Refs:** crc-CLI.md, R2653
 
 ## Test: Tag input grammar parses bare and exact-pair forms
@@ -154,6 +154,6 @@
 
 ## Test: Substrate is read-only on RD
 **Purpose:** Verify `ark connections recall` does not write any RD record under any circumstance.
-**Input:** Snapshot LMDB RD range. Run multiple `ark connections recall` invocations with various `--session` and `--discussed` combinations. Snapshot RD range again.
+**Input:** Snapshot the index's RD range. Run multiple `ark connections recall` invocations with various `--session` and `--discussed` combinations. Snapshot RD range again.
 **Expected:** Snapshots match exactly. The substrate is read-only on the recall namespace; only `ark discussed add` writes (R2662).
 **Refs:** crc-Librarian.md, R2662

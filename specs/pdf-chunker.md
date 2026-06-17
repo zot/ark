@@ -139,7 +139,7 @@ GetChunk(path string, data []byte, customData *any, chunk *Chunk) error
 microfts2's `ChunkCache` dispatches `GetChunk` with the chunk's
 pre-filled `Range` and `Attrs` (read from the C record). The
 chunker reads `content_offset`/`content_len` from Attrs, fetches
-the page blob from ark's subdatabase, decompresses, slices, and
+the page blob from ark's bucket, decompresses, slices, and
 fills `chunk.Content`. `customData` holds decompressed page blobs
 keyed by page number — filled on demand, dropped when the
 ChunkCache expires (session TTL, minutes). No eviction policy

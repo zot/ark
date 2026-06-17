@@ -131,7 +131,7 @@ microfts2 is the source of truth for file identity; chunk embeddings
 - A single background goroutine processes the queue (one file at a
   time to avoid overwhelming the CPU)
 - Status reports progress: "vector: 14/17 files embedded"
-- The queue survives server restart (persisted in ark subdatabase)
+- The queue survives server restart (persisted in the ark bucket)
 - If no embed-cmd is configured, the queue is simply not processed
   (FTS-only mode)
 

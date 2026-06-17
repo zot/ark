@@ -28,7 +28,7 @@ from a flag to a subcommand.
 
 ### `ark embed bench tags`
 
-Collect all tag values from LMDB, embed via batch and single paths,
+Collect all tag values from the index, embed via batch and single paths,
 report timing comparison and speedup ratio.
 
 ### `ark embed bench chunks`
@@ -48,7 +48,7 @@ The concern: embedding records can drift from the actual chunk state
 due to crashes, partial writes, or bugs in the batch embed loop.
 Observed symptoms: continual high memory usage from an embedding loop
 that only stops on restart, creeping database size, and more E records
-in the ark subdatabase than C records in microfts2 — a clear sign of
+in the ark bucket than C records in microfts2 — a clear sign of
 orphaned embeddings.
 
 ### Checks

@@ -1,11 +1,11 @@
 # Vector Benchmark
 
 Benchmark in-process embedding performance against real chunks from
-the LMDB index. The goal is to answer: "Is vector search viable at
+the index. The goal is to answer: "Is vector search viable at
 ark's scale on this hardware?"
 
 This benchmark validated **in-process** embedding — load the model
-once and hold it warm across all embeddings via gollama (the llama.cpp
+once and hold it warm across all embeddings via yzma (the llama.cpp
 Go binding) — against the prior design that shelled out to an external
 embedder per chunk (paying model-load cost every time). The in-process
 approach measured here is now ark's production vector path: the
@@ -14,7 +14,7 @@ Librarian/EC pipeline (R1913–R1916); the external-command embedder
 
 ## `ark vec bench`
 
-Loads a GGUF embedding model, pulls chunks from the existing LMDB
+Loads a GGUF embedding model, pulls chunks from the existing
 index, embeds each one in-process, and reports timing statistics.
 
 - `--model PATH` — path to GGUF model file (required)
@@ -52,5 +52,5 @@ vectors exist and how long the search took.
 
 ## Language and Environment
 
-Go. Uses gollama (github.com/godeps/gollama) for in-process llama.cpp
-embedding. Reads chunks from the existing LMDB index via microfts2.
+Go. Uses yzma (github.com/hybridgroup/yzma) for in-process llama.cpp
+embedding. Reads chunks from the existing index via microfts2.

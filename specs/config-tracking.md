@@ -6,7 +6,7 @@ index staleness.
 
 ## I Records: Config Storage
 
-Each config field gets its own LMDB I record (`I[name] → value`),
+Each config field gets its own index I record (`I[name] → value`),
 following the same pattern as microfts2. Scalar fields store their
 string representation; compound fields store JSON. Operational
 non-config state (e.g. `next_tvid` counter) also lives in I records.

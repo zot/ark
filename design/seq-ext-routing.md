@@ -6,7 +6,7 @@ when target-bearing files reindex, source-side cleanup when an
 and startup rebuild.
 
 `bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(target_chunkid)`
-controls whether each routing writes to LMDB (X + V records) or to
+controls whether each routing writes to the index (X + V records) or to
 ExtMap's in-memory overlay state (`overlayRoutings` +
 `overlayValues`). The six core maps (targetToChunk, chunkToTargets,
 fileidToTvids, extByAnchor, unresolvedTargets, virtualTagCount) are
@@ -77,9 +77,9 @@ Indexer (indexed-chunk callback for source chunk)
 
 Overlay (`tmp://`) sources run this same flow via
 `Indexer.runOverlayExtRouting`, which wraps the `applyIndexExt` calls
-in a read-only `env.View`: an overlay source can route to a
+in a read-only `db.View`: an overlay source can route to a
 persistent target whose fileid resolution (`chunkFileID` →
-`ReadCRecord`) is an LMDB read needing a live txn. No writes fire
+`ReadCRecord`) is an index read needing a live txn. No writes fire
 (`bothPersistent` always false), so the read-only txn and a nil
 `TvidTxn` suffice. (R2915)
 
@@ -203,7 +203,7 @@ Indexer (orphan callback for persistent source_chunkid)
 
 Triggered when TmpTagStore drops a chunk (RemoveFile or RemoveChunk).
 Every routing whose source is overlay has bothPersistent=false, so
-no LMDB writes fire.
+no index writes fire.
 
 ```
 TmpTagStore.dropChunkLocked(chunkID)
@@ -256,7 +256,7 @@ three sources without coordination:
 ```
 Store.TagValueChunks(tag, value)
    │
-   ├── persistent LMDB:
+   ├── persistent index:
    │      prefix scan V[tag]\x00[value]\x00 → []chunkid
    │
    ├── TmpTagStore.TagValueChunks(tag, value) → []chunkid

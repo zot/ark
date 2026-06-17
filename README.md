@@ -4,15 +4,15 @@
 
 A [zettelkasten](https://en.wikipedia.org/wiki/Zettelkasten) is a personal knowledge system -- cards in a box,
 connected by cross-references, that grows with you. This one is
-digital and connected to your AI. Files on disk, LMDB index, hybrid
+digital and connected to your AI. Files on disk, BBolt index, hybrid
 trigram + vector search. Long-term memory for Claude Code across
 every session on your machine.
 
-Ark indexes your files -- projects, notes, claude's chat logs and
-memories, whatever you point it at -- and gives Claude persistent
+Ark indexes your files (projects, notes, Claude's chat logs and
+memories, whatever you point it at) and gives Claude persistent
 recall. Your assistant arrives already knowing what you've worked on
-and decided. Results come back in microseconds, fast enough for
-auto-querying on every message in a conversation.
+and decided. Results come back in microseconds, fast enough to
+auto-query on every message in a conversation.
 
 ## What It Does
 
@@ -39,7 +39,7 @@ auto-querying on every message in a conversation.
   why, and you can't fix it when the clustering is wrong. Tags give
   you edges you can read, grep for, and edit. When a connection is
   wrong, you delete a word. You can add your own edges at any time,
-  and each tag carries a textual body (`@decision: use LMDB for
+  and each tag carries a textual body (`@decision: use bbolt for the
   index`) so the edge itself has meaning, not just a label. The
   graph survives an index rebuild because it lives in the files, not
   the database.
@@ -65,7 +65,7 @@ line. The `@` must be at the start of a line or preceded by a space --
 anything else (like an email address) is ignored.
 
 ```
-@decision: use LMDB for the index
+@decision: use bbolt for the index
 @status: open
 @pattern: closure-actor
 ```
@@ -183,12 +183,12 @@ Ark is deliberately not an MCP server.
   message whether the tools are used or not. The `/ark` skill loads on
   demand. Zero cost when idle.
 
-### Files on Disk, Index in LMDB
+### Files on Disk, Index in BBolt
 
-Ark doesn't copy your files. It keeps a lightweight index in LMDB and
-tracks when files change, disappear, or appear new. Delete the index,
-run `ark rebuild`, get the same results -- because the source of truth
-is always the files.
+Ark doesn't copy your files. It keeps a lightweight index in BBolt and
+tracks when they change or disappear. Delete the index and run `ark
+rebuild` to get the same results, because the source of truth is always
+the files.
 
 ### Search
 
@@ -209,7 +209,7 @@ Ark is a graph database built from the opposite direction. Traditional
 graph DBs start with schema and populate it. Ark starts with documents
 and discovers the schema through use.
 
-- **Nodes**: files and chunks (in LMDB)
+- **Nodes**: files and chunks (in BBolt)
 - **Edges**: tags (indexed, bidirectional via FTS)
 - **Schema**: tag vocabulary (emerges from use, documented in `tags.md`)
 
@@ -370,8 +370,8 @@ MCP restrictions.
   UI engine underneath Frictionless.
 - [**microfts2**](https://github.com/zot/microfts2) -- Trigram
   full-text search library that powers Ark's search.
-- [**microvec**](https://github.com/zot/microvec) -- LMDB-backed
-  vector database for semantic search. Go library with CLI.
+- [**pdftext**](https://github.com/zot/pdftext) -- simple feature-based
+  text extraction from PDFs (tables, paragraphs, headings, ...)
 - [**Humble Master**](https://github.com/zot/humble-master) --
   Narrative alignment research for LLMs. The agentic patterns
   documented above connect to the broader question of how personas
@@ -379,11 +379,11 @@ MCP restrictions.
 
 ## Key Files
 
-| File               | Contents                                             |
-|--------------------|------------------------------------------------------|
-| `ARK-MESSAGING.md` | Cross-project messaging protocol                     |
-| `specs/`           | Human-readable spec files                            |
-| `design/`          | CRC cards, sequence diagrams, requirements (R1-R540) |
+| File               | Contents                                              |
+|--------------------|-------------------------------------------------------|
+| `ARK-MESSAGING.md` | Cross-project messaging protocol                      |
+| `specs/`           | Human-readable spec files                             |
+| `design/`          | CRC cards, sequence diagrams, requirements (R1-R2992) |
 
 ## Status
 

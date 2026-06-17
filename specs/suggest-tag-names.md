@@ -22,7 +22,7 @@ func (l *Librarian) SuggestTagNames(chunkID uint64, k int) ([]TagSuggestion, err
 
 Lives on Librarian beside `EmbedSimilarTagValues` and `SearchChunks`,
 matching the existing layering: Librarian owns vector queries; DB owns
-the LMDB data plane and does not reach into the embedding model.
+the index data plane and does not reach into the embedding model.
 HTTP-layer callers (UI handlers on Server) reach the librarian via
 `srv.librarian` — the established pattern for vector queries.
 
@@ -77,7 +77,7 @@ than returning an error.
 - `k <= 0` → return `(nil, nil)`.
 - Chunk has no EC record → return `(nil, nil)`. Not an error: chunks
   embed lazily, the UI may call before the chunk has been processed.
-- Embedding unavailable (no `tag_model` configured, or model file
+- Embedding unavailable (no `[embedding] model` configured, or model file
   missing) → return `(nil, nil)`. The UI degrades gracefully to
   manual tag entry.
 - ED prefix empty (no tag defs indexed yet) → return `(nil, nil)`.
@@ -87,7 +87,7 @@ than returning an error.
 ## What This Does Not Do
 
 - Does not call the embedding model. The chunk's EC vector is read
-  from LMDB; ED vectors are read from LMDB. Pure cosine math.
+  from the index; ED vectors are read from the index. Pure cosine math.
 - Does not invoke a search agent. No spectral expansion, no
   reranking. Phase 1.5 (`Find Connections`) is a separate slice.
 - Does not propose tag *values*. Phase 1's UI keeps the value
@@ -102,7 +102,7 @@ than returning an error.
 
 ## Performance
 
-- One LMDB View txn covers the full operation.
+- One read transaction covers the full operation.
 - One ED prefix scan (~270–1000 records today).
 - One `FileIDPaths` call (~N records, ~318 KB at current corpus
   size — already cached in microfts2's working set).

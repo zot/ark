@@ -7,7 +7,7 @@ Substrate-pipeline tests live in `connections_substrate_test.go`
 beside `connections_test.go`. They use the **test-as-subscriber
 pattern** from R2312 — subscribing through `PubSub.Subscribe` +
 `Listen` against the tmp:// path the substrate worker writes. No
-mocks of the substrate; LMDB is real, the embedding model is real
+mocks of the substrate; the index is real, the embedding model is real
 when available and skipped (with `t.Skip`) when not.
 
 ## Test: enqueue + completed terminal write for one chunkID input
@@ -195,8 +195,8 @@ FindConnections for that chunk.
 
 **Purpose:** Validates R2588.
 
-**Input:** Run with the embedding model disabled (clear `tag_model`
-config or stub `EmbeddingAvailable()` to false). Submit a
+**Input:** Run with the embedding model disabled (clear the `[embedding]`
+model config or stub `EmbeddingAvailable()` to false). Submit a
 chunkID request.
 
 **Expected:** Completed doc carries `@connections-warning: embedding

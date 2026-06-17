@@ -27,7 +27,7 @@ canonical; these mirror. Keep in sync when you add along one of these
 axes (this is the pinned list CLAUDE.md refers to).
 
 - [cli-commands.md](cli-commands.md) — every CLI subcommand + flag
-- [record-formats.md](record-formats.md) — every LMDB record prefix / key / value
+- [record-formats.md](record-formats.md) — every index record prefix / key / value
 - [lua-api.md](lua-api.md) — every Lua binding (`mcp` / `MCP` / `sys` / `session` / `ui`)
 - [features.md](features.md) — every capability: motivation + objective
 - [config.md](config.md) — every `ark.toml` key

@@ -58,7 +58,7 @@ Scanner              EmptyFiles          microfts2          DB (addDirectory)
   re-populates the set. (R1650)
 - Access to the set is serialized through the DB actor. Scanner.Scan
   runs on the actor goroutine (reads and writes to the set happen
-  there). LMDB evictions from `ScanAsync` are routed through the
+  there). Index evictions from `ScanAsync` are routed through the
   write queue (`enqueueWrite`) so they serialize behind any in-flight
   write transaction rather than contending with it on the actor.
   Synchronous scans (`Scan`, `addDirectory`) run eviction in the

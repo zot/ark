@@ -24,7 +24,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 
 | Feature                                     | Status                                     | Spec                                                                          |
 |---------------------------------------------|--------------------------------------------|-------------------------------------------------------------------------------|
-| Files-on-disk + LMDB index                  | shipping                                   | `principles.md` (project-level commitment); `record-formats.md` (LMDB layout) |
+| Files-on-disk + index                       | shipping                                   | `principles.md` (project-level commitment); `record-formats.md` (index layout) |
 | Ark tags & hypergraph structure             | shipping                                   | `ark-tags.md`                                                                 |
 | Tag drill-down (`<ark-tag>` element)        | shipping                                   | `ark-tag-element.md`                                                          |
 | Source monitoring & chunking                | shipping                                   | `chunkers.md`, `source-monitoring.md`                                         |
@@ -41,7 +41,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Frictionless UI                             | shipping                                   | `ACCESSING-FRICTIONLESS.md`, `lua-api.md`                                     |
 | Bundle distribution                         | shipping                                   | `cli-commands.md` (bundle/setup commands)                                     |
 | Self-provisioned in-process inference | engine landed (gollama→yzma): llama.cpp via yzma purego/`dlopen`, runtime-provisioned libs (`ark embed install`), no GPU-native compile-time dep | `yzma-embedding.md`, `llama-libs.md` |
-| Cross-platform `CGO_ENABLED=0` binaries | blocked: `lmdb-go` (ark store + microfts2) still links C — pending the LMDB→pure-Go (BBolt) migration; then the frictionless-style release sweep | `yzma-embedding.md` |
+| Cross-platform `CGO_ENABLED=0` binaries | shipping: `lmdb-go`→bbolt (store) and gollama→yzma (embedding) removed the last C dependencies; the Makefile builds CGO-free and the `release` target cross-compiles the supported `GOOS/GOARCH` targets, grafting bundled assets via `ark bundle -src` (R2971/R2972). v0.5.0 shipped (linux-amd64) | `llama-libs.md`, `record-formats.md` |
 
 The columns:
 
@@ -53,11 +53,11 @@ The columns:
   When more than one is listed, the first is canonical and the
   others are supporting.
 
-## Files-on-disk + LMDB index
+## Files-on-disk + index
 
 **Motivation.** Index files lose; source files don't. Ark commits to
 the Fossil principle: the markdown, code, and other source files
-the user edits are authoritative, and ark's LMDB index is rebuildable
+the user edits are authoritative, and ark's index is rebuildable
 derived state. Without this guarantee, ark would be another
 proprietary store that holds the user's data hostage. With it, ark
 is a *projection* over content the user controls.
@@ -65,11 +65,11 @@ is a *projection* over content the user controls.
 **Objective.** Every fact ark surfaces — chunks, tags, embeddings —
 is reconstructible by re-running the indexer over the source files.
 `ark rebuild` is the operational expression of this guarantee.
-LMDB-only state (caches, indexes, sidecar request queues) is fair
-game; LMDB-only *user data* would be a bug.
+Index-only state (caches, indexes, sidecar request queues) is fair
+game; index-only *user data* would be a bug.
 
 **Surface.** `ark serve`, `ark rebuild`, `ark refresh`, `ark add`,
-the indexer pipeline, all the LMDB records described in
+the indexer pipeline, all the index records described in
 `specs/record-formats.md`.
 
 ## Ark tags & hypergraph structure
@@ -491,6 +491,6 @@ When a new feature ships or a feature's motivation shifts:
    motivation and objective. Keep it short; the per-feature spec
    has the depth.
 4. If the feature spans multiple existing axes — touching the CLI
-   surface, the LMDB layout, or the Lua API — update those
+   surface, the index layout, or the Lua API — update those
    summary specs too. CLAUDE.md's *cross-cutting spec references*
    section is the maintenance checklist.

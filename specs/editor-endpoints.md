@@ -117,11 +117,11 @@ Response:
 ```
 
 Values come from scanning F (per-file tag count) records and reading
-the actual tag values from indexed files. Since LMDB stores tag counts
+the actual tag values from indexed files. Since the index stores tag counts
 but not tag values directly, this requires reading F records for the
 tag to get file IDs, then extracting values from those files.
 
-An alternative: during indexing, also store tag values in LMDB. This
+An alternative: during indexing, also store tag values in the index. This
 would make value completion fast. But for now, scan files — tag
 completion is interactive and the result set is small enough.
 

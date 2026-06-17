@@ -45,7 +45,7 @@ matching the existing pattern for `SearchChunks` and `EmbedSimilarTagValues`.
 
 ```
 chunk has no EC record       → (nil, nil)        R2169
-no tag_model configured      → (nil, nil)        R2170
+no [embedding] model         → (nil, nil)        R2170
 no ED records yet            → (nil, nil)        R2171
 k <= 0                       → (nil, nil)        R2168
 ED dim != chunk EC dim       → skip that ED, continue  R2172

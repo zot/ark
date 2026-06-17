@@ -3,7 +3,7 @@
 
 ## Test: Store.WriteDerivedProposal round-trip + tally
 **Purpose:** Verify WriteDerivedProposal writes RC with tally=1 on first call and increments to 2 on second.
-**Input:** Inside one write txn, call `WriteDerivedProposal(chunkID=42, tagname="priority")` twice. Read key `"RC" + varint(42) + "priority"` from the ark subdatabase.
+**Input:** Inside one write txn, call `WriteDerivedProposal(chunkID=42, tagname="priority")` twice. Read key `"RC" + varint(42) + "priority"` from the ark bucket.
 **Expected:** Record exists. After first call, value decodes to big-endian uint64 = 1. After second call, value decodes to 2.
 **Refs:** crc-Store.md, seq-derived-tags.md#1.7, R2664, R2674
 
@@ -64,7 +64,7 @@
 ## Test: Store.AcceptDerived idempotent on missing RC
 **Purpose:** Verify AcceptDerived honors the user's intent even when RC has already been removed (e.g. concurrent accept).
 **Input:** Call `AcceptDerived(42, "priority", "high")` for a (chunkid, tagname) with no RC record present. Inspect F/V.
-**Expected:** No error. V/F records reflect the attach. The RC delete is a no-op LMDB Del on a missing key.
+**Expected:** No error. V/F records reflect the attach. The RC delete is a no-op delete on a missing key.
 **Refs:** crc-Store.md, seq-derived-tags.md error paths, R2679
 
 ## Test: Store.RejectDerived drops RC and writes signed RJ
@@ -145,9 +145,9 @@
 **Expected:** RC[C+food] is NOT written. The derivation pass's HasDerivedRejection check (`score < 0`) filters the candidate (R2673).
 **Refs:** crc-Librarian.md, seq-derived-tags.md#1.7, R2673, R2878
 
-## Test: Recall --propose without tag_model is a no-op
-**Purpose:** Verify --propose with no tag_model configured exits silently — no RC/RF writes — and the substrate result is unaffected.
-**Input:** ark.toml with no `tag_model` line. Run `ark connections recall --propose <input>`.
+## Test: Recall --propose without [embedding] model is a no-op
+**Purpose:** Verify --propose with no [embedding] model configured exits silently — no RC/RF writes — and the substrate result is unaffected.
+**Input:** ark.toml with no `[embedding] model` line. Run `ark connections recall --propose <input>`.
 **Expected:** Recall returns the normal substrate result (trigram-only fallback). No RC, RJ, or RF records are written. No error.
 **Refs:** crc-Librarian.md, R2676
 

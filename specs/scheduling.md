@@ -1,8 +1,8 @@
 # Scheduling
 
-Go layer for date-indexed events: parsing, LMDB indexing, scheduler
+Go layer for date-indexed events: parsing, index writes, scheduler
 integration, acknowledgments. Language: Go. Environment: ark server
-process, LMDB database.
+process, ark index.
 
 See also: specs/pubsub.md (event scheduler mechanics, time value
 grammar, recurring format), .scratch/SCHEDULING.md (design brainstorm).
@@ -296,7 +296,7 @@ entries are the durable human record; the log is the machine record.
 
 ## Month Buckets (in-memory)
 
-Replace LMDB day buckets (TD/TF records) with in-memory month
+Replace day buckets (TD/TF records) with in-memory month
 buckets. The scheduler fires from log file upcoming entries.
 Calendar and CLI compute events from recurrence specs. Month
 buckets are the skip list for fast range queries.
@@ -312,14 +312,14 @@ flow:
 
 A 10-year overview is 120 buckets per event, milliseconds to
 compute. In-memory only — derived from specs, recomputable on
-restart. No LMDB storage needed.
+restart. No index storage needed.
 
 Enables `ark schedule search` without a running server: open the
 DB, read schedule log files, build month buckets, compute the
 query. Same code path, no server dependency.
 
 Remove: Store.WriteDayBuckets, QueryDayBuckets, ClearDayBuckets,
-WriteDayBucketsForFile, dayBucketsFromLogFile, TD/TF LMDB records.
+WriteDayBucketsForFile, dayBucketsFromLogFile, TD/TF index records.
 
 ## Scheduling Exceptions
 
@@ -352,7 +352,7 @@ computed result — its upcoming entry accounts for exceptions.
 
 ## Scheduler Integration
 
-The scheduler reads schedule log files — not subscriptions, not LMDB
+The scheduler reads schedule log files — not subscriptions, not index
 registries. The log files are the source of truth for what's upcoming.
 
 ### Startup scan
@@ -487,7 +487,7 @@ ark schedule search 2026-04-01..2026-06-30 --tag standup
 
 Output is markdown by default (crank-handle style), JSON with
 `--json`. Events are computed from recurrence specs and month
-buckets — no LMDB day buckets needed. Works without a running
+buckets — no day buckets needed. Works without a running
 server.
 
 Each event renders as a bullet. The time range collapses when it
@@ -555,7 +555,7 @@ When ark.toml's `[schedule]` section changes (tags added/removed,
 defaults changed), the server must re-materialize day buckets for
 affected files.
 
-Detection: store the serialized `[schedule]` section in the LMDB
+Detection: store the serialized `[schedule]` section in the
 settings record (I prefix). On config reload (startup, ark.toml
 fsnotify), compare current vs stored. If different:
 - Tags added: scan files with the new tag, write schedule log entries

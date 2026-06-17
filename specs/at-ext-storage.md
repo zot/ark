@@ -225,21 +225,21 @@ could revisit if the use case appears.
 
 ## T accounting under multi-set V
 
-`T[tag] = (LMDB F-driven count) + virtualTagCount[tag]`, summed at
+`T[tag] = (index F-driven count) + virtualTagCount[tag]`, summed at
 query time.
 
 - The existing `adjustTagTotal` path stays unchanged. F-record
-  insertion/removal still drives the LMDB T count for inline
-  contributions; the existing `isNew := IsNotFound(F[chunkid][tag])`
+  insertion/removal still drives the index T count for inline
+  contributions; the existing `isNew := F[chunkid][tag] == nil`
   check correctly counts each (chunkid, tag) pair once.
 - `virtualTagCount[tag]` tracks the ext routings' contribution to T.
   Maintained at @ext index time (incremented per routed tag added)
   and at cleanup time (decremented per routed tag removed). Rebuilt
   at startup by scanning X records.
-- T queries return `LMDB_T + virtualTagCount[tag]`.
+- T queries return `index_T + virtualTagCount[tag]`.
 
 The ext-routed contributions don't write F records at the target
-chunkid (target's F is inline-only), so the LMDB T count doesn't see
+chunkid (target's F is inline-only), so the index T count doesn't see
 them. The in-memory counter fills the gap.
 
 ## Routed-tag tvid allocation
@@ -253,7 +253,7 @@ already has a `TvidTxn` open; the routed tag's `Lookup → allocIDInTxn
 
 ## Transaction boundaries
 
-Each file reindex runs inside microfts2's per-file `env.Update`
+Each file reindex runs inside microfts2's per-file `db.Update`
 transaction. All X record mutations and V record updates from the
 ext flow go through the supplied txn, riding the same `TvidTxn`
 that the @ext tag's own tvid lifecycle uses. Multi-file batches
@@ -268,7 +268,7 @@ files are exactly the read-write tagging case `@ext` was designed for.
 A persistent file can route tags to a `tmp://` chunk, and a `tmp://`
 file can route tags to either kind of target. None of these routings
 may leave persistent residue: when ark exits, the overlay state is
-gone, so any LMDB record keyed by an overlay tvid or pointing at an
+gone, so any index record keyed by an overlay tvid or pointing at an
 overlay chunkid would dangle on the next startup with no recovery
 path.
 
@@ -277,7 +277,7 @@ path.
 Each `@ext` routing falls into one of four cases by the persistence
 of its source and target. `IsOverlayID(id) = id has the high bit set`
 applies to both chunkids and fileids — the microfts2 overlay counts
-down from `MaxUint64`, LMDB counts up.
+down from `MaxUint64`, the index counts up.
 
 ```
                 target persistent      target overlay
@@ -291,7 +291,7 @@ overlay       │                      │                      │
 ```
 
 `bothPersistent := !IsOverlayID(sourceChunkID) && !IsOverlayID(targetChunkID)`.
-LMDB X and V records are written iff `bothPersistent`. Any overlay
+Index X and V records are written iff `bothPersistent`. Any overlay
 involvement on either end keeps the routing entirely in ExtMap's
 in-memory state.
 
@@ -376,7 +376,7 @@ tvid_ext leaves every map).
 
 T-totals: `virtualTagCount[tag]` already counts every routed
 contribution (overlay or persistent), so the existing
-`LMDB_T[tag] + virtualTagCount[tag]` formula stays correct without
+`index_T[tag] + virtualTagCount[tag]` formula stays correct without
 modification.
 
 ### Cleanup paths
@@ -393,7 +393,7 @@ txn, tt)`.
 `tvids["ext"]` to find the `tvid_ext` set the chunk contributed. For
 each `tvid_ext`, call `ExtMap.CleanupSource(sourceChunkID, tvidExt,
 nil, nil)` — txn and TvidTxn are unused for overlay sources because
-no LMDB writes can fire (every routing for an overlay source has
+no index writes can fire (every routing for an overlay source has
 `bothPersistent=false`).
 
 `CleanupSource(sourceChunkID, tvidExt, txn, tt)` walks
@@ -447,12 +447,12 @@ takes the persistent branch (`fts.ReadCRecord`), which needs a live
 read transaction to resolve the target's fileid (for the
 self-reference check and `fileidToTvids`). So the overlay indexing
 path opens a **read-only** transaction and threads it down: "an
-overlay source writes no LMDB records" (`bothPersistent` always
-false) does not mean it touches no LMDB — the persistent-target
-fileid read still needs a txn. A read-only `env.View` suffices and
+overlay source writes no index records" (`bothPersistent` always
+false) does not mean it touches no index — the persistent-target
+fileid read still needs a txn. A read-only `db.View` suffices and
 mirrors the self-contained read in `ExtRoutingsForTargetChunk`.
 `CleanupSource` keeps its nil txn: for an overlay source it branches
-on `bothPersistent` before any LMDB access, so it never does a
+on `bothPersistent` before any index access, so it never does a
 persistent read.
 
 ### Overlay error log
@@ -494,7 +494,7 @@ roadmap item) are out of scope here.
 - `unresolvedTargets` membership is overlay-agnostic.
 - Self-reference rejection still fires for any source/target pair
   with the same fileid.
-- T-totals query as `LMDB_T[tag] + virtualTagCount[tag]`.
+- T-totals query as `index_T[tag] + virtualTagCount[tag]`.
 
 ## Out of scope (deferred)
 

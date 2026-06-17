@@ -123,16 +123,16 @@ Every command that may benefit from the running server calls
 `serverClient(arkDir)` first. It dials the Unix socket at
 `<dir>/ark.sock`. Connection success returns an `http.Client` that
 proxies subsequent calls through the socket; failure returns `nil`,
-and the command falls back to opening the LMDB environment directly
+and the command falls back to opening the index directly
 via `withDB`.
 
 Server-first commands proxy as a transparent optimization: the server
-keeps caches warm (file-name maps, LMDB pages, embedding model). Cold-
+keeps caches warm (file-name maps, index pages, embedding model). Cold-
 start fallbacks rebuild caches per invocation.
 
 ### Cold-start (`withDB`)
 
-`withDB(fn)` opens the LMDB environment (`ark.Open(arkDir)`), runs
+`withDB(fn)` opens the index (`ark.Open(arkDir)`), runs
 `fn`, and closes. Use is restricted to commands that don't require the
 embedding model (about-search, tag embeddings) or live state
 (subscriptions, schedule, dm, ext-routing maps).
@@ -354,7 +354,7 @@ Default (`config` with no subcommand): proxies to server if running
 | `remove-pattern PATTERN [--source DIR]` | drop matching include/exclude entry                   |
 | `show-why FILE`                         | JSON: which include/exclude rules cover FILE          |
 | `add-strategy PATTERN STRATEGY`         | append to chunker strategies                          |
-| `recover`                               | rewrite ark.toml from the LMDB I-record snapshot      |
+| `recover`                               | rewrite ark.toml from the index I-record snapshot     |
 
 Mutating subcommands proxy to the server's `/config/...` endpoints
 when the server is running so the in-memory config is kept current.
@@ -653,9 +653,9 @@ ark init [options]
 | `--case-insensitive`    | `true`  | Case-insensitive indexing                  |
 | `--aliases A=B,C=D,...` | —       | Single-byte alias map                      |
 | `--no-setup`            | `false` | Skip `setup` even when not bootstrapped    |
-| `--if-needed`           | `false` | Exit silently if `data.mdb` already exists |
+| `--if-needed`           | `false` | Exit silently if `index.db` already exists |
 
-Without `--if-needed`, removes existing `data.mdb`/`lock.mdb` before
+Without `--if-needed`, removes existing `index.db` before
 creating fresh. Auto-runs `setup` when `~/.ark/html/` is missing
 (unless `--no-setup`). Seeds tags and config from the bundle's
 `install/tags.md` and `install/ark.toml` when present. Creates
@@ -960,7 +960,7 @@ Conventional flags:
 
 Server is preferred (warm caches). When the server is absent, about-
 mode primary or filter searches exit with an error directing the user
-to start `ark serve`. `-multi` requires the LMDB Multi search path.
+to start `ark serve`. `-multi` requires the Multi search path.
 
 `search expand` is the spectral-search sidecar entry point:
 
@@ -986,7 +986,7 @@ ark serve [--no-scan] [--force] [--compact]
 |-------------|---------|---------------------------------------------------------------------------------------------------------------------|
 | `--no-scan` | `false` | Skip startup reconciliation                                                                                         |
 | `--force`   | `false` | Accept config changes, clear E records                                                                              |
-| `--compact` | `false` | Run `mdb_env_copy2(MDB_CP_COMPACT)` against each LMDB env before opening. When the flag is supplied (either form), it overrides `auto_compact` in ark.toml; when omitted, falls back to the toml setting (default `false`). See `serve-compact.md`. |
+| `--compact` | `false` | Compact the database (bbolt `Tx.WriteTo`) before opening. When the flag is supplied (either form), it overrides `auto_compact` in ark.toml; when omitted, falls back to the toml setting (default `false`). See `serve-compact.md`. |
 
 Exits 0 with a stderr message if a server is already running. The
 process holds the file lock on `~/.ark/`, writes a PID file, and
@@ -1022,14 +1022,14 @@ ark status [options]
 
 | Flag                   | Default | Meaning                                                                                |
 |------------------------|---------|----------------------------------------------------------------------------------------|
-| `--db`                 | `false` | Show LMDB record counts by prefix (microfts2 + ark, with totals)                       |
+| `--db`                 | `false` | Show index record counts by prefix (microfts2 + ark, with totals)                      |
 | `--chunks`             | `false` | Show chunk size statistics (count, min, max, mean, median, p90, p95, p99) per strategy |
-| `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `tag_model`                               |
+| `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `[embedding] model`                       |
 | `--filter-files GLOB`  | —       | Repeatable positive path filter for `--chunks`                                         |
 | `--exclude-files GLOB` | —       | Repeatable negative path filter                                                        |
 
-Default output: file/chunk/source counts, map usage, server/UI
-status, plus a `warnings:` section listing E records (each
+Default output: file/chunk/source counts, database file size,
+server/UI status, plus a `warnings:` section listing E records (each
 `name: payload`). Prefers server proxy.
 
 ### `stop` — stop the server
@@ -1139,8 +1139,8 @@ normalization (see "Filter stack").
 | `set FILE TAG VAL ...` | none (file I/O) | Pairs of TAG VAL into FILE's tag block. Setting `status` auto-sets `status-date` to today. Hint when setting `*-handled` bookmarks |
 | `get FILE [TAG...]` | none | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1 |
 | `check FILE [HEADING...]` | none | Validate FILE's tag block. Optional headings restrict allowed body headings |
-| `verify` | refused | Cross-check F/V/T/X records and the in-memory ExtMap. `--repair` writes corrections in a single LMDB write txn. `--scope` is `ext`, `tag-totals`, or `all` (default). Refuses if the server is running. Exit 1 on issues, 2 on tool failure or invalid scope |
-| `inspect` | optional | Read-only observability for `@ext` state. Server-aware: proxies via the running server (in-memory ExtMap section included) or opens LMDB read-only when stopped (disk-only with a note). `--scope ext` (v1 only); `--target PATH` narrows to one file's chunks; `--json` for machine output. Output sections: on-disk (X / V[ext] / F[ext]), in-memory ExtMap maps, per-tvid_ext bridges with decoded paths and routed (tag, value) pairs |
+| `verify` | refused | Cross-check F/V/T/X records and the in-memory ExtMap. `--repair` writes corrections in a single write transaction. `--scope` is `ext`, `tag-totals`, or `all` (default). Refuses if the server is running. Exit 1 on issues, 2 on tool failure or invalid scope |
+| `inspect` | optional | Read-only observability for `@ext` state. Server-aware: proxies via the running server (in-memory ExtMap section included) or opens the index read-only when stopped (disk-only with a note). `--scope ext` (v1 only); `--target PATH` narrows to one file's chunks; `--json` for machine output. Output sections: on-disk (X / V[ext] / F[ext]), in-memory ExtMap maps, per-tvid_ext bridges with decoded paths and routed (tag, value) pairs |
 
 ### `ui` — UI operations
 

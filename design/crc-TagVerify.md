@@ -3,7 +3,7 @@
 
 Diagnostic / repair logic for `ark tag verify`. Cross-checks F, V,
 T, X records and the in-memory ExtMap to detect drift; with
-`--repair`, writes corrections inside a single LMDB write
+`--repair`, writes corrections inside a single write
 transaction.
 
 Lives behind the `ark tag verify` subcommand. Not on any hot path —
@@ -11,7 +11,7 @@ designed for diagnostics and post-import hygiene. Linear in the
 number of F-with-ext records, X records, and T records.
 
 ## Knows
-- db: *DB — facade for LMDB env access, ResolveExtTarget, ExtMap accessor
+- db: *DB — facade for index access, ResolveExtTarget, ExtMap accessor
 - store: *Store — F/V/T record access, X record CRUD primitives
 - extmap: *ExtMap — in-memory anchor / target maps cross-checked against X
 - scope: string — `ext`, `tag-totals`, or `all`
@@ -39,7 +39,7 @@ number of F-with-ext records, X records, and T records.
 ## Collaborators
 - Store — owns F/V/T/X record I/O and the V multi-set primitives
   (`addChunkIDToVRecord`, `removeOneChunkIDFromVRecord`)
-- DB — exposes `ResolveExtTarget`, the LMDB environment, and the
+- DB — exposes `ResolveExtTarget`, the index, and the
   ExtMap; coordinates the write txn for repairs
 - ExtMap — supplies the in-memory state to cross-check; exposes
   `Rebuild` for post-repair consistency

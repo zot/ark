@@ -51,7 +51,7 @@ or merging logic.
 ### Tag Search (Phase A — this work)
 
 For tag search, the pipeline operates on the tag vocabulary
-(V records in LMDB) rather than full-text content:
+(V records in the index) rather than full-text content:
 
 1. **Haiku expands** — given the user's tag name and value,
    suggests alternative tag names and values that a human would
@@ -59,7 +59,7 @@ For tag search, the pipeline operates on the tag vocabulary
 
 2. **Trigram fuzzy match** — each alternative is fuzzy-matched
    against the V records (tag-value index). This is cheap:
-   in-process LMDB reads against the existing vocabulary, no
+   in-process index reads against the existing vocabulary, no
    full-text search needed. Results are (tag, value, count,
    score) tuples.
 

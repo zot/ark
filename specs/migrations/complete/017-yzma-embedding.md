@@ -2,7 +2,7 @@
 
 **Source spike:** `.scratch/YZMA.md` (proven on Steam Deck / Vulkan, 2026-06-11).
 
-## Status (2026-06-11) — IN-FLIGHT, engine landed
+## Status (2026-06-17) — COMPLETE (engine landed 2026-06-11; CGO-free build + prose sweep landed 2026-06-17)
 
 - **Landed & validated:** the embedding engine (`embed.go` wraps yzma
   `pkg/llama`; `librarian.go` swapped), the `[embedding]` config table, the
@@ -12,20 +12,21 @@
   `pkg/download` — that package pulls go-getter + the AWS/GCP SDKs to fetch one
   tarball. A plain `net/http` + stdlib tar/zip fetch (URL map ported from yzma)
   links zero of that weight. `crc-LlamaLibs.md` reflects this.
-- **CGO_ENABLED=0 is NOT achieved (R2971/R2972 deferred).** Removing gollama
-  removed one CGO dep, but `bmatsuo/lmdb-go` (ark's own store **and**
-  `microfts2`) still links C. The pure-Go binary + release sweep are blocked on
-  the **LMDB → pure-Go (BBolt) migration** (a separate item) covering both
-  modules. The Makefile is therefore left untouched for now.
-- **Remaining before `migration-complete`:** (1) the LMDB→BBolt work, then
-  R2971/R2972 + the Makefile `release` target; (2) the prose-supersede sweep —
-  residual `tag_model`/`embed_tiers` key names and gollama engine descriptions
-  across per-feature specs (`recall.md`, `derived-tags.md`, `config-tracking.md`,
-  `vector-freshness.md`, `vec-bench.md`, `tag-embeddings.md` static-link note,
-  `tag-def-embeddings.md`, `seq-tag-embed.md`, `main.md`) and personal notes.
-  The authoritative summary specs (`config.md`, `cli-commands.md`,
-  `record-formats.md`, `features.md`) and the copy-pasteable `ark.toml` examples
-  are already reconciled.
+- **CGO_ENABLED=0 ACHIEVED (R2971/R2972 done, 2026-06-17).** The LMDB→bbolt
+  migration (both ark and microfts2) cleared the last CGO dep, so the Makefile
+  dropped the `gollama`/cmake/Vulkan recipe + `build: gollama` dependency,
+  `build` is explicitly `CGO_ENABLED=0`, and a frictionless-style `release` /
+  `release-archives` target cross-compiles the supported `GOOS/GOARCH` targets
+  (grafting bundled assets via `ark bundle -src`). Pure-Go build verified green.
+- **Prose-supersede sweep done (O134).** Residual `tag_model`/`embed_tiers`
+  ark.toml-key references and gollama engine descriptions across the per-feature
+  specs + design artifacts now reflect the yzma runtime-provisioning model
+  (`[embedding] model`/`tiers`, `ark embed install`). The persisted I-record
+  field names (`store.go` `IFieldTagModel`/`IFieldEmbedTiers` = `tag_model`/
+  `embed_tiers`) were intentionally **not** renamed — only the ark.toml TOML keys
+  moved — so the I-record/change-tracking/`model_mismatch` references to
+  `tag_model` are correct as-is. Personal notes (gollama-fork pattern, embedding
+  benchmark) remain to annotate as historical (cross-cutting follow-up).
 
 ## Problem
 

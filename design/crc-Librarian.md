@@ -171,7 +171,7 @@ loads on first embedding query and stays warm until TTL expiry.
 - unloadModel(): close all tier contexts, default context, and model.
   Called on TTL expiry. (R1596)
 - Available() bool: whether claude is on PATH (spectral search)
-- EmbeddingAvailable() bool: whether tag_model is configured and
+- EmbeddingAvailable() bool: whether the [embedding] model is configured and
   the GGUF file exists
 
 ### Find Connections (Sidecar Pattern, 1G)
@@ -239,11 +239,11 @@ loads on first embedding query and stays warm until TTL expiry.
   Text entries pass through (R2572). Empty input list →
   `chunkIDs/text/range empty` (R2573).
 - runSubstrate(rec *ConnectionsRecord): in-process worker for
-  normal mode. Opens one LMDB View txn (R2579), runs per-input
+  normal mode. Opens one View txn (R2579), runs per-input
   passes, merges across substrates (R2580) then across inputs
   (R2581), sorts top-K (R2585), renders body, calls
   SetConnectionsResult to flip to completed.
-- substrateForInput(input ConnectionsInput, txn *lmdb.Txn) PerInputResult:
+- substrateForInput(input ConnectionsInput, txn *bbolt.Tx) PerInputResult:
   runs the four substrate passes for one normalized input
   (R2575–R2578). Returns per-tag scores keyed by substrate,
   with supporting-chunk and motivating-file evidence.
@@ -282,7 +282,7 @@ loads on first embedding query and stays warm until TTL expiry.
 ### Recall (Phase 2B)
 - Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallResult, error): retrieves top-K chunks ranked by similarity (R2617). Normalizes inputs (R2618), runs Vector-EC and Trigram-EC (R2620) — Vector-EC via `(cos+1)/2` (R2586), Trigram-EC via Jaccard over trigram sets with a query-coverage floor (R2643, R2644) — merges via max across substrates and inputs (R2622), excludes self-chunks for any input that normalizes to a chunkID (R2623), resolves metadata and tags (R2624), reads content from cache if configured (R2625), sorts descending and returns top-K (R2626). Handles missing model gracefully by skipping Vector-EC and setting a warning (R2634). Rejects empty inputs (R2639) and unknown chunks (R2640). Clamps K option (R2641). Constructor `NewLibrarian` succeeds whether or not `claude` is on PATH; `Available()` reports spectral-expansion capability (R2642). **Substrate v3 supersedes the scoring/ranking tail:** the 2-component max-merge → single-pool top-K (R2620/R2622/R2626) is replaced by the 4-component score (R2906) + tag axis (R2905) + 2×2 allocation (R2907/R2908) + chat funnel (R2910); the cross-input per-component max and a final K cap survive. See the "Recall — substrate v3" section below.
 - Recall with `opts.Propose=true` runs the derivation pass on the substrate's full scored chunk set — internally retaining tagless chunks for derivation (forcing `KeepTagless=true` for the derivation chunk set) while still applying the caller's effective `KeepTagless` to the surfaced result. The pass produces RC records as a side effect (R2667, R2668). The caller's surfacing is unaffected — `--propose` does not change which chunks appear in the result stencil.
-- derivationPass(txn *lmdb.Txn, scored []ChunkScore) error: internal step. Reads `maxED = Store.MaxEDSerial()` once for the batch (R2669). For each scored chunk: read RF[chunkid]; if `RF >= maxED`, skip derivation and proceed to stencil-time similarity-only read (R2669). Otherwise, cosine-compare chunk's EC vector against all ED records, take top-N by similarity (`derivationK` default 10) (R2670), filter against already-attached tags (F-record probe per candidate) (R2671), filter against ext-routed tagnames on the chunk (bare-name rule via ExtMap) (R2672), filter against existing RJ records via `Store.HasDerivedRejection` (R2673), then call `Store.WriteDerivedProposal` for each survivor (tally increment-or-create) and `Store.WriteDerivedFreshness(chunkid, maxED)` to stamp the chunk (R2674, R2675). All writes in one batched txn (R2675).
+- derivationPass(txn *bbolt.Tx, scored []ChunkScore) error: internal step. Reads `maxED = Store.MaxEDSerial()` once for the batch (R2669). For each scored chunk: read RF[chunkid]; if `RF >= maxED`, skip derivation and proceed to stencil-time similarity-only read (R2669). Otherwise, cosine-compare chunk's EC vector against all ED records, take top-N by similarity (`derivationK` default 10) (R2670), filter against already-attached tags (F-record probe per candidate) (R2671), filter against ext-routed tagnames on the chunk (bare-name rule via ExtMap) (R2672), filter against existing RJ records via `Store.HasDerivedRejection` (R2673), then call `Store.WriteDerivedProposal` for each survivor (tally increment-or-create) and `Store.WriteDerivedFreshness(chunkid, maxED)` to stamp the chunk (R2674, R2675). All writes in one batched txn (R2675).
 - enrichProposedTags(result *RecallResult, chunkSimilarities map[uint64][]proposalSim) error: for each surfaced chunk with at least one RC record, populate `RecalledChunk.ProposedTags` with the accumulated RC tagnames ordered by similarity descending (R2684, R2685, R2686). Similarity sources: for chunks the pass derived this call, scores are passed through `chunkSimilarities`; for fresh-skip chunks, compute on demand by cosine-comparing the chunk's EC vector against the ED records of each RC tagname (max across the tag's def files) (R2685). The stencil renderer omits the line when `ProposedTags` is empty (R2684).
 - Admission-time tag filter: the substrate's scoring map only
   admits candidate chunks that carry V records, unless

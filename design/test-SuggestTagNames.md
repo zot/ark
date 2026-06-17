@@ -65,7 +65,7 @@ path entry. Call SuggestTagNames.
 MotivatingFiles[0].Path == "". No error.
 **Refs:** R2167
 
-## Test: read-only — no LMDB writes
+## Test: read-only — no index writes
 **Purpose:** R2173 — verify the call doesn't mutate state.
 **Input:** snapshot RecordCounts() before; call SuggestTagNames;
 snapshot after.

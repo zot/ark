@@ -3,7 +3,7 @@
 
 In-memory tag overlay for `tmp://` content. Mirrors the persistent
 V/F/T runtime API so callers do not branch on persistent vs tmp.
-Lives for the server's lifetime; no LMDB writes, no schema marker.
+Lives for the server's lifetime; no index writes, no schema marker.
 
 ## Knows
 - chunks: map[uint64]*chunkTagEntry — chunkid → entry. Each entry
@@ -63,7 +63,7 @@ Lives for the server's lifetime; no LMDB writes, no schema marker.
   whose `tvids["ext"]` is non-empty, enumerate those tvids and call
   `ExtMap.CleanupSource(chunkID, tvidExt, nil, nil)` for each. Every
   routing for an overlay source has bothPersistent=false, so no
-  LMDB writes can fire; txn and TvidTxn are passed as nil. (R2023)
+  index writes can fire; txn and TvidTxn are passed as nil. (R2023)
 - (overlay-source ext alloc) `resolveOrAlloc(tag, value)` is the
   allocator routed-tag tvids use when the source is overlay. Same
   Lookup-then-AllocOverlay semantics as direct overlay tag entries —

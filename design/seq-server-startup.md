@@ -26,9 +26,9 @@ CLI ──> Server.Serve(dbPath, opts)
          │     └── write os.Getpid() to file outside db dir
          │
          ├──> DB.Open(dbPath)
-         │     ├── microfts2.Open (creates LMDB env)
-         │     └── Store.Open (receives env) — Store + Librarian share it;
-         │          EC chunk embeddings live in the ark subdatabase (R1910)
+         │     ├── microfts2.Open (creates the index database)
+         │     └── Store.Open (receives *bbolt.DB) — Store + Librarian share it;
+         │          EC chunk embeddings live in the ark bucket (R1910)
          │
          ├──> Server.EnsureArkSource()
          │     └── ensure ~/.ark is a source (hardcoded, not in ark.toml)
@@ -99,6 +99,6 @@ Signal (SIGTERM/SIGINT)
   │     └── stops accepting new ark API requests
   │
   └──> db.Close()
-        ├── Store.Close (ark subdatabase — EC records included)
-        └── microfts2.Close (closes LMDB env)
+        ├── Store.Close (ark bucket — EC records included)
+        └── microfts2.Close (closes the index database)
 ```

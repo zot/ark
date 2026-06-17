@@ -21,7 +21,7 @@ Tags + FTS give fully functional recall on any hardware.
 All DB operations are serialized through a closure actor (ChanSvc)
 on `ark.DB`. Three concurrent accessors — watcher goroutine, HTTP
 handler goroutines, Lua/UI goroutine — send closures to the actor
-instead of calling DB methods directly. LMDB handles its own
+instead of calling DB methods directly. bbolt handles its own
 concurrency via MVCC; the actor protects the Go-side caches above
 it (pathCache, pathToID, frecordCache). Watcher mutations use
 fire-and-forget (Svc). HTTP/CLI operations use synchronous calls
@@ -29,23 +29,23 @@ fire-and-forget (Svc). HTTP/CLI operations use synchronous calls
 Call direction is always session → DB, never the reverse.
 
 **Read/Write Separation:** Reads execute directly in the actor and
-return immediately (LMDB MVCC provides consistent snapshots). Writes
+return immediately (bbolt MVCC provides consistent snapshots). Writes
 are queued and processed one at a time in a goroutine: Copy() creates
 a cache-less DB copy, the goroutine indexes off the actor, then sends
 a reconcile closure back. The actor invalidates caches, commits, and
 dequeues the next write. Config files (ark.toml) bypass the queue and
 index synchronously in the actor. See seq-write-actor.md.
 
-### LMDB Lifecycle
-microfts2 owns the LMDB environment. Ark opens microfts2 first
-(which creates the env), then opens its own subdatabase; the Store
-and the Librarian (EC chunk embeddings) share that env (R1910).
-MaxDBs covers microfts2 + the ark subdatabase — no separate vector
-subDB (R1911). Closing follows reverse order.
+### Index Lifecycle
+microfts2 owns the `*bbolt.DB`. Ark opens microfts2 first
+(which opens the database), then opens its own `ark` bucket; the Store
+and the Librarian (EC chunk embeddings) share that `*bbolt.DB` (R1910).
+The `ark` bucket lives alongside microfts2's `fts` bucket in the same
+file — no separate vector bucket (R2975). Closing follows reverse order.
 
 ### File Identity
 microfts2 allocates fileids and is the single source of truth for
-path→fileid mapping. The ark subdatabase references files by fileid;
+path→fileid mapping. The ark bucket references files by fileid;
 chunk embeddings (EC records) are keyed by chunkid (R1914).
 
 ### Pattern Matching
@@ -63,14 +63,14 @@ and surfaced through status and listing commands.
 
 ### Tag Tracking
 @tags (format: `@word:`) are extracted from file content during
-add and refresh. Stored in the ark subdatabase with T (global count)
+add and refresh. Stored in the ark bucket with T (global count)
 and F (per-file count) prefix keys. Tag names are the portion between
 @ and :, stored lowercase. The tag vocabulary file (`~/.ark/tags.md`)
 documents definitions using `@tag: name -- description` format.
 
 ### Tag Source Parity (R2344)
 Tags reach the index from three sources: **inline** (T/F/V records in
-LMDB, extracted from chunk text), **ext-routed virtual** (ExtMap entries
+the index, extracted from chunk text), **ext-routed virtual** (ExtMap entries
 written by `@ext:` directives, originating in inline files via X records
 or in tmp:// documents via overlay routings — both merge into the same
 in-memory maps), and **tmp:// overlay** (TmpTagStore mirror of T/F/V
@@ -93,12 +93,12 @@ Content is read from disk at query time using offsets from microfts2.
 Frictionless runs in-process via the `flib` facade package
 (`github.com/zot/frictionless/flib`), which wraps the ui-engine.
 `cfg.Server.Dir` points to `~/.ark/`, where UI assets (html/, lua/,
-viewdefs/, apps/) coexist with ark data (data.mdb, ark.toml,
+viewdefs/, apps/) coexist with ark data (index.db, ark.toml,
 ark.sock). Two listeners: the unix socket serves both ark API and
 Frictionless `/api/*` routes (via `flib.RegisterAPI`); the HTTP port
 (written to `ui-port`) serves the browser UI. If the ui-engine fails
 to start, the ark API server continues — UI is optional. On shutdown,
-`flib.Shutdown()` runs before the LMDB env closes.
+`flib.Shutdown()` runs before the `*bbolt.DB` closes.
 
 ### Sessions
 Named closure actors that carry state (currently a ChunkCache)
@@ -316,7 +316,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O1: Test files not yet written: config_test.go, match_test.go, search_test.go, store_test.go, tags_test.go
 - [ ] O2: serverClient TOCTOU race — probe can succeed but actual request fails if server dies between. Acceptable for v1
 - A1: IndexBuilt field removed from StatusInfo during simplification — spec still mentions it, update spec
-- A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from LMDB key on read)
+- A2: MissingRecord.FileID always serializes as 0 in stored JSON (populated from the index key on read)
 - [ ] O3: Integration tests need live microfts2 + the Librarian/EC pipeline: merge/intersect (test-Searcher), FillChunks/FillFiles (test-ChunkRetrieval)
 - [ ] O4: Fetch uses O(n) StaleFiles scan — add direct path lookup to microfts2 when performance matters
 - [ ] O5: ark stop does not verify process is ark (PID rollover could kill wrong process) — check /proc/PID/cmdline on Linux
@@ -326,7 +326,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A5: microfts2 WithOnly/WithExcept — implemented in microfts2 dependency, used by Searcher.ResolveFilters
 - A6: R231 (no backward compatibility for --source/--not-source) — verified by removal, no design artifact needed
 - A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
-- [ ] O7: Shutdown race: signal handler calls db.Close() while reconcileLoop and watchLoop goroutines may still be running. watcher.Close() stops watchLoop, but reconcileLoop can still be mid-Scan/Refresh against the LMDB env. Need to close reconcileCh and wait for goroutine to drain before db.Close().
+- [ ] O7: Shutdown race: signal handler calls db.Close() while reconcileLoop and watchLoop goroutines may still be running. watcher.Close() stops watchLoop, but reconcileLoop can still be mid-Scan/Refresh against the index. Need to close reconcileCh and wait for goroutine to drain before db.Close().
 - [x] D1: R338-R339 (EnsureArkSource) — designed in crc-Server.md but not implemented. Server should ensure ~/.ark is a source on every startup, before reconciliation.
 - [x] D2: R340 (RemoveSource guard for ~/.ark) — designed in crc-Config.md line 25 but not implemented. Config.RemoveSource should reject the ark database directory.
 - [x] O8: ark install UI asset extraction not yet implemented — R276-R281 designed, bundle commands (R297-R318) implemented, install needs to call ExtractBundle
@@ -347,9 +347,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A15: R421-R422 (second tab detection) — ui-engine/Frictionless concern, not ark Go code
 - [x] D5: R420 (preferred port on restart) — needs flib.Config.Port field in Frictionless upstream
 - [ ] D6: R438-R439 (browser count) — flib.Runtime doesn't expose WebSocket connection count. UIStatus reports running/port/indexing but not browser count. Needs flib API addition.
-- [ ] O14: gollama v0.1.8 SIGILL on Zen 2 (Steam Deck) — llama.cpp compute graph uses unsupported instructions. vec bench loads model but crashes on GetEmbeddings. Needs gollama rebuild with -march=znver2 or compatible flags.
+- [x] O14: (resolved by yzma migration, see T159) SIGILL on Zen 2 (Steam Deck) was a gollama static-build artifact — its bundled llama.cpp compute graph used unsupported instructions. yzma sidesteps this entirely: it dlopens prebuilt llama.cpp shared libs provisioned by `ark embed install`, so the backend is selected at runtime rather than baked in at compile time.
 - [ ] O15: No unit tests for SearchMulti — needs test with mock microfts2 DB or integration test
-- [ ] O16: QueryTrigramCounts + BM25Func open two separate LMDB Views for overlapping data — could be one transaction with a BM25FuncFromQuery helper in microfts2
+- [ ] O16: QueryTrigramCounts + BM25Func open two separate Views for overlapping data — could be one transaction with a BM25FuncFromQuery helper in microfts2
 - [ ] O17: --proximity only works with --multi currently — spec says it composes with any search mode (R597)
 - [ ] O18: No unit tests for Session actor — testable with injected clock/mock FTS
 - A16: SearchCmd has no separate code file — command object is implicit in session closures (server.go, session.go). CRC card documents the concept.
@@ -386,7 +386,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O40: No unit tests for write actor: enqueueWrite, startNextWrite, ScanAsync, RefreshAsync
 - [ ] O41: R1066: deferred-schedule pattern (pendingSchedule/DrainSchedule) not yet removed — schedule I/O still deferred rather than running in write goroutine
 - [ ] O42: No unit tests for editor endpoints: handleSearchGrouped, handleTagComplete, handleTagValues, handleSave, handleSetTags
-- [x] O43: handleTagValues reads files to extract values — O(files) I/O on each completion request. Store tag values in LMDB during indexing for O(1) lookup when this becomes slow.
+- [x] O43: handleTagValues reads files to extract values — O(files) I/O on each completion request. Store tag values in the index during indexing for O(1) lookup when this becomes slow.
 - [ ] O44: handleSave allows writing to any indexed file — no authorization check. Acceptable for local use; revisit if ark ever serves untrusted clients.
 - A24: R1098 (CORS) — same-origin, no explicit headers needed for localhost. Revisit if editor loaded from file:// origin.
 - [ ] O45: No unit tests for V record Store methods: UpdateTagValues, AppendTagValues, RemoveTagValues, QueryTagValues, TagValueChunks
@@ -423,13 +423,13 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O62: No unit tests for DB.AllChunks
 - [ ] O63: No unit tests for chunked content rendering in handleContentView
 - [ ] O64: No unit tests for ChunkStats, NewTokenizer, printChunkStats
-- [x] O65: Embedding model not tracked in DB — switching tag_model in ark.toml silently mixes vectors from different models. Store model filename in LMDB, detect mismatches on startup.
+- [x] O65: Embedding model not tracked in DB — switching the `[embedding] model` in ark.toml silently mixes vectors from different models. Store model filename in the index, detect mismatches on startup.
 - [ ] O66: No unit tests for DiffConfig, ApplyConfigChanges, config recover, server startup gate
 - [ ] O67: No unit tests for cmdFiles --status, --detail, matchBaseSet, percentileInts
 - [ ] O68: No unit tests for Store EC/EF record methods: WriteChunkEmbedding, WriteChunkEmbeddingBatch, ReadChunkEmbedding, WriteFileCentroid, ReadFileCentroid, ScanFileCentroids, RemoveFileChunkEmbeddings, DropChunkEmbeddings
 - [ ] O69: No unit tests for Librarian BatchEmbedChunks, embedWithTierCtx, flushBucket, multi-context ensureModel/unloadModel
 - [x] O70: Crash-orphan centroid drift: if EC records are written but EF centroid write is interrupted, the centroid will be stale on next run. The seeded-from-EF path trusts efCount, missing any orphan EC records beyond that count
-- [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) LMDB reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
+- [ ] O71: Per-chunk ReadChunkEmbedding for partially-embedded files is O(N) index reads. Could use prefix scan with EC+fileID to batch-check existing chunk indices
 - [ ] O72: AllChunks internally calls CheckFile — a variant accepting pre-resolved fileID would eliminate one redundant lookup per file in BatchEmbedChunks
 - [x] O73: PDF chunker: paragraph gap threshold (1.5x) too strict for tightly-spaced documents like cover letters
 - [x] O74: PDF chunker: CJK text extraction unverified with seehuhn library
@@ -446,7 +446,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O80: No unit tests for parseFilterStack, formatFilterStack, or -parse output
 - [ ] O81: No unit tests for files mode in BuildChunkFilters
 - A41: -about as chunk filter (AboutChunkFilter) not yet implemented — requires embedding model in filter path. -about works as primary search only.
-- [x] O82: About chunk filter requires configured embed_cmd/query_cmd in ark.toml — currently tag_model is set (Librarian path) but query-time embedding path is not. vec.Search fails silently.
+- [x] O82: About chunk filter requires configured embed_cmd/query_cmd in ark.toml — currently `[embedding] model` is set (Librarian path) but query-time embedding path is not. vec.Search fails silently.
 - [ ] O83: About filter in CLI local path (no server) silently skips — Librarian only available when server is running
 - A42: R547-R562 (ark vec bench) superseded by R1790-R1801 (ark embed subcommands)
 - A43: R1302-R1305, R1587 (ark embed flat flags) superseded by R1790-R1801 (ark embed subcommands)
@@ -504,19 +504,19 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T45: R1032 retired (dayBucketsFromLogFile no longer needed (obsolescence marker for R1019))
 - T46: R1042 retired (@ark-event-fired: log entries no longer needed for gap detection (obsolescence marker for R870))
 - [x] I1: R1951 (shared tvid map) — to be resolved when crc-TvidMap.md lands. Subpoint 3 specifies the shared resolver (`specs/tvid-map-overlay.md`, R1953–R1969); TmpTagStore moves from `(tag, value)` strings to tvids in the same change.
-- [ ] O85: ExtMap state mutation isn't transactional with the env.Update — if microfts2's commit aborts, the in-memory maps may be briefly inconsistent. Convergence is restored by ExtMap.Rebuild on next DB.Open. Acceptable per design (.scratch/EXT-V-F.md, multi-file batch convergence).
+- [ ] O85: ExtMap state mutation isn't transactional with the `db.Update` — if microfts2's commit aborts, the in-memory maps may be briefly inconsistent. Convergence is restored by ExtMap.Rebuild on next DB.Open. Acceptable per design (.scratch/EXT-V-F.md, multi-file batch convergence).
 - [ ] O86: No tests for @ext storage layer — test-ExtMap.md and integration coverage of multi-set V, X record CRUD, and the canonical re-resolution flow not yet written
 - [x] O87: @ext targets that resolve to overlay (tmp://) chunkids are logged-and-skipped in applyIndexExt. Full support needs (a) in-memory overlay E-records parallel to TmpTagStore — diagnostics that live and die with the session, since persisting them would outlive the context that produced them — (b) overlay-aware chunkFileID via Store.filesForChunk, (c) ExtMap state for overlay chunkids in chunkToTargets/fileidToTvids/targetToChunk, rebuildable from session state on startup. Tracked in PLAN.md.
 - [ ] O88: No tests yet for @ext overlay (tmp://) target routing — covers four routing scopes, overlayRoutings/overlayValues lifecycle, lock-flap-free per-target dispatch, TmpTagStore→ExtMap cleanup hook, and the ark errors API. Belongs alongside O86.
 - [ ] O89: ark errors CLI command not yet implemented. ExtMap exposes RecordOverlayError/AddOverlayError/OverlayErrors/ClearOverlayErrors per R2030; CLI surface (PLAN.md V2.5) needs to consume them via dump/clear/add subcommands.
 - [ ] O90: Multi-source tvid_ext edge case predates overlay routing: two source chunks with identical @ext value text share a tvid_ext, so cleanup of one source incorrectly clears the other's contributions from targetToChunk and the overlay maps. Pre-existing — not regressed by overlay work — but visible in overlay flows when persistent and overlay sources happen to write the same @ext line.
 - T47: R2077 retired (pdftext.Block.BBox already provides heading rects; PDFChunker already emits rect in chunk Attrs. No upstream pdftext change needed.)
-- [ ] O91: Tag-overview routing emission regression: fresh @ext routings stopped registering after several restart + cleanup cycles in dev DB. Pristine pre-implementation binary has same behavior — accumulated LMDB state, not code. Workaround: ark rebuild. Investigate if reproducible from clean state.
+- [ ] O91: Tag-overview routing emission regression: fresh @ext routings stopped registering after several restart + cleanup cycles in dev DB. Pristine pre-implementation binary has same behavior — accumulated index state, not code. Workaround: ark rebuild. Investigate if reproducible from clean state.
 - [ ] I2: R2063 R2064 width persistence uses localStorage as Stage B substrate — HostAPI/I-record swap deferred (Go endpoint work needs its own mini-spec pass). Functional persistence works; per-machine instead of per-DB.
 - [ ] I3: R2032-R2064 R2065-R2072 R2081-R2084 tag-overview frontend Rs are referenced in tag-overview/src/tag-overview.ts via range comments rather than per-Rn inline refs. Coverage exists; granularity coarser than minispec validate expects.
 - [ ] O92: Touch peek (R2042, R2044) deferred — desktop hover peek lands; touch tap conflicts with row-click scroll. Needs separate tap target (long-press, peek-toggle icon) or mode-specific hit area.
 - [ ] O93: R2082 PDF body indicator positioning is a stub — server emits <ark-ext-tags rect=...> but the bundle does not yet position the indicator over the <pdf-chunk> canvas at the rect coordinates. Heading-overlay positioning works; ext-tags overlay does not. Needs <pdf-chunk> coordination.
-- [ ] O94: ExtRoutingsForTargetChunk per-chunk LMDB View txn — handleContentView and renderPdfChunksByPage call it inside a per-chunk loop, opening N read txns. Cheap individually; for 100+ chunk files worth batching to one txn per request via an ExtRoutingsForTargetChunks([]uint64, *DB) variant.
+- [ ] O94: ExtRoutingsForTargetChunk per-chunk read txn — handleContentView and renderPdfChunksByPage call it inside a per-chunk loop, opening N read txns. Cheap individually; for 100+ chunk files worth batching to one txn per request via an ExtRoutingsForTargetChunks([]uint64, *DB) variant.
 - [ ] O95: No automated tests for tag-overview frontend — verified manually via Playwright across modes, filter, category, resize, peek, autotrack. Vitest/Jest harness for tag-overview.ts plus a Go test for renderExtTagsBlock and assignSidebarIDs would lock in behavior.
 - A49: R2103-R2107 are document-level requirements about specs/cli-commands.md itself (canonical inventory, exhaustive flag tables, verification target). They have no implementation in code — the spec is the artifact. Same pattern as record-formats.md, which is anchored in design but has no R-numbers.
 - T48: R21 retired by R2133 (2026-05-04 pattern-anchoring (single/double slash semantics for filesystem-absolute vs source-anchored))
@@ -528,7 +528,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T54: R12 retired by R2143 (2026-05-04 default-replace-semantics (top-level patterns are defaults; per-source patterns replace them))
 - T55: R13 retired by R2144 (2026-05-04 default-replace-semantics (per-source replaces, not adds))
 - T56: R26 retired by R2145 (2026-05-04 default-replace-semantics (TOML keys renamed to default_include/default_exclude))
-- [ ] O96: Librarian-level ED tests (rebuild regenerates ED, BatchEmbed writes ED for missing pairs) require a real GGUF model and are not run by 'go test'. Store-level ED tests in store_test.go cover R2151-R2162 at the LMDB layer; the model-side path is exercised manually after each model swap.
+- [ ] O96: Librarian-level ED tests (rebuild regenerates ED, BatchEmbed writes ED for missing pairs) require a real GGUF model and are not run by 'go test'. Store-level ED tests in store_test.go cover R2151-R2162 at the store layer; the model-side path is exercised manually after each model swap.
 - A50: R2246: Lua API mcp.sweepHotCorrelations() deferred — CLI subcommand 'ark sweep correlations' lands the invocation surface for 1E; the Lua wrapper will land alongside the curation view UI (Phase 1F) when the Lua binding is needed.
 - A51: R2248: Cron-via-tag triggering deferred to a follow-up slice (the 'small extension' described in CURATION-VIEW.md). Sweep invocation in 1E is direct (CLI / Lua / Go); scheduler integration arrives separately.
 - T57: R237 retired by R2271 (2026-05-11 chat-jsonl emit-all: lines without extractable text now emit raw-line chunks instead of being dropped)
@@ -549,7 +549,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T58: R1987 retired by R2366 (narrower forms formalized in R2365–R2379 (specs/at-ext-parsing.md grammar))
 - T59: R1995 retired by R2380 (extByAnchor keys by BASE only — narrower stored alongside tvid_ext for resolve-time evaluation)
 - [ ] I4: R2379 (workshop UI surfaces non-conforming range strings loudly) awaits the /ui-thorough pass — Go primitives already expose the needed state (locator falls back to bare or string-fallback when range is non-conforming, surfaced via mcp.suggestExtLocator).
-- [ ] O98: R2402-R2403 ChunkTextByID does two LMDB+file-read passes — ChunkInfo and ChunkText each call db.fts.NewChunkCache() which re-reads the underlying file. Acceptable at workshop cadence (per-card, low frequency); revisit if profiling shows this dominates.
+- [ ] O98: R2402-R2403 ChunkTextByID does two index+file-read passes — ChunkInfo and ChunkText each call db.fts.NewChunkCache() which re-reads the underlying file. Acceptable at workshop cadence (per-card, low frequency); revisit if profiling shows this dominates.
 - [ ] O99: R2408-R2409 SweepHotCorrelationsAsync frees the Lua VM but the inner closure still holds db.writing=true for the entire sweep (16s from-scratch). Pre-existing property of the sync sibling bridge — fix requires re-architecting SweepHotCorrelations to enqueue per-tag closures rather than running the whole sweep inside one enqueueWrite. Workshop UI mutations queue behind in-flight sweeps.
 - [ ] O100: R2402-R2410 No unit tests yet for the four new bridges (mcp.chunkText / mcp.parseTagBlock / mcp.tmp_get / mcp.sweepHotCorrelationsAsync) and their backing Go methods (DB.ChunkTextByID, DB.TmpContent, Librarian.SweepHotCorrelationsAsync). Live verification deferred to the upcoming /ui-thorough pass when the workshop's slice B/C consumes them.
 - [ ] O101: R2416-R2420 curate-pin inline JS and CSS duplicated between install/html/content-markdown.html and install/html/content-plain.html (~85 lines each). Extraction to install/html/curate-pin.js + curate-pin.css served from ~/.ark/html/ deferred; v1 keeps templates self-contained while the feature is exercised. Re-evaluate when a third content template arrives or when divergence appears.
@@ -669,7 +669,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O128: Tag-axis tuning knobs (standing; informed by the now-landed R2909 per-cell logging): tagAxisInternalK hardcoded at 50 (top tag-values pulled per input); the shared trigramJaccardWithFloor 0.1 query-coverage floor can zero the tag-trigram leg for short values against long inputs (the vector leg compensates when a model is present). Revisit if the per-cell logs show distortion.
 - [ ] O129: Recall chat sub-chunk locator (part 4): the snippet anchor (matched paragraph's first line, capped 60) resolves to the FIRST sub-chunk containing it; a rare collision (two paragraphs sharing that line) resolves to the first — the ext [N] modifier would disambiguate but is deferred with the offset locator (specs/future.md, R2914). Funnel embeds on-the-fly only with a model; no-model path is trigram-only. specs/recall.md algorithm/stencil fold deferred to migration on-completion (after part 5).
 - [ ] O130: Part 5 EV leg: enrichProposedTags recomputes display scores for fresh-skip chunks via bestEDSim (ED-only), so an EV-leg-derived proposal shows its ED similarity (possibly 0) rather than its EV similarity. This-call derivations carry the correct EV-inclusive score; the propose decision itself is EV-correct. Display-only, fresh-skip path.
-- [ ] O131: Ext-routing threads a raw nilable *lmdb.Txn through runExtRouting/runOverlayExtRouting/applyIndexExt/chunkFileID; a wrong nil reaches fts.ReadCRecord and panics (the R2915 crash). Enhancement: model the transaction as a scope object (Monadic Wrapper) constructed only inside an actor closure, so 'inside a txn' is non-nilable by construction and this whole bug class disappears. Also covers librarian.go flushNow, which today relies on a documented 'call me from the write goroutine' contract rather than a local guard.
+- [ ] O131: Ext-routing threads a raw nilable *bbolt.Tx through runExtRouting/runOverlayExtRouting/applyIndexExt/chunkFileID; a wrong nil reaches fts.ReadCRecord and panics (the R2915 crash). Enhancement: model the transaction as a scope object (Monadic Wrapper) constructed only inside an actor closure, so 'inside a txn' is non-nilable by construction and this whole bug class disappears. Also covers librarian.go flushNow, which today relies on a documented 'call me from the write goroutine' contract rather than a local guard.
 - T142: R1302 retired by R1791 (2026-06-07 cli-urfave: ark embed text subcommand)
 - T143: R1303 retired by R1792 (2026-06-07 cli-urfave: ark embed bench tags subcommand)
 - T144: R1304 retired by R1792 (2026-06-07 cli-urfave: ark embed bench chunks subcommand)
@@ -686,7 +686,15 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T153: R1595 retired by R2962 (2026-06-11 yzma-embedding: gollama context API -> yzma ContextParams)
 - A69: R2971-R2972 (Makefile pure-Go CGO_ENABLED=0 build + cross-platform release target) — Makefile build/release infrastructure, not Go code (mirrors A11)
 - [ ] D10: R2971/R2972 (CGO_ENABLED=0 build + frictionless-style release sweep) deferred — blocked on the LMDB->BBolt migration: lmdb-go links C in BOTH ark's store and microfts2. Makefile left untouched until that lands.
-- [ ] O134: yzma migration prose-supersede sweep pending (precondition for migration-complete): residual tag_model/embed_tiers key names + gollama engine descriptions in recall.md, derived-tags.md, config-tracking.md, vector-freshness.md, vec-bench.md, tag-embeddings.md static-link note, tag-def-embeddings.md, seq-tag-embed.md, main.md. Summary specs + ark.toml examples already reconciled.
+- [x] O134: yzma migration prose-supersede sweep done: residual tag_model/embed_tiers key names + gollama engine descriptions across the docs now reflect the yzma runtime-provisioning model (`[embedding] model`/`tiers`, `ark embed install` for prebuilt llama.cpp libs). Covers recall.md, derived-tags.md, config-tracking.md, vector-freshness.md, vec-bench.md, tag-embeddings.md (static-link note reworded), tag-def-embeddings.md, seq-tag-embed.md, main.md, and the CRC/seq/test design artifacts. Summary specs + ark.toml examples were reconciled earlier.
 - [ ] O135: LlamaLibs model auto-fetch (R2969 permits but does not require fetching the GGUF when absent) not implemented — slim downloader fetches libs only; model is configured separately.
 - [ ] O136: Rebuild read-only serve (R2984-R2990): no automated test yet — verified empirically (status/search return live + growing counts during rebuild ~30-66ms vs ~14s block; writes refused 503; exit-on-idle). Add a test for WaitWritesIdle and the read-only window.
 - [ ] O137: No automated test for the NUL-byte embed guard (R2991/R2992): the path needs a loaded embedding model (GGUF + llama.cpp libs), unavailable in CI. Verified by construction (single tokenize chokepoint strips NUL before yzma) + live re-run of the rebuild that crashed.
+- T154: R103 retired by R2975 (2026-06-17 lmdb-to-bbolt: LMDB subdatabase 'ark' -> bbolt 'ark' bucket)
+- T155: R249 retired by R2982 (2026-06-17 lmdb-to-bbolt: status map-usage -> file size)
+- T156: R251 retired by R2982 (2026-06-17 lmdb-to-bbolt: map-usage computation -> file size)
+- T157: R2086 retired by R2981 (2026-06-17 lmdb-to-bbolt: CopyCompact -> bolt WriteTo)
+- T158: R1911 retired by R2978 (2026-06-17 lmdb-to-bbolt: MaxDBs/subDB allocation removed (bbolt has no named-DB limit))
+- T159: R1306 retired by R2969 (2026-06-17 yzma-embedding: gollama Vulkan/SIGILL-on-Zen2 moot — yzma provisions prebuilt libs)
+- T160: R1307 retired by R2961 (2026-06-17 yzma-embedding: local gollama workspace dep retired — yzma binds llama.cpp at runtime)
+- T161: R1308 retired by R2967 (2026-06-17 yzma-embedding: CPU gollama build moot — [embedding] backend selects cpu)

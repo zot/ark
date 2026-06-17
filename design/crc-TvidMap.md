@@ -2,9 +2,9 @@
 **Requirements:** R1953, R1954, R1955, R1956, R1957, R1958, R1959, R1960, R1961, R1962, R1963, R1965, R1968, R1969
 
 In-memory `tvid → (tag, value, origin)` resolver shared by `Store`
-(LMDB V/F records) and `TmpTagStore` (`tmp://` overlay). Loaded once
+(index V/F records) and `TmpTagStore` (`tmp://` overlay). Loaded once
 at startup from V records; maintained at indexing time via a
-transaction overlay that mirrors LMDB's commit/abort semantics.
+transaction overlay that mirrors the index's commit/abort semantics.
 
 ## Knows
 - entries: map[uint64]tvidEntry — tvid → {tag, value, origin}
@@ -43,7 +43,7 @@ transaction overlay that mirrors LMDB's commit/abort semantics.
   (R1957)
 
 ## TvidTxn (overlay)
-Scoped to one LMDB write transaction. Reads inside the txn must use
+Scoped to one write transaction. Reads inside the txn must use
 TvidTxn.Resolve (not the live map) so they see in-flight allocations
 and removals.
 
@@ -60,10 +60,10 @@ and removals.
 - Abort(): drop the overlay struct; live map untouched. (R1962)
 
 ## Crash and abort safety
-- LMDB write txn aborts → caller calls TvidTxn.Abort → overlay
+- write txn aborts → caller calls TvidTxn.Abort → overlay
   discarded → live map unchanged. Next startup reloads from V
   records (which also rolled back). (R1969)
-- LMDB commit succeeds → caller calls TvidTxn.Commit → live map
+- commit succeeds → caller calls TvidTxn.Commit → live map
   reflects the durable state.
 - Process death mid-write: write txn rolls back; live map is in
   process memory and dies with the process; next startup runs
@@ -71,7 +71,7 @@ and removals.
 
 ## Collaborators
 - Store: owns the TvidMap, calls LoadFromStore on Open, calls
-  Begin/Commit/Abort around `env.Update` blocks that touch V records.
+  Begin/Commit/Abort around `db.Update` blocks that touch V records.
   Calls `tt.Add` from `addChunkIDToVRecord` and `tt.Remove` from
   `removeChunkIDInTxn` when V records are deleted entirely. (R1963)
 - TmpTagStore: calls Lookup before AllocOverlay when writing per-chunk

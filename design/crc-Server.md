@@ -73,7 +73,7 @@ Optionally starts the embedded ui-engine alongside.
   ark.toml, cannot be removed. Scoped with include patterns:
   `["ark.toml", "schedule/**", "apps/**", "storage/**"]`. (R961, R962)
 - CheckScheduleConfig(): compare current [schedule] config with stored
-  version in LMDB. On change: re-scan affected files, re-materialize
+  version in the index. On change: re-scan affected files, re-materialize
   day buckets. Includes filter/lifecycle changes. (R975, R976, R977)
 - StartUIEngine(dbPath): configure ui-engine (Dir=dbPath), start in
   goroutine. On failure, log error and continue without UI.
@@ -403,13 +403,13 @@ Optionally starts the embedded ui-engine alongside.
   EnsureUpcoming re-arms the chunk via its normal indexer path.
   (R921, R922, R923, R925, R2842, R2843)
 - CheckScheduleConfig(): on startup and config reload, compare current
-  [schedule] vs stored in LMDB. If different, re-materialize day buckets
+  [schedule] vs stored in the index. If different, re-materialize day buckets
   for affected tags. Store new config after. (R927-R932)
 - HandleSubscribe: POST /subscribe — add or cancel subscriptions, delegates to PubSub
 - HandleListen: GET /listen — long-poll for notifications, delegates to PubSub.Listen + FormatMarkdown
 - StartPubSub(): create PubSub, start reaper ticker (1 minute)
 - StartScheduler(): create EventScheduler, call ScanDayBuckets to
-  read upcoming events from LMDB, crank forward any expired recurring
+  read upcoming events from the index, crank forward any expired recurring
   events, add quarter chime, fire overdue events, set timer to head.
   (R874, R875, R876)
 - HandleSearchGrouped: POST /search/grouped — grouped search with
@@ -427,7 +427,7 @@ Optionally starts the embedded ui-engine alongside.
   Deduplicates by tag name. (R1076-R1080)
 - HandleTagValues: POST /tags/values — tag value completion. Accepts
   tag + prefix, returns {value, count} array. Delegates to
-  Store.QueryTagValues for O(1) LMDB lookup. (R1081-R1085, R1111)
+  Store.QueryTagValues for O(1) index lookup. (R1081-R1085, R1111)
 - HandleSave: POST /save — write file + re-index. Validates path
   is within indexed source. Writes content, triggers single-file
   refresh. (R1086-R1089)

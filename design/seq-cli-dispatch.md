@@ -48,9 +48,9 @@ CLI ──> CLI.DetectServer(dbPath)
          │
          └──> CLI.ColdStart(dbPath)
                ├── DB.Open(dbPath)
-               │    ├── microfts2.Open (loads LMDB env)
-               │    └── Store.Open (env shared with the Librarian; EC
-               │         embeddings live in the ark subdatabase)
+               │    ├── microfts2.Open (opens the bbolt DB)
+               │    └── Store.Open (DB shared with the Librarian; EC
+               │         embeddings live in the ark bucket)
                │
                ├── execute the requested operation
                │    (search, add, remove, etc.)
@@ -81,7 +81,7 @@ CLI ──> cmdSearch: parse flags, build request struct
 ```
 
 Search always tries the server first because the server keeps
-caches warm (file name map, LMDB pages, session chunk caches).
+caches warm (file name map, index pages, session chunk caches).
 The server path avoids the cold-start DB open cost entirely.
 If the server is unavailable or the proxy fails, local search
 is the fallback.

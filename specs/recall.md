@@ -168,8 +168,8 @@ chunk cache. Self-chunkID is excluded from its own results.
   runs. Result carries `Warning: "embedding unavailable"`.
 - No chunks match → return `(&RecallResult{Chunks: nil}, nil)`.
   The CLI emits `## Chunks\n\n_no results_\n` on stdout.
-- `tag_model` configured but file missing (CLI in-process path)
-  → exit non-zero with `error: configured tag_model not found
+- `[embedding] model` configured but file missing (CLI in-process path)
+  → exit non-zero with `error: configured embedding model not found
   at <PATH>`. Distinct from "server not running"; catches typos
   in `ark.toml`.
 
@@ -198,9 +198,9 @@ Options:
 If the server is running, the CLI proxies the `recall` command via HTTP/Unix socket to the server (`POST /recall`), using the warm model if configured.
 
 If the server is not running:
-- If `tag_model` is configured in `ark.toml` **and the model file exists**, the CLI exits non-zero with `error: server not running; model configured. Please start the server with: ark serve`.
-- If `tag_model` is configured in `ark.toml` **but the model file is missing**, the CLI exits non-zero with `error: configured tag_model not found at <PATH>`. This catches typos and stale paths instead of silently degrading to trigram-only.
-- If `tag_model` is not configured, the CLI opens the database locally in-process via `withDB` in read-only mode and executes a local trigram-only recall query.
+- If `[embedding] model` is configured in `ark.toml` **and the model file exists**, the CLI exits non-zero with `error: server not running; model configured. Please start the server with: ark serve`.
+- If `[embedding] model` is configured in `ark.toml` **but the model file is missing**, the CLI exits non-zero with `error: configured embedding model not found at <PATH>`. This catches typos and stale paths instead of silently degrading to trigram-only.
+- If `[embedding] model` is not configured, the CLI opens the database locally in-process via `withDB` in read-only mode and executes a local trigram-only recall query.
 
 ### Stencil shape (markdown)
 

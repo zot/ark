@@ -12,7 +12,7 @@ and triangulate — running one query through multiple strategies to
 surface results that any single strategy would miss.
 
 microfts2 now provides `SearchMulti` which collects candidates once
-(single LMDB transaction) and scores them with each strategy
+(single transaction) and scores them with each strategy
 independently. Ark needs to expose this through the CLI and integrate
 it into the search pipeline.
 

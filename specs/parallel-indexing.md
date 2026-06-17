@@ -2,16 +2,16 @@
 
 Rebuild and refresh index files in parallel. File preparation
 (read, chunk, extract tags/trigrams) is independent per file.
-LMDB writes must be serial (single-writer constraint).
+Index writes must be serial (single-writer constraint).
 
 ## Design
 
 Worker pool fans out file preparation. A ChanSvc actor serializes
-all LMDB writes. Workers send closures that capture their prepared
+all index writes. Workers send closures that capture their prepared
 data and call the write methods.
 
 ```
-workers (N goroutines)          ChanSvc (owns LMDB writes)
+workers (N goroutines)          ChanSvc (owns index writes)
   read file from disk             for fn := range ch {
   chunk into pieces                   fn()
   extract tags + defs             }
@@ -34,7 +34,7 @@ Does not change:
 ## Worker count
 
 Default to `runtime.NumCPU()`. No flag needed — CPU-bound work
-(chunking, trigram extraction) scales with cores. LMDB writes are
+(chunking, trigram extraction) scales with cores. Index writes are
 I/O but serialized, so they don't benefit from parallelism.
 
 ## Error handling

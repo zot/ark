@@ -100,7 +100,7 @@ With `--repair`:
   (it already exists; this just invokes it after the X records
   are made consistent).
 
-Repairs run inside a single LMDB write transaction. Partial repair
+Repairs run inside a single write transaction. Partial repair
 is reported per-issue.
 
 ## Cost

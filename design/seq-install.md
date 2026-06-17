@@ -16,7 +16,7 @@ CLI.cmdUIInstall(cwd)
   │
   ├──> CLI.cmdInit(--if-needed)
   │     │
-  │     ├──> check data.mdb exists in dbPath
+  │     ├──> check index.db exists in dbPath
   │     │     └── exists → skip DB creation
   │     │
   │     ├──> check html/ exists in dbPath
@@ -63,7 +63,7 @@ CLI.cmdSetup()
 ```
 CLI.cmdInit(flags)
   │
-  ├──> if --if-needed && data.mdb exists → exit 0
+  ├──> if --if-needed && index.db exists → exit 0
   │
   ├──> if !--no-setup && html/ missing in dbPath
   │     └──> CLI.cmdSetup()
@@ -71,7 +71,7 @@ CLI.cmdInit(flags)
   ├──> seed from ark.toml if present
   ├──> microfts2.Create(dbPath, opts)
   ├──> Store.Init(env)   (no separate vector DB — EC embeddings are
-  │     ark-subdatabase records; R1912)
+  │     ark-bucket records; R1912)
   ├──> write ark.toml
   │
   └──> print "initialized ark database at <dbPath>"

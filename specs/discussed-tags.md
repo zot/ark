@@ -13,7 +13,7 @@ result-time set operations; the agent layer
 calls the writer. This spec sits between them.
 
 Language: Go (Store + CLI subcommand family). Environment: ark
-server with the LMDB index open. The CLI works in-process via
+server with the index open. The CLI works in-process via
 `withDB` when the server is not running.
 
 ## Why this exists
@@ -187,7 +187,7 @@ see [.scratch/CONTEXTUAL-RECALL.md](../.scratch/CONTEXTUAL-RECALL.md)).
                                │ writes RD records
                                ▼
                      ┌─────────────────────┐
-                     │ LMDB store          │
+                     │ index store         │
                      └─────────┬───────────┘
                                │ range-scanned by
                                ▼
@@ -263,7 +263,7 @@ lands).
 
 ## Performance
 
-- `add` is one LMDB put per tag, batched in a single write txn.
+- `add` is one index put per tag, batched in a single write transaction.
 - `list` is a range scan over `RD + session-bytes + \x00`,
   bounded by the session's discussed-tag count. The 24h TTL keeps
   this small in practice (a long session emits dozens, not

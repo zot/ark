@@ -23,7 +23,7 @@ If content is worth keeping, write a real file.
 microfts2 provides the in-memory overlay: `AddTmpFile`,
 `UpdateTmpFile`, `RemoveTmpFile`. The overlay holds trigrams,
 tokens, and content in RAM. Search merges overlay results with
-LMDB results transparently. Chunk retrieval reads from stored
+index results transparently. Chunk retrieval reads from stored
 in-memory content instead of disk. See microfts2's crc-Overlay.md
 for the full API.
 
@@ -60,7 +60,7 @@ default. `--no-tmp` is the opt-out.
 
 ## Search proxy optimization
 
-CLI search normally runs locally against LMDB (the mmap shares
+CLI search normally runs locally against the index (the mmap shares
 pages with the server). But local search can't see tmp:// documents
 because they only exist in the server's memory.
 
@@ -75,7 +75,7 @@ with an `onlyIfTmp` flag. The server checks `HasTmp()`:
   results. The CLI uses these instead of searching locally.
 
 This means tmp:// documents are invisible to local search (by
-necessity — they're not in LMDB) but the CLI transparently
+necessity — they're not in the index) but the CLI transparently
 proxies when needed, and avoids the proxy cost when there are
 no tmp docs.
 
@@ -97,7 +97,7 @@ overlay. Used by the `onlyIfTmp` optimization.
 Tags are extracted from tmp:// content using the same regex as
 persistent files. Tag counts (T and F records) for tmp:// files
 are tracked in memory alongside the overlay — they don't touch
-LMDB. Structure, tvid integration, and the unified read path are
+the index. Structure, tvid integration, and the unified read path are
 specified in [tmp-tag-overlay.md](tmp-tag-overlay.md).
 
 ## Lua integration

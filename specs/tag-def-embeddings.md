@@ -5,7 +5,8 @@ Embed every tag-definition text so a chunk can retrieve the tag
 chunk curation: the user clicks Curate on a chunk, ark proposes
 tag names whose ED vectors are nearest the chunk's EC vector.
 
-Language: Go. Environment: ark server, gollama with Vulkan build.
+Language: Go. Environment: ark server, yzma (purego) loading
+runtime-provisioned llama.cpp shared libs (`ark embed install`).
 
 ## Context
 
@@ -62,7 +63,7 @@ so name-as-cue cuts against the goal.
 ## Lifecycle
 
 ED follows D's lifecycle one-for-one. The Indexer writes D
-records synchronously inside the LMDB transaction; ED writes
+records synchronously inside the transaction; ED writes
 happen lazily on the next batch-embed pass, so embedding compute
 never blocks the actor.
 
@@ -81,9 +82,9 @@ never blocks the actor.
   re-embed path used by EV.
 - **Drop** (`Store.DropEmbeddings` / `ec_version` mismatch
   cousin): an ED-equivalent drop path exists so a model swap
-  invalidates ED alongside T-name and EV vectors. Stored model
-  filename in `tag_model` already gates this — ED uses the same
-  `tag_model` as T and EV.
+  invalidates ED alongside T-name and EV vectors. The stored model
+  filename in `[embedding] model` already gates this — ED uses the same
+  `[embedding] model` as T and EV.
 
 ## Batch Embed
 
@@ -106,9 +107,9 @@ crash-safe and self-recovering:
 - If ark exits mid-batch with N pairs unwritten, the next
   reconcile sees them in `MissingTagDefEmbeddings()` and
   finishes the work.
-- If a corpus is indexed without `tag_model` configured, D
+- If a corpus is indexed without `[embedding] model` configured, D
   records land but no ED records do. When the user later
-  configures `tag_model` and restarts, the next reconcile pass
+  configures `[embedding] model` and restarts, the next reconcile pass
   picks up every missing pair from scratch.
 
 The query-time path doesn't change for existing callers — this
@@ -142,5 +143,5 @@ behind the same drop API.
 - Does not change the tag-def extraction syntax in indexed files.
   D records already exist; ED is one new vector per existing D.
 - Does not introduce a separate `ed_version` schema marker. ED
-  is gated by `tag_model` like T-name and EV vectors; a model
+  is gated by `[embedding] model` like T-name and EV vectors; a model
   swap drops all three together.

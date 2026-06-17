@@ -225,7 +225,7 @@ mcp.cancel(session, "")
 Unknown chunk IDs are not checked at enqueue time — the sidecar's
 `--fetch` step surfaces them as an `errored` terminal status with
 `@connections-error: unknown chunk <id>`. This keeps the bridge
-sub-millisecond and avoids a redundant LMDB pass on enqueue.
+sub-millisecond and avoids a redundant index pass on enqueue.
 
 Standard gopher-lua two-return convention. Field names follow the
 project's lowerCamelCase Lua conventions (R2266 et al.).
@@ -301,7 +301,7 @@ commands; everything else is rejected.
 - Sidecar wall time: dominated by Claude's response. Haiku
   typically returns in 5–15 s for a handful of chunks; 60 s
   default timeout gives headroom for harder cases.
-- `--fetch` cost: one LMDB read per chunk + a file system read
+- `--fetch` cost: one index read per chunk + a file system read
   per unique file containing those chunks. Single-digit ms for
   the common case (pinned set ≤ ~20 chunks).
 - tmp:// rewrite throttling: 5 s elapsed-tick cadence; terminal

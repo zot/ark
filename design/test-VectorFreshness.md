@@ -4,7 +4,7 @@
 ## Test: stampWrite stores varint serial under S prefix
 **Purpose:** validate side-index key shape and varint value encoding
 **Input:** open Store, call WriteChunkEmbedding(chunkID=42, vec); inspect
-the LMDB key `S` + `EC` + varint(42)
+the index key `S` + `EC` + varint(42)
 **Expected:** the key exists; its value is a varint that decodes to a
 non-zero uint64
 **Refs:** R2174, R2175
@@ -52,7 +52,7 @@ is one greater than any pre-batch I:serial value
 **Refs:** R2183
 
 ## Test: per-txn semantics across separate Update calls
-**Purpose:** stamps in distinct LMDB write txns get strictly-increasing
+**Purpose:** stamps in distinct write txns get strictly-increasing
 serials
 **Input:** WriteChunkEmbedding(1, vec); WriteChunkEmbedding(2, vec)
 **Expected:** RecordSerial for chunk 2 > RecordSerial for chunk 1
@@ -81,7 +81,7 @@ ReadTagDefEmbedding after their respective writes.
 
 ## Test: DeleteChunkEmbeddingInTxn drops matching SEC entry
 **Purpose:** in-txn delete also drops SEC
-**Input:** WriteChunkEmbedding(1, vec); env.Update wrapping
+**Input:** WriteChunkEmbedding(1, vec); db.Update wrapping
 DeleteChunkEmbeddingInTxn(txn, 1)
 **Expected:** RecordSerial for chunk 1 returns (0, false, nil)
 **Refs:** R2185

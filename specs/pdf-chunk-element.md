@@ -286,7 +286,7 @@ grouping glyphs whose baseline Y differs from the running
 average by more than half a glyph height.
 
 Salvage chunks (no `rect`) also produce no `tag_segments`.
-Generic tag extraction — T/F/V/D LMDB records — is unchanged;
+Generic tag extraction — T/F/V/D index records — is unchanged;
 this attribute is a presentation enrichment only.
 
 The server emits the corresponding `segments="…"` attribute
@@ -628,7 +628,7 @@ overlay (see §Tag Interactivity, wrapped value behavior).
 
 Salvage chunks produce no `tag_rects` (no coordinates exist to
 record). Generic tag extraction from chunk text — T/F/V/D
-records in the LMDB index — continues unchanged for all PDF
+records in the index — continues unchanged for all PDF
 chunks including salvage; `tag_rects` is a presentation enrichment
 on top of the existing tag tracking, not a replacement for it.
 That generic extraction is owned by `specs/pdf-chunker.md`

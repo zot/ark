@@ -153,5 +153,5 @@ TagDrift(tag):                                                 R2223
 ```
 
 All three tag-tag queries are live; they do not read or write the
-HC cache. `ScanTagDefEmbeddings` is a single LMDB read txn shared
+HC cache. `ScanTagDefEmbeddings` is a single read txn shared
 across the call.

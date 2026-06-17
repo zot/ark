@@ -48,12 +48,12 @@
 **Input:**
 - Case A: Server running -> proxy to HTTP.
 - Case B: Server down, model configured AND file exists -> exit non-zero with server-not-running error.
-- Case C: Server down, model configured BUT file missing -> exit non-zero with tag_model-not-found error.
+- Case C: Server down, model configured BUT file missing -> exit non-zero with embedding-model-not-found error.
 - Case D: Server down, no model configured -> run in-process Trigram-only.
 **Expected:**
 - Case A executes proxy request to POST /recall.
 - Case B prints `error: server not running; model configured. Please start the server with: ark serve` and exits non-zero.
-- Case C prints `error: configured tag_model not found at <PATH>` and exits non-zero.
+- Case C prints `error: configured embedding model not found at <PATH>` and exits non-zero.
 - Case D opens local DB read-only via withDB and returns Trigram-only results.
 **Refs:** crc-CLI.md, seq-recall.md#1.2, seq-recall.md#1.12, seq-recall.md#1.13, R2630, R2631, R2632, R2633, R2646
 

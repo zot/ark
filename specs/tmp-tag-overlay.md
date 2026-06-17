@@ -15,7 +15,7 @@ spec pins the structure.
 
 `tmp://` documents live for the server's lifetime — no disk, no
 recovery, no schema versioning. The persistent V/F/T records carry
-durability scaffolding (LMDB keys, schema markers, rebuild
+durability scaffolding (index keys, schema markers, rebuild
 protocols) that `tmp://` content does not need. Mirroring the
 runtime API surface gives us code symmetry without inheriting
 storage concerns.
@@ -39,7 +39,7 @@ runtime API for the tag types ark exposes today:
   read used by inbox.
 
 `Store` (the persistent face) gains a thin union layer for the
-read methods listed above: results from LMDB and `TmpTagStore` are
+read methods listed above: results from the index and `TmpTagStore` are
 merged before return. Write-side dispatch routes by id at the
 call boundary: chunkid-keyed writes (`UpdateTagValues`,
 `AppendTagValues`, per-chunk `RemoveTagValues`) split groups by
@@ -65,10 +65,10 @@ the microfts2 overlay drops its records.
 ### Overlay callback caveats
 
 For overlay-fired `IndexedChunk` values, `CRecord.Txn()` and
-`CRecord.DB()` return nil — there is no LMDB transaction context.
+`CRecord.DB()` return nil — there is no transaction context.
 `ChunkID`, `Hash`, `ContentLen`, `Attrs`, `FileIDs`, and
 `Trigrams` are populated; lookups that traverse the CRecord into
-LMDB (e.g., `CRecord.FileRecord`) will fail. The chunkAccumulator
+the index (e.g., `CRecord.FileRecord`) will fail. The chunkAccumulator
 pattern is unaffected because it keys by chunkid and reads only
 populated fields.
 
@@ -92,7 +92,7 @@ all callers (subpoint 3's tvid map).
 Go caller, even though inbox needs it. Wiring inbox to
 `FileTagValues` is part of this spec rather than a follow-up:
 shipping the overlay without exercising the unified read path
-would let an LMDB-only inbox slip in. By the time this spec is
+would let an index-only inbox slip in. By the time this spec is
 implemented, `ark message inbox` resolves messages from both
 persistent and tmp:// sources via the same call.
 

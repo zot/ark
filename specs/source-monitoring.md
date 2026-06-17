@@ -95,11 +95,11 @@ of incoming events.
 
 ### Watcher pattern filtering
 
-Not every file in a watched directory is indexable. LMDB database
+Not every file in a watched directory is indexable. Index database
 files, socket files, log files, PID files — all live in watched
 directories (especially ~/.ark) but should never trigger reconcile.
-Without filtering, a reconcile writes to LMDB, LMDB modifies
-data.mdb, fsnotify fires, and the watcher triggers another reconcile.
+Without filtering, a reconcile writes to the index, the index modifies
+index.db, fsnotify fires, and the watcher triggers another reconcile.
 The database changes itself in a loop.
 
 Before triggering reconcile on a file event, the watcher checks
@@ -207,7 +207,7 @@ is cheap, and we avoid persisting state that can drift from disk.
 
 Access to the set is serialized through the DB actor: Scanner.Scan()
 runs on the actor goroutine, so writes to the set are single-threaded.
-Evictions that touch LMDB are routed through the write queue
+Evictions that touch the index are routed through the write queue
 (`enqueueWrite`) in async scan paths, so they serialize behind any
 in-flight write transaction instead of contending with it on the
 actor. Synchronous scans (e.g. `ark add` of a directory) run the

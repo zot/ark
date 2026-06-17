@@ -100,7 +100,7 @@ length 1 with FileID=10 and Score == ChunkSuggestion.Score.
 **Expected:** results == nil, err == nil.
 **Refs:** R2207
 
-## Test: read-only — no LMDB writes
+## Test: read-only — no index writes
 **Purpose:** R2212 — verify neither call mutates state.
 **Input:** snapshot RecordCounts() before; call `ChunksForTag` and
 `ChunksForTagDef`; snapshot after.

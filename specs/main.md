@@ -22,16 +22,16 @@ layer over microfts2 (trigram) and the Librarian/EC embedding pipeline
 
 - Go
 - microfts2 as a library dependency; vector search via the internal Librarian/EC embedding pipeline (no separate vector library)
-- LMDB via microfts2's environment (shared)
+- Index storage via microfts2 (shared)
 - Unix domain socket for server communication
 
-## Shared LMDB Environment
+## Shared Index
 
-Ark opens microfts2 first (which creates the LMDB environment), then
-opens its own named subdatabase for metadata (missing files list,
+Ark opens microfts2 first (which creates the index), then
+opens its own named bucket for metadata (missing files list,
 etc.), tags, and chunk embeddings (EC records). The Store and the
-Librarian share that env. MaxDBs leaves room: microfts2 uses 2, the
-ark subdatabase uses 1+ — no separate vector subDB (R1911).
+Librarian share that index. The ark bucket holds its records
+alongside microfts2's — no separate vector bucket (R1911).
 
 ## Source Configuration
 
@@ -197,7 +197,7 @@ uses the central config.
 ## Database Directory
 
 Ark stores everything in one directory:
-- LMDB environment (data.mdb, lock.mdb)
+- Index store (index.db)
 - `ark.toml` config file
 - Unix domain socket (while server is running)
 
@@ -219,8 +219,8 @@ earlier in PATH.
 Create a new ark database:
 - Initialize microfts2 (case insensitivity, byte aliases)
 - Embeddings are config-gated (the Librarian/EC pipeline runs when
-  `tag_model` is set) — no separate vector-store init step
-- Create ark's own subdatabase
+  `[embedding] model` is set) — no separate vector-store init step
+- Create ark's own bucket
 - Write default config
 
 microfts2 uses raw byte trigrams — no character set configuration
@@ -250,7 +250,7 @@ anchoring is needed.
 
 Ark registers chunking strategies with microfts2. Strategies are
 either Go functions (registered on every Init and Open) or external
-commands (persisted in LMDB settings).
+commands (persisted in index settings).
 
 Built-in func strategies:
 - `lines` — one chunk per line (microfts2's LineChunkFunc)
@@ -489,9 +489,9 @@ Mirrors the CLI. JSON request/response.
 - `POST /resolve` — dismiss unresolved files by pattern
 - `POST /fetch` — return full file content for an indexed file path
 
-## Ark Subdatabase
+## Ark Bucket
 
-LMDB subdatabase `ark` stores tag records (T/F/V/D), embedding records
+Index bucket `ark` stores tag records (T/F/V/D), embedding records
 (EV/EC/EF), config (I), error conditions (E:), file state (M/U), and
 page content (PC). Record key/value layouts and the schema-version
 protocol live in [record-formats.md](record-formats.md).
@@ -541,7 +541,7 @@ current binary. The bundled assets are the source of truth.
 ### `ark init` — database creation
 
 `ark init` creates a new ark database. Existing behavior is
-unchanged: initializes microfts2 and the ark subdatabase, writes
+unchanged: initializes microfts2 and the ark bucket, writes
 default config (no microvec init step; R1912).
 
 By default, `ark init` runs `ark setup` first if `~/.ark/` has not

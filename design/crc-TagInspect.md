@@ -7,7 +7,7 @@ without judgment. Server-aware so the in-memory ExtMap dump matches
 what the live server is using.
 
 ## Knows
-- db: *DB — facade for LMDB env access, ExtMap accessor, fileid/chunkid resolution
+- db: *DB — facade for index access, ExtMap accessor, fileid/chunkid resolution
 - store: *Store — F/V/X record access, TvidMap for tvid → (tag, value) decoding
 - extmap: *ExtMap — in-memory state to dump
 - scope: string — `ext` (v1)
@@ -39,7 +39,7 @@ what the live server is using.
   and writes the response; CLI proxies via this endpoint when the
   server is up
 - CLI — owns flag parsing (`--scope`, `--target`, `--json`); chooses
-  server-proxy or direct read-only LMDB open based on server liveness
+  server-proxy or direct read-only index open based on server liveness
 
 ## Sequences
 - (none required for v1; flow is straightforward proxy or direct)

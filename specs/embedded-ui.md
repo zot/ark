@@ -21,7 +21,7 @@ assets side by side:
 
 ```
 ~/.ark/
-├── data.mdb, lock.mdb     # LMDB
+├── index.db                # the index
 ├── ark.toml                # ark config
 ├── ark.sock                # ark API socket
 ├── logs/                   # server logs
@@ -36,7 +36,7 @@ assets side by side:
 
 The ui-engine's `Server.Dir` points to `~/.ark/`. The ui-engine
 creates and manages `ui-port` and the standard Frictionless directory
-structure. Ark's own files (data.mdb, ark.toml, ark.sock, logs/)
+structure. Ark's own files (index.db, ark.toml, ark.sock, logs/)
 coexist without collision.
 
 ## Two listeners

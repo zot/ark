@@ -42,14 +42,14 @@ R2012, R2016, R2018, R2022, R2024, R2026)
 
 Overlay (`tmp://`) sources route through `runOverlayExtRouting`
 (invoked from `DB.AddTmpFile`), which opens a **read-only**
-`env.View` and threads that txn into `applyIndexExt`. An overlay
+`db.View` and threads that txn into `applyIndexExt`. An overlay
 source can route to a *persistent* target whose fileid must be read
 (`chunkFileID` → `fts.ReadCRecord`, for the self-reference check and
 `fileidToTvids`), and that read needs a live txn even though the
-overlay source writes no LMDB records — `bothPersistent` is always
+overlay source writes no index records — `bothPersistent` is always
 false, so the read-only txn suffices and the `TvidTxn` stays nil. The
 cleanup counterpart (`CleanupSource` for an overlay source) keeps its
-nil txn because it branches on `bothPersistent` before any LMDB
+nil txn because it branches on `bothPersistent` before any index
 access. (R2915)
 
 ## Knows
@@ -91,7 +91,7 @@ access. (R2915)
   reads files and detects appends. Per-chunk tags arrive via the indexed
   callback (re-extracted from each chunk's original content, R2913); file-level tags + defs are
   re-extracted in executeRefresh from prep.data (full) or prep.newBytes
-  (append) (R1126, R1127, R2913). ChanSvc actor serializes all LMDB writes.
+  (append) (R1126, R1127, R2913). ChanSvc actor serializes all index writes.
   Errors skip the file and log a warning.
 - DetectAppend(path, fileid): get FileInfo from microfts2, check
   FileLength > 0, stat file for growth, hash first FileLength bytes,

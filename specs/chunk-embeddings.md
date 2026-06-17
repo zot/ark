@@ -60,12 +60,12 @@ happens once.
 ## Storage
 
 Chunk embeddings (EC) and file centroids (EF) are stored in the ark
-LMDB subdatabase alongside existing T/EV records.
+bucket alongside existing T/EV records.
 
 EC has one record per unique chunk content (microfts2-dedup'd —
 same text shared across files gets one EC). Orphan-cleanup happens
 via microfts2's removal/reindex callbacks delivering orphaned
-chunkIDs that ark deletes inside the same LMDB transaction.
+chunkIDs that ark deletes inside the same transaction.
 
 EF stores a running sum + count so centroid updates are O(1):
 add a chunk → `sum += vec; n++`; remove → `sum -= vec; n--`; query
@@ -90,14 +90,14 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
    (logged at verbose level).
 5. When a tier's bucket reaches its parallel count, dispatch the
    batch through that tier's context via `EmbedBatch`.
-6. Write resulting EC records to LMDB through the DB actor.
+6. Write resulting EC records to the index through the DB actor.
 7. After all chunks for a file are embedded, update or create the
    EF centroid record.
 8. When all files are processed, flush every bucket with remaining
    chunks — no content left unembedded.
 
 The GPU compute happens outside the actor (same pattern as tag
-embedding). Only the LMDB writes go through the actor.
+embedding). Only the index writes go through the actor.
 
 ## NUL Bytes in Content
 
@@ -126,7 +126,7 @@ EC/EF records are stale and should be dropped on next reconcile
 
 - ~131K chunks currently, growing with sources
 - 768 dims x 4 bytes = 3072 bytes per vector
-- Full EC storage: ~400MB in LMDB
+- Full EC storage: ~400MB in the index
 - EF storage: ~4K files x 3076 bytes ≈ 12MB
 - Full rebuild: variable by tier, ~25-55 minutes on Steam Deck
   depending on chunk size distribution

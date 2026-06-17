@@ -1,6 +1,6 @@
 # Ark
 
-Digital zettelkasten — files on disk, LMDB index. Hybrid trigram + vector search.
+Digital zettelkasten — files on disk, bbolt index. Hybrid trigram + vector search.
 
 load /ark first. This will let you remember and access memories.
 
@@ -42,8 +42,8 @@ reference docs — update them yourself when their surface changes:
   inventory mirror). So a CLI change touches the node declaration **and**
   this spec; the help text follows for free. The docs are authoritative;
   readers shouldn't have to re-check the source.
-- `specs/record-formats.md` — every LMDB record prefix, key shape,
-  and value layout in the `ark` subdatabase. Update when adding a
+- `specs/record-formats.md` — every index record prefix, key shape,
+  and value layout in the `ark` bucket. Update when adding a
   new record class, changing a key/value encoding, or retiring a
   prefix. (Also remember `ark status -db`: it lists these records
   and must stay in sync.)

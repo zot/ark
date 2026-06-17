@@ -1,19 +1,19 @@
-# Status --db: LMDB Record Counts
+# Status --db: Record Counts
 
 `ark status` shows operational health (files, stale, missing). But
 sometimes you want to know what's actually in the database — how many
-records of each type, across both subdatabases. This is a developer
+records of each type, across both buckets. This is a developer
 diagnostic: "what did the indexer produce?"
 
 ## Flag
 
 `ark status --db` adds a section showing record counts grouped by
-subdatabase and record type. Without `--db`, status output is
+bucket and record type. Without `--db`, status output is
 unchanged.
 
 ## Record Types
 
-Two subdatabases share the LMDB environment. Full record key/value
+Two buckets share the database. Full record key/value
 layouts and the complete prefix inventory live in
 [record-formats.md](record-formats.md). The list below names what
 `ark status --db` tallies.
@@ -36,7 +36,7 @@ string. Prefix detection for each key: known multi-byte prefixes
 ## Output
 
 The `--db` section prints after the normal status output. Each
-subdatabase is a header line. Each record type shows: prefix letter,
+bucket is a header line. Each record type shows: prefix letter,
 purpose label, record count, key bytes, and value bytes.
 
 ```
@@ -64,13 +64,13 @@ db: ark
   V  tag-values          1313  keys 83.3 KB     vals 5.8 KB
   X  ext-routings           0  keys 0 B         vals 0 B
 
-db total: 975272 records, 9.1 MB keys, 231.8 MB vals (240.9 MB data in 489.3 MB map)
+db total: 975272 records, 9.1 MB keys, 231.8 MB vals (240.9 MB data, 489.3 MB file)
 ```
 
-Record types are sorted alphabetically within each subdatabase.
+Record types are sorted alphabetically within each bucket.
 Counts are right-aligned for readability. A total line summarizes
-all records across both subdatabases with aggregate key/value sizes
-and their proportion of the LMDB map.
+all records across both buckets with aggregate key/value sizes
+and the on-disk database file size.
 
 ## Server Endpoint
 

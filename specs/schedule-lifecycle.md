@@ -89,7 +89,7 @@ only the extensions whose chunkers it ships:
 This keeps non-text artifacts out of the index by construction:
 Fossil checkout files (`.fslckout`, `*.fossil`), binary office
 documents (`*.docx`), undo-tree dumps, lock files, build outputs,
-LMDB pages, and the like. Each was previously surfaced as an
+index pages, and the like. Each was previously surfaced as an
 `fts add ...: chunk "1-1" contains invalid UTF-8` line on every
 startup — extension-scoped includes drop them before they reach
 the chunker. Archived schedule logs go to
@@ -165,7 +165,7 @@ absence means handled.
 When ark.toml's `[schedule]` section changes, the server
 re-materializes day buckets for affected files.
 
-Detection: store the serialized `[schedule]` config in the LMDB
+Detection: store the serialized `[schedule]` config in the
 settings record. On config reload (startup, ark.toml fsnotify),
 compare current vs stored:
 

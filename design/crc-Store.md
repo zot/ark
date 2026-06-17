@@ -36,7 +36,7 @@ files, unresolved files, ark-level settings, and tag tracking.
 - ClearERecords(): delete all E prefix records. (R1542, R1545)
 - UpdateTags(fileid, tags): replace all F records for fileid, recompute T totals.
   tags is map[string]uint32 (tagname → count in file).
-  Within one LMDB txn: delete old F records for fileid, write new F records,
+  Within one transaction: delete old F records for fileid, write new F records,
   recompute T totals from all F records for affected tagnames.
 - RemoveTags(fileid): delete all F records for fileid, decrement T totals
 - ListTags(): scan T prefix, then union with ExtMap.VirtualTagNames
@@ -55,7 +55,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   without replacing — used by append-only indexing path
 - UpdateTagDefs(fileid, defs): replace all D records for fileid, write new ones.
   defs is map[string]string (tagname → description).
-  Within one LMDB txn: delete old D records for fileid, delete the
+  Within one transaction: delete old D records for fileid, delete the
   fileid's ED records (one per old D), delete the fileid's matching
   SED side-index entries, write new D records. ED records for new
   (tag, fileid) pairs are written lazily by the batch-embed pass.
@@ -86,13 +86,13 @@ files, unresolved files, ark-level settings, and tag tracking.
   I record "schedule_config". (R927, R928, R1572)
 - PutScheduleConfig(serialized string): write schedule config to
   I record "schedule_config". (R927, R932, R1572)
-- RecordCounts(): scan all keys in ark subdatabase, count by prefix byte,
-  return map[byte]int64. Single LMDB View transaction. (R2481)
+- RecordCounts(): scan all keys in ark bucket, count by prefix byte,
+  return map[byte]int64. Single View transaction. (R2481)
 - UpdateTagValues(chunkTags []ChunkTagValues): write the V records for
   the given chunks (idempotent — orphaned-chunk cleanup is a separate
   path, RemoveTagValues via microfts2's removed-chunk callback).
   partitionChunkTags splits the groups by chunkid
-  high bit: persistent chunkids write to LMDB, overlay chunkids
+  high bit: persistent chunkids write to the index, overlay chunkids
   dispatch to TmpTagStore. For each persistent chunk, resolve the
   existing tvid for each (tag, value) by prefix scan
   V[tag]\x00[value]\x00 (or allocate a new tvid), then append the
@@ -174,15 +174,15 @@ files, unresolved files, ark-level settings, and tag tracking.
 - ClearAllSurfaceCooldown() (int, error): delete every RM record across
   all sessions (mirrors ClearAllDiscussed). Both are the clean-command
   mechanism for RM. (R2887)
-- WriteDerivedProposal(txn *lmdb.Txn, chunkID uint64, tagname string)
+- WriteDerivedProposal(txn *bbolt.Tx, chunkID uint64, tagname string)
   error: write or increment RC[chunkid + tagname]. If the record
   exists, increment its 8-byte big-endian uint64 tally; otherwise
   write tally=1. Called inside the derivation pass's batched write
   txn. (R2664, R2674, R2675)
-- WriteDerivedFreshness(txn *lmdb.Txn, chunkID, serial uint64) error:
+- WriteDerivedFreshness(txn *bbolt.Tx, chunkID, serial uint64) error:
   write RF[chunkid] = varint(serial). Same batched txn as the RC
   writes. (R2666, R2669, R2675)
-- ReadDerivedFreshness(txn *lmdb.Txn, chunkID uint64) (serial uint64,
+- ReadDerivedFreshness(txn *bbolt.Tx, chunkID uint64) (serial uint64,
   found bool, err error): read RF[chunkid]; missing or malformed
   value returns (0, false, nil) — derivation treats missing as
   "stale, process this chunk." (R2666, R2669, R2681, R2682)
@@ -190,7 +190,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   across the entire ED prefix via WalkRecordsSinceSerial(ED, 0,
   ...). Cheap with the existing S substrate. Used once per recall
   call to establish the freshness comparator for the batch. (R2669)
-- AdjustJudgment(txn *lmdb.Txn, chunkID uint64, tagname string,
+- AdjustJudgment(txn *bbolt.Tx, chunkID uint64, tagname string,
   delta int64) (newScore int64, err error): the read-modify-write
   primitive for the signed **Recall Judgment** edge
   `RJ[chunkid + tagname]`. Read the current score (absent = 0), add
@@ -199,13 +199,13 @@ files, unresolved files, ark-level settings, and tag tracking.
   reinforces; negative decays/rejects. A score that lands at 0 may
   be stored or deleted (absent ≡ 0). Runs inside the caller's write
   txn. (R2874, R2875, R2881)
-- ReadJudgment(txn *lmdb.Txn, chunkID uint64, tagname string)
+- ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string)
   (score int64, present bool, err error): read the signed score for
   the edge. Absent → `(0, false, nil)`. A value that does not decode
   as `signed-varint + 8 bytes` is treated conservatively as rejected
   (negative score, `present = true`) so a `reject_propose_ceiling==0`
   caller never re-proposes a corrupt edge. (R2874, R2876)
-- HasDerivedRejection(txn *lmdb.Txn, chunkID uint64, tagname string)
+- HasDerivedRejection(txn *bbolt.Tx, chunkID uint64, tagname string)
   (rejected bool, magnitude uint64, err error): thin wrapper over
   `ReadJudgment`. `rejected = present && score < 0`;
   `magnitude = max(0, -score)` (the rejection strength, identical to
@@ -283,7 +283,7 @@ files, unresolved files, ark-level settings, and tag tracking.
 - DropEmbeddings(): strip vectors from T records (keep count), delete all
   EV records, delete all ED records, delete all HC records, and delete
   every ST*/SEV*/SED*/SHC* side-index entry (for rebuild). T-name, EV,
-  ED, and HC all derive from `tag_model`, so a model swap drops them
+  ED, and HC all derive from the `[embedding] model`, so a model swap drops them
   together. SEC* is preserved (EC is not part of DropEmbeddings).
   (R2160, R2187, R2231)
 
@@ -297,7 +297,7 @@ files, unresolved files, ark-level settings, and tag tracking.
 - MissingTagDefEmbeddings() []TagDefRef: scan D prefix, return (tag,
   fileid) pairs that have a D record but no corresponding ED record.
   Used by the post-reconcile batch-embed pass. (R2157)
-- DeleteTagDefEmbeddingsForFileInTxn(txn *lmdb.Txn, fileid uint64): scan
+- DeleteTagDefEmbeddingsForFileInTxn(txn *bbolt.Tx, fileid uint64): scan
   D prefix matching the trailing 8-byte fileid, delete the parallel ED
   records and their matching SED side-index entries inside the same
   txn. Used by UpdateTagDefs/RemoveTagDefs before D records are
@@ -317,7 +317,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   Used by the sweep's phase-4 displace path. (R2229)
 - ReplaceHotCorrelations(tag string, entries []HotCorrelation) error:
   delete all HC entries for tag, write the supplied slice, all in
-  one LMDB write txn. Each new entry is stamped with the txn's
+  one write transaction. Each new entry is stamped with the txn's
   serial. Used by the sweep's phase-3 tag rebuild. Single shared
   serial per call (per-tag txn). (R2229, R2238)
 - DropHotCorrelations() error: delete every HC* record and every
@@ -337,14 +337,14 @@ files, unresolved files, ark-level settings, and tag tracking.
   records for centroid computation. One View transaction. (R1842)
 - DeleteChunkEmbedding(chunkID uint64): delete one EC record and its
   matching SEC side-index entry in the same txn. (R1839, R2185)
-- DeleteChunkEmbeddingInTxn(txn *lmdb.Txn, chunkID uint64): delete one
+- DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID uint64): delete one
   EC record and its matching SEC side-index entry using an existing
   transaction. For microfts2 callbacks. (R1840, R2185)
 - WriteFileCentroid(fileID uint64, sum []float32, count uint32): write
   EF[fileID] record. Unchanged key format. (R1835)
 - ReadFileCentroid(fileID uint64) (sum []float32, count uint32, err error):
   read one EF record.
-- DeleteFileCentroidInTxn(txn *lmdb.Txn, fileID uint64): delete one EF
+- DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID uint64): delete one EF
   record using an existing transaction. For microfts2 callbacks. (R1841)
 - ScanFileCentroids() (map[uint64][]float32, error): scan EF prefix, return
   fileID → centroid vector (sum / count).
@@ -355,21 +355,21 @@ files, unresolved files, ark-level settings, and tag tracking.
   chunkID → vector dimension. Used by embed validate. (R1845)
 
 ### Vector Freshness Substrate (S records, R2174-R2193)
-- allocSerial(txn *lmdb.Txn) (uint64, error): unexported. Read the
+- allocSerial(txn *bbolt.Tx) (uint64, error): unexported. Read the
   `I:serial` counter, advance by 1, write back, return the new value.
-  Sourced from an I-record (not lmdb.Txn.ID()) because compact-copy
-  may reset mt_txnid; the I-record sits in the active B-tree and is
-  preserved by every compact-copy. Counter never resets over the
+  Sourced from an I-record (not bbolt.Tx.ID()) because compaction
+  may reset the transaction id; the I-record sits in the active B-tree and is
+  preserved by every compaction. Counter never resets over the
   database's lifetime. (R2176, R2177)
-- stampWriteWith(txn *lmdb.Txn, prefix, key []byte, serial uint64) error:
+- stampWriteWith(txn *bbolt.Tx, prefix, key []byte, serial uint64) error:
   unexported. Write the side-index entry `S<prefix><key>` →
   varint(serial). Caller is responsible for the original record's
   txn.Put. Used by WriteChunkEmbeddingBatch to stamp every batch
   record with one shared serial. (R2174, R2175)
-- stampWrite(txn *lmdb.Txn, prefix, key []byte) error: unexported
+- stampWrite(txn *bbolt.Tx, prefix, key []byte) error: unexported
   convenience wrapper. Calls allocSerial, then stampWriteWith.
   Used by the four single-record Write*Embedding methods. (R2174-R2176)
-- deleteStamp(txn *lmdb.Txn, prefix, key []byte) error: unexported.
+- deleteStamp(txn *bbolt.Tx, prefix, key []byte) error: unexported.
   Delete `S<prefix><key>` from the side index. No-op if absent.
   Used by the embedding-record delete paths to keep the side index
   in sync. (R2185, R2186)
@@ -465,7 +465,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   (R1724) and from the file-removal path (R1725).
 
 ### Tmp tag overlay union (R1946, R1947, R1952, R2019)
-- TagFiles, TagValueChunks, FileTagValues union persistent LMDB
+- TagFiles, TagValueChunks, FileTagValues union persistent index
   results with `TmpTagStore` results before returning. Callers stay
   unaware of the tmp:// distinction.
 - TagFiles and TagValueChunks add two ExtMap legs covering routed
@@ -480,7 +480,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   R2120, R2124)
 - UpdateTagValues, AppendTagValues, RemoveTagValues dispatch each
   chunkid by its high bit (set when interpreted as int64): persistent
-  chunkids go to LMDB, overlay-issued chunkids (counting down from
+  chunkids go to the index, overlay-issued chunkids (counting down from
   `MaxUint64`) go to TmpTagStore (partitionChunkTags buckets the
   overlay groups by their fileid for the TmpTagStore dispatcher).
 - FileTagValues is the call inbox uses to resolve message tags
@@ -490,7 +490,7 @@ files, unresolved files, ark-level settings, and tag tracking.
 ### Tvid map and overlay (R1956, R1958, R1959, R1962, R1963)
 - tvids: *TvidMap — owned by Store; loaded once during DB.Open via
   `tvids.LoadFromStore(s)` (V-prefix scan, OriginPersistent).
-- Each `env.Update` block touching V records calls `tvids.Begin()`
+- Each `db.Update` block touching V records calls `tvids.Begin()`
   for a fresh `TvidTxn`, then `Commit` on success or `Abort` on
   error/panic. The write-actor invariant guarantees only one txn is
   ever live.
@@ -505,14 +505,14 @@ files, unresolved files, ark-level settings, and tag tracking.
   contributors survive when one is cleaned up. (R1988)
 
 ### Ext provenance records (R1989-R1991, R2010)
-- WriteExtRecord(txn *lmdb.Txn, tvid_ext, target_chunkid uint64,
+- WriteExtRecord(txn *bbolt.Tx, tvid_ext, target_chunkid uint64,
   routed_tvids []uint64): write `X[tvid_ext][target_chunkid] →
   packed routed_tvid varints`. One X record per (tvid_ext,
   target_chunkid) pair. (R1989)
 - ScanExtRecords(tvid_ext uint64) []ExtRouting: prefix-scan
   X[tvid_ext], decode each (target_chunkid, []routed_tvid) pair.
   Used by source-side cleanup and re-resolution. (R1989, R1990)
-- DeleteExtRecord(txn *lmdb.Txn, tvid_ext, target_chunkid uint64):
+- DeleteExtRecord(txn *bbolt.Tx, tvid_ext, target_chunkid uint64):
   delete one X record. (R1989)
 - ScanAllExtRecords() — used by ExtMap.Rebuild at startup to
   repopulate the six in-memory maps. (R1990, R1993)
@@ -523,7 +523,7 @@ files, unresolved files, ark-level settings, and tag tracking.
   target chunk's F record. F[source][ext] holds the @ext tag's tvid
   the same way any other F record holds tag tvids. (R1991)
 - TagCounts(tags []string): T-total query augmented with
-  `ExtMap.VirtualTagCount(tag)`; returns `LMDB_T[tag] +
+  `ExtMap.VirtualTagCount(tag)`; returns `T[tag] +
   virtualTagCount[tag]`. (R2010)
 
 ## Collaborators

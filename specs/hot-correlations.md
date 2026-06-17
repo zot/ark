@@ -53,7 +53,7 @@ type SweepResult struct {
 
 ```go
 // TopKChunksForTag reads the top-K chunks for a tag from the HC
-// cache. Fast (LMDB lookup, no cosine math) but reflects whatever
+// cache. Fast (index lookup, no cosine math) but reflects whatever
 // state the last sweep left. Same result shape as ChunksForTag —
 // callers can treat them interchangeably.
 //
@@ -460,7 +460,7 @@ size.
 ## What This Does Not Do
 
 - Does not invoke a search agent. Pure cosine math against
-  vectors already in LMDB.
+  vectors already in the index.
 - Does not call the embedding model. ED and EC vectors are
   read; not computed.
 - Does not filter chunks already carrying the tag at the
@@ -479,7 +479,7 @@ size.
 - Does not auto-trigger on indexer activity, file changes, or
   any other corpus event. Sweep runs on explicit invocation.
 - Does not maintain in-memory mirrors of HC. All reads go
-  through LMDB. The in-memory tail of recent S records (1C
+  through the index. The in-memory tail of recent S records (1C
   deferred question) becomes actionable once 1E is profiled
   against real workloads, not in this slice.
 
