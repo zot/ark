@@ -595,6 +595,81 @@ func (es *EventScheduler) ensureDir() error {
 // fallback (R2813/R2814 retire @ark-event-spec and @ark-event-upcoming,
 // but pre-migration files still carry them — they get folded into a
 // synthetic initial marker so they survive the next write).
+// ScheduleTagSummary returns the fully-formatted output lines for
+// `ark schedule tags`. The CLI's local arm and POST /schedule/tags both
+// call it so their output cannot drift. showValues appends the per-event
+// last-fire detail read from the schedule log dir. R3000
+func (db *DB) ScheduleTagSummary(showValues bool) []string {
+	cfg := db.Config()
+	tags := cfg.ScheduleTags()
+	if len(tags) == 0 {
+		return []string{
+			"no schedule tags configured",
+			"add [schedule.tag.NAME] blocks to ark.toml",
+		}
+	}
+	var lines []string
+	names := make([]string, 0, len(tags))
+	for k := range tags {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, t := range names {
+		tc := tags[t]
+		line := "@" + t + ":"
+		if def := tc.DefaultDuration; def != "" {
+			line += " (default " + def + ")"
+		}
+		if tc.Suppress {
+			line += " [suppressed]"
+		}
+		switch cfg.Lifecycle(t) {
+		case LifecycleTmp:
+			line += " [lifecycle=tmp]"
+		case LifecycleNone:
+			line += " [lifecycle=none]"
+		}
+		if len(tc.FilterFiles) > 0 {
+			line += " filter=" + strings.Join(tc.FilterFiles, ",")
+		}
+		if len(tc.ExcludeFiles) > 0 {
+			line += " exclude=" + strings.Join(tc.ExcludeFiles, ",")
+		}
+		lines = append(lines, line)
+	}
+	if len(cfg.Schedule.ExcludeFiles) > 0 {
+		lines = append(lines, "", "exclude: "+strings.Join(cfg.Schedule.ExcludeFiles, ", "))
+	}
+	if len(cfg.Schedule.FilterFiles) > 0 {
+		lines = append(lines, "filter: "+strings.Join(cfg.Schedule.FilterFiles, ", "))
+	}
+	if showValues {
+		entries, err := os.ReadDir(filepath.Join(db.dbPath, "schedule"))
+		if err != nil {
+			return lines
+		}
+		lines = append(lines, "")
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			chunks, err := ReadLogFile(filepath.Join(db.dbPath, "schedule", entry.Name()))
+			if err != nil {
+				continue
+			}
+			for _, ch := range chunks {
+				lastFire := "(no fires)"
+				if n := len(ch.Fired); n > 0 {
+					lastFire = ch.Fired[n-1]
+				}
+				lines = append(lines, fmt.Sprintf("@%s: %s\n  source: %s\n  last fire: %s",
+					ch.Event, ch.CurrentSpec(), ch.Source, lastFire))
+			}
+		}
+	}
+	return lines
+}
+
 // CRC: crc-EventScheduler.md | R2813, R2814, R2815, R2816, R2817
 func ReadLogFile(path string) ([]LogChunk, error) {
 	f, err := os.Open(path)

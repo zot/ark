@@ -123,7 +123,7 @@ func configShowAction(_ context.Context, _ *ucli.Command) error {
 
 // CRC: crc-CLITree.md, crc-CLI.md | R1569
 func configRecoverAction(_ context.Context, _ *ucli.Command) error {
-	withDB(func(d *ark.DB) {
+	withExclusiveDB(func(d *ark.DB) {
 		stored, err := d.Store().ReadConfig()
 		if err != nil {
 			fatal(err)

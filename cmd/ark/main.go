@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/zot/ark"
-	"github.com/zot/microfts2"
+	bolterrors "go.etcd.io/bbolt/errors"
 
 	ucli "github.com/urfave/cli/v3"
 	cli "github.com/zot/ui-engine/cli"
@@ -202,6 +202,87 @@ func withDB(fn func(db *ark.DB)) {
 	}
 	defer d.Close()
 	fn(d)
+}
+
+// Stubborn dispatch tunables. R2996, R2997.
+const (
+	dispatchStubbornWindow = 30 * time.Second       // wait through a server bounce this long
+	dispatchRetryInterval  = 200 * time.Millisecond // poll cadence while stubborn
+	dispatchLockTimeout    = 2 * time.Second        // bounded local open (microfts2 R672)
+)
+
+// serverUnreachable reports whether err is a transport-level failure (the
+// server is down or bouncing) rather than an application error from a live
+// server. proxyRaw returns *url.Error for client.Do failures and a plain
+// formatted error for non-200 responses, so a *url.Error means "couldn't
+// reach the server" — the signal to be stubborn. R2996
+func serverUnreachable(err error) bool {
+	var ue *url.Error
+	return errors.As(err, &ue)
+}
+
+// proxyOrLocal is the single dispatch point for every DB-touching CLI
+// command. The index is single-process (bbolt file lock), so a direct
+// local open blocks while the server holds it; proxyOrLocal prefers a
+// running server and opens locally only when none is reachable. R2995
+//
+//   - proxy talks to the server. It may be nil for maintenance/diagnostic
+//     commands needing exclusive local access; with a server running those
+//     fail fast ("stop the server") instead of hanging.
+//   - local opens the index directly (bounded lock wait) and runs the op.
+//
+// Stubborn Plumbing: a transport error is a bounce, not a failure —
+// proxyOrLocal waits for the server to return and retries until the
+// stubborn window elapses (R2996). On a local-open lock timeout it loops
+// to recheck server liveness (the lock may now be held by a server that
+// just came up) and re-dispatches (R2997). A real error surfaces only
+// after the window closes.
+func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
+	start := time.Now()
+	for {
+		if client := serverClient(arkDir); client != nil {
+			if proxy == nil {
+				fatal(fmt.Errorf("a server is running and holds the index; stop it with `ark stop` to run this command"))
+			}
+			err := proxy(client)
+			if err == nil {
+				return
+			}
+			if serverUnreachable(err) && time.Since(start) < dispatchStubbornWindow {
+				time.Sleep(dispatchRetryInterval) // bounce — wait and retry
+				continue
+			}
+			fatal(err)
+		}
+
+		// No server answered the dial: open locally with a bounded lock wait.
+		d, err := ark.OpenWithTimeout(arkDir, dispatchLockTimeout)
+		if err != nil {
+			// Only a lock timeout is worth retrying — something holds the
+			// index though no server answered (a race with a server coming
+			// up, or a bounce in progress). Other open failures (config,
+			// schema) are real; fatal at once. R2997
+			if errors.Is(err, bolterrors.ErrTimeout) && time.Since(start) < dispatchStubbornWindow {
+				time.Sleep(dispatchRetryInterval)
+				continue
+			}
+			fatal(err)
+		}
+		runErr := local(d)
+		d.Close()
+		if runErr != nil {
+			fatal(runErr)
+		}
+		return
+	}
+}
+
+// withExclusiveDB runs fn against a locally-opened index but refuses (fails
+// fast) when a server holds it — for maintenance/diagnostic commands that
+// need exclusive access and have no server proxy. It is proxyOrLocal with a
+// nil proxy; fn keeps its existing fatal-internally style. R3002
+func withExclusiveDB(fn func(*ark.DB)) {
+	proxyOrLocal(nil, func(d *ark.DB) error { fn(d); return nil })
 }
 
 // serverClient returns an http.Client that connects over Unix socket,
@@ -2689,15 +2770,31 @@ func cmdGrams(args []string) {
 		os.Exit(1)
 	}
 
-	withDB(func(d *ark.DB) {
-		trigrams, err := d.QueryTrigramCounts(query)
-		if err != nil {
-			fatal(err)
+	// R2999, R3003: /grams proxies; GramCounts runs locally. Both yield
+	// decoded GramCounts so output matches.
+	emitGrams := func(grams []ark.GramCount) {
+		for _, g := range grams {
+			fmt.Printf("%q\t%d\n", g.Gram, g.Count)
 		}
-		for _, t := range trigrams {
-			fmt.Printf("%q\t%d\n", microfts2.DecodeTrigram(t.Trigram), t.Count)
-		}
-	})
+	}
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var grams []ark.GramCount
+			if err := proxyDecode(client, "POST", "/grams", map[string]any{"query": query}, &grams); err != nil {
+				return err
+			}
+			emitGrams(grams)
+			return nil
+		},
+		func(d *ark.DB) error {
+			grams, err := d.GramCounts(query)
+			if err != nil {
+				return err
+			}
+			emitGrams(grams)
+			return nil
+		},
+	)
 }
 
 func cmdSources(args []string) {
@@ -2818,7 +2915,11 @@ func cmdFetch(args []string) {
 		os.Exit(1)
 	}
 
-	// R692: tmp:// paths must proxy to server (content is in server memory)
+	// R692, R2993: prefer the server when one is reachable. The index is
+	// single-process (bbolt file lock), so opening it locally while the
+	// server holds the DB would block indefinitely, and tmp:// content
+	// lives only in server memory. With no server, ordinary paths read
+	// locally and tmp:// paths error. Mirrors R510 (tag defs).
 	hasTmp := false
 	for _, p := range paths {
 		if strings.HasPrefix(p, "tmp://") {
@@ -2827,12 +2928,22 @@ func cmdFetch(args []string) {
 		}
 	}
 
-	if hasTmp {
-		client := serverClient(arkDir)
-		if client == nil {
-			fmt.Fprintln(os.Stderr, "error: tmp:// requires a running server")
-			os.Exit(1)
+	emit := func(source, content string) {
+		if !strings.HasPrefix(source, "tmp://") {
+			if abs, err := filepath.Abs(source); err == nil {
+				source = abs
+			}
 		}
+		if *wrap != "" {
+			fmt.Printf("<%s source=%q>\n", *wrap, source)
+			writeEscaped(os.Stdout, content, *wrap)
+			fmt.Printf("</%s>\n", *wrap)
+		} else {
+			os.Stdout.WriteString(content)
+		}
+	}
+
+	if client := serverClient(arkDir); client != nil {
 		for _, filePath := range paths {
 			data, err := proxyRaw(client, "POST", "/fetch", map[string]string{"path": filePath})
 			if err != nil {
@@ -2842,37 +2953,55 @@ func cmdFetch(args []string) {
 			if err := json.Unmarshal(data, &resp); err != nil {
 				fatal(fmt.Errorf("decode fetch response: %w", err))
 			}
-			content := resp.Content
-			if *wrap != "" {
-				fmt.Printf("<%s source=%q>\n", *wrap, filePath)
-				writeEscaped(os.Stdout, content, *wrap)
-				fmt.Printf("</%s>\n", *wrap)
-			} else {
-				os.Stdout.WriteString(content)
-			}
+			emit(filePath, resp.Content)
 		}
 		return
 	}
 
-	// Local LMDB — pure read, mmap shares pages with server.
+	// No server reachable — tmp:// content lives only in server memory.
+	if hasTmp {
+		fmt.Fprintln(os.Stderr, "error: tmp:// requires a running server")
+		os.Exit(1)
+	}
+
+	// Local fallback: opening the index directly is safe only because no
+	// server holds the bbolt lock (R2993).
 	withDB(func(d *ark.DB) {
 		for _, filePath := range paths {
 			data, err := d.Fetch(filePath)
 			if err != nil {
 				fatal(err)
 			}
-			content := string(data)
-
-			if *wrap != "" {
-				absPath, _ := filepath.Abs(filePath)
-				fmt.Printf("<%s source=%q>\n", *wrap, absPath)
-				writeEscaped(os.Stdout, content, *wrap)
-				fmt.Printf("</%s>\n", *wrap)
-			} else {
-				os.Stdout.WriteString(content)
-			}
+			emit(filePath, string(data))
 		}
 	})
+}
+
+// emitChunkResult formats a ChunkFetchResult for `ark chunks`, shared by
+// the proxy and local arms so their output is identical. R2998
+func emitChunkResult(res ark.ChunkFetchResult, filePath, chunkRange, anchor, wrap string) {
+	if res.HasSub {
+		if wrap != "" {
+			fmt.Printf("<%s source=%q range=%q>\n", wrap, filePath, fmt.Sprintf("%s:%q", chunkRange, anchor))
+			writeEscaped(os.Stdout, res.Subchunk, wrap)
+			fmt.Printf("</%s>\n", wrap)
+		} else {
+			fmt.Println(res.Subchunk)
+		}
+		return
+	}
+	if wrap != "" {
+		for _, c := range res.Chunks {
+			fmt.Printf("<%s source=%q range=%q>\n", wrap, c.Path, c.Range)
+			writeEscaped(os.Stdout, c.Content, wrap)
+			fmt.Printf("</%s>\n", wrap)
+		}
+		return
+	}
+	enc := json.NewEncoder(os.Stdout)
+	for _, c := range res.Chunks {
+		enc.Encode(c)
+	}
 }
 
 // CRC: crc-CLI.md
@@ -2916,51 +3045,30 @@ Options:`)
 		os.Exit(1)
 	}
 
-	withDB(func(d *ark.DB) {
-		if anchor != "" {
-			// Chat sub-chunk locator path:range:"<snippet>" — return the
-			// matched markdown sub-chunk of the turn (R2914). Drop the snippet
-			// (fetch path:range) for the whole turn — the zoom-out for context.
-			text, ok := d.ChatSubchunk(filePath, chunkRange, anchor)
-			if !ok {
-				fatal(fmt.Errorf("no sub-chunk matching %q at %s:%s", anchor, filePath, chunkRange))
+	// R2998, R3003: dispatch through the central helper. /chunks proxies
+	// to the server; FetchChunkContent runs the identical resolution
+	// locally. emitChunkResult formats both so output cannot drift.
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var res ark.ChunkFetchResult
+			if err := proxyDecode(client, "POST", "/chunks", map[string]any{
+				"path": filePath, "range": chunkRange, "anchor": anchor,
+				"before": *before, "after": *after,
+			}, &res); err != nil {
+				return err
 			}
-			if *wrap != "" {
-				fmt.Printf("<%s source=%q range=%q>\n", *wrap, filePath, fmt.Sprintf("%s:%q", chunkRange, anchor))
-				writeEscaped(os.Stdout, text, *wrap)
-				fmt.Printf("</%s>\n", *wrap)
-			} else {
-				fmt.Println(text)
-			}
-			return
-		}
-		if filePath == "" {
-			// chunkID-only form: resolve via ChunkInfo.
-			cid, _ := strconv.ParseUint(chunkRange, 10, 64)
-			info, err := d.ChunkInfo(cid)
+			emitChunkResult(res, filePath, chunkRange, anchor, *wrap)
+			return nil
+		},
+		func(d *ark.DB) error {
+			res, err := d.FetchChunkContent(filePath, chunkRange, anchor, *before, *after)
 			if err != nil {
-				fatal(err)
+				return err
 			}
-			filePath = info.Path
-			chunkRange = info.Range
-		}
-		results, err := d.GetChunks(filePath, chunkRange, *before, *after)
-		if err != nil {
-			fatal(err)
-		}
-		if *wrap != "" {
-			for _, c := range results {
-				fmt.Printf("<%s source=%q range=%q>\n", *wrap, c.Path, c.Range)
-				writeEscaped(os.Stdout, c.Content, *wrap)
-				fmt.Printf("</%s>\n", *wrap)
-			}
-		} else {
-			enc := json.NewEncoder(os.Stdout)
-			for _, c := range results {
-				enc.Encode(c)
-			}
-		}
-	})
+			emitChunkResult(res, filePath, chunkRange, anchor, *wrap)
+			return nil
+		},
+	)
 }
 
 // resolveChunksTarget parses the positional arguments of `ark chunks`.

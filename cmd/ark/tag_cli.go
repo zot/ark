@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -215,45 +216,77 @@ func tagValuesAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("no tags specified"))
 	}
 	filtering := len(filterFiles) > 0 || len(excludeFiles) > 0
+	withFiles := showFiles || filtering
 
-	withDB(func(d *ark.DB) {
-		for _, tag := range tags {
-			if showFiles || filtering {
-				values, err := d.TagValuesWithFiles(tag, "")
-				if err != nil {
-					fatal(err)
-				}
-				for _, v := range values {
-					matched := v.Files
-					if filtering {
-						matched = nil
-						for _, f := range v.Files {
-							if matchPath(f, filterFiles, excludeFiles) {
-								matched = append(matched, f)
-							}
-						}
-						if len(matched) == 0 {
-							continue
-						}
-					}
-					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, len(matched))
-					if showFiles {
-						for _, f := range matched {
-							fmt.Printf("\t%s\n", f)
-						}
+	// emitFiles/emitCounts format both arms identically. R3001
+	emitFiles := func(tag string, values []ark.TagValueFileInfo) {
+		for _, v := range values {
+			matched := v.Files
+			if filtering {
+				matched = nil
+				for _, f := range v.Files {
+					if matchPath(f, filterFiles, excludeFiles) {
+						matched = append(matched, f)
 					}
 				}
-			} else {
-				values, err := d.TagValues(tag, "")
-				if err != nil {
-					fatal(err)
+				if len(matched) == 0 {
+					continue
 				}
-				for _, v := range values {
-					fmt.Printf("%s\t%s\t%d\n", tag, v.Value, v.Count)
+			}
+			fmt.Printf("%s\t%s\t%d\n", tag, v.Value, len(matched))
+			if showFiles {
+				for _, f := range matched {
+					fmt.Printf("\t%s\n", f)
 				}
 			}
 		}
-	})
+	}
+	emitCounts := func(tag string, values []ark.TagValueCount) {
+		for _, v := range values {
+			fmt.Printf("%s\t%s\t%d\n", tag, v.Value, v.Count)
+		}
+	}
+
+	// R3001, R3003: /tags/values proxies (files flag → file-resolved
+	// variant); the same DB methods run locally with no server.
+	proxyOrLocal(
+		func(client *http.Client) error {
+			for _, tag := range tags {
+				if withFiles {
+					var values []ark.TagValueFileInfo
+					if err := proxyDecode(client, "POST", "/tags/values", map[string]any{"tag": tag, "files": true}, &values); err != nil {
+						return err
+					}
+					emitFiles(tag, values)
+				} else {
+					var values []ark.TagValueCount
+					if err := proxyDecode(client, "POST", "/tags/values", map[string]any{"tag": tag}, &values); err != nil {
+						return err
+					}
+					emitCounts(tag, values)
+				}
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			for _, tag := range tags {
+				if withFiles {
+					values, err := d.TagValuesWithFiles(tag, "")
+					if err != nil {
+						return err
+					}
+					emitFiles(tag, values)
+				} else {
+					values, err := d.TagValues(tag, "")
+					if err != nil {
+						return err
+					}
+					emitCounts(tag, values)
+				}
+			}
+			return nil
+		},
+	)
 	return nil
 }
 

@@ -63,9 +63,9 @@ func uiCommand() *ucli.Command {
 			{Name: "progress", Usage: "report build progress", ArgsUsage: "APP PERCENT STAGE", Action: uiDelegate(cmdUIProgress)},
 			{Name: "install", Usage: "connect this project to ark", Action: uiDelegate(cmdUIInstall)},
 			{
-				Name:   "update",
-				Usage:  "smart update, or version check with -t",
-				Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "t", Usage: "version check only (no update)"}},
+				Name:  "update",
+				Usage: "smart update, or version check with -t",
+				Flags: []ucli.Flag{&ucli.BoolFlag{Name: "t", Usage: "version check only (no update)"}},
 				Action: func(_ context.Context, c *ucli.Command) error {
 					if c.Bool("t") {
 						cmdUIUpdate([]string{"-t"})

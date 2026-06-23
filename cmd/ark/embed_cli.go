@@ -100,7 +100,7 @@ func embedTextAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("ark embed text: TEXT is required"))
 	}
 	text := strings.Join(rest, " ")
-	withDB(func(db *ark.DB) {
+	withExclusiveDB(func(db *ark.DB) {
 		lib := ark.NewLibrarian(db, arkDir)
 		if !lib.Available() {
 			fatal(fmt.Errorf("claude not on PATH"))
@@ -133,7 +133,7 @@ func embedBenchAction(_ context.Context, c *ucli.Command) error {
 	}
 	ctxSize := c.Int("ctx")
 	parallel := c.Int("parallel")
-	withDB(func(db *ark.DB) {
+	withExclusiveDB(func(db *ark.DB) {
 		lib := ark.NewLibrarian(db, arkDir)
 		if !lib.Available() {
 			fatal(fmt.Errorf("claude not on PATH"))
@@ -168,7 +168,7 @@ func embedValidateAction(_ context.Context, c *ucli.Command) error {
 // CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-embed-validate.md | R1794, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813
 func runEmbedValidate(fix, verbose bool) {
 	problems := 0
-	withDB(func(db *ark.DB) {
+	withExclusiveDB(func(db *ark.DB) {
 		store := db.Store()
 
 		// R1855: scan EC records (keyed by chunkID)

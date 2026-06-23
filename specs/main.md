@@ -462,6 +462,11 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   read-approval — using fetch side-steps other permission gates.
   Agents with access to the ark binary can view any indexed file
   without needing separate file-read permissions.
+  Works whether or not a server is running: when a server is up it
+  holds the index open, so fetch reads through it (`POST /fetch`);
+  with no server, fetch opens the index directly. The index is
+  single-process, so a direct open while the server holds it would
+  block — routing through the server avoids that.
 - `ark unresolved [--dir <path>]`
   List files that don't match any include or exclude pattern.
 - `ark resolve [--dir <path>] <pattern>...`
@@ -488,6 +493,9 @@ Mirrors the CLI. JSON request/response.
 - `GET /unresolved` — unresolved files list
 - `POST /resolve` — dismiss unresolved files by pattern
 - `POST /fetch` — return full file content for an indexed file path
+- `POST /chunks` — return chunk content by chunkID, `path:range`, or chat sub-chunk anchor
+- `POST /grams` — return decoded trigram document-frequency counts for a query
+- `POST /schedule/tags` — return the `schedule tags` summary lines (`values` includes per-event detail)
 
 ## Ark Bucket
 

@@ -13,9 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -221,76 +220,28 @@ func scheduleChangeAction(_ context.Context, c *ucli.Command) error {
 // CRC: crc-CLITree.md, crc-CLI.md | R2844
 func scheduleTagsAction(_ context.Context, c *ucli.Command) error {
 	showValues := c.Bool("values")
-	withDB(func(db *ark.DB) {
-		cfg := db.Config()
-		tags := cfg.ScheduleTags()
-		if len(tags) == 0 {
-			fmt.Println("no schedule tags configured")
-			fmt.Println("add [schedule.tag.NAME] blocks to ark.toml")
-			return
+	emit := func(lines []string) {
+		for _, l := range lines {
+			fmt.Println(l)
 		}
-		// Sorted iteration for stable output (R2844)
-		names := make([]string, 0, len(tags))
-		for k := range tags {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		for _, t := range names {
-			tc := tags[t]
-			line := "@" + t + ":"
-			if def := tc.DefaultDuration; def != "" {
-				line += " (default " + def + ")"
+	}
+	// R3000, R3003: /schedule/tags proxies; ScheduleTagSummary builds the
+	// identical lines locally (R2844 stable order, R1033/R1034 --values
+	// detail both live there now).
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var lines []string
+			if err := proxyDecode(client, "POST", "/schedule/tags", map[string]any{"values": showValues}, &lines); err != nil {
+				return err
 			}
-			if tc.Suppress {
-				line += " [suppressed]" // R2844
-			}
-			switch cfg.Lifecycle(t) {
-			case ark.LifecycleTmp:
-				line += " [lifecycle=tmp]"
-			case ark.LifecycleNone:
-				line += " [lifecycle=none]"
-			}
-			if len(tc.FilterFiles) > 0 {
-				line += " filter=" + strings.Join(tc.FilterFiles, ",")
-			}
-			if len(tc.ExcludeFiles) > 0 {
-				line += " exclude=" + strings.Join(tc.ExcludeFiles, ",")
-			}
-			fmt.Println(line)
-		}
-		if len(cfg.Schedule.ExcludeFiles) > 0 {
-			fmt.Printf("\nexclude: %s\n", strings.Join(cfg.Schedule.ExcludeFiles, ", "))
-		}
-		if len(cfg.Schedule.FilterFiles) > 0 {
-			fmt.Printf("filter: %s\n", strings.Join(cfg.Schedule.FilterFiles, ", "))
-		}
-		// R1033, R1034: show values and upcoming from schedule logs
-		if showValues {
-			schedDir := filepath.Join(arkDir, "schedule")
-			entries, err := os.ReadDir(schedDir)
-			if err != nil {
-				return
-			}
-			fmt.Println()
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				chunks, err := ark.ReadLogFile(filepath.Join(schedDir, entry.Name()))
-				if err != nil {
-					continue
-				}
-				for _, ch := range chunks {
-					lastFire := "(no fires)"
-					if n := len(ch.Fired); n > 0 {
-						lastFire = ch.Fired[n-1]
-					}
-					fmt.Printf("@%s: %s\n  source: %s\n  last fire: %s\n",
-						ch.Event, ch.CurrentSpec(), ch.Source, lastFire)
-				}
-			}
-		}
-	})
+			emit(lines)
+			return nil
+		},
+		func(db *ark.DB) error {
+			emit(db.ScheduleTagSummary(showValues))
+			return nil
+		},
+	)
 	return nil
 }
 

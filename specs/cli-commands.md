@@ -55,9 +55,9 @@ otherwise emit a different order each run). R2953.
 | `discussed`        | `discussed SUBCOMMAND ...`                                                                                            | optional                 | per-session recall dedup state (subcommands below)   |
 | `dismiss`          | `dismiss PATTERN...`                                                                                                 | optional                 | drops M records                                      |
 | `embed`            | `embed SUBCOMMAND ...`                                                                                               | none                     | subcommands below                                    |
-| `fetch`            | `fetch [--wrap N] PATH...`                                                                                           | tmp:// only              | reads file content from index                        |
+| `fetch`            | `fetch [--wrap N] PATH...`                                                                                           | optional                 | reads file content from index; proxies to server when up; tmp:// requires server |
 | `files`            | `files [--status] [--detail] [--filter-files G] [--exclude-files G] [PATTERN...]`                                    | optional                 |                                                      |
-| `grams`            | `grams QUERY...`                                                                                                     | none                     | shows trigram index for query                        |
+| `grams`            | `grams QUERY...`                                                                                                     | optional                 | shows trigram index for query; proxies to server when up, else local |
 | `init`             | `init [--embed-cmd C] [--query-cmd C] [--case-insensitive] [--aliases A] [--no-setup] [--if-needed]`                 | none                     |                                                      |
 | `install`          | (no flags)                                                                                                           | none                     | alias of `ui install`                                |
 | `listen`           | `listen --session ID [--timeout N]`                                                                                  | required                 | long-poll; outputs markdown                          |
@@ -175,6 +175,24 @@ server route mappings:
 | `remove tmp://...` | `POST /tmp/remove`                                 |
 | `fetch tmp://...`  | `POST /fetch` (server reads from memory)           |
 | `message dm`       | `POST /tmp/append` to `tmp://<sender>/dm-<to0>` (sender = `--from` session or `--from-service` identity; `<to0>` = first `--to`) |
+
+### Proxy/local dispatch
+
+The index is single-process (bbolt file lock), so a DB-touching
+command can't open it directly while `ark serve` holds it. Such
+commands dispatch through the central `proxyOrLocal` helper: proxy
+to the server when its socket answers, else open the index locally
+with a bounded lock wait. Dispatch is stubborn — a server bounce is
+a wait-and-retry, not an error — and rechecks server liveness if a
+local open hits lock contention. Full behavior: specs/cli-dispatch.md.
+
+Commands with no server endpoint that need exclusive local access
+(`embed text`, `embed bench`, `embed validate`, `config recover`)
+fail fast with a "stop the server" message when a server is running,
+rather than hanging. Server-backed read commands proxy to: `/fetch`
+(fetch), `/chunks` (chunks), `/grams` (grams), `/schedule/tags`
+(schedule tags), `/tags/values` (tag values, `files` flag for the
+file-resolved variant).
 
 ### `reorderArgs`
 
@@ -612,8 +630,12 @@ ark fetch [--wrap NAME] PATH...
 ```
 
 For tmp:// paths: server is required, reads via `POST /fetch`. For
-ordinary paths: `withDB` reads via `db.Fetch(path)` (mmap shares
-pages with server).
+ordinary paths: if a server is running, fetch proxies to it via
+`POST /fetch`; otherwise it opens the index locally via `withDB` and
+reads `db.Fetch(path)`. The index is single-process (bbolt file
+lock), so a local open while the server holds the DB would block —
+proxying when the server is up is what keeps `ark fetch` from
+hanging. Mirrors the `tag defs` server-proxy-or-local pattern (R510).
 
 ### `files` — list indexed files
 

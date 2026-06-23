@@ -292,6 +292,7 @@
 - **R163:** Adding a file to ark implies read-approval; fetch side-steps other permission gates
 - **R164:** `POST /fetch` — server API endpoint, accepts path in request body, returns file content
 - **R165:** (inferred) Output is raw file content to stdout (CLI), or JSON with content field (HTTP)
+- **R2993:** For ordinary (non-`tmp://`) paths, `ark fetch` proxies to a running server via `POST /fetch` when one is reachable, and opens the index locally (`withDB`/`db.Fetch`) only when no server is running. The index is single-process (bbolt file lock), so a local open while the server holds the DB would block indefinitely; proxying when the server is up is what keeps `ark fetch` from hanging. Mirrors R510 (`tag defs`).
 
 ## Feature: Init Seeding
 **Source:** specs/main.md
@@ -4621,3 +4622,17 @@ reason.
 - **R2988:** The rebuild server is the normal server with background subsystems switched off (filesystem watcher, scheduler, embedded UI engine, recall watcher, spectral-search librarian / pubsub reaper); the switches live in the serve options (ServeOpts), each defaulting to on for `ark serve` and off for rebuild.
 - **R2989:** A rebuild server runs the scan once and exits when the write queue has drained — every file the scan enqueued indexed and committed; "write queue drained" is the completion signal the rebuild waits on (the idle primitive).
 - **R2990:** (inferred) The drop window — while `ark init` deletes and recreates the database file, before the read-only server binds the socket — is not covered by the read window; a read arriving then may briefly block on the file lock. Accepted as short and self-clearing.
+
+## Feature: CLI Proxy/Local Dispatch
+**Source:** specs/cli-dispatch.md
+
+- **R2994:** `ark.OpenWithTimeout(dbPath, timeout)` threads a bbolt lock timeout (microfts2 `Options.Timeout`, R672) into the index open so a local open fails fast (`bbolt.ErrTimeout`) instead of hanging while a server holds the single-process index. `ark.Open` delegates with a zero timeout (block until available) for the server's own startup open, which owns the index.
+- **R2995:** `proxyOrLocal(proxy, local)` is the central dispatch point for DB-touching CLI commands: when a server's unix socket accepts a connection it runs `proxy`; otherwise it opens the index locally (bounded lock wait) and runs `local`. A nil `proxy` means the command has no server endpoint and needs exclusive local access; with a server running it fails fast ("a server is running and holds the index; stop it with `ark stop`") instead of hanging.
+- **R2996:** Dispatch is stubborn (Stubborn Plumbing): a transport-level proxy failure (`client.Do` error, detected as `*url.Error`) is treated as a server bounce and retried until a stubborn window elapses, not surfaced immediately; an application error from a live server (HTTP non-200) is reported at once without retry.
+- **R2997:** On a local-open lock timeout (`bbolt.ErrTimeout`) — something holds the index though no server answered the dial (a race with a server coming up, or a bounce in progress) — `proxyOrLocal` loops to recheck server liveness and re-dispatches, surfacing a real error only after the stubborn window closes; a non-timeout open error fails at once.
+- **R2998:** `ark chunks` dispatches through `proxyOrLocal`. `POST /chunks` and the CLI local arm both resolve content via `DB.FetchChunkContent` (anchor → chat sub-chunk R2914; empty path → chunkID-only via `ChunkInfo`; else `path:range` via `GetChunks`), returning a `ChunkFetchResult`; `emitChunkResult` formats both arms so output cannot drift.
+- **R2999:** `ark grams` dispatches through `proxyOrLocal`. `POST /grams` and the CLI local arm both build decoded `GramCount`s via `DB.GramCounts`.
+- **R3000:** `ark schedule tags` dispatches through `proxyOrLocal`. `POST /schedule/tags` and the CLI local arm both build the summary lines via `DB.ScheduleTagSummary(showValues)` (R2844 stable order and R1033/R1034 `--values` detail live there now).
+- **R3001:** `ark tag values` dispatches through `proxyOrLocal`. `POST /tags/values` gains a `files` flag selecting the file-resolved `[]TagValueFileInfo` variant for the `--files`/filter path; the flagless form returns `[]TagValueCount` unchanged for the editor. QueryTagValues already sorts by count desc so proxy and local order match.
+- **R3002:** `withExclusiveDB(fn)` is `proxyOrLocal` with a nil proxy — for commands that keep their fatal-internally local body and have no server endpoint: `embed text`, `embed bench`, `embed validate`, `config recover`. With a server running they fail fast rather than hang.
+- **R3003:** DB-touching CLI commands dispatch through the central `proxyOrLocal` helper (server-first with local fallback) rather than opening the index directly via `withDB`.

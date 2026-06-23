@@ -223,7 +223,18 @@ func injectPath(dbPath string) {
 	os.Setenv("PATH", strings.Join(result, ":"))
 }
 
+// Open opens the database at dbPath, blocking on the bbolt file lock
+// until it is available. The server (sole index owner) uses this.
 func Open(dbPath string) (*DB, error) {
+	return OpenWithTimeout(dbPath, 0)
+}
+
+// OpenWithTimeout opens the database, bounding the bbolt lock wait by
+// timeout (zero blocks forever, like Open). The CLI's local arm passes a
+// non-zero timeout so a direct open fails fast (microfts2 R672 →
+// bbolt.ErrTimeout) instead of hanging while a server holds the
+// single-process index. R2994
+func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	injectPath(dbPath)
 
 	// Load config
@@ -234,8 +245,8 @@ func Open(dbPath string) (*DB, error) {
 	}
 	config.dbPath = dbPath
 
-	// Open microfts2 (opens the bbolt database)
-	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{})
+	// Open microfts2 (opens the bbolt database). R2994: bounded lock wait.
+	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{Timeout: timeout})
 	if err != nil {
 		return nil, fmt.Errorf("open microfts2: %w", err)
 	}
@@ -1488,6 +1499,43 @@ func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microft
 	return db.fts.GetChunks(fpath, targetRange, before, after)
 }
 
+// ChunkFetchResult backs `ark chunks` content retrieval. The CLI's local
+// arm and the POST /chunks handler both build it via FetchChunkContent, so
+// their output cannot drift. R2998
+type ChunkFetchResult struct {
+	Subchunk string                  `json:"subchunk,omitempty"`
+	HasSub   bool                    `json:"hasSub"`
+	Chunks   []microfts2.ChunkResult `json:"chunks,omitempty"`
+}
+
+// FetchChunkContent resolves a chunks-command target and returns its
+// content. anchor != "" → chat sub-chunk (R2914); path == "" → chunkID-only
+// form (rng is the decimal id, resolved via ChunkInfo); otherwise
+// path:range. Shared by the CLI local arm and POST /chunks. R2998
+func (db *DB) FetchChunkContent(path, rng, anchor string, before, after int) (ChunkFetchResult, error) {
+	if anchor != "" {
+		text, ok := db.ChatSubchunk(path, rng, anchor)
+		if !ok {
+			return ChunkFetchResult{}, fmt.Errorf("no sub-chunk matching %q at %s:%s", anchor, path, rng)
+		}
+		return ChunkFetchResult{Subchunk: text, HasSub: true}, nil
+	}
+	if path == "" {
+		cid, _ := strconv.ParseUint(rng, 10, 64)
+		info, err := db.ChunkInfo(cid)
+		if err != nil {
+			return ChunkFetchResult{}, err
+		}
+		path = info.Path
+		rng = info.Range
+	}
+	chunks, err := db.GetChunks(path, rng, before, after)
+	if err != nil {
+		return ChunkFetchResult{}, err
+	}
+	return ChunkFetchResult{Chunks: chunks}, nil
+}
+
 // ResolveLink resolves an @link: value to a /content/ URL target.
 // UUID branch first (TvidMap.Lookup against tag "id" → V record →
 // chunkid → fileid → path + chunk Location). Path branch second:
@@ -2145,6 +2193,28 @@ func (db *DB) tmpPathForFile(fileID uint64) (path, location string, ok bool) {
 // QueryTrigramCounts returns trigram counts for a query string.
 func (db *DB) QueryTrigramCounts(query string) ([]microfts2.TrigramCount, error) {
 	return db.fts.QueryTrigramCounts(query)
+}
+
+// GramCount pairs a decoded trigram with its corpus document frequency.
+// R2999
+type GramCount struct {
+	Gram  string `json:"gram"`
+	Count int    `json:"count"`
+}
+
+// GramCounts returns decoded trigram document-frequency counts for a
+// query — the shared data behind `ark grams` (CLI local arm) and POST
+// /grams, so the two cannot drift. R2999
+func (db *DB) GramCounts(query string) ([]GramCount, error) {
+	tris, err := db.QueryTrigramCounts(query)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GramCount, 0, len(tris))
+	for _, t := range tris {
+		out = append(out, GramCount{Gram: microfts2.DecodeTrigram(t.Trigram), Count: t.Count})
+	}
+	return out, nil
 }
 
 // ConfigChangeAction classifies how a config field change is handled.

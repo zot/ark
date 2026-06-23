@@ -443,6 +443,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/show-why", srv.handleConfigShowWhy)
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
+	mux.HandleFunc("POST /chunks", srv.handleChunks)
+	mux.HandleFunc("POST /grams", srv.handleGrams)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 	mux.HandleFunc("POST /tmp/add", srv.handleTmpAdd)
@@ -460,6 +462,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /schedule/upcoming", srv.handleScheduleUpcoming)
 	mux.HandleFunc("POST /schedule/logs", srv.handleScheduleLogs)
 	mux.HandleFunc("POST /schedule/suppress", srv.handleScheduleSuppress)
+	mux.HandleFunc("POST /schedule/tags", srv.handleScheduleTags)
 	mux.HandleFunc("POST /search/grouped", srv.handleSearchGrouped)
 	mux.HandleFunc("POST /tags/complete", srv.handleTagComplete)
 	mux.HandleFunc("POST /tags/values", srv.handleTagValues)
@@ -2093,6 +2096,69 @@ func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"content": string(data)})
 }
 
+// handleChunks serves chunk content for `ark chunks` while the server
+// holds the index. Mirrors the CLI's resolution via FetchChunkContent so
+// proxy and local output match. R2998
+func (srv *Server) handleChunks(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path   string `json:"path"`
+		Range  string `json:"range"`
+		Anchor string `json:"anchor"`
+		Before int    `json:"before"`
+		After  int    `json:"after"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	res, err := Sync(srv.db, func(db *DB) (ChunkFetchResult, error) {
+		return db.FetchChunkContent(req.Path, req.Range, req.Anchor, req.Before, req.After)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, res)
+}
+
+// handleGrams serves trigram counts for `ark grams`. R2999
+func (srv *Server) handleGrams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	grams, err := Sync(srv.db, func(db *DB) ([]GramCount, error) {
+		return db.GramCounts(req.Query)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, grams)
+}
+
+// handleScheduleTags serves the `ark schedule tags` summary lines. R3000
+func (srv *Server) handleScheduleTags(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Values bool `json:"values"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	lines, err := Sync(srv.db, func(db *DB) ([]string, error) {
+		return db.ScheduleTagSummary(req.Values), nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, lines)
+}
+
 func (srv *Server) handleSourcesCheck(w http.ResponseWriter, r *http.Request) {
 	result, err := Sync(srv.db, func(db *DB) (*SourcesCheckResult, error) {
 		return db.SourcesCheck()
@@ -3203,6 +3269,10 @@ func (srv *Server) handleTagValues(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Tag    string `json:"tag"`
 		Prefix string `json:"prefix"`
+		// Files makes the response []TagValueFileInfo (value + resolved
+		// files) for the `ark tag values --files`/filter path; default
+		// false returns []TagValueCount, unchanged for the editor. R3001
+		Files bool `json:"files"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3215,6 +3285,21 @@ func (srv *Server) handleTagValues(w http.ResponseWriter, r *http.Request) {
 
 	tag := strings.ToLower(req.Tag)
 	prefix := strings.ToLower(req.Prefix)
+
+	// R3001: file-resolved variant for the CLI; QueryTagValues (and thus
+	// TagValuesWithFiles) already sorts by count desc, so order matches
+	// the CLI's local arm.
+	if req.Files {
+		results, err := Sync(srv.db, func(db *DB) ([]TagValueFileInfo, error) {
+			return db.TagValuesWithFiles(tag, prefix)
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, results)
+		return
+	}
 
 	results, err := Sync(srv.db, func(db *DB) ([]TagValueCount, error) {
 		return db.store.QueryTagValues(tag, prefix)
