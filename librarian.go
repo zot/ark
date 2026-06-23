@@ -2183,6 +2183,9 @@ func (l *Librarian) BatchEmbedChunks() error {
 			if placed {
 				fileQueued++
 			} else {
+				// R3004: chunk fits no tier — nil sentinel EC so the queue
+				// check (R1846) treats it as handled and it isn't re-queued.
+				// CRC: crc-Librarian.md | R3004
 				if err := l.db.store.WriteChunkEmbedding(fce.ChunkID, nil); err != nil {
 					log.Printf("chunk embed: sentinel write chunkID=%d: %v", fce.ChunkID, err)
 				}
@@ -2198,6 +2201,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 	// --- Pass 2: embed one tier at a time (R1830) ---
 
 	var totalEmbedded int
+	var totalEmptyStripped int // R3004: all-@tag chunks sentineled in Pass 2
 	for tierIdx, refs := range tierRefs {
 		if len(refs) == 0 {
 			continue
@@ -2259,6 +2263,16 @@ func (l *Librarian) BatchEmbedChunks() error {
 					if stripped != "" {
 						texts = append(texts, stripped)
 						valid = append(valid, ref)
+					} else {
+						// R3004: an all-@tag chunk strips to empty and has no
+						// meaning vector. Record a nil sentinel EC so the queue
+						// check (R1846) treats it as handled and it isn't
+						// re-queued every reconcile (the tag axis carries it).
+						// CRC: crc-Librarian.md | R3004
+						if err := l.db.store.WriteChunkEmbedding(ref.chunkID, nil); err != nil {
+							log.Printf("chunk embed: tag-only sentinel write chunkID=%d: %v", ref.chunkID, err)
+						}
+						totalEmptyStripped++
 					}
 				}
 			}
@@ -2319,8 +2333,8 @@ func (l *Librarian) BatchEmbedChunks() error {
 		}
 	}
 
-	if totalEmbedded > 0 || totalSkipped > 0 || totalDeduped > 0 { // R1864
-		log.Printf("librarian: chunk embed: %d embedded, %d skipped, %d deduped", totalEmbedded, totalSkipped, totalDeduped)
+	if totalEmbedded > 0 || totalSkipped > 0 || totalDeduped > 0 || totalEmptyStripped > 0 { // R1864, R3004
+		log.Printf("librarian: chunk embed: %d embedded, %d skipped, %d deduped, %d tag-only", totalEmbedded, totalSkipped, totalDeduped, totalEmptyStripped)
 	}
 	return nil
 }

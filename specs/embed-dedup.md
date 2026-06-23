@@ -56,3 +56,23 @@ librarian: chunk embed: 1200 embedded, 50 skipped, 3400 deduped
 Where "deduped" is the count of chunk references that were skipped
 because another reference to the same chunkID was already queued in
 this pass.
+
+## Un-embeddable chunks: nil sentinel
+
+Some chunks never produce a meaning vector: a chunk too large for any
+tier bucket, or a chunk that is all `@tag:` lines and strips to empty
+on the meaning axis (the tag axis carries it — see the tag-stripping
+spec). With no record written, the Pass 1 index check returns nil for
+these chunks on every reconcile, so they re-queue forever: wasted work,
+and a misleading "N new" in the embed log that never reaches zero.
+
+Both cases write a nil sentinel EC record (`WriteChunkEmbedding(chunkID,
+nil)`). The sentinel reads back as a non-nil empty slice, so the Pass 1
+check (`ReadChunkEmbedding != nil`) treats the chunk as handled and
+stops re-queueing it. A sentinel contributes no vector to the EF
+centroid. The embed log gains a `tag-only` count so the strip-to-empty
+set is visible:
+
+```
+librarian: chunk embed: 1200 embedded, 50 skipped, 3400 deduped, 12 tag-only
+```

@@ -738,6 +738,39 @@ func TestS_WriteChunkEmbeddingStamps(t *testing.T) {
 	}
 }
 
+// TestS_NilSentinelReadsBackNonNil pins R3004: the nil sentinel written for an
+// un-embeddable chunk (too large, or stripped to empty) must read back as a
+// non-nil empty slice so the Pass 1 queue check (ReadChunkEmbedding != nil)
+// treats the chunk as handled. An unwritten chunk reads back nil and would be
+// re-queued — that contrast is the whole point of the sentinel.
+func TestS_NilSentinelReadsBackNonNil(t *testing.T) {
+	s := testStore(t)
+
+	// Unwritten chunk: nil → the queue would re-embed it.
+	missing, err := s.ReadChunkEmbedding(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing != nil {
+		t.Errorf("unwritten chunk should read back nil, got %v", missing)
+	}
+
+	// Sentinel: nil write → non-nil empty read, so the queue skips it.
+	if err := s.WriteChunkEmbedding(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReadChunkEmbedding(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("sentinel chunk should read back non-nil so the queue check skips it")
+	}
+	if len(got) != 0 {
+		t.Errorf("sentinel should be an empty vector, got len %d", len(got))
+	}
+}
+
 // TestS_BatchSharesOneSerial validates per-txn semantics for batch writes.
 // Refs: R2183
 func TestS_BatchSharesOneSerial(t *testing.T) {
