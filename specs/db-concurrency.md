@@ -65,6 +65,22 @@ processing) merges into the DB actor. The watcher sends reconcile
 closures instead of signaling a separate channel. This eliminates
 the dedicated reconcile goroutine.
 
+## Refresh Coalescing
+
+The watcher's throttle window collapses a burst of events for the same path
+into one entry, but only within a single window. When the write actor is
+saturated — for example, a full embed pass after a rebuild holds the write
+goroutine for minutes — per-path refresh closures from successive windows pile
+up behind it. They drain later as a run of redundant no-op append checks (each
+reports the file "didn't grow" because an earlier one already caught it up).
+
+The DB actor coalesces at the queue level. It keeps a set of paths that have a
+refresh already queued or in flight. `IndexPathsAsync` skips any path in the set
+and marks the rest before enqueueing; each path is cleared as its refresh
+begins, so a change arriving during the refresh re-queues rather than being
+dropped. While a path's refresh is pending, further events for it add no new
+work.
+
 ## Session Interaction
 
 Lua searches go through two actors: session actor → DB actor.

@@ -63,6 +63,9 @@ type DB struct {
 	writing          bool                  // true while a write goroutine is in flight
 	onWriteComplete  func([]scheduleItem)  // callback for schedule items from write goroutines
 	writeIdleWaiters []chan struct{}       // R2989: one-shot signals when the write queue drains; actor-only
+
+	refreshMu      sync.Mutex          // R3005: guards pendingRefresh
+	pendingRefresh map[string]struct{} // R3005: paths with a refresh queued or in flight
 }
 
 // InitOpts are options for creating a new ark database.
@@ -1326,19 +1329,58 @@ func (db *DB) RefreshAsync() error {
 // state. One closure for the whole batch (R991). Must be called from inside
 // the actor.
 //
-// CRC: crc-DB.md | Seq: seq-file-change.md#1.4 | R991
+// CRC: crc-DB.md | Seq: seq-file-change.md#1.4 | R991, R3005
 func (db *DB) IndexPathsAsync(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
+	// R3005: coalesce — skip paths whose refresh is already queued or in
+	// flight, so a saturated write actor doesn't accumulate duplicate no-op
+	// refresh closures for the same file.
+	fresh := db.claimRefreshPaths(paths)
+	if len(fresh) == 0 {
+		return nil
+	}
 	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
 		idx := db.indexer.withFTS(ftsCopy)
-		for _, path := range paths {
+		for _, path := range fresh {
+			// Release before processing so a change arriving during the
+			// refresh re-queues rather than being dropped. (R3005)
+			db.releaseRefreshPath(path)
 			db.syncOnePath(idx, path)
 		}
 		db.drainWriteSchedule(idx)
 	})
 	return nil
+}
+
+// claimRefreshPaths returns the subset of paths without a refresh already
+// queued or in flight, marking those it returns as queued. Coalesces
+// duplicate watcher events under refreshMu.
+// CRC: crc-DB.md | R3005
+func (db *DB) claimRefreshPaths(paths []string) []string {
+	db.refreshMu.Lock()
+	defer db.refreshMu.Unlock()
+	if db.pendingRefresh == nil {
+		db.pendingRefresh = make(map[string]struct{})
+	}
+	var fresh []string
+	for _, p := range paths {
+		if _, busy := db.pendingRefresh[p]; busy {
+			continue
+		}
+		db.pendingRefresh[p] = struct{}{}
+		fresh = append(fresh, p)
+	}
+	return fresh
+}
+
+// releaseRefreshPath clears a path's queued mark so later events re-queue it.
+// CRC: crc-DB.md | R3005
+func (db *DB) releaseRefreshPath(path string) {
+	db.refreshMu.Lock()
+	delete(db.pendingRefresh, path)
+	db.refreshMu.Unlock()
 }
 
 // syncOnePath brings one path's index entry in line with disk. Inside the

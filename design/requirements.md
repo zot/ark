@@ -1679,6 +1679,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R993:** (inferred) Session → DB call direction is always one-way; no SvcSync from DB actor back to session actor
 - **R994:** (inferred) Lua source-add operations use fire-and-forget through the Lua session's closure actor
 - **R995:** (inferred) Go-side caches (pathCache, pathToID, frecordCache) are safe by construction — only accessed inside the actor
+- **R3005:** `IndexPathsAsync` coalesces refresh work via a pending-refresh set — paths with a refresh already queued or in flight are skipped, the rest marked before enqueueing; each path is cleared as its refresh begins, so a change arriving during the refresh re-queues rather than being dropped
 
 ## Feature: DB Write Actor
 **Source:** specs/db-write-actor.md
