@@ -448,29 +448,31 @@ func connCleanAction(_ context.Context, c *ucli.Command) error {
 		TmpRecall       int    `json:"tmpRecall"`
 		CheckpointFiles int    `json:"checkpointFiles"`
 	}
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{"sessions": sessions, "all": all, "checkpoint": checkpoint}
-		if err := proxyDecode(client, "POST", "/connections/clean", body, &resp); err != nil {
-			fatal(err)
-		}
-	} else {
-		withDB(func(db *ark.DB) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			body := map[string]any{"sessions": sessions, "all": all, "checkpoint": checkpoint}
+			if err := proxyDecode(client, "POST", "/connections/clean", body, &resp); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(db *ark.DB) error {
 			rc, err := db.ClearAllDerivedProposals()
 			if err != nil {
-				fatal(err)
+				return err
 			}
 			resp.RC = rc
 			if len(sessions) == 0 {
 				n, err := db.ClearAllDiscussed()
 				if err != nil {
-					fatal(err)
+					return err
 				}
 				resp.RD = n
 			} else {
 				for _, sess := range sessions {
 					n, err := db.ClearDiscussed(sess)
 					if err != nil {
-						fatal(err)
+						return err
 					}
 					resp.RD += n
 				}
@@ -478,14 +480,14 @@ func connCleanAction(_ context.Context, c *ucli.Command) error {
 			if len(sessions) == 0 {
 				n, err := db.ClearAllSurfaceCooldown()
 				if err != nil {
-					fatal(err)
+					return err
 				}
 				resp.RM = n
 			} else {
 				for _, sess := range sessions {
 					n, err := db.ClearSurfaceCooldown(sess)
 					if err != nil {
-						fatal(err)
+						return err
 					}
 					resp.RM += n
 				}
@@ -493,29 +495,30 @@ func connCleanAction(_ context.Context, c *ucli.Command) error {
 			if all {
 				rf, err := db.ClearAllDerivedFreshness()
 				if err != nil {
-					fatal(err)
+					return err
 				}
 				resp.RF = rf
 				rj, err := db.ClearAllDerivedRejections()
 				if err != nil {
-					fatal(err)
+					return err
 				}
 				resp.RJ = rj
 			}
 			if checkpoint {
 				paths, err := db.SessionJSONLs(sessions)
 				if err != nil {
-					fatal(err)
+					return err
 				}
 				for _, p := range paths {
 					if _, err := db.CheckpointFile(p); err != nil {
-						fatal(err)
+						return err
 					}
 					resp.CheckpointFiles++
 				}
 			}
-		})
-	}
+			return nil
+		},
+	)
 	fmt.Fprintf(os.Stderr, "cleaned: RC=%d RD=%d RM=%d", resp.RC, resp.RD, resp.RM)
 	if all {
 		fmt.Fprintf(os.Stderr, " RF=%d RJ=%d tmp-connections=%d tmp-recall=%d",

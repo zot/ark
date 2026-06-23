@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -85,20 +86,23 @@ func discussedAddAction(_ context.Context, c *ucli.Command) error {
 		}
 		tags = append(tags, ark.Discussed{Tag: tag, Value: value})
 	}
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{"session": session, "tags": tags}
-		if err := proxyOK(client, "POST", "/discussed/add", body); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withDB(func(db *ark.DB) {
-		for _, t := range tags {
-			if err := db.AddDiscussed(session, t.Tag, t.Value); err != nil {
-				fatal(err)
+	proxyOrLocal(
+		func(client *http.Client) error {
+			body := map[string]any{"session": session, "tags": tags}
+			if err := proxyOK(client, "POST", "/discussed/add", body); err != nil {
+				return err
 			}
-		}
-	})
+			return nil
+		},
+		func(db *ark.DB) error {
+			for _, t := range tags {
+				if err := db.AddDiscussed(session, t.Tag, t.Value); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
 	return nil
 }
 
@@ -119,23 +123,26 @@ func discussedListAction(_ context.Context, c *ucli.Command) error {
 	}
 
 	var entries []ark.Discussed
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{"session": session}
-		if sinceStr != "" {
-			body["since"] = sinceStr
-		}
-		if err := proxyDecode(client, "POST", "/discussed/list", body, &entries); err != nil {
-			fatal(err)
-		}
-	} else {
-		withDB(func(db *ark.DB) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			body := map[string]any{"session": session}
+			if sinceStr != "" {
+				body["since"] = sinceStr
+			}
+			if err := proxyDecode(client, "POST", "/discussed/list", body, &entries); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(db *ark.DB) error {
 			es, err := db.ListDiscussed(session, since)
 			if err != nil {
-				fatal(err)
+				return err
 			}
 			entries = es
-		})
-	}
+			return nil
+		},
+	)
 
 	if c.Bool("json") {
 		data, err := json.MarshalIndent(entries, "", "  ")
@@ -162,24 +169,27 @@ func discussedClearAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("session ID required"))
 	}
 	var count int
-	if client := serverClient(arkDir); client != nil {
-		var resp struct {
-			Count int `json:"count"`
-		}
-		if err := proxyDecode(client, "POST", "/discussed/clear",
-			map[string]any{"session": session}, &resp); err != nil {
-			fatal(err)
-		}
-		count = resp.Count
-	} else {
-		withDB(func(db *ark.DB) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var resp struct {
+				Count int `json:"count"`
+			}
+			if err := proxyDecode(client, "POST", "/discussed/clear",
+				map[string]any{"session": session}, &resp); err != nil {
+				return err
+			}
+			count = resp.Count
+			return nil
+		},
+		func(db *ark.DB) error {
 			n, err := db.ClearDiscussed(session)
 			if err != nil {
-				fatal(err)
+				return err
 			}
 			count = n
-		})
-	}
+			return nil
+		},
+	)
 	fmt.Fprintf(os.Stderr, "cleared %d entries\n", count)
 	return nil
 }
@@ -197,27 +207,30 @@ func discussedPruneAction(_ context.Context, c *ucli.Command) error {
 	}
 
 	var count int
-	if client := serverClient(arkDir); client != nil {
-		body := map[string]any{}
-		if ttlStr != "" {
-			body["ttl"] = ttlStr
-		}
-		var resp struct {
-			Count int `json:"count"`
-		}
-		if err := proxyDecode(client, "POST", "/discussed/prune", body, &resp); err != nil {
-			fatal(err)
-		}
-		count = resp.Count
-	} else {
-		withDB(func(db *ark.DB) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			body := map[string]any{}
+			if ttlStr != "" {
+				body["ttl"] = ttlStr
+			}
+			var resp struct {
+				Count int `json:"count"`
+			}
+			if err := proxyDecode(client, "POST", "/discussed/prune", body, &resp); err != nil {
+				return err
+			}
+			count = resp.Count
+			return nil
+		},
+		func(db *ark.DB) error {
 			n, err := db.PruneDiscussed(ttl)
 			if err != nil {
-				fatal(err)
+				return err
 			}
 			count = n
-		})
-	}
+			return nil
+		},
+	)
 	fmt.Fprintf(os.Stderr, "pruned %d entries\n", count)
 	return nil
 }

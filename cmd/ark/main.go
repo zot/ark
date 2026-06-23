@@ -664,20 +664,22 @@ Options:`)
 		return
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/add", map[string]any{
-			"paths": paths, "strategy": *strategy,
-		}); err != nil {
-			fatal(err)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.Add(paths, *strategy); err != nil {
-			fatal(err)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyOK(client, "POST", "/add", map[string]any{
+				"paths": paths, "strategy": *strategy,
+			}); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			if err := d.Add(paths, *strategy); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
 }
 
 func cmdRemove(args []string) {
@@ -708,18 +710,20 @@ func cmdRemove(args []string) {
 		return
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/remove", map[string]any{"patterns": patterns}); err != nil {
-			fatal(err)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.Remove(patterns); err != nil {
-			fatal(err)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyOK(client, "POST", "/remove", map[string]any{"patterns": patterns}); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			if err := d.Remove(patterns); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
 }
 
 func cmdScan(args []string) {
@@ -729,26 +733,28 @@ func cmdScan(args []string) {
 	}
 	fs.Parse(args)
 
-	if client := serverClient(arkDir); client != nil {
-		var result struct {
-			NewFiles      int `json:"newFiles"`
-			NewUnresolved int `json:"newUnresolved"`
-		}
-		if err := proxyDecode(client, "POST", "/scan", nil, &result); err != nil {
-			fatal(err)
-		}
-		fmt.Printf("new files: %d, new unresolved: %d\n", result.NewFiles, result.NewUnresolved)
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		results, err := d.Scan()
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Printf("new files: %d, new unresolved: %d\n",
-			len(results.NewFiles), len(results.NewUnresolved))
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var result struct {
+				NewFiles      int `json:"newFiles"`
+				NewUnresolved int `json:"newUnresolved"`
+			}
+			if err := proxyDecode(client, "POST", "/scan", nil, &result); err != nil {
+				return err
+			}
+			fmt.Printf("new files: %d, new unresolved: %d\n", result.NewFiles, result.NewUnresolved)
+			return nil
+		},
+		func(d *ark.DB) error {
+			results, err := d.Scan()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("new files: %d, new unresolved: %d\n",
+				len(results.NewFiles), len(results.NewUnresolved))
+			return nil
+		},
+	)
 }
 
 func cmdRefresh(args []string) {
@@ -760,20 +766,22 @@ func cmdRefresh(args []string) {
 
 	patterns := fs.Args()
 
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/refresh", map[string]any{"patterns": patterns}); err != nil {
-			fatal(err)
-		}
-		fmt.Println("refresh complete")
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.Refresh(patterns); err != nil {
-			fatal(err)
-		}
-		fmt.Println("refresh complete")
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyOK(client, "POST", "/refresh", map[string]any{"patterns": patterns}); err != nil {
+				return err
+			}
+			fmt.Println("refresh complete")
+			return nil
+		},
+		func(d *ark.DB) error {
+			if err := d.Refresh(patterns); err != nil {
+				return err
+			}
+			fmt.Println("refresh complete")
+			return nil
+		},
+	)
 }
 
 // CRC: crc-CLI.md | Seq: seq-filter-stack.md | R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1940
@@ -2632,22 +2640,24 @@ func cmdStale(args []string) {
 	fs.Parse(args)
 	patterns := fs.Args()
 
-	if client := serverClient(arkDir); client != nil {
-		var stale []string
-		if err := proxyDecode(client, "GET", "/stale", nil, &stale); err != nil {
-			fatal(err)
-		}
-		printLines(filterPaths(stale, patterns))
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		stale, err := d.Stale()
-		if err != nil {
-			fatal(err)
-		}
-		printLines(filterPaths(stale, patterns))
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var stale []string
+			if err := proxyDecode(client, "GET", "/stale", nil, &stale); err != nil {
+				return err
+			}
+			printLines(filterPaths(stale, patterns))
+			return nil
+		},
+		func(d *ark.DB) error {
+			stale, err := d.Stale()
+			if err != nil {
+				return err
+			}
+			printLines(filterPaths(stale, patterns))
+			return nil
+		},
+	)
 }
 
 func cmdMissing(args []string) {
@@ -2658,30 +2668,32 @@ func cmdMissing(args []string) {
 	fs.Parse(args)
 	patterns := fs.Args()
 
-	if client := serverClient(arkDir); client != nil {
-		var missing []ark.MissingRecord
-		if err := proxyDecode(client, "GET", "/missing", nil, &missing); err != nil {
-			fatal(err)
-		}
-		var paths []string
-		for _, m := range missing {
-			paths = append(paths, m.Path)
-		}
-		printLines(filterPaths(paths, patterns))
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		missing, err := d.Missing()
-		if err != nil {
-			fatal(err)
-		}
-		var paths []string
-		for _, m := range missing {
-			paths = append(paths, m.Path)
-		}
-		printLines(filterPaths(paths, patterns))
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var missing []ark.MissingRecord
+			if err := proxyDecode(client, "GET", "/missing", nil, &missing); err != nil {
+				return err
+			}
+			var paths []string
+			for _, m := range missing {
+				paths = append(paths, m.Path)
+			}
+			printLines(filterPaths(paths, patterns))
+			return nil
+		},
+		func(d *ark.DB) error {
+			missing, err := d.Missing()
+			if err != nil {
+				return err
+			}
+			var paths []string
+			for _, m := range missing {
+				paths = append(paths, m.Path)
+			}
+			printLines(filterPaths(paths, patterns))
+			return nil
+		},
+	)
 }
 
 // parseDiscussedTagArg parses one `@name[:value]` token and returns
@@ -2746,18 +2758,20 @@ func cmdDismiss(args []string) {
 		os.Exit(1)
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/dismiss", map[string]any{"patterns": patterns}); err != nil {
-			fatal(err)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.Dismiss(patterns); err != nil {
-			fatal(err)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyOK(client, "POST", "/dismiss", map[string]any{"patterns": patterns}); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			if err := d.Dismiss(patterns); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
 }
 
 func cmdGrams(args []string) {
@@ -2815,21 +2829,24 @@ func cmdSources(args []string) {
 
 	switch sub {
 	case "check":
-		if client := serverClient(arkDir); client != nil {
-			var result ark.SourcesCheckResult
-			if err := proxyDecode(client, "POST", "/config/sources-check", nil, &result); err != nil {
-				fatal(err)
-			}
-			printSourcesCheck(&result)
-			return
-		}
-		withDB(func(d *ark.DB) {
-			result, err := d.SourcesCheck()
-			if err != nil {
-				fatal(err)
-			}
-			printSourcesCheck(result)
-		})
+		proxyOrLocal(
+			func(client *http.Client) error {
+				var result ark.SourcesCheckResult
+				if err := proxyDecode(client, "POST", "/config/sources-check", nil, &result); err != nil {
+					return err
+				}
+				printSourcesCheck(&result)
+				return nil
+			},
+			func(d *ark.DB) error {
+				result, err := d.SourcesCheck()
+				if err != nil {
+					return err
+				}
+				printSourcesCheck(result)
+				return nil
+			},
+		)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown sources subcommand: %s\n", sub)
 		os.Exit(1)
@@ -2855,26 +2872,28 @@ func cmdUnresolved(args []string) {
 	fs := flag.NewFlagSet("unresolved", flag.ExitOnError)
 	fs.Parse(args)
 
-	if client := serverClient(arkDir); client != nil {
-		var unresolved []ark.UnresolvedRecord
-		if err := proxyDecode(client, "GET", "/unresolved", nil, &unresolved); err != nil {
-			fatal(err)
-		}
-		for _, u := range unresolved {
-			fmt.Println(u.Path)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		unresolved, err := d.Unresolved()
-		if err != nil {
-			fatal(err)
-		}
-		for _, u := range unresolved {
-			fmt.Println(u.Path)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var unresolved []ark.UnresolvedRecord
+			if err := proxyDecode(client, "GET", "/unresolved", nil, &unresolved); err != nil {
+				return err
+			}
+			for _, u := range unresolved {
+				fmt.Println(u.Path)
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			unresolved, err := d.Unresolved()
+			if err != nil {
+				return err
+			}
+			for _, u := range unresolved {
+				fmt.Println(u.Path)
+			}
+			return nil
+		},
+	)
 }
 
 func cmdResolve(args []string) {
@@ -2890,18 +2909,20 @@ func cmdResolve(args []string) {
 		os.Exit(1)
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/resolve", map[string]any{"patterns": patterns}); err != nil {
-			fatal(err)
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		if err := d.Resolve(patterns); err != nil {
-			fatal(err)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyOK(client, "POST", "/resolve", map[string]any{"patterns": patterns}); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			if err := d.Resolve(patterns); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
 }
 
 func cmdFetch(args []string) {
@@ -3150,18 +3171,20 @@ func cmdChunksStatus(patterns []string) {
 	}
 
 	var entries []chunkEntry
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyDecode(client, "POST", "/files/status", map[string]any{
-			"patterns": patterns,
-			"chunks":   true,
-		}, &entries); err != nil {
-			fatal(err)
-		}
-	} else {
-		withDB(func(d *ark.DB) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			if err := proxyDecode(client, "POST", "/files/status", map[string]any{
+				"patterns": patterns,
+				"chunks":   true,
+			}, &entries); err != nil {
+				return err
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
 			files, err := d.Files()
 			if err != nil {
-				fatal(err)
+				return err
 			}
 			files = filterPaths(files, patterns)
 			for _, f := range files {
@@ -3170,8 +3193,9 @@ func cmdChunksStatus(patterns []string) {
 					entries = append(entries, chunkEntry{Path: f, Location: c.Range, Size: len(c.Content)})
 				}
 			}
-		})
-	}
+			return nil
+		},
+	)
 
 	// Print SIZE FILE:LOCATION
 	maxSize := len("size")
@@ -4069,32 +4093,34 @@ func matchPath(path string, include, exclude []string) bool {
 }
 
 func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {
-	if client := serverClient(arkDir); client != nil {
-		var entries []ark.TagContextEntry
-		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{
-			"tags": tags, "context": true,
-		}, &entries); err != nil {
-			fatal(err)
-		}
-		for _, e := range entries {
-			if matchPath(e.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%s\n", e.Path, e.Line)
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var entries []ark.TagContextEntry
+			if err := proxyDecode(client, "POST", "/tags/files", map[string]any{
+				"tags": tags, "context": true,
+			}, &entries); err != nil {
+				return err
 			}
-		}
-		return
-	}
-
-	withDB(func(d *ark.DB) {
-		entries, err := d.TagContext(tags)
-		if err != nil {
-			fatal(err)
-		}
-		for _, e := range entries {
-			if matchPath(e.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%s\n", e.Path, e.Line)
+			for _, e := range entries {
+				if matchPath(e.Path, filterFiles, excludeFiles) {
+					fmt.Printf("%s\t%s\n", e.Path, e.Line)
+				}
 			}
-		}
-	})
+			return nil
+		},
+		func(d *ark.DB) error {
+			entries, err := d.TagContext(tags)
+			if err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if matchPath(e.Path, filterFiles, excludeFiles) {
+					fmt.Printf("%s\t%s\n", e.Path, e.Line)
+				}
+			}
+			return nil
+		},
+	)
 }
 
 // CRC: crc-CLI.md | R607

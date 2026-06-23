@@ -698,3 +698,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T159: R1306 retired by R2969 (2026-06-17 yzma-embedding: gollama Vulkan/SIGILL-on-Zen2 moot — yzma provisions prebuilt libs)
 - T160: R1307 retired by R2961 (2026-06-17 yzma-embedding: local gollama workspace dep retired — yzma binds llama.cpp at runtime)
 - T161: R1308 retired by R2967 (2026-06-17 yzma-embedding: CPU gollama build moot — [embedding] backend selects cpu)
+- A70: R3003 dispatch-via-proxyOrLocal exceptions (deliberate): cmdStatus + cmdFiles use a proxied-or-local if/else with shared output and fall-through state (convertible later, left for risk); messageInbox falls back to local when the proxy errors (proxyOrLocal would fatal); scheduleSearch is server-required with a non-fallback withDB side-effect; tagVerify refuses with os.Exit(2) when a server holds the index. All are guarded and hang-free.

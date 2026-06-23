@@ -118,25 +118,28 @@ func tagCommand() *ucli.Command {
 
 // CRC: crc-CLITree.md, crc-CLI.md | R122
 func tagListAction(_ context.Context, _ *ucli.Command) error {
-	if client := serverClient(arkDir); client != nil {
-		var tags []ark.TagCount
-		if err := proxyDecode(client, "GET", "/tags", nil, &tags); err != nil {
-			fatal(err)
-		}
-		for _, t := range tags {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-		return nil
-	}
-	withDB(func(d *ark.DB) {
-		tags, err := d.TagList()
-		if err != nil {
-			fatal(err)
-		}
-		for _, t := range tags {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var tags []ark.TagCount
+			if err := proxyDecode(client, "GET", "/tags", nil, &tags); err != nil {
+				return err
+			}
+			for _, t := range tags {
+				fmt.Printf("%s\t%d\n", t.Tag, t.Count)
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			tags, err := d.TagList()
+			if err != nil {
+				return err
+			}
+			for _, t := range tags {
+				fmt.Printf("%s\t%d\n", t.Tag, t.Count)
+			}
+			return nil
+		},
+	)
 	return nil
 }
 
@@ -146,25 +149,28 @@ func tagCountsAction(_ context.Context, c *ucli.Command) error {
 	if len(tags) == 0 {
 		fatal(fmt.Errorf("no tags specified"))
 	}
-	if client := serverClient(arkDir); client != nil {
-		var counts []ark.TagCount
-		if err := proxyDecode(client, "POST", "/tags/counts", map[string]any{"tags": tags}, &counts); err != nil {
-			fatal(err)
-		}
-		for _, t := range counts {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-		return nil
-	}
-	withDB(func(d *ark.DB) {
-		counts, err := d.TagCounts(tags)
-		if err != nil {
-			fatal(err)
-		}
-		for _, t := range counts {
-			fmt.Printf("%s\t%d\n", t.Tag, t.Count)
-		}
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var counts []ark.TagCount
+			if err := proxyDecode(client, "POST", "/tags/counts", map[string]any{"tags": tags}, &counts); err != nil {
+				return err
+			}
+			for _, t := range counts {
+				fmt.Printf("%s\t%d\n", t.Tag, t.Count)
+			}
+			return nil
+		},
+		func(d *ark.DB) error {
+			counts, err := d.TagCounts(tags)
+			if err != nil {
+				return err
+			}
+			for _, t := range counts {
+				fmt.Printf("%s\t%d\n", t.Tag, t.Count)
+			}
+			return nil
+		},
+	)
 	return nil
 }
 
@@ -180,29 +186,32 @@ func tagFilesAction(_ context.Context, c *ucli.Command) error {
 		cmdTagFilesContext(tags, filterFiles, excludeFiles)
 		return nil
 	}
-	if client := serverClient(arkDir); client != nil {
-		var files []ark.TagFileInfo
-		if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": tags}, &files); err != nil {
-			fatal(err)
-		}
-		for _, f := range files {
-			if matchPath(f.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%d\n", f.Path, f.Size)
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var files []ark.TagFileInfo
+			if err := proxyDecode(client, "POST", "/tags/files", map[string]any{"tags": tags}, &files); err != nil {
+				return err
 			}
-		}
-		return nil
-	}
-	withDB(func(d *ark.DB) {
-		files, err := d.TagFiles(tags)
-		if err != nil {
-			fatal(err)
-		}
-		for _, f := range files {
-			if matchPath(f.Path, filterFiles, excludeFiles) {
-				fmt.Printf("%s\t%d\n", f.Path, f.Size)
+			for _, f := range files {
+				if matchPath(f.Path, filterFiles, excludeFiles) {
+					fmt.Printf("%s\t%d\n", f.Path, f.Size)
+				}
 			}
-		}
-	})
+			return nil
+		},
+		func(d *ark.DB) error {
+			files, err := d.TagFiles(tags)
+			if err != nil {
+				return err
+			}
+			for _, f := range files {
+				if matchPath(f.Path, filterFiles, excludeFiles) {
+					fmt.Printf("%s\t%d\n", f.Path, f.Size)
+				}
+			}
+			return nil
+		},
+	)
 	return nil
 }
 
@@ -329,21 +338,24 @@ func tagDefsAction(_ context.Context, c *ucli.Command) error {
 		}
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		var defs []ark.TagDefInfo
-		if err := proxyDecode(client, "POST", "/tags/defs", map[string]any{"tags": tags}, &defs); err != nil {
-			fatal(err)
-		}
-		printDefs(defs)
-		return nil
-	}
-	withDB(func(d *ark.DB) {
-		defs, err := d.TagDefs(tags)
-		if err != nil {
-			fatal(err)
-		}
-		printDefs(defs)
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var defs []ark.TagDefInfo
+			if err := proxyDecode(client, "POST", "/tags/defs", map[string]any{"tags": tags}, &defs); err != nil {
+				return err
+			}
+			printDefs(defs)
+			return nil
+		},
+		func(d *ark.DB) error {
+			defs, err := d.TagDefs(tags)
+			if err != nil {
+				return err
+			}
+			printDefs(defs)
+			return nil
+		},
+	)
 	return nil
 }
 
@@ -422,28 +434,30 @@ func tagInspectAction(_ context.Context, c *ucli.Command) error {
 		rep.WriteText(os.Stdout)
 	}
 
-	if client := serverClient(arkDir); client != nil {
-		var rep ark.ExtInspectReport
-		body := map[string]any{"scope": scope}
-		if target != "" {
-			body["target"] = target
-		}
-		if err := proxyDecode(client, "POST", "/tags/inspect", body, &rep); err != nil {
-			fatal(err)
-		}
-		emit(&rep)
-		return nil
-	}
-
-	withDB(func(d *ark.DB) {
-		rep, err := d.InspectExt(ark.InspectOptions{Scope: scope, Target: target})
-		if err != nil {
-			fatal(err)
-		}
-		rep.ServerSide = false
-		rep.UnavailNote = "ExtMap state unavailable — server not running. Disk view only."
-		rep.InMemory = nil
-		emit(rep)
-	})
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var rep ark.ExtInspectReport
+			body := map[string]any{"scope": scope}
+			if target != "" {
+				body["target"] = target
+			}
+			if err := proxyDecode(client, "POST", "/tags/inspect", body, &rep); err != nil {
+				return err
+			}
+			emit(&rep)
+			return nil
+		},
+		func(d *ark.DB) error {
+			rep, err := d.InspectExt(ark.InspectOptions{Scope: scope, Target: target})
+			if err != nil {
+				return err
+			}
+			rep.ServerSide = false
+			rep.UnavailNote = "ExtMap state unavailable — server not running. Disk view only."
+			rep.InMemory = nil
+			emit(rep)
+			return nil
+		},
+	)
 	return nil
 }
