@@ -12,10 +12,10 @@ require (
 	github.com/urfave/cli/v3 v3.9.0
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/gopher-lua v1.1.1
-	github.com/zot/frictionless v0.29.0
-	github.com/zot/microfts2 v0.4.1
-	github.com/zot/pdftext v0.1.0
-	github.com/zot/ui-engine v0.21.0
+	github.com/zot/frictionless v0.30.0
+	github.com/zot/microfts2 v0.4.2
+	github.com/zot/pdftext v0.2.1
+	github.com/zot/ui-engine v0.22.0
 	go.etcd.io/bbolt v1.4.3
 )
 

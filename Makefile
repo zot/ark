@@ -131,6 +131,9 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@echo "Layering ark app..."
 	@mkdir -p $(CACHE_DIR)/apps/ark
 	cp -r apps/ark/* $(CACHE_DIR)/apps/ark/
+	@rm -rf $(CACHE_DIR)/apps/mcp
+	@mkdir -p $(CACHE_DIR)/apps/mcp
+	cp -r apps/mcp/* $(CACHE_DIR)/apps/mcp/
 	@echo "Layering skills, agents, and install assets..."
 	@mkdir -p $(CACHE_DIR)/skills/ark $(CACHE_DIR)/skills/ui $(CACHE_DIR)/agents $(CACHE_DIR)/install
 	cp .claude/skills/ark/SKILL.md $(CACHE_DIR)/skills/ark/

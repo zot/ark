@@ -471,9 +471,12 @@ unpacks.
 
 **Objective.** `ark bundle` zip-grafts content (HTML assets,
 viewdefs, skill files, the embedding model) onto the binary
-itself; `ark setup` extracts the bundle into `~/.ark/`. The
-runtime then reads from `~/.ark/` as its unified home. No `apt
-install`, no companion config files, no separate service.
+itself; `ark setup` extracts the bundle into `~/.ark/` and
+installs ark's skill and agent files into `~/.claude/` so Claude
+can use them. The runtime then reads from `~/.ark/` as its unified
+home. No `apt install` and no separate service; the only files
+setup writes outside `~/.ark/` are that skill and agent markdown
+in `~/.claude/`.
 
 **Surface.** `ark bundle`, `ark setup`, `ark install`, the
 `~/.ark/` directory layout, the bundle subcommands documented in

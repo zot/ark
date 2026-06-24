@@ -1,0 +1,449 @@
+<template>
+  <script>
+    (function() {
+      var n = Date.now();
+      ['shell','panel','tutorial','updates','dialog'].forEach(function(f) {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = '/mcp/css/' + f + '.css?v=' + n;
+        document.head.appendChild(link);
+      });
+    })();
+  </script>
+
+  <script>
+    // Client-local wait time — updates live tooltip every 200ms
+    (function() {
+      function update() {
+        const tip = document.querySelector('.mcp-menu-tip');
+        const timestampEl = document.querySelector('.mcp-wait-timestamp');
+        if (!tip || !timestampEl) return;
+
+        const serverTimestamp = parseInt(timestampEl.textContent, 10) || 0;
+        if (!serverTimestamp) { tip.textContent = ''; return; }
+
+        const elapsed = Math.floor(Date.now() / 1000) - serverTimestamp;
+        tip.textContent = elapsed > 5 ? 'Waiting (' + elapsed + 's)' : 'Waiting';
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { setInterval(update, 200); });
+      } else {
+        setInterval(update, 200);
+      }
+    })();
+  </script>
+
+  <div class="mcp-shell" ui-class-maximized="isMaximized()">
+    <!-- Current app content -->
+    <div class="mcp-app-container" ui-view="value"></div>
+
+    <!-- Chat/Lua/Todo Panel -->
+    <div class="mcp-chat-panel dock-panel hidden" id="mcp-chat-panel" ui-class-showing="panelShowing()">
+      <div class="mcp-chat-resize-handle" id="mcp-chat-resize-handle"></div>
+      <div class="mcp-bottom-panel-content">
+        <!-- Variables Panel (replaces all other content) -->
+        <div class="mcp-vars-panel" ui-class-hidden="notVarsPanel()">
+          <div ui-view="variableBrowser"></div>
+        </div>
+
+        <!-- Todo Column -->
+        <div class="mcp-todo-column" ui-class-collapsed="todosCollapsed" ui-class-hidden="isVarsPanel()">
+          <div class="mcp-todo-header">
+            <h4 ui-event-click="toggleTodos()">Todos</h4>
+            <div class="mcp-todo-header-buttons">
+              <sl-icon-button name="trash" label="Clear" ui-action="clearTodos()"></sl-icon-button>
+              <sl-icon-button class="mcp-collapse-toggle" name="chevron-left" label="Collapse" ui-event-click="toggleTodos()"></sl-icon-button>
+            </div>
+          </div>
+          <div class="mcp-todo-list" ui-view="todos?wrapper=lua.ViewList"></div>
+        </div>
+
+        <!-- Chat/Lua Column -->
+        <div class="mcp-chat-lua-column" ui-class-hidden="isVarsPanel()">
+          <div class="mcp-panel-header">
+            <div class="mcp-panel-tabs">
+              <sl-button size="small" ui-attr-variant="chatTabVariant()" ui-action="showChatPanel()">Chat</sl-button>
+              <sl-button size="small" ui-attr-variant="luaTabVariant()" ui-action="showLuaPanel()">Lua</sl-button>
+            </div>
+            <sl-button size="small" ui-action="clearPanel()">Clear</sl-button>
+          </div>
+
+          <!-- Chat Panel Content -->
+          <div class="mcp-chat-panel-content" ui-class-hidden="notChatPanel()">
+            <div class="mcp-chat-messages" ui-view="messages?wrapper=lua.ViewList&scrollOnOutput"></div>
+          </div>
+          <div class="mcp-chat-input-area" ui-class-hidden="notChatPanel()">
+            <!-- Image preview (below swoosh, above input) -->
+            <div class="mcp-image-preview-row" ui-class-hidden="noImages()">
+              <div ui-view="imageAttachments()?wrapper=lua.ViewList"></div>
+            </div>
+            <div class="mcp-chat-input-row">
+              <sl-input placeholder="Ask about the selected app..." ui-value="chatInput?keypress" ui-event-keypress-enter="sendChat()"></sl-input>
+              <sl-button variant="primary" ui-action="sendChat()">Send</sl-button>
+            </div>
+          </div>
+          <!-- Image upload bridge (JS → Lua) -->
+          <span id="image-bridge" style="display:none" ui-value="imageUploadData?access=rw"></span>
+          <span style="display:none" ui-value="processImageUpload()?priority=high"></span>
+
+          <!-- Lua Panel Content -->
+          <div class="mcp-lua-panel" ui-class-hidden="notLuaPanel()">
+            <div class="mcp-lua-output" ui-view="luaOutputLines?wrapper=lua.ViewList&scrollOnOutput"></div>
+            <div class="mcp-lua-input-area">
+              <sl-textarea id="lua-input" rows="3" placeholder="Enter Lua code..." ui-value="luaInput?keypress" ui-event-keypress-ctrl-enter="runLua()"></sl-textarea>
+              <div style="display:none" ui-code="_luaInputFocusTrigger"></div>
+              <div class="mcp-lua-buttons">
+                <sl-button size="small" ui-action="clearLuaOutput()">Clear</sl-button>
+                <sl-button size="small" variant="primary" ui-action="runLua()">Run</sl-button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="mcp-status-bar">
+      <span class="mcp-status-toggles">
+        <span class="mcp-build-mode-toggle" ui-event-click="toggleMaximize()" ui-attr-title="maximizeTooltip()">
+          <sl-icon name="arrow-left-right"></sl-icon>
+        </span>
+        <span class="mcp-menu-toggle" ui-event-click="toggleMenu()" ui-class-waiting="isWaiting()">
+          <sl-icon name="grid-3x3-gap-fill"></sl-icon>
+          <!-- Update available star -->
+          <sl-icon class="mcp-update-star-inline hidden" name="star-fill"
+                   ui-class-showing="updateAvailable()"
+                   ui-event-click="startUpdate()"
+                   title="Update available!"></sl-icon>
+          <span class="mcp-menu-tip"></span>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="togglePanel()" title="Chat panel">
+          <sl-icon name="chat-dots" ui-attr-name="panelIcon()"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="displayArk()" title="Ark Search">
+          <sl-icon name="archive-fill"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="displayArkMessages()" title="Ark Messenger">
+          <sl-icon name="envelope-fill"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="displayArkCuration()" title="Tag Forge">
+          <svg class="ark-tag-forge-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 938.55889 851.75421" fill="currentColor" width="1.2rem">
+            <g transform="matrix(0.96187993,0.01231459,-0.01231459,0.96187993,6.3656759,27.748218)">
+              <path transform="rotate(-44.389847,513.17788,426.70561)" d="m 563.68123,879.88851 c -8.73599,-3.27295 -13.76633,-7.37736 -16.646,-13.5811 -2.04254,-76.43079 0.63283,-153.04113 1.28677,-229.52031 0.61438,-74.77621 0.70853,-78.00871 2.55616,-81.28421 3.15404,-5.48366 9.86253,-8.66759 17.19369,-10.86677 -0.95416,-44.43845 -4.96015,-187.51716 -6.83097,-222.36454 44.20886,0.0161 88.99194,0.25643 130.25844,1.53389 0.42734,0.0132 1.77585,12.03199 5.95948,219.66307 7.73108,2.44122 15.47221,6.99044 17.76161,12.97754 4.19198,98.43943 11.07286,196.8448 14.02819,295.30813 0.44798,15.85794 0.37086,16.31092 -3.3784,20.38636 -9.05949,9.83524 -23.38285,12.87168 -64.50576,13.64052 -49.71485,0.94084 -85.14895,-1.19606 -97.68321,-5.89258 z"/>
+              <path d="m 453.47922,298.21349 c -34.42864,32.6673 -62.93614,59.3249 -63.34588,59.23322 -2.23116,-0.49923 -52.44966,-51.07061 -176.53027,-174.75301 33.81249,-32.72947 96.13089,-91.407901 182.79882,-172.144343 14.04225,-13.0751187 27.1932,-24.076827 29.25488,-24.438659 6.48355,-1.166133 31.91022,-4.826227 72.73655,-10.495427 90.34347,-12.538924 93.34527,-12.88697 99.47166,-11.491594 12.35237,2.800761 24.17622,14.857265 27.3387,27.8629278 1.27275,5.2482134 -0.34823,16.1637967 -10.22997,68.7101672 -6.46611,34.353746 -13.4454,71.553468 -15.50982,82.664658 l -3.75092,20.19383 -39.82809,37.62654 c -21.89506,20.69203 -67.98984,64.36154 -102.40568,97.03171 z m -79.44651,73.83805 c -0.9473,0.94277 -4.77872,0.89646 -10.73105,-0.15282 l -0.0868,-0.007 c -3.86249,-0.67996 -6.83721,-1.19814 -9.85983,-2.31675 -10.35292,-3.82767 -21.18484,-14.59337 -69.22608,-62.28599 -66.4543,-65.97809 -70.41188,-70.10705 -75.51562,-78.58361 -6.65817,-11.09723 -11.30324,-32.49402 -6.46479,-29.82653 52.82229,53.81694 113.31103,114.50631 171.88413,173.17284 z"/>
+              <path d="m 284.96033,849.04032 c -4.14,1.78 -7.73,2.44 -14.5,2.66 -10.1,0.34 -16.86,-1.51 -23.36,-6.37 -0.52393,-0.39295 -217.981013,-214.4432 -228.539997,-230.53 -10.7100002,-16.33 -16.0400002,-32 -17.63000023,-51.82 -0.51,-6.33 -0.93000000303,-36.92 -0.93000000303,-68 -0.009999997,-61.18 0.17000000303,-63.55 5.50000003303,-74.08 3.4,-6.7 10.4500002,-13.3 18.4200002,-17.22 l 6.5,-3.2 c 48.346665,0.0107 96.693327,0.01 145.039997,0.01 l 9.71,2.68 c 11.79,3.25 24.7,9.17 33.63,15.43 4.18,2.93 48.1,46.04 117.85,115.7 100.44,100.29 111.45,111.6 113.81,116.86 4.85,10.81 4.39,24.46 -1.19,34.9 -2.48973,4.66639 -154.56367,158.77727 -164.31,162.98 z m 115,-0.51 c -5.2,2.32 -8.19,2.96 -15,3.19 -11.64,0.39 -19.46,-2.55 -28.34,-10.65 -1.31,-1.2 -2.59,-1.89 -3.06,-2.93 -3.39913,-7.49869 140.79887,-142.81578 146.21,-153.68 5.74,-11.55 5.03,-25.86 -1.79,-36.21 -4.46,-6.78 -224.03,-226.33 -231.02,-231.01 -7.39,-4.94 -18.9,-10.47 -29,-13.95 l -9.5,-3.26 31.5,0.31 c 28.63,0.28 32.27,0.51 39.96,2.51 10.31,2.68 24.95,9.49 33.89,15.76 6.56592,4.60405 225.9286,221.38863 231.48,231.87 3.01,5.69 3.17,6.57 3.17,17 0,10.54 -0.14,11.25 -3.29,17.06 -4.06567,7.50123 -153.97622,158.98904 -165.21,163.99 z m -309.819997,-314.7 c 17.019997,2.75 34.099997,-6.55 41.659997,-22.67 2.35,-5.02 2.66,-6.9 2.66,-16.18 0,-9.44 -0.28,-11.07 -2.76,-16.12 -5.79,-11.78 -15.72,-19.43 -28.42,-21.91 -15.499997,-3.02 -33.189997,5.19 -40.619997,18.85 -8.68,15.93 -6.72,32.68 5.33,45.55 6.54,7 13.93,11.16 22.15,12.48 z"/>
+            </g>
+          </svg>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="openTools()" ui-class-has-checkpoints="currentAppHasCheckpoints()" ui-attr-title="toolsTooltip()">
+          <sl-icon name="tools"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="displayPrefs()" title="Preferences">
+          <sl-icon name="gear"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="toggleBuildMode()" ui-attr-title="buildModeTooltip()">
+          <sl-icon name="rocket-takeoff-fill" ui-class-hidden="isThoroughMode()"></sl-icon>
+          <sl-icon name="gem" class="hidden" ui-class-showing="isThoroughMode()"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="toggleBackground()" ui-attr-title="backgroundTooltip()">
+          <sl-icon name="hourglass-split" ui-class-hidden="isBackground()"></sl-icon>
+          <sl-icon name="arrow-repeat" class="hidden" ui-class-showing="isBackground()"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-event-click="toggleVarsPanel()" title="Variables">
+          <sl-icon name="braces" ui-attr-name="varsIcon()"></sl-icon>
+        </span>
+        <span class="mcp-build-mode-toggle" ui-html="helpLinkHtml()"></span>
+      </span>
+      <span class="mcp-status-text" ui-attr-class="statusClass" ui-value="statusLine" ui-class-hidden="isUpdating()"></span>
+      <span class="mcp-status-text updating hidden" ui-class-showing="isUpdating()">
+        Updating to v<span ui-value="latestVersion"></span>...
+        <sl-progress-bar indeterminate></sl-progress-bar>
+      </span>
+    </div>
+
+    <!-- Hidden: wait state data for JS tooltip updates -->
+    <span class="mcp-wait-timestamp" style="display:none;" ui-value="waitStartOffset()"></span>
+    <span style="display:none;" ui-value="checkDisconnectNotify()"></span>
+
+    <!-- Dropdown menu with icon grid (opens upward from status bar) -->
+    <div class="mcp-menu-dropdown hidden" ui-class-showing="menuShowing()">
+      <div class="mcp-icon-grid" ui-viewlist="availableApps()" ui-namespace="list-item">
+        <div></div>
+      </div>
+    </div>
+
+    <!-- Notifications container -->
+    <div class="mcp-notifications" ui-view="notifications()?wrapper=lua.ViewList"></div>
+
+    <!-- Hidden element for JavaScript execution -->
+    <div style="display:none;" ui-code="code"></div>
+
+    <!-- Viewdef lookup bridge -->
+    <span id="viewdef-bridge" style="display:none" ui-value="viewdefResult?access=rw"></span>
+
+    <!-- Image preview lightbox -->
+    <div id="image-lightbox" class="image-lightbox" ui-class-visible="lightboxVisible()" ui-event-click="hideLightbox()">
+      <img ui-attr-src="lightboxUri" alt="Preview">
+    </div>
+
+    <!-- First-run: update preference dialog -->
+    <sl-dialog label="Check for Updates?" ui-attr-open="showUpdatePrefDialog">
+      <p>Would you like Frictionless to check for updates on startup?</p>
+      <sl-button slot="footer" variant="default" ui-action="disableUpdates()">No</sl-button>
+      <sl-button slot="footer" variant="primary" ui-action="enableUpdates()">Yes</sl-button>
+    </sl-dialog>
+
+    <!-- Update confirm dialog -->
+    <sl-dialog label="Update Available" ui-attr-open="showUpdateConfirmDialog">
+      <p>Version <strong ui-value="latestVersion"></strong> is available (you have <strong ui-value="currentVersion()"></strong>).</p>
+      <p>Proceed with update? Claude will download and install the new version.</p>
+      <sl-button slot="footer" variant="default" ui-action="cancelUpdate()">Cancel</sl-button>
+      <sl-button slot="footer" variant="primary" ui-action="confirmUpdate()">Update</sl-button>
+    </sl-dialog>
+
+    <!-- Update notification -->
+    <div class="mcp-update-notification hidden" ui-class-showing="showUpdateNotification()">
+      <sl-alert variant="primary" open>
+        <sl-icon slot="icon" name="download"></sl-icon>
+        <span>Frictionless v<strong ui-value="latestVersion"></strong> is available!</span>
+        <div class="update-actions">
+          <sl-button size="small" variant="primary" ui-action="startUpdate()">Update</sl-button>
+          <sl-button size="small" variant="default" ui-action="dismissUpdateNotification()">Later</sl-button>
+        </div>
+      </sl-alert>
+    </div>
+
+    <!-- Tutorial overlay (rendered by MCP.Tutorial viewdef) -->
+    <div ui-view="tutorial"></div>
+
+  </div>
+
+  <script>
+    // Image drag & drop / paste handling
+    (function() {
+      const panel = document.getElementById('mcp-chat-panel');
+      if (!panel) return;
+
+      let dragCounter = 0;
+
+      panel.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragCounter++;
+        panel.classList.add('drag-over');
+      });
+
+      panel.addEventListener('dragleave', (e) => {
+        dragCounter--;
+        if (dragCounter <= 0) {
+          dragCounter = 0;
+          panel.classList.remove('drag-over');
+        }
+      });
+
+      panel.addEventListener('dragover', (e) => {
+        e.preventDefault();
+      });
+
+      panel.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        panel.classList.remove('drag-over');
+        if (e.dataTransfer && e.dataTransfer.files) {
+          handleImageFiles(e.dataTransfer.files);
+        }
+      });
+
+      // Paste handler
+      panel.addEventListener('paste', (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        const files = [];
+        for (const item of items) {
+          if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+        }
+        if (files.length > 0) handleImageFiles(files);
+      });
+
+      function handleImageFiles(files) {
+        for (const file of files) {
+          if (!file.type.startsWith('image/')) continue;
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const dataUri = e.target.result;
+            const base64Data = dataUri.split(',')[1];
+            generateThumbnail(dataUri, 150).then((thumbnail) => {
+              const payload = JSON.stringify({
+                filename: file.name || 'image.png',
+                mime: file.type,
+                base64: base64Data,
+                thumbnail: thumbnail,
+                fullUri: dataUri
+              });
+              const tryUpdate = () => {
+                if (window.uiApp) {
+                  window.uiApp.updateValue('image-bridge', payload);
+                } else {
+                  setTimeout(tryUpdate, 50);
+                }
+              };
+              tryUpdate();
+            });
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+
+      function generateThumbnail(dataUri, maxDim) {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+              else { w = Math.round(w * maxDim / h); h = maxDim; }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          };
+          img.onerror = () => resolve('');
+          img.src = dataUri;
+        });
+      }
+    })();
+  </script>
+
+  <script>
+    // Chat panel resize handle (timer-loop drag)
+    // See .ui/patterns/event-compression.md
+    (function() {
+      const panel = document.getElementById('mcp-chat-panel');
+      const handle = document.getElementById('mcp-chat-resize-handle');
+      if (!panel || !handle) return;
+
+      let startY, startHeight, currentY, lastY, rafId;
+
+      handle.addEventListener('mousedown', (e) => {
+        startY = currentY = lastY = e.clientY;
+        startHeight = panel.offsetHeight;
+        panel.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = 'none');
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', onRelease);
+        rafLoop();
+        e.preventDefault();
+      });
+
+      function onDrag(e) {
+        currentY = e.clientY;
+      }
+
+      function rafLoop() {
+        rafId = requestAnimationFrame(() => {
+          if (currentY !== lastY) {
+            lastY = currentY;
+            const height = Math.max(120, Math.min(window.innerHeight * 0.6, startHeight + (startY - currentY)));
+            panel.style.height = height + 'px';
+          }
+          rafLoop();
+        });
+      }
+
+      function onRelease() {
+        cancelAnimationFrame(rafId);
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('mouseup', onRelease);
+        panel.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = '');
+      }
+    })();
+  </script>
+
+
+  <script>
+    // Find which viewdef an element belongs to by walking up and checking preceding siblings
+    window.uiApp.findViewdef = function(elementId) {
+      var el = document.getElementById(elementId);
+      while (el) {
+        if (el.getAttribute && el.getAttribute('ui-viewdef')) return el.getAttribute('ui-viewdef');
+        var sib = el.previousElementSibling;
+        while (sib) {
+          if (sib.getAttribute && sib.getAttribute('ui-viewdef')) return sib.getAttribute('ui-viewdef');
+          sib = sib.previousElementSibling;
+        }
+        el = el.parentElement;
+      }
+      return null;
+    };
+    // Find viewdef and send result to Lua via bridge
+    window.uiApp.reportViewdef = function(elementId) {
+      window.uiApp.updateValue('viewdef-bridge', window.uiApp.findViewdef(elementId) || '');
+    };
+  </script>
+
+  <script>
+    // Mouse tracker + highlight utility for agent-driven UI pointing
+    (function() {
+      window._mousePos = {x: 0, y: 0};
+      document.addEventListener("mousemove", function(e) {
+        window._mousePos.x = e.clientX;
+        window._mousePos.y = e.clientY;
+      });
+
+      window.uiApp.highlight = function(elementId) {
+        var mp = window._mousePos;
+        var el = document.getElementById(elementId);
+        if (el == null) return;
+        var r = el.getBoundingClientRect();
+        if (r.width == 0) return;
+        var br = getComputedStyle(el).borderRadius;
+        // Box-shadow ring
+        el.style.boxShadow = "0 0 0 3px #E07A47, 0 0 12px rgba(224,122,71,0.6)";
+        el.style.transition = "box-shadow 2s ease-out";
+        setTimeout(function() { el.style.boxShadow = "0 0 0 3px transparent"; }, 2000);
+        setTimeout(function() { el.style.boxShadow = ""; el.style.transition = ""; }, 4000);
+        // Translucent overlay
+        var ov = document.createElement("div");
+        ov.style.cssText = "position:fixed;pointer-events:none;z-index:9998;background:rgba(224,122,71,0.15);border:2px solid rgba(224,122,71,0.5);border-radius:" + br + ";transition:opacity 2s ease-out;";
+        ov.style.left = r.left + "px"; ov.style.top = r.top + "px";
+        ov.style.width = r.width + "px"; ov.style.height = r.height + "px";
+        document.body.appendChild(ov);
+        setTimeout(function() { ov.style.opacity = "0"; }, 1000);
+        setTimeout(function() { ov.remove(); }, 3000);
+        // SVG dashed connector from mouse to element center
+        var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9999;";
+        var line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", mp.x); line.setAttribute("y1", mp.y);
+        line.setAttribute("x2", cx); line.setAttribute("y2", cy);
+        line.setAttribute("stroke", "#E07A47"); line.setAttribute("stroke-width", "2");
+        line.setAttribute("stroke-dasharray", "6 4");
+        var dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
+        dot.setAttribute("r", "4"); dot.setAttribute("fill", "#E07A47");
+        svg.appendChild(line); svg.appendChild(dot);
+        document.body.appendChild(svg);
+        setTimeout(function() { svg.style.transition = "opacity 2s ease-out"; svg.style.opacity = "0"; }, 1000);
+        setTimeout(function() { svg.remove(); }, 3000);
+      };
+    })();
+  </script>
+
+  <script>
+    // Close lightbox on Escape key
+    (function() {
+      document.addEventListener('keydown', (e) => {
+        const lightbox = document.getElementById('image-lightbox');
+        if (e.key === 'Escape' && lightbox && lightbox.classList.contains('visible')) {
+          // Trigger the hideLightbox() binding by clicking the overlay
+          lightbox.click();
+        }
+      });
+    })();
+  </script>
+</template>

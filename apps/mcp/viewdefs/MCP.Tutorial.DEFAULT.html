@@ -1,0 +1,548 @@
+<template>
+  <!-- Tutorial overlay (visible when active and not paused) -->
+  <div class="tutorial-overlay hidden" ui-class-showing="overlayShowing()">
+    <div class="tutorial-backdrop"></div>
+    <div class="tutorial-card content-card" style="cursor:grab">
+      <div class="tutorial-step-counter">STEP <span ui-value="stepLabel()"></span><span class="tut-progress-bar"><span class="tut-progress-fill"></span></span></div>
+      <div class="tutorial-title" ui-value="title()"></div>
+      <div class="tutorial-description" ui-html="description()"></div>
+      <sl-button class="tutorial-inline-action" size="small" variant="default" ui-action="deleteExampleApp()" ui-class-hidden="deleteExampleHidden()">Delete example app</sl-button>
+      <div class="tutorial-buttons">
+        <sl-button size="small" variant="default" ui-action="prev()" ui-class-hidden="isFirstStep()">Back</sl-button>
+        <span class="spacer"></span>
+        <sl-button size="small" variant="primary" ui-action="next()"><span ui-value="nextLabel()"></span></sl-button>
+      </div>
+      <span class="tutorial-skip" ui-event-click="finish()">Skip tutorial</span>
+    </div>
+    <!-- Trigger repositioning when repositionCode changes -->
+    <div style="display:none" ui-code="repositionCode"></div>
+    <!-- Bridge: exposes the current repositionCode JS string so a page-reload
+         init script can re-fire it (ui-code doesn't fire when the value hasn't
+         changed across the reload). -->
+    <span id="tut-repo-bridge" style="display:none" ui-value="repositionCode"></span>
+    <!-- Tutorial highlight bridge: JS polls this span (Lua-to-JS data bridge) -->
+    <span class="tut-highlight-bridge" style="display:none" ui-value="highlightActive()"></span>
+  </div>
+
+  <script>
+    // Page-reload kick: if the tutorial overlay comes back already showing
+    // (active==true persisted in Lua), explicitly evaluate the stored
+    // repositionCode once. On a cold page load, the ui-code binding can fire
+    // before window._tutReposition is defined (a TypeError appears in the
+    // console). We poll until the function exists AND the bridge span is
+    // populated, then run the code.
+    (function() {
+      var attempts = 0;
+      function tryKick() {
+        var overlay = document.querySelector('.tutorial-overlay');
+        var bridge = document.getElementById('tut-repo-bridge');
+        if (!overlay || !bridge) {
+          if (attempts++ < 60) setTimeout(tryKick, 50);
+          return;
+        }
+        if (!overlay.classList.contains('showing')) return;  // tutorial inactive
+        if (window._tutSched && window._tutSched._lastRepo) return;  // already fired
+        if (typeof window._tutReposition !== 'function') {
+          if (attempts++ < 60) setTimeout(tryKick, 50);  // function not defined yet
+          return;
+        }
+        var code = bridge.textContent || '';
+        if (code.indexOf('window._tutReposition') === -1) {
+          if (attempts++ < 60) setTimeout(tryKick, 50);  // bridge value not populated yet
+          return;
+        }
+        try { eval(code); } catch (e) { console.error('[tutorial] reload kick failed:', e); }
+      }
+      setTimeout(tryKick, 200);
+    })();
+  </script>
+
+  <script>
+    // Central tutorial timer scheduler — all delayed tutorial actions go through this.
+    // Cancels everything when the tutorial exits (overlay hidden).
+    window._tutSched = {
+      _ids: [],
+      after: function(delay, fn) {
+        var self = this;
+        var id = setTimeout(function() {
+          var i = self._ids.indexOf(id);
+          if (i >= 0) self._ids.splice(i, 1);
+          // Only fire if tutorial is still visible
+          var ov = document.querySelector('.tutorial-overlay');
+          if (ov && ov.classList.contains('showing')) fn();
+        }, delay);
+        this._ids.push(id);
+        return id;
+      },
+      cancelAll: function() {
+        this._ids.forEach(function(id) { clearTimeout(id); });
+        this._ids = [];
+        // Also clean up any menu glow left behind
+        var md = document.querySelector('.mcp-menu-dropdown');
+        if (md) md.classList.remove('tut-menu-glow');
+        // Clean up menu toggle wait glow
+        var wo = document.querySelector('.mcp-menu-toggle');
+        if (wo) wo.classList.remove('tut-wait-glow');
+      }
+    };
+  </script>
+
+  <script>
+    // Make tutorial card draggable (event compression pattern)
+    (function() {
+      var card, startX, startY, startLeft, startTop, currentX, currentY, lastX, lastY, rafId;
+
+      document.addEventListener('mousedown', function(e) {
+        card = e.target.closest('.tutorial-card');
+        if (!card) return;
+        if (e.target.closest('sl-button, a, .tutorial-skip')) { card = null; return; }
+        startX = currentX = lastX = e.clientX;
+        startY = currentY = lastY = e.clientY;
+        startLeft = card.offsetLeft;
+        startTop = card.offsetTop;
+        card.style.cursor = 'grabbing';
+        card.style.transform = 'none';
+        card.style.transition = 'none';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onRelease);
+        rafLoop();
+        e.preventDefault();
+      });
+
+      function onMove(e) {
+        currentX = e.clientX;
+        currentY = e.clientY;
+      }
+
+      function rafLoop() {
+        rafId = requestAnimationFrame(function() {
+          if (currentX !== lastX || currentY !== lastY) {
+            lastX = currentX;
+            lastY = currentY;
+            card.style.left = (startLeft + currentX - startX) + 'px';
+            card.style.top = (startTop + currentY - startY) + 'px';
+          }
+          rafLoop();
+        });
+      }
+
+      function onRelease() {
+        cancelAnimationFrame(rafId);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onRelease);
+        if (card) {
+          card.style.transition = '';
+          card.style.cursor = 'grab';
+          console.log('[tutorial] card position: top=' + card.style.top + ' left=' + card.style.left);
+        }
+        card = null;
+      }
+    })();
+  </script>
+
+  <script>
+    // Tutorial card positioning + backdrop cutout + spotlight
+    // Called from Lua via ui-code="repositionCode" with data arguments
+    // (showingAttempt is internal — used to retry on page reload while the
+    //  .showing class binding settles; not passed by Lua)
+    window._tutReposition = function(selector, position, step, topOffset, anchor, showingAttempt) {
+      if (window._tutSched) window._tutSched._lastRepo = {sel: selector, pos: position, step: step, off: topOffset, anc: anchor};
+      requestAnimationFrame(function() { setTimeout(function() {
+        var overlay = document.querySelector('.tutorial-overlay');
+        var backdrop = document.querySelector('.tutorial-backdrop');
+        var card = document.querySelector('.tutorial-card');
+        if (!overlay || !backdrop || !card) return;
+        // On page reload the overlay's .showing class may not have been applied yet
+        // (the ui-code binding can fire before the ui-class binding settles). Retry
+        // briefly; if .showing is still missing, the tutorial really isn't active.
+        if (!overlay.classList.contains('showing')) {
+          var n = showingAttempt || 0;
+          if (n < 10) {
+            setTimeout(function() {
+              window._tutReposition(selector, position, step, topOffset, anchor, n + 1);
+            }, 50);
+          }
+          return;
+        }
+
+        // Step transition: runs before measurement so DOM changes take effect
+        if (window._tutSched) {
+          if (window._tutSched._step !== step) {
+            // Leave: restore panel height when leaving steps 5-6
+            if ((window._tutSched._step === 5 || window._tutSched._step === 6) && window._tutSavedPanelHeight !== undefined) {
+              var p = document.querySelector('.mcp-chat-panel');
+              if (p) p.style.height = window._tutSavedPanelHeight;
+              window._tutSavedPanelHeight = undefined;
+            }
+            window._tutSched.cancelAll();
+            window._tutSched._step = step;
+            window._tutSched._phase2 = false;
+            window._tutSched._remeasured = false;
+            window._tutSched._step1Polling = false;
+            // Enter: resize panel for steps 5-6
+            if (step === 5 || step === 6) {
+              var p = document.querySelector('.mcp-chat-panel');
+              if (p) {
+                window._tutSavedPanelHeight = p.style.height || '';
+                p.style.height = '20rem';
+              }
+            }
+          } else if (window._tutSched._phase2) {
+            return;
+          }
+        }
+
+        var target = document.querySelector(selector);
+        if (!target) {
+          backdrop.style.clipPath = 'polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)';
+          card.style.top = '50%';
+          card.style.left = '50%';
+          card.style.transform = 'translate(-50%, -50%)';
+          return;
+        }
+
+        var rect = target.getBoundingClientRect();
+        // Retry if element hasn't rendered yet (e.g. form reopening)
+        if (rect.width < 10 || rect.height < 10) {
+          window._tutSched.after(500, function() {
+            window._tutReposition(selector, position, step, topOffset);
+          });
+          return;
+        }
+        var pad = 8;
+        var x1 = Math.max(0, rect.left - pad);
+        var y1 = Math.max(0, rect.top - pad);
+        var x2 = Math.min(window.innerWidth, rect.right + pad);
+        var y2 = Math.min(window.innerHeight, rect.bottom + pad);
+
+        var cp = 'polygon(0px 0px, ' + window.innerWidth + 'px 0px, ' +
+          window.innerWidth + 'px ' + window.innerHeight + 'px, 0px ' + window.innerHeight + 'px, 0px 0px, ' +
+          x1 + 'px ' + y1 + 'px, ' + x1 + 'px ' + y2 + 'px, ' +
+          x2 + 'px ' + y2 + 'px, ' + x2 + 'px ' + y1 + 'px, ' + x1 + 'px ' + y1 + 'px)';
+        backdrop.style.clipPath = cp;
+
+        // Spotlight glow on target
+        document.querySelectorAll('.tut-spotlight').forEach(function(el) { el.classList.remove('tut-spotlight'); });
+        target.classList.add('tut-spotlight');
+
+        card.style.transform = 'none';
+        var cardWidth = 340;
+        var cardHeight = card.offsetHeight || 200;
+        var margin = 16;
+
+        var off = topOffset || 0;
+        if (position === 'inside-bottom-right') {
+          // Card's lower-right corner inside the target's content area bottom-right
+          // Use clientWidth to exclude the scrollbar
+          var contentRight = rect.left + target.clientLeft + target.clientWidth;
+          card.style.left = Math.max(margin, contentRight - cardWidth - 3 * margin + off) + 'px';
+          card.style.top = Math.max(margin, y2 - cardHeight - margin) + 'px';
+        } else if (position === 'below') {
+          // Position card below anchor (or target). Right-align if target is near right edge.
+          var anchorEl = anchor ? document.querySelector(anchor) : null;
+          var aRect = anchorEl ? anchorEl.getBoundingClientRect() : rect;
+          var leftPos = aRect.left;
+          // If target's right edge is in the right third of the viewport, right-align the card
+          if (aRect.right > window.innerWidth * 0.66) {
+            leftPos = aRect.right - cardWidth;
+          }
+          card.style.left = Math.max(margin, leftPos) + 'px';
+          card.style.top = (aRect.bottom + margin + off) + 'px';
+        } else if (position === 'top' || position === 'center-top') {
+          if (position === 'center-top') {
+            var cx = (rect.left + rect.right) / 2;
+            card.style.left = Math.max(margin, Math.min(cx - cardWidth / 2, window.innerWidth - cardWidth - margin)) + 'px';
+          } else {
+            card.style.left = Math.max(margin, Math.min(rect.left, window.innerWidth - cardWidth - margin)) + 'px';
+          }
+          card.style.top = Math.max(margin, y1 - cardHeight - margin + off) + 'px';
+        } else if (position === 'right') {
+          card.style.left = Math.min(x2 + margin, window.innerWidth - cardWidth - margin) + 'px';
+          card.style.top = Math.max(margin, rect.top + off) + 'px';
+        } else {
+          card.style.left = Math.max(margin, x1 - cardWidth - margin) + 'px';
+          card.style.top = Math.max(margin, rect.top + off) + 'px';
+        }
+
+        // Delayed re-measure: catch elements that render asynchronously (e.g. GitHub form reopening)
+        if (!window._tutSched._remeasured) {
+          window._tutSched._remeasured = true;
+          window._tutSched.after(800, function() {
+            window._tutReposition(selector, position, step, topOffset, anchor);
+          });
+        }
+
+        // Step 2: add glow to menu toggle (connection status demo)
+        if (step === 2) {
+          var wo = document.querySelector('.mcp-menu-toggle');
+          if (wo) wo.classList.add('tut-wait-glow');
+        }
+
+        // (Step 11 used to open the apps dropdown and spotlight the Prefs menu
+        // item there; Prefs is now its own status-bar icon, so the standard
+        // path above handles it via selector + spotlight.)
+
+        // Step 1 phase 2: menu opened from Lua (run action);
+        // poll until dropdown is visible, then add glow and reposition card
+        if (step === 1 && !window._tutSched._step1Polling) {
+          window._tutSched._step1Polling = true;
+          var pollId = setInterval(function() {
+            var md = document.querySelector('.mcp-menu-dropdown');
+            if (md && md.classList.contains('showing')) {
+              clearInterval(pollId);
+              md.classList.add('tut-menu-glow');
+              var mr = md.getBoundingClientRect();
+              // Card sits above the dropdown, left-aligned with it (dropdown is anchored bottom-left).
+              card.style.left = Math.min(window.innerWidth - cardWidth - margin, Math.max(margin, mr.left)) + 'px';
+              card.style.top = Math.max(margin, mr.top - cardHeight - margin) + 'px';
+              window._tutSched._phase2 = true;
+            }
+          }, 100);
+          // Safety: cancel poll after 10s
+          window._tutSched.after(10000, function() { clearInterval(pollId); });
+        }
+      }, 50); });
+    };
+
+    // Cleanup on tutorial finish: cancel timers, restore panel, remove spotlights
+    window._tutCleanup = function() {
+      if (window._tutSavedPanelHeight !== undefined) {
+        var p = document.querySelector('.mcp-chat-panel');
+        if (p) p.style.height = window._tutSavedPanelHeight;
+        window._tutSavedPanelHeight = undefined;
+      }
+      if (window._tutSched) {
+        window._tutSched.cancelAll();
+        window._tutSched._step = 0;
+      }
+      document.querySelectorAll('.tut-spotlight').forEach(function(el) { el.classList.remove('tut-spotlight'); });
+      var wo = document.querySelector('.mcp-menu-toggle');
+      if (wo) wo.classList.remove('tut-wait-glow');
+    };
+  </script>
+
+  <script>
+    // Tutorial highlight cycling (Lua-to-JS data bridge pattern)
+    // Polls .tut-highlight-bridge for step number; drives element highlights + text cycling
+    (function() {
+      var startTime = 0;
+      var wasStep = '0';
+      var lastIdx = -1;
+
+      // Re-run the last reposition after a delay (e.g. after collapse/expand changes height)
+      function delayedReposition(ms) {
+        window._tutSched.after(ms || 300, function() {
+          var r = window._tutSched._lastRepo;
+          if (r) window._tutReposition(r.sel, r.pos, r.step, r.off, r.anc);
+        });
+      }
+
+      // Click a column header and spotlight it
+      function clickAndSpotlight(colKey) {
+        var h = document.querySelector('th[data-col="' + colKey + '"]');
+        if (h) { h.click(); h.classList.add('tut-spotlight'); }
+      }
+
+      // Step cycling configuration — data-driven
+      var CYCLING_STEPS = {
+        '4': {
+          attr: 'data-ctrl-idx',
+          listSel: '.mcp-status-toggles .mcp-build-mode-toggle, .mcp-status-toggles .mcp-menu-toggle',
+          listClass: 'tut-active'
+        },
+        '5': {
+          attr: 'data-vars-idx',
+          interval: 5000,
+          items: [
+            {fn: function() {
+              // Click ID header twice: first for asc, second for desc (#1 at top)
+              window._tutSched.after(1500, function() { clickAndSpotlight('id'); });
+              window._tutSched.after(3000, function() { clickAndSpotlight('id'); });
+            }},
+            {fn: function() { clickAndSpotlight('time'); }}
+          ]
+        },
+        '6': {
+          attr: 'data-panel-idx',
+          items: [
+            {sel: '.mcp-panel-tabs sl-button:first-child', act: 'click'},
+            {sel: '.mcp-panel-tabs sl-button:nth-child(2)', act: 'click'},
+            {sel: '.mcp-todo-column', act: 'spotlight'},
+            {sel: '.mcp-chat-resize-handle', act: 'spotlight'}
+          ]
+        },
+        '7': {
+          attr: 'data-console-idx',
+          items: [
+            {sel: '.app-list', act: 'spotlight'},
+            {sel: '.app-list-header sl-icon-button[label="New App"]', act: 'spotlight'},
+            {sel: '.app-list-header sl-icon-button[label="Download from GitHub"]', act: 'spotlight'}
+          ]
+        },
+        '10': {
+          attr: 'data-info-idx',
+          items: [
+            {sel: '.detail-actions', act: 'spotlight', fn: function() {
+              // Ensure requirements is collapsed so the expand on next item is visible
+              var header = document.getElementById('tut-req-header');
+              if (header) {
+                var content = header.nextElementSibling;
+                if (content && !content.classList.contains('hidden')) header.click();
+              }
+              delayedReposition();
+            }},
+            {sel: '#tut-req-header', act: 'spotlight', expand: true, fn: function() {
+              delayedReposition();
+            }},
+            {sel: '#tut-issues-header', act: 'spotlight'}
+          ],
+          onEnter: function() {
+            var headers = document.querySelectorAll('.detail-content .section-header');
+            if (headers[0]) headers[0].id = 'tut-req-header';
+            // Known Issues is typically the 3rd section header
+            for (var i = 0; i < headers.length; i++) {
+              if (headers[i].textContent.indexOf('Known Issues') >= 0) {
+                headers[i].id = 'tut-issues-header'; break;
+              }
+            }
+          },
+          onLeave: function() {
+            // Collapse any expanded section
+            if (CYCLING_STEPS['10']._expanded) {
+              CYCLING_STEPS['10']._expanded.click();
+              CYCLING_STEPS['10']._expanded = null;
+            }
+            var el = document.getElementById('tut-req-header');
+            if (el) el.removeAttribute('id');
+            el = document.getElementById('tut-issues-header');
+            if (el) el.removeAttribute('id');
+          }
+        }
+      };
+
+      function clearAll() {
+        document.querySelectorAll('.mcp-build-mode-toggle.tut-active, .mcp-menu-toggle.tut-active')
+          .forEach(function(t) { t.classList.remove('tut-active'); });
+        document.querySelectorAll('.tutorial-description .tut-highlight')
+          .forEach(function(s) { s.classList.remove('tut-highlight'); });
+        document.querySelectorAll('.tut-spotlight')
+          .forEach(function(s) { s.classList.remove('tut-spotlight'); });
+      }
+
+      function highlightByAttr(attr, idx) {
+        document.querySelectorAll('.tutorial-description [' + attr + ']')
+          .forEach(function(s) {
+            if (parseInt(s.getAttribute(attr), 10) === idx) s.classList.add('tut-highlight');
+            else s.classList.remove('tut-highlight');
+          });
+      }
+
+      function setProgress(pct) {
+        var bar = document.querySelector('.tut-progress-bar');
+        var fill = document.querySelector('.tut-progress-fill');
+        if (!bar || !fill) return;
+        if (pct < 0) { bar.classList.remove('active'); return; }
+        bar.classList.add('active');
+        fill.style.width = Math.min(100, pct * 100) + '%';
+      }
+
+      var wasShowing = false;
+      function update() {
+        var overlay = document.querySelector('.tutorial-overlay');
+        var showing = !!(overlay && overlay.classList.contains('showing'));
+        if (!showing) {
+          // Auto-cleanup on hide transition. Run once even if the final step
+          // wasn't a cycling step (so non-cycling spotlights get cleared too).
+          if (wasShowing) {
+            var leaving = CYCLING_STEPS[wasStep];
+            if (leaving && leaving.onLeave) leaving.onLeave();
+            clearAll();
+            if (window._tutCleanup) window._tutCleanup();
+            wasStep = '0';
+            lastIdx = -1;
+          }
+          wasShowing = false;
+          return;
+        }
+        wasShowing = true;
+
+        var bridge = document.querySelector('.tut-highlight-bridge');
+        if (!bridge) return;
+
+        var step = bridge.textContent;
+
+        if (step !== wasStep) {
+          clearAll();
+          lastIdx = -1;
+          // Leave handler
+          var leaving = CYCLING_STEPS[wasStep];
+          if (leaving && leaving.onLeave) leaving.onLeave();
+          // Enter handler
+          var entering = CYCLING_STEPS[step];
+          if (entering && entering.onEnter) entering.onEnter();
+          if (step !== '0') startTime = Date.now();
+        }
+        wasStep = step;
+
+        // Step 1: one-shot 3s countdown, then full
+        if (step === '1') {
+          var elapsed = Date.now() - startTime;
+          var pct = Math.min(1, elapsed / 3000);
+          setProgress(pct);
+          return;
+        }
+
+        var config = CYCLING_STEPS[step];
+        if (!config) { setProgress(-1); return; }
+
+        var elapsed = Date.now() - startTime;
+        var numItems = 0;
+        var interval = config.interval || 3000;
+
+        if (config.listSel) {
+          // List mode: cycle through querySelectorAll results
+          var els = document.querySelectorAll(config.listSel);
+          if (!els.length) return;
+          numItems = els.length;
+          var idx = Math.floor(elapsed / interval) % numItems;
+          els.forEach(function(el, i) {
+            if (i === idx) el.classList.add(config.listClass);
+            else el.classList.remove(config.listClass);
+          });
+          highlightByAttr(config.attr, idx);
+        } else if (config.items) {
+          // Individual items mode
+          numItems = config.items.length;
+          var idx = Math.floor(elapsed / interval) % numItems;
+          if (idx !== lastIdx) {
+            // Collapse previously expanded item
+            if (config._expanded) { config._expanded.click(); config._expanded = null; }
+            clearAll();
+            var item = config.items[idx];
+            var el = item.sel ? document.querySelector(item.sel) : null;
+            if (el) {
+              if (item.act === 'click') el.click();
+              else if (item.act === 'spotlight') el.classList.add('tut-spotlight');
+              else if (item.act === 'active') el.classList.add('tut-active');
+              if (item.expand) {
+                var content = el.nextElementSibling;
+                if (content && content.classList.contains('hidden')) {
+                  el.click(); config._expanded = el;
+                }
+              }
+            }
+            if (item.fn) item.fn(el);
+            lastIdx = idx;
+          }
+          highlightByAttr(config.attr, idx);
+        }
+
+        // Progress: fraction through the full cycle of all items
+        var cycleDuration = numItems * interval;
+        setProgress((elapsed % cycleDuration) / cycleDuration);
+      }
+
+      setInterval(update, 200);
+    })();
+  </script>
+</template>
