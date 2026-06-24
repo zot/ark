@@ -399,6 +399,9 @@ const (
 	LifecycleNone = "none"
 )
 
+// defaultLogCap is the per-tag fired-entry cap applied when a
+// [schedule.tag.X] block omits log_cap.
+// CRC: crc-Config.md | R2827
 const defaultLogCap = 1000
 
 // defaultChimeTags is the canonical list of standard chime cadences

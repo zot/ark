@@ -123,16 +123,17 @@ ambient watcher.
 
 ## `[schedule]` — scheduling feature
 
-| Key                  | Type                              | Default | Meaning                                                                                          | Owner            |
-|----------------------|-----------------------------------|---------|--------------------------------------------------------------------------------------------------|------------------|
-| `tags`               | []string                          | `[]`    | Tags whose values are recognized as schedule entries.                                            | `scheduling.md`  |
-| `defaults`           | map<str,str>                      | `{}`    | Default time-of-day per schedule tag (e.g. `standup = "09:00"`).                                 | `scheduling.md`  |
-| `filter_files`       | []string                          | `[]`    | Restrict schedule scanning to matching files.                                                    | `scheduling.md`  |
-| `exclude_files`      | []string                          | `[]`    | Exclude files from schedule scanning.                                                            | `scheduling.md`  |
-| `lifecycle_include`  | []string                          | `["*"]` | Tags that participate in the full schedule lifecycle.                                            | `scheduling.md`  |
-| `lifecycle_exclude`  | []string                          | `[]`    | Tags excluded from the schedule lifecycle.                                                       | `scheduling.md`  |
-| `tag.<NAME>.filter_files`  | []string                    | `[]`    | Per-tag override of `filter_files`.                                                              | `scheduling.md`  |
-| `tag.<NAME>.exclude_files` | []string                    | `[]`    | Per-tag override of `exclude_files`.                                                             | `scheduling.md`  |
+| Key                           | Type     | Default  | Meaning                                                                                       | Owner                   |
+|-------------------------------|----------|----------|-----------------------------------------------------------------------------------------------|-------------------------|
+| `filter_files`                | []string | `[]`     | Restrict schedule scanning to matching files (tilde-expanded; narrow/carve like search).      | `scheduling.md`         |
+| `exclude_files`               | []string | `[]`     | Exclude files from schedule scanning; carves exceptions to `filter_files`.                     | `scheduling.md`         |
+| `[schedule.tag.<NAME>]`       | table    | —        | Block presence declares `<NAME>` as a schedule tag; the knobs below are optional.             | `scheduling.md`         |
+| `tag.<NAME>.lifecycle`        | string   | `"disk"` | Audit destination: `"disk"`, `"tmp"` (ephemeral, restart-evicted), or `"none"` (fire-only).   | `schedule-lifecycle.md` |
+| `tag.<NAME>.log_cap`          | int      | `1000`   | Fired-entry lines kept per chunk before the older half is trimmed.                            | `schedule-lifecycle.md` |
+| `tag.<NAME>.default_duration` | string   | `""`     | Span for an untimed value (Go duration or `"all-day"`); unset leaves it point-in-time/all-day. | `scheduling.md`         |
+| `tag.<NAME>.filter_files`     | []string | `[]`     | Per-tag override of top-level `filter_files`.                                                 | `scheduling.md`         |
+| `tag.<NAME>.exclude_files`    | []string | `[]`     | Per-tag override of top-level `exclude_files`.                                                | `scheduling.md`         |
+| `tag.<NAME>.suppress`         | bool     | `false`  | Declare the tag but don't arm it; existing audit history is preserved.                        | `schedule-lifecycle.md` |
 
 ## Notes
 

@@ -34,10 +34,10 @@ eligible. Per-tag overrides go in `[schedule.tag.X] filter_files` /
 
 `[schedule.tag.X] lifecycle` selects audit destination per tag —
 `"disk"` (default), `"tmp"` (ephemeral, evicted on restart, trimmed
-to `log_cap` lines), or `"none"` (fire-and-forget — no audit
-anywhere). `lifecycle = "none"` tags still fire through pubsub.
-Suppress (`suppress = true`) stops firing without dropping the
-declaration. See
+to `log_cap` lines, default 1000), or `"none"` (fire-and-forget — no
+audit anywhere). `lifecycle = "none"` tags still fire through pubsub.
+Suppress (`suppress = true`, default `false`) stops firing without
+dropping the declaration. See
 [migrations/complete/006-schedule-record-only.md](migrations/complete/006-schedule-record-only.md) for the full record-only model.
 
 ## EnsureArkSource Scoping
@@ -134,8 +134,7 @@ The schedule log file is identified by the source file path using
 the encoding from specs/scheduling.md (tilde contraction, then
 underscore/hyphen/slash escaping).
 
-For non-lifecycle tags (excluded by `lifecycle_exclude` or not
-matched by `lifecycle_include`), the scheduler fires the event
+For tags with `lifecycle = "none"`, the scheduler fires the event
 through pubsub but skips steps 1-4. No log entry, no check-gap.
 
 ## Check-Gap and Ack Resolution

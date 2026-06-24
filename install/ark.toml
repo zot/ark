@@ -161,6 +161,14 @@ model = "nomic-embed-text-v1.5.Q8_0.gguf"
     close = ["}"]
 
 [[chunker]]
+name = "bracket-c"
+type = "bracket"
+line_comments = ["//"]
+block_comments = [["/*", "*/"]]
+strings = [["\"", "\""], ["'", "'"]]
+brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+[[chunker]]
 name = "bracket-java"
 type = "bracket"
 line_comments = ["//"]

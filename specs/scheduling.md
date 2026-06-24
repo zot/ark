@@ -13,7 +13,17 @@ Schedule tags are declared via per-tag blocks in `ark.toml`. The mere
 presence of a `[schedule.tag.X]` block declares X as a schedule tag.
 Each block accepts per-tag knobs (lifecycle, log_cap,
 default_duration, filter_files, exclude_files, suppress); all are
-optional.
+optional and take these defaults when unset:
+
+- `lifecycle = "disk"` — audit fired events to a disk log. See
+  [schedule-lifecycle.md](schedule-lifecycle.md) for the other values.
+- `log_cap = 1000` — fired-entry lines kept per chunk before the oldest
+  half is trimmed.
+- `default_duration` unset — an untimed value gets no default span: a
+  `DATE TIME` with no `..` is point-in-time, a bare `DATE` is all-day.
+- `filter_files` / `exclude_files` unset — the tag inherits the top-level
+  `[schedule]` scan scope.
+- `suppress = false` — the tag arms normally.
 
 ```toml
 [schedule]
