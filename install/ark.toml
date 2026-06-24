@@ -3,37 +3,53 @@ dotfiles = true
 case_insensitive = true
 
 # Default patterns — apply to any source that doesn't override
-default_include = []
+default_include = ["*.md", "*.go", "*.js", "*.ts", "*.css", "*.lua", "*.txt", "*.json", "*.pdf"]
 default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+search_exclude = ["/home/deck/.claude/projects/**", "/home/deck/.ark/schedule/**"]
+
+# Chunker settings
+about_centroid_threshold = 0.3
+about_filter_top_k = 200
+pdf_preview_zoom = 2.5
+auto_compact = true
+
+# Embedding settings
+[embedding]
+model = "nomic-embed-text-v1.5.Q8_0.gguf"
+
+  [[embedding.tiers]]
+    ctx = 1024
+    parallel = 32
+  
+  [[embedding.tiers]]
+    ctx = 2048
+    parallel = 16
+  
+  [[embedding.tiers]]
+    ctx = 2048
+    parallel = 8
+  
+  [[embedding.tiers]]
+    ctx = 12288
+    parallel = 6
 
 # Strategy mapping — glob pattern to chunking strategy
 [strategies]
-"*.md" = "markdown"
-"*.jsonl" = "chat-jsonl"
-"*.pdf" = "pdf"
+  "*.css" = "bracket-go"
+  "*.go" = "bracket-go"
+  "*.js" = "bracket-go"
+  "*.json" = "bracket-json"
+  "*.jsonl" = "chat-jsonl"
+  "*.lua" = "bracket-lua"
+  "*.md" = "markdown"
+  "*.pdf" = "pdf"
+  "*.ts" = "bracket-go"
+  "*.txt" = "lines"
 
 # Sources — directories to watch
 # [[source]]
 # dir = "~/notes"
 # strategies = {"*.org" = "lines"}  # optional, amends global strategies
-
-# Spec: schedule-lifecycle.md "EnsureArkSource Scoping" | R2811
-# Schedule tags — declared via [schedule.tag.X] blocks. The mere
-# presence of a block declares X as a schedule tag (R2830). The six
-# standard chime cadences (R2778-R2782) are auto-declared by
-# Config.EnsureDefaultScheduleTags with lifecycle="none" (fire
-# through pubsub only, no audit on disk or tmp://). Override by
-# adding an explicit block — for example, to enable fire-history
-# audit for chime-1m:
-#
-#   [schedule.tag.chime-1m]
-#   lifecycle = "disk"   # or "tmp" for ephemeral
-#
-# Or to suppress a chime entirely:
-#
-#   [schedule.tag.chime-5m]
-#   suppress = true
-[schedule]
 
 # ~/.ark itself is always indexed — ark adds a synthetic source for it
 # at startup that you cannot remove. The block below shows the defaults
@@ -59,20 +75,90 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 # type = "bracket-full" / "indent-full" — full form with inline table structs
 
 [[chunker]]
-name = "bracket-go"
-type = "bracket"
-line_comments = ["//"]
-block_comments = [["/*", "*/"]]
-strings = [["\"", "\""], ["`", "`"], ["'", "'"]]
-brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+  name = "bracket-go"
+  type = "bracket"
+  tab_width = 0
+  line_comments = ["//"]
+  block_comments = [["/*", "*/"]]
+  strings = [["\"", "\""], ["`", "`"], ["'", "'"]]
+  brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
 
 [[chunker]]
-name = "bracket-c"
-type = "bracket"
-line_comments = ["//"]
-block_comments = [["/*", "*/"]]
-strings = [["\"", "\""], ["'", "'"]]
-brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+  name = "bracket-js"
+  type = "bracket"
+  tab_width = 0
+  line_comments = ["//"]
+  block_comments = [["/*", "*/"]]
+  strings = [["\"", "\""], ["'", "'"]]
+  brackets = [["{", "}"], ["(", ")"], ["[", "]"], ["`", "`"]]
+
+[[chunker]]
+  name = "bracket-json"
+  type = "bracket"
+  tab_width = 0
+  strings = [["\"", "\""], ["'", "'"]]
+  brackets = [["{", "}"], ["[", "]"]]
+
+[[chunker]]
+  name = "bracket-lua"
+  type = "bracket-full"
+  tab_width = 0
+  line_comments = ["--"]
+  block_comments = [["--[[", "]]--"]]
+  strings = [["\"", "\""], ["'", "'"], ["[[", "]]"]]
+  brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
+
+  [[chunker.bracket_defs]]
+    open = ["function"]
+    close = ["end"]
+
+  [[chunker.bracket_defs]]
+    open = ["if"]
+    separators = ["then", "else", "elseif"]
+    close = ["end"]
+
+  [[chunker.bracket_defs]]
+    open = ["while"]
+    separators = ["do"]
+    close = ["end"]
+
+  [[chunker.bracket_defs]]
+    open = ["repeat"]
+    close = ["until"]
+
+[[chunker]]
+  name = "bracket-shell"
+  type = "bracket-full"
+  tab_width = 0
+  line_comments = ["#"]
+
+  [[chunker.string_defs]]
+    open = "\""
+    close = "\""
+    escape = "\\"
+
+  [[chunker.string_defs]]
+    open = "'"
+    close = "'"
+    escape = ""
+
+  [[chunker.bracket_defs]]
+    open = ["if"]
+    separators = ["then", "elif", "else"]
+    close = ["fi"]
+
+  [[chunker.bracket_defs]]
+    open = ["do"]
+    close = ["done"]
+
+  [[chunker.bracket_defs]]
+    open = ["case"]
+    separators = ["in"]
+    close = ["esac"]
+
+  [[chunker.bracket_defs]]
+    open = ["{"]
+    close = ["}"]
 
 [[chunker]]
 name = "bracket-java"
@@ -80,14 +166,6 @@ type = "bracket"
 line_comments = ["//"]
 block_comments = [["/*", "*/"]]
 strings = [["\"", "\""], ["'", "'"]]
-brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
-
-[[chunker]]
-name = "bracket-js"
-type = "bracket"
-line_comments = ["//"]
-block_comments = [["/*", "*/"]]
-strings = [["\"", "\""], ["'", "'"], ["`", "`"]]
 brackets = [["{", "}"], ["(", ")"], ["[", "]"]]
 
 [[chunker]]
@@ -112,13 +190,6 @@ string_defs = [{open = "'", close = "'"}]
 bracket_defs = [{open = ["begin", "record", "class"], close = ["end"]}, {open = ["if"], separators = ["then", "else"], close = ["end"]}, {open = ["repeat"], close = ["until"]}]
 
 [[chunker]]
-name = "bracket-shell"
-type = "bracket-full"
-line_comments = ["#"]
-string_defs = [{open = "\"", close = "\"", escape = "\\"}, {open = "'", close = "'"}]
-bracket_defs = [{open = ["if"], separators = ["then", "elif", "else"], close = ["fi"]}, {open = ["do"], close = ["done"]}, {open = ["case"], separators = ["in"], close = ["esac"]}, {open = ["{"], close = ["}"]}]
-
-[[chunker]]
 name = "indent-python"
 type = "indent"
 tab_width = 4
@@ -131,3 +202,32 @@ type = "indent"
 tab_width = 2
 line_comments = ["#"]
 strings = [["\"", "\""], ["'", "'"]]
+
+# Spec: schedule-lifecycle.md "EnsureArkSource Scoping" | R2811
+# Schedule tags — declared via [schedule.tag.X] blocks. The mere
+# presence of a block declares X as a schedule tag (R2830). The six
+# standard chime cadences (R2778-R2782) are auto-declared by
+# Config.EnsureDefaultScheduleTags with lifecycle="none" (fire
+# through pubsub only, no audit on disk or tmp://). Override by
+# adding an explicit block — for example, to enable fire-history
+# audit for chime-1m:
+#
+#   [schedule.tag.chime-1m]
+#   lifecycle = "disk"   # or "tmp" for ephemeral
+#
+#   [schedule.tag.reminder]
+#     default_duration = "30m"
+#     exclude_files = ["/home/user/work/project/specs/**/*"]
+#
+# Or to suppress a chime entirely:
+#
+#   [schedule.tag.chime-5m]
+#   suppress = true
+[schedule]
+
+[recall]
+  enabled = true
+  activation_delay = 1
+
+[luhmann]
+

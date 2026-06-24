@@ -69,8 +69,8 @@ github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M
 github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
 github.com/zot/change-tracker v1.4.0 h1:cxElyc25DHuLQRE/HY0bkuu4pfVTOWtak8mjc4bxeTs=
 github.com/zot/change-tracker v1.4.0/go.mod h1:V9pUIOLAIfmi+oNDrI2ObW2dHkkTXs/OzoYQ0VybnQQ=
-github.com/zot/frictionless v0.30.0 h1:6Y7RDbeVvrpxr5oMbt7woKKPwJIFy11ukOFgZwG0OYA=
-github.com/zot/frictionless v0.30.0/go.mod h1:rEx3QpZ5O86fQdpmihoGNohkWSXPh3wPqRK+e2kQ9w4=
+github.com/zot/frictionless v0.31.0 h1:x+tQIjLF9Dqf7/Ep1sqY6I4ngKAZmDPdSqCZ7wMngCE=
+github.com/zot/frictionless v0.31.0/go.mod h1:rEx3QpZ5O86fQdpmihoGNohkWSXPh3wPqRK+e2kQ9w4=
 github.com/zot/microfts2 v0.4.2 h1:g9GjGgO6IKhAp8aakgleYGFuJpSqLVTUQhOBSDi6dfI=
 github.com/zot/microfts2 v0.4.2/go.mod h1:T6O0pRuj58Z+JTx/weP4klPtzy538nyD8mupQqmpgJs=
 github.com/zot/pdftext v0.2.1 h1:YmHZ0sgeJqJu8vp1mTi4zQsMEbn8NtXffIGf8iNCPZU=
