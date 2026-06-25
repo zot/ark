@@ -302,7 +302,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 		}()
 	}
 
-	// Reconciliation goes through the DB actor via srv.reconcile() (R990)
+	// Reconciliation goes through the DB actor via srv.reconcile()
+	// CRC: crc-DB.md | R990
 
 	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
 	sigCh := make(chan os.Signal, 1)
@@ -332,10 +333,11 @@ func Serve(dbPath string, opts ServeOpts) error {
 		srv.startUIEngine(dbPath)
 	}
 
-	// Start filesystem watches BEFORE reconciliation (R358) so nothing
+	// Start filesystem watches BEFORE reconciliation so nothing
 	// changes unseen during the scan. Watching is optional — failure
 	// is non-fatal. R2988: a rebuild does not watch (it runs the scan
 	// once and exits).
+	// CRC: crc-Server.md | R358
 	if !opts.NoScan && !opts.Rebuild {
 		srv.startWatching()
 	}
@@ -708,7 +710,8 @@ func (srv *Server) indexPaths(paths []string) {
 }
 
 // reconcile sends a reconciliation cycle through the DB actor.
-// Fire-and-forget — the watcher doesn't need the result. R987, R990, R992
+// Fire-and-forget — the watcher doesn't need the result. R992
+// CRC: crc-DB.md | R987, R990
 func (srv *Server) reconcile() {
 	srv.db.Do(func(db *DB) {
 		// Wire schedule callback for async write goroutines
@@ -726,10 +729,10 @@ func (srv *Server) reconcile() {
 
 // doReconcile runs the actual reconciliation: sources-check, sweep,
 // scan, refresh. After sources-check, updates watches for any
-// new/removed sources (R351). Sweep drops files that no longer
+// new/removed sources. Sweep drops files that no longer
 // classify as Included (R2138, R2142). Called inside the DB actor.
 //
-// CRC: crc-Server.md | Seq: seq-reconcile.md | R2138, R2142
+// CRC: crc-Server.md | Seq: seq-reconcile.md | R351, R2138, R2142
 func (srv *Server) doReconcile(db *DB) {
 	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
@@ -2350,8 +2353,9 @@ func (srv *Server) handleTmpAppend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleSubscribe processes subscribe/cancel/list/stats requests. R778-R788, R814-R820
+// handleSubscribe processes subscribe/cancel/list/stats requests. R778-R788
 // CRC: crc-Server.md | Seq: seq-pubsub.md | R2782
+// CRC: crc-PubSub.md | R814, R820
 func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Session string `json:"session"`
@@ -2576,8 +2580,9 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]int{"crashes": crashes, "quit_early": quitEarly})
 }
 
-// handleListen long-polls for notifications. R789-R794
+// handleListen long-polls for notifications.
 // CRC: crc-Server.md | Seq: seq-pubsub.md
+// CRC: crc-PubSub.md | R789-R794
 func (srv *Server) handleListen(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
@@ -2614,7 +2619,8 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Parse using same grammar as schedule tags R915
+	// Parse using same grammar as schedule tags
+	// CRC: crc-CLI.md | R915
 	loc := time.Now().Location()
 	dr, err := ParseDateValue(req.Date, "", loc)
 	if err != nil {
@@ -3122,7 +3128,8 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Multi-strategy for combined queries — exclude regex (R1229)
+	// Multi-strategy for combined queries — exclude regex
+	// CRC: crc-Server.md | R1229
 	if !tagOnly && !opts.Fuzzy && opts.Contains == "" && opts.About == "" && len(opts.Regex) == 0 {
 		opts.Multi = true
 	}
@@ -3755,7 +3762,8 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// When the URL specifies a range (?range=...) we know exactly
 			// which chunk we're showing, so wrap the rendered content in a
 			// <div class="ark-chunk" data-chunkid data-fileid> so the
-			// curate-pin inline JS can install a pin button. R2415 R2417
+			// curate-pin inline JS can install a pin button. R2415
+			// CRC: crc-CuratePinButton.md | R2417
 			var body strings.Builder
 			switch {
 			case strategy == "chat-jsonl":
@@ -4064,10 +4072,11 @@ func (srv *Server) CheckScheduleConfig() {
 
 // serializeScheduleConfig produces a deterministic string from the
 // schedule config — used to detect [schedule] section changes between
-// startups. R975. Updated for the [schedule.tag.X] block schema
+// startups. Updated for the [schedule.tag.X] block schema
 // (R2830, R2831): each tag is serialized as
 // "name:lifecycle:log_cap:default_duration:suppress" so changes to
 // per-tag knobs trigger re-materialization just like tag-set changes.
+// CRC: crc-Server.md | R975
 func serializeScheduleConfig(cfg *Config) string {
 	tags := cfg.ScheduleTags()
 	keys := make([]string, 0, len(tags))
@@ -4849,7 +4858,8 @@ func (srv *Server) registerLuaFunctions() {
 
 			tb := ParseTagBlock(data)
 
-			// Build tags table from tag block only (R776)
+			// Build tags table from tag block only
+			// CRC: crc-Server.md | R776
 			tagsResult := L.NewTable()
 			for _, tag := range tb.Tags() {
 				L.SetField(tagsResult, tag.Name, lua.LString(tag.Value))
@@ -4983,7 +4993,8 @@ func (srv *Server) registerLuaFunctions() {
 				return 1
 			}
 
-			// Check prototype argument (R845-R848)
+			// Check prototype argument
+			// CRC: crc-Server.md | R845
 			var prototype *lua.LTable
 			var hasNew bool
 			var sessionCreate *lua.LFunction
@@ -5010,7 +5021,8 @@ func (srv *Server) registerLuaFunctions() {
 				}
 			}
 
-			// wirePrototype applies prototype wiring to an entry table (R845-R848)
+			// wirePrototype applies prototype wiring to an entry table
+			// CRC: crc-Server.md | R845
 			wirePrototype := func(entryTbl *lua.LTable) *lua.LTable {
 				if prototype == nil {
 					return entryTbl
@@ -5043,14 +5055,16 @@ func (srv *Server) registerLuaFunctions() {
 				return entryTbl
 			}
 
-			// Read directory entries (R836)
+			// Read directory entries
+			// CRC: crc-Server.md | R836
 			entries, err := os.ReadDir(sourcePath)
 			if err != nil {
 				L.Push(L.NewTable())
 				return 1
 			}
 
-			// Sort: dirs first, then alphabetically (R841)
+			// Sort: dirs first, then alphabetically
+			// CRC: crc-Server.md | R841
 			sort.Slice(entries, func(i, j int) bool {
 				di, dj := entries[i].IsDir(), entries[j].IsDir()
 				if di != dj {
@@ -5059,7 +5073,8 @@ func (srv *Server) registerLuaFunctions() {
 				return entries[i].Name() < entries[j].Name()
 			})
 
-			// Get missing files for this source (R843, R844)
+			// Get missing files for this source
+			// CRC: crc-Server.md | R843, R844
 			missingPaths := make(map[string]bool)
 			missing, _ := Sync(srv.db, func(db *DB) ([]MissingRecord, error) {
 				return db.Missing()
@@ -5086,7 +5101,8 @@ func (srv *Server) registerLuaFunctions() {
 				// Compute relPath from source root
 				relPath, _ := filepath.Rel(matchedSource.Dir, fullPath)
 
-				// Classify via ShowWhy (R839, R840)
+				// Classify via ShowWhy
+				// CRC: crc-Server.md | R839, R840
 				why, err := cfg.ShowWhy(fullPath)
 				state := "unresolved"
 				var whyPatterns, whySources string
@@ -5098,7 +5114,8 @@ func (srv *Server) registerLuaFunctions() {
 					whyConflict = why.Conflict
 				}
 
-				// Check for ignore files in directories (R842)
+				// Check for ignore files in directories
+				// CRC: crc-Server.md | R842
 				hasIgnoreFile := false
 				if isDir {
 					for _, ignName := range []string{".gitignore", ".arkignore"} {
@@ -5109,10 +5126,12 @@ func (srv *Server) registerLuaFunctions() {
 					}
 				}
 
-				// Check if missing (R843)
+				// Check if missing
+				// CRC: crc-Server.md | R843
 				isMissing := missingPaths[fullPath]
 
-				// Build entry table (R838)
+				// Build entry table
+				// CRC: crc-Server.md | R838
 				entryTbl := L.NewTable()
 				L.SetField(entryTbl, "name", lua.LString(name))
 				L.SetField(entryTbl, "relPath", lua.LString(relPath))
@@ -5132,7 +5151,8 @@ func (srv *Server) registerLuaFunctions() {
 				seenNames[name] = true
 			}
 
-			// Add missing files not on disk at this directory level (R843)
+			// Add missing files not on disk at this directory level
+			// CRC: crc-Server.md | R843
 			for path := range missingPaths {
 				name := filepath.Base(path)
 				if seenNames[name] {

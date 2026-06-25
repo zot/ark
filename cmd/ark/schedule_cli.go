@@ -128,7 +128,8 @@ func scheduleSearchAction(_ context.Context, c *ucli.Command) error {
 		return nil
 	}
 
-	// Decode and format as markdown R916
+	// Decode and format as markdown
+	// CRC: crc-CLI.md | R916
 	var events []ark.ScheduleEvent
 	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &events); err != nil {
 		fatal(err)
@@ -226,8 +227,8 @@ func scheduleTagsAction(_ context.Context, c *ucli.Command) error {
 		}
 	}
 	// R3000, R3003: /schedule/tags proxies; ScheduleTagSummary builds the
-	// identical lines locally (R2844 stable order, R1033/R1034 --values
-	// detail both live there now).
+	// identical lines locally (R2844 stable order, --values detail both live there now).
+	// CRC: crc-CLI.md | R1033, R1034
 	proxyOrLocal(
 		func(client *http.Client) error {
 			var lines []string

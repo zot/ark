@@ -194,7 +194,8 @@ func extractWatchdogTag(line string) string {
 	return rest[at+1 : at+colon]
 }
 
-// Subscribe adds subscriptions for a session. R778, R781, R782, R783, R784, R2457, R2459
+// Subscribe adds subscriptions for a session. R778, R2457, R2459
+// CRC: crc-PubSub.md | R781, R782, R783, R784
 func (ps *PubSub) Subscribe(sessionID string, subs []*TagSub) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -240,7 +241,8 @@ func (ps *PubSub) TouchListen(sessionID string) {
 	}
 }
 
-// Cancel removes subscriptions. R786, R787, R2458
+// Cancel removes subscriptions. R2458
+// CRC: crc-PubSub.md | R786, R787
 // Empty tag cancels all entries for the session. Non-empty tag
 // drops every entry whose Predicate accepts the lowered name and
 // (when a value is supplied) the value. The cancel target is
@@ -276,7 +278,8 @@ func (ps *PubSub) Cancel(sessionID string, tag string, value string) {
 }
 
 // Publish checks extracted tags against subscriptions and enqueues events.
-// writerID is excluded from self-notification (empty = no exclusion). R795, R796, R797, R798
+// writerID is excluded from self-notification (empty = no exclusion). R795, R796, R798
+// CRC: crc-Indexer.md | R797
 // Returns unmatched tags for watchdog processing.
 // If the file contains @mute: true, all events from it are silenced.
 //
@@ -619,7 +622,8 @@ type TagValue struct {
 	Value string
 }
 
-// Listen blocks until events are available or timeout. R789, R790, R794
+// Listen blocks until events are available or timeout.
+// CRC: crc-PubSub.md | R789, R790, R794
 func (ps *PubSub) Listen(sessionID string, timeout time.Duration) []Event {
 	ps.mu.RLock()
 	ch := ps.queues[sessionID]
@@ -665,7 +669,8 @@ done:
 	return events
 }
 
-// FormatMarkdown renders events as crank-handle markdown. R791, R792, R793
+// FormatMarkdown renders events as crank-handle markdown.
+// CRC: crc-PubSub.md | R791, R792, R793
 func FormatMarkdown(events []Event) string {
 	var b strings.Builder
 	for i, evt := range events {
@@ -680,7 +685,8 @@ func FormatMarkdown(events []Event) string {
 	return b.String()
 }
 
-// SubInfo describes a subscription for listing. R814, R815, R816, R2458
+// SubInfo describes a subscription for listing. R2458
+// CRC: crc-PubSub.md | R814, R815, R816
 // Tag carries the canonical sigil form of the entry's predicate so
 // the user can copy it back into a cancel command. Kind is "tag" or
 // "file-tag" (R2462).
@@ -701,7 +707,8 @@ func tagSubKindLabel(k TagSubKind) string {
 	return "tag"
 }
 
-// List returns subscription details. Empty sessionID returns all. R814, R815, R816
+// List returns subscription details. Empty sessionID returns all.
+// CRC: crc-PubSub.md | R814, R815, R816
 func (ps *PubSub) List(sessionID string) []SubInfo {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -726,7 +733,8 @@ func (ps *PubSub) List(sessionID string) []SubInfo {
 	return result
 }
 
-// SubStats is aggregate stats for a session. R817, R818, R820
+// SubStats is aggregate stats for a session.
+// CRC: crc-PubSub.md | R817, R818, R820
 type SubStats struct {
 	SessionID string
 	SubCount  int
@@ -734,7 +742,8 @@ type SubStats struct {
 	Drops     uint64
 }
 
-// Stats returns aggregate hit/drop counts. Empty sessionID returns all. R817, R818
+// Stats returns aggregate hit/drop counts. Empty sessionID returns all.
+// CRC: crc-PubSub.md | R817, R818
 func (ps *PubSub) Stats(sessionID string) []SubStats {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -889,7 +898,8 @@ func looksSchedulable(value string) bool {
 	return false
 }
 
-// matchFileFilters checks path against filter and except globs. R782, R783, R784, R785
+// matchFileFilters checks path against filter and except globs.
+// CRC: crc-PubSub.md | R782, R783, R784, R785
 func matchFileFilters(path string, filterFiles, exceptFiles []string) bool {
 	if len(filterFiles) > 0 {
 		matched := false

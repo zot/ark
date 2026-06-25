@@ -42,7 +42,8 @@ type Librarian struct {
 	// Result store
 	results map[string]*ExpandResult // requestID → result
 
-	// Embedding model (R1277, R1278, R1593, R1594)
+	// Embedding model (R1594)
+	// CRC: crc-Librarian.md | R1277, R1278, R1593
 	model      *embedModel
 	modelCtx   *embedContext // default context for tags/queries (2048/8)
 	tiers      []EmbedTier   // sorted by byte limit ascending
@@ -492,7 +493,8 @@ func matchesAnyGlob(path string, patterns []string) bool {
 	return false
 }
 
-// --- Embedding (R1296-R1301) ---
+// --- Embedding (R1296-R1300) ---
+// CRC: crc-Librarian.md | R1301
 
 // EmbeddingAvailable returns whether the embedding model is configured.
 func (l *Librarian) EmbeddingAvailable() bool {
@@ -1820,7 +1822,8 @@ func (l *Librarian) EmbedBatch(texts []string) ([][]float32, error) {
 // EmbedSimilarTagValues does two-step narrowing: cosine scan T record
 // embeddings to find top-K tags, then cosine scan EV records only for
 // those tags. Single query embedding for both steps (hybrid approach).
-// Multiply tag × value scores. R1297, R1298, R1315, R1316
+// Multiply tag × value scores. R1297, R1316
+// CRC: crc-Librarian.md | R1298, R1315
 func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, error) {
 	queryVec, err := l.EmbedQuery(query)
 	if err != nil {
@@ -2023,7 +2026,8 @@ func (l *Librarian) BatchEmbed() error {
 	return nil
 }
 
-// embedWithCtx embeds a batch using the given context. R1614
+// embedWithCtx embeds a batch using the given context.
+// CRC: crc-Librarian.md | R1614
 func (l *Librarian) embedWithCtx(ctx *embedContext, texts []string) ([][]float32, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -2079,7 +2083,8 @@ func (l *Librarian) BatchEmbedChunks() error {
 		return nil
 	}
 
-	// Priority sort R1611: tag-bearing files first, then non-JSONL, then JSONL.
+	// Priority sort: tag-bearing files first, then non-JSONL, then JSONL.
+	// CRC: crc-Librarian.md | R1611
 	// Build tag-bearing file ID set from F records.
 	tagFileIDs := make(map[uint64]bool)
 	allTags, err := l.db.TagList()
@@ -2129,7 +2134,8 @@ func (l *Librarian) BatchEmbedChunks() error {
 		return sorted[i].priority < sorted[j].priority
 	})
 
-	// --- Pass 1: classify chunks into tier buckets by chunkID (R1846, R1847, R1862, R1863) ---
+	// --- Pass 1: classify chunks into tier buckets by chunkID (R1862, R1863) ---
+	// CRC: crc-Librarian.md | R1846, R1847
 
 	type chunkRef struct {
 		chunkID  uint64
@@ -2198,7 +2204,8 @@ func (l *Librarian) BatchEmbedChunks() error {
 		}
 	}
 
-	// --- Pass 2: embed one tier at a time (R1830) ---
+	// --- Pass 2: embed one tier at a time ---
+	// CRC: crc-Librarian.md | R1830
 
 	var totalEmbedded int
 	var totalEmptyStripped int // R3004: all-@tag chunks sentineled in Pass 2
@@ -2396,7 +2403,8 @@ func (l *Librarian) ensureModel() error {
 	if err != nil {
 		return err
 	}
-	// Default context for tags/queries (or bench override) R1595, R1597, R2962
+	// Default context for tags/queries (or bench override) R1595, R2962
+	// CRC: crc-Librarian.md | R1597
 	ctxSize := l.ctxSize
 	if ctxSize <= 0 {
 		ctxSize = 2048

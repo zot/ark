@@ -1005,7 +1005,8 @@ func (c *Config) checkDuplicates(includes, excludes []string, context string) {
 	}
 }
 
-// initEmbedTiers applies defaults and sorts tiers by byte limit. R1590, R1591, R1592
+// initEmbedTiers applies defaults and sorts tiers by byte limit.
+// CRC: crc-Config.md | R1590, R1591, R1592
 func (c *Config) initEmbedTiers() {
 	if len(c.Embedding.Tiers) == 0 && c.Embedding.Model != "" {
 		c.Embedding.Tiers = DefaultEmbedTiers()

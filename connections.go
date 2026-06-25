@@ -249,7 +249,8 @@ func (l *Librarian) runConnectionsTicker(id string, stop <-chan struct{}) {
 // DrainPendingConnections atomically drains the queue. Side effect:
 // records the drain time as evidence of a live --wait consumer
 // (the polled `--wait` endpoint calls this after WaitForConnectionsRequest
-// returns true). R2321.
+// returns true).
+// CRC: crc-Librarian.md | R2321
 func (l *Librarian) DrainPendingConnections() []ConnectionsRequest {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -261,7 +262,8 @@ func (l *Librarian) DrainPendingConnections() []ConnectionsRequest {
 
 // WaitForConnectionsRequest blocks until at least one request is
 // queued. Records the call time so ConnectionsAvailable can report
-// honestly. R2320, R2321.
+// honestly. R2320.
+// CRC: crc-Librarian.md | R2321
 func (l *Librarian) WaitForConnectionsRequest(timeout time.Duration) bool {
 	l.mu.Lock()
 	l.connectionsLastWait = time.Now()
@@ -358,7 +360,8 @@ func closeStop(rec *ConnectionsRecord) {
 }
 
 // CleanConnectionsResults caps the in-memory record map by age. Mirrors
-// CleanResults for spectral expand. R2321.
+// CleanResults for spectral expand.
+// CRC: crc-Librarian.md | R2321
 func (l *Librarian) CleanConnectionsResults() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

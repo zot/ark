@@ -30,6 +30,7 @@ import (
 // The filter uses a 50% ratio threshold — trigrams appearing in more than
 // half of all chunks are skipped as non-discriminating.
 // Seq: seq-search.md | R572, R574, R575
+// CRC: crc-Searcher.md | R572, R574, R575
 func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts SearchOpts) []microfts2.SearchOption {
 	opts := []microfts2.SearchOption{
 		microfts2.WithTrigramFilter(microfts2.FilterByRatio(0.50)),
@@ -555,7 +556,8 @@ func chunkText(crec microfts2.CRecord, cache *microfts2.ChunkCache, paths map[ui
 	return text
 }
 
-// ContainsChunkFilter returns a ChunkFilter that substring-matches chunk text. R1397
+// ContainsChunkFilter returns a ChunkFilter that substring-matches chunk text.
+// CRC: crc-Searcher.md | R1397
 func ContainsChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uint64]string) microfts2.ChunkFilter {
 	lower := strings.ToLower(term)
 	return func(crec microfts2.CRecord) bool {
@@ -567,7 +569,8 @@ func ContainsChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uin
 	}
 }
 
-// FuzzyChunkFilter returns a ChunkFilter that fuzzy-matches chunk text. R1398
+// FuzzyChunkFilter returns a ChunkFilter that fuzzy-matches chunk text.
+// CRC: crc-Searcher.md | R1398
 func FuzzyChunkFilter(term string, cache *microfts2.ChunkCache, paths map[uint64]string) microfts2.ChunkFilter {
 	return func(crec microfts2.CRecord) bool {
 		text := chunkText(crec, cache, paths)
@@ -774,7 +777,8 @@ func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths
 		if row.Query == "" {
 			continue
 		}
-		// Regex mode uses dedicated microfts2 options (more efficient). R1404
+		// Regex mode uses dedicated microfts2 options (more efficient).
+		// CRC: crc-Server.md | R1404
 		if row.Mode == "regex" {
 			if row.Polarity == "without" {
 				opts = append(opts, microfts2.WithExceptRegex(row.Query))
@@ -2426,11 +2430,13 @@ func rawURLFor(path string) string {
 
 // writePdfTagChildren parses the chunk's tag_rects attribute and emits
 // one `<ark-tag rect="…" segments="…"><name>…</name> <value>…</value></ark-tag>`
-// child per entry. tag_rects format: `name=value@x,y,w,h;…` (R1671,
-// R1672). tag_segments is index-aligned with tag_rects — per-tag
-// `@|name|colon|valRect1|valRect2…` (R1758-R1761). When tagSegments
+// child per entry. tag_rects format: `name=value@x,y,w,h;…` (R1672).
+// tag_segments is index-aligned with tag_rects — per-tag
+// `@|name|colon|valRect1|valRect2…`. When tagSegments
 // is empty or a tag's entry is empty, the `segments` attribute is
 // omitted and the element falls back to approximate mapping.
+// CRC: crc-PDFChunker.md | R1671
+// CRC: crc-PdfChunkElement.md | R1758-R1761
 func writePdfTagChildren(b *strings.Builder, tagRects, tagSegments string) {
 	if tagRects == "" {
 		return

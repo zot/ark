@@ -20,11 +20,13 @@ import (
 )
 
 // Store manages ark's own `ark` bucket inside microfts2's bbolt database for
-// missing files, unresolved files, settings, and tag tracking. (R2975)
+// missing files, unresolved files, settings, and tag tracking.
+// CRC: crc-Store.md | R2975
 type Store struct {
 	// bolt is microfts2's shared *bbolt.DB; ark does not own it. The `ark`
 	// bucket is obtained per txn via tx.Bucket(arkBucketName) — there is no
-	// persistent handle (DBIs do not exist in bbolt). (R2975, R2976)
+	// persistent handle (DBIs do not exist in bbolt).
+	// CRC: crc-DB.md | R2975, R2976
 	bolt *bbolt.DB
 	// filesForChunk resolves a chunkID to the fileids that reference it,
 	// using the provided bbolt txn (must read microfts2's C records).
@@ -211,19 +213,22 @@ const (
 
 // arkBucketName is ark's bucket inside microfts2's shared bbolt database.
 // A bbolt.Tx spans this bucket and microfts2's "fts" bucket, so cross-repo
-// reads/writes stay atomic. (R2975, R2976)
+// reads/writes stay atomic.
+// CRC: crc-DB.md | R2975, R2976
 var arkBucketName = []byte("ark")
 
 // errNotFound mirrors lmdb.IsNotFound's sentinel so the ported read paths
 // keep their original (value, err) control flow. bbolt's Bucket.Get returns
-// a nil slice for an absent key; bGet maps that to errNotFound. (R2979)
+// a nil slice for an absent key; bGet maps that to errNotFound.
+// CRC: crc-Store.md | R2979
 var errNotFound = errors.New("ark: key not found")
 
 func isNotFound(err error) bool { return errors.Is(err, errNotFound) }
 
 // bGet reads key from the ark bucket. Returns errNotFound when the key is
 // absent (bbolt Get → nil), preserving the lmdb.Txn.Get contract callers
-// were written against. The returned slice is valid only within txn. (R2979)
+// were written against. The returned slice is valid only within txn.
+// CRC: crc-Store.md | R2979
 func bGet(txn *bbolt.Tx, key []byte) ([]byte, error) {
 	if v := txn.Bucket(arkBucketName).Get(key); v != nil {
 		return v, nil
@@ -231,19 +236,22 @@ func bGet(txn *bbolt.Tx, key []byte) ([]byte, error) {
 	return nil, errNotFound
 }
 
-// bPut writes key→val into the ark bucket. (R2979)
+// bPut writes key→val into the ark bucket.
+// CRC: crc-Store.md | R2979
 func bPut(txn *bbolt.Tx, key, val []byte) error {
 	return txn.Bucket(arkBucketName).Put(key, val)
 }
 
 // bDel removes key from the ark bucket. bbolt returns no error for a missing
-// key, so the lmdb IsNotFound delete-guards become no-ops. (R2979)
+// key, so the lmdb IsNotFound delete-guards become no-ops.
+// CRC: crc-Store.md | R2979
 func bDel(txn *bbolt.Tx, key []byte) error {
 	return txn.Bucket(arkBucketName).Delete(key)
 }
 
 // OpenStore opens or creates ark's bucket inside microfts2's bbolt database.
-// ark does not own the database — db is microfts2's handle (fts.DB()). (R2975)
+// ark does not own the database — db is microfts2's handle (fts.DB()).
+// CRC: crc-Store.md | R2975
 func OpenStore(db *bbolt.DB) (*Store, error) {
 	err := db.Update(func(txn *bbolt.Tx) error {
 		_, err := txn.CreateBucketIfNotExists(arkBucketName)
@@ -624,7 +632,8 @@ func (s *Store) ClearERecords() error {
 
 // (UpdateTags / AppendTags / RemoveTags removed; their function is now
 // expressed via UpdateTagValues / AppendTagValues / RemoveTagValues which
-// take ChunkTagValues. CRC: crc-Store.md | R1885)
+// take ChunkTagValues.)
+// CRC: crc-Store.md | R1885
 
 // ListTags returns all tags with their total counts. Unions inline
 // T records with ExtMap virtual tag names and TmpTagStore overlay
@@ -837,7 +846,8 @@ func parseFKey(k []byte) (uint64, string, bool) {
 // then invokes fn for each. This lets a delete-during-scan caller safely call
 // bDel(txn, k) (or any write) from fn against the now-cursorless bucket,
 // replacing the lmdb cur.Del(0) idiom. The snapshot also means deletes made
-// during the callback phase never perturb the iteration. (R2980)
+// during the callback phase never perturb the iteration.
+// CRC: crc-Store.md | R2980
 func scanPrefix(txn *bbolt.Tx, prefix []byte, fn func(k, v []byte) error) error {
 	type kv struct{ k, v []byte }
 	var items []kv
@@ -2244,7 +2254,8 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 	return counts, err
 }
 
-// --- Tag Value ID allocation (R1280-R1284) ---
+// --- Tag Value ID allocation ---
+// CRC: crc-Store.md | R1280, R1284
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
 func (s *Store) allocIDInTxn(txn *bbolt.Tx, iFieldName string) (uint64, error) {
@@ -2968,7 +2979,8 @@ func (s *Store) WriteChunkEmbeddingBatch(chunks []ChunkVec) error {
 	})
 }
 
-// ReadChunkEmbedding reads one EC record by chunkID. R1838
+// ReadChunkEmbedding reads one EC record by chunkID.
+// CRC: crc-Store.md | R1838
 func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 	var vec []float32
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
@@ -2987,7 +2999,8 @@ func (s *Store) ReadChunkEmbedding(chunkID uint64) ([]float32, error) {
 	return vec, err
 }
 
-// ReadChunkEmbeddings batch reads EC records for centroid computation. R1842
+// ReadChunkEmbeddings batch reads EC records for centroid computation.
+// CRC: crc-Store.md | R1842
 func (s *Store) ReadChunkEmbeddings(chunkIDs []uint64) [][]float32 {
 	result := make([][]float32, len(chunkIDs))
 	s.bolt.View(func(txn *bbolt.Tx) error {
@@ -3026,7 +3039,8 @@ func (s *Store) DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID uint64) error {
 	return deleteStamp(txn, []byte(prefixEmbedChunk), key[len(prefixEmbedChunk):])
 }
 
-// WriteFileCentroid writes one EF record (running sum + count). R1835
+// WriteFileCentroid writes one EF record (running sum + count).
+// CRC: crc-Store.md | R1835
 func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		if count == 0 {
@@ -3079,7 +3093,8 @@ func (s *Store) DeleteFileCentroid(fileID uint64) error {
 	})
 }
 
-// DeleteFileCentroidInTxn deletes one EF record using an existing transaction. R1841
+// DeleteFileCentroidInTxn deletes one EF record using an existing transaction.
+// CRC: crc-Store.md | R1841
 func (s *Store) DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID uint64) error {
 	err := bDel(txn, fileCentroidKey(fileID))
 	if isNotFound(err) {
@@ -3088,7 +3103,8 @@ func (s *Store) DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID uint64) error {
 	return err
 }
 
-// ScanFileCentroids returns all EF records as fileID → centroid (sum/count). R1605
+// ScanFileCentroids returns all EF records as fileID → centroid (sum/count).
+// CRC: crc-Store.md | R1605
 func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
@@ -3146,7 +3162,8 @@ func (s *Store) ViewChunkEmbeddings(fn func(txn *bbolt.Tx, chunkID uint64, vec [
 	// Read-only streaming scan with early-exit: walk a live cursor directly
 	// rather than via scanPrefix (collect-then-delete), so a large EC corpus
 	// is not materialized up front and the cont=false early-exit still pays
-	// off. Safe because a bbolt View txn cannot mutate the bucket. (R2979)
+	// off. Safe because a bbolt View txn cannot mutate the bucket.
+	// CRC: crc-Store.md | R2979
 	prefix := []byte(prefixEmbedChunk)
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
 		c := txn.Bucket(arkBucketName).Cursor()
@@ -3211,7 +3228,8 @@ func pageContentKey(fileID uint64, page uint32) []byte {
 	return encodeVarint(key, uint64(page))
 }
 
-// WritePageContent stores a per-page compressed chunk-text blob. R1720, R1721, R1722
+// WritePageContent stores a per-page compressed chunk-text blob. R1720
+// CRC: crc-PDFChunker.md | R1721, R1722
 func (s *Store) WritePageContent(fileID uint64, page uint32, blob []byte) error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		return bPut(txn, pageContentKey(fileID, page), blob)
@@ -3235,7 +3253,8 @@ func (s *Store) ReadPageContent(fileID uint64, page uint32) ([]byte, error) {
 	return out, err
 }
 
-// RemovePageContents deletes every PC record for a file. R1724, R1725
+// RemovePageContents deletes every PC record for a file. R1724
+// CRC: crc-PDFChunker.md | R1725
 func (s *Store) RemovePageContents(fileID uint64) error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		prefix := []byte(prefixPageContent)

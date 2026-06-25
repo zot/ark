@@ -21,7 +21,8 @@ import (
 // CRC: crc-PDFChunker.md | Seq: seq-pdf-chunk.md | R1729-R1738
 
 // attrContentOffset and attrContentLen locate a chunk's text inside
-// its page's compressed blob. R1719
+// its page's compressed blob.
+// CRC: crc-PDFChunker.md | R1719
 const (
 	attrContentOffset = "content_offset"
 	attrContentLen    = "content_len"
@@ -109,7 +110,8 @@ func (c *PDFChunker) FileChunks(path string, oldHash [32]byte, yield func(microf
 // extractDoc walks the document, maps each Block to an ark chunk,
 // seals each page's blob, and yields. When persist is true, sealed
 // blobs are staged in c.pending[path] for FlushBlobs to write once
-// the fileid is known. R1720, R1721, R1730, R1733
+// the fileid is known. R1720, R1730, R1733
+// CRC: crc-PDFChunker.md | R1721
 func (c *PDFChunker) extractDoc(path string, doc *pdftext.Doc, yield func(microfts2.Chunk) bool, persist bool) {
 	for page := range doc.Pages() {
 		pageNum := page.Number()
@@ -245,7 +247,8 @@ func (c *PDFChunker) pushPending(path string, page uint32, blob []byte) {
 
 // sealPageBlob concatenates each chunk's text (null-byte separated),
 // records each chunk's offset/length in its Attrs, and returns the
-// zlib-compressed blob. Returns nil on compression failure. R1719, R1721, R1722
+// zlib-compressed blob. Returns nil on compression failure.
+// CRC: crc-PDFChunker.md | R1719, R1721, R1722
 func sealPageBlob(chunks []microfts2.Chunk) []byte {
 	if len(chunks) == 0 {
 		return nil
@@ -273,8 +276,8 @@ func sealPageBlob(chunks []microfts2.Chunk) []byte {
 	return out.Bytes()
 }
 
-// GetChunk implements microfts2.RandomAccessChunker. R1726, R1727, R1728
-// CRC: crc-PDFChunker.md | Seq: seq-pdf-chunk-retrieval.md | R1726
+// GetChunk implements microfts2.RandomAccessChunker. R1726, R1728
+// CRC: crc-PDFChunker.md | Seq: seq-pdf-chunk-retrieval.md | R1726, R1727
 func (c *PDFChunker) GetChunk(path string, _ []byte, customData *any, chunk *microfts2.Chunk) error {
 	if text, ok := c.fastRetrieve(path, customData, chunk); ok {
 		chunk.Content = text
@@ -379,7 +382,8 @@ func parseContentAttrs(attrs []microfts2.Pair) (page uint32, offset, length int,
 }
 
 // customDataPageCache returns (and lazily initializes) the decompressed-
-// page-blob cache inside microfts2's per-file customData. R1727
+// page-blob cache inside microfts2's per-file customData.
+// CRC: crc-PDFChunker.md | R1727
 func customDataPageCache(customData *any) map[uint32][]byte {
 	if *customData == nil {
 		cache := make(map[uint32][]byte)
@@ -440,7 +444,8 @@ func clampRectToPage(r pdfRect, pageSize [2]float64) pdfRect {
 	return pdfRect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
 }
 
-// chunkAttrs builds the Attrs slice for a chunk. R1637, R1638, R1639, R1665
+// chunkAttrs builds the Attrs slice for a chunk.
+// CRC: crc-PDFChunker.md | R1637, R1638, R1639, R1665
 func chunkAttrs(page string, rect pdfRect, fontSize float64, pageSize [2]float64, b *pdftext.Block) []microfts2.Pair {
 	attrs := []microfts2.Pair{
 		{Key: []byte("page"), Value: []byte(page)},
@@ -474,7 +479,8 @@ func chunkAttrs(page string, rect pdfRect, fontSize float64, pageSize [2]float64
 }
 
 // tagRectPattern mirrors the generic regex in tagblock.go so rects
-// only record tags that ark's generic extraction will index (R1676).
+// only record tags that ark's generic extraction will index.
+// CRC: crc-PDFChunker.md | R1676
 var tagRectPattern = regexp.MustCompile(`@([a-zA-Z][\w.-]*):\s*([^\n]*)`)
 
 // extractTagRects scans Block.Text (and Block.Caption) for the ark
@@ -526,7 +532,8 @@ func appendTagRectEntries(entries []string, text string, chars []pdftext.Char) [
 // physical line — so wrapped values carry precise per-line bounds.
 // Format: `atRect|nameRect|colonRect|valRect1|valRect2|...;nextTag…`
 // (each rect = `x,y,w,h`). Tags whose sub-segments fail produce an
-// empty entry so alignment with tag_rects is preserved. R1758-R1761
+// empty entry so alignment with tag_rects is preserved.
+// CRC: crc-PdfChunkElement.md | R1758, R1761
 func extractTagSegments(b *pdftext.Block) string {
 	var entries []string
 	entries = appendTagSegmentEntries(entries, b.Text, b.Chars)
@@ -598,7 +605,8 @@ func encodeTagSegment(r pdfRect) string {
 // physical line. Chars are grouped by baseline Y with a tolerance of
 // half the running average glyph height — when Y drops outside that
 // window the previous group closes and a new one starts. Handles
-// wrapped tag values. R1761
+// wrapped tag values.
+// CRC: crc-PdfChunkElement.md | R1761
 func charRangeRectsByLine(chars []pdftext.Char, start, end int) []pdfRect {
 	if start < 0 || end > len(chars) || start >= end {
 		return nil

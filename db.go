@@ -58,7 +58,8 @@ type DB struct {
 	pubsub        *PubSub           // R2281: set by SetPubSub; nil disables centralized tmp:// publish
 	chunkerByName map[string]any    // R2386, R2389: mirror of microfts2's chunker registry for ChunkerMetadata lookup by strategy name
 
-	// Write actor: read/write path separation. R1051-R1068
+	// Write actor: read/write path separation.
+	// CRC: crc-DB.md | R1051-R1068
 	writeQueue       []func(*microfts2.DB) // queued write closures
 	writing          bool                  // true while a write goroutine is in flight
 	onWriteComplete  func([]scheduleItem)  // callback for schedule items from write goroutines
@@ -81,7 +82,8 @@ type InitOpts struct {
 // IndexFileName is the bbolt database file inside the ark home directory.
 // microfts2 owns the file (it holds both the `fts` and `ark` buckets); ark
 // passes IndexPath(dbPath) — not the directory — to microfts2.Create/Open
-// because bbolt opens a single file, not an LMDB-style directory. (R2974, R2975)
+// because bbolt opens a single file, not an LMDB-style directory.
+// CRC: crc-Store.md | R2974, R2975
 const IndexFileName = "index.db"
 
 // IndexPath returns the bbolt database file path for an ark home directory.
@@ -236,7 +238,8 @@ func Open(dbPath string) (*DB, error) {
 // timeout (zero blocks forever, like Open). The CLI's local arm passes a
 // non-zero timeout so a direct open fails fast (microfts2 R672 →
 // bbolt.ErrTimeout) instead of hanging while a server holds the
-// single-process index. R2994
+// single-process index.
+// CRC: crc-DB.md | R2994
 func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	injectPath(dbPath)
 
@@ -248,7 +251,8 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	}
 	config.dbPath = dbPath
 
-	// Open microfts2 (opens the bbolt database). R2994: bounded lock wait.
+	// Open microfts2 (opens the bbolt database).
+	// CRC: crc-DB.md | R2994
 	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{Timeout: timeout})
 	if err != nil {
 		return nil, fmt.Errorf("open microfts2: %w", err)
@@ -388,13 +392,15 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 }
 
 // Do sends a fire-and-forget operation to the DB actor.
-// Used by the watcher for file changes and reconcile. R987
+// Used by the watcher for file changes and reconcile.
+// CRC: crc-DB.md | R987
 func (db *DB) Do(fn func(*DB)) {
 	svc(db.svc, func() { fn(db) })
 }
 
 // Sync sends an operation to the DB actor and blocks until it completes.
-// Used by HTTP handlers and CLI for operations that return results. R988, R989
+// Used by HTTP handlers and CLI for operations that return results. R988
+// CRC: crc-DB.md | R989
 func Sync[T any](db *DB, fn func(*DB) (T, error)) (T, error) {
 	return svcSync(db.svc, func() (T, error) {
 		return fn(db)
@@ -2548,7 +2554,8 @@ func (db *DB) Status() (*StatusInfo, error) {
 
 	// Database file size on disk. bbolt has no LMDB-style preallocated map
 	// ceiling — the file itself is the storage — so used and total both
-	// report the on-disk size of microfts2's bbolt file. (R2982)
+	// report the on-disk size of microfts2's bbolt file.
+	// CRC: crc-DB.md | R2982
 	var mapUsed, mapTotal int64
 	if fi, err := os.Stat(db.fts.DB().Path()); err == nil {
 		mapTotal = fi.Size()
@@ -3399,7 +3406,8 @@ type InboxEntry struct {
 	Kind            string `json:"kind"`            // "request", "response", or "self"
 	ResponseHandled string `json:"responseHandled"` // @response-handled: tag value
 	RequestHandled  string `json:"requestHandled"`  // @request-handled: tag value
-	StatusDate      string `json:"statusDate"`      // @status-date: tag value (R765)
+	// CRC: crc-DB.md | R765
+	StatusDate string `json:"statusDate"` // @status-date: tag value
 }
 
 // Inbox returns cross-project messages from the tag index.

@@ -204,7 +204,8 @@ func withDB(fn func(db *ark.DB)) {
 	fn(d)
 }
 
-// Stubborn dispatch tunables. R2996, R2997.
+// Stubborn dispatch tunables.
+// CRC: crc-CLI.md | R2996, R2997
 const (
 	dispatchStubbornWindow = 30 * time.Second       // wait through a server bounce this long
 	dispatchRetryInterval  = 200 * time.Millisecond // poll cadence while stubborn
@@ -215,7 +216,8 @@ const (
 // server is down or bouncing) rather than an application error from a live
 // server. proxyRaw returns *url.Error for client.Do failures and a plain
 // formatted error for non-200 responses, so a *url.Error means "couldn't
-// reach the server" — the signal to be stubborn. R2996
+// reach the server" — the signal to be stubborn.
+// CRC: crc-CLI.md | R2996
 func serverUnreachable(err error) bool {
 	var ue *url.Error
 	return errors.As(err, &ue)
@@ -224,7 +226,7 @@ func serverUnreachable(err error) bool {
 // proxyOrLocal is the single dispatch point for every DB-touching CLI
 // command. The index is single-process (bbolt file lock), so a direct
 // local open blocks while the server holds it; proxyOrLocal prefers a
-// running server and opens locally only when none is reachable. R2995
+// running server and opens locally only when none is reachable.
 //
 //   - proxy talks to the server. It may be nil for maintenance/diagnostic
 //     commands needing exclusive local access; with a server running those
@@ -233,10 +235,11 @@ func serverUnreachable(err error) bool {
 //
 // Stubborn Plumbing: a transport error is a bounce, not a failure —
 // proxyOrLocal waits for the server to return and retries until the
-// stubborn window elapses (R2996). On a local-open lock timeout it loops
+// stubborn window elapses. On a local-open lock timeout it loops
 // to recheck server liveness (the lock may now be held by a server that
-// just came up) and re-dispatches (R2997). A real error surfaces only
+// just came up) and re-dispatches. A real error surfaces only
 // after the window closes.
+// CRC: crc-CLI.md | R2995, R2996, R2997
 func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 	start := time.Now()
 	for {
@@ -261,7 +264,8 @@ func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 			// Only a lock timeout is worth retrying — something holds the
 			// index though no server answered (a race with a server coming
 			// up, or a bounce in progress). Other open failures (config,
-			// schema) are real; fatal at once. R2997
+			// schema) are real; fatal at once.
+			// CRC: crc-CLI.md | R2997
 			if errors.Is(err, bolterrors.ErrTimeout) && time.Since(start) < dispatchStubbornWindow {
 				time.Sleep(dispatchRetryInterval)
 				continue
@@ -280,7 +284,8 @@ func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 // withExclusiveDB runs fn against a locally-opened index but refuses (fails
 // fast) when a server holds it — for maintenance/diagnostic commands that
 // need exclusive access and have no server proxy. It is proxyOrLocal with a
-// nil proxy; fn keeps its existing fatal-internally style. R3002
+// nil proxy; fn keeps its existing fatal-internally style.
+// CRC: crc-CLI.md | R3002
 func withExclusiveDB(fn func(*ark.DB)) {
 	proxyOrLocal(nil, func(d *ark.DB) error { fn(d); return nil })
 }
@@ -917,10 +922,11 @@ func parseFilterStack(args []string) (entries []filterEntry, remaining []string,
 	return
 }
 
-// formatFilterStack prints the disambiguated command for -parse. R1781, R1782
+// formatFilterStack prints the disambiguated command for -parse.
 // Tag and file-tag rows are decoded via TagMatcher.Describe so the
 // user sees the resolved name-mode and value-mode rather than the
 // raw sigil string. R2451
+// CRC: crc-CLI.md | R1781, R1782
 func formatFilterStack(entries []filterEntry) string {
 	var parts []string
 	parts = append(parts, "ark search")

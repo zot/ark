@@ -412,9 +412,9 @@ type ErrorReporter interface {
 	Report(subsystem, message string)
 }
 
-// EventScheduler manages time-based event delivery. R805, R806, R807
+// EventScheduler manages time-based event delivery. R805
 // Reads schedule log files from ~/.ark/schedule/ at startup.
-// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md
+// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md | R806, R807
 type EventScheduler struct {
 	queue       eventHeap
 	timer       *time.Timer
@@ -1197,7 +1197,8 @@ func (es *EventScheduler) Upcoming(tag string) []ScheduledEvent {
 	return out
 }
 
-// Add pushes an event onto the queue. Idempotent — same ID replaces. R808, R809
+// Add pushes an event onto the queue. Idempotent — same ID replaces. R808
+// CRC: crc-EventScheduler.md | R809
 func (es *EventScheduler) Add(event *ScheduledEvent) {
 	es.mu.Lock()
 	defer es.mu.Unlock()
@@ -1326,8 +1327,8 @@ func (es *EventScheduler) resetTimer() {
 	es.timer = time.AfterFunc(delay, es.fire)
 }
 
-// fire delivers the head event and reschedules if recurring. R806, R807, R877
-// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md | seq-chimes.md | R2778
+// fire delivers the head event and reschedules if recurring.
+// CRC: crc-EventScheduler.md | Seq: seq-scheduling.md | seq-chimes.md | R2778, R806, R807, R877
 func (es *EventScheduler) fire() {
 	es.mu.Lock()
 	if es.queue.Len() == 0 {
@@ -1344,7 +1345,8 @@ func (es *EventScheduler) fire() {
 		event.Value = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	// Check push record. R811
+	// Check push record.
+	// CRC: crc-EventScheduler.md | R811
 	if !es.pushed[event.ID] {
 		es.pushed[event.ID] = true
 		tags := []TagValue{{Tag: event.Tag, Value: event.Value}}
@@ -1568,8 +1570,9 @@ func (es *EventScheduler) ScanCheckGaps(lookbackDays int) []string {
 	return missed
 }
 
-// parseScheduledTime parses a one-shot date value. R821
+// parseScheduledTime parses a one-shot date value.
 // Flexible: tries multiple formats, strips trailing description text.
+// CRC: crc-EventScheduler.md | R821
 func parseScheduledTime(value string, now time.Time) time.Time {
 	value = strings.TrimSpace(value)
 	// Try each format, longest first
@@ -1799,13 +1802,15 @@ func ParseDateValue(value string, defaultDur string, loc *time.Location) (DateRa
 		leftStr := strings.TrimSpace(value[:idx])
 		rightStr := strings.TrimSpace(value[idx+2:])
 
-		// Parse left side (must be absolute date) R864
+		// Parse left side (must be absolute date)
+		// CRC: crc-EventScheduler.md | R864
 		start, _, err := parseDateTrimming(leftStr, loc)
 		if err != nil {
 			return DateRange{}, err
 		}
 
-		// Right side: try relative duration first R862, R863
+		// Right side: try relative duration first
+		// CRC: crc-EventScheduler.md | R862, R863
 		if end, ok := parseRelativeDuration(start, rightStr); ok {
 			desc := trimRelativePrefix(rightStr)
 			return DateRange{Start: start, End: end, Description: strings.TrimSpace(desc)}, nil
@@ -1973,7 +1978,8 @@ func parseTimeOnly(s string) (time.Time, error) {
 
 // parseRelativeDuration parses anchored relative expressions like
 // "one week later", "3 days later". Matches the first 3 words:
-// N UNIT later [description...]. R862, R863
+// N UNIT later [description...].
+// CRC: crc-EventScheduler.md | R862, R863
 func parseRelativeDuration(anchor time.Time, expr string) (time.Time, bool) {
 	words := strings.Fields(strings.TrimSpace(strings.ToLower(expr)))
 	if len(words) < 3 || words[2] != "later" {
