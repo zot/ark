@@ -1,4 +1,4 @@
-// CRC: crc-ArkSearchElement.md (host role) | R1681-R1690, R1746-R1750
+// CRC: crc-ArkSearchElement.md | R1681-R1690, R1746-R1750 (pdf-host plays the host role for <pdf-chunk>)
 // PDF host storage. The host element owns:
 //   pdfDocCache         — cached PDFDocumentProxy promises, keyed by src
 //   pdfPageCache        — cached baked page-image promises, keyed by src|page|band

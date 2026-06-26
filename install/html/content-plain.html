@@ -817,8 +817,8 @@ if (window !== window.parent) {
   new ResizeObserver(postHeight).observe(document.body);
 }
 
-// R2415-R2420: curate pin button. Same shape as content-markdown.html;
-// see that file for the duplication note (O98).
+// R2415-R2420, R2423-R2425: curate pin button. Same shape as
+// content-markdown.html; see that file for the duplication note (O98).
 installCuratePins(decodeURIComponent(location.pathname.replace(/^\/content/, '')));
 async function installCuratePins(filePath) {
   const chunks = document.querySelectorAll(

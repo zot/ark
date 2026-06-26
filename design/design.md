@@ -138,17 +138,17 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 ## Artifacts
 
 ### CRC Cards
-- [x] crc-DB.md → `db.go`, `locator.go`
+- [x] crc-DB.md → `db.go`, `locator.go`, `compact.go`
 - [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
-- [x] crc-Scanner.md → `scanner.go`
+- [x] crc-Scanner.md → `scanner.go`, `emptyfiles_test.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`
 - [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`
 - [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
@@ -224,7 +224,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### CRC Cards (TypeScript — Ark Search Component)
 - [x] crc-SearchAPI.md → `ark-search/src/search-api.ts`
-- [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`
+- [x] crc-ArkSearchElement.md → `ark-search/src/ark-search-element.ts`, `pdf-chunk/src/pdf-host.ts`
 - [x] crc-ArkTagElement.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 - [ ] crc-CuratePinButton.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 - [x] crc-PdfChunkElement.md → `pdf-chunk/src/pdf-chunk-element.ts`
@@ -375,12 +375,12 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O30: Lua dead code: Source:makeNode() no longer called after mcp.listSource migration. Source._missingPaths also unused. Safe to remove.
 - [ ] O31: Inherited new() on ui-engine prototypes captures root prototype in closure — creates Object type instead of target type. Workaround: use rawget to detect type-specific new(), fall back to session:create. See R846-R848.
 - [ ] O32: No unit tests for mcp.listSource — testable with mock Config and DB.Missing()
-- [ ] O33: No unit tests for scheduling: ParseDateValue, day-bucket Store ops, log file read/write, EnsureUpcoming, ScanScheduleLogs, crankForward
-- [ ] O34: Store.WriteDayBuckets/QueryDayBuckets not yet called from indexer — wiring deferred until calendar UI (Lua API mcp:scheduled)
-- [ ] O35: Lua APIs not yet registered: mcp:scheduled, mcp:reschedule, mcp:tagComplete, mcp:fileStatus, mcp:subscribe (R893-R898)
+- [ ] O33: No unit tests for scheduling: ParseDateValue, log file read/write, EnsureUpcoming, ScanScheduleLogs, crankForward
+- [x] O34: (obsolete) day-bucket Store wiring abandoned — event management taken out of the DB; the indexer arms the in-memory priority queue via EnsureUpcoming. See schedule-record-only.md.
+- [x] O35: Lua APIs now registered (2026-06-25): mcp.scheduled, mcp.reschedule, mcp.tagComplete, mcp.fileStatus (R893-R896, server.go:registerLuaFunctions); mcp.subscribe (R897-R898) was already live at server.go:5647
 - [ ] O36: Event payload does not yet carry IsScheduledFire flag (R878) — publisher delivers same Event type for both scheduled fires and tag changes
 - [ ] O37: Gap detection (R890-R892) not implemented — comparing @ark-event-fired: in log vs @ack: in source file
-- [ ] O38: No unit tests for: ParseAcks, AckCoversDate, WriteDayBucketsForFile, handleScheduleSearch, handleScheduleChange, CheckScheduleConfig, cmdSchedule
+- [ ] O38: No unit tests for: ParseAcks, AckCoversDate, handleScheduleSearch, handleScheduleChange, CheckScheduleConfig, cmdSchedule
 - [ ] O39: handleScheduleChange uses strings.Replace matching trimmed value in untrimmed line — fragile for lines with unusual leading content
 - A23: R980 (calendar virtual items from recurrence specs) — deferred to Lua/UI work
 - [ ] O40: No unit tests for write actor: enqueueWrite, startNextWrite, ScanAsync, RefreshAsync
@@ -699,3 +699,51 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T160: R1307 retired by R2961 (2026-06-17 yzma-embedding: local gollama workspace dep retired — yzma binds llama.cpp at runtime)
 - T161: R1308 retired by R2967 (2026-06-17 yzma-embedding: CPU gollama build moot — [embedding] backend selects cpu)
 - A70: R3003 dispatch-via-proxyOrLocal exceptions (deliberate): cmdStatus + cmdFiles use a proxied-or-local if/else with shared output and fall-through state (convertible later, left for risk); messageInbox falls back to local when the proxy errors (proxyOrLocal would fatal); scheduleSearch is server-required with a non-fallback withDB side-effect; tagVerify refuses with os.Exit(2) when a server holds the index. All are guarded and hang-free.
+- T162: R1243 retired by R1379 (2026-06-25 expand-to-curate rename — POST /search/expand renamed to /search/curate, mode field dropped)
+- T163: R1244 retired by R1382 (2026-06-25 expand-to-curate rename — immediate curated-results return replaced by requestId + poll (GET /search/curate/result/{id}))
+- T164: R1245 retired by R1378 (2026-06-25 expand-to-curate rename — all-in-one server-side pipeline replaced by separate curation step)
+- A72: R1 (Ark is written in Go) — meta requirement, not code-anchorable
+- [ ] I5: ~652 requirements have design coverage but no inline Rn code anchor — the genuine anchoring/disposition bucket. Trajectory: 1015 raw → 700 (mini-spec v2.11.0 range + alternation harvest fix removed the tool artifact) → 658 (bucket-(a) anchored the 41 anchored-but-not-harvested refs, plus 2 bonus) → 652 (bucket-(d) implemented + anchored the mcp: D-gaps R893-R898). NOT obsolete: the genuinely-superseded clusters from completed migrations are already retired (166 Tn entries). Residual is dominated by legitimately-AGAP top-level TypeScript web components (~214: <ark-search>, <pdf-chunk>, tag-overview, …), pre-// CRC: Go ANCHOR impls, and externals (microfts2/pdftext). Validate keeps surfacing these as the methodology tracking the debt; disposition proceeds by feature (PENDING #21 b). Analysis + regen recipe: .scratch/IMPL-COVERAGE.md; feature listing .scratch/impl-recs/UNREFERENCED-659.md
+- T165: R489 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T166: R490 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T167: R491 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T168: R492 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T169: R493 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T170: R494 retired by R525 (2026-06-25 messaging-v2 — @msg ack/close replaced by @status single-lifecycle (R525+))
+- T171: R1570 retired by R1571 (2026-06-25 config per-field I records — ArkSettings blob replaced by per-field iGet/iPut)
+- T172: R1814 retired by R1791 (2026-06-25 embed-subcommands — ark vec bench removed, superseded by ark embed text)
+- T173: R1815 retired by R1791 (2026-06-25 embed-subcommands — vecbench.go deleted, superseded by ark embed text)
+- T174: R1816 retired by R1791 (2026-06-25 embed-subcommands — vec-bench supersession record, see R1791-R1801)
+- T175: R1843 retired by R2115 (2026-06-25 ec-rekey — RemoveFileChunkEmbeddings removed, per-chunkid deletion)
+- T176: R2867 retired by R2947 (2026-06-25 subscriber-presence superseded by per-capability gates)
+- T177: R230 retired (2026-06-25 pre-T-gap removal record — --source/--not-source removed)
+- T178: R543 retired (2026-06-25 pre-T-gap removal record — POST /search/grouped removed)
+- T179: R544 retired (2026-06-25 pre-T-gap removal record — POST /open removed (converted from A71))
+- T180: R545 retired (2026-06-25 pre-T-gap removal record — GET /indexing removed (converted from A71))
+- T181: R879 retired (2026-06-25 event-out-of-DB — ark subscribe --scheduled/--recurring removed)
+- T182: R880 retired (2026-06-25 event-out-of-DB — ScheduleMode type/constants removed)
+- T183: R881 retired (2026-06-25 event-out-of-DB — ScanForSub removed)
+- T184: R882 retired (2026-06-25 event-out-of-DB — RemoveForSession removed)
+- T185: R1018 retired by R2819 (2026-06-25 event-out-of-DB — TD/TF day-bucket records removed; queue+log model)
+- T186: R1019 retired by R2819 (2026-06-25 event-out-of-DB — WriteDayBucketsForFile removed; queue+log model)
+- T187: R1022 retired by R2819 (2026-06-25 event-out-of-DB — day-bucket writes at DB open removed; queue+log model)
+- T188: R1023 retired (2026-06-25 month buckets chucked — never landed; priority-queue + schedule-log model is current)
+- T189: R1024 retired (2026-06-25 month buckets chucked)
+- T190: R1025 retired (2026-06-25 month buckets chucked)
+- T191: R1026 retired (2026-06-25 month buckets chucked)
+- T192: R866 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T193: R867 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T194: R868 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T195: R870 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T196: R871 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T197: R872 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T198: R873 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T199: R911 retired by R2810 (2026-06-25 event-out-of-DB — TD/TF day-bucket record model removed; schedule-record-only log model (R2810+))
+- T200: R914 retired by R1027 (2026-06-25 event-out-of-DB — schedule search no longer queries day buckets; QueryRange computes from specs+logs)
+- T201: R920 retired by R1027 (2026-06-25 event-out-of-DB — ack now merged from source @ack: in QueryRange, not day-bucket record)
+- T202: R929 retired by R2836 (2026-06-25 event-out-of-DB — config-change day-bucket re-materialization removed; priority queue re-arms (R2836))
+- T203: R930 retired by R2836 (2026-06-25 event-out-of-DB — config-change day-bucket re-materialization removed; priority queue re-arms (R2836))
+- T204: R931 retired by R2836 (2026-06-25 event-out-of-DB — config-change day-bucket re-materialization removed; priority queue re-arms (R2836))
+- T205: R932 retired by R2836 (2026-06-25 event-out-of-DB — config-change day-bucket re-materialization removed; priority queue re-arms (R2836))
+- T206: R934 retired by R1027 (2026-06-25 event-out-of-DB — @ack check during day-bucket write removed; ack merged at query time (QueryRange))
+- T207: R935 retired by R1027 (2026-06-25 event-out-of-DB — DayBucketEvent acked field removed; ack merged at query time)

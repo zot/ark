@@ -73,8 +73,8 @@ Optionally starts the embedded ui-engine alongside.
   ark.toml, cannot be removed. Scoped with include patterns:
   `["ark.toml", "schedule/**", "apps/**", "storage/**"]`. (R961, R962)
 - CheckScheduleConfig(): compare current [schedule] config with stored
-  version in the index. On change: re-scan affected files, re-materialize
-  day buckets. Includes filter/lifecycle changes. (R975, R976, R977)
+  version in the index. On change: re-scan affected files, re-arm the
+  in-memory priority queue (R2836). Includes filter/lifecycle changes. (R975, R976, R977)
 - StartUIEngine(dbPath): configure ui-engine (Dir=dbPath), start in
   goroutine. On failure, log error and continue without UI.
 - BindSocket(path): create Unix domain socket, fail if already bound
@@ -166,9 +166,10 @@ Optionally starts the embedded ui-engine alongside.
   - mcp.readMessage(path) — read message file. Returns Lua table
     with tags (name/value pairs from tag block only) and html (body
     rendered via goldmark). Dot syntax, no self.
-  - mcp:scheduled(startDate, endDate) — query day-bucket index for
-    items overlapping the date range. Returns Lua array of tables
-    with date, endDate, tag, summary, path, recurring, allDay. (R893)
+  - mcp:scheduled(startDate, endDate) — query scheduled items
+    overlapping the date range (via QueryRange). Returns Lua array of
+    tables with date, endDate, tag, summary, path, recurring, allDay.
+    (R893 — function presence unverified, see IMPL-COVERAGE item 4)
   - mcp:reschedule(path, tag, newDate, newEndDate) — rewrite date
     in tag value, preserve trailing text, re-index. (R894)
   - mcp:tagComplete(prefix) — tag name/value completions from
@@ -393,7 +394,7 @@ Optionally starts the embedded ui-engine alongside.
 - GetOrCreateSession(name): look up session by name, create if not
   found. Session receives DB reference and TTL from config. Mutex
   protects the map; session actor runs in its own goroutine.
-- HandleScheduleSearch: POST /schedule/search — query day buckets, return events with ack status (R914-R920)
+- HandleScheduleSearch: POST /schedule/search — query via EventScheduler.QueryRange (specs + schedule logs), return events with ack status (R914-R920)
 - HandleScheduleChange: POST /schedule/change — rewrite date in
   tag, re-index. Detects `tmp://` prefix: tmp:// paths read via the
   in-memory tmp:: overlay and write via `db.UpdateTmpFile` (the
@@ -403,8 +404,8 @@ Optionally starts the embedded ui-engine alongside.
   EnsureUpcoming re-arms the chunk via its normal indexer path.
   (R921, R922, R923, R925, R2842, R2843)
 - CheckScheduleConfig(): on startup and config reload, compare current
-  [schedule] vs stored in the index. If different, re-materialize day buckets
-  for affected tags. Store new config after. (R927-R932)
+  [schedule] vs stored in the index. If different, re-scan affected tags
+  and re-arm the in-memory priority queue (R2836). Store new config after. (R927-R932)
 - HandleSubscribe: POST /subscribe — add or cancel subscriptions, delegates to PubSub
 - HandleListen: GET /listen — long-poll for notifications, delegates to PubSub.Listen + FormatMarkdown
 - StartPubSub(): create PubSub, start reaper ticker (1 minute)

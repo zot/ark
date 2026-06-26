@@ -75,8 +75,8 @@ goroutine. This prevents file I/O from blocking the actor during
 indexing. The `handleScan` and `handleRefresh` endpoints also drain.
 
 Adding or removing a tag from the schedule config triggers
-re-materialization of day-bucket entries for all files containing
-that tag.
+re-evaluation of the affected files and re-arming of the in-memory
+priority queue (R2836).
 
 ## Date and Duration Parsing
 
@@ -293,7 +293,7 @@ The log file is a regular ark file — tagged, indexed, searchable.
 
 - **Source file** — the pattern (`@standup: every Monday at 09:00`)
 - **Log file** — the concrete instances (`@ark-event-upcoming:`, `@ark-event-fired:`)
-- **Day buckets** — derived from log entries, rebuildable
+- **Priority queue** — in-memory, armed from log entries at startup and kept current by the indexer; rebuildable, no DB records
 - **`@ack:` in source file** — human record
 
 Files all the way down. Rebuilding the index loses nothing.
@@ -304,32 +304,29 @@ Old `@ark-event-fired:` entries accumulate. The log directory is designed for
 rotation — archive or delete old log files. The source file's `@ack:`
 entries are the durable human record; the log is the machine record.
 
-## Month Buckets (in-memory)
+## Event queue (in-memory)
 
-Replace day buckets (TD/TF records) with in-memory month
-buckets. The scheduler fires from log file upcoming entries.
-Calendar and CLI compute events from recurrence specs. Month
-buckets are the skip list for fast range queries.
+The scheduler fires from an in-memory priority queue
+(`eventHeap`/`ScheduledEvent`), not from DB bucket records. The
+queue is armed at startup by `EventScheduler.ScanScheduleLogs`
+(reading `~/.ark/schedule/` log files) and kept current by the
+indexer's `EnsureUpcoming` as schedule-log chunks change. Calendar
+and CLI compute events directly from recurrence specs plus the log
+files; exceptions (`@remove:`, `@add:`) and `@ack:` status are
+merged from the source file. Query flow:
 
-Computed on startup from schedule log specs. One entry per month
-per recurring event — the first occurrence in that month. Query
-flow:
+1. Compute occurrences forward from the recurrence spec
+2. Apply scheduling exceptions (@remove:, @add:)
+3. Merge ack status from source file @ack: tags
 
-1. Find the month bucket at or before the range start
-2. Crank forward from that point to generate all events in range
-3. Apply scheduling exceptions (@remove:, @add:)
-4. Merge ack status from source file @ack: tags
+`ark schedule search` runs this without a server: open the DB, read
+the schedule log files, compute the query. Same code path, no server
+dependency.
 
-A 10-year overview is 120 buckets per event, milliseconds to
-compute. In-memory only — derived from specs, recomputable on
-restart. No index storage needed.
-
-Enables `ark schedule search` without a running server: open the
-DB, read schedule log files, build month buckets, compute the
-query. Same code path, no server dependency.
-
-Remove: Store.WriteDayBuckets, QueryDayBuckets, ClearDayBuckets,
-WriteDayBucketsForFile, dayBucketsFromLogFile, TD/TF index records.
+Earlier iterations stored events as TD/TF day-bucket index records,
+then as in-memory month buckets; both were removed (event management
+is no longer in the DB). See `schedule-record-only.md` for the
+current record-only model — no DB bucket records remain.
 
 ## Scheduling Exceptions
 
@@ -352,7 +349,7 @@ Exception tags carry a date and optional trailing description text,
 same format as schedule tag values. Parsed at index time and stored
 in the event struct alongside the recurrence spec.
 
-When computing occurrences (month bucket generation, schedule
+When computing occurrences (occurrence generation, schedule
 search, crank-forward):
 - `@remove: DATE` — skip that date, don't generate an occurrence
 - `@add: DATE` — include an extra occurrence on that date
@@ -419,7 +416,7 @@ When a recurring event fires:
 1. Convert `@ark-event-upcoming:` → `@ark-event-fired:` in the log file
 2. Compute next occurrence
 3. Write one `@ark-event-upcoming:` if the event hasn't ended
-4. Re-index the log file (new day-bucket entries written)
+4. Re-index the log file (priority queue updated via EnsureUpcoming)
 5. Re-enqueue in the priority queue
 
 ### Event payload
@@ -484,7 +481,7 @@ equivalent Lua APIs.
 ark schedule search DATE [--tag TAG] [--gaps] [--json]
 ```
 
-Query day buckets for events. DATE uses the same format as schedule
+Query scheduled events for a date range. DATE uses the same format as schedule
 tag values: single date, range with `..`, keyword prefixes. Trailing
 text is ignored.
 
@@ -496,8 +493,8 @@ ark schedule search 2026-04-01..2026-06-30 --tag standup
 ```
 
 Output is markdown by default (crank-handle style), JSON with
-`--json`. Events are computed from recurrence specs and month
-buckets — no day buckets needed. Works without a running
+`--json`. Events are computed from recurrence specs and schedule
+log files — no DB bucket records. Works without a running
 server.
 
 Each event renders as a bullet. The time range collapses when it
@@ -562,15 +559,15 @@ value directly.
 ## Config Change Detection
 
 When ark.toml's `[schedule]` section changes (tags added/removed,
-defaults changed), the server must re-materialize day buckets for
-affected files.
+defaults changed), the server must re-evaluate affected files and
+re-arm the in-memory priority queue.
 
 Detection: store the serialized `[schedule]` section in the
 settings record (I prefix). On config reload (startup, ark.toml
 fsnotify), compare current vs stored. If different:
 - Tags added: scan files with the new tag, write schedule log entries
 - Tags removed: remove schedule log chunks for that tag
-- Defaults changed: re-compute month buckets with new durations
+- Defaults changed: re-evaluate affected schedule log entries and re-arm the queue with new durations
 
 ## Gap Detection
 
@@ -590,22 +587,22 @@ date. Past events without acks are gaps.
 ## Lua APIs
 
 ```lua
--- Query: items overlapping a date range
-local items = mcp:scheduled("2026-03-01", "2026-03-31")
+-- Query: items overlapping a date range (endDate inclusive, whole day)
+local items = mcp.scheduled("2026-03-01", "2026-03-31")
 -- returns: [{date, endDate, tag, summary, path, recurring, allDay}]
 
 -- Mutate: change a scheduled item's date (preserves trailing text)
-mcp:reschedule(path, tag, newDate, newEndDate)
+mcp.reschedule(path, tag, newDate, newEndDate)
 
--- Completion: tag names and values from the index
-mcp:tagComplete(prefix)
+-- Completion: tag-name completions, or "tag:valuePrefix" for value completions
+mcp.tagComplete(prefix)
 
--- File info: indexed? what tags? what schedule?
-mcp:fileStatus(path)
+-- File info: indexed? per-chunk tags (F records)? upcoming schedule fires?
+mcp.fileStatus(path)
 
 -- Subscribe: UI-side tag-change subscription with callback
-mcp:subscribe({tag="status", value="open|accepted"}, callback)
-mcp:subscribe({tag="dentist", filterFiles="~/notes/**"}, callback)
+mcp.subscribe({tag="status", value="open|accepted"}, callback)
+mcp.subscribe({tag="dentist", filterFiles="~/notes/**"}, callback)
 ```
 
 `mcp:subscribe` has full parity with the CLI subscribe flags (minus

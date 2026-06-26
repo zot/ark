@@ -2,11 +2,23 @@
 
 **Requirements:** R1235-R1247, R1268-R1273, R1378-R1383
 
-Browser sends POST /search/curate (was /search/expand). Server
-delegates to Librarian actor, which runs the three-step pipeline:
-expand → fuzzy match → curate → fetch results. Curation endpoints
-use /search/curate prefix; expansion/matching endpoints remain
-under /search/expand/.
+Browser sends POST /search/curate (was /search/expand). The server
+**queues** the request and a **sidecar agent** drives the steps: it
+picks up work via GET /search/curate/wait (lotto tube), runs expand,
+calls the match endpoints under /search/expand/ (fuzzy, embed,
+search), curates, then posts the result via POST /search/curate/result.
+The browser polls GET /search/curate/result/{id} for the curated
+results. Curation endpoints use the /search/curate prefix;
+expansion/matching endpoints remain under /search/expand/.
+
+> **Note — the diagrams below are superseded.** They depict the
+> pre-rename topology where the Librarian actor spawned a `claude`
+> **co-process** and ran expand → fuzzy → curate → fetch **inline**
+> on the server (the old `POST /search/expand` all-in-one returning
+> `source:"expansion"` directly — retired R1244/R1245). The current
+> model is sidecar-driven and separated (R1378–R1383, summarised
+> above); the conceptual three steps are unchanged but the execution
+> topology is not. A full redraw to the lotto-tube model is pending.
 
 ## Happy Path
 

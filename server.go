@@ -483,6 +483,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /search/curate/wait", srv.librarian.HandleExpandWait)
 		mux.HandleFunc("POST /search/curate/result", srv.librarian.HandleExpandResult)
 		mux.HandleFunc("GET /search/curate/result/{id}", srv.librarian.HandleExpandGet)
+		// R1383: expansion/matching endpoints remain under /search/expand/
 		mux.HandleFunc("POST /search/expand/fuzzy", srv.librarian.HandleFuzzyMatch)
 		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
 		mux.HandleFunc("POST /search/expand/embed", srv.librarian.HandleEmbedMatch)
@@ -2607,7 +2608,8 @@ func (srv *Server) handleListen(w http.ResponseWriter, r *http.Request) {
 
 // registerLuaFunctions registers Go functions on the Lua mcp table
 // via the passive execution path (no UI update push).
-// handleScheduleSearch queries day buckets for a date range. R914-R920
+// handleScheduleSearch queries the schedule range via EventScheduler.QueryRange
+// (recurrence specs + schedule logs, no DB buckets). R914-R920
 // CRC: crc-Server.md | Seq: seq-scheduling.md
 func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -2632,10 +2634,110 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, events)
 }
 
-// handleScheduleChange rewrites a date in a schedule tag value.
-// Routes disk paths via os.ReadFile/os.WriteFile and tmp:// paths
-// via the tmp:: overlay (db.TmpContent / db.UpdateTmpFile, which
-// goes through the centralized write actor + publish path per R2281).
+// errScheduleTagNotFound reports that the requested @tag was not present in
+// the file rescheduleTag was asked to rewrite. R925
+var errScheduleTagNotFound = errors.New("tag not found in file")
+
+// rescheduleResult reports the value rewrite computed by rescheduleTag.
+type rescheduleResult struct {
+	Old string
+	New string
+}
+
+// rescheduleTag rewrites the date portion of the @tag value in the file at
+// path to newStart (and ..newEnd when non-empty), preserving the trailing
+// description text. Disk paths write via os.WriteFile + reconcile; tmp:// paths
+// route through db.UpdateTmpFile (the centralized write actor + publish path,
+// R2281). When dryRun is true the change is computed without writing. Shared by
+// the HTTP handler (handleScheduleChange) and the mcp:reschedule Lua binding.
+// CRC: crc-Server.md | Seq: seq-scheduling.md | R894, R921, R922, R923, R925, R2842, R2843
+func (srv *Server) rescheduleTag(path, tag, newStart, newEnd string, dryRun bool) (rescheduleResult, error) {
+	isTmp := strings.HasPrefix(path, "tmp://")
+
+	// Read source content.
+	var content []byte
+	if isTmp {
+		c, err := Sync(srv.db, func(db *DB) ([]byte, error) {
+			return db.TmpContent(path)
+		})
+		if err != nil {
+			return rescheduleResult{}, fmt.Errorf("read tmp:// content: %w", err)
+		}
+		content = c
+	} else {
+		c, err := os.ReadFile(path)
+		if err != nil {
+			return rescheduleResult{}, fmt.Errorf("read file: %w", err)
+		}
+		content = c
+	}
+
+	// Find the tag line and rewrite the date portion. R922
+	prefix := "@" + tag + ":"
+	lines := strings.Split(string(content), "\n")
+	var result rescheduleResult
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		pos := strings.Index(trimmed, prefix)
+		if pos < 0 {
+			continue
+		}
+		oldValue := strings.TrimSpace(trimmed[pos+len(prefix):])
+		// Parse old value to extract description text.
+		loc := time.Now().Location()
+		dr, err := ParseDateValue(oldValue, "", loc)
+		if err != nil {
+			continue
+		}
+
+		// Build new value: newStart [..newEnd] description.
+		newValue := newStart
+		if newEnd != "" {
+			newValue += ".." + newEnd
+		}
+		if dr.Description != "" {
+			newValue += " " + dr.Description
+		}
+		result = rescheduleResult{Old: oldValue, New: newValue}
+
+		if dryRun {
+			return result, nil
+		}
+
+		// Replace the line.
+		lines[i] = strings.Replace(line, oldValue, newValue, 1)
+		found = true
+		break
+	}
+
+	if !found {
+		return rescheduleResult{}, errScheduleTagNotFound
+	}
+
+	// Write back via the appropriate destination. (R2842, R2843)
+	newContent := []byte(strings.Join(lines, "\n"))
+	if isTmp {
+		if err := SyncVoid(srv.db, func(db *DB) error {
+			return db.UpdateTmpFile(path, "markdown", newContent)
+		}); err != nil {
+			return rescheduleResult{}, fmt.Errorf("write tmp:// content: %w", err)
+		}
+	} else {
+		if err := os.WriteFile(path, newContent, 0644); err != nil {
+			return rescheduleResult{}, fmt.Errorf("write file: %w", err)
+		}
+		// Disk path: trigger re-index via reconcile. tmp:// path already
+		// publishes through UpdateTmpFile's R2281-wired path.
+		srv.reconcile()
+	}
+
+	return result, nil
+}
+
+// handleScheduleChange rewrites a date in a schedule tag value. Thin HTTP
+// wrapper over rescheduleTag, which handles disk vs tmp:// routing and the
+// centralized write actor + publish path per R2281.
 // CRC: crc-Server.md | Seq: seq-scheduling.md | R921, R922, R923, R925, R2842, R2843
 func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -2654,94 +2756,19 @@ func (srv *Server) handleScheduleChange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	isTmp := strings.HasPrefix(req.Path, "tmp://")
-
-	// Read source content.
-	var content []byte
-	if isTmp {
-		c, err := Sync(srv.db, func(db *DB) ([]byte, error) {
-			return db.TmpContent(req.Path)
-		})
-		if err != nil {
-			http.Error(w, "read tmp:// content: "+err.Error(), http.StatusInternalServerError)
-			return
+	result, err := srv.rescheduleTag(req.Path, req.Tag, req.NewStart, req.NewEnd, req.DryRun)
+	if err != nil {
+		if errors.Is(err, errScheduleTagNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		content = c
-	} else {
-		c, err := os.ReadFile(req.Path)
-		if err != nil {
-			http.Error(w, "read file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		content = c
-	}
-
-	// Find the tag line and rewrite the date portion R922
-	prefix := "@" + req.Tag + ":"
-	lines := strings.Split(string(content), "\n")
-	found := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		pos := strings.Index(trimmed, prefix)
-		if pos < 0 {
-			continue
-		}
-		oldValue := strings.TrimSpace(trimmed[pos+len(prefix):])
-		// Parse old value to extract description text
-		loc := time.Now().Location()
-		dr, err := ParseDateValue(oldValue, "", loc)
-		if err != nil {
-			continue
-		}
-
-		// Build new value: newStart [..newEnd] description
-		newValue := req.NewStart
-		if req.NewEnd != "" {
-			newValue += ".." + req.NewEnd
-		}
-		if dr.Description != "" {
-			newValue += " " + dr.Description
-		}
-
-		if req.DryRun {
-			writeJSON(w, map[string]string{
-				"old": oldValue,
-				"new": newValue,
-			})
-			return
-		}
-
-		// Replace the line
-		newLine := strings.Replace(line, oldValue, newValue, 1)
-		lines[i] = newLine
-		found = true
-		break
-	}
-
-	if !found {
-		http.Error(w, "tag not found in file", http.StatusNotFound)
 		return
 	}
-
-	// Write back via the appropriate destination. (R2842, R2843)
-	newContent := []byte(strings.Join(lines, "\n"))
-	if isTmp {
-		if err := SyncVoid(srv.db, func(db *DB) error {
-			return db.UpdateTmpFile(req.Path, "markdown", newContent)
-		}); err != nil {
-			http.Error(w, "write tmp:// content: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else {
-		if err := os.WriteFile(req.Path, newContent, 0644); err != nil {
-			http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// Disk path: trigger re-index via reconcile. tmp:// path
-		// already publishes through UpdateTmpFile's R2281-wired path.
-		srv.reconcile()
+	if req.DryRun {
+		writeJSON(w, map[string]string{"old": result.Old, "new": result.New})
+		return
 	}
-
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -4666,6 +4693,208 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp:scheduled(startDate, endDate) — schedule events overlapping the
+		// date range, computed from schedule logs via EventScheduler.QueryRange
+		// (no DB buckets). endDate is inclusive (whole day).
+		// CRC: crc-Server.md | Seq: seq-scheduling.md | R893
+		L.SetField(tbl, "scheduled", L.NewFunction(func(L *lua.LState) int {
+			startStr := L.CheckString(1)
+			endStr := L.CheckString(2)
+			loc := time.Now().Location()
+			startDR, err := ParseDateValue(startStr, "", loc)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("bad startDate: " + err.Error()))
+				return 2
+			}
+			endDR, err := ParseDateValue(endStr, "", loc)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("bad endDate: " + err.Error()))
+				return 2
+			}
+			end := time.Date(endDR.Start.Year(), endDR.Start.Month(), endDR.Start.Day(), 23, 59, 59, 0, loc)
+			if endDR.End.After(end) {
+				end = endDR.End
+			}
+			result := L.NewTable()
+			if srv.scheduler != nil {
+				for i, e := range srv.scheduler.QueryRange(startDR.Start, end, "", false) {
+					item := L.NewTable()
+					L.SetField(item, "date", lua.LString(e.Date))
+					L.SetField(item, "endDate", lua.LString(e.End.Format("20060102")))
+					L.SetField(item, "tag", lua.LString(e.Tag))
+					L.SetField(item, "summary", lua.LString(e.Summary))
+					L.SetField(item, "path", lua.LString(e.Source))
+					L.SetField(item, "recurring", lua.LString(e.Spec))
+					L.SetField(item, "allDay", lua.LBool(e.AllDay))
+					result.RawSetInt(i+1, item)
+				}
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:reschedule(path, tag, newDate, newEndDate) — rewrite the date in
+		// the @tag value (preserving the trailing description) and re-index.
+		// Returns {old, new}. Delegates to the shared rescheduleTag helper.
+		// CRC: crc-Server.md | Seq: seq-scheduling.md | R894
+		L.SetField(tbl, "reschedule", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			tag := L.CheckString(2)
+			newDate := L.CheckString(3)
+			newEndDate := L.OptString(4, "")
+			result, err := srv.rescheduleTag(path, tag, newDate, newEndDate, false)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			out := L.NewTable()
+			L.SetField(out, "old", lua.LString(result.Old))
+			L.SetField(out, "new", lua.LString(result.New))
+			L.Push(out)
+			return 1
+		}))
+
+		// mcp:tagComplete(prefix) — tag-name completions (with descriptions),
+		// or value completions when prefix is "tag:valuePrefix". Names from
+		// T/D records, values from V records.
+		// CRC: crc-Server.md | Seq: seq-tag-value-index.md | R895
+		L.SetField(tbl, "tagComplete", L.NewFunction(func(L *lua.LState) int {
+			prefix := L.CheckString(1)
+			result := L.NewTable()
+			if idx := strings.IndexByte(prefix, ':'); idx >= 0 {
+				tag := strings.TrimSpace(prefix[:idx])
+				valPrefix := strings.TrimSpace(prefix[idx+1:])
+				values, err := Sync(srv.db, func(db *DB) ([]TagValueCount, error) {
+					return db.TagValues(tag, valPrefix)
+				})
+				if err != nil {
+					L.Push(lua.LNil)
+					L.Push(lua.LString(err.Error()))
+					return 2
+				}
+				for i, v := range values {
+					item := L.NewTable()
+					L.SetField(item, "kind", lua.LString("value"))
+					L.SetField(item, "tag", lua.LString(tag))
+					L.SetField(item, "value", lua.LString(v.Value))
+					L.SetField(item, "count", lua.LNumber(v.Count))
+					result.RawSetInt(i+1, item)
+				}
+				L.Push(result)
+				return 1
+			}
+			lower := strings.ToLower(prefix)
+			defs, err := Sync(srv.db, func(db *DB) ([]TagDefInfo, error) {
+				return db.TagDefs(nil)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			descMap := make(map[string]string)
+			for _, d := range defs {
+				if _, ok := descMap[d.Tag]; !ok {
+					descMap[d.Tag] = d.Description
+				}
+			}
+			tags, err := Sync(srv.db, func(db *DB) ([]TagCount, error) {
+				return db.TagList()
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			n := 0
+			for _, t := range tags {
+				if lower != "" && !strings.HasPrefix(strings.ToLower(t.Tag), lower) {
+					continue
+				}
+				n++
+				item := L.NewTable()
+				L.SetField(item, "kind", lua.LString("name"))
+				L.SetField(item, "name", lua.LString(t.Tag))
+				L.SetField(item, "description", lua.LString(descMap[t.Tag]))
+				L.SetField(item, "count", lua.LNumber(t.Count))
+				result.RawSetInt(n, item)
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:fileStatus(path) — indexed?, the file's per-chunk tags (iterate
+		// its chunks, read F records via AllTagsForChunk — chunk-level, not a
+		// flat file rollup), and upcoming schedule fires for the file.
+		// CRC: crc-Server.md | R896
+		L.SetField(tbl, "fileStatus", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			out := L.NewTable()
+			indexed, _ := Sync(srv.db, func(db *DB) (bool, error) {
+				return db.IsIndexed(path), nil
+			})
+			L.SetField(out, "indexed", lua.LBool(indexed))
+			if !indexed {
+				L.Push(out)
+				return 1
+			}
+			type chunkTags struct {
+				chunkID uint64
+				pairs   []TagValue
+			}
+			var chunks []chunkTags
+			SyncVoid(srv.db, func(db *DB) error {
+				fileID, ok := db.PathFileID(path)
+				if !ok {
+					return nil
+				}
+				for _, chunkID := range db.ChunkIDsForFile(fileID) {
+					pairs, err := db.store.AllTagsForChunk(chunkID)
+					if err != nil {
+						continue
+					}
+					chunks = append(chunks, chunkTags{chunkID, pairs})
+				}
+				return nil
+			})
+			chunksTable := L.NewTable()
+			for ci, ct := range chunks {
+				chunkTable := L.NewTable()
+				L.SetField(chunkTable, "chunkID", lua.LNumber(ct.chunkID))
+				tagsTable := L.NewTable()
+				for ti, tv := range ct.pairs {
+					pair := L.NewTable()
+					L.SetField(pair, "tag", lua.LString(tv.Tag))
+					L.SetField(pair, "value", lua.LString(tv.Value))
+					tagsTable.RawSetInt(ti+1, pair)
+				}
+				L.SetField(chunkTable, "tags", tagsTable)
+				chunksTable.RawSetInt(ci+1, chunkTable)
+			}
+			L.SetField(out, "chunks", chunksTable)
+			scheduleTable := L.NewTable()
+			if srv.scheduler != nil {
+				si := 0
+				for _, e := range srv.scheduler.Upcoming("") {
+					if e.Path != path {
+						continue
+					}
+					si++
+					ev := L.NewTable()
+					L.SetField(ev, "tag", lua.LString(e.Tag))
+					L.SetField(ev, "value", lua.LString(e.Value))
+					L.SetField(ev, "nextFire", lua.LString(e.NextFire.Format(time.RFC3339)))
+					scheduleTable.RawSetInt(si, ev)
+				}
+			}
+			L.SetField(out, "schedule", scheduleTable)
+			L.Push(out)
+			return 1
+		}))
+
 		// mcp:open(path) — open indexed file with system viewer
 		L.SetField(tbl, "open", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
@@ -5641,7 +5870,7 @@ func (srv *Server) registerLuaFunctions() {
 		// prior sub on the same tag for this session, then appends
 		// the new one. Starts the listening goroutine on first sub
 		// for the session.
-		// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R2277, R2288, R2289, R2290, R2293, R2299
+		// CRC: crc-Server.md | Seq: seq-tmp-subscription.md | R897, R898, R2277, R2288, R2289, R2290, R2293, R2299
 		L.SetField(tbl, "subscribe", L.NewFunction(func(L *lua.LState) int {
 			sessionID := L.CheckString(1)
 			filterTbl := L.CheckTable(2)

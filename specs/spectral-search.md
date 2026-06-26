@@ -44,9 +44,11 @@ The CLI is effectively a local API gateway.
 
 ## Expansion Pipeline
 
-Expansion is a three-step server-side pipeline. The client sends
-one request and receives curated results — no client-side search
-or merging logic.
+Expansion is a three-step mechanism — expand, match, curate. A
+sidecar agent drives the steps through the curation endpoints (see
+Endpoints below): the server queues the request, the sidecar runs
+expansion and matching, then submits the candidates for curation.
+The steps below describe the mechanism, not where each runs.
 
 ### Tag Search (Phase A — this work)
 
@@ -67,8 +69,8 @@ For tag search, the pipeline operates on the tag vocabulary
    scores, prunes false positives, selects what's actually
    relevant to the user's intent. Returns a curated subset.
 
-The server then fetches the actual search results for the curated
-tags and returns them to the client as expansion-sourced results.
+The curated tags are then searched (via the match endpoints) and
+the results returned to the client, marked as expansion-sourced.
 
 ### General Search (Phase B — future)
 

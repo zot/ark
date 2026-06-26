@@ -164,7 +164,7 @@ func tryKeywordDate(s string, keywords []string, loc *time.Location) (time.Time,
 }
 
 // ScheduleEvent is a computed event occurrence for schedule search results.
-// R1025, R1027
+// R1027
 type ScheduleEvent struct {
 	Date    string    `json:"date"` // YYYYMMDD
 	Tag     string    `json:"tag"`
@@ -179,7 +179,7 @@ type ScheduleEvent struct {
 // QueryRange computes all events between start and end by reading schedule
 // logs and cranking forward from specs. Optionally filters by tag name.
 // If gaps is true, only returns past events without matching @ack: entries.
-// R1025, R1027, R1041, R1043
+// R1027, R1041, R1043
 func (es *EventScheduler) QueryRange(start, end time.Time, tag string, gaps bool) []ScheduleEvent {
 	var events []ScheduleEvent
 	if es.scheduleDir == "" {

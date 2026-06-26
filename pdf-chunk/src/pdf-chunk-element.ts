@@ -1115,10 +1115,10 @@ export class PdfChunkElement extends HTMLElement {
 		}
 	}
 
-	// Position <ark-curate-region rect="..."> children absolutely above
-	// the canvas. Same coordinate transform as positionHitRegions' fallback
-	// path, applied to the curate-pin overlay regions emitted by the
-	// server's renderPdfChunksByPage. R2422
+	// R2422: positionRegions — position <ark-curate-region rect="...">
+	// children absolutely above the canvas. Same coordinate transform as
+	// positionHitRegions' fallback path, applied to the curate-pin overlay
+	// regions emitted by the server's renderPdfChunksByPage.
 	positionRegions(chunkRect: Rect, cssScale: number): void {
 		const regions = Array.from(
 			this.querySelectorAll<HTMLElement>(':scope > ark-curate-region[rect]'),

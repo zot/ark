@@ -3,7 +3,8 @@
 
 Priority queue of time-tagged events with a single timer. Reads
 schedule logs at startup. Delivers events as crank handles through
-PubSub's listen channel. In-memory month buckets serve range queries.
+PubSub's listen channel. Range queries (QueryRange) compute
+occurrences from recurrence specs + schedule logs — no stored buckets.
 
 ## Knows
 - queue: heap of ScheduledEvent — sorted by NextFire
@@ -147,13 +148,11 @@ PubSub's listen channel. In-memory month buckets serve range queries.
   RFC 3339 format. Subscribers consuming chimes receive a usable
   "now" tick rather than the source recurrence string. Non-chime
   events keep their source value. (R2778)
-- BuildMonthBuckets(): compute month buckets from all schedule log specs.
-  One entry per month per event — first occurrence in that month. Called
-  on startup after ScanScheduleLogs. (R1023, R1024, R1026)
-- QueryRange(start, end time.Time, exceptions []Exception) []Event:
-  find month bucket at or before start, crank forward to generate all
-  events in range, apply @remove:/@add: exceptions, merge @ack: status.
-  Used by schedule search CLI and calendar UI. (R1025, R1039, R1041)
+- QueryRange(start, end time.Time, tag string, gaps bool) []ScheduleEvent:
+  compute occurrences by reading the schedule logs and cranking forward
+  from recurrence specs (no stored buckets), apply @remove:/@add:
+  exceptions, merge @ack: status. Used by schedule search CLI and
+  calendar UI. (R1027, R1039, R1041)
 - ComputeGaps(start, end time.Time, acks []AckEntry) []Event:
   compare spec occurrences against ack dates, return unacked past
   events. (R1041, R1043)

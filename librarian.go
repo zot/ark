@@ -312,6 +312,7 @@ func (l *Librarian) FuzzyMatchTags(alternatives []TagAlt) []TagMatch {
 
 // HandleExpand queues a curation request and returns the request ID.
 // POST /search/curate
+// CRC: crc-Librarian.md | R1378, R1379
 func (l *Librarian) HandleExpand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Tag   string `json:"tag"`
@@ -331,6 +332,7 @@ func (l *Librarian) HandleExpand(w http.ResponseWriter, r *http.Request) {
 
 // HandleExpandWait is the lotto tube — blocks until requests are available.
 // GET /search/curate/wait
+// CRC: crc-Librarian.md | R1380
 func (l *Librarian) HandleExpandWait(w http.ResponseWriter, r *http.Request) {
 	timeout := 120 * time.Second
 	if l.WaitForRequest(timeout) {
@@ -343,6 +345,7 @@ func (l *Librarian) HandleExpandWait(w http.ResponseWriter, r *http.Request) {
 
 // HandleExpandResult receives results from the sidecar agent.
 // POST /search/curate/result
+// CRC: crc-Librarian.md | R1381
 func (l *Librarian) HandleExpandResult(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID      string `json:"id"`
@@ -359,6 +362,7 @@ func (l *Librarian) HandleExpandResult(w http.ResponseWriter, r *http.Request) {
 
 // HandleExpandGet retrieves the result for a request ID, blocking until ready.
 // GET /search/curate/result/{id}
+// CRC: crc-Librarian.md | R1382
 func (l *Librarian) HandleExpandGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -494,7 +498,7 @@ func matchesAnyGlob(path string, patterns []string) bool {
 }
 
 // --- Embedding (R1296-R1300) ---
-// CRC: crc-Librarian.md | R1301
+// CRC: crc-Librarian.md | R1299, R1301
 
 // EmbeddingAvailable returns whether the embedding model is configured.
 func (l *Librarian) EmbeddingAvailable() bool {

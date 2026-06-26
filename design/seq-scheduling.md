@@ -27,28 +27,26 @@ Indexer              Config            EventScheduler
  |<-------------------------------------------------|
 ```
 
-## Index-time: Day-Bucket Materialization
+## Index-time: Priority-queue arming
 
 ```
-Indexer              Store
+Indexer              EventScheduler
  |                     |
  |-- (log file re-indexed after mutations)
  |                     |
- |-- parse @ark-event-upcoming: and
- |   @ark-event-fired: entries
+ |-- parse @ark-event-upcoming: entries
+ |   (WriteDateIndex, gated by schedule scope)
  |                     |
- |-- discretize into days
- |                     |
- |-- WriteDayBuckets ->|
- |                     |-- ClearDayBuckets(fileid)
- |                     |   read TF|fileid → dates
- |                     |   delete TD|date|fileid|*
- |                     |   delete TF|fileid
- |                     |
- |                     |-- write new TD entries
- |                     |-- write new TF entry
+ |-- EnsureUpcoming(tag, value, path) ->|
+ |                     |-- crank forward from the recurrence spec,
+ |                     |   enqueue the next ScheduledEvent in the
+ |                     |   in-memory priority queue (no DB records)
  |<--------------------|
 ```
+
+(Earlier the indexer materialized TD/TF day-bucket records in the
+Store; event management is no longer in the DB — see
+schedule-record-only.md.)
 
 ## Startup: Scheduler Population
 
@@ -105,45 +103,39 @@ EventScheduler       PubSub             (log file)
  |   (if not exists) ----------->|
  |                     |                     |
  |-- re-index log file |                     |
- |   (day buckets updated)                   |
+ |   (priority queue re-armed)               |
  |                     |                     |
  |-- re-enqueue        |                     |
  |-- reset timer       |                     |
 ```
 
-## Re-index: Day-Bucket Cleanup
+## Re-index: Priority-queue re-arm
 
 ```
-Indexer              Store
+Indexer              EventScheduler
  |                     |
  |-- RefreshFile       |
  |   (log file changed)|
  |                     |
- |-- ClearDayBuckets ->|
- |   (fileid)          |-- read TF|fileid → [dates]
- |                     |-- delete TD|date|fileid|*
- |                     |-- delete TF|fileid
- |<--------------------|
- |                     |
- |-- WriteDayBuckets ->|
- |   (from @ark-event-upcoming:              |
- |    and @ark-event-fired: entries)         |
- |                     |-- write new TD+TF   |
+ |-- EnsureUpcoming -->|
+ |   (tag, value, path)|-- crank forward from the recurrence spec,
+ |                     |   replace the file's queued ScheduledEvent
+ |                     |   (no DB records to clear/write)
  |<--------------------|
 ```
 
 ## Calendar Query (Lua)
 
 ```
-Lua                 Server              Store
+Lua                 Server              EventScheduler
  |                     |                  |
  |-- mcp:scheduled  ->|                  |
  |   ("2026-03-01",   |                  |
  |    "2026-03-31")   |                  |
- |                     |-- QueryDayBuckets|
+ |                     |-- QueryRange    -|
  |                     |   (start, end)->|
- |                     |            <----|-- seek TD|20260301
- |                     |                 |   scan to TD|20260331
+ |                     |            <----|-- read schedule logs,
+ |                     |                 |   crank forward from specs
  |                     |                 |
  |<-- [{date, endDate,|                 |
  |     tag, summary,  |                 |

@@ -1,5 +1,7 @@
 package ark
 
+// CRC: crc-EventScheduler.md
+
 import (
 	"strings"
 	"testing"

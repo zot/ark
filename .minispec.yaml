@@ -1,0 +1,12 @@
+# Minispec project config. See config-reference.md in the mini-spec skill.
+#
+# .html files embed JS (in <script>) and CSS (in <style>) alongside HTML.
+# Traceability for the embedded JS is written as `// Rn` line comments
+# (the standard JS form the skill prescribes); CSS-only requirements whose
+# sole implementation is a rule inside <style> are anchored in `/* Rn */`
+# CSS comments, since neither `//` nor `<!-- -->` is valid CSS there. So the
+# .html comment pattern must recognize the HTML-comment, JS-line-comment, and
+# CSS-block-comment prefixes.
+# (The built-in ` -->` closer is retained and stripped best-effort on read.)
+comment_patterns:
+  .html: "<!--\\s*|//\\s*|/\\*\\s*"

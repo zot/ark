@@ -420,7 +420,7 @@
 - **R946:** Pubsub JSON wire format `except_files` is renamed to `exclude_files`
 
 ### Replaces Source Filtering
-- **R230:** `--source` and `--not-source` flags are removed — replaced by `--filter-files` and `--exclude-files`
+- **~~R230:~~** (Retired T177 — no replacement) `--source` and `--not-source` flags are removed — replaced by `--filter-files` and `--exclude-files`
 - **R231:** (inferred) No backward compatibility shim needed — flags are not in use outside testing
 
 ## Feature: Config Flag Parsing Bug
@@ -710,9 +710,9 @@
 - **R416:** (inferred) All mcp Lua functions are registered after Frictionless setup completes
 
 ### HTTP Endpoint Removal
-- **R543:** `POST /search/grouped` endpoint is removed
-- **R544:** `POST /open` endpoint is removed
-- **R545:** `GET /indexing` endpoint is removed
+- **~~R543:~~** (Retired T178 — no replacement) `POST /search/grouped` endpoint is removed
+- **~~R544:~~** (Retired T179 — no replacement) `POST /open` endpoint is removed
+- **~~R545:~~** (Retired T180 — no replacement) `GET /indexing` endpoint is removed
 - **R546:** (inferred) All three operations are available only as Lua functions on the mcp table
 
 ### Search Consistency
@@ -858,14 +858,14 @@
 - **R476:** (inferred) The diagnostic output is designed as a crank-handle prompt — self-contained instructions a model can follow without additional context
 
 ### ack
-- **R489:** `ark message ack FILE` sets `@msg` to `read` in the file's tag block
-- **R490:** If `@msg` is already `read`, `acting`, or `closed`, does nothing (no error)
-- **R491:** (inferred) Uses same file read/parse/render/write pattern as set-tags
+- **~~R489:~~** (Retired T165 — see R525) `ark message ack FILE` sets `@msg` to `read` in the file's tag block
+- **~~R490:~~** (Retired T166 — see R525) If `@msg` is already `read`, `acting`, or `closed`, does nothing (no error)
+- **~~R491:~~** (Retired T167 — see R525) (inferred) Uses same file read/parse/render/write pattern as set-tags
 
 ### close
-- **R492:** `ark message close FILE` sets `@msg` to `closed` in the file's tag block
-- **R493:** If `@msg` is already `closed`, does nothing (no error)
-- **R494:** (inferred) Uses same file read/parse/render/write pattern as set-tags
+- **~~R492:~~** (Retired T168 — see R525) `ark message close FILE` sets `@msg` to `closed` in the file's tag block
+- **~~R493:~~** (Retired T169 — see R525) If `@msg` is already `closed`, does nothing (no error)
+- **~~R494:~~** (Retired T170 — see R525) (inferred) Uses same file read/parse/render/write pattern as set-tags
 
 ### inbox
 - **R495:** `ark message inbox [--project PROJECT]` lists non-closed messages across all indexed sources
@@ -1447,19 +1447,19 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1015:** `ark schedule search DATE` uses same date grammar as schedule tags (single date, `..` range, keyword prefixes)
 - **R1016:** `ark schedule parse DATE` diagnostic — shows parsed start, end, description, recurrence spec, bounds, next occurrence
 - **R1017:** `ark schedule tags` shows configured tags, defaults, lifecycle status, per-tag filters
-- **R1018:** `RemoveFile`/`RemoveByID` clears TD/TF day bucket records via `ClearDayBuckets`
-- **R1019:** `WriteDayBucketsForFile` handles schedule log files via `dayBucketsFromLogFile` — parses `@ark-event-upcoming:`/`@ark-event-fired:` entries
+- **~~R1018:~~** (Retired T185 — see R2819) `RemoveFile`/`RemoveByID` clears TD/TF day bucket records via `ClearDayBuckets`
+- **~~R1019:~~** (Retired T186 — see R2819) `WriteDayBucketsForFile` handles schedule log files via `dayBucketsFromLogFile` — parses `@ark-event-upcoming:`/`@ark-event-fired:` entries
 - **R1020:** `ParseDate` handles `2006-01-02 15:04` format (space-separated date+time)
 - **R1021:** `ReloadConfig` updates `indexer.config` (was stale after ark.toml reload)
-- **R1022:** Indexer config set at DB open time, not only when scheduler is wired — enables day bucket writes during rebuild
+- **~~R1022:~~** (Retired T187 — see R2819) Indexer config set at DB open time, not only when scheduler is wired — enables day bucket writes during rebuild
 
 ### Month Buckets (replaces Day Buckets)
 
-- **R1023:** Remove the day-bucket records (TD/TF). Replace with in-memory month buckets computed from schedule log specs.
-- **R1024:** One month bucket entry per month per recurring event — the first occurrence in that month
-- **R1025:** Query: find month bucket at or before range start, crank forward to generate all events in range
-- **R1026:** Month buckets computed on startup from schedule log files. Recomputable on restart.
-- **R1027:** `ark schedule search` computes events from specs and month buckets — works without a running server
+- **~~R1023:~~** (Retired T188 — no replacement) Remove the day-bucket records (TD/TF). Replace with in-memory month buckets computed from schedule log specs.
+- **~~R1024:~~** (Retired T189 — no replacement) One month bucket entry per month per recurring event — the first occurrence in that month
+- **~~R1025:~~** (Retired T190 — no replacement) Query: find month bucket at or before range start, crank forward to generate all events in range
+- **~~R1026:~~** (Retired T191 — no replacement) Month buckets computed on startup from schedule log files. Recomputable on restart.
+- **R1027:** `ark schedule search` computes events from specs and schedule log files — works without a running server
 - **~~R1028:~~** (Retired T41 — no replacement) @obsolete-req: R866 -- day bucket LMDB indexing replaced by month buckets
 - **~~R1029:~~** (Retired T42 — no replacement) @obsolete-req: R871 -- TF reverse index for deletion no longer needed
 - **~~R1030:~~** (Retired T43 — no replacement) @obsolete-req: R911 -- TD JSON array no longer needed
@@ -1477,7 +1477,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1036:** `@add: DATE [text]` in the same chunk as a schedule tag adds an extra occurrence
 - **R1037:** Exception tags use short names scoped by the event chunk (not @ark-event- prefix)
 - **R1038:** Exceptions parsed at index time and stored in the event struct
-- **R1039:** crankForward, month bucket generation, and schedule search all respect exceptions
+- **R1039:** crankForward, occurrence generation, and schedule search all respect exceptions
 - **R1040:** Source file is the authority — schedule log upcoming entry reflects the computed result after exceptions
 
 ### Gap Detection (revised)
@@ -1486,34 +1486,23 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **~~R1042:~~** (Retired T46 — no replacement) @obsolete-req: R870 -- @ark-event-fired: entries in log no longer needed for gap detection
 - **R1043:** `ark schedule search --gaps` computes unacked past occurrences from spec vs @ack: dates
 
-## Feature: Chat Transcript
-**Source:** specs/chat-transcript.md
-
-- **R1044:** `ark chats GLOB` reads Claude Code JSONL logs and renders human-readable transcripts
-- **R1045:** User turns introduced with `❯`, assistant turns with `●`, continuation lines indented 2 spaces
-- **R1046:** Text word-wrapped at `--line-length` (default 100)
-- **R1047:** `--with-tools` shows tool calls inline as `⚙ ToolName summary`
-- **R1048:** `--wrap NAME` surrounds output with `<NAME>...</NAME>` tags
-- **R1049:** Sidechain messages (subagent traffic) filtered out
-- **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
-
 ### Day-Bucket Indexing
 
-- **R866:** Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag
-- **R867:** Calendar range query: seek `TD|start`, scan to `TD|end` — no post-filtering needed
-- **R911:** TD value is a JSON array — multiple events per day per file/tag (e.g., rescheduled occurrences)
+- **~~R866:~~** (Retired T192 — see R2810) Events are discretized into day-granularity buckets: key `TD|YYYYMMDD|fileid|tag`, value is a JSON array of events for that day/file/tag
+- **~~R867:~~** (Retired T193 — see R2810) Calendar range query: seek `TD|start`, scan to `TD|end` — no post-filtering needed
+- **~~R911:~~** (Retired T199 — see R2810) TD value is a JSON array — multiple events per day per file/tag (e.g., rescheduled occurrences)
 - **R912:** Each event in the array carries ack status (acked bool, ackText string), parsed from `@ack:` tags in the same chunk at index time
 - **R913:** (inferred) Calendar view gets events + ack status in one range scan, no second pass
 
 ### Schedule CLI
 
-- **R914:** `ark schedule search START END` queries day buckets for events overlapping the date range
+- **~~R914:~~** (Retired T200 — see R1027) `ark schedule search START END` queries day buckets for events overlapping the date range
 - **R915:** START and END accept flexible date formats via dateparse
 - **R916:** Output is markdown by default (crank-handle style for agents)
 - **R917:** `--json` flag outputs JSON array
 - **R918:** `--tag TAG` filters to a specific schedule tag
 - **R919:** `--gaps` shows only past events with `acked: false` — Franklin's missed-event query
-- **R920:** Each event in output includes ack status from the day-bucket record
+- **~~R920:~~** (Retired T201 — see R1027) Each event in output includes ack status from the day-bucket record
 - **R921:** `ark schedule change PATH TAG NEWSTART [NEWEND]` rewrites the date in a schedule tag value
 - **R922:** Description text after the date is preserved on rewrite
 - **R923:** File is re-indexed after modification
@@ -1525,26 +1514,26 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R927:** Store serialized `[schedule]` section in the index settings record (I prefix) on server startup
 - **R928:** On config reload (startup, ark.toml fsnotify), compare current `[schedule]` vs stored
-- **R929:** Tags added: scan files with the new tag, write day buckets
-- **R930:** Tags removed: clear day buckets for files with that tag
-- **R931:** Defaults changed: re-materialize affected day buckets with new durations
-- **R932:** (inferred) After re-materialization, update the stored `[schedule]` in the index
+- **~~R929:~~** (Retired T202 — see R2836) Tags added: scan files with the new tag, write day buckets
+- **~~R930:~~** (Retired T203 — see R2836) Tags removed: clear day buckets for files with that tag
+- **~~R931:~~** (Retired T204 — see R2836) Defaults changed: re-materialize affected day buckets with new durations
+- **~~R932:~~** (Retired T205 — see R2836) (inferred) After re-materialization, update the stored `[schedule]` in the index
 
 ### Acknowledgment Indexing
 
 - **R933:** When indexing a file with schedule tags, parse `@ack:` tags in the same chunk
-- **R934:** For each day bucket being written, check if any `@ack:` covers that date
-- **R935:** Embed `acked: true` and `ackText` in the DayBucketEvent when covered
+- **~~R934:~~** (Retired T206 — see R1027) For each day bucket being written, check if any `@ack:` covers that date
+- **~~R935:~~** (Retired T207 — see R1027) Embed `acked: true` and `ackText` in the DayBucketEvent when covered
 - **R936:** `@ack:` parsing uses the same date formats as schedule tag parsing (dateparse)
-- **R868:** (inferred) Multi-day events produce one TD entry per day spanned
+- **~~R868:~~** (Retired T194 — see R2810) (inferred) Multi-day events produce one TD entry per day spanned
 - **~~R869:~~** (Retired T113 — no replacement) (inferred) Day buckets for recurring events are derived from `@ark-event-upcoming:` entries in schedule log files, not materialized directly from the recurring spec
-- **R870:** Past events are indexed from `@ark-event-fired:` entries in schedule log files as day buckets — the calendar is a historical record
+- **~~R870:~~** (Retired T195 — see R2810) Past events are indexed from `@ark-event-fired:` entries in schedule log files as day buckets — the calendar is a historical record
 
 ### Reverse Index for Deletion
 
-- **R871:** `TF|fileid` key stores the list of all dates with day-bucket entries for that file
-- **R872:** On re-index: read `TF|fileid` (one read), delete each `TD|date|fileid|*`, delete `TF|fileid`, write new TD + TF from current content
-- **R873:** File removal (`RemoveFile`, `RemoveByID`) clears TD/TF day bucket records via `Store.ClearDayBuckets`
+- **~~R871:~~** (Retired T196 — see R2810) `TF|fileid` key stores the list of all dates with day-bucket entries for that file
+- **~~R872:~~** (Retired T197 — see R2810) On re-index: read `TF|fileid` (one read), delete each `TD|date|fileid|*`, delete `TF|fileid`, write new TD + TF from current content
+- **~~R873:~~** (Retired T198 — see R2810) File removal (`RemoveFile`, `RemoveByID`) clears TD/TF day bucket records via `Store.ClearDayBuckets`
 
 ### Schedule Log
 
@@ -1558,6 +1547,17 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R906:** Log files are rotatable — old `@ark-event-fired:` entries can be archived; `@ack:` in source files is the durable human record
 - **R907:** Log files are regular ark files — tagged, indexed, searchable
 - **R908:** (inferred) `~/.ark/schedule/*.md` is included in the `~/.ark` source so log files are indexed automatically
+
+## Feature: Chat Transcript
+**Source:** specs/chat-transcript.md
+
+- **R1044:** `ark chats GLOB` reads Claude Code JSONL logs and renders human-readable transcripts
+- **R1045:** User turns introduced with `❯`, assistant turns with `●`, continuation lines indented 2 spaces
+- **R1046:** Text word-wrapped at `--line-length` (default 100)
+- **R1047:** `--with-tools` shows tool calls inline as `⚙ ToolName summary`
+- **R1048:** `--wrap NAME` surrounds output with `<NAME>...</NAME>` tags
+- **R1049:** Sidechain messages (subagent traffic) filtered out
+- **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
 
 ## Feature: Schedule Lifecycle
 **Source:** specs/schedule-lifecycle.md
@@ -1581,7 +1581,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R964:** When a lifecycle event fires, convert `@ark-event-upcoming: DATE` to `@ark-event-fired: DATE` in the schedule log
 - **R965:** Append `@check-gap: DATE` in the same paragraph as `@ark-event-fired:` (same chunk after markdown chunking) **only when the tag has a non-empty `default_duration`**. Tags without a duration are heartbeats (chimes, ticks) and lack a meaningful human-ack loop; appending `@check-gap:` for them would let `ScanCheckGaps` flood `tmp://watchdog/missed-events` on every restart with bogus misses.
 - **R966:** Compute next occurrence, append `@ark-event-upcoming: NEXT` if no exception exists for that date
-- **R967:** Re-index the log file after modification so day buckets update
+- **R967:** Re-index the log file after modification so the priority queue updates (EnsureUpcoming)
 - **R968:** For non-lifecycle tags, fire through pubsub but skip log writing (no fired tag, no check-gap)
 
 ### Check-Gap and Ack Resolution
@@ -1594,7 +1594,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Config Change Re-materialization
 - **R975:** Schedule filtering config (`filter_files`, `exclude_files`, `lifecycle_include`, `lifecycle_exclude`) is included in the stored `[schedule]` hash
-- **R976:** Filter changes trigger re-evaluation: files newly in scope get schedule log entries written; files out of scope get log entries and day buckets removed
+- **R976:** Filter changes trigger re-evaluation: files newly in scope get schedule log entries written; files out of scope get log entries removed
 - **R977:** (inferred) Lifecycle filter changes re-evaluate which tags get check-gap monitoring — newly excluded tags have their check-gaps removed
 
 ### Materialization Strategy
@@ -1612,10 +1612,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Remove Scheduling from Subscriptions
 
-- **R879:** Remove `--scheduled` and `--recurring` flags from `ark subscribe` CLI
-- **R880:** Remove `ScheduleMode` type, `ScheduleNone`/`ScheduleOneShot`/`ScheduleRecurring` constants, and `Schedule` field from `TagSub`
-- **R881:** Remove `ScanForSub` from EventScheduler — replaced by day-bucket startup scan (R875)
-- **R882:** (inferred) Remove `RemoveForSession` session-scoped event cleanup — events are no longer per-subscription
+- **~~R879:~~** (Retired T181 — no replacement) Remove `--scheduled` and `--recurring` flags from `ark subscribe` CLI
+- **~~R880:~~** (Retired T182 — no replacement) Remove `ScheduleMode` type, `ScheduleNone`/`ScheduleOneShot`/`ScheduleRecurring` constants, and `Schedule` field from `TagSub`
+- **~~R881:~~** (Retired T183 — no replacement) Remove `ScanForSub` from EventScheduler — replaced by day-bucket startup scan (R875)
+- **~~R882:~~** (Retired T184 — no replacement) (inferred) Remove `RemoveForSession` session-scoped event cleanup — events are no longer per-subscription
 
 ### Acknowledgments
 
@@ -1635,7 +1635,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Lua APIs
 
-- **R893:** `mcp:scheduled(startDate, endDate)` returns items overlapping a date range from day-bucket index; each item has date, endDate, tag, summary, path, recurring, allDay
+- **R893:** `mcp.scheduled(startDate, endDate)` returns items overlapping a date range, computed from the schedule logs via EventScheduler.QueryRange (endDate inclusive, whole day); each item has date, endDate, tag, summary, path, recurring, allDay
 - **R894:** `mcp:reschedule(path, tag, newDate, newEndDate)` rewrites the date in the tag value, preserves trailing description text, re-indexes
 - **R895:** `mcp:tagComplete(prefix)` returns tag name and value completions from the index
 - **R896:** `mcp:fileStatus(path)` returns whether the file is indexed, its tags, and schedule info
@@ -1987,9 +1987,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1242:** (inferred) The Librarian is managed by a closure actor to serialize access from concurrent HTTP handlers
 
 ### Expansion Pipeline
-- **R1243:** `POST /search/expand` accepts JSON body with `mode`, `tag`, `value` fields
-- **R1244:** Returns JSON `{results: [{path, strategy, chunks, source: "expansion"}]}` — curated search results marked as expansion-sourced
-- **R1245:** The pipeline runs server-side in three steps: Haiku expands → search → Haiku curates
+- **~~R1243:~~** (Retired T162 — see R1379) `POST /search/expand` accepts JSON body with `mode`, `tag`, `value` fields
+- **~~R1244:~~** (Retired T163 — see R1382) Returns JSON `{results: [{path, strategy, chunks, source: "expansion"}]}` — curated search results marked as expansion-sourced
+- **~~R1245:~~** (Retired T164 — see R1378) The pipeline runs server-side in three steps: Haiku expands → search → Haiku curates
 - **R1246:** For tag mode (Phase A): step 2 is trigram fuzzy matching against V records (the tag-value index)
 - **R1270:** Haiku expand step: given user's tag name and value, suggests alternative tag names and values
 - **R1271:** Fuzzy match step: each alternative is fuzzy-matched against V records, producing (tag, value, count, score) tuples
@@ -2520,7 +2520,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### ArkSettings Removal
 
-- **R1570:** The old `ArkSettings` struct and single-blob I record format are removed.
+- **~~R1570:~~** (Retired T171 — see R1571) The old `ArkSettings` struct and single-blob I record format are removed.
 - **R1571:** `GetSettings`/`PutSettings` are replaced by per-field `iGet`/`iPut` calls.
 - **R1572:** The `Extra` map entries (schedule config, ID counters) become their own I record keys.
 
@@ -2969,9 +2969,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Remove ark vec
 
-- **R1814:** Remove the `vec` case from the CLI command dispatcher.
-- **R1815:** Delete `cmd/ark/vecbench.go`.
-- **R1816:** R547-R562 (ark vec bench, ark vec bench-search) are superseded by R1791-R1801.
+- **~~R1814:~~** (Retired T172 — see R1791) Remove the `vec` case from the CLI command dispatcher.
+- **~~R1815:~~** (Retired T173 — see R1791) Delete `cmd/ark/vecbench.go`.
+- **~~R1816:~~** (Retired T174 — see R1791) R547-R562 (ark vec bench, ark vec bench-search) are superseded by R1791-R1801.
 
 ## Feature: Embed Deduplication
 **Source:** specs/embed-dedup.md
@@ -3023,7 +3023,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1840:** `DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID)` deletes one EC record using an existing transaction. Used inside microfts2 callbacks.
 - **R1841:** `DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID)` deletes one EF record using an existing transaction.
 - **R1842:** `ReadChunkEmbeddings(chunkIDs []uint64) [][]float32` batch reads EC records for centroid computation.
-- **R1843:** `RemoveFileChunkEmbeddings(fileID)` is removed. Replaced by per-chunkID deletion in callbacks.
+- **~~R1843:~~** (Retired T175 — see R2115) `RemoveFileChunkEmbeddings(fileID)` is removed. Replaced by per-chunkID deletion in callbacks.
 - **R1844:** `DropChunkEmbeddings()` unchanged — drops all EC and EF records.
 - **R1845:** `ScanChunkEmbeddingKeys()` returns map[chunkID]*ChunkEmbedInfo (dimension only, no fileID grouping).
 
@@ -4409,7 +4409,7 @@ implementation, not a separate format break.
 - **R2806:** As a backstop to the watcher activation gate (R2867), the watcher's `fire()` re-queries **both** `SubscriberCount("ark-recall-curate", "<originating-session-uuid>")` and `SubscriberCount("ark-recall-result", "<originating-session-uuid>")` before running the substrate / writing the curation doc. If either is zero (e.g. the consumer dropped during `activation_delay`, after the append-time gate passed), the watcher skips the curation write, clears `pendingChunks` as it would on normal completion, and writes a record to `recall.jsonl` with `outcome: "no-subscriber"`. No fire is counted as missed.
 - **R2807:** `ark connections recall close` queries `SubscriberCount("ark-recall-result", "<originating-session-uuid>")` before writing the result doc. If the count is zero, `close` skips the result-doc write, still performs the curation removal + orphan sweep + monitoring-log append per R2758, and records `outcome: "no-subscriber"`. The cleanup side of `close` runs regardless of subscriber presence; only the result-doc *write* is gated.
 - **R2808:** The `outcome` field in `~/.ark/monitoring/recall.jsonl` records (R2763) is extended to include the value `"no-subscriber"`. The enumeration becomes `"result-emitted"`, `"silent-close"`, `"no-subscriber"`, `"error"`. The value is written by both gate points (R2806 watcher skip, R2807 close skip). Forward-compatible — R2763's "future fields slot in at the end" property is preserved.
-- **R2867:** The recall watcher activates per session only while *both* ends of the recall pipe are subscribed: a daemon on the bare `@ark-recall-curate` tag (something to curate the doc) and a client on `@ark-recall-result=<session>` (something to read the result). At each `OnAppend` — after source qualification (R2741) and before accumulation (R2729) — the watcher queries `SubscriberCount("ark-recall-curate", <session>)` and `SubscriberCount("ark-recall-result", <session>)`; if either is zero it ignores the append and **drops the session's in-memory state**: it stops any armed `pendingTimer` and deletes the session's entry from the state map (discarding `pendingChunks`). An unsubscribed session is therefore never accumulated (R2729), armed (R2734), or fired (R2735), and leaves no leaked per-session state.
+- **~~R2867:~~** (Retired T176 — see R2947) The recall watcher activates per session only while *both* ends of the recall pipe are subscribed: a daemon on the bare `@ark-recall-curate` tag (something to curate the doc) and a client on `@ark-recall-result=<session>` (something to read the result). At each `OnAppend` — after source qualification (R2741) and before accumulation (R2729) — the watcher queries `SubscriberCount("ark-recall-curate", <session>)` and `SubscriberCount("ark-recall-result", <session>)`; if either is zero it ignores the append and **drops the session's in-memory state**: it stops any armed `pendingTimer` and deletes the session's entry from the state map (discarding `pendingChunks`). An unsubscribed session is therefore never accumulated (R2729), armed (R2734), or fired (R2735), and leaves no leaked per-session state.
 - **R2868:** Because the activation gate (R2867) drops a session's state while it is unsubscribed and only live appends drive the watcher (no backfill, R2698), a session whose watch (re)activates resumes at the current end of its JSONL: the first fire after (re)subscription processes only chunks appended after activation, never the prior transcript. No persistent per-session recall checkpoint is required — subscriptions are in-memory, so a server restart drops them and re-subscription re-activates at the then-current JSONL end.
 - **R2809:** `EventScheduler.EnsureUpcoming` enqueues newly-armed recurring events in-memory (`crankForward(chunk, now, true)`) so they fire within the current `ark serve` session — same-session firing for every recurring tag, not just chimes, without waiting for a restart. `Add` is idempotent per-ID (existing R808, R809), so re-running EnsureUpcoming on an already-armed chunk replaces rather than duplicates. Closes the pre-existing latent gap where EnsureUpcoming wrote the on-disk log but the queue was populated only at startup via ScanScheduleLogs; chimes uncovered the gap first because they're the only auto-created schedule source. Source-file duplication for a tag (e.g. literal `@chime-15m: every 15m` text in a code file) is blocked at config level via `[schedule].exclude_files` (`MatchesScheduleFilterForTag` in the indexer), not in the scheduler.
 

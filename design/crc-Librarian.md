@@ -267,13 +267,13 @@ loads on first embedding query and stays warm until TTL expiry.
   not check.
 
 ### HTTP Handlers
-- HandleExpand: POST /search/expand — queue request, return ID
-- HandleExpandWait: GET /search/expand/wait — lotto tube
-- HandleExpandResult: POST /search/expand/result — receive result
-- HandleExpandGet: GET /search/expand/result/{id} — retrieve result
-- HandleFuzzyMatch: POST /search/expand/fuzzy — trigram fuzzy match
-- HandleExpandSearch: POST /search/expand/search — search curated tags
-- HandleEmbedMatch: POST /search/expand/embed — embedding similarity
+- HandleExpand: POST /search/curate — queue request, return ID (R1378, R1379)
+- HandleExpandWait: GET /search/curate/wait — lotto tube (R1380)
+- HandleExpandResult: POST /search/curate/result — receive result (R1381)
+- HandleExpandGet: GET /search/curate/result/{id} — retrieve result (R1382)
+- HandleFuzzyMatch: POST /search/expand/fuzzy — trigram fuzzy match (R1383)
+- HandleExpandSearch: POST /search/expand/search — search curated tags (R1383)
+- HandleEmbedMatch: POST /search/expand/embed — embedding similarity (R1383)
 - HandleConnectionsWait: GET /connections/wait — lotto tube for find-connections sidecar (R2315, R2321)
 - HandleConnectionsFetch: GET /connections/fetch?id=... — returns BuildFetchPayload JSON (R2316)
 - HandleConnectionsResult: POST /connections/result — SetConnectionsResult with stdin JSON body (R2317)

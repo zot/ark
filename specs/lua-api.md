@@ -109,6 +109,15 @@ corpus) and edit the matching `SetField` site.
 | `mcp.onpublish(fn)`                               | `specs/tmp-subscription.md`              | Register a publish callback for the session                                                           |
 | `mcp.cancel(spec)`                                | `specs/tmp-subscription.md`              | Unsubscribe                                                                                           |
 
+### Schedule and tag completion (ark)
+
+| Method                                            | Source spec            | Behavior                                                                                                                       |
+|---------------------------------------------------|------------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| `mcp.scheduled(startDate, endDate)`               | `specs/scheduling.md`  | Schedule events overlapping the range (via `EventScheduler.QueryRange`; endDate inclusive); `[{date, endDate, tag, summary, path, recurring, allDay}]` |
+| `mcp.reschedule(path, tag, newDate, newEndDate)`  | `specs/scheduling.md`  | Rewrite the date in the `@tag` value (preserving trailing text), write back (disk or `tmp://` via the write actor), re-index; returns `{old, new}` |
+| `mcp.tagComplete(prefix)`                         | `specs/scheduling.md`  | Tag-name completions with descriptions, or value completions when `prefix` is `"tag:valuePrefix"`                              |
+| `mcp.fileStatus(path)`                            | `specs/scheduling.md`  | `{indexed, chunks=[{chunkID, tags=[{tag, value}]}], schedule=[...]}` — per-chunk tags read from F records, not a file rollup    |
+
 ### `tmp://` document overlay (ark)
 
 | Method                                | Source spec               | Behavior                                                                              |

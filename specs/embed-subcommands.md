@@ -4,7 +4,8 @@ Restructure `ark embed` from a flat flag-driven command into proper
 subcommands: `text`, `bench`, and `validate`. Also remove the obsolete
 `ark vec` command tree.
 
-Language: Go. Environment: CLI (`cmd/ark/main.go`, `cmd/ark/vecbench.go`).
+Language: Go. Environment: CLI (`cmd/ark/main.go`). (The old
+`cmd/ark/vecbench.go` was deleted with the `ark vec` tree.)
 
 ## `ark embed text TEXT...`
 

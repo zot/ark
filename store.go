@@ -180,7 +180,7 @@ const (
 	prefixTagFile        = 'F'
 	prefixTagDef         = 'D'
 	prefixTagValue       = 'V'
-	prefixEmbedValue     = "EV" // R1290: tag-value compound embeddings
+	prefixEmbedValue     = "EV" // R1290, R1291: tag-value compound embeddings (EV = the only two-byte prefix; tag-name embeddings stay inline in T)
 	prefixEmbedChunk     = "EC" // R1598: chunk-level embeddings
 	prefixEmbedFileCent  = "EF" // R1599: file centroid (running sum + count)
 	prefixEmbedDef       = "ED" // R2151: tag-definition embeddings

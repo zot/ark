@@ -323,11 +323,20 @@ harvests implementation refs from two comment shapes:
    the deliberate field/line annotations that sit beside a type's or
    function's `// CRC:` header.
 
+**Ranges (v2.11.0+).** Both shapes expand `Rn-Rm` **range** syntax into
+every member, so `// R5-R8` counts R5, R6, R7, and R8 — no need to spell
+out a long contiguous span. The second `R` is optional (`R5-8`), ranges
+and comma lists mix freely (`// R5-R7, R10`), and a reversed range
+(`R8-R5`) contributes only the low ref.
+
 The `<comment-prefix>` is the file's line-comment leader and is
 **language-dependent**: `//` for Go/JS/TS/C, `--` for Lua, `#` for
 shell/Python, `<!--` for Markdown/HTML, `/*` for CSS. Run `minispec
 query comment-patterns` for the per-extension list (and the
-block-comment closers below). The examples here are Go.
+block-comment closers below). The examples here are Go. A
+`comment_patterns` entry may be an **alternation** (v2.11.0+) — e.g.
+`.html: "<!--\s*|//\s*"` so an HTML file's embedded-JS `// Rn`
+annotations harvest alongside its `<!-- CRC: … -->` comments.
 
 What still does **not** count, because the ref does not lead the
 comment and so reads as prose rather than intent:

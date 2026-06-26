@@ -161,7 +161,7 @@ func TestScannerReReportsOnMtimeChange(t *testing.T) {
 	}
 }
 
-// R1649: non-empty files bypass the set and go through normal NewFiles flow.
+// CRC: crc-Scanner.md | Seq: seq-empty-file-skip.md | R1649 — non-empty files bypass the set and go through the normal NewFiles flow.
 func TestScannerIgnoresNonEmptyFiles(t *testing.T) {
 	sc, dir, ef := testScanner(t)
 

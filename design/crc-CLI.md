@@ -257,7 +257,7 @@ dispatches operations via proxy or cold-start.
 
 - cmdSchedule: dispatches to search, change, parse, tags, upcoming,
   logs, suppress, unsuppress sub-subcommands. (R926)
-- cmdScheduleSearch: query Store.QueryDayBuckets for date range.
+- cmdScheduleSearch: query EventScheduler.QueryRange for date range.
   START END as flexible dates (dateparse). Flags: --tag (filter),
   --gaps (only unacked past events), --json (JSON output).
   Default output is markdown crank-handle style. Renders

@@ -1570,7 +1570,7 @@ func spaces(n int) string {
 	return strings.Repeat(" ", n)
 }
 
-// CRC: crc-CLI.md | Seq: seq-spectral-expand.md | R1243
+// CRC: crc-CLI.md | Seq: seq-spectral-expand.md | R1379
 func cmdSearchExpand(args []string) {
 	fs := flag.NewFlagSet("search expand", flag.ExitOnError)
 	wait := fs.Bool("wait", false, "lotto tube: block until expansion requests arrive, print as JSON")
@@ -2942,7 +2942,7 @@ func cmdFetch(args []string) {
 		os.Exit(1)
 	}
 
-	// R692, R2993: prefer the server when one is reachable. The index is
+	// R510, R692, R2993: prefer the server when one is reachable. The index is
 	// single-process (bbolt file lock), so opening it locally while the
 	// server holds the DB would block indefinitely, and tmp:// content
 	// lives only in server memory. With no server, ordinary paths read

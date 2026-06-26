@@ -1,6 +1,6 @@
 # Schedule Lifecycle
 
-Wiring the schedule data layer (day buckets, log files, date parsing)
+Wiring the schedule data layer (priority queue, log files, date parsing)
 into a working lifecycle. Language: Go. Environment: ark server.
 
 See also: specs/scheduling.md (data model, CLI commands),
@@ -128,7 +128,7 @@ When the scheduler fires an event for a lifecycle tag:
    means the markdown chunker keeps them in the same chunk
 3. Compute next occurrence, append `@ark-event-upcoming: NEXT`
    if no exception (deleted upcoming line) exists for that date
-4. Re-index the log file so day buckets update
+4. Re-index the log file so the priority queue updates (EnsureUpcoming)
 
 The schedule log file is identified by the source file path using
 the encoding from specs/scheduling.md (tilde contraction, then
@@ -162,17 +162,16 @@ absence means handled.
 ## Config Change Detection
 
 When ark.toml's `[schedule]` section changes, the server
-re-materializes day buckets for affected files.
+re-evaluates affected files and re-arms the in-memory priority queue.
 
 Detection: store the serialized `[schedule]` config in the
 settings record. On config reload (startup, ark.toml fsnotify),
 compare current vs stored:
 
 - Tags added: scan files with the new tag via tag index, write
-  schedule log entries and day buckets
-- Tags removed: clear day buckets for files with that tag, remove
-  schedule log chunks
-- Defaults changed (durations): re-materialize with new durations
+  schedule log entries
+- Tags removed: remove schedule log chunks for files with that tag
+- Defaults changed (durations): re-evaluate affected entries and re-arm the queue with new durations
 - Filter changes: re-evaluate which files participate, add/remove
   schedule log entries accordingly
 

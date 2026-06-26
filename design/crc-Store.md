@@ -68,20 +68,15 @@ files, unresolved files, ark-level settings, and tag tracking.
 - ListTagDefs(tags []string): scan D prefix, return definitions.
   If tags is empty, return all. Otherwise filter to requested tags.
   Returns (tagname, description, fileid) triples.
-- WriteDayBuckets(fileid uint64, entries []DayBucketEntry): write
-  TD keys for each day spanned by each entry, write TF reverse index.
-  Cleans old entries first via ClearDayBuckets. (R866, R871, R872)
-- ClearDayBuckets(fileid uint64): read TF|fileid to get date list,
-  delete all TD|date|fileid|* entries, delete TF|fileid. (R871, R872)
-- QueryDayBuckets(startDate, endDate string) []DayBucketEntry: seek
-  TD|startDate, scan to TD|endDate, return all entries. (R867)
 - ParseAcks(content []byte, tag string) []AckEntry: extract @ack:
   tags from the same chunk as the given tag, parse dates and ranges.
-  (R883, R884, R885, R886, R887, R888)
-- WriteDayBucketsWithAcks(fileid uint64, entries []DayBucketEntry,
-  acks []AckEntry): same as WriteDayBuckets but cross-references
-  ack entries against event dates, setting Acked/AckText on matching
-  DayBucketEvents before writing. (R933, R934, R935)
+  Called at index time for files with schedule tags; ack status is
+  merged at query time (EventScheduler.QueryRange), not stored.
+  (R883, R884, R885, R886, R887, R888, R933)
+
+(The TD/TF day-bucket Store methods — WriteDayBuckets, ClearDayBuckets,
+QueryDayBuckets, WriteDayBucketsWithAcks — were removed: event management
+is no longer in the DB. See schedule-record-only.md.)
 - GetScheduleConfig() string: read stored schedule config from
   I record "schedule_config". (R927, R928, R1572)
 - PutScheduleConfig(serialized string): write schedule config to

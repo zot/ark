@@ -27,7 +27,7 @@ no new struct, no new field (R2278).
 - FileTagMembers: map[uint64]bool — set of fileIDs currently matching this entry's predicate; populated/maintained only when Kind == FileTag (R2463, R2469)
 - Hits: uint64 — events successfully enqueued (atomic)
 - Drops: uint64 — events lost to full queue (atomic)
-- (R879, R880) Schedule field removed — scheduling driven by ark.toml + day buckets, not subscriptions
+- (R879, R880) Schedule field removed — scheduling driven by ark.toml + schedule-log files (in-memory priority queue), not subscriptions
 
 ### Event
 - Tag: string — the matched tag name

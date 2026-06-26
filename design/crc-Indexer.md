@@ -160,14 +160,10 @@ access. (R2915)
   first — skip if file is outside schedule scope. Then call EnsureUpcoming
   on the scheduler. Called from AddFile, RefreshFile, AppendFile after tag
   extraction. (R866, R868, R869, R870, R872, R953, R954, R956)
-- WriteDayBucketsForFile(fileid uint64, path string, content []byte):
-  for each schedule tag in content, parse the date value, discretize into
-  day buckets, parse @ack: entries in the same chunk, write via
-  Store.WriteDayBucketsWithAcks. (R933, R934, R935, R866)
 
 ## Collaborators
 - microfts2.DB: file identity, trigram indexing, staleness detection
-- Store: tag record storage (T/F/V prefix keys), day-bucket storage (TD/TF keys), EC/EF record cleanup via callback
+- Store: tag record storage (T/F/V prefix keys), EC/EF record cleanup via callback
 - Config: schedule tag declarations for date indexing
 - PubSub: notified after tag extraction (Publish call)
 - Librarian: writes EC/EF records post-reconcile (BatchEmbedChunks); not invoked synchronously from the Indexer (R1923)

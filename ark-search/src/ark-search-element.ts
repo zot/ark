@@ -1,5 +1,5 @@
 // CRC: crc-ArkSearchElement.md | Seq: seq-tag-click.md
-// R1356-R1367, R1372, R1373, R1377, R1386-R1394, R1406-R1422
+// R1356-R1367, R1372, R1373, R1377, R1386-R1394, R1406-R1422, R1433-R1436, R1438-R1453
 
 import type {
   SearchAPI,

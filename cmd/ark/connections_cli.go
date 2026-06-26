@@ -7,6 +7,7 @@ package main
 // existing handler helpers. The deepest tree in the CLI (3 levels:
 // `connections recall close`) and where the -loc/-chunk help drift lived —
 // the migration pilot. (R2916–R2932; see crc-CLITree.md, seq-cli-urfave.md.)
+// R2932: the migration freezes the flag surface — no flag is added, removed, renamed, or switched to GNU-only --long.
 
 import (
 	"context"

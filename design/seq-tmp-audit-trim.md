@@ -42,9 +42,11 @@ applies to `lifecycle = "disk"` against the disk log file.
 
 Identical structure with two substitutions:
 
-- 1.4 / 1.5: read disk file at `~/.ark/schedule/HASH.md` via
-  `ReadLogFile` (no tmp:: overlay).
-- 3.2 / 3.3: write disk file via `WriteLogFile`; no tmp:// publish
+- The read step (the disk equivalent of steps 1.4–1.5 above) instead
+  reads the disk file at `~/.ark/schedule/HASH.md` via `ReadLogFile`
+  (no tmp:: overlay).
+- The write-back step (the disk equivalent of steps 3.2–3.3 above)
+  instead writes the disk file via `WriteLogFile`; no tmp:// publish
   step. PubSub events for disk audit appends are not part of the
   contract (the source-file change that triggered the spec marker
   already published).

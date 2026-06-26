@@ -857,8 +857,10 @@ if (window !== window.parent) {
   new ResizeObserver(postHeight).observe(document.body);
 }
 
-// R2415-R2420: curate pin button. Fetch the pinned set once, prepend a
-// pin button to every chunk div, toggle between pin/dismiss on click.
+// R2415-R2420, R2423-R2425: curate pin button. Fetch the pinned set once,
+// prepend a pin button to every chunk container (div + ark-curate-region,
+// R2424, R2425), toggle between pin/dismiss on click; hover reveals the
+// chunk-bound outline (R2423, styled below).
 // The outer `path` variable used by the editor is URL-encoded; the
 // pin POST body needs the decoded form so the server stores the
 // canonical absolute path that microfts2 uses internally.
