@@ -53,7 +53,7 @@ type chunkAccumulator struct {
 // callback must never traverse the CRecord into LMDB. This makes the same
 // callback shape work for both persistent and tmp:// indexing without
 // branching. (R1949)
-// CRC: crc-Indexer.md | R1891, R1949, R2913
+// CRC: crc-Indexer.md | R1891, R1904, R1949, R2913
 func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 	a.chunkTags = append(a.chunkTags, ChunkTagValues{
 		ChunkID: ic.CRecord.ChunkID,

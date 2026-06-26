@@ -185,8 +185,10 @@ func Init(dbPath string, opts InitOpts) error {
 		}
 	}
 
-	// CRC: crc-DB.md | R1539
-	// Write full config to I records
+	// CRC: crc-DB.md | R1539, R1542
+	// Write full config to I records. On rebuild cmdInit removes the index
+	// file first, so this writes fresh ark.toml config into a db cleared of
+	// all prior I and E records.
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config for I records: %w", err)

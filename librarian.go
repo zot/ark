@@ -2441,6 +2441,9 @@ func (l *Librarian) resetModelTimer() {
 	})
 }
 
+// unloadModel releases the embedding model and all contexts; the model
+// TTL timer (resetModelTimer) fires this when the embed queue goes idle.
+// CRC: crc-Librarian.md | R1596
 func (l *Librarian) unloadModel() {
 	if l.modelCtx != nil {
 		l.modelCtx.close()

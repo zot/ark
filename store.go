@@ -2113,7 +2113,7 @@ type AckEntry struct {
 
 // ParseAcks extracts @ack: tags from content that are in the same chunk
 // as the given schedule tag. Returns parsed date entries.
-// CRC: crc-Store.md | R883, R884, R885, R886, R887, R888, R936
+// CRC: crc-Store.md | R883, R884, R885, R886, R887, R888, R933, R936
 func ParseAcks(content []byte, tag string) []AckEntry {
 	lines := strings.Split(string(content), "\n")
 	var acks []AckEntry

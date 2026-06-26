@@ -938,7 +938,7 @@ func matchesFilterExclude(path string, filterFiles, excludeFiles []string) bool 
 
 // ExpandTilde expands ~ and ~user at the start of a path.
 // ~ → os.UserHomeDir(). ~user → os/user.Lookup first, ~/../user fallback.
-// CRC: crc-Config.md | R947, R948, R949
+// CRC: crc-Config.md | R947, R948, R949, R952
 func ExpandTilde(path string) string {
 	if !strings.HasPrefix(path, "~") {
 		return path

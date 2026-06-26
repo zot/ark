@@ -1439,8 +1439,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1007:** Schedule log records parsed bounds as `@ark-event-start:` and `@ark-event-end:` tags so the scheduler reads them directly on startup
 - **R1008:** (inferred) Crank-forward on startup respects bounds — does not create `@ark-event-upcoming:` entries beyond `@ark-event-end:`
 - **R1009:** (inferred) `writeDateIndex` skips schedule log files (`~/.ark/schedule/*`) to prevent cascade — log writes trigger watcher, watcher re-indexes, re-index calls EnsureUpcoming, which writes again
-- **R1010:** Schedule log maintains exactly one `@ark-event-upcoming:` per recurring event. Calendar UI computes future dates from `@ark-event-spec:`.
-- **R1011:** After downtime, crank-forward converts all past upcoming to fired, then writes one new upcoming
+- **~~R1010:~~** (Retired T213 — see R2813) Schedule log maintains exactly one `@ark-event-upcoming:` per recurring event. Calendar UI computes future dates from `@ark-event-spec:`.
+- **~~R1011:~~** (Retired T214 — see R2818) After downtime, crank-forward converts all past upcoming to fired, then writes one new upcoming
 - **R1012:** Per-tag schedule filtering via `[schedule.tag.NAME]` in ark.toml with `filter_files`/`exclude_files`. Global excludes always apply; per-tag filters narrow further.
 - **R1013:** tmp:// source files produce tmp:// schedule logs (`tmp://schedule/HASH.md`), not disk logs
 - **R1014:** Schedule processing deferred outside DB actor — items accumulated during indexing, drained after scan/refresh, processed in goroutine
@@ -1594,12 +1594,12 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Config Change Re-materialization
 - **R975:** Schedule filtering config (`filter_files`, `exclude_files`, `lifecycle_include`, `lifecycle_exclude`) is included in the stored `[schedule]` hash
-- **R976:** Filter changes trigger re-evaluation: files newly in scope get schedule log entries written; files out of scope get log entries removed
-- **R977:** (inferred) Lifecycle filter changes re-evaluate which tags get check-gap monitoring — newly excluded tags have their check-gaps removed
+- **~~R976:~~** (Retired T216 — see R2818) Filter changes trigger re-evaluation: files newly in scope get schedule log entries written; files out of scope get log entries removed
+- **~~R977:~~** (Retired T217 — see R2818) (inferred) Lifecycle filter changes re-evaluate which tags get check-gap monitoring — newly excluded tags have their check-gaps removed
 
 ### Materialization Strategy
 - **R978:** Only the next occurrence of a recurring event is materialized in the schedule log
-- **R979:** On startup, compute missed occurrences between last-fired and now, surface as missed events, then materialize just the next one
+- **~~R979:~~** (Retired T215 — see R2818) On startup, compute missed occurrences between last-fired and now, surface as missed events, then materialize just the next one
 - **R980:** (inferred) Calendar UI computes virtual recurring items on the fly from recurrence specs — deferred to Lua/UI work
 
 ### Scheduler Integration
@@ -1761,8 +1761,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### V Record Lifecycle
 - **R1103:** On index/refresh: remove all V entries for the file's old chunkids, then add V entries from freshly extracted tag values
-- **R1104:** On append: add V entries for newly extracted tag values (no removal — appended tags are additive)
-- **R1105:** On remove: remove the chunkid from all V entries; delete the key if chunkid list becomes empty
+- **~~R1104:~~** (Retired T208 — see R1884) On append: add V entries for newly extracted tag values (no removal — appended tags are additive)
+- **~~R1105:~~** (Retired T209 — see R1899) On remove: remove the chunkid from all V entries; delete the key if chunkid list becomes empty
 - **R1106:** `ExtractTagValues` (already called during index/refresh/append) provides the source data — no new extraction logic needed
 - **R1107:** (inferred) V records are rebuilt from scratch by `ark rebuild`, same as T/F/D records
 
@@ -1783,8 +1783,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1114:** Indexer passes `WithChunkCallback` to `ReindexWithContent` during full refresh
 - **R1115:** Indexer passes `WithAppendChunkCallback` to `AppendChunks` during append refresh
 - **~~R1116:~~** (Retired T31 — see R1913) The callback accumulates chunk text slices for microvec embedding
-- **R1117:** The callback extracts tag values from each chunk's clean text via `ExtractTagValues`
-- **R1118:** The callback extracts tag defs from each chunk's clean text via `ExtractTagDefs`
+- **~~R1117:~~** (Retired T210 — see R1904) The callback extracts tag values from each chunk's clean text via `ExtractTagValues`
+- **~~R1118:~~** (Retired T211 — see R2913) The callback extracts tag defs from each chunk's clean text via `ExtractTagDefs`
 - **R1119:** (inferred) The callback extracts tag counts via `TagCountsFromValues` on accumulated tag values
 
 ### Tag Merging
@@ -1799,7 +1799,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Prep/Execute Restructure
 - **R1126:** `prepareRefresh` no longer extracts tags for full refresh — tags come from callback in `executeRefresh`
-- **R1127:** `prepareRefresh` still extracts tags for append path using `tagWindowForAppend` (unchanged)
+- **~~R1127:~~** (Retired T212 — see R1895) `prepareRefresh` still extracts tags for append path using `tagWindowForAppend` (unchanged)
 - **R1128:** (inferred) `refreshPrep.tags`, `.defs`, `.tagValues` fields are nil for full refresh, populated for append
 
 ### Tag Value Sort

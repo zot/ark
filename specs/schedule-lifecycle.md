@@ -180,10 +180,15 @@ a re-scan of affected tags, not a full rebuild.
 
 ## Materialization Strategy
 
-Only the next occurrence of a recurring event is materialized in
-the schedule log. On startup, compute missed occurrences between
-last-fired and now, surface them as missed events, then materialize
-just the next one.
+Only the next occurrence of a recurring event is live at any time. It
+is held in the in-memory priority queue, not written into the schedule
+log (the log no longer carries an upcoming marker; the queue is the
+authoritative "what's next"). On startup `ScanScheduleLogs` re-arms the
+queue from each surviving chunk's recurrence spec via
+`crankForwardAndEnqueue`, and separately scans the audit logs for
+unresolved `@check-gap:` entries within the lookback window, appending
+those to `tmp://watchdog/missed-events`. Missed firings surface through
+that check-gap audit rather than being recomputed from recurrence math.
 
 The calendar UI computes virtual recurring items on the fly from
 the recurrence spec for display purposes — this is Lua-side work,

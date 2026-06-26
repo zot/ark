@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R979, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1010, R1011, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043, R2780, R2779, R2783, R2778, R2809, R2810, R2812, R2813, R2814, R2815, R2816, R2817, R2818, R2819, R2820, R2821, R2822, R2823, R2824, R2825, R2826, R2827, R2828, R2829, R2846, R2847, R2848, R3000
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043, R2780, R2779, R2783, R2778, R2809, R2810, R2812, R2813, R2814, R2815, R2816, R2817, R2818, R2819, R2820, R2821, R2822, R2823, R2824, R2825, R2826, R2827, R2828, R2829, R2846, R2847, R2848, R3000
 
 Priority queue of time-tagged events with a single timer. Reads
 schedule logs at startup. Delivers events as crank handles through
@@ -46,7 +46,7 @@ occurrences from recurrence specs + schedule logs — no stored buckets.
   Chime tag value override (R2778) still applies before publish.
   If recurring (`event.Recurring != ""`): re-enqueue the next
   occurrence via `ComputeNext(event.Recurring, NOW, …)` regardless
-  of audit destination. (R807, R877, R1010, R1011, R2812, R2820)
+  of audit destination. (R807, R877, R2812, R2820)
   Reset timer to new head.
 - ComputeNext(recurring string, after time.Time, notAfter time.Time) time.Time:
   parse recurrence spec, return next occurrence after the given time.
@@ -103,7 +103,7 @@ occurrences from recurrence specs + schedule logs — no stored buckets.
     (R2818, R808, R809, R2809)
   If all chunks in a file are dropped, delete the log file. (R2810)
   Also scan for unresolved @check-gap: entries within lookback
-  window — append to tmp://watchdog/missed-events. (R972, R973, R979)
+  window — append to tmp://watchdog/missed-events. (R972, R973)
 - ResolveCheckGap(tag, sourcePath, date): called when an @ack:
   covering the fired date is detected via subscription. Removes
   the @check-gap: line from the log chunk, re-indexes. (R969, R970, R971)

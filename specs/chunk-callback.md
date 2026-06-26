@@ -14,6 +14,16 @@ Language: Go. Environment: ark indexer, microfts2 dependency.
 > coupling no longer exists. Read this spec for the tag-extraction
 > behavior; for embeddings see R1913/R1926.
 
+> **Tag/def extraction split (R1117/R1118 retired — T210/T211, 2026-06-26).**
+> The "extract tags from each chunk's clean text" model below is superseded
+> by the chunkid migration: per-chunk tag **values** ride `indexedCallback`
+> (R1904); file-level tag **values + defs** are re-extracted from full
+> content via `fileLevelTags` (R2913/R1926) — defs are no longer per-chunk.
+> The `tagWindowForAppend` prose ("append prep still extracts … unchanged")
+> is also historical — that helper was removed (R1895). This spec still
+> reads as if these models were current; it needs a full rewrite to state B,
+> tracked alongside the C-cluster (R1124/R1126/R1127) disposition.
+
 ## Problem
 
 Tag value (V) records have noise from JSONL raw-file extraction.
