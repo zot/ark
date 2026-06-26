@@ -124,7 +124,7 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// Initialize microfts2 (creates the bbolt database).
-	// CRC: crc-DB.md | R1911, R1912, R2978 — microfts2 owns the bbolt file and
+	// CRC: crc-DB.md | R3, R1911, R1912, R2978 — microfts2 owns the bbolt file and
 	// its `fts` bucket; ark opens its `ark` bucket in the same DB. bbolt has no
 	// MaxDBs/MapSize ceiling, so those Options fields are gone (R2978).
 	ftsOpts := microfts2.Options{

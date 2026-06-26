@@ -292,6 +292,7 @@ func withExclusiveDB(fn func(*ark.DB)) {
 
 // serverClient returns an http.Client that connects over Unix socket,
 // or nil if no server is running.
+// CRC: crc-CLI.md | Seq: seq-cli-dispatch.md | R4
 func serverClient(dbPath string) *http.Client {
 	socketPath := filepath.Join(dbPath, "ark.sock")
 	conn, err := net.Dial("unix", socketPath)
@@ -377,7 +378,7 @@ func requireServer(op string) *http.Client {
 
 // Command implementations
 
-// CRC: crc-CLI.md | Seq: seq-install.md
+// CRC: crc-CLI.md | Seq: seq-install.md | R278, R279, R323, R325
 func cmdSetup(args []string) {
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprintln(os.Stderr, "Usage: ark setup\n\nBootstrap ~/.ark/: extract bundled assets, install global skills\nand agent, run linkapp. Idempotent.")
@@ -3031,7 +3032,7 @@ func emitChunkResult(res ark.ChunkFetchResult, filePath, chunkRange, anchor, wra
 	}
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R479, R480, R487
 func cmdChunks(args []string) {
 	fs := flag.NewFlagSet("chunks", flag.ExitOnError)
 	before := fs.Int("before", 0, "number of chunks before target")
@@ -3312,7 +3313,7 @@ func uiRequest(method, path string, jsonBody string) []byte {
 	return data
 }
 
-// CRC: crc-CLI.md | Seq: seq-install.md
+// CRC: crc-CLI.md | Seq: seq-install.md | R332
 func cmdUIInstall(args []string) {
 	// R429: Bootstrap — ensure setup and database exist
 	cmdInit([]string{"--if-needed"})
@@ -3809,7 +3810,7 @@ func cmdUIReload(args []string) {
 	fmt.Printf("ui: reloaded (port %d)\n", result.Port)
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R289
 func cmdUIStatus(args []string) {
 	client := serverClient(arkDir)
 	if client == nil {
@@ -4279,7 +4280,7 @@ func cmdChunkJSONL(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R233
 // reorderArgs moves flag arguments (starting with -) before positional
 // arguments. Go's flag package stops parsing at the first non-flag
 // argument, so flags after positional args are silently ignored.
@@ -4358,7 +4359,7 @@ func parseAliases(s string) map[byte]byte {
 	return aliases
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R298, R299, R300, R302
 func cmdBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	output := fs.String("o", "", "Output path for bundled binary (required)")
@@ -4411,7 +4412,7 @@ func cmdBundle(args []string) {
 	fmt.Printf("Created bundled binary: %s\n", *output)
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R304, R305, R306
 func cmdBundleLs(args []string) {
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprintln(os.Stderr, "Usage: ark ls\n\nList embedded assets in the bundled binary.")
@@ -4440,7 +4441,7 @@ func cmdBundleLs(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R307, R308, R309
 func cmdBundleCat(args []string) {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "Usage: ark cat <file>\n\nPrint an embedded file from the bundled binary to stdout.")
@@ -4463,7 +4464,7 @@ func cmdBundleCat(args []string) {
 	os.Stdout.Write(content)
 }
 
-// CRC: crc-CLI.md
+// CRC: crc-CLI.md | R310-R318
 func cmdBundleCp(args []string) {
 	if len(args) < 2 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "Usage: ark cp <pattern> <dest-dir>\n\nExtract embedded files matching a glob pattern to a directory.\nPreserves permissions and recreates symlinks.")
