@@ -175,6 +175,7 @@ func Init(dbPath string, opts InitOpts) error {
 		}
 	}
 
+	// CRC: crc-DB.md | R127, R128, R129
 	// Create starter tags.md from bundle seed if provided
 	tagsPath := filepath.Join(dbPath, "tags.md")
 	if len(opts.TagsSeed) > 0 {

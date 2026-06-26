@@ -185,7 +185,7 @@
 - **R117:** @tags are extracted from file content during add and refresh operations
 - **R118:** Tag extraction regex: `@[a-zA-Z][\w-]*:` — @ followed by letter, word chars or hyphens, then colon (colon disambiguates from emails/mentions)
 - **R119:** `T` prefix + tagname bytes → uint32 count (total occurrences across all files)
-- **R120:** `F` prefix + fileid (8 bytes) + tagname bytes → uint32 count (occurrences in that file)
+- **~~R120:~~** (Retired T218 — see R1874) `F` prefix + fileid (8 bytes) + tagname bytes → uint32 count (occurrences in that file)
 - **R121:** Tag counts are recomputed on refresh — old counts for a file are removed, new counts stored
 - **R122:** `ark tag list` shows all known tags with their total counts
 - **R123:** `ark tag counts <tag>...` shows the total count for each specified tag

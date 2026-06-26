@@ -25,7 +25,7 @@ import (
 	"github.com/zot/ark"
 )
 
-// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-cli-urfave.md#3.3 | R122, R123, R124, R615
+// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-cli-urfave.md#3.3 | R122, R123, R124, R615, R131
 func tagCommand() *ucli.Command {
 	fileFilterFlags := func() []ucli.Flag {
 		return []ucli.Flag{
@@ -299,7 +299,7 @@ func tagValuesAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md
+// CRC: crc-CLITree.md, crc-CLI.md | R506, R507, R508, R509
 func tagDefsAction(_ context.Context, c *ucli.Command) error {
 	showPath := c.Bool("path")
 	tags := normalizeTagNames(c.Args().Slice())

@@ -639,7 +639,7 @@ func (s *Store) ClearERecords() error {
 // T records with ExtMap virtual tag names and TmpTagStore overlay
 // tag names; counts are summed across sources. Honors tag source
 // parity.
-// CRC: crc-Store.md | R2344, R2345
+// CRC: crc-Store.md | R2344, R2345, R119
 func (s *Store) ListTags() ([]TagCount, error) {
 	counts := make(map[string]uint32)
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
@@ -878,6 +878,7 @@ func unresolvedKey(path string) []byte {
 }
 
 // tagDefKey builds a D prefix key: D[tagname][fileid].
+// CRC: crc-Store.md | R504
 func tagDefKey(tag string, fileid uint64) []byte {
 	key := make([]byte, 1+len(tag)+8)
 	key[0] = byte(prefixTagDef)
@@ -898,7 +899,7 @@ type TagDefRecord struct {
 // stale embeddings never outlive their definitions; the next batch-embed
 // pass picks up the new (tag, fileid) pairs as missing. SED side-index
 // entries for the dropped EDs are also removed.
-// CRC: crc-Store.md | R2154, R2186
+// CRC: crc-Store.md | R2154, R2186, R505
 func (s *Store) UpdateTagDefs(fileid uint64, defs map[string]string) error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		// Both D and ED keys end with an 8-byte big-endian fileid.
@@ -938,7 +939,7 @@ func (s *Store) RemoveTagDefs(fileid uint64) error {
 // AppendTagDefs adds D records without removing existing ones. Existing
 // ED records for unchanged (tag, fileid) pairs are left intact; newly
 // added pairs become "missing" and are picked up by the next BatchEmbed.
-// CRC: crc-Store.md | R2156
+// CRC: crc-Store.md | R2156, R511
 func (s *Store) AppendTagDefs(fileid uint64, defs map[string]string) error {
 	if len(defs) == 0 {
 		return nil

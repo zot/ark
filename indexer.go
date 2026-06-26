@@ -19,6 +19,7 @@ import (
 	"sync"
 )
 
+// CRC: crc-Indexer.md | R118
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
 // chunkAccumulator collects chunk text + tag-value extractions via two
@@ -53,7 +54,7 @@ type chunkAccumulator struct {
 // callback must never traverse the CRecord into LMDB. This makes the same
 // callback shape work for both persistent and tmp:// indexing without
 // branching. (R1949)
-// CRC: crc-Indexer.md | R1891, R1904, R1949, R2913
+// CRC: crc-Indexer.md | R1891, R1904, R1949, R2913, R121
 func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 	a.chunkTags = append(a.chunkTags, ChunkTagValues{
 		ChunkID: ic.CRecord.ChunkID,
@@ -1186,7 +1187,7 @@ var tagValueRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):[ \t]*([^\n]*)`)
 // (ParseExtTarget for @ext; future tags register their own handlers).
 // Skips mentions per R1317-R1325. Strategy controls whether
 // markdown-specific heuristics (fenced/indented code) apply.
-// CRC: crc-Indexer.md | R1317-R1325, R2110, R2111
+// CRC: crc-Indexer.md | R1317-R1325, R2110, R2111, R117
 func ExtractTagValues(content []byte, strategy string) []TagValue {
 	markdown := strategy == "markdown"
 	locs := tagValueRegex.FindAllSubmatchIndex(content, -1)
@@ -1328,10 +1329,12 @@ func isMention(content []byte, atPos int, markdown bool) bool {
 
 // tagDefRegex matches @tag: definitions at line start. First word after
 // "@tag:" is the tag name, rest is description.
+// CRC: crc-Indexer.md | R502
 var tagDefRegex = regexp.MustCompile(`(?:^|\n)@tag:\s+(\S+)\s+(.+)`)
 
 // ExtractTagDefs scans content for @tag: name description lines.
 // Returns map of tagname → description.
+// CRC: crc-Indexer.md | R503
 func ExtractTagDefs(content []byte) map[string]string {
 	matches := tagDefRegex.FindAllSubmatch(content, -1)
 	if len(matches) == 0 {

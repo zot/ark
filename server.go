@@ -431,9 +431,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /config", srv.handleConfig)
 	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)
 	mux.HandleFunc("POST /resolve", srv.handleResolve)
-	mux.HandleFunc("GET /tags", srv.handleTags)
-	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)
-	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)
+	mux.HandleFunc("GET /tags", srv.handleTags)              // R132
+	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts) // R133
+	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)   // R134
 	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
 	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
