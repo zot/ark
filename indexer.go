@@ -938,7 +938,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	return nil
 }
 
-// CRC: crc-Indexer.md | Seq: seq-parallel-refresh.md
+// CRC: crc-Indexer.md | Seq: seq-parallel-refresh.md | R517-R522
 // RefreshStale re-indexes all stale files in parallel. Workers read files
 // and extract tags concurrently. A ChanSvc actor serializes LMDB writes.
 // Returns the list of missing files found during the check.
