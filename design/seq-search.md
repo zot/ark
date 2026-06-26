@@ -43,7 +43,7 @@ CLI ──> Searcher.SearchCombined(query, opts)
          │     ├── path filters: glob -files against indexed paths → IDs
          │     ├── content filters → file ID sets
          │     ├── positives intersect, negatives subtract
-         │     └── return WithOnly(ids) or WithExcept(ids)
+         │     └── return WithOnly(ids) (negatives already subtracted)
          │
          ├──> defaultSearchOpts(filterOpt, score, opts)
          │     ├── adds WithDensity() if score="density"

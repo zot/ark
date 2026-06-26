@@ -638,7 +638,7 @@ func LoadConfig(path string) (*Config, error) {
 	// R950, R951: expand tilde in all path fields at load time
 	cfg.DefaultInclude = ExpandTildeSlice(cfg.DefaultInclude)
 	cfg.DefaultExclude = ExpandTildeSlice(cfg.DefaultExclude)
-	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude)
+	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude) // R943: search_exclude carried through LoadConfig (startup + reload)
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
 	for k, tc := range cfg.Schedule.Tag {

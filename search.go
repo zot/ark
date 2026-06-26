@@ -283,6 +283,7 @@ type Searcher struct {
 
 // SearchCombined sends the same query to both engines, merges by
 // (fileid, chunknum), combines scores, sorts descending.
+// CRC: crc-Searcher.md | R228
 func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
@@ -354,6 +355,7 @@ func (s *Searcher) aboutSearch(query string, k int) ([]ChunkScore, error) {
 }
 
 // SearchSplit dispatches --about, --contains, --regex to appropriate engines.
+// CRC: crc-Searcher.md | R228
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
@@ -1202,7 +1204,7 @@ func computeCentroidFilters(metas []aboutFilterMeta, centroids map[uint64][]floa
 	return
 }
 
-// CRC: crc-Searcher.md
+// CRC: crc-Searcher.md | R215-R227, R512-R516
 // resolveFilters builds a microfts2 search option from all filter flags.
 // Path filters first (cheap), then content filters. Positives intersect,
 // negatives subtract. Returns nil if no filtering is requested.

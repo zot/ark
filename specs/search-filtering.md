@@ -64,7 +64,9 @@ All filters produce file ID sets and compose:
 
 Evaluation order: path filters first (cheap — no FTS needed), then
 content filters. The combined file ID set is passed to microfts2
-as WithOnly or WithExcept.
+as WithOnly, with negative filters subtracted from the set before
+it is passed. The negatives-only case still uses WithOnly, not
+WithExcept.
 
 ## Tag filtering
 

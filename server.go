@@ -841,6 +841,7 @@ func PidFilePath(dbPath string) string {
 
 // JSON request/response helpers
 
+// CRC: crc-Server.md | R229
 type searchRequest struct {
 	Query           string           `json:"query"`
 	About           string           `json:"about"`

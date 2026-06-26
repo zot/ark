@@ -31,7 +31,7 @@ type TagSub struct {
 	Kind         TagSubKind     // R2462: chunk vs file-scoped
 	Predicate    MatchPredicate // R2442: parsed sigil form
 	FilterFiles  []string       // only match these path globs (nil = all)
-	ExcludeFiles []string       // exclude these path globs
+	ExcludeFiles []string       // R945: exclude these path globs (renamed from ExceptFiles)
 	// FileTagMembers tracks fileIDs currently matching this entry's
 	// Predicate. Populated/maintained only when Kind == TagSubFile.
 	// In-memory only — re-seeded on server restart via the normal

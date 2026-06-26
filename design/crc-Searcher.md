@@ -36,8 +36,8 @@ Optionally retrieves chunk text or full file content.
   --exclude-file-tags): query Store.TagFiles for file IDs containing
   specified tags. Content filters last (--filter, --except):
   run preliminary FTS searches, collect matching file IDs. Positives
-  intersect, negatives subtract. Returns microfts2 WithOnly or
-  WithExcept search option.
+  intersect, negatives subtract. Returns a microfts2 WithOnly
+  search option (negatives subtracted from the ID set).
 - Merge(ftsResults []microfts2.SearchResult, vecResults []ChunkScore):
   combine by (FileID, ChunkID) key, sum or weighted-combine scores (R1918)
 - Intersect(ftsResults []microfts2.SearchResult, vecResults []ChunkScore):

@@ -113,7 +113,7 @@ func subscribeAction(_ context.Context, c *ucli.Command) error {
 			sub["filter_files"] = ark.ExpandTildeSlice(filterFiles)
 		}
 		if len(excludeFiles) > 0 { // R944
-			sub["exclude_files"] = ark.ExpandTildeSlice(excludeFiles)
+			sub["exclude_files"] = ark.ExpandTildeSlice(excludeFiles) // R946: wire key renamed from except_files
 		}
 		subs = append(subs, sub)
 	}

@@ -383,7 +383,7 @@
 - **R216:** Multiple `--filter` flags intersect — all must match (file must appear in every filter's results)
 - **R217:** `--except <query>` runs a preliminary FTS search and subtracts those file IDs from the scope
 - **R218:** Multiple `--except` flags union — any match is excluded
-- **R219:** Content filters are pushed to microfts2 as file ID sets via WithOnly/WithExcept
+- **R219:** Content filters are pushed to microfts2 as file ID sets via WithOnly (positives intersected and negatives subtracted into the set before it is passed)
 
 ### Path Filtering
 - **R220:** `--filter-files <pattern>` restricts search to files whose paths match the glob pattern
@@ -402,7 +402,7 @@
 ### Composition
 - **R225:** All filters produce file ID sets: positive filters intersect, negative filters subtract
 - **R226:** Evaluation order: path filters first (cheap), then content filters
-- **R227:** The combined file ID set is passed to microfts2 as WithOnly (if any positives) or WithExcept (if only negatives)
+- **R227:** The combined file ID set is passed to microfts2 as WithOnly; negative filters are subtracted from the set before it is passed, so the negatives-only case still uses WithOnly rather than a separate WithExcept
 - **R228:** Search filtering works with SearchCombined, SearchSplit, and tag search
 - **R229:** (inferred) Filter fields pass through the server proxy via searchRequest JSON
 
