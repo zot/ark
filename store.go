@@ -2258,6 +2258,8 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 // CRC: crc-Store.md | R1280, R1284
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
+// Operational counters (next_tvid, etc.) are stored as I records via makeIKey.
+// CRC: crc-Store.md | R1536
 func (s *Store) allocIDInTxn(txn *bbolt.Tx, iFieldName string) (uint64, error) {
 	key := makeIKey(iFieldName)
 	var id uint64

@@ -253,6 +253,7 @@ function detectTags(
 // `xScale`/`yScale` convert chunker coordinates to PDF.js text-content
 // coordinates (only relevant for Skia-generated PDFs that report
 // content in a different scale than MediaBox).
+// CRC: crc-PdfChunkElement.md | R1762
 function parseSegmentsAttribute(
 	segmentsStr: string,
 	name: string,
