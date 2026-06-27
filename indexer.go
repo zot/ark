@@ -183,6 +183,8 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 // CRC: crc-Indexer.md | R1113, R1123, R1891, R2913
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	acc := chunkAccumulator{strategy: strategy}
+	// CRC: crc-Indexer.md | R209 — an unregistered strategy name is rejected
+	// here by microfts2, surfacing as a scan-time error.
 	fileid, content, err := idx.fts.AddFileWithContent(path, strategy,
 		microfts2.WithIndexedChunkCallback(acc.indexedCallback))
 	if err != nil {

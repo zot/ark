@@ -1019,7 +1019,7 @@ func cmdSearch(args []string) {
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
 	multi := fs.Bool("multi", false, "run all strategies (coverage, density, overlap, bm25)")
 	proximity := fs.Bool("proximity", false, "rerank top results by query term proximity")
-	// CRC: crc-CLI.md | R654, R655, R656 — --session NAME routes via the server proxy (req.Session, requires a running server); without it search runs the normal direct/proxy path
+	// CRC: crc-CLI.md | R654, R655, R656, R681 — --session NAME routes via the server proxy (req.Session, requires a running server; R681: --session always proxies); without it search runs the normal direct/proxy path
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
 	tags := fs.Bool("tags", false, "output extracted @tag activity as markdown bullets (see -no-values/-no-chunks/-no-files)")

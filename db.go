@@ -758,7 +758,7 @@ func (db *DB) FTS() *microfts2.DB {
 // After the write completes, calls pubsub.PublishTmpDiff so
 // subscribers see the new tag-set (prior set is empty for a fresh
 // path → every present tag fires, R2285).
-// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R663, R666, R667, R1948, R2012, R2016, R2281, R2285
+// CRC: crc-DB.md | Seq: seq-tmp-tag-overlay.md | Seq: seq-ext-routing.md | Seq: seq-tmp-subscription.md | R663, R665, R666, R667, R668, R1948, R2012, R2016, R2281, R2285
 func (db *DB) AddTmpFile(path, strategy string, content []byte) (uint64, error) {
 	acc := &chunkAccumulator{}
 	fid, err := db.fts.AddTmpFile(path, strategy, content, microfts2.WithIndexedChunkCallback(acc.indexedCallback))
@@ -1546,6 +1546,7 @@ func (db *DB) ResolveTagPredicateChunks(p MatchPredicate, fileTag bool) []uint64
 }
 
 // GetChunks returns the target chunk and its positional neighbors.
+// CRC: crc-DB.md | R693 — tmp:// paths are handled internally by microfts2.GetChunks
 func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microfts2.ChunkResult, error) {
 	return db.fts.GetChunks(fpath, targetRange, before, after)
 }

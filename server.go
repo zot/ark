@@ -738,7 +738,7 @@ func (srv *Server) reconcile() {
 // new/removed sources. Sweep drops files that no longer
 // classify as Included (R2138, R2142). Called inside the DB actor.
 //
-// CRC: crc-Server.md | Seq: seq-reconcile.md | R347, R351, R2138, R2142
+// CRC: crc-Server.md | Seq: seq-reconcile.md | R204, R347, R351, R2138, R2142
 func (srv *Server) doReconcile(db *DB) {
 	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
@@ -2179,6 +2179,7 @@ func (srv *Server) handleScheduleTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, lines)
 }
 
+// CRC: crc-Server.md | R202 — POST /config/sources-check runs glob reconciliation
 func (srv *Server) handleSourcesCheck(w http.ResponseWriter, r *http.Request) {
 	result, err := Sync(srv.db, func(db *DB) (*SourcesCheckResult, error) {
 		return db.SourcesCheck()

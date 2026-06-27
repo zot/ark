@@ -47,6 +47,8 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 	if !sopts.Before.IsZero() {
 		opts = append(opts, microfts2.WithBefore(sopts.Before))
 	}
+	// R683, R684: WithNoTmp skips the overlay entirely — cheaper than
+	// WithExcept(TmpFileIDs()) since it avoids the trigram intersection.
 	if sopts.NoTmp {
 		opts = append(opts, microfts2.WithNoTmp())
 	}

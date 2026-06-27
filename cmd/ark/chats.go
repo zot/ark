@@ -11,6 +11,7 @@ import (
 )
 
 // cmdChats displays conversation transcripts from JSONL logs.
+// CRC: crc-CLI.md | R1044, R1048
 func cmdChats(args []string) {
 	fs := flag.NewFlagSet("chats", flag.ExitOnError)
 	withTools := fs.Bool("with-tools", false, "display tool calls and results")
@@ -64,6 +65,7 @@ Examples:
 }
 
 // findJSONLFiles searches indexed sources for JSONL files matching a glob pattern.
+// CRC: crc-CLI.md | R1050 — GLOB matches file basenames under ~/.claude/projects/
 func findJSONLFiles(pattern string) []string {
 	// Search common Claude Code conversation log locations
 	dirs := []string{}
@@ -107,6 +109,8 @@ type contentBlock struct {
 }
 
 // renderChat reads a JSONL file and prints a human-readable transcript.
+// CRC: crc-CLI.md | R1045, R1047, R1049 — ❯ user / ● assistant markers,
+// --with-tools shows ⚙ tool calls, sidechain (subagent) records filtered out
 func renderChat(path string, withTools bool, lineLen int, sidechain bool) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -194,6 +198,7 @@ func extractBlocks(content json.RawMessage) []contentBlock {
 
 // printWrapped prints text with a marker on the first line and 2-space indent
 // on continuation lines, word-wrapped at lineLen.
+// CRC: crc-CLI.md | R1046 — word-wrap at --line-length (default 100)
 func printWrapped(marker, text string, lineLen int) {
 	indent := "  " // continuation indent (matches marker + space width)
 	prefix := marker + " "

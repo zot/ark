@@ -1038,13 +1038,14 @@ func (c *Config) SaveConfig(path string) error {
 }
 
 // IsGlob returns true if dir contains glob characters (*, ?, [).
+// CRC: crc-Config.md | R194
 func IsGlob(dir string) bool {
 	return strings.ContainsAny(dir, "*?[")
 }
 
 // AddSource adds a new source directory. Glob patterns (containing *, ?, [)
 // are stored as-is without validation. Concrete paths are validated to exist.
-// CRC: crc-Config.md | R148
+// CRC: crc-Config.md | R148, R195, R201
 func (c *Config) AddSource(dir string) error {
 	dir = ExpandTilde(dir)
 	for _, src := range c.Sources {
@@ -1069,7 +1070,7 @@ func (c *Config) AddSource(dir string) error {
 // RemoveSource removes a source directory by path. Returns an error
 // if the source is a concrete dir managed by a glob pattern or if
 // the directory is the ark database directory (hardcoded source).
-// CRC: crc-Config.md | R340
+// CRC: crc-Config.md | R200, R340
 func (c *Config) RemoveSource(dir string) error {
 	dir = ExpandTilde(dir)
 	if c.dbPath != "" && dir == c.dbPath {
@@ -1102,6 +1103,7 @@ type SourcesCheckResult struct {
 
 // ResolveGlobs expands all glob source patterns, diffs against concrete sources,
 // and returns what needs to be added, what's missing, and what's orphaned.
+// CRC: crc-Config.md | R196, R197, R198, R199, R203
 func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 	result := &SourcesCheckResult{}
 
@@ -1172,6 +1174,7 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 // StrategyForFile merges per-source strategies over global strategies,
 // then finds the longest matching pattern. Returns the matched strategy
 // name, or "lines" if no pattern matches.
+// CRC: crc-Config.md | R205, R206, R207, R208
 func (c *Config) StrategyForFile(relPath string, sourceStrategies map[string]string) string {
 	if len(c.Strategies) == 0 && len(sourceStrategies) == 0 {
 		return "lines"
