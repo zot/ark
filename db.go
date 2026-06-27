@@ -288,7 +288,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		chunkerByName: make(map[string]any),
 	}
 
-	// CRC: crc-DB.md | R382, R2273, R2386, R2389
+	// CRC: crc-DB.md | R370, R382, R2273, R2386, R2389
 	// Register built-in chunkers (must happen on every Open, not just
 	// InitDB — chunker registrations aren't persisted in LMDB). Markdown
 	// and chat-jsonl register as AppendAwareChunker structs (R2273) so
@@ -702,7 +702,7 @@ func (db *DB) ReloadConfig() error {
 }
 
 // IsIndexable returns true if path would be indexed by any configured source.
-// CRC: crc-DB.md | Seq: seq-file-change.md | R2133
+// CRC: crc-DB.md | Seq: seq-file-change.md | R388, R392, R2133
 func (db *DB) IsIndexable(path string) bool {
 	for _, src := range db.config.Sources {
 		if IsGlob(src.Dir) {

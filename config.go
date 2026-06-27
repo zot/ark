@@ -716,7 +716,7 @@ default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"
 // EnsureArkSource adds the database directory as an in-memory source
 // if not already present. This source is hardcoded — it does not appear
 // in ark.toml and cannot be removed. Scoped to content directories only.
-// CRC: crc-Config.md | R961, R962
+// CRC: crc-Config.md | R338, R339, R341, R961, R962
 func (c *Config) EnsureArkSource() {
 	if c.dbPath == "" {
 		return
@@ -1069,6 +1069,7 @@ func (c *Config) AddSource(dir string) error {
 // RemoveSource removes a source directory by path. Returns an error
 // if the source is a concrete dir managed by a glob pattern or if
 // the directory is the ark database directory (hardcoded source).
+// CRC: crc-Config.md | R340
 func (c *Config) RemoveSource(dir string) error {
 	dir = ExpandTilde(dir)
 	if c.dbPath != "" && dir == c.dbPath {

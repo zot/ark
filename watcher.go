@@ -44,6 +44,7 @@ func (srv *Server) startWatching() {
 
 // watchSourceDirs adds fsnotify watches for all resolved source directories
 // and their subdirectories. Safe to call multiple times — fsnotify deduplicates.
+// CRC: crc-Server.md | Seq: seq-file-change.md | R349
 func (srv *Server) watchSourceDirs() {
 	if srv.watcher == nil {
 		return
@@ -57,7 +58,7 @@ func (srv *Server) watchSourceDirs() {
 }
 
 // watchDirRecursive adds a watch for dir and all its watchable subdirectories.
-// R2952: descent matches the Scanner — a subtree is watched iff
+// R350, R2952: descent matches the Scanner — a subtree is watched iff
 // DB.IsWatchableDir (Classify isDir=true is not Excluded), so dot-dirs like
 // .scratch/ are watched (dotfiles=true) while directory excludes like .git/
 // are skipped. Replaces the prior unconditional dot-prefix skip, which made
@@ -107,7 +108,7 @@ func (srv *Server) unwatchDir(dir string) {
 // Anchors throughout this function reference steps in the "Throttled
 // On-Notify" diagram of seq-file-change.md.
 //
-// CRC: crc-Server.md | Seq: seq-file-change.md#1 | R991, R992
+// CRC: crc-Server.md | Seq: seq-file-change.md#1 | R348, R352, R353, R354, R355, R356, R357, R387, R389, R390, R391, R393, R394, R395, R991, R992
 func (srv *Server) watchLoop() {
 	configPath := srv.db.ConfigPath()
 	var (

@@ -338,7 +338,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// changes unseen during the scan. Watching is optional — failure
 	// is non-fatal. R2988: a rebuild does not watch (it runs the scan
 	// once and exits).
-	// CRC: crc-Server.md | R358
+	// CRC: crc-Server.md | R358, R359
 	if !opts.NoScan && !opts.Rebuild {
 		srv.startWatching()
 	}
@@ -347,6 +347,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// immediately. R2988: a rebuild drives its own scan in runRebuildScan
 	// (below) so it can wait for the write queue to drain, so skip the
 	// background reconcile here.
+	// CRC: crc-Server.md | R343
 	if !opts.NoScan && !opts.Rebuild {
 		srv.reconcile()
 	}
@@ -713,7 +714,10 @@ func (srv *Server) indexPaths(paths []string) {
 
 // reconcile sends a reconciliation cycle through the DB actor.
 // Fire-and-forget — the watcher doesn't need the result. R992
-// CRC: crc-DB.md | R987, R990
+// A second reconcile requested while one runs queues behind it on the
+// DB actor (FIFO) rather than being dropped, so it runs after (R346);
+// the dispatch returns immediately so HTTP handlers don't block (R345).
+// CRC: crc-DB.md | R345, R346, R987, R990
 func (srv *Server) reconcile() {
 	srv.db.Do(func(db *DB) {
 		// Wire schedule callback for async write goroutines
@@ -734,7 +738,7 @@ func (srv *Server) reconcile() {
 // new/removed sources. Sweep drops files that no longer
 // classify as Included (R2138, R2142). Called inside the DB actor.
 //
-// CRC: crc-Server.md | Seq: seq-reconcile.md | R351, R2138, R2142
+// CRC: crc-Server.md | Seq: seq-reconcile.md | R347, R351, R2138, R2142
 func (srv *Server) doReconcile(db *DB) {
 	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
@@ -2013,7 +2017,9 @@ type configWhyRequest struct {
 }
 
 // configMutate decodes a request, applies a config mutation inside the
-// DB actor, saves, and triggers reconciliation.
+// DB actor, saves, and triggers reconciliation. Every config mutation
+// handler routes through here, so each one triggers a reconcile (R344).
+// CRC: crc-Server.md | R344
 func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func(*DB) error) {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

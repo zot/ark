@@ -637,7 +637,7 @@
 - **R366:** If last chunk doesn't match (unclean boundary), re-chunk from the last chunk's start offset only
 - **R367:** Append-only chunks only extract tags from new chunks, adding to existing T/F counts
 - **R368:** Append detection is universal — every file gets it, not strategy-specific
-- **R369:** (inferred) Strategies can report whether they produce clean chunk boundaries (line-based and JSONL always do)
+- **~~R369:~~** (Retired T219 — see R2273) (inferred) Strategies can report whether they produce clean chunk boundaries (line-based and JSONL always do)
 
 ### chat-jsonl Rename
 - **R370:** The current `jsonl` chunking strategy is renamed to `chat-jsonl`
@@ -654,7 +654,7 @@
 - **R382:** Ark registers the markdown strategy in both `InitDB` and `Open`
 - **R383:** The default strategy mapping for `*.md` changes from `lines` to `markdown`
 - **R384:** Blank lines are boundaries only — not included in any chunk's content
-- **R385:** (inferred) Append detection derives boundary cleanliness from last chunk end vs file length — no chunker reporting needed
+- **~~R385:~~** (Retired T220 — see R2273) (inferred) Append detection derives boundary cleanliness from last chunk end vs file length — no chunker reporting needed
 - **R386:** (inferred) Until O12 back-seek is implemented, append detection falls back to full reindex for markdown-strategy files
 
 ### Empty Files

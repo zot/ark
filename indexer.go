@@ -597,6 +597,7 @@ type refreshPrep struct {
 // from multiple goroutines. LMDB reads (DetectAppend, FileInfoByID) are
 // concurrent-safe. Returns a prep struct for executeRefresh.
 // Tag extraction itself moves on-actor (R1896).
+// CRC: crc-Indexer.md | Seq: seq-file-change.md | R364, R368
 func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refreshPrep, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -650,7 +651,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 
 // executeRefresh runs all LMDB writes for a prepared file.
 // Must be called from the ChanSvc goroutine (single writer).
-// CRC: crc-Indexer.md | R1894, R1896, R1898, R2864
+// CRC: crc-Indexer.md | Seq: seq-file-change.md | R365, R367, R1894, R1896, R1898, R2864
 func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 	Logv(2, "execute-refresh: %s isAppend=%v newBytes=%d", prep.path, prep.isAppend, len(prep.newBytes))
 	if prep.unchanged {
@@ -795,6 +796,7 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 // DetectAppend checks whether a file change is append-only by hashing
 // the first FileLength bytes and comparing to the stored ContentHash.
 // Returns true if the prefix is unchanged and the file grew.
+// CRC: crc-Indexer.md | Seq: seq-file-change.md | R360, R361, R362
 func (idx *Indexer) DetectAppend(path string, fileid uint64) (bool, error) {
 	info, err := idx.fts.FileInfoByID(fileid)
 	if err != nil {

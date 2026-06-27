@@ -167,9 +167,13 @@ This is universal — not strategy-specific. Every file gets it. Small
 files: hash is trivial, full reindex is cheap anyway. Large files:
 skip re-chunking everything before the watermark.
 
-Strategies can report whether they produce clean chunk boundaries.
-Line-based and JSONL strategies always end on boundaries. Markdown
-heading-based strategies might not.
+Clean-boundary handling is delegated to the chunker, not reported
+per-strategy to ark: a strategy that implements microfts2's
+`AppendAwareChunker` (`chat-jsonl`, `markdown`) merges boundary-spanning
+appends itself. Line-based and JSONL strategies always end on clean
+boundaries; markdown heading-based strategies might not, which is why the
+unclean-boundary back-seek above remains deferred for any chunker that is
+not append-aware.
 
 ### chat-jsonl (done)
 
