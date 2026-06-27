@@ -1334,6 +1334,7 @@ func cmdSearch(args []string) {
 			}
 			results, err = d.SearchMulti(query, opts)
 		case primaryFuzzy:
+			// CRC: crc-CLI.md | R739, R741, R742, R743 — --fuzzy is a primary mode taking a positional query; filters/proximity/-k/--chunks/--file-content/--tags/--scores/--no-tmp compose via the shared opts
 			results, err = d.SearchFuzzy(query, opts)
 		case isSplit:
 			results, err = d.SearchSplit(opts)
@@ -2137,6 +2138,7 @@ func cmdEmbedBenchChunks(db *ark.DB, lib *ark.Librarian, ctxSize, parallel int) 
 }
 
 // CRC: crc-CLI.md | R2085
+// CRC: crc-CLI.md, crc-Server.md | R170, R171
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	noScan := fs.Bool("no-scan", false, "skip startup reconciliation")
@@ -2170,6 +2172,7 @@ func cmdServe(args []string) {
 	}
 }
 
+// CRC: crc-CLI.md, crc-DB.md | R250, R255, R256 — output order (files, stale, missing, unresolved, chunks, sources, strategies, map, server); new fields after existing; map in human-readable MB/GB via formatBytes
 func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	server := "not running"
 	if serverRunning {
@@ -3220,6 +3223,7 @@ func cmdChunksStatus(patterns []string) {
 	}
 }
 
+// CRC: crc-CLI.md, crc-Server.md | R172, R173, R174, R176
 func cmdStop(args []string) {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	force := fs.Bool("f", false, "send SIGKILL instead of SIGTERM")

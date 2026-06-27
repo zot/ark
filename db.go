@@ -1470,7 +1470,7 @@ func (db *DB) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, e
 }
 
 // SearchFuzzy runs a typo-tolerant search via microfts2.SearchFuzzy.
-// CRC: crc-Searcher.md | R745
+// CRC: crc-Searcher.md | R738, R745
 func (db *DB) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEntry, error) {
 	return db.search.SearchFuzzy(query, opts)
 }
@@ -2537,6 +2537,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		return nil, err
 	}
 
+	// CRC: crc-DB.md | R252, R253, R254, R258 — chunk total (sum of per-file ChunkRanges), per-strategy file tally, source count
 	var staleCount, totalChunks int
 	var totalSize int64
 	strategies := make(map[string]int)

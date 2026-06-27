@@ -2119,6 +2119,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 	if opts.Multi {
 		results, err = s.SearchMulti(query, opts)
 	} else if opts.Fuzzy {
+		// CRC: crc-Searcher.md | R747
 		results, err = s.SearchFuzzy(query, opts)
 	} else if opts.About != "" || opts.Contains != "" || len(opts.Regex) > 0 || opts.LikeFile != "" {
 		results, err = s.SearchSplit(opts)

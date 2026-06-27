@@ -306,6 +306,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// CRC: crc-DB.md | R990
 
 	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
+	// CRC: crc-Server.md | R175
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -1103,6 +1104,7 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 		var results []SearchResultEntry
 		var err error
+		// CRC: crc-Server.md | R749
 		if req.Fuzzy {
 			results, err = db.SearchFuzzy(req.Query, opts)
 		} else if req.About != "" || req.Contains != "" || len(req.Regex) > 0 || req.LikeFile != "" {
@@ -1220,7 +1222,7 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// CRC: crc-Server.md | R2477, R2480
+// CRC: crc-Server.md | R257, R2477, R2480
 func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	wantDB := r.URL.Query().Get("db") == "true"
 
