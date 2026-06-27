@@ -2091,6 +2091,7 @@ type fetchRequest struct {
 	Path string `json:"path"`
 }
 
+// CRC: crc-Server.md | R164, R165
 func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	var req fetchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

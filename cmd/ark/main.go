@@ -2934,6 +2934,7 @@ func cmdResolve(args []string) {
 	)
 }
 
+// CRC: crc-CLI.md | R165
 func cmdFetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	wrap := fs.String("wrap", "", "wrap output in XML tags (e.g. memory, knowledge)")

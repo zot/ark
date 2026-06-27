@@ -2951,6 +2951,7 @@ func (db *DB) Resolve(patterns []string) error {
 
 // Fetch returns the full content of an indexed file.
 // The file must be known to microfts2 (in the index).
+// CRC: crc-DB.md | R161, R162, R163
 func (db *DB) Fetch(path string) ([]byte, error) {
 	// R692: tmp:// paths read from overlay's stored content
 	if strings.HasPrefix(path, "tmp://") {
