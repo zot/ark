@@ -2030,26 +2030,31 @@ func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, f
 	w.WriteHeader(http.StatusOK)
 }
 
+// CRC: crc-Server.md | R152
 func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddSource(req.Dir) })
 }
 
+// CRC: crc-Server.md | R160
 func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemoveSource(req.Dir) })
 }
 
+// CRC: crc-Server.md | R153
 func (srv *Server) handleConfigAddInclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddInclude(req.Pattern, req.Source) })
 }
 
+// CRC: crc-Server.md | R154
 func (srv *Server) handleConfigAddExclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddExclude(req.Pattern, req.Source) })
 }
 
+// CRC: crc-Server.md | R155
 func (srv *Server) handleConfigRemovePattern(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemovePattern(req.Pattern, req.Source) })
@@ -2065,6 +2070,7 @@ func (srv *Server) handleConfigAddStrategy(w http.ResponseWriter, r *http.Reques
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddStrategy(req.Pattern, req.Strategy) })
 }
 
+// CRC: crc-Server.md | R156
 func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
 	var req configWhyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

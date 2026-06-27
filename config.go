@@ -1044,6 +1044,7 @@ func IsGlob(dir string) bool {
 
 // AddSource adds a new source directory. Glob patterns (containing *, ?, [)
 // are stored as-is without validation. Concrete paths are validated to exist.
+// CRC: crc-Config.md | R148
 func (c *Config) AddSource(dir string) error {
 	dir = ExpandTilde(dir)
 	for _, src := range c.Sources {
@@ -1225,6 +1226,7 @@ func (c *Config) AddStrategy(pattern, strategy string) error {
 
 // AddInclude adds an include pattern. If sourceDir is empty, adds to
 // global patterns; otherwise adds to the specified source's patterns.
+// CRC: crc-Config.md | R149, R151
 func (c *Config) AddInclude(pattern, sourceDir string) error {
 	if err := validatePattern(pattern); err != nil {
 		return err
@@ -1244,6 +1246,7 @@ func (c *Config) AddInclude(pattern, sourceDir string) error {
 
 // AddExclude adds an exclude pattern. If sourceDir is empty, adds to
 // global patterns; otherwise adds to the specified source's patterns.
+// CRC: crc-Config.md | R149
 func (c *Config) AddExclude(pattern, sourceDir string) error {
 	if err := validatePattern(pattern); err != nil {
 		return err
@@ -1275,6 +1278,7 @@ func appendToPatternSpec(spec *PatternSpec, pattern string) {
 // RemovePattern removes a pattern from include or exclude lists. If
 // sourceDir is empty, removes from global; otherwise from the specified
 // source. Returns an error if the pattern wasn't found.
+// CRC: crc-Config.md | R150
 func (c *Config) RemovePattern(pattern, sourceDir string) error {
 	if sourceDir == "" {
 		if removeFromSlice(&c.DefaultInclude, pattern) || removeFromSlice(&c.DefaultExclude, pattern) {
@@ -1306,6 +1310,7 @@ type WhyResult struct {
 
 // ShowWhy explains why a file is included, excluded, or unresolved.
 // It checks config patterns and ignore files (.gitignore, .arkignore).
+// CRC: crc-Config.md | R157, R158
 func (c *Config) ShowWhy(filePath string) (*WhyResult, error) {
 	filePath = ExpandTilde(filePath)
 	m := &Matcher{Dotfiles: c.Dotfiles}
