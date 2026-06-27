@@ -1070,6 +1070,7 @@ func cmdSearch(args []string) {
 		}()
 	}
 
+	// CRC: crc-CLI.md | R110
 	if *chunks && *files {
 		fmt.Fprintln(os.Stderr, "error: --chunks and --file-content are mutually exclusive")
 		os.Exit(1)
@@ -1343,6 +1344,7 @@ func cmdSearch(args []string) {
 			fatal(err)
 		}
 
+		// CRC: crc-Searcher.md | R114 — fills apply after any search mode (combined/split/fuzzy/multi/tag)
 		if *tags || *chunks {
 			results, err = d.FillChunks(results)
 			if err != nil {

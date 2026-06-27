@@ -67,13 +67,13 @@ The default `about_filter_top_k` (200) can be overridden per row:
 ## Search output modes
 
 - Default: `filepath:startline-endline` (one per line), with optional `\tscore`
-- `--chunks` — emit chunk text as JSONL: `{"path", "startLine", "endLine", "score", "text"}`
-- `--files` — emit full file content as JSONL for matching files
+- `--chunks` — emit chunk text as JSONL: `{"path", "range", "score", "text"}` (with `--preview N`, `text` is replaced by a `preview` window)
+- `--file-content` — emit full file content as JSONL for matching files
 - `--wrap <name>` — wrap output in XML tags for direct context
   injection into AI sessions. The tag name is the wrapper argument:
   `--wrap memory` produces `<memory source="path" lines="start-end">content</memory>`,
   `--wrap knowledge` produces `<knowledge source="path">content</knowledge>`.
-  Works with `--chunks` and `--files`. Also works on `ark fetch`.
+  Works with `--chunks` and `--file-content`. Also works on `ark fetch`.
   No post-processing needed — output drops straight into context.
   Convention: `memory` for conversation/experience, `knowledge` for
   distilled facts/notes/code.

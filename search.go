@@ -162,6 +162,7 @@ type SearchResultEntry struct {
 }
 
 // ChunkResult is the JSONL output for --chunks.
+// CRC: crc-Searcher.md | R112
 type ChunkResult struct {
 	Path    string  `json:"path"`
 	Range   string  `json:"range"`
@@ -258,7 +259,8 @@ func ExtractPreview(text, query string, n int) string {
 	return result
 }
 
-// FileResult is the JSONL output for --files.
+// FileResult is the JSONL output for --file-content.
+// CRC: crc-Searcher.md | R113
 type FileResult struct {
 	Path  string  `json:"path"`
 	Score float64 `json:"score"`
@@ -1527,7 +1529,9 @@ func (s *Searcher) filterAndResolve(results []SearchResultEntry, opts SearchOpts
 }
 
 // FillChunks reads chunk text for each result using a fresh per-query ChunkCache.
-// CRC: crc-Searcher.md | R605, R653
+// R115: content comes from the index, not a fresh permission-gated file read.
+// R116: chunk text is stored at index time, so retrieval needs no embedding model.
+// CRC: crc-Searcher.md | R108, R115, R116, R605, R653
 func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	return s.FillChunksUsing(results, nil)
 }
@@ -1662,6 +1666,7 @@ func (s *Searcher) FillChunksUsing(results []SearchResultEntry, cache *microfts2
 
 // FillFiles deduplicates results by file and reads full content.
 // Multiple chunk hits from one file → one entry with best score.
+// CRC: crc-Searcher.md | R109, R111
 func (s *Searcher) FillFiles(results []SearchResultEntry) ([]SearchResultEntry, error) {
 	type fileEntry struct {
 		idx   int

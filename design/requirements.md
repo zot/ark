@@ -170,12 +170,12 @@
 ### Chunk Retrieval
 
 - **R108:** `ark search --chunks` emits chunk text as JSONL instead of range output
-- **R109:** `ark search --files` emits full file content as JSONL for each matching file
-- **R110:** `--chunks` and `--files` are mutually exclusive — error if both provided
-- **R111:** (inferred) `--files` deduplicates by file — multiple chunk hits from one file emit the file content once
-- **R112:** (inferred) JSONL schema for `--chunks`: `{"path":"...","startLine":N,"endLine":N,"score":F,"text":"..."}`
-- **R113:** (inferred) JSONL schema for `--files`: `{"path":"...","score":F,"text":"..."}`  — score is the best chunk score for that file
-- **R114:** `--chunks` and `--files` work with combined search, split search, and tag search
+- **R109:** `ark search --file-content` emits full file content as JSONL for each matching file
+- **R110:** `--chunks` and `--file-content` are mutually exclusive — error if both provided
+- **R111:** (inferred) `--file-content` deduplicates by file — multiple chunk hits from one file emit the file content once
+- **R112:** (inferred) JSONL schema for `--chunks`: `{"path":"...","range":"...","score":F,"text":"..."}` (with `--preview N`, `text` is omitted and a `preview` field carries the window)
+- **R113:** (inferred) JSONL schema for `--file-content`: `{"path":"...","score":F,"text":"..."}`  — score is the best chunk score for that file
+- **R114:** `--chunks` and `--file-content` work with combined search, split search, and tag search
 - **R115:** Chunk retrieval enables permission end-run: indexed file content emitted without per-file permission
 - **R116:** Chunk retrieval works without an embedding model (FTS-only and tag search)
 
