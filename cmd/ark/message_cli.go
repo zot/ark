@@ -366,7 +366,7 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 			}
 		}
 
-		// CRC: crc-CLI.md | R2430, R2431, R2484
+		// CRC: crc-CLI.md | R530, R531, R532, R533, R534, R539, R540, R2430, R2431, R2484
 		// CLI-specific post-filters. --all is applied here (not by the
 		// fetch) so that completed responses remain visible to byID for
 		// pair lookup; the display view still hides them unless asked.
@@ -405,6 +405,7 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 			filtered = um
 		}
 
+		// CRC: crc-CLI.md | R537, R538 — --counts prints one tab-separated status\tcount line per status, sorted
 		if counts {
 			statusCounts := make(map[string]int)
 			for _, e := range filtered {
@@ -495,7 +496,7 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 
 	// Server-first so tmp:// inbox messages (only in server memory) are
 	// visible. Cold-path fallback when no server is running.
-	// CRC: crc-CLI.md | R1952, R2484
+	// CRC: crc-CLI.md | R501, R535, R536, R1952, R2484
 	// We always fetch with showAll=true so completed responses remain in
 	// the entry stream for byID pair lookup; --all is applied as a CLI
 	// post-filter in printEntries.

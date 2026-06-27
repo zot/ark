@@ -3295,7 +3295,7 @@ type inboxFields struct {
 // Store.FileTagValues, which dispatches to the in-memory tag overlay.
 // Returns ok=false when the @status tag is absent — the candidate is
 // not an inboxable message.
-// CRC: crc-DB.md | R1147, R1149, R1952
+// CRC: crc-DB.md | R525, R1147, R1149, R1952
 func (db *DB) readInboxFields(fileID uint64, path string) (inboxFields, bool) {
 	var f inboxFields
 	if IsOverlayID(fileID) {

@@ -1921,7 +1921,7 @@ func StrategyToContentType(strategy string) string {
 // SearchMulti runs a query through all four scoring strategies (coverage, density,
 // overlap, bm25) in a single microfts2 SearchMulti call. Results are deduplicated
 // by (fileid, chunknum), keeping the best score per chunk across strategies.
-// CRC: crc-Searcher.md | Seq: seq-search.md
+// CRC: crc-Searcher.md | Seq: seq-search.md | R587, R588, R589, R593, R594, R595, R596, R598, R601, R602
 func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
@@ -2005,7 +2005,7 @@ func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEnt
 }
 
 // buildStrategies creates the scorer map for SearchMulti.
-// CRC: crc-Searcher.md | R697, R698, R699, R700
+// CRC: crc-Searcher.md | R586, R604, R697, R698, R699, R700
 func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc, error) {
 	strategies := map[string]microfts2.ScoreFunc{
 		"coverage": microfts2.ScoreCoverage,
@@ -2117,6 +2117,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 
 	var results []SearchResultEntry
 	var err error
+	// CRC: crc-Searcher.md | R603 — multi-strategy search for the UI
 	if opts.Multi {
 		results, err = s.SearchMulti(query, opts)
 	} else if opts.Fuzzy {

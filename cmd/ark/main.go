@@ -1182,6 +1182,7 @@ func cmdSearch(args []string) {
 		fmt.Fprintln(os.Stderr, "error: --multi and --score are mutually exclusive")
 		os.Exit(1)
 	}
+	// CRC: crc-CLI.md | R592 — --multi is an error with --about, --regex, or --like-file
 	if *multi && (primaryAbout != "" || len(primaryRegex) > 0 || *likeFile != "") {
 		fmt.Fprintln(os.Stderr, "error: --multi cannot be used with --about, --regex, or --like-file")
 		os.Exit(1)
@@ -1329,6 +1330,7 @@ func cmdSearch(args []string) {
 			// R2442, R2453: predicate-driven bypass (local fallback).
 			chunkIDs := d.ResolveTagPredicateChunks(*primaryTagPredicate, primaryFileTag)
 			results, err = d.SearchTagChunks(chunkIDs, opts)
+		// CRC: crc-CLI.md | R585, R591 — --multi runs all strategies; works with a combined query or --contains
 		case *multi:
 			if query == "" && primaryContains != "" {
 				query = primaryContains
