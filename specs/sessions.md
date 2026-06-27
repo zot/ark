@@ -38,14 +38,18 @@ accommodates future state without changing the model.
 
 ## Command Object (Search Only)
 
-A SearchCmd struct captures the parameters for a search operation.
-All three sources construct a SearchCmd and either run it directly
-(no session) or submit it to a named session.
+The search-command responsibilities — capture the parameters, be
+built by all three sources, and run directly or within a named
+session — are realized by the existing `SearchOpts` struct, not a
+distinct `SearchCmd`. Each source constructs `SearchOpts` and
+dispatches the search inline; a search runs directly when its
+`Cache` is nil, and within a session when the session actor threads
+its shared cache through `SearchOpts.Cache` (cross-query caching).
 
-This is an incremental step — not every operation needs a command
-object. Search is the one that benefits from session-scoped caching.
-Other commands continue to dispatch as they do today. As more
-commands benefit from sessions, they get their own command structs.
+This is an incremental step — only search benefits from
+session-scoped caching, so only search grew the Session/Cache
+fields. Other commands continue to dispatch as they do today; a
+future command that needs sessions can follow the same pattern.
 
 ## Source Integration
 
@@ -61,7 +65,8 @@ cross-query cache.
 
 Search handler accepts an optional `session` field in the JSON
 request body. If present, the server looks up (or creates) the
-named session and submits the SearchCmd to it. If absent, the
+named session and runs the search within it (threading the
+session's cache through `SearchOpts.Cache`). If absent, the
 search runs immediately with no session — same as today.
 
 ### Lua (UI)
@@ -69,7 +74,8 @@ search runs immediately with no session — same as today.
 `mcp.search_grouped` accepts an optional `session` field in its
 opts table. The UI app passes a fixed session name (e.g. "ui")
 for interactive search, so all keystrokes share one cache. The
-Lua function constructs a SearchCmd and submits it to the session.
+Lua function passes the session name through `SearchOpts` so the
+search runs within that session.
 
 ## What a Session Is Not
 

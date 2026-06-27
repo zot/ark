@@ -2,6 +2,12 @@
 
 Covers how search commands flow through sessions from all three sources.
 
+> **Realization note (A16):** `SearchCmd` below is the *concept*, not a
+> code struct (none exists — pickaxe-confirmed). It is realized as
+> `ark.SearchOpts` (carrying the Session name and the optional session
+> `Cache`), constructed and dispatched inline by each source; "submit to
+> session" is the `Cache` threading (R1139/R1140). See crc-SearchCmd.md.
+
 ## Participants
 - CLI / HTTP Handler / Lua Function
 - Server

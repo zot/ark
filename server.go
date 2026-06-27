@@ -4644,7 +4644,7 @@ func (srv *Server) registerLuaFunctions() {
 				}
 			}
 
-			// R660, R661: session-scoped search for UI
+			// R660, R661, R662: session-scoped search for UI — Lua search_grouped builds SearchOpts (incl. session) and submits to the named session (R662 = the designed SearchCmd's Lua construction path)
 			var sessionName string
 			if L.GetTop() >= 2 {
 				optsTable := L.CheckTable(2)

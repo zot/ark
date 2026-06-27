@@ -60,6 +60,7 @@ func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts Sea
 }
 
 // SearchOpts controls search behavior.
+// CRC: crc-SearchCmd.md, crc-Searcher.md | R649, R650, R651 — realizes the designed SearchCmd: captures all search params (incl. Session, Cache), constructed by CLI (runSearch), HTTP (handleSearch), and Lua, dispatched inline; "submit to session" is the Cache threading (R1139/R1140); converts to microfts2's searchConfig via the With* options in defaultSearchOpts
 type SearchOpts struct {
 	K               int                      // max results (default 20)
 	Scores          bool                     // include scores in output
