@@ -43,8 +43,9 @@ Supports `--wrap <name>` for XML wrapping, consistent with
 
 ## Implementation
 
-Calls `microfts2.DB.GetChunks()` directly. Cold-start only (withDB) —
-this is a fast, read-only operation. No server proxy needed.
+Calls `microfts2.DB.GetChunks()` directly. Dispatches via `proxyOrLocal`:
+it proxies to `POST /chunks` when a server holds the single-process index,
+otherwise cold-starts locally — a fast, read-only operation either way.
 
 ## Why this matters
 

@@ -3030,6 +3030,10 @@ func cmdFetch(args []string) {
 
 // emitChunkResult formats a ChunkFetchResult for `ark chunks`, shared by
 // the proxy and local arms so their output is identical. R2998
+// R481: default output is JSONL — one JSON object per chunk (same format as
+// `ark search --chunks`). R482: each object is a microfts2.ChunkResult with
+// path, range, content, and 0-based index.
+// CRC: crc-CLI.md | R481, R482, R2998
 func emitChunkResult(res ark.ChunkFetchResult, filePath, chunkRange, anchor, wrap string) {
 	if res.HasSub {
 		if wrap != "" {
@@ -3096,9 +3100,11 @@ Options:`)
 		os.Exit(1)
 	}
 
-	// R2998, R3003: dispatch through the central helper. /chunks proxies
-	// to the server; FetchChunkContent runs the identical resolution
-	// locally. emitChunkResult formats both so output cannot drift.
+	// R485, R2998, R3003: dispatch through the central helper. /chunks proxies
+	// to the server when one holds the single-process index; otherwise
+	// FetchChunkContent runs the identical resolution locally (cold-start) —
+	// read-only and fast either way. emitChunkResult formats both so output
+	// cannot drift.
 	proxyOrLocal(
 		func(client *http.Client) error {
 			var res ark.ChunkFetchResult

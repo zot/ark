@@ -1560,7 +1560,11 @@ func (db *DB) ResolveTagPredicateChunks(p MatchPredicate, fileTag bool) []uint64
 }
 
 // GetChunks returns the target chunk and its positional neighbors.
-// CRC: crc-DB.md | R693 — tmp:// paths are handled internally by microfts2.GetChunks
+// R484: calls microfts2.DB.GetChunks() directly — no re-implementation of
+// chunk retrieval. R488: the targetRange label is opaque, passed through
+// verbatim to microfts2. R483: the target chunk and its neighbors come back
+// in positional (ascending-index) order.
+// CRC: crc-DB.md | R483, R484, R488, R693 — tmp:// paths are handled internally by microfts2.GetChunks
 func (db *DB) GetChunks(fpath, targetRange string, before, after int) ([]microfts2.ChunkResult, error) {
 	return db.fts.GetChunks(fpath, targetRange, before, after)
 }
@@ -1578,6 +1582,9 @@ type ChunkFetchResult struct {
 // content. anchor != "" → chat sub-chunk (R2914); path == "" → chunkID-only
 // form (rng is the decimal id, resolved via ChunkInfo); otherwise
 // path:range. Shared by the CLI local arm and POST /chunks. R2998
+// R486: the target file must be indexed — ChunkInfo/GetChunks return an
+// error when it is not in the database, propagated to the caller here.
+// CRC: crc-DB.md | R486, R2998
 func (db *DB) FetchChunkContent(path, rng, anchor string, before, after int) (ChunkFetchResult, error) {
 	if anchor != "" {
 		text, ok := db.ChatSubchunk(path, rng, anchor)

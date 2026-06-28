@@ -135,7 +135,8 @@ dispatches operations via proxy or cold-start.
   --wrap <name> wraps output in XML tags.
 - cmdChunks: context expansion around search hits. Takes path, range,
   optional -before/-after counts. Calls microfts2.GetChunks() via
-  withDB. Outputs JSONL (one object per chunk: path, range, content,
+  proxyOrLocal (POST /chunks when a server holds the index, else local
+  cold-start). Outputs JSONL (one object per chunk: path, range, content,
   index). Supports --wrap for XML wrapping.
 - cmdFiles: list indexed files. Positional glob args filter the output.
   --filter-files/--exclude-files set the base file set; positional
