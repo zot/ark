@@ -3050,7 +3050,7 @@ func (s *Store) DeleteChunkEmbeddingInTxn(txn *bbolt.Tx, chunkID uint64) error {
 }
 
 // WriteFileCentroid writes one EF record (running sum + count).
-// CRC: crc-Store.md | R1835
+// CRC: crc-Store.md | R1602, R1835
 func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		if count == 0 {
@@ -3069,6 +3069,7 @@ func (s *Store) WriteFileCentroid(fileID uint64, sum []float32, count uint32) er
 }
 
 // ReadFileCentroid reads one EF record. Returns sum, count.
+// CRC: crc-Store.md | R1603
 func (s *Store) ReadFileCentroid(fileID uint64) ([]float32, uint32, error) {
 	var sum []float32
 	var count uint32
@@ -3114,7 +3115,8 @@ func (s *Store) DeleteFileCentroidInTxn(txn *bbolt.Tx, fileID uint64) error {
 }
 
 // ScanFileCentroids returns all EF records as fileID → centroid (sum/count).
-// CRC: crc-Store.md | R1605
+// R1619: centroid at query time is sum / count (computed below as s/count).
+// CRC: crc-Store.md | R1605, R1619
 func (s *Store) ScanFileCentroids() (map[uint64][]float32, error) {
 	result := make(map[uint64][]float32)
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
@@ -3211,7 +3213,7 @@ func (s *Store) ScanChunkEmbeddingKeys() (map[uint64]int, error) {
 
 // DropChunkEmbeddings deletes all EC and EF records, and drops every SEC*
 // side-index entry alongside the EC sweep. EF is not stamped.
-// CRC: crc-Store.md | R1844, R2193
+// CRC: crc-Store.md | R1606, R1844, R2193
 func (s *Store) DropChunkEmbeddings() error {
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		if err := scanPrefix(txn, []byte(prefixEmbedChunk), func(k, _ []byte) error {

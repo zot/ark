@@ -2605,9 +2605,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Incremental Centroid Updates
 
-- **R1618:** File centroids use running sum for O(1) updates: add chunk adds vec to sum and increments count, remove chunk subtracts vec and decrements count.
+- **R1618:** File centroids are stored as a running sum + count — the EF record holds the element-wise sum of the file's embedded chunk vecs plus the count of embedded chunks. The centroid is accumulated by summing chunk vecs (`sum += vec; count++`) and is the stored sum divided by count (R1619).
 - **R1619:** Centroid at query time is `sum / count`.
-- **R1623:** EF centroid count includes permanently-skipped (oversized) chunks so the fast-skip sentinel (`efCount == len(chunkLens)`) terminates correctly for files with chunks exceeding all tier byte limits. Oversized count is only added for fresh centroids; seeded centroids from prior runs already include it.
+- **~~R1623:~~** (Retired T222 — see R3004) EF centroid count includes permanently-skipped (oversized) chunks so the fast-skip sentinel (`efCount == len(chunkLens)`) terminates correctly for files with chunks exceeding all tier byte limits. Oversized count is only added for fresh centroids; seeded centroids from prior runs already include it.
 
 ### Model Mismatch
 

@@ -2172,6 +2172,9 @@ func (l *Librarian) BatchEmbedChunks() error {
 				totalDeduped++
 				continue
 			}
+			// R1604: a chunk with a C record (it's in finfo.Chunks) but no EC
+			// record (existing == nil) is a "missing embedding" — queue it. This
+			// inlines the former standalone MissingChunkEmbeddings() scan.
 			existing, _ := l.db.store.ReadChunkEmbedding(fce.ChunkID)
 			if existing != nil {
 				continue
@@ -2312,7 +2315,10 @@ func (l *Librarian) BatchEmbedChunks() error {
 		ctx.close()
 	}
 
-	// R1848: recompute EF centroids for files that got new embeddings
+	// R1608, R1618, R1848: recompute EF centroids from scratch for files that
+	// got new embeddings — read every chunk vec and accumulate the running sum
+	// (R1618: sum += vec, count++; centroid is sum/count). A full re-index of a
+	// file lands here.
 	for fileID := range filesWithNewEmbeddings {
 		finfo, err := l.db.fts.FileInfoByID(fileID)
 		if err != nil || len(finfo.Chunks) == 0 {

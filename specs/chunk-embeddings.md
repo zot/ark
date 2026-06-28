@@ -67,9 +67,10 @@ same text shared across files gets one EC). Orphan-cleanup happens
 via microfts2's removal/reindex callbacks delivering orphaned
 chunkIDs that ark deletes inside the same transaction.
 
-EF stores a running sum + count so centroid updates are O(1):
-add a chunk → `sum += vec; n++`; remove → `sum -= vec; n--`; query
-→ `centroid = sum / n`. Recomputed from scratch on full re-index.
+EF stores a running sum + count: the centroid is accumulated by
+summing the file's chunk vecs (`sum += vec; n++`) and read back as
+`centroid = sum / n`. It is recomputed from scratch (re-summing every
+chunk vec) whenever a file gains new embeddings or is re-indexed.
 
 Record key/value layouts: see [record-formats.md](record-formats.md)
 (EC and EF sections).
