@@ -113,7 +113,12 @@ func NewLibrarian(db *DB, dbPath string) *Librarian {
 		connectionsResults:     make(map[string]*ConnectionsRecord),
 		connectionsAvailWindow: 60 * time.Second, // R2320
 	}
-	// R2964: resolve the embedding model path
+	// R2964: resolve the embedding model path. R1275: the model path is
+	// relative to the database directory (~/.ark/). R1276: if [embedding]
+	// model is empty or the file does not exist, modelPath stays "" so
+	// EmbeddingAvailable reports disabled and search falls back to trigram
+	// fuzzy.
+	// CRC: crc-Librarian.md | R1275, R1276
 	if model := cfg.Embedding.Model; model != "" {
 		modelPath := filepath.Join(dbPath, model)
 		if _, err := os.Stat(modelPath); err == nil {
@@ -1955,7 +1960,12 @@ func (l *Librarian) BatchEmbed() error {
 		tvidMap = l.db.store.TvidMap().Snapshot()
 	}
 
-	// Batch embed tag names (hyphens → spaces)
+	// Batch embed tag names (hyphens → spaces). R1285: hyphens→spaces
+	// (`design-decision` → "design decision"). R1287: the embedding is stored
+	// inline in the T record via WriteTagNameEmbedding(tag, vec) — keyed by tag
+	// name, no separate ET prefix or tag-name-id. R1288: this hyphens→spaces
+	// conversion applies to both T (here) and EV (the tag-value block below).
+	// CRC: crc-Librarian.md | R1285, R1287, R1288
 	batchSize := 50
 	for i := 0; i < len(missingTags); i += batchSize {
 		end := min(i+batchSize, len(missingTags))
@@ -1975,7 +1985,10 @@ func (l *Librarian) BatchEmbed() error {
 		}
 	}
 
-	// Batch embed tag values ("tag: value" with hyphens → spaces in tag)
+	// Batch embed tag values ("tag: value" with hyphens → spaces in tag).
+	// R1286: tag-value compounds are embedded as "tagname: value" — colon
+	// preserved, hyphens in the tag name converted to spaces (R1288).
+	// CRC: crc-Librarian.md | R1286, R1288
 	for i := 0; i < len(missingTvids); i += batchSize {
 		end := min(i+batchSize, len(missingTvids))
 		batch := missingTvids[i:end]
@@ -2439,6 +2452,9 @@ func (l *Librarian) ensureModel() error {
 	return nil
 }
 
+// R1279: when the modelTTL elapses this timer fires unloadModel (l.model →
+// nil); the next query's ensureModel sees nil and reloads the model.
+// CRC: crc-Librarian.md | R1279
 func (l *Librarian) resetModelTimer() {
 	if l.modelTimer != nil {
 		l.modelTimer.Stop()

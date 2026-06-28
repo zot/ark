@@ -1332,6 +1332,9 @@ func (s *Store) writeChunkTagValuesInTxn(txn *bbolt.Tx, tt *TvidTxn, chunkID uin
 // removeOneVarint via removeOneChunkIDFromVRecord (ext) or removeVarint
 // via removeChunkIDInTxn (inline orphan path). Returns the tvid.
 // CRC: crc-Store.md | R1873, R1281, R1955, R1963, R1988
+// R1283: the tag-value-id is stable — Lookup reuses the tvid already assigned
+// to a (tag, value) pair; only a first-seen pair allocs a new one below.
+// CRC: crc-Store.md | R1283
 func (s *Store) addChunkIDToVRecord(txn *bbolt.Tx, tt *TvidTxn, tag, value string, chunkID uint64) (uint64, error) {
 	if tvid, ok := tt.Lookup(tag, value); ok {
 		fullKey := tagValueFullKey(tag, value, tvid)
@@ -2267,7 +2270,9 @@ func (s *Store) RecordCounts() (map[string]RecordStats, error) {
 
 // allocIDInTxn increments and returns the next ID within an existing write txn.
 // Operational counters (next_tvid, etc.) are stored as I records via makeIKey.
-// CRC: crc-Store.md | R1536
+// R1282: the next_tvid counter is stored as an ark index setting — an I
+// record (makeIKey(IFieldNextTvid)) read, incremented, and written here.
+// CRC: crc-Store.md | R1282, R1536
 func (s *Store) allocIDInTxn(txn *bbolt.Tx, iFieldName string) (uint64, error) {
 	key := makeIKey(iFieldName)
 	var id uint64
