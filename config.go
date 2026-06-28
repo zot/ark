@@ -40,8 +40,9 @@ const arkSourceIncludePatterns = `
 
 // Config represents the parsed ark.toml configuration.
 // CRC: crc-Config.md | R624, R625
+// CRC: crc-Config.md | R8
 type Config struct {
-	Dotfiles        bool              `toml:"dotfiles"`
+	Dotfiles        bool              `toml:"dotfiles"` // R25
 	CaseInsensitive bool              `toml:"case_insensitive,omitempty"`
 	EmbedCmd        string            `toml:"embed_cmd,omitempty"`
 	QueryCmd        string            `toml:"query_cmd,omitempty"`
@@ -513,9 +514,10 @@ type BracketDefConfig struct {
 }
 
 // Source is a directory entry in the configuration.
+// CRC: crc-Config.md | R27
 type Source struct {
 	Dir        string            `toml:"dir"`
-	Strategies map[string]string `toml:"strategies,omitempty"`
+	Strategies map[string]string `toml:"strategies,omitempty"` // R14
 	Include    PatternSpec       `toml:"include,omitempty"`
 	Exclude    PatternSpec       `toml:"exclude,omitempty"`
 	FromGlob   string            `toml:"from_glob,omitempty"`
@@ -618,6 +620,7 @@ func tomlEncodeStrings(s []string) []byte {
 }
 
 // LoadConfig reads and validates an ark.toml file.
+// CRC: crc-Config.md | R23 — config is TOML, named ark.toml
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -685,6 +688,7 @@ func (c *Config) EnsureDefaultScheduleTags() {
 // If configSeed is non-nil, uses that (from install/ark.toml bundle).
 // Otherwise falls back to a minimal built-in default.
 // CRC: crc-Config.md | R631, R632, R633, R2781, R2834
+// CRC: crc-Config.md | R22
 func WriteDefaultConfig(path string, configSeed []byte) error {
 	if len(configSeed) > 0 {
 		return os.WriteFile(path, configSeed, 0644)
@@ -981,6 +985,7 @@ func ExpandTildeSlice(paths []string) []string {
 }
 
 // validate checks for identical include/exclude strings.
+// CRC: crc-Config.md | R11
 func (c *Config) validate() {
 	c.Errors = nil
 	// Check global patterns

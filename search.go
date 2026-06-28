@@ -287,8 +287,9 @@ type Searcher struct {
 }
 
 // SearchCombined sends the same query to both engines, merges by
-// (fileid, chunknum), combines scores, sorts descending.
-// CRC: crc-Searcher.md | R228
+// (fileid, chunknum), combines scores, sorts descending (R46). microfts2
+// returns file/chunk matches with trigram scores (R47).
+// CRC: crc-Searcher.md | R46, R47, R228
 func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
@@ -359,8 +360,12 @@ func (s *Searcher) aboutSearch(query string, k int) ([]ChunkScore, error) {
 	return s.librarian.SearchChunks(qvec, k)
 }
 
-// SearchSplit dispatches --about, --contains, --regex to appropriate engines.
-// CRC: crc-Searcher.md | R228
+// SearchSplit dispatches --about, --contains, --regex to appropriate engines:
+// --contains and --regex go to microfts2 only (R53, R54); --contains drives
+// the FTS query while --regex post-filters when both are given (R55); each of
+// --about / --contains / --regex works alone (R56), and --about combined with
+// an FTS flag intersects (R57, via s.intersect).
+// CRC: crc-Searcher.md | R53, R54, R55, R56, R228
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
@@ -1365,6 +1370,9 @@ func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, erro
 
 // merge combines results from both engines by (FileID, ChunkID).
 // CRC: crc-Searcher.md | R1918
+// merge combines FTS and vector results keyed by (fileID, chunkNum), summing
+// scores, then sorts by combined score descending (R49, R50).
+// CRC: crc-Searcher.md | R49, R50
 func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []ChunkScore) []SearchResultEntry {
 	m := make(map[chunkKey]*SearchResultEntry)
 	cache := s.newFTSKeyCache()
@@ -1424,8 +1432,9 @@ func (s *Searcher) merge(ftsResults []microfts2.SearchResult, vecResults []Chunk
 	return results
 }
 
-// intersect keeps only chunks present in both result sets.
-// CRC: crc-Searcher.md | R1918
+// intersect keeps only chunks present in both result sets. This is the
+// --about + --contains/--regex intersection (R57).
+// CRC: crc-Searcher.md | R57, R1918
 func (s *Searcher) intersect(ftsResults []microfts2.SearchResult, vecResults []ChunkScore) []SearchResultEntry {
 	cache := s.newFTSKeyCache()
 	vecMap := make(map[chunkKey]float64)

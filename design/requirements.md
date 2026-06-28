@@ -162,7 +162,7 @@
 - **R104:** `M` prefix + fileid (8 bytes) → JSON missing file record (path, lastSeen timestamp)
 - **R105:** `U` prefix + path bytes → JSON unresolved file record (path, firstSeen timestamp, dir)
 - **R106:** Unresolved files that no longer exist on disk are removed silently during scans
-- **R107:** `I` key → JSON ark-level settings (sourceConfig, dotfiles boolean)
+- **~~R107:~~** (Retired T221 — see R1571) `I` key → JSON ark-level settings (sourceConfig, dotfiles boolean)
 
 ## Feature: Chunk Retrieval
 **Source:** specs/search.md

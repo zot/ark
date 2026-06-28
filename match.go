@@ -26,7 +26,7 @@ type Matcher struct {
 
 // Classify determines whether a path is included, excluded, or unresolved
 // given a set of include and exclude patterns. Include wins conflicts.
-// CRC: crc-Matcher.md | R2133
+// CRC: crc-Matcher.md | R9, R10, R15, R2133
 func (m *Matcher) Classify(includes, excludes []string, absPath, sourceDir string, isDir bool) Classification {
 	included := false
 	excluded := false
@@ -67,7 +67,7 @@ func (m *Matcher) Classify(includes, excludes []string, absPath, sourceDir strin
 // `ark remove` patterns, etc.) — in that case, "./" and bare forms fall
 // back to matching against absPath directly.
 //
-// CRC: crc-Matcher.md | R2133
+// CRC: crc-Matcher.md | R16, R17, R18, R19, R20, R2133
 func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 	dirPattern := strings.HasSuffix(pattern, "/")
 	if dirPattern != isDir {

@@ -251,7 +251,7 @@ func bDel(txn *bbolt.Tx, key []byte) error {
 
 // OpenStore opens or creates ark's bucket inside microfts2's bbolt database.
 // ark does not own the database — db is microfts2's handle (fts.DB()).
-// CRC: crc-Store.md | R2975
+// CRC: crc-Store.md | R6, R2975
 func OpenStore(db *bbolt.DB) (*Store, error) {
 	err := db.Update(func(txn *bbolt.Tx) error {
 		_, err := txn.CreateBucketIfNotExists(arkBucketName)
@@ -340,6 +340,9 @@ func (s *Store) ListUnresolved() ([]UnresolvedRecord, error) {
 }
 
 // CleanUnresolved removes unresolved entries for files no longer on disk.
+// Called from the scan/refresh paths (db.go) so vanished unresolved files
+// drop out silently.
+// CRC: crc-Store.md | R106
 func (s *Store) CleanUnresolved() error {
 	records, err := s.ListUnresolved()
 	if err != nil {
@@ -408,6 +411,8 @@ func makeIKey(name string) []byte {
 }
 
 // IGet reads a single I record string value. Returns "" if not found.
+// CRC: crc-Store.md | R1571 — per-field I records replace the monolithic
+// GetSettings/PutSettings JSON-blob settings (supersedes R107).
 func (s *Store) IGet(name string) (string, error) {
 	var val string
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
@@ -863,6 +868,7 @@ func scanPrefix(txn *bbolt.Tx, prefix []byte, fn func(k, v []byte) error) error 
 	return nil
 }
 
+// CRC: crc-Store.md | R104 — M record key: 'M' + fileid (8 bytes, big-endian)
 func missingKey(fileid uint64) []byte {
 	key := make([]byte, 9)
 	key[0] = byte(prefixMissing)
@@ -870,6 +876,7 @@ func missingKey(fileid uint64) []byte {
 	return key
 }
 
+// CRC: crc-Store.md | R105 — U record key: 'U' + path bytes
 func unresolvedKey(path string) []byte {
 	key := make([]byte, 1+len(path))
 	key[0] = byte(prefixUnresolved)

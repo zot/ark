@@ -131,7 +131,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 	setupLogging(dbPath)
 	socketPath := filepath.Join(dbPath, "ark.sock")
 
-	// Highlander: try to bind the socket
+	// Highlander: try to bind the socket. The socket bind IS the lock —
+	// only one server per database (R61: bound in the db dir; R68: one
+	// server per db). A live peer answering the dial means another server
+	// holds it, so exit (R69). A stale socket (dial fails) is removed and
+	// rebound for cold-start (R70).
+	// CRC: crc-Server.md | R61, R68, R69, R70
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		// Check if it's a stale socket
@@ -347,7 +352,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// immediately. R2988: a rebuild drives its own scan in runRebuildScan
 	// (below) so it can wait for the write queue to drain, so skip the
 	// background reconcile here.
-	// CRC: crc-Server.md | R343
+	// R66: startup reconciliation (scan then refresh) runs by default;
+	// R67: --no-scan (opts.NoScan) skips it.
+	// CRC: crc-Server.md | R66, R67, R343
 	if !opts.NoScan && !opts.Rebuild {
 		srv.reconcile()
 	}
@@ -419,20 +426,20 @@ func Serve(dbPath string, opts ServeOpts) error {
 		srv.uiRuntime.RegisterAPI(mux)
 	}
 
-	mux.HandleFunc("POST /search", srv.handleSearch)
-	mux.HandleFunc("POST /add", srv.handleAdd)
-	mux.HandleFunc("POST /remove", srv.handleRemove)
-	mux.HandleFunc("POST /scan", srv.handleScan)
-	mux.HandleFunc("POST /refresh", srv.handleRefresh)
-	mux.HandleFunc("GET /status", srv.handleStatus)
-	mux.HandleFunc("GET /files", srv.handleFiles)
+	mux.HandleFunc("POST /search", srv.handleSearch)   // R90
+	mux.HandleFunc("POST /add", srv.handleAdd)         // R91
+	mux.HandleFunc("POST /remove", srv.handleRemove)   // R92
+	mux.HandleFunc("POST /scan", srv.handleScan)       // R93
+	mux.HandleFunc("POST /refresh", srv.handleRefresh) // R94
+	mux.HandleFunc("GET /status", srv.handleStatus)    // R95
+	mux.HandleFunc("GET /files", srv.handleFiles)      // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
-	mux.HandleFunc("GET /stale", srv.handleStale)
-	mux.HandleFunc("GET /missing", srv.handleMissing)
-	mux.HandleFunc("POST /dismiss", srv.handleDismiss)
-	mux.HandleFunc("GET /config", srv.handleConfig)
-	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)
-	mux.HandleFunc("POST /resolve", srv.handleResolve)
+	mux.HandleFunc("GET /stale", srv.handleStale)            // R97
+	mux.HandleFunc("GET /missing", srv.handleMissing)        // R98
+	mux.HandleFunc("POST /dismiss", srv.handleDismiss)       // R99
+	mux.HandleFunc("GET /config", srv.handleConfig)          // R100
+	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)  // R101
+	mux.HandleFunc("POST /resolve", srv.handleResolve)       // R102
 	mux.HandleFunc("GET /tags", srv.handleTags)              // R132
 	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts) // R133
 	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)   // R134
@@ -518,6 +525,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	}
 
 	log.Printf("ark server listening on %s", socketPath)
+	// R65, R89: HTTP API accepts requests over the unix-socket listener, mirroring the CLI with JSON request/response.
 	return http.Serve(listener, mux)
 }
 
@@ -833,6 +841,7 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 	})
 }
 
+// CRC: crc-Server.md | R62 — PID file written outside the db directory, for emergency kill only
 func PidFilePath(dbPath string) string {
 	// PID file outside the database directory, derived from dbPath
 	absPath, err := filepath.Abs(dbPath)

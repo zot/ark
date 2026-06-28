@@ -99,7 +99,7 @@ func buildArkCommand() *ucli.Command {
 		// Global flags recognized before the subcommand (R2923). --dir
 		// defaults to ~/.ark/; -v is a repeatable count flag.
 		Flags: []ucli.Flag{
-			&ucli.StringFlag{Name: "dir", Value: defaultDB(), Usage: "database directory (default ~/.ark/)"},
+			&ucli.StringFlag{Name: "dir", Value: defaultDB(), Usage: "database directory (default ~/.ark/)"}, // R71
 			&ucli.BoolFlag{Name: "v", Usage: "increase verbosity (repeatable, up to -vvvv)", Config: ucli.BoolConfig{Count: &verbosity}},
 		},
 		// Before runs ahead of any subcommand Action, so the bodies that
@@ -186,6 +186,7 @@ func cmdVersion(_ []string) {
 	fmt.Printf("ark %s\n", ark.Version)
 }
 
+// CRC: crc-CLI.md | R29 — default database directory is ~/.ark/ (--dir overrides; R71)
 func defaultDB() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -240,6 +241,7 @@ func serverUnreachable(err error) bool {
 // just came up) and re-dispatches. A real error surfaces only
 // after the window closes.
 // CRC: crc-CLI.md | R2995, R2996, R2997
+// CRC: crc-CLI.md | Seq: seq-cli-dispatch.md | R88
 func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 	start := time.Now()
 	for {
@@ -519,6 +521,7 @@ func isBootstrapped() bool {
 	return err == nil
 }
 
+// CRC: crc-CLI.md | R72
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	embedCmd := fs.String("embed-cmd", "", "embedding command (optional, enables vector search)")
@@ -606,6 +609,7 @@ func cmdRebuild(args []string) {
 	}
 }
 
+// CRC: crc-CLI.md | R73
 func cmdAdd(args []string) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	fs.Usage = func() {
@@ -688,6 +692,7 @@ Options:`)
 	)
 }
 
+// CRC: crc-CLI.md | R74
 func cmdRemove(args []string) {
 	fs := flag.NewFlagSet("remove", flag.ExitOnError)
 	fs.Usage = func() {
@@ -732,6 +737,7 @@ func cmdRemove(args []string) {
 	)
 }
 
+// CRC: crc-CLI.md | R75
 func cmdScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	fs.Usage = func() {
@@ -763,6 +769,7 @@ func cmdScan(args []string) {
 	)
 }
 
+// CRC: crc-CLI.md | R76
 func cmdRefresh(args []string) {
 	fs := flag.NewFlagSet("refresh", flag.ExitOnError)
 	fs.Usage = func() {
@@ -976,6 +983,7 @@ func anchorFilterToCwd(glob, cwd string) string {
 	return joined
 }
 
+// CRC: crc-CLI.md | R77, R78
 func cmdSearch(args []string) {
 	// Subcommand dispatch
 	if len(args) > 0 && args[0] == "expand" {
@@ -1011,9 +1019,9 @@ func cmdSearch(args []string) {
 		fmt.Fprintln(os.Stderr, searchHelp+"\n\nOutput:")
 		fs.PrintDefaults()
 	}
-	k := fs.Int("k", 20, "max results")
-	scores := fs.Bool("scores", false, "show scores")
-	after := fs.String("after", "", "only results after date")
+	k := fs.Int("k", 20, "max results")                        // R58
+	scores := fs.Bool("scores", false, "show scores")          // R59
+	after := fs.String("after", "", "only results after date") // R60
 	before := fs.String("before", "", "only results before date")
 	likeFile := fs.String("like-file", "", "find similar files using FTS density scoring")
 	score := fs.String("score", "", "scoring strategy: auto (default), coverage, density")
@@ -1419,6 +1427,7 @@ func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files b
 				fmt.Printf("%s:%s\t%.4f\n", r.Path, r.Range, r.Score)
 			}
 		} else {
+			// R51: output format is filepath:range (startline-endline), score added under --scores above
 			fmt.Printf("%s:%s\n", r.Path, r.Range)
 		}
 	}
@@ -2141,7 +2150,7 @@ func cmdEmbedBenchChunks(db *ark.DB, lib *ark.Librarian, ctxSize, parallel int) 
 }
 
 // CRC: crc-CLI.md | R2085
-// CRC: crc-CLI.md, crc-Server.md | R170, R171
+// CRC: crc-CLI.md, crc-Server.md | R79, R170, R171
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	noScan := fs.Bool("no-scan", false, "skip startup reconciliation")
@@ -2298,7 +2307,7 @@ func printLines(lines []string) {
 	}
 }
 
-// CRC: crc-CLI.md | R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531
+// CRC: crc-CLI.md | R80, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	showDB := fs.Bool("db", false, "show LMDB record counts by type")
@@ -2466,7 +2475,7 @@ func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {
 	}
 }
 
-// CRC: crc-CLI.md | R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586
+// CRC: crc-CLI.md | R81, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586
 func cmdFiles(args []string) {
 	fs := flag.NewFlagSet("files", flag.ExitOnError)
 	showStatus := fs.Bool("status", false, "show file status, bytes, and chunk count")
@@ -2650,6 +2659,7 @@ func percentileInts(sorted []int, p int) int {
 	return sorted[idx]
 }
 
+// CRC: crc-CLI.md | R82
 func cmdStale(args []string) {
 	fs := flag.NewFlagSet("stale", flag.ExitOnError)
 	fs.Parse(args)
@@ -2675,6 +2685,7 @@ func cmdStale(args []string) {
 	)
 }
 
+// CRC: crc-CLI.md | R83
 func cmdMissing(args []string) {
 	fs := flag.NewFlagSet("missing", flag.ExitOnError)
 	fs.Usage = func() {
@@ -2760,6 +2771,7 @@ func parseDiscussedList(s string) ([]ark.Discussed, error) {
 	return out, nil
 }
 
+// CRC: crc-CLI.md | R84
 func cmdDismiss(args []string) {
 	fs := flag.NewFlagSet("dismiss", flag.ExitOnError)
 	fs.Usage = func() {
@@ -2883,6 +2895,7 @@ func printSourcesCheck(result *ark.SourcesCheckResult) {
 	}
 }
 
+// CRC: crc-CLI.md | R86
 func cmdUnresolved(args []string) {
 	fs := flag.NewFlagSet("unresolved", flag.ExitOnError)
 	fs.Parse(args)
@@ -2911,6 +2924,7 @@ func cmdUnresolved(args []string) {
 	)
 }
 
+// CRC: crc-CLI.md | R87
 func cmdResolve(args []string) {
 	fs := flag.NewFlagSet("resolve", flag.ExitOnError)
 	fs.Usage = func() {

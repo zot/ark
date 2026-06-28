@@ -2394,6 +2394,9 @@ func (t *Tokenizer) ModelName() string {
 	return base
 }
 
+// CRC: crc-Librarian.md | R64 — loads the embedding model once and keeps it
+// warm on the Librarian (l.model); reused across queries until unloadModel's
+// TTL (R1596) drops it.
 func (l *Librarian) ensureModel() error {
 	if l.model != nil {
 		return nil

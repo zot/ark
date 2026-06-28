@@ -44,7 +44,8 @@
 **Refs:** crc-Store.md, R87
 
 ## Test: settings round-trip
-**Purpose:** GetSettings/PutSettings preserve ark settings
-**Input:** PutSettings with dotfiles=true, sourceConfig ref
-**Expected:** GetSettings returns matching values
-**Refs:** crc-Store.md, R107
+**Purpose:** per-field IGet/IPut preserve ark settings (replaces the
+monolithic GetSettings/PutSettings blob)
+**Input:** IPut dotfiles=true and a default_exclude I record
+**Expected:** IGet returns matching values per field
+**Refs:** crc-Store.md, R1571

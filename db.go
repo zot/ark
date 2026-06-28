@@ -83,7 +83,9 @@ type InitOpts struct {
 // microfts2 owns the file (it holds both the `fts` and `ark` buckets); ark
 // passes IndexPath(dbPath) — not the directory — to microfts2.Create/Open
 // because bbolt opens a single file, not an LMDB-style directory.
-// CRC: crc-Store.md | R2974, R2975
+// R28: ark stores everything in one directory — index.db here, ark.toml
+// (ConfigPath), and the ark.sock unix socket all live under dbPath.
+// CRC: crc-Store.md | R28, R2974, R2975
 const IndexFileName = "index.db"
 
 // IndexPath returns the bbolt database file path for an ark home directory.
@@ -115,6 +117,7 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// Ensure newline alias for line-start matching
+	// CRC: crc-DB.md | R34
 	aliases := opts.Aliases
 	if aliases == nil {
 		aliases = make(map[byte]byte)
@@ -124,9 +127,11 @@ func Init(dbPath string, opts InitOpts) error {
 	}
 
 	// Initialize microfts2 (creates the bbolt database).
-	// CRC: crc-DB.md | R3, R1911, R1912, R2978 — microfts2 owns the bbolt file and
+	// CRC: crc-DB.md | R3, R31, R33, R1911, R1912, R2978 — microfts2 owns the bbolt file and
 	// its `fts` bucket; ark opens its `ark` bucket in the same DB. bbolt has no
 	// MaxDBs/MapSize ceiling, so those Options fields are gone (R2978).
+	// R31/R33: microfts2 is created with character set, case-insensitivity, and
+	// aliases; these are fixed at Create and immutable thereafter.
 	ftsOpts := microfts2.Options{
 		CaseInsensitive: opts.CaseInsensitive,
 		Aliases:         aliases,
@@ -254,8 +259,9 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	}
 	config.dbPath = dbPath
 
-	// Open microfts2 (opens the bbolt database).
-	// CRC: crc-DB.md | R2994
+	// Open microfts2 (opens the bbolt database with bbolt's exclusive
+	// single-process file lock — R63).
+	// CRC: crc-DB.md | R63, R2994
 	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{Timeout: timeout})
 	if err != nil {
 		return nil, fmt.Errorf("open microfts2: %w", err)
@@ -660,6 +666,7 @@ func (db *DB) Config() *Config { return db.config }
 func (db *DB) Store() *Store   { return db.store }
 
 // ConfigPath returns the path to ark.toml.
+// CRC: crc-DB.md | R24 — config file lives in the database directory
 func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") }
 
 // SaveConfig writes the current config to disk and re-validates.
@@ -943,6 +950,8 @@ var ErrFileOutsideSource = errors.New("file is outside every configured source; 
 // If a file, adds directly with the given strategy.
 //
 // CRC: crc-DB.md | Seq: seq-add.md | R2954, R2955
+// CRC: crc-DB.md | R35 — Add walks source directories per config (addDirectory
+// applies the include/exclude classification during the walk)
 func (db *DB) Add(paths []string, strategy string) error {
 	if db.config.HasErrors() {
 		return fmt.Errorf("config errors: %v", db.config.Errors)
@@ -1057,6 +1066,8 @@ func evictEmpty(fts *microfts2.DB, paths []string) {
 }
 
 // Remove removes files from both engines. Accepts paths or glob patterns.
+// CRC: crc-DB.md | R41 — Remove takes paths or glob patterns and removes
+// matched files from both engines (Indexer.RemoveFile drops microfts2 + store)
 func (db *DB) Remove(patterns []string) error {
 	// Get all indexed files to match patterns against
 	statuses, err := db.fts.StaleFiles()
@@ -1112,6 +1123,9 @@ func (db *DB) Scan() (*ScanResults, error) {
 }
 
 // Refresh re-indexes stale files, optionally scoped by patterns.
+// CRC: crc-DB.md | R43, R45 — Refresh re-indexes stale files via microfts2
+// staleness (modtime + content hash, in RefreshStale); vanished files are not
+// auto-deleted but added to the missing list for review (R45).
 func (db *DB) Refresh(patterns []string) error {
 	missing, err := db.indexer.RefreshStale(patterns, db.matcher)
 	if err != nil {

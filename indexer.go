@@ -180,7 +180,11 @@ func (idx *Indexer) DrainSchedule() []scheduleItem {
 // re-extracted from each new chunk's original content in
 // WithIndexedChunkCallback for F/V/T writes (dedup'd chunks cost zero).
 // File-level tags + defs are re-extracted from the returned source content.
-// CRC: crc-Indexer.md | R1113, R1123, R1891, R2913
+// Files go to microfts2 first via AddFileWithContent, which returns the
+// fileid and the source content the chunk callback reads at microfts2's
+// offsets (R37, R38); microfts2 skips re-chunking content it already holds
+// fresh (R36).
+// CRC: crc-Indexer.md | R36, R37, R38, R1113, R1123, R1891, R2913
 func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	acc := chunkAccumulator{strategy: strategy}
 	// CRC: crc-Indexer.md | R209 — an unregistered strategy name is rejected
