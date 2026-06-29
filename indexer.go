@@ -19,7 +19,8 @@ import (
 	"sync"
 )
 
-// CRC: crc-Indexer.md | R118
+// R751: tagRegex matches `@tag:` anywhere in content — no line-start anchor.
+// CRC: crc-Indexer.md | R118, R751
 var tagRegex = regexp.MustCompile(`@([a-zA-Z][\w.-]*):`)
 
 // chunkAccumulator collects chunk text + tag-value extractions via two
@@ -71,7 +72,9 @@ func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 // *here* only: this file-level path sees the raw PDF byte stream, where the
 // tag regex would invent only spurious matches. A pdf's real tags live in
 // its extracted chunk text and are picked up per-chunk (indexedCallback),
-// not at file level. CRC: crc-Indexer.md | R2913
+// not at file level. R757: on a full refresh this scans the entire file
+// (the whole `content`), unaffected by any append-only handling.
+// CRC: crc-Indexer.md | R757, R2913
 func fileLevelTags(content []byte, strategy string) ([]TagValue, map[string]string) {
 	if strategy == "pdf" {
 		return nil, nil
@@ -1337,7 +1340,9 @@ func isMention(content []byte, atPos int, markdown bool) bool {
 
 // tagDefRegex matches @tag: definitions at line start. First word after
 // "@tag:" is the tag name, rest is description.
-// CRC: crc-Indexer.md | R502
+// R752: tagDefRegex keeps its line-start anchor (`(?:^|\n)`) — definitions
+// are a structured, line-anchored format.
+// CRC: crc-Indexer.md | R502, R752
 var tagDefRegex = regexp.MustCompile(`(?:^|\n)@tag:\s+(\S+)\s+(.+)`)
 
 // ExtractTagDefs scans content for @tag: name description lines.

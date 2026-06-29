@@ -285,24 +285,28 @@ humidity = "35%"
 The tag gets you to the chunk. The code fence is the content.
 No new data format needed.
 
-### Stopping a Recurring Event
+### Stopping a Recurring Event (planned — unimplemented)
+
+> **Status:** designed, not yet built (R825, gap D12). The scheduler
+> does **not** currently skip `@ended:` chunks; this section describes
+> the intended behavior.
 
 ```
 @ended: [REASON]
 ```
 
-Must be in the **same chunk** as the recurring tag — same
-paragraph in markdown, same comment block in code. When the
-scheduler reads a chunk containing both the subscribed tag and
-`@ended:`, it skips the event entirely.
+Would be required in the **same chunk** as the recurring tag — same
+paragraph in markdown, same comment block in code. When implemented,
+the scheduler would skip the event entirely on reading a chunk
+containing both the subscribed tag and `@ended:`.
 
 ```
 @standup: every Monday at 09:00
 @ended: team dissolved 2026-06-15
 ```
 
-The `@ended:` tag is searchable — `ark search --tags ended` finds
-all stopped events and why.
+The `@ended:` tag is still searchable like any other tag — `ark
+search --tags ended` finds chunks that carry it.
 
 ### Scheduling Mechanics
 
@@ -332,12 +336,16 @@ default `ark.toml` shipping list. (The previous "Quarter Chimes"
 hardcoded 15-minute event is retired in favor of the generic
 `@chime-15m:` tag.)
 
-### Variable-date Holidays
+### Variable-date Holidays (planned — unimplemented)
 
-A Lua function in init.lua computes variable-date holidays (Easter
-computus, lunar calendar) at startup and writes them to a tmp://
-file with `@event:` tags. The scheduler picks them up through the
-same tag-scanning path as everything else.
+> **Status:** designed, not yet built (R813, gap D11). Ark has no
+> `apps/ark/init.lua` holiday function yet.
+
+A Lua function in `apps/ark/init.lua` (each Frictionless app may
+optionally ship an `init.lua`) would compute variable-date holidays
+(Easter computus, lunar calendar) at startup and write them to a
+tmp:// file with `@ark-event:` tags. The scheduler would pick them up
+through the same tag-scanning path as everything else.
 
 ### Push Records
 

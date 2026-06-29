@@ -75,18 +75,14 @@ value capture honors the documented "to end of line" semantics.
 
 ## Append-detection tag boundary
 
-When a file is appended to, `ExtractTags` runs on `newBytes` starting
-at the old `FileLength` offset. If a tag straddles the boundary
-(`@st` in old content, `atus: open` in new content), the tag is
-silently lost.
+When a file is appended to, a tag can straddle the append boundary
+(`@st` in old content, `atus: open` in new content). Handling this is
+now microfts2's responsibility via the chunker's append protocol: a
+tag split across the seam is re-emitted by the indexed-chunk callback
+as part of the merged chunk, so ark sees the whole tag for both
+`ExtractTags` and `ExtractTagDefs`.
 
-In practice this is unlikely because appends land at line boundaries,
-but it is possible.
-
-Fix: when computing `newBytes` for tag extraction during append
-detection, back up from the split point to the previous newline in
-the full file data. Scan tags from there. This does not affect the
-bytes sent to `AppendChunks` (which must start exactly at
-`FileLength`) — only the tag extraction window is widened.
-
-The same boundary issue applies to `ExtractTagDefs`.
+The earlier ark-side fix — a `tagWindowForAppend` that backed the tag
+scan window up to the previous newline while leaving the bytes sent to
+`AppendChunks` untouched — was removed (see R1895). Ark no longer
+widens the tag-scan window itself.

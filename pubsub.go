@@ -291,7 +291,13 @@ func (ps *PubSub) Cancel(sessionID string, tag string, value string) {
 // The file-tag pass runs even when tags is empty so a content-only
 // change on a member file still fires (R2466).
 func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagValue {
-	// Check for @mute: true — silences all events from this file
+	// Check for @mute: true — silences all events from this file.
+	// R829: @mute: true silences all pubsub events from the file. R830: the
+	// mute check runs here, before subscription matching, so no events fire
+	// and no unmatched tags reach the watchdog (early return nil). R831: only
+	// notifications are suppressed — indexing/search are untouched (this is
+	// the pubsub path only).
+	// CRC: crc-Indexer.md | R829, R830, R831
 	for _, tv := range tags {
 		if tv.Tag == "mute" && strings.TrimSpace(strings.ToLower(tv.Value)) == "true" {
 			return nil

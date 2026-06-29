@@ -1018,7 +1018,10 @@ func parseLogChunks(content []byte) ([]LogChunk, error) {
 // against the current [schedule] config — chunks whose tag is no
 // longer scheduled or whose source no longer passes the schedule
 // filter are dropped; log files with no surviving chunks are deleted.
-// CRC: crc-EventScheduler.md | R874, R875, R876, R2810, R2818, R2821
+// R812: the push-record map (es.pushed) is in-memory, so a server restart
+// clears it; this startup re-scan re-arms the queue from the logs and fires
+// anything currently due.
+// CRC: crc-EventScheduler.md | R812, R874, R875, R876, R2810, R2818, R2821
 func (es *EventScheduler) ScanScheduleLogs() error {
 	if es.scheduleDir == "" {
 		return nil

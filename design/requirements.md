@@ -1244,9 +1244,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R753:** `tagPattern` (search.go) and tag-block regexes (tagblock.go) are unchanged
 
 ### Append-Detection Tag Boundary
-- **R754:** During append detection, the tag extraction window backs up from the split point to the previous newline in the full file data
-- **R755:** The widened window applies to both `ExtractTags` and `ExtractTagDefs`
-- **R756:** The bytes sent to `AppendChunks` are not affected — only the tag scan window is widened
+- **~~R754:~~** (Retired T223 — see R1895) During append detection, the tag extraction window backs up from the split point to the previous newline in the full file data
+- **~~R755:~~** (Retired T224 — see R1895) The widened window applies to both `ExtractTags` and `ExtractTagDefs`
+- **~~R756:~~** (Retired T225 — see R1895) The bytes sent to `AppendChunks` are not affected — only the tag scan window is widened
 - **R757:** (inferred) Full refresh path is unaffected — it scans the entire file
 
 ## Feature: Table Sort
