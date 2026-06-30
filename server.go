@@ -728,7 +728,10 @@ func (srv *Server) indexPaths(paths []string) {
 // CRC: crc-DB.md | R345, R346, R987, R990
 func (srv *Server) reconcile() {
 	srv.db.Do(func(db *DB) {
-		// Wire schedule callback for async write goroutines
+		// Wire schedule callback for async write goroutines.
+		// CRC: crc-Server.md | R1014 — schedule processing is deferred outside the
+		// DB actor: items accumulate during indexing, drain after scan/refresh, and
+		// run in a goroutine so EnsureUpcoming I/O never blocks the actor.
 		db.onWriteComplete = func(items []scheduleItem) {
 			go srv.processScheduleItems(items)
 		}
@@ -2648,7 +2651,7 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Parse using same grammar as schedule tags
-	// CRC: crc-CLI.md | R915
+	// CRC: crc-CLI.md | R915, R1015
 	loc := time.Now().Location()
 	dr, err := ParseDateValue(req.Date, "", loc)
 	if err != nil {

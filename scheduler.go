@@ -535,7 +535,7 @@ func eventID(source, tag, dateStr string) string {
 // enqueue) added; false when the spec is non-recurring, out of bounds,
 // or every candidate falls on a @remove: date.
 //
-// CRC: crc-EventScheduler.md | Seq: seq-spec-change.md#4 | R2820
+// CRC: crc-EventScheduler.md | Seq: seq-spec-change.md#4 | R2820, R1040
 func (es *EventScheduler) crankForwardAndEnqueue(c *LogChunk, now time.Time, enqueue bool) bool {
 	spec := c.CurrentSpec()
 	if !IsRecurringSpec(spec) {
@@ -599,6 +599,7 @@ func (es *EventScheduler) ensureDir() error {
 // `ark schedule tags`. The CLI's local arm and POST /schedule/tags both
 // call it so their output cannot drift. showValues appends the per-event
 // last-fire detail read from the schedule log dir. R3000
+// CRC: crc-EventScheduler.md | R1017
 func (db *DB) ScheduleTagSummary(showValues bool) []string {
 	cfg := db.Config()
 	tags := cfg.ScheduleTags()
@@ -1374,6 +1375,8 @@ func (es *EventScheduler) fire() {
 	case event.Recurring != "":
 		// lifecycle=none: no audit, but recurring events still need to
 		// re-enqueue so the next occurrence fires. (R2825)
+		// R968: non-lifecycle tags fire through pubsub (above) but skip log
+		// writing entirely — no @ark-event-fired:, no @check-gap:.
 		next := ComputeNext(event.Recurring, time.Now(), time.Time{})
 		if !next.IsZero() {
 			es.Add(&ScheduledEvent{
@@ -1437,7 +1440,8 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 		c = &chunks[len(chunks)-1]
 	}
 
-	// R2827: log_cap trim — drop older half before append if at cap.
+	// R906, R2827: log files are rotatable — log_cap trim drops the older
+	// half of @ark-event-fired: entries before append once at cap.
 	cap := es.config.LogCap(event.Tag)
 	if len(c.Fired)+1 > cap {
 		drop := min(len(c.Fired)+1-cap/2, len(c.Fired))
@@ -1467,7 +1471,9 @@ func (es *EventScheduler) fireLogMutate(event *ScheduledEvent) {
 
 // ResolveCheckGap removes a @check-gap: entry for a tag+source when an
 // @ack: covering that date is detected. Called from the ack subscription path.
-// CRC: crc-EventScheduler.md | R969, R970, R971
+// CRC: crc-EventScheduler.md | R969, R970, R971, R974
+// R974: ack resolution is subscription-driven, not polled — this runs when an
+// @ack: is detected. A @check-gap: present = unresolved; removed = handled.
 func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
 	logPath := es.logFilePath(sourcePath)
 	chunks, err := ReadLogFile(logPath)
@@ -1501,7 +1507,9 @@ func (es *EventScheduler) ResolveCheckGap(tag, sourcePath, date string) {
 // ResolveCheckGapsFromAcks removes check-gaps covered by any ack entry.
 // Iterates all schedule log chunks for the source path and removes check-gaps
 // whose date falls within any ack's date range.
-// CRC: crc-EventScheduler.md | R970, R971
+// CRC: crc-EventScheduler.md | R970, R971, R890
+// R890: compares each @check-gap: fired date against @ack: entries (AckCoversDate)
+// to find unacknowledged occurrences.
 func (es *EventScheduler) ResolveCheckGapsFromAcks(sourcePath string, acks []AckEntry) {
 	logPath := es.logFilePath(sourcePath)
 	chunks, err := ReadLogFile(logPath)
@@ -1539,7 +1547,10 @@ func (es *EventScheduler) ResolveCheckGapsFromAcks(sourcePath string, acks []Ack
 
 // ScanCheckGaps scans all schedule logs for unresolved @check-gap: entries
 // within the lookback window and appends them to tmp://watchdog/missed-events.
-// Called at startup. CRC: crc-EventScheduler.md | R972, R973
+// Called at startup.
+// CRC: crc-EventScheduler.md | R972, R973, R889, R891
+// R889: unresolved @check-gap: entries are the staleness signal (fired-but-unacked
+// occurrences). R891: lookbackDays bounds recent-miss detection (caller passes 7).
 func (es *EventScheduler) ScanCheckGaps(lookbackDays int) []string {
 	if es.scheduleDir == "" {
 		return nil

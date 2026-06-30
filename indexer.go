@@ -149,7 +149,7 @@ func (idx *Indexer) SetRecallWatcher(w *RecallWatcher) {
 // ensures upcoming entries exist in the schedule log.
 // Uses pre-extracted tag values to avoid re-parsing content.
 // R953, R954, R956: skips files outside schedule filter scope.
-// CRC: crc-Indexer.md | R866, R869, R870, R872
+// CRC: crc-Indexer.md | R866, R869, R870, R872, R1009
 func (idx *Indexer) writeDateIndex(path string, tagValues []TagValue) {
 	if idx.scheduler == nil || idx.config == nil {
 		return

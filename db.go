@@ -674,7 +674,7 @@ func (db *DB) SaveConfig() error { return db.config.SaveConfig(db.ConfigPath()) 
 
 // ReloadConfig re-reads ark.toml from disk, diffs against stored I records,
 // applies changes, and propagates to components.
-// CRC: crc-DB.md | R1561, R1562, R1563, R1564
+// CRC: crc-DB.md | R1561, R1562, R1563, R1564, R1021
 func (db *DB) ReloadConfig() error {
 	cfg, err := LoadConfig(db.ConfigPath())
 	if err != nil {

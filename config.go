@@ -899,6 +899,7 @@ func (c *Config) MatchesScheduleFilter(path string) bool {
 // MatchesScheduleFilterForTag returns true if a file path passes the
 // schedule filter for a specific tag. Checks per-tag overrides first,
 // falls back to global. (R2831)
+// CRC: crc-Config.md | R1012 — global excludes always apply; per-tag filters narrow further.
 func (c *Config) MatchesScheduleFilterForTag(path, tag string) bool {
 	if tc, ok := c.Schedule.Tag[tag]; ok {
 		hasOverride := len(tc.FilterFiles) > 0 || len(tc.ExcludeFiles) > 0

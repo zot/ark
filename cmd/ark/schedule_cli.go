@@ -246,7 +246,7 @@ func scheduleTagsAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md
+// CRC: crc-CLITree.md, crc-CLI.md | R1016
 func scheduleParseAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() == 0 {
 		return ucli.ShowSubcommandHelp(c)

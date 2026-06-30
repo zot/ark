@@ -10,6 +10,7 @@ var timeNow = time.Now
 
 // ParseDate parses a date string: "2006-01-02", "2006-01-02T15:04:05", or
 // a duration suffix like "24h", "7d" (meaning that long ago from now).
+// CRC: crc-DB.md | R1020 — handles the "2006-01-02 15:04" space-separated date+time form.
 func ParseDate(s string) (time.Time, error) {
 	if len(s) > 1 {
 		suffix := s[len(s)-1]
