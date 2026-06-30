@@ -1382,6 +1382,8 @@ func cmdSearch(args []string) {
 	})
 }
 
+// CRC: crc-CLI.md | R178, R181 — ark search --wrap <name> emits results in XML
+// tags named by the arg; works with both --chunks and --files output modes.
 func printSearchResults(results []ark.SearchResultEntry, scores, chunks, files bool, wrap string, previewN int, query string) {
 	if wrap != "" {
 		for _, r := range results {
@@ -2268,6 +2270,7 @@ func formatBytes(b int64) string {
 }
 
 // writeEscaped writes s to w, escaping the closing tag to prevent premature tag closure.
+// CRC: crc-CLI.md | R180 — </tag> occurrences in content become &lt;/tag> so the wrap XML stays valid.
 func writeEscaped(w io.Writer, s string, tag string) {
 	closing := "</" + tag + ">"
 	for {
@@ -2985,6 +2988,7 @@ func cmdFetch(args []string) {
 				source = abs
 			}
 		}
+		// CRC: crc-CLI.md | R178 — ark fetch --wrap <name> (files/fetch form: source attr, no range).
 		if *wrap != "" {
 			fmt.Printf("<%s source=%q>\n", *wrap, source)
 			writeEscaped(os.Stdout, content, *wrap)
