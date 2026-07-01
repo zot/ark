@@ -98,6 +98,10 @@ const keepLogSize = 1 * 1024 * 1024 // 1MB
 
 // setupLogging configures file logging for the server.
 // Logs go to both stderr and ~/.ark/logs/ark.log.
+// CRC: crc-Server.md | R210, R211, R212, R213 — creates the logs dir if absent
+// (R211), truncates ark.log to the last 1MB when it exceeds 10MB on startup
+// (R213), and routes the default logger through io.MultiWriter(stderr, file)
+// (R210, R212).
 func setupLogging(dbPath string) {
 	logsDir := filepath.Join(dbPath, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {

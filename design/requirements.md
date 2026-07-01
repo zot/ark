@@ -338,7 +338,7 @@
 
 - **R189:** `--tags` flag changes search output to return only @tags found in matching chunks
 - **R190:** Search runs normally (FTS, vector, or combined); output is tag vocabulary from results
-- **R191:** Output: one tag per line with count (how many result chunks contained it)
+- **~~R191:~~** (Retired T226 — see R2433) Output: one tag per line with count (how many result chunks contained it)
 - **R192:** With `--scores`, includes the best chunk score where the tag appeared
 - **R193:** (inferred) Tag extraction uses the same regex as indexing: `@[a-zA-Z][\w-]*:`
 
@@ -1197,10 +1197,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Verbosity Levels
 
-- **R731:** Level 1: server lifecycle, connection events
-- **R732:** Level 2: HTTP requests, protocol messages
-- **R733:** Level 3: indexing detail, variable operations
-- **R734:** Level 4: full values, chunk content
+- **R731:** Verbosity is a graded dial — higher levels are strictly more verbose (`Logv` emits when `verbosity >= level`), with no fixed per-level category; call sites pick a level by how much detail they carry. Level 1 (`-v`) is the coarsest tier: high-level indexing/refresh milestones (full refresh, orphan cleanup, PDF page progress).
+- **R732:** Level 2 (`-vv`) is the fine tier: per-file refresh/append decisions and recall-watcher activity.
+- **R733:** Level 3 (`-vvv`) is a deeper tier surfaced through the same `verbosity >= level` gate — no separate mechanism; call sites opt in for finer operational detail (e.g. variable operations).
+- **R734:** Level 4 (`-vvvv`) is the deepest tier through the same gate, for the fullest detail (values, chunk content).
 
 ### Server Pass-through
 

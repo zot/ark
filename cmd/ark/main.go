@@ -1101,6 +1101,8 @@ func cmdSearch(args []string) {
 		beforeTime = t
 	}
 
+	// CRC: crc-CLI.md | R573, R579 — three valid --score modes (auto = default
+	// when omitted, coverage, density); any unknown mode errors and exits.
 	switch *score {
 	case "", "auto", "coverage", "density":
 		// valid
@@ -1369,6 +1371,7 @@ func cmdSearch(args []string) {
 			}
 		}
 
+		// CRC: crc-CLI.md | R189 — -tags switches output to extracted @tag vocabulary
 		if *tags {
 			tagResults := ark.ExtractResultTags(results)
 			if *tagsJSON {
@@ -1506,7 +1509,8 @@ func emitTagsJSONL(tags []ark.TagResult) {
 // explicit -no-values / -no-chunks / -no-files flags. The output is
 // stable across invocations: tags sorted by count desc (ties by name),
 // values by count desc (ties by value), locations in extraction order.
-// CRC: crc-CLI.md | R2433, R2435, R2436, R2437, R2438, R2439, R2440
+// CRC: crc-CLI.md | R192, R2433, R2435, R2436, R2437, R2438, R2439, R2440 —
+// R192: with -scores, the tag header carries the best chunk score [%.4f].
 func printTagsBabyFood(tags []ark.TagResult, cfg tagsCfg, scores bool) {
 	for _, t := range tags {
 		emitTag(t, cfg, scores)

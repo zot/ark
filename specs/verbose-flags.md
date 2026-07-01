@@ -9,12 +9,19 @@ the frictionless convention from `ui-engine/internal/config`.
 before subcommand dispatch, the same way `--dir` is handled today.
 Both stacked (`-vvv`) and repeated (`-v -v -v`) forms work.
 
-Levels:
+Levels are a graded dial — each higher level is strictly more verbose,
+since `Logv(level, …)` emits whenever the global verbosity is at least
+`level`. There is no fixed per-level category; a call site chooses a
+level by how much detail it carries. Current usage:
 
-- **1 (-v):** connections, server lifecycle events
-- **2 (-vv):** protocol messages, HTTP requests
-- **3 (-vvv):** variable operations, indexing detail
-- **4 (-vvvv):** full values, chunk content
+- **1 (-v):** coarsest tier — high-level indexing/refresh milestones
+  (full refresh, orphan cleanup, PDF page progress).
+- **2 (-vv):** fine tier — per-file refresh/append decisions and
+  recall-watcher activity.
+- **3 (-vvv):** deeper tier for finer operational detail (e.g. variable
+  operations); available through the same gate, used as call sites opt in.
+- **4 (-vvvv):** deepest tier for the fullest detail (values, chunk
+  content).
 
 ## Global flag, not per-subcommand
 

@@ -311,7 +311,8 @@ func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResult
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
-	// R576: Fuzzy escalation: auto mode retries with density on zero results
+	// R576, R577: Fuzzy escalation — auto mode ("" or "auto") retries with density
+	// on zero results; explicit --score coverage/density disables it (R577 gate).
 	if len(ftsResults.Results) == 0 && (score == "" || score == "auto") {
 		densityOpts := defaultSearchOpts(filterOpt, "density", opts)
 		ftsResults, err = s.fts.Search(query, densityOpts...)
@@ -409,6 +410,11 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 		ftsSearchOpts = append(ftsSearchOpts, microfts2.WithExceptRegex(opts.ExceptRegex...))
 	}
 
+	// CRC: crc-Searcher.md | R183, R184, R186, R188, R578 — --like-file reads the
+	// file at query time (R188: file need not be indexed) and uses its content as a
+	// density FTS query (R183; R578: always density regardless of --score; R184:
+	// density measures aboutness, suiting long file-content queries). This feeds the
+	// FTS side of split search, intersected with --about vector results below (R186).
 	if opts.LikeFile != "" {
 		// --like-file always uses density regardless of --score
 		content, err := os.ReadFile(opts.LikeFile)
@@ -489,6 +495,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 }
 
 func validateSearchFlags(opts SearchOpts) error {
+	// CRC: crc-Searcher.md | R185 — --like-file is mutually exclusive with --contains and --regex
 	// --contains and --regex can combine: contains drives FTS, regex post-filters
 	if opts.LikeFile != "" && (opts.Contains != "" || len(opts.Regex) > 0) {
 		return fmt.Errorf("--like-file is mutually exclusive with --contains and --regex")
@@ -1845,7 +1852,9 @@ type TagResult struct {
 // chunk contributes at most one location per (tag, value) pair — repeated
 // inline occurrences within the same chunk don't inflate counts. Results
 // must have Text populated (via FillChunks).
-// CRC: crc-Searcher.md | R2433, R2434
+// CRC: crc-Searcher.md | R190, R193, R2433, R2434 — output is tag vocabulary
+// from the (normally-run) result set; extraction uses ExtractTagValues, the
+// same extractor indexing uses.
 func ExtractResultTags(results []SearchResultEntry) []TagResult {
 	type groupKey struct{ tag, value string }
 	groups := make(map[string]map[string][]TagLocation)

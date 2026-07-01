@@ -622,6 +622,7 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 
 	// Try append detection (LMDB reads are concurrent-safe)
 	ok, _ := idx.DetectAppend(path, fileID)
+	// R732: level-2 (fine) verbosity tier — per-file refresh/append detail
 	Logv(2, "prepare-refresh: %s detect=%v", path, ok)
 	info, infoErr := idx.fts.FileInfoByID(fileID)
 	if ok {
@@ -734,6 +735,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 // by the reindex callback) drop their F/V/T contributions in the same txn.
 // CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899, R2913
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
+	// R731: level-1 (coarsest) verbosity tier — high-level refresh milestone
 	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
 	acc := chunkAccumulator{strategy: prep.strategy}
 	var fileid uint64

@@ -105,9 +105,12 @@ it returns only the @tags extracted from those chunks. The search
 itself runs normally (FTS, vector, or combined), but the output is
 the tag vocabulary discovered in the results rather than the content.
 
-Output: one tag per line with count (how many result chunks contained
-it). With `--scores`, includes the best chunk score where the tag
-appeared.
+The output is agent-readable markdown: the discovered tags rendered as
+a bullet tree (tag → value → file → range) with per-tag chunk counts.
+With `--scores`, each tag header also carries the best chunk score
+where the tag appeared. The tree format, its suppression flags
+(`-no-values` / `-no-chunks` / `-no-files`), and the `-json` variant
+are specified in specs/tags-baby-food.md.
 
 This lets the agent ask "what tags are relevant to X?" without
 reading content — useful for navigation, topic discovery, and the
