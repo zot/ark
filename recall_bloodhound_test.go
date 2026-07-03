@@ -71,16 +71,22 @@ func TestParseBloodhoundToken(t *testing.T) {
 	}
 }
 
-// TestBuildSearchTask covers the task doc shape (R2937, R2938): curate head
-// tag, the ## Search task header with cookie, the payload, and the crank handle
-// with the cookie substituted; stripCurateTagLine drops the head tag.
+// TestBuildSearchTask covers the task doc shape (R2937, R2938, R3006): curate
+// head tag, the ## Search task header with cookie, the payload, the ## Recall
+// seed block between the payload and the crank handle, and the crank handle with
+// the cookie substituted; stripCurateTagLine drops the head tag.
 func TestBuildSearchTask(t *testing.T) {
 	cookie := bloodhoundToken("sess-A", 3)
-	body := buildSearchTask("sess-A", cookie, "where is the tag-strip logic? pointers")
+	seed := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{
+		{Path: "knowledge/bm25.md", Range: "12-19", Score: 0.72, Content: "BM25 was considered for recall", Tags: []RecallTag{{Tag: "topic"}}},
+	}})
+	body := buildSearchTask("sess-A", cookie, "where is the tag-strip logic? pointers", seed)
 	for _, want := range []string{
 		"@ark-secretary-work: sess-A",
 		"## Search task " + cookie,
 		"where is the tag-strip logic? pointers",
+		"## Recall seed",
+		"knowledge/bm25.md:12-19",
 		"finding " + cookie,
 		"close " + cookie,
 		"<your nonce>",
@@ -89,12 +95,49 @@ func TestBuildSearchTask(t *testing.T) {
 			t.Errorf("buildSearchTask missing %q", want)
 		}
 	}
+	// The seed rides on path:range, never a chunkid on the wire (R3006).
+	if strings.Contains(body, "@chunk-id") {
+		t.Errorf("buildSearchTask seed leaked a chunkid")
+	}
+	// Seed sits between the payload and the crank handle.
+	if strings.Index(body, "## Recall seed") >= strings.Index(body, "You are the bloodhound") {
+		t.Errorf("## Recall seed must precede the crank handle")
+	}
 	if strings.Contains(body, "COOKIE") {
 		t.Errorf("buildSearchTask left COOKIE unsubstituted")
 	}
 	stripped := stripCurateTagLine(body)
 	if strings.HasPrefix(stripped, "@ark-secretary-work:") || !strings.HasPrefix(stripped, "## Search task") {
 		t.Errorf("stripCurateTagLine: got %.40q", stripped)
+	}
+}
+
+// TestRenderBloodhoundSeed covers the seed renderer (R3006): compact locator
+// lines with size/score/tags and no chunkid, and the empty-seed note.
+func TestRenderBloodhoundSeed(t *testing.T) {
+	got := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{
+		{ChunkID: 84213, Path: "knowledge/bm25.md", Range: "12-19", Score: 0.72, Content: "BM25 was considered\nsecond line", Tags: []RecallTag{{Tag: "topic"}, {Tag: "method"}}},
+	}})
+	for _, want := range []string{
+		"## Recall seed",
+		"knowledge/bm25.md:12-19",
+		"0.72",
+		"[topic, method]",
+		"> BM25 was considered",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("renderBloodhoundSeed missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "84213") || strings.Contains(got, "@chunk-id") {
+		t.Errorf("renderBloodhoundSeed leaked a chunkid:\n%s", got)
+	}
+	// Empty / nil result → empty-seed note, still a ## Recall seed block.
+	for _, empty := range []*RecallResult{nil, {}} {
+		note := renderBloodhoundSeed(empty)
+		if !strings.Contains(note, "## Recall seed") || !strings.Contains(note, "no corpus matches") {
+			t.Errorf("empty seed note wrong: %q", note)
+		}
 	}
 }
 
@@ -122,11 +165,11 @@ func TestBloodhoundRoundTrip(t *testing.T) {
 	loc := info.Path + ":" + info.Range
 
 	const sess = "sess-A"
-	if err := b.RecallBloodhoundOpen(sess, 1, "where is the tag-strip logic? pointers"); err != nil {
+	if err := b.RecallBloodhoundOpen(sess, 1, "where is the tag-strip logic? pointers", renderBloodhoundSeed(nil)); err != nil {
 		t.Fatal(err)
 	}
 	cookie := bloodhoundToken(sess, 1)
-	if data, err := db.TmpContent(bloodhoundTaskPath(sess, 1)); err != nil || !strings.Contains(string(data), "## Search task "+cookie) {
+	if data, err := db.TmpContent(bloodhoundTaskPath(sess, 1)); err != nil || !strings.Contains(string(data), "## Search task "+cookie) || !strings.Contains(string(data), "## Recall seed") {
 		t.Fatalf("task doc missing/short: err=%v", err)
 	}
 	if err := b.FindingItem(cookie, "", "It's in stripArkTags at embed time.", ""); err != nil {
@@ -159,7 +202,7 @@ func TestBloodhoundRoundTrip(t *testing.T) {
 	}
 
 	// Silent close: a fresh task with no findings writes no finding doc.
-	if err := b.RecallBloodhoundOpen(sess, 2, "anything?"); err != nil {
+	if err := b.RecallBloodhoundOpen(sess, 2, "anything?", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.closeBloodhound(bloodhoundToken(sess, 2), sess, 2, 9); err != nil {

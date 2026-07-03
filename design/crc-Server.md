@@ -20,7 +20,7 @@ Optionally starts the embedded ui-engine alongside.
 - sessions: map[string]*Session — named sessions, autocreated on demand (mutex-protected)
 - pubsub: *PubSub — subscription registry and notification delivery
 - scheduler: *EventScheduler — time-based event queue
-- librarian: *Librarian — Haiku co-process for spectral search expansion
+- librarian: *Librarian — sidecar expansion request queue for spectral search
 - recallWatcher: *RecallWatcher — ambient simple-recall subsystem; nil when `[recall].enabled` is false (R2687, R2688)
 
 ## Does
@@ -490,11 +490,13 @@ Optionally starts the embedded ui-engine alongside.
     header. (R1165-R1167)
   All three validate path is within a source dir (R1154-R1156). Registered on
   the UI server HTTP port only (R1151-R1153).
-- HandleSearchExpand: POST /search/expand — query expansion via
-  Librarian. Accepts {mode, name, value}, returns {alternatives}.
-  Returns 503 if claude not available. (R1243-R1247)
 - StartLibrarian(): check for claude on PATH (exec.LookPath),
-  create Librarian with TTL from config. Called during Serve().
+  create the Librarian. Called during Serve(); when available, the
+  server registers the Librarian's **sidecar** spectral endpoints
+  (`/search/curate*` queue + `/search/expand/*` match, owned by
+  crc-Librarian.md) — no bare `/search/expand` all-in-one, no 503
+  (the old co-process path is gone; unavailability just leaves the
+  endpoints unregistered). (R1248, R1379, R1380)
   (R1248-R1250)
 - EmbedAfterReconcile(): enqueue a write that calls
   Librarian.BatchEmbed(). Queued after the reconcile-complete
@@ -562,7 +564,7 @@ Optionally starts the embedded ui-engine alongside.
 - flib.Runtime: WithLua for passive Lua function registration
 - PubSub: subscription registry and notification delivery
 - EventScheduler: time-based event queue
-- Librarian: Haiku co-process for spectral query expansion
+- Librarian: sidecar expansion request queue for spectral query expansion
 - TagBlock: parse/set/render tag blocks for setTags and readMessage
 - goldmark: markdown→HTML rendering for readMessage body and /content/ view
 - ArkTagElement: server wraps tag patterns in `<ark-tag>` elements for content pages

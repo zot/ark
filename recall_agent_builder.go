@@ -808,8 +808,10 @@ func bloodhoundFindingPath(session string, bid uint64) string {
 // searchCrankHandle is the self-contained CLI craft handed to the warm
 // secretary for a directed hunt (Stencil: the weak agent executes without
 // planning). COOKIE is substituted with the task's cookie; the agent fills its
-// own nonce. R2938
+// own nonce. R2938, R3006 (the ## Recall seed lead-in)
 const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue is the ## Search task above. Read its fields — clue, scope, depth, want, and any stop condition — then work the trail. Don't plan; do these in order, using ~/.ark/ark.
+
+FIRST read the ## Recall seed above: strong candidates the deluxe combined search already found (it reaches the value→chunk tag axis your own searches can't). READ those hits (step 5) before searching — they often answer the clue outright. Run the steps below only to widen the trail or when the seed is thin (or empty).
 
 Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search with ~/.ark/ark search; open any indexed file with ~/.ark/ark chunks <path:range> (a scoped range) or ~/.ark/ark fetch <path> (the whole file); locate files by name with ~/.ark/ark files <pattern>; report with ~/.ark/ark connections recall (surface / recommend / finding / close). The Read tool, grep, find, ls, and awk are DENIED, and cat only reaches user-approved paths (it stalls on anything else) — so to look inside any indexed file use ~/.ark/ark chunks or ~/.ark/ark fetch, never Read or cat.
 
@@ -835,27 +837,32 @@ Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search wi
 8. ~/.ark/ark connections recall close COOKIE --nonce <your nonce>
 `
 
-// buildSearchTask renders the bloodhound task doc: the curate head tag (so it
-// rides the tube), the ## Search task header with the cookie, the raw payload,
-// and the search crank handle with the cookie filled. R2937, R2938
-func buildSearchTask(session, cookie, payload string) string {
+// buildSearchTask renders the bloodhound task doc in order: the curate head tag
+// (so it rides the tube), the ## Search task header with the cookie + raw
+// payload, the pre-rendered ## Recall seed block (R3006), and the search crank
+// handle with the cookie filled. R2937, R2938, R3006
+func buildSearchTask(session, cookie, payload, seed string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "@ark-secretary-work: %s\n\n", session)
 	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, payload)
+	if seed != "" {
+		fmt.Fprintf(&sb, "%s\n", seed)
+	}
 	sb.WriteString(strings.ReplaceAll(searchCrankHandle, "COOKIE", cookie))
 	return sb.String()
 }
 
 // RecallBloodhoundOpen writes the directed-search task doc into the
-// ARK-BLOODHOUND namespace and retains the clue for the finding header.
-// Go-internal, called by the watcher's dispatchBloodhound.
-// CRC: crc-RecallAgentBuilder.md | R2937, R2938
-func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload string) error {
+// ARK-BLOODHOUND namespace and retains the clue for the finding header. The
+// seed is the watcher's pre-rendered Recall result (R3006). Go-internal,
+// called by the watcher's dispatchBloodhound.
+// CRC: crc-RecallAgentBuilder.md | R2937, R2938, R3006
+func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload, seed string) error {
 	cookie := bloodhoundToken(session, bid)
 	b.mu.Lock()
 	b.bloodhoundClues[cookie] = payload
 	b.mu.Unlock()
-	body := buildSearchTask(session, cookie, payload)
+	body := buildSearchTask(session, cookie, payload, seed)
 	path := bloodhoundTaskPath(session, bid)
 	return SyncVoid(b.db, func(db *DB) error {
 		_, e := db.AddTmpFile(path, "markdown", []byte(body))

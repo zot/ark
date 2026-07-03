@@ -76,18 +76,48 @@ sequence) and writes a task doc onto the **curate tube** so the secretary's
   subscribes to, so the doc rides the existing tube. The namespace files the
   doc; the **tag** drives delivery — the two are orthogonal, so no new
   subscription is needed.
-- Body: the **search crank handle** (SHERLOCK.md "Build-step 2") with the raw
-  payload pasted verbatim under a `## Search task <cookie>` first line. The crank
-  handle is self-contained — it carries the CLI craft (scope→targets,
-  match-the-matcher, the chat two-pass, the tune loop, the `want` emit-branches)
-  so the weak agent executes without planning.
+- Body, in order: the `## Search task <cookie>` first line with the raw payload
+  pasted verbatim; a **`## Recall seed`** block (below); then the **search crank
+  handle** (SHERLOCK.md "Build-step 2"). The crank handle is self-contained — it
+  carries the CLI craft (scope→targets, match-the-matcher, the chat two-pass, the
+  tune loop, the `want` emit-branches) so the weak agent executes without
+  planning; its first step reads the seed.
 - `next` distinguishes the two doc kinds by **namespace** (it scans both and
   prioritizes `ARK-BLOODHOUND/`); the `## Search task` first line tells the
   *agent* it's running a search rather than curating. Nothing about the tube
   (the tag) changes.
 
 The activation-gate backstop applies as it does for curation: if the consumer
-dropped, the task is not written.
+dropped, the task is not written — and the seed search is not run.
+
+### The Recall seed (hypergraph-aware start)
+
+Before writing the task doc, the watcher runs the corpus's **deluxe combined
+search** on the payload — `Librarian.Recall({Text: payload})`, the same
+four-substrate combination (`VectorEC`, `TrigramEC`, `TagVector`, `TagTrigram`)
+ambient recall's fire uses — and renders the top candidates into a `## Recall
+seed` block placed between the `## Search task` payload and the crank handle.
+Each candidate is one compact locator line — `<path>:<range> (<size>) <score>
+[tags]` with a short excerpt — carrying the same `<path>:<range>` the crank
+handle feeds to `ark chunks`, and no chunkid on the wire.
+
+This is the point of the bloodhound-over-recall design. The subagent's own
+tools reach only content search (FTS + Vector-EC via `ark search`); the
+value→chunk **tag axis** (R2905/R2906) is reachable only through `Recall`.
+Seeding the task doc gives every hunt a hypergraph-aware starting set it could
+not assemble itself — a chunk can seed the hunt because its *tags* match the
+clue even when its prose doesn't. The crank handle's first step reads the seed;
+the agent runs its own searches only to widen the trail or when the seed is thin.
+
+The seed search is **clue-only and session-agnostic**: the input is the
+watermark payload, nothing else. The bloodhound is *pull* — the assistant has
+already distilled its need into the clue, so the conversation is not folded back
+into the search input. Folding it would pull the hunt off the trail; ambient
+recall folds conversation only because its input *is* the conversation. The seed
+runs with no discussed-tag exclusion and no derivation side-effects
+(`RecallOpts.Session` and `.Propose` left off) — a directed hunt should see
+every match, and the seed only reads. If the seed search finds nothing, the doc
+carries an empty-seed note and the agent starts from its own searches.
 
 ## Dispatch — search ahead of recall (`next`)
 
@@ -229,6 +259,11 @@ it. Recorded for a later seam.
   `<BLOODHOUND>…</BLOODHOUND>` writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` with the
   crank handle wrapping the captured payload; an append with no watermark writes
   none.
+- **Recall seed** — a dispatched task doc carries a `## Recall seed` block
+  between the `## Search task` payload and the crank handle, holding the top
+  `Recall` candidates as `<path>:<range> (<size>) <score>` locator lines (no
+  chunkid); a payload with no corpus match yields the empty-seed note and the
+  task still dispatches.
 - **Multi-line payload** — a watermark whose payload spans lines is captured
   whole (DOTALL).
 - **Once-only** — the same watermark across two separate appends yields two

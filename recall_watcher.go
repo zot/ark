@@ -5,6 +5,7 @@ package ark
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"path/filepath"
 	"regexp"
@@ -634,20 +635,95 @@ func (w *RecallWatcher) nextBloodhoundLocked(sessionID string) uint64 {
 	return w.bloodhoundCounters[sessionID]
 }
 
+// bloodhoundSeedK is the candidate count for a directed hunt's Recall seed — a
+// focused starting set the weak agent actually reads, not the full ambient
+// per-DM count; the agent widens the trail with its own `-k 20` searches. R3006
+const bloodhoundSeedK = 10
+
 // dispatchBloodhound runs on the watcher's worker goroutine. It re-checks the
 // bloodhound gate (write-time backstop — secretary + bloodhound-result sub,
-// R2947), then hands the payload to the builder, which writes the task doc in
+// R2947), seeds the hunt with the deluxe combined Recall search (R3006, R3007),
+// then hands the payload + seed to the builder, which writes the task doc in
 // the ARK-BLOODHOUND namespace and retains the clue for the finding header.
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947, R3006, R3007
 func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string) {
 	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
-	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload); err != nil {
+	// Seed the hunt with the hypergraph-aware combined search. Clue-only and
+	// session-agnostic — Session/Propose left off — so a directed *pull* hunt
+	// sees every match (no discussed-exclusion) with no derivation side-effects,
+	// and the conversation is never folded into the search input (unlike ambient
+	// *push* recall, whose input is the conversation). Only Recall reaches the
+	// value→chunk tag axis (R2905/R2906) the subagent's content-only `ark search`
+	// cannot. A failed seed is not fatal: the hunt still dispatches from the
+	// empty-seed note and the agent starts from its own searches. R3006, R3007
+	result, err := w.librarian.Recall(
+		[]ConnectionsInput{{Text: payload}},
+		RecallOpts{K: bloodhoundSeedK, IncludeContent: true, KeepTagless: true},
+	)
+	if err != nil {
+		log.Printf("recall-watcher: bloodhound seed Recall failed session=%s B=%d: %v", sessionID, bid, err)
+		result = nil
+	}
+	seed := renderBloodhoundSeed(result)
+
+	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload, seed); err != nil {
 		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
-	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d", sessionID, bid)
+	seedN := 0
+	if result != nil {
+		seedN = len(result.Chunks)
+	}
+	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d seed-chunks=%d", sessionID, bid, seedN)
+}
+
+// renderBloodhoundSeed formats a Recall result as the `## Recall seed` block of
+// a bloodhound task doc: one compact locator line per candidate —
+// `<path>:<range> (<size>) <score> [tags]` with a short excerpt, no chunkid on
+// the wire (the crank handle opens each with `ark chunks <path:range>`). A
+// nil/empty result renders the empty-seed note so the task still dispatches. R3006
+// CRC: crc-RecallWatcher.md | R3006
+func renderBloodhoundSeed(result *RecallResult) string {
+	var sb strings.Builder
+	sb.WriteString("## Recall seed\n\n")
+	if result == nil || len(result.Chunks) == 0 {
+		sb.WriteString("_(no corpus matches — start from your own searches)_\n")
+		return sb.String()
+	}
+	sb.WriteString("Strong candidates from the deluxe combined search (4 substrates: meaning + tags — the tag axis your own `ark search` can't reach). READ these first with `ark chunks <path:range>`; run your own searches only to widen or if this is thin.\n\n")
+	for _, c := range result.Chunks {
+		tags := ""
+		if names := recallTagNames(c.Tags); len(names) > 0 {
+			tags = " [" + strings.Join(names, ", ") + "]"
+		}
+		fmt.Fprintf(&sb, "- %s:%s (%s) %.2f%s\n", c.Path, c.Range, friendlySize(len(c.Content)), c.Score, tags)
+		if excerpt := seedExcerpt(c.Content); excerpt != "" {
+			fmt.Fprintf(&sb, "  > %s\n", excerpt)
+		}
+	}
+	return sb.String()
+}
+
+// recallTagNames pulls the tag names (values dropped) from a chunk's tags.
+func recallTagNames(tags []RecallTag) []string {
+	names := make([]string, 0, len(tags))
+	for _, t := range tags {
+		names = append(names, t.Tag)
+	}
+	return names
+}
+
+// seedExcerpt returns the first non-blank line of content, truncated for the
+// seed's one-line-per-candidate preview.
+func seedExcerpt(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return truncateUTF8(line, 120)
+		}
+	}
+	return ""
 }
 
 // seedFire computes the initial per-session fire counter from the

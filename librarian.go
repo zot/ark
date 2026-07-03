@@ -1,7 +1,7 @@
 package ark
 
 // CRC: crc-Librarian.md | Seq: seq-spectral-expand.md
-// R1235-R1254, R1268-R1273
+// R1246, R1270-R1273
 
 import (
 	"container/heap"

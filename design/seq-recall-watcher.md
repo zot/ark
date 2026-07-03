@@ -213,8 +213,11 @@ both pipe ends are subscribed — R2933):
   watermark neither arms nor suppresses a curation fire.
 - `dispatchBloodhound` (worker goroutine): re-check the **bloodhound gate**
   (secretary present + `ark-bloodhound-result` subscribed, R2947) as the
-  write-time backstop, then `RecallBloodhoundOpen(session, B, payload)`
+  write-time backstop, then **seed the hunt** — run
+  `librarian.Recall({Text: payload})` (clue-only, `Session`/`Propose` off,
+  R3006/R3007) and `renderBloodhoundSeed` the result into a compact
+  locator list — and `RecallBloodhoundOpen(session, B, payload, seed)`
   writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag `@ark-secretary-work=<S>`,
-  body = search crank handle + payload) and retains the clue. The write
-  actor publishes the secretary-work event → wakes the secretary's `next`
-  (seq-recall-agent.md, Flow 6).
+  body = `## Search task` payload + `## Recall seed` + search crank handle)
+  and retains the clue. The write actor publishes the secretary-work
+  event → wakes the secretary's `next` (seq-recall-agent.md, Flow 6).

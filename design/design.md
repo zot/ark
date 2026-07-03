@@ -772,3 +772,18 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] D11: R813: variable-date holiday computation — planned Lua function for ark's apps/ark/init.lua (each Frictionless app may optionally include an init.lua; ark's is not yet written). Would write a tmp:// file with @ark-event: tags at startup. App-layer Lua, outside Go mini-spec scope.
 - [ ] D12: R825: @ended: [REASON] event-stop — designed but never implemented in Go (git-confirmed: only requirements.md + pubsub.md ever carried it). The scheduler does not skip chunks containing both a scheduled tag and @ended:.
 - T226: R191 retired by R2433 (2026-07-01 tags-baby-food: -tags output changed from flat TSV tag\tcount to markdown bullet tree)
+- T227: R1235 retired by R1380 (2026-07-03 spectral co-process removal: Haiku expansion is driven via the Gen-2 sidecar queue, not a spawned claude --print co-process)
+- T228: R1236 retired (2026-07-03 spectral co-process removal: --system-prompt-file/--tools were co-process-only flags; the sidecar agent carries its own persona + guard)
+- T229: R1237 retired (2026-07-03 spectral co-process removal: no co-process session to --resume; the sidecar agent is a persistent subagent)
+- T230: R1238 retired (2026-07-03 spectral co-process removal: no per-expansion spawn / prompt-cache; the sidecar agent is warm)
+- T231: R1239 retired (2026-07-03 spectral co-process removal: no co-process session / TTL)
+- T232: R1240 retired (2026-07-03 spectral co-process removal: no co-process session cache)
+- T233: R1241 retired (2026-07-03 spectral co-process removal: no claude invocation to fail/clear)
+- T234: R1242 retired (2026-07-03 spectral co-process removal: no closure-actor co-process; the sidecar queue serializes via a plain mutex)
+- T235: R1247 retired (2026-07-03 spectral co-process removal: no co-process to 503 on; unavailability gates endpoint registration via the R1248 PATH check)
+- T236: R1253 retired (2026-07-03 spectral co-process removal: no spawn reads ~/.ark/searching/CLAUDE.md (now vestigial))
+- T237: R1254 retired (2026-07-03 spectral co-process removal: no spawn for CLAUDE.md changes to take effect on)
+- T238: R1268 retired (2026-07-03 spectral co-process removal: --system-prompt-file was a co-process flag)
+- T239: R1269 retired (2026-07-03 spectral co-process removal: --tools disabling was a co-process flag)
+- [ ] O139: specs/spectral-search.md still describes the dead Gen-1 claude --print co-process (§The Librarian, §Endpoints, §Searching Directory, §Availability); supersede-at-source spec-prose fix DEFERRED per Bill 2026-07-03 (leave the spec intact until the Gen-2 sidecar is removed). The retired reqs (T227-T239) already forward, and the code is the sidecar, so the trap is low-risk. Reconcile when the sidecar is torn out.
+- [ ] O140: Full spectral->bloodhound: remove the live Gen-2 expansion sidecar (Librarian ExpandRequest queue, /search/curate + /search/expand endpoints, cmd/ark/main.go:1632-1759 CLI family, ark-expansion agent, search-expansion skill), retire R1246/R1270-R1273/R1378-R1383/R1248-R1252 to the bloodhound, and fold+retire spectral-search.md. DEFERRED per Bill 2026-07-03 as its own slice (a real feature removal; bloodhound does not yet replace the tag-search-panel expansion role in code).

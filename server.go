@@ -59,7 +59,7 @@ type Server struct {
 	sessions           map[string]*Session // R641: named sessions, autocreated on demand
 	pubsub             *PubSub             // R799: subscription registry
 	scheduler          *EventScheduler     // R805: time-based event queue
-	librarian          *Librarian          // R1235: Haiku co-process for spectral search
+	librarian          *Librarian          // R1379: sidecar expansion request queue for spectral search
 	curation           *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
 	recallWatcher      *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
 	recallAgentBuilder *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
@@ -256,7 +256,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		log.Printf("chimes: ensure file failed: %v", err)
 	}
 
-	// R1235, R1248: Create librarian for spectral search
+	// R1248, R1379: Create librarian (sidecar expansion queue) for spectral search
 	lib := NewLibrarian(db, dbPath)
 	if lib.Available() {
 		log.Printf("spectral search: claude available, librarian started")

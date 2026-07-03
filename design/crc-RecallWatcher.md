@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -112,10 +112,22 @@ composes and writes each curation doc via the in-process
 - dispatchBloodhound(sessionID, B, payload): worker-goroutine job.
   Re-checks the **bloodhound gate** as the write-time backstop —
   secretary present (`ark-secretary-work`) AND `ark-bloodhound-result`
-  subscribed (R2947); then calls
-  `builder.RecallBloodhoundOpen(sessionID, B, payload)` — writes the
-  task doc in the `ARK-BLOODHOUND` namespace and retains the clue for
-  the finding header (R2937, owned by crc-RecallAgentBuilder.md).
+  subscribed (R2947). Then **seeds the hunt** (R3006, R3007): runs
+  `librarian.Recall([]ConnectionsInput{{Text: payload}},
+  RecallOpts{K: bloodhoundSeedK, IncludeContent: true,
+  KeepTagless: true})` (`bloodhoundSeedK = 10`, a focused seed — the
+  agent widens with its own `-k 20`) — **clue-only and session-agnostic** (`Session`
+  and `Propose` left off: a directed *pull* hunt sees every match, no
+  discussed-exclusion, no derivation side-effects; the conversation is
+  never folded into the search input) — and renders the result via
+  `renderBloodhoundSeed` (the compact `<path>:<range> (<size>) <score>
+  [tags]` locator list, no chunkid; empty-seed note when the corpus
+  matches nothing). Passes that seed string to
+  `builder.RecallBloodhoundOpen(sessionID, B, payload, seed)` — writes
+  the task doc in the `ARK-BLOODHOUND` namespace and retains the clue for
+  the finding header (R2937, owned by crc-RecallAgentBuilder.md). Reaching
+  the value→chunk tag axis (R2905/R2906) is the point: the subagent's own
+  `ark search` is content-only, so only `Recall` can seed it hypergraph-aware.
 - fire(sessionID): timer-expiry callback. Snapshots
   `pendingChunks`, clears the slice under the per-session
   lock, allocates the next per-session fire value

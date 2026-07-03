@@ -1975,16 +1975,16 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 **Source:** specs/spectral-search.md
 
 ### Haiku Session
-- **R1235:** The server manages Haiku interactions via `claude --print --model haiku --output-format json` invocations
-- **R1236:** Each invocation uses `--system-prompt-file ~/.ark/searching/CLAUDE.md --tools ""`
-- **R1268:** `--system-prompt-file` replaces all default Claude Code instructions — the Librarian is a specialized oracle, not a general assistant
-- **R1269:** `--tools ""` disables all tool access — the Librarian only generates text responses
-- **R1237:** Conversation context persists via `--resume SESSION_ID` — the session ID from the first invocation is stored and reused
-- **R1238:** Two spawns per expansion: one for expand (step 1), one for curate (step 3). Claude's prompt caching pays system prompt tokens once per session.
-- **R1239:** The session ID expires after a TTL with no requests — next expansion starts a fresh conversation
-- **R1240:** (inferred) A fresh session creates a new conversation context, paying cache creation tokens again
-- **R1241:** (inferred) If a claude invocation fails, the session ID is cleared and the next request starts fresh
-- **R1242:** (inferred) The Librarian is managed by a closure actor to serialize access from concurrent HTTP handlers
+- **~~R1235:~~** (Retired T227 — see R1380) The server manages Haiku interactions via `claude --print --model haiku --output-format json` invocations
+- **~~R1236:~~** (Retired T228 — no replacement) Each invocation uses `--system-prompt-file ~/.ark/searching/CLAUDE.md --tools ""`
+- **~~R1268:~~** (Retired T238 — no replacement) `--system-prompt-file` replaces all default Claude Code instructions — the Librarian is a specialized oracle, not a general assistant
+- **~~R1269:~~** (Retired T239 — no replacement) `--tools ""` disables all tool access — the Librarian only generates text responses
+- **~~R1237:~~** (Retired T229 — no replacement) Conversation context persists via `--resume SESSION_ID` — the session ID from the first invocation is stored and reused
+- **~~R1238:~~** (Retired T230 — no replacement) Two spawns per expansion: one for expand (step 1), one for curate (step 3). Claude's prompt caching pays system prompt tokens once per session.
+- **~~R1239:~~** (Retired T231 — no replacement) The session ID expires after a TTL with no requests — next expansion starts a fresh conversation
+- **~~R1240:~~** (Retired T232 — no replacement) (inferred) A fresh session creates a new conversation context, paying cache creation tokens again
+- **~~R1241:~~** (Retired T233 — no replacement) (inferred) If a claude invocation fails, the session ID is cleared and the next request starts fresh
+- **~~R1242:~~** (Retired T234 — no replacement) (inferred) The Librarian is managed by a closure actor to serialize access from concurrent HTTP handlers
 
 ### Expansion Pipeline
 - **~~R1243:~~** (Retired T162 — see R1379) `POST /search/expand` accepts JSON body with `mode`, `tag`, `value` fields
@@ -1995,7 +1995,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1271:** Fuzzy match step: each alternative is fuzzy-matched against V records, producing (tag, value, count, score) tuples
 - **R1272:** Haiku curate step: sees matched tag/value pairs with scores, prunes false positives, returns curated subset
 - **R1273:** Server fetches actual search results for the curated tags before returning to the client
-- **R1247:** (inferred) If the co-process is unavailable (not on PATH, spawn failure), the endpoint returns 503
+- **~~R1247:~~** (Retired T235 — no replacement) (inferred) If the co-process is unavailable (not on PATH, spawn failure), the endpoint returns 503
 
 ### Curation Endpoint Rename
 - **R1378:** Curation endpoints are renamed from `/search/expand` to `/search/curate` — curation is now a separate step from expansion
@@ -2013,8 +2013,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Searching Directory
 - **R1251:** `~/.ark/searching/CLAUDE.md` contains the system prompt for the Haiku expansion session
 - **R1252:** `ark init` creates `~/.ark/searching/` and writes a default `CLAUDE.md` if the directory doesn't exist
-- **R1253:** The CLAUDE.md file is read at co-process spawn time via the `--system-prompt-file` flag
-- **R1254:** (inferred) Changes to CLAUDE.md take effect on next co-process spawn (after TTL expiry or crash)
+- **~~R1253:~~** (Retired T236 — no replacement) The CLAUDE.md file is read at co-process spawn time via the `--system-prompt-file` flag
+- **~~R1254:~~** (Retired T237 — no replacement) (inferred) Changes to CLAUDE.md take effect on next co-process spawn (after TTL expiry or crash)
 
 ### Two-Phase Results (UI)
 - **R1255:** Phase 1: literal search fires immediately on user input (existing behavior, ~300ms debounce)
@@ -4101,7 +4101,7 @@ implementation, not a separate format break.
 - **R2617:** The `ark recall` CLI command and the `Librarian.Recall` Go API retrieve the top-K chunks from the corpus relevant to a given set of inputs.
 - **R2618:** Inputs may be decimal chunkIDs, `PATH:N-M` / `PATH:N` locators, or bare text. Positional arguments are normalized into `ConnectionsInput` structures via the existing `normalizeInputs` function.
 - **R2619:** The `--type chunk|text` CLI flag overrides auto-detection of input tokens, using the same categorization semantics as `ark connections find`.
-- **R2620:** For each normalized input, the recall pipeline executes two normal-mode substrate passes: Vector-EC (using `SearchChunks`) and Trigram-EC (using `SearchFuzzy`). ED-side substrates (Vector-ED, Trigram-ED) are omitted.
+- **R2620:** For each normalized input, the recall pipeline executes two content-EC substrate passes: Vector-EC (using `SearchChunks`) and Trigram-EC (using `SearchFuzzy`). The old tag-*definition* ED substrates (Vector-ED, Trigram-ED) remain omitted — but the tag axis is **not** absent: it contributes through the value→chunk TagVector/TagTrigram passes (R2905, R2906) added alongside these, so tags are a first-class part of the combined score.
 - **~~R2621:~~** (Retired T93 — see R2643) Scores are normalized to `[0,1]`: Vector cosine scores are normalized via `(cos+1)/2`, and Trigram scores are normalized using microfts2's standard fuzzy match scoring.
 - **R2622:** Similarity scores are merged per chunk: the overall chunk score is the `max` score across all input parameters and both active substrates.
 - **R2623:** Self-chunk exclusion: any input that normalizes to a chunkID — whether passed directly as `{ChunkID: c}` or resolved from a `{Path, Range}` locator — must be excluded from its own recall results. Bare-text inputs do not trigger self-exclusion.
@@ -4564,6 +4564,8 @@ reason.
 - **R2944:** `finding` has **no own-session gate** — a finding whose `-loc` resolves to the requester's own session is accepted, unlike `surface` (a directed search may legitimately point at a chunk already in the requester's session).
 - **R2945:** `ark connections recall close <cookie> --nonce <N>` writes `tmp://ARK-BLOODHOUND/finding-<S>-<B>` tagged `@ark-bloodhound-result: <S>` iff any finding was added (else silent-close), removes the `tmp://ARK-BLOODHOUND/task-<S>-<B>` doc, and appends a monitoring record — the same close machinery curation uses. The bloodhound's own tmp:// namespace (`ARK-BLOODHOUND/`, separate from recall's `ARK-RECALL/`) keeps the two independent per-session counters from ever colliding on a path; the cookie carries a kind-marker so the shared `close`/`finding` verbs route to the bloodhound's namespace and its own in-flight maps.
 - **R2946:** The result-doc format gains a third H2 kind, `## Finding: <originating clue, echoed verbatim>`, alongside `## Surface:` / `## Recommend:` — optional synthesized answer text followed by `- <path>:<range> (<size>) — <note>` lines. `close` stamps the header with the clue the server retained for `<B>` (R2937), so the echo is the assistant's own words. A finding is a **directed response** the assistant *called for*: it correlates verbatim by that clue and folds the digest into its **own reasoning**, distinct from the *ambient* surface/recommend it gates on "show the user?". Findings are their own docs that **pile up** on the bloodhound's own `@ark-bloodhound-result=<S>` channel and are drained by the assistant's `listen` (which subscribes to it), one at a time; nothing is reused at the doc level, and delivery is asynchronous (the lead arrives a later turn).
+- **R3006:** Before writing a bloodhound task doc, the watcher seeds it with the corpus's **deluxe combined search** — `Librarian.Recall({Text: payload})`, the same four-substrate combination (`VectorEC`, `TrigramEC`, `TagVector`, `TagTrigram`) ambient recall's fire uses — rendering the top candidates into a `## Recall seed` block placed between the `## Search task` payload and the crank handle. Each candidate is one compact locator line `<path>:<range> (<size>) <score> [tags]` with a short excerpt, carrying the `<path>:<range>` the crank handle feeds to `ark chunks` and **no chunkid on the wire**; an empty result renders an empty-seed note and the task still dispatches. The seed gives every hunt the value→chunk **tag axis** (R2905/R2906) the subagent's own content-only `ark search` cannot reach, and the crank handle's first step reads it before the agent runs its own searches (to widen the trail or when the seed is thin).
+- **R3007:** The seed search is **clue-only and session-agnostic** — the input is the watermark payload alone, with `RecallOpts.Session` and `.Propose` left off (no discussed-tag exclusion, no derivation side-effects): a directed *pull* hunt should see every match and the seed only reads, so the conversation is **not** folded into the search input (unlike ambient *push* recall, whose input *is* the conversation).
 
 
 ## Feature: Per-capability recall subscriptions (level decoupling)
