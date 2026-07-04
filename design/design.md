@@ -149,7 +149,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
-- [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`
+- [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -162,11 +162,11 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
 - [x] crc-LlamaLibs.md → `llamalibs.go`
-- [x] crc-RecallWatcher.md → `recall_watcher.go`
-- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
+- [ ] crc-RecallWatcher.md → `recall_watcher.go`
+- [ ] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
-- [ ] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
+- [ ] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`, `recall_next.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -217,6 +217,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
+- [ ] seq-bloodhound-cli.md → `cmd/ark/bloodhound_cli.go`, `recall_watcher.go`, `recall_agent_builder.go`, `recall_next.go`, `server.go`, `cmd/ark/monitoring_cli.go`
 - [ ] seq-subscriber-presence.md → `pubsub.go`, `recall_watcher.go`, `recall_agent_builder.go`, `server.go`
 - [ ] seq-chimes.md → `scheduler.go`, `server.go`, `config.go`, `pubsub.go`
 - [ ] seq-spec-change.md → `scheduler.go`, `config.go`, `indexer.go`, `server.go`

@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -97,6 +97,17 @@ CLITree owns how those bodies are *reached* and how their help is
 - Flag surface frozen (R2932): the migration adds, removes, renames no
   flag and switches none to GNU-only `--long`; it only re-homes existing
   flags onto their nodes.
+- Bloodhound + `luhmann next` nodes (R3010, R3021, R3022, R3027, R3029):
+  post-migration growth added as tree nodes like any other. A new `ark
+  bloodhound` group in `cmd/ark/bloodhound_cli.go` carries `search
+  TERMS... [--wait] [--timeout S]` (create the request doc + subscribe +
+  block + print JSONL, R3021/R3022/R3029) and `add --result --id --path
+  --chunk` (Luhmann's result stencil, R3027). A new `next --session S
+  [--first|--force] [--keepalive N]` node joins the existing `luhmann`
+  group in `cmd/ark/monitoring_cli.go` (R3010). Each self-documents from
+  its declarations; the `search` and `next` blocking bodies own their
+  stubborn-plumbing redial (crc-CLI.md) — CLITree only routes and generates
+  their help.
 
 ## Collaborators
 - CLI (crc-CLI.md): owns the command bodies the `Action`s call; CLITree
@@ -106,3 +117,4 @@ CLITree owns how those bodies are *reached* and how their help is
 
 ## Sequences
 - seq-cli-urfave.md
+- seq-bloodhound-cli.md

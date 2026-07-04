@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -56,6 +56,13 @@ composes and writes each curation doc via the in-process
   monotonic **bloodhound id** (`<B>`) counter (R2937). In-memory
   only, no dir-seeding (task docs are ephemeral tmp://), reset on
   restart — distinct from the dir-seeded `fireCounters`.
+- cliPool: the CLI-bloodhound pool roster (R3023, R3024) — pool-
+  secretary sessions with per-secretary state (free / busy /
+  idle-since for the cooldown clock), plus the in-flight request
+  docs keyed by `<id>`. The watcher marks a secretary busy on
+  dispatch and free on return; Luhmann owns the spawn/stop lifecycle
+  (crc-LuhmannCLI.md). In-memory; a bounce drops it and the CLI's
+  `--wait` re-drives the hunt.
 
 ## Does
 - Enabled() bool: true when `db.Config().Recall.Enabled` is
@@ -188,6 +195,41 @@ composes and writes each curation doc via the in-process
   - Log `fired` decision with section/candidate/discussed
     counts and the fire number (R2713).
 
+### CLI-hunt Fixer (R3020, R3023–R3025, R3030, R3031)
+The watcher is the **Fixer** for external-CLI hunts
+([bloodhound-cli.md](../specs/bloodhound-cli.md)): distinct from the
+OnAppend-driven ambient/in-session paths above, it **subscribes to two
+pubsub tags** and routes the request doc `tmp://BLOODHOUND-CLI/<id>`
+across the pipeline via the **tag baton** (R3031). All scheduling is
+deterministic Go.
+
+- **On `@ark-bloodhound-cli`** (a new request doc; R3023): gate on a live
+  Luhmann first — if `luhmannOwner` is empty (no orchestrator), do not
+  schedule, and the CLI reports orchestrator-not-running (R3020). Then
+  **enhance** the request doc into a standard bloodhound task doc, reusing
+  the in-session seed machinery — run `librarian.Recall` (R3006), render
+  the `## Recall seed`, and add the search crank handle (R2938) — so a
+  pool secretary runs it identically to an in-session hunt (R3030). Then
+  **schedule + route**: pick a free pool secretary from `cliPool` and
+  re-tag the request doc to its `@ark-secretary-work=<pool-sec>` tube
+  (R2948), marking it busy; none free with room
+  (`class.bloodhound.pool_max`) → push a *stand up another* directive onto
+  Luhmann's `nextQueue` and route when the new secretary subscribes; none
+  free with the pool full → leave the request pending (the CLI's `--wait`
+  blocks); too many idle past `cooldown_seconds` → push a *stop one*
+  directive.
+- **On `@ark-bloodhound-cli-return`** (a secretary re-tagged the request
+  doc with its raw results; R3024): **free the secretary** — mark it
+  idle-in-cooldown in `cliPool`, occupancy freed *before* curation; only
+  past `cooldown_seconds` is it eligible for a *stop one*. Then **route to
+  curation** — push the request-doc path onto Luhmann's `nextQueue` as a
+  curation task (R3025). No doc-tag hop: the watcher → Luhmann hand-off is
+  the in-process queue.
+- **Atomic baton** (R3031): the request → `@ark-secretary-work` re-tag the
+  watcher performs appends its content (seed + crank handle) and rewrites
+  the tag in one write-actor flush, so the secretary never wakes on a
+  half-enhanced doc.
+
 ## Out of scope
 - ~~No subscriber liveness check before emit (R2714)~~ — gates added
   by R2867 (activation, at OnAppend) and R2806 (backstop, at fire);
@@ -226,8 +268,15 @@ composes and writes each curation doc via the in-process
 - PubSub (crc-PubSub.md): `SubscriberCount` on both
   `ark-secretary-work` and `ark-recall-result=<session>` gates
   session activation at OnAppend (R2867) and the curation-doc
-  write at fire (R2806).
+  write at fire (R2806); also carries the watcher's
+  `@ark-bloodhound-cli` / `@ark-bloodhound-cli-return` subscriptions
+  that drive the CLI-hunt Fixer (R3023, R3024).
+- LuhmannCLI (crc-LuhmannCLI.md): the watcher pushes *stand up* /
+  *stop* directives and curation tasks onto Luhmann's `nextQueue`
+  (R3024, R3025), and gates CLI scheduling on a live `luhmannOwner`
+  (R3020); Luhmann owns the pool-secretary spawn/stop lifecycle.
 
 ## Sequences
 - seq-recall-watcher.md
 - seq-recall-agent.md
+- seq-bloodhound-cli.md

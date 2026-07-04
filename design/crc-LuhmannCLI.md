@@ -1,11 +1,14 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026
 
-Three CLI verbs the orchestrator session uses to record its own
-supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl`.
-`spawn-record` and `exit-record` are server-required because they
-route through the write actor; `inspect-exit` is cold-start because
-it only reads subagent JSONLs.
+The Go surface the orchestrator session calls into. Three verbs record
+its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
+`spawn-record` and `exit-record` are server-required (they route through
+the write actor); `inspect-exit` is cold-start (it only reads subagent
+JSONLs). A fourth verb, **`next`**, is the orchestrator's blocking
+**drain tube**: it hands back curation tasks, supervisor directives, and
+keepalives from the recall service, guarded by an in-memory ownership
+lease that keeps exactly one Luhmann draining (R3010–R3016).
 
 The orchestrator session itself — the persona, the supervisor logic,
 the Task-spawning of managed subagents — lives in a Claude Code
@@ -15,6 +18,14 @@ card covers only the Go surface the skill calls into.
 ## Knows
 - arkDir: string — `~/.ark/`
 - logPath: string — `~/.ark/monitoring/luhmann.jsonl`
+- luhmannOwner: string — the session that currently holds the
+  Luhmann role (R3012). In-memory server state, empty when
+  unowned; cleared on a server restart (no persistence). The
+  ownership lease `next` enforces.
+- nextQueue: chan work — in-memory queue of work items the recall
+  watcher pushes and `next` drains (R3011): curation tasks (a
+  request-doc path to refine) and supervisor directives (stand up /
+  stop a pool secretary). Server state; a bounce drops it.
 
 ## Does
 
@@ -82,6 +93,61 @@ card covers only the Go surface the skill calls into.
   `user`), `last_error` (string or null), and `tokens_at_close`
   (the R2777 value, or `0` when unmeasured).
 
+### `luhmann next --session S [--first|--force] [--keepalive N]`
+- Server-required. The orchestrator's **drain tube**: a blocking
+  long-poll that returns one work item and is re-invoked in a loop
+  (R3010). The Luhmann skill backgrounds it so the session stays
+  conversational; on completion the harness re-injects the result,
+  Luhmann acts, and re-invokes. Same background-lotto-tube family as
+  `RecallNext` and `{cmd} event`.
+- **Ownership lease** (R3012): `--session S` is an *identity*, not a
+  tube scope — the queue is one global feed of all CLI hunts and
+  directives, and a single `luhmannOwner` holds the role.
+  - **`--first`** claims: sets `luhmannOwner := S` if unowned; if a
+    *different* session owns it, errors `you don't have ownership`
+    (R3013).
+  - **plain** (no flag) validates and **never claims**: proceeds only
+    if `S == luhmannOwner`; errors `there are no sessions` when
+    unowned, `you don't have ownership` when a different session owns
+    it (R3013).
+  - **`--force`** sets `luhmannOwner := S` unconditionally — the
+    deliberate takeover of a dead-but-registered owner (R3013).
+  - The lease is **in-memory**, so a bounce clears it. The two error
+    strings drive the skill's reflexes and make the protocol
+    self-converging with no persistence (R3014): `there are no
+    sessions` → re-invoke `--first`; `you don't have ownership` →
+    **exit** (a losing second Luhmann steps down after a post-bounce
+    race, so exactly one survives).
+- **Blocks** up to the keepalive window (`--keepalive N`, default
+  ~45 min; R3016) in a select over `nextQueue`, the keepalive timer,
+  and ctx. On an item it returns crank-handle prose; on the deadline a
+  keepalive (run next again). Three kinds (R3011): a **curation task**
+  (a request-doc path — the skill reads it, refines, runs `ark
+  bloodhound add`, R3025/R3027); a **supervisor directive** (stand up /
+  stop a pool secretary — the skill spawns/stops via Task and records
+  with `spawn-record` / `exit-record`, R3019); the **keepalive**.
+- **Stubborn plumbing** (R3015): the `next` CLI treats an `ark serve`
+  bounce as a wait condition — redials with backoff, and on reconnect
+  a `there are no sessions` routes into the re-`--first` path rather
+  than failing the loop (mirrors `RecallNext`'s R2903 redial).
+- The keepalive is a **backgrounded-loop** clock (< 1 hr main-agent
+  cache), NOT the secretary's 90 s foreground number (R3016); the tube
+  **subsumes** the standalone `ark heartbeat` design.
+
+### Pool lifecycle + curation opt-in (R3017–R3019, R3026)
+- The **CLI-bloodhound secretary pool** is a Luhmann-managed class
+  (R3019): on stand-up / stop directives the skill spawns / stops pool
+  secretaries and records them on the same crash / quit-early streak
+  machine and `[luhmann]` policy the recall class once used. Config:
+  `class.bloodhound.pool_max` (default 3, R3017) and
+  `class.bloodhound.cooldown_seconds` (default 120, R3018) — read from
+  `[luhmann]` on the same reload path (R2801).
+- Luhmann's **opt-in to serve CLI curation is simply owning the `next`
+  seat** (R3026): no separate parent-signal subscription; a session not
+  draining `next` serves no CLI hunts. Curation is mandatory but
+  decoupled from occupancy — the watcher already freed the secretary on
+  its return (R3024), so a slow refine costs only the CLI's latency.
+
 ## Collaborators
 - Monitor (crc-Monitor.md): reads back the log this card writes.
 - RecallAgentBuilder (crc-RecallAgentBuilder.md): provides the
@@ -89,8 +155,14 @@ card covers only the Go surface the skill calls into.
   scanning behavior; LuhmannCLI calls into it for `inspect-exit`.
   No new lookup code on this card.
 - Server (crc-Server.md): hosts the HTTP handlers for the two
-  write-actor verbs.
-- CLI (crc-CLI.md): dispatches the three subcommands.
+  write-actor verbs, and the `next` long-poll endpoint + the
+  `luhmannOwner` / `nextQueue` state.
+- CLI (crc-CLI.md): dispatches the four subcommands.
+- RecallWatcher (crc-RecallWatcher.md): the Fixer that **pushes**
+  curation tasks (on a hunt's return) and supervisor directives
+  (pool scaling) onto `nextQueue`; `next` drains what the watcher
+  enqueues (R3011, R3024).
 
 ## Sequences
 - seq-luhmann-supervisor.md
+- seq-bloodhound-cli.md
