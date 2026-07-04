@@ -3,7 +3,7 @@
 **Requirements:** R2696, R2705, R2706, R2708, R2711, R2712, R2713,
 R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739,
 R2740, R2741, R2746, R2747, R2748, R2753, R2754,
-R2806, R2867, R2868, R2869, R2898, R2901
+R2806, R2867, R2868, R2869, R2898, R2901, R3009
 
 The watcher hooks into `indexer.executeRefresh`'s isAppend
 branch. OnAppend is synchronous on the indexer's goroutine —
@@ -51,9 +51,10 @@ is in `seq-recall-agent.md`.
          │
          ├── 2.6  for each line in newBytes:                      (R2731, R2732)
          │           obj = json.Unmarshal(line)
-         │           if obj.type == "user" && genuine(obj):        (R2732)
-         │             // genuine = string content && no origin.kind
-         │             //   (excludes tool-results + notifications)
+         │           if obj.type == "user" && genuine(obj):        (R2732, R3009)
+         │             // genuine = string content && origin.kind=="human"
+         │             //   (excludes tool-results, notifications, caveats;
+         │             //    origin-absence is NOT genuine, R3009)
          │             cancel pendingTimer; armReady = true        (R2733)
          │           else if obj.type == "system"
          │                && obj.subtype == "turn_duration":

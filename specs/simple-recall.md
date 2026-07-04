@@ -239,9 +239,15 @@ never re-triggers on its own consumers' output):
   fires on a turn that no human initiated.
 - **Genuine user records only.** A `type:"user"` line counts as a
   user turn only when it's a real human message: `message.content` is
-  a JSON string (tool-results are arrays) **and** it has no harness
-  `origin` (Claude Code stamps injected lines — e.g. background-task
-  completions — with `origin.kind` like `"task-notification"`). Tool-
+  a JSON string (tool-results are arrays) **and** it carries the human
+  origin marker `origin.kind == "human"`. Absence of an origin is *not*
+  a genuine signal — tool-results and local-command caveats also lack
+  one — so detection keys on the positive marker, not its absence.
+  Injected lines (e.g. background-task completions) carry a different
+  `origin.kind` like `"task-notification"`. Anthropic does not publish
+  this format, so the rule is deliberately conservative: a positive
+  allowlist of the one known human marker, with the `-vv` `turn_duration
+  ignored` log as the drift tripwire if the marker ever changes. Tool-
   results and notification wake-lines are *not* user turns. Without
   this, a consumer surfacing recall — woken by a `type:"user"`
   notification — would re-arm the watcher and cascade.

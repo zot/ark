@@ -496,9 +496,11 @@ func (b *RecallAgentBuilder) recentConversation(session string, n int) string {
 }
 
 // userProse returns the prose of a genuine user message (content is a
-// JSON string, no harness origin — mirrors isGenuineUserMessage) and ok.
+// JSON string, origin.kind == "human" — mirrors isGenuineUserMessage) and ok.
+// R3009: keys on the positive human marker, not origin-absence, so genuine
+// turns (now stamped origin.kind="human") are not dropped from injected context.
 func userProse(originKind string, content json.RawMessage) (string, bool) {
-	if originKind != "" {
+	if originKind != "human" {
 		return "", false
 	}
 	c := bytes.TrimSpace(content)

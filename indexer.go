@@ -606,7 +606,7 @@ type refreshPrep struct {
 // from multiple goroutines. LMDB reads (DetectAppend, FileInfoByID) are
 // concurrent-safe. Returns a prep struct for executeRefresh.
 // Tag extraction itself moves on-actor (R1896).
-// CRC: crc-Indexer.md | Seq: seq-file-change.md | R364, R368
+// CRC: crc-Indexer.md | Seq: seq-file-change.md | R364, R368, R3008
 func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refreshPrep, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -637,8 +637,14 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 			}
 			fullHash := sha256.Sum256(data)
 			prep.fullHash = fmt.Sprintf("%x", fullHash)
+			// R3008: the stored watermark must come from the same snapshot we
+			// hashed. fileSize is len(data) — the exact bytes covered by
+			// fullHash — never os.Stat's size, which can race ahead of `data`
+			// under a concurrent append and desync the (FileLength, ContentHash)
+			// pair (spurious full reindex) or drop the interleaved bytes.
+			// modTime stays best-effort from stat.
 			fi, _ := os.Stat(path)
-			prep.fileSize = fi.Size()
+			prep.fileSize = int64(len(data))
 			prep.modTime = fi.ModTime().UnixNano()
 			return prep, nil
 		}

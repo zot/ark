@@ -251,18 +251,22 @@ func scanBloodhounds(newBytes []byte) []string {
 
 // isGenuineUserMessage reports whether a `type:"user"` record is a real
 // human message rather than a tool-result or a harness-injected line.
-// Two structural tells, both from the Claude Code JSONL (R2732):
+// Two structural tells, both from the Claude Code JSONL:
 //   - genuine prose has STRING content; tool-results are arrays of
 //     `{type:"tool_result", ...}` parts.
-//   - the harness stamps injected user-records (e.g. background-task
-//     completions) with an `origin.kind` ("task-notification"); a typed
-//     message has no `origin`.
+//   - a genuine typed turn carries the positive marker
+//     `origin.kind == "human"`. Absence of an origin is NOT genuine:
+//     tool-results and local-command caveats also lack it, and injected
+//     user-records (e.g. background-task completions) carry a different
+//     kind like "task-notification". Anthropic doesn't publish this
+//     format, so we key on the one known human marker (conservative
+//     allowlist); if it changes, arming goes quiet and the -vv
+//     "turn_duration ignored" log is the tripwire.
 //
-// A notification's content can itself be a string, so the origin check
-// is what excludes it; tool-results are excluded by the array check.
+// CRC: crc-RecallWatcher.md | R2732, R3009
 func isGenuineUserMessage(originKind string, content json.RawMessage) bool {
-	if originKind != "" {
-		return false // harness-injected (task-notification, etc.)
+	if originKind != "human" {
+		return false // only a positively-marked human turn arms recall
 	}
 	c := bytes.TrimSpace(content)
 	return len(c) > 0 && c[0] == '"' // JSON string ⇒ genuine prose; '[' ⇒ tool-result

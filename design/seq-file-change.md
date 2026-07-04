@@ -1,5 +1,5 @@
 # Sequence: File Change (fsnotify)
-**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R392, R393, R394, R395, R360, R361, R362, R363, R365, R366, R367, R368, R369
+**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R392, R393, R394, R395, R360, R361, R362, R363, R365, R366, R367, R368, R369, R3008
 
 Covers fsnotify events on source directories, throttled on-notify,
 and append detection.
@@ -81,6 +81,10 @@ Indexer.RefreshFile(path, strategy)
   │           ├── parse last ChunkRange for base line
   │           ├── microfts2.AppendChunks(fileid, newBytes, strategy,
   │           │     WithBaseLine, WithContentHash, WithModTime, WithFileLength)
+  │           │     — WithFileLength and WithContentHash come from the SAME
+  │           │       whole-file read snapshot: stored length = len(data), the
+  │           │       exact span hashed, never a later os.Stat, so a concurrent
+  │           │       append can't desync the (length, hash) pair (R3008)
   │           ├── EC embeddings re-computed for the file's chunks
   │           │     (Librarian.BatchEmbedChunks; chunkid-keyed, R1914)
   │           ├── ExtractTags(newBytes) → newTags

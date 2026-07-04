@@ -163,6 +163,16 @@ cheaper than full reindex.
 Append-only chunks lighten tag indexing too — only extract tags
 from new chunks, add to existing counts.
 
+The new watermark ark stores after an append — file length plus
+content hash, the inputs the next detection compares against — comes
+from a single in-memory snapshot of the file. The stored length is the
+byte count actually hashed and chunked, never a size from a separate,
+later stat. A write landing between the read and such a stat would
+record a length past the hashed content: the next detection then
+hashes a different span, wrongly reports a modification, and forces a
+full reindex, while the bytes between the two reads go unchunked.
+Content appended after the snapshot is caught by the next change event.
+
 This is universal — not strategy-specific. Every file gets it. Small
 files: hash is trivial, full reindex is cheap anyway. Large files:
 skip re-chunking everything before the watermark.
