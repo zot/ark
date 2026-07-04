@@ -4644,6 +4644,16 @@ func recallRedialKeepalive(session string, nonce uint64) string {
 	return fmt.Sprintf("The ark server is restarting or briefly unreachable — no work yet. This is normal. Run `%s` again now to keep watching; do not stop, do not wait.\n", nextCmd)
 }
 
+// luhmannRedialKeepalive is the CLI-synthesized keepalive `ark luhmann next`
+// returns when its connection drops or the redial budget is exhausted (R3015):
+// exit 0 with a re-invoke instruction so the orchestrator loop rides out the
+// bounce, then re-validates ownership on the next plain call (a reborn server
+// answers with the reclaim signal, R3014).
+// CRC: crc-LuhmannCLI.md | R3015
+func luhmannRedialKeepalive(session string) string {
+	return fmt.Sprintf("The ark server connection dropped (it may be restarting). Run `~/.ark/ark luhmann next --session %s` again now to resume — do not stop.\n", session)
+}
+
 // popFire returns (fireToken, rest, err) for a recall result-builder
 // verb. The fire token is the first positional argument before any
 // flags — the composite `<session>-<fire>` cookie the crank-handle

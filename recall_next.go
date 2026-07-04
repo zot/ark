@@ -547,3 +547,178 @@ func assistantText(content json.RawMessage) string {
 	}
 	return ""
 }
+
+// --- Luhmann `next` drain tube (bloodhound-CLI S1: R3010–R3016, R3026) ---
+//
+// The orchestrator's sibling of RecallNext: a blocking long-poll the Luhmann
+// skill backgrounds and re-invokes in a loop. Where RecallNext serves one
+// session's secretary, `next` serves the single orchestrator seat — guarded by
+// an in-memory ownership lease (R3012) — and drains the recall watcher's
+// cross-session queue of curation tasks and supervisor directives (R3011).
+
+// LuhmannNextKeepalive is the default idle window `ark luhmann next` blocks
+// before returning a keepalive (R3016). It is a backgrounded-loop clock: the
+// window stays under the ~1-hour main-agent prompt-cache TTL so a returning
+// keepalive lands Luhmann's re-read inside the still-warm cache. Deliberately
+// NOT the recall secretary's 90 s foreground number (recallNextKeepalive) — that
+// is a ~120 s foreground-Bash auto-background artifact of a dedicated subagent.
+// The tube subsumes the standalone `ark heartbeat` keepalive design.
+var LuhmannNextKeepalive = 45 * time.Minute // R3016
+
+// luhmannNextKeepaliveMax caps a caller-supplied --keepalive so it can never
+// cross the 1-hour cache TTL that governs the backgrounded loop (R3016).
+const luhmannNextKeepaliveMax = 55 * time.Minute // R3016
+
+// luhmannNextQueueCap buffers the watcher→Luhmann handoff so a watcher push
+// never blocks while the drain sits idle between invocations (R3011).
+const luhmannNextQueueCap = 64 // R3011
+
+// Ownership-error strings the skill's reflexes key on (R3014): they make the
+// lease protocol self-converging with no persistence and no human arbitration.
+const (
+	luhmannErrNoSessions  = "there are no sessions"    // unowned server (post-bounce) → re-invoke --first
+	luhmannErrNoOwnership = "you don't have ownership" // a foreign owner holds the seat → stand down
+)
+
+// LuhmannWork is one item the recall watcher pushes onto the server's nextQueue
+// for the orchestrator's `next` drain (R3011). Two kinds: a curation task (a raw
+// CLI-hunt finding — Path is the request-doc tmp:// path Luhmann refines and
+// emits via `ark bloodhound add`) or a supervisor directive (Directive ∈
+// stand-up/stop for the pooled Class — Luhmann spawns/stops via Task and records
+// it). The keepalive is the third `next` return but is synthesized on the
+// deadline, not queued.
+type LuhmannWork struct { // R3011
+	Kind      string // "curation" | "directive"
+	Path      string // curation: request-doc tmp:// path
+	Directive string // directive: "stand-up" | "stop"
+	Class     string // directive: managed class (e.g. "bloodhound")
+}
+
+// luhmannNextMode is the ownership intent of one `next` call (R3013).
+type luhmannNextMode int
+
+const (
+	luhmannModePlain luhmannNextMode = iota // R3013: validate, never claim
+	luhmannModeFirst                        // R3013: claim if unowned or self
+	luhmannModeForce                        // R3013: reclaim unconditionally
+)
+
+// luhmannNextDisposition tells the handler how to signal the CLI (R3013, R3014).
+type luhmannNextDisposition int
+
+const (
+	luhmannDispOK      luhmannNextDisposition = iota // R3013: work or keepalive, exit 0
+	luhmannDispExit                                  // R3014: you don't have ownership → stand down
+	luhmannDispReclaim                               // R3014: there are no sessions → re-invoke --first
+)
+
+// claimLuhmann applies the in-memory ownership lease for one `next` call
+// (R3012, R3013). Returns the disposition and, for the two non-OK cases, the
+// error string the skill keys on (R3014). --force always claims; --first claims
+// when unowned or already self, else stands the caller down; plain validates
+// only — unowned yields the reclaim signal, a foreign owner stands the caller
+// down. The lease is server memory (no persistence), so a bounce clears it and
+// the reclaim path (R3014) re-establishes exactly one owner.
+// CRC: crc-LuhmannCLI.md | R3012, R3013, R3014, R3026
+func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNextDisposition, string) {
+	srv.luhmannMu.Lock()
+	defer srv.luhmannMu.Unlock()
+	switch mode {
+	case luhmannModeForce:
+		srv.luhmannOwner = session
+		return luhmannDispOK, ""
+	case luhmannModeFirst:
+		if srv.luhmannOwner == "" || srv.luhmannOwner == session {
+			srv.luhmannOwner = session
+			return luhmannDispOK, ""
+		}
+		return luhmannDispExit, luhmannErrNoOwnership
+	default: // plain
+		switch srv.luhmannOwner {
+		case "":
+			return luhmannDispReclaim, luhmannErrNoSessions
+		case session:
+			return luhmannDispOK, ""
+		default:
+			return luhmannDispExit, luhmannErrNoOwnership
+		}
+	}
+}
+
+// LuhmannNext is the orchestrator's blocking drain tube (R3010): it applies the
+// ownership lease (R3012–R3014, R3026 — owning the seat is the sole opt-in to
+// serving CLI curation), then — once the caller owns the seat — blocks in a
+// select over nextQueue, the keepalive timer, and ctx, returning one
+// crank-handle body per call. Three return kinds (R3011): a curation task or a
+// supervisor directive drained from nextQueue, or a keepalive on the idle
+// deadline. The disposition drives the handler's headers (R3013, R3014).
+// CRC: crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3011, R3016
+func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmannNextMode, keepalive time.Duration) (body string, disp luhmannNextDisposition, err error) {
+	disp, msg := srv.claimLuhmann(session, mode)
+	if disp != luhmannDispOK {
+		return luhmannOwnershipPrompt(disp, msg, session), disp, nil
+	}
+	switch {
+	case keepalive <= 0:
+		keepalive = LuhmannNextKeepalive
+	case keepalive > luhmannNextKeepaliveMax:
+		keepalive = luhmannNextKeepaliveMax // R3016: never cross the 1h cache TTL
+	}
+	timer := time.NewTimer(keepalive)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return "", luhmannDispOK, ctx.Err()
+	case w := <-srv.nextQueue:
+		return luhmannWorkPrompt(session, w), luhmannDispOK, nil
+	case <-timer.C:
+		return luhmannKeepalivePrompt(session), luhmannDispOK, nil
+	}
+}
+
+// luhmannOwnershipPrompt is the crank-handle for the two ownership signals
+// (R3014). Reclaim: the server was reborn by a bounce and holds no owner, so
+// re-claim with --first. Exit: another session owns the seat, so this Luhmann
+// stands down — the losing side of a post-bounce --first race steps aside, so
+// exactly one orchestrator survives.
+// CRC: crc-LuhmannCLI.md | R3014
+func luhmannOwnershipPrompt(disp luhmannNextDisposition, msg, session string) string {
+	if disp == luhmannDispReclaim {
+		return fmt.Sprintf("The ark server has no Luhmann owner (%s) — it was restarted. Reclaim the seat: run `~/.ark/ark luhmann next --session %s --first`.\n", msg, session)
+	}
+	return fmt.Sprintf("Another session owns the Luhmann seat (%s). Stand down — do not run `next` again; a single orchestrator serves CLI hunts.\n", msg)
+}
+
+// luhmannKeepalivePrompt is returned on the idle deadline (R3011, R3016): no
+// work arrived within the window, so spend one cheap cached turn and re-invoke
+// to hold the seat warm. Exit 0, like a work item — only the stand-down signal
+// stops the loop.
+// CRC: crc-LuhmannCLI.md | R3011, R3016
+func luhmannKeepalivePrompt(session string) string {
+	return fmt.Sprintf("No curation task or directive is pending. This is normal. Run `~/.ark/ark luhmann next --session %s` again now to keep the seat warm — do not stop.\n", session)
+}
+
+// luhmannWorkPrompt renders one drained work item as a crank-handle (R3011). A
+// curation task points Luhmann at the request doc to refine and emit via `ark
+// bloodhound add` (the CLI-hunt discernment split; the exact add contract is
+// pinned in S4). A directive tells Luhmann to stand up or stop a pool secretary
+// and record it (the pool-management surface lands with S2/the watcher).
+// CRC: crc-LuhmannCLI.md | R3011
+func luhmannWorkPrompt(session string, w LuhmannWork) string {
+	nextCmd := fmt.Sprintf("~/.ark/ark luhmann next --session %s", session)
+	switch w.Kind {
+	case "curation":
+		return fmt.Sprintf(
+			"A directed-search finding is ready to curate. The raw results are in the request doc:\n%s\n\n"+
+				"Read that file with the Read tool, refine the raw findings (keep what genuinely answers the query, drop the noise), and emit each kept item with `~/.ark/ark bloodhound add` (one item per call). The terminal add notifies the waiting CLI.\n"+
+				"Then run `%s` again.\n",
+			w.Path, nextCmd)
+	case "directive":
+		return fmt.Sprintf(
+			"Supervisor directive: %s a `%s` pool secretary. Carry it out with the Task tool, and record it with `~/.ark/ark luhmann spawn-record` / `exit-record` on the `%s` class.\n"+
+				"Then run `%s` again.\n",
+			w.Directive, w.Class, w.Class, nextCmd)
+	default:
+		return fmt.Sprintf("Unrecognized work kind %q — skip it and run `%s` again.\n", w.Kind, nextCmd)
+	}
+}

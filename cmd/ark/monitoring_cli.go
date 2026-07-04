@@ -10,8 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	ucli "github.com/urfave/cli/v3"
 	"github.com/zot/ark"
@@ -179,6 +183,18 @@ func luhmannCommand() *ucli.Command {
 				},
 				Action: luhmannInspectExitAction,
 			},
+			{
+				Name:      "next",
+				Usage:     "orchestrator drain tube: block for the next curation task, directive, or keepalive (server)",
+				ArgsUsage: "--session SID [--first | --force] [--keepalive SECONDS]",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "session", Usage: "orchestrator session identity holding the Luhmann seat (required)"},
+					&ucli.BoolFlag{Name: "first", Usage: "claim the seat if unowned (errors if another session owns it)"},
+					&ucli.BoolFlag{Name: "force", Usage: "reclaim the seat unconditionally (deliberate takeover of a dead owner)"},
+					&ucli.IntFlag{Name: "keepalive", Value: int(ark.LuhmannNextKeepalive / time.Second), Usage: "idle seconds before a keepalive (default ~45m; capped under the 1h main-agent cache)"},
+				},
+				Action: luhmannNextAction,
+			},
 		},
 	}
 }
@@ -236,4 +252,70 @@ func luhmannInspectExitAction(_ context.Context, c *ucli.Command) error {
 	}
 	fmt.Println(result.Label)
 	return nil
+}
+
+// luhmannNextAction drives the orchestrator's blocking drain tube, mirroring
+// connRecallNextAction's stubborn-plumbing loop (R3015): a server bounce is a
+// wait condition, not an error. The disposition headers route the loop —
+// X-Luhmann-Exit stands the orchestrator down (exit 2, R3014); a normal return
+// (work, keepalive, or the reclaim crank-handle) prints and exits 0 so the
+// backgrounded loop re-invokes and re-validates ownership.
+// CRC: crc-CLITree.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3015
+func luhmannNextAction(_ context.Context, c *ucli.Command) error {
+	session := c.String("session")
+	if session == "" {
+		fmt.Fprintln(os.Stderr, "ark luhmann next --session SID [--first | --force] [--keepalive SECONDS]")
+		os.Exit(2)
+	}
+	if c.Bool("first") && c.Bool("force") {
+		fmt.Fprintln(os.Stderr, "ark luhmann next: --first and --force are mutually exclusive")
+		os.Exit(2)
+	}
+	mode := "plain"
+	switch {
+	case c.Bool("first"):
+		mode = "first"
+	case c.Bool("force"):
+		mode = "force"
+	}
+	nextURL := fmt.Sprintf("http://ark/luhmann/next?session=%s&mode=%s&keepalive=%d", session, mode, c.Int("keepalive"))
+	req, err := http.NewRequest("GET", nextURL, nil)
+	if err != nil {
+		fatal(err)
+	}
+	// R3015: redial with backoff on a cold dial up to a bounded budget; on a
+	// mid-block drop or exhausted budget, hand back a keepalive (exit 0) so the
+	// orchestrator loop re-invokes `next` and rides out the bounce, then
+	// re-validates ownership — a reborn server answers the plain call with the
+	// reclaim signal, routing into the --first path (R3014).
+	deadline := time.Now().Add(recallNextRedialBudget)
+	backoff := recallNextRedialBackoff
+	for {
+		client := serverClient(arkDir)
+		if client == nil {
+			if time.Now().After(deadline) {
+				os.Stdout.WriteString(luhmannRedialKeepalive(session))
+				return nil
+			}
+			time.Sleep(backoff)
+			backoff = min(backoff*2, recallNextRedialMaxBackoff)
+			continue
+		}
+		resp, derr := client.Do(req)
+		if derr != nil {
+			time.Sleep(backoff)
+			os.Stdout.WriteString(luhmannRedialKeepalive(session))
+			return nil
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fatal(fmt.Errorf("server error (%d): %s", resp.StatusCode, strings.TrimSpace(string(data))))
+		}
+		os.Stdout.Write(data)
+		if resp.Header.Get("X-Luhmann-Exit") == "1" {
+			os.Exit(2) // R3014: another session owns the seat — stand down
+		}
+		return nil
+	}
 }

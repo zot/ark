@@ -64,6 +64,14 @@ type Server struct {
 	recallWatcher      *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
 	recallAgentBuilder *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
 
+	// Bloodhound-CLI orchestrator drain tube (S1). The luhmannOwner lease
+	// keeps exactly one session draining `ark luhmann next`; nextQueue is the
+	// watcher→Luhmann handoff of curation tasks + supervisor directives. Both
+	// are in-memory server state — a bounce clears them (R3012, R3011).
+	luhmannMu    sync.Mutex       // R3012: guards luhmannOwner
+	luhmannOwner string           // R3012: session holding the Luhmann seat; "" when unowned
+	nextQueue    chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
+
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
 	// goroutine that drains pubsub.Listen, compresses by (path, tag),
@@ -270,7 +278,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 		pubsub:    ps,
 		scheduler: sched,
 		librarian: lib,
-		curation:  newCuration(dbPath), // R2355, R2381
+		curation:  newCuration(dbPath),                         // R2355, R2381
+		nextQueue: make(chan LuhmannWork, luhmannNextQueueCap), // R3011: watcher→Luhmann handoff
 	}
 	srv.curation.Load() // R2383: hydrate pinned slice from curation.toml before luaTable is wired
 
@@ -471,6 +480,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /subscribers", srv.handleSubscribers)
 	mux.HandleFunc("POST /monitor/control", srv.handleMonitorControl)
 	mux.HandleFunc("POST /luhmann/record", srv.handleLuhmannRecord)
+	// Orchestrator drain tube (bloodhound-CLI S1): blocking long-poll, R3010.
+	mux.HandleFunc("GET /luhmann/next", srv.handleLuhmannNext)
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
@@ -2612,6 +2623,47 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]int{"crashes": crashes, "quit_early": quitEarly})
+}
+
+// handleLuhmannNext is the orchestrator's blocking drain tube (R3010): GET so
+// any client drives it like recall's `next`. The ownership lease is keyed on
+// ?session; ?mode ∈ {plain,first,force} is the claim intent (R3013); ?keepalive
+// overrides the idle window in seconds (R3016). Disposition → headers:
+// X-Luhmann-Exit signals stand-down (you don't have ownership); X-Luhmann-Reclaim
+// signals re-invoke --first (there are no sessions); neither on a normal
+// work/keepalive return. The body is crank-handle prose the skill acts on.
+// CRC: crc-Server.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3016
+func (srv *Server) handleLuhmannNext(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+	mode := luhmannModePlain
+	switch r.URL.Query().Get("mode") {
+	case "first":
+		mode = luhmannModeFirst
+	case "force":
+		mode = luhmannModeForce
+	}
+	var keepalive time.Duration
+	if s := r.URL.Query().Get("keepalive"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			keepalive = time.Duration(n) * time.Second
+		}
+	}
+	body, disp, rerr := srv.LuhmannNext(r.Context(), session, mode, keepalive)
+	if rerr != nil {
+		return // client disconnect or cancellation — nothing to deliver
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	switch disp {
+	case luhmannDispExit:
+		w.Header().Set("X-Luhmann-Exit", "1") // R3014: foreign owner → stand down
+	case luhmannDispReclaim:
+		w.Header().Set("X-Luhmann-Reclaim", "1") // R3014: unowned → re-invoke --first
+	}
+	w.Write([]byte(body))
 }
 
 // handleListen long-polls for notifications.

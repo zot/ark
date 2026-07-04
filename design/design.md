@@ -283,6 +283,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
+- [x] test-LuhmannCLI.md → `luhmann_next_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
