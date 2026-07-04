@@ -1,5 +1,16 @@
 # Spectral Search
 
+> **⚠ SUPERSEDED — read first.** The `claude --print` **co-process** this spec
+> describes is **gone** (retired T227–T239, 2026-07-03). What actually runs today
+> is the Gen-2 **sidecar expansion queue** — the Librarian's `ExpandRequest` tube
+> plus the `/search/curate` and `/search/expand` endpoints, drained by the
+> `ark-expansion` agent — and Phase A's spectral-toggle UI (R1255–R1265) was
+> **never built** (no consumer ever called the sidecar). The whole feature is
+> **slated for removal** in favor of the **bloodhound** ([bloodhound.md](bloodhound.md));
+> see PENDING (the Gen-2 sidecar teardown). Everything below describes the original
+> co-process design for **history** — it is **not** current behavior. When the
+> sidecar is torn out, this spec retires with it.
+
 LLM-powered query expansion for the ark search widget. A cheap model
 (Haiku) acts as a librarian — given what the user typed, it suggests
 alternative terms that a human would think to check. This is the
