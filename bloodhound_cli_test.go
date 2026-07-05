@@ -5,6 +5,8 @@ package ark
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -382,6 +384,73 @@ func TestBloodhoundCLIResultStripsHeadTag(t *testing.T) {
 	var f cliFinding
 	if err := json.Unmarshal([]byte(strings.TrimRight(jsonl, "\n")), &f); err != nil || f.Path != "specs/a.md" {
 		t.Errorf("jsonl = %q parsed %+v err %v", jsonl, f, err)
+	}
+}
+
+// TestDeregisterPoolSecretaryOnExit confirms a terminal exit for the bloodhound
+// class drops the secretary from the roster (and its inflight entry), while a
+// wrong class or a non-terminal kind is a no-op — the symmetric counterpart to
+// RegisterPoolSecretary (R3034).
+// Refs: R3034
+func TestDeregisterPoolSecretaryOnExit(t *testing.T) {
+	hub := &fakeLuhmannHub{owner: "S"}
+	w := newFixerWatcher(hub)
+	w.pool.secretaries[7] = &poolSec{nonce: 7}
+	w.pool.secretaries[8] = &poolSec{nonce: 8, busy: true}
+	w.pool.inflight["tmp://BLOODHOUND-CLI/x"] = 7
+
+	// Wrong class → no-op.
+	w.DeregisterPoolSecretary("recall", "exit", 7)
+	if _, ok := w.pool.secretaries[7]; !ok {
+		t.Error("wrong class must not deregister")
+	}
+	// Non-terminal kind → no-op.
+	w.DeregisterPoolSecretary("bloodhound", "spawn", 7)
+	if _, ok := w.pool.secretaries[7]; !ok {
+		t.Error("a spawn record must not deregister")
+	}
+	// Terminal context-limit exit → removes the secretary and its inflight entry.
+	w.DeregisterPoolSecretary("bloodhound", "exit", 7)
+	if _, ok := w.pool.secretaries[7]; ok {
+		t.Error("a context-limit exit should deregister the secretary")
+	}
+	if _, ok := w.pool.inflight["tmp://BLOODHOUND-CLI/x"]; ok {
+		t.Error("the exited secretary's inflight entry should be dropped")
+	}
+	if _, ok := w.pool.secretaries[8]; !ok {
+		t.Error("a different secretary must be untouched")
+	}
+	// Idempotent (already removed) and the crash kind also deregisters.
+	w.DeregisterPoolSecretary("bloodhound", "crash", 7) // no-op, no panic
+	w.DeregisterPoolSecretary("bloodhound", "crash", 8)
+	if _, ok := w.pool.secretaries[8]; ok {
+		t.Error("a crash exit should deregister too")
+	}
+}
+
+// TestExitRecordDeregistersPoolSecretary is the wiring Sentry: a bloodhound
+// `exit-record` POST to /luhmann/record must reach DeregisterPoolSecretary with
+// the right (class, kind, nonce) — the S3 lesson that a mis-passed field slips
+// past a mechanism-only test (R3033/R3034).
+// Refs: R3034
+func TestExitRecordDeregistersPoolSecretary(t *testing.T) {
+	l, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	w := NewRecallWatcher(db, l, db.store, b)
+	srv := &Server{db: db, recallWatcher: w}
+	w.RegisterPoolSecretary(5)
+	if _, ok := w.pool.secretaries[5]; !ok {
+		t.Fatal("secretary 5 should be registered")
+	}
+
+	body := strings.NewReader(`{"kind":"exit","class":"bloodhound","nonce":5,"reason":"context-limit"}`)
+	rec := httptest.NewRecorder()
+	srv.handleLuhmannRecord(rec, httptest.NewRequest(http.MethodPost, "/luhmann/record", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("record POST = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if _, ok := w.pool.secretaries[5]; ok {
+		t.Error("a bloodhound exit-record must deregister the pool secretary")
 	}
 }
 

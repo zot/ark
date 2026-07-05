@@ -2,8 +2,8 @@
 **Source:** crc-RecallAgentBuilder.md, crc-RecallWatcher.md
 
 ## Test: userProse — genuine vs. injected vs. tool-result
-**Purpose:** Verify genuine-user extraction for conversation injection (R2891): prose string content with no harness origin yields the text; a `task-notification` origin and array (tool-result) content are rejected.
-**Input:** `userProse("", `"hello there"`)`, `userProse("task-notification", `"x"`)`, `userProse("", `[{"type":"tool_result"}]`)`, `userProse("", ``)`.
+**Purpose:** Verify genuine-user extraction for conversation injection. R3009 keys on the positive human-origin marker (`origin.kind == "human"`), not origin-absence: a `"human"`-stamped prose string yields the text; an unstamped turn, a `task-notification` origin, array (tool-result) content, and empty content are all rejected. (Used by the R2891 injection path.)
+**Input:** `userProse("human", `"hello there"`)` → text; `userProse("", `"hello there"`)`, `userProse("task-notification", `"x"`)`, `userProse("human", `[{"type":"tool_result"}]`)`, `userProse("human", ``)` → all rejected.
 **Expected:** `("hello there", true)`, `("", false)`, `("", false)`, `("", false)`.
 **Refs:** crc-RecallAgentBuilder.md, R2891
 

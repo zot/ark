@@ -304,6 +304,36 @@ func (w *RecallWatcher) RegisterPoolSecretary(nonce uint64) {
 	w.pump()
 }
 
+// DeregisterPoolSecretary drops a pool secretary from the roster on a terminal
+// exit record for the bloodhound class — the symmetric counterpart to
+// RegisterPoolSecretary (R3034/R3033). Called from the exit-record handler for
+// every luhmann record; it self-gates on the bloodhound class and a terminal
+// kind, so a spawn/respawn record or another class is a no-op. Removing the
+// nonce means a secretary that exited on its own context limit (not via a stop
+// directive) no longer counts toward pool_max and is never routed a hunt; any
+// inflight entry pointing at it is dropped in the same step. Idempotent — an
+// already-removed nonce is a no-op, so a prune-driven stop and an independent
+// self-exit reconcile safely.
+// CRC: crc-RecallWatcher.md | R3034
+func (w *RecallWatcher) DeregisterPoolSecretary(class, kind string, nonce uint64) {
+	if w == nil || class != bloodhoundPoolClass {
+		return
+	}
+	switch kind {
+	case "exit", "crash", "quit-early":
+	default:
+		return // spawn/respawn (or anything non-terminal) never deregisters
+	}
+	w.pool.mu.Lock()
+	delete(w.pool.secretaries, nonce)
+	for path, n := range w.pool.inflight {
+		if n == nonce {
+			delete(w.pool.inflight, path)
+		}
+	}
+	w.pool.mu.Unlock()
+}
+
 // renderSeed runs the hypergraph-aware combined search on the payload and
 // renders the ## Recall seed block. Shared by dispatchBloodhound and the CLI
 // Fixer. A failed seed is not fatal — the empty-seed note still dispatches the

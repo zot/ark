@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -229,6 +229,17 @@ deterministic Go.
   watcher performs appends its content (seed + crank handle) and rewrites
   the tag in one write-actor flush, so the secretary never wakes on a
   half-enhanced doc.
+- **Pool roster lifecycle** (R3033, R3034): the roster is a set of
+  `cliPool` entries whose membership brackets a secretary's life.
+  `RegisterPoolSecretary(nonce)` adds one on `reserve-nonce --luhmann`
+  (R3033); `DeregisterPoolSecretary(class, kind, nonce)` removes it on a
+  terminal `exit-record` for the bloodhound class (R3034) — self-gated on
+  class + terminal kind, and also dropping any `inflight` entry for that
+  nonce. Registration and deregistration are the only membership changes
+  besides `prune` (R3019); a self-exit and a `prune`-driven stop reconcile
+  idempotently. Without the deregister, a secretary that exits on its own
+  context limit would linger in the roster — miscounting `pool_max` and
+  drawing hunts to a dead tube — until the cooldown prune swept it.
 
 ## Out of scope
 - ~~No subscriber liveness check before emit (R2714)~~ — gates added

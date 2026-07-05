@@ -139,6 +139,19 @@ through the real subscribe→publish path.
 each line parses as a finding.
 **Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.6
 
+## Test: deregister a pool secretary on exit
+**Purpose:** a terminal `exit-record` for the bloodhound class drops the secretary
+from the roster (and any inflight entry), the symmetric counterpart to
+`RegisterPoolSecretary`; a wrong class or a non-terminal kind is a no-op, and the
+call is idempotent (R3034).
+**Input:** a fake-hub `RecallWatcher` with two roster secretaries (one with an
+inflight entry); `DeregisterPoolSecretary` with wrong class, then `spawn` kind,
+then `exit`, then a repeat + a `crash` for the other.
+**Expected:** wrong-class / spawn are no-ops; the `exit` removes the secretary and
+its inflight entry, leaving the other; the `crash` removes the second; repeats
+don't panic.
+**Refs:** crc-RecallWatcher.md
+
 ## Test: empty hunt yields an empty result (DB integration)
 **Purpose:** a `--done` with no prior `add` writes an empty-body result doc, so the
 CLI prints no lines and exits 0 (R3029).

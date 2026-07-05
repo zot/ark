@@ -223,6 +223,14 @@ the watcher learns it from the reservation rather than minting it:
   `<luhmann-session>-<nonce>` and routes a hunt by tagging
   `@ark-secretary-work=<that composite>`. Both sides compute the identical key
   with nothing to report back.
+- **`ark luhmann exit-record --class bloodhound`** — when a pool secretary
+  finishes (a clean context-limit fill, a crash, or a quit-early), Luhmann's
+  exit record **deregisters** that nonce from the watcher's roster — the
+  symmetric bookend to `reserve-nonce --luhmann`. Without it, a secretary that
+  exits on its own (not via a watcher *stop*) would linger in the roster,
+  miscounting `pool_max` and drawing hunts to a dead tube until the cooldown
+  prune eventually swept it. Deregistration is idempotent with `prune`'s own
+  removal, so a self-exit and a *stop* directive reconcile safely.
 
 ## JSONL output contract
 

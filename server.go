@@ -2629,6 +2629,11 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// R3034: a terminal exit for the bloodhound class deregisters the pool
+	// secretary from the watcher's roster (symmetric with reserve-nonce
+	// --luhmann's registration, R3033). Self-gated on class + kind, so a
+	// spawn/respawn or another class is a no-op.
+	srv.recallWatcher.DeregisterPoolSecretary(req.Class, req.Kind, uint64(req.Nonce))
 	writeJSON(w, map[string]int{"crashes": crashes, "quit_early": quitEarly})
 }
 

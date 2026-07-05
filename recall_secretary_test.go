@@ -11,9 +11,11 @@ import (
 
 // --- Recall Secretary seam 3a tests ---
 
-// TestUserProse verifies genuine-user extraction: prose string content
-// with no harness origin yields the text; tool-results and injected
-// notifications are rejected. R2891
+// TestUserProse verifies genuine-user extraction. R3009 keys on the positive
+// human-origin marker (origin.kind == "human"), not origin-absence: a genuine
+// turn is stamped "human" and yields its prose string; an unstamped turn, an
+// injected notification, tool-results, and empty content are all rejected. Used
+// by the R2891 conversation-injection path.
 func TestUserProse(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -22,10 +24,11 @@ func TestUserProse(t *testing.T) {
 		want    string
 		ok      bool
 	}{
-		{"genuine", "", `"hello there"`, "hello there", true},
+		{"genuine", "human", `"hello there"`, "hello there", true},
+		{"unstamped", "", `"hello there"`, "", false}, // R3009: no human marker → not genuine
 		{"notification", "task-notification", `"background done"`, "", false},
-		{"tool-result", "", `[{"type":"tool_result","content":"x"}]`, "", false},
-		{"empty", "", ``, "", false},
+		{"tool-result", "human", `[{"type":"tool_result","content":"x"}]`, "", false},
+		{"empty", "human", ``, "", false},
 	}
 	for _, tc := range cases {
 		got, ok := userProse(tc.origin, json.RawMessage(tc.content))
