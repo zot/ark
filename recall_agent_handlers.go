@@ -8,10 +8,20 @@ import (
 	"strconv"
 )
 
-// handleRecallReserveNonce returns the next per-server monotonic
-// nonce. CRC: crc-Server.md | R2755
-func (srv *Server) handleRecallReserveNonce(w http.ResponseWriter, _ *http.Request) {
+// handleRecallReserveNonce returns the next per-server monotonic nonce. With
+// `{"luhmann": true}` it also registers the nonce as a CLI-bloodhound pool
+// secretary in the watcher (the reservation doubles as pool registration, so
+// the go-between learns the nonce Luhmann will spawn with). R3033
+// CRC: crc-Server.md | R2755, R3033
+func (srv *Server) handleRecallReserveNonce(w http.ResponseWriter, r *http.Request) {
 	n := srv.recallAgentBuilder.ReserveNonce()
+	var req struct {
+		Luhmann bool `json:"luhmann"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
+	if req.Luhmann && srv.recallWatcher != nil {
+		srv.recallWatcher.RegisterPoolSecretary(uint64(n)) // R3033
+	}
 	writeJSON(w, map[string]any{"nonce": n})
 }
 

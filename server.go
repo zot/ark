@@ -300,6 +300,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// watcher or the CLI verbs touch it.
 	srv.recallAgentBuilder = NewRecallAgentBuilder(db)
 	srv.recallWatcher = NewRecallWatcher(db, lib, db.store, srv.recallAgentBuilder)
+	srv.recallWatcher.SetLuhmannHub(srv) // R3020: S1 seat bridge for the CLI-hunt Fixer
 	db.indexer.SetRecallWatcher(srv.recallWatcher)
 
 	// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.2 | R2988
@@ -482,6 +483,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /luhmann/record", srv.handleLuhmannRecord)
 	// Orchestrator drain tube (bloodhound-CLI S1): blocking long-poll, R3010.
 	mux.HandleFunc("GET /luhmann/next", srv.handleLuhmannNext)
+	// External CLI directed hunt (bloodhound-CLI S3): submit + blocking result.
+	mux.HandleFunc("POST /bloodhound/search", srv.handleBloodhoundSearch)
+	mux.HandleFunc("GET /bloodhound/result", srv.handleBloodhoundResult)
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
@@ -2664,6 +2668,69 @@ func (srv *Server) handleLuhmannNext(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Luhmann-Reclaim", "1") // R3014: unowned → re-invoke --first
 	}
 	w.Write([]byte(body))
+}
+
+// handleBloodhoundSearch creates a CLI-hunt request doc (R3021) after gating on a
+// live Luhmann (R3020) and — without `--wait` — a non-busy pool (R3022). Returns
+// the hunt id the CLI blocks on and prints under. Submits nothing on either gate.
+// CRC: crc-Server.md | Seq: seq-bloodhound-cli.md#1.1 | R3020, R3021, R3022
+func (srv *Server) handleBloodhoundSearch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Payload string `json:"payload"`
+		Wait    bool   `json:"wait"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Payload) == "" {
+		http.Error(w, "payload required", http.StatusBadRequest)
+		return
+	}
+	// R3020: Luhmann-or-error — no orchestrator, no curator; submit nothing.
+	if srv.LuhmannOwner() == "" {
+		http.Error(w, "orchestrator not running (no Luhmann session is draining `next`)", http.StatusServiceUnavailable)
+		return
+	}
+	// R3022: without --wait, a full pool fails fast rather than queueing.
+	if !req.Wait && srv.recallWatcher != nil && srv.recallWatcher.PoolBusy() {
+		http.Error(w, "bloodhound pool is busy; retry with --wait", http.StatusTooManyRequests)
+		return
+	}
+	id, err := srv.recallAgentBuilder.BloodhoundCLIOpen(req.Payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"id": id})
+}
+
+// handleBloodhoundResult blocks until the hunt's result tag fires or the timeout
+// elapses (R3021, R3022), then returns the result-doc JSONL. A clean timeout sets
+// X-Bloodhound-Timeout with an empty body; an empty hunt returns an empty body.
+// CRC: crc-Server.md | Seq: seq-bloodhound-cli.md#1.6 | R3021, R3029
+func (srv *Server) handleBloodhoundResult(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	timeout := 300 * time.Second
+	if s := r.URL.Query().Get("timeout"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			timeout = time.Duration(n) * time.Second
+		}
+	}
+	jsonl, ok, rerr := srv.recallAgentBuilder.BloodhoundCLIResult(r.Context(), id, timeout)
+	if rerr != nil {
+		return // client disconnect or cancellation
+	}
+	if !ok {
+		w.Header().Set("X-Bloodhound-Timeout", "1") // R3022: bounded wait elapsed
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Write([]byte(jsonl))
 }
 
 // handleListen long-polls for notifications.

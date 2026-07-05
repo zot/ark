@@ -163,6 +163,7 @@ func arkCommands() []*ucli.Command {
 		connectionsCommand(),
 		monitorCommand(),
 		luhmannCommand(),
+		bloodhoundCommand(),
 		embedCommand(),
 		discussedCommand(),
 		tagCommand(),

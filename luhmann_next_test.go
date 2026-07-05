@@ -100,8 +100,23 @@ func TestLuhmannNextDirectiveWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, "stand-up") || !strings.Contains(body, "bloodhound") {
-		t.Errorf("body = %q, want directive crank-handle", body)
+	if !strings.Contains(body, "stand up another") || !strings.Contains(body, "bloodhound") {
+		t.Errorf("body = %q, want stand-up directive crank-handle", body)
+	}
+}
+
+// TestLuhmannNextStopDirective confirms a stop directive names the specific
+// pool secretary's nonce and the exit-record command.
+// Refs: R3011, R3019
+func TestLuhmannNextStopDirective(t *testing.T) {
+	srv := &Server{luhmannOwner: "A", nextQueue: make(chan LuhmannWork, 1)}
+	srv.nextQueue <- LuhmannWork{Kind: "directive", Directive: "stop", Class: "bloodhound", Nonce: 99}
+	body, _, err := srv.LuhmannNext(context.Background(), "A", luhmannModePlain, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "stop") || !strings.Contains(body, "99") || !strings.Contains(body, "exit-record") {
+		t.Errorf("body = %q, want stop directive naming nonce 99", body)
 	}
 }
 

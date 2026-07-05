@@ -101,12 +101,22 @@ type LuhmannConfig struct {
 }
 
 // LuhmannClass is per-managed-subagent-class configuration.
-// CRC: crc-Config.md | R2800
+// CRC: crc-Config.md | R2800, R3017, R3018
 type LuhmannClass struct {
 	// Enabled declares whether the orchestrator should host this
 	// class. Setting to false disables it without removing
 	// supervisor state from luhmann.jsonl. Default true.
 	Enabled *bool `toml:"enabled,omitempty"`
+
+	// PoolMax is the maximum concurrent pool secretaries the
+	// orchestrator stands up for a pooled class (the CLI-bloodhound
+	// pool) on stand-up directives. Default 3. R3017
+	PoolMax *int `toml:"pool_max,omitempty"`
+
+	// CooldownSeconds is how long a pooled-class secretary that has
+	// returned to idle stays warm before it is eligible for a stop-one
+	// directive (damps spawn/stop churn). Default 120. R3018
+	CooldownSeconds *int `toml:"cooldown_seconds,omitempty"`
 }
 
 // EffectiveContextLimit returns ContextLimit with the default applied.
@@ -154,6 +164,25 @@ func (lc LuhmannConfig) ClassEnabled(name string) bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// EffectivePoolMax returns the named class's pool_max with default 3. R3017
+// CRC: crc-Config.md | R3017
+func (lc LuhmannConfig) EffectivePoolMax(name string) int {
+	if c, ok := lc.Classes[name]; ok && c.PoolMax != nil {
+		return *c.PoolMax
+	}
+	return 3
+}
+
+// EffectiveCooldownSeconds returns the named class's cooldown_seconds with
+// default 120. R3018
+// CRC: crc-Config.md | R3018
+func (lc LuhmannConfig) EffectiveCooldownSeconds(name string) int {
+	if c, ok := lc.Classes[name]; ok && c.CooldownSeconds != nil {
+		return *c.CooldownSeconds
+	}
+	return 120
 }
 
 // RecallConfig collects the [recall] section of ark.toml.

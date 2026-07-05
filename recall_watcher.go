@@ -51,6 +51,13 @@ type RecallWatcher struct {
 	// tasks. In-memory only, no dir-seeding (task docs are ephemeral
 	// tmp://), reset on restart — distinct from fireCounters. R2937
 	bloodhoundCounters map[string]uint64
+
+	// CLI-bloodhound Fixer state (S2). luhmann is the S1 orchestrator-seat
+	// bridge (owner + nextQueue); pool is the pool-secretary roster + the
+	// pending-hunt queue. Both nil-safe: the Fixer no-ops without a hub.
+	// R3020, R3023, R3024
+	luhmann luhmannHub
+	pool    *cliPool
 }
 
 // recallSessionState carries the per-session accumulator and timer.
@@ -78,15 +85,26 @@ func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgent
 		sessions:           make(map[string]*recallSessionState),
 		fireCounters:       make(map[string]uint64),
 		bloodhoundCounters: make(map[string]uint64),
+		pool:               newCLIPool(),
 	}
 }
 
-// Start begins the closure-actor worker goroutine.
+// Start begins the closure-actor worker goroutine and the CLI-bloodhound
+// Fixer loop (S2). Wire the luhmann hub before calling Start.
 func (w *RecallWatcher) Start() {
 	if w == nil {
 		return
 	}
 	runSvc(w.jobs)
+	w.startFixer() // R3023, R3024: subscribe + drain @ark-bloodhound-cli[-return]
+}
+
+// SetLuhmannHub wires the S1 orchestrator-seat bridge (owner lookup + nextQueue
+// producer) into the watcher-as-Fixer. Called by Serve before Start. R3020
+func (w *RecallWatcher) SetLuhmannHub(h luhmannHub) {
+	if w != nil {
+		w.luhmann = h
+	}
 }
 
 func (w *RecallWatcher) config() RecallConfig {
@@ -654,33 +672,17 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
-	// Seed the hunt with the hypergraph-aware combined search. Clue-only and
-	// session-agnostic — Session/Propose left off — so a directed *pull* hunt
-	// sees every match (no discussed-exclusion) with no derivation side-effects,
-	// and the conversation is never folded into the search input (unlike ambient
-	// *push* recall, whose input is the conversation). Only Recall reaches the
-	// value→chunk tag axis (R2905/R2906) the subagent's content-only `ark search`
-	// cannot. A failed seed is not fatal: the hunt still dispatches from the
-	// empty-seed note and the agent starts from its own searches. R3006, R3007
-	result, err := w.librarian.Recall(
-		[]ConnectionsInput{{Text: payload}},
-		RecallOpts{K: bloodhoundSeedK, IncludeContent: true, KeepTagless: true},
-	)
-	if err != nil {
-		log.Printf("recall-watcher: bloodhound seed Recall failed session=%s B=%d: %v", sessionID, bid, err)
-		result = nil
-	}
-	seed := renderBloodhoundSeed(result)
-
+	// Seed the hunt with the hypergraph-aware combined search (renderSeed):
+	// clue-only and session-agnostic, so a directed *pull* hunt sees every match
+	// with no derivation side-effects. Only Recall reaches the value→chunk tag
+	// axis (R2905/R2906) the subagent's content-only `ark search` cannot. A
+	// failed seed is not fatal — the empty-seed note still dispatches. R3006, R3007
+	seed := w.renderSeed(payload)
 	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload, seed); err != nil {
 		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
-	seedN := 0
-	if result != nil {
-		seedN = len(result.Chunks)
-	}
-	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d seed-chunks=%d", sessionID, bid, seedN)
+	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d", sessionID, bid)
 }
 
 // renderBloodhoundSeed formats a Recall result as the `## Recall seed` block of

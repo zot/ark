@@ -157,6 +157,7 @@ func recallCommand() *ucli.Command {
 			{
 				Name:   "reserve-nonce",
 				Usage:  "return the next per-server monotonic nonce",
+				Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "luhmann", Usage: "also register the nonce as a CLI-bloodhound pool secretary in the watcher"}},
 				Action: connRecallReserveNonceAction,
 			},
 			{
@@ -567,7 +568,7 @@ func connRecallDefaultAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md | Seq: seq-recall-agent.md#2 | R2755
+// CRC: crc-CLITree.md | Seq: seq-recall-agent.md#2 | R2755, R3033
 func connRecallReserveNonceAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() > 0 {
 		fmt.Fprintln(os.Stderr, "ark connections recall reserve-nonce: no arguments expected")
@@ -577,10 +578,16 @@ func connRecallReserveNonceAction(_ context.Context, c *ucli.Command) error {
 	if client == nil {
 		fatal(errors.New("server not running; start with `ark serve`"))
 	}
+	// R3033: --luhmann also registers the nonce in the watcher's CLI-bloodhound
+	// pool roster, so the reservation doubles as pool registration.
+	body := map[string]any{}
+	if c.Bool("luhmann") {
+		body["luhmann"] = true
+	}
 	var resp struct {
 		Nonce uint32 `json:"nonce"`
 	}
-	if err := proxyDecode(client, "POST", "/connections/recall/reserve-nonce", struct{}{}, &resp); err != nil {
+	if err := proxyDecode(client, "POST", "/connections/recall/reserve-nonce", body, &resp); err != nil {
 		fatal(err)
 	}
 	fmt.Println(resp.Nonce)

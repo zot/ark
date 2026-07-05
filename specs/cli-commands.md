@@ -461,10 +461,13 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   [derived-tags.md](derived-tags.md). The simple-recall watcher
   built on top of this substrate is described in
   [simple-recall.md](simple-recall.md).
-- `recall reserve-nonce` returns the next monotonic integer the
+- `recall reserve-nonce [--luhmann]` returns the next monotonic integer the
   Luhmann orchestrator uses as the recall daemon's per-generation
   nonce (the `nonce → .meta.json` discovery key). The counter is
-  in-memory and resets on `ark serve` restart. See
+  in-memory and resets on `ark serve` restart. With `--luhmann` the server
+  also registers the nonce as a CLI-bloodhound pool secretary in the watcher's
+  roster (the reservation doubles as pool registration; see
+  [bloodhound-cli.md](bloodhound-cli.md)). See
   [simple-recall.md](simple-recall.md).
 - `recall next [--session SID] NONCE` is the recall secretary's entire
   loop — a batteries-included crank handle. With `--session SID` (the
@@ -711,6 +714,7 @@ See: `subscribe`
 ark luhmann spawn-record --class C --nonce N --task-id T
 ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
 ark luhmann inspect-exit --nonce N [--json]
+ark luhmann next --session S [--first | --force] [--keepalive SECONDS]
 ```
 
 | Subcommand       | Flags                                              | Behavior                                                                                                                                                       |
@@ -718,6 +722,7 @@ ark luhmann inspect-exit --nonce N [--json]
 | `spawn-record`   | `--class`, `--nonce`, `--task-id` (all required)   | Server-required. Append a `kind: "spawn"` record to `~/.ark/monitoring/luhmann.jsonl` via the write actor (carries both counters forward).                     |
 | `exit-record`    | `--class`, `--nonce`, `--reason` (required); `--crashes` / `--quit-early` (counter overrides); `--backoff S` (records the seconds the supervisor will wait before respawn) | Server-required. Reason → kind: `context-limit`→`exit` (resets both counters), `quit-early`→`quit-early` (increments `quit_early`, holds `crashes`), else→`crash` (increments `crashes`, holds `quit_early`). |
 | `inspect-exit`   | `--nonce`; `--json`                                | Cold-start. Classify a subagent exit as `healthy` / `quit-early` / `crash` / `unknown` via the nonce → `.meta.json` lookup. Default prints the label; `--json` adds details. |
+| `next`           | `--session` (required identity); `--first` (claim if unowned), `--force` (reclaim); `--keepalive SECONDS` (idle window, default ~2700 = 45m, capped under the 1h cache) | Server-required. The orchestrator's blocking drain tube: returns one curation task, supervisor directive, or keepalive crank-handle, guarded by an in-memory ownership lease. `--first`/plain/`--force` per the lease; a foreign owner exits 2 (stand down), an unowned server on a plain call returns the reclaim crank-handle. Backgrounded + re-invoked in a loop; subsumes the standalone `ark heartbeat` keepalive. |
 
 See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md)
 

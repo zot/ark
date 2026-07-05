@@ -120,6 +120,8 @@ ambient watcher.
 | `quit_early_pause_after`         | int      | `3`           | Consecutive quit-early count (independent counter) at which the supervisor pauses a class (storm pause `quit-early-storm`) instead of respawning.    | `luhmann.md`   |
 | `backoff_seconds`                | []int    | `[1, 5, 30]`  | Seconds to wait between successive crash respawns. Final value applies to attempts beyond the list length, up to `crash_pause_after`.                | `luhmann.md`   |
 | `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this subagent class (e.g. `class.recall.enabled`).                                                              | `luhmann.md`   |
+| `class.<NAME>.pool_max`          | int      | `3`           | Max concurrent pool secretaries the orchestrator stands up for a pooled class (the CLI-bloodhound pool, `class.bloodhound.pool_max`).                | `bloodhound-cli.md` |
+| `class.<NAME>.cooldown_seconds`  | int      | `120`         | How long a returned-to-idle pool secretary stays warm before it is eligible for a stop-one directive (damps spawn/stop churn).                       | `bloodhound-cli.md` |
 
 ## `[schedule]` — scheduling feature
 

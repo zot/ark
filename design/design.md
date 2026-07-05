@@ -162,7 +162,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
 - [x] crc-LlamaLibs.md → `llamalibs.go`
-- [ ] crc-RecallWatcher.md → `recall_watcher.go`
+- [ ] crc-RecallWatcher.md → `recall_watcher.go`, `recall_watcher_cli.go`
 - [ ] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
@@ -284,6 +284,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-LuhmannCLI.md → `luhmann_next_test.go`
+- [x] test-BloodhoundCLIFixer.md → `bloodhound_cli_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`

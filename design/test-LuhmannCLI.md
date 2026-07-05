@@ -46,11 +46,18 @@ call with a keepalive long enough that the work, not the timer, wins.
 **Expected:** body contains the request-doc path and the `bloodhound add` instruction.
 **Refs:** crc-LuhmannCLI.md, seq-bloodhound-cli.md#1.5
 
-## Test: directive work delivery
-**Purpose:** a queued supervisor directive is rendered as the spawn/stop
-crank-handle naming the directive and the managed class (R3011).
+## Test: directive work delivery (stand-up)
+**Purpose:** a queued stand-up directive is rendered as the spawn crank-handle
+naming the class and the `reserve-nonce --luhmann` + spawn-record steps (R3011).
 **Input:** owned `Server`; push `LuhmannWork{Kind:"directive", Directive:"stand-up", Class:"bloodhound"}`.
-**Expected:** body names "stand-up" and "bloodhound".
+**Expected:** body says "stand up another" and names "bloodhound".
+**Refs:** crc-LuhmannCLI.md
+
+## Test: directive work delivery (stop)
+**Purpose:** a stop directive names the specific pool secretary's nonce and the
+`exit-record` command (R3011, R3019).
+**Input:** owned `Server`; push `LuhmannWork{Kind:"directive", Directive:"stop", Class:"bloodhound", Nonce:99}`.
+**Expected:** body names "stop", the nonce "99", and "exit-record".
 **Refs:** crc-LuhmannCLI.md
 
 ## Test: stand-down returns immediately

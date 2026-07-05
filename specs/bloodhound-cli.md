@@ -175,7 +175,14 @@ Three new tags carry the CLI path, plus one reused tube. Names are
   it; the watcher subscribes and wakes on a new hunt.
 - **`@ark-secretary-work=<pool-sec>`** (*reused*, R2948) — the existing
   secretary work tube; the watcher re-tags the request doc to the chosen pool
-  secretary's value so its `next` picks up the hunt.
+  secretary's value so its `next` picks up the hunt. `<pool-sec>` is the
+  **composite `<luhmann-session>-<nonce>`** (the Luhmann seat owner plus the
+  secretary's reserved nonce), so each pool secretary owns a *unique* tube — no
+  shared queue, no claim needed for one-grabs-each. Because the value is still a
+  real session id with the nonce appended after a dash, it fits the existing
+  `<session>-<segment>` shape, so the pool secretary runs the ordinary
+  `recall next --session <luhmann-session>-<nonce>` and every subscribe / route
+  path works unchanged.
 - **`@ark-bloodhound-cli-return`** — the secretary re-tags the request doc to
   it when its raw results are in; the watcher subscribes and wakes to free the
   secretary and route to curation.
@@ -186,6 +193,26 @@ Three new tags carry the CLI path, plus one reused tube. Names are
 The watcher → Luhmann hand-off uses no tag: it is an in-process `next`-queue
 push. Request docs live in the `tmp://BLOODHOUND-CLI/` namespace, separate from
 recall's `ARK-RECALL/` and the in-session bloodhound's `ARK-BLOODHOUND/`.
+
+## Pool identity and the nonce
+
+Luhmann is the hands — it holds the Task tool, so it launches each pool
+secretary — and the watcher is the go-between that decides *when* one is needed.
+So the secretary's identity (its nonce) is born where the launch happens, and
+the watcher learns it from the reservation rather than minting it:
+
+- **`ark connections recall reserve-nonce --luhmann`** — Luhmann reserves a
+  nonce (the ordinary monotonic counter) for a pool spawn; the `--luhmann` flag
+  makes the server also **register that nonce in the watcher's pool roster**
+  (`cliPool`) as a pending pool secretary. The reservation doubles as pool
+  registration, so the go-between learns the nonce with no report-back call.
+- Luhmann then spawns the secretary via the Task tool with the composite
+  `--session <luhmann-session>-<nonce>` in its prompt and records it with
+  `spawn-record`. The watcher already holds both halves — the Luhmann seat owner
+  (the S1 `luhmannOwner` lease) and the reserved nonce — so it composes the same
+  `<luhmann-session>-<nonce>` and routes a hunt by tagging
+  `@ark-secretary-work=<that composite>`. Both sides compute the identical key
+  with nothing to report back.
 
 ## JSONL output contract
 

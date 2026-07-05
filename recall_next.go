@@ -95,6 +95,12 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 		if _, _, content, ok := b.lowestPendingBloodhound(session); ok {
 			return recallSearchTaskPrompt(session, nonce, content), false, nil
 		}
+		// R3030, R3032: a CLI-bloodhound request doc the watcher routed to this
+		// pool secretary via @ark-secretary-work=<composite>. Same crank-handle
+		// return as an in-session bloodhound task (the enhanced doc IS one).
+		if content, ok := b.lowestPendingCLIHunt(session); ok {
+			return recallSearchTaskPrompt(session, nonce, content), false, nil
+		}
 		fire, docSession, content, ok := b.lowestPendingCuration(session)
 		if ok {
 			if session != "" {
@@ -242,6 +248,39 @@ func (b *RecallAgentBuilder) lowestPendingBloodhound(targetSession string) (bid 
 		return 0, "", "", false
 	}
 	return bid, bestSession, string(data), true
+}
+
+// lowestPendingCLIHunt finds a CLI-bloodhound request doc the watcher routed to
+// this pool secretary — a tmp://BLOODHOUND-CLI/<id> doc enhanced and re-tagged
+// to @ark-secretary-work=<session> (the composite <luhmann-session>-<nonce>,
+// R3032). Unlike lowestPendingBloodhound, whose ARK-BLOODHOUND path encodes the
+// session, the BLOODHOUND-CLI path is only <id>, so we match on the doc's head
+// tag. No result-subscriber gate: the watcher routes only to a subscribed
+// secretary, and a CLI-hunt finding goes to the request doc, not a consumer.
+// CRC: crc-RecallAgentBuilder.md | R3030, R3032
+func (b *RecallAgentBuilder) lowestPendingCLIHunt(session string) (content string, ok bool) {
+	if session == "" {
+		return "", false
+	}
+	files, err := Sync(b.db, func(db *DB) ([]string, error) { return db.Files() })
+	if err != nil {
+		return "", false
+	}
+	head := "@ark-secretary-work: " + session
+	for _, p := range files {
+		if !strings.HasPrefix(p, bloodhoundCLIPrefix) {
+			continue
+		}
+		data, derr := b.db.TmpContent(p)
+		if derr != nil {
+			continue
+		}
+		s := string(data)
+		if first, _, _ := strings.Cut(s, "\n"); strings.TrimSpace(first) == head {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 // recallSearchTaskPrompt wraps a dispatched bloodhound task for inline return:
@@ -548,6 +587,75 @@ func assistantText(content json.RawMessage) string {
 	return ""
 }
 
+// --- CLI-bloodhound consumer verbs (bloodhound-CLI S3: R3021, R3022, R3029) ---
+
+// bloodhoundCLIResultSession is the pubsub session the `ark bloodhound search`
+// consumer subscribes + blocks on for one hunt's result. Value-scoped by id so a
+// CLI wakes only on its own result (R3021).
+func bloodhoundCLIResultSession(id string) string { return "bloodhound-cli-result-" + id }
+
+// bloodhoundCLIResultWindow bounds each blocking Listen inside BloodhoundCLIResult
+// so the loop honors the deadline and ctx cancellation.
+const bloodhoundCLIResultWindow = 30 * time.Second
+
+// BloodhoundCLIOpen creates a CLI-hunt request doc and subscribes the caller to
+// its result tag **before the doc lands** (R3021): it mints a hunt id, subscribes
+// bloodhoundCLIResultSession(id) to @ark-bloodhound-cli-result=<id>, then writes
+// the request doc tmp://BLOODHOUND-CLI/<id> — head tag @ark-bloodhound-cli + the
+// TERMS payload — in one atomic write so the watcher never sees a half-built doc.
+// Returns the id the CLI blocks on and prints under.
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-bloodhound-cli.md#1.1 | R3021, R3031
+func (b *RecallAgentBuilder) BloodhoundCLIOpen(payload string) (string, error) {
+	id := strconv.FormatUint(uint64(b.ReserveNonce()), 10)
+	p, err := ParseMatchSyntax(bloodhoundCLIResultTag + "=" + id)
+	if err != nil {
+		return "", err
+	}
+	b.db.pubsub.Subscribe(bloodhoundCLIResultSession(id), []*TagSub{{Kind: TagSubChunk, Predicate: p}})
+	// Head tag carries a colon + the id as value — ark only extracts `@word:`
+	// tags, so a colon-less head tag would never publish and the watcher would
+	// never wake. The fixer subscribes bare, so any value matches.
+	body := "@" + bloodhoundCLIRequestTag + ": " + id + "\n\n" + strings.TrimRight(payload, "\n") + "\n"
+	path := bloodhoundCLIPrefix + id
+	if err := SyncVoid(b.db, func(db *DB) error {
+		_, e := db.AddTmpFile(path, "markdown", []byte(body))
+		return e
+	}); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// BloodhoundCLIResult blocks until the hunt's result tag fires (R3021) — Luhmann's
+// terminal `ark bloodhound add` (R3027) — or the timeout elapses, then returns the
+// result doc's JSONL content (read from the event's own path, so S3 need not know
+// where S4 writes it). ok is false on a clean timeout (no result), true with the
+// content otherwise. R3021, R3022, R3029
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-bloodhound-cli.md#1.6 | R3021, R3029
+func (b *RecallAgentBuilder) BloodhoundCLIResult(ctx context.Context, id string, timeout time.Duration) (jsonl string, ok bool, err error) {
+	session := bloodhoundCLIResultSession(id)
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return "", false, nil // R3022: clean timeout
+		}
+		events := b.db.pubsub.Listen(session, min(remaining, bloodhoundCLIResultWindow))
+		for _, ev := range events {
+			data, derr := b.db.TmpContent(ev.Path)
+			if derr != nil {
+				continue // result doc vanished between publish and read
+			}
+			return string(data), true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", false, ctx.Err()
+		default:
+		}
+	}
+}
+
 // --- Luhmann `next` drain tube (bloodhound-CLI S1: R3010–R3016, R3026) ---
 //
 // The orchestrator's sibling of RecallNext: a blocking long-poll the Luhmann
@@ -592,6 +700,7 @@ type LuhmannWork struct { // R3011
 	Path      string // curation: request-doc tmp:// path
 	Directive string // directive: "stand-up" | "stop"
 	Class     string // directive: managed class (e.g. "bloodhound")
+	Nonce     uint64 // directive "stop": which pool secretary to stop (R3019); 0 for stand-up
 }
 
 // luhmannNextMode is the ownership intent of one `next` call (R3013).
@@ -714,11 +823,52 @@ func luhmannWorkPrompt(session string, w LuhmannWork) string {
 				"Then run `%s` again.\n",
 			w.Path, nextCmd)
 	case "directive":
+		// Stand-up mints a fresh nonce (`reserve-nonce --luhmann`) and spawns;
+		// stop names the nonce of an idle-past-cooldown secretary to retire (R3019).
+		if w.Directive == "stop" {
+			return fmt.Sprintf(
+				"Supervisor directive: stop the `%s` pool secretary with nonce %d (idle past its cooldown). Stop its Task and record it with `~/.ark/ark luhmann exit-record --class %s --nonce %d --reason context-limit`.\n"+
+					"Then run `%s` again.\n",
+				w.Class, w.Nonce, w.Class, w.Nonce, nextCmd)
+		}
 		return fmt.Sprintf(
-			"Supervisor directive: %s a `%s` pool secretary. Carry it out with the Task tool, and record it with `~/.ark/ark luhmann spawn-record` / `exit-record` on the `%s` class.\n"+
+			"Supervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n"+
 				"Then run `%s` again.\n",
-			w.Directive, w.Class, w.Class, nextCmd)
+			w.Class, w.Class, nextCmd)
 	default:
 		return fmt.Sprintf("Unrecognized work kind %q — skip it and run `%s` again.\n", w.Kind, nextCmd)
+	}
+}
+
+// luhmannHub is the watcher-as-Fixer's view of the orchestrator seat (S1 state
+// on Server): who owns it, and the queue to push curation tasks + supervisor
+// directives onto. Narrow interface so the Fixer stays decoupled from the full
+// Server and is testable with a fake hub. R3011, R3020, R3024, R3025
+type luhmannHub interface {
+	LuhmannOwner() string            // R3012, R3020: seat owner ("" = no orchestrator)
+	EnqueueLuhmann(LuhmannWork) bool // R3024, R3025: push work; false if the queue is full
+}
+
+// LuhmannOwner returns the session holding the Luhmann seat, or "" when
+// unowned (R3012). The watcher gates CLI hunts on a live orchestrator (R3020)
+// and composes the pool routing key `<luhmannOwner>-<nonce>` from it (R3032).
+// CRC: crc-LuhmannCLI.md | R3012, R3020, R3032
+func (srv *Server) LuhmannOwner() string {
+	srv.luhmannMu.Lock()
+	defer srv.luhmannMu.Unlock()
+	return srv.luhmannOwner
+}
+
+// EnqueueLuhmann pushes a work item onto nextQueue for the `next` drain
+// (R3011), non-blocking: returns false when the queue is full so the watcher
+// can leave a hunt pending rather than block the Fixer loop. This is
+// nextQueue's producer side (the drain is LuhmannNext). R3024, R3025
+// CRC: crc-LuhmannCLI.md | R3011, R3024, R3025
+func (srv *Server) EnqueueLuhmann(w LuhmannWork) bool {
+	select {
+	case srv.nextQueue <- w:
+		return true
+	default:
+		return false
 	}
 }
