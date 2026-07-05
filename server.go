@@ -486,6 +486,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// External CLI directed hunt (bloodhound-CLI S3): submit + blocking result.
 	mux.HandleFunc("POST /bloodhound/search", srv.handleBloodhoundSearch)
 	mux.HandleFunc("GET /bloodhound/result", srv.handleBloodhoundResult)
+	// Luhmann's result stencil (bloodhound-CLI S4): append one curated finding /
+	// flip the result tag. R3027, R3028
+	mux.HandleFunc("POST /bloodhound/add", srv.handleBloodhoundAdd)
 	mux.HandleFunc("GET /listen", srv.handleListen)
 	mux.HandleFunc("POST /schedule/search", srv.handleScheduleSearch)
 	mux.HandleFunc("POST /schedule/change", srv.handleScheduleChange)
@@ -2731,6 +2734,43 @@ func (srv *Server) handleBloodhoundResult(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Write([]byte(jsonl))
+}
+
+// handleBloodhoundAdd is Luhmann's result stencil (R3027): each call appends one
+// curated finding to the result-doc accumulator; `{"done": true}` writes the
+// result doc and flips its tag to @ark-bloodhound-cli-result: <id>, waking the
+// CLI. The hunt id is derived from the request-doc path in `result`.
+// CRC: crc-Server.md | Seq: seq-bloodhound-cli.md#1.5.2 | R3027, R3028
+func (srv *Server) handleBloodhoundAdd(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Result string `json:"result"` // request-doc path tmp://BLOODHOUND-CLI/<id>
+		Loc    string `json:"loc"`    // curated finding <path>:<range>
+		Note   string `json:"note"`
+		Chunk  string `json:"chunk"`
+		Done   bool   `json:"done"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(req.Result, bloodhoundCLIPrefix) {
+		http.Error(w, "result must be a tmp://BLOODHOUND-CLI/<id> path", http.StatusBadRequest)
+		return
+	}
+	id := cliRequestID(req.Result)
+	if req.Done {
+		if err := srv.recallAgentBuilder.BloodhoundCLIAddDone(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"status": "ok"})
+		return
+	}
+	if err := srv.recallAgentBuilder.BloodhoundCLIAdd(id, req.Loc, req.Note, req.Chunk); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok"})
 }
 
 // handleListen long-polls for notifications.

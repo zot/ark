@@ -646,7 +646,9 @@ func (b *RecallAgentBuilder) BloodhoundCLIResult(ctx context.Context, id string,
 			if derr != nil {
 				continue // result doc vanished between publish and read
 			}
-			return string(data), true, nil
+			// Strip the @ark-bloodhound-cli-result head tag so the CLI prints
+			// pure JSONL (R3029) — the tag is doc metadata, not output.
+			return stripLeadingTag(string(data)), true, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -779,7 +781,17 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 	case <-ctx.Done():
 		return "", luhmannDispOK, ctx.Err()
 	case w := <-srv.nextQueue:
-		return luhmannWorkPrompt(session, w), luhmannDispOK, nil
+		// For a curation task, inline the request doc's content (query + raw
+		// findings) into the crank-handle: tmp:// paths aren't Read-able files,
+		// and the doc is small. Best-effort — an unreadable/absent doc still
+		// dispatches, naming the path for the `add` calls.
+		content := ""
+		if w.Kind == "curation" && srv.db != nil {
+			if data, derr := srv.db.TmpContent(w.Path); derr == nil {
+				content = stripLeadingTag(string(data))
+			}
+		}
+		return luhmannWorkPrompt(session, w, content), luhmannDispOK, nil
 	case <-timer.C:
 		return luhmannKeepalivePrompt(session), luhmannDispOK, nil
 	}
@@ -808,20 +820,25 @@ func luhmannKeepalivePrompt(session string) string {
 }
 
 // luhmannWorkPrompt renders one drained work item as a crank-handle (R3011). A
-// curation task points Luhmann at the request doc to refine and emit via `ark
-// bloodhound add` (the CLI-hunt discernment split; the exact add contract is
-// pinned in S4). A directive tells Luhmann to stand up or stop a pool secretary
-// and record it (the pool-management surface lands with S2/the watcher).
-// CRC: crc-LuhmannCLI.md | R3011
-func luhmannWorkPrompt(session string, w LuhmannWork) string {
+// curation task inlines the request doc's content (query + raw findings — the
+// tmp:// path is not a Read-able file) and pins the exact `ark bloodhound add`
+// contract Luhmann emits per kept item, plus the terminal `--done` (R3025,
+// R3027). A directive tells Luhmann to stand up or stop a pool secretary and
+// record it. `content` is the inlined curation body (empty for a directive).
+// CRC: crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3011, R3025, R3027
+func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 	nextCmd := fmt.Sprintf("~/.ark/ark luhmann next --session %s", session)
 	switch w.Kind {
 	case "curation":
 		return fmt.Sprintf(
-			"A directed-search finding is ready to curate. The raw results are in the request doc:\n%s\n\n"+
-				"Read that file with the Read tool, refine the raw findings (keep what genuinely answers the query, drop the noise), and emit each kept item with `~/.ark/ark bloodhound add` (one item per call). The terminal add notifies the waiting CLI.\n"+
+			"A directed-search finding is ready to curate. The raw results:\n\n%s\n\n"+
+				"Refine them — keep what genuinely answers the query, drop the noise. Emit each kept item with, one call per item:\n"+
+				"  ~/.ark/ark bloodhound add --result %s --loc PATH:RANGE --note \"why it answers the query\" [--chunk \"excerpt\"]\n"+
+				"When done — even if you kept nothing — finish with:\n"+
+				"  ~/.ark/ark bloodhound add --result %s --done\n"+
+				"which writes the result doc and notifies the waiting CLI.\n"+
 				"Then run `%s` again.\n",
-			w.Path, nextCmd)
+			content, w.Path, w.Path, nextCmd)
 	case "directive":
 		// Stand-up mints a fresh nonce (`reserve-nonce --luhmann`) and spawns;
 		// stop names the nonce of an idle-past-cooldown secretary to retire (R3019).

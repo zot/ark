@@ -101,8 +101,9 @@ CLITree owns how those bodies are *reached* and how their help is
   post-migration growth added as tree nodes like any other. A new `ark
   bloodhound` group in `cmd/ark/bloodhound_cli.go` carries `search
   TERMS... [--wait] [--timeout S]` (create the request doc + subscribe +
-  block + print JSONL, R3021/R3022/R3029) and `add --result --id --path
-  --chunk` (Luhmann's result stencil, R3027). A new `next --session S
+  block + print JSONL, R3021/R3022/R3029) and `add --result --loc --note
+  [--chunk] | --result --done` (Luhmann's result stencil — one curated JSON
+  line per call, `--done` writes the result doc + flips its tag, R3027). A new `next --session S
   [--first|--force] [--keepalive N]` node joins the existing `luhmann`
   group in `cmd/ark/monitoring_cli.go` (R3010). Each self-documents from
   its declarations; the `search` and `next` blocking bodies own their

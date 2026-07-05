@@ -44,6 +44,7 @@ otherwise emit a different order each run). R2953.
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
+| `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | external directed hunts against the warm bloodhound (subcommands below) |
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
 | `chats`            | `chats GLOB [--with-tools] [--sidechain] [--wrap N] [--line-length N]`                                               | none                     | walks `~/.claude/projects/`                          |
@@ -257,6 +258,42 @@ enclosing source (the same resolution the directory walk uses,
 default `lines`); a file outside every configured source has nothing
 to resolve against and is rejected as a client error (HTTP 400) — pass
 `--strategy` to add it anyway.
+
+### `bloodhound` — external directed hunts
+
+External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.md)).
+Both subcommands require `ark serve` **and** a running Luhmann orchestrator.
+
+```
+ark bloodhound search CLUE... [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS]
+ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
+ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
+```
+
+**`search`** — submit a directed hunt and print the curated findings as JSONL
+(one object per line; an empty hunt prints nothing and exits 0). The whole
+protocol (request doc, tag baton, pool secretary, Luhmann curation) is hidden
+behind the one command (Batteries Included).
+
+| Flag           | Default      | Meaning                                                                 |
+|----------------|--------------|-------------------------------------------------------------------------|
+| `--scope S`    | `all`        | search scope: `code` \| `specs` \| `design` \| `notes` \| `chat` \| `all` |
+| `--depth D`    | `lookup`     | `lookup` (one pass) \| `investigate` (tune until the stop condition)     |
+| `--want W`     | `passages`   | `answer` \| `passages` \| …                                             |
+| `--wait`       | `false`      | block stubbornly on a busy pool / server bounce instead of failing fast |
+| `--timeout N`  | `300`        | seconds to wait for the curated result                                  |
+
+**`add`** — Luhmann's result stencil (one curated item per call), plus the
+terminal `--done` that writes the result doc and wakes the waiting CLI. Not for
+external callers; the Luhmann orchestrator runs it while draining `luhmann next`.
+
+| Flag             | Default | Meaning                                                            |
+|------------------|---------|--------------------------------------------------------------------|
+| `--result PATH`  | —       | the request-doc path handed to `luhmann next` (`tmp://BLOODHOUND-CLI/<id>`) |
+| `--loc PATH:RANGE` | —     | the curated finding's locator (required unless `--done`)           |
+| `--note TEXT`    | —       | one-line curated note: why it answers the query                    |
+| `--chunk TEXT`   | —       | optional chunk excerpt carried in the JSONL                        |
+| `--done`         | `false` | terminal call: write the result doc and notify the waiting CLI     |
 
 ### `bundle` — graft assets onto binary
 

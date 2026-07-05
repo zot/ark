@@ -150,26 +150,36 @@ call — the Stencil pattern, the same discipline as `surface` / `recommend` /
 `finding`:
 
 ```
-ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --id CHUNK-ID --path PATH --chunk CHUNK-TEXT
+ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
+ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
 ```
 
-- Each call appends one JSON line to the result doc.
-- A terminal call flips the result doc's tag to `@ark-bloodhound-cli-result:
-  <id>`, the notification the waiting CLI is subscribed to. Whether the
-  terminal is a `--done` flag on `add` or a sibling close verb is a
-  Design-phase choice.
+- Each item call appends one JSON line — `{path, range, note, chunk?}` — to the
+  result doc. The `--loc PATH:RANGE` locator matches the `surface` / `finding`
+  siblings; `--note` is the curated one-liner; `--chunk` optionally carries the
+  excerpt so an external app need not re-fetch.
+- The terminal `--done` writes the result doc `tmp://BLOODHOUND-CLI-RESULT/<id>`
+  and flips its tag to `@ark-bloodhound-cli-result: <id>`, the notification the
+  waiting CLI is subscribed to; it also drops the internal request doc. A
+  `--done` with no prior `add` writes an empty-body result doc — an empty hunt
+  prints no lines and exits 0.
 
 The pool secretary appends its **raw** results to the **request** doc through
 the existing bloodhound builder path (its `finding` / `close`,
 [bloodhound.md](bloodhound.md)), re-tagging to `@ark-bloodhound-cli-return`
 instead of writing a session-result doc; `ark bloodhound add` is Luhmann's
-write into the **result** doc. Two write targets, two docs.
+write into the **result** doc (`tmp://BLOODHOUND-CLI-RESULT/<id>`, a namespace
+separate from the request doc). Two write targets, two docs. Luhmann curates
+from the request doc's content, which `ark luhmann next` **inlines** into its
+crank-handle (a `tmp://` path is not a Read-able file).
 
 ## Tags and namespaces
 
-Three new tags carry the CLI path, plus one reused tube. Names are
-**provisional**, kept in the existing `@ark-*` service family (matching
-`@ark-bloodhound-result` / `@ark-recall-result`) and pinned in Design:
+Three new tags carry the CLI path, plus one reused tube — kept in the existing
+`@ark-*` service family (matching `@ark-bloodhound-result` /
+`@ark-recall-result`). Every one is written **with a colon** (`@word: value`);
+a colon-less head tag is never extracted or published, so the next stage never
+wakes:
 
 - **`@ark-bloodhound-cli`** (request) — the CLI writes the request doc under
   it; the watcher subscribes and wakes on a new hunt.

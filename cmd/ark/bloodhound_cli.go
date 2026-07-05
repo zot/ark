@@ -38,8 +38,43 @@ func bloodhoundCommand() *ucli.Command {
 				},
 				Action: bloodhoundSearchAction,
 			},
+			{
+				Name:      "add",
+				Usage:     "Luhmann's result stencil: append one curated finding to a CLI hunt, or --done to finish",
+				ArgsUsage: "--result tmp://BLOODHOUND-CLI/<id> (--loc PATH:RANGE --note TEXT [--chunk TEXT] | --done)",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "result", Usage: "the request-doc path handed to `luhmann next` (tmp://BLOODHOUND-CLI/<id>)"},
+					&ucli.StringFlag{Name: "loc", Usage: "the curated finding's PATH:RANGE"},
+					&ucli.StringFlag{Name: "note", Usage: "one-line curated note: why it answers the query"},
+					&ucli.StringFlag{Name: "chunk", Usage: "optional chunk excerpt to carry in the JSONL"},
+					&ucli.BoolFlag{Name: "done", Usage: "terminal call: write the result doc and notify the waiting CLI"},
+				},
+				Action: bloodhoundAddAction,
+			},
 		},
 	}
+}
+
+// CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.5.2 | R3027, R3028
+func bloodhoundAddAction(_ context.Context, c *ucli.Command) error {
+	result := c.String("result")
+	if result == "" {
+		fmt.Fprintln(os.Stderr, "ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> (--loc PATH:RANGE --note TEXT [--chunk TEXT] | --done)")
+		os.Exit(2)
+	}
+	done := c.Bool("done")
+	loc := c.String("loc")
+	if !done && loc == "" {
+		fmt.Fprintln(os.Stderr, "ark bloodhound add: --loc required (or --done to finish)")
+		os.Exit(2)
+	}
+	client := requireServer("bloodhound add")
+	if err := proxyOK(client, "POST", "/bloodhound/add", map[string]any{
+		"result": result, "loc": loc, "note": c.String("note"), "chunk": c.String("chunk"), "done": done,
+	}); err != nil {
+		fatal(err)
+	}
+	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1 | R3020, R3021, R3022, R3029

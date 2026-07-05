@@ -96,3 +96,53 @@ queues nothing (R3019).
 **Input:** fake hub with `owner == ""`, one idle-past-cooldown secretary; `prune()`.
 **Expected:** the secretary remains; no work queued.
 **Refs:** crc-RecallWatcher.md
+
+## Test: CLI-hunt finding routes by namespace (DB integration)
+**Purpose:** the pool secretary's `finding`/`close` cookie is the bare request
+id (no `<session>-b<B>` kind-marker); `FindingItem` accepts it only when a live
+`tmp://BLOODHOUND-CLI/<id>` request doc matches, else rejects (R3025).
+**Input:** `setupConnections` DB; `BloodhoundCLIOpen` → the id; `FindingItem(id, …)`;
+then `FindingItem("999", …)` with no matching doc.
+**Expected:** the first succeeds; the second returns "not a bloodhound cookie".
+**Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.3.2
+
+## Test: CLI-hunt close re-tags the request doc (DB integration)
+**Purpose:** `closeCLIHunt` appends the raw findings to the request doc and flips
+its head tag to `@ark-bloodhound-cli-return: <id>` (WITH COLON — the S3 regression
+guard) in one write; it writes no finding- doc and drops the secretary-facing seed
++ crank handle (R3025, R3031).
+**Input:** `setupConnections` DB; `BloodhoundCLIOpen` → `enhanceRequestDoc` (so the
+doc holds a `## Recall seed` + crank handle); one `FindingItem`; `CloseResult(id)`.
+**Expected:** the doc's first line is `@ark-bloodhound-cli-return: <id>`; the body
+contains `## Raw findings` and the finding loc; it no longer contains
+`You are the bloodhound` (the crank handle) or `## Recall seed`.
+**Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.3.2
+
+## Test: bloodhound add stencil accumulates and the terminal flips the tag (DB integration)
+**Purpose:** `BloodhoundCLIAdd` appends one JSON line per call to the result
+accumulator; `BloodhoundCLIAddDone` writes `tmp://BLOODHOUND-CLI-RESULT/<id>`
+tagged `@ark-bloodhound-cli-result: <id>` (WITH COLON), removes the request doc,
+and drops the accumulator (R3027, R3028).
+**Input:** `setupConnections` DB; two `BloodhoundCLIAdd(id, loc, note, chunk)`; then
+`BloodhoundCLIAddDone(id)`.
+**Expected:** the result doc's first line is `@ark-bloodhound-cli-result: <id>`; its
+body is two JSONL lines each parsing to `{path,range,note}`; the request doc is gone.
+**Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.5.2, #1.5.3
+
+## Test: CLI result path strips the head tag end-to-end (DB integration)
+**Purpose:** `BloodhoundCLIResult` returns pure JSONL — the
+`@ark-bloodhound-cli-result` head tag is doc metadata, not output (R3029) — driven
+through the real subscribe→publish path.
+**Input:** `setupConnections` DB; `BloodhoundCLIOpen` (subscribes) → `BloodhoundCLIAdd`
+→ `BloodhoundCLIAddDone`; then `BloodhoundCLIResult(ctx, id, timeout)`.
+**Expected:** ok is true; the returned text is the JSONL with no leading `@`-tag line;
+each line parses as a finding.
+**Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.6
+
+## Test: empty hunt yields an empty result (DB integration)
+**Purpose:** a `--done` with no prior `add` writes an empty-body result doc, so the
+CLI prints no lines and exits 0 (R3029).
+**Input:** `setupConnections` DB; `BloodhoundCLIOpen` → `BloodhoundCLIAddDone(id)` with
+no adds; then `BloodhoundCLIResult`.
+**Expected:** ok is true; the returned JSONL body is empty (no lines).
+**Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.6.1

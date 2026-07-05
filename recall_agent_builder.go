@@ -41,6 +41,14 @@ type RecallAgentBuilder struct {
 	bloodhounds     map[string]*recallResultDoc // open finding-doc builders
 	bloodhoundClues map[string]string           // cookie -> originating clue
 
+	// CLI-bloodhound (external-CLI directed hunt) in-flight state, both keyed by
+	// the request <id> (the bare cookie the watcher put in the enhanced task doc).
+	// Two accumulators for two stages: cliHunts is the pool secretary's raw
+	// findings, flushed to the request doc at close (R3025); cliResults is
+	// Luhmann's curated JSONL, flushed to the result doc at `add --done` (R3027).
+	cliHunts   map[string]*recallResultDoc // R3025: secretary raw findings -> request doc
+	cliResults map[string]*recallResultDoc // R3027: Luhmann curated JSONL -> result doc
+
 	// Monitoring log paths. Default to ~/.ark/monitoring/ but can
 	// be overridden for testing.
 	monitorPath string
@@ -63,6 +71,8 @@ func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
 		results:         make(map[string]*recallResultDoc),
 		bloodhounds:     make(map[string]*recallResultDoc),
 		bloodhoundClues: make(map[string]string),
+		cliHunts:        make(map[string]*recallResultDoc),
+		cliResults:      make(map[string]*recallResultDoc),
 		monitorPath:     filepath.Join(monDir, "recall.jsonl"),
 		fumblePath:      filepath.Join(monDir, "recall-fumbles.jsonl"),
 		curationDir:     filepath.Join(home, ".ark", "recall-curation"),
@@ -299,6 +309,12 @@ func (b *RecallAgentBuilder) CloseResult(fireToken string, nonce uint32, preserv
 	// directed-search close in its own namespace. R2945
 	if session, bid, ok := parseBloodhoundToken(fireToken); ok {
 		return b.closeBloodhound(fireToken, session, bid, nonce)
+	}
+	// R3025: a CLI-bloodhound hunt cookie is the bare request <id>; its close
+	// appends raw findings to the request doc and flips the tag to
+	// @ark-bloodhound-cli-return (not a finding- doc), handing it to the watcher.
+	if b.isCLIHunt(fireToken) {
+		return b.closeCLIHunt(fireToken, nonce)
 	}
 	b.mu.Lock()
 	doc := b.results[fireToken]
@@ -894,10 +910,18 @@ func (b *RecallAgentBuilder) FindingItem(cookie, loc, answer, note string) error
 	if loc == "" && answer == "" {
 		return fmt.Errorf("finding requires -loc or -answer")
 	}
-	if _, _, ok := parseBloodhoundToken(cookie); !ok {
+	// R3025: a CLI-bloodhound hunt uses the same `finding` verb, but its cookie
+	// is the bare request <id> (no <session>-b<B> kind-marker). Route it to the
+	// CLI-hunt accumulator when a live BLOODHOUND-CLI request doc matches;
+	// otherwise require the in-session bloodhound cookie shape.
+	var doc *recallResultDoc
+	if _, _, ok := parseBloodhoundToken(cookie); ok {
+		doc = b.openBloodhound(cookie)
+	} else if b.isCLIHunt(cookie) {
+		doc = b.openCLIHunt(cookie)
+	} else {
 		return fmt.Errorf("not a bloodhound cookie: %q", cookie)
 	}
-	doc := b.openBloodhound(cookie)
 	if answer != "" {
 		fmt.Fprintf(&doc.buf, "\n%s\n", answer)
 	}
@@ -967,6 +991,188 @@ func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64,
 	// findings counted in the surfaced slot of the monitor record.
 	b.appendMonitor(bid, session, nonce, in, out, contextTokens, latency, found, 0, outcome)
 	return nil
+}
+
+// --- CLI-bloodhound: two-doc pipeline (external-CLI directed hunt) ---
+//
+// bloodhound-cli.md S4. Distinct from the in-session ARK-BLOODHOUND finding
+// doc: a CLI hunt reuses this builder family for a two-doc pipeline. The
+// request doc (tmp://BLOODHOUND-CLI/<id>) is the internal working artifact
+// whose tag is a routing baton; the result doc
+// (tmp://BLOODHOUND-CLI-RESULT/<id>) is the clean external JSONL.
+
+// bloodhoundCLIResultPath is the canonical tmp:// path for a CLI-hunt result
+// doc — a separate namespace from the request doc so the CLI never sees the
+// internal pipeline. R3027, R3028
+func bloodhoundCLIResultPath(id string) string {
+	return "tmp://BLOODHOUND-CLI-RESULT/" + id
+}
+
+// isCLIHunt reports whether cookie names a live CLI-bloodhound request doc
+// (the namespace discriminator, R3025). A pool secretary's finding/close
+// cookie is the bare request id, so the tmp:// path is the source of truth —
+// no kind-marker to parse. Best-effort: a missing doc simply routes cookie
+// through the ordinary recall/bloodhound paths.
+func (b *RecallAgentBuilder) isCLIHunt(cookie string) bool {
+	if b.db == nil || cookie == "" {
+		return false
+	}
+	_, err := b.db.TmpContent(bloodhoundCLIPrefix + cookie)
+	return err == nil
+}
+
+// openCLIHunt returns the per-id raw-findings accumulator for a CLI hunt,
+// allocating on first call. Reuses recallResultDoc as a plain item
+// accumulator (session unused — the request doc, not a session-scoped result,
+// is the write target). R3025
+func (b *RecallAgentBuilder) openCLIHunt(id string) *recallResultDoc {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if d, ok := b.cliHunts[id]; ok {
+		return d
+	}
+	d := &recallResultDoc{opened: time.Now()}
+	b.cliHunts[id] = d
+	return d
+}
+
+// closeCLIHunt finalizes a CLI-bloodhound secretary hunt (R3025, R3031): it
+// appends the accumulated raw findings to the request doc
+// tmp://BLOODHOUND-CLI/<id> and re-tags it @ark-bloodhound-cli-return: <id>
+// in one atomic write, handing the doc back to the watcher (which frees the
+// secretary and routes it to Luhmann for curation). Unlike closeBloodhound it
+// writes no finding-<S>-<B> doc and removes nothing — the request doc IS the
+// return, and Luhmann reads it next. The secretary-facing seed + crank handle
+// are dropped (cut at `## Recall seed`) so Luhmann's inlined view is just the
+// query + raw findings.
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-bloodhound-cli.md#1.3.2 | R3025, R3031
+func (b *RecallAgentBuilder) closeCLIHunt(id string, nonce uint32) error {
+	b.mu.Lock()
+	doc := b.cliHunts[id]
+	delete(b.cliHunts, id)
+	b.mu.Unlock()
+
+	path := bloodhoundCLIPrefix + id
+	data, err := b.db.TmpContent(path)
+	if err != nil {
+		b.appendMonitor(0, "cli-"+id, nonce, 0, 0, 0, 0, 0, 0, "error")
+		return fmt.Errorf("cli-hunt close: request doc %s not found: %w", path, err)
+	}
+	// Keep the query context (## Search task + payload), drop the secretary's
+	// seed + crank handle so Luhmann curates against a clean doc.
+	query := stripLeadingTag(string(data))
+	if i := strings.Index(query, "## Recall seed"); i >= 0 {
+		query = strings.TrimRight(query[:i], "\n")
+	}
+	findings := "(no findings)\n"
+	found := 0
+	if doc != nil && doc.items > 0 {
+		findings = strings.TrimLeft(doc.buf.String(), "\n")
+		found = doc.items
+	}
+	// R3028/R3031: flip the head tag to @ark-bloodhound-cli-return: <id> (WITH
+	// COLON — ark only extracts @word: tags, so a colon-less tag never
+	// publishes and the watcher never wakes) and append the raw findings, one
+	// atomic write-actor flush.
+	newBody := fmt.Sprintf("@%s: %s\n\n%s\n\n## Raw findings\n\n%s",
+		bloodhoundCLIReturnTag, id, query, findings)
+	if err := SyncVoid(b.db, func(db *DB) error {
+		return db.UpdateTmpFile(path, "markdown", []byte(newBody))
+	}); err != nil {
+		b.appendMonitor(0, "cli-"+id, nonce, 0, 0, 0, 0, 0, 0, "error")
+		return fmt.Errorf("cli-hunt close: re-tag request doc: %w", err)
+	}
+	in, out := b.lookupSubagentTokens(nonce)
+	contextTokens, _ := b.ContextTokens(nonce)
+	latency := 0
+	if doc != nil && !doc.opened.IsZero() {
+		latency = int(time.Since(doc.opened).Milliseconds())
+	}
+	b.appendMonitor(0, "cli-"+id, nonce, in, out, contextTokens, latency, found, 0, "cli-return")
+	return nil
+}
+
+// cliFinding is one curated line of a CLI-hunt result doc's JSONL output
+// (R3029): at least path + range + a curated note, with an optional chunk
+// excerpt so an external app need not re-fetch.
+type cliFinding struct {
+	Path  string `json:"path"`
+	Range string `json:"range"`
+	Note  string `json:"note,omitempty"`
+	Chunk string `json:"chunk,omitempty"`
+}
+
+// BloodhoundCLIAdd appends one curated finding to the CLI-hunt result-doc
+// accumulator (R3027), opening cliResults[id] on first call. Luhmann's result
+// stencil — one item per call, the discipline of surface/finding: the model
+// never hand-writes JSON, the builder does. id is the request id (derived from
+// the --result path). R3027, R3029
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-bloodhound-cli.md#1.5.2 | R3027, R3029
+func (b *RecallAgentBuilder) BloodhoundCLIAdd(id, loc, note, chunk string) error {
+	path, rangeLabel := splitLoc(loc)
+	if path == "" || rangeLabel == "" {
+		return fmt.Errorf("add requires -loc PATH:RANGE")
+	}
+	line, err := json.Marshal(cliFinding{Path: path, Range: rangeLabel, Note: note, Chunk: chunk})
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d, ok := b.cliResults[id]
+	if !ok {
+		d = &recallResultDoc{opened: time.Now()}
+		b.cliResults[id] = d
+	}
+	d.buf.Write(line)
+	d.buf.WriteByte('\n')
+	d.items++
+	return nil
+}
+
+// BloodhoundCLIAddDone is the terminal call (R3027, R3028): it writes the
+// result doc tmp://BLOODHOUND-CLI-RESULT/<id> with the head tag
+// @ark-bloodhound-cli-result: <id> (WITH COLON) followed by the accumulated
+// JSONL, which publishes the notification the waiting CLI is subscribed to. An
+// id with no prior add writes an empty-body result doc — an empty hunt (R3029:
+// no lines, exit 0). It then drops cliResults[id] and removes the internal
+// request doc (Luhmann is finished with it). R3027, R3028, R3031
+// CRC: crc-RecallAgentBuilder.md | Seq: seq-bloodhound-cli.md#1.5.3 | R3027, R3028, R3031
+func (b *RecallAgentBuilder) BloodhoundCLIAddDone(id string) error {
+	b.mu.Lock()
+	d := b.cliResults[id]
+	delete(b.cliResults, id)
+	b.mu.Unlock()
+
+	body := "@" + bloodhoundCLIResultTag + ": " + id + "\n\n"
+	if d != nil {
+		body += d.buf.String()
+	}
+	resultPath := bloodhoundCLIResultPath(id)
+	if err := SyncVoid(b.db, func(db *DB) error {
+		_, e := db.AddTmpFile(resultPath, "markdown", []byte(body))
+		return e
+	}); err != nil {
+		return fmt.Errorf("write cli result doc: %w", err)
+	}
+	// The request doc has served its purpose (Luhmann curated from it); drop it
+	// so the tmp:// space doesn't grow across hunts. The result doc lingers for
+	// the CLI's read (wiped on restart, tmp:// being per-process).
+	_ = SyncVoid(b.db, func(db *DB) error {
+		return db.RemoveTmpFile(bloodhoundCLIPrefix + id)
+	})
+	return nil
+}
+
+// stripLeadingTag drops a single leading @word:... head-tag line (and blank
+// lines after it) so inlined tmp:// doc content reads cleanly — the CLI's JSONL
+// output and Luhmann's curation view must not carry the head tag.
+func stripLeadingTag(s string) string {
+	first, rest, found := strings.Cut(s, "\n")
+	if found && strings.HasPrefix(first, "@") {
+		return strings.TrimLeft(rest, "\n")
+	}
+	return s
 }
 
 // blockquoteEscape collapses internal newlines so a multi-line

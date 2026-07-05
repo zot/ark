@@ -122,8 +122,11 @@ card covers only the Go surface the skill calls into.
   ~45 min; R3016) in a select over `nextQueue`, the keepalive timer,
   and ctx. On an item it returns crank-handle prose; on the deadline a
   keepalive (run next again). Three kinds (R3011): a **curation task**
-  (a request-doc path — the skill reads it, refines, runs `ark
-  bloodhound add`, R3025/R3027); a **supervisor directive** (stand up /
+  (the request doc's content is **inlined** into the crank-handle — a
+  `tmp://` path is not a Read-able file — and the skill refines it, then
+  runs `ark bloodhound add … --loc … --note …` per kept item and a
+  terminal `add … --done`, naming the request-doc path only as the
+  `--result` arg, R3025/R3027); a **supervisor directive** (stand up /
   stop a pool secretary — the skill spawns/stops via Task and records
   with `spawn-record` / `exit-record`, R3019); the **keepalive**.
 - **Stubborn plumbing** (R3015): the `next` CLI treats an `ark serve`

@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -48,9 +48,17 @@ for these verbs — `ark serve` must be running.
   retained when the watcher's `RecallBloodhoundOpen` mints `<B>`
   (R2937), stamped into the finding doc's `## Finding:` header at
   close so the assistant correlates verbatim (R2946).
-- cliResults: map[id]*resultDoc — open CLI-bloodhound **result**-doc
+- cliHunts: map[id]*recallResultDoc — open CLI-bloodhound **request**-doc
+  raw-findings accumulators (R3025), keyed by the request `<id>` (the bare
+  cookie the watcher wrote into the enhanced task doc). Populated on the
+  first `finding` for an id whose `tmp://BLOODHOUND-CLI/<id>` request doc is
+  live (the namespace discriminator, `isCLIHunt`); flushed to the request
+  doc and dropped at `close`. Reuses `recallResultDoc` as a plain item
+  accumulator (session unused — the write target is the request doc, not a
+  session-scoped result).
+- cliResults: map[id]*recallResultDoc — open CLI-bloodhound **result**-doc
   builders (R3027), keyed by the request `<id>`. Populated on the
-  first `ark bloodhound add` for an id, dropped when the terminal call
+  first `ark bloodhound add` for an id, dropped when the terminal `--done`
   flips the result doc's tag. Accumulates JSONL lines (one item per
   call), separate from the internal request doc so the CLI never sees
   the pipeline.
@@ -361,25 +369,41 @@ external output.
   one atomic go (R3031), so the watcher sees a complete request. The
   watcher then enhances + re-tags it to a pool secretary
   (crc-RecallWatcher.md).
-- **Secretary close for a CLI hunt** (R3025) — when the task is a
-  `BLOODHOUND-CLI/` request doc (the namespace is the discriminator),
-  `Close` appends the secretary's raw findings to that **request** doc and
-  re-tags it `@ark-bloodhound-cli-return` in one atomic write (R3031),
-  instead of writing a `finding-<S>-<B>` doc tagged `@ark-bloodhound-result`
-  (the in-session path, R2945). The request doc, not a new finding doc, is
-  the return the watcher wakes on.
+- **Secretary close for a CLI hunt** (R3025) — the pool secretary's
+  `finding`/`close` cookie is the bare request `<id>` (no `<session>-b<B>`
+  kind-marker). `FindingItem` and `CloseResult` detect it via `isCLIHunt` —
+  a live `tmp://BLOODHOUND-CLI/<id>` doc exists (the namespace is the
+  discriminator) — routing `finding` into `cliHunts[id]` and `close` into
+  `closeCLIHunt`. `closeCLIHunt` appends the accumulated raw findings to the
+  **request** doc under a `## Raw findings` H2 and re-tags it
+  `@ark-bloodhound-cli-return: <id>` (**with colon** — ark only extracts
+  `@word:` tags) in one atomic write (R3031), dropping the secretary-facing
+  seed + crank handle (cut at `## Recall seed`) so Luhmann curates a clean
+  query + findings. It writes **no** `finding-<S>-<B>` doc and removes
+  nothing — the request doc, not a new finding doc, is the return the
+  watcher wakes on.
 - **`ark bloodhound add`** (R3027) — Luhmann's **result** stencil, one item
-  per call: `add --result tmp://BLOODHOUND-CLI/<id> --id --path --chunk`
-  opens `cliResults[id]` on first call and appends one JSON line to the
-  result doc; a terminal call flips the result doc's tag to
-  `@ark-bloodhound-cli-result: <id>` (R3028) — the notification the waiting
-  CLI is subscribed to — and drops `cliResults[id]`. Same one-item-per-call
-  discipline as `surface` / `finding`.
+  per call: `add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note
+  NOTE [--chunk TEXT]` (`BloodhoundCLIAdd`) opens `cliResults[id]` on first
+  call and appends one JSON line `{path, range, note, chunk?}` (R3029) to the
+  result accumulator; the terminal `add --result … --done`
+  (`BloodhoundCLIAddDone`) writes the result doc
+  `tmp://BLOODHOUND-CLI-RESULT/<id>` with head tag
+  `@ark-bloodhound-cli-result: <id>` (**with colon**, R3028) — the
+  notification the waiting CLI is subscribed to — then drops `cliResults[id]`
+  and removes the internal request doc. An empty hunt (`--done` with no prior
+  `add`) writes an empty-body result doc (R3029). Same one-item-per-call
+  discipline as `surface` / `finding`; the `--loc` locator matches those
+  siblings. `BloodhoundCLIResult` strips the head-tag line so the CLI prints
+  pure JSONL.
 - **CLI tags** (R3028): `@ark-bloodhound-cli` (request), `@ark-bloodhound-cli-return`
   (secretary → watcher), `@ark-bloodhound-cli-result: <id>` (result,
-  value-scoped), plus the reused `@ark-secretary-work` tube (R2948). Every
-  write appends content and rewrites the tag in one write-actor flush, so no
-  stage wakes on a half-built doc (R3031).
+  value-scoped), plus the reused `@ark-secretary-work` tube (R2948) — all
+  written **with a colon** (a colon-less head tag is never extracted, so the
+  next stage never wakes). Every write appends content and rewrites the tag
+  in one write-actor flush, so no stage wakes on a half-built doc (R3031).
+  The result doc lives in its own `tmp://BLOODHOUND-CLI-RESULT/` namespace,
+  separate from the `tmp://BLOODHOUND-CLI/` request doc.
 
 ## Out of scope
 - Does **not** spawn or supervise the recall agent process.

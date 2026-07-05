@@ -3,6 +3,9 @@ package ark
 // CRC: crc-RecallWatcher.md | Test: test-BloodhoundCLIFixer.md
 
 import (
+	"context"
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -238,5 +241,168 @@ func TestPruneNoOpWithoutLuhmann(t *testing.T) {
 	}
 	if len(hub.queued) != 0 {
 		t.Error("prune must queue nothing without a live Luhmann")
+	}
+}
+
+// --- S4: secretary CLI-hunt close + Luhmann's `bloodhound add` stencil ---
+
+// TestCLIHuntFindingRoutesByNamespace confirms the pool secretary's bare-id
+// cookie routes `finding` to the CLI-hunt accumulator only when a live request
+// doc matches, else it is rejected (R3025).
+// Refs: R3025
+func TestCLIHuntFindingRoutesByNamespace(t *testing.T) {
+	_, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	b.monitorPath = filepath.Join(t.TempDir(), "recall.jsonl")
+	id, err := b.BloodhoundCLIOpen("clue: x\nscope: all\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.FindingItem(id, "specs/foo.md:1-5", "", "matches"); err != nil {
+		t.Fatalf("finding with a live CLI request id should be accepted: %v", err)
+	}
+	if err := b.FindingItem("999", "specs/foo.md:1-5", "", "x"); err == nil {
+		t.Error("finding with a bare id and no request doc must be rejected")
+	}
+}
+
+// TestCLIHuntCloseRetagsRequestDoc guards the whole secretary-close path: the
+// request doc is re-tagged @ark-bloodhound-cli-return: <id> WITH COLON (the S3
+// regression), raw findings are appended, and the secretary-facing seed + crank
+// handle are cut (R3025, R3031).
+// Refs: R3025, R3031
+func TestCLIHuntCloseRetagsRequestDoc(t *testing.T) {
+	// Neutralize the harness's ambient CLAUDE_CODE_SESSION_ID so close-time
+	// subagent-JSONL discovery early-returns (as in a normal `go test` run),
+	// rather than probing the test db's unset config.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	l, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	b.monitorPath = filepath.Join(t.TempDir(), "recall.jsonl")
+	w := NewRecallWatcher(db, l, db.store, b)
+	id, err := b.BloodhoundCLIOpen("clue: needle\nscope: all\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := bloodhoundCLIPrefix + id
+	if err := w.enhanceRequestDoc(path, "L-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.FindingItem(id, "specs/foo.md:10-20", "", "the needle is here"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.CloseResult(id, 0, false); err != nil {
+		t.Fatalf("CLI-hunt close: %v", err)
+	}
+	data, err := db.TmpContent(path)
+	if err != nil {
+		t.Fatalf("request doc should still exist (re-tagged, not removed): %v", err)
+	}
+	s := string(data)
+	if first := strings.SplitN(s, "\n", 2)[0]; first != "@"+bloodhoundCLIReturnTag+": "+id {
+		t.Errorf("head tag = %q, want @%s: %s (WITH COLON)", first, bloodhoundCLIReturnTag, id)
+	}
+	if !strings.Contains(s, "## Raw findings") || !strings.Contains(s, "specs/foo.md:10-20") {
+		t.Errorf("body missing raw findings section/loc:\n%s", s)
+	}
+	if strings.Contains(s, "You are the bloodhound") || strings.Contains(s, "## Recall seed") {
+		t.Errorf("secretary seed/crank handle should be cut from the curation view:\n%s", s)
+	}
+}
+
+// TestBloodhoundCLIAddStencilFlipsResultTag confirms the add stencil accumulates
+// one JSON line per call and the terminal --done writes the result doc tagged
+// @ark-bloodhound-cli-result: <id> WITH COLON, then removes the request doc
+// (R3027, R3028).
+// Refs: R3027, R3028
+func TestBloodhoundCLIAddStencilFlipsResultTag(t *testing.T) {
+	_, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	id, err := b.BloodhoundCLIOpen("clue: x\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAdd(id, "specs/a.md:1-2", "first", "excerpt one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAdd(id, "specs/b.md:3-4", "second", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAddDone(id); err != nil {
+		t.Fatal(err)
+	}
+	data, err := db.TmpContent(bloodhoundCLIResultPath(id))
+	if err != nil {
+		t.Fatalf("result doc not created: %v", err)
+	}
+	s := string(data)
+	if first := strings.SplitN(s, "\n", 2)[0]; first != "@"+bloodhoundCLIResultTag+": "+id {
+		t.Errorf("result head tag = %q, want @%s: %s (WITH COLON)", first, bloodhoundCLIResultTag, id)
+	}
+	lines := strings.Split(strings.TrimRight(stripLeadingTag(s), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 JSONL lines, got %d:\n%s", len(lines), s)
+	}
+	var f cliFinding
+	if err := json.Unmarshal([]byte(lines[0]), &f); err != nil {
+		t.Fatalf("line 0 not JSON: %q (%v)", lines[0], err)
+	}
+	if f.Path != "specs/a.md" || f.Range != "1-2" || f.Note != "first" || f.Chunk != "excerpt one" {
+		t.Errorf("line 0 = %+v, want specs/a.md:1-2/first/excerpt one", f)
+	}
+	if _, err := db.TmpContent(bloodhoundCLIPrefix + id); err == nil {
+		t.Error("request doc should be removed after --done")
+	}
+}
+
+// TestBloodhoundCLIResultStripsHeadTag drives the real subscribe→publish→listen
+// path and confirms BloodhoundCLIResult returns pure JSONL — the head tag is doc
+// metadata, not output (R3029).
+// Refs: R3029
+func TestBloodhoundCLIResultStripsHeadTag(t *testing.T) {
+	_, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	id, err := b.BloodhoundCLIOpen("clue: x\n") // subscribes to the result tag
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAdd(id, "specs/a.md:1-2", "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAddDone(id); err != nil { // publishes the result tag
+		t.Fatal(err)
+	}
+	jsonl, ok, err := b.BloodhoundCLIResult(context.Background(), id, 2*time.Second)
+	if err != nil || !ok {
+		t.Fatalf("result: ok=%v err=%v", ok, err)
+	}
+	if strings.HasPrefix(jsonl, "@") {
+		t.Errorf("result should be pure JSONL, got a head tag:\n%s", jsonl)
+	}
+	var f cliFinding
+	if err := json.Unmarshal([]byte(strings.TrimRight(jsonl, "\n")), &f); err != nil || f.Path != "specs/a.md" {
+		t.Errorf("jsonl = %q parsed %+v err %v", jsonl, f, err)
+	}
+}
+
+// TestBloodhoundCLIEmptyHunt confirms a --done with no adds yields an empty
+// result body: the CLI prints no lines and exits 0 (R3029).
+// Refs: R3029
+func TestBloodhoundCLIEmptyHunt(t *testing.T) {
+	_, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	id, err := b.BloodhoundCLIOpen("clue: x\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BloodhoundCLIAddDone(id); err != nil {
+		t.Fatal(err)
+	}
+	jsonl, ok, err := b.BloodhoundCLIResult(context.Background(), id, 2*time.Second)
+	if err != nil || !ok {
+		t.Fatalf("result: ok=%v err=%v", ok, err)
+	}
+	if strings.TrimSpace(jsonl) != "" {
+		t.Errorf("empty hunt should yield no JSONL lines, got:\n%q", jsonl)
 	}
 }
