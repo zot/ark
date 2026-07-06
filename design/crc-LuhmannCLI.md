@@ -151,13 +151,14 @@ card covers only the Go surface the skill calls into.
   secretaries and records them on the same crash / quit-early streak
   machine and `[luhmann]` policy the recall class once used. Config:
   `class.bloodhound.pool_max` (default 3, R3017) and
-  `class.bloodhound.cooldown_seconds` (default 120, R3018) — read from
+  `class.bloodhound.cooldown_seconds` (default 600, R3018) — read from
   `[luhmann]` on the same reload path (R2801).
 - Luhmann's **opt-in to serve CLI curation is simply owning the `next`
   seat** (R3026): no separate parent-signal subscription; a session not
-  draining `next` serves no CLI hunts. Curation is mandatory but
-  decoupled from occupancy — the watcher already freed the secretary on
-  its return (R3024), so a slow refine costs only the CLI's latency.
+  draining `next` serves no CLI hunts. Curation is the default (opt-out
+  per-hunt via the CLI's `--raw`, R3038) but decoupled from occupancy —
+  the watcher already freed the secretary on its return (R3024), so a slow
+  refine costs only the CLI's latency.
 
 ## Collaborators
 - Monitor (crc-Monitor.md): reads back the log this card writes.

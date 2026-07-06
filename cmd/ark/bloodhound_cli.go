@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +35,9 @@ func bloodhoundCommand() *ucli.Command {
 					&ucli.StringFlag{Name: "depth", Value: "lookup", Usage: "depth: lookup | investigate"},
 					&ucli.StringFlag{Name: "want", Value: "passages", Usage: "want: answer | passages | ..."},
 					&ucli.BoolFlag{Name: "wait", Usage: "block stubbornly on a busy pool / server bounce instead of failing fast"},
-					&ucli.IntFlag{Name: "timeout", Value: 300, Usage: "seconds to wait for the curated result (default 300)"},
+					&ucli.IntFlag{Name: "timeout", Value: 300, Usage: "seconds to wait for the result (default 300)"},
+					&ucli.BoolFlag{Name: "raw", Usage: "skip Luhmann curation: return the secretary's own findings (markdown, Baby Food for agents) — curate in your own context"},
+					&ucli.BoolFlag{Name: "markdown", Usage: "render the curated findings as a markdown locator list instead of JSONL (redundant with --raw)"},
 				},
 				Action: bloodhoundSearchAction,
 			},
@@ -86,8 +89,15 @@ func bloodhoundSearchAction(_ context.Context, c *ucli.Command) error {
 	}
 	// The TERMS payload the watcher wraps as the ## Search task the secretary
 	// reads — clue · scope · depth · want (R3021).
+	raw := c.Bool("raw")
+	markdown := c.Bool("markdown")
 	payload := fmt.Sprintf("clue: %s\nscope: %s\ndepth: %s\nwant: %s\n",
 		clue, c.String("scope"), c.String("depth"), c.String("want"))
+	if raw {
+		// R3038: the watcher reads this marker to skip Luhmann curation and relay
+		// the secretary's own findings straight back.
+		payload += "curate: false\n"
+	}
 	wait := c.Bool("wait")
 	timeout := c.Int("timeout")
 
@@ -139,9 +149,65 @@ func bloodhoundSearchAction(_ context.Context, c *ucli.Command) error {
 			fmt.Fprintln(os.Stderr, "bloodhound search: timed out awaiting the curated result")
 			os.Exit(1)
 		}
-		// R3029: the result doc is already JSONL (one curated finding per line);
-		// an empty hunt is an empty body — no lines, exit 0.
-		os.Stdout.Write(data)
+		// R3037/R3040: print per the flag the caller sent. --raw relays the
+		// secretary's own markdown (already Baby Food) verbatim; --markdown renders
+		// the curated JSONL as a locator list; default is the JSONL verbatim (R3029
+		// — an empty hunt is an empty body, no lines, exit 0).
+		if markdown && !raw {
+			os.Stdout.WriteString(renderFindingsMarkdown(data))
+		} else {
+			os.Stdout.Write(data)
+		}
 		return nil
 	}
+}
+
+// bloodhoundFinding mirrors the CLI-hunt result JSONL wire shape (R3027) so the
+// thin client can render it without importing the server type. path + range +
+// curated note, with an optional chunk excerpt.
+type bloodhoundFinding struct {
+	Path  string `json:"path"`
+	Range string `json:"range"`
+	Note  string `json:"note"`
+	Chunk string `json:"chunk"`
+}
+
+// renderFindingsMarkdown turns the curated JSONL into the Baby Food an agent
+// reads (R3037): one `- ` + "`path:range`" + ` — note` locator line per finding,
+// the chunk excerpt as a blockquote when present, and a "no findings" line for
+// the empty result. Defensive — a line that does not parse as a finding is
+// skipped, never fatal.
+// CRC: crc-CLITree.md | R3037, R3040
+func renderFindingsMarkdown(data []byte) string {
+	var b strings.Builder
+	n := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var f bloodhoundFinding
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			continue // skip a malformed line rather than aborting the render
+		}
+		loc := f.Path
+		if f.Range != "" {
+			loc += ":" + f.Range
+		}
+		fmt.Fprintf(&b, "- `%s`", loc)
+		if f.Note != "" {
+			fmt.Fprintf(&b, " — %s", f.Note)
+		}
+		b.WriteByte('\n')
+		if f.Chunk != "" {
+			for _, cl := range strings.Split(strings.TrimRight(f.Chunk, "\n"), "\n") {
+				fmt.Fprintf(&b, "> %s\n", cl)
+			}
+		}
+		n++
+	}
+	if n == 0 {
+		return "no findings\n"
+	}
+	return b.String()
 }

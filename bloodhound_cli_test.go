@@ -40,23 +40,29 @@ func newFixerWatcher(hub *fakeLuhmannHub) *RecallWatcher {
 
 func intp(n int) *int { return &n }
 
-// Refs: R3017, R3018
+// Refs: R3017, R3018, R3041
 func TestPoolConfigDefaultsAndOverrides(t *testing.T) {
 	var empty LuhmannConfig
 	if got := empty.EffectivePoolMax("bloodhound"); got != 3 {
 		t.Errorf("default pool_max = %d, want 3", got)
 	}
-	if got := empty.EffectiveCooldownSeconds("bloodhound"); got != 120 {
-		t.Errorf("default cooldown = %d, want 120", got)
+	if got := empty.EffectiveCooldownSeconds("bloodhound"); got != 600 {
+		t.Errorf("default cooldown = %d, want 600", got)
+	}
+	if got := empty.EffectiveRequestTTLSeconds("bloodhound"); got != 900 {
+		t.Errorf("default request_ttl = %d, want 900", got)
 	}
 	set := LuhmannConfig{Classes: map[string]LuhmannClass{
-		"bloodhound": {PoolMax: intp(5), CooldownSeconds: intp(30)},
+		"bloodhound": {PoolMax: intp(5), CooldownSeconds: intp(30), RequestTTLSeconds: intp(120)},
 	}}
 	if got := set.EffectivePoolMax("bloodhound"); got != 5 {
 		t.Errorf("pool_max override = %d, want 5", got)
 	}
 	if got := set.EffectiveCooldownSeconds("bloodhound"); got != 30 {
 		t.Errorf("cooldown override = %d, want 30", got)
+	}
+	if got := set.EffectiveRequestTTLSeconds("bloodhound"); got != 120 {
+		t.Errorf("request_ttl override = %d, want 120", got)
 	}
 }
 
@@ -144,10 +150,10 @@ func TestRegisterPoolSecretaryIdempotent(t *testing.T) {
 // Refs: R3019
 func TestPruneRetiresIdlePastCooldown(t *testing.T) {
 	hub := &fakeLuhmannHub{owner: "S"}
-	w := newFixerWatcher(hub)                                                                             // db nil → cooldown default 120s
-	w.pool.secretaries[1] = &poolSec{nonce: 1, idleSince: time.Now().Add(-200 * time.Second)}             // past cooldown
+	w := newFixerWatcher(hub)                                                                             // db nil → cooldown default 600s
+	w.pool.secretaries[1] = &poolSec{nonce: 1, idleSince: time.Now().Add(-700 * time.Second)}             // past cooldown
 	w.pool.secretaries[2] = &poolSec{nonce: 2, idleSince: time.Now()}                                     // within cooldown
-	w.pool.secretaries[3] = &poolSec{nonce: 3, busy: true, idleSince: time.Now().Add(-200 * time.Second)} // busy
+	w.pool.secretaries[3] = &poolSec{nonce: 3, busy: true, idleSince: time.Now().Add(-700 * time.Second)} // busy
 
 	w.prune()
 
@@ -473,5 +479,197 @@ func TestBloodhoundCLIEmptyHunt(t *testing.T) {
 	}
 	if strings.TrimSpace(jsonl) != "" {
 		t.Errorf("empty hunt should yield no JSONL lines, got:\n%q", jsonl)
+	}
+}
+
+// --- #30: --raw curation-ownership branch + reap/re-issue sweep ---
+
+// TestCLIReturnRawSkipsCuration confirms a return whose recorded intent is raw
+// frees the secretary but queues no curation task — the branch decides who
+// curates, not occupancy (R3039). db==nil, so relayRawResult no-ops.
+// Refs: R3039
+func TestCLIReturnRawSkipsCuration(t *testing.T) {
+	hub := &fakeLuhmannHub{owner: "S"}
+	w := newFixerWatcher(hub)
+	const path = "tmp://BLOODHOUND-CLI/raw1"
+	w.pool.secretaries[7] = &poolSec{nonce: 7, busy: true}
+	w.pool.inflight[path] = 7
+	w.pool.requests[path] = &cliRequest{raw: true}
+
+	w.onBloodhoundCLIReturn(path)
+
+	if w.pool.secretaries[7].busy {
+		t.Error("a raw return must still free the secretary")
+	}
+	if len(hub.queued) != 0 {
+		t.Errorf("a raw return must queue no curation, got %+v", hub.queued)
+	}
+	if _, ok := w.pool.requests[path]; ok {
+		t.Error("the request record should be cleared on return")
+	}
+	if _, ok := w.pool.inflight[path]; ok {
+		t.Error("inflight should be cleared on return")
+	}
+}
+
+// TestCLIRequestRecordsRawIntent confirms onBloodhoundCLIRequest reads the doc
+// once and records raw iff the payload carries curate:false, stamping the reap
+// clock (R3038). Uses a fake hub (owner set) with a real db for the doc read.
+// Refs: R3038
+func TestCLIRequestRecordsRawIntent(t *testing.T) {
+	_, db, _ := setupConnections(t)
+	if db.config == nil {
+		db.config = &Config{} // poolMax() reads db.Config().Luhmann; setupConnections leaves it nil
+	}
+	b := NewRecallAgentBuilder(db)
+	hub := &fakeLuhmannHub{owner: "S"}
+	w := &RecallWatcher{pool: newCLIPool(), luhmann: hub, db: db}
+
+	rawID, err := b.BloodhoundCLIOpen("clue: x\nscope: all\ncurate: false\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawPath := bloodhoundCLIPrefix + rawID
+	w.onBloodhoundCLIRequest(rawPath)
+	req := w.pool.requests[rawPath]
+	if req == nil || !req.raw {
+		t.Errorf("a curate:false payload should record raw=true, got %+v", req)
+	}
+	if req != nil && req.submitted.IsZero() {
+		t.Error("submit time should be stamped for the reap clock")
+	}
+
+	curID, err := b.BloodhoundCLIOpen("clue: y\nscope: all\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	curPath := bloodhoundCLIPrefix + curID
+	w.onBloodhoundCLIRequest(curPath)
+	if req := w.pool.requests[curPath]; req == nil || req.raw {
+		t.Errorf("a default payload should record raw=false, got %+v", req)
+	}
+}
+
+// TestCLIRawRelayWritesResultDoc drives the full raw branch: for a raw request,
+// onBloodhoundCLIReturn writes the result doc from the request doc's ## Raw
+// findings, tags it @ark-bloodhound-cli-result WITH COLON, drops the request
+// doc, and queues no curation (R3039, R3040).
+// Refs: R3039, R3040
+func TestCLIRawRelayWritesResultDoc(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	l, db, _ := setupConnections(t)
+	b := NewRecallAgentBuilder(db)
+	b.monitorPath = filepath.Join(t.TempDir(), "recall.jsonl")
+	w := NewRecallWatcher(db, l, db.store, b)
+	id, err := b.BloodhoundCLIOpen("clue: needle\nscope: all\ncurate: false\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := bloodhoundCLIPrefix + id
+	if err := w.enhanceRequestDoc(path, "L-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.FindingItem(id, "specs/foo.md:10-20", "", "the needle is here"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.CloseResult(id, 0, false); err != nil { // re-tags return, appends ## Raw findings
+		t.Fatalf("CLI-hunt close: %v", err)
+	}
+	// Mark the hunt raw and drive the return branch.
+	w.pool.secretaries[1] = &poolSec{nonce: 1, busy: true}
+	w.pool.inflight[path] = 1
+	w.pool.requests[path] = &cliRequest{raw: true}
+
+	w.onBloodhoundCLIReturn(path)
+
+	data, err := db.TmpContent(bloodhoundCLIResultPath(id))
+	if err != nil {
+		t.Fatalf("raw relay should write the result doc: %v", err)
+	}
+	s := string(data)
+	if first := strings.SplitN(s, "\n", 2)[0]; first != "@"+bloodhoundCLIResultTag+": "+id {
+		t.Errorf("result head tag = %q, want @%s: %s (WITH COLON)", first, bloodhoundCLIResultTag, id)
+	}
+	if !strings.Contains(s, "specs/foo.md:10-20") {
+		t.Errorf("result should relay the raw finding loc verbatim:\n%s", s)
+	}
+	if _, err := db.TmpContent(path); err == nil {
+		t.Error("request doc should be dropped after the raw relay")
+	}
+}
+
+// TestSweepReapsStaleRequest confirms the sweep reaps a pending request past its
+// TTL and leaves a fresh one (R3041). db==nil → the roster drop is asserted; doc
+// removal is exercised by the DB relay test.
+// Refs: R3041
+func TestSweepReapsStaleRequest(t *testing.T) {
+	hub := &fakeLuhmannHub{owner: "S"}
+	w := newFixerWatcher(hub) // db nil; request_ttl default 900s
+	const stale = "tmp://BLOODHOUND-CLI/stale"
+	const fresh = "tmp://BLOODHOUND-CLI/fresh"
+	w.pool.requests[stale] = &cliRequest{submitted: time.Now().Add(-1000 * time.Second)}
+	w.pool.requests[fresh] = &cliRequest{submitted: time.Now()}
+	w.pool.pending = []string{stale, fresh}
+
+	w.sweepRequests()
+
+	if _, ok := w.pool.requests[stale]; ok {
+		t.Error("a request past its TTL should be reaped")
+	}
+	if _, ok := w.pool.requests[fresh]; !ok {
+		t.Error("a fresh request must not be reaped")
+	}
+	if len(w.pool.pending) != 1 || w.pool.pending[0] != fresh {
+		t.Errorf("pending = %v, want [fresh] after reap", w.pool.pending)
+	}
+}
+
+// TestSweepReissuesStandUp confirms the sweep re-pushes one stand-up for a
+// request stranded past the re-issue threshold with pool room, but not when the
+// pool is full nor for a request under the threshold (R3042).
+// Refs: R3042
+func TestSweepReissuesStandUp(t *testing.T) {
+	const path = "tmp://BLOODHOUND-CLI/stranded"
+	standUps := func(q []LuhmannWork) int {
+		n := 0
+		for _, w := range q {
+			if w.Kind == "directive" && w.Directive == "stand-up" && w.Class == "bloodhound" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// (a) stranded past the threshold, pool has room → exactly one stand-up.
+	hubA := &fakeLuhmannHub{owner: "S"}
+	wA := newFixerWatcher(hubA)
+	wA.pool.requests[path] = &cliRequest{submitted: time.Now().Add(-100 * time.Second)}
+	wA.pool.pending = []string{path}
+	wA.sweepRequests()
+	if got := standUps(hubA.queued); got != 1 {
+		t.Errorf("(a) stranded request should re-issue one stand-up, got %d (%+v)", got, hubA.queued)
+	}
+
+	// (b) pool at max → no re-issue (no room).
+	hubB := &fakeLuhmannHub{owner: "S"}
+	wB := newFixerWatcher(hubB)
+	for i := uint64(1); i <= 3; i++ {
+		wB.pool.secretaries[i] = &poolSec{nonce: i, busy: true}
+	}
+	wB.pool.requests[path] = &cliRequest{submitted: time.Now().Add(-100 * time.Second)}
+	wB.pool.pending = []string{path}
+	wB.sweepRequests()
+	if got := standUps(hubB.queued); got != 0 {
+		t.Errorf("(b) a full pool must not re-issue, got %d", got)
+	}
+
+	// (c) request under the threshold → no re-issue.
+	hubC := &fakeLuhmannHub{owner: "S"}
+	wC := newFixerWatcher(hubC)
+	wC.pool.requests[path] = &cliRequest{submitted: time.Now()}
+	wC.pool.pending = []string{path}
+	wC.sweepRequests()
+	if got := standUps(hubC.queued); got != 0 {
+		t.Errorf("(c) a request under the threshold must not re-issue, got %d", got)
 	}
 }

@@ -63,7 +63,7 @@ pubsub.
 ## `ark bloodhound search`
 
 ```
-ark bloodhound search TERMS...  [--wait] [--timeout S]
+ark bloodhound search TERMS...  [--wait] [--timeout S] [--raw] [--markdown]
 ```
 
 The whole client protocol in one blocking command:
@@ -83,7 +83,13 @@ The whole client protocol in one blocking command:
    waiting); without `--wait` a busy pool fails fast. `--timeout S` bounds the
    total wait (default 300 s).
 3. **Print.** When the result tag fires, the CLI reads the result doc and
-   prints the findings as clean **JSONL** on stdout, one object per line.
+   prints it in the mode set by its flags (all client-side; the pipeline is
+   identical). Default: clean **JSONL** on stdout, one object per line — the
+   script contract. `--markdown`: the same curated findings rendered as a
+   markdown locator list (Baby Food — the chewed view an agent reads). `--raw`:
+   the secretary's own findings, uncurated (see "Curation ownership" below);
+   because those are already markdown, `--raw` output is markdown regardless of
+   `--markdown`.
 
 ## The watcher as scheduler + hub + router
 
@@ -136,12 +142,55 @@ the baton:
    bloodhound add` and tagging `@ark-bloodhound-cli-result: <id>` to wake the
    CLI.
 
-Curation is **mandatory** (every CLI finding gets Luhmann's judgment) but
+Curation is the **default** — every CLI finding gets Luhmann's judgment unless
+the client opts out with `--raw` (see "Curation ownership" below) — and is
 **decoupled from occupancy**: the secretary was already freed at step 1, so
 curation costs only the CLI's own latency, never a held pool slot. Luhmann's
 **opt-in to serve CLI curation is simply owning the `next` seat** (`--first`,
 [luhmann.md](luhmann.md)); there is no separate subscription — the ownership
 lease is the opt-in, and a session not draining `next` serves no CLI hunts.
+
+## Curation ownership: curated (default) vs `--raw`
+
+Directed search is not one tool but three points on a **curation-ownership
+axis** — who does the discernment the sealed Haiku lacks, and in whose context:
+
+| Option | Secretary (the hunt) | Curation | Overhead | When |
+|---|---|---|---|---|
+| **Local `/bloodhound`** | you spawn + supervise | **you**, in your own session context | high (spawn, listen loop, respawn) | search is central to your work; you want own-context, iterative curation |
+| **Remote `--raw`** | **Luhmann's** pool secretary | **you**, in your own context | ~zero (one CLI call) | you want the finds and will judge them yourself; no agent management |
+| **Remote curated** (default) | Luhmann's pool secretary | **Luhmann**, separate context | ~zero | scripts; or an agent that wants a finished answer |
+
+`--raw` is the missing **middle**: it borrows Luhmann's warm secretary (the
+expensive part — a Haiku working the trail) but keeps the *other* half of
+`/bloodhound`, the curation, in the caller's own head, where folding finds into
+live reasoning is powerful — and it needs **no agent management**, just one CLI
+call. Curated stays the **default** because a *script* has no context to curate
+*in*: it consumes the JSONL as-is and needs Luhmann's discernment already baked
+in. `--raw` is the agent opt-in, never a replacement.
+
+**How `--raw` routes.** The request doc carries the client's intent — `--raw`
+writes `curate: false` in the `TERMS` payload. The watcher (the Fixer) records
+that intent in memory keyed by `<id>` when the request first arrives (the doc
+body is rewritten at later hops, so the flag can't live there). At the **return
+hop** (`@ark-bloodhound-cli-return`) the watcher branches:
+
+- **raw** — write the result doc `tmp://BLOODHOUND-CLI-RESULT/<id>` directly
+  from the request doc's `## Raw findings`, flip its tag to
+  `@ark-bloodhound-cli-result: <id>`, drop the request doc, and **skip the
+  Luhmann `next` push** entirely. The secretary's findings are already the
+  markdown locator lines it wrote (`- path:range (size) — note`), relayed
+  verbatim — the Baby Food an agent reads.
+- **curated** — push the request-doc path onto Luhmann's `next` queue exactly as
+  the discernment split above describes.
+
+The CLI stays dumb (Batteries Included): the same result-tag subscription wakes
+it either way, and it prints per the flag it sent (`--raw` → the relayed
+markdown verbatim; else the curated JSONL, `--markdown`-rendered on request).
+The routing intelligence lives in the go-between, where all the other routing
+already is. A raw hunt paired with a warm pool touches Luhmann **not at all** —
+no stand-up, no curation — so it takes the slow, serial curation step off the
+critical path (the latency the interactive path is most sensitive to).
 
 ## `ark bloodhound add` — the result stencil
 
@@ -232,21 +281,66 @@ the watcher learns it from the reservation rather than minting it:
   prune eventually swept it. Deregistration is idempotent with `prune`'s own
   removal, so a self-exit and a *stop* directive reconcile safely.
 
-## JSONL output contract
+## Output contract
 
-`ark bloodhound search` prints one JSON object per line — the machine contract
-external apps consume. Each line is one curated finding carrying at least its
-`path`, `range`, and a curated `note`; the exact field set is fixed in Design.
-An empty hunt prints no lines and exits zero, so a client can treat "no
-output" as "no findings."
+Three client-side modes over the one pipeline:
+
+- **JSONL (default)** — one JSON object per line, the machine contract external
+  apps consume. Each line is one curated finding carrying at least its `path`,
+  `range`, and a curated `note`; the exact field set is fixed in Design. An
+  empty hunt prints no lines and exits zero, so a client can treat "no output"
+  as "no findings."
+- **`--markdown`** — the same curated findings rendered as a markdown locator
+  list (Baby Food): `- \`path:range\` — note`, with the chunk excerpt as a
+  blockquote when present, and a "no findings" line for the empty case. A pure
+  client-side render of the JSONL the CLI already holds; no server or protocol
+  change. Opt-in; JSONL stays the default (matching the `--json`-bool
+  convention elsewhere).
+- **`--raw`** — the secretary's *uncurated* findings, relayed verbatim from the
+  request doc's `## Raw findings` (already markdown locator lines). The empty
+  case relays the `(no findings)` body the secretary wrote. Since raw output is
+  inherently markdown, `--markdown` is redundant with `--raw`.
+
+## Reap and re-issue (robustness backstop)
+
+The tag baton is liveness-fragile at two points, both time-based, so nothing
+event-driven wakes the watcher to recover them. A **periodic sweep** on the
+watcher's worker closes both:
+
+- **Reap an abandoned request.** `ark bloodhound search` is a blocking command
+  with no clean "I gave up" signal — on `--timeout` it simply exits, leaving its
+  request stranded in the watcher (pending, or in-flight at a secretary whose
+  return the client no longer awaits). A later stand-up would then waste a hunt
+  on a query nobody is listening for. The sweep reaps any request older than a
+  **reap TTL** (`class.bloodhound.request_ttl_seconds`, generously longer than a
+  typical `--timeout` so a live client is never reaped): drop it from the
+  roster's pending/in-flight sets and remove its request doc.
+- **Re-issue a dropped stand-up.** When the watcher pushes a *stand up another*
+  directive, it expects a new secretary to subscribe so `pump()` routes the
+  waiting request. If Luhmann drops that directive (a drift or a garbled tool
+  call mid-turn — the same failure class the re-launch-first crank handle in
+  [luhmann.md](luhmann.md) hardens the loop against), no secretary arrives and
+  the request sits unrouted until it is reaped. The sweep re-pushes a *stand up*
+  for any request that has sat pending, unrouted, past a **re-issue threshold**
+  while the pool has room — bounded by `pool_max` and the count of already
+  in-flight stand-ups so it never over-spawns. This recovers the item that
+  re-launch-first alone cannot: re-launch-first keeps Luhmann's loop alive, but
+  the *dropped work item* still needs re-issuing.
+
+Both are best-effort recovery of a fragile hop, not a guarantee: a client that
+has already given up gets nothing either way. They keep a dropped hunt from
+silently wedging the pool or stranding a request forever.
 
 ## Configuration
 
 The pool is configured on the Luhmann side ([luhmann.md](luhmann.md)):
-`class.bloodhound.pool_max` (max concurrent secretaries) and
-`class.bloodhound.cooldown_seconds` (warm-idle window before pruning). The
-existing `[luhmann]` crash / quit-early policy governs pool secretaries as it
-would any managed class.
+`class.bloodhound.pool_max` (max concurrent secretaries),
+`class.bloodhound.cooldown_seconds` (warm-idle window before pruning — default
+`600`, warm enough that follow-up hunts in an interactive burst reuse the same
+secretary rather than paying a cold stand-up), and
+`class.bloodhound.request_ttl_seconds` (the reap TTL above). The existing
+`[luhmann]` crash / quit-early policy governs pool secretaries as it would any
+managed class.
 
 ## What this slice does not do
 
@@ -293,6 +387,18 @@ would any managed class.
   result.
 - **Empty hunt** — a hunt with no findings prints no JSONL lines and exits
   zero.
+- **Raw relay** — a `--raw` hunt (`curate: false`) returns the secretary's
+  `## Raw findings` verbatim and pushes **no** curation task to Luhmann; a
+  curated hunt still routes through Luhmann.
+- **Markdown render** — `--markdown` renders the curated JSONL as the locator
+  list (chunk excerpt as a blockquote when present); an empty result prints the
+  "no findings" line.
+- **Reap** — a request older than `request_ttl_seconds` is dropped from the
+  roster (pending / in-flight) and its request doc removed; a fresh request is
+  left alone.
+- **Re-issue** — a request pending unrouted past the re-issue threshold with
+  pool room re-pushes a *stand up* directive; at `pool_max` (or with a stand-up
+  already in flight) it does not.
 
 ## Sequencing
 

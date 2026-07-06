@@ -259,7 +259,8 @@ CLI hunts, so no single session's assistant can own them.
 | `backoff_seconds`                | []int    | `[1, 5, 30]`  | The seconds to wait between successive crash respawns. Last value is used for any further attempts up to `crash_pause_after`.                        |
 | `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this class. Setting to `false` disables it without removing supervisor state from the log.                      |
 | `class.<NAME>.pool_max`          | int      | `3`           | For a pooled class (the CLI-bloodhound pool), the maximum concurrent secretaries Luhmann stands up on `stand up another` directives. See [bloodhound-cli.md](bloodhound-cli.md).             |
-| `class.<NAME>.cooldown_seconds`  | int      | `120`         | For a pooled class, how long a secretary that has returned to idle stays warm before it is eligible for pruning (damps spawn/stop churn).           |
+| `class.<NAME>.cooldown_seconds`  | int      | `600`         | For a pooled class, how long a secretary that has returned to idle stays warm before it is eligible for pruning (damps spawn/stop churn; warm enough for interactive-burst reuse).           |
+| `class.<NAME>.request_ttl_seconds` | int    | `900`         | For the CLI-bloodhound pool: the watcher reaps a stranded request (a client that hit `--timeout` and exited) older than this. Read by the watcher, not Luhmann. See [bloodhound-cli.md](bloodhound-cli.md).           |
 
 Live reload: `[luhmann]` follows the same `ark.toml` reload path as
 the rest of the config. Changes take effect on the next supervisor

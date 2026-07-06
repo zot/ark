@@ -7,14 +7,16 @@ bookkeeping is exercised against a bare `RecallWatcher` with a **fake
 `luhmannHub`** and `db == nil`, so no DB/pubsub/socket is needed — the scenarios
 are chosen so `enhanceRequestDoc` (the only DB-touching path) is never reached
 (a hunt routes only when a pending path *and* a free secretary coincide, which
-each test avoids). R3017, R3018, R3020, R3023, R3024, R3033.
+each test avoids). R3017, R3018, R3020, R3023, R3024, R3033, R3038, R3039,
+R3041, R3042.
 
 ## Test: pool config defaults and overrides
-**Purpose:** `EffectivePoolMax` / `EffectiveCooldownSeconds` return 3 / 120 with
-no config and the configured value when set (R3017, R3018).
+**Purpose:** `EffectivePoolMax` / `EffectiveCooldownSeconds` /
+`EffectiveRequestTTLSeconds` return 3 / 600 / 900 with no config and the
+configured value when set (R3017, R3018, R3041).
 **Input:** a `LuhmannConfig` with no `class` entry, then one with
-`class.bloodhound.pool_max` / `cooldown_seconds` set.
-**Expected:** defaults 3 / 120; overrides honored.
+`class.bloodhound.pool_max` / `cooldown_seconds` / `request_ttl_seconds` set.
+**Expected:** defaults 3 / 600 / 900; overrides honored.
 **Refs:** crc-Config.md
 
 ## Test: EnqueueLuhmann is non-blocking when full
@@ -59,8 +61,8 @@ queued; `inflight` no longer holds the path.
 **Purpose:** `prune` (autoscale down, R3019) stops a not-busy secretary idle past
 `cooldown_seconds`, but not a within-cooldown or a busy one; it pushes one stop
 directive naming the nonce and drops it from the roster.
-**Input:** three secretaries — one idle 200s (default cooldown 120s), one idle 0s,
-one busy 200s; `prune()`.
+**Input:** three secretaries — one idle 700s (default cooldown 600s), one idle 0s,
+one busy 700s; `prune()`.
 **Expected:** the first is removed and a `stop`/`bloodhound`/nonce-1 directive is
 queued; the other two remain.
 **Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md
@@ -159,3 +161,58 @@ CLI prints no lines and exits 0 (R3029).
 no adds; then `BloodhoundCLIResult`.
 **Expected:** ok is true; the returned JSONL body is empty (no lines).
 **Refs:** crc-RecallAgentBuilder.md, seq-bloodhound-cli.md#1.6.1
+
+## Test: raw return skips curation
+**Purpose:** a return whose recorded intent is `raw` frees the secretary but pushes
+**no** curation task to Luhmann — the branch decides who curates, not occupancy
+(R3039). db==nil, so `relayRawResult` no-ops and only the skip is asserted.
+**Input:** fake-hub `RecallWatcher`, db==nil; a busy secretary `inflight[path]=nonce`;
+`requests[path] = {raw: true}`; `onBloodhoundCLIReturn(path)`.
+**Expected:** the secretary is freed (not busy, idleSince set); **no** `curation`
+work is queued; `inflight` and `requests` no longer hold the path.
+**Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md#1.4.3
+
+## Test: request intent recorded from the payload (DB integration)
+**Purpose:** `onBloodhoundCLIRequest` reads the request doc once and sets
+`requests[path].raw` iff the payload carries `curate: false` (R3038); the submit
+time is stamped for the reap clock.
+**Input:** `setupConnections` DB, fake-hub owner "S", empty pool (room, so it queues
+a stand-up and does not route); `BloodhoundCLIOpen` with a `curate: false` payload,
+then `onBloodhoundCLIRequest(path)`; separately, a payload without the marker.
+**Expected:** `requests[path].raw` is true for the first, false for the second; both
+have a non-zero `submitted`.
+**Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md#1.2
+
+## Test: raw relay writes the result doc from raw findings (DB integration)
+**Purpose:** for a raw request, `onBloodhoundCLIReturn` → `relayRawResult` writes
+`tmp://BLOODHOUND-CLI-RESULT/<id>` from the request doc's `## Raw findings`, tags it
+`@ark-bloodhound-cli-result: <id>` (WITH COLON), drops the request doc, and queues no
+curation (R3039, R3040).
+**Input:** `setupConnections` DB; `BloodhoundCLIOpen` → `enhanceRequestDoc` → one
+`FindingItem` → `CloseResult(id)` (so the request doc holds `## Raw findings`);
+`requests[path] = {raw: true}`; `onBloodhoundCLIReturn(path)`.
+**Expected:** the result doc's first line is `@ark-bloodhound-cli-result: <id>`; its
+body contains the finding loc from `## Raw findings`; the request doc is gone; no
+`curation` work queued. Driven through `BloodhoundCLIResult`, the returned text is
+the raw findings with the head tag stripped.
+**Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md#1.4.3
+
+## Test: reap drops a request past its TTL
+**Purpose:** the sweep reaps a `requests` entry older than `request_ttl_seconds`,
+dropping it from `requests` and `pending` (R3041); a fresh request is untouched.
+**Input:** fake-hub `RecallWatcher`, db==nil; `requests[stale] = {submitted: now-1000s}`
+with `pending=[stale]`, and `requests[fresh] = {submitted: now}` with `pending+=[fresh]`;
+`sweepRequests()`.
+**Expected:** `stale` is gone from `requests` and `pending`; `fresh` remains in both.
+**Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md#2.1.2
+
+## Test: re-issue re-pushes a stand-up for a stranded request
+**Purpose:** the sweep re-pushes one `stand up another` for a request pending past the
+re-issue threshold while the pool has room (R3042); it does not when the pool is full,
+nor for a request under the threshold.
+**Input:** fake-hub owner "S". (a) `requests[path]={submitted: now-100s}`, `pending=[path]`,
+empty pool; `sweepRequests()`. (b) same but pool at `pool_max` (3 busy). (c) a request
+`submitted: now` under the threshold, empty pool.
+**Expected:** (a) exactly one `stand-up`/`bloodhound` directive queued; (b) none (no
+room); (c) none (under threshold).
+**Refs:** crc-RecallWatcher.md, seq-bloodhound-cli.md#2.1.3

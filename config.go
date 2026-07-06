@@ -115,8 +115,15 @@ type LuhmannClass struct {
 
 	// CooldownSeconds is how long a pooled-class secretary that has
 	// returned to idle stays warm before it is eligible for a stop-one
-	// directive (damps spawn/stop churn). Default 120. R3018
+	// directive (damps spawn/stop churn). Default 600. R3018
 	CooldownSeconds *int `toml:"cooldown_seconds,omitempty"`
+
+	// RequestTTLSeconds is the reap TTL for a stranded CLI-bloodhound
+	// request: the watcher drops a request older than this (a client that
+	// hit --timeout and exited). Read by the watcher, not Luhmann. Default
+	// 900 — generously longer than a typical --timeout so a live client is
+	// never reaped. R3041
+	RequestTTLSeconds *int `toml:"request_ttl_seconds,omitempty"`
 }
 
 // EffectiveContextLimit returns ContextLimit with the default applied.
@@ -176,13 +183,23 @@ func (lc LuhmannConfig) EffectivePoolMax(name string) int {
 }
 
 // EffectiveCooldownSeconds returns the named class's cooldown_seconds with
-// default 120. R3018
+// default 600 (warm enough for interactive-burst reuse). R3018
 // CRC: crc-Config.md | R3018
 func (lc LuhmannConfig) EffectiveCooldownSeconds(name string) int {
 	if c, ok := lc.Classes[name]; ok && c.CooldownSeconds != nil {
 		return *c.CooldownSeconds
 	}
-	return 120
+	return 600
+}
+
+// EffectiveRequestTTLSeconds returns the named class's request_ttl_seconds with
+// default 900 — the watcher's reap TTL for a stranded CLI-bloodhound request.
+// CRC: crc-Config.md | R3041
+func (lc LuhmannConfig) EffectiveRequestTTLSeconds(name string) int {
+	if c, ok := lc.Classes[name]; ok && c.RequestTTLSeconds != nil {
+		return *c.RequestTTLSeconds
+	}
+	return 900
 }
 
 // RecallConfig collects the [recall] section of ark.toml.

@@ -285,6 +285,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-LuhmannCLI.md → `luhmann_next_test.go`
 - [x] test-BloodhoundCLIFixer.md → `bloodhound_cli_test.go`
+- [x] test-BloodhoundCLI.md → `cmd/ark/bloodhound_cli_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
@@ -792,3 +793,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O139: specs/spectral-search.md still describes the dead Gen-1 claude --print co-process (§The Librarian, §Endpoints, §Searching Directory, §Availability); supersede-at-source spec-prose fix DEFERRED per Bill 2026-07-03 (leave the spec intact until the Gen-2 sidecar is removed). The retired reqs (T227-T239) already forward, and the code is the sidecar, so the trap is low-risk. Reconcile when the sidecar is torn out.
 - [ ] O140: Full spectral->bloodhound: remove the live Gen-2 expansion sidecar (Librarian ExpandRequest queue, /search/curate + /search/expand endpoints, cmd/ark/main.go:1632-1759 CLI family, ark-expansion agent, search-expansion skill), retire R1246/R1270-R1273/R1378-R1383/R1248-R1252 to the bloodhound, and fold+retire spectral-search.md. DEFERRED per Bill 2026-07-03 as its own slice (a real feature removal; bloodhound does not yet replace the tag-search-panel expansion role in code).
 - [ ] O141: CLI-bloodhound result docs (tmp://BLOODHOUND-CLI-RESULT/<id>) linger until server restart — no clean signal for when the waiting CLI has read the result, so BloodhoundCLIAddDone removes the request doc but not the result doc. tmp:// is per-process (wiped on restart) and each doc is small, so this is minor; add a TTL/reaper if it ever matters. (bloodhound-CLI S4, R3027)
+- [ ] O142: sweepRequests reap is pending-only (R3041): a request whose secretary crashes mid-hunt leaves its cliPool.requests entry + request doc until a server bounce — DeregisterPoolSecretary drops the secretary+inflight but not the request record, and the reap never scans in-flight/orphaned requests. Bounded (crash-only, rare) and cleared on bounce; mid-flight-hunt recovery is out of scope per R3034. Deliberate, not an oversight.

@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -62,7 +62,10 @@ composes and writes each curation doc via the in-process
   docs keyed by `<id>`. The watcher marks a secretary busy on
   dispatch and free on return; Luhmann owns the spawn/stop lifecycle
   (crc-LuhmannCLI.md). In-memory; a bounce drops it and the CLI's
-  `--wait` re-drives the hunt.
+  `--wait` re-drives the hunt. Also holds `requests`: a
+  path→`cliRequest{submitted, raw}` map recording each hunt's submit
+  time (the reap clock, R3041) and its `--raw` curate-intent (R3038),
+  set when the request first arrives and read at the return hop.
 
 ## Does
 - Enabled() bool: true when `db.Config().Recall.Enabled` is
@@ -195,7 +198,7 @@ composes and writes each curation doc via the in-process
   - Log `fired` decision with section/candidate/discussed
     counts and the fire number (R2713).
 
-### CLI-hunt Fixer (R3020, R3023–R3025, R3030, R3031)
+### CLI-hunt Fixer (R3020, R3023–R3025, R3030, R3031, R3038, R3039, R3041, R3042)
 The watcher is the **Fixer** for external-CLI hunts
 ([bloodhound-cli.md](../specs/bloodhound-cli.md)): distinct from the
 OnAppend-driven ambient/in-session paths above, it **subscribes to two
@@ -205,7 +208,11 @@ deterministic Go.
 
 - **On `@ark-bloodhound-cli`** (a new request doc; R3023): gate on a live
   Luhmann first — if `luhmannOwner` is empty (no orchestrator), do not
-  schedule, and the CLI reports orchestrator-not-running (R3020). Then
+  schedule, and the CLI reports orchestrator-not-running (R3020). **Record
+  the request** in `cliPool.requests` with its submit time and its `raw`
+  intent — read the doc once and set `raw` iff the payload carries `curate:
+  false` (R3038); the body is overwritten at the enhance/close hops, so the
+  intent must be captured now, in memory. Then
   **enhance** the request doc into a standard bloodhound task doc, reusing
   the in-session seed machinery — run `librarian.Recall` (R3006), render
   the `## Recall seed`, and add the search crank handle (R2938) — so a
@@ -221,10 +228,16 @@ deterministic Go.
 - **On `@ark-bloodhound-cli-return`** (a secretary re-tagged the request
   doc with its raw results; R3024): **free the secretary** — mark it
   idle-in-cooldown in `cliPool`, occupancy freed *before* curation; only
-  past `cooldown_seconds` is it eligible for a *stop one*. Then **route to
-  curation** — push the request-doc path onto Luhmann's `nextQueue` as a
-  curation task (R3025). No doc-tag hop: the watcher → Luhmann hand-off is
-  the in-process queue.
+  past `cooldown_seconds` is it eligible for a *stop one*. Then **branch on
+  the recorded `raw` intent** (R3039): for a **curated** request (default)
+  push the request-doc path onto Luhmann's `nextQueue` as a curation task
+  (R3025, no doc-tag hop); for a **raw** request skip Luhmann entirely and
+  `relayRawResult` — write the result doc `tmp://BLOODHOUND-CLI-RESULT/<id>`
+  directly from the request doc's `## Raw findings` (head tag
+  `@ark-bloodhound-cli-result: <id>`, reusing `bloodhoundCLIResultPath`),
+  then drop the request doc. Either way the request's `cliPool.requests`
+  entry is cleared. The branch decides *who curates*, never occupancy — the
+  secretary was already freed above.
 - **Atomic baton** (R3031): the request → `@ark-secretary-work` re-tag the
   watcher performs appends its content (seed + crank handle) and rewrites
   the tag in one write-actor flush, so the secretary never wakes on a
@@ -240,6 +253,23 @@ deterministic Go.
   idempotently. Without the deregister, a secretary that exits on its own
   context limit would linger in the roster — miscounting `pool_max` and
   drawing hunts to a dead tube — until the cooldown prune swept it.
+- **Reap + re-issue sweep** (R3041, R3042): the existing `pruneLoop` ticker
+  (`bloodhoundPruneInterval`) also runs a request sweep, since both recovery
+  points are time-based and nothing event-driven wakes the watcher for a
+  stranded request. Each pass: (1) `pump()` — re-attempt routing in case a
+  free secretary was missed; (2) **reap** — for each `cliPool.requests` entry
+  older than `request_ttl_seconds` (R3041), drop it from `requests` /
+  `pending` and remove its request doc (the CLI hit `--timeout` and exited —
+  no clean abandonment signal, so TTL is the trigger; the TTL is generous so
+  a live client is never reaped); (3) **re-issue** — if a request has sat
+  pending, unrouted, past a re-issue threshold while the pool has room
+  (`len(secretaries) < pool_max`), push one *stand up another* directive
+  (R3042), recovering a stand-up Luhmann dropped (drift / garbled tool call —
+  the R3036 re-launch-first failure class). Bounded by `pool_max` and
+  at-most-one stand-up per pass, so it never over-spawns. Both operate only on
+  **pending** requests — an in-flight request is bounded by the secretary
+  lifecycle (return, or crash→deregister), so the sweep never races a live
+  secretary's write.
 
 ## Out of scope
 - ~~No subscriber liveness check before emit (R2714)~~ — gates added

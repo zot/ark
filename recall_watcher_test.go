@@ -55,12 +55,16 @@ func TestTruncateUTF8(t *testing.T) {
 	}
 }
 
-// R2731, R2732 — per-line JSON scan picks up turn_duration and
-// user signals; "userType" inside other records doesn't false-trip.
+// R2731, R2732, R3009 — per-line JSON scan picks up turn_duration and
+// *genuine* user signals; "userType" inside other records doesn't false-trip,
+// and a user record without the positive origin.kind=="human" marker (R3009)
+// yields no signal (an origin-less line stands in for a tool-result / injected
+// wake turn — counting it would re-arm the recall ping-pong).
 func TestScanNewBytes_Signals(t *testing.T) {
 	input := []byte(`{"type":"assistant","content":"hi"}
 {"type":"system","subtype":"turn_duration","durationMs":12,"userType":"external"}
-{"type":"user","message":{"content":"hello"}}
+{"type":"user","message":{"content":"injected wake"}}
+{"type":"user","message":{"content":"hello"},"origin":{"kind":"human"}}
 {"type":"tool_use","name":"Bash"}
 `)
 	got := scanNewBytes(input)
@@ -78,9 +82,9 @@ func TestScanNewBytes_Signals(t *testing.T) {
 func TestScanNewBytes_PartialTrailingLine(t *testing.T) {
 	// Unterminated trailing line — scanner attempts a parse and
 	// silently skips when the JSON is incomplete. The complete line is
-	// a genuine user message (content is a JSON string, no origin —
-	// R2732) so it yields signalUser.
-	input := []byte(`{"type":"user","message":{"content":"hi"}}` + "\n" + `{"type":"sys`)
+	// a genuine user message (string content + the positive
+	// origin.kind=="human" marker, R3009) so it yields signalUser.
+	input := []byte(`{"type":"user","message":{"content":"hi"},"origin":{"kind":"human"}}` + "\n" + `{"type":"sys`)
 	got := scanNewBytes(input)
 	if len(got) != 1 || got[0] != signalUser {
 		t.Errorf("scanNewBytes partial: got %v want [signalUser]", got)

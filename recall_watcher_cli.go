@@ -33,9 +33,15 @@ const (
 	bloodhoundCLIResultTag    = "ark-bloodhound-cli-result" // value-scoped by hunt id; wakes the waiting CLI (R3028)
 	bloodhoundCLIListenWindow = 5 * time.Second
 	// bloodhoundPruneInterval is how often the Fixer scans for pool secretaries
-	// idle past their cooldown to retire (R3019). Independent of the per-class
+	// idle past their cooldown to retire (R3019), and the same tick drives the
+	// request sweep (reap + re-issue, R3041/R3042). Independent of the per-class
 	// cooldown_seconds, which is the warmth window each secretary must exceed.
 	bloodhoundPruneInterval = 30 * time.Second
+	// bloodhoundReissueThreshold is how long a request may sit pending and
+	// unrouted before the sweep re-pushes a stand-up to recover a directive
+	// Luhmann dropped (R3042). Shorter than request_ttl_seconds, so a stranded
+	// request gets a re-issue attempt well before it is reaped.
+	bloodhoundReissueThreshold = 60 * time.Second
 )
 
 // poolSec is one pool secretary's roster entry, keyed by its reserved nonce
@@ -47,20 +53,33 @@ type poolSec struct {
 	idleSince time.Time
 }
 
+// cliRequest is the per-hunt state the Fixer records when a request first
+// arrives: its submit time (the reap clock, R3041) and whether the client asked
+// to skip curation (`--raw` → curate:false, R3038). Kept in memory because the
+// request doc's body is overwritten at the enhance/close hops, so the intent
+// cannot survive there.
+type cliRequest struct {
+	submitted time.Time
+	raw       bool
+}
+
 // cliPool is the watcher's roster of CLI-bloodhound pool secretaries plus the
-// pending-hunt queue and the in-flight path→nonce map. Everything under mu.
-// In-memory; a server bounce drops it and the CLI's --wait re-drives. R3023, R3024
+// pending-hunt queue, the in-flight path→nonce map, and the per-request record.
+// Everything under mu. In-memory; a server bounce drops it and the CLI's --wait
+// re-drives. R3023, R3024, R3038, R3041
 type cliPool struct {
 	mu          sync.Mutex
-	secretaries map[uint64]*poolSec // nonce → state
-	inflight    map[string]uint64   // request-doc path → the nonce running it
-	pending     []string            // request-doc paths awaiting a free secretary
+	secretaries map[uint64]*poolSec    // nonce → state
+	inflight    map[string]uint64      // request-doc path → the nonce running it
+	pending     []string               // request-doc paths awaiting a free secretary
+	requests    map[string]*cliRequest // request-doc path → submit time + raw intent
 }
 
 func newCLIPool() *cliPool {
 	return &cliPool{
 		secretaries: make(map[uint64]*poolSec),
 		inflight:    make(map[string]uint64),
+		requests:    make(map[string]*cliRequest),
 	}
 }
 
@@ -97,9 +116,19 @@ func (w *RecallWatcher) poolMax() int {
 // a Duration — the warmth window an idle secretary must exceed before pruning.
 func (w *RecallWatcher) cooldown() time.Duration {
 	if w == nil || w.db == nil {
-		return 120 * time.Second
+		return 600 * time.Second
 	}
 	return time.Duration(w.db.Config().Luhmann.EffectiveCooldownSeconds(bloodhoundPoolClass)) * time.Second
+}
+
+// requestTTL reads the live [luhmann].class.bloodhound.request_ttl_seconds
+// (R3041) as a Duration — the reap window past which a stranded request (the
+// client hit --timeout and exited) is dropped.
+func (w *RecallWatcher) requestTTL() time.Duration {
+	if w == nil || w.db == nil {
+		return 900 * time.Second
+	}
+	return time.Duration(w.db.Config().Luhmann.EffectiveRequestTTLSeconds(bloodhoundPoolClass)) * time.Second
 }
 
 // startFixer subscribes the Fixer to the request/return tags and launches its
@@ -130,6 +159,7 @@ func (w *RecallWatcher) pruneLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		w.prune()
+		w.sweepRequests() // R3041/R3042: reap stranded requests, re-issue dropped stand-ups
 	}
 }
 
@@ -185,11 +215,26 @@ func (w *RecallWatcher) onBloodhoundCLIRequest(path string) {
 		Logv(1, "bloodhound-cli: no Luhmann owner; %s left pending", path)
 		return
 	}
+	// R3038: read the request doc once and record the curate intent — the body is
+	// overwritten at enhance/close, so --raw (curate:false) must be captured now,
+	// in memory. A nil db (unit tests) or a read miss defaults to curated.
+	raw := false
+	if w.db != nil {
+		if content, err := w.db.TmpContent(path); err == nil {
+			for _, line := range strings.Split(string(content), "\n") {
+				if strings.TrimSpace(line) == "curate: false" {
+					raw = true // R3038: a dedicated marker line, not a clue substring
+					break
+				}
+			}
+		}
+	}
 	w.pool.mu.Lock()
 	w.pool.pending = append(w.pool.pending, path)
+	w.pool.requests[path] = &cliRequest{submitted: time.Now(), raw: raw} // R3038, R3041
 	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax()
 	w.pool.mu.Unlock()
-	Logv(1, "bloodhound-cli: request %s (stand-up=%v)", path, needStandUp)
+	Logv(1, "bloodhound-cli: request %s (raw=%v stand-up=%v)", path, raw, needStandUp)
 	if needStandUp {
 		// R3023: none free, room in the pool → ask Luhmann to stand one up.
 		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "directive", Directive: "stand-up", Class: bloodhoundPoolClass})
@@ -209,14 +254,116 @@ func (w *RecallWatcher) onBloodhoundCLIReturn(path string) {
 			sec.idleSince = time.Now() // cooldown clock starts
 		}
 	}
+	req := w.pool.requests[path]
+	delete(w.pool.requests, path) // R3039: the hunt is resolved either way
 	w.pool.mu.Unlock()
-	if w.luhmann != nil {
+
+	// R3039: branch on the recorded curate intent. Raw skips Luhmann entirely —
+	// the watcher relays the secretary's uncurated findings straight to the result
+	// doc; curated (default) routes to Luhmann for the discernment step.
+	if req != nil && req.raw {
+		if err := w.relayRawResult(path); err != nil {
+			log.Printf("bloodhound-cli: raw relay %s failed: %v", path, err)
+		}
+	} else if w.luhmann != nil {
 		// R3024, R3025: hand the raw finding to Luhmann for curation (in-process,
 		// no tag hop). If the queue is full the curation is dropped — the CLI's
 		// --timeout bounds the wait; a bounce re-drives the whole hunt.
 		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "curation", Path: path})
 	}
 	w.pump()
+}
+
+// relayRawResult is the raw branch of the return hop (R3039, R3040): it writes
+// the result doc tmp://BLOODHOUND-CLI-RESULT/<id> directly from the request
+// doc's ## Raw findings — the secretary's own uncurated markdown, already the
+// Baby Food an agent reads — tags it @ark-bloodhound-cli-result: <id> (WITH
+// COLON, so the waiting CLI's subscription wakes), and drops the request doc.
+// The mirror of BloodhoundCLIAddDone's curated write, but with no Luhmann in the
+// loop. Best-effort: a nil db (unit tests) is a no-op.
+// CRC: crc-RecallWatcher.md | Seq: seq-bloodhound-cli.md#1.4.3 | R3039, R3040
+func (w *RecallWatcher) relayRawResult(path string) error {
+	if w.db == nil {
+		return nil
+	}
+	id := cliRequestID(path)
+	data, err := w.db.TmpContent(path)
+	if err != nil {
+		return err
+	}
+	// Relay only the ## Raw findings body; an absent section (shouldn't happen —
+	// the secretary always writes it) yields a "(no findings)" body.
+	findings := "(no findings)\n"
+	if i := strings.Index(string(data), "## Raw findings"); i >= 0 {
+		if body := strings.TrimSpace(string(data)[i+len("## Raw findings"):]); body != "" {
+			findings = body + "\n"
+		}
+	}
+	body := "@" + bloodhoundCLIResultTag + ": " + id + "\n\n" + findings
+	if err := SyncVoid(w.db, func(db *DB) error {
+		_, e := db.AddTmpFile(bloodhoundCLIResultPath(id), "markdown", []byte(body))
+		return e
+	}); err != nil {
+		return err
+	}
+	// The request doc has served its purpose; drop it (mirrors BloodhoundCLIAddDone).
+	_ = SyncVoid(w.db, func(db *DB) error {
+		return db.RemoveTmpFile(path)
+	})
+	return nil
+}
+
+// sweepRequests is the periodic request maintenance the pruneLoop drives
+// (R3041/R3042): re-attempt routing, reap requests the client abandoned, and
+// re-issue a stand-up for a request stranded by a dropped directive. Operates
+// only on pending requests — an in-flight one is bounded by the secretary
+// lifecycle, so the sweep never races a live secretary's write.
+// CRC: crc-RecallWatcher.md | Seq: seq-bloodhound-cli.md#2.1 | R3041, R3042
+func (w *RecallWatcher) sweepRequests() {
+	if w == nil {
+		return
+	}
+	// 2.1.1: a free secretary may have been missed by an earlier pump.
+	w.pump()
+
+	ttl := w.requestTTL()
+	var reap []string
+	standUp := false
+	w.pool.mu.Lock()
+	// 2.1.2 reap: a pending request older than the TTL — the client hit --timeout
+	// and exited. Drop it from requests + pending; its doc is removed below.
+	kept := w.pool.pending[:0]
+	for _, path := range w.pool.pending {
+		if req := w.pool.requests[path]; req != nil && time.Since(req.submitted) > ttl {
+			reap = append(reap, path)
+			delete(w.pool.requests, path)
+			continue
+		}
+		kept = append(kept, path)
+	}
+	w.pool.pending = kept
+	// 2.1.3 re-issue: any surviving request pending past the threshold, with room
+	// in the pool, earns one stand-up to recover a directive Luhmann dropped.
+	if w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax() {
+		for _, path := range w.pool.pending {
+			if req := w.pool.requests[path]; req != nil && time.Since(req.submitted) > bloodhoundReissueThreshold {
+				standUp = true
+				break
+			}
+		}
+	}
+	w.pool.mu.Unlock()
+
+	for _, path := range reap {
+		Logv(1, "bloodhound-cli: reaped stranded request %s", path)
+		if w.db != nil {
+			_ = SyncVoid(w.db, func(db *DB) error { return db.RemoveTmpFile(path) })
+		}
+	}
+	if standUp && w.luhmann != nil && w.luhmann.LuhmannOwner() != "" {
+		Logv(1, "bloodhound-cli: re-issuing a dropped stand-up for a stranded request")
+		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "directive", Directive: "stand-up", Class: bloodhoundPoolClass})
+	}
 }
 
 // pump routes queued hunts to free secretaries — the single "route when ready"

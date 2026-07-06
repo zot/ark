@@ -121,7 +121,8 @@ ambient watcher.
 | `backoff_seconds`                | []int    | `[1, 5, 30]`  | Seconds to wait between successive crash respawns. Final value applies to attempts beyond the list length, up to `crash_pause_after`.                | `luhmann.md`   |
 | `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this subagent class (e.g. `class.recall.enabled`).                                                              | `luhmann.md`   |
 | `class.<NAME>.pool_max`          | int      | `3`           | Max concurrent pool secretaries the orchestrator stands up for a pooled class (the CLI-bloodhound pool, `class.bloodhound.pool_max`).                | `bloodhound-cli.md` |
-| `class.<NAME>.cooldown_seconds`  | int      | `120`         | How long a returned-to-idle pool secretary stays warm before it is eligible for a stop-one directive (damps spawn/stop churn).                       | `bloodhound-cli.md` |
+| `class.<NAME>.cooldown_seconds`  | int      | `600`         | How long a returned-to-idle pool secretary stays warm before it is eligible for a stop-one directive (damps spawn/stop churn; warm enough that follow-up hunts in an interactive burst reuse it).      | `bloodhound-cli.md` |
+| `class.<NAME>.request_ttl_seconds` | int    | `900`         | Reap TTL for a stranded CLI-bloodhound request — the watcher drops a request older than this (a client that hit `--timeout` and exited). Generously longer than a typical `--timeout` so a live client is never reaped. | `bloodhound-cli.md` |
 
 ## `[schedule]` — scheduling feature
 

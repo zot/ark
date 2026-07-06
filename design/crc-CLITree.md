@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -100,8 +100,8 @@ CLITree owns how those bodies are *reached* and how their help is
 - Bloodhound + `luhmann next` nodes (R3010, R3021, R3022, R3027, R3029):
   post-migration growth added as tree nodes like any other. A new `ark
   bloodhound` group in `cmd/ark/bloodhound_cli.go` carries `search
-  TERMS... [--wait] [--timeout S]` (create the request doc + subscribe +
-  block + print JSONL, R3021/R3022/R3029) and `add --result --loc --note
+  TERMS... [--wait] [--timeout S] [--raw] [--markdown]` (create the request
+  doc + subscribe + block + print, R3021/R3022/R3029) and `add --result --loc --note
   [--chunk] | --result --done` (Luhmann's result stencil — one curated JSON
   line per call, `--done` writes the result doc + flips its tag, R3027). A new `next --session S
   [--first|--force] [--keepalive N]` node joins the existing `luhmann`
@@ -109,6 +109,17 @@ CLITree owns how those bodies are *reached* and how their help is
   its declarations; the `search` and `next` blocking bodies own their
   stubborn-plumbing redial (crc-CLI.md) — CLITree only routes and generates
   their help.
+- Bloodhound search **output modes** (R3037, R3038, R3040): `search` picks
+  its output client-side from the flag it sent — the server returns the
+  result-doc body either way (crc-Server.md), the CLI just formats it. Default
+  prints the curated JSONL verbatim; `--markdown` unmarshals that JSONL into a
+  local `{path,range,note,chunk}` mirror (the wire shape, not an imported type —
+  the CLI stays a thin client) and renders a locator list `- \`path:range\` —
+  note` with the `chunk` as a blockquote, "no findings" when empty (R3037);
+  `--raw` sets `curate: false` in the submitted payload so the watcher relays the
+  secretary's *uncurated* findings (already markdown) which the CLI prints
+  verbatim — redundant with `--markdown` (R3038, R3040). Pure formatting +
+  one payload marker; no new server route, no protocol change.
 
 ## Collaborators
 - CLI (crc-CLI.md): owns the command bodies the `Action`s call; CLITree

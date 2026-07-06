@@ -265,13 +265,13 @@ External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.m
 Both subcommands require `ark serve` **and** a running Luhmann orchestrator.
 
 ```
-ark bloodhound search CLUE... [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS]
+ark bloodhound search CLUE... [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
 ```
 
-**`search`** — submit a directed hunt and print the curated findings as JSONL
-(one object per line; an empty hunt prints nothing and exits 0). The whole
+**`search`** — submit a directed hunt and print the findings (default: curated
+JSONL, one object per line; an empty hunt prints nothing and exits 0). The whole
 protocol (request doc, tag baton, pool secretary, Luhmann curation) is hidden
 behind the one command (Batteries Included).
 
@@ -281,7 +281,9 @@ behind the one command (Batteries Included).
 | `--depth D`    | `lookup`     | `lookup` (one pass) \| `investigate` (tune until the stop condition)     |
 | `--want W`     | `passages`   | `answer` \| `passages` \| …                                             |
 | `--wait`       | `false`      | block stubbornly on a busy pool / server bounce instead of failing fast |
-| `--timeout N`  | `300`        | seconds to wait for the curated result                                  |
+| `--timeout N`  | `300`        | seconds to wait for the result                                          |
+| `--raw`        | `false`      | skip Luhmann curation: return the secretary's own findings (markdown, Baby Food for agents) — you curate in your own context |
+| `--markdown`   | `false`      | render the curated findings as a markdown locator list instead of JSONL (client-side; redundant with `--raw`) |
 
 **`add`** — Luhmann's result stencil (one curated item per call), plus the
 terminal `--done` that writes the result doc and wakes the waiting CLI. Not for
