@@ -15,6 +15,8 @@ import (
 func cmdChats(args []string) {
 	fs := flag.NewFlagSet("chats", flag.ExitOnError)
 	withTools := fs.Bool("with-tools", false, "display tool calls and results")
+	thinking := fs.Bool("thinking", false, "display chain-of-thought (thinking) blocks")
+	all := fs.Bool("all", false, "display everything: tools + thinking + sidechain")
 	sidechain := fs.Bool("sidechain", false, "display sidechain chatter")
 	wrap := fs.String("wrap", "", "wrap output with a name tag")
 	lineLen := fs.Int("line-length", 100, "word-wrap line length")
@@ -53,8 +55,14 @@ Examples:
 		fmt.Printf("<%s>\n", *wrap)
 	}
 
+	// R3035: --all is a convenience for the complete transcript — it enables
+	// tools, thinking, and sidechain together.
+	showTools := *withTools || *all
+	showThinking := *thinking || *all
+	showSidechain := *sidechain || *all
+
 	for _, path := range files {
-		if err := renderChat(path, *withTools, *lineLen, *sidechain); err != nil {
+		if err := renderChat(path, showTools, showThinking, *lineLen, showSidechain); err != nil {
 			fmt.Fprintf(os.Stderr, "error reading %s: %v\n", path, err)
 		}
 	}
@@ -102,16 +110,18 @@ type messageContent struct {
 }
 
 type contentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	Thinking string          `json:"thinking,omitempty"` // R3035: chain-of-thought block
+	Name     string          `json:"name,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"`
 }
 
 // renderChat reads a JSONL file and prints a human-readable transcript.
-// CRC: crc-CLI.md | R1045, R1047, R1049 — ❯ user / ● assistant markers,
-// --with-tools shows ⚙ tool calls, sidechain (subagent) records filtered out
-func renderChat(path string, withTools bool, lineLen int, sidechain bool) error {
+// CRC: crc-CLI.md | R1045, R1047, R1049, R3035 — ❯ user / ● assistant markers,
+// --with-tools shows ⚙ tool calls, --thinking shows ✻ chain-of-thought,
+// sidechain (subagent) records filtered out unless requested
+func renderChat(path string, withTools, withThinking bool, lineLen int, sidechain bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -154,6 +164,13 @@ func renderChat(path string, withTools bool, lineLen int, sidechain bool) error 
 				case "text":
 					if b.Text != "" {
 						printWrapped("●", b.Text, lineLen)
+						fmt.Println()
+					}
+				case "thinking":
+					// R3035: chain-of-thought, off by default (verbose). The
+					// corpus already indexes it; this restores display parity.
+					if withThinking && b.Thinking != "" {
+						printWrapped("✻", b.Thinking, lineLen)
 						fmt.Println()
 					}
 				case "tool_use":

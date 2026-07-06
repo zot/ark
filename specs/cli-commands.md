@@ -47,7 +47,7 @@ otherwise emit a different order each run). R2953.
 | `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | external directed hunts against the warm bloodhound (subcommands below) |
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
-| `chats`            | `chats GLOB [--with-tools] [--sidechain] [--wrap N] [--line-length N]`                                               | none                     | walks `~/.claude/projects/`                          |
+| `chats`            | `chats GLOB [--with-tools] [--thinking] [--all] [--sidechain] [--wrap N] [--line-length N]`                          | none                     | walks `~/.claude/projects/`                          |
 | `chunks`           | `chunks CHUNKID [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE:"SNIPPET" [-wrap N]` <br> `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]` | optional                 | `CHUNKID` resolves via `db.ChunkInfo`; `PATH:RANGE` accepts `NN` and `NN-MM` range labels; `PATH:RANGE:"SNIPPET"` is the recall chat sub-chunk locator (R2914) — returns the matched paragraph; drop the snippet for the whole turn |
 | `chunk-chat-jsonl` | `chunk-chat-jsonl FILE`                                                                                              | n/a                      | internal chunker (microfts2 protocol)                |
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
@@ -333,6 +333,8 @@ ark chats GLOB [options]
 | Flag              | Default | Meaning                                  |
 |-------------------|---------|------------------------------------------|
 | `--with-tools`    | `false` | Render tool calls and results            |
+| `--thinking`      | `false` | Render chain-of-thought (thinking) blocks as `✻ …` |
+| `--all`           | `false` | Complete transcript: `--with-tools` + `--thinking` + `--sidechain` |
 | `--sidechain`     | `false` | Include subagent traffic                 |
 | `--wrap NAME`     | —       | Wrap entire output in `<NAME>...</NAME>` |
 | `--line-length N` | `100`   | Word-wrap column                         |

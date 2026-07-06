@@ -1559,6 +1559,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1048:** `--wrap NAME` surrounds output with `<NAME>...</NAME>` tags
 - **R1049:** Sidechain messages (subagent traffic) filtered out
 - **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
+- **R3035:** `--thinking` renders assistant thinking (chain-of-thought) blocks inline as `✻ ...`, off by default; `--all` enables tools + thinking + sidechain together for a complete transcript. The chunker (`extractJSONLTextFast`) extracts the same `thinking` field, so display and index agree — but Claude Code stopped persisting thinking text ~2026-04 (signature-only since; see `.scratch/CHAT-THINKING-REDACTION-20260705.md`), so both carry reasoning only for pre-May transcripts. `--thinking` is thus effectively an archive reader for that window.
 
 ## Feature: Schedule Lifecycle
 **Source:** specs/schedule-lifecycle.md

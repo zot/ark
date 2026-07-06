@@ -98,6 +98,8 @@ func flatCommands() []*ucli.Command {
 			Name: "chats", Usage: "show conversation transcripts from JSONL logs", ArgsUsage: "[PATH...]",
 			Flags: []ucli.Flag{
 				&ucli.BoolFlag{Name: "with-tools", Usage: "display tool calls and results"},
+				&ucli.BoolFlag{Name: "thinking", Usage: "display chain-of-thought (thinking) blocks"},
+				&ucli.BoolFlag{Name: "all", Usage: "display everything: tools + thinking + sidechain"},
 				&ucli.BoolFlag{Name: "sidechain", Usage: "display sidechain chatter"},
 				&ucli.StringFlag{Name: "wrap", Usage: "wrap output with a name tag"},
 				&ucli.IntFlag{Name: "line-length", Value: 100, Usage: "word-wrap line length"},
@@ -210,6 +212,12 @@ func flatChatsAction(_ context.Context, c *ucli.Command) error {
 	a := []string{"--line-length", strconv.Itoa(c.Int("line-length"))}
 	if c.Bool("with-tools") {
 		a = append(a, "--with-tools")
+	}
+	if c.Bool("thinking") {
+		a = append(a, "--thinking")
+	}
+	if c.Bool("all") {
+		a = append(a, "--all")
 	}
 	if c.Bool("sidechain") {
 		a = append(a, "--sidechain")
