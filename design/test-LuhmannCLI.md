@@ -82,3 +82,14 @@ rather than a spurious work/keepalive return (R3010).
 **Input:** owned `Server`, empty `nextQueue`, an already-cancelled ctx, long keepalive.
 **Expected:** non-nil error (context cancelled).
 **Refs:** crc-LuhmannCLI.md
+
+## Test: work crank handles lead with re-launch-first
+**Purpose:** R3036 — every work crank handle (curation, stand-up, stop) must LEAD
+with the backgrounded re-launch instruction, ahead of the work-specific content, so
+a mid-work drift can't kill the loop.
+**Input:** `luhmannWorkPrompt("S", w, "raw results")` for each of curation, stand-up,
+and stop work items.
+**Expected:** each body contains "re-launch the seat" + "backgrounded", and that
+instruction's index precedes the work marker ("bloodhound add" / "stand up another" /
+"exit-record").
+**Refs:** crc-LuhmannCLI.md

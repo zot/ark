@@ -138,9 +138,19 @@ them, and — for curation — to bring the discernment a Haiku can't.
 
 Always `run_in_background: true`: `next` blocks up to ~45 min (a
 keepalive window sized to your prompt cache, not the 90 s a foreground
-subagent uses), and you must stay conversational. After each return,
-handle it, then run `next` again — backgrounded — to keep the seat
-warm. Never poll, never narrate the waiting.
+subagent uses), and you must stay conversational.
+
+**Re-launch-first — this is the rule that keeps the seat alive.** The
+instant a `next` returns, your *very first* action is to fire the next
+one (`run_in_background: true`) — **before** you touch the work it
+handed you. The crank handle tells you this too; do it even so. Why it
+matters: the loop's life must not depend on your finishing the work
+cleanly. Re-launch first and a garbled tool call or a stalled step
+mid-work cannot kill the seat — its successor is already blocking, and
+it will hand you the next item when you're done. Re-launch *last* (the
+old habit) means any drift before you re-invoke drops the loop for
+good, with nothing left to restart it. Never poll, never narrate the
+waiting.
 
 ### The four returns
 

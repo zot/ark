@@ -130,10 +130,16 @@ Cold-start. No server required.
 The orchestrator's **drain tube**: one blocking verb Luhmann pops in a
 loop to receive everything the recall service pushes at it. It is
 launched `run_in_background` so the orchestrator stays conversational and
-keeps supervising while it waits; on completion Claude Code re-injects
-the result, Luhmann acts on it, and re-invokes `next`. This is the
-established background-lotto-tube shape, the same family as `ark
-connections recall next` and the `/ui` skill's `{cmd} event` listener.
+keeps supervising while it waits. On completion Claude Code re-injects
+the result; Luhmann then **re-invokes `next` first — before acting on the
+work it carries** — so a stalled or garbled work turn can never leave the
+seat undrained (the successor `next` is already blocking, ready to hand
+back the following item once the work finishes). Loop continuity comes
+from re-launching at the *front* of each turn, not the tail; the work
+crank handles lead with this instruction and the `/luhmann` skill teaches
+it (R3036). This is the established background-lotto-tube shape, the same
+family as `ark connections recall next` and the `/ui` skill's `{cmd}
+event` listener.
 
 A single `next` return carries one of three **kinds**, told apart by the
 returned body:

@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
@@ -129,6 +129,14 @@ card covers only the Go surface the skill calls into.
   `--result` arg, R3025/R3027); a **supervisor directive** (stand up /
   stop a pool secretary — the skill spawns/stops via Task and records
   with `spawn-record` / `exit-record`, R3019); the **keepalive**.
+- **Re-launch-first** (R3036): every *work* crank handle (curation,
+  directive) LEADS with the instruction to fire the successor `next`
+  (backgrounded) **before** processing the item (`relaunchFirst`),
+  replacing the old trailing "run next again". Loop continuity thus
+  moves from tail to front, so a mid-work drift or a garbled tool call
+  can't kill the loop — the successor is already blocking. The keepalive
+  already re-launches and is unchanged; the `/luhmann` skill teaches the
+  same order.
 - **Stubborn plumbing** (R3015): the `next` CLI treats an `ark serve`
   bounce as a wait condition — redials with backoff, and on reconnect
   a `there are no sessions` routes into the re-`--first` path rather

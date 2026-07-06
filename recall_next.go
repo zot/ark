@@ -828,33 +828,47 @@ func luhmannKeepalivePrompt(session string) string {
 // CRC: crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3011, R3025, R3027
 func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 	nextCmd := fmt.Sprintf("~/.ark/ark luhmann next --session %s", session)
+	lead := relaunchFirst(nextCmd)
 	switch w.Kind {
 	case "curation":
 		return fmt.Sprintf(
-			"A directed-search finding is ready to curate. The raw results:\n\n%s\n\n"+
+			"%sA directed-search finding is ready to curate. The raw results:\n\n%s\n\n"+
 				"Refine them — keep what genuinely answers the query, drop the noise. Emit each kept item with, one call per item:\n"+
 				"  ~/.ark/ark bloodhound add --result %s --loc PATH:RANGE --note \"why it answers the query\" [--chunk \"excerpt\"]\n"+
 				"When done — even if you kept nothing — finish with:\n"+
 				"  ~/.ark/ark bloodhound add --result %s --done\n"+
-				"which writes the result doc and notifies the waiting CLI.\n"+
-				"Then run `%s` again.\n",
-			content, w.Path, w.Path, nextCmd)
+				"which writes the result doc and notifies the waiting CLI.\n",
+			lead, content, w.Path, w.Path)
 	case "directive":
 		// Stand-up mints a fresh nonce (`reserve-nonce --luhmann`) and spawns;
 		// stop names the nonce of an idle-past-cooldown secretary to retire (R3019).
 		if w.Directive == "stop" {
 			return fmt.Sprintf(
-				"Supervisor directive: stop the `%s` pool secretary with nonce %d (idle past its cooldown). Stop its Task and record it with `~/.ark/ark luhmann exit-record --class %s --nonce %d --reason context-limit`.\n"+
-					"Then run `%s` again.\n",
-				w.Class, w.Nonce, w.Class, w.Nonce, nextCmd)
+				"%sSupervisor directive: stop the `%s` pool secretary with nonce %d (idle past its cooldown). Stop its Task and record it with `~/.ark/ark luhmann exit-record --class %s --nonce %d --reason context-limit`.\n",
+				lead, w.Class, w.Nonce, w.Class, w.Nonce)
 		}
 		return fmt.Sprintf(
-			"Supervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n"+
-				"Then run `%s` again.\n",
-			w.Class, w.Class, nextCmd)
+			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
+			lead, w.Class, w.Class)
 	default:
-		return fmt.Sprintf("Unrecognized work kind %q — skip it and run `%s` again.\n", w.Kind, nextCmd)
+		return fmt.Sprintf("%sSkip this unrecognized work kind %q.\n", lead, w.Kind)
 	}
+}
+
+// relaunchFirst is the re-launch-first preamble every work crank handle leads
+// with (R3036): the orchestrator's FIRST action on any `next` return is to fire
+// the successor `next` (backgrounded) before processing the item — so a drift or
+// a garbled tool call mid-work can't kill the loop, because its successor is
+// already blocking. This replaces the old trailing "run next again": continuity
+// now comes from the front, not the tail. Crank Handle + Soviet Supermarket —
+// the load-bearing action sits at step 1, where the agent looks first.
+// CRC: crc-LuhmannCLI.md | R3036
+func relaunchFirst(nextCmd string) string {
+	return fmt.Sprintf(
+		"**First, before anything else — re-launch the seat so it can't go cold while you work:** "+
+			"run `%s` backgrounded **now**. Do this step first; then even if the work below stalls "+
+			"or a tool call garbles, the loop survives because its successor is already waiting. Then:\n\n",
+		nextCmd)
 }
 
 // luhmannHub is the watcher-as-Fixer's view of the orchestrator seat (S1 state

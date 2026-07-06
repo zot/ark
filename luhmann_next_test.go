@@ -120,6 +120,33 @@ func TestLuhmannNextStopDirective(t *testing.T) {
 	}
 }
 
+// TestLuhmannWorkPromptRelaunchFirst is the re-launch-first Sentry (R3036): every
+// work crank handle must LEAD with the backgrounded re-launch instruction, ahead
+// of the work-specific content — so a drift mid-work leaves the loop alive.
+func TestLuhmannWorkPromptRelaunchFirst(t *testing.T) {
+	cases := []struct {
+		name  string
+		w     LuhmannWork
+		after string // a work-specific marker that must come AFTER the re-launch
+	}{
+		{"curation", LuhmannWork{Kind: "curation", Path: "tmp://BLOODHOUND-CLI/9"}, "bloodhound add"},
+		{"stand-up", LuhmannWork{Kind: "directive", Directive: "stand-up", Class: "bloodhound"}, "stand up another"},
+		{"stop", LuhmannWork{Kind: "directive", Directive: "stop", Class: "bloodhound", Nonce: 7}, "exit-record"},
+	}
+	for _, tc := range cases {
+		body := luhmannWorkPrompt("S", tc.w, "raw results")
+		rl := strings.Index(body, "re-launch the seat")
+		if rl < 0 || !strings.Contains(body, "backgrounded") {
+			t.Errorf("%s: prompt missing the backgrounded re-launch-first instruction: %q", tc.name, body)
+			continue
+		}
+		work := strings.Index(body, tc.after)
+		if work < 0 || rl >= work {
+			t.Errorf("%s: re-launch (idx %d) must lead the work marker %q (idx %d)", tc.name, rl, tc.after, work)
+		}
+	}
+}
+
 // TestLuhmannNextStandDownImmediate confirms a non-owner short-circuits on the
 // lease and never enters the blocking select, even with an hour-long keepalive.
 // Refs: R3013, R3014
