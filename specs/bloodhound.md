@@ -101,6 +101,23 @@ Each candidate is one compact locator line — `<path>:<range> (<size>) <score>
 [tags]` with a short excerpt — carrying the same `<path>:<range>` the crank
 handle feeds to `ark chunks`, and no chunkid on the wire.
 
+**Per-idea seeding (multi-paragraph clue).** The seed splits the **clue** into
+paragraphs — blank-line-separated, via the same markdown chunker the fire path
+uses — and passes one `Recall` input per paragraph. `Recall` searches each and
+**unions** their hits into one ranked set (its per-chunk score accumulator
+already merges multiple inputs), so each distinct idea in a complex clue
+contributes its own strong matches. A single-paragraph clue is one input —
+identical to before, no regression. This matters because a single `Recall` over
+a multi-idea clue builds one query embedding at the *centroid* of the ideas,
+matching chunks near none of them; the vector substrate — the tag-axis reach
+that is the seed's whole point — is diluted exactly when the clue is richest.
+The seed budget scales with the idea count so each paragraph earns
+representation rather than starving a fixed pool.
+
+Only the **clue** is embedded as seed input; the `scope`/`depth`/`want` fields
+shape the hunt (they drive the crank handle) but are directives, not search
+ideas, so they are never folded into the seed search.
+
 This is the point of the bloodhound-over-recall design. The subagent's own
 tools reach only content search (FTS + Vector-EC via `ark search`); the
 value→chunk **tag axis** (R2905/R2906) is reachable only through `Recall`.
@@ -109,10 +126,11 @@ not assemble itself — a chunk can seed the hunt because its *tags* match the
 clue even when its prose doesn't. The crank handle's first step reads the seed;
 the agent runs its own searches only to widen the trail or when the seed is thin.
 
-The seed search is **clue-only and session-agnostic**: the input is the
-watermark payload, nothing else. The bloodhound is *pull* — the assistant has
-already distilled its need into the clue, so the conversation is not folded back
-into the search input. Folding it would pull the hunt off the trail; ambient
+The seed search is **clue-only and session-agnostic**: the input is the clue
+(split per paragraph), nothing else — not the `scope`/`depth`/`want` fields, and
+not the conversation. The bloodhound is *pull* — the assistant has already
+distilled its need into the clue, so the conversation is not folded back into the
+search input. Folding it would pull the hunt off the trail; ambient
 recall folds conversation only because its input *is* the conversation. The seed
 runs with no discussed-tag exclusion and no derivation side-effects
 (`RecallOpts.Session` and `.Propose` left off) — a directed hunt should see

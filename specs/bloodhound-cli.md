@@ -63,18 +63,36 @@ pubsub.
 ## `ark bloodhound search`
 
 ```
-ark bloodhound search TERMS...  [--wait] [--timeout S] [--raw] [--markdown]
+ark bloodhound search [CLUE...]  [--file PATH | --file -] [--wait] [--timeout S] [--raw] [--markdown]
 ```
 
 The whole client protocol in one blocking command:
 
 1. **Create + subscribe.** The CLI creates the request doc
-   `tmp://BLOODHOUND-CLI/<id>` carrying the `TERMS` payload (the same clue ·
-   scope · depth · want a watermark carries) under the watcher tag
-   `@ark-bloodhound-cli`, and subscribes to `@ark-bloodhound-cli-result: <id>`
-   before the doc lands, so no result notification can be missed. The server
-   accumulates the doc's fields and writes them in one atomic go, so the
-   watcher sees a complete request.
+   `tmp://BLOODHOUND-CLI/<id>` carrying the clue and the `scope`/`depth`/`want`
+   metadata under the watcher tag `@ark-bloodhound-cli`, and subscribes to
+   `@ark-bloodhound-cli-result: <id>` before the doc lands, so no result
+   notification can be missed. The server accumulates the doc's fields and writes
+   them in one atomic go, so the watcher sees a complete request.
+
+### Clue input — one-liner or file/heredoc (markdown)
+
+The **clue** is the searchable content; `scope`/`depth`/`want` are metadata that
+shape the hunt, not search text. Two ways to supply the clue:
+
+- **Positional `CLUE...`** — the one-liner case, joined into a single line.
+- **`--file PATH`** — read the clue from a file. **`--file -`** reads stdin, which
+  is the **heredoc** path an agent or script uses to pass a **multi-paragraph
+  markdown** clue without escaping newlines (fidelity by construction, the same
+  move as the messenger's `--content-file`). `CLUE...` and `--file` are mutually
+  exclusive.
+
+A multi-paragraph clue is the point: each blank-line-separated paragraph is a
+distinct **search idea**, and the Recall seed splits the clue and searches each
+idea separately, unioning the hits (see the Recall-seed "per-idea seeding" in
+[bloodhound.md](bloodhound.md)). A one-liner clue is a single idea — unchanged.
+`argv` can't carry paragraph breaks, so the file/heredoc path is what makes the
+CLI a first-class multi-idea search client.
 2. **Block for the result.** `ark bloodhound search` is synchronous: it waits
    on its result tag, then prints. `--wait` governs the one case that is not an
    ordinary wait — a **busy pool** (no free secretary, pool at `pool_max`):

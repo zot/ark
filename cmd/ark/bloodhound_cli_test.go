@@ -3,6 +3,8 @@ package main
 // CRC: crc-CLITree.md | Test: test-BloodhoundCLI.md
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,5 +50,46 @@ this is not json`
 	}
 	if strings.Contains(out, "not json") {
 		t.Errorf("malformed line should be skipped, not emitted:\n%s", out)
+	}
+}
+
+// TestResolveClue confirms the clue comes from positional args or --file (with
+// "-" reading stdin), and that the two are mutually exclusive (R3046).
+func TestResolveClue(t *testing.T) {
+	if got, err := resolveClue([]string{"find", "the", "thing"}, "", nil); err != nil || got != "find the thing" {
+		t.Errorf("positional: got %q err %v", got, err)
+	}
+	fp := filepath.Join(t.TempDir(), "clue.md")
+	if err := os.WriteFile(fp, []byte("para one\n\npara two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveClue(nil, fp, nil); err != nil || got != "para one\n\npara two" {
+		t.Errorf("file: got %q err %v", got, err)
+	}
+	if got, err := resolveClue(nil, "-", strings.NewReader("heredoc clue")); err != nil || got != "heredoc clue" {
+		t.Errorf("stdin: got %q err %v", got, err)
+	}
+	if _, err := resolveClue([]string{"x"}, fp, nil); err == nil {
+		t.Error("positional + --file together should error (mutually exclusive)")
+	}
+}
+
+// TestBuildSearchPayload confirms the payload is metadata-first (scope/depth/want,
+// then curate:false only for --raw) with the clue body last and its paragraph
+// breaks intact (R3044, R3046).
+func TestBuildSearchPayload(t *testing.T) {
+	clue := "idea one\n\nidea two"
+	p := buildSearchPayload(clue, "specs", "investigate", "passages", false)
+	if !strings.HasPrefix(p, "scope: specs\ndepth: investigate\nwant: passages\n") {
+		t.Errorf("metadata should lead:\n%q", p)
+	}
+	if strings.Contains(p, "curate:") {
+		t.Errorf("no curate marker without --raw:\n%q", p)
+	}
+	if !strings.HasSuffix(strings.TrimRight(p, "\n"), clue) {
+		t.Errorf("clue body (with blank-line break) should be last:\n%q", p)
+	}
+	if pr := buildSearchPayload(clue, "all", "lookup", "passages", true); !strings.Contains(pr, "curate: false\n") {
+		t.Errorf("--raw should add curate:false:\n%q", pr)
 	}
 }

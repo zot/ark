@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -100,8 +100,8 @@ CLITree owns how those bodies are *reached* and how their help is
 - Bloodhound + `luhmann next` nodes (R3010, R3021, R3022, R3027, R3029):
   post-migration growth added as tree nodes like any other. A new `ark
   bloodhound` group in `cmd/ark/bloodhound_cli.go` carries `search
-  TERMS... [--wait] [--timeout S] [--raw] [--markdown]` (create the request
-  doc + subscribe + block + print, R3021/R3022/R3029) and `add --result --loc --note
+  [CLUE...] [--file PATH|-] [--wait] [--timeout S] [--raw] [--markdown]` (create the
+  request doc + subscribe + block + print, R3021/R3022/R3029) and `add --result --loc --note
   [--chunk] | --result --done` (Luhmann's result stencil — one curated JSON
   line per call, `--done` writes the result doc + flips its tag, R3027). A new `next --session S
   [--first|--force] [--keepalive N]` node joins the existing `luhmann`
@@ -120,6 +120,16 @@ CLITree owns how those bodies are *reached* and how their help is
   secretary's *uncurated* findings (already markdown) which the CLI prints
   verbatim — redundant with `--markdown` (R3038, R3040). Pure formatting +
   one payload marker; no new server route, no protocol change.
+- Bloodhound search **clue input** (R3046): the **clue** is the searchable
+  content, taken from positional `CLUE...` (joined into one line) or `--file PATH`
+  (read the clue from a file); `--file -` reads stdin — the **heredoc** path for a
+  multi-paragraph markdown clue (`argv` can't carry paragraph breaks). `CLUE...`
+  and `--file` are mutually exclusive (error if both). The action builds the
+  request payload **metadata-first** — `scope`/`depth`/`want` (and `curate: false`
+  for `--raw`) as leading `key: value` lines, then the clue body last — so the
+  watcher's `clueOf` (crc-RecallWatcher) strips the metadata and splits only the
+  clue for the per-paragraph seed (R3043). The file is read byte-for-byte (fidelity
+  by construction, as with the messenger's `--content-file`).
 
 ## Collaborators
 - CLI (crc-CLI.md): owns the command bodies the `Action`s call; CLITree

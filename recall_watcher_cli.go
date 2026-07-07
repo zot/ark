@@ -10,6 +10,7 @@ package ark
 
 import (
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -481,14 +482,78 @@ func (w *RecallWatcher) DeregisterPoolSecretary(class, kind string, nonce uint64
 	w.pool.mu.Unlock()
 }
 
-// renderSeed runs the hypergraph-aware combined search on the payload and
-// renders the ## Recall seed block. Shared by dispatchBloodhound and the CLI
-// Fixer. A failed seed is not fatal — the empty-seed note still dispatches the
-// hunt. R3006, R3007
+// bloodhoundSeedKCap bounds the per-idea seed budget so a many-paragraph clue
+// can't blow the seed up (R3045).
+const bloodhoundSeedKCap = 30
+
+// seedMetaKeys are the leading `key:` metadata fields clueOf strips before the
+// clue body — they shape the hunt (crank handle) but are not search ideas
+// (R3044). `curate:` is the #30 raw marker; the others are the CLI's flags.
+var seedMetaKeys = []string{"scope:", "depth:", "want:", "curate:"}
+
+// clueOf extracts the searchable clue from a bloodhound payload: leading
+// scope/depth/want/curate metadata lines (and blank lines) are stripped, and the
+// rest is the clue. Free-form in-session prose has no leading metadata, so it is
+// returned whole; an old clue-first payload (first line not a stripped key) also
+// degrades to the whole string — no regression.
+// CRC: crc-RecallWatcher.md | R3044
+func clueOf(payload string) string {
+	lines := strings.Split(payload, "\n")
+	i := 0
+	for i < len(lines) {
+		t := strings.ToLower(strings.TrimSpace(lines[i]))
+		isMeta := slices.ContainsFunc(seedMetaKeys, func(k string) bool {
+			return strings.HasPrefix(t, k)
+		})
+		// Skip blank and metadata lines; stop at the first content line.
+		if t != "" && !isMeta {
+			break
+		}
+		i++
+	}
+	return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+}
+
+// seedK scales the seed budget with the clue's idea (paragraph) count so a
+// multi-idea union isn't starved by a fixed pool; a single idea keeps the base
+// bloodhoundSeedK.
+// CRC: crc-RecallWatcher.md | R3045
+func seedK(paras int) int {
+	if paras <= 1 {
+		return bloodhoundSeedK
+	}
+	return min(bloodhoundSeedK+5*(paras-1), bloodhoundSeedKCap)
+}
+
+// seedInputs splits the clue into paragraphs (the same markdown chunker the fire
+// path uses) and returns one Recall input per idea plus the scaled seed K. Recall
+// unions the per-input hits by chunkID, so each idea contributes its own matches
+// instead of a single centroid query; a single-paragraph clue is one input,
+// identical to the pre-split seed.
+// CRC: crc-RecallWatcher.md | R3043, R3044, R3045
+func seedInputs(payload string) ([]ConnectionsInput, int) {
+	paras := splitParagraphs([]byte(clueOf(payload)))
+	if len(paras) == 0 {
+		// Empty clue: one empty input preserves the empty-seed-note behavior.
+		return []ConnectionsInput{{Text: ""}}, bloodhoundSeedK
+	}
+	inputs := make([]ConnectionsInput, len(paras))
+	for i, p := range paras {
+		inputs[i] = ConnectionsInput{Text: p}
+	}
+	return inputs, seedK(len(paras))
+}
+
+// renderSeed runs the hypergraph-aware combined search on the clue and renders
+// the ## Recall seed block. Shared by dispatchBloodhound and the CLI Fixer. The
+// clue is split per paragraph (seedInputs) so each idea in a complex clue seeds
+// its own matches. A failed seed is not fatal — the empty-seed note still
+// dispatches the hunt. R3006, R3007, R3043
 func (w *RecallWatcher) renderSeed(payload string) string {
+	inputs, k := seedInputs(payload)
 	result, err := w.librarian.Recall(
-		[]ConnectionsInput{{Text: payload}},
-		RecallOpts{K: bloodhoundSeedK, IncludeContent: true, KeepTagless: true},
+		inputs,
+		RecallOpts{K: k, IncludeContent: true, KeepTagless: true},
 	)
 	if err != nil {
 		log.Printf("bloodhound-cli: seed Recall failed: %v", err)

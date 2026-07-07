@@ -265,7 +265,7 @@ External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.m
 Both subcommands require `ark serve` **and** a running Luhmann orchestrator.
 
 ```
-ark bloodhound search CLUE... [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]
+ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
 ```
@@ -277,6 +277,7 @@ behind the one command (Batteries Included).
 
 | Flag           | Default      | Meaning                                                                 |
 |----------------|--------------|-------------------------------------------------------------------------|
+| `--file PATH`  | —            | read the clue from a file (markdown); `--file -` reads stdin (heredoc) for a multi-paragraph clue. Mutually exclusive with positional `CLUE...` |
 | `--scope S`    | `all`        | search scope: `code` \| `specs` \| `design` \| `notes` \| `chat` \| `all` |
 | `--depth D`    | `lookup`     | `lookup` (one pass) \| `investigate` (tune until the stop condition)     |
 | `--want W`     | `passages`   | `answer` \| `passages` \| …                                             |

@@ -10,16 +10,19 @@ artifact) and the result doc (clean external JSONL). Participants:
 add`, LuhmannCLI).
 
 ```
-1.1  ark bloodhound search TERMS [--wait] [--timeout S] [--raw] [--markdown] (R3021, R3022)
+1.1  ark bloodhound search [CLUE...] [--file PATH|-] [--wait] [--timeout S] [--raw] [--markdown] (R3021, R3022)
      1.1.1  subscribe @ark-bloodhound-cli-result:<id>  (before submit)     (R3021)
-     1.1.2  create request doc tmp://BLOODHOUND-CLI/<id> = @ark-bloodhound-cli
-              + TERMS; server accumulates, one atomic write                (R3021, R3031)
+     1.1.2  clue ← positional CLUE... or --file (--file - = heredoc stdin);
+              create request doc tmp://BLOODHOUND-CLI/<id> = @ark-bloodhound-cli
+              + payload (metadata-first: scope/depth/want/[curate] then clue
+              body); server accumulates, one atomic write          (R3021, R3031, R3046)
      1.1.3  block on the result tag (--wait: stubborn across a bounce)     (R3022)
 
 1.2  watcher wakes on @ark-bloodhound-cli   (Fixer: request trigger)       (R3023)
      1.2.1  gate: luhmannOwner present? no → CLI reports not-running (≠0)  (R3020)
-     1.2.2  enhance: Librarian.Recall seed + search crank handle →
-              a standard bloodhound task doc                              (R3006, R3030)
+     1.2.2  enhance: renderSeed — clueOf strips metadata, split clue per
+              paragraph, Recall unions per-idea hits (K scales) + crank
+              handle → a standard bloodhound task doc              (R3006, R3030, R3043-R3045)
      1.2.3  schedule + route:
               free secretary → re-tag @ark-secretary-work=<pool-sec>,
                 mark busy  (atomic append + re-tag)                        (R3023, R3031)

@@ -673,3 +673,51 @@ func TestSweepReissuesStandUp(t *testing.T) {
 		t.Errorf("(c) a request under the threshold must not re-issue, got %d", got)
 	}
 }
+
+// --- #32: multi-idea seed — clueOf + seedInputs ---
+
+// TestClueOf confirms clueOf strips leading scope/depth/want/curate metadata and
+// returns the clue body, while free-form prose and old clue-first payloads are
+// returned whole (R3044).
+// Refs: R3044
+func TestClueOf(t *testing.T) {
+	cases := []struct{ name, payload, want string }{
+		{"metadata-first", "scope: all\ndepth: lookup\nwant: passages\n\nfind the actor queue\npattern", "find the actor queue\npattern"},
+		{"curate marker (--raw)", "scope: all\ndepth: lookup\nwant: passages\ncurate: false\n\nthe clue", "the clue"},
+		{"free-form prose", "investigate how recall dedup works — want a synthesis", "investigate how recall dedup works — want a synthesis"},
+		{"old clue-first degrades whole", "clue: x\nscope: all", "clue: x\nscope: all"},
+	}
+	for _, tc := range cases {
+		if got := clueOf(tc.payload); got != tc.want {
+			t.Errorf("%s: clueOf = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestSeedInputs confirms the clue splits into one Recall input per paragraph, K
+// scales with the idea count, metadata never leaks into an input, and a single
+// idea is one input at the base K (R3043, R3044, R3045).
+// Refs: R3043, R3044, R3045
+func TestSeedInputs(t *testing.T) {
+	// single-paragraph clue → one input, base K
+	if inputs, k := seedInputs("scope: all\n\nsingle idea here"); len(inputs) != 1 || k != bloodhoundSeedK {
+		t.Errorf("single: inputs=%d k=%d, want 1/%d", len(inputs), k, bloodhoundSeedK)
+	}
+	// three-paragraph clue → three inputs, K = base+10, no metadata among inputs
+	inputs, k := seedInputs("scope: all\ndepth: lookup\nwant: passages\n\nidea one\n\nidea two\n\nidea three")
+	if len(inputs) != 3 {
+		t.Fatalf("three: inputs=%d, want 3", len(inputs))
+	}
+	if k != bloodhoundSeedK+10 {
+		t.Errorf("three: k=%d, want %d", k, bloodhoundSeedK+10)
+	}
+	for _, in := range inputs {
+		if strings.HasPrefix(in.Text, "scope:") || strings.HasPrefix(in.Text, "depth:") || strings.HasPrefix(in.Text, "want:") {
+			t.Errorf("metadata leaked into a seed input: %q", in.Text)
+		}
+	}
+	// K is capped
+	if got := seedK(100); got != bloodhoundSeedKCap {
+		t.Errorf("seedK(100) = %d, want cap %d", got, bloodhoundSeedKCap)
+	}
+}

@@ -8,7 +8,28 @@ bookkeeping is exercised against a bare `RecallWatcher` with a **fake
 are chosen so `enhanceRequestDoc` (the only DB-touching path) is never reached
 (a hunt routes only when a pending path *and* a free secretary coincide, which
 each test avoids). R3017, R3018, R3020, R3023, R3024, R3033, R3038, R3039,
-R3041, R3042.
+R3041, R3042. The seed clue-split helpers (`clueOf`, `seedInputs`, R3043–R3045)
+are pure functions tested directly, no DB.
+
+## Test: clueOf strips leading metadata, keeps the clue
+**Purpose:** `clueOf` returns the searchable clue — leading `scope`/`depth`/`want`/
+`curate` lines (and blank lines) stripped — while free-form prose with no leading
+metadata is returned whole (R3044).
+**Input:** a metadata-first payload `scope: all\ndepth: lookup\nwant: passages\n\n<clue
+body>`; a `--raw` variant carrying a `curate: false` line; a free-form prose payload
+with no metadata; and an old-style `clue: x\nscope: all` payload.
+**Expected:** the first two return only the clue body (no scope/depth/want/curate); the
+free-form payload returns unchanged; the old-style payload degrades to the whole string
+(first line is not a stripped key) — no panic, no regression.
+
+## Test: seedInputs splits per paragraph and scales K
+**Purpose:** `seedInputs` splits the clue into paragraphs (one `ConnectionsInput` each)
+and scales the seed budget `min(bloodhoundSeedK + 5·(paras−1), cap)`; a single-paragraph
+clue is one input at the base K (R3043, R3045). Metadata never appears as an input (R3044).
+**Input:** a one-paragraph clue; a three-paragraph clue; a metadata-first payload whose
+clue is two paragraphs.
+**Expected:** input counts 1, 3, 2; K = base, base+10, base+5 (capped); no input equals a
+`scope:`/`depth:`/`want:` line.
 
 ## Test: pool config defaults and overrides
 **Purpose:** `EffectivePoolMax` / `EffectiveCooldownSeconds` /

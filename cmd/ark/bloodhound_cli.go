@@ -29,8 +29,9 @@ func bloodhoundCommand() *ucli.Command {
 			{
 				Name:      "search",
 				Usage:     "run a directed hunt and print curated findings as JSONL",
-				ArgsUsage: "CLUE...",
+				ArgsUsage: "[CLUE...]",
 				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "file", Usage: "read the clue from a file ('-' = stdin, for a heredoc multi-paragraph markdown clue); mutually exclusive with positional CLUE"},
 					&ucli.StringFlag{Name: "scope", Value: "all", Usage: "search scope: code | specs | design | notes | chat | all"},
 					&ucli.StringFlag{Name: "depth", Value: "lookup", Usage: "depth: lookup | investigate"},
 					&ucli.StringFlag{Name: "want", Value: "passages", Usage: "want: answer | passages | ..."},
@@ -82,22 +83,22 @@ func bloodhoundAddAction(_ context.Context, c *ucli.Command) error {
 
 // CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1 | R3020, R3021, R3022, R3029
 func bloodhoundSearchAction(_ context.Context, c *ucli.Command) error {
-	clue := strings.TrimSpace(strings.Join(c.Args().Slice(), " "))
-	if clue == "" {
-		fmt.Fprintln(os.Stderr, "ark bloodhound search CLUE... [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS]")
-		os.Exit(2)
-	}
-	// The TERMS payload the watcher wraps as the ## Search task the secretary
-	// reads — clue · scope · depth · want (R3021).
 	raw := c.Bool("raw")
 	markdown := c.Bool("markdown")
-	payload := fmt.Sprintf("clue: %s\nscope: %s\ndepth: %s\nwant: %s\n",
-		clue, c.String("scope"), c.String("depth"), c.String("want"))
-	if raw {
-		// R3038: the watcher reads this marker to skip Luhmann curation and relay
-		// the secretary's own findings straight back.
-		payload += "curate: false\n"
+	// R3046: the clue comes from positional CLUE... or --file (--file - = stdin,
+	// the heredoc path); the two are mutually exclusive.
+	clue, err := resolveClue(c.Args().Slice(), c.String("file"), os.Stdin)
+	if err != nil {
+		fatal(err)
 	}
+	if clue == "" {
+		fmt.Fprintln(os.Stderr, "ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]")
+		os.Exit(2)
+	}
+	// The payload the watcher wraps as the ## Search task the secretary reads:
+	// scope/depth/want (and curate:false for --raw) as leading metadata lines, then
+	// the clue body last, so the watcher's clueOf splits only the clue (R3044, R3046).
+	payload := buildSearchPayload(clue, c.String("scope"), c.String("depth"), c.String("want"), raw)
 	wait := c.Bool("wait")
 	timeout := c.Int("timeout")
 
@@ -209,5 +210,50 @@ func renderFindingsMarkdown(data []byte) string {
 	if n == 0 {
 		return "no findings\n"
 	}
+	return b.String()
+}
+
+// resolveClue returns the search clue from either positional args (joined into
+// one line) or --file (read byte-for-byte; "-" reads stdin, the heredoc path).
+// The two are mutually exclusive.
+// CRC: crc-CLITree.md | R3046
+func resolveClue(args []string, file string, stdin io.Reader) (string, error) {
+	positional := strings.TrimSpace(strings.Join(args, " "))
+	if file == "" {
+		return positional, nil
+	}
+	if positional != "" {
+		return "", errors.New("give the clue as positional args OR --file, not both")
+	}
+	var (
+		data []byte
+		err  error
+	)
+	if file == "-" {
+		data, err = io.ReadAll(stdin)
+	} else {
+		data, err = os.ReadFile(file)
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading clue: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// buildSearchPayload assembles the request payload metadata-first: scope/depth/
+// want (and curate:false for --raw) as leading key:value lines, then the clue
+// body last, so the watcher's clueOf strips the metadata and splits only the clue
+// for the per-paragraph seed.
+// CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1.2 | R3044, R3046
+func buildSearchPayload(clue, scope, depth, want string, raw bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "scope: %s\ndepth: %s\nwant: %s\n", scope, depth, want)
+	if raw {
+		// R3038: the watcher reads this marker to skip Luhmann curation.
+		b.WriteString("curate: false\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(clue)
+	b.WriteString("\n")
 	return b.String()
 }
