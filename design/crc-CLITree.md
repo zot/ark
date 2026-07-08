@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -130,6 +130,13 @@ CLITree owns how those bodies are *reached* and how their help is
   watcher's `clueOf` (crc-RecallWatcher) strips the metadata and splits only the
   clue for the per-paragraph seed (R3043). The file is read byte-for-byte (fidelity
   by construction, as with the messenger's `--content-file`).
+- `ext` node (R3048): a new `ark ext` group in `cmd/ark/ext_cli.go` with
+  `set`/`add`/`remove` leaves, each taking `<target> <tag>` positionals plus a
+  `<value>` (required for set/add, optional for remove). The `Action`s follow the
+  `config` add/remove dispatch: proxy to the running server (POST `/ext/set`,
+  `/ext/add`, `/ext/remove` — crc-Server.md) when `serverClient` connects, else
+  `withExclusiveDB` calling `DB.SetExtTag` / `DB.AddExtTag` / `DB.RemoveExtTag`.
+  Mirror-file-only scope lives in the DB primitive (crc-DB.md); CLITree only routes.
 
 ## Collaborators
 - CLI (crc-CLI.md): owns the command bodies the `Action`s call; CLITree

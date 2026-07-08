@@ -312,10 +312,16 @@ target's).
 2. Compute the mirror file path under
    `~/.ark/external/<slug>/<target-path>.md`.
 3. Read the mirror file (create empty if absent).
-4. **If** a line exists matching `@ext: TARGET @tag:` (same
-   TARGET text byte-for-byte, same tag name), **replace its
-   value in place**. Otherwise **append** a new line:
-   `@ext: TARGET @tag: value`.
+4. **Collapse** every line whose TARGET matches byte-for-byte
+   and whose tag list contains `tag` to a single value: rewrite
+   the first such `(TARGET, tag)` span's value in place, then
+   drop every later `(TARGET, tag)` span (dropping a line that
+   is left with no tags). **If** no `(TARGET, tag)` span exists,
+   **append** a new line: `@ext: TARGET @tag: value`. In the
+   common single-value case (the workshop authors one value per
+   `(TARGET, tag)`) this is identical to a plain in-place
+   replace; the collapse only bites when `ark ext add` (below)
+   has stacked multiple values.
 5. Write the file via temp+rename for atomicity (matching
    `mcp.setTags`'s precedent for Lua-driven file mutation).
 6. The watcher / indexer picks up the change and reindexes the
@@ -325,19 +331,79 @@ target's).
 
 1. Locate the mirror file (resolve as above). Missing file →
    silent no-op.
-2. Find the line matching `@ext: TARGET @tag:`. Missing line →
-   silent no-op.
+2. Find **every** line matching `@ext: TARGET @tag:` (all
+   values, not just the first). Missing line → silent no-op.
 3. For a single-tag line, delete the whole line including its
    trailing newline.
 4. For a multi-tag line (rare in v1 since the workshop authors
    one tag per line, but supported for hand-edited mirror
-   files), remove the `@tag: value` span only, preserving the
-   rest of the line.
+   files), remove the matching `@tag: value` span only,
+   preserving the rest of the line.
 5. Write atomically; reindex follows.
+
+The underlying `DB.RemoveExtTag(targetSpec, tag, value)` primitive
+takes an optional `value` filter: empty removes every
+`(TARGET, tag)` routing; non-empty removes only spans whose value
+matches. `mcp.removeExtTag(targetSpec, tag)` passes an empty value,
+so the Lua path removes all values for `(TARGET, tag)` — identical
+to the prior single-value behavior in the workshop's one-value-per-
+tag usage.
 
 Both functions return `(true, nil)` on success or `(false,
 errstring)`. Errors: source root not found for target, write
 permission denied, malformed `targetSpec`.
+
+### CLI authoring: `ark ext {set,add,remove}`
+
+The Lua bindings above are reachable only from a Frictionless
+viewdef. A plain-session assistant that reads an `@ext` proposal
+(e.g. a recall recommend) needs to apply it without the workshop.
+The `ark ext` command group exposes the same mirror authoring from
+the CLI. All three verbs act **only on the target's mirror file**
+(`~/.ark/external/<slug>/<target-path>.md`) — never on
+hand-authored `@ext` lines elsewhere in the corpus (see
+"Mirror-file-only scope" below).
+
+```
+ark ext set    <target> <tag> <value>   # collapse all values → the one new value
+ark ext add    <target> <tag> <value>   # append a value; multiple values per tag OK
+ark ext remove <target> <tag> [value]   # remove all values, or just <value>
+```
+
+- `set` — wraps `DB.SetExtTag`: replace every `(TARGET, tag)`
+  value in the mirror file with the single `<value>` (collapse),
+  appending when none exist.
+- `add` — wraps the new `DB.AddExtTag`: **append** a
+  `(TARGET, tag, value)` routing, leaving any existing values in
+  place, so a tag can carry several values (`@topic: recall` **and**
+  `@topic: bloodhound`). An exact `(TARGET, tag, value)` duplicate
+  is a silent no-op.
+- `remove` — wraps `DB.RemoveExtTag`: drop the `(TARGET, tag)`
+  routing(s). With `<value>` omitted, removes every value; with
+  `<value>` given, removes only spans whose value matches.
+
+`<target>` is a TARGET string as defined in
+`specs/at-ext-parsing.md`. For a read-only conversation chunk the
+apply command names an absolute-path `path:absolute` TARGET (chat-log
+content is unstable, so text/regex locators never apply).
+
+Like every mutating CLI command, `ark ext` **proxies through the
+running server** when one is up (the server holds the index; the
+mutation runs inside the DB actor and the mirror file write happens
+there), and opens the index exclusively when no server is running.
+
+#### Mirror-file-only scope
+
+An `@ext: <target>` routing can be hand-authored in **any** corpus
+file, so a literal corpus-wide "replace all values" would have to
+scan and edit every file that mentions the target — invasive and
+expensive. The `ark ext` verbs deliberately do **not** do this.
+`set`/`remove`'s all-value semantics operate *within the mirror
+file only*. The effective tag set a chunk carries is the union of
+its mirror-file routings and any hand-authored `@ext` lines; the
+CLI owns only the mirror file's contribution. Because `SetExtTag`
+already resolves to the mirror path, this needs no corpus scan — it
+is a single-file edit.
 
 ## `mcp.suggestExtLocator(chunkID)`
 

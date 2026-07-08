@@ -471,6 +471,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /chunks", srv.handleChunks)
 	mux.HandleFunc("POST /grams", srv.handleGrams)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
+	mux.HandleFunc("POST /ext/set", srv.handleExtSet)       // R3049
+	mux.HandleFunc("POST /ext/add", srv.handleExtAdd)       // R3049
+	mux.HandleFunc("POST /ext/remove", srv.handleExtRemove) // R3049
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 	mux.HandleFunc("POST /tmp/add", srv.handleTmpAdd)
 	mux.HandleFunc("POST /tmp/update", srv.handleTmpUpdate)
@@ -2127,6 +2130,48 @@ func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, result)
+}
+
+// extRequest is the shared body for the /ext/{set,add,remove}
+// endpoints. value is the new value for set/add and the optional
+// filter for remove.
+type extRequest struct {
+	Target string `json:"target"`
+	Tag    string `json:"tag"`
+	Value  string `json:"value"`
+}
+
+// extMutate decodes an extRequest and runs an `@ext` mirror mutation
+// inside the DB actor. The mirror-file write happens on the actor
+// goroutine (temp+rename), not through enqueueWrite. Backs the
+// `ark ext` CLI's server-proxy path.
+// CRC: crc-Server.md | R3049
+func (srv *Server) extMutate(w http.ResponseWriter, r *http.Request, fn func(*DB, extRequest) error) {
+	var req extRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := SyncVoid(srv.db, func(db *DB) error { return fn(db, req) }); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// CRC: crc-Server.md | R3049
+func (srv *Server) handleExtSet(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.SetExtTag(req.Target, req.Tag, req.Value) })
+}
+
+// CRC: crc-Server.md | R3049
+func (srv *Server) handleExtAdd(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.AddExtTag(req.Target, req.Tag, req.Value) })
+}
+
+// CRC: crc-Server.md | R3049
+func (srv *Server) handleExtRemove(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.RemoveExtTag(req.Target, req.Tag, req.Value) })
 }
 
 type fetchRequest struct {
@@ -5783,7 +5828,7 @@ func (srv *Server) registerLuaFunctions() {
 			targetSpec := L.CheckString(1)
 			tag := L.CheckString(2)
 			err := SyncVoid(srv.db, func(db *DB) error {
-				return db.RemoveExtTag(targetSpec, tag)
+				return db.RemoveExtTag(targetSpec, tag, "")
 			})
 			if err != nil {
 				L.Push(lua.LFalse)

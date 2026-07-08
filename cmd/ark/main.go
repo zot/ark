@@ -168,6 +168,7 @@ func arkCommands() []*ucli.Command {
 		discussedCommand(),
 		tagCommand(),
 		configCommand(),
+		extCommand(),
 		scheduleCommand(),
 		messageCommand(),
 		uiCommand(),

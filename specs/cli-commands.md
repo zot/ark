@@ -668,6 +668,32 @@ llama.cpp shared libs and needs only the `[embedding]` config.
 EC, orphan EF, dimension inconsistency); `--fix` deletes orphan EC,
 orphan EF, and wrong-dimension EC records.
 
+### `ext` — author `@ext` routings
+
+```
+ark ext set    <target> <tag> <value>
+ark ext add    <target> <tag> <value>
+ark ext remove <target> <tag> [value]
+```
+
+Author `@ext` routings into the target's **mirror file**
+(`~/.ark/external/<slug>/<target-path>.md`) — the CLI counterpart
+to the Frictionless workshop's `mcp.setExtTag`/`mcp.removeExtTag`,
+so a plain-session assistant can apply an `@ext` proposal (e.g. a
+recall recommend) without the UI. All three verbs act only on the
+mirror file; they never scan or edit hand-authored `@ext` lines
+elsewhere in the corpus. `<target>` is a TARGET string per
+`specs/at-ext-parsing.md` (absolute paths for read-only chunks).
+Mutating, so each proxies through the running server (mutation runs
+in the DB actor) or opens the index exclusively when stopped —
+mirrors the `config` add/remove pattern.
+
+| Subcommand | Server | Behavior |
+|------------|--------|----------|
+| `set <target> <tag> <value>` | proxy-or-exclusive | Collapse every `(target, tag)` value in the mirror file to the single `<value>`; append when none exist |
+| `add <target> <tag> <value>` | proxy-or-exclusive | Append a `(target, tag, value)` routing (multiple values per tag allowed); an exact duplicate is a silent no-op |
+| `remove <target> <tag> [value]` | proxy-or-exclusive | Remove `(target, tag)` routings — all values, or only the matching `<value>` when given; missing file/line is a silent no-op |
+
 ### `fetch` — read indexed file content
 
 ```

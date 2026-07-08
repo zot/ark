@@ -2168,10 +2168,13 @@ func (db *DB) resolveExtMirror(targetSpec string) (mirrorPath string, err error)
 	return extMirrorPath(sourceRoot, targetFile)
 }
 
-// SetExtTag authors an `@ext` routing into the mirror tree under
-// `~/.ark/external/`. See CRC crc-DB.md and R2392-R2395 for the full
-// algorithm. CRC: crc-DB.md | R2392, R2393, R2394, R2395
-func (db *DB) SetExtTag(targetSpec, tag, value string) error {
+// upsertExtTag reads the target's mirror file, applies op (set or
+// add) via applyExtMirrorEdit, appends a fresh single-tag line when
+// nothing matched, and writes atomically. Shared by SetExtTag
+// (collapse-all) and AddExtTag (append-if-absent) — the op is the
+// only difference.
+// CRC: crc-DB.md | R2392, R2393, R2394, R2395, R3047
+func (db *DB) upsertExtTag(targetSpec, tag, value string, op extOp) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return errors.New("tag must not be empty")
@@ -2186,10 +2189,11 @@ func (db *DB) SetExtTag(targetSpec, tag, value string) error {
 	} else if !os.IsNotExist(rerr) {
 		return fmt.Errorf("read %s: %w", mirrorPath, rerr)
 	}
-	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, false)
+	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, op)
 	if !matched {
-		// emit one (TARGET, tag, value) per line. Multi-tag lines
-		// are syntactically valid but the v1 authoring path always
+		// No existing (TARGET,tag) span (set) / no exact dup (add):
+		// append one (TARGET, tag, value) per line. Multi-tag lines
+		// are syntactically valid but the authoring path always
 		// appends single-tag lines for trivial scanning.
 		// CRC: crc-DB.md | R2394
 		if len(newData) > 0 && newData[len(newData)-1] != '\n' {
@@ -2203,10 +2207,29 @@ func (db *DB) SetExtTag(targetSpec, tag, value string) error {
 	return atomicWriteFile(mirrorPath, newData, 0644)
 }
 
-// RemoveExtTag removes an `@ext` routing from the mirror tree.
-// Missing mirror file or missing matching line is a silent no-op.
+// SetExtTag authors an `@ext` routing into the mirror tree under
+// `~/.ark/external/`, collapsing every existing (TARGET,tag) value to
+// the one new value (append when none exist). See CRC crc-DB.md and
+// R2392-R2395 for the full algorithm.
+// CRC: crc-DB.md | R2392, R2393, R2394, R2395
+func (db *DB) SetExtTag(targetSpec, tag, value string) error {
+	return db.upsertExtTag(targetSpec, tag, value, extOpSet)
+}
+
+// AddExtTag appends an `@ext` routing to the target's mirror file,
+// leaving existing values in place so a (TARGET,tag) can carry
+// multiple values; an exact (TARGET,tag,value) duplicate is a no-op.
+// CRC: crc-DB.md | R3047
+func (db *DB) AddExtTag(targetSpec, tag, value string) error {
+	return db.upsertExtTag(targetSpec, tag, value, extOpAdd)
+}
+
+// RemoveExtTag removes `@ext` routing(s) from the mirror tree. An
+// empty value removes every (TARGET,tag) span; a non-empty value
+// removes only spans whose value matches. Missing mirror file or no
+// matching line is a silent no-op.
 // CRC: crc-DB.md | R2396
-func (db *DB) RemoveExtTag(targetSpec, tag string) error {
+func (db *DB) RemoveExtTag(targetSpec, tag, value string) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return errors.New("tag must not be empty")
@@ -2222,7 +2245,7 @@ func (db *DB) RemoveExtTag(targetSpec, tag string) error {
 		}
 		return fmt.Errorf("read %s: %w", mirrorPath, err)
 	}
-	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, "", true)
+	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove)
 	if !matched {
 		return nil
 	}

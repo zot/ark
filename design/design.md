@@ -149,7 +149,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
-- [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`
+- [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -214,7 +214,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
-- [ ] seq-ext-author.md → `db.go`, `server.go`, `extmap.go`, `indexer.go`
+- [ ] seq-ext-author.md → `db.go`, `ext.go`, `server.go`, `extmap.go`, `indexer.go`, `cmd/ark/ext_cli.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
 - [x] seq-bloodhound-cli.md → `cmd/ark/bloodhound_cli.go`, `recall_watcher.go`, `recall_agent_builder.go`, `recall_next.go`, `server.go`, `cmd/ark/monitoring_cli.go`
@@ -795,3 +795,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O141: CLI-bloodhound result docs (tmp://BLOODHOUND-CLI-RESULT/<id>) linger until server restart — no clean signal for when the waiting CLI has read the result, so BloodhoundCLIAddDone removes the request doc but not the result doc. tmp:// is per-process (wiped on restart) and each doc is small, so this is minor; add a TTL/reaper if it ever matters. (bloodhound-CLI S4, R3027)
 - [ ] O142: sweepRequests reap is pending-only (R3041): a request whose secretary crashes mid-hunt leaves its cliPool.requests entry + request doc until a server bounce — DeregisterPoolSecretary drops the secretary+inflight but not the request record, and the reap never scans in-flight/orphaned requests. Bounded (crash-only, rare) and cleared on bounce; mid-flight-hunt recovery is out of scope per R3034. Deliberate, not an oversight.
 - [ ] O143: Multi-idea seed (R3043): the clue-split, K-scaling, and payload helpers (clueOf/seedInputs/seedK/resolveClue/buildSearchPayload) are unit-tested, and Recall's per-input union is its own existing coverage — but the end-to-end composition (paragraph A → chunk X, paragraph B → chunk Y, both in the unioned seed) is not tested against a live corpus. Disproportionate: needs a tuned fixture where distinct paragraphs match distinct chunks. Covered by its parts.
+- [ ] O144: ext authoring DB/CLI/server layer (DB.SetExtTag/AddExtTag/RemoveExtTag, ark ext {set,add,remove}, POST /ext/*) has no automated test — the pure line-mutation logic (mutateExtLine/applyExtMirrorEdit) is fully unit-tested (R2395/R2396/R3047), but the DB methods write to the real ~/.ark home via arkHomeDir (hardcoded os.UserHomeDir+/.ark), so a DB-level test would pollute the live home or need HOME injection. Verified live 2026-07-07: cold (exclusive DB) + warm (server proxy) paths, all three verbs, multi-value add, exact-dup no-op, collapse-all set, value-filtered + all-value remove, zero residue after cleanup. (R3048, R3049)

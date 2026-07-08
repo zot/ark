@@ -102,9 +102,10 @@ func TestResolveExtTargetPath(t *testing.T) {
 }
 
 func TestMutateExtLineSingleTagReplace(t *testing.T) {
+	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: /a/b.md:"foo" @topic: old`,
-		`/a/b.md:"foo"`, "topic", "new", false)
+		`/a/b.md:"foo"`, "topic", "new", extOpSet, &placed)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop, got matched=%v drop=%v", matched, drop)
 	}
@@ -114,9 +115,10 @@ func TestMutateExtLineSingleTagReplace(t *testing.T) {
 }
 
 func TestMutateExtLineSingleTagRemoveDropsLine(t *testing.T) {
+	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: /a/b.md:"foo" @topic: x`,
-		`/a/b.md:"foo"`, "topic", "", true)
+		`/a/b.md:"foo"`, "topic", "", extOpRemove, &placed)
 	if !matched || !drop {
 		t.Fatalf("want matched && drop, got matched=%v drop=%v", matched, drop)
 	}
@@ -126,9 +128,10 @@ func TestMutateExtLineSingleTagRemoveDropsLine(t *testing.T) {
 }
 
 func TestMutateExtLineMultiTagReplaceOnly(t *testing.T) {
+	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: %abc @t1: v1 @target: oldv @t3: v3`,
-		`%abc`, "target", "newv", false)
+		`%abc`, "target", "newv", extOpSet, &placed)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop")
 	}
@@ -138,9 +141,10 @@ func TestMutateExtLineMultiTagReplaceOnly(t *testing.T) {
 }
 
 func TestMutateExtLineMultiTagRemoveOnly(t *testing.T) {
+	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: %abc @t1: v1 @target: v2 @t3: v3`,
-		`%abc`, "target", "", true)
+		`%abc`, "target", "", extOpRemove, &placed)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop")
 	}
@@ -149,25 +153,56 @@ func TestMutateExtLineMultiTagRemoveOnly(t *testing.T) {
 	}
 }
 
+// extOpRemove with a non-empty value spares spans whose value differs.
+func TestMutateExtLineRemoveByValueSparesOthers(t *testing.T) {
+	placed := false
+	got, drop, matched := mutateExtLine(
+		`@ext: %abc @topic: keep @topic: drop`,
+		`%abc`, "topic", "drop", extOpRemove, &placed)
+	if !matched || drop {
+		t.Fatalf("want matched && !drop, got matched=%v drop=%v", matched, drop)
+	}
+	if want := `@ext: %abc @topic: keep`; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+// extOpAdd never rewrites; it only reports an exact (target,tag,value) dup.
+func TestMutateExtLineAddReportsDup(t *testing.T) {
+	placed := false
+	in := `@ext: %abc @topic: recall`
+	got, drop, matched := mutateExtLine(in, `%abc`, "topic", "recall", extOpAdd, &placed)
+	if !matched || drop || got != in {
+		t.Fatalf("dup: want matched && !drop && unchanged, got matched=%v drop=%v line=%q", matched, drop, got)
+	}
+	got, _, matched = mutateExtLine(in, `%abc`, "topic", "bloodhound", extOpAdd, &placed)
+	if matched || got != in {
+		t.Errorf("no dup: want !matched && unchanged, got matched=%v line=%q", matched, got)
+	}
+}
+
 func TestMutateExtLineNoMatchOnTargetMismatch(t *testing.T) {
+	placed := false
 	in := `@ext: /a/b.md:"foo" @topic: v`
-	got, _, matched := mutateExtLine(in, `/a/b.md:"bar"`, "topic", "new", false)
+	got, _, matched := mutateExtLine(in, `/a/b.md:"bar"`, "topic", "new", extOpSet, &placed)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
 }
 
 func TestMutateExtLineNoMatchOnTagMismatch(t *testing.T) {
+	placed := false
 	in := `@ext: /a/b.md:"foo" @topic: v`
-	got, _, matched := mutateExtLine(in, `/a/b.md:"foo"`, "other", "new", false)
+	got, _, matched := mutateExtLine(in, `/a/b.md:"foo"`, "other", "new", extOpSet, &placed)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
 }
 
 func TestMutateExtLineNonExtLineUntouched(t *testing.T) {
+	placed := false
 	in := `# heading`
-	got, _, matched := mutateExtLine(in, `/x`, "topic", "new", false)
+	got, _, matched := mutateExtLine(in, `/x`, "topic", "new", extOpSet, &placed)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
@@ -175,7 +210,7 @@ func TestMutateExtLineNonExtLineUntouched(t *testing.T) {
 
 func TestApplyExtMirrorEditReplacesFirstMatch(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "new", false)
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "new", extOpSet)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -185,9 +220,22 @@ func TestApplyExtMirrorEditReplacesFirstMatch(t *testing.T) {
 	}
 }
 
+// set collapses every (TARGET,tag) value across lines to one.
+func TestApplyExtMirrorEditSetCollapsesAcrossLines(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n@ext: /b:\"y\" @topic: q\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "z", extOpSet)
+	if !matched {
+		t.Fatal("expected match")
+	}
+	want := "@ext: /a:\"x\" @topic: z\n@ext: /b:\"y\" @topic: q\n"
+	if string(got) != want {
+		t.Errorf("collapse: got %q want %q", string(got), want)
+	}
+}
+
 func TestApplyExtMirrorEditDropsLineOnRemove(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", true)
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -197,14 +245,52 @@ func TestApplyExtMirrorEditDropsLineOnRemove(t *testing.T) {
 	}
 }
 
+// remove with no value drops every (TARGET,tag) line.
+func TestApplyExtMirrorEditRemoveAllValues(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove)
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if string(got) != "" {
+		t.Errorf("remove-all: want empty, got %q", string(got))
+	}
+}
+
+// remove with a value drops only the matching-value line.
+func TestApplyExtMirrorEditRemoveByValue(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "one", extOpRemove)
+	if !matched {
+		t.Fatal("expected match")
+	}
+	want := "@ext: /a:\"x\" @topic: two\n"
+	if string(got) != want {
+		t.Errorf("remove-by-value: got %q want %q", string(got), want)
+	}
+}
+
 func TestApplyExtMirrorEditNoMatchReturnsOriginal(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n")
-	got, matched := applyExtMirrorEdit(data, `/missing`, "topic", "v", false)
+	got, matched := applyExtMirrorEdit(data, `/missing`, "topic", "v", extOpSet)
 	if matched {
 		t.Fatal("expected no match")
 	}
 	if string(got) != string(data) {
 		t.Errorf("data should be unchanged: got %q", string(got))
+	}
+}
+
+// add appends a new value; an exact dup leaves the file untouched.
+func TestApplyExtMirrorEditAdd(t *testing.T) {
+	data := []byte("@ext: /a:\"x\" @topic: recall\n")
+	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "recall", extOpAdd)
+	if !matched || string(got) != string(data) {
+		t.Errorf("dup: want matched && unchanged, got matched=%v data=%q", matched, string(got))
+	}
+	got, matched = applyExtMirrorEdit(data, `/a:"x"`, "topic", "bloodhound", extOpAdd)
+	if matched {
+		t.Errorf("new value: want !matched (caller appends), got matched=%v data=%q", matched, string(got))
 	}
 }
 

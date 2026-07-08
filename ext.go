@@ -276,14 +276,32 @@ func anchorSkip(value string) int {
 	return n
 }
 
-// mutateExtLine rewrites a single `@ext: TARGET @t1: v1 ...` line
-// when its TARGET matches targetSpec byte-for-byte and its tag list
-// contains tag — either replacing the value (remove=false) or
-// removing the `@tag: value` span (remove=true). Non-matching lines
-// pass through unchanged. dropLine is true when removing the only
-// tag on the line, signalling the caller to drop the whole line.
-// CRC: crc-DB.md | R2395, R2396
-func mutateExtLine(line, targetSpec, tag, newValue string, remove bool) (newLine string, dropLine, matched bool) {
+// extOp selects the mirror-authoring operation applyExtMirrorEdit
+// performs on a mirror file's @ext lines.
+type extOp int
+
+const (
+	extOpSet    extOp = iota // collapse every (TARGET,tag) value to one new value
+	extOpAdd                 // append-if-absent: report an exact (TARGET,tag,value) dup; never mutates
+	extOpRemove              // drop (TARGET,tag) spans, optionally filtered by value
+)
+
+// mutateExtLine applies op to a single `@ext: TARGET @t1: v1 ...`
+// line whose TARGET matches targetSpec byte-for-byte, handling EVERY
+// matching `tag` span on the line:
+//   - extOpSet: rewrite the first surviving (TARGET,tag) value to
+//     value and drop later ones; *setPlaced tracks whether that
+//     surviving value has already been written on an earlier line,
+//     so the collapse spans the whole file.
+//   - extOpRemove: drop matching spans — all of them, or only those
+//     whose value equals value when value != "".
+//   - extOpAdd: never modifies the line; matched reports an exact
+//     (TARGET,tag,value) duplicate.
+//
+// Non-matching lines pass through unchanged. dropLine is true when
+// the line is left with no tags.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047
+func mutateExtLine(line, targetSpec, tag, value string, op extOp, setPlaced *bool) (newLine string, dropLine, matched bool) {
 	trimmedLeading := strings.TrimLeft(line, " \t")
 	if !strings.HasPrefix(trimmedLeading, "@ext:") {
 		return line, false, false
@@ -296,31 +314,53 @@ func mutateExtLine(line, targetSpec, tag, newValue string, remove bool) (newLine
 		return line, false, false
 	}
 	tagLower := strings.ToLower(tag)
-	idx := -1
-	for i, tv := range tags {
-		if tv.Tag == tagLower {
-			idx = i
-			break
+	wantValue := strings.TrimSpace(value)
+
+	if op == extOpAdd {
+		// Duplicate scan only — the line is never rewritten.
+		for _, tv := range tags {
+			if tv.Tag == tagLower && tv.Value == wantValue {
+				return line, false, true
+			}
 		}
-	}
-	if idx < 0 {
 		return line, false, false
 	}
 
-	if remove {
-		tags = append(tags[:idx], tags[idx+1:]...)
-		if len(tags) == 0 {
-			return "", true, true
+	kept := tags[:0] // in-place filter of the surviving spans
+	for _, tv := range tags {
+		if tv.Tag != tagLower {
+			kept = append(kept, tv)
+			continue
 		}
-	} else {
-		tags[idx].Value = newValue
+		switch op {
+		case extOpSet:
+			matched = true
+			if !*setPlaced {
+				tv.Value = wantValue
+				*setPlaced = true
+				kept = append(kept, tv)
+			}
+			// later matches collapse away (dropped)
+		case extOpRemove:
+			if value == "" || tv.Value == wantValue {
+				matched = true // dropped
+			} else {
+				kept = append(kept, tv) // value filter spares this span
+			}
+		}
+	}
+	if !matched {
+		return line, false, false
+	}
+	if len(kept) == 0 {
+		return "", true, true
 	}
 
 	var sb strings.Builder
 	sb.WriteString(leading)
 	sb.WriteString("@ext: ")
 	sb.WriteString(targetSpec)
-	for _, tv := range tags {
+	for _, tv := range kept {
 		sb.WriteString(" @")
 		sb.WriteString(tv.Tag)
 		sb.WriteString(": ")
@@ -329,17 +369,20 @@ func mutateExtLine(line, targetSpec, tag, newValue string, remove bool) (newLine
 	return sb.String(), false, true
 }
 
-// applyExtMirrorEdit walks the lines of a mirror file's bytes, applies
-// mutateExtLine to the first matching line, and returns the rewritten
-// bytes plus a matched flag. Callers handle the no-match case (append
-// for SetExtTag, no-op for RemoveExtTag).
-// CRC: crc-DB.md | R2395, R2396
-func applyExtMirrorEdit(data []byte, targetSpec, tag, newValue string, remove bool) (newData []byte, matched bool) {
+// applyExtMirrorEdit walks every line of a mirror file's bytes,
+// applies mutateExtLine under op, and returns the rewritten bytes
+// plus a matched flag. For extOpSet/extOpRemove it processes ALL
+// matching lines (collapse / remove-all); for extOpAdd it scans for
+// an exact duplicate and returns the data unchanged when one is
+// found. Callers handle the no-match case (append for set/add, no-op
+// for remove).
+// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047
+func applyExtMirrorEdit(data []byte, targetSpec, tag, value string, op extOp) (newData []byte, matched bool) {
 	if len(data) == 0 {
 		return data, false
 	}
-	var out []byte
-	out = make([]byte, 0, len(data))
+	setPlaced := false
+	out := make([]byte, 0, len(data))
 	i := 0
 	for i < len(data) {
 		j := i
@@ -348,19 +391,22 @@ func applyExtMirrorEdit(data []byte, targetSpec, tag, newValue string, remove bo
 		}
 		hasNL := j < len(data)
 		line := string(data[i:j])
-		if !matched {
-			rewritten, drop, m := mutateExtLine(line, targetSpec, tag, newValue, remove)
-			if m {
-				matched = true
-				if drop {
-					i = j
-					if hasNL {
-						i++
-					}
-					continue
-				}
-				line = rewritten
+
+		rewritten, drop, m := mutateExtLine(line, targetSpec, tag, value, op, &setPlaced)
+		if m {
+			matched = true
+			if op == extOpAdd {
+				// Exact duplicate found — leave the file untouched.
+				return data, true
 			}
+			if drop {
+				i = j
+				if hasNL {
+					i++
+				}
+				continue
+			}
+			line = rewritten
 		}
 		out = append(out, line...)
 		if hasNL {
