@@ -405,6 +405,84 @@ CLI owns only the mirror file's contribution. Because `SetExtTag`
 already resolves to the mirror path, this needs no corpus scan — it
 is a single-file edit.
 
+### Staging ledger: proposed and judged routings
+
+The mirror file is not only for committed `@ext` routings. It is the
+durable home for a routing's whole curation lifecycle — proposed,
+committed, judged — as three tag classes that share the `@ext-*`
+family and the same `TARGET @tag: value` grammar:
+
+```
+@ext:            TARGET @tag: value
+@ext-candidate:  insight: "why" TARGET @tag: value
+@ext-judgment:   TARGET @tag:
+```
+
+- `@ext` — a committed routing (a live edge).
+- `@ext-candidate` — a **proposed** routing: durable, not yet an edge.
+- `@ext-judgment` — a durable **judgment** on the `(tag-name, chunk)`
+  edge (rejection now, reinforcement later). Tag-name only, no value.
+
+All three index as **ordinary tags** — a normal F and V record for the
+outer tag name — because that is the truth of the file: an enumerator
+listing a chunk's tags must see `@ext-candidate` sitting there with its
+literal value. They differ only in what the indexer *additionally*
+derives. `@ext` routes a live edge (an X record plus the routed tag's V
+record); `@ext-candidate` and `@ext-judgment` derive a proposal or a
+judgment record *instead of* the live edge. **That derivation is a
+separate pass — the tag-derived record subsystem — and is out of scope
+here; this section covers only the file forms and the authoring verbs.**
+See `.scratch/TAG-ENRICHMENT.md` "SETTLED MODEL" for the derivation model.
+
+#### `insight` — proposal rationale
+
+A candidate may carry an `insight` field: a quoted, free-text "why"
+that travels with the proposal for whoever makes the accept/reject
+call. It is **reserved metadata, not a routed tag**, so it carries **no
+`@` sigil** (see `specs/at-ext-parsing.md` "Reserved metadata field")
+and sits **first, before the TARGET**. Leading-and-quoted is what keeps
+it unambiguous against an undelimited TARGET (a bare path can contain
+spaces). The why is always quoted, so it may hold `@` or `:` without
+confusing the parser. Because the insight is part of the line's text,
+two proposals of the same tag with different insights are distinct
+lines, so both survive for the judge to weigh; insights are preserved,
+not collapsed into one.
+
+#### Verbs: `ark ext {candidate,accept,reject}`
+
+Three verbs stage a routing through its lifecycle, all riding the same
+class-aware mirror-file machinery (`applyExtMirrorEdit`) as
+`set`/`add`/`remove`:
+
+```
+ark ext candidate <target> <tag> [value] [--insight "why"]   # write an @ext-candidate
+ark ext accept    <target> <tag> [value]                     # @ext-candidate → @ext
+ark ext reject    <target> <tag> [value]                     # @ext-candidate → @ext-judgment
+```
+
+- `candidate` — author an `@ext-candidate` line for `(target, tag[,
+  value])`, with the optional quoted `--insight`. Append semantics: an
+  exact duplicate (same target, tag, value, and insight) is a silent
+  no-op; a differing insight is a distinct proposal (a new line).
+- `accept` — rewrite the matching `@ext-candidate` line(s) to `@ext`,
+  committing the edge and consuming the candidate in one file edit. The
+  candidate's `insight` is **dropped**: the committed routing stands on
+  its own (the `@ext` form carries no rationale). This closes the accept
+  loop by construction — the candidate is gone and the edge is authored;
+  the indexer reflects both on reindex.
+- `reject` — rewrite the matching `@ext-candidate` line(s) to a single
+  `@ext-judgment: TARGET @tag:` (tag-name only), recording a durable
+  rejection and consuming the candidate(s) for that `(target, tag)`.
+
+Like every mutating `ark ext` verb, all three proxy through the running
+server or open the index exclusively when stopped, and act **only** on
+the target's mirror file.
+
+**Deferred to a later pass** (not this authoring pass): the derivation
+of `@ext-candidate` → RC and `@ext-judgment` → RJ, the signed judgment
+score, a reject rationale, and the reinforcement (positive-judgment)
+verb.
+
 ## `mcp.suggestExtLocator(chunkID)`
 
 Returns the workshop's recommended base + locator for an `@ext`

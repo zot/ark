@@ -52,3 +52,50 @@
   UpdateTags(fileid=2, {"decision": 1, "pattern": 3})
 **Expected:** TagFiles(["decision"]) returns [{fileid=1, count=2}, {fileid=2, count=1}]
 **Refs:** crc-Store.md
+
+## Test: ParseExtTarget peels leading insight (R3050)
+**Purpose:** Verify a leading reserved `insight: "..."` (no @) is peeled
+  before the TARGET and excluded from routed tags
+**Input:** `insight: "resembles the streaming note" %abc @topic: recall`
+**Expected:** target `%abc`, tags `[{topic, recall}]` — insight not a routed tag
+**Refs:** crc-Indexer.md
+
+## Test: ParseExtTarget insight with embedded @/: (R3050)
+**Purpose:** Verify a quoted insight holding `@` or `:` is not mis-split
+**Input:** `insight: "see @foo: bar, ratio 3:1" %abc @topic: recall`
+**Expected:** tags `[{topic, recall}]` — embedded `@foo:` stays inside the quote
+**Refs:** crc-Indexer.md
+
+## Test: ParseExtTarget spacey path (R3050)
+**Purpose:** Verify a bare path with spaces is bounded at the first routed
+  `@tag:` (the automated producer proposes on such files), bare and with
+  leading insight
+**Input:** `/home/my notes/file with space.md @topic: recall`; and
+  `insight: "why" /home/my notes/x y.md @topic: recall`
+**Expected:** target keeps the full spacey path; tags `[{topic, recall}]`
+**Refs:** crc-Indexer.md
+
+## Test: candidateLine insight-first (R3051, R3053)
+**Purpose:** Verify the canonical `@ext-candidate` line — insight quoted and
+  first, before the TARGET, no @; tag-name-only when value empty; quotes escaped
+**Input:** candidateLine("%abc","topic","recall","it fits");
+  candidateLine("%abc","topic","recall",`say "hi"`)
+**Expected:** `@ext-candidate: insight: "it fits" %abc @topic: recall`;
+  `@ext-candidate: insight: "say \"hi\"" %abc @topic: recall`
+**Refs:** crc-DB.md
+
+## Test: accept transition drops insight (R3054)
+**Purpose:** Verify accept removes the matching `@ext-candidate` span and
+  re-emits `@ext`, dropping the insight
+**Input:** candidate line with insight for (%abc, topic, recall) →
+  applyExtMirrorEdit(remove, candidate) → upsertExtLine(add, committed)
+**Expected:** `@ext: %abc @topic: recall` (candidate gone, insight dropped)
+**Refs:** crc-DB.md
+
+## Test: reject transition tag-name-only (R3055)
+**Purpose:** Verify reject removes matching candidate span(s) and re-emits a
+  single tag-name-only `@ext-judgment`, deduped across values
+**Input:** two candidate lines for (%abc, topic) with different values →
+  remove(candidate) → per-distinct-tag upsertExtLine(add, judgment, value="")
+**Expected:** one `@ext-judgment: %abc @topic:` line
+**Refs:** crc-DB.md

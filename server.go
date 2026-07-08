@@ -471,9 +471,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /chunks", srv.handleChunks)
 	mux.HandleFunc("POST /grams", srv.handleGrams)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
-	mux.HandleFunc("POST /ext/set", srv.handleExtSet)       // R3049
-	mux.HandleFunc("POST /ext/add", srv.handleExtAdd)       // R3049
-	mux.HandleFunc("POST /ext/remove", srv.handleExtRemove) // R3049
+	mux.HandleFunc("POST /ext/set", srv.handleExtSet)             // R3049
+	mux.HandleFunc("POST /ext/add", srv.handleExtAdd)             // R3049
+	mux.HandleFunc("POST /ext/remove", srv.handleExtRemove)       // R3049
+	mux.HandleFunc("POST /ext/candidate", srv.handleExtCandidate) // R3057
+	mux.HandleFunc("POST /ext/accept", srv.handleExtAccept)       // R3057
+	mux.HandleFunc("POST /ext/reject", srv.handleExtReject)       // R3057
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 	mux.HandleFunc("POST /tmp/add", srv.handleTmpAdd)
 	mux.HandleFunc("POST /tmp/update", srv.handleTmpUpdate)
@@ -2132,13 +2135,14 @@ func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// extRequest is the shared body for the /ext/{set,add,remove}
-// endpoints. value is the new value for set/add and the optional
-// filter for remove.
+// extRequest is the shared body for the /ext/* endpoints. value is the
+// new value for set/add and the optional filter for remove/accept/
+// reject; insight is the optional quoted rationale for candidate.
 type extRequest struct {
-	Target string `json:"target"`
-	Tag    string `json:"tag"`
-	Value  string `json:"value"`
+	Target  string `json:"target"`
+	Tag     string `json:"tag"`
+	Value   string `json:"value"`
+	Insight string `json:"insight"`
 }
 
 // extMutate decodes an extRequest and runs an `@ext` mirror mutation
@@ -2172,6 +2176,23 @@ func (srv *Server) handleExtAdd(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | R3049
 func (srv *Server) handleExtRemove(w http.ResponseWriter, r *http.Request) {
 	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.RemoveExtTag(req.Target, req.Tag, req.Value) })
+}
+
+// CRC: crc-Server.md | R3057
+func (srv *Server) handleExtCandidate(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error {
+		return db.CandidateExtTag(req.Target, req.Tag, req.Value, req.Insight)
+	})
+}
+
+// CRC: crc-Server.md | R3057
+func (srv *Server) handleExtAccept(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.AcceptExtTag(req.Target, req.Tag, req.Value) })
+}
+
+// CRC: crc-Server.md | R3057
+func (srv *Server) handleExtReject(w http.ResponseWriter, r *http.Request) {
+	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.RejectExtTag(req.Target, req.Tag, req.Value) })
 }
 
 type fetchRequest struct {

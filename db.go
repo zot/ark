@@ -2168,6 +2168,21 @@ func (db *DB) resolveExtMirror(targetSpec string) (mirrorPath string, err error)
 	return extMirrorPath(sourceRoot, targetFile)
 }
 
+// readExtMirror reads a target's mirror file. A missing file yields nil
+// data and no error (the caller creates it on the subsequent write); a
+// genuine read failure is wrapped. Shared by the create-if-missing
+// authoring methods (upsertExtTag and CandidateExtTag).
+func readExtMirror(mirrorPath string) ([]byte, error) {
+	data, err := os.ReadFile(mirrorPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", mirrorPath, err)
+	}
+	return data, nil
+}
+
 // upsertExtTag reads the target's mirror file, applies op (set or
 // add) via applyExtMirrorEdit, appends a fresh single-tag line when
 // nothing matched, and writes atomically. Shared by SetExtTag
@@ -2183,24 +2198,13 @@ func (db *DB) upsertExtTag(targetSpec, tag, value string, op extOp) error {
 	if err != nil {
 		return err
 	}
-	var data []byte
-	if existing, rerr := os.ReadFile(mirrorPath); rerr == nil {
-		data = existing
-	} else if !os.IsNotExist(rerr) {
-		return fmt.Errorf("read %s: %w", mirrorPath, rerr)
+	data, err := readExtMirror(mirrorPath)
+	if err != nil {
+		return err
 	}
-	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, op)
-	if !matched {
-		// No existing (TARGET,tag) span (set) / no exact dup (add):
-		// append one (TARGET, tag, value) per line. Multi-tag lines
-		// are syntactically valid but the authoring path always
-		// appends single-tag lines for trivial scanning.
-		// CRC: crc-DB.md | R2394
-		if len(newData) > 0 && newData[len(newData)-1] != '\n' {
-			newData = append(newData, '\n')
-		}
-		newData = append(newData, []byte(fmt.Sprintf("@ext: %s @%s: %s\n", targetSpec, strings.ToLower(tag), value))...)
-	}
+	// applyExtMirrorEdit (set/add) plus append-when-nothing-matched, on
+	// the committed class. (R2394)
+	newData := upsertExtLine(data, targetSpec, tag, value, op, extClassCommitted)
 	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
 	}
@@ -2245,9 +2249,103 @@ func (db *DB) RemoveExtTag(targetSpec, tag, value string) error {
 		}
 		return fmt.Errorf("read %s: %w", mirrorPath, err)
 	}
-	newData, matched := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove)
+	newData, matched, _ := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove, extClassCommitted)
 	if !matched {
 		return nil
+	}
+	return atomicWriteFile(mirrorPath, newData, 0644)
+}
+
+// CandidateExtTag authors an `@ext-candidate` (proposed routing) into
+// the target's mirror file, carrying an optional quoted insight placed
+// first, before the TARGET (no @ sigil). An exact duplicate line (same TARGET, tag,
+// value, and insight) is a silent no-op; a differing insight is a new
+// proposal, so multiple insights on one (TARGET, tag) are preserved.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3053
+func (db *DB) CandidateExtTag(targetSpec, tag, value, insight string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	mirrorPath, err := db.resolveExtMirror(targetSpec)
+	if err != nil {
+		return err
+	}
+	data, err := readExtMirror(mirrorPath)
+	if err != nil {
+		return err
+	}
+	line := candidateLine(targetSpec, tag, value, insight)
+	if mirrorHasLine(data, line) {
+		return nil // exact duplicate — silent no-op
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	data = append(data, line...)
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
+	}
+	return atomicWriteFile(mirrorPath, data, 0644)
+}
+
+// AcceptExtTag rewrites matching `@ext-candidate` line(s) to `@ext`,
+// committing the routing and consuming the candidate (its insight is
+// dropped). Missing file or no match is a silent no-op.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054
+func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
+	return db.transitionExtCandidate(targetSpec, tag, value, extClassCommitted)
+}
+
+// RejectExtTag rewrites matching `@ext-candidate` line(s) to a single
+// tag-name-only `@ext-judgment`, a durable rejection consuming the
+// candidate(s). Missing file or no match is a silent no-op.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.4 | R3055
+func (db *DB) RejectExtTag(targetSpec, tag, value string) error {
+	return db.transitionExtCandidate(targetSpec, tag, value, extClassJudgment)
+}
+
+// transitionExtCandidate removes matching @ext-candidate spans and
+// re-emits them under toClass: committed keeps each distinct (tag,
+// value) as an @ext line; judgment collapses to one tag-name-only
+// @ext-judgment line per distinct tag. The candidate's insight is
+// dropped by the rewrite; append-if-absent dedups against existing
+// committed / judgment lines.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3055
+func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extClass) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	mirrorPath, err := db.resolveExtMirror(targetSpec)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(mirrorPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", mirrorPath, err)
+	}
+	newData, matched, removed := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove, extClassCandidate)
+	if !matched {
+		return nil
+	}
+	seen := make(map[string]bool, len(removed))
+	for _, tv := range removed {
+		emitValue := tv.Value
+		key := tv.Tag + "\x00" + tv.Value
+		if toClass == extClassJudgment {
+			emitValue = "" // tag-name-only judgment
+			key = tv.Tag
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		newData = upsertExtLine(newData, targetSpec, tv.Tag, emitValue, extOpAdd, toClass)
 	}
 	return atomicWriteFile(mirrorPath, newData, 0644)
 }

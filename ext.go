@@ -41,8 +41,11 @@ type ExtTargetParts struct {
 // over the quoted-string or regex span so an embedded `@tag:`
 // inside the anchor is not mistaken for the start of the tag list.
 // See specs/at-ext-parsing.md "Target syntax."
-// CRC: crc-Indexer.md | R1983, R1984, R2111, R2112, R2365
+// CRC: crc-Indexer.md | R1983, R1984, R2111, R2112, R2365, R3050
 func ParseExtTarget(value string) (target string, tags []TagValue, ok bool) {
+	// Peel a leading reserved `insight: "..."` metadata field (no @
+	// sigil), if present, before the TARGET is parsed. (R3050)
+	value = stripLeadingInsight(value)
 	searchStart := anchorSkip(value)
 	first := tagValueRegex.FindStringSubmatchIndex(value[searchStart:])
 	if first == nil {
@@ -276,6 +279,70 @@ func anchorSkip(value string) int {
 	return n
 }
 
+// extInsightField is the reserved `insight` metadata field name (no @
+// sigil) — a quoted rationale carried first on an @ext-candidate,
+// before the TARGET, excluded from the routed-tag list. (R3050)
+const extInsightField = "insight"
+
+// stripLeadingInsight removes a leading reserved `insight: "..."`
+// metadata field (no @ sigil) from an @ext-candidate value, returning
+// the remainder that begins at the TARGET. The field is recognized only
+// when `insight:` is followed by whitespace and then a quoted value —
+// so a relative-path base literally named `insight` with a `:"anchor"`
+// narrower (no space before the quote) is not mistaken for it. The
+// quoted span is skipped via indexUnescapedByte so the rationale may
+// contain `@` or `:`. Absent such a leading field, value is returned
+// unchanged, so committed `@ext` and `@ext-judgment` values pass through.
+// CRC: crc-Indexer.md | R3050
+func stripLeadingInsight(value string) string {
+	s := strings.TrimLeft(value, " \t")
+	kw := extInsightField + ":"
+	if !strings.HasPrefix(s, kw) {
+		return value
+	}
+	rest := s[len(kw):]
+	trimmed := strings.TrimLeft(rest, " \t")
+	if len(trimmed) == len(rest) || len(trimmed) == 0 || trimmed[0] != '"' {
+		return value // no space after the colon, or not quoted — a TARGET, not metadata
+	}
+	if end := indexUnescapedByte(trimmed[1:], '"'); end >= 0 {
+		return trimmed[1+end+1:]
+	}
+	return value // unterminated quote — leave intact (degrade gracefully)
+}
+
+// extClass selects which @ext-family tag a mirror line carries. Named
+// markers replace the hardcoded "@ext:" literal so one line-mutation
+// path serves committed routings, proposals, and judgments alike.
+// (R3051, R3052)
+type extClass int
+
+const (
+	extClassCommitted extClass = iota // @ext           — a live routing edge
+	extClassCandidate                 // @ext-candidate — a proposed routing
+	extClassJudgment                  // @ext-judgment  — a durable judgment
+)
+
+// Mirror-line tag names for the @ext-* family (tagExt = "ext" lives in
+// store.go). (R3051)
+const (
+	extCandidateTag = "ext-candidate"
+	extJudgmentTag  = "ext-judgment"
+)
+
+// marker returns the class's @-prefixed line marker: "@ext",
+// "@ext-candidate", or "@ext-judgment". (R3052)
+func (c extClass) marker() string {
+	switch c {
+	case extClassCandidate:
+		return "@" + extCandidateTag
+	case extClassJudgment:
+		return "@" + extJudgmentTag
+	default:
+		return "@" + tagExt
+	}
+}
+
 // extOp selects the mirror-authoring operation applyExtMirrorEdit
 // performs on a mirror file's @ext lines.
 type extOp int
@@ -286,28 +353,32 @@ const (
 	extOpRemove              // drop (TARGET,tag) spans, optionally filtered by value
 )
 
-// mutateExtLine applies op to a single `@ext: TARGET @t1: v1 ...`
-// line whose TARGET matches targetSpec byte-for-byte, handling EVERY
-// matching `tag` span on the line:
+// mutateExtLine applies op to a single mirror line of the given class
+// (`@ext:` / `@ext-candidate:` / `@ext-judgment:`) whose TARGET matches
+// targetSpec byte-for-byte, handling EVERY matching `tag` span:
 //   - extOpSet: rewrite the first surviving (TARGET,tag) value to
 //     value and drop later ones; *setPlaced tracks whether that
 //     surviving value has already been written on an earlier line,
 //     so the collapse spans the whole file.
 //   - extOpRemove: drop matching spans — all of them, or only those
-//     whose value equals value when value != "".
+//     whose value equals value when value != ""; each dropped span's
+//     (tag, value) is appended to *removed when non-nil (the
+//     accept/reject transitions read this to re-emit under a new class).
 //   - extOpAdd: never modifies the line; matched reports an exact
 //     (TARGET,tag,value) duplicate.
 //
-// Non-matching lines pass through unchanged. dropLine is true when
-// the line is left with no tags.
-// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047
-func mutateExtLine(line, targetSpec, tag, value string, op extOp, setPlaced *bool) (newLine string, dropLine, matched bool) {
+// Only lines carrying `class`'s marker are considered; other classes and
+// non-@ext lines pass through unchanged. dropLine is true when the line
+// is left with no tags.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047, R3052, R3054, R3055
+func mutateExtLine(line, targetSpec, tag, value string, op extOp, class extClass, setPlaced *bool, removed *[]TagValue) (newLine string, dropLine, matched bool) {
+	marker := class.marker()
 	trimmedLeading := strings.TrimLeft(line, " \t")
-	if !strings.HasPrefix(trimmedLeading, "@ext:") {
+	if !strings.HasPrefix(trimmedLeading, marker+":") {
 		return line, false, false
 	}
 	leading := line[:len(line)-len(trimmedLeading)]
-	valuePart := trimmedLeading[len("@ext:"):]
+	valuePart := trimmedLeading[len(marker)+1:]
 
 	target, tags, ok := ParseExtTarget(valuePart)
 	if !ok || target != targetSpec {
@@ -344,6 +415,9 @@ func mutateExtLine(line, targetSpec, tag, value string, op extOp, setPlaced *boo
 		case extOpRemove:
 			if value == "" || tv.Value == wantValue {
 				matched = true // dropped
+				if removed != nil {
+					*removed = append(*removed, tv)
+				}
 			} else {
 				kept = append(kept, tv) // value filter spares this span
 			}
@@ -358,7 +432,8 @@ func mutateExtLine(line, targetSpec, tag, value string, op extOp, setPlaced *boo
 
 	var sb strings.Builder
 	sb.WriteString(leading)
-	sb.WriteString("@ext: ")
+	sb.WriteString(marker)
+	sb.WriteString(": ")
 	sb.WriteString(targetSpec)
 	for _, tv := range kept {
 		sb.WriteString(" @")
@@ -369,17 +444,17 @@ func mutateExtLine(line, targetSpec, tag, value string, op extOp, setPlaced *boo
 	return sb.String(), false, true
 }
 
-// applyExtMirrorEdit walks every line of a mirror file's bytes,
-// applies mutateExtLine under op, and returns the rewritten bytes
-// plus a matched flag. For extOpSet/extOpRemove it processes ALL
-// matching lines (collapse / remove-all); for extOpAdd it scans for
-// an exact duplicate and returns the data unchanged when one is
-// found. Callers handle the no-match case (append for set/add, no-op
-// for remove).
-// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047
-func applyExtMirrorEdit(data []byte, targetSpec, tag, value string, op extOp) (newData []byte, matched bool) {
+// applyExtMirrorEdit walks every line of a mirror file's bytes, applies
+// mutateExtLine under op for the given class, and returns the rewritten
+// bytes, a matched flag, and (for extOpRemove) the (tag, value) pairs it
+// removed. For extOpSet/extOpRemove it processes ALL matching lines
+// (collapse / remove-all); for extOpAdd it scans for an exact duplicate
+// and returns the data unchanged when one is found. Callers handle the
+// no-match case (append for set/add, no-op for remove).
+// CRC: crc-DB.md | Seq: seq-ext-author.md#1.5 | R2395, R2396, R3047, R3052
+func applyExtMirrorEdit(data []byte, targetSpec, tag, value string, op extOp, class extClass) (newData []byte, matched bool, removed []TagValue) {
 	if len(data) == 0 {
-		return data, false
+		return data, false, nil
 	}
 	setPlaced := false
 	out := make([]byte, 0, len(data))
@@ -392,12 +467,12 @@ func applyExtMirrorEdit(data []byte, targetSpec, tag, value string, op extOp) (n
 		hasNL := j < len(data)
 		line := string(data[i:j])
 
-		rewritten, drop, m := mutateExtLine(line, targetSpec, tag, value, op, &setPlaced)
+		rewritten, drop, m := mutateExtLine(line, targetSpec, tag, value, op, class, &setPlaced, &removed)
 		if m {
 			matched = true
 			if op == extOpAdd {
 				// Exact duplicate found — leave the file untouched.
-				return data, true
+				return data, true, nil
 			}
 			if drop {
 				i = j
@@ -416,5 +491,77 @@ func applyExtMirrorEdit(data []byte, targetSpec, tag, value string, op extOp) (n
 			i = j
 		}
 	}
-	return out, matched
+	return out, matched, removed
+}
+
+// upsertExtLine applies op for (targetSpec, tag, value) on class to
+// data, appending a fresh single-tag line of that class when nothing
+// matched (set/add). Pure — no file I/O; shared by the file-authoring
+// DB methods and the accept/reject transitions. (R3052)
+func upsertExtLine(data []byte, targetSpec, tag, value string, op extOp, class extClass) []byte {
+	newData, matched, _ := applyExtMirrorEdit(data, targetSpec, tag, value, op, class)
+	if !matched && (op == extOpSet || op == extOpAdd) {
+		newData = appendExtLine(newData, targetSpec, tag, value, class)
+	}
+	return newData
+}
+
+// appendExtLine appends a single-tag line of the given class. An empty
+// value emits a tag-name-only routed tag (`@tag:`), the form
+// @ext-judgment uses. (R3051, R3055)
+func appendExtLine(data []byte, targetSpec, tag, value string, class extClass) []byte {
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	var sb strings.Builder
+	sb.WriteString(class.marker())
+	sb.WriteString(": ")
+	sb.WriteString(targetSpec)
+	sb.WriteString(" @")
+	sb.WriteString(strings.ToLower(tag))
+	sb.WriteString(":")
+	if v := strings.TrimSpace(value); v != "" {
+		sb.WriteString(" ")
+		sb.WriteString(v)
+	}
+	sb.WriteString("\n")
+	return append(data, sb.String()...)
+}
+
+// candidateLine builds the canonical @ext-candidate mirror line. A
+// non-empty insight is emitted quoted and FIRST, before the TARGET —
+// with no @ sigil, because it is metadata, not a routed tag — so it
+// never collides with an undelimited TARGET, and distinct insights make
+// distinct lines (preserved, not collapsed). (R3051, R3053)
+func candidateLine(targetSpec, tag, value, insight string) string {
+	var sb strings.Builder
+	sb.WriteString(extClassCandidate.marker())
+	sb.WriteString(": ")
+	if s := strings.TrimSpace(insight); s != "" {
+		sb.WriteString(extInsightField)
+		sb.WriteString(`: "`)
+		sb.WriteString(strings.ReplaceAll(s, `"`, `\"`))
+		sb.WriteString(`" `)
+	}
+	sb.WriteString(targetSpec)
+	sb.WriteString(" @")
+	sb.WriteString(strings.ToLower(tag))
+	sb.WriteString(":")
+	if v := strings.TrimSpace(value); v != "" {
+		sb.WriteString(" ")
+		sb.WriteString(v)
+	}
+	return sb.String()
+}
+
+// mirrorHasLine reports whether data contains line as an exact whole
+// line. Used for @ext-candidate duplicate detection (whole-line match,
+// so a differing insight is a distinct proposal). (R3053)
+func mirrorHasLine(data []byte, line string) bool {
+	for _, existing := range strings.Split(string(data), "\n") {
+		if existing == line {
+			return true
+		}
+	}
+	return false
 }

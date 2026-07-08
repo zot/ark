@@ -105,7 +105,7 @@ func TestMutateExtLineSingleTagReplace(t *testing.T) {
 	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: /a/b.md:"foo" @topic: old`,
-		`/a/b.md:"foo"`, "topic", "new", extOpSet, &placed)
+		`/a/b.md:"foo"`, "topic", "new", extOpSet, extClassCommitted, &placed, nil)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop, got matched=%v drop=%v", matched, drop)
 	}
@@ -118,7 +118,7 @@ func TestMutateExtLineSingleTagRemoveDropsLine(t *testing.T) {
 	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: /a/b.md:"foo" @topic: x`,
-		`/a/b.md:"foo"`, "topic", "", extOpRemove, &placed)
+		`/a/b.md:"foo"`, "topic", "", extOpRemove, extClassCommitted, &placed, nil)
 	if !matched || !drop {
 		t.Fatalf("want matched && drop, got matched=%v drop=%v", matched, drop)
 	}
@@ -131,7 +131,7 @@ func TestMutateExtLineMultiTagReplaceOnly(t *testing.T) {
 	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: %abc @t1: v1 @target: oldv @t3: v3`,
-		`%abc`, "target", "newv", extOpSet, &placed)
+		`%abc`, "target", "newv", extOpSet, extClassCommitted, &placed, nil)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop")
 	}
@@ -144,7 +144,7 @@ func TestMutateExtLineMultiTagRemoveOnly(t *testing.T) {
 	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: %abc @t1: v1 @target: v2 @t3: v3`,
-		`%abc`, "target", "", extOpRemove, &placed)
+		`%abc`, "target", "", extOpRemove, extClassCommitted, &placed, nil)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop")
 	}
@@ -158,7 +158,7 @@ func TestMutateExtLineRemoveByValueSparesOthers(t *testing.T) {
 	placed := false
 	got, drop, matched := mutateExtLine(
 		`@ext: %abc @topic: keep @topic: drop`,
-		`%abc`, "topic", "drop", extOpRemove, &placed)
+		`%abc`, "topic", "drop", extOpRemove, extClassCommitted, &placed, nil)
 	if !matched || drop {
 		t.Fatalf("want matched && !drop, got matched=%v drop=%v", matched, drop)
 	}
@@ -171,11 +171,11 @@ func TestMutateExtLineRemoveByValueSparesOthers(t *testing.T) {
 func TestMutateExtLineAddReportsDup(t *testing.T) {
 	placed := false
 	in := `@ext: %abc @topic: recall`
-	got, drop, matched := mutateExtLine(in, `%abc`, "topic", "recall", extOpAdd, &placed)
+	got, drop, matched := mutateExtLine(in, `%abc`, "topic", "recall", extOpAdd, extClassCommitted, &placed, nil)
 	if !matched || drop || got != in {
 		t.Fatalf("dup: want matched && !drop && unchanged, got matched=%v drop=%v line=%q", matched, drop, got)
 	}
-	got, _, matched = mutateExtLine(in, `%abc`, "topic", "bloodhound", extOpAdd, &placed)
+	got, _, matched = mutateExtLine(in, `%abc`, "topic", "bloodhound", extOpAdd, extClassCommitted, &placed, nil)
 	if matched || got != in {
 		t.Errorf("no dup: want !matched && unchanged, got matched=%v line=%q", matched, got)
 	}
@@ -184,7 +184,7 @@ func TestMutateExtLineAddReportsDup(t *testing.T) {
 func TestMutateExtLineNoMatchOnTargetMismatch(t *testing.T) {
 	placed := false
 	in := `@ext: /a/b.md:"foo" @topic: v`
-	got, _, matched := mutateExtLine(in, `/a/b.md:"bar"`, "topic", "new", extOpSet, &placed)
+	got, _, matched := mutateExtLine(in, `/a/b.md:"bar"`, "topic", "new", extOpSet, extClassCommitted, &placed, nil)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
@@ -193,7 +193,7 @@ func TestMutateExtLineNoMatchOnTargetMismatch(t *testing.T) {
 func TestMutateExtLineNoMatchOnTagMismatch(t *testing.T) {
 	placed := false
 	in := `@ext: /a/b.md:"foo" @topic: v`
-	got, _, matched := mutateExtLine(in, `/a/b.md:"foo"`, "other", "new", extOpSet, &placed)
+	got, _, matched := mutateExtLine(in, `/a/b.md:"foo"`, "other", "new", extOpSet, extClassCommitted, &placed, nil)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
@@ -202,7 +202,7 @@ func TestMutateExtLineNoMatchOnTagMismatch(t *testing.T) {
 func TestMutateExtLineNonExtLineUntouched(t *testing.T) {
 	placed := false
 	in := `# heading`
-	got, _, matched := mutateExtLine(in, `/x`, "topic", "new", extOpSet, &placed)
+	got, _, matched := mutateExtLine(in, `/x`, "topic", "new", extOpSet, extClassCommitted, &placed, nil)
 	if matched || got != in {
 		t.Errorf("want unchanged, got matched=%v line=%q", matched, got)
 	}
@@ -210,7 +210,7 @@ func TestMutateExtLineNonExtLineUntouched(t *testing.T) {
 
 func TestApplyExtMirrorEditReplacesFirstMatch(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "new", extOpSet)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "new", extOpSet, extClassCommitted)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -223,7 +223,7 @@ func TestApplyExtMirrorEditReplacesFirstMatch(t *testing.T) {
 // set collapses every (TARGET,tag) value across lines to one.
 func TestApplyExtMirrorEditSetCollapsesAcrossLines(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n@ext: /b:\"y\" @topic: q\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "z", extOpSet)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "z", extOpSet, extClassCommitted)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -235,7 +235,7 @@ func TestApplyExtMirrorEditSetCollapsesAcrossLines(t *testing.T) {
 
 func TestApplyExtMirrorEditDropsLineOnRemove(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n@ext: /b:\"y\" @topic: q\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove, extClassCommitted)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -248,7 +248,7 @@ func TestApplyExtMirrorEditDropsLineOnRemove(t *testing.T) {
 // remove with no value drops every (TARGET,tag) line.
 func TestApplyExtMirrorEditRemoveAllValues(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "", extOpRemove, extClassCommitted)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -260,7 +260,7 @@ func TestApplyExtMirrorEditRemoveAllValues(t *testing.T) {
 // remove with a value drops only the matching-value line.
 func TestApplyExtMirrorEditRemoveByValue(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: one\n@ext: /a:\"x\" @topic: two\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "one", extOpRemove)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "one", extOpRemove, extClassCommitted)
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -272,7 +272,7 @@ func TestApplyExtMirrorEditRemoveByValue(t *testing.T) {
 
 func TestApplyExtMirrorEditNoMatchReturnsOriginal(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: old\n")
-	got, matched := applyExtMirrorEdit(data, `/missing`, "topic", "v", extOpSet)
+	got, matched, _ := applyExtMirrorEdit(data, `/missing`, "topic", "v", extOpSet, extClassCommitted)
 	if matched {
 		t.Fatal("expected no match")
 	}
@@ -284,11 +284,11 @@ func TestApplyExtMirrorEditNoMatchReturnsOriginal(t *testing.T) {
 // add appends a new value; an exact dup leaves the file untouched.
 func TestApplyExtMirrorEditAdd(t *testing.T) {
 	data := []byte("@ext: /a:\"x\" @topic: recall\n")
-	got, matched := applyExtMirrorEdit(data, `/a:"x"`, "topic", "recall", extOpAdd)
+	got, matched, _ := applyExtMirrorEdit(data, `/a:"x"`, "topic", "recall", extOpAdd, extClassCommitted)
 	if !matched || string(got) != string(data) {
 		t.Errorf("dup: want matched && unchanged, got matched=%v data=%q", matched, string(got))
 	}
-	got, matched = applyExtMirrorEdit(data, `/a:"x"`, "topic", "bloodhound", extOpAdd)
+	got, matched, _ = applyExtMirrorEdit(data, `/a:"x"`, "topic", "bloodhound", extOpAdd, extClassCommitted)
 	if matched {
 		t.Errorf("new value: want !matched (caller appends), got matched=%v data=%q", matched, string(got))
 	}
@@ -351,5 +351,180 @@ func TestOverlayExtRoutingToPersistentTarget(t *testing.T) {
 	// The routed tag must have reached the persistent target chunk.
 	if chunks := db.extmap.ExtTagValueChunks("topic", "routed"); len(chunks) == 0 {
 		t.Fatal("overlay @ext routing did not reach the persistent target")
+	}
+}
+
+// --- Pass A: @ext-candidate / @ext-judgment authoring ledger ---
+
+// Spacey paths parse correctly: the TARGET is bounded at the first
+// routed @tag:, so a space inside a bare path stays part of the TARGET.
+// The automated producer proposes tags on such files, so this must hold
+// — and insight-first keeps it holding. (R3050)
+func TestParseExtTargetSpaceInPath(t *testing.T) {
+	target, tags, ok := ParseExtTarget(`/home/my notes/file with space.md @topic: recall`)
+	if !ok || target != "/home/my notes/file with space.md" {
+		t.Fatalf("spacey path: ok=%v target=%q", ok, target)
+	}
+	if len(tags) != 1 || tags[0].Tag != "topic" || tags[0].Value != "recall" {
+		t.Errorf("tags: %+v", tags)
+	}
+	target, tags, ok = ParseExtTarget(`insight: "why" /home/my notes/x y.md @topic: recall`)
+	if !ok || target != "/home/my notes/x y.md" || len(tags) != 1 || tags[0].Value != "recall" {
+		t.Errorf("insight+spacey: target=%q tags=%+v ok=%v", target, tags, ok)
+	}
+}
+
+// ParseExtTarget peels a leading reserved insight; it is not a routed tag. (R3050)
+func TestParseExtTargetSkipsInsight(t *testing.T) {
+	target, tags, ok := ParseExtTarget(`insight: "resembles the streaming note" %abc @topic: recall`)
+	if !ok || target != "%abc" {
+		t.Fatalf("ok=%v target=%q", ok, target)
+	}
+	if len(tags) != 1 || tags[0].Tag != "topic" || tags[0].Value != "recall" {
+		t.Errorf("routed tags: %+v (insight should be excluded)", tags)
+	}
+}
+
+// A quoted @insight containing `@` or `:` must not be mis-split. (R3050)
+func TestParseExtTargetInsightWithEmbeddedAtColon(t *testing.T) {
+	_, tags, ok := ParseExtTarget(`insight: "see @foo: bar, ratio 3:1" %abc @topic: recall`)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if len(tags) != 1 || tags[0].Tag != "topic" || tags[0].Value != "recall" {
+		t.Errorf("embedded @/: leaked into routed tags: %+v", tags)
+	}
+}
+
+// An @insight with no routed tag is nothing to apply. (R3050)
+func TestParseExtTargetInsightOnlyIsNoop(t *testing.T) {
+	if _, _, ok := ParseExtTarget(`insight: "just a thought" %abc`); ok {
+		t.Error("expected ok=false for insight-only @ext line")
+	}
+}
+
+// extClass markers name the three mirror classes. (R3052)
+func TestExtClassMarker(t *testing.T) {
+	cases := map[extClass]string{
+		extClassCommitted: "@ext",
+		extClassCandidate: "@ext-candidate",
+		extClassJudgment:  "@ext-judgment",
+	}
+	for c, want := range cases {
+		if got := c.marker(); got != want {
+			t.Errorf("marker(%d): got %q want %q", c, got, want)
+		}
+	}
+}
+
+// mutateExtLine only touches lines of the requested class. (R3052)
+func TestMutateExtLineClassAware(t *testing.T) {
+	placed := false
+	line := `@ext-candidate: %abc @topic: recall`
+	if _, _, matched := mutateExtLine(line, "%abc", "topic", "", extOpRemove, extClassCommitted, &placed, nil); matched {
+		t.Errorf("committed class should not match an @ext-candidate line")
+	}
+	placed = false
+	got, drop, matched := mutateExtLine(line, "%abc", "topic", "", extOpRemove, extClassCandidate, &placed, nil)
+	if !matched || !drop || got != "" {
+		t.Errorf("candidate class: matched=%v drop=%v got=%q", matched, drop, got)
+	}
+}
+
+// candidateLine builds the canonical proposal line; insight quoted and
+// placed before the routed tag, escaped. (R3051, R3053)
+func TestCandidateLine(t *testing.T) {
+	if got := candidateLine("%abc", "topic", "recall", "it fits"); got != `@ext-candidate: insight: "it fits" %abc @topic: recall` {
+		t.Errorf("with insight: %q", got)
+	}
+	if got := candidateLine("%abc", "topic", "recall", ""); got != `@ext-candidate: %abc @topic: recall` {
+		t.Errorf("no insight: %q", got)
+	}
+	if got := candidateLine("%abc", "topic", "", ""); got != `@ext-candidate: %abc @topic:` {
+		t.Errorf("bare tag: %q", got)
+	}
+	if got := candidateLine("%abc", "topic", "recall", `say "hi"`); got != `@ext-candidate: insight: "say \"hi\"" %abc @topic: recall` {
+		t.Errorf("quoted insight escaping: %q", got)
+	}
+}
+
+// appendExtLine emits a tag-name-only routed tag for an empty value
+// (the @ext-judgment form). (R3055)
+func TestAppendExtLineJudgmentTagNameOnly(t *testing.T) {
+	if got := appendExtLine(nil, "%abc", "topic", "", extClassJudgment); string(got) != "@ext-judgment: %abc @topic:\n" {
+		t.Errorf("judgment tag-name-only: %q", string(got))
+	}
+	if got := appendExtLine(nil, "%abc", "topic", "recall", extClassCommitted); string(got) != "@ext: %abc @topic: recall\n" {
+		t.Errorf("committed: %q", string(got))
+	}
+}
+
+// mirrorHasLine matches whole lines exactly, so a differing insight is
+// a distinct proposal. (R3053)
+func TestMirrorHasLine(t *testing.T) {
+	data := []byte("@ext-candidate: %abc @topic: recall\n@ext: %x @y: z\n")
+	if !mirrorHasLine(data, "@ext-candidate: %abc @topic: recall") {
+		t.Error("should find the exact candidate line")
+	}
+	if mirrorHasLine(data, `@ext-candidate: insight: "x" %abc @topic: recall`) {
+		t.Error("differing insight is a distinct line, must not match")
+	}
+}
+
+// Accept transition (the pure composition DB.transitionExtCandidate
+// runs): remove the @ext-candidate span, re-emit committed, drop the
+// @insight. (R3054)
+func TestExtTransitionAcceptComposition(t *testing.T) {
+	data := []byte(`@ext-candidate: insight: "resembles streaming" %abc @topic: recall` + "\n")
+	newData, matched, removed := applyExtMirrorEdit(data, "%abc", "topic", "", extOpRemove, extClassCandidate)
+	if !matched || len(removed) != 1 || removed[0].Tag != "topic" || removed[0].Value != "recall" {
+		t.Fatalf("remove: matched=%v removed=%+v", matched, removed)
+	}
+	for _, tv := range removed {
+		newData = upsertExtLine(newData, "%abc", tv.Tag, tv.Value, extOpAdd, extClassCommitted)
+	}
+	if want := "@ext: %abc @topic: recall\n"; string(newData) != want {
+		t.Errorf("accept: got %q want %q", string(newData), want)
+	}
+}
+
+// Regression (live Pass A drive): accept/reject with a *specific* value
+// must still match an @ext-candidate that carries an @insight — the
+// insight must not throw off routed-tag value matching. (R3053, R3054)
+func TestExtCandidateInsightValueMatch(t *testing.T) {
+	line := `insight: "why here" /home/deck/work/ark/principles.md @itag: ival`
+	target, tags, ok := ParseExtTarget(line)
+	t.Logf("ParseExtTarget → target=%q tags=%+v ok=%v", target, tags, ok)
+
+	data := []byte(`@ext-candidate: insight: "why here" /home/deck/work/ark/principles.md @itag: ival` + "\n")
+	newData, matched, removed := applyExtMirrorEdit(data, "/home/deck/work/ark/principles.md", "itag", "ival", extOpRemove, extClassCandidate)
+	if !matched {
+		t.Fatalf("expected match on insight-bearing candidate; removed=%+v newData=%q", removed, string(newData))
+	}
+	if len(removed) != 1 || removed[0].Tag != "itag" || removed[0].Value != "ival" {
+		t.Errorf("removed=%+v", removed)
+	}
+}
+
+// Reject transition: remove candidate span(s), re-emit a single
+// tag-name-only @ext-judgment, deduped across values. (R3055)
+func TestExtTransitionRejectComposition(t *testing.T) {
+	data := []byte(
+		`@ext-candidate: %abc @topic: recall` + "\n" +
+			`@ext-candidate: %abc @topic: bloodhound` + "\n")
+	newData, matched, removed := applyExtMirrorEdit(data, "%abc", "topic", "", extOpRemove, extClassCandidate)
+	if !matched || len(removed) != 2 {
+		t.Fatalf("remove: matched=%v removed=%+v", matched, removed)
+	}
+	seen := map[string]bool{}
+	for _, tv := range removed {
+		if seen[tv.Tag] {
+			continue
+		}
+		seen[tv.Tag] = true
+		newData = upsertExtLine(newData, "%abc", tv.Tag, "", extOpAdd, extClassJudgment)
+	}
+	if want := "@ext-judgment: %abc @topic:\n"; string(newData) != want {
+		t.Errorf("reject: got %q want %q", string(newData), want)
 	}
 }

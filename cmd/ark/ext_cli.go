@@ -16,7 +16,7 @@ import (
 	"github.com/zot/ark"
 )
 
-// CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048, R3056
 func extCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "ext",
@@ -40,6 +40,27 @@ func extCommand() *ucli.Command {
 				ArgsUsage: "<target> <tag> [value]",
 				Action:    extRemoveAction,
 			},
+			{
+				Name:      "candidate",
+				Usage:     "propose <tag> on <target> as an @ext-candidate",
+				ArgsUsage: "<target> <tag> [value]",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "insight", Usage: "quoted rationale carried with the proposal"},
+				},
+				Action: extCandidateAction,
+			},
+			{
+				Name:      "accept",
+				Usage:     "commit matching @ext-candidate(s) on <target> to @ext",
+				ArgsUsage: "<target> <tag> [value]",
+				Action:    extAcceptAction,
+			},
+			{
+				Name:      "reject",
+				Usage:     "reject matching @ext-candidate(s) on <target> (durable @ext-judgment)",
+				ArgsUsage: "<target> <tag> [value]",
+				Action:    extRejectAction,
+			},
 		},
 	}
 }
@@ -47,10 +68,14 @@ func extCommand() *ucli.Command {
 // extProxyOrLocal runs an @ext mirror mutation: proxy to the running
 // server (POST /ext/<verb>) when one is up, else open the index
 // exclusively and call local. Mirrors the config add/remove dispatch.
-// CRC: crc-CLITree.md | R3048
-func extProxyOrLocal(verb, target, tag, value string, local func(*ark.DB) error) {
+// insight rides along only for candidate (empty for the other verbs).
+// CRC: crc-CLITree.md | R3048, R3056
+func extProxyOrLocal(verb, target, tag, value, insight string, local func(*ark.DB) error) {
 	if client := serverClient(arkDir); client != nil {
 		body := map[string]string{"target": target, "tag": tag, "value": value}
+		if insight != "" {
+			body["insight"] = insight
+		}
 		if err := proxyOK(client, "POST", "/ext/"+verb, body); err != nil {
 			fatal(err)
 		}
@@ -66,21 +91,45 @@ func extProxyOrLocal(verb, target, tag, value string, local func(*ark.DB) error)
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extSetAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, true)
-	extProxyOrLocal("set", target, tag, value, func(d *ark.DB) error { return d.SetExtTag(target, tag, value) })
+	extProxyOrLocal("set", target, tag, value, "", func(d *ark.DB) error { return d.SetExtTag(target, tag, value) })
 	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extAddAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, true)
-	extProxyOrLocal("add", target, tag, value, func(d *ark.DB) error { return d.AddExtTag(target, tag, value) })
+	extProxyOrLocal("add", target, tag, value, "", func(d *ark.DB) error { return d.AddExtTag(target, tag, value) })
 	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extRemoveAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("remove", target, tag, value, func(d *ark.DB) error { return d.RemoveExtTag(target, tag, value) })
+	extProxyOrLocal("remove", target, tag, value, "", func(d *ark.DB) error { return d.RemoveExtTag(target, tag, value) })
+	return nil
+}
+
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.2 | R3056
+func extCandidateAction(_ context.Context, c *ucli.Command) error {
+	target, tag, value := extArgs(c, false)
+	insight := c.String("insight")
+	extProxyOrLocal("candidate", target, tag, value, insight, func(d *ark.DB) error {
+		return d.CandidateExtTag(target, tag, value, insight)
+	})
+	return nil
+}
+
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.3 | R3056
+func extAcceptAction(_ context.Context, c *ucli.Command) error {
+	target, tag, value := extArgs(c, false)
+	extProxyOrLocal("accept", target, tag, value, "", func(d *ark.DB) error { return d.AcceptExtTag(target, tag, value) })
+	return nil
+}
+
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.4 | R3056
+func extRejectAction(_ context.Context, c *ucli.Command) error {
+	target, tag, value := extArgs(c, false)
+	extProxyOrLocal("reject", target, tag, value, "", func(d *ark.DB) error { return d.RejectExtTag(target, tag, value) })
 	return nil
 }
 

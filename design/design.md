@@ -266,7 +266,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Matcher.md → `match_test.go`
 - [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`, `search_nildb_test.go`
 - [x] test-Store.md → `store_test.go`
-- [x] test-Tags.md → `indexer_test.go`, `store_test.go`
+- [x] test-Tags.md → `indexer_test.go`, `store_test.go`, `ext_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
 - [x] test-TagBlock.md → `tagblock_test.go`
 - [x] test-Sweep.md → `db_test.go`
@@ -796,3 +796,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O142: sweepRequests reap is pending-only (R3041): a request whose secretary crashes mid-hunt leaves its cliPool.requests entry + request doc until a server bounce — DeregisterPoolSecretary drops the secretary+inflight but not the request record, and the reap never scans in-flight/orphaned requests. Bounded (crash-only, rare) and cleared on bounce; mid-flight-hunt recovery is out of scope per R3034. Deliberate, not an oversight.
 - [ ] O143: Multi-idea seed (R3043): the clue-split, K-scaling, and payload helpers (clueOf/seedInputs/seedK/resolveClue/buildSearchPayload) are unit-tested, and Recall's per-input union is its own existing coverage — but the end-to-end composition (paragraph A → chunk X, paragraph B → chunk Y, both in the unioned seed) is not tested against a live corpus. Disproportionate: needs a tuned fixture where distinct paragraphs match distinct chunks. Covered by its parts.
 - [ ] O144: ext authoring DB/CLI/server layer (DB.SetExtTag/AddExtTag/RemoveExtTag, ark ext {set,add,remove}, POST /ext/*) has no automated test — the pure line-mutation logic (mutateExtLine/applyExtMirrorEdit) is fully unit-tested (R2395/R2396/R3047), but the DB methods write to the real ~/.ark home via arkHomeDir (hardcoded os.UserHomeDir+/.ark), so a DB-level test would pollute the live home or need HOME injection. Verified live 2026-07-07: cold (exclusive DB) + warm (server proxy) paths, all three verbs, multi-value add, exact-dup no-op, collapse-all set, value-filtered + all-value remove, zero residue after cleanup. (R3048, R3049)
+- [ ] O145: Pass A @ext-candidate authoring glue verified live, not unit-tested: DB CandidateExtTag/AcceptExtTag/RejectExtTag file-I/O + resolveExtMirror path resolution, POST /ext/{candidate,accept,reject} handlers, and ark ext {candidate,accept,reject} CLI dispatch. Live-driven end-to-end (candidate w/ insight-first, accept drops insight, reject tag-name-only; spacey path; zero residue). Pure logic (parsing, class-aware mutation, transitions, line builders) is unit-tested in ext_test.go; the wrappers need a config-source + ~/.ark mirror fixture disproportionate to unit-test (O144 precedent for Layer 1).

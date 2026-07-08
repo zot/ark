@@ -135,6 +135,39 @@ reindex is asynchronous via the watcher.
 3.5.   watcher/indexer reindex the mirror file (as 1.9 / 2.7)
 ```
 
+## Flow: `ark ext` staging (candidate / accept / reject)
+
+`candidate` authors a new `@ext-candidate` line; `accept` and `reject`
+are class *transitions* on an existing candidate line, both riding the
+class-aware `applyExtMirrorEdit`. Diagram 4.
+
+```
+4.   ark ext {candidate|accept|reject} <target> <tag> [value] [--insight]
+4.1.   Action checks serverClient(arkDir):
+4.1.1.   server up → proxyOK(POST /ext/{candidate|accept|reject}, payload)
+4.1.1.1.   handler → extMutate → SyncVoid(db, fn) on the DB actor
+4.1.2.   no server → withExclusiveDB(db) calling the DB method directly
+4.2.   candidate → DB.CandidateExtTag(target, tag, value, insight):
+4.2.1.     read mirror file (empty if absent)
+4.2.2.     mirrorHasLine: scan for the exact candidate line
+             `@ext-candidate: [insight: "..."] TARGET @tag: value`
+             (whole-line match, so a differing insight is distinct)
+4.2.3.     found → no-op; else append the new candidate line
+             (insight, when given, quoted and first, before the TARGET, no @)
+4.3.   accept → DB.AcceptExtTag(target, tag, value):
+4.3.1.     applyExtMirrorEdit transition: for each matching @ext-candidate
+             line (TARGET byte-for-byte, tag, value filter when non-empty)
+             drop the candidate span and emit the routed (tag, value) as
+             an `@ext` line; insight dropped
+4.4.   reject → DB.RejectExtTag(target, tag, value):
+4.4.1.     transition matching @ext-candidate span(s) → a single
+             tag-name-only `@ext-judgment: TARGET @tag:`
+4.5.   atomicWriteFile(mirror_path) via temp+rename (as flow 1.7)
+4.6.   watcher/indexer reindex: all three classes index as ordinary tags
+         (F/V for the outer name); RC/RJ derivation for candidate/judgment
+         is a later pass, not in this flow
+```
+
 ## Notes
 
 The atomic write at 1.7 (and 2.5) is what gives the caller

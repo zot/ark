@@ -46,6 +46,29 @@ at resolve time so that the V record stores exactly what the user
 wrote (matching the verbatim-preservation rule for relative paths
 and `~/` expansion — see "Relative paths" below).
 
+### Reserved metadata field: `insight`
+
+An `@ext-candidate` value may begin with a reserved `insight: "…"`
+field — a quoted, free-text rationale carried with the proposal (see
+`curation-workshop-primitives.md` "Staging ledger"). It is **not** a
+routed tag and carries **no `@` sigil**, precisely because it is
+metadata. It sits **first, before the TARGET**, and its value is
+**always quoted**. `ParseExtTarget` peels a leading `insight: "…"`
+before it parses the TARGET, skipping the quoted span (via
+`indexUnescapedByte`) so the rationale may hold `@` or `:` without being
+misread.
+
+Leading-and-quoted is what keeps it unambiguous. A bare TARGET (a path,
+a `%uuid`, or a RANGE_STRING) is undelimited and can contain spaces, so
+a metadata field placed *between* the TARGET and the routed tag could
+not be told apart from the TARGET. Putting it first, quoted, with no
+sigil, avoids that entirely. The field is recognized only when
+`insight:` is followed by whitespace and then a quote, so a
+relative-path base literally named `insight` with a `:"anchor"` narrower
+(no space before the quote) is not mistaken for it. Because the insight
+is part of the line's text, two proposals of the same tag with different
+insights remain distinct lines (preserved, not merged).
+
 ## Target syntax
 
 ```

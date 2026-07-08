@@ -668,21 +668,27 @@ llama.cpp shared libs and needs only the `[embedding]` config.
 EC, orphan EF, dimension inconsistency); `--fix` deletes orphan EC,
 orphan EF, and wrong-dimension EC records.
 
-### `ext` — author `@ext` routings
+### `ext` — author and stage `@ext` routings
 
 ```
-ark ext set    <target> <tag> <value>
-ark ext add    <target> <tag> <value>
-ark ext remove <target> <tag> [value]
+ark ext set       <target> <tag> <value>
+ark ext add       <target> <tag> <value>
+ark ext remove    <target> <tag> [value]
+ark ext candidate <target> <tag> [value] [--insight "why"]
+ark ext accept    <target> <tag> [value]
+ark ext reject    <target> <tag> [value]
 ```
 
 Author `@ext` routings into the target's **mirror file**
 (`~/.ark/external/<slug>/<target-path>.md`) — the CLI counterpart
 to the Frictionless workshop's `mcp.setExtTag`/`mcp.removeExtTag`,
 so a plain-session assistant can apply an `@ext` proposal (e.g. a
-recall recommend) without the UI. All three verbs act only on the
+recall recommend) without the UI. All six verbs act only on the
 mirror file; they never scan or edit hand-authored `@ext` lines
-elsewhere in the corpus. `<target>` is a TARGET string per
+elsewhere in the corpus. The `candidate`/`accept`/`reject` verbs stage
+a routing through its proposed → committed → judged lifecycle (see
+`specs/curation-workshop-primitives.md` "Staging ledger"); deriving
+proposals and judgments to records is a later pass. `<target>` is a TARGET string per
 `specs/at-ext-parsing.md` (absolute paths for read-only chunks).
 Mutating, so each proxies through the running server (mutation runs
 in the DB actor) or opens the index exclusively when stopped —
@@ -693,6 +699,9 @@ mirrors the `config` add/remove pattern.
 | `set <target> <tag> <value>` | proxy-or-exclusive | Collapse every `(target, tag)` value in the mirror file to the single `<value>`; append when none exist |
 | `add <target> <tag> <value>` | proxy-or-exclusive | Append a `(target, tag, value)` routing (multiple values per tag allowed); an exact duplicate is a silent no-op |
 | `remove <target> <tag> [value]` | proxy-or-exclusive | Remove `(target, tag)` routings — all values, or only the matching `<value>` when given; missing file/line is a silent no-op |
+| `candidate <target> <tag> [value] [--insight "why"]` | proxy-or-exclusive | Author an `@ext-candidate` (proposed routing) in the mirror file; optional quoted `--insight` rationale; an exact duplicate is a silent no-op, a differing insight is a new proposal |
+| `accept <target> <tag> [value]` | proxy-or-exclusive | Rewrite matching `@ext-candidate` line(s) → `@ext` (commit the edge, consume the candidate; the `insight` is dropped) |
+| `reject <target> <tag> [value]` | proxy-or-exclusive | Rewrite matching `@ext-candidate` line(s) → a single `@ext-judgment: TARGET @tag:` (tag-name only, durable rejection) |
 
 ### `fetch` — read indexed file content
 
