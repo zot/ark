@@ -12,6 +12,17 @@ ExtMap's in-memory overlay state (`overlayRoutings` +
 fileidToTvids, extByAnchor, unresolvedTargets, virtualTagCount) are
 updated identically in both branches.
 
+**Class branch (tag-derived family, R3060/R3062/R3064).** The same flow
+drives three source classes, keyed uniformly `source_tvid + target_chunkid`
+and differing only at the write step: `@ext` writes X + the routed V edge +
+`virtualTagCount` (the flow below); `@ext-candidate` writes an RC record with
+tally = the line's `@count` and updates `candidateSourcesByChunk`;
+`@ext-judgment` writes an RJ record with signed score = the line's signed
+`@count` (or deletes at 0) and updates `rejectByChunk`. Candidate and judgment
+write **no** V edge and no `virtualTagCount`, and are persistent-only.
+Resolution, keying, the reindex diff, source-orphan cleanup, and startup
+rebuild are shared across classes.
+
 ## Participants
 - Indexer
 - ExtMap

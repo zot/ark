@@ -1,6 +1,18 @@
 # Sequence: Derived Tags — Derive + Accept + Reject
 
-**Requirements:** R2664–R2686, R2911
+**Requirements:** R2664–R2686, R2911, R3067, R3068, R3069, R3071
+
+> **State B (2026-07-08, tag-derived-subsystem migration).** The producer
+> path below is **inverted** — the derivation pass no longer writes bbolt RC
+> directly; it authors an `@ext-candidate` file tag via `DB.CandidateExtTag`
+> (a duplicate bumps the line's `@count`), and the indexer derives RC keyed
+> `source_tvid + target_chunkid` (see seq-ext-routing.md). Accept is
+> `DB.AcceptExtTag` (`@ext-candidate` → `@ext`; `Store.AcceptDerived` retires,
+> R3071); reject is `DB.RejectExtTag` (authors `@ext-judgment`; `RejectDerived`
+> inverts, R3069). Reads go through `ExtMap.candidateSourcesByChunk` /
+> `rejectByChunk`, not RC/RJ prefix scans (R3067). The numbered diagram below
+> still shows the pre-inversion direct-write flow and is reconciled when the
+> migration lands. RF freshness (R3072) is unchanged.
 
 Three flows cover the derived-tag lifecycle. The recall substrate's
 *derivation pass* writes RC and RF records as a side effect of

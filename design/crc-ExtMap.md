@@ -1,11 +1,19 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915, R3058, R3059, R3060, R3062, R3063, R3064, R3065, R3066, R3074
 
-Owns the in-memory state and orchestration for `@ext` routing.
-Six core maps maintained alongside DB X-record writes; canonical
-re-resolution flow runs from the indexer's reindex callback;
-source-side cleanup runs from the orphan callback. Rebuilt at
-startup by scanning X records.
+Owns the in-memory state and orchestration for the **tag-derived
+record family** — `@ext`→X (committed routing), `@ext-candidate`→RC
+(proposal), `@ext-judgment`→RJ (signed judgment) — all keyed
+`source_tvid + target_chunkid` and sharing one lifecycle. Six core
+maps maintained alongside DB X-record writes; canonical re-resolution
+flow runs from the indexer's reindex callback; source-side cleanup
+runs from the orphan callback. Rebuilt at startup by scanning X (and
+RC/RJ) records. The generalization from "the `@ext` router" to "the
+tag-derived routing map" branches only at the **write step** by class:
+`@ext` writes an X record, the routed V edge, and `virtualTagCount`;
+`@ext-candidate`/`@ext-judgment` write RC/RJ **instead of** the edge —
+no V append, no `virtualTagCount` bump. RC/RJ are persistent-only (no
+overlay branch). (R3060, R3062, R3063, R3064)
 
 Two extension maps and an error log handle overlay (tmp://)
 routings whose records cannot live in the index. Overlay state is
@@ -53,8 +61,31 @@ sources index, dropped as overlay items disappear.
 - overlayErrors: []OverlayError — append-only diagnostics for
   overlay routings; session-scoped. Each entry: {Time,
   SourceChunkID, SourceFileID, Severity, Message}. (R2029)
+- candidateSourcesByChunk: map[uint64][]uint64 — target_chunkid →
+  source_tvids of `@ext-candidate` routings landing on that chunk.
+  In-memory reverse lookup for "candidates proposed on chunk C,"
+  replacing the RC bbolt prefix scan. Maintained on derive / reindex /
+  cleanup, rebuilt at startup (pattern of routedTagsByTvidExt). Read by
+  `enrichProposedTags` / `DerivedProposals`, which then Resolve +
+  ParseExtTarget each source_tvid to recover (tagname, value). (R3065)
+- rejectByChunk: map[uint64]map[string]int64 — target_chunkid → tagname
+  → signed judgment score, the in-memory judgment lookup for the reject
+  filter. "Is T net-rejected on C" is one hit with the negative-score
+  check. Score is materialized from the `@ext-judgment` `@count` field.
+  Maintained fresh, rebuilt at startup. (R3066)
 
 ## Does
+- Class-branched write step: IndexExt / ReresolveOnReindex / CleanupSource
+  take the source tag's class (committed / candidate / judgment) and branch
+  only where they touch the DB. Committed → today's X-record + routed-V-edge +
+  virtualTagCount path (unchanged). Candidate → write RC[source_tvid][target]
+  with tally = the `@ext-candidate` line's `@count` (R3074); update
+  candidateSourcesByChunk; no V edge, no virtualTagCount. Judgment → write
+  RJ[source_tvid][target] with signed score = the `@ext-judgment` line's signed
+  `@count` (nanos = derive time), or delete when `@count` is 0 (absent ≡
+  neutral); update rejectByChunk; no V edge, no virtualTagCount. Everything
+  else — TARGET resolution, keying, the reindex diff, source-orphan cleanup,
+  startup rebuild — is shared across classes. (R3062, R3063, R3064, R3074)
 - Rebuild(db *DB): startup scan of X records to repopulate the seven
   core maps (six from R1992 plus extSource). Reads `targetToChunk`
   and `virtualTagCount` directly from X record contents; derives

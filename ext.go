@@ -311,6 +311,57 @@ func stripLeadingInsight(value string) string {
 	return value // unterminated quote — leave intact (degrade gracefully)
 }
 
+// extCountField is the reserved `count` metadata field carried as a
+// `@count: N` routed-position tag on @ext-candidate / @ext-judgment
+// lines. Unlike a peel it stays in the tag's value string (so the V
+// record mirrors the file faithfully), but the derivation drops it from
+// the routed tags and materializes its signed value into the RC tally /
+// signed RJ score. (R3074)
+const extCountField = "count"
+
+// extractCountField splits the reserved `@count` field out of a parsed
+// routed-tag list. It returns the remaining routed tags, the signed
+// count, and whether a count was present. A malformed count value is
+// treated as absent (routed tag dropped, count 0). @count is reserved
+// for the candidate/judgment classes; a committed @ext carrying one has
+// it dropped from routing and ignored (hasCount stays usable but the
+// caller does not materialize it). (R3074)
+// CRC: crc-Indexer.md | R3074
+func extractCountField(tags []TagValue) (routed []TagValue, count int64, hasCount bool) {
+	routed = tags[:0]
+	for _, tv := range tags {
+		if tv.Tag == extCountField {
+			if n, err := strconv.ParseInt(strings.TrimSpace(tv.Value), 10, 64); err == nil {
+				count, hasCount = n, true
+			}
+			continue
+		}
+		routed = append(routed, tv)
+	}
+	return routed, count, hasCount
+}
+
+// extClassForTag maps an @ext-family outer tag name to its class.
+// Non-family tags map to extClassCommitted by convention; callers gate
+// on membership before relying on the result. (R3061)
+// CRC: crc-Indexer.md | R3061
+func extClassForTag(tag string) extClass {
+	switch tag {
+	case extCandidateTag:
+		return extClassCandidate
+	case extJudgmentTag:
+		return extClassJudgment
+	default:
+		return extClassCommitted
+	}
+}
+
+// isExtFamilyTag reports whether tag is one of the three tag-derived
+// source classes (@ext / @ext-candidate / @ext-judgment). (R3061)
+func isExtFamilyTag(tag string) bool {
+	return tag == tagExt || tag == extCandidateTag || tag == extJudgmentTag
+}
+
 // extClass selects which @ext-family tag a mirror line carries. Named
 // markers replace the hardcoded "@ext:" literal so one line-mutation
 // path serves committed routings, proposals, and judgments alike.

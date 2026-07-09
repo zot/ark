@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113, R1114, R1115, R1116, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984, R2012, R2016, R2018, R2022, R2024, R2026, R2110, R2111, R2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050
+**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113, R1114, R1115, R1116, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984, R2012, R2016, R2018, R2022, R2024, R2026, R2110, R2111, R2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -24,6 +24,13 @@ A reserved `insight: "..."` metadata field (no `@` sigil) may lead an
 `stripLeadingInsight`, skipping the quoted span so it may contain `@` or
 `:`, and it is excluded from the routed-tag list. Leading-and-quoted
 avoids ambiguity with an undelimited, possibly-spacey TARGET. (R3050)
+A second reserved field, `@count: N` (signed int, `@` sigil), may trail an
+`@ext-candidate` / `@ext-judgment` value; `ParseExtTarget` drops it from the
+routed-tag list but — unlike a peel — **retains it in the returned value
+text**, so the outer tag's V record mirrors the file line faithfully (the
+index is a performance mirror of the source). The parsed count is handed to
+the derivation to materialize the RC tally / signed RJ score. `@count` on a
+committed `@ext` is excluded from routing and not materialized. (R3074)
 
 The indexer threads the **source file's absolute directory** through
 `runExtRouting` → `collectIndexExtPlans` / `collectReresolvePlans` so
@@ -33,10 +40,14 @@ loop. Re-resolution paths recover the source path from
 `extSource[tvid_ext]` → `chunkFileID` → `fileIDPath`. (R2374)
 
 `@ext` routing is delegated to ExtMap. During the indexed-chunk
-callback, for each `TagValue{Tag: "ext", Value: V}` in the chunk's
-extracted tags, the indexer calls `ExtMap.IndexExt(tvid_ext,
-sourceChunkID, V, sourceFileid, txn, tt)`. The source chunkID
-threads in so ExtMap can compute `bothPersistent` per target.
+callback, `collectIndexExtPlans` builds a per-class derivation plan for
+each `TagValue` whose tag is `tagExt`, `extCandidateTag`, or
+`extJudgmentTag` (previously `tagExt` only) and calls
+`ExtMap.IndexExt(tvid, sourceChunkID, V, sourceFileid, class, txn, tt)`
+with the tag's class, so ExtMap branches the write step (X+V+count vs
+RC vs RJ). The candidate/judgment value carries the parsed `@count`
+(R3074) through to the RC tally / signed RJ score. The source chunkID
+threads in so ExtMap can compute `bothPersistent` per target. (R3061)
 The reindex callback (microfts2 fires once per file with
 `(fileid, orphanedChunkIDs, addedChunkIDs)`) calls
 `ExtMap.ReresolveOnReindex(...)` for the canonical re-resolution

@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R119, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2765, R2766, R2874, R2875, R2876, R2877, R2878, R2879, R2881, R2882, R2883, R2884, R2885, R2886, R2887, R2975, R2979, R2980, R2983
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R119, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2765, R2766, R2874, R2875, R2876, R2877, R2878, R2879, R2881, R2882, R2883, R2884, R2885, R2886, R2887, R2975, R2979, R2980, R2983, R3058, R3059, R3060, R3065, R3066, R3067, R3069, R3070, R3071, R3072, R3073
 
 Ark's own `ark` bucket inside microfts2's bbolt database. Manages missing
 files, unresolved files, ark-level settings, and tag tracking.
@@ -169,11 +169,11 @@ is no longer in the DB. See schedule-record-only.md.)
 - ClearAllSurfaceCooldown() (int, error): delete every RM record across
   all sessions (mirrors ClearAllDiscussed). Both are the clean-command
   mechanism for RM. (R2887)
-- WriteDerivedProposal(txn *bbolt.Tx, chunkID uint64, tagname string)
-  error: write or increment RC[chunkid + tagname]. If the record
-  exists, increment its 8-byte big-endian uint64 tally; otherwise
-  write tally=1. Called inside the derivation pass's batched write
-  txn. (R2664, R2674, R2675)
+- WriteDerivedProposal: **superseded.** RC is no longer written by a direct
+  Store primitive keyed `chunkid + tagname`; it is derived by ExtMap's
+  class-branched write step from the `@ext-candidate` file tag, keyed
+  `source_tvid + target_chunkid`, with the tally materialized from `@count`.
+  (R3058, R3062, R3068)
 - WriteDerivedFreshness(txn *bbolt.Tx, chunkID, serial uint64) error:
   write RF[chunkid] = varint(serial). Same batched txn as the RC
   writes. (R2666, R2669, R2675)
@@ -185,54 +185,40 @@ is no longer in the DB. See schedule-record-only.md.)
   across the entire ED prefix via WalkRecordsSinceSerial(ED, 0,
   ...). Cheap with the existing S substrate. Used once per recall
   call to establish the freshness comparator for the batch. (R2669)
-- AdjustJudgment(txn *bbolt.Tx, chunkID uint64, tagname string,
-  delta int64) (newScore int64, err error): the read-modify-write
-  primitive for the signed **Recall Judgment** edge
-  `RJ[chunkid + tagname]`. Read the current score (absent = 0), add
-  `delta`, stamp the timestamp to NOW, write the v3 value
-  `signed-varint(score) + 8-byte BE unix nanos`. Positive delta
-  reinforces; negative decays/rejects. A score that lands at 0 may
-  be stored or deleted (absent ≡ 0). Runs inside the caller's write
-  txn. (R2874, R2875, R2881)
+- AdjustJudgment: **superseded.** The signed judgment score is no longer
+  adjusted by a direct bbolt RMW keyed `chunkid + tagname`; it is carried by
+  the `@ext-judgment` line's signed `@count` (RMW on the file line, one
+  closure-actor op) and materialized into `RJ[source_tvid + target_chunkid]`
+  by the derivation. Reinforcement (positive) rides the same field.
+  (R3059, R3062, R3069, R3075)
 - ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string)
   (score int64, present bool, err error): read the signed score for
   the edge. Absent → `(0, false, nil)`. A value that does not decode
   as `signed-varint + 8 bytes` is treated conservatively as rejected
   (negative score, `present = true`) so a `reject_propose_ceiling==0`
   caller never re-proposes a corrupt edge. (R2874, R2876)
-- HasDerivedRejection(txn *bbolt.Tx, chunkID uint64, tagname string)
-  (rejected bool, magnitude uint64, err error): thin wrapper over
-  `ReadJudgment`. `rejected = present && score < 0`;
-  `magnitude = max(0, -score)` (the rejection strength, identical to
-  the v2 counter under rejection-only history). Used by:
-  - the derivation pass to filter candidates (`score < 0` blocks
-    re-proposal; the magnitude then gates against
-    `reject_propose_ceiling`),
-  - `DerivedProposals` (defense-in-depth filter on reads),
-  - the assistant's "mention rejected proposals" path (uses the
-    magnitude against `reject_mention_ceiling`).
-  (R2665, R2673, R2678, R2765, R2766, R2876, R2878)
-- DerivedProposals(chunkID uint64) ([]DerivedProposal, error): one
-  View txn. Range-scan `"RC" + chunkid varint`, decode each entry's
-  tagname and 8-byte big-endian tally, skip entries shadowed by
-  an RJ record. Return slice sorted by tally descending. Reader
-  treats RC values that are not exactly 8 bytes as tally=0.
-  (R2664, R2678, R2681)
-- AcceptDerived(chunkID uint64, tagname, value string) (tvid uint64,
-  err error): one write txn through the actor. Delete
-  `RC[chunkid + tagname]`. Resolve or allocate tvid for the
-  (tagname, value) pair. Append chunkID via the existing F/V
-  attach path (the per-chunk append path, same code that handles
-  inline tag writes). Empty value produces a bare-tag attach.
-  Returns the resolved tvid. (R2679)
-- RejectDerived(chunkID uint64, tagname string) (magnitude uint64,
-  err error): one write txn through the actor. Delete
-  `RC[chunkid + tagname]`, then `AdjustJudgment(txn, chunkID,
-  tagname, -1)`. Returns the rejection magnitude (`max(0,
-  -newScore)`) so callers expecting the prior counter are unchanged.
-  With no reinforcement producer present, a rejection-only sequence
-  yields scores `-1, -2, -3, …` — bit-for-bit identical to the v2
-  monotonic counter. (R2680, R2877)
+- HasDerivedRejection / the reject-filter read: **moves to the in-memory map.**
+  "Is tag T net-rejected on chunk C" is answered by `ExtMap.rejectByChunk`
+  (target_chunkid → tagname → signed score), not a direct `RJ[chunkid + tagname]`
+  key lookup — RJ is now keyed by source_tvid, so the chunk→tagname question is
+  not a direct key. The propose pass, the mention path, and the (retiring)
+  read-side defense all consult the map. `reject_propose_ceiling` /
+  `reject_mention_ceiling` read the map's signed magnitude. (R3066, R3070)
+- DerivedProposals(chunkID uint64) ([]DerivedProposal, error): read
+  `ExtMap.candidateSourcesByChunk[chunkID]` → source_tvids; for each,
+  `TvidMap.Resolve(source_tvid)` + `ParseExtTarget` recovers `(tagname, value)`
+  and the RC record supplies the tally. Skip tagnames net-rejected in
+  `rejectByChunk` (defense-in-depth). Return sorted by tally descending.
+  Supersedes the `"RC" + chunkid` prefix scan. (R3058, R3065, R3067)
+- AcceptDerived: **retires.** Committing a candidate is `DB.AcceptExtTag`
+  (`@ext-candidate` → `@ext`); on reindex the RC derivation drops and the X+V
+  edge lands, so the accept loop closes by construction with no separate
+  RC-delete-and-attach primitive. (R3071)
+- RejectDerived(chunkID uint64, tagname string) (magnitude uint64, err error):
+  **inverts.** No longer a direct `RC` delete + `AdjustJudgment` write; it
+  authors an `@ext-judgment` file tag via `DB.RejectExtTag` (create-or-decrement
+  the signed `@count`). The indexer derives the RJ record; the returned
+  magnitude reads back from `rejectByChunk`. (R3069, R3075)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time
@@ -416,22 +402,23 @@ is no longer in the DB. See schedule-record-only.md.)
 - Value: string — empty means bare-name entry
 - Timestamp: time.Time — derived from the 8-byte RD value
 
-### Derived Tag Records (RC/RJ/RF, R2664-R2666, R2681-R2682, R2874)
-- RC key: `"RC" + chunkid varint + tagname` (raw bytes, `[\w][\w\-.]*`,
-  no control bytes). Value: 8 bytes, big-endian `uint64` tally. One
-  record per (chunkid, tagname) statistical candidate; bare-tag in
-  the v1 statistical slice. Malformed value → tally=0 on read. (R2664,
-  R2681)
-- RJ key: `"RJ" + chunkid varint + tagname` — mirrors RC. Value
-  (v3): `signed-varint(score) + 8-byte BE unix nanos`. The record is
-  the **Recall Judgment** edge — one signed relevance figure per
-  (chunkid, tagname). `score < 0` is net-rejected (magnitude
-  `-score` = the v2 reject counter); `score > 0` is reinforced;
-  `score == 0` ≡ absent. The trailing timestamp is the most-recent
-  adjustment (decay-on-read is a future knob). Applies to attached
-  F/V hyperedges as well as RC proposals — the key addresses any
-  (chunkid, tagname). Bidirectional via AdjustJudgment; no manual
-  un-reject verb. (R2665, R2874, R2879, R2881)
+### Derived Tag Records (RC/RJ/RF, R3058-R3059, R3072, R3074)
+- RC key (re-keyed): `"RC" + source_tvid varint + target_chunkid varint` —
+  source_tvid is the `@ext-candidate` tag's tvid. Value: varint tally,
+  materialized from the line's `@count` field. Tagname/value are **not**
+  stored — recovered via `TvidMap.Resolve(source_tvid)` + `ParseExtTarget`.
+  One record per (candidate source, target chunk); distinct insights → distinct
+  source_tvids → separate records at one chunk. Reverse lookup via
+  `ExtMap.candidateSourcesByChunk`. Supersedes the `chunkid + tagname → 8-byte
+  tally` shape. (R3058, R3060, R3074)
+- RJ key (re-keyed): `"RJ" + source_tvid varint + target_chunkid varint` —
+  mirrors RC; source_tvid is the `@ext-judgment` tag's tvid. Value (v3):
+  `signed-varint(score) + 8-byte BE unix nanos`; score materialized from the
+  line's signed `@count`, nanos = derive time. `score < 0` net-rejected
+  (magnitude `-score`), `> 0` reinforced, `== 0` ≡ absent (line removed).
+  Applies to attached F/V hyperedges as well as RC proposals. The chunk→tagname
+  reject question is answered by `ExtMap.rejectByChunk`, not a direct key.
+  Supersedes the `chunkid + tagname` key shape. (R3059, R3060, R3066, R3074)
 - RF key: `"RF" + chunkid varint`. Value: varint `uint64` — the
   `max RecordSerial(ED, *)` observed at last derivation pass.
   Missing → serial 0 on read (force re-process). Malformed varint
