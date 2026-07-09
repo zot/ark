@@ -854,23 +854,25 @@ session:
 ## Recall Judgment record (signed per-edge relevance)
 
 The RJ record is the **Recall Judgment** edge: one signed relevance
-figure per (chunkid, tagname). Rejection is the negative tail of a
-single bidirectional axis.
+figure per (source `@ext-judgment` tvid, target chunk). Rejection is the
+negative tail of a single bidirectional axis.
 
-- **Key:** unchanged — `"RJ"` + chunkid varint + tagname.
+- **Key:** `"RJ"` + source_tvid varint + target_chunkid varint (re-keyed
+  from the old chunkid + tagname shape). The tagname is recovered from the
+  source tvid, not stored.
 - **Value (v3):** `signed-varint(score) + 8-byte BE unix nanos`.
   `score < 0` is net-rejected (magnitude `-score` is the rejection
   strength); `score > 0` is reinforced; `score == 0` ≡ record-absent.
   The timestamp is the most-recent adjustment.
 
-The edge applies to attached tags (live F/V hyperedges) as well as
-derived RC proposals — the key addresses any (chunkid, tagname).
-`Store.AdjustJudgment(chunk, tag, delta)` is the bidirectional
-read-modify-write primitive; `Store.RejectDerived` is a `-1` delta
-that also deletes the RC. With no reinforcement producer yet (the
-Recall Secretary is a later seam), a rejection-only sequence yields
-scores `-1, -2, -3, …` — bit-for-bit identical to the prior monotonic
-reject counter.
+The score is **materialized from the `@ext-judgment` line's signed
+`@count`** and RJ is derived on reindex, not written directly.
+`Store.RejectDerived` authors that tag via `DB.RejectExtTag`, which
+creates the judgment (`@count: -1`) or decrements it. With no
+reinforcement producer yet (the Recall Secretary is a later seam), a
+rejection-only sequence yields scores `-1, -2, -3, …` — the magnitude
+accumulates in `@count`. The reject filter reads the in-memory
+`ExtMap.rejectByChunk` map, not an RJ key lookup.
 
 **Migration:** the v2 (`varint counter + nanos`) and v3 values are
 structurally indistinguishable, so there is no automatic drop —

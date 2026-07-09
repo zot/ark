@@ -24,6 +24,16 @@ func setupRecall(t *testing.T) (*Librarian, *DB) {
 	t.Helper()
 	idx, dir := testIndexer(t)
 	db := newTestDB(idx, dir)
+	// Wire the @ext routing state as DB.Open does in production, so the
+	// derivation reject filter (l.db.extmap) and DerivedProposals
+	// (store.extmap) have a live ExtMap and the indexer derives RC/RJ.
+	db.extmap = NewExtMap()
+	db.indexer.extmap = db.extmap
+	db.indexer.db = db // back-pointer the ext derivation needs (indexer.go:391 gate)
+	db.store.SetExtMap(db.extmap)
+	if err := db.extmap.Rebuild(db); err != nil {
+		t.Fatalf("ExtMap.Rebuild: %v", err)
+	}
 	db.svc = make(chan func(), 16)
 	go runSvc(db.svc)
 	t.Cleanup(func() {

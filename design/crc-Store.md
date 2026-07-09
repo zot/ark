@@ -191,12 +191,13 @@ is no longer in the DB. See schedule-record-only.md.)
   closure-actor op) and materialized into `RJ[source_tvid + target_chunkid]`
   by the derivation. Reinforcement (positive) rides the same field.
   (R3059, R3062, R3069, R3075)
-- ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string)
-  (score int64, present bool, err error): read the signed score for
-  the edge. Absent → `(0, false, nil)`. A value that does not decode
-  as `signed-varint + 8 bytes` is treated conservatively as rejected
-  (negative score, `present = true`) so a `reject_propose_ceiling==0`
-  caller never re-proposes a corrupt edge. (R2874, R2876)
+- ReadJudgment: **superseded.** The old (chunkid + tagname) signed-score
+  read is gone; `ReadDerivedJudgment(txn, source_tvid, target_chunkid)`
+  reads the re-keyed RJ record with the same v3 codec — absent →
+  `(0, false, nil)`, and a value that does not decode as
+  `signed-varint + 8 bytes` reads conservatively as rejected (negative
+  score, `present = true`) so a corrupt edge never re-proposes.
+  (R3059, R2874)
 - HasDerivedRejection / the reject-filter read: **moves to the in-memory map.**
   "Is tag T net-rejected on chunk C" is answered by `ExtMap.rejectByChunk`
   (target_chunkid → tagname → signed score), not a direct `RJ[chunkid + tagname]`
@@ -210,15 +211,18 @@ is no longer in the DB. See schedule-record-only.md.)
   and the RC record supplies the tally. Skip tagnames net-rejected in
   `rejectByChunk` (defense-in-depth). Return sorted by tally descending.
   Supersedes the `"RC" + chunkid` prefix scan. (R3058, R3065, R3067)
-- AcceptDerived: **retires.** Committing a candidate is `DB.AcceptExtTag`
-  (`@ext-candidate` → `@ext`); on reindex the RC derivation drops and the X+V
-  edge lands, so the accept loop closes by construction with no separate
-  RC-delete-and-attach primitive. (R3071)
-- RejectDerived(chunkID uint64, tagname string) (magnitude uint64, err error):
+- AcceptDerived(db *DB, chunkID uint64, tagname, value string) error:
+  **re-homed to the mirror path.** Resolves the chunk's locator and delegates
+  to `DB.AcceptExtTag` (`@ext-candidate` → `@ext`); on reindex the RC derivation
+  drops and the X+V edge lands, so the accept loop closes by construction with no
+  separate RC-delete-and-attach primitive. Kept (not retired) as the file-backed
+  accept primitive the forge wiring (#12) will call. (R3071)
+- RejectDerived(db *DB, chunkID uint64, tagname string) (magnitude uint64, err error):
   **inverts.** No longer a direct `RC` delete + `AdjustJudgment` write; it
   authors an `@ext-judgment` file tag via `DB.RejectExtTag` (create-or-decrement
   the signed `@count`). The indexer derives the RJ record; the returned
-  magnitude reads back from `rejectByChunk`. (R3069, R3075)
+  magnitude reads back from `rejectByChunk` (0 until the reindex materializes it).
+  Both accept and reject take `*DB` to reach the mirror-authoring path. (R3069, R3075)
 
 ### DayBucketEvent (R911, R912)
 - Start: time.Time

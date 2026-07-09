@@ -197,8 +197,8 @@ const (
 	// derivation pass writes RC + RF as a side effect of
 	// `ark connections recall --propose`; the Tag Forge writes RJ via
 	// Store.RejectDerived. R2664–R2666
-	prefixDerivedCandidate = "RC" // R2664 — RC + chunkid varint + tagname → 8-byte BE tally
-	prefixDerivedRejection = "RJ" // R2665, R2874 (Recall Judgment) -- RJ + chunkid varint + tagname -> signed-varint(score) + 8-byte BE unix nanos
+	prefixDerivedCandidate = "RC" // R3058 — RC + source_tvid varint + target_chunkid varint → varint tally
+	prefixDerivedRejection = "RJ" // R3059, R2874 (Recall Judgment) — RJ + source_tvid varint + target_chunkid varint → signed-varint(score) + 8-byte BE unix nanos
 	prefixDerivedFreshness = "RF" // R2666 — RF + chunkid varint → varint serial
 	// prefixSurfaceCooldown is the per-(session, chunk) surface-cooldown
 	// sibling of RD — keyed by chunk instead of tag-value. R2882
@@ -1545,6 +1545,29 @@ func (s *Store) ReadExtTvidsForChunk(txn *bbolt.Tx, chunkID uint64) ([]uint64, e
 		return nil, nil
 	}
 	return decodeVarints(v[4:]), nil
+}
+
+// ReadExtFamilyTvidsForChunk returns the source tvids of every @ext-family
+// tag (@ext / @ext-candidate / @ext-judgment) registered against chunkID's F
+// records. Used by orphan cleanup so candidate/judgment sources strike their
+// RC/RJ records through CleanupSource just as @ext sources strike X records.
+// CRC: crc-Store.md | R3064
+func (s *Store) ReadExtFamilyTvidsForChunk(txn *bbolt.Tx, chunkID uint64) ([]uint64, error) {
+	var out []uint64
+	for _, tag := range []string{tagExt, extCandidateTag, extJudgmentTag} {
+		v, err := bGet(txn, tagFileKey(chunkID, tag))
+		if err != nil {
+			if isNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		if len(v) <= 4 {
+			continue
+		}
+		out = append(out, decodeVarints(v[4:])...)
+	}
+	return out, nil
 }
 
 // removeChunkIDInTxn drops F records for a chunkid, decrements T totals
@@ -3618,43 +3641,6 @@ type DerivedProposal struct {
 	Tally   uint64
 }
 
-// derivedKey builds an RC- or RJ-prefixed key. Both record classes
-// share the same key shape: prefix + chunkid varint + tagname.
-// CRC: crc-Store.md | R2664, R2665
-func derivedKey(prefix string, chunkID uint64, tagname string) []byte {
-	key := make([]byte, 0, len(prefix)+binary.MaxVarintLen64+len(tagname))
-	key = append(key, prefix...)
-	key = encodeVarint(key, chunkID)
-	key = append(key, tagname...)
-	return key
-}
-
-// derivedChunkPrefix returns the range-scan prefix for one chunk's
-// RC or RJ records (prefix + chunkid varint, no tagname).
-// CRC: crc-Store.md | R2664, R2665
-func derivedChunkPrefix(prefix string, chunkID uint64) []byte {
-	buf := make([]byte, 0, len(prefix)+binary.MaxVarintLen64)
-	buf = append(buf, prefix...)
-	buf = encodeVarint(buf, chunkID)
-	return buf
-}
-
-// parseDerivedKey decodes a key produced by derivedKey for the
-// given prefix. Returns (chunkID, tagname, ok). Used by
-// DerivedProposals when iterating the RC range.
-// CRC: crc-Store.md | R2664
-func parseDerivedKey(prefix string, k []byte) (chunkID uint64, tagname string, ok bool) {
-	if !bytes.HasPrefix(k, []byte(prefix)) {
-		return 0, "", false
-	}
-	rest := k[len(prefix):]
-	cid, n := binary.Uvarint(rest)
-	if n <= 0 {
-		return 0, "", false
-	}
-	return cid, string(rest[n:]), true
-}
-
 // derivedFreshnessKey returns the RF key for a chunk.
 // CRC: crc-Store.md | R2666
 func derivedFreshnessKey(chunkID uint64) []byte {
@@ -3662,26 +3648,6 @@ func derivedFreshnessKey(chunkID uint64) []byte {
 	buf = append(buf, prefixDerivedFreshness...)
 	buf = encodeVarint(buf, chunkID)
 	return buf
-}
-
-// WriteDerivedProposal writes or increments an RC record's tally
-// inside the caller's write txn. New records start at tally=1; an
-// existing record's 8-byte big-endian tally is incremented by 1.
-// Malformed existing values (not exactly 8 bytes) are overwritten
-// as if starting fresh.
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R2664, R2674, R2675
-func (s *Store) WriteDerivedProposal(txn *bbolt.Tx, chunkID uint64, tagname string) error {
-	key := derivedKey(prefixDerivedCandidate, chunkID, tagname)
-	var tally uint64 = 1
-	existing, err := bGet(txn, key)
-	if err == nil && len(existing) == 8 {
-		tally = binary.BigEndian.Uint64(existing) + 1
-	} else if err != nil && !isNotFound(err) {
-		return err
-	}
-	val := make([]byte, 8)
-	binary.BigEndian.PutUint64(val, tally)
-	return bPut(txn, key, val)
 }
 
 // WriteDerivedFreshness stamps a chunk's RF record with the given
@@ -3712,75 +3678,6 @@ func (s *Store) ReadDerivedFreshness(txn *bbolt.Tx, chunkID uint64) (uint64, boo
 		return 0, false, nil // malformed varint — treat as stale (R2681)
 	}
 	return serial, true, nil
-}
-
-// AdjustJudgment applies a signed delta to the Recall Judgment edge
-// RJ[chunkid+tagname] inside the caller's write txn: read the current
-// score (absent = 0), add delta, stamp NOW, write the v3 value
-// signed-varint(score) + 8-byte BE unix nanos. A score that returns to
-// 0 deletes the record (absent equals 0). Positive delta reinforces;
-// negative decays/rejects. Returns the new score.
-// CRC: crc-Store.md | R2874, R2875, R2879, R2881
-func (s *Store) AdjustJudgment(txn *bbolt.Tx, chunkID uint64, tagname string, delta int64) (int64, error) {
-	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	var score int64
-	if v, err := bGet(txn, key); err == nil {
-		if cur, _, ok := decodeJudgmentValue(v); ok {
-			score = cur
-		}
-	} else if !isNotFound(err) {
-		return 0, err
-	}
-	score += delta
-	if score == 0 {
-		if err := bDel(txn, key); err != nil && !isNotFound(err) {
-			return 0, err
-		}
-		return 0, nil
-	}
-	if err := bPut(txn, key, encodeJudgmentValue(score, time.Now().UnixNano())); err != nil {
-		return 0, err
-	}
-	return score, nil
-}
-
-// ReadJudgment reads the signed score of the Recall Judgment edge
-// RJ[chunkid+tagname]. Absent gives (0, false, nil). A value that does
-// not decode as signed-varint + 8 bytes is treated conservatively as
-// rejected (a negative score with present=true) so a
-// reject_propose_ceiling==0 caller never re-proposes a corrupt edge.
-// CRC: crc-Store.md | R2874, R2876
-func (s *Store) ReadJudgment(txn *bbolt.Tx, chunkID uint64, tagname string) (int64, bool, error) {
-	key := derivedKey(prefixDerivedRejection, chunkID, tagname)
-	v, err := bGet(txn, key)
-	if err != nil {
-		if isNotFound(err) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	score, _, ok := decodeJudgmentValue(v)
-	if !ok {
-		return -1, true, nil // corrupt edge reads as rejected (conservative)
-	}
-	return score, true, nil
-}
-
-// HasDerivedRejection reports whether the (chunk, tagname) edge is
-// net-rejected (judgment score < 0) and the rejection magnitude
-// (-score). Thin wrapper over ReadJudgment; the propose pass and the
-// assistant's mention path consume magnitude exactly as they consumed
-// the v2 counter.
-// CRC: crc-Store.md | R2665, R2673, R2765, R2766, R2876, R2878
-func (s *Store) HasDerivedRejection(txn *bbolt.Tx, chunkID uint64, tagname string) (bool, uint64, error) {
-	score, present, err := s.ReadJudgment(txn, chunkID, tagname)
-	if err != nil {
-		return false, 0, err
-	}
-	if !present || score >= 0 {
-		return false, 0, nil
-	}
-	return true, uint64(-score), nil
 }
 
 // decodeJudgmentValue parses a v3 Recall Judgment value:
@@ -3848,36 +3745,48 @@ func (s *Store) MaxEVSerial() (uint64, error) {
 	return maxS, err
 }
 
-// DerivedProposals returns all RC records for one chunk sorted by
-// tally descending. RC entries shadowed by a matching RJ record are
-// filtered as defense-in-depth — the derivation pass already skips
-// them, but a forge view might surface pre-rejection RC records.
-// Malformed RC values surface as tally=0; the next WriteDerivedProposal
-// self-corrects.
-// CRC: crc-Store.md | R2664, R2678, R2681
+// DerivedProposals returns the derived-tag proposals for one chunk,
+// sorted by tally descending. It reads ExtMap.candidateSourcesByChunk
+// (the RC reverse lookup), recovers each candidate's (tagname, value)
+// from its source tvid via TvidMap.Resolve + ParseExtTarget, and reads
+// the RC tally from the source_tvid + target_chunkid record. Proposals
+// whose tagname is net-rejected in rejectByChunk are dropped as
+// defense-in-depth (the derivation already skips them). Supersedes the
+// "RC" + chunkid prefix scan. (R3058, R3065, R3067)
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R3058, R3065, R3067
 func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
-	prefix := derivedChunkPrefix(prefixDerivedCandidate, chunkID)
+	if s.extmap == nil || s.tvids == nil {
+		return nil, nil
+	}
+	srcTvids := s.extmap.CandidateSourcesForChunk(chunkID)
+	if len(srcTvids) == 0 {
+		return nil, nil
+	}
 	var out []DerivedProposal
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
-		return scanPrefix(txn, prefix, func(k, v []byte) error {
-			_, tagname, ok := parseDerivedKey(prefixDerivedCandidate, k)
+		for _, srcTvid := range srcTvids {
+			tag, valuePart, ok := s.tvids.Resolve(srcTvid)
+			if !ok || tag != extCandidateTag {
+				continue
+			}
+			_, routed, ok := ParseExtTarget(valuePart)
 			if !ok {
-				return nil
+				continue
 			}
-			rejected, _, err := s.HasDerivedRejection(txn, chunkID, tagname)
-			if err != nil {
-				return err
+			if routed, _, _ = extractCountField(routed); len(routed) == 0 {
+				continue
 			}
-			if rejected {
-				return nil
+			tagname := routed[0].Tag
+			if s.extmap.RejectScore(chunkID, tagname) < 0 {
+				continue
 			}
-			var tally uint64
-			if len(v) == 8 {
-				tally = binary.BigEndian.Uint64(v)
+			tally, _, terr := s.ReadDerivedCandidate(txn, srcTvid, chunkID)
+			if terr != nil {
+				return terr
 			}
 			out = append(out, DerivedProposal{ChunkID: chunkID, Tagname: tagname, Tally: tally})
-			return nil
-		})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -3936,63 +3845,206 @@ func (s *Store) clearAllByPrefix(prefix []byte) (int, error) {
 	return deleted, err
 }
 
-// AcceptDerived promotes a derived proposal to an attached tag:
-// delete RC[chunkid+tagname], then attach (tagname, value) via the
-// existing F/V path (AppendTagValues). Returns the resolved tvid.
-// Empty value produces a bare-tag attach. No-op safe if the RC record
-// is already gone (e.g. concurrent accept). Two writes — the RC
-// deletion isn't part of AppendTagValues' txn — but both run inside
-// Store.env, so a crash between them leaves the chunk with the tag
-// attached and the RC still present; the next derivation pass will
-// drop the stale RC because alreadyOn now contains tagname (R2671).
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#2.2 | R2679
-func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, error) {
-	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
-	if err := s.bolt.Update(func(txn *bbolt.Tx) error {
-		if err := bDel(txn, rcKey); err != nil && !isNotFound(err) {
-			return err
-		}
-		return nil
-	}); err != nil {
-		return 0, err
+// AcceptDerived commits a derived proposal by authoring the promotion in
+// the target's mirror file: DB.AcceptExtTag rewrites the matching
+// @ext-candidate line(s) to @ext, and the indexer lands the X + V edge on
+// the subsequent reindex, dropping the RC record by construction — no
+// separate RC-delete-and-attach step. Empty value promotes every value
+// for that tag. No-op safe when the chunk has no locator. (R3071)
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#2.2 | R3071
+func (s *Store) AcceptDerived(db *DB, chunkID uint64, tagname, value string) error {
+	info, err := db.ChunkInfo(chunkID)
+	if err != nil {
+		return nil // no locator to name the chunk — nothing to accept
 	}
-	if err := s.AppendTagValues([]ChunkTagValues{{
-		ChunkID: chunkID,
-		Values:  []TagValue{{Tag: tagname, Value: value}},
-	}}); err != nil {
-		return 0, err
-	}
-	// Resolve the tvid the attach produced. The append-path reuses an
-	// existing tvid if the (tag, value) pair already exists; either way
-	// the tvids map now carries the canonical id.
-	tvid, _ := s.tvids.Lookup(tagname, value)
-	return tvid, nil
+	return db.AcceptExtTag(info.Path+":"+info.Range, tagname, value)
 }
 
-// RejectDerived deletes RC[chunkid+tagname] and applies a -1 judgment
-// delta in one txn, returning the rejection magnitude (max(0,
-// -newScore)). With no reinforcement producer present, a
-// rejection-only sequence yields scores -1, -2, -3 ... bit-for-bit
-// identical to the v2 monotonic counter. No-op safe if the RC record
-// is already gone.
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R2680, R2877
-func (s *Store) RejectDerived(chunkID uint64, tagname string) (uint64, error) {
-	rcKey := derivedKey(prefixDerivedCandidate, chunkID, tagname)
-	var magnitude uint64
-	err := s.bolt.Update(func(txn *bbolt.Tx) error {
-		if err := bDel(txn, rcKey); err != nil && !isNotFound(err) {
-			return err
+// RejectDerived records a durable rejection of the (chunkID, tagname)
+// proposal by authoring an @ext-judgment file tag via DB.RejectExtTag
+// (create-or-decrement the signed @count, R3075) — no longer a direct
+// RC delete + bbolt judgment write. The indexer derives the RJ record
+// on the subsequent reindex; the returned magnitude reflects the
+// reject map's current signed score (0 until that reindex materializes
+// it). No-op safe when the chunk has no locator. (R3069, R3075)
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#3.2 | R3069, R3075
+func (s *Store) RejectDerived(db *DB, chunkID uint64, tagname string) (uint64, error) {
+	info, err := db.ChunkInfo(chunkID)
+	if err != nil {
+		return 0, nil // no locator to name the chunk — nothing to reject
+	}
+	if err := db.RejectExtTag(info.Path+":"+info.Range, tagname, ""); err != nil {
+		return 0, err
+	}
+	if s.extmap == nil {
+		return 0, nil
+	}
+	if score := s.extmap.RejectScore(chunkID, tagname); score < 0 {
+		return uint64(-score), nil
+	}
+	return 0, nil
+}
+
+// --- Tag-derived RC/RJ helpers (state B: source_tvid + target_chunkid) ---
+//
+// RC and RJ re-key from the old (chunkid + tagname) shape to the uniform
+// tag-derived family key <class-letter> + source_tvid + target_chunkid,
+// siblings of the X record. The routed (tagname, value) is not stored — it is
+// recovered from the source tvid, exactly as X recovers its routed tag. These
+// helpers are the sole RC/RJ path; the old (chunkid + tagname) key helpers and
+// their direct writers were removed when the tag-derived flip landed.
+
+// derivedRoutedKey builds an RC/RJ key: prefix + varint(src_tvid) + varint(target_chunkid).
+// CRC: crc-Store.md | R3058, R3059, R3060
+func derivedRoutedKey(prefix string, srcTvid, targetChunk uint64) []byte {
+	key := make([]byte, 0, len(prefix)+2*binary.MaxVarintLen64)
+	key = append(key, prefix...)
+	key = encodeVarint(key, srcTvid)
+	return encodeVarint(key, targetChunk)
+}
+
+// derivedRoutedPrefix returns the scan prefix for one source tvid
+// (prefix + varint(src_tvid)).
+// CRC: crc-Store.md | R3058, R3059
+func derivedRoutedPrefix(prefix string, srcTvid uint64) []byte {
+	key := make([]byte, 0, len(prefix)+binary.MaxVarintLen64)
+	key = append(key, prefix...)
+	return encodeVarint(key, srcTvid)
+}
+
+// parseDerivedRoutedKey extracts src_tvid and target_chunkid from an RC/RJ key.
+// Returns ok=false if the key shape doesn't match the given prefix.
+// CRC: crc-Store.md | R3058, R3059
+func parseDerivedRoutedKey(prefix string, k []byte) (srcTvid, targetChunk uint64, ok bool) {
+	if !bytes.HasPrefix(k, []byte(prefix)) {
+		return 0, 0, false
+	}
+	rest := k[len(prefix):]
+	srcTvid, n := binary.Uvarint(rest)
+	if n <= 0 {
+		return 0, 0, false
+	}
+	rest = rest[n:]
+	targetChunk, n = binary.Uvarint(rest)
+	if n <= 0 || n != len(rest) {
+		return 0, 0, false
+	}
+	return srcTvid, targetChunk, true
+}
+
+// WriteDerivedCandidate writes RC[src_tvid][target_chunkid] = varint tally.
+// The tally is materialized from the @ext-candidate line's @count field, so the
+// caller supplies it (rather than incrementing an internal counter, as the
+// retired per-(chunk, tagname) writer did).
+// CRC: crc-Store.md | R3058, R3074
+func (s *Store) WriteDerivedCandidate(txn *bbolt.Tx, srcTvid, targetChunk, tally uint64) error {
+	key := derivedRoutedKey(prefixDerivedCandidate, srcTvid, targetChunk)
+	val := encodeVarint(make([]byte, 0, binary.MaxVarintLen64), tally)
+	return bPut(txn, key, val)
+}
+
+// ReadDerivedCandidate returns the tally for one (src_tvid, target_chunkid).
+// Returns (0, false, nil) when the record is absent or its value is malformed.
+// CRC: crc-Store.md | R3058
+func (s *Store) ReadDerivedCandidate(txn *bbolt.Tx, srcTvid, targetChunk uint64) (uint64, bool, error) {
+	key := derivedRoutedKey(prefixDerivedCandidate, srcTvid, targetChunk)
+	v, err := bGet(txn, key)
+	if err != nil {
+		if isNotFound(err) {
+			return 0, false, nil
 		}
-		newScore, err := s.AdjustJudgment(txn, chunkID, tagname, -1)
-		if err != nil {
-			return err
+		return 0, false, err
+	}
+	tally, n := binary.Uvarint(v)
+	if n <= 0 {
+		return 0, false, nil
+	}
+	return tally, true, nil
+}
+
+// DeleteDerivedCandidate removes one RC record. No-op safe if absent.
+// CRC: crc-Store.md | R3058
+func (s *Store) DeleteDerivedCandidate(txn *bbolt.Tx, srcTvid, targetChunk uint64) error {
+	key := derivedRoutedKey(prefixDerivedCandidate, srcTvid, targetChunk)
+	if err := bDel(txn, key); err != nil && !isNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// ScanAllDerivedCandidates iterates every RC record in the store. Used by
+// ExtMap.Rebuild to repopulate candidateSourcesByChunk on startup.
+// CRC: crc-Store.md | R3064, R3065
+func (s *Store) ScanAllDerivedCandidates(txn *bbolt.Tx, fn func(srcTvid, targetChunk, tally uint64) error) error {
+	prefix := []byte(prefixDerivedCandidate)
+	return scanPrefix(txn, prefix, func(k, v []byte) error {
+		st, tc, ok := parseDerivedRoutedKey(prefixDerivedCandidate, k)
+		if !ok {
+			return nil
 		}
-		if newScore < 0 {
-			magnitude = uint64(-newScore)
+		tally, n := binary.Uvarint(v)
+		if n <= 0 {
+			tally = 0
 		}
-		return nil
+		return fn(st, tc, tally)
 	})
-	return magnitude, err
+}
+
+// WriteDerivedJudgment writes RJ[src_tvid][target_chunkid] = signed-varint(score)
+// + 8-byte BE unix nanos (the v3 judgment codec). The score is materialized from
+// the signed @count field of the @ext-judgment line; nanos records derivation time.
+// CRC: crc-Store.md | R3059, R3074
+func (s *Store) WriteDerivedJudgment(txn *bbolt.Tx, srcTvid, targetChunk uint64, score, nanos int64) error {
+	key := derivedRoutedKey(prefixDerivedRejection, srcTvid, targetChunk)
+	return bPut(txn, key, encodeJudgmentValue(score, nanos))
+}
+
+// ReadDerivedJudgment returns the signed score for one (src_tvid, target_chunkid).
+// Absent gives (0, false, nil). A value that does not decode as signed-varint + 8
+// bytes reads conservatively as rejected (negative score, present=true) so a
+// corrupt edge never re-proposes. CRC: crc-Store.md | R3059
+func (s *Store) ReadDerivedJudgment(txn *bbolt.Tx, srcTvid, targetChunk uint64) (int64, bool, error) {
+	key := derivedRoutedKey(prefixDerivedRejection, srcTvid, targetChunk)
+	v, err := bGet(txn, key)
+	if err != nil {
+		if isNotFound(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	score, _, ok := decodeJudgmentValue(v)
+	if !ok {
+		return -1, true, nil // corrupt edge reads as rejected (conservative)
+	}
+	return score, true, nil
+}
+
+// DeleteDerivedJudgment removes one RJ record. No-op safe if absent.
+// CRC: crc-Store.md | R3059
+func (s *Store) DeleteDerivedJudgment(txn *bbolt.Tx, srcTvid, targetChunk uint64) error {
+	key := derivedRoutedKey(prefixDerivedRejection, srcTvid, targetChunk)
+	if err := bDel(txn, key); err != nil && !isNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// ScanAllDerivedJudgments iterates every RJ record in the store. Used by
+// ExtMap.Rebuild to repopulate rejectByChunk on startup. Malformed values are
+// skipped. CRC: crc-Store.md | R3064, R3066
+func (s *Store) ScanAllDerivedJudgments(txn *bbolt.Tx, fn func(srcTvid, targetChunk uint64, score, nanos int64) error) error {
+	prefix := []byte(prefixDerivedRejection)
+	return scanPrefix(txn, prefix, func(k, v []byte) error {
+		st, tc, ok := parseDerivedRoutedKey(prefixDerivedRejection, k)
+		if !ok {
+			return nil
+		}
+		score, nanos, ok := decodeJudgmentValue(v)
+		if !ok {
+			return nil
+		}
+		return fn(st, tc, score, nanos)
+	})
 }
 
 // --- float32 ↔ bytes conversion ---

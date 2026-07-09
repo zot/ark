@@ -32,33 +32,40 @@ type OverlayError struct {
 // CRC: crc-ExtMap.md | R1992, R2013, R2014, R2029
 type ExtMap struct {
 	mu                  sync.RWMutex
-	targetToChunk       map[uint64][]uint64            // tvid_ext → chunkids
-	chunkToTargets      map[uint64][]uint64            // chunkid → tvid_exts
-	fileidToTvids       map[uint64][]uint64            // fileid → tvid_exts (target file)
-	extByAnchor         map[string][]uint64            // anchor spec text → tvid_exts
-	unresolvedTargets   map[uint64]bool                // tvid_exts whose target spec resolves to nothing
-	virtualTagCount     map[string]int                 // ext-routed contributions per tag (persistent + overlay)
-	extSource           map[uint64]uint64              // tvid_ext → source chunkID (R2024, R2026)
-	routedTagsByTvidExt map[uint64][]TagValue          // tvid_ext → routed (tag, value) pairs (R2121)
-	overlayRoutings     map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
-	overlayValues       map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
-	overlayErrors       []OverlayError                 // session diagnostics (R2029)
+	targetToChunk       map[uint64][]uint64   // tvid_ext → chunkids
+	chunkToTargets      map[uint64][]uint64   // chunkid → tvid_exts
+	fileidToTvids       map[uint64][]uint64   // fileid → tvid_exts (target file)
+	extByAnchor         map[string][]uint64   // anchor spec text → tvid_exts
+	unresolvedTargets   map[uint64]bool       // tvid_exts whose target spec resolves to nothing
+	virtualTagCount     map[string]int        // ext-routed contributions per tag (persistent + overlay)
+	extSource           map[uint64]uint64     // tvid_ext → source chunkID (R2024, R2026)
+	routedTagsByTvidExt map[uint64][]TagValue // tvid_ext → routed (tag, value) pairs (R2121)
+	// Derived-record reverse lookups (state B). candidateSourcesByChunk
+	// replaces the RC prefix scan; rejectByChunk answers the reject
+	// filter's "is tag T net-rejected on chunk C" in one hit (R3065, R3066).
+	candidateSourcesByChunk map[uint64][]uint64            // target_chunkid → source tvids (RC)
+	rejectByChunk           map[uint64]map[string]int64    // target_chunkid → tagname → judgment score (RJ)
+	overlayRoutings         map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
+	overlayValues           map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
+	overlayErrors           []OverlayError                 // session diagnostics (R2029)
 }
 
 // NewExtMap constructs an empty ExtMap.
 // CRC: crc-ExtMap.md | R1992, R2013, R2014
 func NewExtMap() *ExtMap {
 	return &ExtMap{
-		targetToChunk:       make(map[uint64][]uint64),
-		chunkToTargets:      make(map[uint64][]uint64),
-		fileidToTvids:       make(map[uint64][]uint64),
-		extByAnchor:         make(map[string][]uint64),
-		unresolvedTargets:   make(map[uint64]bool),
-		virtualTagCount:     make(map[string]int),
-		extSource:           make(map[uint64]uint64),
-		routedTagsByTvidExt: make(map[uint64][]TagValue),
-		overlayRoutings:     make(map[uint64]map[uint64][]uint64),
-		overlayValues:       make(map[string]map[string][]uint64),
+		targetToChunk:           make(map[uint64][]uint64),
+		chunkToTargets:          make(map[uint64][]uint64),
+		fileidToTvids:           make(map[uint64][]uint64),
+		extByAnchor:             make(map[string][]uint64),
+		unresolvedTargets:       make(map[uint64]bool),
+		virtualTagCount:         make(map[string]int),
+		extSource:               make(map[uint64]uint64),
+		routedTagsByTvidExt:     make(map[uint64][]TagValue),
+		candidateSourcesByChunk: make(map[uint64][]uint64),
+		rejectByChunk:           make(map[uint64]map[string]int64),
+		overlayRoutings:         make(map[uint64]map[uint64][]uint64),
+		overlayValues:           make(map[string]map[string][]uint64),
 	}
 }
 
@@ -114,6 +121,36 @@ func (m *ExtMap) SourceChunkID(tvidExt uint64) (uint64, bool) {
 	defer m.mu.RUnlock()
 	cid, ok := m.extSource[tvidExt]
 	return cid, ok
+}
+
+// CandidateSourcesForChunk returns a copy of the @ext-candidate source
+// tvids whose TARGET resolved to chunkID — the RC reverse lookup that
+// replaces the old `"RC" + chunkid` prefix scan. Store.DerivedProposals
+// resolves each tvid back to its (tagname, value) and RC tally. (R3065)
+// CRC: crc-ExtMap.md | R3065
+func (m *ExtMap) CandidateSourcesForChunk(chunkID uint64) []uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src := m.candidateSourcesByChunk[chunkID]
+	if len(src) == 0 {
+		return nil
+	}
+	return append([]uint64(nil), src...)
+}
+
+// RejectScore returns the signed judgment score for the (chunkID,
+// tagname) edge from the in-memory reject map, or 0 when neutral. A
+// negative score means net-rejected with magnitude -score; the reject
+// filter and DerivedProposals read it in one map hit instead of an
+// RJ key lookup. (R3066, R3070)
+// CRC: crc-ExtMap.md | R3066, R3070
+func (m *ExtMap) RejectScore(chunkID uint64, tagname string) int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if inner := m.rejectByChunk[chunkID]; inner != nil {
+		return inner[tagname]
+	}
+	return 0
 }
 
 // sourceDirLocked returns the source file's directory for
@@ -408,12 +445,14 @@ func (m *ExtMap) Rebuild(db *DB) error {
 	m.virtualTagCount = make(map[string]int)
 	m.extSource = make(map[uint64]uint64)
 	m.routedTagsByTvidExt = make(map[uint64][]TagValue)
+	m.candidateSourcesByChunk = make(map[uint64][]uint64)
+	m.rejectByChunk = make(map[uint64]map[string]int64)
 	m.overlayRoutings = make(map[uint64]map[uint64][]uint64)
 	m.overlayValues = make(map[string]map[string][]uint64)
 	m.overlayErrors = nil
 
 	return db.store.bolt.View(func(txn *bbolt.Tx) error {
-		return db.store.ScanAllExtRecords(txn, func(tvidExt, targetChunk uint64, routedTvids []uint64) error {
+		if err := db.store.ScanAllExtRecords(txn, func(tvidExt, targetChunk uint64, routedTvids []uint64) error {
 			m.targetToChunk[tvidExt] = append(m.targetToChunk[tvidExt], targetChunk)
 			m.chunkToTargets[targetChunk] = appendUnique(m.chunkToTargets[targetChunk], tvidExt)
 			if fileID, ok := db.chunkFileID(txn, targetChunk); ok {
@@ -457,6 +496,33 @@ func (m *ExtMap) Rebuild(db *DB) error {
 			if needRouted {
 				m.routedTagsByTvidExt[tvidExt] = pairs
 			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		// Populate the derived-record reverse lookups from RC/RJ. Empty
+		// until the wiring flip authors the first candidate/judgment.
+		// CRC: crc-ExtMap.md | R3064, R3065
+		if err := db.store.ScanAllDerivedCandidates(txn, func(srcTvid, targetChunk, tally uint64) error {
+			m.candidateSourcesByChunk[targetChunk] = appendUnique(m.candidateSourcesByChunk[targetChunk], srcTvid)
+			return nil
+		}); err != nil {
+			return err
+		}
+		// CRC: crc-ExtMap.md | R3064, R3066
+		return db.store.ScanAllDerivedJudgments(txn, func(srcTvid, targetChunk uint64, score, nanos int64) error {
+			_, value, ok := db.store.tvids.Resolve(srcTvid)
+			if !ok {
+				return nil
+			}
+			_, routed, parseOk := ParseExtTarget(value)
+			if !parseOk || len(routed) == 0 {
+				return nil
+			}
+			if m.rejectByChunk[targetChunk] == nil {
+				m.rejectByChunk[targetChunk] = make(map[string]int64)
+			}
+			m.rejectByChunk[targetChunk][routed[0].Tag] = score
 			return nil
 		})
 	})
@@ -515,6 +581,11 @@ func (m *ExtMap) applyIndexExt(txn *bbolt.Tx, tt *TvidTxn, db *DB, p extIndexPla
 		m.extSource[p.tvidExt] = p.sourceChunkID
 		m.mu.Unlock()
 		return nil
+	}
+	// R3062: candidate/judgment take the lighter derived path — an RC/RJ
+	// record instead of the live V edge, no virtualTagCount bump.
+	if p.class != extClassCommitted {
+		return m.applyDerivedIndexExt(txn, db, p, sourceOverlay)
 	}
 	type accepted struct {
 		chunkID        uint64
@@ -683,6 +754,10 @@ func (m *ExtMap) strikeOverlayValueLocked(tag, value string, chunkID uint64) {
 // state.
 // CRC: crc-ExtMap.md | R1994, R2002, R2003, R2004, R2005, R2006, R2026
 func (m *ExtMap) applyReresolve(txn *bbolt.Tx, tt *TvidTxn, db *DB, fileID uint64, p extReresolvePlan) error {
+	// R3062: candidate/judgment re-resolve through the derived path.
+	if p.class != extClassCommitted {
+		return m.applyDerivedReresolve(txn, db, fileID, p)
+	}
 	tvidExt := p.tvidExt
 	newTargets := p.newTargets
 	routed := p.routedTags
@@ -854,6 +929,18 @@ func (m *ExtMap) applyReresolve(txn *bbolt.Tx, tt *TvidTxn, db *DB, fileID uint6
 // bothPersistent=false so no LMDB writes fire.
 // CRC: crc-ExtMap.md | R2008, R2009, R2022, R2023, R2024, R2025
 func (m *ExtMap) CleanupSource(txn *bbolt.Tx, tt *TvidTxn, db *DB, sourceChunkID, tvidExt uint64) error {
+	// R3064: candidate/judgment sources strike RC/RJ, not X + routed V.
+	if tag, value, ok := resolveTvid(tt, db, tvidExt); ok {
+		if class := extClassForTag(tag); class != extClassCommitted {
+			var routedTag string
+			if _, routed, pok := ParseExtTarget(value); pok {
+				if routed, _, _ = extractCountField(routed); len(routed) > 0 {
+					routedTag = routed[0].Tag
+				}
+			}
+			return m.cleanupDerivedSource(txn, db, tvidExt, class, routedTag)
+		}
+	}
 	sourceOverlay := IsOverlayID(sourceChunkID)
 	m.mu.RLock()
 	targets := append([]uint64(nil), m.targetToChunk[tvidExt]...)
@@ -945,6 +1032,268 @@ func (m *ExtMap) CleanupSource(txn *bbolt.Tx, tt *TvidTxn, db *DB, sourceChunkID
 			if len(m.extByAnchor[key]) == 0 {
 				delete(m.extByAnchor, key)
 			}
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// candidateTally clamps a candidate's @count into an RC tally (≥1). A count
+// of 0 or 1 (or a stray negative) yields 1; larger counts pass through.
+// CRC: crc-ExtMap.md | R3074
+func candidateTally(count int64) uint64 {
+	if count > 1 {
+		return uint64(count)
+	}
+	return 1
+}
+
+// setRejectLocked sets (or, when score==0, clears) the reject-filter entry
+// for (targetChunk, tagname). Caller holds m.mu.
+// CRC: crc-ExtMap.md | R3066
+func (m *ExtMap) setRejectLocked(targetChunk uint64, tagname string, score int64) {
+	if score == 0 {
+		if inner := m.rejectByChunk[targetChunk]; inner != nil {
+			delete(inner, tagname)
+			if len(inner) == 0 {
+				delete(m.rejectByChunk, targetChunk)
+			}
+		}
+		return
+	}
+	inner := m.rejectByChunk[targetChunk]
+	if inner == nil {
+		inner = make(map[string]int64)
+		m.rejectByChunk[targetChunk] = inner
+	}
+	inner[tagname] = score
+}
+
+// applyDerivedIndexExt handles index-time derivation for the candidate and
+// judgment classes. For each persistent target it writes the RC/RJ record
+// (materializing @count into the tally / signed score) and maintains the
+// reverse-lookup maps — no V edge, no virtualTagCount, which is the entire
+// proposed/judged-vs-committed distinction. Persistent-only: an overlay
+// source or target writes no derived record (R3063).
+// CRC: crc-ExtMap.md | R3062, R3063, R3064, R3074
+func (m *ExtMap) applyDerivedIndexExt(txn *bbolt.Tx, db *DB, p extIndexPlan, sourceOverlay bool) error {
+	var routedTag string
+	if len(p.routedTags) > 0 {
+		routedTag = p.routedTags[0].Tag
+	}
+	type derivedWrite struct {
+		chunk  uint64
+		fileID uint64
+	}
+	writes := make([]derivedWrite, 0, len(p.targets))
+	for _, t := range p.targets {
+		fid, ok := db.chunkFileID(txn, t)
+		if !ok {
+			continue
+		}
+		if fid == p.sourceFileID {
+			continue // self-reference rejected (mirror committed path)
+		}
+		if sourceOverlay || IsOverlayID(t) {
+			continue // R3063: persistent-only
+		}
+		switch p.class {
+		case extClassCandidate:
+			if err := db.store.WriteDerivedCandidate(txn, p.tvidExt, t, candidateTally(p.count)); err != nil {
+				return err
+			}
+		case extClassJudgment:
+			if p.count == 0 {
+				if err := db.store.DeleteDerivedJudgment(txn, p.tvidExt, t); err != nil {
+					return err
+				}
+			} else if err := db.store.WriteDerivedJudgment(txn, p.tvidExt, t, p.count, time.Now().UnixNano()); err != nil {
+				return err
+			}
+		}
+		writes = append(writes, derivedWrite{chunk: t, fileID: fid})
+	}
+	m.mu.Lock()
+	m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
+	m.extSource[p.tvidExt] = p.sourceChunkID
+	delete(m.unresolvedTargets, p.tvidExt)
+	for _, w := range writes {
+		m.targetToChunk[p.tvidExt] = append(m.targetToChunk[p.tvidExt], w.chunk)
+		m.chunkToTargets[w.chunk] = appendUnique(m.chunkToTargets[w.chunk], p.tvidExt)
+		m.fileidToTvids[w.fileID] = appendUnique(m.fileidToTvids[w.fileID], p.tvidExt)
+		switch p.class {
+		case extClassCandidate:
+			m.candidateSourcesByChunk[w.chunk] = appendUnique(m.candidateSourcesByChunk[w.chunk], p.tvidExt)
+		case extClassJudgment:
+			m.setRejectLocked(w.chunk, routedTag, p.count)
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// applyDerivedReresolve re-resolves a candidate/judgment source when its
+// target file reindexes: it writes RC/RJ for newly-resolved targets and
+// deletes them for vanished ones, maintaining the reverse-lookup maps.
+// Persistent-only (R3063), so there is no overlay branch. Mirrors the
+// committed applyReresolve, minus V edges and virtualTagCount.
+// CRC: crc-ExtMap.md | R3062, R3063, R3064, R3074
+func (m *ExtMap) applyDerivedReresolve(txn *bbolt.Tx, db *DB, fileID uint64, p extReresolvePlan) error {
+	tvidExt := p.tvidExt
+	var routedTag string
+	if len(p.routedTags) > 0 {
+		routedTag = p.routedTags[0].Tag
+	}
+	m.mu.RLock()
+	oldAll := append([]uint64(nil), m.targetToChunk[tvidExt]...)
+	sourceChunkID := m.extSource[tvidExt]
+	m.mu.RUnlock()
+	if IsOverlayID(sourceChunkID) {
+		return nil // R3063: overlay source never derives
+	}
+	oldScoped, removeFids := filterByFileWithIDs(txn, db, oldAll, fileID)
+	newScoped, addFids := filterByFileWithIDs(txn, db, p.newTargets, fileID)
+	adds := setDiff(newScoped, oldScoped)
+	removes := setDiff(oldScoped, newScoped)
+
+	for _, removed := range removes {
+		if IsOverlayID(removed) {
+			continue
+		}
+		switch p.class {
+		case extClassCandidate:
+			if err := db.store.DeleteDerivedCandidate(txn, tvidExt, removed); err != nil {
+				return err
+			}
+		case extClassJudgment:
+			if err := db.store.DeleteDerivedJudgment(txn, tvidExt, removed); err != nil {
+				return err
+			}
+		}
+	}
+	for _, added := range adds {
+		if IsOverlayID(added) {
+			continue
+		}
+		switch p.class {
+		case extClassCandidate:
+			if err := db.store.WriteDerivedCandidate(txn, tvidExt, added, candidateTally(p.count)); err != nil {
+				return err
+			}
+		case extClassJudgment:
+			if p.count == 0 {
+				if err := db.store.DeleteDerivedJudgment(txn, tvidExt, added); err != nil {
+					return err
+				}
+			} else if err := db.store.WriteDerivedJudgment(txn, tvidExt, added, p.count, time.Now().UnixNano()); err != nil {
+				return err
+			}
+		}
+	}
+
+	m.mu.Lock()
+	for _, removed := range removes {
+		if IsOverlayID(removed) {
+			continue
+		}
+		m.targetToChunk[tvidExt] = removeUint64(m.targetToChunk[tvidExt], removed)
+		m.chunkToTargets[removed] = removeUint64(m.chunkToTargets[removed], tvidExt)
+		if fid := removeFids[removed]; fid != 0 {
+			m.fileidToTvids[fid] = removeUint64(m.fileidToTvids[fid], tvidExt)
+		}
+		switch p.class {
+		case extClassCandidate:
+			m.candidateSourcesByChunk[removed] = removeUint64(m.candidateSourcesByChunk[removed], tvidExt)
+			if len(m.candidateSourcesByChunk[removed]) == 0 {
+				delete(m.candidateSourcesByChunk, removed)
+			}
+		case extClassJudgment:
+			m.setRejectLocked(removed, routedTag, 0)
+		}
+	}
+	for _, added := range adds {
+		if IsOverlayID(added) {
+			continue
+		}
+		m.targetToChunk[tvidExt] = append(m.targetToChunk[tvidExt], added)
+		m.chunkToTargets[added] = appendUnique(m.chunkToTargets[added], tvidExt)
+		if fid := addFids[added]; fid != 0 {
+			m.fileidToTvids[fid] = appendUnique(m.fileidToTvids[fid], tvidExt)
+		}
+		switch p.class {
+		case extClassCandidate:
+			m.candidateSourcesByChunk[added] = appendUnique(m.candidateSourcesByChunk[added], tvidExt)
+		case extClassJudgment:
+			if p.count != 0 {
+				m.setRejectLocked(added, routedTag, p.count)
+			}
+		}
+	}
+	if len(p.newTargets) == 0 {
+		m.unresolvedTargets[tvidExt] = true
+		m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], tvidExt)
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// cleanupDerivedSource strikes the RC/RJ records and reverse-lookup entries
+// for an orphaned candidate/judgment source, then drops the source tvid from
+// the shared maps. The committed sibling lives inline in CleanupSource.
+// CRC: crc-ExtMap.md | R3064
+func (m *ExtMap) cleanupDerivedSource(txn *bbolt.Tx, db *DB, tvidExt uint64, class extClass, routedTag string) error {
+	m.mu.RLock()
+	targets := append([]uint64(nil), m.targetToChunk[tvidExt]...)
+	m.mu.RUnlock()
+	type cleaned struct {
+		chunk  uint64
+		fileID uint64
+	}
+	done := make([]cleaned, 0, len(targets))
+	for _, targetChunk := range targets {
+		c := cleaned{chunk: targetChunk}
+		if txn != nil {
+			if id, ok := db.chunkFileID(txn, targetChunk); ok {
+				c.fileID = id
+			}
+			switch class {
+			case extClassCandidate:
+				if err := db.store.DeleteDerivedCandidate(txn, tvidExt, targetChunk); err != nil {
+					return err
+				}
+			case extClassJudgment:
+				if err := db.store.DeleteDerivedJudgment(txn, tvidExt, targetChunk); err != nil {
+					return err
+				}
+			}
+		}
+		done = append(done, c)
+	}
+	m.mu.Lock()
+	for _, c := range done {
+		m.chunkToTargets[c.chunk] = removeUint64(m.chunkToTargets[c.chunk], tvidExt)
+		if c.fileID != 0 {
+			m.fileidToTvids[c.fileID] = removeUint64(m.fileidToTvids[c.fileID], tvidExt)
+		}
+		switch class {
+		case extClassCandidate:
+			m.candidateSourcesByChunk[c.chunk] = removeUint64(m.candidateSourcesByChunk[c.chunk], tvidExt)
+			if len(m.candidateSourcesByChunk[c.chunk]) == 0 {
+				delete(m.candidateSourcesByChunk, c.chunk)
+			}
+		case extClassJudgment:
+			m.setRejectLocked(c.chunk, routedTag, 0)
+		}
+	}
+	delete(m.targetToChunk, tvidExt)
+	delete(m.unresolvedTargets, tvidExt)
+	delete(m.extSource, tvidExt)
+	for base, ids := range m.extByAnchor {
+		nids := removeUint64(ids, tvidExt)
+		if len(nids) == 0 {
+			delete(m.extByAnchor, base)
+		} else if len(nids) != len(ids) {
+			m.extByAnchor[base] = nids
 		}
 	}
 	m.mu.Unlock()

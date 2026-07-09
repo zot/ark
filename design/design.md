@@ -280,7 +280,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-FindConnectionsSubstrate.md → `connections_substrate_test.go`
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
-- [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
+- [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-LuhmannCLI.md → `luhmann_next_test.go`
@@ -606,7 +606,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T92: R2587 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
 - T93: R2621 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
 - [ ] O114: discussed-tags: deferred tests from test-Discussed.md — Lua sys.recall + sys.discussed bridge tests, ark.toml TTL config defaults/override/invalid warning, substrate-is-read-only-on-RD snapshot test. Behavior is exercised end-to-end via Go-level tests; add Lua tests when test-Recall.md's Lua harness pattern earns another instance.
-- A65: RP/RPE/RR record prefixes reserved for LLM-driven definition proposals (ARK-STATE.md item 1, agent layer). This slice (item 2) covers statistical attach-proposals only — chunkID+tagname keyed via RC/RJ/RF. Definition proposals (tagname+value+definition keyed, with embedding + reasoning) require an LLM and land with the recall agent. Letters chosen now to avoid collision; record-formats.md notes the reservation.
+- A65: RP/RPE/RR record prefixes reserved for LLM-driven definition proposals (ARK-STATE.md item 1, agent layer). This slice (item 2) covers statistical attach-proposals only (RC/RJ later re-keyed from chunkID+tagname to source_tvid+target_chunkid — R3058/R3059; RF stays chunkid-keyed). Definition proposals (tagname+value+definition keyed, with embedding + reasoning) require an LLM and land with the recall agent. Letters chosen now to avoid collision; record-formats.md notes the reservation.
 - [ ] O115: Recall --propose substrate scan: derivation iterates every recalled chunk × every ED record to compute per-tag max cosine. For an N-chunk corpus with M tag values this is O(N·M) cosine compares per --propose invocation. Acceptable at current scale (Bill: "simple first") and amortized by RF freshness skip; revisit if interactive latency degrades when N·M grows. Vector index (HNSW or similar) is the obvious lever.
 - [ ] O116: Lua bridge for AcceptDerived / RejectDerived not yet wired — Store API exists (per Bill's front-load-Go-for-UI preference, [[feedback_frontload-go-for-ui]]) and sys.recall surfaces proposed tags via the Lua bridge, but the write-side bridge (sys.acceptProposal / sys.rejectProposal or similar) lands in the next /ui-thorough pass alongside the curation-view accept/reject UI. No mini-spec/frictionless thrash needed when that pass starts.
 - A66: R2699 — watcher relies on substrate self-exclusion (R2645); no code anchor by design (delegated non-feature)
@@ -797,3 +797,15 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O143: Multi-idea seed (R3043): the clue-split, K-scaling, and payload helpers (clueOf/seedInputs/seedK/resolveClue/buildSearchPayload) are unit-tested, and Recall's per-input union is its own existing coverage — but the end-to-end composition (paragraph A → chunk X, paragraph B → chunk Y, both in the unioned seed) is not tested against a live corpus. Disproportionate: needs a tuned fixture where distinct paragraphs match distinct chunks. Covered by its parts.
 - [ ] O144: ext authoring DB/CLI/server layer (DB.SetExtTag/AddExtTag/RemoveExtTag, ark ext {set,add,remove}, POST /ext/*) has no automated test — the pure line-mutation logic (mutateExtLine/applyExtMirrorEdit) is fully unit-tested (R2395/R2396/R3047), but the DB methods write to the real ~/.ark home via arkHomeDir (hardcoded os.UserHomeDir+/.ark), so a DB-level test would pollute the live home or need HOME injection. Verified live 2026-07-07: cold (exclusive DB) + warm (server proxy) paths, all three verbs, multi-value add, exact-dup no-op, collapse-all set, value-filtered + all-value remove, zero residue after cleanup. (R3048, R3049)
 - [ ] O145: Pass A @ext-candidate authoring glue verified live, not unit-tested: DB CandidateExtTag/AcceptExtTag/RejectExtTag file-I/O + resolveExtMirror path resolution, POST /ext/{candidate,accept,reject} handlers, and ark ext {candidate,accept,reject} CLI dispatch. Live-driven end-to-end (candidate w/ insight-first, accept drops insight, reject tag-name-only; spacey path; zero residue). Pure logic (parsing, class-aware mutation, transitions, line builders) is unit-tested in ext_test.go; the wrappers need a config-source + ~/.ark mirror fixture disproportionate to unit-test (O144 precedent for Layer 1).
+- T240: R2664 retired by R3058 (2026-07-09 tag-derived-subsystem)
+- T241: R2665 retired by R3059 (2026-07-09 tag-derived-subsystem)
+- T242: R2673 retired by R3070 (2026-07-09 tag-derived-subsystem)
+- T243: R2674 retired by R3075 (2026-07-09 tag-derived-subsystem)
+- T244: R2678 retired by R3067 (2026-07-09 tag-derived-subsystem)
+- T245: R2679 retired by R3071 (2026-07-09 tag-derived-subsystem)
+- T246: R2680 retired by R3069 (2026-07-09 tag-derived-subsystem)
+- T247: R2877 retired by R3069 (2026-07-09 tag-derived-subsystem)
+- T248: R3053 retired by R3075 (2026-07-09 tag-derived-subsystem)
+- T249: R2875 retired by R3075 (2026-07-09 tag-derived-subsystem)
+- T250: R2876 retired by R3059 (2026-07-09 tag-derived-subsystem)
+- T251: R2878 retired by R3070 (2026-07-09 tag-derived-subsystem)

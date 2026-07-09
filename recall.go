@@ -1074,9 +1074,11 @@ type chunkWork struct {
 
 // runDerivationPass is the read+write side effect of --propose. For
 // each chunk in the scored set: skip via RF freshness, else compute
-// cosine vs ED, top-N, filter, write RC + RF in one batched txn.
-// Returns the per-chunk per-tag similarity map for stencil ordering.
-// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.6 | R2669, R2670, R2671, R2672, R2673, R2674, R2675
+// cosine vs ED, top-N, filter; each survivor is authored as an
+// @ext-candidate file tag (its RC record derives on reindex, R3068)
+// and the chunk's RF freshness is stamped. Returns the per-chunk
+// per-tag similarity map for stencil ordering.
+// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.6 | R2669, R2670, R2671, R2672, R3068, R3072, R3076
 func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map[uint64]map[string]float64, error) {
 	maxED, err := l.db.store.MaxEDSerial()
 	if err != nil {
@@ -1129,7 +1131,7 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 			if err != nil || chunkVec == nil {
 				continue // can't derive without an EC vector
 			}
-			cw := l.selectCandidates(txn, chunkID, chunkVec, eds, acc.alreadyOn, derivationK, minSim)
+			cw := l.selectCandidates(chunkID, chunkVec, eds, acc.alreadyOn, derivationK, minSim)
 			work[chunkID] = cw
 		}
 		return nil
@@ -1137,22 +1139,57 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 		return nil, err
 	}
 
-	// Write phase: batched RC + RF writes. Routes through the actor
-	// per the all-mutation-through-write-actor rule.
+	// Write+materialize phase (one actor op): author every survivor as an
+	// @ext-candidate file tag, stamp RF freshness, then synchronously
+	// reindex each DISTINCT touched mirror once — deduped by target file,
+	// so proposals batch before the sync rather than reindexing a mirror
+	// per proposal — so the RC records derive now and enrichProposedTags
+	// surfaces them in this same call (R3076). The @count RMW in
+	// CandidateExtTag cannot lose a concurrent bump (R3075); RF follows the
+	// all-mutation-through-actor rule (R3072); syncOnePath assumes the
+	// caller already holds the actor, which we do.
+	touched := make(map[string]bool)
 	if err := SyncVoid(l.db, func(_ *DB) error {
-		return l.db.store.bolt.Update(func(txn *bbolt.Tx) error {
-			for chunkID, cw := range work {
-				for _, tag := range cw.proposals {
-					if err := l.db.store.WriteDerivedProposal(txn, chunkID, tag); err != nil {
-						return err
-					}
+		for chunkID, cw := range work {
+			if len(cw.proposals) == 0 {
+				continue
+			}
+			info, cErr := l.db.ChunkInfo(chunkID)
+			if cErr != nil {
+				continue // no locator to name the chunk — skip authoring
+			}
+			target := info.Path + ":" + info.Range
+			authoredAny := false
+			for _, tag := range cw.proposals {
+				if aErr := l.db.CandidateExtTag(target, tag, "", ""); aErr != nil {
+					log.Printf("recall: author @ext-candidate %s @%s: %v", target, tag, aErr)
+					continue
 				}
+				authoredAny = true
+			}
+			if authoredAny {
+				if mp, mErr := l.db.resolveExtMirror(target); mErr == nil {
+					touched[mp] = true
+				}
+			}
+		}
+		if err := l.db.store.bolt.Update(func(txn *bbolt.Tx) error {
+			for chunkID := range work {
 				if err := l.db.store.WriteDerivedFreshness(txn, chunkID, maxSerial); err != nil {
 					return err
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		// Batched synchronous materialization: one reindex per distinct
+		// mirror, on the actor. syncOnePath resolves strategy the same way
+		// the watcher does and dispatches Add/Refresh. R3076
+		for mp := range touched {
+			l.db.syncOnePath(l.db.indexer, mp)
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -1172,9 +1209,11 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 // selectCandidates computes per-tag max cosine vs the chunk vector,
 // drops already-attached, rejected, and sub-threshold tags, and
 // returns the top-k survivors as a chunkWork ready for the write
-// phase. minSim is the chunk-EC ↔ tag-ED cosine floor (R2742).
-// CRC: crc-Librarian.md | R2670, R2671, R2672, R2673, R2674, R2742
-func (l *Librarian) selectCandidates(txn *bbolt.Tx, chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int, minSim float64) *chunkWork {
+// phase. minSim is the chunk-EC ↔ tag-ED cosine floor (R2742). The
+// net-rejected filter reads ExtMap.rejectByChunk (R3070), not an RJ
+// key lookup.
+// CRC: crc-Librarian.md | R2670, R2671, R2672, R2742, R3070
+func (l *Librarian) selectCandidates(chunkID uint64, chunkVec []float32, eds []TagDefEmbedding, alreadyOn map[string]bool, k int, minSim float64) *chunkWork {
 	// Per-tag max similarity across all ED records for that tag.
 	perTag := make(map[string]float64)
 	for _, ed := range eds {
@@ -1194,11 +1233,11 @@ func (l *Librarian) selectCandidates(txn *bbolt.Tx, chunkID uint64, chunkVec []f
 		if alreadyOn[tag] {
 			continue // R2671 + R2672 (union via AllTagsForChunk)
 		}
-		rejected, magnitude, _ := l.db.store.HasDerivedRejection(txn, chunkID, tag)
-		if rejected {
+		if score := l.db.extmap.RejectScore(chunkID, tag); score < 0 {
+			magnitude := uint64(-score)
 			ceiling := l.db.Config().Recall.EffectiveRejectProposeCeiling()
 			if ceiling == 0 || magnitude >= uint64(ceiling) {
-				continue // R2673, R2765, R2878 — score<0 suppresses when ceiling=0; magnitude gates when ceiling>0
+				continue // R3070, R2765, R2878 — net-rejected suppresses when ceiling=0; magnitude gates when ceiling>0
 			}
 			// magnitude < ceiling: re-propose despite previous rejection
 		}

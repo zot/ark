@@ -72,40 +72,43 @@ established by `RD` ([discussed-tags.md](discussed-tags.md)).
 
 ### RC — Recall Candidate (derived attach proposal)
 
-- **Key:** `"RC"` + chunkid varint + tagname (raw bytes).
-- **Value:** 8 bytes — big-endian `uint64` tally counter.
-- **Semantic:** one record per (chunkid, tagname) candidate. The
-  tagname is the proposed attach; the value is unspecified at the
-  statistical pass — bare-tag attach. The tally counts how many
-  derivation passes have proposed the same (chunkid, tagname); a
-  higher tally is a stronger candidate.
-- **Key shape note:** tagname follows the same `[\w][\w\-.]*`
-  grammar as everywhere else in ark and never contains control
-  bytes; chunkid varints terminate at MSB=0 so the boundary
-  between the chunkid and tagname segments is unambiguous. Same
-  pattern as the F record (`F` + chunkid varint + tagname).
-- **Lifecycle:** written by the derivation pass when --propose is
-  set. Deleted by `Store.AcceptDerived` (after writing F/V for the
-  accepted attach) or `Store.RejectDerived` (after writing the
-  corresponding RJ record).
-- **Reverse lookup** (proposals for one chunk): prefix scan
-  `"RC"` + chunkid varint.
-- **Reverse lookup** (one specific proposal): exact key.
+- **Key:** `"RC"` + source_tvid varint + target_chunkid varint — a
+  tag-derived family key, sibling of the X record. `source_tvid` is the
+  tvid of the `@ext-candidate` tag whose TARGET named the chunk.
+- **Value:** varint tally, materialized from the `@ext-candidate` line's
+  `@count` field.
+- **Semantic:** one record per (source `@ext-candidate` tvid, target
+  chunk). The proposed `(tagname, value)` is **not** stored — it is
+  recovered from the source tvid (`TvidMap.Resolve` → the `@ext-candidate`
+  value → `ParseExtTarget`), exactly as X recovers its routed tag. A higher
+  tally is a stronger candidate.
+- **Lifecycle:** **derived** on (re)index of the `@ext-candidate` file tag,
+  not written directly. The propose pass (`--propose`) and `ark ext
+  candidate` author that tag; `Store.AcceptDerived` / `RejectDerived`
+  rewrite it to `@ext` / `@ext-judgment`, whose reindex drops the RC and
+  lands the X+V edge / RJ. Struck via `ExtMap.CleanupSource` when the source
+  chunk orphans.
+- **Reverse lookup** (proposals for one chunk): the in-memory
+  `ExtMap.candidateSourcesByChunk` map (target_chunkid → source tvids).
 
-### RJ — Recall reJection (sticky no-resurface marker)
+### RJ — Recall Judgment (signed per-edge relevance)
 
-- **Key:** `"RJ"` + chunkid varint + tagname. Mirrors RC exactly.
-- **Value:** 8 bytes — big-endian `uint64` unix nanoseconds
-  (rejection timestamp). The timestamp is for diagnostics and
-  potential future TTL; the *presence* of the record is what blocks
-  re-proposal.
-- **Semantic:** the curator rejected this (chunkid, tagname). The
-  derivation pass checks RJ before writing RC; an RJ hit suppresses
-  re-proposal.
-- **Lifecycle:** written by `Store.RejectDerived` together with the
-  matching RC delete in one txn. Never deleted by the substrate; an
-  RJ record persists until the user explicitly removes it via a
-  future `ark derived unreject` verb (not in this slice).
+- **Key:** `"RJ"` + source_tvid varint + target_chunkid varint. Mirrors RC —
+  `source_tvid` is the `@ext-judgment` tag whose TARGET named the chunk, and
+  the tagname is recovered from it (not stored).
+- **Value (v3):** `signed-varint(score) + 8-byte BE unix nanos`. `score < 0`
+  = net-rejected (magnitude `-score`); `score > 0` = reinforced; `score == 0`
+  = neutral, equivalent to record-absent. The score is **materialized from
+  the `@ext-judgment` line's signed `@count`**.
+- **Semantic:** one signed relevance figure per (source `@ext-judgment`
+  tvid, target chunk) edge. The derivation pass suppresses re-proposal when
+  the edge is net-rejected, reading the in-memory `ExtMap.rejectByChunk` map
+  (not an RJ key lookup — RJ is source_tvid-keyed). `reject_propose_ceiling`
+  / `reject_mention_ceiling` in `[recall]` gate on the magnitude.
+- **Lifecycle:** **derived** on reindex of the `@ext-judgment` file tag,
+  which `Store.RejectDerived` (and `ark ext reject`) authors by creating or
+  decrementing its signed `@count`. Struck via `ExtMap.CleanupSource` when the
+  source chunk orphans.
 
 ### RF — Recall Freshness (per-chunk derivation stamp)
 
@@ -202,20 +205,27 @@ For each eligible chunk:
    would create curator noise. The conservative bare-name default
    may relax to exact-pair matching once we see real proposal
    streams; that's a future change.
-4. Filter out candidates that already have a matching RJ record
-   (`RJ[chunkid + tagname]` exists). The curator already said no;
-   don't re-surface.
+4. Filter out candidates the curator has net-rejected, read from the
+   in-memory `ExtMap.rejectByChunk` map (target_chunkid → tagname →
+   signed score; negative = net-rejected). The curator already said no;
+   don't re-surface. The `reject_propose_ceiling` knob can relax this
+   for low-magnitude rejections.
 
 ### Writing proposals
 
-For each surviving candidate:
+For each surviving candidate, the pass **authors an `@ext-candidate`
+file tag** via `DB.CandidateExtTag` — it does not write RC directly.
+The `@ext-candidate` line's `@count` is the repetition tally: a new
+`(TARGET, tag)` writes `@count: 1`; an exact-identity repeat increments
+it. The indexer derives the RC record (`source_tvid + target_chunkid →
+@count`) when that file tag is indexed.
 
-- If `RC[chunkid + tagname]` exists, increment the tally by 1.
-- Otherwise, write `RC[chunkid + tagname] = 1`.
-
-All RC writes happen inside the derivation pass's batched write
-through the actor — one transaction per recall call, not per
-proposal.
+Authoring, the RF freshness stamp, and the reindex all run inside one
+closure-actor op per recall call (not per proposal). The pass then
+**synchronously materializes**: it reindexes each distinct touched
+mirror once (deduped by target file) so the RC records derive and the
+proposals surface in the same `--propose` call, rather than only after
+the async watcher pass.
 
 ### Cost characteristics
 
@@ -319,11 +329,11 @@ The `RecallResult` shape is unchanged. The pass is a side effect.
 New Store methods:
 
 ```go
-// DerivedProposals returns all RC records for a chunk, sorted by
-// tally descending. Reads RJ records too and excludes any
-// (chunkid, tagname) shadowed by a rejection (defense-in-depth;
-// the derivation pass already filters, but a caller might query a
-// chunkid whose RC records pre-date a later RJ).
+// DerivedProposals returns a chunk's derived proposals, sorted by tally
+// descending. Reads ExtMap.candidateSourcesByChunk, recovers each
+// candidate's (tagname, value) from its source tvid (TvidMap.Resolve +
+// ParseExtTarget), and reads the tally from the RC record. Skips
+// tagnames net-rejected in ExtMap.rejectByChunk (defense-in-depth).
 func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error)
 
 type DerivedProposal struct {
@@ -332,22 +342,23 @@ type DerivedProposal struct {
     Tally   uint64
 }
 
-// AcceptDerived promotes a derived proposal to an attached tag.
-// In one write txn: drop RC[chunkID + tagname], call the
-// existing tag-attach path (F + V update via AppendTagValues
-// or equivalent) with the supplied value (empty for bare-tag).
-// Returns the resolved tvid.
-func (s *Store) AcceptDerived(chunkID uint64, tagname, value string) (uint64, error)
+// AcceptDerived commits a proposal by authoring the promotion in the
+// target's mirror file: it resolves the chunk's locator and delegates to
+// DB.AcceptExtTag (@ext-candidate → @ext). On reindex the RC derivation
+// drops and the X+V edge lands — no separate RC-delete-and-attach step.
+func (s *Store) AcceptDerived(db *DB, chunkID uint64, tagname, value string) error
 
-// RejectDerived persists a no-resurface marker. In one write
-// txn: drop RC[chunkID + tagname], write RJ[chunkID + tagname]
-// with NOW timestamp.
-func (s *Store) RejectDerived(chunkID uint64, tagname string) error
+// RejectDerived records a durable rejection by authoring an @ext-judgment
+// file tag via DB.RejectExtTag (create-or-decrement its signed @count).
+// The indexer derives the RJ record; the returned magnitude reads back
+// from ExtMap.rejectByChunk (0 until that reindex materializes it).
+func (s *Store) RejectDerived(db *DB, chunkID uint64, tagname string) (uint64, error)
 ```
 
-The pair `AcceptDerived` / `RejectDerived` is front-loaded for the
-forge UI work that follows (item 6). They have no in-tree caller
-yet; the Tag Forge wires to them when it lands.
+The pair `AcceptDerived` / `RejectDerived` is front-loaded for the forge
+UI work that follows (item 6); both edit the mirror file rather than
+writing bbolt records directly. They have no in-tree caller yet; the Tag
+Forge wires to them when it lands.
 
 Internal helpers (not part of the public API contract; sketched
 for the design phase):
@@ -355,8 +366,10 @@ for the design phase):
 ```go
 // derivationPass runs the proposal pass on a batch of chunks
 // inside the recall path. Holds maxED for the batch; per-chunk
-// freshness check; per-chunk candidate generation; one batched
-// write of RC + RF records through the actor.
+// freshness check; per-chunk candidate generation; then, in one
+// actor op, authors an @ext-candidate file tag per survivor,
+// stamps RF, and reindexes each touched mirror so the RC records
+// derive in this same call.
 func (l *Librarian) derivationPass(chunks []RecalledChunk) error
 ```
 

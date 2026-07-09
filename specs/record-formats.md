@@ -38,10 +38,10 @@ change them, we need to update the CLI code so it's up-to-date.
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
 | `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
-| `RC`   | Recall Candidate    | `RC` + chunkid varint + tagname                   | 8-byte big-endian uint64 tally counter  |
+| `RC`   | Recall Candidate    | `RC` + source_tvid varint + target_chunkid varint | varint tally (materialized from `@ext-candidate` `@count`) |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
 | `RF`   | Recall Freshness    | `RF` + chunkid varint                             | varint uint64 (max S-over-ED at last derivation) |
-| `RJ`   | Recall Judgment     | `RJ` + chunkid varint + tagname                   | signed-varint score + 8-byte big-endian unix nanos |
+| `RJ`   | Recall Judgment     | `RJ` + source_tvid varint + target_chunkid varint | signed-varint score (from `@ext-judgment` `@count`) + 8-byte big-endian unix nanos |
 | `RM`   | Recall surface-cooldown | `RM` + session-bytes + `\x00` + chunkid varint | 8-byte big-endian unix nanos (last surfaced) |
 | `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
 | `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
@@ -436,21 +436,25 @@ agent-layer design). Currently:
 
 ### RC — Recall Candidate (derived attach proposal)
 
-- **Key:** `"RC"` + chunkid varint + tagname (raw bytes; `[\w][\w\-.]*`
-  grammar, no control bytes).
-- **Value:** 8 bytes — big-endian `uint64` tally counter.
-- **Semantic:** one record per (chunkid, tagname) statistical
-  derivation candidate. The tagname is the proposed attach; bare-tag
-  shape in the statistical slice (no value segment). Tally counts
-  how many derivation passes have proposed the same (chunkid,
-  tagname); higher tally = stronger signal in the Tag Forge.
-- **Lifecycle:** written by the derivation pass when
-  `ark connections recall --propose` is set. Deleted by
-  `Store.AcceptDerived` (after writing F/V for the attach) or
-  `Store.RejectDerived` (after writing the corresponding RJ
-  record).
-- **Reverse lookup** (proposals for one chunk): prefix scan
-  `"RC"` + chunkid varint. Detail spec: `derived-tags.md`.
+- **Key:** `"RC"` + source_tvid varint + target_chunkid varint —
+  a tag-derived family key, sibling of the X record. `source_tvid`
+  is the tvid of the `@ext-candidate` tag whose TARGET named the chunk.
+- **Value:** varint tally, materialized from the `@ext-candidate` line's
+  `@count` field.
+- **Semantic:** one record per (source `@ext-candidate` tvid, target
+  chunk). The proposed `(tagname, value)` is **not** stored — it is
+  recovered from the source tvid via `TvidMap.Resolve` → the
+  `@ext-candidate` value → `ParseExtTarget`, exactly as X recovers its
+  routed tag. Higher tally = stronger signal in the Tag Forge.
+- **Lifecycle:** **derived**, not directly written — the indexer derives
+  it when the `@ext-candidate` file tag is (re)indexed. The propose pass
+  (`ark connections recall --propose`) and `ark ext candidate` author that
+  tag; `Store.AcceptDerived` / `RejectDerived` rewrite it to `@ext` /
+  `@ext-judgment`, whose reindex drops the RC and lands the X+V edge / RJ.
+  Struck via `ExtMap.CleanupSource` when the source chunk orphans.
+- **Reverse lookup** (proposals for one chunk): the in-memory
+  `ExtMap.candidateSourcesByChunk` map (target_chunkid → source tvids),
+  not a prefix scan. Detail spec: `derived-tags.md`.
 
 ### RD — Recall discussed-tag
 
@@ -491,7 +495,10 @@ agent-layer design). Currently:
 
 ### RJ — Recall Judgment (signed per-edge relevance)
 
-- **Key:** `"RJ"` + chunkid varint + tagname. Mirrors RC exactly.
+- **Key:** `"RJ"` + source_tvid varint + target_chunkid varint. Mirrors
+  RC exactly — a tag-derived family key; `source_tvid` is the
+  `@ext-judgment` tag whose TARGET named the chunk, and the tagname is
+  recovered from it (not stored).
 - **Value (v3):** `signed-varint(score) + 8-byte BE unix nanos`
   (the score is zigzag-encoded via `binary.PutVarint`). `score < 0`
   is net-rejected — magnitude `-score` is the rejection strength;
@@ -499,12 +506,16 @@ agent-layer design). Currently:
   record-absent (a write that lands at 0 may delete the record). The
   timestamp is the most-recent adjustment (enables decay-on-read as a
   future knob).
-- **Semantic:** one signed relevance figure per (chunkid, tagname)
-  edge — whether the tag is a derived RC proposal or already attached
-  (live F/V hyperedge). Rejection is the negative tail of a single
+- **Semantic:** one signed relevance figure per (source `@ext-judgment`
+  tvid, target chunk) edge. The score is **materialized from the
+  `@ext-judgment` line's signed `@count`** (negative = net-rejected
+  magnitude, positive = reinforced); RJ is derived on reindex, not
+  written directly. Rejection is the negative tail of a single
   bidirectional axis; reinforcement raises the score, decay/rejection
   lowers it. The derivation pass suppresses re-proposal when the score
-  is negative; two ceiling knobs in `[recall]` —
+  is negative, reading the in-memory `ExtMap.rejectByChunk` map (not an
+  RJ key lookup — RJ is source_tvid-keyed); two ceiling knobs in
+  `[recall]` —
   `reject_propose_ceiling` and `reject_mention_ceiling` — consult the
   magnitude (`-score`) to decide whether the substrate keeps proposing
   and whether the assistant keeps mentioning the pair. `0` (unset) on

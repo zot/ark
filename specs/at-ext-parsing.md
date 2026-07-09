@@ -69,6 +69,23 @@ relative-path base literally named `insight` with a `:"anchor"` narrower
 is part of the line's text, two proposals of the same tag with different
 insights remain distinct lines (preserved, not merged).
 
+### Reserved metadata field: `count`
+
+`@ext-candidate` and `@ext-judgment` lines carry a reserved `@count: N`
+field — a signed integer that, unlike `insight`, sits in the **routed-tag
+position**. `ParseExtTarget` returns it among the routed tags, but the
+derivation splits it out (`extractCountField`) and excludes it from the
+routed set, materializing its value into the RC tally / signed RJ score
+(negative = net-rejected magnitude, positive = reinforced popularity).
+Unlike a peel, `@count` **stays in the tag's value string**, so the outer
+tag's V record mirrors the file line faithfully — the index is a
+performance mirror of the source, never a filtered view. On a committed
+`@ext`, `@count` is excluded from routing and not materialized. Because
+`@count` is part of the tvid-bearing value, changing it churns the source
+tvid: the source-chunk reindex cleans the old-count derived record and
+derives the new one, so the count survives in the file line as the source
+of truth.
+
 ## Target syntax
 
 ```

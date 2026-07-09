@@ -124,7 +124,12 @@ Every producer authors file tags; bbolt RC/RJ demote to a derived index of them.
   single producer path (the same mirror authoring Pass A built for `ark ext
   candidate`); the indexer then derives RC. A bare RC (tvid + chunkid, no
   tag/value) is meaningless without a source line, so authoring is the only
-  option once RC is tvid-keyed.
+  option once RC is tvid-keyed. To keep proposals visible in the same
+  `--propose` call (not only after the async watcher pass), the pass then
+  **synchronously materializes**: still on the actor, it reindexes each distinct
+  touched mirror once via `DB.syncOnePath`, deriving the RC before
+  `enrichProposedTags` reads it. Embedding stays deferred, so the sync is just
+  the FTS + tag + derive of tiny mirror files.
 - **`Store.RejectDerived`** stops writing bbolt RJ directly and authors an
   `@ext-judgment` file tag (negative score on reject; the reinforce direction is
   schema-ready but has no producer — seam 3b).
@@ -133,7 +138,10 @@ Every producer authors file tags; bbolt RC/RJ demote to a derived index of them.
 - **The accept loop closes by construction.** `ark ext accept` (Pass A) rewrites
   `@ext-candidate` → `@ext`; on reindex the RC derivation drops and the X + V
   edge lands. Committing a tag consumes its candidate with no separate
-  `AcceptDerived` bbolt dance. `Store.AcceptDerived` retires.
+  `AcceptDerived` bbolt dance. `Store.AcceptDerived` is **re-homed to the mirror
+  path** — it delegates to `DB.AcceptExtTag` rather than deleting RC and
+  attaching directly — surviving as the file-backed accept primitive the forge
+  wiring will call (symmetric with the inverted `Store.RejectDerived`).
 
 ### The freshness gate stays
 
@@ -170,8 +178,9 @@ are the disposable half by definition (state A stored them nowhere else).
   the "RF orphan cleaned via callback" claim or make it true; note X/RC/RJ as one
   keyed family.
 - `derived-tags.md` — the derivation pass now authors `@ext-candidate` instead of
-  writing RC; the accept/reject Store API section (`AcceptDerived` retired,
-  `RejectDerived` inverted); the RC-as-tally storage section.
+  writing RC; the accept/reject Store API section (`AcceptDerived` and
+  `RejectDerived` both re-homed to author via the mirror path — `DB.AcceptExtTag` /
+  `DB.RejectExtTag`); the RC-as-tally storage section.
 - `at-ext-storage.md` — `ExtMap` is the tag-derived map, not the `@ext`-only
   router; the class branch at the write step.
 - `simple-recall.md` — RJ producer path (file-backed) and the reject-filter map.

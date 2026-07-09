@@ -294,12 +294,12 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 }
 
 // cleanupOrphans drops EC records and inline F/V/T contributions for
-// orphaned chunks, capturing @ext source tvids first so ExtMap can
-// strike their X records and routed-tag V entries afterward. Order
-// matters: the @ext tvids must be read before RemoveTagValuesInTxn
-// wipes F[orphan][ext], and CleanupSource must run before tt.Commit
-// drops tvid_exts whose source V records emptied. (R1899, R2008,
-// R2009, R2022, R2024)
+// orphaned chunks, capturing @ext-family source tvids first so ExtMap can
+// strike their derived records (X for @ext, RC/RJ for candidate/judgment)
+// and routed-tag V entries afterward. Order matters: the family tvids must
+// be read before RemoveTagValuesInTxn wipes F[orphan][ext*], and
+// CleanupSource must run before tt.Commit drops tvid_exts whose source V
+// records emptied. (R1899, R2008, R2009, R2022, R2024, R3064)
 func (idx *Indexer) cleanupOrphans(txn *bbolt.Tx, tt *TvidTxn, orphanedChunkIDs []uint64) error {
 	type extPair struct {
 		sourceChunkID uint64
@@ -308,7 +308,7 @@ func (idx *Indexer) cleanupOrphans(txn *bbolt.Tx, tt *TvidTxn, orphanedChunkIDs 
 	var extPairs []extPair
 	if idx.extmap != nil {
 		for _, id := range orphanedChunkIDs {
-			ts, err := idx.store.ReadExtTvidsForChunk(txn, id)
+			ts, err := idx.store.ReadExtFamilyTvidsForChunk(txn, id)
 			if err != nil {
 				return err
 			}
@@ -422,16 +422,17 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 // `sourceDir` (derived once from fileID) threads through to
 // ResolveExtTarget so relative-path narrower bases absolutize
 // against the source file's directory. (R2374)
-// CRC: crc-Indexer.md | R1996, R2012, R2016, R2374
+// CRC: crc-Indexer.md | R1996, R2012, R2016, R2374, R3061, R3074
 func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValues) []extIndexPlan {
 	sourceDir := idx.sourceDirFor(fileID)
 	var out []extIndexPlan
 	for _, ct := range chunkTags {
 		for _, tv := range ct.Values {
-			if tv.Tag != tagExt || tv.Value == "" {
+			// R3061: derive all three @ext-family classes, not @ext alone.
+			if !isExtFamilyTag(tv.Tag) || tv.Value == "" {
 				continue
 			}
-			tvidExt, ok := idx.store.tvids.Lookup(tagExt, tv.Value)
+			tvidExt, ok := idx.store.tvids.Lookup(tv.Tag, tv.Value)
 			if !ok {
 				continue
 			}
@@ -439,11 +440,16 @@ func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValu
 			if !parseOK {
 				continue
 			}
+			// R3074: split the reserved @count out of the routed tags; it
+			// materializes into the RC tally / signed RJ score downstream.
+			routed, count, _ := extractCountField(routed)
 			parts, _ := ParseExtTargetParts(target, sourceDir)
 			out = append(out, extIndexPlan{
 				sourceChunkID: ct.ChunkID,
 				sourceFileID:  fileID,
 				tvidExt:       tvidExt,
+				class:         extClassForTag(tv.Tag),
+				count:         count,
 				target:        target,
 				targetBase:    parts.BaseValue,
 				targets:       idx.db.ResolveExtTarget(target, sourceDir),
@@ -504,7 +510,7 @@ func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValu
 // source file may differ (the changed file F is the target of the
 // routings; the sources live elsewhere), so sourceDir is recovered
 // per-tvid_ext via ExtMap.SourceChunkID → chunkFileID → fileIDPath.
-// CRC: crc-Indexer.md | R2000, R2001, R2374
+// CRC: crc-Indexer.md | R2000, R2001, R2374, R3061, R3074
 func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64) []extReresolvePlan {
 	candidates := idx.extmap.candidatesForFileChange(idx.db, fileID, addedChunkIDs, orphanedChunkIDs)
 	if len(candidates) == 0 {
@@ -515,7 +521,7 @@ func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphaned
 	sourceDirCache := make(map[uint64]string)
 	out := make([]extReresolvePlan, 0, len(candidates))
 	for tvidExt := range candidates {
-		_, value, ok := idx.store.tvids.Resolve(tvidExt)
+		tag, value, ok := idx.store.tvids.Resolve(tvidExt)
 		if !ok {
 			continue
 		}
@@ -523,10 +529,14 @@ func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphaned
 		if !parseOK {
 			continue
 		}
+		// R3061/R3074: recover the class from the source tag and split @count.
+		routed, count, _ := extractCountField(routed)
 		sourceDir := idx.reresolveSourceDir(tvidExt, sourceDirCache)
 		parts, _ := ParseExtTargetParts(target, sourceDir)
 		out = append(out, extReresolvePlan{
 			tvidExt:    tvidExt,
+			class:      extClassForTag(tag),
+			count:      count,
 			target:     target,
 			targetBase: parts.BaseValue,
 			routedTags: routed,
@@ -569,16 +579,20 @@ type extIndexPlan struct {
 	sourceChunkID uint64
 	sourceFileID  uint64
 	tvidExt       uint64
-	target        string // TARGET text as authored (verbatim for V record / debugging)
-	targetBase    string // BASE of the TARGET — absolutized path or UUID value — for extByAnchor keying (R2380)
+	class         extClass // source tag class: committed / candidate / judgment (R3061)
+	count         int64    // materialized @count → RC tally / signed RJ score (R3074)
+	target        string   // TARGET text as authored (verbatim for V record / debugging)
+	targetBase    string   // BASE of the TARGET — absolutized path or UUID value — for extByAnchor keying (R2380)
 	targets       []uint64
 	routedTags    []TagValue
 }
 
 type extReresolvePlan struct {
 	tvidExt    uint64
-	target     string // TARGET text as authored
-	targetBase string // BASE for extByAnchor keying (R2380)
+	class      extClass // source tag class recovered from the resolved tag name (R3061)
+	count      int64    // materialized @count → RC tally / signed RJ score (R3074)
+	target     string   // TARGET text as authored
+	targetBase string   // BASE for extByAnchor keying (R2380)
 	routedTags []TagValue
 	newTargets []uint64
 }

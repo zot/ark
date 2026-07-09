@@ -219,11 +219,11 @@ step 7.7.
          │
          ├── 9.2  parse ## Surface: / ## Recommend: H2s
          │
-         ├── 9.3  for each Recommend item, consult RJ
-         │          counter via Store.HasDerivedRejection: (R2765, R2766)
-         │          - counter >= reject_mention_ceiling:
+         ├── 9.3  for each Recommend item, consult the net-rejection
+         │          magnitude via ExtMap.rejectByChunk: (R2765, R2766, R3070)
+         │          - magnitude >= reject_mention_ceiling:
          │            drop silently
-         │          - counter >= reject_propose_ceiling:
+         │          - magnitude >= reject_propose_ceiling:
          │            suppress per-record specifics; may
          │            include in aggregate count
          │          - below propose ceiling: full mention

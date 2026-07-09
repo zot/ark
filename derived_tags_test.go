@@ -3,43 +3,11 @@ package ark
 // CRC: crc-Store.md, crc-Librarian.md | Test: test-DerivedTags.md
 
 import (
+	"strings"
 	"testing"
 
 	"go.etcd.io/bbolt"
 )
-
-// --- Store-level tests ---
-
-// TestStore_WriteDerivedProposal_TallyIncrements verifies tally goes
-// from 1 → 2 across two WriteDerivedProposal calls for the same key.
-// Refs: R2664, R2674
-func TestStore_WriteDerivedProposal_TallyIncrements(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(42)
-
-	// Two writes for the same (chunkID, tag).
-	for range 2 {
-		if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-			return db.store.WriteDerivedProposal(txn, chunkID, "priority")
-		}); err != nil {
-			t.Fatalf("WriteDerivedProposal: %v", err)
-		}
-	}
-
-	props, err := db.store.DerivedProposals(chunkID)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	if len(props) != 1 {
-		t.Fatalf("expected 1 proposal, got %d", len(props))
-	}
-	if props[0].Tagname != "priority" {
-		t.Errorf("tagname: got %q want %q", props[0].Tagname, "priority")
-	}
-	if props[0].Tally != 2 {
-		t.Errorf("tally: got %d want 2", props[0].Tally)
-	}
-}
 
 // TestStore_WriteAndReadDerivedFreshness round-trips a serial value.
 // Refs: R2666, R2669
@@ -93,128 +61,6 @@ func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 	}
 }
 
-// TestStore_HasDerivedRejection_PresentAndAbsent verifies the signed
-// judgment probe: one reject gives score -1, so rejected with magnitude 1.
-// Refs: R2665, R2673, R2878
-func TestStore_HasDerivedRejection_PresentAndAbsent(t *testing.T) {
-	_, db := setupRecall(t)
-	if _, err := db.store.RejectDerived(42, "bogus"); err != nil {
-		t.Fatalf("RejectDerived: %v", err)
-	}
-
-	var present, absent bool
-	var mag uint64
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		p, m, err := db.store.HasDerivedRejection(txn, 42, "bogus")
-		if err != nil {
-			return err
-		}
-		a, _, err := db.store.HasDerivedRejection(txn, 42, "missing")
-		if err != nil {
-			return err
-		}
-		present, mag, absent = p, m, a
-		return nil
-	}); err != nil {
-		t.Fatalf("HasDerivedRejection: %v", err)
-	}
-	if !present {
-		t.Error("expected present=true for bogus")
-	}
-	if mag != 1 {
-		t.Errorf("magnitude: got %d want 1", mag)
-	}
-	if absent {
-		t.Error("expected absent=false for missing")
-	}
-}
-
-// TestStore_DerivedProposals_SortByTallyDesc verifies the result order.
-// Refs: R2678
-func TestStore_DerivedProposals_SortByTallyDesc(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(42)
-
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		// priority gets tally=3
-		for range 3 {
-			if err := db.store.WriteDerivedProposal(txn, chunkID, "priority"); err != nil {
-				return err
-			}
-		}
-		// status gets tally=1
-		if err := db.store.WriteDerivedProposal(txn, chunkID, "status"); err != nil {
-			return err
-		}
-		// axis gets tally=5
-		for range 5 {
-			if err := db.store.WriteDerivedProposal(txn, chunkID, "axis"); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("WriteDerivedProposal setup: %v", err)
-	}
-
-	props, err := db.store.DerivedProposals(chunkID)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	want := []DerivedProposal{
-		{ChunkID: chunkID, Tagname: "axis", Tally: 5},
-		{ChunkID: chunkID, Tagname: "priority", Tally: 3},
-		{ChunkID: chunkID, Tagname: "status", Tally: 1},
-	}
-	if len(props) != len(want) {
-		t.Fatalf("expected %d props, got %d", len(want), len(props))
-	}
-	for i := range want {
-		if props[i] != want[i] {
-			t.Errorf("position %d: got %+v want %+v", i, props[i], want[i])
-		}
-	}
-}
-
-// TestStore_DerivedProposals_FiltersRJ verifies that an RC entry
-// shadowed by an RJ record is excluded from DerivedProposals.
-// Refs: R2678, R2673
-func TestStore_DerivedProposals_FiltersRJ(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(42)
-
-	// Write two RC entries.
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		if err := db.store.WriteDerivedProposal(txn, chunkID, "priority"); err != nil {
-			return err
-		}
-		return db.store.WriteDerivedProposal(txn, chunkID, "status")
-	}); err != nil {
-		t.Fatalf("WriteDerivedProposal: %v", err)
-	}
-
-	// Drive status's judgment negative directly (AdjustJudgment leaves
-	// the RC in place) so DerivedProposals must drop a pre-rejection RC
-	// because the edge score is now < 0.
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		_, err := db.store.AdjustJudgment(txn, chunkID, "status", -1)
-		return err
-	}); err != nil {
-		t.Fatalf("AdjustJudgment: %v", err)
-	}
-
-	props, err := db.store.DerivedProposals(chunkID)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	if len(props) != 1 {
-		t.Fatalf("expected 1 prop (status filtered by RJ shadow); got %d: %+v", len(props), props)
-	}
-	if props[0].Tagname != "priority" {
-		t.Errorf("survivor: got %q want priority", props[0].Tagname)
-	}
-}
-
 // TestStore_MaxEDSerial_TracksHighWater verifies MaxEDSerial reflects
 // the highest stamped ED serial.
 // Refs: R2669
@@ -244,295 +90,6 @@ func TestStore_MaxEDSerial_TracksHighWater(t *testing.T) {
 	}
 }
 
-// TestStore_AcceptDerived_DropsRCAndAttaches verifies atomic
-// RC delete + F/V attach via the existing tag-attach path.
-// Refs: R2679
-func TestStore_AcceptDerived_DropsRCAndAttaches(t *testing.T) {
-	_, db := setupRecall(t)
-	chunkID, _ := indexLine(t, db, "1.txt", "apple banana")
-
-	// Seed an RC record.
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		return db.store.WriteDerivedProposal(txn, chunkID, "priority")
-	}); err != nil {
-		t.Fatalf("WriteDerivedProposal: %v", err)
-	}
-
-	tvid, err := db.store.AcceptDerived(chunkID, "priority", "high")
-	if err != nil {
-		t.Fatalf("AcceptDerived: %v", err)
-	}
-	if tvid == 0 {
-		t.Error("expected non-zero resolved tvid")
-	}
-
-	// RC should be gone.
-	props, _ := db.store.DerivedProposals(chunkID)
-	if len(props) != 0 {
-		t.Errorf("expected RC dropped after accept; got %+v", props)
-	}
-
-	// Tag should be attached — TagsForChunk picks up the F/V write.
-	tags, err := db.store.AllTagsForChunk(chunkID)
-	if err != nil {
-		t.Fatalf("AllTagsForChunk: %v", err)
-	}
-	found := false
-	for _, tv := range tags {
-		if tv.Tag == "priority" && tv.Value == "high" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected priority:high attached to chunk; got %+v", tags)
-	}
-}
-
-// TestStore_RejectDerived_DropsRCAndWritesRJ verifies atomic RC
-// delete + signed v3 judgment write (score -1, NOW timestamp).
-// Refs: R2680, R2877
-func TestStore_RejectDerived_DropsRCAndWritesRJ(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(42)
-
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		return db.store.WriteDerivedProposal(txn, chunkID, "fluff")
-	}); err != nil {
-		t.Fatalf("WriteDerivedProposal: %v", err)
-	}
-
-	if mag, err := db.store.RejectDerived(chunkID, "fluff"); err != nil {
-		t.Fatalf("RejectDerived: %v", err)
-	} else if mag != 1 {
-		t.Errorf("RejectDerived magnitude: got %d want 1", mag)
-	}
-
-	// RC dropped.
-	props, _ := db.store.DerivedProposals(chunkID)
-	if len(props) != 0 {
-		t.Errorf("expected RC dropped after reject; got %+v", props)
-	}
-
-	// RJ present, v3 shape: signed-varint(score) + 8-byte BE nanos.
-	// Fresh reject gives score -1.
-	rjKey := derivedKey(prefixDerivedRejection, chunkID, "fluff")
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		v, err := bGet(txn, rjKey)
-		if err != nil {
-			return err
-		}
-		score, nanos, ok := decodeJudgmentValue(v)
-		if !ok {
-			t.Errorf("RJ value malformed: %x", v)
-		}
-		if score != -1 {
-			t.Errorf("RJ score: got %d want -1", score)
-		}
-		if nanos == 0 {
-			t.Error("RJ timestamp is zero")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("read RJ: %v", err)
-	}
-}
-
-// TestStore_AdjustJudgment_RoundTrip verifies the signed RMW primitive
-// reinforces, accumulates, and decays, persisting the result.
-// Refs: R2874, R2875
-func TestStore_AdjustJudgment_RoundTrip(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(7)
-	for _, st := range []struct {
-		delta int64
-		want  int64
-	}{{+1, 1}, {+2, 3}, {-1, 2}} {
-		var got int64
-		if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-			n, err := db.store.AdjustJudgment(txn, chunkID, "t", st.delta)
-			got = n
-			return err
-		}); err != nil {
-			t.Fatalf("AdjustJudgment(%d): %v", st.delta, err)
-		}
-		if got != st.want {
-			t.Errorf("after delta %d: got score %d want %d", st.delta, got, st.want)
-		}
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		score, present, err := db.store.ReadJudgment(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if !present || score != 2 {
-			t.Errorf("ReadJudgment: got (%d, %v) want (2, true)", score, present)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("ReadJudgment: %v", err)
-	}
-}
-
-// TestStore_ReadJudgment_AbsentPresentMalformed verifies the three read
-// paths, including the conservative malformed-as-rejected rule.
-// Refs: R2874, R2876
-func TestStore_ReadJudgment_AbsentPresentMalformed(t *testing.T) {
-	_, db := setupRecall(t)
-	// (a) absent
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		score, present, err := db.store.ReadJudgment(txn, 1, "t")
-		if err != nil {
-			return err
-		}
-		if present || score != 0 {
-			t.Errorf("absent: got (%d, %v) want (0, false)", score, present)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("absent read: %v", err)
-	}
-	// (b) present
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		_, err := db.store.AdjustJudgment(txn, 1, "t", +2)
-		return err
-	}); err != nil {
-		t.Fatalf("AdjustJudgment: %v", err)
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		score, present, err := db.store.ReadJudgment(txn, 1, "t")
-		if err != nil {
-			return err
-		}
-		if !present || score != 2 {
-			t.Errorf("present: got (%d, %v) want (2, true)", score, present)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("present read: %v", err)
-	}
-	// (c) malformed value gives conservative rejected (negative, present)
-	badKey := derivedKey(prefixDerivedRejection, 2, "t")
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		return bPut(txn, badKey, []byte{0x01, 0x02, 0x03})
-	}); err != nil {
-		t.Fatalf("write malformed: %v", err)
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		score, present, err := db.store.ReadJudgment(txn, 2, "t")
-		if err != nil {
-			return err
-		}
-		if !present || score >= 0 {
-			t.Errorf("malformed: got (%d, %v) want (negative, true)", score, present)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("malformed read: %v", err)
-	}
-}
-
-// TestStore_Judgment_ReinforcementHysteresis verifies a reinforced edge
-// survives a single rejection (the axis is bidirectional).
-// Refs: R2875, R2877, R2881
-func TestStore_Judgment_ReinforcementHysteresis(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(9)
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		_, err := db.store.AdjustJudgment(txn, chunkID, "t", +2)
-		return err
-	}); err != nil {
-		t.Fatalf("reinforce: %v", err)
-	}
-	if _, err := db.store.RejectDerived(chunkID, "t"); err != nil {
-		t.Fatalf("RejectDerived: %v", err)
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if rejected || mag != 0 {
-			t.Errorf("after +2 then reject: rejected=%v mag=%d, want false/0", rejected, mag)
-		}
-		score, _, err := db.store.ReadJudgment(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if score != 1 {
-			t.Errorf("score: got %d want 1", score)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-}
-
-// TestStore_RejectDerived_RejectParity verifies repeated rejects walk the
-// score negative, matching the v2 monotonic counter.
-// Refs: R2877, R2878
-func TestStore_RejectDerived_RejectParity(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(11)
-	for i, want := range []uint64{1, 2, 3} {
-		mag, err := db.store.RejectDerived(chunkID, "t")
-		if err != nil {
-			t.Fatalf("RejectDerived #%d: %v", i+1, err)
-		}
-		if mag != want {
-			t.Errorf("reject #%d magnitude: got %d want %d", i+1, mag, want)
-		}
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if !rejected || mag != 3 {
-			t.Errorf("final: rejected=%v mag=%d want true/3", rejected, mag)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-}
-
-// TestStore_Judgment_NeutralEqualsAbsent verifies a score driven back to
-// 0 reads as neutral, indistinguishable from absent at the contract
-// surface (HasDerivedRejection false/0).
-// Refs: R2874, R2881
-func TestStore_Judgment_NeutralEqualsAbsent(t *testing.T) {
-	_, db := setupRecall(t)
-	const chunkID = uint64(13)
-	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		if _, err := db.store.AdjustJudgment(txn, chunkID, "t", +1); err != nil {
-			return err
-		}
-		_, err := db.store.AdjustJudgment(txn, chunkID, "t", -1)
-		return err
-	}); err != nil {
-		t.Fatalf("Adjust: %v", err)
-	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		score, _, err := db.store.ReadJudgment(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if score != 0 {
-			t.Errorf("neutral score: got %d want 0", score)
-		}
-		rejected, mag, err := db.store.HasDerivedRejection(txn, chunkID, "t")
-		if err != nil {
-			return err
-		}
-		if rejected || mag != 0 {
-			t.Errorf("neutral: rejected=%v mag=%d want false/0", rejected, mag)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-}
-
 // --- Recall-level tests ---
 
 // TestRecall_Propose_WritesRCAndRF runs a single --propose pass and
@@ -542,7 +99,7 @@ func TestStore_Judgment_NeutralEqualsAbsent(t *testing.T) {
 // derivation subject.
 // Refs: R2667, R2670, R2674, R2669
 func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
@@ -556,6 +113,7 @@ func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
 		t.Fatalf("Recall: %v", err)
 	}
 
+	reindexMirrors(t, db)
 	props, err := db.store.DerivedProposals(cTarget)
 	if err != nil {
 		t.Fatalf("DerivedProposals: %v", err)
@@ -591,7 +149,7 @@ func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
 // proposed. Without the EV leg there is no ED to derive against, so the pass
 // would propose nothing.
 func TestRecall_Propose_EVLeg(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	cHolder, _ := indexLine(t, db, "holder.txt", "unrelated note text")
@@ -621,6 +179,7 @@ func TestRecall_Propose_EVLeg(t *testing.T) {
 		t.Fatalf("Recall: %v", err)
 	}
 
+	reindexMirrors(t, db)
 	props, err := db.store.DerivedProposals(cTarget)
 	if err != nil {
 		t.Fatalf("DerivedProposals: %v", err)
@@ -641,7 +200,7 @@ func TestRecall_Propose_EVLeg(t *testing.T) {
 // (freshness skip).
 // Refs: R2669
 func TestRecall_Propose_FreshnessSkipsRedundantWork(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
@@ -657,6 +216,7 @@ func TestRecall_Propose_FreshnessSkipsRedundantWork(t *testing.T) {
 		}
 	}
 
+	reindexMirrors(t, db)
 	props, err := db.store.DerivedProposals(cTarget)
 	if err != nil {
 		t.Fatalf("DerivedProposals: %v", err)
@@ -673,7 +233,7 @@ func TestRecall_Propose_FreshnessSkipsRedundantWork(t *testing.T) {
 // the tally.
 // Refs: R2669, R2674
 func TestRecall_Propose_StaleEDRetriggersDerive(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
@@ -697,6 +257,7 @@ func TestRecall_Propose_StaleEDRetriggersDerive(t *testing.T) {
 		t.Fatalf("second Recall: %v", err)
 	}
 
+	reindexMirrors(t, db)
 	props, _ := db.store.DerivedProposals(cTarget)
 	for _, p := range props {
 		if p.Tagname == "food" && p.Tally != 2 {
@@ -710,7 +271,7 @@ func TestRecall_Propose_StaleEDRetriggersDerive(t *testing.T) {
 // @food proposal.
 // Refs: R2671
 func TestRecall_Propose_FiltersAlreadyAttached(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
@@ -731,6 +292,7 @@ func TestRecall_Propose_FiltersAlreadyAttached(t *testing.T) {
 		t.Fatalf("Recall: %v", err)
 	}
 
+	reindexMirrors(t, db)
 	props, _ := db.store.DerivedProposals(cTarget)
 	for _, p := range props {
 		if p.Tagname == "food" {
@@ -739,21 +301,22 @@ func TestRecall_Propose_FiltersAlreadyAttached(t *testing.T) {
 	}
 }
 
-// TestRecall_Propose_SkipsRJRejected verifies the RJ filter — a
-// rejected (chunkID, tagname) is not re-proposed.
-// Refs: R2673
+// TestRecall_Propose_SkipsRJRejected verifies the reject filter — a
+// net-rejected (chunkID, tagname) in rejectByChunk is not re-proposed.
+// Refs: R3070
 func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
 	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
 	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
 
-	// Pre-reject @food on the target chunk.
-	if _, err := db.store.RejectDerived(cTarget, "food"); err != nil {
-		t.Fatalf("RejectDerived: %v", err)
-	}
+	// Pre-reject @food on the target chunk (reject map, as a derived
+	// @ext-judgment would populate).
+	db.extmap.mu.Lock()
+	db.extmap.rejectByChunk[cTarget] = map[string]int64{"food": -1}
+	db.extmap.mu.Unlock()
 
 	if _, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
@@ -762,6 +325,11 @@ func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
 		t.Fatalf("Recall: %v", err)
 	}
 
+	// The reject filter suppressed the candidate — no @food authored.
+	if m := externalMirrors(t); strings.Contains(m, "@food:") {
+		t.Errorf("@food should be filtered (net-rejected); mirrors:\n%s", m)
+	}
+	reindexMirrors(t, db)
 	props, _ := db.store.DerivedProposals(cTarget)
 	for _, p := range props {
 		if p.Tagname == "food" {
@@ -775,7 +343,7 @@ func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
 // chunk has RC records.
 // Refs: R2684, R2686
 func TestRecall_Propose_StencilEmitsProposedTags(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
@@ -783,12 +351,22 @@ func TestRecall_Propose_StencilEmitsProposedTags(t *testing.T) {
 	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
 	db.store.WriteTagDefEmbedding("style", 11, vecFrom(0.7, 0.7, 0, 0))
 
+	// First pass authors the @ext-candidate; the derivation is async (the
+	// RC record lands on reindex), so proposals surface on the NEXT recall.
+	if _, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cInput}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	); err != nil {
+		t.Fatalf("first Recall: %v", err)
+	}
+	reindexMirrors(t, db)
+
 	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
 	)
 	if err != nil {
-		t.Fatalf("Recall: %v", err)
+		t.Fatalf("second Recall: %v", err)
 	}
 	var target *RecalledChunk
 	for i := range res.Chunks {
@@ -818,12 +396,17 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
 	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
 
-	// Pre-existing RC record on the target from an earlier (simulated) pass.
+	// Pre-existing derived proposal on the target (map + RC record) from an
+	// earlier pass.
+	tvid := db.store.tvids.AllocOverlay(extCandidateTag, "x @leftover:")
 	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		return db.store.WriteDerivedProposal(txn, cTarget, "leftover")
+		return db.store.WriteDerivedCandidate(txn, tvid, cTarget, 1)
 	}); err != nil {
-		t.Fatalf("WriteDerivedProposal: %v", err)
+		t.Fatalf("WriteDerivedCandidate: %v", err)
 	}
+	db.extmap.mu.Lock()
+	db.extmap.candidateSourcesByChunk[cTarget] = []uint64{tvid}
+	db.extmap.mu.Unlock()
 
 	// Recall WITHOUT --propose.
 	res, err := l.Recall(
@@ -848,26 +431,40 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	_, db := setupRecall(t)
 
-	// Seed two chunks with RC + RF + RJ records.
+	// Seed RC + RF + RJ records (source_tvid + target_chunkid keys).
 	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
-		if err := db.store.WriteDerivedProposal(txn, 1, "food"); err != nil {
+		if err := db.store.WriteDerivedCandidate(txn, 100, 1, 1); err != nil {
 			return err
 		}
-		if err := db.store.WriteDerivedProposal(txn, 2, "axis"); err != nil {
+		if err := db.store.WriteDerivedCandidate(txn, 101, 2, 1); err != nil {
 			return err
 		}
 		if err := db.store.WriteDerivedFreshness(txn, 1, 10); err != nil {
 			return err
 		}
-		return db.store.WriteDerivedFreshness(txn, 2, 11)
+		if err := db.store.WriteDerivedFreshness(txn, 2, 11); err != nil {
+			return err
+		}
+		if err := db.store.WriteDerivedJudgment(txn, 102, 1, -1, 12345); err != nil {
+			return err
+		}
+		return db.store.WriteDerivedJudgment(txn, 103, 2, -1, 12346)
 	}); err != nil {
-		t.Fatalf("seed RC/RF: %v", err)
+		t.Fatalf("seed RC/RF/RJ: %v", err)
 	}
-	if _, err := db.store.RejectDerived(1, "noise"); err != nil {
-		t.Fatalf("RejectDerived 1: %v", err)
+	countRC := func() int {
+		n := 0
+		_ = db.store.bolt.View(func(txn *bbolt.Tx) error {
+			return db.store.ScanAllDerivedCandidates(txn, func(_, _, _ uint64) error { n++; return nil })
+		})
+		return n
 	}
-	if _, err := db.store.RejectDerived(2, "noise"); err != nil {
-		t.Fatalf("RejectDerived 2: %v", err)
+	countRJ := func() int {
+		n := 0
+		_ = db.store.bolt.View(func(txn *bbolt.Tx) error {
+			return db.store.ScanAllDerivedJudgments(txn, func(_, _ uint64, _, _ int64) error { n++; return nil })
+		})
+		return n
 	}
 	if err := db.store.AddDiscussed("sess-A", "topic", "x"); err != nil {
 		t.Fatalf("AddDiscussed A: %v", err)
@@ -885,11 +482,11 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	if n != 2 {
 		t.Errorf("RC deleted = %d, want 2", n)
 	}
-	for _, cid := range []uint64{1, 2} {
-		props, _ := db.store.DerivedProposals(cid)
-		if len(props) != 0 {
-			t.Errorf("chunk %d: RC still has %d entries after ClearAllDerivedProposals", cid, len(props))
-		}
+	if countRC() != 0 {
+		t.Errorf("RC still present after ClearAllDerivedProposals")
+	}
+	if countRJ() != 2 {
+		t.Errorf("RJ should be intact after RC clear; got %d", countRJ())
 	}
 
 	// ClearAllDerivedFreshness — wipes RF for both chunks.
@@ -920,16 +517,8 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	if n != 2 {
 		t.Errorf("RJ deleted = %d, want 2", n)
 	}
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		for _, cid := range []uint64{1, 2} {
-			rej, _, _ := db.store.HasDerivedRejection(txn, cid, "noise")
-			if rej {
-				t.Errorf("chunk %d: RJ still present after ClearAllDerivedRejections", cid)
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("verify RJ: %v", err)
+	if countRJ() != 0 {
+		t.Errorf("RJ still present after ClearAllDerivedRejections")
 	}
 
 	// ClearAllDiscussed — wipes RD across every session.
@@ -955,7 +544,7 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 // aligned to ProposedTags.
 // Refs: R2742, R2743
 func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
-	l, db := setupRecall(t)
+	l, db := setupFileBackedRecall(t)
 	floor := 0.5
 	db.config.Recall.MinProposeSimilarity = &floor
 
@@ -968,12 +557,21 @@ func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
 	// Mostly orthogonal: cosine 0.3 / √1.09 ≈ 0.287, below floor.
 	db.store.WriteTagDefEmbedding("noise", 11, vecFrom(0.3, 1, 0, 0))
 
+	// First pass authors above-floor candidates; reindex derives; second
+	// pass surfaces them via the stencil (derivation is async).
+	if _, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cInput}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	); err != nil {
+		t.Fatalf("first Recall: %v", err)
+	}
+	reindexMirrors(t, db)
 	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
 	)
 	if err != nil {
-		t.Fatalf("Recall: %v", err)
+		t.Fatalf("second Recall: %v", err)
 	}
 	var target *RecalledChunk
 	for i := range res.Chunks {

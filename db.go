@@ -2258,10 +2258,13 @@ func (db *DB) RemoveExtTag(targetSpec, tag, value string) error {
 
 // CandidateExtTag authors an `@ext-candidate` (proposed routing) into
 // the target's mirror file, carrying an optional quoted insight placed
-// first, before the TARGET (no @ sigil). An exact duplicate line (same TARGET, tag,
-// value, and insight) is a silent no-op; a differing insight is a new
-// proposal, so multiple insights on one (TARGET, tag) are preserved.
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3053
+// first, before the TARGET (no @ sigil). The line's `@count` is the
+// repetition tally: a new (TARGET, tag, value, insight) identity is
+// written at `@count: 1`; an exact-identity repeat increments the
+// existing line's `@count` (a differing insight is a distinct proposal
+// with its own tally). The read-modify-write runs as one closure-actor
+// op so concurrent bumps cannot lose an update. (R3051, R3074, R3075)
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3074, R3075
 func (db *DB) CandidateExtTag(targetSpec, tag, value, insight string) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -2275,15 +2278,7 @@ func (db *DB) CandidateExtTag(targetSpec, tag, value, insight string) error {
 	if err != nil {
 		return err
 	}
-	line := candidateLine(targetSpec, tag, value, insight)
-	if mirrorHasLine(data, line) {
-		return nil // exact duplicate — silent no-op
-	}
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		data = append(data, '\n')
-	}
-	data = append(data, line...)
-	data = append(data, '\n')
+	data = upsertCountLine(data, candidateLine(targetSpec, tag, value, insight), 1)
 	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
 	}
@@ -2309,10 +2304,11 @@ func (db *DB) RejectExtTag(targetSpec, tag, value string) error {
 // transitionExtCandidate removes matching @ext-candidate spans and
 // re-emits them under toClass: committed keeps each distinct (tag,
 // value) as an @ext line; judgment collapses to one tag-name-only
-// @ext-judgment line per distinct tag. The candidate's insight is
-// dropped by the rewrite; append-if-absent dedups against existing
-// committed / judgment lines.
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3055
+// @ext-judgment line per distinct tag, decrementing that line's signed
+// @count by one (creating it at -1 when absent) so repeated rejects
+// accumulate magnitude. The candidate's insight and @count are dropped
+// by the rewrite. (R3054, R3055, R3075)
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3055, R3075
 func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extClass) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -2335,17 +2331,20 @@ func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extC
 	}
 	seen := make(map[string]bool, len(removed))
 	for _, tv := range removed {
-		emitValue := tv.Value
-		key := tv.Tag + "\x00" + tv.Value
 		if toClass == extClassJudgment {
-			emitValue = "" // tag-name-only judgment
-			key = tv.Tag
+			if seen[tv.Tag] {
+				continue
+			}
+			seen[tv.Tag] = true
+			newData = upsertCountLine(newData, judgmentIdentity(targetSpec, tv.Tag), -1)
+			continue
 		}
+		key := tv.Tag + "\x00" + tv.Value
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		newData = upsertExtLine(newData, targetSpec, tv.Tag, emitValue, extOpAdd, toClass)
+		newData = upsertExtLine(newData, targetSpec, tv.Tag, tv.Value, extOpAdd, toClass)
 	}
 	return atomicWriteFile(mirrorPath, newData, 0644)
 }

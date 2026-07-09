@@ -616,3 +616,62 @@ func mirrorHasLine(data []byte, line string) bool {
 	}
 	return false
 }
+
+// judgmentIdentity builds the tag-name-only `@ext-judgment: TARGET @tag:`
+// line (no value, no `@count`) — the identity a signed `@count` field
+// rides on. (R3055, R3075)
+func judgmentIdentity(targetSpec, tag string) string {
+	return extClassJudgment.marker() + ": " + targetSpec + " @" + strings.ToLower(tag) + ":"
+}
+
+// bumpCountLine applies a signed delta to the reserved `@count` field of
+// the first mirror line whose text equals `identity` (a candidate or
+// judgment line built without its `@count` suffix). A bare identity line
+// counts as `@count: 0`, so the first bump materializes `delta`. A
+// resulting count of 0 removes the line entirely (absent ≡ neutral,
+// R2881). Returns the rewritten bytes and whether a line matched. The
+// caller appends a fresh line when nothing matched. (R3074, R3075)
+func bumpCountLine(data []byte, identity string, delta int64) (newData []byte, bumped bool) {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		var cur int64
+		switch {
+		case line == identity:
+			cur = 0
+		case strings.HasPrefix(line, identity+" @count:"):
+			n, err := strconv.ParseInt(strings.TrimSpace(line[len(identity)+len(" @count:"):]), 10, 64)
+			if err != nil {
+				continue
+			}
+			cur = n
+		default:
+			continue
+		}
+		nc := cur + delta
+		if nc == 0 {
+			lines = append(lines[:i], lines[i+1:]...)
+		} else {
+			lines[i] = identity + " @count: " + strconv.FormatInt(nc, 10)
+		}
+		return []byte(strings.Join(lines, "\n")), true
+	}
+	return data, false
+}
+
+// upsertCountLine bumps `identity`'s signed `@count` by delta when the
+// line already exists, else appends `identity @count: <delta>` (an absent
+// line starts at 0, so the append materializes exactly delta). The single
+// read-modify-write path shared by the candidate tally (`+1` per repeat)
+// and the judgment score (`-1` per reject); one closure-actor call keeps
+// it lost-update-free (R986). (R3074, R3075)
+func upsertCountLine(data []byte, identity string, delta int64) []byte {
+	if nd, bumped := bumpCountLine(data, identity, delta); bumped {
+		return nd
+	}
+	line := identity + " @count: " + strconv.FormatInt(delta, 10)
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	data = append(data, line...)
+	return append(data, '\n')
+}

@@ -461,9 +461,11 @@ ark ext reject    <target> <tag> [value]                     # @ext-candidate �
 ```
 
 - `candidate` — author an `@ext-candidate` line for `(target, tag[,
-  value])`, with the optional quoted `--insight`. Append semantics: an
-  exact duplicate (same target, tag, value, and insight) is a silent
-  no-op; a differing insight is a distinct proposal (a new line).
+  value])`, with the optional quoted `--insight`, carrying a `@count`
+  repetition tally. A new `(target, tag, value, insight)` identity writes
+  `@count: 1`; an exact-identity duplicate **increments** the existing
+  line's `@count` (a differing insight is a distinct proposal with its own
+  tally). The read-modify-write runs as one closure-actor op.
 - `accept` — rewrite the matching `@ext-candidate` line(s) to `@ext`,
   committing the edge and consuming the candidate in one file edit. The
   candidate's `insight` is **dropped**: the committed routing stands on
@@ -471,17 +473,20 @@ ark ext reject    <target> <tag> [value]                     # @ext-candidate �
   loop by construction — the candidate is gone and the edge is authored;
   the indexer reflects both on reindex.
 - `reject` — rewrite the matching `@ext-candidate` line(s) to a single
-  `@ext-judgment: TARGET @tag:` (tag-name only), recording a durable
-  rejection and consuming the candidate(s) for that `(target, tag)`.
+  tag-name-only `@ext-judgment: TARGET @tag:` carrying a signed `@count`,
+  recording a durable rejection and consuming the candidate(s) for that
+  `(target, tag)`. The first reject creates `@count: -1`; a repeat
+  decrements it; a `@count` that reaches 0 removes the line.
 
 Like every mutating `ark ext` verb, all three proxy through the running
 server or open the index exclusively when stopped, and act **only** on
 the target's mirror file.
 
-**Deferred to a later pass** (not this authoring pass): the derivation
-of `@ext-candidate` → RC and `@ext-judgment` → RJ, the signed judgment
-score, a reject rationale, and the reinforcement (positive-judgment)
-verb.
+**Now landed** (the tag-derived RC/RJ subsystem, #22 Pass B+C): the
+derivation of `@ext-candidate` → RC and `@ext-judgment` → RJ, and the
+signed judgment score (carried in the line's `@count`). **Still deferred:**
+a reject rationale and the reinforcement (positive-judgment) producer
+(seam 3b).
 
 ## `mcp.suggestExtLocator(chunkID)`
 
