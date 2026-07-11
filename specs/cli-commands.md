@@ -374,9 +374,24 @@ for fuller context.
 | `-after N`   | `0`     | Chunks after the target                     |
 | `-wrap NAME` | —       | XML wrapping                                |
 | `-status`    | `false` | Switch to status mode: `SIZE FILE:LOCATION` |
+| `-anchor`    | `false` | Switch to anchor mode: print the opinionated `@ext` target (address) |
 
 Default mode emits JSONL (one chunk per line, fields: path, range,
 score, content). Status mode is right-aligned text.
+
+Anchor mode (`-anchor`) prints a single line — the opinionated, durable
+`@ext` TARGET string for the chunk (`%uuid`, `/path:1-5`,
+`/path:"unique snippet"`, or `/path:/regex/`), reusing `SuggestExtLocator`'s
+`@id`→unique-string→range heuristic. It's the generic chunk-addressing
+counterpart to `mcp.suggestExtLocator`, and its output feeds straight into
+`ark ext {candidate,set,add} <target> …`. Proxies to `POST /chunks/anchor`
+when the server is up.
+
+> **Consistency debt (O-gap):** `-status` and `-anchor` are output *modes*
+> selected by flags rather than subcommands, because `chunks` is a **leaf**
+> command taking positional args (`CHUNKID` / `PATH RANGE`) — a subcommand
+> token would be ambiguous with a positional. See the `ark chunks` mode-flag
+> gap in `design.md`.
 
 ### `chunk-chat-jsonl` — internal chunker
 

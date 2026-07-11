@@ -281,6 +281,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`
+- [x] test-Anchor.md → `locator_test.go`
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-LuhmannCLI.md → `luhmann_next_test.go`
@@ -291,6 +292,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
+- [x] test-StatusDBLabels.md → `status_db_labels_test.go`
 - [ ] test-RecallWatcher.md → `recall_watcher_test.go`
 
 ### CRC Cards (Nano)
@@ -809,3 +811,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T249: R2875 retired by R3075 (2026-07-09 tag-derived-subsystem)
 - T250: R2876 retired by R3059 (2026-07-09 tag-derived-subsystem)
 - T251: R2878 retired by R3070 (2026-07-09 tag-derived-subsystem)
+- [ ] O146: ark chunks mode-flags (-status, -anchor) substitute for subcommands: chunks is a leaf command taking positional args (CHUNKID / PATH RANGE), so a subcommand token would be ambiguous with a positional — flags are the only mode selector. Diverges from the ark ext/tag subcommand-group convention; accretes as modes grow. Revisit the command shape if the mode count keeps rising (e.g. require an explicit leading subcommand that frees the positional slot).

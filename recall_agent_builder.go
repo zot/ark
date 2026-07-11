@@ -829,7 +829,7 @@ const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue i
 
 FIRST read the ## Recall seed above: strong candidates the deluxe combined search already found (it reaches the value→chunk tag axis your own searches can't). READ those hits (step 5) before searching — they often answer the clue outright. Run the steps below only to widen the trail or when the seed is thin (or empty).
 
-Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search with ~/.ark/ark search; open any indexed file with ~/.ark/ark chunks <path:range> (a scoped range) or ~/.ark/ark fetch <path> (the whole file); locate files by name with ~/.ark/ark files <pattern>; report with ~/.ark/ark connections recall (surface / recommend / finding / close). The Read tool, grep, find, ls, and awk are DENIED, and cat only reaches user-approved paths (it stalls on anything else) — so to look inside any indexed file use ~/.ark/ark chunks or ~/.ark/ark fetch, never Read or cat.
+Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search with ~/.ark/ark search; open any indexed file with ~/.ark/ark chunks --wrap recall <path:range> (a scoped range) or ~/.ark/ark fetch --wrap recall <path> (the whole file) — --wrap gives you clean text with a provenance tag instead of JSON; locate files by name with ~/.ark/ark files <pattern>; report with ~/.ark/ark connections recall (surface / recommend / finding / close). The Read tool, grep, find, ls, and awk are DENIED, and cat only reaches user-approved paths (it stalls on anything else) — so to look inside any indexed file use ~/.ark/ark chunks or ~/.ark/ark fetch, never Read or cat.
 
 1. SCOPE -> filters. Turn the scope word into search filters (-files globs are cwd-relative: 'specs/**' = this project's specs; '**/' for any depth):
      code   -> -with -files '**/*.go'
@@ -844,7 +844,7 @@ Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search wi
      ~/.ark/ark search -files '~/.claude/projects/**' -fuzzy "<clue>" -k 20 -scores
    Keep it apart from the corpus pool; don't merge (fuzzy scores saturate).
 4. TUNE (depth=investigate only). Too noisy? narrow: -with -files '**/*.md', -with -tag NAME[:VALUE]. Too thin? widen: -fuzzy, drop a filter, -about. -parse shows how args parsed. Loop until the stop condition holds (or 2 dry rounds). depth=lookup: one pass.
-5. READ the top hits with ~/.ark/ark chunks <path:range> -before 2 -after 2 — NEVER the Read tool (denied here for everything but your own task doc). Corpus files open with ark chunks/fetch, not Read.
+5. READ the top hits with ~/.ark/ark chunks --wrap recall <path:range> -before 2 -after 2 — NEVER the Read tool (denied here for everything but your own task doc). Corpus files open with ark chunks/fetch, not Read.
 6. CURATE to the few that actually answer the clue. Drop the rest — no dumps.
 7. EMIT per want — one item per call:
      answer / verdict            -> ~/.ark/ark connections recall finding COOKIE -answer "1-3 sentences" -loc <path:range>

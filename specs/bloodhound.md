@@ -99,7 +99,8 @@ ambient recall's fire uses — and renders the top candidates into a `## Recall
 seed` block placed between the `## Search task` payload and the crank handle.
 Each candidate is one compact locator line — `<path>:<range> (<size>) <score>
 [tags]` with a short excerpt — carrying the same `<path>:<range>` the crank
-handle feeds to `ark chunks`, and no chunkid on the wire.
+handle feeds to `ark chunks --wrap recall` (wrapped so the weak secretary
+reads clean text, not JSON), and no chunkid on the wire.
 
 **Per-idea seeding (multi-paragraph clue).** The seed splits the **clue** into
 paragraphs — blank-line-separated, via the same markdown chunker the fire path

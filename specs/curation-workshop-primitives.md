@@ -508,6 +508,17 @@ local sug, err = mcp.suggestExtLocator(chunkID)
 -- }
 ```
 
+The Lua binding returns the structured suggestion and the workshop widget
+assembles the TARGET string itself. On the Go side, `LocatorSuggestion.Target()`
+does that assembly — `baseValue` plus the narrower for its `locatorKind`
+(bare → `%uuid`/path, `absolute` → `:range`, `string` → `:"…"`, `regex` →
+`:/…/`), the inverse of `ParseExtTargetParts`. `DB.SuggestAnchor(path, range)`
+resolves a chunk location to a chunkID and returns that assembled target,
+exposed as **`ark chunks -anchor <chunkID | path:range>`** — the CLI
+counterpart to `mcp.suggestExtLocator`, so a plain-session assistant can get
+the opinionated `@ext` address for a chunk (to feed `ark ext candidate …`)
+without the UI. It is generic chunk addressing, not `@ext`-specific.
+
 Field semantics:
 
 - `base` — `"uuid"` when the chunk has an `@id` tag value

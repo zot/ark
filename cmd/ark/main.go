@@ -3076,6 +3076,7 @@ func cmdChunks(args []string) {
 	after := fs.Int("after", 0, "number of chunks after target")
 	wrap := fs.String("wrap", "", "wrap output in XML tags")
 	showStatus := fs.Bool("status", false, "show SIZE FILE:LOCATION for all chunks matching patterns")
+	showAnchor := fs.Bool("anchor", false, "print the opinionated @ext target (address) for the chunk")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, `Usage: ark chunks [options] <chunkid>
        ark chunks [options] <path>:<range>
@@ -3099,6 +3100,10 @@ Options:`)
 
 	if *showStatus {
 		cmdChunksStatus(fs.Args())
+		return
+	}
+	if *showAnchor {
+		cmdChunksAnchor(fs.Args())
 		return
 	}
 
@@ -3138,6 +3143,42 @@ Options:`)
 	)
 }
 
+// cmdChunksAnchor prints the opinionated @ext TARGET string for a chunk
+// (`ark chunks -anchor`), reusing resolveChunksTarget's input forms and
+// proxying to the server (which holds the single-process index) or
+// resolving locally when stopped — the CLI counterpart to
+// mcp.suggestExtLocator. R3077
+func cmdChunksAnchor(args []string) {
+	filePath, chunkRange, _, err := resolveChunksTarget(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, `usage: ark chunks -anchor <chunkid> | <path>:<range> | <path> <range>`)
+		os.Exit(1)
+	}
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var res struct {
+				Target string `json:"target"`
+			}
+			if err := proxyDecode(client, "POST", "/chunks/anchor", map[string]any{
+				"path": filePath, "range": chunkRange,
+			}, &res); err != nil {
+				return err
+			}
+			fmt.Println(res.Target)
+			return nil
+		},
+		func(d *ark.DB) error {
+			target, err := d.SuggestAnchor(filePath, chunkRange)
+			if err != nil {
+				return err
+			}
+			fmt.Println(target)
+			return nil
+		},
+	)
+}
+
 // resolveChunksTarget parses the positional arguments of `ark chunks`.
 // Returns (path, range, anchor) on success. When the input is a bare
 // chunkID, path is empty and range carries the decimal chunkID string —
@@ -3162,19 +3203,21 @@ func resolveChunksTarget(posArgs []string) (path, rangeLabel, anchor string, err
 			return "", arg, "", nil
 		}
 		// path:range:"snippet" — a quoted string anchor after a path:range
-		// is the recall chat sub-chunk locator (R2914).
+		// is the recall chat sub-chunk locator (R2914). The range is split
+		// at the LAST colon of the base: chunk-range Locations never contain
+		// a bare colon (specs/chunkers.md contract), so the last colon is the
+		// path boundary even when the path itself contains a colon. R3078
 		if i := strings.Index(arg, `:"`); i > 0 && strings.HasSuffix(arg, `"`) && len(arg) > i+2 {
 			base, snip := arg[:i], arg[i+2:len(arg)-1]
 			if j := strings.LastIndexByte(base, ':'); j > 0 && j < len(base)-1 {
-				if looksLikeRange(base[j+1:]) {
-					return base[:j], base[j+1:], snip, nil
-				}
+				return base[:j], base[j+1:], snip, nil
 			}
 		}
+		// path:range — last colon splits path from range. No range-shape
+		// validation: the range is any non-empty colon-free Location (line
+		// N-M, PDF PAGE/KIND/N, …); FetchChunkContent resolves or errors. R3078
 		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx < len(arg)-1 {
-			if cand := arg[idx+1:]; looksLikeRange(cand) {
-				return arg[:idx], cand, "", nil
-			}
+			return arg[:idx], arg[idx+1:], "", nil
 		}
 		return "", "", "", fmt.Errorf(`single argument must be a decimal chunkID, path:range, or path:range:"snippet"`)
 	case 2:
@@ -3194,19 +3237,6 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
-}
-
-// looksLikeRange recognizes `NN` and `NN-MM` shapes (the two range
-// labels every chunker uses today). Stays narrow on purpose — exotic
-// label formats fall back to the two-arg form.
-func looksLikeRange(s string) bool {
-	if s == "" {
-		return false
-	}
-	if idx := strings.IndexByte(s, '-'); idx >= 0 {
-		return idx > 0 && idx < len(s)-1 && isAllDigits(s[:idx]) && isAllDigits(s[idx+1:])
-	}
-	return isAllDigits(s)
 }
 
 func cmdChunksStatus(patterns []string) {

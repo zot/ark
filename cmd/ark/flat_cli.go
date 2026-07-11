@@ -91,6 +91,7 @@ func flatCommands() []*ucli.Command {
 				&ucli.IntFlag{Name: "after", Usage: "number of chunks after target"},
 				&ucli.StringFlag{Name: "wrap", Usage: "wrap output in XML tags"},
 				&ucli.BoolFlag{Name: "status", Usage: "show SIZE FILE:LOCATION for all chunks matching patterns"},
+				&ucli.BoolFlag{Name: "anchor", Usage: "print the opinionated @ext target (address) for the chunk"},
 			},
 			Action: flatChunksAction,
 		},
@@ -203,6 +204,9 @@ func flatChunksAction(_ context.Context, c *ucli.Command) error {
 	}
 	if c.Bool("status") {
 		a = append(a, "--status")
+	}
+	if c.Bool("anchor") {
+		a = append(a, "--anchor")
 	}
 	cmdChunks(append(a, c.Args().Slice()...))
 	return nil

@@ -688,7 +688,7 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 // renderBloodhoundSeed formats a Recall result as the `## Recall seed` block of
 // a bloodhound task doc: one compact locator line per candidate —
 // `<path>:<range> (<size>) <score> [tags]` with a short excerpt, no chunkid on
-// the wire (the crank handle opens each with `ark chunks <path:range>`). A
+// the wire (the crank handle opens each with `ark chunks --wrap recall <path:range>`). A
 // nil/empty result renders the empty-seed note so the task still dispatches. R3006
 // CRC: crc-RecallWatcher.md | R3006
 func renderBloodhoundSeed(result *RecallResult) string {
@@ -698,7 +698,7 @@ func renderBloodhoundSeed(result *RecallResult) string {
 		sb.WriteString("_(no corpus matches — start from your own searches)_\n")
 		return sb.String()
 	}
-	sb.WriteString("Strong candidates from the deluxe combined search (4 substrates: meaning + tags — the tag axis your own `ark search` can't reach). READ these first with `ark chunks <path:range>`; run your own searches only to widen or if this is thin.\n\n")
+	sb.WriteString("Strong candidates from the deluxe combined search (4 substrates: meaning + tags — the tag axis your own `ark search` can't reach). READ these first with `ark chunks --wrap recall <path:range>` (clean text, not JSON); run your own searches only to widen or if this is thin.\n\n")
 	for _, c := range result.Chunks {
 		tags := ""
 		if names := recallTagNames(c.Tags); len(names) > 0 {

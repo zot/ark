@@ -469,6 +469,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
 	mux.HandleFunc("POST /fetch", srv.handleFetch)
 	mux.HandleFunc("POST /chunks", srv.handleChunks)
+	mux.HandleFunc("POST /chunks/anchor", srv.handleAnchor) // R3077
 	mux.HandleFunc("POST /grams", srv.handleGrams)
 	mux.HandleFunc("POST /config/sources-check", srv.handleSourcesCheck)
 	mux.HandleFunc("POST /ext/set", srv.handleExtSet)             // R3049
@@ -2239,6 +2240,28 @@ func (srv *Server) handleChunks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, res)
+}
+
+// handleAnchor serves the opinionated @ext TARGET string for a chunk
+// (`ark chunks -anchor`) while the server holds the index — the CLI
+// counterpart to mcp.suggestExtLocator. R3077
+func (srv *Server) handleAnchor(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path  string `json:"path"`
+		Range string `json:"range"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	target, err := Sync(srv.db, func(db *DB) (string, error) {
+		return db.SuggestAnchor(req.Path, req.Range)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"target": target})
 }
 
 // handleGrams serves trigram counts for `ark grams`. R2999

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"go.etcd.io/bbolt"
@@ -34,6 +35,88 @@ type LocatorSuggestion struct {
 type CrossFileScope struct {
 	Chunks int
 	Files  int
+}
+
+// Target assembles the suggestion into a single @ext TARGET string —
+// BaseValue plus the narrower for its LocatorKind — the inverse of
+// ParseExtTargetParts: bare → `%uuid`/path, absolute → `:range`,
+// string → `:"…"`, regex → `:/…/`. The opinionated address a chunk
+// should be routed by. (R3077)
+// CRC: crc-DB.md | R3077
+func (s LocatorSuggestion) Target() string {
+	switch s.LocatorKind {
+	case "absolute":
+		return s.BaseValue + ":" + s.LocatorText
+	case "string":
+		return s.BaseValue + `:"` + escapeAnchorText(s.LocatorText, '"') + `"`
+	case "regex":
+		return s.BaseValue + ":/" + escapeAnchorText(s.LocatorText, '/') + "/"
+	default: // "bare" (or unknown) — just the base
+		return s.BaseValue
+	}
+}
+
+// escapeAnchorText backslash-escapes the narrower delimiter and the
+// backslash itself so ParseExtTargetParts' indexUnescapedByte scan finds
+// the true closing delimiter. (R3077)
+func escapeAnchorText(s string, delim byte) string {
+	if !strings.ContainsAny(s, string(delim)+`\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' || s[i] == delim {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// SuggestAnchor resolves a chunk location (a bare chunkID passed as rng
+// with path=="", or an explicit path + range) to a chunkID and returns
+// its opinionated @ext TARGET string via SuggestExtLocator + Target.
+// The CLI (`ark chunks -anchor`) and callers that hold a path:range use
+// this; the Lua side uses SuggestExtLocator directly. (R3077)
+// CRC: crc-DB.md | R3077
+func (db *DB) SuggestAnchor(path, rng string) (string, error) {
+	chunkID, err := db.chunkIDForLocation(path, rng)
+	if err != nil {
+		return "", err
+	}
+	sug, err := db.SuggestExtLocator(chunkID)
+	if err != nil {
+		return "", err
+	}
+	return sug.Target(), nil
+}
+
+// chunkIDForLocation resolves (path, range) to a chunkID. A bare chunkID
+// arrives as path=="" with rng holding the decimal id (the resolveChunksTarget
+// shape). Otherwise it looks the range up among the file's chunk entries. (R3077)
+func (db *DB) chunkIDForLocation(path, rng string) (uint64, error) {
+	if path == "" {
+		cid, perr := strconv.ParseUint(rng, 10, 64)
+		if perr != nil {
+			return 0, fmt.Errorf("invalid chunkID %q", rng)
+		}
+		return cid, nil
+	}
+	status, err := db.fts.CheckFile(path)
+	if err != nil || status.FileID == 0 {
+		return 0, fmt.Errorf("file not indexed: %s", path)
+	}
+	info, err := db.fts.FileInfoByID(status.FileID)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range info.Chunks {
+		if c.Location == rng {
+			return c.ChunkID, nil
+		}
+	}
+	return 0, fmt.Errorf("no chunk at %s:%s", path, rng)
 }
 
 // SuggestExtLocator implements the algorithm described in

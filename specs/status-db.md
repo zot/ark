@@ -22,11 +22,15 @@ layouts and the complete prefix inventory live in
 microfts2 prefixes are single-byte. (See microfts2 documentation
 for layouts.)
 
-**ark** (the zettelkasten layer): every prefix listed in
-`record-formats.md` gets its own row — single-byte (M, U, I, T, F,
-D, V, X) and multi-byte (E:, EV, EC, EF, PC). Multi-byte prefixes are
-not collapsed; counting `E` as a combined bucket would make
-`model_mismatch` errors and tag-value embeddings indistinguishable.
+**ark** (the zettelkasten layer): every prefix in the ark table of
+`record-formats.md` gets its own row, **except** a class a spec
+explicitly marks "no status display" (currently only `S`, the
+freshness stamp — see vector-freshness.md). The row set is that
+inventory minus the exclusions, not a hand-kept second list; a class
+missing from the CLI's label map is silently dropped. Multi-byte
+prefixes are not collapsed; counting `E` as a combined bucket would
+make `model_mismatch` errors and tag-value embeddings
+indistinguishable.
 
 `Store.RecordCounts()` returns counts keyed by the full prefix
 string. Prefix detection for each key: known multi-byte prefixes

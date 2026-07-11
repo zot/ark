@@ -2774,6 +2774,36 @@ type StatusInfo struct {
 	Spectral bool `json:"spectral"`
 }
 
+// arkLabels maps every ark-bucket record prefix that `status -db` displays to
+// its human label. It mirrors the ark table in specs/record-formats.md minus any
+// class a spec marks "no status display" (currently only S — see
+// vector-freshness.md). buildRecordCounts iterates this map, so a record class
+// missing here is silently omitted from the listing: add a class here whenever
+// you add it to record-formats.md.
+// CRC: crc-DB.md | R3078
+var arkLabels = map[string]string{
+	"D":  "tag-defs",
+	"F":  "file-tags",
+	"I":  "settings",
+	"M":  "missing",
+	"T":  "tag-totals",
+	"U":  "unresolved",
+	"V":  "tag-values",
+	"X":  "ext-routings",
+	"E:": "errors",
+	"EV": "tag-value-embeds",
+	"EC": "chunk-embeds",
+	"EF": "file-centroids",
+	"ED": "tag-def-embeds", // R2162
+	"PC": "page-content",
+	"RM": "recall-cooldown", // R2882
+	"HC": "hot-correlations",
+	"RC": "recall-candidate",
+	"RD": "recall-discussed",
+	"RF": "recall-freshness",
+	"RJ": "recall-judgment",
+}
+
 // StatusDB returns per-prefix record counts for both subdatabases.
 // CRC: crc-DB.md | R2473, R2478, R2479, R2482
 func (db *DB) StatusDB() (*DBRecordCounts, error) {
@@ -2785,23 +2815,6 @@ func (db *DB) StatusDB() (*DBRecordCounts, error) {
 		"N": "paths",
 		"T": "trigrams",
 		"W": "tokens",
-	}
-	arkLabels := map[string]string{
-		"D":  "tag-defs",
-		"F":  "file-tags",
-		"I":  "settings",
-		"M":  "missing",
-		"T":  "tag-totals",
-		"U":  "unresolved",
-		"V":  "tag-values",
-		"X":  "ext-routings",
-		"E:": "errors",
-		"EV": "tag-value-embeds",
-		"EC": "chunk-embeds",
-		"EF": "file-centroids",
-		"ED": "tag-def-embeds", // R2162
-		"PC": "page-content",
-		"RM": "recall-cooldown", // R2882
 	}
 
 	result := &DBRecordCounts{}
