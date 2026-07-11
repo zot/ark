@@ -9,13 +9,11 @@ package ark
 // derive RC). Refs: R3058, R3065, R3066, R3067, R3068, R3070, R3074, R3075
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/zot/microfts2"
 	"go.etcd.io/bbolt"
@@ -229,48 +227,6 @@ func TestStore_DerivedProposals_MapBacked(t *testing.T) {
 	}
 }
 
-// --- End-to-end: propose authors an @ext-candidate, reindex derives RC ---
-
-func TestRecall_Propose_AuthorsAndDerives(t *testing.T) {
-	l, db := setupFileBackedRecall(t)
-	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
-	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
-	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
-
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("Recall: %v", err)
-	}
-
-	// The propose pass authors an @ext-candidate mirror line (R3068).
-	if m := externalMirrors(t); !strings.Contains(m, "@food: @count: 1") {
-		t.Fatalf("expected @ext-candidate @food authored; mirrors:\n%s", m)
-	}
-
-	// Reindexing that mirror derives the RC record + reverse map (R3064).
-	reindexMirrors(t, db)
-	props, err := db.store.DerivedProposals(cTarget)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	found := false
-	for _, p := range props {
-		if p.Tagname == "food" {
-			found = true
-			if p.Tally != 1 {
-				t.Errorf("food tally: got %d want 1", p.Tally)
-			}
-		}
-	}
-	if !found {
-		t.Errorf("expected food proposal after reindex; got %+v", props)
-	}
-}
-
 // TestStore_ReadDerivedJudgment_AbsentPresentMalformed covers the v3
 // judgment codec on the live helper (the coverage the retired ReadJudgment
 // held): absent → neutral, present → the signed score, and a value that
@@ -409,83 +365,6 @@ func TestStore_AcceptDerived_FileBacked(t *testing.T) {
 	if !found {
 		t.Errorf("expected priority:high attached via @ext after accept; got %+v", tags)
 	}
-}
-
-// TestRecall_Propose_SameCallProposals verifies the synchronous
-// materialization (R3076): a single --propose call authors AND reindexes,
-// so the proposal is visible in the same call — both to DerivedProposals
-// and in the surfaced chunk's ProposedTags — with no manual reindex.
-func TestRecall_Propose_SameCallProposals(t *testing.T) {
-	l, db := setupFileBackedRecall(t)
-	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
-	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
-	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
-
-	res, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	)
-	if err != nil {
-		t.Fatalf("Recall: %v", err)
-	}
-
-	props, _ := db.store.DerivedProposals(cTarget)
-	found := false
-	for _, p := range props {
-		if p.Tagname == "food" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected food proposal in the SAME call; got %+v", props)
-	}
-
-	var target *RecalledChunk
-	for i := range res.Chunks {
-		if res.Chunks[i].ChunkID == cTarget {
-			target = &res.Chunks[i]
-		}
-	}
-	if target == nil || len(target.ProposedTags) == 0 || target.ProposedTags[0] != "food" {
-		t.Fatalf("expected food in ProposedTags same-call; got %+v", target)
-	}
-}
-
-// TestRecall_Propose_SyncReindexCost measures the batched sync-reindex
-// cost — one reindex per distinct touched mirror. Not a pass/fail gate;
-// run with -v to read the number. (Line chunker + async embedding, so
-// this is the FTS + tag + derive cost, a representative lower bound.)
-func TestRecall_Propose_SyncReindexCost(t *testing.T) {
-	_, db := setupFileBackedRecall(t)
-	const M = 12
-	var mirrors []string
-	for i := 0; i < M; i++ {
-		cT, _ := indexLine(t, db, fmt.Sprintf("t%d.txt", i), "apple banana grape")
-		target := targetSpec(t, db, cT)
-		if err := db.CandidateExtTag(target, "food", "", ""); err != nil {
-			t.Fatalf("CandidateExtTag: %v", err)
-		}
-		mp, err := db.resolveExtMirror(target)
-		if err != nil {
-			t.Fatalf("resolveExtMirror: %v", err)
-		}
-		mirrors = append(mirrors, mp)
-	}
-
-	start := time.Now()
-	if err := SyncVoid(db, func(_ *DB) error {
-		for _, mp := range mirrors {
-			db.syncOnePath(db.indexer, mp)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("sync-reindex: %v", err)
-	}
-	elapsed := time.Since(start)
-	t.Logf("batched sync-reindex of %d mirrors: %v total, %.3f ms/mirror",
-		M, elapsed, float64(elapsed.Microseconds())/float64(M)/1000)
 }
 
 // itoa avoids importing strconv into this file for the one call site.

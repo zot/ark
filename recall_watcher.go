@@ -525,7 +525,7 @@ func (w *RecallWatcher) fire(sessionID string) {
 				// KeepTagless: true so the watcher surfaces persona
 				// files, design docs, and other prose-heavy content
 				// that lacks @tag: lines. Without it the propose
-				// pass still computes RC records for these chunks,
+				// pass still computes proposals for these chunks,
 				// but the surfacing filter hides them from the DM —
 				// exactly the opposite of what ambient recall
 				// wants. R2746
@@ -536,6 +536,10 @@ func (w *RecallWatcher) fire(sessionID string) {
 					Session:        sessionID,
 					Propose:        cfg.EffectivePropose(),
 					KeepTagless:    true,
+					// R3082: inject the source chunk (each snapshot turn is
+					// processed as cid across this loop) so the conversation
+					// earns compute-for-display proposals, rendered tag-only.
+					ConversationChunks: []uint64{cid},
 				},
 			)
 			if err != nil {

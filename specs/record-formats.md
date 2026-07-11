@@ -40,7 +40,7 @@ change them, we need to update the CLI code so it's up-to-date.
 | `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
 | `RC`   | Recall Candidate    | `RC` + source_tvid varint + target_chunkid varint | varint tally (materialized from `@ext-candidate` `@count`) |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
-| `RF`   | Recall Freshness    | `RF` + chunkid varint                             | varint uint64 (max S-over-ED at last derivation) |
+| `RF`   | Recall Freshness (dormant, #36) | `RF` + chunkid varint                 | varint uint64 (max S-over-ED at last derivation) — no writer after #36 |
 | `RJ`   | Recall Judgment     | `RJ` + source_tvid varint + target_chunkid varint | signed-varint score (from `@ext-judgment` `@count`) + 8-byte big-endian unix nanos |
 | `RM`   | Recall surface-cooldown | `RM` + session-bytes + `\x00` + chunkid varint | 8-byte big-endian unix nanos (last surfaced) |
 | `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
@@ -478,20 +478,22 @@ agent-layer design). Currently:
   tagname and value follow the same no-`\x00` constraint as V
   records. Detail spec: `discussed-tags.md`.
 
-### RF — Recall Freshness (per-chunk derivation stamp)
+### RF — Recall Freshness (per-chunk derivation stamp) — DORMANT
+
+**Retired by #36 (recall-proposals-for-display).** The derivation pass is now
+compute-for-display and keeps no freshness cache, so RF has no writer or
+reader. The record class and its Store methods (`WriteDerivedFreshness` /
+`ReadDerivedFreshness`) are retained pending a full teardown (banked O-gap);
+`ark connections clean -all` still wipes any residual RF records.
 
 - **Key:** `"RF"` + chunkid varint.
-- **Value:** varint-encoded `uint64` — the `max RecordSerial(ED, *)`
+- **Value:** varint-encoded `uint64` — historically the `max RecordSerial(ED, *)`
   observed when this chunk was last derivation-processed.
-- **Semantic:** "this chunk has been processed against the ED
-  landscape as of serial N." A chunk is fresh (skip-eligible) for
-  derivation iff its RF stamp `>=` the current max ED serial.
-  Missing RF is treated as serial 0 (force re-process).
-- **Lifecycle:** written by the derivation pass on every chunk
-  it processes, with or without resulting proposals. Cleaned up
-  lazily — RF records for chunkids orphaned by microfts2 are
-  removed alongside EC and F via the existing chunkid-orphan
-  callback path. Detail spec: `derived-tags.md`.
+- **Semantic (historical):** "this chunk has been processed against the ED
+  landscape as of serial N." Formerly the derivation freshness skip.
+- **Lifecycle:** formerly written by the derivation pass on every chunk it
+  processed; **no writer after #36.** Residual records are cleaned lazily via
+  the chunkid-orphan callback (alongside EC and F). Detail spec: `derived-tags.md`.
 
 ### RJ — Recall Judgment (signed per-edge relevance)
 

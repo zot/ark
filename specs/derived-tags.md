@@ -11,21 +11,24 @@ cycles.
 This spec adds a **statistical derivation pass** that runs as a side
 effect of each recall call. Per returned chunk, score the chunk's EC
 vector against ED records to surface tag names whose definitions
-describe the chunk but aren't yet attached. Persist the surviving
-candidates as derived-tag proposals for later human review in the
-Tag Forge.
+describe the chunk but aren't yet attached.
 
-Curation throughput now accrues passively. Every recall call leaves
-curation footprints. The vocabulary grows as a side effect of the
-system being used.
+> **State C (compute-for-display, #36 recall-proposals-for-display).** The
+> pass **computes** proposals and surfaces them for display; it authors
+> nothing and writes no durable records. The sole author of durable
+> `@ext-candidate`s is a *discerning approver* — the calling agent (full
+> conversation context) via `ark ext candidate`, or the human via the Tag
+> Forge. The watcher (blind cosine) and the recall secretary (weak Haiku)
+> only propose. This reverses the *autonomous producer* landed by migration
+> 018; the RC/RJ record family, the candidate algorithm, and the
+> accept/reject verbs all survive. RF freshness is retired (dormant).
 
-Owns the storage shape (RC, RJ, RF records), the proposal pass
-algorithm, the `--propose` flag on `ark connections recall`, and
-the Store-level accept/reject API the Tag Forge will call when it
-lands (Forge UI is out of scope here; see ARK-STATE item 6). The
-LLM-mediated layers — relevance filtering, new-tag-definition
-invention, axis-aware proposals — are item 1 (agent layer) and
-deliberately deferred; see "What This Spec Does Not Cover."
+Owns the storage shape (RC, RJ, and the dormant RF records), the proposal
+pass algorithm, the `--propose` flag on `ark connections recall`, and the
+Store-level accept/reject API the Tag Forge calls. The LLM-mediated layers —
+relevance filtering, new-tag-definition invention, axis-aware proposals — are
+item 1 (agent layer) and deliberately deferred; see "What This Spec Does Not
+Cover."
 
 Language: Go (Store + Librarian + CLI subcommand flag). Environment:
 ark server with the embedding model loaded on demand. The CLI works
@@ -48,11 +51,14 @@ Three things land at once:
 - **AI perspective injected into curation.** D-record similarity
   is an automated proposal stream. The curator gains a collaborator
   in deciding what tags attach where.
-- **Automatic.** No `ark connections find` workflow step. Curation
-  accrues passively as a byproduct of ordinary recall use.
+- **Discernment-gated.** No `ark connections find` workflow step: the
+  proposals surface on every recall call, but nothing durable is written
+  until a discerning approver — the calling agent (via `ark ext candidate`)
+  or the human (via the Tag Forge) — authors it.
 
-The third bullet is the keystone. The shift from "user must remember
-to ask" to "happens whenever recall runs" is the actual novelty.
+The third bullet is the keystone. The shift is from "user must remember to
+ask" to "the system proposes on every recall, and an approver with context
+decides what to keep" — the compute is automatic, the authoring is deliberate.
 
 ## What this slice covers
 
@@ -83,8 +89,8 @@ established by `RD` ([discussed-tags.md](discussed-tags.md)).
   value → `ParseExtTarget`), exactly as X recovers its routed tag. A higher
   tally is a stronger candidate.
 - **Lifecycle:** **derived** on (re)index of the `@ext-candidate` file tag,
-  not written directly. The propose pass (`--propose`) and `ark ext
-  candidate` author that tag; `Store.AcceptDerived` / `RejectDerived`
+  not written directly. `ark ext candidate` — authored by the calling
+  agent — writes that tag; `Store.AcceptDerived` / `RejectDerived`
   rewrite it to `@ext` / `@ext-judgment`, whose reindex drops the RC and
   lands the X+V edge / RJ. Struck via `ExtMap.CleanupSource` when the source
   chunk orphans.
@@ -110,24 +116,21 @@ established by `RD` ([discussed-tags.md](discussed-tags.md)).
   decrementing its signed `@count`. Struck via `ExtMap.CleanupSource` when the
   source chunk orphans.
 
-### RF — Recall Freshness (per-chunk derivation stamp)
+### RF — Recall Freshness (per-chunk derivation stamp) — DORMANT
+
+**Retired by #36.** The compute-for-display pass keeps no freshness cache, so
+RF has no writer or reader. The record class and its Store methods
+(`WriteDerivedFreshness` / `ReadDerivedFreshness`) are retained pending a full
+teardown (see the RF-teardown gap). Historical shape:
 
 - **Key:** `"RF"` + chunkid varint.
-- **Value:** varint-encoded `uint64` — the txn serial that was
-  "current" against the ED record set when this chunk was last
-  processed by the derivation pass. Specifically, `max
-  RecordSerial(ED, *)` at processing time.
-- **Semantic:** "this chunk has been processed against the ED
-  landscape as of serial N." A chunk is *fresh* (skip-eligible)
-  for derivation iff its RF stamp is greater than or equal to the
-  current `max RecordSerial(ED, *)` — nothing has changed in tag
-  definitions since the last pass touched it.
-- **Lifecycle:** written by the derivation pass on every chunk
-  it processes (whether or not proposals result). Deleted lazily —
-  an RF record for a chunkid orphaned by microfts2 is cleaned up
-  by the existing chunkid-orphan callback path (alongside EC and
-  F record cleanup); the substrate is tolerant of missing RF
-  records (treats them as "stale, process this chunk").
+- **Value:** varint `uint64` — historically `max RecordSerial(ED, *)` at the
+  chunk's last derivation.
+- **Semantic (historical):** the derivation freshness skip — a chunk was fresh
+  iff its RF stamp met the current max ED serial.
+- **Lifecycle:** formerly written by the pass on every chunk it processed; no
+  writer after #36. Residual records are cleaned lazily by the chunkid-orphan
+  callback (alongside EC and F).
 
 These three classes are collision-free with each other and with all
 existing prefixes. The `R` namespace's other allocations — `RP`,
@@ -136,9 +139,10 @@ item 1 (agent layer) and do not appear in this slice.
 
 ## The derivation pass
 
-Triggered by `ark connections recall --propose`. Runs alongside
-the substrate's chunk-scoring pass; produces no caller-visible
-output (proposals land in the index as a side effect).
+Triggered by `ark connections recall --propose`. Runs alongside the
+substrate's chunk-scoring pass and returns per-chunk computed proposals for
+this call; `enrichProposedTags` surfaces them on each surfaced chunk's
+`ProposedTags`. It writes nothing to the index.
 
 ### Chunk set
 
@@ -157,27 +161,12 @@ that have escaped curation. Surfacing and derivation are
 orthogonal — `--propose` should never imply changes to the
 caller's surfaced output.
 
-### Freshness check
+### Freshness check — RETIRED (#36)
 
-For each chunk in the derivation chunk set:
-
-1. Read `RF[chunkid]`. If absent, treat as serial 0.
-2. Compute `maxSerial = max(maxED, maxEV)` where `maxED` /
-   `maxEV` are the max `RecordSerial` across all ED / EV keys
-   (`Store.MaxEDSerial` / `MaxEVSerial`). The `S` substrate makes
-   each a single bookmark computation; the recall pass holds the
-   result for the batch. EV is folded in because the propose pass
-   now scores against tag *values* too (R2911), so a value change
-   must also invalidate freshness.
-3. If `RF[chunkid] >= maxSerial`, the chunk is fresh — skip
-   derivation for this chunk. The chunk still appears in the recall
-   result; only the proposal pass is skipped.
-4. Otherwise, run derivation on this chunk. After it completes
-   (with or without proposals), write `RF[chunkid] = maxSerial`.
-
-The skip keeps re-runs cheap. The common case — recall called many
-times across a session without tag-definition or tag-value changes
-— runs derivation only once per chunk.
+The RF freshness skip is gone. Compute-for-display keeps no durable RC cache,
+so there is nothing to keep fresh: the pass always computes for the chunks it
+is asked about (a repeat `--propose` recomputes rather than skipping).
+`MaxEDSerial` / `MaxEVSerial` are no longer consulted by the pass.
 
 ### Candidate generation
 
@@ -211,21 +200,21 @@ For each eligible chunk:
    don't re-surface. The `reject_propose_ceiling` knob can relax this
    for low-magnitude rejections.
 
-### Writing proposals
+### Returning proposals
 
-For each surviving candidate, the pass **authors an `@ext-candidate`
-file tag** via `DB.CandidateExtTag` — it does not write RC directly.
-The `@ext-candidate` line's `@count` is the repetition tally: a new
-`(TARGET, tag)` writes `@count: 1`; an exact-identity repeat increments
-it. The indexer derives the RC record (`source_tvid + target_chunkid →
-@count`) when that file tag is indexed.
+The pass returns the surviving candidates per chunk transiently for this recall
+call (ordered by similarity descending); `enrichProposedTags` copies them onto
+each surfaced chunk's `ProposedTags` / `ProposedTagScores`. **The pass authors
+no `@ext-candidate`, writes no RC/RF, and performs no synchronous
+materialization.**
 
-Authoring, the RF freshness stamp, and the reindex all run inside one
-closure-actor op per recall call (not per proposal). The pass then
-**synchronously materializes**: it reindexes each distinct touched
-mirror once (deduped by target file) so the RC records derive and the
-proposals surface in the same `--propose` call, rather than only after
-the async watcher pass.
+Durable authoring is the calling agent's separate `ark ext candidate` verb: the
+agent — holding full conversation context — reviews the surfaced proposals and
+authors the ones it chooses. Only then does the `@ext-candidate` line's `@count`
+tally and the indexer derive the RC record on reindex (the 018 path,
+unchanged). The `#36` live-conversation injection (`RecallOpts.ConversationChunks`)
+folds the conversation's own chunks into the compute so they earn proposals too,
+surfaced tag-only (never surfaced back as content).
 
 ### Cost characteristics
 
@@ -233,15 +222,14 @@ Per processed chunk:
 - One EC vector load (already in cache from the substrate).
 - O(ED-count) cosine comparisons, where ED-count is small
   (~hundreds of records on a typical corpus).
-- O(top-N) F-record probes and RJ-record probes.
-- O(survivors) RC writes (typically a handful).
+- O(top-N) F-record probes and `rejectByChunk` lookups.
+- No writes — the pass is read-only (compute-for-display).
 
 Per recall call:
-- One `max(S over ED)` bookmark computation.
-- Per-chunk freshness check (cheap index get).
-- Derivation only on stale chunks. In steady state, most chunks
-  are fresh — the marginal cost of `--propose` on a recall call
-  is near zero.
+- No freshness bookmark, no RC/RF writes.
+- Compute-for-display recomputes each `--propose` call (no freshness skip),
+  bounded by the surfaced set + injected conversation chunks — a few thousand
+  cosines at most (see the KeepTagless-recompute gap).
 
 ## CLI integration
 
@@ -249,21 +237,18 @@ Per recall call:
 
 | Flag       | Default | Meaning                                                                                       |
 |------------|---------|-----------------------------------------------------------------------------------------------|
-| `--propose`| false   | Run the statistical derivation pass on the substrate's full scored chunk set. Persist surviving candidates as RC records, and surface accumulated proposals per surfaced chunk in the result stencil. |
+| `--propose`| false   | Run the compute-for-display derivation pass on the substrate's full scored chunk set, and surface this call's computed proposals per surfaced chunk in the result stencil. Persists nothing. |
 
-Without `--propose`, recall behavior is unchanged. With
-`--propose`, the result stencil gains a `@chunk-proposed-tags`
-line for each surfaced chunk that has any RC records (see
-*Stencil additions* below). Proposals for tagless chunks (which
-are present in the derivation chunk set but absent from the
-surfaced output when `-all` is off) are not visible in the
-stencil but are persisted to the index for the Tag Forge to pick up.
+Without `--propose`, recall behavior is unchanged. With `--propose`, the result
+stencil gains a `@chunk-proposed-tags` line for each surfaced chunk that earned
+computed proposals this call (see *Stencil additions* below). Proposals for
+tagless chunks (present in the derivation chunk set but absent from the surfaced
+output when `-all` is off) are computed but not surfaced — nothing is persisted.
 
-`--propose` does **not** alter which chunks appear in the
-caller's surfaced output — `-all` still controls that. The
-derivation pass internally retains tagless chunks (see *Chunk
-set* above) to do background curation work, but those chunks
-appear in the result stencil only when `-all` is set.
+`--propose` does **not** alter which chunks appear in the caller's surfaced
+output — `-all` still controls that. The derivation pass internally retains
+tagless chunks (see *Chunk set* above), but with nothing authored their
+computed proposals are simply discarded unless the chunk is surfaced.
 
 ### Stencil additions
 
@@ -279,15 +264,11 @@ list is the *accumulated* RC record set for the chunk (this
 call's emissions plus prior calls' proposals not yet accepted
 or rejected) — not just survivors of this pass.
 
-**Order:** by similarity descending against the chunk's EC
-vector. Similarity is computed at stencil-emission time: for a
-chunk whose RF stamp is fresh (derivation skipped), per-RC
-cosine computation is bounded by the small RC-count for that
-chunk (typically a handful); for a chunk that derived this
-call, the scores are in hand. Cosine is computed against the
-max ED similarity for each tagname (a tag can have multiple
-def files; the chunk's similarity to the tag is the max across
-the tag's ED records).
+**Order:** by similarity descending against the chunk's EC vector. Every
+`--propose` call computes the scores (there is no freshness skip), so the scores
+are always in hand. Cosine is computed against the max ED similarity for each
+tagname (a tag can have multiple def files; the chunk's similarity to the tag is
+the max across the tag's ED records).
 
 Bare-tag values only in this slice (no `@chunk-proposed-tag-value:`
 sub-items). When item 1's LLM lands and proposes specific values,
@@ -302,8 +283,8 @@ type RecalledChunk struct {
 }
 ```
 
-Empty / omitted when `--propose` is false or the chunk has no
-RC records.
+Empty / omitted when `--propose` is false or the chunk earned no computed
+proposals.
 
 No CLI verbs for listing, accepting, or rejecting derived proposals
 ship in this slice. The Tag Forge wires directly to the Store API
@@ -317,14 +298,20 @@ below; CLI verbs land when a non-UI caller needs them.
 type RecallOpts struct {
     // ... existing fields ...
 
-    // Propose runs the statistical derivation pass on returned
-    // chunks. Surviving candidates are written as RC records.
-    // Result shape unchanged; proposals are persisted side-effects.
+    // Propose runs the compute-for-display derivation pass on the
+    // scored chunks and surfaces the computed proposals via
+    // RecalledChunk.ProposedTags. It authors nothing and writes no
+    // RC/RF. (#36)
     Propose bool
+    // ConversationChunks folds the live-conversation chunk set into
+    // the --propose compute (A66 bypassed) so the conversation earns
+    // its own proposals, surfaced tag-only. Watcher-populated. (#36)
+    ConversationChunks []uint64
 }
 ```
 
-The `RecallResult` shape is unchanged. The pass is a side effect.
+The `RecallResult` shape is unchanged apart from the `ProposedTags`
+enrichment. The pass is read-only.
 
 New Store methods:
 
@@ -364,13 +351,13 @@ Internal helpers (not part of the public API contract; sketched
 for the design phase):
 
 ```go
-// derivationPass runs the proposal pass on a batch of chunks
-// inside the recall path. Holds maxED for the batch; per-chunk
-// freshness check; per-chunk candidate generation; then, in one
-// actor op, authors an @ext-candidate file tag per survivor,
-// stamps RF, and reindexes each touched mirror so the RC records
-// derive in this same call.
-func (l *Librarian) derivationPass(chunks []RecalledChunk) error
+// runDerivationPass runs the compute-for-display proposal pass on the
+// scored chunk set: per-chunk candidate generation (cosine vs ED+EV,
+// top-N, floor, minus already-attached / ext-routed / net-rejected),
+// returning the surviving candidates per chunk transiently. It authors
+// nothing and writes no RC/RF. enrichProposedTags copies the result
+// onto each surfaced chunk's ProposedTags.
+func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map[uint64]*chunkWork, error)
 ```
 
 ## Lua bridge
@@ -390,113 +377,88 @@ isn't here yet. When it lands, `sys.derived` exposes `proposals`,
 
 ## Empty / Error Cases
 
-- `--propose` without `[embedding] model` configured → recall succeeds
-  with the trigram-only fallback path; derivation is silently
-  skipped (no ED records to score against). The caller's recall
-  result is unaffected.
-- `--propose` on a default invocation (without `-all`): the
-  derivation pass processes tagless chunks too, but those chunks
-  do not appear in the caller's surfaced result. Proposals
-  written for tagless chunks become visible only when the user
-  later runs the Tag Forge.
-- `--propose` on a chunk with no RC records (e.g. a chunk where
-  every candidate was filtered out by external-tag exclusion or
-  already-attached): the `@chunk-proposed-tags` line is omitted
-  rather than emitted empty. JSON omits the `proposedTags` field
-  via the `omitempty` tag.
-- ED record set empty (cold corpus, no tag definitions indexed
-  yet) → derivation produces no candidates; RF stamps still get
-  written (max=0). Future recall calls remain efficient.
-- RC record with malformed value (not 8 bytes) → treat tally as
-  0; the next write overwrites with a corrected value. Should
-  not happen — the writer always produces 8-byte values.
-- RF record with malformed value → treat as serial 0 (force
-  re-derivation). Same self-healing pattern.
-- Acceptance racing with a re-derivation: `AcceptDerived` and the
-  derivation pass both go through the same write actor, so they
-  serialize. A pass that produces a proposal which is accepted
-  before the pass returns sees the RC delete after its own write —
-  the deleted record is fine; future passes won't re-propose
-  because the chunk now carries the tag (F-record check filters
-  it).
+- `--propose` without `[embedding] model` configured → recall succeeds with the
+  trigram-only fallback path; the compute is silently skipped (no ED records to
+  score against). The caller's recall result is unaffected.
+- `--propose` on a default invocation (without `-all`): the pass computes
+  proposals for tagless chunks too, but those chunks do not appear in the
+  caller's surfaced result and nothing is written, so their computed proposals
+  are simply discarded.
+- `--propose` on a chunk with no computed proposals (every candidate filtered
+  out by external-tag exclusion, already-attached, or the floor): the
+  `@chunk-proposed-tags` line is omitted rather than emitted empty. JSON omits
+  the `proposedTags` field via the `omitempty` tag.
+- ED record set empty (cold corpus, no tag definitions indexed yet) → the compute
+  produces no candidates; nothing is written. The recall result is unaffected.
+- Malformed RC value on the **forge** read path (`Store.DerivedProposals`) →
+  treat tally as 0; the value re-derives on the next reindex of the source
+  `@ext-candidate` line (018 substrate; the recall path does not read RC).
+- Concurrency: the compute-for-display pass is read-only, so it cannot race a
+  concurrent `ark ext accept`/`reject`. Durable authoring (`ark ext candidate`)
+  and accept/reject serialize through the closure actor on the `@count` mirror
+  line (R3075), independent of the recall pass.
+
 
 ## Performance
 
-The derivation pass cost on a recall call:
+The compute-for-display pass cost on a recall call (read-only; no writes):
 
-- Cold (first time touching a chunk): O(ED-count) cosines per
-  chunk, ~hundreds of comparisons on a typical corpus. The vector
-  math is fast (768-dim float32); under 5 ms per chunk in
-  practice.
-- Warm (chunk already processed against current ED set): single
-  index get for `RF[chunkid]`, near-zero cost.
-- Per-batch fixed cost: `max(S over ED)` bookmark computation,
-  cheap with the existing S substrate (`WalkRecordsSinceSerial`).
-
-Recall calls with `--propose` and a warm cache should add under
-10 ms total to substrate-only recall latency. Cold-cache cost
-(no RF records yet) is bounded by `K * 5 ms` ≈ 100 ms for
-default `K=20`; this is amortized across future passes.
+- O(ED-count) cosines per processed chunk, ~hundreds of comparisons on a
+  typical corpus. The vector math is fast (768-dim float32); under 5 ms per
+  chunk in practice.
+- There is no freshness skip (RF retired), so every `--propose` call
+  recomputes. The compute set is bounded by the surfaced set + injected
+  conversation chunks, so cost is `≈ (K + turns) × 5 ms` — well under 100 ms
+  for default `K=20`. If it ever bites, align the compute set to the surfaced
+  chunks rather than the full scored set (see the KeepTagless-recompute gap).
 
 ## Test Strategy
 
-- `recall --propose` on a corpus with ED records writes RC
-  records for each returned chunk's surviving candidates.
-- A second `recall --propose` immediately after, without ED
-  changes, skips derivation (RF freshness check); RC records and
-  their tallies are unchanged.
-- A tag-definition change (new ED record) **or a tag-value change
-  (new EV record)** invalidates RF on the next recall — the
-  affected chunks re-derive and tally increments where the same
-  candidate survives.
-- External-tag exclusion: a chunk carrying an ext-routed `@food`
-  doesn't get `@food` proposals even when ED-similarity is high.
-- Already-attached filter: a chunk with an `@cooking` F record
-  doesn't get `@cooking` proposals.
-- Rejection persistence: write an RJ record for a (chunk, tag);
-  subsequent `recall --propose` skips that candidate.
-- `Store.AcceptDerived` drops RC and writes F/V for the attach;
-  the next derivation pass doesn't re-propose because the F
-  filter now matches.
-- `Store.RejectDerived` drops RC and writes RJ; subsequent
-  derivation skips the candidate.
-- RF malformed-value tolerance: corrupt an RF value to 1 byte;
-  next derivation re-runs the chunk and overwrites RF correctly.
+- `recall --propose` on a corpus with ED records surfaces computed proposals
+  per surfaced chunk via `ProposedTags` **and writes no RC/RF records** (the
+  index is unchanged).
+- Proposals surface in the same call (no reindex), similarity-descending.
+- External-tag exclusion: a chunk carrying an ext-routed `@food` doesn't get a
+  `@food` proposal even when ED-similarity is high.
+- Already-attached filter: a chunk with an `@cooking` F record doesn't get a
+  `@cooking` proposal.
+- Reject filter: a net-rejected `(chunk, tag)` in `ExtMap.rejectByChunk` is not
+  proposed.
+- The EV leg proposes a tag from an existing value (EV) with no ED.
+- Conversation injection: a chunk in `ConversationChunks` earns proposals and is
+  appended even when A66 would self-exclude it; absent without the injection.
+- `Store.AcceptDerived` / `RejectDerived` (mirror-file rewrites) and the RC/RJ
+  derivation on reindex are unchanged (018 substrate) — a regression guard.
 - `--propose` without `[embedding] model` → recall result unchanged, no
-  RC records written, no error.
+  proposals, no error.
 
-## Lifecycle: substrate writes RC + RF; forge writes RJ via Store API
+## Lifecycle: the pass computes; the agent authors; the forge accepts/rejects
 
 ```
-                  ┌────────────────────────────────┐
-                  │ ark connections recall         │
-                  │   --propose <inputs>           │
-                  └────────────┬───────────────────┘
-                               │ derivation pass
-                               ├──── writes RC ──────┐
-                               └──── writes RF ──────┤
-                                                     ▼
-                                          ┌──────────────────┐
-                                          │ index store      │
-                                          └──────────────────┘
-                                                     ▲
-                  ┌────────────────────────────────┐ │
-                  │ Tag Forge UI (item 6)          │ │
-                  │   reads RC via                 │ │
-                  │   Store.DerivedProposals       │─┘
-                  │                                │
-                  │   on accept:                   │ writes F/V
-                  │     Store.AcceptDerived ───────│─→ drops RC
-                  │                                │
-                  │   on reject:                   │ writes RJ
-                  │     Store.RejectDerived ───────│─→ drops RC
-                  └────────────────────────────────┘
+  ark connections recall --propose <inputs>
+        │  compute-for-display pass (no writes)
+        ▼
+  RecalledChunk.ProposedTags        ← surfaced for review, similarity-desc
+        │
+        │  the calling agent (full context) reviews and authors what it keeps
+        ▼
+  ark ext candidate <target> <tag>  → @ext-candidate mirror line
+        │                              (reindex derives RC[source_tvid+chunk])
+        ▼
+  ┌──────────────────┐   reads RC via Store.DerivedProposals (forge, #37)
+  │ index store (RC) │ ◀─────────────────────────────────────────────┐
+  └──────────────────┘                                                │
+        ▲                                                     ┌────────────────┐
+        │  ark ext accept → @ext (drops RC, lands X + V edge) │ Tag Forge / CLI│
+        │  ark ext reject → @ext-judgment (derives RJ)        │  accept/reject │
+        └─────────────────────────────────────────────────── └────────────────┘
 ```
 
-The substrate has no opinion about *who* consumes RC records. Any
-future caller — Tag Forge, an ambient watcher, a CLI verb when one
-emerges — uses the same `Store.DerivedProposals` /
-`Store.AcceptDerived` / `Store.RejectDerived` surface.
+The recall pass writes nothing; it only computes and surfaces proposals.
+Durable state is authored by a discerning approver — the calling agent via
+`ark ext candidate`, or the human via the Tag Forge — after which the 018
+substrate (RC/RJ derivation, `Store.DerivedProposals` / `AcceptDerived` /
+`RejectDerived`) carries the ledger exactly as before.
 
 ## What This Spec Does Not Cover
 

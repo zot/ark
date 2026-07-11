@@ -9,8 +9,14 @@ import (
 	"go.etcd.io/bbolt"
 )
 
+// --- Dormant RF store methods ---
+// RF is retired by #36 (recall-proposals-for-display); the compute-for-display
+// pass no longer reads or writes it. The Store methods and record class are
+// retained pending the banked full-teardown O-gap; these tests guard the
+// retained code until then.
+
 // TestStore_WriteAndReadDerivedFreshness round-trips a serial value.
-// Refs: R2666, R2669
+// Refs: R2666, R2669 (dormant — see above)
 func TestStore_WriteAndReadDerivedFreshness(t *testing.T) {
 	_, db := setupRecall(t)
 	const chunkID = uint64(42)
@@ -41,7 +47,7 @@ func TestStore_WriteAndReadDerivedFreshness(t *testing.T) {
 
 // TestStore_ReadDerivedFreshness_MissingReturnsZero verifies a fresh
 // DB returns (0, false) for any chunk.
-// Refs: R2669, R2682
+// Refs: R2669, R2682 (dormant — see above)
 func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 	_, db := setupRecall(t)
 	var got uint64
@@ -62,8 +68,8 @@ func TestStore_ReadDerivedFreshness_MissingReturnsZero(t *testing.T) {
 }
 
 // TestStore_MaxEDSerial_TracksHighWater verifies MaxEDSerial reflects
-// the highest stamped ED serial.
-// Refs: R2669
+// the highest stamped ED serial. The method is retained (no caller after
+// #36 dropped the RF freshness comparator); this guards it.
 func TestStore_MaxEDSerial_TracksHighWater(t *testing.T) {
 	_, db := setupRecall(t)
 
@@ -90,15 +96,45 @@ func TestStore_MaxEDSerial_TracksHighWater(t *testing.T) {
 	}
 }
 
-// --- Recall-level tests ---
+// --- Compute-for-display recall tests (state B, #36) ---
 
-// TestRecall_Propose_WritesRCAndRF runs a single --propose pass and
-// verifies RC and RF records exist for the matched (target) chunk.
-// The input chunk is excluded from results via self-chunk exclusion
-// (R2623), so we use two chunks: cInput as the query, cTarget as the
-// derivation subject.
-// Refs: R2667, R2670, R2674, R2669
-func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
+// findSurfaced returns the surfaced RecalledChunk with the given ID, or nil.
+func findSurfaced(res *RecallResult, id uint64) *RecalledChunk {
+	for i := range res.Chunks {
+		if res.Chunks[i].ChunkID == id {
+			return &res.Chunks[i]
+		}
+	}
+	return nil
+}
+
+// assertNoDerivedWrites asserts the compute-for-display pass authored no
+// @ext-candidate and wrote no RC/RF records — the core state-B guarantee
+// (R3079). Pass the chunks whose RF absence should be checked.
+func assertNoDerivedWrites(t *testing.T, db *DB, chunks ...uint64) {
+	t.Helper()
+	_ = db.store.bolt.View(func(txn *bbolt.Tx) error {
+		n := 0
+		_ = db.store.ScanAllDerivedCandidates(txn, func(_, _, _ uint64) error { n++; return nil })
+		if n != 0 {
+			t.Errorf("expected no RC records from the compute-for-display pass; got %d", n)
+		}
+		for _, c := range chunks {
+			if _, ok, _ := db.store.ReadDerivedFreshness(txn, c); ok {
+				t.Errorf("chunk %d: expected no RF stamp (compute-for-display writes none)", c)
+			}
+		}
+		return nil
+	})
+	if m := externalMirrors(t); strings.Contains(m, "@ext-candidate") || strings.Contains(m, "@food") {
+		t.Errorf("compute-for-display must author no @ext-candidate; mirrors:\n%s", m)
+	}
+}
+
+// TestRecall_Propose_ComputesNoWrite: a single --propose pass surfaces the
+// computed proposal in the SAME call via ProposedTags, and writes nothing to
+// the index (no RC, no RF, no @ext-candidate). R3079, R3080.
+func TestRecall_Propose_ComputesNoWrite(t *testing.T) {
 	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
@@ -106,48 +142,57 @@ func TestRecall_Propose_WritesRCAndRF(t *testing.T) {
 	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
 	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0)) // cos=1.0
 
-	if _, err := l.Recall(
+	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
+	target := findSurfaced(res, cTarget)
+	if target == nil {
+		t.Fatalf("target chunk %d not surfaced", cTarget)
+	}
+	if len(target.ProposedTags) == 0 || target.ProposedTags[0] != "food" {
+		t.Fatalf("expected food proposed in the same call; got %v", target.ProposedTags)
+	}
+	assertNoDerivedWrites(t, db, cInput, cTarget)
+}
 
-	reindexMirrors(t, db)
-	props, err := db.store.DerivedProposals(cTarget)
+// TestRecall_Propose_SurfacesOrdered: proposals surface similarity-descending
+// in the same call (food cos=1.0 before style cos≈0.7). R3080, R2684, R2686.
+func TestRecall_Propose_SurfacesOrdered(t *testing.T) {
+	l, db := setupFileBackedRecall(t)
+	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
+	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
+	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
+	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("style", 11, vecFrom(0.7, 0.7, 0, 0))
+
+	res, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cInput}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	)
 	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
+		t.Fatalf("Recall: %v", err)
 	}
-	foundFood := false
-	for _, p := range props {
-		if p.Tagname == "food" {
-			foundFood = true
-			if p.Tally != 1 {
-				t.Errorf("food tally: got %d want 1", p.Tally)
-			}
-		}
+	target := findSurfaced(res, cTarget)
+	if target == nil {
+		t.Fatalf("target chunk %d not surfaced", cTarget)
 	}
-	if !foundFood {
-		t.Errorf("expected RC for (chunk %d, food); got %+v", cTarget, props)
+	if len(target.ProposedTags) == 0 || target.ProposedTags[0] != "food" {
+		t.Errorf("expected food first (highest cosine); got %v", target.ProposedTags)
 	}
-
-	var rf uint64
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		s, _, err := db.store.ReadDerivedFreshness(txn, cTarget)
-		rf = s
-		return err
-	}); err != nil {
-		t.Fatalf("ReadDerivedFreshness: %v", err)
-	}
-	if rf == 0 {
-		t.Error("expected RF stamp > 0 after derivation")
+	if len(target.ProposedTagScores) != len(target.ProposedTags) {
+		t.Errorf("scores must align with tags; tags=%v scores=%v",
+			target.ProposedTags, target.ProposedTagScores)
 	}
 }
 
 // TestRecall_Propose_EVLeg verifies R2911: a chunk resembling an existing tag
-// *value* (EV) — with no definition (ED) for that tag — still gets the tag
-// proposed. Without the EV leg there is no ED to derive against, so the pass
-// would propose nothing.
+// *value* (EV) — with no definition (ED) for that tag — still earns the tag as
+// a computed proposal, surfaced in the same call.
 func TestRecall_Propose_EVLeg(t *testing.T) {
 	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
@@ -172,104 +217,30 @@ func TestRecall_Propose_EVLeg(t *testing.T) {
 		t.Fatalf("WriteTagValueEmbedding: %v", err)
 	}
 
-	if _, err := l.Recall(
+	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
-
-	reindexMirrors(t, db)
-	props, err := db.store.DerivedProposals(cTarget)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
+	target := findSurfaced(res, cTarget)
+	if target == nil {
+		t.Fatalf("target chunk %d not surfaced", cTarget)
 	}
 	found := false
-	for _, p := range props {
-		if p.Tagname == "cuisine" {
+	for _, tag := range target.ProposedTags {
+		if tag == "cuisine" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected cuisine proposed for cTarget via the EV leg; got %+v", props)
+		t.Errorf("expected cuisine proposed via the EV leg; got %v", target.ProposedTags)
 	}
 }
 
-// TestRecall_Propose_FreshnessSkipsRedundantWork verifies a second
-// --propose call with no ED change leaves the tally unchanged
-// (freshness skip).
-// Refs: R2669
-func TestRecall_Propose_FreshnessSkipsRedundantWork(t *testing.T) {
-	l, db := setupFileBackedRecall(t)
-	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
-	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
-	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
-
-	for range 2 {
-		if _, err := l.Recall(
-			[]ConnectionsInput{{ChunkID: cInput}},
-			RecallOpts{K: 5, Propose: true, KeepTagless: true},
-		); err != nil {
-			t.Fatalf("Recall: %v", err)
-		}
-	}
-
-	reindexMirrors(t, db)
-	props, err := db.store.DerivedProposals(cTarget)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	for _, p := range props {
-		if p.Tagname == "food" && p.Tally != 1 {
-			t.Errorf("food tally after 2 passes: got %d want 1 (freshness should skip)", p.Tally)
-		}
-	}
-}
-
-// TestRecall_Propose_StaleEDRetriggersDerive verifies that writing a
-// new ED record invalidates RF and a subsequent --propose advances
-// the tally.
-// Refs: R2669, R2674
-func TestRecall_Propose_StaleEDRetriggersDerive(t *testing.T) {
-	l, db := setupFileBackedRecall(t)
-	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
-	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
-	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
-
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("first Recall: %v", err)
-	}
-
-	// Advance the ED landscape — new ED write bumps the S serial.
-	db.store.WriteTagDefEmbedding("style", 11, vecFrom(0, 1, 0, 0))
-
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("second Recall: %v", err)
-	}
-
-	reindexMirrors(t, db)
-	props, _ := db.store.DerivedProposals(cTarget)
-	for _, p := range props {
-		if p.Tagname == "food" && p.Tally != 2 {
-			t.Errorf("food tally after ED change: got %d want 2 (should re-derive)", p.Tally)
-		}
-	}
-}
-
-// TestRecall_Propose_FiltersAlreadyAttached verifies the alreadyOn
-// filter — a chunk that already carries @food doesn't get a derived
-// @food proposal.
-// Refs: R2671
+// TestRecall_Propose_FiltersAlreadyAttached verifies the alreadyOn filter — a
+// chunk that already carries @food gets no derived @food proposal (R2671).
 func TestRecall_Propose_FiltersAlreadyAttached(t *testing.T) {
 	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
@@ -285,25 +256,24 @@ func TestRecall_Propose_FiltersAlreadyAttached(t *testing.T) {
 		t.Fatalf("UpdateTagValues: %v", err)
 	}
 
-	if _, err := l.Recall(
+	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true},
-	); err != nil {
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	)
+	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
-
-	reindexMirrors(t, db)
-	props, _ := db.store.DerivedProposals(cTarget)
-	for _, p := range props {
-		if p.Tagname == "food" {
-			t.Errorf("@food should be filtered (already attached); got %+v", p)
+	if target := findSurfaced(res, cTarget); target != nil {
+		for _, tag := range target.ProposedTags {
+			if tag == "food" {
+				t.Errorf("@food should be filtered (already attached); got %v", target.ProposedTags)
+			}
 		}
 	}
 }
 
 // TestRecall_Propose_SkipsRJRejected verifies the reject filter — a
-// net-rejected (chunkID, tagname) in rejectByChunk is not re-proposed.
-// Refs: R3070
+// net-rejected (chunkID, tagname) in rejectByChunk is not proposed (R3070).
 func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
 	l, db := setupFileBackedRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
@@ -318,77 +288,27 @@ func TestRecall_Propose_SkipsRJRejected(t *testing.T) {
 	db.extmap.rejectByChunk[cTarget] = map[string]int64{"food": -1}
 	db.extmap.mu.Unlock()
 
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("Recall: %v", err)
-	}
-
-	// The reject filter suppressed the candidate — no @food authored.
-	if m := externalMirrors(t); strings.Contains(m, "@food:") {
-		t.Errorf("@food should be filtered (net-rejected); mirrors:\n%s", m)
-	}
-	reindexMirrors(t, db)
-	props, _ := db.store.DerivedProposals(cTarget)
-	for _, p := range props {
-		if p.Tagname == "food" {
-			t.Errorf("@food should be filtered (RJ); got %+v", p)
-		}
-	}
-}
-
-// TestRecall_Propose_StencilEmitsProposedTags verifies the surfaced
-// RecalledChunk carries ProposedTags when --propose is set and the
-// chunk has RC records.
-// Refs: R2684, R2686
-func TestRecall_Propose_StencilEmitsProposedTags(t *testing.T) {
-	l, db := setupFileBackedRecall(t)
-	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
-	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
-	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("food", 10, vecFrom(1, 0, 0, 0))
-	db.store.WriteTagDefEmbedding("style", 11, vecFrom(0.7, 0.7, 0, 0))
-
-	// First pass authors the @ext-candidate; the derivation is async (the
-	// RC record lands on reindex), so proposals surface on the NEXT recall.
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("first Recall: %v", err)
-	}
-	reindexMirrors(t, db)
-
 	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
 	)
 	if err != nil {
-		t.Fatalf("second Recall: %v", err)
+		t.Fatalf("Recall: %v", err)
 	}
-	var target *RecalledChunk
-	for i := range res.Chunks {
-		if res.Chunks[i].ChunkID == cTarget {
-			target = &res.Chunks[i]
+	if target := findSurfaced(res, cTarget); target != nil {
+		for _, tag := range target.ProposedTags {
+			if tag == "food" {
+				t.Errorf("@food should be filtered (net-rejected); got %v", target.ProposedTags)
+			}
 		}
-	}
-	if target == nil {
-		t.Fatalf("target chunk %d not surfaced; got chunks: %+v", cTarget, res.Chunks)
-	}
-	if len(target.ProposedTags) == 0 {
-		t.Fatalf("expected ProposedTags populated; got empty")
-	}
-	if target.ProposedTags[0] != "food" {
-		t.Errorf("expected food first; got %v", target.ProposedTags)
 	}
 }
 
-// TestRecall_Propose_ProposedTagsOmittedWithoutPropose verifies the
-// field stays empty when --propose isn't set, even with existing RC
-// records in the database.
-// Refs: R2686
+// TestRecall_Propose_ProposedTagsOmittedWithoutPropose verifies the field
+// stays empty when --propose isn't set — and, since a derived RC record +
+// reverse-lookup map are pre-seeded, that the recall path does NOT read RC
+// (R3080: enrich reads the transient compute, not DerivedProposals).
+// Refs: R2686, R3080
 func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	l, db := setupRecall(t)
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
@@ -396,8 +316,9 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	db.store.WriteChunkEmbedding(cInput, vecFrom(1, 0, 0, 0))
 	db.store.WriteChunkEmbedding(cTarget, vecFrom(1, 0, 0, 0))
 
-	// Pre-existing derived proposal on the target (map + RC record) from an
-	// earlier pass.
+	// Pre-existing derived proposal on the target (map + RC record). Even with
+	// this present, no --propose ⇒ no computed proposals ⇒ empty ProposedTags,
+	// and the recall path never consults RC.
 	tvid := db.store.tvids.AllocOverlay(extCandidateTag, "x @leftover:")
 	if err := db.store.bolt.Update(func(txn *bbolt.Tx) error {
 		return db.store.WriteDerivedCandidate(txn, tvid, cTarget, 1)
@@ -408,7 +329,6 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 	db.extmap.candidateSourcesByChunk[cTarget] = []uint64{tvid}
 	db.extmap.mu.Unlock()
 
-	// Recall WITHOUT --propose.
 	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, KeepTagless: true},
@@ -426,7 +346,8 @@ func TestRecall_Propose_ProposedTagsOmittedWithoutPropose(t *testing.T) {
 
 // TestStore_ClearAllRecall_WipesAcrossSubstrates verifies the four
 // ClearAll* helpers each remove every record under their respective
-// prefix without touching the others.
+// prefix without touching the others. (RF is dormant but its clear still
+// operates on residual records.)
 // Refs: R2744
 func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	_, db := setupRecall(t)
@@ -537,12 +458,10 @@ func TestStore_ClearAllRecall_WipesAcrossSubstrates(t *testing.T) {
 	}
 }
 
-// TestRecall_Propose_MinSimilarityFloor verifies the
-// chunk-EC ↔ tag-ED cosine floor (`[recall].min_propose_similarity`)
-// drops sub-threshold candidates before the top-K cut, never writes
-// them as RC records, and surfaces scores via ProposedTagScores
-// aligned to ProposedTags.
-// Refs: R2742, R2743
+// TestRecall_Propose_MinSimilarityFloor verifies the chunk-EC ↔ tag-ED cosine
+// floor ([recall].min_propose_similarity) drops sub-threshold candidates from
+// the computed proposals, and surfaces scores via ProposedTagScores aligned to
+// ProposedTags. R2742, R2743.
 func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
 	l, db := setupFileBackedRecall(t)
 	floor := 0.5
@@ -557,33 +476,19 @@ func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
 	// Mostly orthogonal: cosine 0.3 / √1.09 ≈ 0.287, below floor.
 	db.store.WriteTagDefEmbedding("noise", 11, vecFrom(0.3, 1, 0, 0))
 
-	// First pass authors above-floor candidates; reindex derives; second
-	// pass surfaces them via the stencil (derivation is async).
-	if _, err := l.Recall(
-		[]ConnectionsInput{{ChunkID: cInput}},
-		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
-		t.Fatalf("first Recall: %v", err)
-	}
-	reindexMirrors(t, db)
 	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
 	)
 	if err != nil {
-		t.Fatalf("second Recall: %v", err)
+		t.Fatalf("Recall: %v", err)
 	}
-	var target *RecalledChunk
-	for i := range res.Chunks {
-		if res.Chunks[i].ChunkID == cTarget {
-			target = &res.Chunks[i]
-		}
-	}
+	target := findSurfaced(res, cTarget)
 	if target == nil {
 		t.Fatalf("target chunk %d not surfaced", cTarget)
 	}
 	if len(target.ProposedTags) != 1 || target.ProposedTags[0] != "food" {
-		t.Fatalf("expected exactly [food]; got %v", target.ProposedTags)
+		t.Fatalf("expected exactly [food] (noise below floor); got %v", target.ProposedTags)
 	}
 	if len(target.ProposedTagScores) != 1 {
 		t.Fatalf("expected one score aligned to one tag; got %v", target.ProposedTagScores)
@@ -591,22 +496,11 @@ func TestRecall_Propose_MinSimilarityFloor(t *testing.T) {
 	if target.ProposedTagScores[0] < 0.99 {
 		t.Errorf("expected food cosine ≈ 1.0; got %v", target.ProposedTagScores[0])
 	}
-
-	// "noise" must not have produced an RC record (write-side floor).
-	props, err := db.store.DerivedProposals(cTarget)
-	if err != nil {
-		t.Fatalf("DerivedProposals: %v", err)
-	}
-	for _, p := range props {
-		if p.Tagname == "noise" {
-			t.Errorf("noise should have been filtered by floor; found RC record: %+v", p)
-		}
-	}
 }
 
 // TestRecall_Propose_NoModelIsNoOp verifies --propose without
-// EmbeddingAvailable is silent: no RC writes, recall result unaffected.
-// Refs: R2676
+// EmbeddingAvailable is silent: no computed proposals, recall result
+// unaffected, and nothing written. R2676.
 func TestRecall_Propose_NoModelIsNoOp(t *testing.T) {
 	_, db := setupRecall(t)
 	// Reset Librarian without modelPath so EmbeddingAvailable() = false.
@@ -620,26 +514,64 @@ func TestRecall_Propose_NoModelIsNoOp(t *testing.T) {
 
 	cInput, _ := indexLine(t, db, "input.txt", "apple banana cherry")
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
-	if _, err := l.Recall(
+	res, err := l.Recall(
 		[]ConnectionsInput{{ChunkID: cInput}},
 		RecallOpts{K: 5, Propose: true, KeepTagless: true},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
+	for _, c := range res.Chunks {
+		if len(c.ProposedTags) != 0 {
+			t.Errorf("chunk %d: expected no proposals without embedding; got %v", c.ChunkID, c.ProposedTags)
+		}
+	}
+	_ = cTarget
+}
 
-	props, _ := db.store.DerivedProposals(cTarget)
-	if len(props) != 0 {
-		t.Errorf("expected no RC writes without embedding; got %+v", props)
+// TestRecall_Propose_InjectsConversationChunks verifies R3082: a chunk passed
+// in RecallOpts.ConversationChunks earns computed proposals and is appended to
+// the result even when A66 self-exclusion would otherwise drop it (it is the
+// query input); without the injection it does not appear. Authors nothing.
+func TestRecall_Propose_InjectsConversationChunks(t *testing.T) {
+	l, db := setupFileBackedRecall(t)
+	// cConv is BOTH the query input (so A66 self-excludes it from search
+	// results) and the injected conversation chunk. Its EC aligns with the
+	// "food" tag def, so the compute-for-display pass earns it a tag.
+	cConv, _ := indexLine(t, db, "conv.txt", "zebra xylophone quartz")
+	cOther, _ := indexLine(t, db, "other.txt", "apple banana cherry")
+	db.store.WriteChunkEmbedding(cConv, vecFrom(0, 1, 0, 0))
+	db.store.WriteChunkEmbedding(cOther, vecFrom(1, 0, 0, 0))
+	db.store.WriteTagDefEmbedding("food", 10, vecFrom(0, 1, 0, 0)) // aligns cConv
+
+	// With injection: cConv is self-excluded from search but re-admitted by the
+	// conversation injection (A66 bypassed), earns "food", and is appended.
+	res, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cConv}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true, ConversationChunks: []uint64{cConv}},
+	)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
-	var rf uint64
-	if err := db.store.bolt.View(func(txn *bbolt.Tx) error {
-		s, _, err := db.store.ReadDerivedFreshness(txn, cTarget)
-		rf = s
-		return err
-	}); err != nil {
-		t.Fatalf("ReadDerivedFreshness: %v", err)
+	conv := findSurfaced(res, cConv)
+	if conv == nil {
+		t.Fatalf("injected conversation chunk %d not in result (A66 bypass failed)", cConv)
 	}
-	if rf != 0 {
-		t.Errorf("expected no RF write without embedding; got %d", rf)
+	if len(conv.ProposedTags) == 0 || conv.ProposedTags[0] != "food" {
+		t.Errorf("expected food proposed on the conversation chunk; got %v", conv.ProposedTags)
+	}
+	assertNoDerivedWrites(t, db, cConv, cOther)
+
+	// Without injection: cConv is the query input, self-excluded (A66), so it
+	// does not appear even though it has an EC vector.
+	res2, err := l.Recall(
+		[]ConnectionsInput{{ChunkID: cConv}},
+		RecallOpts{K: 5, Propose: true, KeepTagless: true},
+	)
+	if err != nil {
+		t.Fatalf("Recall (no inject): %v", err)
+	}
+	if c := findSurfaced(res2, cConv); c != nil {
+		t.Errorf("conversation chunk %d should be self-excluded without injection; got %+v", cConv, c)
 	}
 }

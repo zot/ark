@@ -1,28 +1,28 @@
 # Sequence: Derived Tags — Derive + Accept + Reject
 
-**Requirements:** R2666, R2669, R2670, R2671, R2672, R2684, R2685, R2686, R2911, R3054, R3055, R3058, R3059, R3065, R3066, R3067, R3068, R3069, R3070, R3071, R3072, R3074, R3075, R3076
+**Requirements:** R2670, R2671, R2672, R2684, R2685, R2686, R2911, R3054, R3055, R3058, R3059, R3065, R3066, R3067, R3069, R3070, R3071, R3074, R3075, R3079, R3080, R3081, R3082
 
-> **State B (tag-derived RC/RJ subsystem, #22 Pass B+C).** The diagram and
-> prose below reflect the **inverted** producer path. The derivation pass no
-> longer writes bbolt RC directly; it authors an `@ext-candidate` file tag via
-> `DB.CandidateExtTag` (an exact-identity duplicate bumps the line's `@count`,
-> R3075), and the indexer derives RC keyed `source_tvid + target_chunkid`
-> (sibling of the X record, seq-ext-routing.md), with the tally materialized
-> from `@count` (R3058, R3074). Accept delegates to `DB.AcceptExtTag`
-> (`@ext-candidate` → `@ext`; on reindex the RC drops and the X+V edge lands,
-> R3071); reject delegates to `DB.RejectExtTag` (authors an `@ext-judgment`
-> whose signed `@count` derives the RJ, R3069). Reads go through the in-memory
-> `ExtMap.candidateSourcesByChunk` / `rejectByChunk` maps, not RC/RJ prefix
-> scans (R3065, R3066, R3067). The propose pass **synchronously materializes**
-> its own proposals — it reindexes each touched mirror once, on the actor, so
-> the RC records derive and proposals surface in the same `--propose` call
-> (R3076). RF freshness (R3072) is unchanged.
+> **State C (compute-for-display, #36 recall-proposals-for-display).** The
+> derivation pass **computes proposals for display only** — it authors nothing
+> and writes no RC/RF. `selectCandidates` scores each chunk's EC against ED+EV,
+> filters, and returns the surviving candidates transiently for this call
+> (R3079); `enrichProposedTags` surfaces them from that transient set, not from
+> RC (R3080). The **calling agent** is the sole author of durable
+> `@ext-candidate`s, via `ark ext candidate` (R3081); the pass and the recall
+> secretary only propose. The live-conversation chunk set (source seed +
+> recent-N turns) is folded into the compute so the conversation earns proposals
+> too, while never being surfaced back (R3082). RF freshness is retired
+> (R2666/R2669/R3072). The 018 substrate below — RC/RJ derivation from the
+> agent-authored mirror lines, Accept, Reject — is unchanged; only the
+> *autonomous producer* is reversed.
 
 Three flows cover the derived-tag lifecycle. The recall substrate's
-*derivation pass* authors `@ext-candidate` file tags (from which the
-indexer derives RC) and stamps RF as a side effect of
-`ark connections recall --propose`. The Tag Forge (item 12) later
-consumes the derived proposals and routes user decisions through
+*derivation pass* **computes** derived-tag proposals for the current
+`ark connections recall --propose` call and returns them for display — it no
+longer authors `@ext-candidate`s or stamps RF (#36, R3079). The **calling
+agent** authors the proposals it chooses via `ark ext candidate`; the indexer
+then derives RC from those mirror lines (the 018 path). The Tag Forge (item 12)
+consumes derived proposals and routes user decisions through
 `Store.AcceptDerived` (which delegates to `DB.AcceptExtTag`, rewriting
 `@ext-candidate` → `@ext` so the reindex lands the attached tag) or
 `Store.RejectDerived` (which delegates to `DB.RejectExtTag`, authoring
@@ -31,133 +31,64 @@ an `@ext-judgment` whose reindex derives RJ to suppress re-proposal).
 ## Derive — `ark connections recall --propose`
 
 ```
-Caller        CLI               Server (Lib.Recall)              Store                    index
-(user/agent)  (cmdRecall)       substrate + derivation worker    (helpers)                (RC/RJ/RF + EC/ED)
-  |                        |              |                              |                          |
-  |- ark connections recall ...           |                              |                          |
-  |  --propose <inputs> -->|              |                              |                          |
-1.1                        |- parse flags;                               |                          |
-                           |  RecallOpts.Propose=true                    |                          |
-                           |  (R2667)                                    |                          |
-1.2                        |- proxy POST  |                              |                          |
-                           |  /recall --->|                              |                          |
-1.3                        |              |- db.View(txn):               |                          |
-                           |              |  force                       |                          |
-                           |              |  KeepTagless=true            |                          |
-                           |              |  internally for              |                          |
-                           |              |  derivation chunk            |                          |
-                           |              |  set (R2668)                 |                          |
-1.4                        |              |- run vector+trigram          |                          |
-                           |              |  EC passes (existing         |                          |
-                           |              |  substrate, R2620)           |                          |
-1.5                        |              |- partition scored:           |                          |
-                           |              |  surfaced[]                  |                          |
-                           |              |  (caller's effective         |                          |
-                           |              |  KeepTagless) +              |                          |
-                           |              |  derivation[]                |                          |
-                           |              |  (full set, R2668)           |                          |
-1.6                        |              |- derivationPass(             |                          |
-                           |              |    scored):                  |                          |
-                           |              |- MaxEDSerial() +             |                          |
-                           |              |    MaxEVSerial() --->        |                          |
-                           |              |    maxSerial =               |                          |- max(ED,EV)
-                           |              |    max(ED,EV) walk           |                          |   S bookmarks
-                           |              |    (R2669, R2911)            |                          |
-                           |              |<- maxSerial ----------       |                          |
-1.7                        |              |- per chunk in derivation:    |                          |
-                           |              |  - ReadDerivedFreshness ---> |                          |
-                           |              |     (R2669)                  |                          |
-                           |              |  - if rf >= maxSerial:       |                          |
-                           |              |      skip derivation         |                          |
-                           |              |      for this chunk          |                          |
-                           |              |      (record this in         |                          |
-                           |              |      chunkSimilarities       |                          |
-                           |              |      with no scores —        |                          |
-                           |              |      stencil step            |                          |
-                           |              |      will compute            |                          |
-                           |              |      on-demand)              |                          |
-                           |              |  - else:                     |                          |
-                           |              |      cosine(EC[chunkid],     |                          |
-                           |              |         ED[*]+EV[*]) → top-N |                          |
-                           |              |         (R2670, R2911)       |                          |
-                           |              |      drop candidates         |                          |
-                           |              |         in F-record set      |                          |
-                           |              |         (R2671)              |                          |
-                           |              |      drop candidates         |                          |
-                           |              |         matching ext-routed  |                          |
-                           |              |         tagnames (R2672)     |                          |
-                           |              |      drop net-rejected via   |                          |
-                           |              |         ExtMap.rejectByChunk |                          |
-                           |              |         (R3070)              |                          |
-                           |              |      for each survivor:      |                          |
-                           |              |         author @ext-candidate|                          |
-                           |              |         file tag via         |                          |
-                           |              |         DB.CandidateExtTag   |                          |
-                           |              |         (@count 1 / bump,    |                          |
-                           |              |         R3068, R3075)        |                          |
-                           |              |      WriteDerivedFreshness   |                          |
-                           |              |         (chunkid, maxSerial) |                          |- Put RF[chunk]
-                           |              |                              |                          |   varint(maxSerial)
-                           |              |                              |                          |   (R2666)
-                           |              |- then, one actor op:         |                          |
-                           |              |    reindex each distinct     |                          |
-                           |              |    touched mirror once       |                          |- derive RC[src_tvid
-                           |              |    via DB.syncOnePath        |                          |   + target_chunk] =
-                           |              |    (R3076) --->              |                          |   varint tally
-                           |              |                              |                          |   (from @count,
-                           |              |                              |                          |   R3058)
-1.8                        |              |- enrichProposedTags(surfaced,|                          |
-                           |              |    chunkSimilarities):       |                          |
-                           |              |  per surfaced chunk          |                          |
-                           |              |  with any candidate:         |                          |
-                           |              |  - DerivedProposals: read    |                          |
-                           |              |     candidateSourcesByChunk  |                          |
-                           |              |     → TvidMap.Resolve +      |                          |
-                           |              |     ParseExtTarget, tally    |                          |
-                           |              |     from RC (R3067)          |                          |
-                           |              |  - if chunk was              |                          |
-                           |              |    derived-this-call:        |                          |
-                           |              |      use stored similarities |                          |
-                           |              |    else:                     |                          |
-                           |              |      cosine(EC[chunkid],     |                          |
-                           |              |         ED[tag, *]) max      |                          |
-                           |              |         per tag (R2685)      |                          |
-                           |              |  - sort by similarity desc   |                          |
-                           |              |    (R2685)                   |                          |
-                           |              |  - assign                    |                          |
-                           |              |    RecalledChunk.            |                          |
-                           |              |    ProposedTags (R2686)      |                          |
-1.9                        |              |- render markdown stencil:    |                          |
-                           |              |  per chunk with non-empty    |                          |
-                           |              |  ProposedTags, emit          |                          |
-                           |              |  `@chunk-proposed-tags:` line|                          |
-                           |              |  after `@chunk-tags`         |                          |
-                           |              |  (R2684)                     |                          |
-                           |              |<- batched txn commit         |                          |
-                           |<- 200 JSON --|                              |                          |
-  |<- markdown stencil ----|                                             |                          |
+Caller        CLI          Server (Lib.Recall)                     Store        index
+(user/agent)  (cmdRecall)  substrate + compute-for-display pass    (helpers)    (ED/EV/EC)
+  |               |              |                                      |            |
+  |- ark connections recall      |                                      |            |
+  |  --propose <inputs> -->|     |                                      |            |
+1.1               |- parse flags; RecallOpts.Propose=true (R2667)       |            |
+1.2               |- proxy POST /recall -->|                            |            |
+1.3               |              |- db.View(txn): force KeepTagless=true internally   |
+                  |              |  for the derivation set (R2668)      |            |
+1.4               |              |- run vector+trigram EC passes (existing substrate, |
+                  |              |  R2620)                              |            |
+1.5               |              |- assemble the compute set: the scored chunks PLUS  |
+                  |              |  the injected live-conversation chunk set (source  |
+                  |              |  seed + recent-N turns, A66 self-exclusion         |
+                  |              |  bypassed, tag-only) (R3082)         |            |
+1.6               |              |- runDerivationPass(scoresMap): per chunk,          |
+                  |              |  selectCandidates —                  |            |
+                  |              |    cosine(EC, ED[*]+EV[*]) -> top-N (R2670, R2911)  |
+                  |              |    floor min_propose_similarity (R2742)            |
+                  |              |    drop already-attached (F set) (R2671)           |
+                  |              |    drop ext-routed tagnames (R2672)  |            |
+                  |              |    drop net-rejected via ExtMap.rejectByChunk (R3070)
+                  |              |  collect survivors into transient work[chunk]      |
+                  |              |  (similarity desc)                   |            |
+1.7               |              |- return work — NO @ext-candidate authoring, NO     |
+                  |              |  RC/RF write, NO syncOnePath materialize (R3079)   |
+1.8               |              |- enrichProposedTags(surfaced, work): per surfaced  |
+                  |              |  chunk, set ProposedTags/ProposedTagScores from    |
+                  |              |  work[chunk] (similarity desc) — NOT from          |
+                  |              |  DerivedProposals/RC (R3080, R2685, R2686)         |
+1.9               |              |- render stencil: per chunk with non-empty          |
+                  |              |  ProposedTags, emit `@chunk-proposed-tags:` after  |
+                  |              |  `@chunk-tags` (R2684)               |            |
+                  |              |<- read-only View; no write txn       |            |
+                  |<- 200 JSON --|                                      |            |
+  |<- markdown stencil ----|                                            |            |
 ```
 
-`--propose` is purely additive at the caller level (no input
-behavior change). The derivation pass authors `@ext-candidate` file
-tags and stamps RF as a side effect, then synchronously reindexes the
-touched mirrors so the RC records derive in the same call (R3076); the
-caller's surfaced output gains the `@chunk-proposed-tags` line per
-surfaced chunk that accumulated proposals (R2684, R2685). Tagless
-chunks are derivation candidates when `--propose` is set (R2668), but
-their proposals are invisible in the stencil unless `-all` is also set.
+`--propose` is purely additive at the caller level (no input behavior change)
+and now **read-only** — the compute-for-display pass writes nothing to the
+index (R3079). The caller's surfaced output gains the `@chunk-proposed-tags`
+line per surfaced chunk that this call computed proposals for (R2684, R2685).
+Tagless chunks are compute candidates when `--propose` is set (R2668), but
+their proposals are invisible in the stencil unless `-all` is also set. The
+live-conversation chunk set is folded into the compute (R3082) so the
+conversation earns proposals for the calling agent to author, though those
+chunks are never surfaced back (R2872).
 
-The write+materialize phase is one closure-actor op: authoring every
-survivor's `@ext-candidate` (the `@count` read-modify-write inside
-`DB.CandidateExtTag` can't lose a concurrent bump, R3075), stamping RF,
-and reindexing each **distinct** touched mirror once via
-`DB.syncOnePath` all run on the actor the caller already holds.
-Embedding stays deferred to `BatchEmbedChunks`, so the sync cost is
-only FTS + tag-extraction + derivation of the tiny mirror files.
+The calling agent — holding full conversation context — decides which computed
+proposals to author as durable `@ext-candidate`s via `ark ext candidate`
+(R3081); that authoring, and the RC derivation it triggers on reindex, is the
+018 path (unchanged). The recall pass itself neither authors nor materializes,
+so a repeat `--propose` recomputes rather than skipping a freshness stamp.
 
 When `--propose` is set but no `[embedding] model` is configured, the
-derivation pass exits silently — there are no ED/EV records to score
-against (R2676); the recall result is unaffected.
+compute pass exits silently — there are no ED/EV records to score against
+(R2676); the recall result is unaffected.
+
 
 ## Accept — `Store.AcceptDerived(db *DB, chunkID uint64, tagname, value string) error`
 
@@ -265,18 +196,16 @@ mirror-authoring path.
   count is file-backed, the read-modify-write is one closure-actor op
   and cannot lose a concurrent decrement (R3075).
 - Concurrent recall calls with `--propose`: each runs its own
-  derivation pass, authoring `@ext-candidate` file tags through the
-  closure actor. The `@count` bumps serialize through the actor; no
-  lost updates (R3075).
-- RF record present but malformed (not a valid varint): reader
-  treats as serial 0; the chunk re-derives unconditionally and
-  the next write self-corrects (R2681).
+  **read-only** compute pass and writes nothing to the index, so there
+  is no contention (R3079). Durable authoring is the calling agent's
+  separate `ark ext candidate`, whose `@count` read-modify-write
+  serializes through the actor (R3075).
 - RC record with malformed value (not a valid varint tally):
   `DerivedProposals` surfaces tally=0; the next reindex of the
   `@ext-candidate` mirror re-derives the correct `@count`-materialized
   value (R2681, R3058).
 - Source chunk orphaned by microfts2: `ExtMap.CleanupSource` strikes
   the derived RC/RJ records (keyed by source tvid, like X) when the
-  source `@ext-candidate` / `@ext-judgment` chunk orphans (R3064). RF,
-  which is chunkid-keyed, is still cleaned by the chunkid-orphan
-  callback alongside EC/F (R2682).
+  source `@ext-candidate` / `@ext-judgment` chunk orphans (R3064). RF is
+  dormant (#36); any residual RF records are cleaned incidentally by the
+  chunkid-orphan callback alongside EC/F until the class is torn down.

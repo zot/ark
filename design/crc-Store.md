@@ -175,16 +175,19 @@ is no longer in the DB. See schedule-record-only.md.)
   `source_tvid + target_chunkid`, with the tally materialized from `@count`.
   (R3058, R3062, R3068)
 - WriteDerivedFreshness(txn *bbolt.Tx, chunkID, serial uint64) error:
-  write RF[chunkid] = varint(serial). Same batched txn as the RC
-  writes. (R2666, R2669, R2675)
+  **dormant — RF retired by #36 (recall-proposals-for-display).** No caller
+  after the compute-for-display pass (R3079) dropped RF writes; method
+  retained pending a full RF teardown (banked O-gap). Historically wrote
+  RF[chunkid] = varint(serial). (R2666, R2669, R2675 retired)
 - ReadDerivedFreshness(txn *bbolt.Tx, chunkID uint64) (serial uint64,
-  found bool, err error): read RF[chunkid]; missing or malformed
-  value returns (0, false, nil) — derivation treats missing as
-  "stale, process this chunk." (R2666, R2669, R2681, R2682)
+  found bool, err error): **dormant — RF retired by #36.** No caller after
+  the pass dropped the freshness skip (R3079); retained pending teardown.
+  (R2666, R2669, R2682 retired)
 - MaxEDSerial() (uint64, error): return `max RecordSerial(ED, *)`
   across the entire ED prefix via WalkRecordsSinceSerial(ED, 0,
-  ...). Cheap with the existing S substrate. Used once per recall
-  call to establish the freshness comparator for the batch. (R2669)
+  ...). Cheap with the existing S substrate. Formerly the recall
+  freshness comparator (R2669 retired); dormant unless another caller
+  uses it — confirm at implementation. (R2669 retired)
 - AdjustJudgment: **superseded.** The signed judgment score is no longer
   adjusted by a direct bbolt RMW keyed `chunkid + tagname`; it is carried by
   the `@ext-judgment` line's signed `@count` (RMW on the file line, one
@@ -210,7 +213,9 @@ is no longer in the DB. See schedule-record-only.md.)
   `TvidMap.Resolve(source_tvid)` + `ParseExtTarget` recovers `(tagname, value)`
   and the RC record supplies the tally. Skip tagnames net-rejected in
   `rejectByChunk` (defense-in-depth). Return sorted by tally descending.
-  Supersedes the `"RC" + chunkid` prefix scan. (R3058, R3065, R3067)
+  Supersedes the `"RC" + chunkid` prefix scan. The recall-path caller
+  (`enrichProposedTags`) is removed by #36 (R3080); retained as the
+  forge-facing reader (#37). (R3058, R3065, R3067)
 - AcceptDerived(db *DB, chunkID uint64, tagname, value string) error:
   **re-homed to the mirror path.** Resolves the chunk's locator and delegates
   to `DB.AcceptExtTag` (`@ext-candidate` → `@ext`); on reindex the RC derivation
@@ -423,11 +428,12 @@ is no longer in the DB. See schedule-record-only.md.)
   Applies to attached F/V hyperedges as well as RC proposals. The chunk→tagname
   reject question is answered by `ExtMap.rejectByChunk`, not a direct key.
   Supersedes the `chunkid + tagname` key shape. (R3059, R3060, R3066, R3074)
-- RF key: `"RF" + chunkid varint`. Value: varint `uint64` — the
-  `max RecordSerial(ED, *)` observed at last derivation pass.
-  Missing → serial 0 on read (force re-process). Malformed varint
-  → serial 0. Cleaned up lazily via existing chunkid-orphan
-  callback alongside EC/F. (R2666, R2681, R2682)
+- RF key: `"RF" + chunkid varint`. **Dormant — RF retired by #36
+  (recall-proposals-for-display).** The compute-for-display pass (R3079)
+  keeps no freshness cache, so RF has no writer or reader; the record class
+  and its lazy chunkid-orphan cleanup are retained pending a full teardown
+  (banked O-gap). Historical value: varint `uint64` = `max RecordSerial(ED, *)`
+  at the last pass. (R2666, R2669, R2682 retired)
 - The `R` prefix carries the recall feature namespace; `RP`/`RPE`/`RR`
   letters are reserved for LLM-driven definition proposals (not in
   this slice — see ARK-STATE item 1).

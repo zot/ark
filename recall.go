@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/zot/microfts2"
-	"go.etcd.io/bbolt"
 )
 
 // RecallOpts configures top-K retrieval, content loading, and the
@@ -42,13 +41,22 @@ type RecallOpts struct {
 	// records (lazy expiry). Zero falls back to the [recall]
 	// discussed_ttl default (24h). R2659
 	DiscussedTTL time.Duration `json:"discussedTtl,omitempty"`
-	// Propose runs the statistical derivation pass on the substrate's
-	// full scored chunk set as a side effect. Surviving candidates
-	// land as RC records; each processed chunk's RF stamp advances to
-	// the current max ED serial. The caller's surfaced result is not
-	// changed except by the ProposedTags enrichment on RecalledChunk.
-	// R2667, R2668
+	// Propose runs the compute-for-display derivation pass on the
+	// substrate's full scored chunk set (#36). It computes per-chunk tag
+	// proposals and surfaces them via RecalledChunk.ProposedTags; it
+	// authors nothing and writes no RC/RF. The caller's surfaced result
+	// is unchanged except by the ProposedTags enrichment.
+	// R2667, R2668, R3079
 	Propose bool `json:"propose,omitempty"`
+	// ConversationChunks is the optional live-conversation chunk-ID set
+	// (source-seed chunk + recent-N turn chunks) folded into the --propose
+	// compute with A66 self-exclusion bypassed, so the conversation earns
+	// its own tag proposals. Watcher-populated; empty for a directed
+	// bloodhound seed. These chunks are own-session, so the watcher renders
+	// them tag-only (R2869): their proposals surface for the calling agent
+	// to author, their content never surfaces.
+	// R3082
+	ConversationChunks []uint64 `json:"conversationChunks,omitempty"`
 }
 
 // discussedExclusion is the per-chunk lookup table built from the
@@ -255,7 +263,7 @@ type chunkScoresAcc struct {
 }
 
 // Recall retrieves the top-K chunks from the corpus relevant to a given set of inputs.
-// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658, R2905, R2906
+// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658, R2905, R2906, R3082
 func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallResult, error) {
 	// 1. Clamping K. R2641
 	k := opts.K
@@ -525,18 +533,30 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		}
 	}
 
+	// 4a. Inject the live-conversation chunk set (source seed + recent-N
+	// turns) into the scored map so the --propose compute earns proposals on
+	// the conversation itself. admit() does not consult selfChunks, so A66
+	// self-exclusion is bypassed by construction. These chunks carry no
+	// search-hit scores, so the 2×2 does not surface them; section 5d appends
+	// the ones that earned proposals (rendered tag-only by the watcher). R3082
+	if opts.Propose {
+		for _, cid := range opts.ConversationChunks {
+			admit(cid)
+		}
+	}
+
 	// 4b. Derivation pass (when --propose is set and embeddings are
 	// available). Runs on the full scored set (tagless chunks included
-	// via admitTagless). Writes RC + RF records as a side effect; the
-	// derived similarity scores are returned for stencil ordering.
-	// R2667, R2669, R2670, R2671, R2672, R2673, R2674, R2675, R2676
-	var derivedScores map[uint64]map[string]float64
+	// via admitTagless). Compute-for-display (#36): computes per-chunk
+	// proposals and returns them transiently for enrichProposedTags; it
+	// writes no RC/RF records and authors nothing. R2667, R3079
+	var derivedWork map[uint64]*chunkWork
 	if opts.Propose && embedAvail {
-		ds, dErr := l.runDerivationPass(scoresMap)
+		dw, dErr := l.runDerivationPass(scoresMap)
 		if dErr != nil {
 			log.Printf("recall: derivation pass: %v", dErr)
 		}
-		derivedScores = ds
+		derivedWork = dw
 	}
 
 	// 5. Build the candidate set with the metadata the 2×2 allocation
@@ -673,10 +693,48 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		})
 	}
 
-	// 6. Enrich each surfaced chunk with accumulated derived-tag
-	// candidates ordered by similarity desc. R2684, R2685, R2686
+	// 5d. Append the injected live-conversation chunks that earned computed
+	// proposals but were not surfaced by the 2×2 (they carry no search-hit
+	// scores). Their content is never surfaced — they are own-session,
+	// rendered tag-only by the watcher (R2869); enrichProposedTags fills
+	// ProposedTags below. R3082
+	if opts.Propose && len(opts.ConversationChunks) > 0 {
+		inResult := make(map[uint64]bool, len(recalled))
+		for i := range recalled {
+			inResult[recalled[i].ChunkID] = true
+		}
+		for _, cid := range opts.ConversationChunks {
+			if inResult[cid] {
+				continue
+			}
+			cw := derivedWork[cid]
+			if cw == nil || len(cw.proposals) == 0 {
+				continue // no computed proposals to surface
+			}
+			info, err := l.db.ChunkInfo(cid)
+			if err != nil {
+				continue
+			}
+			var tags []RecallTag
+			if allTags, aerr := l.db.store.AllTagsForChunk(cid); aerr == nil {
+				for _, tv := range allTags {
+					tags = append(tags, RecallTag{Tag: tv.Tag, Value: tv.Value})
+				}
+			}
+			recalled = append(recalled, RecalledChunk{
+				ChunkID: cid,
+				Path:    info.Path,
+				Range:   info.Range,
+				Tags:    tags,
+			})
+			inResult[cid] = true
+		}
+	}
+
+	// 6. Enrich each surfaced chunk with this call’s computed derived-tag
+	// proposals, ordered by similarity desc. R3080, R2684, R2685, R2686
 	if opts.Propose && embedAvail {
-		l.enrichProposedTags(recalled, derivedScores)
+		l.enrichProposedTags(recalled, derivedWork)
 	}
 
 	return &RecallResult{
@@ -1072,37 +1130,28 @@ type chunkWork struct {
 	scores    map[string]float64 // tagname → similarity for stencil
 }
 
-// runDerivationPass is the read+write side effect of --propose. For
-// each chunk in the scored set: skip via RF freshness, else compute
-// cosine vs ED, top-N, filter; each survivor is authored as an
-// @ext-candidate file tag (its RC record derives on reindex, R3068)
-// and the chunk's RF freshness is stamped. Returns the per-chunk
-// per-tag similarity map for stencil ordering.
-// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.6 | R2669, R2670, R2671, R2672, R3068, R3072, R3076
-func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map[uint64]map[string]float64, error) {
-	maxED, err := l.db.store.MaxEDSerial()
+// runDerivationPass is the compute-for-display proposal pass (#36). For
+// each chunk in the scored set it computes candidate tags via
+// selectCandidates — cosine vs ED (+EV, R2911), top-N, the
+// min-similarity floor, minus already-attached, ext-routed, and
+// net-rejected tags — and returns them transiently for this recall call.
+// It authors no @ext-candidate, writes no RC/RF, and runs no synchronous
+// materialization: the calling agent is the sole author of durable
+// candidates via `ark ext candidate` (R3081). RF freshness is retired
+// with the durable RC cache, so the pass always computes for the chunks
+// it is asked about (a repeat --propose recomputes rather than skipping).
+// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.6 | R3079, R3081, R2911
+func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map[uint64]*chunkWork, error) {
+	eds, err := l.db.store.ScanTagDefEmbeddings()
 	if err != nil {
 		return nil, err
 	}
 	// Part 5 (R2911): also score chunk-EC against tag-value (EV) embeddings,
 	// so a chunk earns a tag for resembling an existing *value*, not only a
-	// definition. Freshness tracks max(ED, EV) serial so the leg re-triggers
-	// when either substrate changes.
-	maxEV, err := l.db.store.MaxEVSerial()
-	if err != nil {
-		return nil, err
-	}
-	maxSerial := maxED
-	if maxEV > maxSerial {
-		maxSerial = maxEV
-	}
-	eds, err := l.db.store.ScanTagDefEmbeddings()
-	if err != nil {
-		return nil, err
-	}
-	// Fold EV vectors into the candidate scan as additional per-tag vectors
-	// (tag resolved via the TvidMap); selectCandidates' per-tag max then spans
-	// definitions and values alike, under the same min floor (R2911).
+	// definition. Fold EV vectors into the candidate scan as additional
+	// per-tag vectors (tag resolved via the TvidMap); selectCandidates'
+	// per-tag max then spans definitions and values alike, under the same
+	// min floor (R2911).
 	if evs, eerr := l.db.store.ScanTagValueEmbeddings(); eerr == nil && len(evs) > 0 {
 		tvids := l.db.store.TvidMap().Snapshot()
 		for tvid, vec := range evs {
@@ -1112,98 +1161,25 @@ func (l *Librarian) runDerivationPass(scoresMap map[uint64]*chunkScoresAcc) (map
 		}
 	}
 	if len(eds) == 0 {
-		// Nothing to derive against — leave RC/RF alone, return empty.
-		return nil, nil
+		return nil, nil // nothing to derive against
 	}
 
 	const derivationK = 10
 	minSim := l.db.Config().Recall.EffectiveMinProposeSimilarity()
 	work := make(map[uint64]*chunkWork, len(scoresMap))
 
-	// Read phase: freshness check, candidate generation, filtering.
-	if err := l.db.store.bolt.View(func(txn *bbolt.Tx) error {
-		for chunkID, acc := range scoresMap {
-			rf, _, _ := l.db.store.ReadDerivedFreshness(txn, chunkID)
-			if rf >= maxSerial {
-				continue // fresh — no write
-			}
-			chunkVec, err := l.db.store.ReadChunkEmbedding(chunkID)
-			if err != nil || chunkVec == nil {
-				continue // can't derive without an EC vector
-			}
-			cw := l.selectCandidates(chunkID, chunkVec, eds, acc.alreadyOn, derivationK, minSim)
-			work[chunkID] = cw
+	// Compute-only: no RF freshness skip (RF retired), no durable write.
+	// selectCandidates reads only the in-memory ExtMap and the passed
+	// vectors, and ReadChunkEmbedding opens its own read txn, so no
+	// wrapping View is needed. R3079
+	for chunkID, acc := range scoresMap {
+		chunkVec, err := l.db.store.ReadChunkEmbedding(chunkID)
+		if err != nil || chunkVec == nil {
+			continue // can't derive without an EC vector
 		}
-		return nil
-	}); err != nil {
-		return nil, err
+		work[chunkID] = l.selectCandidates(chunkID, chunkVec, eds, acc.alreadyOn, derivationK, minSim)
 	}
-
-	// Write+materialize phase (one actor op): author every survivor as an
-	// @ext-candidate file tag, stamp RF freshness, then synchronously
-	// reindex each DISTINCT touched mirror once — deduped by target file,
-	// so proposals batch before the sync rather than reindexing a mirror
-	// per proposal — so the RC records derive now and enrichProposedTags
-	// surfaces them in this same call (R3076). The @count RMW in
-	// CandidateExtTag cannot lose a concurrent bump (R3075); RF follows the
-	// all-mutation-through-actor rule (R3072); syncOnePath assumes the
-	// caller already holds the actor, which we do.
-	touched := make(map[string]bool)
-	if err := SyncVoid(l.db, func(_ *DB) error {
-		for chunkID, cw := range work {
-			if len(cw.proposals) == 0 {
-				continue
-			}
-			info, cErr := l.db.ChunkInfo(chunkID)
-			if cErr != nil {
-				continue // no locator to name the chunk — skip authoring
-			}
-			target := info.Path + ":" + info.Range
-			authoredAny := false
-			for _, tag := range cw.proposals {
-				if aErr := l.db.CandidateExtTag(target, tag, "", ""); aErr != nil {
-					log.Printf("recall: author @ext-candidate %s @%s: %v", target, tag, aErr)
-					continue
-				}
-				authoredAny = true
-			}
-			if authoredAny {
-				if mp, mErr := l.db.resolveExtMirror(target); mErr == nil {
-					touched[mp] = true
-				}
-			}
-		}
-		if err := l.db.store.bolt.Update(func(txn *bbolt.Tx) error {
-			for chunkID := range work {
-				if err := l.db.store.WriteDerivedFreshness(txn, chunkID, maxSerial); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		// Batched synchronous materialization: one reindex per distinct
-		// mirror, on the actor. syncOnePath resolves strategy the same way
-		// the watcher does and dispatches Add/Refresh. R3076
-		for mp := range touched {
-			l.db.syncOnePath(l.db.indexer, mp)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	// Surface this-call scores for stencil ordering. Empty maps are
-	// omitted — enrichProposedTags treats missing entries as "no
-	// fresh score, compute on demand."
-	out := make(map[uint64]map[string]float64, len(work))
-	for chunkID, cw := range work {
-		if len(cw.scores) > 0 {
-			out[chunkID] = cw.scores
-		}
-	}
-	return out, nil
+	return work, nil
 }
 
 // selectCandidates computes per-tag max cosine vs the chunk vector,
@@ -1260,79 +1236,28 @@ func (l *Librarian) selectCandidates(chunkID uint64, chunkVec []float32, eds []T
 	return cw
 }
 
-// enrichProposedTags populates RecalledChunk.ProposedTags with the
-// accumulated RC entries for each surfaced chunk, ordered by chunk-EC
-// ↔ tag-ED cosine similarity descending. Reuses this-call scores
-// from derivedScores for chunks the pass derived; computes on-demand
-// for fresh-skip chunks. When neither path yields a score (no EC
-// vector, no ED records), proposals fall back to DerivedProposals'
-// tally-desc order, which sort.SliceStable preserves.
-// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.8 | R2684, R2685, R2686
-func (l *Librarian) enrichProposedTags(chunks []RecalledChunk, derivedScores map[uint64]map[string]float64) {
-	if len(chunks) == 0 {
-		return
-	}
-	var edCache []TagDefEmbedding
-	edCacheLoaded := false
+// enrichProposedTags populates each surfaced chunk's ProposedTags /
+// ProposedTagScores from this call's transient computed proposals
+// (work) — already ordered by chunk-EC ↔ tag similarity descending by
+// selectCandidates. The durable RC pool (Store.DerivedProposals) is no
+// longer read on the recall path; it is retained as the forge-facing
+// reader (#37).
+// CRC: crc-Librarian.md | Seq: seq-derived-tags.md#1.8 | R3080, R2684, R2685, R2686
+func (l *Librarian) enrichProposedTags(chunks []RecalledChunk, work map[uint64]*chunkWork) {
 	for i := range chunks {
-		props, err := l.db.store.DerivedProposals(chunks[i].ChunkID)
-		if err != nil || len(props) == 0 {
+		cw := work[chunks[i].ChunkID]
+		if cw == nil || len(cw.proposals) == 0 {
 			continue
 		}
-		thisCall := derivedScores[chunks[i].ChunkID]
-		scored := make([]scoredTag, 0, len(props))
-		var chunkVec []float32 // loaded lazily on first on-demand miss
-		for _, p := range props {
-			if s, ok := thisCall[p.Tagname]; ok {
-				scored = append(scored, scoredTag{p.Tagname, s})
-				continue
-			}
-			if chunkVec == nil {
-				v, vErr := l.db.store.ReadChunkEmbedding(chunks[i].ChunkID)
-				if vErr == nil && v != nil {
-					chunkVec = v
-				}
-			}
-			if !edCacheLoaded {
-				if eds, eErr := l.db.store.ScanTagDefEmbeddings(); eErr == nil {
-					edCache = eds
-				}
-				edCacheLoaded = true
-			}
-			scored = append(scored, scoredTag{p.Tagname, bestEDSim(chunkVec, edCache, p.Tagname)})
-		}
-		sort.SliceStable(scored, func(a, b int) bool {
-			return scored[a].score > scored[b].score
-		})
-		names := make([]string, 0, len(scored))
-		scoresOut := make([]float64, 0, len(scored))
-		for _, sp := range scored {
-			names = append(names, sp.tag)
-			scoresOut = append(scoresOut, sp.score)
+		names := make([]string, len(cw.proposals))
+		copy(names, cw.proposals)
+		scoresOut := make([]float64, len(cw.proposals))
+		for j, tag := range cw.proposals {
+			scoresOut[j] = cw.scores[tag]
 		}
 		chunks[i].ProposedTags = names
 		chunks[i].ProposedTagScores = scoresOut
 	}
-}
-
-// bestEDSim returns max cosine similarity between chunkVec and any
-// ED record for tag. Returns 0 if either input is empty or no ED
-// record matches — callers treat 0 as "no score" and rely on the
-// stable sort to preserve tally-desc order. R2685
-func bestEDSim(chunkVec []float32, eds []TagDefEmbedding, tag string) float64 {
-	if len(chunkVec) == 0 {
-		return 0
-	}
-	var best float64
-	for _, ed := range eds {
-		if ed.Tag != tag || len(ed.Vec) != len(chunkVec) {
-			continue
-		}
-		if s := cosineSimilarity(chunkVec, ed.Vec); s > best {
-			best = s
-		}
-	}
-	return best
 }
 
 // HandleRecall serves HTTP POST /recall requests.

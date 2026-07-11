@@ -211,7 +211,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-find-connections-substrate.md → `connections.go`, `connections_substrate.go`, `server.go`, `cmd/ark/main.go`
 - [ ] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
-- [ ] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
+- [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `ext.go`, `server.go`, `extmap.go`, `indexer.go`, `cmd/ark/ext_cli.go`
@@ -609,7 +609,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T93: R2621 retired by R2643 (2026-05-22 trigram-normalize-jaccard)
 - [ ] O114: discussed-tags: deferred tests from test-Discussed.md — Lua sys.recall + sys.discussed bridge tests, ark.toml TTL config defaults/override/invalid warning, substrate-is-read-only-on-RD snapshot test. Behavior is exercised end-to-end via Go-level tests; add Lua tests when test-Recall.md's Lua harness pattern earns another instance.
 - A65: RP/RPE/RR record prefixes reserved for LLM-driven definition proposals (ARK-STATE.md item 1, agent layer). This slice (item 2) covers statistical attach-proposals only (RC/RJ later re-keyed from chunkID+tagname to source_tvid+target_chunkid — R3058/R3059; RF stays chunkid-keyed). Definition proposals (tagname+value+definition keyed, with embedding + reasoning) require an LLM and land with the recall agent. Letters chosen now to avoid collision; record-formats.md notes the reservation.
-- [ ] O115: Recall --propose substrate scan: derivation iterates every recalled chunk × every ED record to compute per-tag max cosine. For an N-chunk corpus with M tag values this is O(N·M) cosine compares per --propose invocation. Acceptable at current scale (Bill: "simple first") and amortized by RF freshness skip; revisit if interactive latency degrades when N·M grows. Vector index (HNSW or similar) is the obvious lever.
+- [ ] O115: Recall --propose substrate scan: derivation iterates every recalled chunk × every ED record to compute per-tag max cosine. For an N-chunk corpus with M tag values this is O(N·M) cosine compares per --propose invocation. Acceptable at current scale (Bill: "simple first"). Since #36 retired the RF freshness skip, every --propose call recomputes; the compute set is bounded by the surfaced + injected-conversation chunks, not the whole corpus (see O148). Revisit if interactive latency degrades when N·M grows; vector index (HNSW or similar) is the obvious lever.
 - [ ] O116: Lua bridge for AcceptDerived / RejectDerived not yet wired — Store API exists (per Bill's front-load-Go-for-UI preference, [[feedback_frontload-go-for-ui]]) and sys.recall surfaces proposed tags via the Lua bridge, but the write-side bridge (sys.acceptProposal / sys.rejectProposal or similar) lands in the next /ui-thorough pass alongside the curation-view accept/reject UI. No mini-spec/frictionless thrash needed when that pass starts.
 - A66: R2699 — watcher relies on substrate self-exclusion (R2645); no code anchor by design (delegated non-feature)
 - [ ] O117: RecallWatcher integration tests deferred — test-RecallWatcher.md lists ~15 pipeline scenarios (cooldown gate, similarity gate, mark-on-send, propose passthrough, source-dir whitelist, live config reload). Unit tests in recall_watcher_test.go cover pure helpers + SourceQualifies; pipeline scenarios need DB + librarian + chat-jsonl chunk scaffolding.
@@ -812,3 +812,12 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T250: R2876 retired by R3059 (2026-07-09 tag-derived-subsystem)
 - T251: R2878 retired by R3070 (2026-07-09 tag-derived-subsystem)
 - [ ] O146: ark chunks mode-flags (-status, -anchor) substitute for subcommands: chunks is a leaf command taking positional args (CHUNKID / PATH RANGE), so a subcommand token would be ambiguous with a positional — flags are the only mode selector. Diverges from the ark ext/tag subcommand-group convention; accretes as modes grow. Revisit the command shape if the mode count keeps rising (e.g. require an explicit leading subcommand that frees the positional slot).
+- T252: R3068 retired by R3079 (2026-07-11 recall-proposals-for-display: pass computes for display, authors no @ext-candidate)
+- T253: R3076 retired by R3079 (2026-07-11 recall-proposals-for-display: no authoring, no sync-materialize)
+- T255: R3072 retired (2026-07-11 recall-proposals-for-display: RF removed from the pass)
+- T256: R2666 retired (2026-07-11 recall-proposals-for-display: RF record class no longer written)
+- T257: R2669 retired (2026-07-11 recall-proposals-for-display: RF read/skip/write removed)
+- T258: R2675 retired (2026-07-11 recall-proposals-for-display: pass writes no RC/RF)
+- T259: R2682 retired (2026-07-11 recall-proposals-for-display: RF lazy cleanup moot)
+- [ ] O147: RF full teardown (#36 recall-proposals-for-display): RF is dormant after the compute-for-display reversal — no writer or reader. Retained pending teardown: Store methods ReadDerivedFreshness/WriteDerivedFreshness + MaxEDSerial/MaxEVSerial (no callers), the RF record class in record-formats.md, the ark status -db RF label (R3078), and ClearAllDerivedFreshness / the clean -all RF wipe (R2744). Remove all together in a focused teardown pass; also removes the dormant-RF guard tests.
+- [ ] O148: KeepTagless propose recompute (#36): with the RF freshness skip retired, --propose recomputes cosine for the full scored set every call, and R2668 still forces KeepTagless=true so unsurfaced tagless chunks are computed too. For recall latencies this is cheap (~100-200ms cold). If it bites, align the compute set to surfaced-candidates + injected-conversation-chunks (retire R2668's forcing) rather than the full tagless set.

@@ -510,11 +510,12 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   list. Per-chunk filter is permissive — a chunk survives if it
   has any non-discussed tag left. See
   [discussed-tags.md](discussed-tags.md) for the dedup story and
-  TTL semantics. `--propose` runs the statistical derivation
-  pass on the substrate's full scored chunk set, persists
-  surviving candidates as RC records, and adds a
-  `@chunk-proposed-tags` line to each surfaced chunk that
-  accumulated proposals (similarity-desc order). See
+  TTL semantics. `--propose` runs the compute-for-display
+  derivation pass on the substrate's full scored chunk set and
+  adds a `@chunk-proposed-tags` line to each surfaced chunk with
+  this call's computed proposals (similarity-desc order); it
+  persists nothing — the calling agent is the sole author of
+  durable `@ext-candidate`s, via `ark ext candidate`. See
   [derived-tags.md](derived-tags.md). The simple-recall watcher
   built on top of this substrate is described in
   [simple-recall.md](simple-recall.md).

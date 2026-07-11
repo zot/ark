@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -167,7 +167,14 @@ composes and writes each curation doc via the in-process
     RecallOpts{K: cfg.EffectiveChunksPerDM(),
     IncludeContent: true, Session: sessionID,
     Propose: cfg.EffectivePropose(),
-    KeepTagless: true})` per paragraph (R2736, R2746).
+    KeepTagless: true})` per paragraph (R2736, R2746). When
+    `Propose` is set, the same call carries the **live-conversation
+    chunk-ID set** on `RecallOpts` — the current source chunk plus the
+    turn chunks accumulated in the snapshot (`pendingChunks`) — so the
+    compute-for-display pass earns proposals on the conversation itself
+    (folded in tag-only, A66 self-exclusion bypassed, never surfaced
+    back); the calling agent authors the ones it chooses via
+    `ark ext candidate` (R3082).
   - Open a `RecallCurationBuilder(sessionID, fire)`
     (R2753, R2754).
   - For each paragraph whose Recall result's top chunk

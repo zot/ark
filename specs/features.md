@@ -264,8 +264,11 @@ backed by RD records — see `specs/discussed-tags.md`),
 API consumed by the Tag Forge — see `specs/derived-tags.md` for
 the RC/RJ/RF record classes), `sys.recall` (Lua bridge), the
 substrate primitives shared with find connections. Statistical
-derivation runs as a side effect of each recall call so curation
-candidates accrue passively. The **simple-recall watcher** — a
+derivation runs on each recall call and **computes** candidates for
+display (#36); the pass persists nothing — the calling agent authors
+the durable `@ext-candidate`s it chooses (`ark ext candidate`), so
+curation is discernment-gated rather than passively accrued. The
+**simple-recall watcher** — a
 deterministic subsystem of `ark serve` — runs the substrate
 against Claude Code JSONL chunks as they land and writes a
 **curation doc** to `tmp://ARK-RECALL/`. The **recall agent**

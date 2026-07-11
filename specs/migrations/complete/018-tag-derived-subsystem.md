@@ -1,6 +1,7 @@
 # Migration: the tag-derived record subsystem (RC/RJ re-key + producer inversion)
 
-**Status:** in-flight. Folds PENDING #22 Pass B and Pass C into one pass
+**Status:** complete (closed 2026-07-10; commits `328b4a1` + `c511bae`).
+Folds PENDING #22 Pass B and Pass C into one pass
 (Bill, 2026-07-08: "fold C into B" — one clean RC/RJ shape, no staged
 coexistence). Authoritative model:
 [.scratch/TAG-ENRICHMENT.md](../../.scratch/TAG-ENRICHMENT.md) "SETTLED MODEL
