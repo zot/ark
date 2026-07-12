@@ -41,10 +41,13 @@ type ExtTargetParts struct {
 // over the quoted-string or regex span so an embedded `@tag:`
 // inside the anchor is not mistaken for the start of the tag list.
 // See specs/at-ext-parsing.md "Target syntax."
-// CRC: crc-Indexer.md | R1983, R1984, R2111, R2112, R2365, R3050
+// CRC: crc-Indexer.md | R1983, R1984, R2111, R2112, R2365, R3050, R3090
 func ParseExtTarget(value string) (target string, tags []TagValue, ok bool) {
-	// Peel a leading reserved `insight: "..."` metadata field (no @
-	// sigil), if present, before the TARGET is parsed. (R3050)
+	// Peel the leading first-seen date and optional disposition (R3090),
+	// then the reserved `insight: "..."` metadata field (R3050), before the
+	// TARGET is parsed. The peel order mirrors the on-disk line shape:
+	// <date> <disposition> insight: "..." TARGET @tag: value.
+	value = stripLeadingDateDisposition(value)
 	value = stripLeadingInsight(value)
 	searchStart := anchorSkip(value)
 	first := tagValueRegex.FindStringSubmatchIndex(value[searchStart:])
@@ -311,6 +314,124 @@ func stripLeadingInsight(value string) string {
 	return value // unterminated quote — leave intact (degrade gracefully)
 }
 
+// isExtDate reports whether s is exactly a `YYYY-MM-DD` date shape: ten
+// characters, ASCII digits with `-` at positions 4 and 7. Shape-only — it
+// does not validate month/day ranges. The narrow, exact-length test is what
+// bounds the peel so an ordinary TARGET is not mistaken for a leading date.
+// CRC: crc-Indexer.md | R3091
+func isExtDate(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for i := 0; i < 10; i++ {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// peelDate splits an optional leading `YYYY-MM-DD ` first-seen date off
+// body, returning the ten-char date and the remainder past its trailing
+// space. Returns ("", body) when body does not begin with a date shape.
+// CRC: crc-Indexer.md | R3090, R3091
+func peelDate(body string) (date, rest string) {
+	if len(body) >= 11 && isExtDate(body[:10]) && body[10] == ' ' {
+		return body[:10], body[11:]
+	}
+	return "", body
+}
+
+// stripLeadingDateDisposition peels an optional leading `YYYY-MM-DD `
+// first-seen date and — only when a date was present — an optional
+// `internal `/`external ` disposition off an @ext-family value, returning
+// the remainder that begins at the insight peel / TARGET. Called before
+// stripLeadingInsight in ParseExtTarget, mirroring the on-disk line order.
+// A committed `@ext` (no leading date) and a bare TARGET pass through
+// unchanged; an `@ext-judgment` (date, no disposition) yields just the date
+// peel. Gating the disposition peel behind a date peel bounds the ambiguity
+// of a TARGET literally named `internal`/`external`.
+// CRC: crc-Indexer.md | R3090, R3092, R3093
+func stripLeadingDateDisposition(value string) string {
+	s := strings.TrimLeft(value, " \t")
+	date, rest := peelDate(s)
+	if date == "" {
+		return value // no leading date → committed @ext or dateless legacy line
+	}
+	for _, disp := range [...]string{extDispositionInternal, extDispositionExternal} {
+		if strings.HasPrefix(rest, disp+" ") {
+			return rest[len(disp)+1:]
+		}
+	}
+	return rest
+}
+
+// peelExtCandidateDisposition returns the disposition token an
+// `@ext-candidate` value carries after its leading date (`internal` /
+// `external`), or "" when none is present. Where stripLeadingDateDisposition
+// discards the disposition for TARGET parsing, this surfaces it for the
+// accept branch, which routes each candidate per its own disposition.
+// (R3100)
+func peelExtCandidateDisposition(value string) string {
+	s := strings.TrimLeft(value, " \t")
+	date, rest := peelDate(s)
+	if date == "" {
+		return "" // no leading date → committed/legacy line, no disposition
+	}
+	for _, disp := range [...]string{extDispositionInternal, extDispositionExternal} {
+		if strings.HasPrefix(rest, disp+" ") {
+			return disp
+		}
+	}
+	return ""
+}
+
+// acceptedCandidate is one `@ext-candidate` span the accept path matched:
+// the disposition that decides its resolution and the routed (tag, value).
+type acceptedCandidate struct {
+	disposition string
+	tag         string
+	value       string
+}
+
+// collectAcceptedCandidates scans mirror data for every `@ext-candidate`
+// line whose TARGET equals targetSpec and that carries the accepted (tag,
+// value) — value "" matches any value — returning one acceptedCandidate per
+// matching routed tag, tagged with the line's disposition. It matches the
+// same spans applyExtMirrorEdit(extOpRemove, candidate) consumes, so the
+// accept loop can resolve each per its own disposition while the removal
+// drops the lines. The reserved `@count` tag is skipped. (R3100)
+func collectAcceptedCandidates(data []byte, targetSpec, tag, value string) []acceptedCandidate {
+	marker := extClassCandidate.marker()
+	tagLower := strings.ToLower(strings.TrimSpace(tag))
+	wantValue := strings.TrimSpace(value)
+	var out []acceptedCandidate
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, marker+":") {
+			continue
+		}
+		valuePart := trimmed[len(marker)+1:]
+		target, tags, ok := ParseExtTarget(valuePart)
+		if !ok || target != targetSpec {
+			continue
+		}
+		disp := peelExtCandidateDisposition(valuePart)
+		for _, tv := range tags {
+			if tv.Tag == extCountField {
+				continue
+			}
+			if tv.Tag == tagLower && (wantValue == "" || tv.Value == wantValue) {
+				out = append(out, acceptedCandidate{disposition: disp, tag: tv.Tag, value: tv.Value})
+			}
+		}
+	}
+	return out
+}
+
 // extCountField is the reserved `count` metadata field carried as a
 // `@count: N` routed-position tag on @ext-candidate / @ext-judgment
 // lines. Unlike a peel it stays in the tag's value string (so the V
@@ -339,6 +460,21 @@ func extractCountField(tags []TagValue) (routed []TagValue, count int64, hasCoun
 		routed = append(routed, tv)
 	}
 	return routed, count, hasCount
+}
+
+// onlyReservedCountTags reports whether every tag in tags is the reserved
+// `@count` field — i.e. removing the real routed tag(s) left only the tally.
+// Such a line is a meaningless husk and is dropped whole. (R3074)
+func onlyReservedCountTags(tags []TagValue) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	for _, tv := range tags {
+		if tv.Tag != extCountField {
+			return false
+		}
+	}
+	return true
 }
 
 // extClassForTag maps an @ext-family outer tag name to its class.
@@ -379,6 +515,18 @@ const (
 const (
 	extCandidateTag = "ext-candidate"
 	extJudgmentTag  = "ext-judgment"
+)
+
+// @ext-candidate disposition tokens — a bare word carried after the
+// first-seen date that names where an accepted tag is written: external
+// routes to the target's mirror file (today's behavior); internal writes
+// the tag into the target file's own body (the internal-disposition
+// feature). The disposition is part of the candidate line's identity, so
+// internal and external are distinct proposals with independent @count
+// tallies. (R3092)
+const (
+	extDispositionExternal = "external"
+	extDispositionInternal = "internal"
 )
 
 // marker returns the class's @-prefixed line marker: "@ext",
@@ -477,7 +625,12 @@ func mutateExtLine(line, targetSpec, tag, value string, op extOp, class extClass
 	if !matched {
 		return line, false, false
 	}
-	if len(kept) == 0 {
+	// When the removal leaves only the reserved `@count` tally (no real routed
+	// tag survives), the candidate/judgment line is meaningless — drop it whole
+	// rather than rebuild a `@marker: TARGET @count: N` husk, which would also
+	// shed the leading date / disposition / insight that ParseExtTarget strips.
+	// (R3074: @count rides with its line; consuming the tag consumes the tally.)
+	if len(kept) == 0 || onlyReservedCountTags(kept) {
 		return "", true, true
 	}
 
@@ -579,15 +732,24 @@ func appendExtLine(data []byte, targetSpec, tag, value string, class extClass) [
 	return append(data, sb.String()...)
 }
 
-// candidateLine builds the canonical @ext-candidate mirror line. A
-// non-empty insight is emitted quoted and FIRST, before the TARGET —
-// with no @ sigil, because it is metadata, not a routed tag — so it
-// never collides with an undelimited TARGET, and distinct insights make
-// distinct lines (preserved, not collapsed). (R3051, R3053)
-func candidateLine(targetSpec, tag, value, insight string) string {
+// candidateLine builds the DATELESS identity of an @ext-candidate mirror
+// line: `@ext-candidate: <disposition> insight: "…" TARGET @tag: value`.
+// The disposition (default external) sits right after the marker and is
+// part of the identity — internal and external are distinct proposals with
+// independent tallies. A non-empty insight is emitted quoted next, before
+// the TARGET — with no @ sigil, because it is metadata, not a routed tag —
+// so it never collides with an undelimited TARGET, and distinct insights
+// make distinct lines (preserved, not collapsed). The first-seen date is
+// NOT part of the identity; upsertCountLine reinserts it after the marker
+// at append time. (R3051, R3053, R3092)
+func candidateLine(targetSpec, tag, value, insight, disposition string) string {
 	var sb strings.Builder
 	sb.WriteString(extClassCandidate.marker())
 	sb.WriteString(": ")
+	if d := strings.TrimSpace(disposition); d != "" {
+		sb.WriteString(d)
+		sb.WriteString(" ")
+	}
 	if s := strings.TrimSpace(insight); s != "" {
 		sb.WriteString(extInsightField)
 		sb.WriteString(`: "`)
@@ -624,22 +786,60 @@ func judgmentIdentity(targetSpec, tag string) string {
 	return extClassJudgment.marker() + ": " + targetSpec + " @" + strings.ToLower(tag) + ":"
 }
 
+// splitMarkerPrefix splits a mirror line at the first ": " — the marker
+// boundary, since every @ext-family marker (`@ext:`, `@ext-candidate:`,
+// `@ext-judgment:`) is written with a trailing space. Returns the prefix
+// through and including that ": ", the remaining body, and ok=false when
+// no ": " is present.
+// CRC: crc-Indexer.md | R3090
+func splitMarkerPrefix(line string) (prefix, body string, ok bool) {
+	if idx := strings.Index(line, ": "); idx >= 0 {
+		return line[:idx+2], line[idx+2:], true
+	}
+	return line, "", false
+}
+
+// withDate reinserts a first-seen date immediately after identity's marker
+// prefix, producing `<marker>: <date> <identity-body>`. An empty date (or a
+// prefixless identity) returns identity unchanged, so a dateless legacy
+// line round-trips.
+// CRC: crc-Indexer.md | R3090
+func withDate(identity, date string) string {
+	if date == "" {
+		return identity
+	}
+	prefix, body, ok := splitMarkerPrefix(identity)
+	if !ok {
+		return identity
+	}
+	return prefix + date + " " + body
+}
+
 // bumpCountLine applies a signed delta to the reserved `@count` field of
-// the first mirror line whose text equals `identity` (a candidate or
-// judgment line built without its `@count` suffix). A bare identity line
-// counts as `@count: 0`, so the first bump materializes `delta`. A
-// resulting count of 0 removes the line entirely (absent ≡ neutral,
-// R2881). Returns the rewritten bytes and whether a line matched. The
-// caller appends a fresh line when nothing matched. (R3074, R3075)
+// the first mirror line whose DATELESS text equals `identity` (a candidate
+// or judgment line built without its first-seen date or `@count` suffix).
+// Each line's own leading date is peeled before the identity match and
+// reinserted on rewrite — the first-seen freeze, so a repeat never restamps
+// the date. A bare identity line counts as `@count: 0`, so the first bump
+// materializes `delta`. A resulting count of 0 removes the line entirely
+// (absent ≡ neutral, R2881). Returns the rewritten bytes and whether a line
+// matched; the caller appends a fresh line when nothing matched.
+// CRC: crc-Indexer.md | R3074, R3075, R3090, R3091
 func bumpCountLine(data []byte, identity string, delta int64) (newData []byte, bumped bool) {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
+		prefix, body, ok := splitMarkerPrefix(line)
+		if !ok {
+			continue
+		}
+		ownDate, datelessBody := peelDate(body)
+		dateless := prefix + datelessBody
 		var cur int64
 		switch {
-		case line == identity:
+		case dateless == identity:
 			cur = 0
-		case strings.HasPrefix(line, identity+" @count:"):
-			n, err := strconv.ParseInt(strings.TrimSpace(line[len(identity)+len(" @count:"):]), 10, 64)
+		case strings.HasPrefix(dateless, identity+" @count:"):
+			n, err := strconv.ParseInt(strings.TrimSpace(dateless[len(identity)+len(" @count:"):]), 10, 64)
 			if err != nil {
 				continue
 			}
@@ -651,24 +851,26 @@ func bumpCountLine(data []byte, identity string, delta int64) (newData []byte, b
 		if nc == 0 {
 			lines = append(lines[:i], lines[i+1:]...)
 		} else {
-			lines[i] = identity + " @count: " + strconv.FormatInt(nc, 10)
+			lines[i] = withDate(identity, ownDate) + " @count: " + strconv.FormatInt(nc, 10)
 		}
 		return []byte(strings.Join(lines, "\n")), true
 	}
 	return data, false
 }
 
-// upsertCountLine bumps `identity`'s signed `@count` by delta when the
-// line already exists, else appends `identity @count: <delta>` (an absent
-// line starts at 0, so the append materializes exactly delta). The single
+// upsertCountLine bumps `identity`'s signed `@count` by delta when a
+// matching line exists, else appends `<marker>: <date> <identity-body>
+// @count: <delta>` — the first-seen date is stamped only on this append
+// (a later repeat preserves it via bumpCountLine's freeze). An absent line
+// starts at 0, so the append materializes exactly delta. The single
 // read-modify-write path shared by the candidate tally (`+1` per repeat)
 // and the judgment score (`-1` per reject); one closure-actor call keeps
-// it lost-update-free (R986). (R3074, R3075)
-func upsertCountLine(data []byte, identity string, delta int64) []byte {
+// it lost-update-free (R986). (R3074, R3075, R3090)
+func upsertCountLine(data []byte, identity, date string, delta int64) []byte {
 	if nd, bumped := bumpCountLine(data, identity, delta); bumped {
 		return nd
 	}
-	line := identity + " @count: " + strconv.FormatInt(delta, 10)
+	line := withDate(identity, date) + " @count: " + strconv.FormatInt(delta, 10)
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}

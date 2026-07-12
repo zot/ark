@@ -40,7 +40,7 @@ Every per-feature spec has a home here, placed by primary concern (a few
 could sit in two; cross-listing is kept minimal).
 
 - **Indexing & chunking** — chunkers.md, chunker-strategies.md, pdf-chunker.md, chunk-callback.md, chunk-context.md, parallel-indexing.md, source-monitoring.md, indexing.md, v25-enhancements.md
-- **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md
+- **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, internal-disposition.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md
 - **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md, embed-subcommands.md, llama-libs.md
 - **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md, search-profiling.md, chunk-filters.md, file-tag-filter.md
 - **Recall & substrate** — recall.md, simple-recall.md, bloodhound.md, bloodhound-cli.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md

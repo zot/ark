@@ -112,40 +112,45 @@ func TestExtractCountField(t *testing.T) {
 }
 
 func TestUpsertCountLine(t *testing.T) {
-	cand := `@ext-candidate: %abc @topic:`
+	cand := `@ext-candidate: external %abc @topic:`
+	const d1, d2 = "2026-07-12", "2026-07-13"
 
-	// New candidate line appends at @count: 1.
-	data := upsertCountLine(nil, cand, 1)
-	if got, want := string(data), cand+" @count: 1\n"; got != want {
+	// New candidate line appends at @count: 1, stamped with the first-seen
+	// date immediately after the marker.
+	data := upsertCountLine(nil, cand, d1, 1)
+	if got, want := string(data), `@ext-candidate: 2026-07-12 external %abc @topic: @count: 1`+"\n"; got != want {
 		t.Fatalf("append: got %q want %q", got, want)
 	}
-	// Exact-identity repeat bumps @count to 2.
-	data = upsertCountLine(data, cand, 1)
-	if got, want := string(data), cand+" @count: 2\n"; got != want {
-		t.Fatalf("bump: got %q want %q", got, want)
+	// Exact-identity repeat bumps @count to 2 and FREEZES the first-seen date:
+	// a later date passed in is ignored on a bump (first-seen wins).
+	data = upsertCountLine(data, cand, d2, 1)
+	if got, want := string(data), `@ext-candidate: 2026-07-12 external %abc @topic: @count: 2`+"\n"; got != want {
+		t.Fatalf("bump freezes date: got %q want %q", got, want)
 	}
 
-	// Judgment line: first reject creates @count: -1, second → -2.
+	// Judgment line: first reject creates @count: -1 (dated), second → -2,
+	// preserving the original date.
 	jid := judgmentIdentity("%abc", "topic")
-	j := upsertCountLine(nil, jid, -1)
-	if got, want := string(j), jid+" @count: -1\n"; got != want {
+	j := upsertCountLine(nil, jid, d1, -1)
+	if got, want := string(j), `@ext-judgment: 2026-07-12 %abc @topic: @count: -1`+"\n"; got != want {
 		t.Fatalf("judgment create: got %q want %q", got, want)
 	}
-	j = upsertCountLine(j, jid, -1)
-	if got, want := string(j), jid+" @count: -2\n"; got != want {
+	j = upsertCountLine(j, jid, d2, -1)
+	if got, want := string(j), `@ext-judgment: 2026-07-12 %abc @topic: @count: -2`+"\n"; got != want {
 		t.Fatalf("judgment decrement: got %q want %q", got, want)
 	}
 
 	// A count returning to 0 removes the line (absent ≡ neutral).
-	one := []byte(jid + " @count: -1\n")
-	if got := string(upsertCountLine(one, jid, 1)); got != "" {
+	one := []byte(`@ext-judgment: 2026-07-12 %abc @topic: @count: -1` + "\n")
+	if got := string(upsertCountLine(one, jid, d1, 1)); got != "" {
 		t.Fatalf("zero removes: got %q want empty", got)
 	}
 
-	// A bare identity line (no @count) counts as 0, so +1 materializes 1.
+	// A bare (dateless, countless) legacy line counts as 0; +1 materializes 1
+	// and stays dateless — no own date to reinsert (backward compat).
 	bare := []byte(cand + "\n")
-	if got, want := string(upsertCountLine(bare, cand, 1)), cand+" @count: 1\n"; got != want {
-		t.Fatalf("bare implicit 0: got %q want %q", got, want)
+	if got, want := string(upsertCountLine(bare, cand, d1, 1)), cand+" @count: 1\n"; got != want {
+		t.Fatalf("bare implicit 0 stays dateless: got %q want %q", got, want)
 	}
 }
 
@@ -308,7 +313,7 @@ func TestStore_RejectDerived_FileBacked(t *testing.T) {
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	target := targetSpec(t, db, cTarget)
 
-	if err := db.CandidateExtTag(target, "food", "", ""); err != nil {
+	if err := db.CandidateExtTag(target, "food", "", "", extDispositionExternal); err != nil {
 		t.Fatalf("CandidateExtTag: %v", err)
 	}
 	reindexMirrors(t, db)
@@ -341,7 +346,7 @@ func TestStore_AcceptDerived_FileBacked(t *testing.T) {
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	target := targetSpec(t, db, cTarget)
 
-	if err := db.CandidateExtTag(target, "priority", "high", ""); err != nil {
+	if err := db.CandidateExtTag(target, "priority", "high", "", extDispositionExternal); err != nil {
 		t.Fatalf("CandidateExtTag: %v", err)
 	}
 	reindexMirrors(t, db)
@@ -364,6 +369,152 @@ func TestStore_AcceptDerived_FileBacked(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected priority:high attached via @ext after accept; got %+v", tags)
+	}
+}
+
+// TestCandidateExtTag_DispositionDistinctLines drives the file-authoring
+// path: internal and external are distinct proposals (disposition is part
+// of the line identity) with independent @count tallies, and each line
+// carries a leading first-seen date after the marker. (R3090, R3092)
+func TestCandidateExtTag_DispositionDistinctLines(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
+	target := targetSpec(t, db, cTarget)
+
+	// external once, internal twice → two distinct lines, independent tallies.
+	for _, d := range []string{extDispositionExternal, extDispositionInternal, extDispositionInternal} {
+		if err := db.CandidateExtTag(target, "food", "fruit", "", d); err != nil {
+			t.Fatalf("CandidateExtTag(%s): %v", d, err)
+		}
+	}
+
+	mirror, err := db.resolveExtMirror(target)
+	if err != nil {
+		t.Fatalf("resolveExtMirror: %v", err)
+	}
+	data, err := os.ReadFile(mirror)
+	if err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+
+	var candLines []string
+	for _, ln := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(ln, "@ext-candidate:") {
+			candLines = append(candLines, ln)
+		}
+	}
+	if len(candLines) != 2 {
+		t.Fatalf("want 2 distinct candidate lines, got %d: %q", len(candLines), candLines)
+	}
+
+	var sawExt1, sawInt2 bool
+	for _, ln := range candLines {
+		body := strings.TrimPrefix(ln, "@ext-candidate: ")
+		if len(body) < 11 || !isExtDate(body[:10]) || body[10] != ' ' {
+			t.Errorf("candidate line missing leading first-seen date: %q", ln)
+		}
+		if strings.Contains(ln, " external ") && strings.HasSuffix(ln, "@count: 1") {
+			sawExt1 = true
+		}
+		if strings.Contains(ln, " internal ") && strings.HasSuffix(ln, "@count: 2") {
+			sawInt2 = true
+		}
+	}
+	if !sawExt1 {
+		t.Errorf("external proposal should carry @count: 1; lines=%q", candLines)
+	}
+	if !sawInt2 {
+		t.Errorf("internal proposal (authored twice) should carry @count: 2; lines=%q", candLines)
+	}
+}
+
+// peelExtCandidateDisposition surfaces the disposition; collectAcceptedCandidates
+// returns one entry per matching candidate line, tagged with its disposition —
+// so an internal and an external proposal of the same (tag,value) both surface.
+// (R3100)
+func TestPeelAndCollectDisposition(t *testing.T) {
+	if d := peelExtCandidateDisposition("2026-07-12 internal notes/f.md @topic: recall"); d != "internal" {
+		t.Errorf("internal peel: %q", d)
+	}
+	if d := peelExtCandidateDisposition("2026-07-12 external notes/f.md @topic: recall"); d != "external" {
+		t.Errorf("external peel: %q", d)
+	}
+	if d := peelExtCandidateDisposition("notes/f.md @topic: recall"); d != "" {
+		t.Errorf("no leading date → no disposition: %q", d)
+	}
+	data := []byte(
+		"@ext-candidate: 2026-07-12 internal notes/f.md @topic: recall @count: 1\n" +
+			"@ext-candidate: 2026-07-12 external notes/f.md @topic: recall @count: 1\n")
+	got := collectAcceptedCandidates(data, "notes/f.md", "topic", "recall")
+	if len(got) != 2 {
+		t.Fatalf("want 2 accepted candidates, got %d: %+v", len(got), got)
+	}
+	seen := map[string]bool{got[0].disposition: true, got[1].disposition: true}
+	if !seen["internal"] || !seen["external"] {
+		t.Errorf("expected both dispositions surfaced; got %+v", got)
+	}
+}
+
+// TestAcceptExtTag_InternalWritesSourceBody drives an internal accept end to
+// end: author an internal candidate on a markdown file, accept it, and confirm
+// the inline `@tag` is written into the file's own body (not routed to the
+// mirror), the candidate is consumed, and a positive `@ext-judgment` lands.
+// (R3100, R3101, R3103)
+func TestAcceptExtTag_InternalWritesSourceBody(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	// Register the wrapped markdown chunker so internal insertion is available.
+	db.chunkerByName = make(map[string]any)
+	if err := db.addChunker("markdown", wrapInternalTagChunker(microfts2.MarkdownChunker{}, stencilMarkdown)); err != nil {
+		t.Fatalf("register markdown: %v", err)
+	}
+	src := filepath.Join(db.dbPath, "note.md")
+	if err := os.WriteFile(src, []byte("## A\nbody a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(src, "markdown"); err != nil {
+		t.Fatalf("index source: %v", err)
+	}
+	if err := db.CandidateExtTag(src, "topic", "recall", "", extDispositionInternal); err != nil {
+		t.Fatalf("candidate: %v", err)
+	}
+	if err := db.AcceptExtTag(src, "topic", "recall"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	body, _ := os.ReadFile(src)
+	if !strings.Contains(string(body), "@topic: recall") {
+		t.Errorf("source file body missing the inline tag:\n%s", body)
+	}
+	mirror := externalMirrors(t)
+	if strings.Contains(mirror, "@ext: ") {
+		t.Errorf("internal accept must not route an @ext edge; mirror:\n%s", mirror)
+	}
+	if !strings.Contains(mirror, "@ext-judgment:") || !strings.Contains(mirror, "@count: 1") {
+		t.Errorf("expected a positive @ext-judgment @count: 1; mirror:\n%s", mirror)
+	}
+	if strings.Contains(mirror, "@ext-candidate:") {
+		t.Errorf("candidate should be consumed; mirror:\n%s", mirror)
+	}
+}
+
+// TestAcceptExtTag_InternalFallsBackToExternal: an internal disposition against
+// a target whose chunker can't host an inline tag (the line chunker) degrades
+// to the external mirror route, and still records the positive judgment. (R3102, R3103)
+func TestAcceptExtTag_InternalFallsBackToExternal(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
+	target := targetSpec(t, db, cTarget)
+	if err := db.CandidateExtTag(target, "food", "fruit", "", extDispositionInternal); err != nil {
+		t.Fatalf("candidate: %v", err)
+	}
+	if err := db.AcceptExtTag(target, "food", "fruit"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	mirror := externalMirrors(t)
+	if !strings.Contains(mirror, "@ext: ") || !strings.Contains(mirror, "@food: fruit") {
+		t.Errorf("internal on a line-chunked target should fall back to external @ext; mirror:\n%s", mirror)
+	}
+	if !strings.Contains(mirror, "@ext-judgment:") {
+		t.Errorf("expected a positive @ext-judgment; mirror:\n%s", mirror)
 	}
 }
 

@@ -431,20 +431,82 @@ func TestMutateExtLineClassAware(t *testing.T) {
 	}
 }
 
-// candidateLine builds the canonical proposal line; insight quoted and
-// placed before the routed tag, escaped. (R3051, R3053)
+// candidateLine builds the canonical proposal line: disposition right
+// after the marker, then insight quoted before the routed tag, escaped.
+// (R3051, R3053, R3092)
 func TestCandidateLine(t *testing.T) {
-	if got := candidateLine("%abc", "topic", "recall", "it fits"); got != `@ext-candidate: insight: "it fits" %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", "it fits", "external"); got != `@ext-candidate: external insight: "it fits" %abc @topic: recall` {
 		t.Errorf("with insight: %q", got)
 	}
-	if got := candidateLine("%abc", "topic", "recall", ""); got != `@ext-candidate: %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", "", "external"); got != `@ext-candidate: external %abc @topic: recall` {
 		t.Errorf("no insight: %q", got)
 	}
-	if got := candidateLine("%abc", "topic", "", ""); got != `@ext-candidate: %abc @topic:` {
-		t.Errorf("bare tag: %q", got)
+	// Disposition is part of the identity — internal makes a distinct line.
+	if got := candidateLine("%abc", "topic", "", "", "internal"); got != `@ext-candidate: internal %abc @topic:` {
+		t.Errorf("bare tag, internal: %q", got)
 	}
-	if got := candidateLine("%abc", "topic", "recall", `say "hi"`); got != `@ext-candidate: insight: "say \"hi\"" %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", `say "hi"`, "external"); got != `@ext-candidate: external insight: "say \"hi\"" %abc @topic: recall` {
 		t.Errorf("quoted insight escaping: %q", got)
+	}
+	// Empty disposition is omitted (a dateless, dispositionless legacy line).
+	if got := candidateLine("%abc", "topic", "recall", "", ""); got != `@ext-candidate: %abc @topic: recall` {
+		t.Errorf("empty disposition omitted: %q", got)
+	}
+}
+
+// stripLeadingDateDisposition peels a leading first-seen date and — only
+// after a date — an internal/external disposition, mirroring the on-disk
+// @ext-candidate / @ext-judgment line order. Committed @ext and
+// date-shaped TARGETs pass through. (R3090, R3092, R3093)
+func TestStripLeadingDateDisposition(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// candidate: date + disposition peeled, insight + TARGET remain
+		{`2026-07-12 external insight: "why" notes/f.md @topic: x`, `insight: "why" notes/f.md @topic: x`},
+		{`2026-07-12 internal notes/f.md @topic: x`, `notes/f.md @topic: x`},
+		// judgment: date only, no disposition token → just the date peels
+		{`2026-07-12 notes/f.md @topic:`, `notes/f.md @topic:`},
+		// committed @ext: no leading date → unchanged
+		{`notes/f.md @topic: recall`, `notes/f.md @topic: recall`},
+		{`%abc @topic: recall`, `%abc @topic: recall`},
+		// date-shape guard: "2026-07-12.md" has no space at position 10 → not a date
+		{`2026-07-12.md @topic: recall`, `2026-07-12.md @topic: recall`},
+		// disposition peel fires only after a date: a bare "external…" target stays
+		{`external-notes.md @topic: recall`, `external-notes.md @topic: recall`},
+		// a non-disposition word after the date is left in place (only the date peels)
+		{`2026-07-12 someword notes/f.md @topic: x`, `someword notes/f.md @topic: x`},
+	}
+	for _, c := range cases {
+		if got := stripLeadingDateDisposition(c.in); got != c.want {
+			t.Errorf("stripLeadingDateDisposition(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// ParseExtTarget peels the leading date + disposition before resolving the
+// TARGET, so a dated candidate/judgment value parses to the same (TARGET,
+// tags) as its bare committed form. (R3090, R3092)
+func TestParseExtTargetDateDisposition(t *testing.T) {
+	cases := []struct {
+		name, in, wantTarget, wantTag, wantVal string
+	}{
+		{"candidate date+disp+insight", `2026-07-12 external insight: "why" notes/f.md @topic: recall`, "notes/f.md", "topic", "recall"},
+		{"candidate internal", `2026-07-12 internal notes/f.md @topic: recall`, "notes/f.md", "topic", "recall"},
+		{"judgment date only", `2026-07-12 notes/f.md @topic:`, "notes/f.md", "topic", ""},
+		{"committed no date", `notes/f.md @topic: recall`, "notes/f.md", "topic", "recall"},
+		{"date-shape target not peeled", `2026-07-12.md @topic: recall`, "2026-07-12.md", "topic", "recall"},
+	}
+	for _, c := range cases {
+		target, tags, ok := ParseExtTarget(c.in)
+		if !ok {
+			t.Errorf("%s: ok=false", c.name)
+			continue
+		}
+		if target != c.wantTarget {
+			t.Errorf("%s: target=%q want %q", c.name, target, c.wantTarget)
+		}
+		if len(tags) != 1 || tags[0].Tag != c.wantTag || tags[0].Value != c.wantVal {
+			t.Errorf("%s: tags=%+v want {%s:%s}", c.name, tags, c.wantTag, c.wantVal)
+		}
 	}
 }
 

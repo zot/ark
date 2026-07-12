@@ -2167,12 +2167,14 @@ func (srv *Server) handleConfigShowWhy(w http.ResponseWriter, r *http.Request) {
 
 // extRequest is the shared body for the /ext/* endpoints. value is the
 // new value for set/add and the optional filter for remove/accept/
-// reject; insight is the optional quoted rationale for candidate.
+// reject; insight is the optional quoted rationale for candidate, and
+// disposition (internal|external) is candidate's accept-target hint.
 type extRequest struct {
-	Target  string `json:"target"`
-	Tag     string `json:"tag"`
-	Value   string `json:"value"`
-	Insight string `json:"insight"`
+	Target      string `json:"target"`
+	Tag         string `json:"tag"`
+	Value       string `json:"value"`
+	Insight     string `json:"insight"`
+	Disposition string `json:"disposition"`
 }
 
 // extMutate decodes an extRequest and runs an `@ext` mirror mutation
@@ -2211,7 +2213,7 @@ func (srv *Server) handleExtRemove(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | R3057
 func (srv *Server) handleExtCandidate(w http.ResponseWriter, r *http.Request) {
 	srv.extMutate(w, r, func(db *DB, req extRequest) error {
-		return db.CandidateExtTag(req.Target, req.Tag, req.Value, req.Insight)
+		return db.CandidateExtTag(req.Target, req.Tag, req.Value, req.Insight, req.Disposition)
 	})
 }
 

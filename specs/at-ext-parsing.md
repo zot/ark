@@ -69,6 +69,51 @@ relative-path base literally named `insight` with a `:"anchor"` narrower
 is part of the line's text, two proposals of the same tag with different
 insights remain distinct lines (preserved, not merged).
 
+The full leading order on an `@ext-candidate` line is
+`<date> <disposition> insight: "…" TARGET …` — date and disposition
+(below) come before the insight; all three are peeled ahead of the TARGET.
+
+### Reserved leading field: `date`
+
+`@ext-candidate` and `@ext-judgment` lines carry a leading `YYYY-MM-DD`
+**first-seen date** immediately after the marker (before the disposition,
+insight, and TARGET). It is a historical note recorded **once** — when the
+proposal or judgment is first authored — and **frozen**: a later `@count`
+bump preserves the line's original date rather than restamping it, so the
+date always records when the line first appeared. `ParseExtTarget` peels the
+leading date (via `stripLeadingDateDisposition`, before the insight peel) so
+it never reaches the TARGET.
+
+The date is **excluded from line identity**: the `@count` dedup match
+compares the date-stripped line, so a repeat of the same identity bumps the
+existing line's count and keeps its frozen date instead of appending a
+duplicate. Recognition is **shape-only** — exactly ten characters
+`YYYY-MM-DD` (ASCII digits with `-` at positions 4 and 7) followed by a
+space; month and day ranges are not validated. A committed `@ext` carries no
+date and passes through unchanged. The one accepted ambiguity is a bare
+TARGET that is *literally* a ten-character date followed by a space (it would
+mis-peel); a dated filename such as `2026-07-12.md` has no space at position
+10 and is safe.
+
+### Reserved leading field: `disposition`
+
+An `@ext-candidate` line carries a `disposition` bare token — `internal`
+or `external`, default `external` — placed right after the marker (after the
+date on disk). It names where an eventual **accept** writes the tag:
+`external` routes it to the target's mirror file (today's behavior);
+`internal` writes it into the target file's own body (defined and built by
+the internal-disposition feature). `@ext-judgment` lines carry no
+disposition.
+
+`stripLeadingDateDisposition` peels the disposition **only after a leading
+date was peeled**, which bounds the ambiguity of a TARGET literally named
+`internal` or `external` — an undated committed value never mis-peels a
+disposition. The disposition **is part of the line identity**: an internal
+and an external proposal of the same `(TARGET, tag, value, insight)` are
+**distinct lines** with independent `@count` tallies, exactly as distinct
+insights are — so choosing internal versus external is a separate proposal,
+not a mutation of an existing one.
+
 ### Reserved metadata field: `count`
 
 `@ext-candidate` and `@ext-judgment` lines carry a reserved `@count: N`

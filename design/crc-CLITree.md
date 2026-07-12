@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -147,7 +147,8 @@ CLITree owns how those bodies are *reached* and how their help is
   `withExclusiveDB` calling `DB.SetExtTag` / `DB.AddExtTag` / `DB.RemoveExtTag`.
   Mirror-file-only scope lives in the DB primitive (crc-DB.md); CLITree only routes.
   The staging leaves `candidate`/`accept`/`reject` (candidate also takes an
-  `--insight "why"` flag) dispatch the same way to `DB.CandidateExtTag` /
+  `--insight "why"` flag and a `--disposition internal|external` / `--internal`
+  choice, default external — R3094) dispatch the same way to `DB.CandidateExtTag` /
   `AcceptExtTag` / `RejectExtTag` (POST `/ext/{candidate,accept,reject}` —
   crc-Server.md); `value` is optional for all three. (R3056)
 

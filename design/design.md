@@ -144,7 +144,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [x] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`, `emptyfiles_test.go`
-- [x] crc-Indexer.md → `indexer.go`, `ext.go`
+- [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
 - [x] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
@@ -266,7 +266,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Matcher.md → `match_test.go`
 - [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`, `search_nildb_test.go`
 - [x] test-Store.md → `store_test.go`
-- [x] test-Tags.md → `indexer_test.go`, `store_test.go`, `ext_test.go`
+- [x] test-Tags.md → `indexer_test.go`, `store_test.go`, `ext_test.go`, `ext_insert_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
 - [x] test-TagBlock.md → `tagblock_test.go`
 - [x] test-Sweep.md → `db_test.go`

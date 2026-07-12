@@ -446,19 +446,25 @@ The compute-for-display pass cost on a recall call (read-only; no writes):
         │                              (reindex derives RC[source_tvid+chunk])
         ▼
   ┌──────────────────┐   reads RC via Store.DerivedProposals (forge, #37)
-  │ index store (RC) │ ◀─────────────────────────────────────────────┐
-  └──────────────────┘                                                │
-        ▲                                                     ┌────────────────┐
-        │  ark ext accept → @ext (drops RC, lands X + V edge) │ Tag Forge / CLI│
-        │  ark ext reject → @ext-judgment (derives RJ)        │  accept/reject │
-        └─────────────────────────────────────────────────── └────────────────┘
+  │ index store (RC) │ ◀───────────────────────────────────────────────────────┐
+  └──────────────────┘                                                         │
+        ▲                                                                ┌────────────────┐
+        │  accept → external @ext | internal file body, +RJ (drops RC)   │ Tag Forge / CLI│
+        │  reject → @ext-judgment @count:−1 (derives RJ −, drops RC)     │  accept/reject │
+        └──────────────────────────────────────────────────────────────  └────────────────┘
 ```
 
 The recall pass writes nothing; it only computes and surfaces proposals.
 Durable state is authored by a discerning approver — the calling agent via
-`ark ext candidate`, or the human via the Tag Forge — after which the 018
-substrate (RC/RJ derivation, `Store.DerivedProposals` / `AcceptDerived` /
-`RejectDerived`) carries the ledger exactly as before.
+`ark ext candidate` (stamping a disposition, default external), or the human via
+the Tag Forge. **Accept** resolves each candidate per its disposition: `external`
+lands an `@ext` mirror edge, `internal` writes the tag into the source file's own
+body (falling back to external when the type can't host it — see
+`internal-disposition.md`); and every accept also writes a positive
+`@ext-judgment @count:+1` (reinforce, R3103). **Reject** writes `@count:-1`. The
+018 substrate (RC/RJ derivation, `Store.DerivedProposals` / `AcceptDerived` /
+`RejectDerived`) carries the ledger; the diagram's `accept → @ext` line shows the
+external path only.
 
 ## What This Spec Does Not Cover
 

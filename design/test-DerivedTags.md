@@ -141,3 +141,24 @@ remain as landed by migration 018 — #36 reverses only the *autonomous producer
 not the ledger or its verbs.
 **Refs:** crc-DB.md, crc-ExtMap.md, crc-Store.md, R3051, R3054, R3055, R3058,
 R3059, R3065, R3066, R3067, R3069, R3071, R3074, R3075
+
+## Test: upsertCountLine first-seen date freeze (R3090, R3091)
+**Purpose:** Verify a new candidate/judgment line is stamped with the passed
+  first-seen date after the marker, and a later bump preserves that original
+  date (a fresh date passed on the bump is ignored); a dateless legacy line
+  bumps without gaining a date
+**Input:** upsertCountLine(nil, candIdentity, "2026-07-12", 1) then
+  upsertCountLine(…, candIdentity, "2026-07-13", 1); dateless bare identity + 1
+**Expected:** append → `… 2026-07-12 … @count: 1`; bump → `… 2026-07-12 … @count: 2`
+  (frozen); dateless legacy line → `… @count: 1` (stays dateless)
+**Refs:** crc-Indexer.md
+
+## Test: CandidateExtTag disposition distinguishes lines (R3090, R3092)
+**Purpose:** Verify internal and external proposals of the same (TARGET, tag,
+  value) are distinct mirror lines with independent `@count` tallies, each
+  carrying a leading first-seen date
+**Input:** author external once, internal twice for (target, food, fruit) →
+  read the mirror file
+**Expected:** two `@ext-candidate:` lines, each with a leading `YYYY-MM-DD`;
+  the external line at `@count: 1`, the internal line at `@count: 2`
+**Refs:** crc-DB.md

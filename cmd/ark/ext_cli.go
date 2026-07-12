@@ -16,6 +16,15 @@ import (
 	"github.com/zot/ark"
 )
 
+// Candidate disposition tokens for `ark ext candidate` — external routes
+// an accepted tag to the mirror (default); internal writes it into the
+// source file body. Mirror of ark's package-internal disposition tokens.
+// CRC: crc-CLITree.md | R3094
+const (
+	dispositionExternal = "external"
+	dispositionInternal = "internal"
+)
+
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048, R3056
 func extCommand() *ucli.Command {
 	return &ucli.Command{
@@ -46,6 +55,8 @@ func extCommand() *ucli.Command {
 				ArgsUsage: "<target> <tag> [value]",
 				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "insight", Usage: "quoted rationale carried with the proposal"},
+					&ucli.StringFlag{Name: "disposition", Value: dispositionExternal, Usage: "where an accepted tag is written: external (mirror) or internal (source file)"},
+					&ucli.BoolFlag{Name: "internal", Usage: "shorthand for --disposition internal"},
 				},
 				Action: extCandidateAction,
 			},
@@ -68,13 +79,17 @@ func extCommand() *ucli.Command {
 // extProxyOrLocal runs an @ext mirror mutation: proxy to the running
 // server (POST /ext/<verb>) when one is up, else open the index
 // exclusively and call local. Mirrors the config add/remove dispatch.
-// insight rides along only for candidate (empty for the other verbs).
-// CRC: crc-CLITree.md | R3048, R3056
-func extProxyOrLocal(verb, target, tag, value, insight string, local func(*ark.DB) error) {
+// insight and disposition ride along only for candidate (empty for the
+// other verbs).
+// CRC: crc-CLITree.md | R3048, R3056, R3094
+func extProxyOrLocal(verb, target, tag, value, insight, disposition string, local func(*ark.DB) error) {
 	if client := serverClient(arkDir); client != nil {
 		body := map[string]string{"target": target, "tag": tag, "value": value}
 		if insight != "" {
 			body["insight"] = insight
+		}
+		if disposition != "" {
+			body["disposition"] = disposition
 		}
 		if err := proxyOK(client, "POST", "/ext/"+verb, body); err != nil {
 			fatal(err)
@@ -91,45 +106,63 @@ func extProxyOrLocal(verb, target, tag, value, insight string, local func(*ark.D
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extSetAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, true)
-	extProxyOrLocal("set", target, tag, value, "", func(d *ark.DB) error { return d.SetExtTag(target, tag, value) })
+	extProxyOrLocal("set", target, tag, value, "", "", func(d *ark.DB) error { return d.SetExtTag(target, tag, value) })
 	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extAddAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, true)
-	extProxyOrLocal("add", target, tag, value, "", func(d *ark.DB) error { return d.AddExtTag(target, tag, value) })
+	extProxyOrLocal("add", target, tag, value, "", "", func(d *ark.DB) error { return d.AddExtTag(target, tag, value) })
 	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
 func extRemoveAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("remove", target, tag, value, "", func(d *ark.DB) error { return d.RemoveExtTag(target, tag, value) })
+	extProxyOrLocal("remove", target, tag, value, "", "", func(d *ark.DB) error { return d.RemoveExtTag(target, tag, value) })
 	return nil
 }
 
-// CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.2 | R3056
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.2 | R3056, R3094
 func extCandidateAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
 	insight := c.String("insight")
-	extProxyOrLocal("candidate", target, tag, value, insight, func(d *ark.DB) error {
-		return d.CandidateExtTag(target, tag, value, insight)
+	disposition := extDisposition(c)
+	extProxyOrLocal("candidate", target, tag, value, insight, disposition, func(d *ark.DB) error {
+		return d.CandidateExtTag(target, tag, value, insight, disposition)
 	})
 	return nil
+}
+
+// extDisposition resolves the candidate disposition from `--internal`
+// (shorthand) or `--disposition`, defaulting to external. An unrecognized
+// `--disposition` value is a fatal usage error.
+// CRC: crc-CLITree.md | R3094
+func extDisposition(c *ucli.Command) string {
+	if c.Bool("internal") {
+		return dispositionInternal
+	}
+	switch d := c.String("disposition"); d {
+	case dispositionInternal, dispositionExternal:
+		return d
+	default:
+		fatal(fmt.Errorf("--disposition must be %s or %s, got %q", dispositionInternal, dispositionExternal, d))
+		return ""
+	}
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.3 | R3056
 func extAcceptAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("accept", target, tag, value, "", func(d *ark.DB) error { return d.AcceptExtTag(target, tag, value) })
+	extProxyOrLocal("accept", target, tag, value, "", "", func(d *ark.DB) error { return d.AcceptExtTag(target, tag, value) })
 	return nil
 }
 
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.4 | R3056
 func extRejectAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("reject", target, tag, value, "", func(d *ark.DB) error { return d.RejectExtTag(target, tag, value) })
+	extProxyOrLocal("reject", target, tag, value, "", "", func(d *ark.DB) error { return d.RejectExtTag(target, tag, value) })
 	return nil
 }
 

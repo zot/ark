@@ -75,13 +75,37 @@
 **Expected:** target keeps the full spacey path; tags `[{topic, recall}]`
 **Refs:** crc-Indexer.md
 
-## Test: candidateLine insight-first (R3051, R3053)
-**Purpose:** Verify the canonical `@ext-candidate` line — insight quoted and
-  first, before the TARGET, no @; tag-name-only when value empty; quotes escaped
-**Input:** candidateLine("%abc","topic","recall","it fits");
-  candidateLine("%abc","topic","recall",`say "hi"`)
-**Expected:** `@ext-candidate: insight: "it fits" %abc @topic: recall`;
-  `@ext-candidate: insight: "say \"hi\"" %abc @topic: recall`
+## Test: stripLeadingDateDisposition peel + guards (R3090, R3092, R3093)
+**Purpose:** Verify a leading `YYYY-MM-DD` date and — only after a date — an
+  internal/external disposition are peeled; committed values and date-shaped
+  filenames pass through
+**Input:** `2026-07-12 external insight: "why" notes/f.md @topic: x`;
+  `2026-07-12 notes/f.md @topic:` (judgment, date only);
+  `notes/f.md @topic: recall` (committed); `2026-07-12.md @topic: recall`
+  (no space at position 10); `external-notes.md @topic: recall` (disposition
+  word but no date)
+**Expected:** date+disposition peeled → `insight: "why" notes/f.md @topic: x`;
+  judgment → date only; committed / `2026-07-12.md` / `external-notes.md` unchanged
+**Refs:** crc-Indexer.md
+
+## Test: ParseExtTarget with date + disposition (R3090, R3092)
+**Purpose:** Verify a dated candidate/judgment value parses to the same
+  (TARGET, tags) as its bare committed form
+**Input:** `2026-07-12 internal notes/f.md @topic: recall`;
+  `2026-07-12 notes/f.md @topic:` (judgment)
+**Expected:** target `notes/f.md`, tags `[{topic, recall}]` / `[{topic, ""}]`
+**Refs:** crc-Indexer.md
+
+## Test: candidateLine disposition + insight-first (R3051, R3053, R3092)
+**Purpose:** Verify the canonical `@ext-candidate` line — disposition right
+  after the marker, insight quoted before the TARGET, no @; tag-name-only when
+  value empty; quotes escaped; empty disposition omitted
+**Input:** candidateLine("%abc","topic","recall","it fits","external");
+  candidateLine("%abc","topic","recall",`say "hi"`,"external");
+  candidateLine("%abc","topic","recall","","")
+**Expected:** `@ext-candidate: external insight: "it fits" %abc @topic: recall`;
+  `@ext-candidate: external insight: "say \"hi\"" %abc @topic: recall`;
+  `@ext-candidate: %abc @topic: recall` (empty disposition omitted)
 **Refs:** crc-DB.md
 
 ## Test: accept transition drops insight (R3054)

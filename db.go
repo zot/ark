@@ -301,7 +301,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	// growing files index incrementally via microfts2's drop-and-replace
 	// append protocol. addChunker mirrors each registration into
 	// db.chunkerByName so ChunkInfo can look up ChunkerMetadata by strategy.
-	if err := db.addChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+	if err := db.addChunker("markdown", wrapInternalTagChunker(microfts2.MarkdownChunker{}, stencilMarkdown)); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register markdown strategy: %w", err)
 	}
@@ -566,7 +566,7 @@ func (db *DB) registerConfigChunkers(cfg *Config) {
 		isBracket := cc.Type == "bracket" || cc.Type == "bracket-full"
 		switch {
 		case isBracket:
-			if err := db.addChunker(cc.Name, microfts2.BracketChunker(lang)); err != nil {
+			if err := db.addChunker(cc.Name, wrapInternalTagChunker(microfts2.BracketChunker(lang), stencilBracket)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		case isIndent:
@@ -574,7 +574,7 @@ func (db *DB) registerConfigChunkers(cfg *Config) {
 			if tabWidth <= 0 {
 				tabWidth = 4
 			}
-			if err := db.addChunker(cc.Name, microfts2.IndentChunker(lang, tabWidth)); err != nil {
+			if err := db.addChunker(cc.Name, wrapInternalTagChunker(microfts2.IndentChunker(lang, tabWidth), stencilIndent)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		default:
@@ -2256,16 +2256,19 @@ func (db *DB) RemoveExtTag(targetSpec, tag, value string) error {
 	return atomicWriteFile(mirrorPath, newData, 0644)
 }
 
-// CandidateExtTag authors an `@ext-candidate` (proposed routing) into
-// the target's mirror file, carrying an optional quoted insight placed
-// first, before the TARGET (no @ sigil). The line's `@count` is the
-// repetition tally: a new (TARGET, tag, value, insight) identity is
-// written at `@count: 1`; an exact-identity repeat increments the
-// existing line's `@count` (a differing insight is a distinct proposal
-// with its own tally). The read-modify-write runs as one closure-actor
-// op so concurrent bumps cannot lose an update. (R3051, R3074, R3075)
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3074, R3075
-func (db *DB) CandidateExtTag(targetSpec, tag, value, insight string) error {
+// CandidateExtTag authors an `@ext-candidate` (proposed routing) into the
+// target's mirror file, carrying an optional quoted insight placed first
+// (no @ sigil) and a disposition (internal|external, default external)
+// naming where an eventual accept writes the tag. The line's `@count` is
+// the repetition tally: a new (TARGET, tag, value, insight, disposition)
+// identity is written at `@count: 1`, stamped with today's first-seen
+// date; an exact-identity repeat increments the existing line's `@count`
+// and preserves its original date (a differing insight or disposition is a
+// distinct proposal with its own tally). The read-modify-write runs as one
+// closure-actor op so concurrent bumps cannot lose an update.
+// (R3051, R3074, R3075, R3090, R3092)
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3074, R3075, R3090, R3092
+func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition string) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return errors.New("tag must not be empty")
@@ -2278,19 +2281,131 @@ func (db *DB) CandidateExtTag(targetSpec, tag, value, insight string) error {
 	if err != nil {
 		return err
 	}
-	data = upsertCountLine(data, candidateLine(targetSpec, tag, value, insight), 1)
+	date := time.Now().Format("2006-01-02")
+	data = upsertCountLine(data, candidateLine(targetSpec, tag, value, insight, disposition), date, 1)
 	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
 	}
 	return atomicWriteFile(mirrorPath, data, 0644)
 }
 
-// AcceptExtTag rewrites matching `@ext-candidate` line(s) to `@ext`,
-// committing the routing and consuming the candidate (its insight is
-// dropped). Missing file or no match is a silent no-op.
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054
+// AcceptExtTag commits matching `@ext-candidate`(s) on targetSpec, resolving
+// each per its own disposition: `external` routes to the mirror as an `@ext`
+// edge (source untouched); `internal` writes the tag into the target file's
+// own body via the chunker's insertion stencil, falling back to the external
+// route when the file type cannot host an inline tag or the file is not
+// writable. Every accept also writes a positive `@ext-judgment @count:+1`
+// (deduped per tag) — the accept-time producer of the signed-RJ axis; the
+// R3070 net-rejected filter fires on negative counts only, so a positive
+// judgment reinforces without suppressing. The candidate(s) are consumed
+// (leading date and insight dropped). Missing file or no match is a silent
+// no-op. The source-file write runs on the DB actor (the same goroutine that
+// serializes the mirror write), so concurrent accepts to one file serialize.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3071, R3100, R3101, R3102, R3103
 func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
-	return db.transitionExtCandidate(targetSpec, tag, value, extClassCommitted)
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	mirrorPath, err := db.resolveExtMirror(targetSpec)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(mirrorPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", mirrorPath, err)
+	}
+	accepted := collectAcceptedCandidates(data, targetSpec, tag, value)
+	if len(accepted) == 0 {
+		return nil
+	}
+	// Consume the accepted candidate spans; branch each per its disposition.
+	newData, _, _ := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove, extClassCandidate)
+	date := time.Now().Format("2006-01-02")
+	judged := make(map[string]bool)
+	for _, ac := range accepted {
+		external := true
+		if ac.disposition == extDispositionInternal {
+			wrote, werr := db.writeInternalTag(targetSpec, ac.tag, ac.value)
+			if werr != nil {
+				return werr
+			}
+			external = !wrote // internal write landed → do not also route external
+		}
+		if external {
+			newData = upsertExtLine(newData, targetSpec, ac.tag, ac.value, extOpAdd, extClassCommitted)
+		}
+		if !judged[ac.tag] {
+			judged[ac.tag] = true
+			newData = upsertCountLine(newData, judgmentIdentity(targetSpec, ac.tag), date, 1)
+		}
+	}
+	return atomicWriteFile(mirrorPath, newData, 0644)
+}
+
+// writeInternalTag writes `@tag: value` into the source file body of the
+// resolved target and returns wrote=true. It returns false (the caller falls
+// back to the external mirror route) whenever the target does not resolve to a
+// single writable, tag-insertable location: a bare-path target inserts a
+// file-level tag at the top of the file; a single-chunk address inserts a
+// chunk-level tag under the chunk's opener; a multi-chunk match, an incapable
+// chunker type (lines/jsonl/pdf), a comment-less code chunk, a read-only zone,
+// or a file unwritable on disk all degrade to external. The write is a
+// temp+rename on the DB actor; the normal reindex the file change triggers
+// materializes the tag (no new DB mutation path).
+// CRC: crc-DB.md | R3101, R3102
+func (db *DB) writeInternalTag(targetSpec, tag, value string) (bool, error) {
+	parts, ok := ParseExtTargetParts(targetSpec, "")
+	if !ok || parts.Invalid {
+		return false, nil
+	}
+	// File-level only for a bare PATH base; a bare UUID spans many chunks.
+	fileLevel := parts.BaseKind == "path" && parts.AnchorKind == "" && parts.ModifierN == 0
+	chunkIDs := db.ResolveExtTarget(targetSpec, "")
+	if len(chunkIDs) == 0 {
+		return false, nil
+	}
+	if !fileLevel && len(chunkIDs) != 1 {
+		return false, nil // multi-chunk (or unresolved) internal → external
+	}
+	info, err := db.ChunkInfo(chunkIDs[0])
+	if err != nil || !info.Writable {
+		return false, nil // unknown chunk or read-only zone → external
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil {
+		return false, nil
+	}
+	inserter, ok := db.chunkerByName[finfo.Strategy].(tagInserter)
+	if !ok {
+		return false, nil // incapable chunker type → external
+	}
+	st, err := os.Stat(info.Path)
+	if err != nil || st.Mode().Perm()&0o200 == 0 {
+		return false, nil // unwritable on disk (layer b) → external
+	}
+	fileBytes, err := os.ReadFile(info.Path)
+	if err != nil {
+		return false, nil
+	}
+	scope := tagScopeChunk
+	var chunk microfts2.Chunk
+	if fileLevel {
+		scope = tagScopeFile
+	} else {
+		chunk = microfts2.Chunk{Locator: microfts2.EncodeByteRangeLocator(int(info.ByteStart), int(info.ByteEnd))}
+	}
+	newBytes, ok := inserter.InsertTag(fileBytes, chunk, tag, value, scope)
+	if !ok {
+		return false, nil // comment-less code chunk → external
+	}
+	if err := atomicWriteFile(info.Path, newBytes, st.Mode().Perm()); err != nil {
+		return false, nil // write failed → external
+	}
+	return true, nil
 }
 
 // RejectExtTag rewrites matching `@ext-candidate` line(s) to a single
@@ -2305,10 +2420,11 @@ func (db *DB) RejectExtTag(targetSpec, tag, value string) error {
 // re-emits them under toClass: committed keeps each distinct (tag,
 // value) as an @ext line; judgment collapses to one tag-name-only
 // @ext-judgment line per distinct tag, decrementing that line's signed
-// @count by one (creating it at -1 when absent) so repeated rejects
-// accumulate magnitude. The candidate's insight and @count are dropped
-// by the rewrite. (R3054, R3055, R3075)
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3055, R3075
+// @count by one (creating it — stamped with today's first-seen date — at
+// -1 when absent) so repeated rejects accumulate magnitude. The
+// candidate's leading date, insight, and @count are dropped by the
+// rewrite. (R3054, R3055, R3075, R3090)
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3055, R3075, R3090
 func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extClass) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -2329,6 +2445,7 @@ func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extC
 	if !matched {
 		return nil
 	}
+	date := time.Now().Format("2006-01-02")
 	seen := make(map[string]bool, len(removed))
 	for _, tv := range removed {
 		if toClass == extClassJudgment {
@@ -2336,7 +2453,7 @@ func (db *DB) transitionExtCandidate(targetSpec, tag, value string, toClass extC
 				continue
 			}
 			seen[tv.Tag] = true
-			newData = upsertCountLine(newData, judgmentIdentity(targetSpec, tv.Tag), -1)
+			newData = upsertCountLine(newData, judgmentIdentity(targetSpec, tv.Tag), date, -1)
 			continue
 		}
 		key := tv.Tag + "\x00" + tv.Value
