@@ -97,6 +97,11 @@ Optionally starts the embedded ui-engine alongside.
 - HandleTags: GET /tags — list all tags
 - HandleTagCounts: POST /tags/counts — counts for specified tags
 - HandleTagFiles: POST /tags/files — files for specified tags
+- HandleTagChunk: POST /tags/chunk {path, range} — tag union at an
+  address; empty range → DB.AllTagsForFilePath (file-wide), non-empty
+  range → DB.AllTagsAtLocation (one chunk). Returns []TagValue. Backs
+  the index-backed `ark tag chunk` / `ark tag get -all` forms. (R3086,
+  R3087, R3089)
 - HandleConfigAddSource: POST /config/add-source
 - HandleConfigRemoveSource: POST /config/remove-source
 - HandleConfigAddInclude: POST /config/add-include

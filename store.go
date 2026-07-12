@@ -1900,6 +1900,35 @@ func (s *Store) AllTagsForChunk(chunkID uint64) ([]TagValue, error) {
 	return result, nil
 }
 
+// AllTagsForFile returns the deduplicated union of every (tag, value) pair
+// across all of fileID's chunks — each chunk's inline TagsForChunk plus its
+// ext-routed and overlay tags (AllTagsForChunk) — collapsed from the
+// per-chunk multiset to one file-wide set. Chunk ids come from the
+// chunksForFile resolver wired by SetChunkResolver; returns nil when that
+// resolver is unset (Store-only test paths) or the file has no chunks.
+// CRC: crc-Store.md | R3083
+func (s *Store) AllTagsForFile(fileID uint64) ([]TagValue, error) {
+	if s.chunksForFile == nil {
+		return nil, nil
+	}
+	var result []TagValue
+	seen := make(map[TagValue]struct{})
+	for _, chunkID := range s.chunksForFile(fileID) {
+		tags, err := s.AllTagsForChunk(chunkID)
+		if err != nil {
+			return result, err
+		}
+		for _, tv := range tags {
+			if _, ok := seen[tv]; ok {
+				continue
+			}
+			seen[tv] = struct{}{}
+			result = append(result, tv)
+		}
+	}
+	return result, nil
+}
+
 // TagValueMatch is a tag value with its chunkID list, returned by
 // MatchTagValues. The chunkIDs come straight from the V record value blob
 // (post chunkid migration); callers that need fileIDs resolve via filesForChunk.

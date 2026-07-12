@@ -1236,7 +1236,8 @@ ark tag files TAG... [--context] [--filter-files G] [--exclude-files G]
 ark tag values TAG... [--files] [--filter-files G] [--exclude-files G]
 ark tag defs [TAG...] [--path]
 ark tag set FILE TAG VAL [TAG VAL ...]
-ark tag get FILE [TAG ...]
+ark tag get FILE [TAG ...] [--all]
+ark tag chunk FILE | FILE:TARGET [--all]
 ark tag check FILE [HEADING...]
 ark tag verify [--repair] [--scope SCOPE]
 ark tag inspect [--scope SCOPE] [--target PATH] [--json]
@@ -1257,7 +1258,8 @@ normalization (see "Filter stack").
 | `values TAG...` | cold-start | Values for each tag (`tag\tvalue\tcount`); with `--files`, follows up with per-file lines |
 | `defs [TAG...]` | optional | Tag definitions (`tag description`); with `--path`, prefixes the source path (no dedup) |
 | `set FILE TAG VAL ...` | none (file I/O) | Pairs of TAG VAL into FILE's tag block. Setting `status` auto-sets `status-date` to today. Hint when setting `*-handled` bookmarks |
-| `get FILE [TAG...]` | none | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1 |
+| `get FILE [TAG...] [--all]` | none / optional (`--all`) | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1. `--all`: every tag in the file (union across all chunks), not just the block — needs the index; the `[TAG...]` filter composes |
+| `chunk ADDRESS [--all]` | none / optional | List tags at a file or chunk address (`tag\tvalue` per line), reusing the `ark chunks` / `@ext` grammar. Bare `FILE`: the file tag block (== `get`, no index). `FILE --all`: file-wide union across all chunks. `FILE:TARGET` (RANGE, `:"SNIPPET"`, or chunkID): that chunk's tag union — the only per-chunk view. Index-backed forms proxy to the server or cold-start |
 | `check FILE [HEADING...]` | none | Validate FILE's tag block. Optional headings restrict allowed body headings |
 | `verify` | refused | Cross-check F/V/T/X records and the in-memory ExtMap. `--repair` writes corrections in a single write transaction. `--scope` is `ext`, `tag-totals`, or `all` (default). Refuses if the server is running. Exit 1 on issues, 2 on tool failure or invalid scope |
 | `inspect` | optional | Read-only observability for `@ext` state. Server-aware: proxies via the running server (in-memory ExtMap section included) or opens the index read-only when stopped (disk-only with a note). `--scope ext` (v1 only); `--target PATH` narrows to one file's chunks; `--json` for machine output. Output sections: on-disk (X / V[ext] / F[ext]), in-memory ExtMap maps, per-tvid_ext bridges with decoded paths and routed (tag, value) pairs |

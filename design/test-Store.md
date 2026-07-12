@@ -49,3 +49,20 @@ monolithic GetSettings/PutSettings blob)
 **Input:** IPut dotfiles=true and a default_exclude I record
 **Expected:** IGet returns matching values per field
 **Refs:** crc-Store.md, R1571
+
+## Test: AllTagsForFile unions and dedups across chunks
+**Purpose:** AllTagsForFile collapses the per-chunk multiset to one
+file-wide set — a (tag,value) in two chunks appears once, distinct
+per-chunk pairs all appear, and ext-routed pairs surface
+**Input:** fileID 1 owns chunks 100 and 101; inline `shared=s` on both,
+`c100-only=a` on 100, `c101-only=b` on 101; an ext-routed `ext-tag=e`
+onto 101
+**Expected:** four pairs, each exactly once (shared deduped)
+**Refs:** crc-Store.md, R3083
+
+## Test: AllTagsForFile with no chunk resolver
+**Purpose:** the Store-only path (SetChunkResolver never called) returns
+nil rather than panicking
+**Input:** a bare testStore, AllTagsForFile(1)
+**Expected:** nil result, no error
+**Refs:** crc-Store.md, R3083

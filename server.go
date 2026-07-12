@@ -457,6 +457,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /tags", srv.handleTags)              // R132
 	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts) // R133
 	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)   // R134
+	mux.HandleFunc("POST /tags/chunk", srv.handleTagChunk)   // R3086, R3087, R3089
 	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
 	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
@@ -1882,6 +1883,34 @@ func (srv *Server) handleTagFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, files)
+}
+
+// handleTagChunk returns the tag union at a file or chunk address. An empty
+// range yields the file-wide union (DB.AllTagsForFilePath); a non-empty range
+// yields the addressed chunk's union (DB.AllTagsAtLocation). Returns
+// []TagValue. Backs the index-backed `ark tag chunk` / `ark tag get -all`
+// forms.
+// CRC: crc-Server.md | R3086, R3087, R3089
+func (srv *Server) handleTagChunk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path  string `json:"path"`
+		Range string `json:"range"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	tags, err := Sync(srv.db, func(db *DB) ([]TagValue, error) {
+		if req.Range == "" {
+			return db.AllTagsForFilePath(req.Path)
+		}
+		return db.AllTagsAtLocation(req.Path, req.Range)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, tags)
 }
 
 // handleTagInspect dumps disk + in-memory @ext state. Read-only.

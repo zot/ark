@@ -1846,3 +1846,88 @@ func TestSurfaceCooldown_ClearScope(t *testing.T) {
 		t.Errorf("ClearAllSurfaceCooldown: got %d want 1", all)
 	}
 }
+
+// CRC: crc-Store.md | Test: test-Store.md | R3083
+// TestAllTagsForFileUnionDedup verifies AllTagsForFile unions tags across all
+// of a file's chunks and collapses the per-chunk multiset to one file-wide
+// set: a (tag,value) present in two chunks appears once, the distinct pairs
+// from each chunk all appear, and an ext-routed pair surfaces too. (R3083)
+func TestAllTagsForFileUnionDedup(t *testing.T) {
+	s := testStore(t)
+	ext := NewExtMap()
+	s.SetExtMap(ext)
+
+	// fileID 1 owns chunks 100 and 101.
+	s.SetChunkResolver(
+		func(_ *bbolt.Tx, _ uint64) []uint64 { return nil },
+		func(fileID uint64) []uint64 {
+			if fileID == 1 {
+				return []uint64{100, 101}
+			}
+			return nil
+		},
+	)
+
+	addInline := func(chunkID uint64, tag, value string) {
+		t.Helper()
+		if err := s.UpdateTagValues([]ChunkTagValues{{
+			ChunkID: chunkID,
+			FileID:  1,
+			Values:  []TagValue{{Tag: tag, Value: value}},
+		}}); err != nil {
+			t.Fatalf("addInline c%d %s=%s: %v", chunkID, tag, value, err)
+		}
+	}
+
+	// "shared" appears in both chunks (dedup target); the *-only tags are
+	// distinct per chunk.
+	addInline(100, "shared", "s")
+	addInline(100, "c100-only", "a")
+	addInline(101, "shared", "s")
+	addInline(101, "c101-only", "b")
+
+	// An ext-routed pair onto chunk 101 (mirrors tag_source_parity_test addExt).
+	ext.mu.Lock()
+	ext.routedTagsByTvidExt[2000] = append(ext.routedTagsByTvidExt[2000], TagValue{Tag: "ext-tag", Value: "e"})
+	ext.targetToChunk[2000] = append(ext.targetToChunk[2000], 101)
+	ext.chunkToTargets[101] = append(ext.chunkToTargets[101], 2000)
+	ext.virtualTagCount["ext-tag"]++
+	ext.mu.Unlock()
+
+	got, err := s.AllTagsForFile(1)
+	if err != nil {
+		t.Fatalf("AllTagsForFile: %v", err)
+	}
+	counts := make(map[TagValue]int)
+	for _, tv := range got {
+		counts[tv]++
+	}
+	want := []TagValue{
+		{Tag: "shared", Value: "s"},
+		{Tag: "c100-only", Value: "a"},
+		{Tag: "c101-only", Value: "b"},
+		{Tag: "ext-tag", Value: "e"},
+	}
+	for _, w := range want {
+		if counts[w] != 1 {
+			t.Errorf("AllTagsForFile: pair %+v count=%d, want 1 (got %+v)", w, counts[w], got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("AllTagsForFile: got %d pairs, want %d (%+v)", len(got), len(want), got)
+	}
+}
+
+// TestAllTagsForFileNilResolver verifies AllTagsForFile returns nil (not a
+// panic) when the chunksForFile resolver is unwired — the Store-only path.
+// (R3083)
+func TestAllTagsForFileNilResolver(t *testing.T) {
+	s := testStore(t)
+	got, err := s.AllTagsForFile(1)
+	if err != nil {
+		t.Fatalf("AllTagsForFile: %v", err)
+	}
+	if got != nil {
+		t.Errorf("AllTagsForFile with nil resolver: want nil, got %+v", got)
+	}
+}

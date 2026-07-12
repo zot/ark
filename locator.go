@@ -260,6 +260,32 @@ func (db *DB) ChunkIDsForFile(fileID uint64) []uint64 {
 	return out
 }
 
+// AllTagsForFilePath resolves path→fileID via PathFileID and returns the
+// file-wide deduplicated tag union (Store.AllTagsForFile). Backs the
+// `ark tag {chunk,get} FILE -all` forms and the empty-range case of the
+// /tags/chunk endpoint.
+// CRC: crc-DB.md | R3086, R3089
+func (db *DB) AllTagsForFilePath(path string) ([]TagValue, error) {
+	fileID, ok := db.PathFileID(path)
+	if !ok {
+		return nil, fmt.Errorf("file not indexed: %s", path)
+	}
+	return db.store.AllTagsForFile(fileID)
+}
+
+// AllTagsAtLocation resolves (path, range)→chunkID via chunkIDForLocation
+// and returns that chunk's tag union (Store.AllTagsForChunk). Backs the
+// `ark tag chunk FILE:TARGET` form and the non-empty-range case of the
+// /tags/chunk endpoint.
+// CRC: crc-DB.md | R3087, R3089
+func (db *DB) AllTagsAtLocation(path, rng string) ([]TagValue, error) {
+	chunkID, err := db.chunkIDForLocation(path, rng)
+	if err != nil {
+		return nil, err
+	}
+	return db.store.AllTagsForChunk(chunkID)
+}
+
 // tokenSpansRegex matches a sequence of word characters OR a single
 // non-word, non-whitespace character. Used to tokenize lines for
 // Layer 1 — punctuation becomes its own token where it would

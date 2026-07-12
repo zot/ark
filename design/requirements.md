@@ -992,6 +992,13 @@
 - **R614:** `ark message set-tags` and `ark message get-tags` become aliases for `ark tag set` and `ark tag get`
 - **R615:** (inferred) Help text for `ark tag` lists the new subcommands (set, get, check)
 - **R616:** (inferred) Help text for aliased commands points users to `ark tag`
+- **R3083:** (inferred) `Store.AllTagsForFile(fileID)` returns the deduplicated union of every (tag, value) pair across all of the file's chunks — each chunk's inline, ext-routed, and overlay tags — collapsing the per-chunk multiset to one file-wide set
+- **R3084:** `ark tag chunk ADDRESS` lists the tags at a file or chunk address, reusing the `ark chunks` / `@ext` address grammar; the address granularity picks the tag scope, and output is `tag\tvalue` per line (flat union)
+- **R3085:** `ark tag chunk FILE` (bare file) reads the file's own tag block — identical to `ark tag get FILE` (the file-block reader), needing no index
+- **R3086:** `ark tag chunk FILE -all` lists every tag anywhere in the file — the deduplicated union across all chunks (R3083)
+- **R3087:** `ark tag chunk FILE:TARGET` (a chunk address — `RANGE`, `:"SNIPPET"`, or a decimal chunkID) resolves to a single chunk and lists that chunk's tag union via `Store.AllTagsForChunk`; the only per-chunk tag view
+- **R3088:** `ark tag get FILE -all [TAG ...]` lists every tag in the file (the R3086 union); the optional `[TAG ...]` filter composes, narrowing the union to the named tags
+- **R3089:** (inferred) The index-backed tag-read forms (`-all`, `FILE:TARGET`) proxy to the server when one holds the single-process index, else resolve against a cold-start DB — the standard proxy-or-local dispatch
 
 ## Feature: Inbox Entry Enrichment
 **Source:** specs/inbox-entry-enrichment.md

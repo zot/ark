@@ -26,6 +26,39 @@ Same behavior as `ark message get-tags`: reads tags from the tag block.
 Outputs `tag\tvalue` per line. Specific tags: outputs only those.
 No tags: outputs all. Exits 1 if a requested tag is not found.
 
+### `-all` — every tag in the file
+
+`ark tag get FILE -all [TAG ...]` reads every tag anywhere in the file —
+the deduplicated union across all its chunks (the file tag block plus each
+chunk's inline and ext-routed tags) — not just the file's own tag block.
+The optional `[TAG ...]` filter composes: `ark tag get FILE -all foo` lists
+the `foo` tag wherever it appears in the file. This form needs the index and
+proxies to the server when one is running (else it resolves against a cold DB).
+
+## ark tag chunk
+
+```
+ark tag chunk FILE
+ark tag chunk FILE -all
+ark tag chunk FILE:TARGET
+```
+
+Lists the tags at a file or chunk address, reusing the `ark chunks` / `@ext`
+address grammar. The address granularity picks the tag scope — the read-side
+mirror of the write-side placement choice:
+
+- **bare `FILE`** — the file's own tag block. Identical to `ark tag get FILE`
+  (the file-block reader); no index needed.
+- **`FILE -all`** — every tag anywhere in the file, the deduplicated union
+  across all chunks. Identical to `ark tag get FILE -all`.
+- **`FILE:TARGET`** — a chunk address (`RANGE`, `:"SNIPPET"`, or a decimal
+  chunkID). Resolves to a single chunk and lists that chunk's tag union
+  (inline plus ext-routed). This is the only per-chunk tag view; nothing
+  else lists the tags on one chunk.
+
+Output is `tag\tvalue` per line (flat union). The `-all` and `FILE:TARGET`
+forms need the index and proxy to the server when one is running.
+
 ## ark tag check
 
 ```

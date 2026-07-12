@@ -35,7 +35,7 @@ func tagCommand() *ucli.Command {
 	}
 	return &ucli.Command{
 		Name:  "tag",
-		Usage: "tag operations (list, counts, files, values, defs, set, get, check, verify, inspect)",
+		Usage: "tag operations (list, counts, files, values, defs, set, get, chunk, check, verify, inspect)",
 		Commands: []*ucli.Command{
 			{
 				Name:   "list",
@@ -85,7 +85,19 @@ func tagCommand() *ucli.Command {
 				Name:      "get",
 				Usage:     "read tags from a file's tag block",
 				ArgsUsage: "FILE [TAG ...]",
-				Action:    tagGetAction,
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{Name: "all", Usage: "every tag in the file (union across all chunks), not just the tag block"},
+				},
+				Action: tagGetAction,
+			},
+			{
+				Name:      "chunk",
+				Usage:     "list tags at a file or chunk address",
+				ArgsUsage: "FILE | FILE:TARGET",
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{Name: "all", Usage: "every tag in the file (union across all chunks)"},
+				},
+				Action: tagChunkAction,
 			},
 			{
 				Name:      "check",
@@ -370,8 +382,16 @@ func tagSetAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R608, R609
+// CRC: crc-CLITree.md, crc-CLI.md | R608, R609, R3088
 func tagGetAction(_ context.Context, c *ucli.Command) error {
+	if c.Bool("all") {
+		args := c.Args().Slice()
+		if len(args) < 1 {
+			fatal(fmt.Errorf("usage: ark tag get FILE -all [TAG ...]"))
+		}
+		runAllTagsForFile(args[0], normalizeTagNames(args[1:]))
+		return nil
+	}
 	cmdTagGet(c.Args().Slice())
 	return nil
 }
@@ -460,4 +480,98 @@ func tagInspectAction(_ context.Context, c *ucli.Command) error {
 		},
 	)
 	return nil
+}
+
+// tagChunkAction lists the tags at a file or chunk address (R3084). The
+// address granularity picks the tag scope: `FILE -all` is the file-wide
+// union (R3086); a bare FILE is the file-block reader, identical to
+// `tag get` (R3085); a chunk address (FILE:TARGET, a bare chunkID, ...)
+// lists that chunk's tag union (R3087). Index-backed forms dispatch via
+// proxyOrLocal (R3089).
+// CRC: crc-CLITree.md, crc-CLI.md | R3084, R3085, R3086, R3087, R3089
+func tagChunkAction(_ context.Context, c *ucli.Command) error {
+	args := c.Args().Slice()
+	if len(args) < 1 {
+		fatal(fmt.Errorf(`usage: ark tag chunk FILE | FILE -all [TAG ...] | FILE:TARGET`))
+	}
+	if c.Bool("all") {
+		runAllTagsForFile(args[0], normalizeTagNames(args[1:]))
+		return nil
+	}
+	// A chunk address resolves to a non-empty range; a bare FILE does not and
+	// falls through to the file-block reader (== tag get). Only the first
+	// positional is the address.
+	path, rng, _, err := resolveChunksTarget(args[:1])
+	if err != nil || rng == "" {
+		cmdTagGet(args[:1])
+		return nil
+	}
+	runAllTagsForChunk(path, rng)
+	return nil
+}
+
+// printTagValues emits tag<TAB>value per line, optionally narrowed to the
+// named tags (R3088). R3084
+func printTagValues(tvs []ark.TagValue, filter []string) {
+	var fset map[string]bool
+	if len(filter) > 0 {
+		fset = make(map[string]bool, len(filter))
+		for _, f := range filter {
+			fset[f] = true
+		}
+	}
+	for _, tv := range tvs {
+		if fset != nil && !fset[tv.Tag] {
+			continue
+		}
+		fmt.Printf("%s\t%s\n", tv.Tag, tv.Value)
+	}
+}
+
+// runAllTagsForFile prints the file-wide tag union (R3086), narrowed by an
+// optional tag filter (R3088). Proxies to POST /tags/chunk when a server
+// holds the index, else resolves against a cold DB (R3089).
+func runAllTagsForFile(path string, filter []string) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var tvs []ark.TagValue
+			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": path}, &tvs); err != nil {
+				return err
+			}
+			printTagValues(tvs, filter)
+			return nil
+		},
+		func(d *ark.DB) error {
+			tvs, err := d.AllTagsForFilePath(path)
+			if err != nil {
+				return err
+			}
+			printTagValues(tvs, filter)
+			return nil
+		},
+	)
+}
+
+// runAllTagsForChunk prints the addressed chunk's tag union (R3087). Proxies
+// to POST /tags/chunk when a server holds the index, else resolves against a
+// cold DB (R3089).
+func runAllTagsForChunk(path, rng string) {
+	proxyOrLocal(
+		func(client *http.Client) error {
+			var tvs []ark.TagValue
+			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": path, "range": rng}, &tvs); err != nil {
+				return err
+			}
+			printTagValues(tvs, nil)
+			return nil
+		},
+		func(d *ark.DB) error {
+			tvs, err := d.AllTagsAtLocation(path, rng)
+			if err != nil {
+				return err
+			}
+			printTagValues(tvs, nil)
+			return nil
+		},
+	)
 }

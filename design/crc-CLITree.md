@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -94,6 +94,15 @@ CLITree owns how those bodies are *reached* and how their help is
   is gone now that every command is a tree node. urfave's `CommandNotFound`
   hook was rejected for that routing because it fires only for flagless
   unknown commands; the root `Action` covers all cases.)
+- Tag readers (R3084-R3089): the `tag` group's `chunk` node lists tags at a
+  file or chunk address — bare `FILE` delegates to `tag get`'s file-block
+  reader (R3085); `FILE -all` calls DB.AllTagsForFilePath (R3086); a
+  `FILE:TARGET` chunk address (parsed by resolveChunksTarget) calls
+  DB.AllTagsAtLocation (R3087). A `-all` bool flag on the `tag get` node
+  routes to the same file-wide union with the trailing `[TAG ...]` filter
+  composed in (R3088). Both index-backed forms dispatch through proxyOrLocal
+  — the server `/tags/chunk` endpoint when one is running, else a cold DB
+  (R3089).
 - Flag surface frozen (R2932): the migration adds, removes, renames no
   flag and switches none to GNU-only `--long`; it only re-homes existing
   flags onto their nodes.
