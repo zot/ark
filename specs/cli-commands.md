@@ -63,7 +63,7 @@ otherwise emit a different order each run). R2953.
 | `install`          | (no flags)                                                                                                           | none                     | alias of `ui install`                                |
 | `listen`           | `listen --session ID [--timeout N]`                                                                                  | required                 | long-poll; outputs markdown                          |
 | `ls`               | `ls`                                                                                                                 | n/a                      | bundled binary only; alias of `bundle ls`            |
-| `luhmann`          | `luhmann SUBCOMMAND ...`                                                                                             | mixed                    | orchestrator supervisor log writer (subcommands below) |
+| `luhmann`          | `luhmann SUBCOMMAND ...`                                                                                             | mixed                    | orchestrator supervisor + hosted-session lifecycle (subcommands below) |
 | `monitor`          | `monitor SUBCOMMAND ...`                                                                                             | mixed                    | inspect `~/.ark/monitoring/*.jsonl` (subcommands below) |
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
@@ -801,13 +801,17 @@ successful non-event return.
 
 See: `subscribe`
 
-### `luhmann` — orchestrator supervisor log writer
+### `luhmann` — orchestrator supervisor + hosted-session lifecycle
 
 ```
 ark luhmann spawn-record --class C --nonce N --task-id T
 ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
 ark luhmann inspect-exit --nonce N [--json]
 ark luhmann next --session S [--first | --force] [--keepalive SECONDS]
+ark luhmann launch [--bootstrap INPUT]
+ark luhmann attach
+ark luhmann status [--json]
+ark luhmann stop
 ```
 
 | Subcommand       | Flags                                              | Behavior                                                                                                                                                       |
@@ -816,8 +820,12 @@ ark luhmann next --session S [--first | --force] [--keepalive SECONDS]
 | `exit-record`    | `--class`, `--nonce`, `--reason` (required); `--crashes` / `--quit-early` (counter overrides); `--backoff S` (records the seconds the supervisor will wait before respawn) | Server-required. Reason → kind: `context-limit`→`exit` (resets both counters), `quit-early`→`quit-early` (increments `quit_early`, holds `crashes`), else→`crash` (increments `crashes`, holds `quit_early`). |
 | `inspect-exit`   | `--nonce`; `--json`                                | Cold-start. Classify a subagent exit as `healthy` / `quit-early` / `crash` / `unknown` via the nonce → `.meta.json` lookup. Default prints the label; `--json` adds details. |
 | `next`           | `--session` (required identity); `--first` (claim if unowned), `--force` (reclaim); `--keepalive SECONDS` (idle window, default ~2700 = 45m, capped under the 1h cache) | Server-required. The orchestrator's blocking drain tube: returns one curation task, supervisor directive, or keepalive crank-handle, guarded by an in-memory ownership lease. `--first`/plain/`--force` per the lease; a foreign owner exits 2 (stand down), an unowned server on a plain call returns the reclaim crank-handle. Backgrounded + re-invoked in a loop; subsumes the standalone `ark heartbeat` keepalive. |
+| `launch`         | `--bootstrap INPUT` (default `load /luhmann`)      | Server-required. Fork a pty (cwd `~/.ark/luhmann`), start `claude`, and run the content-free confirmation (await the 2nd session JSONL record → send the bootstrap → await the seat claim), then print the confirmed session id. The **spend consent gate** — the only CLI door that starts a paid session; errors if one is already hosted. Blocks until confirmed. |
+| `attach`         | none                                               | Server-required. Raw-mode terminal client over the unix socket: stdin → pty, pty → stdout, with `SIGWINCH` (smallest-wins) resize and a tmux-style detach escape (`Ctrl-]` then `d`). Detaching leaves the session running; multiple `attach` clients may connect at once. |
+| `status`         | `--json`                                           | Server-required. The single source of truth: whether a session is hosted, its id, and the pool-secretary roster count. Human text by default; `--json` for machine reads. |
+| `stop`           | none                                               | Server-required. Graceful teardown ("End session"): records the hosted pool secretaries' exits, releases the seat lease, then kills the child — leaving the monitoring log truthful (no ghosts). |
 
-See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md)
+See: `monitor`, `connections recall context`, [luhmann.md](luhmann.md), [managed-pty.md](managed-pty.md)
 
 ### `message` — messaging operations
 

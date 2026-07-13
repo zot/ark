@@ -72,6 +72,11 @@ type Server struct {
 	luhmannOwner string           // R3012: session holding the Luhmann seat; "" when unowned
 	nextQueue    chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
 
+	// R3116: the managed-PTY host — holds the pty master + `claude` child of a
+	// hosted Luhmann session and fans its output out to attached clients. nil of
+	// no session hosted; never proactively started (R3114).
+	ptyHost *PtyHost
+
 	// R2294, R2299, R2300: Lua-side subscription scaffolding. Each
 	// sessionID with at least one mcp.subscribe gets a listening
 	// goroutine that drains pubsub.Listen, compresses by (path, tag),
@@ -303,6 +308,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	srv.recallWatcher.SetLuhmannHub(srv) // R3020: S1 seat bridge for the CLI-hunt Fixer
 	db.indexer.SetRecallWatcher(srv.recallWatcher)
 
+	// R3116: the managed-PTY host. Constructed unconditionally (its actor is
+	// idle until Launch), but it never starts `claude` on its own (R3114).
+	srv.ptyHost = NewPtyHost(srv)
+
 	// CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.2 | R2988
 	// In rebuild read-only mode, skip every background subsystem — recall
 	// watcher, pubsub reaper, UI engine, scheduler scans, startup reconcile.
@@ -491,6 +500,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /luhmann/record", srv.handleLuhmannRecord)
 	// Orchestrator drain tube (bloodhound-CLI S1): blocking long-poll, R3010.
 	mux.HandleFunc("GET /luhmann/next", srv.handleLuhmannNext)
+	// Managed-PTY lifecycle (#35 phase 1): launch/attach/status/stop. attach
+	// hijacks into a raw pty stream. R3122–R3126.
+	mux.HandleFunc("POST /luhmann/launch", srv.handleLuhmannLaunch)
+	mux.HandleFunc("GET /luhmann/attach", srv.handleLuhmannAttach)
+	mux.HandleFunc("GET /luhmann/pty-status", srv.handleLuhmannStatus)
+	mux.HandleFunc("POST /luhmann/stop", srv.handleLuhmannStop)
 	// External CLI directed hunt (bloodhound-CLI S3): submit + blocking result.
 	mux.HandleFunc("POST /bloodhound/search", srv.handleBloodhoundSearch)
 	mux.HandleFunc("GET /bloodhound/result", srv.handleBloodhoundResult)

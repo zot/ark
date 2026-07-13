@@ -149,7 +149,7 @@ func monitorControlAction(kind string, c *ucli.Command) error {
 func luhmannCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "luhmann",
-		Usage: "orchestrator supervisor log writer (spawn-record, exit-record, inspect-exit)",
+		Usage: "orchestrator supervisor + hosted-session lifecycle (launch, attach, status, stop, next, *-record)",
 		Commands: []*ucli.Command{
 			{
 				Name:  "spawn-record",
@@ -194,6 +194,30 @@ func luhmannCommand() *ucli.Command {
 					&ucli.IntFlag{Name: "keepalive", Value: int(ark.LuhmannNextKeepalive / time.Second), Usage: "idle seconds before a keepalive (default ~45m; capped under the 1h main-agent cache)"},
 				},
 				Action: luhmannNextAction,
+			},
+			{
+				Name:  "launch",
+				Usage: "start a hosted Claude Code session in a pty (spend consent gate; server)",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "bootstrap", Usage: "first input that loads the orchestrator skill (default: load /luhmann)"},
+				},
+				Action: luhmannLaunchAction,
+			},
+			{
+				Name:   "attach",
+				Usage:  "attach a raw-mode terminal to the hosted session (detach: Ctrl-] then d; server)",
+				Action: luhmannAttachAction,
+			},
+			{
+				Name:   "status",
+				Usage:  "report whether a session is hosted + pool-secretary count (server)",
+				Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "json", Usage: "emit JSON"}},
+				Action: luhmannStatusAction,
+			},
+			{
+				Name:   "stop",
+				Usage:  "gracefully end the hosted session (\"End session\"; server)",
+				Action: luhmannStopAction,
 			},
 		},
 	}

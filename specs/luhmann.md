@@ -269,13 +269,17 @@ the section when it acts on a subagent completion event.
 
 ## What this spec deliberately does not require
 
-- An `ark luhmann start` or `stop` **process** daemon. The
-  orchestrator is a Claude Code session, not a process under
-  `systemd`: its lifecycle is the session's lifecycle. `next` is a
-  blocking verb the session itself backgrounds and re-invokes (the
-  drain tube above), not a detached server process. The Go-side
-  surface is the supervisor log, the drain tube, and the config
-  schema.
+- **Process hosting of the orchestrator session — see
+  [managed-pty.md](managed-pty.md), not here.** `ark serve` *can* host the
+  session in a pty (holding the pty master, running `claude` as a child, and
+  owning its `launch`/`attach`/`status`/`stop` lifecycle). *This* spec's
+  Go-side surface stays the supervisor log, the drain tube (`next`), and the
+  `[luhmann]` config schema; the pty host is managed-pty.md's. (Earlier
+  revisions here disclaimed any process daemon on the grounds that "the
+  orchestrator's lifecycle is the session's lifecycle." The pty host
+  supersedes that: when a session is pty-hosted, ark owns its process
+  lifecycle. The drain tube is still session-backgrounded and re-invoked,
+  unchanged — `next` is not a detached process.)
 - Inter-class coordination (e.g. "pause recall when monitoring is
   active"). One class at a time per the firmness scope; future
   multi-class supervisors will earn their own coordination spec.

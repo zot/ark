@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —

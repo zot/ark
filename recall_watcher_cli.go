@@ -94,6 +94,32 @@ func (p *cliPool) pickFreeLocked() *poolSec {
 	return nil
 }
 
+// PoolSize reports the pool-secretary roster count for the managed-PTY status
+// (R3124): how many CLI-bloodhound secretaries the hosted Luhmann is running.
+func (w *RecallWatcher) PoolSize() int {
+	if w == nil {
+		return 0
+	}
+	w.pool.mu.Lock()
+	defer w.pool.mu.Unlock()
+	return len(w.pool.secretaries)
+}
+
+// PoolNonces returns a snapshot of the pool secretaries' nonces so a graceful
+// stop can record each one's exit before the pty teardown takes it down (R3125).
+func (w *RecallWatcher) PoolNonces() []uint64 {
+	if w == nil {
+		return nil
+	}
+	w.pool.mu.Lock()
+	defer w.pool.mu.Unlock()
+	nonces := make([]uint64, 0, len(w.pool.secretaries))
+	for nonce := range w.pool.secretaries {
+		nonces = append(nonces, nonce)
+	}
+	return nonces
+}
+
 // PoolBusy reports whether the pool has no free secretary and is at pool_max — a
 // submit-time snapshot for the CLI's fail-fast-without-`--wait` gate (R3022).
 func (w *RecallWatcher) PoolBusy() bool {

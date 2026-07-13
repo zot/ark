@@ -15,6 +15,12 @@ V2 adds model-free recall: chunk/file content retrieval (JSONL), @tag
 tracking with vocabulary, and JSONL chunking for conversation logs.
 Tags + FTS give fully functional recall on any hardware.
 
+The managed pty session lets `ark serve` host a Claude Code session in a pty
+(the Luhmann orchestrator first): it holds the pty master, runs `claude` as a
+child, and fans the byte stream out to any number of attached clients (CLI now,
+browser later), while `launch` confirms the session came up through content-free
+signals and `stop` tears it down cleanly. See specs/managed-pty.md.
+
 ## Cross-cutting Concerns
 
 ### DB Concurrency (Closure Actor)
@@ -167,6 +173,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 - [x] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`, `recall_next.go`
+- [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
+- [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
+- [x] test-PtyHost.md → `ptyhost_test.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -180,6 +189,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-reconcile.md → `server.go`
 - [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
+- [x] seq-pty-launch.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`
+- [x] seq-pty-attach.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 - [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
 - [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
@@ -822,3 +833,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O147: RF full teardown (#36 recall-proposals-for-display): RF is dormant after the compute-for-display reversal — no writer or reader. Retained pending teardown: Store methods ReadDerivedFreshness/WriteDerivedFreshness + MaxEDSerial/MaxEVSerial (no callers), the RF record class in record-formats.md, the ark status -db RF label (R3078), and ClearAllDerivedFreshness / the clean -all RF wipe (R2744). Remove all together in a focused teardown pass; also removes the dormant-RF guard tests.
 - [ ] O148: KeepTagless propose recompute (#36): with the RF freshness skip retired, --propose recomputes cosine for the full scored set every call, and R2668 still forces KeepTagless=true so unsurfaced tagless chunks are computed too. For recall latencies this is cheap (~100-200ms cold). If it bites, align the compute set to surfaced-candidates + injected-conversation-chunks (retire R2668's forcing) rather than the full tagless set.
 - [x] I6: R3108 (bloodhound secretary proposes connecting tags) is the agent-def/crank-handle PROMPT = #38 item 6, deferred at scoping (Bill 2026-07-12). R3110 (<BLOODHOUND notags>) + R3112 (<RECALL notags/>) are the opt-outs for that proposing: they have no live behavioral consumer until item 6 makes the secretary propose, so building their watcher plumbing now is dead scaffolding. Deferred to ride with item 6 as one 'proposing + its opt-outs' slice. Apply half (R3104-R3107) + recommend routing/backtick (R3109/R3111) landed this session with tests.
+- [ ] O149: Managed-PTY launch/attach/stop end-to-end is integration-level, not unit-tested (test-PtyHost.md covers the deterministic fan-out logic only). The launch confirmation protocol (R3126) needs a real `claude` binary + a live server + the seat lease; drive it once the browser slice lands or as a scripted CLI smoke test. Also note a pathological launch↔stop race (Stop mid-launch can leave a stale seat owner) — acceptable for phase 1, revisit if it bites.
