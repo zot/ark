@@ -1,5 +1,5 @@
 # RecallAgent
-**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897, R2898, R2941, R2942
+**Requirements:** R2769, R2771, R2859, R2860, R2873, R2890, R2895, R2897, R2898, R2941, R2942, R3108
 
 Non-Go artifact set that defines the **per-session Haiku secretary**
 that runs the ambient-recall loop — one per active session, spawned by

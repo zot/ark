@@ -313,7 +313,7 @@ func TestStore_RejectDerived_FileBacked(t *testing.T) {
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	target := targetSpec(t, db, cTarget)
 
-	if err := db.CandidateExtTag(target, "food", "", "", extDispositionExternal); err != nil {
+	if err := db.CandidateExtTag(target, "food", "", "", extDispositionExternal, false); err != nil {
 		t.Fatalf("CandidateExtTag: %v", err)
 	}
 	reindexMirrors(t, db)
@@ -346,7 +346,7 @@ func TestStore_AcceptDerived_FileBacked(t *testing.T) {
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	target := targetSpec(t, db, cTarget)
 
-	if err := db.CandidateExtTag(target, "priority", "high", "", extDispositionExternal); err != nil {
+	if err := db.CandidateExtTag(target, "priority", "high", "", extDispositionExternal, false); err != nil {
 		t.Fatalf("CandidateExtTag: %v", err)
 	}
 	reindexMirrors(t, db)
@@ -383,7 +383,7 @@ func TestCandidateExtTag_DispositionDistinctLines(t *testing.T) {
 
 	// external once, internal twice → two distinct lines, independent tallies.
 	for _, d := range []string{extDispositionExternal, extDispositionInternal, extDispositionInternal} {
-		if err := db.CandidateExtTag(target, "food", "fruit", "", d); err != nil {
+		if err := db.CandidateExtTag(target, "food", "fruit", "", d, false); err != nil {
 			t.Fatalf("CandidateExtTag(%s): %v", d, err)
 		}
 	}
@@ -474,7 +474,7 @@ func TestAcceptExtTag_InternalWritesSourceBody(t *testing.T) {
 	if _, err := db.indexer.AddFile(src, "markdown"); err != nil {
 		t.Fatalf("index source: %v", err)
 	}
-	if err := db.CandidateExtTag(src, "topic", "recall", "", extDispositionInternal); err != nil {
+	if err := db.CandidateExtTag(src, "topic", "recall", "", extDispositionInternal, false); err != nil {
 		t.Fatalf("candidate: %v", err)
 	}
 	if err := db.AcceptExtTag(src, "topic", "recall"); err != nil {
@@ -503,7 +503,7 @@ func TestAcceptExtTag_InternalFallsBackToExternal(t *testing.T) {
 	_, db := setupFileBackedRecall(t)
 	cTarget, _ := indexLine(t, db, "target.txt", "apple banana grape")
 	target := targetSpec(t, db, cTarget)
-	if err := db.CandidateExtTag(target, "food", "fruit", "", extDispositionInternal); err != nil {
+	if err := db.CandidateExtTag(target, "food", "fruit", "", extDispositionInternal, false); err != nil {
 		t.Fatalf("candidate: %v", err)
 	}
 	if err := db.AcceptExtTag(target, "food", "fruit"); err != nil {
@@ -515,6 +515,64 @@ func TestAcceptExtTag_InternalFallsBackToExternal(t *testing.T) {
 	}
 	if !strings.Contains(mirror, "@ext-judgment:") {
 		t.Errorf("expected a positive @ext-judgment; mirror:\n%s", mirror)
+	}
+}
+
+// collectAcceptedCandidates surfaces the replace flag per candidate, so accept
+// can pick the add vs replace cell (a replace and an add proposal of the same
+// routing are independent). (R3104, R3106)
+func TestCollectAcceptedCandidates_Replace(t *testing.T) {
+	data := []byte(
+		"@ext-candidate: 2026-07-12 internal replace notes/f.md @cuisine: italian @count: 1\n" +
+			"@ext-candidate: 2026-07-12 external notes/f.md @cuisine: french @count: 1\n")
+	got := collectAcceptedCandidates(data, "notes/f.md", "cuisine", "")
+	if len(got) != 2 {
+		t.Fatalf("want 2 candidates, got %d: %+v", len(got), got)
+	}
+	byVal := map[string]acceptedCandidate{got[0].value: got[0], got[1].value: got[1]}
+	if !byVal["italian"].replace || byVal["italian"].disposition != extDispositionInternal {
+		t.Errorf("italian should be internal+replace: %+v", byVal["italian"])
+	}
+	if byVal["french"].replace {
+		t.Errorf("french is an add-proposal, replace must be false: %+v", byVal["french"])
+	}
+}
+
+// TestAcceptExtTag_InternalReplaceRewritesInline drives the internal-replace
+// accept cell end to end: a replace candidate rewrites an existing inline tag
+// in the source body in place, rather than adding a second line. (R3106, R3107)
+func TestAcceptExtTag_InternalReplaceRewritesInline(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	db.chunkerByName = make(map[string]any)
+	if err := db.addChunker("markdown", wrapInternalTagChunker(microfts2.MarkdownChunker{}, stencilMarkdown)); err != nil {
+		t.Fatalf("register markdown: %v", err)
+	}
+	src := filepath.Join(db.dbPath, "note.md")
+	if err := os.WriteFile(src, []byte("@cuisine: french\n\n## A\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(src, "markdown"); err != nil {
+		t.Fatalf("index source: %v", err)
+	}
+	// internal + replace: collapse the existing @cuisine value in place.
+	if err := db.CandidateExtTag(src, "cuisine", "italian", "", extDispositionInternal, true); err != nil {
+		t.Fatalf("candidate: %v", err)
+	}
+	if err := db.AcceptExtTag(src, "cuisine", "italian"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	body, _ := os.ReadFile(src)
+	if strings.Contains(string(body), "@cuisine: french") {
+		t.Errorf("replace should have collapsed the old value; body:\n%s", body)
+	}
+	if !strings.Contains(string(body), "@cuisine: italian") {
+		t.Errorf("replace should have written the new value; body:\n%s", body)
+	}
+	if n := strings.Count(string(body), "@cuisine:"); n != 1 {
+		t.Errorf("replace must not add a second @cuisine line (got %d); body:\n%s", n, body)
+	}
+	if mirror := externalMirrors(t); strings.Contains(mirror, "@ext: ") {
+		t.Errorf("internal replace must not route an @ext edge; mirror:\n%s", mirror)
 	}
 }
 

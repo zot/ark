@@ -248,6 +248,89 @@ reads the digest, and **folds it into its own reasoning** (it asked) — distinc
 from surface/recommend, which it gates on "should I show the *user* this?".
 Delivery is async — the lead simply arrives a later turn.
 
+## Recommend — the directed hunt also curates
+
+A finding is *consumed and evaporates*; the corpus is no denser afterward. A
+directed hunt can instead lay down a **persistent connection** — the
+highest-value use of the corpus. So the bloodhound emits `## Recommend:`
+connecting-tag proposals **alongside** `## Finding:`, promoting a query that
+proved its worth into a tag on the chunks it surfaced. This is **Query
+Crystallization**: search and tagging are the same act at different
+time-horizons, and a query that keeps earning its keep gets promoted into a tag
+so the corpus answers it for free thereafter.
+
+**The query is the tag context.** The clue that directed the hunt is exactly
+the signal a good tag needs: it steered the search *and* colors the proposed
+value. A chunk surfaced by a clue about French-Indian fusion earns `@cuisine:
+mostly French, influenced by Indian` — the value carries the query's angle. A
+recommend on a directed search is therefore better warranted, and less
+intrusive, than an ambient one: the bridge to the user's intent is explicit,
+not guessed.
+
+**The deposit lands on the found chunks.** The secretary is given the clue and
+the seed chunks, never the current conversation, so it tags only what the hunt
+surfaced. (Applying a tag to the *current context* is recall's move — recall
+has no query, so its conversation context does that double duty. The bloodhound
+is query-pure.)
+
+The flow is **agent-driven** — two LLM passes, not the statistical
+find-connections substrate:
+
+1. The **seed** already carries each seed chunk's full tag set
+   (`AllTagsForChunk`, the `[tags]` on every `## Recall seed` line), so the
+   secretary sees the bridge vocabulary already near the query's angle and can
+   avoid redundant proposals.
+2. The **secretary** (Haiku) proposes connecting tags along the clue's angle
+   for the chunks it holds — skipping a chunk's existing tags, refining an
+   existing tag, or coining a new name (its agent definition runs `ark tag defs`
+   at the top, so it knows the vocabulary's names *and meanings*). It emits each
+   via `ark connections recall recommend`. New tag **names** are in scope; tag
+   **definitions** are not (that stays #5, RP/RPE/RR). The secretary is
+   **disposition-agnostic** — it does not choose internal versus external, and
+   phrases a refinement in English ("replace the existing value with …").
+3. `close` flushes the recommends into `ark-bloodhound-result` **alongside** the
+   findings (see "Recommends ride the finding stream"). Today a `## Recommend:`
+   fired during a directed hunt is dropped; routing it into the bloodhound
+   stream is a core fix this feature makes.
+4. The **calling assistant** reads the result, folds the finding in, and
+   **winnows** the recommends at its discernment gate (`discussed-tags.md`) —
+   dropping weak bridges, refining, adding its own. This second pass *is* the
+   cap; no fixed N.
+5. For each survivor the assistant **authors a durable candidate** — `ark ext
+   candidate TARGET tag value --disposition <int|ext> [--replace]` — stamping
+   the disposition (asked once per context, default external) and translating a
+   secretary's English "replace" intent into `--replace`. The candidate is the
+   durable async hand-off: the assistant accepts it on the user's OK, or it
+   waits for the Tag Forge or a later `ark ext accept`.
+
+**Proposals are inert.** A `## Recommend:` tag is written back-quoted (see
+[simple-recall.md](simple-recall.md), "Result doc shape") so ark never indexes
+the *proposal* as a live tag on the doc carrying it. The invariant must hold at
+every indexed hop — secretary curation doc, result doc, session — which is the
+**Watermark** pattern: the tag rides content already scanned, recognized by the
+assistant, never acted on by the indexer.
+
+### Recommends ride the finding stream
+
+Two in-flight doc streams exist per session: the finding stream keyed by the
+bloodhound cookie, and the ambient result stream keyed by the fire token. A
+`## Recommend:` fired during a **directed** hunt must ride the **finding**
+stream so `close` flushes it into `tmp://ARK-BLOODHOUND/finding-<S>-<B>`
+alongside the `## Finding:` items, under the `@ark-bloodhound-result=<S>` tag
+the assistant already listens on. Without this routing the directed recommend
+is left on the ambient stream, which the bloodhound `close` never touches, and
+the proposal is silently dropped.
+
+### Opt-out — `<BLOODHOUND notags>`
+
+A bare `<BLOODHOUND>clue</BLOODHOUND>` curates. `<BLOODHOUND notags>` suppresses
+the whole tag apparatus for **that hunt**: the watcher omits the `[tags]` from
+the seed lines and the crank handle tells the secretary to propose nothing, so
+the hunt returns findings only. Plenty of directed searches are mere lookups
+where a connection is clutter; `notags` is the escape hatch for them. The
+ambient counterpart is `<RECALL notags/>` (see [simple-recall.md](simple-recall.md),
+"Opt-out").
+
 ## Async only (sync deferred)
 
 Delivery is **fire-and-forget**: the assistant emits the watermark, keeps
@@ -269,8 +352,12 @@ it. Recorded for a later seam.
   from ambient recall's `@ark-recall-result` gate.
 - **No watcher interaction with the ambient fire.** Recognition is orthogonal
   to arm/cancel/fire; it neither triggers nor suppresses a curation pass.
-- **No new-tag invention, no RJ writes** — inherited non-goals from
-  simple-recall.md; the bloodhound only searches and reports.
+- **No new tag *definitions*, no secretary-authored RJ writes.** The bloodhound
+  now recommends connecting tags (see "Recommend — the directed hunt also
+  curates"): new tag *names* are in scope, but definitions stay #5 (RP/RPE/RR).
+  The secretary only proposes; the calling assistant winnows and authors the
+  durable candidate, so no RJ record is written by the secretary (unchanged from
+  simple-recall.md).
 
 ## Test strategy
 

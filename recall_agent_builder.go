@@ -49,6 +49,11 @@ type RecallAgentBuilder struct {
 	cliHunts   map[string]*recallResultDoc // R3025: secretary raw findings -> request doc
 	cliResults map[string]*recallResultDoc // R3027: Luhmann curated JSONL -> result doc
 
+	// R3112: sessions that emitted <RECALL notags/> — RecommendItem drops ambient
+	// recommends for these (the per-session tag-recommend opt-out). Guarded by mu;
+	// a nil-map read is a safe false, so only writes lazily allocate.
+	recallNotags map[string]bool
+
 	// Monitoring log paths. Default to ~/.ark/monitoring/ but can
 	// be overridden for testing.
 	monitorPath string
@@ -277,10 +282,49 @@ func friendlySize(n int) string {
 	}
 }
 
+// SetRecallNotags marks a session as opted out of ambient tag recommends
+// (the <RECALL notags/> watermark, R3112). Idempotent; lazily allocates the set
+// so a builder constructed without it stays valid.
+// CRC: crc-RecallAgentBuilder.md | R3112
+func (b *RecallAgentBuilder) SetRecallNotags(session string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.recallNotags == nil {
+		b.recallNotags = make(map[string]bool)
+	}
+	b.recallNotags[session] = true
+}
+
+// ClearRecallNotags restores ambient tag recommends for a session — the other
+// half of the toggle (the <RECALL tags/> watermark, R3113) — so the user need
+// not restart ark to undo a <RECALL notags/>. Idempotent; a no-op when the
+// session was never suppressed.
+// CRC: crc-RecallAgentBuilder.md | R3113
+func (b *RecallAgentBuilder) ClearRecallNotags(session string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.recallNotags, session)
+}
+
+// recallNotagsFor reports whether a session opted out of ambient tag recommends.
+// A nil-map read is a safe false. (R3112)
+func (b *RecallAgentBuilder) recallNotagsFor(session string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.recallNotags[session]
+}
+
 // RecommendItem appends a `## Recommend:` H2 to the result-doc
 // builder for the given fire, opening it on first call. Session is
 // derived from the in-flight curation doc (see SurfaceItem).
-// CRC: crc-RecallAgentBuilder.md | R2757, R2899, R2900
+// A recommend fired during a directed hunt (a kind-marked bloodhound
+// cookie <session>-b<B>) rides the finding stream so closeBloodhound flushes
+// it alongside the findings; a plain fire token routes to the ambient result
+// doc as before (R3109), unless that session opted out via <RECALL notags/>,
+// in which case the ambient recommend is dropped (R3112). The tag is written
+// back-quoted so the proposal is inert — ark never indexes it as a live tag on
+// the doc carrying it (R3111, Watermark).
+// CRC: crc-RecallAgentBuilder.md | R2757, R2899, R2900, R3109, R3111, R3112
 func (b *RecallAgentBuilder) RecommendItem(fireToken string, loc, tagSpec, reason string) error {
 	if tagSpec == "" {
 		return fmt.Errorf("tag required")
@@ -288,13 +332,24 @@ func (b *RecallAgentBuilder) RecommendItem(fireToken string, loc, tagSpec, reaso
 	if reason == "" {
 		return fmt.Errorf("reason required")
 	}
-	doc, err := b.openResult(fireToken)
-	if err != nil {
-		return err
+	var doc *recallResultDoc
+	if _, _, ok := parseBloodhoundToken(fireToken); ok {
+		doc = b.openBloodhound(fireToken) // R3109: directed recommend → finding stream
+	} else {
+		// R3112: drop an ambient recommend for a session that opted out via
+		// <RECALL notags/> — a clean no-op so the secretary's call still succeeds.
+		if session, _, ok := parseFireToken(fireToken); ok && b.recallNotagsFor(session) {
+			return nil
+		}
+		var err error
+		if doc, err = b.openResult(fireToken); err != nil {
+			return err
+		}
 	}
 	path, rangeLabel := splitLoc(loc)
-	// R2899: result-doc Recommend H2 references the chunk by path:range.
-	fmt.Fprintf(&doc.buf, "\n## Recommend: %s on %s:%s\n\nreason: %s\n", tagSpec, path, rangeLabel, reason)
+	// R2899: Recommend H2 references the chunk by path:range. R3111: the tag is
+	// back-quoted (inert) at every indexed hop.
+	fmt.Fprintf(&doc.buf, "\n## Recommend: `%s` on %s:%s\n\nreason: %s\n", tagSpec, path, rangeLabel, reason)
 	doc.items++
 	return nil
 }
@@ -824,7 +879,9 @@ func bloodhoundFindingPath(session string, bid uint64) string {
 // searchCrankHandle is the self-contained CLI craft handed to the warm
 // secretary for a directed hunt (Stencil: the weak agent executes without
 // planning). COOKIE is substituted with the task's cookie; the agent fills its
-// own nonce. R2938, R3006 (the ## Recall seed lead-in)
+// own nonce. Step 8 proposes connecting tags along the clue's angle (R3108),
+// suppressed per-hunt by the buildSearchTask "no-tags" directive (R3110).
+// R2938, R3006 (the ## Recall seed lead-in), R3108
 const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue is the ## Search task above. Read its fields — clue, scope, depth, want, and any stop condition — then work the trail. Don't plan; do these in order, using ~/.ark/ark.
 
 FIRST read the ## Recall seed above: strong candidates the deluxe combined search already found (it reaches the value→chunk tag axis your own searches can't). READ those hits (step 5) before searching — they often answer the clue outright. Run the steps below only to widen the trail or when the seed is thin (or empty).
@@ -850,17 +907,25 @@ Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search wi
      answer / verdict            -> ~/.ark/ark connections recall finding COOKIE -answer "1-3 sentences" -loc <path:range>
      passages/pointers/inventory -> ~/.ark/ark connections recall finding COOKIE -loc <path:range> [-note "..."]   (repeat per item)
    "no — not in <scope>" is a valid answer; emit it with -answer.
-8. ~/.ark/ark connections recall close COOKIE --nonce <your nonce>
+8. PROPOSE connecting tags (SKIP this step entirely if the ## Search task says "no-tags"). The clue you just chased is itself a tag waiting to happen: for the few chunks that best answer it, propose a tag whose VALUE carries the clue's angle — a hunt about French-Indian fusion earns "@cuisine: mostly French, some Indian" on the chunk it surfaced. Look first at the [tags] the ## Recall seed already lists on each chunk (skip a tag it already carries); when you need the vocabulary, run ~/.ark/ark tag defs (tag names + meanings) — reuse an existing NAME when one fits, coin a new name when none does (a coined name carries its meaning in its value; never invent a definition). One per call:
+     ~/.ark/ark connections recall recommend COOKIE -loc <path:range> -tag "@name: value" -reason "why this bridges"
+   To sharpen a value a chunk already carries, say so in the reason ("replace the existing value with ..."). Propose only genuine bridges — a tag that fits everything sharpens nothing, and the calling assistant winnows what you send. Not every hunt earns a tag; emit none when none fits.
+9. ~/.ark/ark connections recall close COOKIE --nonce <your nonce>
 `
 
 // buildSearchTask renders the bloodhound task doc in order: the curate head tag
 // (so it rides the tube), the ## Search task header with the cookie + raw
 // payload, the pre-rendered ## Recall seed block (R3006), and the search crank
-// handle with the cookie filled. R2937, R2938, R3006
-func buildSearchTask(session, cookie, payload, seed string) string {
+// handle with the cookie filled. When notags, a "no-tags" directive rides right
+// under the header so the crank handle's step 8 (propose tags) is skipped for
+// this hunt — findings only (R3110). R2937, R2938, R3006, R3110
+func buildSearchTask(session, cookie, payload, seed string, notags bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "@ark-secretary-work: %s\n\n", session)
 	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, payload)
+	if notags {
+		sb.WriteString("**no-tags: this hunt returns findings only — SKIP step 8 (propose connecting tags).**\n\n")
+	}
 	if seed != "" {
 		fmt.Fprintf(&sb, "%s\n", seed)
 	}
@@ -870,15 +935,16 @@ func buildSearchTask(session, cookie, payload, seed string) string {
 
 // RecallBloodhoundOpen writes the directed-search task doc into the
 // ARK-BLOODHOUND namespace and retains the clue for the finding header. The
-// seed is the watcher's pre-rendered Recall result (R3006). Go-internal,
-// called by the watcher's dispatchBloodhound.
-// CRC: crc-RecallAgentBuilder.md | R2937, R2938, R3006
-func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload, seed string) error {
+// seed is the watcher's pre-rendered Recall result (R3006); notags suppresses
+// the tag-proposal step for this hunt (R3110). Go-internal, called by the
+// watcher's dispatchBloodhound.
+// CRC: crc-RecallAgentBuilder.md | R2937, R2938, R3006, R3110
+func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload, seed string, notags bool) error {
 	cookie := bloodhoundToken(session, bid)
 	b.mu.Lock()
 	b.bloodhoundClues[cookie] = payload
 	b.mu.Unlock()
-	body := buildSearchTask(session, cookie, payload, seed)
+	body := buildSearchTask(session, cookie, payload, seed, notags)
 	path := bloodhoundTaskPath(session, bid)
 	return SyncVoid(b.db, func(db *DB) error {
 		_, e := db.AddTmpFile(path, "markdown", []byte(body))

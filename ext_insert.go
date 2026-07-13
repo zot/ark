@@ -38,9 +38,11 @@ const (
 type tagInserter interface {
 	// InsertTag returns fileBytes with an inline `@tag: value` placed so it
 	// belongs to targetChunk (tagScopeChunk) or the whole file (tagScopeFile).
-	// ok=false signals "cannot write a valid inline tag" — a comment-less code
-	// chunker — so the caller falls back to external.
-	InsertTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope) (out []byte, ok bool)
+	// When replace is set, an existing inline `@tag:` line in scope is rewritten
+	// in place instead of adding a second one, degrading to a fresh insert when
+	// none is present (R3107). ok=false signals "cannot write a valid inline
+	// tag" — a comment-less code chunker — so the caller falls back to external.
+	InsertTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope, replace bool) (out []byte, ok bool)
 }
 
 // stencilKind names the three insertion stencils. They differ in opener
@@ -81,9 +83,9 @@ type internalTagChunker struct {
 // InsertTag implements tagInserter, delegating to the pure insertInternalTag
 // with this wrapper's comment delimiter (from the promoted ChunkerMetadata)
 // and stencil kind.
-// CRC: crc-Indexer.md | R3096, R3097, R3098, R3099
-func (w internalTagChunker) InsertTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope) ([]byte, bool) {
-	return insertInternalTag(fileBytes, targetChunk, tag, value, scope, w.CommentSyntax(), w.kind)
+// CRC: crc-Indexer.md | R3096, R3097, R3098, R3099, R3107
+func (w internalTagChunker) InsertTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope, replace bool) ([]byte, bool) {
+	return insertInternalTag(fileBytes, targetChunk, tag, value, scope, w.CommentSyntax(), w.kind, replace)
 }
 
 // wrapInternalTagChunker wraps a microfts2 text chunker in an internalTagChunker
@@ -105,9 +107,12 @@ func wrapInternalTagChunker(c any, kind stencilKind) any {
 // the tag with commentSyntax to keep the source valid in its own language; a
 // comment-less code chunker cannot, so ok=false and the caller falls back to
 // external. Markdown needs no comment (a bare `@tag:` line is valid markdown),
-// so it always succeeds. Pure — no file I/O — so it is testable in isolation.
-// CRC: crc-Indexer.md | R3097, R3098, R3099
-func insertInternalTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope, commentSyntax string, kind stencilKind) ([]byte, bool) {
+// so it always succeeds. When replace is set, an existing inline `@tag:` line
+// in scope is rewritten in place instead of adding a second one, degrading to
+// a fresh insert when none is present. Pure — no file I/O — so it is testable
+// in isolation.
+// CRC: crc-Indexer.md | R3097, R3098, R3099, R3107
+func insertInternalTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value string, scope tagScope, commentSyntax string, kind stencilKind, replace bool) ([]byte, bool) {
 	code := kind != stencilMarkdown
 	if code && commentSyntax == "" {
 		return nil, false // comment-less code chunk → no valid inline tag → external
@@ -120,17 +125,103 @@ func insertInternalTag(fileBytes []byte, targetChunk microfts2.Chunk, tag, value
 		tagText = commentSyntax + " " + tagText
 	}
 
+	// Chunk scope needs the target's byte range for both the replace search and
+	// the insert point; file scope ignores it.
+	var start, end int
+	if scope == tagScopeChunk {
+		var ok bool
+		start, end, ok = microfts2.DecodeByteRangeLocator(targetChunk.Locator)
+		if !ok || start < 0 || end > len(fileBytes) || start >= end {
+			return nil, false
+		}
+	}
+
+	// Replace: rewrite an existing inline `@tag:` line in scope. On a miss,
+	// fall through to the insert below — replace degrades to internal-add. (R3107)
+	if replace {
+		lo, hi := start, end
+		if scope == tagScopeFile {
+			lo, hi = 0, fileScopeSearchEnd(fileBytes, commentSyntax, code)
+		}
+		if out, ok := replaceTagLine(fileBytes, lo, hi, tag, tagText, commentSyntax, code); ok {
+			return out, true
+		}
+	}
+
 	if scope == tagScopeFile {
 		// Top of file, above the first heading → the @-run stands as its own chunk.
 		return spliceLine(fileBytes, 0, "", tagText), true
 	}
-
-	start, end, ok := microfts2.DecodeByteRangeLocator(targetChunk.Locator)
-	if !ok || start < 0 || end > len(fileBytes) || start >= end {
-		return nil, false
-	}
 	pos, indent := chunkInsertPoint(fileBytes, start, end, kind)
 	return spliceLine(fileBytes, pos, indent, tagText), true
+}
+
+// fileScopeSearchEnd returns the byte offset just past the file's leading
+// preamble — the maximal run of blank, comment, or `@`-tag lines at the top,
+// where a file-level internal tag lives. A file-scope replace searches only
+// this run, so it never rewrites a same-named chunk-level tag deeper in the
+// file. (R3107)
+func fileScopeSearchEnd(data []byte, commentSyntax string, code bool) int {
+	pos := 0
+	for pos < len(data) {
+		lineEnd := indexByteRange(data, pos, len(data), '\n')
+		end := lineEnd
+		if end < 0 {
+			end = len(data)
+		}
+		body := strings.TrimSpace(string(data[pos:end]))
+		if code && commentSyntax != "" && strings.HasPrefix(body, commentSyntax) {
+			body = strings.TrimSpace(body[len(commentSyntax):])
+		}
+		if body != "" && !strings.HasPrefix(body, "@") {
+			return pos // first real-content line ends the preamble
+		}
+		if lineEnd < 0 {
+			return len(data)
+		}
+		pos = lineEnd + 1
+	}
+	return len(data)
+}
+
+// replaceTagLine rewrites the first inline `@tag:` line within data[lo:hi] to
+// newTagText (the fully-formed tag line, comment-wrapped for code), preserving
+// the original line's leading indentation. The trailing colon in the match key
+// stops `@topic:` from matching `@topics:`. Returns (rewritten, true) on a hit,
+// (nil, false) when no matching line is in range. (R3107)
+func replaceTagLine(data []byte, lo, hi int, tag, newTagText, commentSyntax string, code bool) ([]byte, bool) {
+	want := "@" + strings.ToLower(strings.TrimSpace(tag)) + ":"
+	if hi > len(data) {
+		hi = len(data)
+	}
+	pos := lo
+	for pos < hi {
+		lineEnd := indexByteRange(data, pos, hi, '\n')
+		end := lineEnd
+		if end < 0 {
+			end = hi
+		}
+		raw := string(data[pos:end])
+		trimmed := strings.TrimLeft(raw, " \t")
+		body := trimmed
+		if code && commentSyntax != "" && strings.HasPrefix(body, commentSyntax) {
+			body = strings.TrimLeft(body[len(commentSyntax):], " \t")
+		}
+		if strings.HasPrefix(strings.ToLower(body), want) {
+			indent := raw[:len(raw)-len(trimmed)]
+			out := make([]byte, 0, len(data)-len(raw)+len(indent)+len(newTagText))
+			out = append(out, data[:pos]...)
+			out = append(out, indent...)
+			out = append(out, newTagText...)
+			out = append(out, data[end:]...)
+			return out, true
+		}
+		if lineEnd < 0 {
+			break
+		}
+		pos = lineEnd + 1
+	}
+	return nil, false
 }
 
 // chunkInsertPoint returns the byte offset for a chunk-level tag line and the

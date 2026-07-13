@@ -426,8 +426,11 @@ func (w *RecallWatcher) enhanceRequestDoc(path, composite string) error {
 	if err != nil {
 		return err
 	}
-	seed := w.renderSeed(payload)
-	body := buildSearchTask(composite, cliRequestID(path), payload, seed)
+	// CLI hunts are findings-only: their recommends have no in-session builder to
+	// land in (results route through Luhmann curation), so suppress step 8's tag
+	// proposals here — #38's tag-proposing is the in-session bloodhound path (R3110).
+	seed := w.renderSeed(payload, true)
+	body := buildSearchTask(composite, cliRequestID(path), payload, seed, true)
 	// UpdateTmpFile (not Add) — the request doc already exists (the CLI created
 	// it); this overwrites it in one write-actor flush, re-indexing the head tag
 	// from @ark-bloodhound-cli to @ark-secretary-work=<composite> (the baton flip).
@@ -549,7 +552,7 @@ func seedInputs(payload string) ([]ConnectionsInput, int) {
 // clue is split per paragraph (seedInputs) so each idea in a complex clue seeds
 // its own matches. A failed seed is not fatal — the empty-seed note still
 // dispatches the hunt. R3006, R3007, R3043
-func (w *RecallWatcher) renderSeed(payload string) string {
+func (w *RecallWatcher) renderSeed(payload string, notags bool) string {
 	inputs, k := seedInputs(payload)
 	result, err := w.librarian.Recall(
 		inputs,
@@ -559,7 +562,7 @@ func (w *RecallWatcher) renderSeed(payload string) string {
 		log.Printf("bloodhound-cli: seed Recall failed: %v", err)
 		result = nil
 	}
-	return renderBloodhoundSeed(result)
+	return renderBloodhoundSeed(result, notags)
 }
 
 // readCLIRequestPayload reads the request doc and strips its @ark-bloodhound-cli

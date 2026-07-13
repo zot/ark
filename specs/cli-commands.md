@@ -690,7 +690,7 @@ orphan EF, and wrong-dimension EC records.
 ark ext set       <target> <tag> <value>
 ark ext add       <target> <tag> <value>
 ark ext remove    <target> <tag> [value]
-ark ext candidate <target> <tag> [value] [--insight "why"] [--disposition internal|external] [--internal]
+ark ext candidate <target> <tag> [value] [--insight "why"] [--disposition internal|external] [--internal] [--replace]
 ark ext accept    <target> <tag> [value]
 ark ext reject    <target> <tag> [value]
 ```
@@ -715,8 +715,8 @@ mirrors the `config` add/remove pattern.
 | `set <target> <tag> <value>` | proxy-or-exclusive | Collapse every `(target, tag)` value in the mirror file to the single `<value>`; append when none exist |
 | `add <target> <tag> <value>` | proxy-or-exclusive | Append a `(target, tag, value)` routing (multiple values per tag allowed); an exact duplicate is a silent no-op |
 | `remove <target> <tag> [value]` | proxy-or-exclusive | Remove `(target, tag)` routings — all values, or only the matching `<value>` when given; missing file/line is a silent no-op |
-| `candidate <target> <tag> [value] [--insight "why"] [--disposition internal\|external] [--internal]` | proxy-or-exclusive | Author an `@ext-candidate` (proposed routing) in the mirror file, stamped with today's first-seen date; optional quoted `--insight` rationale and `--disposition internal\|external` / `--internal` shorthand (default external, part of the line identity — a differing disposition is a distinct proposal); an exact-identity repeat increments the line's `@count`, a differing insight or disposition is a new proposal |
-| `accept <target> <tag> [value]` | proxy-or-exclusive | Commit matching `@ext-candidate`(s), each per its disposition: `external` → an `@ext` mirror edge; `internal` → write the tag into the target file's own body (fallback to external when the type can't host it or the file isn't writable — see `internal-disposition.md`). Consumes the candidate(s) (leading date + `insight` dropped) and writes a positive `@ext-judgment @count:+1` |
+| `candidate <target> <tag> [value] [--insight "why"] [--disposition internal\|external] [--internal] [--replace]` | proxy-or-exclusive | Author an `@ext-candidate` (proposed routing) in the mirror file, stamped with today's first-seen date; optional quoted `--insight` rationale, `--disposition internal\|external` / `--internal` shorthand (default external), and `--replace` (accept collapses the target's values of the tag instead of the default add). Both disposition and `--replace` are part of the line identity — a differing disposition or a differing add-vs-replace is a distinct proposal; an exact-identity repeat increments the line's `@count` |
+| `accept <target> <tag> [value]` | proxy-or-exclusive | Commit matching `@ext-candidate`(s), each per its disposition **and** `replace` token → four cells: external-add appends the `@ext` mirror edge, external-replace collapses the mirror's values (`ext set` semantics), internal-add inserts an inline tag, internal-replace rewrites the existing inline tag (fallback to external when the type can't host it or the file isn't writable — see `internal-disposition.md`). Consumes the candidate(s) (leading date, disposition, `replace`, `insight` dropped) and writes a positive `@ext-judgment @count:+1` |
 | `reject <target> <tag> [value]` | proxy-or-exclusive | Rewrite matching `@ext-candidate` line(s) → a single dated `@ext-judgment: <date> TARGET @tag: @count: -N` (tag-name only, durable signed rejection) |
 
 ### `fetch` — read indexed file content

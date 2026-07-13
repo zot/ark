@@ -93,6 +93,38 @@ inline/file-block tag, indistinguishable from a human-typed one; the normal
 reindex the file change triggers materializes it (no new DB mutation path), and
 re-proposal is self-suppressed once it indexes.
 
+## Replace disposition — collapse instead of add
+
+A candidate may carry a `replace` token (see `at-ext-parsing.md`, "Reserved
+leading field: replace"). It rides **orthogonally** to the internal/external
+disposition, so `accept` dispatches **four cells**: the tag's values are either
+**added to** or **collapsed to** the accepted value, in either the mirror or
+the source body.
+
+|              | add (default)                        | replace                                                      |
+|--------------|--------------------------------------|-------------------------------------------------------------|
+| **external** | append the `@ext` edge (`extOpAdd`)  | rewrite the mirror's values of the tag to this one (`extOpSet`) |
+| **internal** | insert a new inline `@tag:` line      | rewrite the existing inline `@tag:` line in the target        |
+
+Three cells already exist: both external cells (`extOpSet` already collapses
+the mirror's values to the accepted one) and internal-add (the inline insert
+above). The **internal-replace** cell is the one new write path. It **locates
+the existing inline `@tag:` line** in the target — inside the target chunk for
+a chunk-level address, at the file's top-of-file `@`-run for a file-level one —
+and rewrites its value in place, using the same per-chunker stencil and the
+same temp+rename on the DB actor as the insert. It **degrades to internal-add**
+(a fresh insert) when no such line is present, and to **external** per the
+capability gate above when the file type cannot host an internal tag at all.
+
+This is the "a curator revises a tag it set earlier" capability. Internal
+disposition granted the agent the pen to *write* an inline tag; replace grants
+it the pen to *revise* one — the same location a human edits by hand.
+
+`replace` collapses **all** of the target's values of that tag to the accepted
+value. For a single-value tag that is exactly "change the value"; for a tag
+that legitimately holds several values it is lossy — there is no "replace only
+this one value," which is out of scope here.
+
 ## Positive judgment — every accept reinforces
 
 Every accept — internal or external — also writes a positive `@ext-judgment

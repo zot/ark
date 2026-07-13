@@ -308,6 +308,11 @@ self-contained crank handle carries the CLI craft) and returns a curated
 ambient recall's `@ark-recall-result`), which the assistant's `listen`
 subscribes to — a *response* the assistant called for, correlated by the
 echoed clue, distinct from the ambient surface/recommend it didn't ask for.
+A directed hunt also **curates**: alongside its finding the bloodhound
+recommends *connecting tags* on the chunks it surfaced, promoting a query that
+proved its worth into a persistent tag (**Query Crystallization**) — the
+assistant winnows the proposals at its discernment gate and authors the durable
+candidates.
 The two are independent opt-ins (each its own subscription), so the
 bloodhound (level 3) can run without the ambient firehose (level 4). Async
 by default. The secretary is one agent doing both — a

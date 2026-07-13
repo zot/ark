@@ -19,8 +19,15 @@ import (
 )
 
 // bloodhoundRe recognizes a directed-search watermark in assistant output.
-// Non-greedy + DOTALL so a multi-line payload is captured whole. R2934
-var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND>(.*?)</BLOODHOUND>`)
+// Non-greedy + DOTALL so a multi-line payload is captured whole. The optional
+// ` notags` attribute (group 1) suppresses the hunt's tag proposals; group 2 is
+// the payload. R2934, R3110
+var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND( notags)?>(.*?)</BLOODHOUND>`)
+
+// recallTagsToggleRe recognizes the self-closing ambient tag-recommend toggle:
+// `<RECALL notags/>` suppresses recommends for the session (R3112),
+// `<RECALL tags/>` restores them (R3113). Group 1 is the direction word.
+var recallTagsToggleRe = regexp.MustCompile(`<RECALL (notags|tags)/>`)
 
 // recallMinParagraphBytes is the floor on paragraph length before a
 // paragraph earns its own Recall call. Drops one-liners like "yes." /
@@ -233,38 +240,69 @@ func scanNewBytes(newBytes []byte) []jsonlSignal {
 	return sigs
 }
 
+// assistantLineTexts yields the decoded prose text of each `type:"assistant"`
+// line in newBytes, skipping blank, unparseable, non-assistant, and text-less
+// lines. Shared by the watermark scanners (scanBloodhounds, scanRecallNotags).
+func assistantLineTexts(newBytes []byte) func(yield func(string) bool) {
+	return func(yield func(string) bool) {
+		for line := range bytesIterLines(newBytes) {
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var rec struct {
+				Type    string `json:"type"`
+				Message struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
+				continue
+			}
+			if text := assistantText(rec.Message.Content); text != "" && !yield(text) {
+				return
+			}
+		}
+	}
+}
+
 // scanBloodhounds walks newBytes for directed-search watermarks in assistant
 // output: each `type:"assistant"` line's text (decoded via assistantText) is
 // regex-matched for `<BLOODHOUND>…</BLOODHOUND>`, and every capture is one
 // payload. Deterministic and once-only by construction — newBytes is the
 // newly-appended slice, so a given line is scanned exactly once (two identical
 // watermarks are two requests). R2934
-func scanBloodhounds(newBytes []byte) []string {
-	var payloads []string
-	for line := range bytesIterLines(newBytes) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
-			continue
-		}
-		text := assistantText(rec.Message.Content)
-		if text == "" {
-			continue
-		}
+func scanBloodhounds(newBytes []byte) []bloodhoundReq {
+	var reqs []bloodhoundReq
+	for text := range assistantLineTexts(newBytes) {
 		for _, m := range bloodhoundRe.FindAllStringSubmatch(text, -1) {
-			if p := strings.TrimSpace(m[1]); p != "" {
-				payloads = append(payloads, p)
+			// m[1] = " notags" (or ""), m[2] = payload. R3110
+			if p := strings.TrimSpace(m[2]); p != "" {
+				reqs = append(reqs, bloodhoundReq{payload: p, notags: m[1] != ""})
 			}
 		}
 	}
-	return payloads
+	return reqs
+}
+
+// bloodhoundReq is one recognized `<BLOODHOUND>` watermark: the clue payload and
+// whether it opted out of tag proposals via `<BLOODHOUND notags>`. R3110
+type bloodhoundReq struct {
+	payload string
+	notags  bool
+}
+
+// scanRecallTagsDirective returns the final ambient tag-recommend toggle in
+// newBytes: suppress=true for `<RECALL notags/>` (R3112), suppress=false for
+// `<RECALL tags/>` (R3113). found is false when no marker is present. Markers
+// are read in assistant-line order and the last one wins, so a batch that flips
+// the toggle resolves to its final state. R3112, R3113
+func scanRecallTagsDirective(newBytes []byte) (suppress, found bool) {
+	for text := range assistantLineTexts(newBytes) {
+		for _, m := range recallTagsToggleRe.FindAllStringSubmatch(text, -1) {
+			suppress, found = m[1] == "notags", true
+		}
+	}
+	return suppress, found
 }
 
 // isGenuineUserMessage reports whether a `type:"user"` record is a real
@@ -444,10 +482,21 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 	// above (it touches no timer/armReady/pendingChunks). For each payload,
 	// allocate <B> under the lock and dispatch off the indexer goroutine.
 	if w.bloodhoundEnabled(sessionID) {
-		for _, payload := range scanBloodhounds(newBytes) {
+		for _, req := range scanBloodhounds(newBytes) {
 			bid := w.nextBloodhoundLocked(sessionID)
-			p, sid := payload, sessionID
-			svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, p) })
+			r, sid := req, sessionID
+			svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, r.payload, r.notags) })
+		}
+	}
+	// R3112/R3113: a <RECALL notags/> | <RECALL tags/> marker toggles per-session
+	// tag-recommend suppression on the builder (last marker in the batch wins).
+	if w.builder != nil {
+		if suppress, found := scanRecallTagsDirective(newBytes); found {
+			if suppress {
+				w.builder.SetRecallNotags(sessionID)
+			} else {
+				w.builder.ClearRecallNotags(sessionID)
+			}
 		}
 	}
 }
@@ -672,7 +721,7 @@ const bloodhoundSeedK = 10
 // then hands the payload + seed to the builder, which writes the task doc in
 // the ARK-BLOODHOUND namespace and retains the clue for the finding header.
 // CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947, R3006, R3007
-func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string) {
+func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string, notags bool) {
 	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
@@ -681,8 +730,8 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 	// with no derivation side-effects. Only Recall reaches the value→chunk tag
 	// axis (R2905/R2906) the subagent's content-only `ark search` cannot. A
 	// failed seed is not fatal — the empty-seed note still dispatches. R3006, R3007
-	seed := w.renderSeed(payload)
-	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload, seed); err != nil {
+	seed := w.renderSeed(payload, notags)
+	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload, seed, notags); err != nil {
 		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
@@ -693,9 +742,11 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 // a bloodhound task doc: one compact locator line per candidate —
 // `<path>:<range> (<size>) <score> [tags]` with a short excerpt, no chunkid on
 // the wire (the crank handle opens each with `ark chunks --wrap recall <path:range>`). A
-// nil/empty result renders the empty-seed note so the task still dispatches. R3006
-// CRC: crc-RecallWatcher.md | R3006
-func renderBloodhoundSeed(result *RecallResult) string {
+// nil/empty result renders the empty-seed note so the task still dispatches.
+// When notags, the per-line `[tags]` are omitted — a no-tags hunt won't propose,
+// so the bridge vocabulary is dead weight (R3110). R3006
+// CRC: crc-RecallWatcher.md | R3006, R3110
+func renderBloodhoundSeed(result *RecallResult, notags bool) string {
 	var sb strings.Builder
 	sb.WriteString("## Recall seed\n\n")
 	if result == nil || len(result.Chunks) == 0 {
@@ -705,7 +756,7 @@ func renderBloodhoundSeed(result *RecallResult) string {
 	sb.WriteString("Strong candidates from the deluxe combined search (4 substrates: meaning + tags — the tag axis your own `ark search` can't reach). READ these first with `ark chunks --wrap recall <path:range>` (clean text, not JSON); run your own searches only to widen or if this is thin.\n\n")
 	for _, c := range result.Chunks {
 		tags := ""
-		if names := recallTagNames(c.Tags); len(names) > 0 {
+		if names := recallTagNames(c.Tags); !notags && len(names) > 0 {
 			tags = " [" + strings.Join(names, ", ") + "]"
 		}
 		fmt.Fprintf(&sb, "- %s:%s (%s) %.2f%s\n", c.Path, c.Range, friendlySize(len(c.Content)), c.Score, tags)

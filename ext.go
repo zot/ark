@@ -363,10 +363,36 @@ func stripLeadingDateDisposition(value string) string {
 	}
 	for _, disp := range [...]string{extDispositionInternal, extDispositionExternal} {
 		if strings.HasPrefix(rest, disp+" ") {
-			return rest[len(disp)+1:]
+			rest = rest[len(disp)+1:]
+			// A `replace` token peels only behind a disposition — the one
+			// grammar slot reserved for it — so a TARGET named `replace`
+			// on a dateless/dispositionless line never mis-peels. (R3104)
+			if strings.HasPrefix(rest, extReplaceToken+" ") {
+				rest = rest[len(extReplaceToken)+1:]
+			}
+			return rest
 		}
 	}
 	return rest
+}
+
+// peelExtCandidateReplace reports whether an `@ext-candidate` value carries a
+// bare `replace` token after its leading date + disposition. Where
+// stripLeadingDateDisposition discards it for TARGET parsing, this surfaces it
+// for the accept branch, which routes each candidate's write per its own
+// (disposition, replace). (R3104)
+func peelExtCandidateReplace(value string) bool {
+	s := strings.TrimLeft(value, " \t")
+	date, rest := peelDate(s)
+	if date == "" {
+		return false
+	}
+	for _, disp := range [...]string{extDispositionInternal, extDispositionExternal} {
+		if strings.HasPrefix(rest, disp+" ") {
+			return strings.HasPrefix(rest[len(disp)+1:], extReplaceToken+" ")
+		}
+	}
+	return false
 }
 
 // peelExtCandidateDisposition returns the disposition token an
@@ -393,6 +419,7 @@ func peelExtCandidateDisposition(value string) string {
 // the disposition that decides its resolution and the routed (tag, value).
 type acceptedCandidate struct {
 	disposition string
+	replace     bool
 	tag         string
 	value       string
 }
@@ -420,12 +447,13 @@ func collectAcceptedCandidates(data []byte, targetSpec, tag, value string) []acc
 			continue
 		}
 		disp := peelExtCandidateDisposition(valuePart)
+		replace := peelExtCandidateReplace(valuePart)
 		for _, tv := range tags {
 			if tv.Tag == extCountField {
 				continue
 			}
 			if tv.Tag == tagLower && (wantValue == "" || tv.Value == wantValue) {
-				out = append(out, acceptedCandidate{disposition: disp, tag: tv.Tag, value: tv.Value})
+				out = append(out, acceptedCandidate{disposition: disp, replace: replace, tag: tv.Tag, value: tv.Value})
 			}
 		}
 	}
@@ -528,6 +556,17 @@ const (
 	extDispositionExternal = "external"
 	extDispositionInternal = "internal"
 )
+
+// extReplaceToken is a bare word carried after the disposition on an
+// `@ext-candidate` line. It names an eventual accept as a *replace* — collapse
+// the target's values of the tag to the accepted value — rather than the
+// default *add* (append). Like the disposition it is part of the line
+// identity, so a replace-proposal and an add-proposal of the same
+// (TARGET, tag, value, insight, disposition) are distinct lines with
+// independent @count tallies. It peels only behind a disposition (itself only
+// behind a date), which bounds the ambiguity of a TARGET literally named
+// `replace`. (R3104)
+const extReplaceToken = "replace"
 
 // marker returns the class's @-prefixed line marker: "@ext",
 // "@ext-candidate", or "@ext-judgment". (R3052)
@@ -739,15 +778,24 @@ func appendExtLine(data []byte, targetSpec, tag, value string, class extClass) [
 // independent tallies. A non-empty insight is emitted quoted next, before
 // the TARGET — with no @ sigil, because it is metadata, not a routed tag —
 // so it never collides with an undelimited TARGET, and distinct insights
-// make distinct lines (preserved, not collapsed). The first-seen date is
-// NOT part of the identity; upsertCountLine reinserts it after the marker
-// at append time. (R3051, R3053, R3092)
-func candidateLine(targetSpec, tag, value, insight, disposition string) string {
+// make distinct lines (preserved, not collapsed). The disposition and the
+// optional `replace` token both ride in the identity, so an internal vs
+// external, or an add vs replace, proposal of the same routing are distinct
+// lines with independent @count tallies. The first-seen date is NOT part of
+// the identity; upsertCountLine reinserts it after the marker at append time.
+// (R3051, R3053, R3092, R3104)
+func candidateLine(targetSpec, tag, value, insight, disposition string, replace bool) string {
 	var sb strings.Builder
 	sb.WriteString(extClassCandidate.marker())
 	sb.WriteString(": ")
 	if d := strings.TrimSpace(disposition); d != "" {
 		sb.WriteString(d)
+		sb.WriteString(" ")
+	}
+	// `replace` rides right behind the disposition, so it peels (and dedups)
+	// only in the slot stripLeadingDateDisposition reserves for it. (R3104)
+	if replace {
+		sb.WriteString(extReplaceToken)
 		sb.WriteString(" ")
 	}
 	if s := strings.TrimSpace(insight); s != "" {

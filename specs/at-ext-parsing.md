@@ -70,8 +70,9 @@ is part of the line's text, two proposals of the same tag with different
 insights remain distinct lines (preserved, not merged).
 
 The full leading order on an `@ext-candidate` line is
-`<date> <disposition> insight: "…" TARGET …` — date and disposition
-(below) come before the insight; all three are peeled ahead of the TARGET.
+`<date> <disposition> [replace] insight: "…" TARGET …` — date, disposition,
+and the optional `replace` token (all below) come before the insight, and are
+peeled ahead of the TARGET.
 
 ### Reserved leading field: `date`
 
@@ -113,6 +114,30 @@ and an external proposal of the same `(TARGET, tag, value, insight)` are
 **distinct lines** with independent `@count` tallies, exactly as distinct
 insights are — so choosing internal versus external is a separate proposal,
 not a mutation of an existing one.
+
+### Reserved leading field: `replace`
+
+An `@ext-candidate` line may carry a bare `replace` token immediately after
+the disposition. It names how an eventual **accept** applies the tag: with
+`replace`, accept **collapses** the target's existing values of the tag to the
+accepted value; absent it (the default, **add**), accept appends the value
+alongside any existing ones. The two write outcomes and the four dispatch cells
+that carry them are defined by the internal-disposition feature (see
+`internal-disposition.md`, "Replace disposition"). `@ext-judgment` lines carry
+no `replace` token.
+
+`stripLeadingDateDisposition` peels `replace` **only after a disposition was
+peeled**, which itself fires only after a date. That nesting bounds the
+ambiguity of a TARGET literally named `replace`: an undated or dispositionless
+committed value never mis-peels the token, and a dated `internal`/`external`
+candidate reaches the `replace` peel only in the one grammar position reserved
+for it.
+
+`replace` **is part of the line identity**, exactly as the disposition is: a
+replace-proposal and an add-proposal of the same `(TARGET, tag, value, insight,
+disposition)` are **distinct lines** with independent `@count` tallies.
+Choosing replace versus add is a separate proposal, not a mutation of an
+existing one.
 
 ### Reserved metadata field: `count`
 

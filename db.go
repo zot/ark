@@ -2263,12 +2263,13 @@ func (db *DB) RemoveExtTag(targetSpec, tag, value string) error {
 // the repetition tally: a new (TARGET, tag, value, insight, disposition)
 // identity is written at `@count: 1`, stamped with today's first-seen
 // date; an exact-identity repeat increments the existing line's `@count`
-// and preserves its original date (a differing insight or disposition is a
-// distinct proposal with its own tally). The read-modify-write runs as one
-// closure-actor op so concurrent bumps cannot lose an update.
-// (R3051, R3074, R3075, R3090, R3092)
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3074, R3075, R3090, R3092
-func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition string) error {
+// and preserves its original date (a differing insight, disposition, or
+// add-vs-replace is a distinct proposal with its own tally). The
+// read-modify-write runs as one closure-actor op so concurrent bumps cannot
+// lose an update.
+// (R3051, R3074, R3075, R3090, R3092, R3104, R3105)
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.2 | R3051, R3074, R3075, R3090, R3092, R3104, R3105
+func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition string, replace bool) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return errors.New("tag must not be empty")
@@ -2282,7 +2283,7 @@ func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition strin
 		return err
 	}
 	date := time.Now().Format("2006-01-02")
-	data = upsertCountLine(data, candidateLine(targetSpec, tag, value, insight, disposition), date, 1)
+	data = upsertCountLine(data, candidateLine(targetSpec, tag, value, insight, disposition, replace), date, 1)
 	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(mirrorPath), err)
 	}
@@ -2301,7 +2302,11 @@ func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition strin
 // (leading date and insight dropped). Missing file or no match is a silent
 // no-op. The source-file write runs on the DB actor (the same goroutine that
 // serializes the mirror write), so concurrent accepts to one file serialize.
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3071, R3100, R3101, R3102, R3103
+// The (disposition, replace) pair gives four cells: external-add appends the
+// @ext edge, external-replace collapses the mirror's values (extOpSet),
+// internal-add inserts an inline tag, internal-replace rewrites the existing
+// inline tag (R3106, R3107).
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3071, R3100, R3101, R3102, R3103, R3106, R3107
 func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -2329,14 +2334,21 @@ func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
 	for _, ac := range accepted {
 		external := true
 		if ac.disposition == extDispositionInternal {
-			wrote, werr := db.writeInternalTag(targetSpec, ac.tag, ac.value)
+			wrote, werr := db.writeInternalTag(targetSpec, ac.tag, ac.value, ac.replace)
 			if werr != nil {
 				return werr
 			}
 			external = !wrote // internal write landed → do not also route external
 		}
 		if external {
-			newData = upsertExtLine(newData, targetSpec, ac.tag, ac.value, extOpAdd, extClassCommitted)
+			// The (disposition, replace) axes give four accept cells; here the
+			// two external ones: replace collapses the mirror's values of the
+			// tag (extOpSet), add appends the edge (extOpAdd). (R3106)
+			op := extOpAdd
+			if ac.replace {
+				op = extOpSet
+			}
+			newData = upsertExtLine(newData, targetSpec, ac.tag, ac.value, op, extClassCommitted)
 		}
 		if !judged[ac.tag] {
 			judged[ac.tag] = true
@@ -2353,11 +2365,13 @@ func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
 // file-level tag at the top of the file; a single-chunk address inserts a
 // chunk-level tag under the chunk's opener; a multi-chunk match, an incapable
 // chunker type (lines/jsonl/pdf), a comment-less code chunk, a read-only zone,
-// or a file unwritable on disk all degrade to external. The write is a
-// temp+rename on the DB actor; the normal reindex the file change triggers
-// materializes the tag (no new DB mutation path).
-// CRC: crc-DB.md | R3101, R3102
-func (db *DB) writeInternalTag(targetSpec, tag, value string) (bool, error) {
+// or a file unwritable on disk all degrade to external. When replace is set,
+// InsertTag rewrites an existing inline `@tag:` line in scope instead of
+// adding a new one, degrading to a fresh insert when none is present (R3107).
+// The write is a temp+rename on the DB actor; the normal reindex the file
+// change triggers materializes the tag (no new DB mutation path).
+// CRC: crc-DB.md | R3101, R3102, R3107
+func (db *DB) writeInternalTag(targetSpec, tag, value string, replace bool) (bool, error) {
 	parts, ok := ParseExtTargetParts(targetSpec, "")
 	if !ok || parts.Invalid {
 		return false, nil
@@ -2398,7 +2412,7 @@ func (db *DB) writeInternalTag(targetSpec, tag, value string) (bool, error) {
 	} else {
 		chunk = microfts2.Chunk{Locator: microfts2.EncodeByteRangeLocator(int(info.ByteStart), int(info.ByteEnd))}
 	}
-	newBytes, ok := inserter.InsertTag(fileBytes, chunk, tag, value, scope)
+	newBytes, ok := inserter.InsertTag(fileBytes, chunk, tag, value, scope, replace)
 	if !ok {
 		return false, nil // comment-less code chunk → external
 	}

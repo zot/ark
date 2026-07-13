@@ -432,25 +432,32 @@ func TestMutateExtLineClassAware(t *testing.T) {
 }
 
 // candidateLine builds the canonical proposal line: disposition right
-// after the marker, then insight quoted before the routed tag, escaped.
-// (R3051, R3053, R3092)
+// after the marker, then the optional `replace` token, then insight quoted
+// before the routed tag, escaped. (R3051, R3053, R3092, R3104)
 func TestCandidateLine(t *testing.T) {
-	if got := candidateLine("%abc", "topic", "recall", "it fits", "external"); got != `@ext-candidate: external insight: "it fits" %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", "it fits", "external", false); got != `@ext-candidate: external insight: "it fits" %abc @topic: recall` {
 		t.Errorf("with insight: %q", got)
 	}
-	if got := candidateLine("%abc", "topic", "recall", "", "external"); got != `@ext-candidate: external %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", "", "external", false); got != `@ext-candidate: external %abc @topic: recall` {
 		t.Errorf("no insight: %q", got)
 	}
 	// Disposition is part of the identity — internal makes a distinct line.
-	if got := candidateLine("%abc", "topic", "", "", "internal"); got != `@ext-candidate: internal %abc @topic:` {
+	if got := candidateLine("%abc", "topic", "", "", "internal", false); got != `@ext-candidate: internal %abc @topic:` {
 		t.Errorf("bare tag, internal: %q", got)
 	}
-	if got := candidateLine("%abc", "topic", "recall", `say "hi"`, "external"); got != `@ext-candidate: external insight: "say \"hi\"" %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", `say "hi"`, "external", false); got != `@ext-candidate: external insight: "say \"hi\"" %abc @topic: recall` {
 		t.Errorf("quoted insight escaping: %q", got)
 	}
 	// Empty disposition is omitted (a dateless, dispositionless legacy line).
-	if got := candidateLine("%abc", "topic", "recall", "", ""); got != `@ext-candidate: %abc @topic: recall` {
+	if got := candidateLine("%abc", "topic", "recall", "", "", false); got != `@ext-candidate: %abc @topic: recall` {
 		t.Errorf("empty disposition omitted: %q", got)
+	}
+	// replace rides right after the disposition, before the insight. (R3104)
+	if got := candidateLine("%abc", "cuisine", "french", "", "external", true); got != `@ext-candidate: external replace %abc @cuisine: french` {
+		t.Errorf("replace token: %q", got)
+	}
+	if got := candidateLine("%abc", "cuisine", "french", "why", "internal", true); got != `@ext-candidate: internal replace insight: "why" %abc @cuisine: french` {
+		t.Errorf("replace + insight: %q", got)
 	}
 }
 
@@ -474,10 +481,36 @@ func TestStripLeadingDateDisposition(t *testing.T) {
 		{`external-notes.md @topic: recall`, `external-notes.md @topic: recall`},
 		// a non-disposition word after the date is left in place (only the date peels)
 		{`2026-07-12 someword notes/f.md @topic: x`, `someword notes/f.md @topic: x`},
+		// replace peels after the disposition (R3104)
+		{`2026-07-12 external replace notes/f.md @topic: x`, `notes/f.md @topic: x`},
+		{`2026-07-12 internal replace insight: "y" notes/f.md @topic: x`, `insight: "y" notes/f.md @topic: x`},
+		// replace peels ONLY behind a disposition — a bare "replace…" target stays
+		{`2026-07-12 replace-notes.md @topic: x`, `replace-notes.md @topic: x`},
 	}
 	for _, c := range cases {
 		if got := stripLeadingDateDisposition(c.in); got != c.want {
 			t.Errorf("stripLeadingDateDisposition(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// peelExtCandidateReplace surfaces the replace token for the accept branch:
+// present only behind a date + disposition, in the one reserved slot. (R3104)
+func TestPeelExtCandidateReplace(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{`2026-07-12 external replace notes/f.md @topic: x`, true},
+		{`2026-07-12 internal replace insight: "y" notes/f.md @topic: x`, true},
+		{`2026-07-12 external notes/f.md @topic: x`, false},       // add-proposal
+		{`2026-07-12 replace notes/f.md @topic: x`, false},        // no disposition → not a replace token
+		{`replace-notes.md @topic: x`, false},                     // dateless TARGET named replace-…
+		{`2026-07-12 external replace-notes.md @topic: x`, false}, // TARGET "replace-notes.md", no bare token
+	}
+	for _, c := range cases {
+		if got := peelExtCandidateReplace(c.in); got != c.want {
+			t.Errorf("peelExtCandidateReplace(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }

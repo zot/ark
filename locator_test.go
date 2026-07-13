@@ -104,7 +104,7 @@ func TestBloodhoundCrankHandle_WrapsChunkReads(t *testing.T) {
 	if strings.Contains(searchCrankHandle, "ark chunks <path:range>") {
 		t.Error("searchCrankHandle: found an un-wrapped `ark chunks <path:range>` instruction")
 	}
-	seed := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{{Path: "/a.md", Range: "1-2"}}})
+	seed := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{{Path: "/a.md", Range: "1-2"}}}, false)
 	if !strings.Contains(seed, "ark chunks --wrap") {
 		t.Errorf("renderBloodhoundSeed: chunk read must use `ark chunks --wrap`; got:\n%s", seed)
 	}

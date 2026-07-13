@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -40,10 +40,14 @@ for these verbs — `ark serve` must be running.
   builders for directed search (R2943), in the `ARK-BLOODHOUND`
   namespace. Keyed by the kind-marked cookie `<session>-b<B>` so it
   never collides with a `<session>-<fire>` recall token in the maps
-  above; populated lazily on first `finding`. Reuses the
+  above; populated lazily on first `finding` **or `recommend`**. Reuses the
   `recallResultDoc` accumulator (same one-item-per-call shape as
-  results), but its items are `## Finding:` H2s with no own-session
-  gate (R2944).
+  results); its items are `## Finding:` H2s with no own-session
+  gate (R2944) **and, when a directed hunt curates, `## Recommend:` H2s
+  (R3109)** — `RecommendItem` detects a bloodhound cookie and appends here so
+  `Close` flushes the recommends into the `finding-<session>-<B>` doc alongside
+  the findings, instead of dropping them on the never-touched ambient results
+  stream.
 - bloodhoundClues: map[bhToken]string — the originating clue
   retained when the watcher's `RecallBloodhoundOpen` mints `<B>`
   (R2937), stamped into the finding doc's `## Finding:` header at
@@ -227,11 +231,17 @@ for these verbs — `ark serve` must be running.
   cooldown floor (R2893) won't re-offer this chunk within
   `[recall].surface_cooldown`.
 - RecommendItem(fireToken, loc, tagSpec, reason) error
-  (R2757, R2899) — same open-on-first-call semantics; appends
-  a `## Recommend: @<tag>[:<value>] on <path>:<range>` H2 with
-  its `reason: ...` line (R2899). `loc` is the candidate's
+  (R2757, R2899, R3109, R3111) — same open-on-first-call semantics; appends
+  a ``## Recommend: `@<tag>[:<value>]` on <path>:<range>`` H2 with
+  its `reason: ...` line (R2899). The tag is **back-quoted** so the proposal
+  is inert at every indexed hop — ark never extracts it as a live tag on the
+  doc that carries it (R3111, Watermark). `loc` is the candidate's
   path:range — no server-side resolution and no size read needed,
-  since the agent already supplies it.
+  since the agent already supplies it. When `fireToken` is a kind-marked
+  **bloodhound** cookie (`<session>-b<B>`), the item routes into
+  `bloodhounds[cookie]` so a directed hunt's `Close` flushes it into the
+  finding doc (R3109); a plain `<session>-<fire>` token routes into the ambient
+  `results` doc as before.
 - Close(fireToken, nonce, preserveCuration bool) error (R2758,
   R2901) — the single cleanup verb. `fireToken` is the composite
   `<session>-<fire>`; it decomposes to the session and fire for

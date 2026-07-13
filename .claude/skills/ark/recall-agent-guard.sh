@@ -1,5 +1,5 @@
 #!/bin/bash
-# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2859, R2771, R2941
+# CRC: crc-RecallAgent.md | Seq: seq-recall-agent.md#3 | R2859, R2771, R2941, R3108
 # PreToolUse hook for ark-recall-agent (the long-running daemon).
 # Hermetic seal: only the four recall verbs the loop uses are permitted —
 #   ark connections recall next                       (the loop driver)
@@ -30,13 +30,20 @@ if [ "$TOOL" = Bash ]; then
     if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+(search|chunks|fetch|files|grams)(\s|$)'; then
         exit 0
     fi
+    # Read-only tag vocabulary for a directed hunt's tag proposals (R3108):
+    # `tag defs` lists tag names + meanings so the secretary proposes along the
+    # clue's angle without duplicating existing tags. Only `tag defs` — bare
+    # `ark tag` stays denied because it would admit the mutating `tag set`.
+    if echo "$CMD" | grep -qE '^\s*~/\.ark/ark\s+tag\s+defs(\s|$)'; then
+        exit 0
+    fi
     # `next` blocks, so the harness backgrounds it; allow reading the
     # backgrounded command's output file. Single file arg only — the
     # trailing `\s*$` rejects chaining (`cat x; rm y`) and redirection.
     if echo "$CMD" | grep -qE '^\s*cat\s+\S+\s*$'; then
         exit 0
     fi
-    echo "BLOCKED: recall-agent may run only — ark connections recall { next | surface | recommend | close | finding }, the read-only ark { search | chunks | fetch | files | grams } for a directed hunt, plus \`cat <file>\`. Open indexed files with ark chunks/fetch, not cat or Read. Run \`~/.ark/ark connections recall next <your nonce>\` and follow what it returns." >&2
+    echo "BLOCKED: recall-agent may run only — ark connections recall { next | surface | recommend | close | finding }, the read-only ark { search | chunks | fetch | files | grams | tag defs } for a directed hunt, plus \`cat <file>\`. Open indexed files with ark chunks/fetch, not cat or Read. Run \`~/.ark/ark connections recall next <your nonce>\` and follow what it returns." >&2
     exit 2
 fi
 

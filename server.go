@@ -2175,6 +2175,7 @@ type extRequest struct {
 	Value       string `json:"value"`
 	Insight     string `json:"insight"`
 	Disposition string `json:"disposition"`
+	Replace     string `json:"replace"` // candidate: "true" collapses on accept (R3105)
 }
 
 // extMutate decodes an extRequest and runs an `@ext` mirror mutation
@@ -2213,7 +2214,7 @@ func (srv *Server) handleExtRemove(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | R3057
 func (srv *Server) handleExtCandidate(w http.ResponseWriter, r *http.Request) {
 	srv.extMutate(w, r, func(db *DB, req extRequest) error {
-		return db.CandidateExtTag(req.Target, req.Tag, req.Value, req.Insight, req.Disposition)
+		return db.CandidateExtTag(req.Target, req.Tag, req.Value, req.Insight, req.Disposition, req.Replace == "true")
 	})
 }
 

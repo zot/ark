@@ -400,10 +400,20 @@ them. **Surface** items recommend showing a chunk to the user;
 
 reason: <one-line justification>
 
-## Recommend: @<tag>[:<value>] on <path>:<range>
+## Recommend: `@<tag>[:<value>]` on <path>:<range>
 
 reason: <one-line justification>
 ```
+
+**The recommended tag is inert.** It is written **back-quoted** —
+`` `@<tag>[:<value>]` `` — so ark never indexes the *proposal* as a live tag
+on the result doc that carries it. A recommend rides indexed tmp:// docs at
+every hop (curation doc, result doc, session transcript), and an un-quoted
+`@tag:` on any of them would be extracted as a real tag on that doc, polluting
+the index with the very connection the assistant has not yet approved. The
+backticks make the proposal recognizable-but-inert — the **Watermark** pattern:
+the assistant reads it back off the content, the indexer passes it over. The
+`recommend` builder verb wraps the tag; callers pass the bare `@tag[:value]`.
 
 Both H2 kinds name the chunk by its `<path>:<range>` locator
 (mirroring the curation-doc `## Candidate:` line, R2898) — never a
@@ -458,6 +468,28 @@ recommend, it issues `close` with no prior `surface` /
 is still removed, and the monitoring log entry is still
 written. The assistant's `ark listen` never sees a matching
 event in that case.
+
+## Opt-out toggle — `<RECALL notags/>` / `<RECALL tags/>`
+
+Tag recommends are a curation *offer*, not a mandate. A session that wants
+recall's surfacing without its tag proposals emits `<RECALL notags/>` — a
+self-closing watermark the watcher recognizes on an assistant line, via the
+same per-append scan the bloodhound uses for `<BLOODHOUND>`. Once set for a
+session, the curation pass omits its proposed-tag apparatus (no `## Recommend:`
+items) and surfaces chunks only; the `## Surface:` arm is unaffected. This is
+the ambient counterpart to the bloodhound's per-hunt `<BLOODHOUND notags>`
+([bloodhound.md](bloodhound.md), "Opt-out"). The shapes differ because the
+cadences do: a bloodhound hunt is a discrete request, so its opt-out scopes to
+that hunt; ambient recall fires continuously, so its opt-out is a session-scoped
+switch.
+
+The switch is a **toggle**: `<RECALL tags/>` clears the suppression and restores
+tag recommends for the session, so the user is never forced to restart ark to
+undo a `<RECALL notags/>`. Both markers are recognized on the same per-append
+scan; when a single appended batch carries more than one, **the last marker
+wins** (the batch resolves to its final state), so a user who turns recommends
+off and back on within one turn ends up with them on. The default (no marker
+ever seen) is recommends on.
 
 ## Builder CLI
 
