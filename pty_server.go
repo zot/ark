@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -38,23 +37,26 @@ func (srv *Server) ReleaseLuhmann(session string) {
 	}
 }
 
-// SeatOwner reports the current Luhmann seat owner for the host's launch waits
-// and refusal check (R3126). PtyEnv.
+// SeatOwner reports the current Luhmann seat owner for the host's launch wait
+// (R3126). PtyEnv.
 func (srv *Server) SeatOwner() string { return srv.LuhmannOwner() }
+
+// ForceReleaseSeat clears any seat claim before a managed launch (R3126): a stale
+// owner (a prior session that died without releasing the in-memory lease) would
+// otherwise block the new session's --first claim. Unconditional, unlike
+// ReleaseSeat — the launch is the authoritative start. PtyEnv.
+// CRC: crc-LuhmannCLI.md | R3126
+func (srv *Server) ForceReleaseSeat() {
+	srv.luhmannMu.Lock()
+	srv.luhmannOwner = ""
+	srv.luhmannMu.Unlock()
+}
 
 // ReleaseSeat releases the seat lease on teardown (R3125). PtyEnv.
 func (srv *Server) ReleaseSeat(session string) { srv.ReleaseLuhmann(session) }
 
-// LuhmannDir is the hosted session's cwd, ~/.ark/luhmann (R3126 step 1 encodes
-// it to find the session JSONL). PtyEnv.
+// LuhmannDir is the hosted session's cwd, ~/.ark/luhmann (R3126). PtyEnv.
 func (srv *Server) LuhmannDir() string { return filepath.Join(arkHomeDir(), "luhmann") }
-
-// ProjectsDir is ~/.claude/projects, the root of Claude Code's per-project
-// session logs (R3126 step 1). PtyEnv.
-func (srv *Server) ProjectsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "projects")
-}
 
 // PoolRosterCount is the pool-secretary roster size for status (R3124). PtyEnv.
 func (srv *Server) PoolRosterCount() int { return srv.recallWatcher.PoolSize() }

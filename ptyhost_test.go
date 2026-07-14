@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -21,10 +22,10 @@ import (
 type fakePtyEnv struct{}
 
 func (fakePtyEnv) SeatOwner() string        { return "" }
+func (fakePtyEnv) ForceReleaseSeat()        {}
 func (fakePtyEnv) ReleaseSeat(string)       {}
 func (fakePtyEnv) RecordHostedExits(string) {}
 func (fakePtyEnv) LuhmannDir() string       { return "" }
-func (fakePtyEnv) ProjectsDir() string      { return "" }
 func (fakePtyEnv) PoolRosterCount() int     { return 0 }
 
 // fakePtyClient captures broadcast bytes through a bounded buffer: once cap is
@@ -229,5 +230,202 @@ func TestPtyHostZeroClientsKeepsRunning(t *testing.T) {
 	}
 	if n := clientCount(h); n != 1 {
 		t.Errorf("client set has %d after re-attach, want 1", n)
+	}
+}
+
+// envHas reports whether env contains an entry with the given prefix.
+func envHas(env []string, prefix string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestFilterChildEnvStripsMarkers: the hosted child launches as a fresh
+// top-level session — the Claude Code session-identity markers are removed while
+// credentials/config and a present TERM pass through untouched (R3127).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3127
+func TestFilterChildEnvStripsMarkers(t *testing.T) {
+	src := []string{
+		"CLAUDECODE=1",
+		"CLAUDE_CODE_SESSION_ID=abc",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"AI_AGENT=1",
+		"ANTHROPIC_API_KEY=secret",
+		"CLAUDE_EFFORT=high",
+		"HOME=/home/deck",
+		"TERM=xterm-256color",
+	}
+	got := filterChildEnv(src)
+
+	for _, p := range []string{"CLAUDECODE=", "CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_ENTRYPOINT=", "AI_AGENT="} {
+		if envHas(got, p) {
+			t.Errorf("marker %q must be stripped from the child env", p)
+		}
+	}
+	for _, p := range []string{"ANTHROPIC_API_KEY=", "CLAUDE_EFFORT=", "HOME=", "TERM="} {
+		if !envHas(got, p) {
+			t.Errorf("%q must pass through to the child env", p)
+		}
+	}
+}
+
+// TestFilterChildEnvEnsuresTerm: TERM is appended when the server's env lacks it,
+// so the child TUI still renders (R3127).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3127
+func TestFilterChildEnvEnsuresTerm(t *testing.T) {
+	got := filterChildEnv([]string{"HOME=/home/deck"})
+	found := ""
+	for _, e := range got {
+		if strings.HasPrefix(e, "TERM=") {
+			found = e
+		}
+	}
+	if found != "TERM=xterm-256color" {
+		t.Errorf("TERM ensured as xterm-256color, got %q", found)
+	}
+}
+
+// trustDialog mirrors the real "trust this folder" render: cursor-move params
+// carry digits (\x1b[14G lands right before "trust"), the number precedes the
+// label in stream order, and the question itself contains "trust". A correct
+// scan must strip the escapes, ignore the question, and read the option number.
+const trustDialog = "\x1b[?25l\x1b[2K" +
+	"\x1b[38;5;250mDo you trust the files in this folder?\x1b[39m\r\n" +
+	"\x1b[38;5;153m❯\x1b[4G\x1b[38;5;246m1.\x1b[7G\x1b[38;5;153mYes,\x1b[12GI\x1b[14Gtrust\x1b[20Gthis\x1b[25Gfolder\x1b[39m\r\n" +
+	"\x1b[4G\x1b[38;5;246m2.\x1b[7G\x1b[39mNo,\x1b[11Gexit\r\n" +
+	"\x1b[2mEnter to confirm\x1b[22m"
+
+// TestScanTrustAcceptReadsOptionNumber: the accept keystrokes are the option
+// number read from the stream (not an assumed default), then Enter (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestScanTrustAcceptReadsOptionNumber(t *testing.T) {
+	keys, ok := scanTrustAccept([]byte(trustDialog))
+	if !ok {
+		t.Fatal("trust dialog not detected")
+	}
+	if string(keys) != "1\r" {
+		t.Errorf("accept keys = %q, want \"1\\r\"", keys)
+	}
+}
+
+// TestScanTrustAcceptReorderedMenu: when "Yes, I trust" is option 2, the scan
+// yields "2" — the number is read, not assumed (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestScanTrustAcceptReorderedMenu(t *testing.T) {
+	reordered := "\x1b[38;5;250mDo you trust the files in this folder?\x1b[39m\r\n" +
+		"\x1b[38;5;246m1.\x1b[7G\x1b[39mNo,\x1b[11Gexit\r\n" +
+		"\x1b[38;5;153m❯\x1b[4G\x1b[38;5;246m2.\x1b[7G\x1b[38;5;153mYes,\x1b[12GI\x1b[14Gtrust\x1b[20Gthis\x1b[25Gfolder"
+	keys, ok := scanTrustAccept([]byte(reordered))
+	if !ok || string(keys) != "2\r" {
+		t.Errorf("reordered menu: keys=%q ok=%v, want \"2\\r\", true", keys, ok)
+	}
+}
+
+// TestScanTrustAcceptNoDialog: ordinary output (no menu) is not mistaken for the
+// trust dialog, even when it contains the word "trust" (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestScanTrustAcceptNoDialog(t *testing.T) {
+	for _, s := range []string{
+		"\x1b[38;5;246mOpus 4.8 (1M context)\x1b[39m manual mode on",
+		"I don't think we should trust this input blindly.",
+		"",
+	} {
+		if keys, ok := scanTrustAccept([]byte(s)); ok {
+			t.Errorf("false positive on %q -> keys=%q", s, keys)
+		}
+	}
+}
+
+// TestClaudeProjectDirEncoding: cwd encodes to ~/.claude/projects/<'/' and '.' →
+// '-'>, matching Claude Code's per-project log dir used by the new-project check
+// (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestClaudeProjectDirEncoding(t *testing.T) {
+	got := claudeProjectDir("/home/deck/.ark/luhmann")
+	const want = "/.claude/projects/-home-deck--ark-luhmann"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("claudeProjectDir = %q, want suffix %q", got, want)
+	}
+}
+
+// TestMaybeAcceptTrustFires: on the dialog, the accepter disarms, closes
+// trustDone, and sends the accept keystrokes through the input funnel (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestMaybeAcceptTrustFires(t *testing.T) {
+	h := &PtyHost{inCh: make(chan []byte, 4)}
+	h.trustArmed.Store(true)
+	h.trustDone = make(chan struct{})
+
+	h.maybeAcceptTrust([]byte(trustDialog))
+
+	if h.trustArmed.Load() {
+		t.Error("accepter should disarm after handling the dialog")
+	}
+	select {
+	case <-h.trustDone:
+	default:
+		t.Error("trustDone should be closed after acceptance")
+	}
+	select {
+	case got := <-h.inCh:
+		if string(got) != "1\r" {
+			t.Errorf("sent %q, want \"1\\r\"", got)
+		}
+	default:
+		t.Error("accept keystrokes were not sent")
+	}
+}
+
+// TestMaybeAcceptTrustAccumulates: a dialog split across two reads is still
+// detected — the accepter accumulates output across chunks (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestMaybeAcceptTrustAccumulates(t *testing.T) {
+	h := &PtyHost{inCh: make(chan []byte, 4)}
+	h.trustArmed.Store(true)
+	h.trustDone = make(chan struct{})
+
+	half := len(trustDialog) / 2
+	h.maybeAcceptTrust([]byte(trustDialog[:half]))
+	h.maybeAcceptTrust([]byte(trustDialog[half:]))
+
+	if h.trustArmed.Load() {
+		t.Error("dialog split across chunks should still be detected")
+	}
+}
+
+// TestMaybeAcceptTrustWaitsWithoutDialog: ordinary early output leaves the
+// accepter armed and quiet — it acts only on the actual dialog (R3128).
+//
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
+func TestMaybeAcceptTrustWaitsWithoutDialog(t *testing.T) {
+	h := &PtyHost{inCh: make(chan []byte, 4)}
+	h.trustArmed.Store(true)
+	h.trustDone = make(chan struct{})
+
+	h.maybeAcceptTrust([]byte("\x1b[2mStarting up…\x1b[22m no menu here"))
+
+	if !h.trustArmed.Load() {
+		t.Error("accepter should stay armed until the dialog appears")
+	}
+	select {
+	case <-h.trustDone:
+		t.Error("trustDone should not close without a dialog")
+	default:
+	}
+	select {
+	case got := <-h.inCh:
+		t.Errorf("no keystrokes should be sent, got %q", got)
+	default:
 	}
 }

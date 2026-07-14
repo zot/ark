@@ -16,3 +16,4 @@ node_modules
 /ark
 /pdf-chunk/dist
 /tag-overview/dist/
+/release/

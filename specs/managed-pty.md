@@ -48,6 +48,39 @@ receive is the JSONL read side.
 dies on `ark stop`, and per the invariant it is **not** auto-relaunched, so a
 restart leaves the session down until a human re-launches it.
 
+The child launches as a **fresh, top-level `claude`**, indistinguishable from
+one a human started in a clean shell. This matters because `ark serve` may
+itself be running inside a Claude Code session (an agent started it from its
+shell), and that parent environment carries session-identity markers:
+`CLAUDECODE`, `CLAUDE_CODE_*`, and `AI_AGENT`. A child `claude` that inherits
+them concludes it is a nested sub-session and will not complete an interactive
+turn. The bootstrap never submits, so no JSONL is ever written and the launch
+dies waiting at the second-record gate (see the confirmation protocol below).
+So the fork strips those markers from the child's environment before starting
+it; credentials (`ANTHROPIC*`) and unrelated config are left intact. The hosted
+session is its own session, not the server's grandchild.
+
+A directory Claude Code has never opened triggers a one-time **"trust this
+folder"** dialog at startup, a numbered menu (`1. Yes, I trust this folder` /
+`2. No, exit`). For a managed launch that is a hazard: the dialog intercepts the
+bootstrap keystrokes, so the session comes up but never loads `/luhmann` and the
+launch fails. So when the launch targets a directory new to Claude Code (its
+`~/.claude/projects/<cwd-encoded>/` does not exist yet), the host watches the
+child's early output and answers the dialog before sending the bootstrap. It
+selects the trust-accepting option by the *number it reads from the stream*,
+never by pressing Enter on whatever is highlighted. The default is "Yes" today,
+but a future build could default to "No, exit", and a blind Enter would then
+kill the session. Reading the number also answers a reordered menu correctly.
+
+The scan works because the current renderer emits the dialog in reading order,
+the option number ahead of its "Yes … trust" label, once the ANSI escapes are
+stripped. It is a heuristic and it fails safe: if the stream stops matching (say
+a renderer that backtracks with cursor addressing to place text out of stream
+order), the host sends no keystroke, and the launch fails visibly at the seat
+claim, the same symptom as any other bootstrap that did not take. Recovering
+from a backtracking renderer would mean maintaining a virtual screen — tracking
+the cursor into a grid and reading the grid — which is out of scope until then.
+
 The master's byte stream fans out to a set of attached **clients**. A client
 is transport-agnostic: anything that can receive the output stream, send input,
 and report a terminal size. Phase 1 ships one client transport, the CLI
@@ -131,22 +164,22 @@ session".) Server required.
 ## Launch confirmation — content-free
 
 `launch` confirms the session came up without parsing any JSON record content,
-using two presence signals and one event ark already owns:
+using one event ark already owns — the seat claim — after clearing the way for
+it:
 
-1. **Second JSONL record.** Locate the new session's JSONL under
-   `~/.claude/projects/<cwd-encoded>/` and wait for its *second* record to
-   appear. This is a cheap early liveness gate — `claude` is connected to Claude
-   Code and progressing — and a fail-fast if it never starts. Best-effort
-   heuristic; the seat claim below is the authoritative gate.
+1. **Clear a stale seat.** Before forking, unconditionally clear any prior seat
+   claim (`ForceReleaseSeat`). A prior session that died without releasing the
+   in-memory lease would otherwise block the new session's `--first` claim; the
+   managed launch is the authoritative start, so it takes the seat.
 2. **Send the bootstrap.** Write `load /luhmann` to the pty. Claude Code buffers
    input typed at any time, so ordering against startup is safe.
 3. **Seat claim.** Wait for the launched session to claim the Luhmann seat via
    `ark luhmann next --first` — the authoritative confirmation that `/luhmann`
    loaded and attached, and the event that teaches ark the session's id (from the
-   claim's `--session`). A timeout on either wait fails the launch.
+   claim's `--session`). A timeout on the wait fails the launch.
 
-Nothing here reads the *content* of a record: the signals are record presence
-(step 1) and ark's own seat lease (step 3).
+Nothing here reads the *content* of a record: the sole confirmation is ark's own
+seat lease (step 3).
 
 ## What this spec deliberately does not require
 
