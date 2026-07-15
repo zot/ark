@@ -8,6 +8,7 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/hybridgroup/yzma v1.16.1
 	github.com/itlightning/dateparse v0.2.1
 	github.com/urfave/cli/v3 v3.9.0
@@ -27,7 +28,6 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/google/codesearch v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jupiterrider/ffi v0.6.0 // indirect
 	github.com/layeh/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect

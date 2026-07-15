@@ -244,13 +244,46 @@ transport (CLI now, browser later) uniformly:
   copying on-screen content after detaching; a future "clear on detach" would
   destroy that and is intentionally not done.
 
+## Browser transport
+
+The browser reaches the hosted session over ark's **own** websocket at `GET
+/luhmann/pty`, served on the UI HTTP server (the same origin and port the
+Frictionless UI uses) whenever the UI runtime is running. This is a separate
+wire from ui-engine's `WebSocketEndpoint`, which is a structured view-diff
+channel — the wrong shape for a raw terminal stream, and routing pty bytes
+through its per-session view executor would tie terminal latency to view
+rendering. So ark runs its own `gorilla/websocket` upgrade on that path.
+
+Two message kinds carry the two directions:
+
+- **Binary messages are raw pty bytes.** A browser→host binary message is input,
+  merged onto the child like any client's keystrokes; a host→browser binary
+  message is a chunk of the child's output. The message boundary is the chunk
+  boundary, so there is no framing to parse.
+- **Text messages are JSON control frames.** `{"t":"resize","cols":C,"rows":R}`
+  reports the client's terminal size for the smallest-wins minimum, and
+  `{"t":"repaint"}` requests the forced repaint (the browser's equivalent of the
+  CLI client's on-connect repaint, carried the same client-requested way the
+  Screen repaint section describes). The **first** message must be a resize, so
+  the host knows the client's size before it attaches; a connection that opens
+  with anything else is closed.
+
+The websocket client is one implementation of the transport-agnostic client
+interface the CLI `attach` also implements. It plugs into the identical fan-out
+(broadcast, serialized input merge, smallest-wins resize, attach/detach
+independence) with the same bounded-buffer drop, so a stalled browser tab is
+dropped rather than allowed to stall the session, and the same
+survive-zero-clients behaviour. The xterm.js terminal that drives it is a later
+`/ui-thorough` slice; this spec covers the Go endpoint and its wire.
+
 ## What this spec deliberately does not require
 
-- **The browser transport *wiring*.** The websocket endpoint itself (`GET
-  /luhmann/pty` on the UI HTTP server, ark's own `gorilla/websocket`) and the
-  xterm.js client are a later slice. What phase 1 *does* commit is the
-  transport-agnostic client interface the fan-out uses (see Architecture), so
-  that slice plugs in a browser client without reworking the multiplexer.
+- **The xterm.js browser *client*.** The websocket endpoint itself (`GET
+  /luhmann/pty` on the UI HTTP server, ark's own `gorilla/websocket`) ships now
+  (see Browser transport); the browser-side xterm.js terminal that connects to
+  it is a later `/ui-thorough` slice. The transport-agnostic client interface
+  the fan-out uses (see Architecture) is what lets that client plug in without
+  reworking the multiplexer.
 - **A second concurrent hosted session.** One pty-hosted session at a time; a
   session pool is not in scope.
 - **Content-based idle detection.** A precise "the agent finished its turn and

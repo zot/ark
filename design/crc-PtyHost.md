@@ -28,7 +28,7 @@ through its channel, so no lock is held across pty I/O.
 - status: report whether a session is hosted (master non-nil) plus the pool-secretary roster count from the supervisor state (R3124).
 
 ## Collaborators
-- attached clients: the transport-agnostic client interface it broadcasts to and merges input from — PtyAttach is phase-1's implementation, a browser client a later one (R3117). Connected-to.
+- attached clients: the transport-agnostic client interface it broadcasts to and merges input from — PtyAttach (CLI, unix socket) and PtyBrowser (browser, websocket) are its two implementations (R3117, R3144). Connected-to.
 - Luhmann seat lease: launch waits for the session's `ark luhmann next --first` claim on it — the authoritative confirmation and the session-id source (R3126); stop releases the same lease (R3125). Connected-to, not part-of.
 - creack/pty: the pty master primitive.
 - Server: holds the PtyHost and exposes launch/attach/status/stop over the unix socket (R3116).

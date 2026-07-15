@@ -17,8 +17,9 @@ Tags + FTS give fully functional recall on any hardware.
 
 The managed pty session lets `ark serve` host a Claude Code session in a pty
 (the Luhmann orchestrator first): it holds the pty master, runs `claude` as a
-child, and fans the byte stream out to any number of attached clients (CLI now,
-browser later), while `launch` confirms the session came up through content-free
+child, and fans the byte stream out to any number of attached clients (a CLI
+client over the unix socket, a browser over a `GET /luhmann/pty` websocket),
+while `launch` confirms the session came up through content-free
 signals and `stop` tears it down cleanly. See specs/managed-pty.md.
 
 ## Cross-cutting Concerns
@@ -176,7 +177,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-LuhmannSend.md → `luhmann_send.go`
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
+- [x] crc-PtyBrowser.md → `pty_browser.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
+- [x] test-PtyBrowser.md → `pty_browser_test.go`
 
 ### Sequences
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
@@ -191,7 +194,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-pty-launch.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`
-- [x] seq-pty-attach.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`
+- [x] seq-pty-attach.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`, `pty_browser.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 - [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
 - [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
@@ -840,3 +843,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A76: R3128 trust-dialog acceptance assumes Claude Code renders the option in stream order (number before the 'Yes … trust' label). It fails safe on a non-match (no key sent; launch fails visibly at the seat claim). If a future renderer backtracks with cursor addressing, escalate to a virtual screen (track cursor into a grid, read the grid) instead of scraping the raw stream.
 - [ ] O150: luhmann send end-to-end is integration-level, not unit-tested: the full path (enqueue command → LuhmannNext delivers the crank-handle → the hosted orchestrator runs a turn → the marker + turn_duration land in its JSONL → tailSendWindow brackets → the CLI renders) needs a live hosted orchestrator (a paid claude session) + a live server + the seat lease. The deterministic pieces ARE unit-tested (test-LuhmannSend.md: scanSendWindow open/close/pre-marker cases, tailSendWindow happy-path + timeout against a temp JSONL, the request/nonce builder, the no-orchestrator gate). Drive the true end-to-end as a scripted CLI smoke test alongside O149, or verify live against the running Luhmann session before committing. **Verified live 2026-07-14** (session 6276ba08: `send` → command delivered → single-turn reply bracketed marker→turn_duration → rendered with tools, exit 0, ~16s; the no-orchestrator 409 gate also confirmed; R3135 auto-index source present at startup). Automated smoke test still deferred (needs the paid session). R3129/R3132/R3133.
 - [ ] O151: attach-client interactive additions are raw-terminal code, driven live not unit-tested (like O149): the bottom-row detach prompt (showDetachPrompt, R3138), the on-connect repaint request (R3137), and the Ctrl-]-cancel repaint request. The host side IS unit-tested (TestPtyHostForceRepaint, TestPtyRepaintFrameRoundTrip, TestFilterChildEnvManagedMarker). Verify live: attach → full screen appears at once (R3137); Ctrl-] → prompt shows; press a non-d key → prompt wiped by the child repaint (R3138); d → detach. **Verified live 2026-07-14** (Bill: repaints properly on attach and on Ctrl-] cancel). The initial failure was SIGWINCH coalescing — a synchronous shrink-then-restore was invisible to the child; fixed by holding the shrink `ptyRepaintNudge` (100ms) so the intermediate size is observed. **R3140 (full terminal restore) also verified live** — the intermittent raw-mode-stuck after detach was DEC private modes (cursor / bracketed-paste / mouse) that `term.Restore` does not undo; fixed with a sanitizing exit sequence, no more manual `reset`. Detach deliberately keeps the rendered frame on screen (Bill: good for copying / scrollback). R3136/R3137/R3138/R3140.
+- [ ] O152: Browser websocket transport wiring (the gorilla upgrade, first-frame-resize precondition, Attach/read-loop/Detach in handleLuhmannPty, wsPtyClient.writeLoop) is driven live, not unit-tested — like the socket transport (O149) and the attach-client interactive additions (O151); it needs a real browser or websocket client plus a hosted session. The deterministic control-frame parser (parsePtyControl) IS unit-tested (test-PtyBrowser.md). Fold into the automated smoke test (PENDING #40).

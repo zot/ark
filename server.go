@@ -3839,7 +3839,11 @@ func (srv *Server) registerContentRoutes() {
 	srv.uiRuntime.UIHandleFunc("POST /curation/pin", srv.handleCuratePin)
 	srv.uiRuntime.UIHandleFunc("POST /curation/dismiss", srv.handleCurateDismiss)
 	srv.uiRuntime.UIHandleFunc("GET /curation/pinned", srv.handleCuratePinned)
-	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints)")
+	// Managed-PTY browser transport: ark's own websocket for the hosted pty,
+	// distinct from ui-engine's view-diff socket, so raw terminal bytes never
+	// route through the per-session view executor (R3141).
+	srv.uiRuntime.UIHandleFunc("GET /luhmann/pty", srv.handleLuhmannPty)
+	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints, /luhmann/pty)")
 	// NOTE: /content/ markdown shell references /ark-markdown-editor.js.
 	// The UI server serves from ~/.ark/html/ — the Makefile must copy
 	// the built bundle there (see O48 in design.md gaps).
