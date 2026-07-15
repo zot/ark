@@ -701,12 +701,13 @@ const (
 // keepalive is a fourth `next` return but is synthesized on the deadline, not
 // queued.
 type LuhmannWork struct { // R3011
-	Kind      string // "curation" | "directive" | "command"
+	Kind      string // "curation" | "directive" | "command" | "frictionless-event"
 	Path      string // curation: request-doc tmp:// path
 	Directive string // directive: "stand-up" | "stop"
 	Class     string // directive: managed class (e.g. "bloodhound")
 	Nonce     uint64 // directive "stop": which pool secretary to stop (R3019); command: correlation nonce (R3130)
 	Command   string // command: the built markdown request incl. the inert `LSEND:n` marker (R3130)
+	Event     string // frictionless-event: the UI event's raw JSON payload (R3147)
 }
 
 // luhmannNextMode is the ownership intent of one `next` call (R3013).
@@ -727,6 +728,20 @@ const (
 	luhmannDispReclaim                               // R3014: there are no sessions → re-invoke --first
 )
 
+// setLuhmannOwnerLocked seats `session` and, when that displaces a *different*
+// owner, clears Frictionless event routing in the same locked step (R3148).
+// Routing does not inherit: the incoming orchestrator starts without it and
+// must ask for itself, so it can never find itself serving a UI event stream it
+// doesn't know about. A re-claim by the same session (a `--first` after a
+// reconnect) leaves its own routing intact. Caller holds luhmannMu.
+// CRC: crc-LuhmannCLI.md | Seq: seq-luhmann-events.md#3.2 | R3148
+func (srv *Server) setLuhmannOwnerLocked(session string) {
+	if srv.luhmannOwner != session {
+		srv.clearEventRoutingLocked()
+	}
+	srv.luhmannOwner = session
+}
+
 // claimLuhmann applies the in-memory ownership lease for one `next` call
 // (R3012, R3013). Returns the disposition and, for the two non-OK cases, the
 // error string the skill keys on (R3014). --force always claims; --first claims
@@ -740,11 +755,11 @@ func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNe
 	defer srv.luhmannMu.Unlock()
 	switch mode {
 	case luhmannModeForce:
-		srv.luhmannOwner = session
+		srv.setLuhmannOwnerLocked(session)
 		return luhmannDispOK, ""
 	case luhmannModeFirst:
 		if srv.luhmannOwner == "" || srv.luhmannOwner == session {
-			srv.luhmannOwner = session
+			srv.setLuhmannOwnerLocked(session)
 			return luhmannDispOK, ""
 		}
 		return luhmannDispExit, luhmannErrNoOwnership
@@ -862,6 +877,14 @@ func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 		return fmt.Sprintf(
 			"%sA command has arrived — handle it as you would a request from the user: do the work, then reply. Your reply ends the turn.\n\n%s\n",
 			lead, w.Command)
+	case "frictionless-event":
+		// R3147: a UI event routed onto the tube by the event pump
+		// (crc-LuhmannEvents.md). Fire-and-forget: nobody is blocked on a reply,
+		// so its effects reach the user through app-data mutations the UI
+		// reflects and through the conversation itself.
+		return fmt.Sprintf(
+			"%sA Frictionless UI event has arrived — the app is asking you to do this. Handle it, acting on the app's data as needed. No caller is waiting on a reply, so there is nothing to return; talk to the user only if the event asks you to.\n\n```json\n%s\n```\n",
+			lead, w.Event)
 	default:
 		return fmt.Sprintf("%sSkip this unrecognized work kind %q.\n", lead, w.Kind)
 	}

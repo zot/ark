@@ -89,7 +89,10 @@ replacing the `.ui/mcp` shell script:
 
 - `ark ui run '<lua>'` — execute Lua code in the UI session
 - `ark ui display <app>` — display an app in the browser
-- `ark ui event` — wait for next UI event (long-poll, 120s timeout)
+- `ark ui event` — wait for next UI event (long-poll, 120s timeout).
+  Errors while a Luhmann orchestrator owns event routing, which reroutes
+  these same events onto its own tube; see the `events` verb in
+  [luhmann.md](luhmann.md). Unaffected when no orchestrator has asked.
 - `ark ui checkpoint <cmd> <app> [msg]` — manage app checkpoints
 - `ark ui audit <app>` — run code quality audit
 - `ark ui status` — ui-engine server status

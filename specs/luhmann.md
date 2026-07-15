@@ -168,6 +168,10 @@ returned body:
   fire-and-forget kinds above, the sender is blocked waiting for the
   reply, so the command carries an inert correlation marker (see `send`)
   that the tube's other producers never need.
+- **frictionless-event** — a Frictionless UI event routed onto the tube by
+  the `events` opt-in (below), carrying the event's JSON payload. Luhmann
+  handles it as a task the UI is asking for. Fire-and-forget like a
+  directive: nothing blocks on the reply.
 
 #### Ownership lease — `--session`, `--first`, `--force`
 
@@ -272,6 +276,57 @@ Plumbing), consistent with `next`.
 `send` requires a live orchestrator: with no session owning the tube
 (`luhmannOwner` empty) it errors orchestrator-not-running, the same gate the
 watcher applies to CLI hunts. Server required.
+
+### `events`
+
+The **event-routing opt-in**. Frictionless events are the high-level "have
+the agent do this" tasks a Lua app pushes with `mcp.pushState()` — a job
+listing arriving with *summarize it, add a job item, discuss it with the
+user*. They are drained today by `ark ui event`, the first lotto tube and
+the one this whole family grew out of. `ark luhmann events` routes them onto
+`next` instead, so a pty-hosted orchestrator handles UI work in the same
+serialized conversation thread it already uses for curation tasks,
+directives, and commands.
+
+```
+ark luhmann events --session S [--off]
+```
+
+`--session S` must already own the `next` seat. Routing is a privilege of
+the seat rather than a second identity, so a session that does not own the
+seat errors `you don't have ownership` — the same string driving the same
+stand-down reflex as `next`.
+
+While a session owns routing:
+
+- Frictionless events arrive on its `next` tube as a **frictionless-event**
+  kind.
+- `ark ui event` **errors**, reporting that an orchestrator owns event
+  routing.
+
+There is exactly **one event reader at a time**, and the reason is that the
+drain is destructive: each event is delivered once and then cleared from the
+queue. Two readers would split the stream between them, each seeing an
+arbitrary half of the events and neither seeing the whole. So the second
+reader is refused rather than served badly.
+
+`--off` releases routing and `ark ui event` serves again. When no
+orchestrator owns routing, `ark ui event` behaves exactly as it always has.
+The opt-in changes nothing for a session that never asks.
+
+**Routing does not inherit.** It belongs to the session that asked for it,
+not to the seat, so a new orchestrator taking over the seat starts without
+routing even when its predecessor had it, and must ask for itself. Routing
+clears when the owner releases it with `--off`, when a different session
+claims or forces the seat, and on a server bounce along with the lease
+itself. This keeps a fresh orchestrator from silently inheriting a UI event
+stream it has no idea it is serving; until it asks, the events go back to
+`ark ui event`.
+
+Like the curation and directive kinds, a frictionless-event is
+enqueue-and-forget. Its effects reach the user through the app-data
+mutations the UI reflects and through the conversation itself, not through a
+blocked caller — only `send` blocks. Server required.
 
 ## `[luhmann]` configuration
 

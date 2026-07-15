@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130, R3147, R3148
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
@@ -27,7 +27,9 @@ card covers only the Go surface the skill calls into.
   directives (stand up / stop a pool secretary), both pushed by the recall
   watcher; plus **command** items (R3130) — a `send` instruction with an
   inert correlation nonce, pushed by the synchronous producer
-  (crc-LuhmannSend.md). Server state; a bounce drops it.
+  (crc-LuhmannSend.md); plus **frictionless-event** items (R3147) — a UI
+  event, pushed by the event-routing pump (crc-LuhmannEvents.md) while the
+  seat owner has opted in. Server state; a bounce drops it.
 
 ## Does
 
@@ -114,6 +116,11 @@ card covers only the Go surface the skill calls into.
     it (R3013).
   - **`--force`** sets `luhmannOwner := S` unconditionally — the
     deliberate takeover of a dead-but-registered owner (R3013).
+  - Whenever the seat changes to a **different** session, the claim also
+    clears Frictionless event routing in the same locked step
+    (`clearEventRouting`, crc-LuhmannEvents.md, R3148): routing does not
+    inherit, so the incoming orchestrator must ask for itself. A re-claim by
+    the *same* session leaves its routing intact.
   - The lease is **in-memory**, so a bounce clears it. The two error
     strings drive the skill's reflexes and make the protocol
     self-converging with no persistence (R3014): `there are no
@@ -131,6 +138,10 @@ card covers only the Go surface the skill calls into.
   `--result` arg, R3025/R3027); a **supervisor directive** (stand up /
   stop a pool secretary — the skill spawns/stops via Task and records
   with `spawn-record` / `exit-record`, R3019); the **keepalive**. A
+  fifth kind, the **frictionless-event** (R3147), is produced by the event
+  pump (crc-LuhmannEvents.md) once the seat owner opts in with `ark luhmann
+  events`: a UI event routed onto this tube instead of `ark ui event`,
+  fire-and-forget like a directive. A
   fourth kind, the **command** (R3130), is produced by `ark luhmann send`
   (crc-LuhmannSend.md): a synchronous CLI instruction rendered as a
   markdown request carrying an inert correlation nonce; `next` hands it
@@ -186,7 +197,12 @@ card covers only the Go surface the skill calls into.
 - LuhmannSend (crc-LuhmannSend.md): the synchronous producer — pushes
   **command** items onto `nextQueue` via `EnqueueLuhmann` and reads
   `LuhmannOwner()` to gate on a live orchestrator (R3130).
+- LuhmannEvents (crc-LuhmannEvents.md): the event-routing producer — pushes
+  **frictionless-event** items onto `nextQueue`, hangs its opt-in off this
+  card's seat, and shares `luhmannMu` so a seat change clears routing
+  atomically (R3147, R3148).
 
 ## Sequences
 - seq-luhmann-supervisor.md
 - seq-bloodhound-cli.md
+- seq-luhmann-events.md

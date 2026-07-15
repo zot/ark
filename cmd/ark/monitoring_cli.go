@@ -206,6 +206,18 @@ func luhmannCommand() *ucli.Command {
 				Action: luhmannSendAction,
 			},
 			{
+				Name:      "events",
+				Usage:     "route Frictionless UI events onto this session's next tube (server)",
+				ArgsUsage: "--session SID [--off]",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "session", Usage: "orchestrator session identity holding the Luhmann seat (required)"},
+					// No backticks in Usage: urfave reads a backquoted span as the
+					// flag's value-placeholder name, which is nonsense on a bool.
+					&ucli.BoolFlag{Name: "off", Usage: "release event routing, so 'ark ui event' serves again"},
+				},
+				Action: luhmannEventsAction,
+			},
+			{
 				Name:  "launch",
 				Usage: "start a hosted Claude Code session in a pty (spend consent gate; server)",
 				Flags: []ucli.Flag{
@@ -399,4 +411,31 @@ func luhmannSendAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("%s", strings.TrimSpace(string(data))))
 		return nil
 	}
+}
+
+// luhmannEventsAction is the `ark luhmann events` opt-in: it asks the server to
+// route Frictionless UI events onto this session's `next` tube (or, with --off,
+// to stop). Routing hangs off the `next` seat, so the server refuses a session
+// that doesn't own it with the same stand-down string `next` uses (R3013).
+// CRC: crc-CLITree.md, crc-LuhmannEvents.md | Seq: seq-luhmann-events.md#1.1 | R3145
+func luhmannEventsAction(_ context.Context, c *ucli.Command) error {
+	session := c.String("session")
+	if session == "" {
+		fmt.Fprintln(os.Stderr, "ark luhmann events --session SID [--off]")
+		os.Exit(2)
+	}
+	off := c.Bool("off")
+	client := requireServer("luhmann events")
+	if err := proxyOK(client, "POST", "/luhmann/events", map[string]any{
+		"session": session,
+		"off":     off,
+	}); err != nil {
+		fatal(err)
+	}
+	if off {
+		fmt.Println("event routing released; `ark ui event` serves again")
+	} else {
+		fmt.Printf("Frictionless UI events now arrive on `ark luhmann next --session %s`\n", session)
+	}
+	return nil
 }

@@ -69,10 +69,18 @@ type Server struct {
 	// keeps exactly one session draining `ark luhmann next`; nextQueue is the
 	// watcher→Luhmann handoff of curation tasks + supervisor directives. Both
 	// are in-memory server state — a bounce clears them (R3012, R3011).
-	luhmannMu    sync.Mutex       // R3012: guards luhmannOwner
+	luhmannMu    sync.Mutex       // R3012, R3145: guards luhmannOwner + eventOwner/eventPumpCancel
 	luhmannOwner string           // R3012: session holding the Luhmann seat; "" when unowned
 	nextQueue    chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
 	sendCounter  atomic.Uint64    // R3131: monotonic nonce source for `ark luhmann send`; a bounce resets it
+
+	// R3145, R3148: Frictionless event routing. eventOwner shares luhmannMu
+	// with the seat rather than taking a lock of its own — the two are
+	// lifecycle-coupled (routing clears on a seat change), so one lock keeps
+	// the invariant "eventOwner is empty or equals luhmannOwner" indivisible.
+	eventOwner      string             // R3145: session owning event routing; "" when unowned
+	eventPumpCancel context.CancelFunc // R3145: stops the running pump; nil when none runs
+	uiMux           *http.ServeMux     // R3146: the mux flib registered /wait on; the pump reads it in-process
 
 	// R3116: the managed-PTY host — holds the pty master + `claude` child of a
 	// hosted Luhmann session and fans its output out to attached clients. nil of
@@ -452,6 +460,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	if srv.uiRuntime != nil {
 		srv.uiRuntime.RegisterAPI(mux)
 	}
+	// R3146: keep the mux the event pump reads /wait from in-process. External
+	// callers reach it only through gateFrictionlessWait (installed at Serve
+	// below), so the pump bypasses its own gate by construction.
+	srv.uiMux = mux
 
 	mux.HandleFunc("POST /search", srv.handleSearch)   // R90
 	mux.HandleFunc("POST /add", srv.handleAdd)         // R91
@@ -506,6 +518,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /luhmann/next", srv.handleLuhmannNext)
 	// Synchronous command bridge (#35): enqueue → wait → render, R3129.
 	mux.HandleFunc("POST /luhmann/send", srv.handleLuhmannSend)
+	mux.HandleFunc("POST /luhmann/events", srv.handleLuhmannEvents) // R3145
 	// Managed-PTY lifecycle (#35 phase 1): launch/attach/status/stop. attach
 	// hijacks into a raw pty stream. R3122–R3126.
 	mux.HandleFunc("POST /luhmann/launch", srv.handleLuhmannLaunch)
@@ -577,7 +590,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	log.Printf("ark server listening on %s", socketPath)
 	// R65, R89: HTTP API accepts requests over the unix-socket listener, mirroring the CLI with JSON request/response.
-	return http.Serve(listener, mux)
+	// R3146: the gate wraps the whole mux so `ark ui event` is refused while an
+	// orchestrator owns event routing. A wrapper rather than a route because
+	// flib already registered /wait and a second registration would collide.
+	return http.Serve(listener, srv.gateFrictionlessWait(mux))
 }
 
 // CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.3 | R2987

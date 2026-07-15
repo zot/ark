@@ -3498,6 +3498,14 @@ func cmdUIEvent(args []string) {
 		resp.Body.Close()
 		out := strings.TrimSpace(string(data))
 
+		// R3146: a Luhmann orchestrator owns event routing, so these events now
+		// arrive on its `next` tube. Reading here would make this the second
+		// reader of a destructive drain and split the stream, so the gate refuses
+		// it. Not retryable — routing is released by whoever claimed it.
+		if resp.StatusCode == http.StatusConflict {
+			fmt.Fprintln(os.Stderr, out)
+			os.Exit(1)
+		}
 		if out == "" {
 			continue
 		}
