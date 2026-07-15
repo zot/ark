@@ -7,7 +7,7 @@ package ark
 // confirmation protocol (R3126) touches a real JSONL + the seat lease and is
 // left to integration (see design.md Gaps).
 //
-// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3118, R3119, R3120, R3121, R3122
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3118, R3119, R3120, R3121, R3122, R3136, R3139
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakePtyEnv is an inert PtyEnv for the fan-out tests (no seat, no roster).
@@ -90,6 +91,77 @@ func clientCount(h *PtyHost) int {
 	var n int
 	_ = svcSyncVoid(h.jobs, func() error { n = len(h.clients); return nil })
 	return n
+}
+
+// Test: forceRepaint toggles the pty size a row and restores it, so the child
+// gets a real SIGWINCH to redraw on — a same-size resize would be a kernel
+// no-op (R3136).
+func TestPtyHostForceRepaint(t *testing.T) {
+	h := NewPtyHost(fakePtyEnv{})
+	var mu sync.Mutex
+	var sizes []PtyWinsize
+	installMaster(h, fakeMaster(t), func(s PtyWinsize) {
+		mu.Lock()
+		sizes = append(sizes, s)
+		mu.Unlock()
+	})
+	if _, err := h.Attach(&fakePtyClient{}, PtyWinsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	mu.Lock()
+	sizes = nil // drop the attach's own resize; measure only the repaint
+	mu.Unlock()
+
+	h.ForceRepaint()
+	time.Sleep(ptyRepaintNudge + 50*time.Millisecond) // the restore fires async
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []PtyWinsize{{Cols: 80, Rows: 23}, {Cols: 80, Rows: 24}}
+	if len(sizes) != len(want) || sizes[0] != want[0] || sizes[1] != want[1] {
+		t.Errorf("forceRepaint sizes = %v, want %v (shrink a row, hold, then restore)", sizes, want)
+	}
+}
+
+// Test: a repaint frame round-trips as kind-only (R3136).
+func TestPtyRepaintFrameRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WritePtyRepaint(&buf); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	kind, data, _, err := ReadPtyFrame(&buf)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if kind != ptyFrameRepaint || data != nil {
+		t.Errorf("got kind=%q data=%v, want ptyFrameRepaint + nil data", kind, data)
+	}
+}
+
+// Test: the child env carries the managed-pty marker, still strips the session
+// markers, and passes credentials through (R3139, R3127).
+func TestFilterChildEnvManagedMarker(t *testing.T) {
+	env := filterChildEnv([]string{"PATH=/usr/bin", "CLAUDECODE=1", "ANTHROPIC_API_KEY=sk"})
+	var hasMarker, hasCreds, hasCode bool
+	for _, e := range env {
+		switch {
+		case e == "ARK_MANAGED_PTY=1":
+			hasMarker = true
+		case e == "ANTHROPIC_API_KEY=sk":
+			hasCreds = true
+		case strings.HasPrefix(e, "CLAUDECODE="):
+			hasCode = true
+		}
+	}
+	if !hasMarker {
+		t.Error("filterChildEnv must set ARK_MANAGED_PTY=1")
+	}
+	if !hasCreds {
+		t.Error("filterChildEnv must pass credentials through")
+	}
+	if hasCode {
+		t.Error("filterChildEnv must strip CLAUDECODE")
+	}
 }
 
 // Test: smallest-wins resize, both directions (R3120).

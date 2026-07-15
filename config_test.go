@@ -8,6 +8,37 @@ import (
 	"testing"
 )
 
+// TestEnsureLuhmannSource verifies ark auto-indexes the orchestrator's own
+// session by adding its Claude Code project directory as a chat-jsonl source,
+// idempotently, with no user config (R3135).
+func TestEnsureLuhmannSource(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	want := claudeProjectDir(luhmannCwd())
+	if want == "" {
+		t.Fatal("claudeProjectDir(luhmannCwd()) returned empty")
+	}
+	c := &Config{}
+	c.EnsureLuhmannSource()
+	found := false
+	for _, s := range c.Sources {
+		if s.Dir == want {
+			found = true
+			if len(s.Include.Replace) != 1 || s.Include.Replace[0] != "*.jsonl" {
+				t.Errorf("include = %v, want [*.jsonl]", s.Include.Replace)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("EnsureLuhmannSource added no source for %s", want)
+	}
+	// Idempotent: a second call must not duplicate.
+	n := len(c.Sources)
+	c.EnsureLuhmannSource()
+	if len(c.Sources) != n {
+		t.Errorf("second EnsureLuhmannSource duplicated: %d → %d", n, len(c.Sources))
+	}
+}
+
 func TestLoadValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ark.toml")

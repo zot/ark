@@ -6,8 +6,9 @@ Language: Go. Environment: ark CLI binary; writes JSONL records under
 This spec covers the **Go side** of the Luhmann orchestrator: the
 `ark luhmann` CLI verbs the orchestrator session uses to record its
 own supervisor lifecycle events **and to drain its work tube**
-(`next`), and the `[luhmann]` `ark.toml` section that configures
-restart policy. The orchestrator session
+(`next`), the `send` verb a caller uses to push one command into that
+tube and wait for the orchestrator's reply, and the `[luhmann]`
+`ark.toml` section that configures restart policy. The orchestrator session
 itself — its persona, its event handling, the lotto-tube subagent it
 hosts — lives in a Claude Code skill (`.claude/skills/luhmann.md`)
 and a companion agent definition (`.claude/agents/luhmann-researcher.md`),
@@ -58,6 +59,7 @@ ark luhmann spawn-record --class C --nonce N --task-id T
 ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K]
 ark luhmann inspect-exit --nonce N [--json]
 ark luhmann next --session S [--first | --force] [--keepalive N]
+ark luhmann send "<instruction>" [--timeout D]
 ```
 
 ### `spawn-record`
@@ -141,7 +143,7 @@ it (R3036). This is the established background-lotto-tube shape, the same
 family as `ark connections recall next` and the `/ui` skill's `{cmd}
 event` listener.
 
-A single `next` return carries one of three **kinds**, told apart by the
+A single `next` return carries one of several **kinds**, told apart by the
 returned body:
 
 - **curation task** — a raw bloodhound finding the watcher handed back
@@ -160,6 +162,12 @@ returned body:
   `next` returns a keepalive crank-handle so Luhmann spends one cheap
   cached turn and re-invokes, holding the main-agent prompt cache warm
   across idle gaps.
+- **command** — a synchronous CLI instruction pushed by `ark luhmann send`
+  (below). The body is the caller's instruction rendered as a markdown
+  request; Luhmann handles it as an ordinary work item. Unlike the two
+  fire-and-forget kinds above, the sender is blocked waiting for the
+  reply, so the command carries an inert correlation marker (see `send`)
+  that the tube's other producers never need.
 
 #### Ownership lease — `--session`, `--first`, `--force`
 
@@ -219,6 +227,51 @@ directives, and the keepalive chime on a single sub-1-hour clock, so no
 separate heartbeat command is needed.
 
 Server required.
+
+### `send`
+
+The **synchronous producer** counterpart to `next`'s drain: where `next`
+is the orchestrator popping work off the tube, `send` is a caller pushing
+one instruction onto the same tube and blocking until the orchestrator has
+handled it, then printing the orchestrator's turns for that instruction.
+One blocking call does enqueue → wait → render (Batteries Included).
+
+```
+ark luhmann send "<instruction>" [--timeout D]
+```
+
+Flow:
+
+1. **Mint a correlation nonce** and build the instruction as a **markdown
+   command request** — the CLI does the formatting; the orchestrator reads
+   only the rendered markdown, never a raw wire format. The nonce is embedded
+   as an **inert, backquoted marker**: a code literal the orchestrator
+   ignores, but a side-signal the server recognizes on the JSONL tap it
+   already owns (Watermark). The marker must never nudge the orchestrator's
+   response — a watermark that changes the turn contaminates the thing it
+   measures.
+2. **Enqueue** the request on the tube as a `command`-kind item. When the
+   orchestrator's `next` returns it, the request — inert nonce and all —
+   lands in the orchestrator's JSONL as the delivered work.
+3. **Bracket by watermark.** The server watches the orchestrator's JSONL,
+   recognizes its nonce (the open bracket), and renders **every turn from
+   that point up to the first turn completion where the orchestrator yields
+   for input** (the close bracket). A single command is one turn even when it
+   makes many tool calls, so a `summarize → add an item → discuss with the
+   user` instruction renders as one turn ending in the orchestrator's message
+   or question; the sender never counts turns or assumes single-turn.
+4. **Render and return.** Print the bracketed turns using the same transcript
+   rendering as `ark chats` (tool calls shown), then exit.
+
+`--timeout D` bounds the wait (default 120s). On timeout `send` exits
+non-zero, reporting that the instruction was enqueued but no turn completed
+in time — the orchestrator may still act on it (the enqueue is not undone).
+A server bounce mid-wait is a wait condition, not an error (Stubborn
+Plumbing), consistent with `next`.
+
+`send` requires a live orchestrator: with no session owning the tube
+(`luhmannOwner` empty) it errors orchestrator-not-running, the same gate the
+watcher applies to CLI hunts. Server required.
 
 ## `[luhmann]` configuration
 

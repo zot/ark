@@ -7,6 +7,7 @@ package main
 // helpers. (R2916–R2932; see crc-CLITree.md.)
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -149,7 +150,7 @@ func monitorControlAction(kind string, c *ucli.Command) error {
 func luhmannCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "luhmann",
-		Usage: "orchestrator supervisor + hosted-session lifecycle (launch, attach, status, stop, next, *-record)",
+		Usage: "orchestrator supervisor + hosted-session lifecycle (launch, attach, status, stop, next, send, *-record)",
 		Commands: []*ucli.Command{
 			{
 				Name:  "spawn-record",
@@ -194,6 +195,15 @@ func luhmannCommand() *ucli.Command {
 					&ucli.IntFlag{Name: "keepalive", Value: int(ark.LuhmannNextKeepalive / time.Second), Usage: "idle seconds before a keepalive (default ~45m; capped under the 1h main-agent cache)"},
 				},
 				Action: luhmannNextAction,
+			},
+			{
+				Name:      "send",
+				Usage:     "push one instruction to the orchestrator and print its reply (server)",
+				ArgsUsage: `"<instruction>" [--timeout SECONDS]`,
+				Flags: []ucli.Flag{
+					&ucli.IntFlag{Name: "timeout", Value: int(ark.DefaultLuhmannSendTimeout / time.Second), Usage: "seconds to wait for a turn to complete (default 120)"},
+				},
+				Action: luhmannSendAction,
 			},
 			{
 				Name:  "launch",
@@ -340,6 +350,53 @@ func luhmannNextAction(_ context.Context, c *ucli.Command) error {
 		if resp.Header.Get("X-Luhmann-Exit") == "1" {
 			os.Exit(2) // R3014: another session owns the seat — stand down
 		}
+		return nil
+	}
+}
+
+// luhmannSendAction pushes one instruction to the orchestrator and prints its
+// reply. It POSTs to the blocking /luhmann/send verb, then renders the returned
+// window with the `ark chats --with-tools` renderer (R3129, R3133). A 504 means
+// the wait timed out (the enqueue stands); any other non-200 is fatal.
+// CRC: crc-CLITree.md | Seq: seq-luhmann-send.md#1.12 | R3129, R3133
+func luhmannSendAction(_ context.Context, c *ucli.Command) error {
+	instruction := c.Args().First()
+	if instruction == "" {
+		fmt.Fprintln(os.Stderr, `ark luhmann send "<instruction>" [--timeout SECONDS]`)
+		os.Exit(2)
+	}
+	client := requireServer("luhmann send")
+	reqBody, err := json.Marshal(map[string]any{
+		"instruction": instruction,
+		"timeout":     c.Int("timeout"),
+	})
+	if err != nil {
+		fatal(err)
+	}
+	req, err := http.NewRequest("POST", "http://ark/luhmann/send", bytes.NewReader(reqBody))
+	if err != nil {
+		fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		if rerr := renderChatLines(bytes.NewReader(data), true, false, 100, false); rerr != nil {
+			fatal(rerr)
+		}
+		return nil
+	case http.StatusGatewayTimeout:
+		// R3133: enqueued but no turn completed — the orchestrator may still act.
+		fmt.Fprintln(os.Stderr, strings.TrimSpace(string(data)))
+		os.Exit(1)
+		return nil
+	default:
+		fatal(fmt.Errorf("%s", strings.TrimSpace(string(data))))
 		return nil
 	}
 }

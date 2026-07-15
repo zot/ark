@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,17 +119,24 @@ type contentBlock struct {
 }
 
 // renderChat reads a JSONL file and prints a human-readable transcript.
-// CRC: crc-CLI.md | R1045, R1047, R1049, R3035 — ❯ user / ● assistant markers,
-// --with-tools shows ⚙ tool calls, --thinking shows ✻ chain-of-thought,
-// sidechain (subagent) records filtered out unless requested
+// CRC: crc-CLI.md | R1045, R1047, R1049, R3035
 func renderChat(path string, withTools, withThinking bool, lineLen int, sidechain bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	return renderChatLines(f, withTools, withThinking, lineLen, sidechain)
+}
 
-	scanner := bufio.NewScanner(f)
+// renderChatLines renders a stream of JSONL records as a transcript — the same
+// per-record rendering as renderChat, factored out so a non-file source (the
+// `ark luhmann send` reply window) renders identically.
+// CRC: crc-CLI.md | R1045, R1047, R1049, R3035 — ❯ user / ● assistant markers,
+// --with-tools shows ⚙ tool calls, --thinking shows ✻ chain-of-thought,
+// sidechain (subagent) records filtered out unless requested
+func renderChatLines(r io.Reader, withTools, withThinking bool, lineLen int, sidechain bool) error {
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB max line
 
 	for scanner.Scan() {

@@ -173,6 +173,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
 - [x] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`, `recall_next.go`
+- [x] crc-LuhmannSend.md → `luhmann_send.go`
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
@@ -228,6 +229,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-ext-author.md → `db.go`, `ext.go`, `server.go`, `extmap.go`, `indexer.go`, `cmd/ark/ext_cli.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
 - [ ] seq-luhmann-supervisor.md → `cmd/ark/main.go`, `monitoring.go`, `server.go`, `recall_agent_builder.go`
+- [x] seq-luhmann-send.md → `luhmann_send.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/chats.go`
 - [x] seq-bloodhound-cli.md → `cmd/ark/bloodhound_cli.go`, `recall_watcher.go`, `recall_agent_builder.go`, `recall_next.go`, `server.go`, `cmd/ark/monitoring_cli.go`
 - [ ] seq-subscriber-presence.md → `pubsub.go`, `recall_watcher.go`, `recall_agent_builder.go`, `server.go`
 - [ ] seq-chimes.md → `scheduler.go`, `server.go`, `config.go`, `pubsub.go`
@@ -296,6 +298,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
 - [x] test-LuhmannCLI.md → `luhmann_next_test.go`
+- [x] test-LuhmannSend.md → `luhmann_send_test.go`
 - [x] test-BloodhoundCLIFixer.md → `bloodhound_cli_test.go`
 - [x] test-BloodhoundCLI.md → `cmd/ark/bloodhound_cli_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
@@ -835,3 +838,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] I6: R3108 (bloodhound secretary proposes connecting tags) is the agent-def/crank-handle PROMPT = #38 item 6, deferred at scoping (Bill 2026-07-12). R3110 (<BLOODHOUND notags>) + R3112 (<RECALL notags/>) are the opt-outs for that proposing: they have no live behavioral consumer until item 6 makes the secretary propose, so building their watcher plumbing now is dead scaffolding. Deferred to ride with item 6 as one 'proposing + its opt-outs' slice. Apply half (R3104-R3107) + recommend routing/backtick (R3109/R3111) landed this session with tests.
 - [ ] O149: Managed-PTY launch/attach/stop end-to-end is integration-level, not unit-tested (test-PtyHost.md covers the deterministic fan-out logic only). The launch confirmation protocol (R3126) needs a real `claude` binary + a live server + the seat lease; drive it once the browser slice lands or as a scripted CLI smoke test. Also note a pathological launch↔stop race (Stop mid-launch can leave a stale seat owner) — acceptable for phase 1, revisit if it bites.
 - A76: R3128 trust-dialog acceptance assumes Claude Code renders the option in stream order (number before the 'Yes … trust' label). It fails safe on a non-match (no key sent; launch fails visibly at the seat claim). If a future renderer backtracks with cursor addressing, escalate to a virtual screen (track cursor into a grid, read the grid) instead of scraping the raw stream.
+- [ ] O150: luhmann send end-to-end is integration-level, not unit-tested: the full path (enqueue command → LuhmannNext delivers the crank-handle → the hosted orchestrator runs a turn → the marker + turn_duration land in its JSONL → tailSendWindow brackets → the CLI renders) needs a live hosted orchestrator (a paid claude session) + a live server + the seat lease. The deterministic pieces ARE unit-tested (test-LuhmannSend.md: scanSendWindow open/close/pre-marker cases, tailSendWindow happy-path + timeout against a temp JSONL, the request/nonce builder, the no-orchestrator gate). Drive the true end-to-end as a scripted CLI smoke test alongside O149, or verify live against the running Luhmann session before committing. **Verified live 2026-07-14** (session 6276ba08: `send` → command delivered → single-turn reply bracketed marker→turn_duration → rendered with tools, exit 0, ~16s; the no-orchestrator 409 gate also confirmed; R3135 auto-index source present at startup). Automated smoke test still deferred (needs the paid session). R3129/R3132/R3133.
+- [ ] O151: attach-client interactive additions are raw-terminal code, driven live not unit-tested (like O149): the bottom-row detach prompt (showDetachPrompt, R3138), the on-connect repaint request (R3137), and the Ctrl-]-cancel repaint request. The host side IS unit-tested (TestPtyHostForceRepaint, TestPtyRepaintFrameRoundTrip, TestFilterChildEnvManagedMarker). Verify live: attach → full screen appears at once (R3137); Ctrl-] → prompt shows; press a non-d key → prompt wiped by the child repaint (R3138); d → detach. **Verified live 2026-07-14** (Bill: repaints properly on attach and on Ctrl-] cancel). The initial failure was SIGWINCH coalescing — a synchronous shrink-then-restore was invisible to the child; fixed by holding the shrink `ptyRepaintNudge` (100ms) so the intermediate size is observed. **R3140 (full terminal restore) also verified live** — the intermittent raw-mode-stuck after detach was DEC private modes (cursor / bracketed-paste / mouse) that `term.Restore` does not undo; fixed with a sanitizing exit sequence, no more manual `reset`. Detach deliberately keeps the rendered frame on screen (Bill: good for copying / scrollback). R3136/R3137/R3138/R3140.

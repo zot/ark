@@ -411,14 +411,11 @@ func (h *PtyHost) Detach(reg *ptyClientReg) {
 	})
 }
 
-// recomputeSizeLocked sets the pty size to the minimum of all attached clients'
-// sizes and SIGWINCHes the child (R3120). With no clients it leaves the size as
-// is — zero attached clients leaves the session running untouched (R3121). Must
-// run inside a jobs closure (touches the client set + master).
-// CRC: crc-PtyHost.md | R3120, R3121
-func (h *PtyHost) recomputeSizeLocked() {
+// minSizeLocked returns the smallest-wins pty size across attached clients and
+// whether one is available (a hosted master plus at least one sized client). R3120
+func (h *PtyHost) minSizeLocked() (PtyWinsize, bool) {
 	if h.master == nil || len(h.clients) == 0 {
-		return
+		return PtyWinsize{}, false
 	}
 	var cols, rows uint16
 	for reg := range h.clients {
@@ -433,14 +430,70 @@ func (h *PtyHost) recomputeSizeLocked() {
 		}
 	}
 	if cols == 0 || rows == 0 {
-		return
+		return PtyWinsize{}, false
 	}
-	size := PtyWinsize{Cols: cols, Rows: rows}
+	return PtyWinsize{Cols: cols, Rows: rows}, true
+}
+
+// setSizeLocked applies a pty size to the child — through the resizeSink seam
+// when set (tests), else a real TIOCSWINSZ on the master.
+func (h *PtyHost) setSizeLocked(size PtyWinsize) {
 	if h.resizeSink != nil {
 		h.resizeSink(size)
 		return
 	}
-	_ = pty.Setsize(h.master, &pty.Winsize{Rows: rows, Cols: cols})
+	if h.master != nil {
+		_ = pty.Setsize(h.master, &pty.Winsize{Rows: size.Rows, Cols: size.Cols})
+	}
+}
+
+// recomputeSizeLocked sets the pty size to the smallest-wins minimum and
+// SIGWINCHes the child (R3120). With no clients it leaves the size as is — zero
+// attached clients leaves the session running untouched (R3121). Must run inside
+// a jobs closure (touches the client set + master).
+// CRC: crc-PtyHost.md | R3120, R3121
+func (h *PtyHost) recomputeSizeLocked() {
+	if size, ok := h.minSizeLocked(); ok {
+		h.setSizeLocked(size)
+	}
+}
+
+// ptyRepaintNudge is how long ForceRepaint holds the shrunk size before restoring
+// it. The child's SIGWINCH handler must observe the *intermediate* size to
+// repaint: a synchronous shrink-then-restore coalesces (signals are not queued),
+// so the handler runs once, reads the restored — unchanged — size, and skips the
+// redraw. Holding the shrink a beat makes the change observable. R3136
+const ptyRepaintNudge = 100 * time.Millisecond
+
+// ForceRepaint forces the child to redraw the whole screen (R3136): shrink the pty
+// one row now, then restore it after ptyRepaintNudge. ark holds no virtual screen
+// (R3115), so the only lever is a real SIGWINCH the child repaints on — and the
+// delay is what makes the shrink observable (a rapid toggle back to the same size
+// is invisible to a coalescing handler; only an *observed* size change repaints).
+// The host's answer to a client's repaint frame, on attach (R3137) and on a detach
+// cancel (R3138).
+// CRC: crc-PtyHost.md | R3136
+func (h *PtyHost) ForceRepaint() {
+	var shrank bool
+	_ = svcSyncVoid(h.jobs, func() error {
+		if sz, ok := h.minSizeLocked(); ok && sz.Rows >= 2 {
+			h.setSizeLocked(PtyWinsize{Cols: sz.Cols, Rows: sz.Rows - 1})
+			Logv(1, "pty force-repaint: shrink to %dx%d, restore in %v", sz.Cols, sz.Rows-1, ptyRepaintNudge)
+			shrank = true
+		}
+		return nil
+	})
+	if !shrank {
+		return
+	}
+	time.AfterFunc(ptyRepaintNudge, func() {
+		_ = svcSyncVoid(h.jobs, func() error {
+			if sz, ok := h.minSizeLocked(); ok {
+				h.setSizeLocked(sz)
+			}
+			return nil
+		})
+	})
 }
 
 // --- stop + status (R3124, R3125) -------------------------------------------
@@ -593,6 +646,9 @@ func filterChildEnv(src []string) []string {
 	if !hasTerm {
 		env = append(env, "TERM=xterm-256color")
 	}
+	// R3139: mark the child as an ark-managed pty session so the /luhmann skill can
+	// tell it from a bare `/luhmann` invocation and surface the detach hint.
+	env = append(env, "ARK_MANAGED_PTY=1")
 	return env
 }
 
@@ -663,8 +719,9 @@ func isNewClaudeProject(cwd string) bool {
 // kind-specific payload.
 
 const (
-	ptyFrameData   byte = 'd' // input: kind, uint32 length (BE), then length bytes
-	ptyFrameResize byte = 'r' // resize: kind, uint16 cols (BE), uint16 rows (BE)
+	ptyFrameData    byte = 'd' // input: kind, uint32 length (BE), then length bytes
+	ptyFrameResize  byte = 'r' // resize: kind, uint16 cols (BE), uint16 rows (BE)
+	ptyFrameRepaint byte = 'p' // repaint: kind only — force the child to redraw (R3136)
 )
 
 // WritePtyInput writes a client→host input frame (R3119: the host serializes it
@@ -691,8 +748,16 @@ func WritePtyResize(w io.Writer, size PtyWinsize) error {
 	return err
 }
 
+// WritePtyRepaint writes a client→host repaint frame (R3136): a single kind byte
+// asking the host to force the child to redraw the whole screen. No payload.
+func WritePtyRepaint(w io.Writer) error {
+	_, err := w.Write([]byte{ptyFrameRepaint})
+	return err
+}
+
 // ReadPtyFrame reads one client→host frame. On kind ptyFrameData it returns the
-// input bytes in data; on ptyFrameResize it returns the size in ws.
+// input bytes in data; on ptyFrameResize it returns the size in ws; ptyFrameRepaint
+// carries only the kind.
 func ReadPtyFrame(r io.Reader) (kind byte, data []byte, ws PtyWinsize, err error) {
 	var k [1]byte
 	if _, err = io.ReadFull(r, k[:]); err != nil {
@@ -717,6 +782,8 @@ func ReadPtyFrame(r io.Reader) (kind byte, data []byte, ws PtyWinsize, err error
 		}
 		ws = PtyWinsize{Cols: binary.BigEndian.Uint16(b[:2]), Rows: binary.BigEndian.Uint16(b[2:])}
 		return ptyFrameResize, nil, ws, nil
+	case ptyFrameRepaint:
+		return ptyFrameRepaint, nil, ws, nil
 	default:
 		return 0, nil, ws, fmt.Errorf("unknown pty frame kind %q", k[0])
 	}

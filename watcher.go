@@ -219,6 +219,7 @@ func (srv *Server) watchLoop() {
 				log.Printf("watch: config reload failed: %v", err)
 			} else {
 				srv.db.Config().EnsureArkSource()
+				srv.db.Config().EnsureLuhmannSource() // R3135
 				if srv.scheduler != nil {
 					// Re-point scheduler at the new config pointer.
 					// ReloadConfig swaps db.config; the scheduler's

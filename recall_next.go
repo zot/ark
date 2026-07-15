@@ -690,19 +690,23 @@ const (
 	luhmannErrNoOwnership = "you don't have ownership" // a foreign owner holds the seat → stand down
 )
 
-// LuhmannWork is one item the recall watcher pushes onto the server's nextQueue
-// for the orchestrator's `next` drain (R3011). Two kinds: a curation task (a raw
+// LuhmannWork is one item pushed onto the server's nextQueue for the
+// orchestrator's `next` drain (R3011). Three kinds: a curation task (a raw
 // CLI-hunt finding — Path is the request-doc tmp:// path Luhmann refines and
 // emits via `ark bloodhound add`) or a supervisor directive (Directive ∈
 // stand-up/stop for the pooled Class — Luhmann spawns/stops via Task and records
-// it). The keepalive is the third `next` return but is synthesized on the
-// deadline, not queued.
+// it), both pushed by the recall watcher; or a command (R3130) — a synchronous
+// `ark luhmann send` instruction, Command is the built markdown request carrying
+// an inert correlation nonce, pushed by LuhmannSend (crc-LuhmannSend.md). The
+// keepalive is a fourth `next` return but is synthesized on the deadline, not
+// queued.
 type LuhmannWork struct { // R3011
-	Kind      string // "curation" | "directive"
+	Kind      string // "curation" | "directive" | "command"
 	Path      string // curation: request-doc tmp:// path
 	Directive string // directive: "stand-up" | "stop"
 	Class     string // directive: managed class (e.g. "bloodhound")
-	Nonce     uint64 // directive "stop": which pool secretary to stop (R3019); 0 for stand-up
+	Nonce     uint64 // directive "stop": which pool secretary to stop (R3019); command: correlation nonce (R3130)
+	Command   string // command: the built markdown request incl. the inert `LSEND:n` marker (R3130)
 }
 
 // luhmannNextMode is the ownership intent of one `next` call (R3013).
@@ -850,6 +854,14 @@ func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 		return fmt.Sprintf(
 			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
 			lead, w.Class, w.Class)
+	case "command":
+		// R3130: a synchronous `ark luhmann send` instruction. Handle it as an
+		// ordinary user request; the reply ends the turn, which is where the
+		// sender's watermark bracket closes (R3132). Command already carries the
+		// inert `LSEND:n` correlation marker, so it lands verbatim in the JSONL.
+		return fmt.Sprintf(
+			"%sA command has arrived — handle it as you would a request from the user: do the work, then reply. Your reply ends the turn.\n\n%s\n",
+			lead, w.Command)
 	default:
 		return fmt.Sprintf("%sSkip this unrecognized work kind %q.\n", lead, w.Kind)
 	}

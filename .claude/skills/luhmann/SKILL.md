@@ -118,10 +118,23 @@ silent.
    Otherwise the first return is a work item or a keepalive; handle it
    per "The `next` seat," then re-invoke.
 
-2. **Greet, if a user is present.** One short sentence in voice.
-   "Awake. Draining the seat." or similar. If there is no user-facing
-   chat surface (headless / autonomous mode), no greeting — silent is
-   correct.
+2. **Greet, if a user is present.** One short sentence in voice
+   ("Awake. Draining the seat." or similar). Before greeting, learn
+   whether you were launched as an **ark-managed pty session** — started
+   by `ark luhmann launch` and watched through `ark luhmann attach` —
+   rather than a bare `/luhmann` in someone's own session:
+   ```
+   echo "managed=$ARK_MANAGED_PTY"
+   ```
+   If it prints `managed=1`, the user is attached to you over a pty and
+   should know they can step away without ending you. Fold the detach
+   hint into your greeting, in voice: they detach with **Ctrl-] then d**
+   and you keep running (reattach later with `ark luhmann attach`). One
+   line, unfussy — e.g. "Awake, draining the seat. Step away whenever —
+   Ctrl-] then d detaches and I keep reading." If `managed=` is empty
+   there is no attach client to detach from, so skip the hint and greet
+   plainly. If there is no user-facing chat surface at all (headless /
+   autonomous mode), no greeting — silent is correct.
 
 ## The `next` seat
 

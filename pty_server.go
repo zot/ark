@@ -56,7 +56,13 @@ func (srv *Server) ForceReleaseSeat() {
 func (srv *Server) ReleaseSeat(session string) { srv.ReleaseLuhmann(session) }
 
 // LuhmannDir is the hosted session's cwd, ~/.ark/luhmann (R3126). PtyEnv.
-func (srv *Server) LuhmannDir() string { return filepath.Join(arkHomeDir(), "luhmann") }
+// luhmannCwd is the hosted orchestrator session's working directory
+// (~/.ark/luhmann) — the single source of truth shared by the pty host
+// (LuhmannDir) and the auto-index source (Config.EnsureLuhmannSource, R3135), so
+// where Luhmann runs, where its log lands, and what ark indexes can never drift.
+func luhmannCwd() string { return filepath.Join(arkHomeDir(), "luhmann") }
+
+func (srv *Server) LuhmannDir() string { return luhmannCwd() }
 
 // PoolRosterCount is the pool-secretary roster size for status (R3124). PtyEnv.
 func (srv *Server) PoolRosterCount() int { return srv.recallWatcher.PoolSize() }
@@ -181,6 +187,8 @@ func (srv *Server) handleLuhmannAttach(w http.ResponseWriter, r *http.Request) {
 			srv.ptyHost.Input(data)
 		case ptyFrameResize:
 			srv.ptyHost.Resize(reg, ws)
+		case ptyFrameRepaint:
+			srv.ptyHost.ForceRepaint() // R3136: client asked the child to redraw
 		}
 	}
 	srv.ptyHost.Detach(reg)

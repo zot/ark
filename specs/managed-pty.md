@@ -58,7 +58,11 @@ turn. The bootstrap never submits, so no JSONL is ever written and the launch
 dies waiting at the second-record gate (see the confirmation protocol below).
 So the fork strips those markers from the child's environment before starting
 it; credentials (`ANTHROPIC*`) and unrelated config are left intact. The hosted
-session is its own session, not the server's grandchild.
+session is its own session, not the server's grandchild. The fork also **sets**
+one marker of its own, `ARK_MANAGED_PTY=1`, so the hosted session can tell it was
+started by `ark luhmann launch` — as opposed to a bare `/luhmann` invoked in some
+other session — and surface the attach/detach hint to the user accordingly (the
+`/luhmann` skill reads it; that greeting is a Claude Code asset, not this spec's).
 
 A directory Claude Code has never opened triggers a one-time **"trust this
 folder"** dialog at startup, a numbered menu (`1. Yes, I trust this folder` /
@@ -143,7 +147,11 @@ Server required.
 
 A raw-mode client over the unix socket: stdin → pty, pty → stdout, with a
 tmux-style detach escape and `SIGWINCH` (resize) propagation. Detaching leaves
-the session running. Multiple `attach` clients may be connected at once
+the session running. On exit it restores the terminal **fully** — the termios
+line discipline *and* a sanitizing sequence undoing the DEC private modes the
+child set through its output (cursor visibility, bracketed paste, mouse
+reporting), which `term.Restore` alone does not, so the shell returns clean
+without a manual `reset`. Multiple `attach` clients may be connected at once
 (fan-out). Server required.
 
 ### `status`
@@ -180,6 +188,61 @@ it:
 
 Nothing here reads the *content* of a record: the sole confirmation is ark's own
 seat lease (step 3).
+
+## Indexing the orchestrator's session
+
+The orchestrator's Claude Code project directory
+(`~/.claude/projects/<cwd-encoded>` for cwd `~/.ark/luhmann`) is added as an
+**in-memory `chat-jsonl` source**, so the session's own conversation log is
+indexed — searchable through recall, tappable by the watcher — with no user
+configuration. This is the same principle as the hardcoded `~/.ark` source
+(`EnsureArkSource`): the project directory exists **only because ark forked the
+pty** with that cwd, so it is ark-managed content, not the user's, and ark
+indexes it implicitly rather than asking. The global `*.jsonl` → `chat-jsonl`
+strategy classifies it, and the standard `~/.claude/projects/**` search
+exclusion keeps its chunks out of ordinary search results — present for recall,
+absent from search noise. The whole project directory is indexed, not one
+session file, so the orchestrator's memory spans launches, which the larger
+orchestrator roles depend on.
+
+Note this is distinct from how `ark luhmann send` (see [luhmann.md](luhmann.md))
+**locates** the live session log: `send` globs `~/.claude/projects/*/<uuid>.jsonl`
+directly on the filesystem, because it must read the log the instant a command is
+enqueued — before the indexer, on its own clock, has picked the file up. Indexing
+serves search and recall; the direct glob serves the synchronous read.
+
+## Screen repaint
+
+ark holds no virtual screen — the pty is a raw byte stream and ark never models
+what is on it (the machine-opaque invariant above). A client that attaches
+mid-session therefore receives only *subsequent* output; the full-screen paint
+the child already emitted is gone, so a freshly attached — or re-attached —
+client sees a blank or stale screen until the child next repaints on its own.
+
+The host exposes a **forced repaint**: it toggles the pty size by one row —
+shrink, hold a short beat, then restore — to raise a real `SIGWINCH`, which the
+child (an Ink TUI) repaints the whole screen on. The hold is essential: a
+synchronous shrink-then-restore coalesces (signals are not queued), so the child
+reads the restored, unchanged size and skips the redraw; only an *observed*
+intermediate size triggers a repaint. A same-size `SIGWINCH` will not do either —
+the kernel drops `TIOCSWINSZ` when the size is unchanged. A repaint is **client-requested**, carried on a `repaint` frame over the
+same client→host channel as input and resize, so one mechanism serves every
+transport (CLI now, browser later) uniformly:
+
+- **On attach.** The client requests a repaint immediately after connecting, so it
+  sees the current screen at once instead of waiting for the child's next paint.
+- **On a cancelled detach.** The `attach` client's detach escape (`Ctrl-]`) paints a
+  transient one-line prompt so the escape is *acknowledged* — pressing `Ctrl-]`
+  alone otherwise gives no feedback, which is what makes detaching feel
+  untrustworthy. `d` detaches; any other key cancels — the client discards it (a
+  mode key, not input for the child) and requests a repaint to wipe the prompt
+  (again the child does the redraw, since ark has no screen of its own). On an
+  actual detach the client clears the prompt itself before exiting — an instant
+  local erase, since a child repaint would race the imminent disconnect, so the
+  help text never lingers on the abandoned frame. The rest of the rendered frame
+  is **deliberately left on screen** (not cleared) — useful for scrolling back or
+  copying on-screen content after detaching; a future "clear on detach" would
+  destroy that and is intentionally not done.
 
 ## What this spec deliberately does not require
 

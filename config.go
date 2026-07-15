@@ -782,6 +782,31 @@ func (c *Config) EnsureArkSource() {
 	})
 }
 
+// EnsureLuhmannSource adds the orchestrator's Claude Code project directory as
+// an in-memory chat-jsonl source (R3135), so the ark-managed Luhmann session's
+// own log is indexed for recall and the watcher tap without any user config.
+// The project directory exists only because ark forked its pty with cwd
+// luhmannCwd(), so ark owns it — the same principle as EnsureArkSource. The
+// *.jsonl global strategy classifies it chat-jsonl and the ~/.claude/projects/**
+// search exclusion keeps it out of ordinary search; the whole directory is
+// indexed (not one session file) so the orchestrator's memory spans launches.
+// CRC: crc-Config.md | R3135
+func (c *Config) EnsureLuhmannSource() {
+	dir := claudeProjectDir(luhmannCwd())
+	if dir == "" {
+		return
+	}
+	for _, src := range c.Sources {
+		if src.Dir == dir {
+			return
+		}
+	}
+	c.Sources = append(c.Sources, Source{
+		Dir:     dir,
+		Include: PatternSpec{Replace: []string{"*.jsonl"}},
+	})
+}
+
 // IsInSource returns true if path falls under any configured source directory.
 // CRC: crc-Config.md | R1154
 func (c *Config) IsInSource(path string) bool {

@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
@@ -22,10 +22,12 @@ card covers only the Go surface the skill calls into.
   Luhmann role (R3012). In-memory server state, empty when
   unowned; cleared on a server restart (no persistence). The
   ownership lease `next` enforces.
-- nextQueue: chan work — in-memory queue of work items the recall
-  watcher pushes and `next` drains (R3011): curation tasks (a
-  request-doc path to refine) and supervisor directives (stand up /
-  stop a pool secretary). Server state; a bounce drops it.
+- nextQueue: chan work — in-memory queue of work items `next` drains
+  (R3011): curation tasks (a request-doc path to refine) and supervisor
+  directives (stand up / stop a pool secretary), both pushed by the recall
+  watcher; plus **command** items (R3130) — a `send` instruction with an
+  inert correlation nonce, pushed by the synchronous producer
+  (crc-LuhmannSend.md). Server state; a bounce drops it.
 
 ## Does
 
@@ -121,14 +123,21 @@ card covers only the Go surface the skill calls into.
 - **Blocks** up to the keepalive window (`--keepalive N`, default
   ~45 min; R3016) in a select over `nextQueue`, the keepalive timer,
   and ctx. On an item it returns crank-handle prose; on the deadline a
-  keepalive (run next again). Three kinds (R3011): a **curation task**
+  keepalive (run next again). The kinds (R3011): a **curation task**
   (the request doc's content is **inlined** into the crank-handle — a
   `tmp://` path is not a Read-able file — and the skill refines it, then
   runs `ark bloodhound add … --loc … --note …` per kept item and a
   terminal `add … --done`, naming the request-doc path only as the
   `--result` arg, R3025/R3027); a **supervisor directive** (stand up /
   stop a pool secretary — the skill spawns/stops via Task and records
-  with `spawn-record` / `exit-record`, R3019); the **keepalive**.
+  with `spawn-record` / `exit-record`, R3019); the **keepalive**. A
+  fourth kind, the **command** (R3130), is produced by `ark luhmann send`
+  (crc-LuhmannSend.md): a synchronous CLI instruction rendered as a
+  markdown request carrying an inert correlation nonce; `next` hands it
+  back like any work item (leading with re-launch-first, R3036), and the
+  sender brackets the reply off the JSONL tap. Only this kind needs
+  correlation, and it rides a nonce in its own content rather than a tube
+  protocol change.
 - **Re-launch-first** (R3036): every *work* crank handle (curation,
   directive) LEADS with the instruction to fire the successor `next`
   (backgrounded) **before** processing the item (`relaunchFirst`),
@@ -174,6 +183,9 @@ card covers only the Go surface the skill calls into.
   curation tasks (on a hunt's return) and supervisor directives
   (pool scaling) onto `nextQueue`; `next` drains what the watcher
   enqueues (R3011, R3024).
+- LuhmannSend (crc-LuhmannSend.md): the synchronous producer — pushes
+  **command** items onto `nextQueue` via `EnqueueLuhmann` and reads
+  `LuhmannOwner()` to gate on a live orchestrator (R3130).
 
 ## Sequences
 - seq-luhmann-supervisor.md

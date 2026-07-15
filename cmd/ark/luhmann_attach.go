@@ -27,8 +27,21 @@ import (
 
 // ptyDetachPrefix is the tmux-style detach lead key: Ctrl-] (GS). Followed by
 // 'd' it detaches (leaving the session running); doubled it sends a literal
-// Ctrl-]; any other key sends the prefix then that key (R3123).
+// Ctrl-]; any other key cancels and is discarded — it was a mode key, not input
+// (R3123, R3138).
 const ptyDetachPrefix = 0x1d
+
+// termSanitize undoes the DEC private modes a full-screen child (Ink) sets through
+// its output but that term.Restore does not — term.Restore only resets the termios
+// line discipline. Chiefly a hidden cursor (Ink hides it during a render, so
+// detaching mid-render leaves the terminal looking frozen and "raw"), plus
+// bracketed paste, mouse reporting, scroll region, and SGR. Emitted on exit so the
+// shell returns clean instead of needing a manual `reset` (R3140).
+const termSanitize = "\x1b[?25h" + // show cursor
+	"\x1b[?2004l" + // bracketed paste off
+	"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // mouse reporting off
+	"\x1b[r" + // reset scroll region
+	"\x1b[0m" // reset SGR attributes
 
 // luhmannLaunchAction proxies the launch verb: the server forks the pty and runs
 // the content-free confirmation, blocking until the session claims the seat
@@ -143,6 +156,9 @@ func luhmannAttachAction(_ context.Context, _ *ucli.Command) error {
 	var once sync.Once
 	exit := func(msg string) {
 		once.Do(func() {
+			// R3140: undo the child's cursor/paste/mouse modes (term.Restore resets
+			// only the termios) so the shell returns clean, not needing `reset`.
+			fmt.Fprint(os.Stdout, termSanitize)
 			_ = term.Restore(fd, oldState)
 			conn.Close()
 			if msg != "" {
@@ -171,9 +187,41 @@ func luhmannAttachAction(_ context.Context, _ *ucli.Command) error {
 		exit("Luhmann session ended.")
 	}()
 
+	// R3137: request an initial repaint so this freshly attached client sees the
+	// full screen at once, not only subsequent output.
+	_ = ark.WritePtyRepaint(conn)
+
 	// stdin → host, watching for the detach escape (R3123).
 	pipeInput(conn, exit)
 	return nil
+}
+
+// showDetachPrompt paints a transient one-line detach hint on the bottom row so
+// pressing Ctrl-] is acknowledged instead of silent (R3138). It saves and
+// restores the cursor so the child's cursor is undisturbed; the prompt is wiped
+// when the child repaints (on cancel via the repaint frame, R3136) or the client
+// exits (on detach).
+func showDetachPrompt() {
+	_, rows, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil || rows < 1 {
+		return
+	}
+	const msg = " Ctrl-] pressed: d detaches, any other key cancels "
+	// ESC 7 save cursor; go to bottom row; reverse video; msg; reset; clear to EOL; ESC 8 restore cursor.
+	fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[7m%s\x1b[0m\x1b[K\x1b8", rows, msg)
+}
+
+// clearDetachPrompt erases the detach prompt from the bottom row (R3138), used
+// right before detaching so the help text does not linger on the abandoned
+// frame. Instant and local — the client wipes the overlay it painted, with no
+// child round-trip (a repaint frame would race the imminent disconnect).
+func clearDetachPrompt() {
+	_, rows, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil || rows < 1 {
+		return
+	}
+	// ESC 7 save cursor; go to bottom row; clear the line; ESC 8 restore cursor.
+	fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2K\x1b8", rows)
 }
 
 // sendSize reports the local terminal size as a resize frame (R3120).
@@ -187,7 +235,9 @@ func sendSize(conn net.Conn, fd int) {
 
 // pipeInput forwards stdin to the host as input frames, consuming the detach
 // escape locally: Ctrl-] then 'd' detaches; Ctrl-] doubled sends a literal
-// Ctrl-]; Ctrl-] then any other key sends the prefix and that key (R3123).
+// Ctrl-]; Ctrl-] then any other key sends the prefix and that key (R3123). On
+// Ctrl-] it paints a transient detach prompt (R3138); a cancel wipes the prompt
+// by requesting a repaint (R3136), since only the child can redraw the screen.
 func pipeInput(conn net.Conn, exit func(string)) {
 	buf := make([]byte, 4096)
 	inEscape := false
@@ -203,17 +253,24 @@ func pipeInput(conn net.Conn, exit func(string)) {
 						if len(out) > 0 {
 							_ = ark.WritePtyInput(conn, out)
 						}
+						clearDetachPrompt() // R3138: wipe the help text before leaving
 						exit("[detached]")
 						return
 					case ptyDetachPrefix:
-						out = append(out, ptyDetachPrefix) // doubled → literal
+						out = append(out, ptyDetachPrefix) // doubled → literal Ctrl-]
 					default:
-						out = append(out, ptyDetachPrefix, b)
+						// R3138: any other key cancels — discard it (and the
+						// prefix); it was a mode key, not input for the child.
 					}
+					// R3138: the escape resolved (cancel or literal) — wipe the
+					// prompt by asking the child to repaint (R3136); ark holds no
+					// screen of its own to redraw it.
+					_ = ark.WritePtyRepaint(conn)
 					continue
 				}
 				if b == ptyDetachPrefix {
 					inEscape = true
+					showDetachPrompt() // R3138: acknowledge the escape
 					continue
 				}
 				out = append(out, b)

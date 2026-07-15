@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -71,6 +72,7 @@ type Server struct {
 	luhmannMu    sync.Mutex       // R3012: guards luhmannOwner
 	luhmannOwner string           // R3012: session holding the Luhmann seat; "" when unowned
 	nextQueue    chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
+	sendCounter  atomic.Uint64    // R3131: monotonic nonce source for `ark luhmann send`; a bounce resets it
 
 	// R3116: the managed-PTY host — holds the pty master + `claude` child of a
 	// hosted Luhmann session and fans its output out to attached clients. nil of
@@ -242,6 +244,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)
 	db.Config().EnsureArkSource()
+	// Ensure the orchestrator's own session log is indexed (R3135).
+	db.Config().EnsureLuhmannSource()
 
 	// R2659, R2663: warn if [recall].discussed_ttl can't be parsed —
 	// we fall back to 24h either way, but the user should see typos.
@@ -500,6 +504,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /luhmann/record", srv.handleLuhmannRecord)
 	// Orchestrator drain tube (bloodhound-CLI S1): blocking long-poll, R3010.
 	mux.HandleFunc("GET /luhmann/next", srv.handleLuhmannNext)
+	// Synchronous command bridge (#35): enqueue → wait → render, R3129.
+	mux.HandleFunc("POST /luhmann/send", srv.handleLuhmannSend)
 	// Managed-PTY lifecycle (#35 phase 1): launch/attach/status/stop. attach
 	// hijacks into a raw pty stream. R3122–R3126.
 	mux.HandleFunc("POST /luhmann/launch", srv.handleLuhmannLaunch)

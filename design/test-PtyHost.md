@@ -13,6 +13,24 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 **Expected:** pty size = 80×24 after B, recomputes to 100×40 after A detaches (grew), then 60×20 after C (shrank); a resize (`SIGWINCH`) fires on every change.
 **Refs:** crc-PtyHost.md, seq-pty-attach.md#1.2, seq-pty-attach.md#1.6
 
+## Test: forceRepaint toggles the size to force a SIGWINCH redraw
+**Purpose:** R3136 — a same-size resize is a kernel no-op, so a repaint shrinks a row then restores, giving the child a real `SIGWINCH` to redraw on.
+**Input:** attach a client (80×24); clear the recorded resizes; call `ForceRepaint`.
+**Expected:** exactly two resizes — 80×23 then 80×24.
+**Refs:** crc-PtyHost.md
+
+## Test: repaint frame round-trips
+**Purpose:** R3136 — the `repaint` frame is kind-only on the client→host channel.
+**Input:** `WritePtyRepaint` into a buffer, then `ReadPtyFrame`.
+**Expected:** kind is `ptyFrameRepaint`, nil data.
+**Refs:** crc-PtyHost.md
+
+## Test: child env carries the managed-pty marker
+**Purpose:** R3139 — the hosted child is marked so `/luhmann` can tell it was launched by ark.
+**Input:** an env slice with a session marker (`CLAUDECODE`) + credentials.
+**Expected:** `ARK_MANAGED_PTY=1` present; credentials pass through; the session marker stripped (R3127).
+**Refs:** crc-PtyHost.md
+
 ## Test: broadcast drops a slow client, never blocks
 **Purpose:** R3118 — a client whose buffer overflows is dropped; others keep receiving.
 **Input:** attach a normal client and a "stuck" client (bounded buffer that never drains); push more child output than the stuck buffer holds.
