@@ -388,16 +388,21 @@ func (l *Librarian) BuildFetchPayload(id string) ([]ChunkFetchEntry, error) {
 		return nil, errors.New("unknown request id")
 	}
 
-	paths, err := l.db.fts.FileIDPaths()
+	// R995: read through a private fts.Copy() so this off-actor path
+	// resolution (FileIDPaths) and chunk-cache access can't race the write
+	// actor's InvalidateCaches. The bbolt reads below (View/ReadCRecord)
+	// are MVCC-safe either way. See specs/architecture.md.
+	db := l.db.withFTS(l.db.fts.Copy())
+	paths, err := db.fts.FileIDPaths()
 	if err != nil {
 		return nil, fmt.Errorf("file id paths: %w", err)
 	}
 
 	out := make([]ChunkFetchEntry, 0, len(rec.ChunkIDs))
-	cache := l.db.fts.NewChunkCache()
-	err = l.db.fts.DB().View(func(txn *bbolt.Tx) error {
+	cache := db.fts.NewChunkCache()
+	err = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, chunkID := range rec.ChunkIDs {
-			crec, rerr := l.db.fts.ReadCRecord(txn, chunkID)
+			crec, rerr := db.fts.ReadCRecord(txn, chunkID)
 			if rerr != nil || len(crec.FileIDs) == 0 {
 				return fmt.Errorf("unknown chunk %d", chunkID)
 			}
