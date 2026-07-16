@@ -47,7 +47,7 @@ func bloodhoundCommand() *ucli.Command {
 				Usage:     "Luhmann's result stencil: append one curated finding to a CLI hunt, or --done to finish",
 				ArgsUsage: "--result tmp://BLOODHOUND-CLI/<id> (--loc PATH:RANGE --note TEXT [--chunk TEXT] | --done)",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "result", Usage: "the request-doc path handed to `luhmann next` (tmp://BLOODHOUND-CLI/<id>)"},
+					&ucli.StringFlag{Name: "result", Usage: "the request-doc `PATH` handed to 'luhmann next' (tmp://BLOODHOUND-CLI/<id>)"},
 					&ucli.StringFlag{Name: "loc", Usage: "the curated finding's PATH:RANGE"},
 					&ucli.StringFlag{Name: "note", Usage: "one-line curated note: why it answers the query"},
 					&ucli.StringFlag{Name: "chunk", Usage: "optional chunk excerpt to carry in the JSONL"},

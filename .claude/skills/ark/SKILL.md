@@ -35,6 +35,13 @@ SessionStart hook auto-loads its skill reference. Franklin reads
 the summary and asks the daily question. Neither agent knows the
 other exists.
 
+**On Windows (WSL), ensure `wslu` is installed.** ark's UI opens a
+browser, which under WSL needs `wslview` from the `wslu` package. Detect
+WSL with `grep -qi microsoft /proc/version`; if it matches and
+`command -v wslview` is empty, tell the user and offer to install:
+`sudo apt update && sudo apt install -y wslu`. On non-WSL Linux, skip
+silently — no check, no message.
+
 ## Tags
 
 Tags are `@word:` patterns in indexed files. The colon is required.
