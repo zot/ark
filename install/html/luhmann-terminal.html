@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!-- A full-viewport terminal on the ark-hosted Luhmann session: the browser
+     counterpart of `ark luhmann attach`. Also the worked example of the
+     element's host interface — the status strip below is driven entirely by
+     the luhmann-terminal-status event. -->
+<!-- CRC: ui-luhmann-terminal-page.md | Seq: seq-luhmann-terminal.md#2.6 | R3159, R3161 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Luhmann</title>
+  <link rel="stylesheet" href="/themes/base.css">
+  <style>
+    html, body {
+      height: 100dvh;
+      margin: 0;
+      background: var(--term-bg, #0a0a0f);
+      color: var(--term-text, #ddd);
+      font-family: var(--term-sans, system-ui, sans-serif);
+    }
+    body { display: flex; flex-direction: column; }
+    /* The strip is fixed-height and the terminal takes the rest, so the
+       element's box IS the viewport minus the strip — its ResizeObserver
+       turns a window resize into a pty resize with no layout code here. */
+    #status {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: .5em;
+      padding: .4em .8em;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      font-size: .85rem;
+    }
+    #lamp {
+      width: .6em;
+      height: .6em;
+      border-radius: 50%;
+      background: var(--lamp, var(--term-text-dim, #8888a0));
+    }
+    luhmann-terminal { flex: 1; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div id="status"><span id="lamp"></span><span id="text">Luhmann: connecting…</span></div>
+  <luhmann-terminal></luhmann-terminal>
+  <script type="module" src="/luhmann-terminal-element.js"></script>
+  <script type="module">
+    // R3159: detail.state is the whole host interface — the page holds no
+    // connection state of its own.
+    const lamp = document.getElementById('lamp');
+    const text = document.getElementById('text');
+
+    const render = {
+      connecting: () => ['var(--term-text-dim, #8888a0)', 'Luhmann: connecting…'],
+      connected: (d) => ['var(--term-success, #3fb950)',
+        d.session ? `Luhmann: awake (session ${d.session})` : 'Luhmann: awake'],
+      waiting: (d) => ['var(--term-warning, #d29922)',
+        `Luhmann: reconnecting (attempt ${d.attempt})`],
+      // No launch button: ark never proactively starts a paid session (R3114,
+      // R3158). Launching stays an explicit `ark luhmann launch`.
+      asleep: () => ['var(--term-text-muted, #6a6a80)', 'Luhmann: asleep — no session'],
+    };
+
+    // On document, not on the strip: the strip and the terminal are siblings, so
+    // a bubbling event from the terminal never passes through the strip.
+    document.addEventListener('luhmann-terminal-status', (e) => {
+      const [color, msg] = (render[e.detail.state] ?? render.connecting)(e.detail);
+      lamp.style.setProperty('--lamp', color);
+      text.textContent = msg;
+    });
+  </script>
+</body>
+</html>

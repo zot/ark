@@ -16,4 +16,5 @@ node_modules
 /ark
 /pdf-chunk/dist
 /tag-overview/dist/
+/luhmann-terminal/dist/
 /release/

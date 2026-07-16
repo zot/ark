@@ -260,6 +260,16 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-pdf-chunk-render.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
 - [x] seq-pdf-slice.md → `pdf-chunk/src/pdf-chunk-element.ts`, `ark-search/src/ark-search-element.ts`
 
+### CRC Cards (TypeScript — Luhmann Terminal)
+- [x] crc-PtyProtocol.md → `luhmann-terminal/src/pty-protocol.ts`
+- [x] crc-LuhmannTerminalElement.md → `luhmann-terminal/src/luhmann-terminal-element.ts`
+
+### Sequences (TypeScript — Luhmann Terminal)
+- [x] seq-luhmann-terminal.md → `luhmann-terminal/src/luhmann-terminal-element.ts`, `luhmann-terminal/src/pty-protocol.ts`
+
+### UI Layouts
+- [x] ui-luhmann-terminal-page.md → `install/html/luhmann-terminal.html`
+
 ### CRC Cards (TypeScript — Markdown Editor)
 - [x] crc-ArkTagParser.md → `markdown-editor/src/ark-tag-parser.ts`
 - [x] crc-TagWidget.md → `markdown-editor/src/tag-widget.ts`
@@ -279,6 +289,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-PtyProtocol.md → `luhmann-terminal/src/pty-protocol.test.ts`
 - [x] test-DateParseGuards.md → `scheduler_test.go`
 - [x] test-Config.md → `config_test.go`
 - [x] test-Matcher.md → `match_test.go`
@@ -849,3 +860,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O152: Browser websocket transport wiring (the gorilla upgrade, first-frame-resize precondition, Attach/read-loop/Detach in handleLuhmannPty, wsPtyClient.writeLoop) is driven live, not unit-tested — like the socket transport (O149) and the attach-client interactive additions (O151); it needs a real browser or websocket client plus a hosted session. The deterministic control-frame parser (parsePtyControl) IS unit-tested (test-PtyBrowser.md). Fold into the automated smoke test (PENDING #40).
 - [ ] O153: Frictionless event routing live wiring (the pump's in-process /wait poll against a real flib session, a Lua app's mcp.pushState() reaching the tube, and the gate refusing a live `ark ui event`) is driven live, not unit-tested — like the socket/browser pty transports (O149, O152); it needs a running UI session plus a hosted orchestrator holding the seat. The deterministic cores ARE unit-tested against a fake /wait mux (test-LuhmannEvents.md): seat gate, claim/release, pump idempotency, batch fan-out, 204/404/undecodable wait conditions, cancel, full-queue non-block, the gate's refuse/pass/other-paths matrix, and the no-inheritance clear. Fold into the automated smoke test (PENDING #40). R3145-R3148.
 - [ ] O154: Pre-existing data race (found 2026-07-15 during #35's event-tube pass; NOT introduced by it — reproduced under `-race` at clean HEAD caed1b3 in a detached worktree). `Librarian.computeSubstrate` (connections_substrate.go:257) reads `db.FileIDPaths` off-actor while the write actor's `startNextWrite` (db.go:470) calls microfts2's `InvalidateCaches` (microfts2/db.go:1277) — concurrent read/write of the same cache field. Surfaced by TestSubstrate_FindConnectionsCompletesPendingToDone under -race; the non-race suite is green, so it has been latent. Violates the project's all-mutation-through-the-write-actor rule on the read side. Needs its own pass: route the substrate's FileIDPaths read through the actor (Sync) or have microfts2 guard the cache.
+- [ ] O155: `<luhmann-terminal>`'s DOM/socket surface is driven live, not automated — the client-side counterpart of O152's server-side wiring. FULLY VERIFIED LIVE 2026-07-15 in a real browser (Playwright) against a running ark and a real hosted session (`b7f33e7a`, launched with Bill's explicit go-ahead and stopped after): asleep→no socket opened + state=asleep; connect handshake (resize-first-then-repaint) with the repaint restoring a screen painted *before* the element existed — the proof R3152/R3137 earn their place, since ark holds no screen (R3115); the live Ink TUI rendering with full color; input as binary (`h`→[104], `i`→[105]) echoed back by the child; Ctrl-] forwarded as [29] with no detach (R3156); resize 92x22→131x38 debounced to exactly ONE control frame (R3154); socket-drop reconnect walking waiting(0)→connecting(1)→connected(0) with the session id held and the screen repainted (R3157); and session-stop→asleep with the loop then provably silent for 8s — zero probes, zero sockets, zero events (R3157/R3158). What remains is *automation*, not verification: this is hand-driven, and re-driving it needs a paid `claude` launch (ptyhost.go:196), so fold it into the automated smoke test (PENDING #40) alongside O152. The deterministic core IS unit-tested (test-PtyProtocol.md, 17 tests via `node --test`): endpoint derivation, control frames, both input encodings, probe classification, backoff, theming. R3150-R3162.

@@ -273,17 +273,26 @@ interface the CLI `attach` also implements. It plugs into the identical fan-out
 (broadcast, serialized input merge, smallest-wins resize, attach/detach
 independence) with the same bounded-buffer drop, so a stalled browser tab is
 dropped rather than allowed to stall the session, and the same
-survive-zero-clients behaviour. The xterm.js terminal that drives it is a later
-`/ui-thorough` slice; this spec covers the Go endpoint and its wire.
+survive-zero-clients behaviour. This spec covers the Go endpoint and its wire;
+the xterm.js terminal that drives it is `specs/luhmann-terminal-element.md`.
+
+`GET /luhmann/pty-status` — the hosted/session/secretary-count report the CLI
+`status` verb reads — is also served on the UI HTTP server, the same handler
+mirrored on both muxes (as the curation endpoints are, for the content view). A
+browser cannot see why a websocket handshake failed: the 409 above reaches the
+page as an unexplained 1006 close, so a browser client has no way to tell "no
+session is hosted" from "ark is restarting" without asking. The mirror is what
+it asks.
 
 ## What this spec deliberately does not require
 
-- **The xterm.js browser *client*.** The websocket endpoint itself (`GET
-  /luhmann/pty` on the UI HTTP server, ark's own `gorilla/websocket`) ships now
-  (see Browser transport); the browser-side xterm.js terminal that connects to
-  it is a later `/ui-thorough` slice. The transport-agnostic client interface
-  the fan-out uses (see Architecture) is what lets that client plug in without
-  reworking the multiplexer.
+- **The xterm.js browser *client*.** This spec owns the websocket endpoint
+  (`GET /luhmann/pty` on the UI HTTP server, ark's own `gorilla/websocket`) and
+  its wire; the browser-side terminal that connects to it is owned by
+  `specs/luhmann-terminal-element.md`, and that element's *placement* in the
+  Frictionless app is a later `/ui-thorough` slice. The transport-agnostic
+  client interface the fan-out uses (see Architecture) is what lets that client
+  plug in without reworking the multiplexer.
 - **A second concurrent hosted session.** One pty-hosted session at a time; a
   session pool is not in scope.
 - **Content-based idle detection.** A precise "the agent finished its turn and

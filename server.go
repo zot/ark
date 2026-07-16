@@ -3859,6 +3859,11 @@ func (srv *Server) registerContentRoutes() {
 	// distinct from ui-engine's view-diff socket, so raw terminal bytes never
 	// route through the per-session view executor (R3141).
 	srv.uiRuntime.UIHandleFunc("GET /luhmann/pty", srv.handleLuhmannPty)
+	// R3149: the same status handler the unix-socket mux serves, mirrored here so
+	// a browser client can ask why a /luhmann/pty handshake failed. The WebSocket
+	// API surfaces a rejected upgrade as an unexplained 1006 close, so without
+	// this a page cannot tell R3141's no-session 409 from a bouncing server.
+	srv.uiRuntime.UIHandleFunc("GET /luhmann/pty-status", srv.handleLuhmannStatus)
 	log.Printf("ui: content routes registered (/fetch/, /content/, /raw/, editor endpoints, /luhmann/pty)")
 	// NOTE: /content/ markdown shell references /ark-markdown-editor.js.
 	// The UI server serves from ~/.ark/html/ — the Makefile must copy

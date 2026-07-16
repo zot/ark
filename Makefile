@@ -10,10 +10,10 @@ FRICTIONLESS_BIN := $(FRICTIONLESS_DIR)/build/frictionless
 CACHE_DIR := cache
 RELEASE_DIR := release
 
-.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk tag-overview release release-archives
+.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk tag-overview luhmann-terminal release release-archives
 
 # Default: deps, cache, build+bundle
-all: cache markdown-editor ark-search pdf-chunk tag-overview build
+all: cache markdown-editor ark-search pdf-chunk tag-overview luhmann-terminal build
 
 # Build markdown editor JS bundle
 markdown-editor:
@@ -30,6 +30,10 @@ pdf-chunk:
 # Build tag-overview JS bundle (sidebar + <ark-ext-tags>)
 tag-overview:
 	@$(MAKE) -C tag-overview build
+
+# Build <luhmann-terminal> JS bundle (xterm.js + its CSS, inlined — R3160)
+luhmann-terminal:
+	@$(MAKE) -C luhmann-terminal build
 
 # Build Go binary and graft cached assets.
 # R2971: no gollama/cmake/Vulkan recipe — the embedding engine (yzma) dlopens
@@ -122,7 +126,8 @@ CACHE_SRC := \
 	$(wildcard markdown-editor/dist/*) \
 	$(wildcard ark-search/dist/*) \
 	$(wildcard pdf-chunk/dist/*) \
-	$(wildcard tag-overview/dist/*)
+	$(wildcard tag-overview/dist/*) \
+	$(wildcard luhmann-terminal/dist/*)
 
 #@note: need to scrape emacs backups out of $(CACHE_DIR)/apps/ark after copy
 $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
@@ -146,6 +151,7 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@if [ -d ark-search/dist ]; then cp ark-search/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d pdf-chunk/dist ]; then cp pdf-chunk/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d tag-overview/dist ]; then cp tag-overview/dist/* $(CACHE_DIR)/html/; fi
+	@if [ -d luhmann-terminal/dist ]; then cp luhmann-terminal/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"
@@ -157,6 +163,7 @@ cache-clean:
 
 test:
 	go test $(BUILDFLAGS) $(GOTAGS) ./...
+	@$(MAKE) -C luhmann-terminal test
 
 clean:
 	rm -rf bin $(CACHE_DIR) $(RELEASE_DIR)
