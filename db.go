@@ -423,6 +423,34 @@ func SyncVoid(db *DB, fn func(*DB) error) error {
 	})
 }
 
+// withFTS returns a shallow, read-only DB view bound to an alternate
+// fts — typically fts.Copy() — for an off-actor read operation that must
+// not touch the shared original's Go-side caches
+// (pathCache/pathToID/frecordCache), which the write actor nils via
+// InvalidateCaches. The copy carries its own lazily-loaded caches, so
+// the operation's FileIDPaths / FileInfoByID / SearchFuzzy reads are
+// isolated from the invalidate. The overlay pointer is shared — it has
+// its own mutex and InvalidateCaches leaves it alone — so tmp://
+// documents still resolve through the view. Shares store, config, and
+// the chunker-backed helpers, and rebinds the Searcher to the same fts.
+// The view carries no actor (svc nil) and no write queue: reads only.
+// See specs/db-concurrency.md "Protected Resources".
+// CRC: crc-DB.md | R995, R3163
+func (db *DB) withFTS(fts *microfts2.DB) *DB {
+	cp := &DB{
+		fts:        fts,
+		store:      db.store,
+		config:     db.config,
+		matcher:    db.matcher,
+		pdfChunker: db.pdfChunker,
+		dbPath:     db.dbPath,
+	}
+	if db.search != nil {
+		cp.search = db.search.withFTS(fts)
+	}
+	return cp
+}
+
 // CRC: crc-DB.md | Seq: seq-write-actor.md | R1053
 // enqueueWrite appends a write closure to the write queue. If no write
 // is in flight and the queue was empty, starts the write goroutine.

@@ -81,11 +81,15 @@ func setupConnections(t *testing.T) (*Librarian, *DB, *PubSub) {
 	}
 
 	t.Cleanup(func() {
-		// The actor goroutine intentionally leaks. Closing db.svc races
-		// with in-flight write continuations (startNextWrite schedules
-		// a continuation via svc() *after* the write goroutine
-		// completes) — and the test process exits clean anyway. Just
-		// close the FTS env so disk resources are released.
+		// Drain in-flight/queued writes before closing fts. The write
+		// actor runs each write closure on its own goroutine
+		// (startNextWrite), where it touches fts off the main goroutine
+		// (e.g. writeConnectionsDoc → AppendTmpFile → ensureOverlay), so
+		// closing fts while a write is in flight is a data race.
+		// WaitWritesIdle blocks until the write queue has drained. The
+		// actor goroutine itself intentionally leaks (db.svc is left
+		// open, still serving WaitWritesIdle); the test process exits clean.
+		db.WaitWritesIdle()
 		_ = fts.Close()
 	})
 	return l, db, ps

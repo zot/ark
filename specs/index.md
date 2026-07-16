@@ -48,7 +48,7 @@ could sit in two; cross-listing is kept minimal).
 - **PDF** — pdf-chunker.md, pdf-chunk-element.md *(see Theme: Dealing with PDFs)*
 - **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md, inbox-bookmark-fields.md, inbox-entry-enrichment.md
 - **tmp:// documents** — tmp-documents.md, tmp-subscription.md, tmp-tag-overlay.md
-- **Storage & concurrency** — record-formats.md, db-write-actor.md, db-concurrency.md, rebuild-read-serve.md, cli-dispatch.md, chunk-cache-threading.md, pubsub.md, tvid-map-overlay.md, serve-compact.md
+- **Storage & concurrency** — architecture.md *(overview — see Theme: Actors & DB-access discipline)*, record-formats.md, db-write-actor.md, db-concurrency.md, rebuild-read-serve.md, cli-dispatch.md, chunk-cache-threading.md, pubsub.md, tvid-map-overlay.md, serve-compact.md
 - **UI / Frictionless** — embedded-ui.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md, ark-search.md, chunked-content-view.md, content-fetching.md, content-iframe.md, editor-endpoints.md, tag-overview.md, tag-search-panel.md, table-sort.md, chat-transcript.md
 - **Nano (local LLM agent)** — nano-overview.md, nano-cli.md, nano-library.md, nano-sessions.md, nano-tool-loop.md
 - **Status & diagnostics** — status-db.md, status-enhanced.md, files-status.md, chunk-stats.md, tag-inspect.md, tag-verify.md, verbose-flags.md
@@ -96,3 +96,21 @@ file-level*, not chunk text — keep that distinction explicit.
 
 Touches: pdf-chunker.md (canonical — §Tag Extraction), pdf-chunk-element.md,
 chunkers.md, migrations/recall-substrate-v3.md (R2913).
+
+### Actors & DB-access discipline
+
+Off-actor DB access is governed by one rule no single feature spec can
+see: **the actor-protected Go caches (pathCache / pathToID / frecordCache)
+are never read off the shared original.** An off-actor read *operation*
+reads through a private `fts.Copy()` (`l.db.withFTS`); a write goes through
+the write actor (which writes on its own copy, then `InvalidateCaches` back
+on the actor). bbolt is MVCC-safe, so bbolt `View` reads are exempt — only
+the Go caches above them are protected.
+
+Invariant: **no off-actor goroutine touches the shared original's Go
+caches.** A bare `db.fts.FileIDPaths` / `FileInfoByID` / `SearchFuzzy` off
+the actor is a latent data race (this is what O154 was).
+
+Touches: architecture.md (canonical overview), db-concurrency.md
+(§Protected Resources), db-write-actor.md, find-connections-substrate.md
+(substrateOp — the pattern's first instance), chunk-cache-threading.md.

@@ -132,6 +132,57 @@ func TestSubstrate_FindConnectionsCompletesPendingToDone(t *testing.T) {
 	t.Fatalf("substrate did not complete: %+v", l.ConnectionRecordSnapshot(id))
 }
 
+// TestWithFTS_ReadViewResolves pins the substrateOp read seam: a view
+// from db.withFTS(db.fts.Copy()) is bound to the private copy (so its
+// cache reads can't race InvalidateCaches — R3163/R995), yet still
+// resolves paths and chunks and carries a rebound Searcher. The race
+// itself is guarded by TestSubstrate_FindConnectionsCompletesPendingToDone
+// under `go test -race`; this pins the mechanism's correctness.
+func TestWithFTS_ReadViewResolves(t *testing.T) {
+	l, db, _ := setupConnections(t)
+	cid, _ := indexLine(t, db, "wf.txt", "hello withfts\n")
+
+	// The test harness omits the Searcher; wire one so we can verify the
+	// rebind (production always sets db.search — db.go:291).
+	db.search = &Searcher{fts: db.fts, store: db.store, config: db.config, librarian: l}
+
+	view := db.withFTS(db.fts.Copy())
+	if view.fts == db.fts {
+		t.Fatal("withFTS view shares the original fts; expected the copy")
+	}
+	if view.search == nil || view.search == db.search {
+		t.Fatal("withFTS did not rebind the Searcher to the copy")
+	}
+	if view.search.fts != view.fts {
+		t.Fatal("rebound Searcher is not bound to the copy fts")
+	}
+
+	paths, err := view.fts.FileIDPaths()
+	if err != nil {
+		t.Fatalf("FileIDPaths on copy view: %v", err)
+	}
+	if !pathsHaveSuffix(paths, "wf.txt") {
+		t.Fatalf("wf.txt not resolved by copy view: %v", paths)
+	}
+
+	info, err := view.ChunkInfo(cid)
+	if err != nil {
+		t.Fatalf("ChunkInfo on copy view: %v", err)
+	}
+	if !strings.HasSuffix(info.Path, "wf.txt") {
+		t.Fatalf("ChunkInfo path = %q, want suffix wf.txt", info.Path)
+	}
+}
+
+func pathsHaveSuffix(paths map[uint64]string, suffix string) bool {
+	for _, p := range paths {
+		if strings.HasSuffix(p, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSubstrate_ParseConnectionsDocRoundTrip(t *testing.T) {
 	doc := ConnectionsDoc{
 		Status:    "completed",

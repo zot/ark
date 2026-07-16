@@ -286,6 +286,21 @@ type Searcher struct {
 	librarian *Librarian
 }
 
+// withFTS returns a copy of the Searcher bound to an alternate fts
+// (typically fts.Copy()), so an off-actor read operation searches
+// through a private cache rather than the shared original's — whose
+// path cache the write actor nils via InvalidateCaches (SearchFuzzy
+// resolves result paths through fts.FileIDPaths). Shares store, config,
+// and the librarian back-reference. CRC: crc-Searcher.md | R3163
+func (s *Searcher) withFTS(fts *microfts2.DB) *Searcher {
+	return &Searcher{
+		fts:       fts,
+		store:     s.store,
+		config:    s.config,
+		librarian: s.librarian,
+	}
+}
+
 // SearchCombined sends the same query to both engines, merges by
 // (fileid, chunknum), combines scores, sorts descending (R46). microfts2
 // returns file/chunk matches with trigram scores (R47).

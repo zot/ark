@@ -443,7 +443,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 			if err == nil {
 				queryTris := queryTrigramSet(queryText)
 				for _, h := range hits {
-					cid, ok := l.resolveSearchEntryChunkID(h)
+					cid, ok := resolveSearchEntryChunkID(l.db, h)
 					if !ok {
 						continue
 					}

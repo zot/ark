@@ -233,12 +233,12 @@ func rangesOverlap(aStart, aEnd, bStart, bEnd int) bool {
 	return aStart <= bEnd && bStart <= aEnd
 }
 
-// runSubstrate is the in-process worker for normal mode. Opens one
-// LMDB View txn, runs per-input substrate passes, merges, renders the
-// proposal body, and flips the tmp:// doc to completed via the
-// existing write actor. R2579, R2580, R2581, R2585, R2598, R2599
+// runSubstrate is the in-process worker for normal mode. Builds a
+// substrateOp over a private fts.Copy(), runs the per-input passes,
+// merges, and flips the tmp:// doc to completed via the write actor.
+// R2579, R2580, R2581, R2585, R2598, R2599
 func (l *Librarian) runSubstrate(rec *ConnectionsRecord, inputs []substrateInput, k int) {
-	result, err := l.computeSubstrate(inputs, k)
+	result, err := l.newSubstrateOp(k).compute(inputs)
 	if err != nil {
 		if serr := l.SetConnectionsError(rec.ID, err.Error()); serr != nil {
 			log.Printf("connections: runSubstrate error for %s: %v", rec.ID, serr)
@@ -250,11 +250,36 @@ func (l *Librarian) runSubstrate(rec *ConnectionsRecord, inputs []substrateInput
 	}
 }
 
-// computeSubstrate executes the pipeline. Pure function over LMDB;
-// no doc writes. R2579–R2585
-func (l *Librarian) computeSubstrate(inputs []substrateInput, k int) (*SubstrateResult, error) {
-	embedAvail := l.EmbeddingAvailable()
-	paths, perr := l.db.fts.FileIDPaths()
+// substrateOp carries one find-connections substrate computation and is
+// the sole mediator of its DB access (Monadic Wrapper). It reads through
+// op.db, a view bound to a private fts.Copy(), so its Go-side cache reads
+// — pathCache via FileIDPaths, frecordCache via FileInfoByID, and
+// SearchFuzzy's internal FileIDPaths — never race the write actor's
+// InvalidateCaches on the shared original. Embedding and the bbolt-only
+// vector search (SearchChunks) stay on op.l: they touch no fts cache.
+// CRC: crc-Librarian.md | R2579, R2580, R2581, R3163
+type substrateOp struct {
+	l          *Librarian
+	db         *DB // read view bound to l.db.fts.Copy(); the sole fts door
+	k          int
+	embedAvail bool
+}
+
+// newSubstrateOp builds the operation, taking the fts.Copy() up front so
+// the whole pass reads one consistent, privately-cached snapshot.
+func (l *Librarian) newSubstrateOp(k int) *substrateOp {
+	return &substrateOp{
+		l:          l,
+		db:         l.db.withFTS(l.db.fts.Copy()),
+		k:          k,
+		embedAvail: l.EmbeddingAvailable(),
+	}
+}
+
+// compute executes the pipeline over the operation's private fts.Copy().
+// No doc writes. R2579–R2585
+func (op *substrateOp) compute(inputs []substrateInput) (*SubstrateResult, error) {
+	paths, perr := op.db.fts.FileIDPaths()
 	if perr != nil {
 		log.Printf("connections: substrate path resolution: %v", perr)
 	}
@@ -267,16 +292,16 @@ func (l *Librarian) computeSubstrate(inputs []substrateInput, k int) (*Substrate
 	// it — tracked as a gap in design.md.
 	perInput := make([]map[string]*candidateAcc, 0, len(inputs))
 	for _, in := range inputs {
-		acc, ierr := l.substrateForInput(in, embedAvail)
+		acc, ierr := op.forInput(in)
 		if ierr != nil {
 			return nil, ierr
 		}
 		perInput = append(perInput, acc)
 	}
 
-	candidates := mergeAcrossInputs(perInput, k, paths)
+	candidates := mergeAcrossInputs(perInput, op.k, paths)
 	out := &SubstrateResult{Candidates: candidates}
-	if !embedAvail {
+	if !op.embedAvail {
 		out.Warning = "embedding unavailable"
 	}
 	return out, nil
@@ -297,9 +322,9 @@ func newCandidateAcc() *candidateAcc {
 	}
 }
 
-// substrateForInput runs the four substrate passes for a single
-// normalized input. R2575–R2578
-func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[string]*candidateAcc, error) {
+// forInput runs the four substrate passes for a single normalized
+// input, reading through the operation's private fts.Copy(). R2575–R2578
+func (op *substrateOp) forInput(in substrateInput) (map[string]*candidateAcc, error) {
 	out := make(map[string]*candidateAcc)
 
 	// Resolve the query vector and the query text used for trigram passes.
@@ -307,21 +332,21 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 	var queryText string
 	if in.text != "" {
 		queryText = in.text
-		if embedAvail {
-			v, err := l.EmbedQuery(in.text)
+		if op.embedAvail {
+			v, err := op.l.EmbedQuery(in.text)
 			if err == nil {
 				queryVec = v
 			}
 		}
 	} else if in.chunkID != 0 {
-		if embedAvail {
-			v, err := l.db.store.ReadChunkEmbedding(in.chunkID)
+		if op.embedAvail {
+			v, err := op.db.store.ReadChunkEmbedding(in.chunkID)
 			if err == nil {
 				queryVec = v
 			}
 		}
 		// Pull chunk text for trigram-side use.
-		txt, terr := substrateChunkText(l.db, in.chunkID)
+		txt, terr := substrateChunkText(op.db, in.chunkID)
 		if terr == nil {
 			queryText = txt
 		}
@@ -329,7 +354,7 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 
 	// Substrate 1: vector(input, ED). R2575
 	if len(queryVec) > 0 {
-		eds, err := l.db.store.ScanTagDefEmbeddings()
+		eds, err := op.db.store.ScanTagDefEmbeddings()
 		if err == nil {
 			for _, ed := range eds {
 				if len(ed.Vec) != len(queryVec) {
@@ -355,7 +380,7 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 	if queryText != "" {
 		queryTri := trigrams(strings.ToLower(queryText))
 		if len(queryTri) > 0 {
-			scanTagDefs(l.db.store, func(tag, defText string, fileID uint64) {
+			scanTagDefs(op.db.store, func(tag, defText string, fileID uint64) {
 				score := trigramOverlap(queryTri, trigrams(strings.ToLower(defText)))
 				if score == 0 {
 					return
@@ -377,11 +402,11 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 
 	// Substrate 3: vector(input, EC). R2577
 	if len(queryVec) > 0 {
-		scores, err := l.SearchChunks(queryVec, substrateInternalK)
+		scores, err := op.l.SearchChunks(queryVec, substrateInternalK)
 		if err == nil {
 			for _, cs := range scores {
 				normalized := normalizeCos(cs.Score)
-				addVotesFromChunk(l.db, cs.ChunkID, normalized, out, in.chunkID, func(acc *candidateAcc, n float64) {
+				addVotesFromChunk(op.db, cs.ChunkID, normalized, out, in.chunkID, func(acc *candidateAcc, n float64) {
 					if n > acc.scores.VectorEC {
 						acc.scores.VectorEC = n
 					}
@@ -395,16 +420,16 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 	// a query-coverage floor that lets us skip the union computation
 	// for chunks that barely overlap the query. Skipped when the
 	// Searcher isn't wired (test setups without full DB).
-	if queryText != "" && l.db.search != nil {
-		hits, err := l.db.SearchFuzzy(queryText, SearchOpts{K: substrateInternalK})
+	if queryText != "" && op.db.search != nil {
+		hits, err := op.db.SearchFuzzy(queryText, SearchOpts{K: substrateInternalK})
 		if err == nil {
 			queryTris := queryTrigramSet(queryText)
 			for _, h := range hits {
-				cid, ok := l.resolveSearchEntryChunkID(h)
+				cid, ok := resolveSearchEntryChunkID(op.db, h)
 				if !ok {
 					continue
 				}
-				chunkText, terr := substrateChunkText(l.db, cid)
+				chunkText, terr := substrateChunkText(op.db, cid)
 				if terr != nil {
 					continue
 				}
@@ -412,7 +437,7 @@ func (l *Librarian) substrateForInput(in substrateInput, embedAvail bool) (map[s
 				if score == 0 {
 					continue
 				}
-				addVotesFromChunk(l.db, cid, score, out, in.chunkID, func(acc *candidateAcc, n float64) {
+				addVotesFromChunk(op.db, cid, score, out, in.chunkID, func(acc *candidateAcc, n float64) {
 					if n > acc.scores.TrigramEC {
 						acc.scores.TrigramEC = n
 					}
@@ -472,9 +497,11 @@ func scanTagDefs(store *Store, yield func(tag, defText string, fileID uint64)) {
 
 // resolveSearchEntryChunkID maps a SearchResultEntry's (FileID,
 // ChunkNum) to the global chunkID via FileInfoByID. FileInfoByID is
-// cached, so repeated lookups across the same file are cheap.
-func (l *Librarian) resolveSearchEntryChunkID(h SearchResultEntry) (uint64, bool) {
-	info, err := l.db.fts.FileInfoByID(h.FileID)
+// cached, so repeated lookups across the same file are cheap. Takes the
+// DB explicitly so callers pass either the live DB or an off-actor read
+// view bound to an fts.Copy() (substrateOp).
+func resolveSearchEntryChunkID(db *DB, h SearchResultEntry) (uint64, bool) {
+	info, err := db.fts.FileInfoByID(h.FileID)
 	if err != nil {
 		return 0, false
 	}

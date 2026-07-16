@@ -67,6 +67,15 @@ reference docs — update them yourself when their surface changes:
   chunker interfaces it implements (the interface matrix), content
   source, and registration path. Update when adding/renaming a
   chunker, or when a chunker's implemented interface set changes.
+- `specs/architecture.md` — the cross-cutting overview of the in-process
+  concurrency model: the DB closure actor, the write-actor split, the
+  actor-protected Go caches, and the operation-object access discipline.
+  A **mirror** of the canonical per-feature specs (`db-concurrency.md`,
+  `db-write-actor.md`) plus the operation pattern — it owns no
+  requirements, and those specs win on any disagreement. Update when the
+  actor model, the protected-resources rule, or the operation discipline
+  changes (a new operation lands, the #46 rollout advances), and keep the
+  `specs/index.md` "Actors & DB-access discipline" theme in sync.
 
 ## Frictionless UI
 

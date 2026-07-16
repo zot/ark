@@ -44,6 +44,43 @@ through the actor's channel. The code inside the actor is sequential
 - CLI search — the user is waiting for results.
 - Any operation where the caller needs the return value.
 
+## Protected Resources
+
+Some state on `ark.DB` is mutated by the actor (or the write
+goroutine's reconcile step) and is **not** safe to touch from another
+goroutine. Every accessor must go through the DB actor:
+
+- **microfts2's Go-side caches** — `pathCache`, `pathToID`,
+  `frecordCache` (inside `fts`). Lazily loaded on read, cleared by the
+  reconcile step's `InvalidateCaches()` after each write. Go maps are
+  unsafe for concurrent read/write, so resolving paths or FRecords via a
+  bare `fts` call from a non-actor goroutine races the invalidate.
+- **Write-queue state** — `writeQueue`, `writing`, `writeIdleWaiters`.
+  Actor-only.
+
+Access rule:
+
+- **Inside the actor** (a `Svc`/`Sync` closure, or the reconcile step):
+  read the resource directly — you are already serialized.
+- **An off-actor read operation** (a worker goroutine — e.g. the
+  find-connections substrate worker) reads through a **private
+  `fts.Copy()`**. The copy carries its own lazily-loaded caches, so its
+  path/FRecord reads never touch the shared original's caches that the
+  reconcile step nils. `DB.withFTS(fts.Copy())` returns a read view
+  bound to the copy, and rebinds the Searcher too (fuzzy search resolves
+  result paths through the path cache). The copy shares the overlay
+  pointer, so tmp:// documents still resolve. This mirrors what the
+  write actor already does — it writes on its own `Copy()` — and keeps
+  reads off the actor, so a long read pass never stalls writes.
+- **Writes** go through the write actor.
+
+Bundling the read state on an operation object (Monadic Wrapper) so all
+of its DB access flows through one copy-bound handle is the shape that
+makes this auditable. The find-connections substrate is the first such
+operation (`substrateOp`); bringing the remaining bare `fts` readers
+(search, recall normalization, fetch-payload assembly, …) onto operations
+is ongoing tech debt.
+
 ## Watcher Batching
 
 The watcher currently triggers a full reconcile (walk all source

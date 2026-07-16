@@ -292,3 +292,21 @@ turbo request is pending, call `Librarian.ListConnections()`.
 (mutating the returned slice does not affect the Librarian's map).
 
 **Refs:** crc-Librarian.md.
+
+## Test: withFTS read view resolves through the copy (R3163)
+
+**Purpose:** Validates R3163 — the `substrateOp` read seam. A view from
+`db.withFTS(db.fts.Copy())` is bound to the private copy (so its cache
+reads can't race `InvalidateCaches`) yet still resolves paths and chunks
+and carries a rebound Searcher.
+
+**Input:** `setupConnections`, index one line file, wire a `Searcher`
+onto the DB (the harness omits it), then `view := db.withFTS(db.fts.Copy())`.
+
+**Expected:** `view.fts != db.fts` (it is the copy); `view.search` is
+non-nil, distinct from the original, and bound to `view.fts`;
+`view.fts.FileIDPaths()` and `view.ChunkInfo(cid)` both resolve the
+indexed file. (The race itself is guarded by
+`TestSubstrate_FindConnectionsCompletesPendingToDone` under `go test -race`.)
+
+**Refs:** crc-DB.md, crc-Searcher.md, crc-Librarian.md.
