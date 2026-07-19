@@ -431,7 +431,10 @@ func SyncVoid(db *DB, fn func(*DB) error) error {
 // the operation's FileIDPaths / FileInfoByID / SearchFuzzy reads are
 // isolated from the invalidate. The overlay pointer is shared — it has
 // its own mutex and InvalidateCaches leaves it alone — so tmp://
-// documents still resolve through the view. Shares store, config, and
+// documents still resolve through the view. The ExtMap is shared for the
+// same reason (own mutex, untouched by InvalidateCaches), so a read view
+// resolves @ext routings without reaching back to the live DB (R3165).
+// Shares store, config, and
 // the chunker-backed helpers, and rebinds the Searcher to the same fts.
 // The view carries no actor (svc nil) and no write queue: reads only.
 // See specs/db-concurrency.md "Protected Resources".
@@ -444,6 +447,7 @@ func (db *DB) withFTS(fts *microfts2.DB) *DB {
 		matcher:    db.matcher,
 		pdfChunker: db.pdfChunker,
 		dbPath:     db.dbPath,
+		extmap:     db.extmap,
 	}
 	if db.search != nil {
 		cp.search = db.search.withFTS(fts)

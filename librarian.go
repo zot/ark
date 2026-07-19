@@ -409,11 +409,18 @@ func (l *Librarian) HandleExpandSearch(w http.ResponseWriter, r *http.Request) {
 		Value  string          `json:"value"`
 		Groups []GroupedResult `json:"groups"`
 	}
+	// R3165: HandleExpandSearch runs on the HTTP goroutine, not the actor,
+	// and SearchGrouped resolves result paths through the fts Go-side
+	// caches (FileIDPaths / FileInfoByID) that the write actor nils via
+	// InvalidateCaches. One private copy for the whole expansion loop —
+	// the same read seam as substrateOp and recallOp.
+	rdb := l.db.withFTS(l.db.fts.Copy())
+
 	var results []searchResult
 	for _, alt := range alts {
 		regex := `@` + alt.Tag + `:.*` + alt.Value
 		opts := SearchOpts{Regex: []string{regex}}
-		groups, err := l.db.SearchGrouped("@"+alt.Tag+": "+alt.Value, opts)
+		groups, err := rdb.SearchGrouped("@"+alt.Tag+": "+alt.Value, opts)
 		if err != nil {
 			log.Printf("librarian: search for @%s: %s failed: %v", alt.Tag, alt.Value, err)
 			continue

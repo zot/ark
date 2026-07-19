@@ -3949,6 +3949,19 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R3165: one private read view for the whole render. handleContentView
+	// runs on the HTTP goroutine, and its render subtree reads the fts
+	// Go-side caches all over — ChunkIDByLocation / ChunkIDsForPath
+	// (CheckFile + FileInfoByID), ResolveLink via wrapTagElements,
+	// resolveFilePath via ExtRoutingsForTargetChunk, and ChunkIDsForPath
+	// again inside renderPdfChunksByPage. Off the actor, every one of those
+	// races the write actor's InvalidateCaches (the O154 class). Binding a
+	// single fts.Copy() here and threading it through fixes the whole
+	// subtree at once: rdb is the sole door for off-actor reads below.
+	// The Sync(srv.db, ...) calls keep the live DB — the view carries no
+	// actor. CRC: crc-Server.md | R3165
+	rdb := srv.db.withFTS(srv.db.fts.Copy())
+
 	// R1423-R1427: query params for iframe previews
 	rangeParam := r.URL.Query().Get("range")
 	hideToggle := r.URL.Query().Get("toggle") == "false"
@@ -3984,7 +3997,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Cache-busting hash for JS bundle
-	dbPath := srv.db.Path()
+	dbPath := rdb.Path()
 	bundleHash := ""
 	if info, err := os.Stat(filepath.Join(dbPath, "html", "ark-markdown-editor.js")); err == nil {
 		bundleHash = fmt.Sprintf("?v=%d", info.ModTime().Unix())
@@ -4012,11 +4025,11 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 		// Falls back to single-blob rendering when the file is not indexed.
 		var buf strings.Builder
 		if isChunk {
-			rendered := wrapTagElements(renderMarkdownForContent(data, path), srv.db)
-			cid := srv.db.ChunkIDByLocation(path, rangeParam)
+			rendered := wrapTagElements(renderMarkdownForContent(data, path), rdb)
+			cid := rdb.ChunkIDByLocation(path, rangeParam)
 			var extBlock string
 			if cid != 0 {
-				extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
+				extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
 			}
 			writeArkChunkOpen(&buf, rangeParam, cid, fileID)
 			buf.WriteString(extBlock)
@@ -4027,14 +4040,14 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 				return db.AllChunks(path), nil
 			})
 			if len(chunks) > 0 {
-				chunkIDs := srv.db.ChunkIDsForPath(path)
+				chunkIDs := rdb.ChunkIDsForPath(path)
 				for i, ch := range chunks {
-					rendered := wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
+					rendered := wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), rdb)
 					var extBlock string
 					var cid uint64
 					if i < len(chunkIDs) {
 						cid = chunkIDs[i]
-						extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
+						extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
 					}
 					writeArkChunkOpen(&buf, ch.Range, cid, fileID)
 					buf.WriteString(extBlock)
@@ -4042,7 +4055,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 					buf.WriteString("</div>\n")
 				}
 			} else {
-				buf.WriteString(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
+				buf.WriteString(wrapTagElements(renderMarkdownForContent(data, path), rdb))
 			}
 		}
 		// R2074, R2075: id anchors for sidebar — applied across the
@@ -4073,7 +4086,7 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			if strategy == "pdf" {
 				// R2074, R2075, R2076: id anchors for sidebar — applied to
 				// <ark-tag> and <ark-heading> overlays inside <pdf-chunk>.
-				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, fileID, srv.db)))
+				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, fileID, rdb)))
 				tmpl.Execute(w, shell)
 				return
 			}
@@ -4081,22 +4094,22 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			// render through goldmark. Other strategies stay pre-wrapped.
 			useMarkdown := strategy == "chat-jsonl"
 			// R2065, R2073, R2079: chunkIDs for per-chunk ext-routing lookup.
-			chunkIDs := srv.db.ChunkIDsForPath(path)
+			chunkIDs := rdb.ChunkIDsForPath(path)
 			var buf strings.Builder
 			prevRole := ""
 			groupOpen := false
 			for i, ch := range chunks {
 				var rendered string
 				if useMarkdown {
-					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), srv.db)
+					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), rdb)
 				} else {
-					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), srv.db)
+					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), rdb)
 				}
 				var extBlock string
 				var cid uint64
 				if i < len(chunkIDs) {
 					cid = chunkIDs[i]
-					extBlock = renderExtTagsBlock(srv.db.extmap.ExtRoutingsForTargetChunk(cid, srv.db), "")
+					extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
 				}
 				// R1509-R1512: role grouping for chat-jsonl chunks.
 				role, _ := microfts2.PairGet(ch.Attrs, "role")
@@ -4158,25 +4171,25 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 			var body strings.Builder
 			switch {
 			case strategy == "chat-jsonl":
-				body.WriteString(wrapTagElements(renderMarkdownForContent(data, path), srv.db))
+				body.WriteString(wrapTagElements(renderMarkdownForContent(data, path), rdb))
 			case strategy == "pdf" && isChunk:
 				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
 					return db.ChunkAttrs(path, rangeParam), nil
 				})
-				pdfZoom := srv.db.config.PdfPreviewZoom
+				pdfZoom := rdb.config.PdfPreviewZoom
 				if pdfZoom <= 0 {
 					pdfZoom = 1.5
 				}
 				if pdfHTML, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
 					body.WriteString(pdfHTML)
 				} else {
-					body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
+					body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), rdb))
 				}
 			default:
-				body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), srv.db))
+				body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), rdb))
 			}
 			if isChunk {
-				cid := srv.db.ChunkIDByLocation(path, rangeParam)
+				cid := rdb.ChunkIDByLocation(path, rangeParam)
 				var buf strings.Builder
 				writeArkChunkOpen(&buf, rangeParam, cid, fileID)
 				buf.WriteString(body.String())

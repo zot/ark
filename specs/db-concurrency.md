@@ -81,6 +81,36 @@ operation (`substrateOp`); bringing the remaining bare `fts` readers
 (search, recall normalization, fetch-payload assembly, …) onto operations
 is ongoing tech debt.
 
+### Raciness is a property of the caller, not the reader
+
+`InvalidateCaches` has exactly one call site, and it runs **on the
+actor**. So a cache read is safe or racy according to the goroutine it
+runs on, never according to which function performs it. A helper that
+reads `FileIDPaths` is perfectly safe when every path into it comes from
+inside a `Sync(db, …)` closure, and the same helper is a race when one
+caller reaches it from an HTTP goroutine.
+
+The consequence for auditing: **counting reader call sites overstates the
+work.** The unit to inventory is the set of *off-actor entry points*, and
+for each one the whole subtree it can reach. Most of the Searcher's cache
+readers, for instance, are reached only from server handlers that already
+run inside `Sync(srv.db, …)`, and need no migration at all.
+
+### HTTP handlers are off-actor read operations
+
+An `http.HandlerFunc` runs on its own goroutine. A handler that reads
+cache-backed state without entering the actor is therefore an off-actor
+read operation and owes a private `fts.Copy()`, bound once at the top of
+the handler and threaded through everything it calls. Binding it at the
+handler — rather than at each reader — is what covers the whole render
+subtree: helpers that take a `*DB` inherit the view from their caller, so
+one binding fixes every reader beneath it.
+
+Handlers that reach the DB only through `Sync`/`SyncVoid` closures are
+already serialized and need no view. A handler that mixes both keeps the
+live `srv.db` for its `Sync` calls — a read view carries no actor — and
+uses the bound view for everything off-actor.
+
 ## Watcher Batching
 
 The watcher currently triggers a full reconcile (walk all source

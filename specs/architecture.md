@@ -97,14 +97,28 @@ goroutines.
   reads `FileIDPaths` + chunk content through a local
   `l.db.withFTS(l.db.fts.Copy())` view: the copy-read discipline applied
   without a dedicated op struct, since the read is self-contained. (R995.)
+- **Off-actor HTTP read handlers** — `handleContentView` (`server.go`) and the
+  Librarian's `HandleExpandSearch` (`librarian.go`) run on the HTTP goroutine
+  and bind one `withFTS(fts.Copy())` view at the top of the handler, threading
+  it through the whole render subtree. Because the helpers beneath take a
+  `*DB`, one binding covers every reader under it — `ChunkIDByLocation`,
+  `ChunkIDsForPath`, `ResolveLink`, `resolveFilePath`,
+  `renderPdfChunksByPage`, `SearchGrouped`. Their `Sync(srv.db, …)` calls keep
+  the live DB: a read view carries no actor. (R3165.)
 
 ### Direction (not yet built)
 
-The last off-actor bare-`fts` readers — the `FileIDPaths` callers in the
-long-lived `Searcher` (`search.go`) — still read the shared original and are
-the remaining live instances of the O154 race class. Migrating them onto
-operations, and converting HTTP handlers into operation wrappers
+The `Searcher`'s own cache readers (`search.go`) need **no** migration: every
+path into them comes from a server handler already inside `Sync(srv.db, …)`,
+and `InvalidateCaches` runs only on the actor, so they are serialized by
+construction. Raciness follows the calling goroutine, not the reader — see
+`specs/db-concurrency.md`, "Raciness is a property of the caller." An earlier
+plan counted those reader call sites as pending work; that was the wrong unit.
+
+What remains is converting HTTP handlers into operation wrappers
 (`srv.handler(SomeOp{})`, copying an empty prototype per request) so the
-discipline is grep-auditable across the server, is tracked as **PENDING #46**
+discipline is grep-auditable across the server rather than re-derived by
+inspection at each handler. That is an **auditability** goal, not a live race:
+the known racy entry points are fixed (R3165). Tracked as **PENDING #46**
 (design.md **O156**). Design sketch:
 [.scratch/OPERATION-OBJECTS-20260716.md](../.scratch/OPERATION-OBJECTS-20260716.md).
