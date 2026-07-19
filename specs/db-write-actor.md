@@ -51,6 +51,20 @@ Each goroutine runs one batch, sends the reconcile closure, and
 dies. The main actor commits and decides whether to start the next.
 No writing occurs until after the previous transaction commits.
 
+### Serialization contract
+
+At most one write closure runs at a time (R1067) — the dequeue-after-commit
+pattern above. This one-at-a-time execution is not merely a performance
+property; it is a **contract other code may rely on**: a write closure's body
+runs atomically with respect to every other write closure, so a check-and-set
+performed inside a write closure needs no extra lock or atomic. The terminal
+connections-doc transition (R3164) is the first consumer — it flips the
+record's `Done` and writes the doc inside one closure, so the first terminal
+write wins the dedup and `Done` becomes observable only once the write is in
+flight (and thus counted by `WaitWritesIdle`). Parallelizing writes for I/O
+throughput would silently break such consumers and must be weighed against
+them, not done blindly.
+
 This is the critical path. If the goroutine panics or the
 reconcile closure errors, the failed batch is dropped — but the
 system self-heals: the next write request entering the main actor

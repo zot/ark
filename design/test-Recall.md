@@ -98,3 +98,9 @@
 - Case B: Lua sys.recall call.
 **Expected:** Both invoke Librarian.Recall and return JSON/Lua table results.
 **Refs:** crc-Server.md, seq-recall.md#1.3, seq-recall.md#2.1, R2628, R2629
+
+## Test: recallOp reads through a private fts.Copy()
+**Purpose:** Verify newRecallOp binds op.db to a private copy (not the shared original) so Recall's fts-cache reads can't race the write actor's InvalidateCaches, keeps op.l on the live Librarian for embedding/store, rebinds the Searcher to the copy, and the copy still resolves reads — a guard so a future refactor aliasing op.db to l.db (silently restoring the O154 race) fails loudly.
+**Input:** setupRecall + one indexed chunk. Build op := l.newRecallOp().
+**Expected:** op.db.fts != l.db.fts; op.l == l; op.db.search bound to op.db.fts; op.db.ChunkInfo resolves the indexed chunk's path.
+**Refs:** crc-Librarian.md, R995, R3163

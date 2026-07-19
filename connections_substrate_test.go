@@ -15,7 +15,7 @@ import (
 
 func TestSubstrate_NormalizeRejectsUnknownChunk(t *testing.T) {
 	l, _, _ := setupConnections(t)
-	_, _, err := l.normalizeInputs([]ConnectionsInput{{ChunkID: 99999999}}, true)
+	_, _, err := normalizeInputs(l.db, []ConnectionsInput{{ChunkID: 99999999}}, true)
 	if err == nil || !strings.Contains(err.Error(), "unknown chunk 99999999") {
 		t.Fatalf("want unknown chunk 99999999, got %v", err)
 	}
@@ -23,7 +23,7 @@ func TestSubstrate_NormalizeRejectsUnknownChunk(t *testing.T) {
 
 func TestSubstrate_NormalizeRejectsEmptyInputs(t *testing.T) {
 	l, _, _ := setupConnections(t)
-	_, _, err := l.normalizeInputs(nil, true)
+	_, _, err := normalizeInputs(l.db, nil, true)
 	if err == nil || err.Error() != "chunkIDs/text/range empty" {
 		t.Fatalf("want chunkIDs/text/range empty, got %v", err)
 	}
@@ -31,7 +31,7 @@ func TestSubstrate_NormalizeRejectsEmptyInputs(t *testing.T) {
 
 func TestSubstrate_NormalizeRejectsPathWithoutRange(t *testing.T) {
 	l, _, _ := setupConnections(t)
-	_, _, err := l.normalizeInputs([]ConnectionsInput{{Path: "foo.md"}}, true)
+	_, _, err := normalizeInputs(l.db, []ConnectionsInput{{Path: "foo.md"}}, true)
 	if err == nil || !strings.Contains(err.Error(), "requires a range") {
 		t.Fatalf("want requires a range, got %v", err)
 	}
@@ -39,7 +39,7 @@ func TestSubstrate_NormalizeRejectsPathWithoutRange(t *testing.T) {
 
 func TestSubstrate_NormalizeRejectsMissingPath(t *testing.T) {
 	l, _, _ := setupConnections(t)
-	_, _, err := l.normalizeInputs([]ConnectionsInput{{Path: "missing.md", Range: "1-10"}}, true)
+	_, _, err := normalizeInputs(l.db, []ConnectionsInput{{Path: "missing.md", Range: "1-10"}}, true)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("want path not found, got %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSubstrate_NormalizeRejectsMissingPath(t *testing.T) {
 func TestSubstrate_NormalizeRejectsBadRange(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	_, p := indexLine(t, db, "a.txt", "hello\n")
-	_, _, err := l.normalizeInputs([]ConnectionsInput{{Path: p, Range: "abc-xyz"}}, true)
+	_, _, err := normalizeInputs(l.db, []ConnectionsInput{{Path: p, Range: "abc-xyz"}}, true)
 	if err == nil || !strings.Contains(err.Error(), "parse error") {
 		t.Fatalf("want path:range parse error, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestSubstrate_NormalizeRejectsBadRange(t *testing.T) {
 func TestSubstrate_NormalizeAcceptsTextInput(t *testing.T) {
 	l, db, _ := setupConnections(t)
 	indexLine(t, db, "a.txt", "hello\n")
-	inputs, chunkIDs, err := l.normalizeInputs([]ConnectionsInput{{Text: "what is this about"}}, true)
+	inputs, chunkIDs, err := normalizeInputs(l.db, []ConnectionsInput{{Text: "what is this about"}}, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSubstrate_NormalizeExpandsPathRangeToChunks(t *testing.T) {
 	// Single-line indexer produces one chunk per file; the range covers
 	// that chunk. Verifies path:range → chunkID expansion succeeds.
 	c1, p := indexLine(t, db, "a.txt", "alpha\n")
-	inputs, ids, err := l.normalizeInputs([]ConnectionsInput{{Path: p, Range: "1-1"}}, true)
+	inputs, ids, err := normalizeInputs(l.db, []ConnectionsInput{{Path: p, Range: "1-1"}}, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -154,7 +154,12 @@ func (l *Librarian) FindConnections(inputs []ConnectionsInput, opts FindConnecti
 	// substrate worker needs each chunk's EC vector at enqueue.
 	// Turbo preserves R2324's deferred "surface at --fetch" semantics.
 	strict := mode == "normal"
-	normInputs, chunkIDs, err := l.normalizeInputs(inputs, strict)
+	// Normalize through a one-shot copy-bound read view so the enqueue-time
+	// FileIDPaths / FileInfoByID reads can't race the write actor's
+	// InvalidateCaches (R995, R3163). The substrate worker builds its own
+	// copy later in newSubstrateOp; this closes normalizeInputs' own
+	// off-actor read, which the #43 substrateOp pilot left on the live db.
+	normInputs, chunkIDs, err := normalizeInputs(l.db.withFTS(l.db.fts.Copy()), inputs, strict)
 	if err != nil {
 		return "", err
 	}
@@ -282,6 +287,69 @@ func (l *Librarian) WaitForConnectionsRequest(timeout time.Duration) bool {
 	}
 }
 
+// finalizeConnectionsDoc performs a terminal transition on a connections
+// request — the single door for all three (SetConnectionsError,
+// SetConnectionsResult, SetSubstrateResult). It stops the timeout timer and
+// elapsed-ticker eagerly, then applies the transition's own fields (mutate),
+// flips Done, renders, and writes the tmp:// doc — the Done flip, the render,
+// and the write all INSIDE the write-actor closure.
+//
+// Both key properties fall out of the write actor running closures strictly
+// one at a time (the serialization contract — specs/db-write-actor.md, R1058,
+// R1067):
+//   - Dedup is atomic with no extra lock or flag: the first terminal write to
+//     run sees Done==false and wins; any later one sees Done==true and discards.
+//   - Done becomes observable only once this write closure is in flight, so a
+//     caller polling the record and seeing Done is guaranteed WaitWritesIdle
+//     will block for the write before fts.Close — closing the observe-before-
+//     durable race that panicked on a nil overlay when a poller tore the DB
+//     down between the Done flip and the (then still-queued) write.
+//
+// mutate sets the transition's fields (Status/Error/…) under l.mu inside the
+// closure; render sees the flipped Done (it emits @connections-completed).
+// Returns the write result, nil if the record was already terminal, or an
+// error if the id is unknown.
+// CRC: crc-Librarian.md | Seq: seq-find-connections.md | R2333, R3164
+func (l *Librarian) finalizeConnectionsDoc(id string, mutate func(rec *ConnectionsRecord), body ...string) error {
+	l.mu.Lock()
+	rec := l.connectionsResults[id]
+	if rec == nil {
+		l.mu.Unlock()
+		return errors.New("unknown request id")
+	}
+	// Stop the timeout timer and elapsed-ticker eagerly so neither enqueues
+	// further work behind this terminal write. Idempotent — a losing terminal
+	// transition (deduped in the closure below) doing it again is harmless.
+	if rec.Timer != nil {
+		rec.Timer.Stop()
+		rec.Timer = nil
+	}
+	closeStop(rec)
+	l.mu.Unlock()
+
+	ch := make(chan error, 1)
+	if err := SyncVoid(l.db, func(db *DB) error {
+		db.enqueueWrite(func(_ *microfts2.DB) {
+			l.mu.Lock()
+			if rec.Done {
+				l.mu.Unlock()
+				log.Printf("connections: late terminal for %s, discarding (status=%s)", id, rec.Status)
+				ch <- nil
+				return
+			}
+			mutate(rec)
+			rec.Done = true
+			content := renderConnectionsDoc(rec, body...)
+			l.mu.Unlock()
+			ch <- db.UpdateTmpFile(rec.Path, "markdown", content)
+		})
+		return nil
+	}); err != nil {
+		return err
+	}
+	return <-ch
+}
+
 // SetConnectionsResult validates the payload, renders the body, and
 // flips the tmp:// doc to completed (or errored on protocol violation).
 // CRC: crc-Librarian.md | Seq: seq-find-connections.md | R2317, R2329, R2330, R2333
@@ -292,57 +360,22 @@ func (l *Librarian) SetConnectionsResult(id string, result *ConnectionsResult) e
 	if err := validateEvidence(result); err != nil {
 		return l.SetConnectionsError(id, "protocol: "+err.Error())
 	}
-	l.mu.Lock()
-	rec := l.connectionsResults[id]
-	if rec == nil {
-		l.mu.Unlock()
-		return errors.New("unknown request id")
-	}
-	if rec.Done {
-		l.mu.Unlock()
-		log.Printf("connections: late --result for %s, discarding (status=%s)", id, rec.Status)
-		return nil
-	}
-	rec.Status = "completed"
-	rec.Progress = "done"
-	rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
-	rec.Done = true
-	if rec.Timer != nil {
-		rec.Timer.Stop()
-		rec.Timer = nil
-	}
-	closeStop(rec)
-	l.mu.Unlock()
-	body := renderConnectionsBody(result)
-	return l.writeConnectionsDoc(rec, false, body)
+	return l.finalizeConnectionsDoc(id, func(rec *ConnectionsRecord) {
+		rec.Status = "completed"
+		rec.Progress = "done"
+		rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
+	}, renderConnectionsBody(result))
 }
 
 // SetConnectionsError flips the tmp:// doc to errored. Idempotent
 // on terminal state. R2318, R2329, R2333.
 func (l *Librarian) SetConnectionsError(id, msg string) error {
-	l.mu.Lock()
-	rec := l.connectionsResults[id]
-	if rec == nil {
-		l.mu.Unlock()
-		return errors.New("unknown request id")
-	}
-	if rec.Done {
-		l.mu.Unlock()
-		log.Printf("connections: late --error for %s, discarding (status=%s)", id, rec.Status)
-		return nil
-	}
-	rec.Status = "errored"
-	rec.Error = msg
-	rec.Progress = "done"
-	rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
-	rec.Done = true
-	if rec.Timer != nil {
-		rec.Timer.Stop()
-		rec.Timer = nil
-	}
-	closeStop(rec)
-	l.mu.Unlock()
-	return l.writeConnectionsDoc(rec, false)
+	return l.finalizeConnectionsDoc(id, func(rec *ConnectionsRecord) {
+		rec.Status = "errored"
+		rec.Error = msg
+		rec.Progress = "done"
+		rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
+	})
 }
 
 // closeStop closes the record's stop channel exactly once. The caller
@@ -574,31 +607,13 @@ func (l *Librarian) SetSubstrateResult(id string, result *SubstrateResult) error
 	if result == nil {
 		return l.SetConnectionsError(id, "empty substrate result")
 	}
-	l.mu.Lock()
-	rec := l.connectionsResults[id]
-	if rec == nil {
-		l.mu.Unlock()
-		return errors.New("unknown request id")
-	}
-	if rec.Done {
-		l.mu.Unlock()
-		log.Printf("connections: late substrate result for %s, discarding (status=%s)", id, rec.Status)
-		return nil
-	}
-	rec.Status = "completed"
-	rec.Progress = "done"
-	rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
-	rec.Done = true
-	rec.Warning = result.Warning
-	rec.ProposalCount = len(result.Candidates)
-	if rec.Timer != nil {
-		rec.Timer.Stop()
-		rec.Timer = nil
-	}
-	closeStop(rec)
-	l.mu.Unlock()
-	body := renderSubstrateBody(result)
-	return l.writeConnectionsDoc(rec, false, body)
+	return l.finalizeConnectionsDoc(id, func(rec *ConnectionsRecord) {
+		rec.Status = "completed"
+		rec.Progress = "done"
+		rec.Elapsed = int(time.Since(rec.Started).Round(time.Second) / time.Second)
+		rec.Warning = result.Warning
+		rec.ProposalCount = len(result.Candidates)
+	}, renderSubstrateBody(result))
 }
 
 // ListConnections returns snapshot copies of every in-flight

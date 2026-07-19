@@ -451,9 +451,12 @@ func (db *DB) withFTS(fts *microfts2.DB) *DB {
 	return cp
 }
 
-// CRC: crc-DB.md | Seq: seq-write-actor.md | R1053
+// CRC: crc-DB.md | Seq: seq-write-actor.md | R1053, R1067
 // enqueueWrite appends a write closure to the write queue. If no write
-// is in flight and the queue was empty, starts the write goroutine.
+// is in flight and the queue was empty, starts the write goroutine. The
+// `!db.writing` guard is the one-at-a-time serialization (R1067): a new
+// write goroutine starts only when none is running, so write closures run
+// strictly serially — the contract finalizeConnectionsDoc's dedup relies on.
 // Must be called from inside the actor.
 func (db *DB) enqueueWrite(fn func(ftsCopy *microfts2.DB)) {
 	db.writeQueue = append(db.writeQueue, fn)

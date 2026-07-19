@@ -32,6 +32,15 @@ Reads and writes take different paths through that one actor
   is dequeued (continuation pattern).
 - There is no second actor — the write goroutine is just a goroutine that
   sends one closure back (R1065).
+- The actor runs **at most one write closure at a time** (R1067) — the
+  dequeue-after-commit continuation. This one-at-a-time execution is a
+  **contract** other code may rely on: a write closure's body is atomic with
+  respect to every other write closure, so a check-and-set inside a write
+  closure needs no extra lock. The terminal connections-doc transition
+  (`finalizeConnectionsDoc`, R3164) is the first consumer — it flips `Done`
+  and writes the doc in one closure, so the write is durable before `Done` is
+  observable. Parallelizing writes for throughput would silently break such
+  consumers.
 
 ## Protected resources
 
@@ -76,14 +85,26 @@ goroutines.
   find-connections substrate computation; the first operation and the
   reference implementation of the read-via-`fts.Copy()` rule. (R3163;
   `find-connections-substrate.md`.)
+- **recallOp** (`recall.go`) — one `Recall` computation. Holds the
+  copy-bound read view as its sole fts door and routes every fts-cache read
+  through it: `normalizeInputs`, `substrateChunkText`, `SearchFuzzy`,
+  `resolveSearchEntryChunkID`, `ChunkInfo`, `FileStrategy`, the result-build
+  `NewChunkCache`, and the `chatFunnel` helper (an `op` method). Embedding,
+  `SearchChunks`, and store reads stay on the live Librarian. `FindConnections`
+  runs its enqueue-time normalization through the same db-taking
+  `normalizeInputs` on a one-shot copy. (R3163.)
+- **BuildFetchPayload** (`connections.go`) — the in-flight fetch assembly
+  reads `FileIDPaths` + chunk content through a local
+  `l.db.withFTS(l.db.fts.Copy())` view: the copy-read discipline applied
+  without a dedicated op struct, since the read is self-contained. (R995.)
 
 ### Direction (not yet built)
 
-The remaining off-actor bare-`fts` readers — Recall normalization, the
-search-side `FileIDPaths` callers, `BuildFetchPayload` — still read the
-shared original and are the last live instances of the O154 race class.
-Migrating them onto operations, and converting HTTP handlers into operation
-wrappers (`srv.handler(SomeOp{})`, copying an empty prototype per request)
-so the discipline is grep-auditable across the server, is tracked as
-**PENDING #46** (design.md **O156**). Design sketch:
+The last off-actor bare-`fts` readers — the `FileIDPaths` callers in the
+long-lived `Searcher` (`search.go`) — still read the shared original and are
+the remaining live instances of the O154 race class. Migrating them onto
+operations, and converting HTTP handlers into operation wrappers
+(`srv.handler(SomeOp{})`, copying an empty prototype per request) so the
+discipline is grep-auditable across the server, is tracked as **PENDING #46**
+(design.md **O156**). Design sketch:
 [.scratch/OPERATION-OBJECTS-20260716.md](../.scratch/OPERATION-OBJECTS-20260716.md).

@@ -262,9 +262,34 @@ type chunkScoresAcc struct {
 	alreadyOn map[string]bool
 }
 
+// recallOp carries one Recall computation and is the sole mediator of its
+// fts-cache DB access (Monadic Wrapper / operation object). It reads through
+// op.db, a view bound to a private fts.Copy(), so its Go-side cache reads —
+// FileIDPaths (normalizeInputs), FileInfoByID (ChunkInfo, FileStrategy,
+// resolveSearchEntryChunkID), SearchFuzzy's path resolution, and the
+// NewChunkCache content reads (substrateChunkText, the result-build cache) —
+// never race the write actor's InvalidateCaches. Embedding, the bbolt-only
+// vector search (SearchChunks), and every store (V/D/EC) read stay on op.l:
+// they touch no fts cache. Mirrors substrateOp (connections_substrate.go).
+// CRC: crc-Librarian.md | R995, R3163
+type recallOp struct {
+	l  *Librarian
+	db *DB // read view bound to l.db.fts.Copy(); the sole fts door
+}
+
+// newRecallOp builds the operation, taking the fts.Copy() up front so the
+// whole recall pass reads one consistent, privately-cached snapshot.
+func (l *Librarian) newRecallOp() *recallOp {
+	return &recallOp{
+		l:  l,
+		db: l.db.withFTS(l.db.fts.Copy()),
+	}
+}
+
 // Recall retrieves the top-K chunks from the corpus relevant to a given set of inputs.
-// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658, R2905, R2906, R3082
+// CRC: crc-Librarian.md | Seq: seq-recall.md#1.3 | R2617, R2618, R2620, R2622, R2623, R2624, R2625, R2626, R2634, R2639, R2640, R2641, R2643, R2644, R2655, R2656, R2657, R2658, R2905, R2906, R3082, R3163
 func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallResult, error) {
+	op := l.newRecallOp()
 	// 1. Clamping K. R2641
 	k := opts.K
 	if k <= 0 {
@@ -275,7 +300,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	}
 
 	// 2. Normalization. R2618, R2639, R2640
-	normInputs, _, err := l.normalizeInputs(inputs, true)
+	normInputs, _, err := normalizeInputs(op.db, inputs, true)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +429,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 					queryVec = v
 				}
 			}
-			txt, terr := substrateChunkText(l.db, in.chunkID)
+			txt, terr := substrateChunkText(op.db, in.chunkID)
 			if terr == nil {
 				queryText = txt
 			}
@@ -438,12 +463,12 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 
 		// Trigram-EC pass: candidates from SearchFuzzy are re-scored as
 		// Jaccard(Tq, Tc) with a query-coverage floor. R2643, R2644
-		if queryText != "" && l.db.search != nil {
-			hits, err := l.db.SearchFuzzy(queryText, SearchOpts{K: 50})
+		if queryText != "" && op.db.search != nil {
+			hits, err := op.db.SearchFuzzy(queryText, SearchOpts{K: 50})
 			if err == nil {
 				queryTris := queryTrigramSet(queryText)
 				for _, h := range hits {
-					cid, ok := resolveSearchEntryChunkID(l.db, h)
+					cid, ok := resolveSearchEntryChunkID(op.db, h)
 					if !ok {
 						continue
 					}
@@ -454,7 +479,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 					if acc == nil {
 						continue // tagless chunk and KeepTagless=false
 					}
-					chunkText, terr := substrateChunkText(l.db, cid)
+					chunkText, terr := substrateChunkText(op.db, cid)
 					if terr != nil {
 						continue
 					}
@@ -581,14 +606,14 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 			continue
 		}
 
-		info, err := l.db.ChunkInfo(cid)
+		info, err := op.db.ChunkInfo(cid)
 		if err != nil {
 			continue
 		}
 
 		strat, ok := strategyByPath[info.Path]
 		if !ok {
-			strat = l.db.FileStrategy(info.Path)
+			strat = op.db.FileStrategy(info.Path)
 			strategyByPath[info.Path] = strat
 		}
 		size := info.ByteEnd - info.ByteStart
@@ -637,7 +662,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	// R2912 gate). Trigram-only when no model is available.
 	if len(convTurns) > 0 {
 		candidates = append(candidates,
-			l.chatFunnel(convTurns, inputQueries, rc.EffectiveChatFunnelGate(), embedAvail)...)
+			op.chatFunnel(convTurns, inputQueries, rc.EffectiveChatFunnelGate(), embedAvail)...)
 	}
 
 	// 5b. Allocate across the 2×2 (source × axis) grid — per-cell ranking
@@ -649,7 +674,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 
 	// 5c. Resolve tags + content for the surfaced set only, then build the
 	// result chunks. R2624, R2625
-	cache := l.db.fts.NewChunkCache()
+	cache := op.db.fts.NewChunkCache()
 	recalled := make([]RecalledChunk, 0, len(surfaced))
 	for _, sc := range surfaced {
 		acc := sc.cand.acc
@@ -711,7 +736,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 			if cw == nil || len(cw.proposals) == 0 {
 				continue // no computed proposals to surface
 			}
-			info, err := l.db.ChunkInfo(cid)
+			info, err := op.db.ChunkInfo(cid)
 			if err != nil {
 				continue
 			}
@@ -1036,7 +1061,7 @@ func firstLineSnippet(text string) string {
 // sub-chunk candidates — meaning components only; the tag axis surfaces whole
 // turns separately — located by path:range:"<snippet>". Trigram-only, no model.
 // CRC: crc-Librarian.md | R2910, R2912
-func (l *Librarian) chatFunnel(turns []recallCandidate, inputs []inputQuery, gate int, embedAvail bool) []recallCandidate {
+func (op *recallOp) chatFunnel(turns []recallCandidate, inputs []inputQuery, gate int, embedAvail bool) []recallCandidate {
 	type sub struct {
 		turn recallCandidate
 		text string
@@ -1044,7 +1069,7 @@ func (l *Librarian) chatFunnel(turns []recallCandidate, inputs []inputQuery, gat
 	}
 	var pool []sub
 	for _, t := range turns {
-		content, err := substrateChunkText(l.db, t.chunkID)
+		content, err := substrateChunkText(op.db, t.chunkID)
 		if err != nil || content == "" {
 			continue
 		}
@@ -1084,7 +1109,7 @@ func (l *Librarian) chatFunnel(turns []recallCandidate, inputs []inputQuery, gat
 		for i, s := range pool {
 			texts[i] = s.text
 		}
-		vecs, _ = l.EmbedBatch(texts)
+		vecs, _ = op.l.EmbedBatch(texts)
 	}
 
 	out := make([]recallCandidate, 0, len(pool))

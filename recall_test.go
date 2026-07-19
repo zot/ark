@@ -100,6 +100,38 @@ func TestRecall_MergedScoringAndRanking(t *testing.T) {
 	}
 }
 
+// TestRecall_OpReadsThroughCopy pins the recallOp read seam: newRecallOp
+// binds op.db to a private fts.Copy() (so Recall's fts-cache reads can't
+// race the write actor's InvalidateCaches — R995/R3163), keeps op.l on the
+// live Librarian for embedding/store reads, rebinds the Searcher to the
+// copy, and the copy still resolves paths and chunks. A future refactor that
+// aliased op.db to l.db would silently restore the O154 race class; this
+// catches it. The race itself is guarded by the -race Recall tests.
+func TestRecall_OpReadsThroughCopy(t *testing.T) {
+	l, db := setupRecall(t)
+	cid, _ := indexLine(t, db, "rop.txt", "hello recallop\n")
+
+	op := l.newRecallOp()
+	if op.db.fts == db.fts {
+		t.Fatal("newRecallOp shares the original fts; expected a private copy")
+	}
+	if op.l != l {
+		t.Fatal("newRecallOp did not keep the live Librarian on op.l")
+	}
+	if op.db.search == nil || op.db.search.fts != op.db.fts {
+		t.Fatal("newRecallOp did not rebind the Searcher to the copy fts")
+	}
+
+	// The copy still resolves reads (FileInfoByID via ChunkInfo).
+	info, err := op.db.ChunkInfo(cid)
+	if err != nil {
+		t.Fatalf("ChunkInfo on recallOp copy view: %v", err)
+	}
+	if !strings.HasSuffix(info.Path, "rop.txt") {
+		t.Fatalf("ChunkInfo path = %q, want suffix rop.txt", info.Path)
+	}
+}
+
 // TestRecall_SelfChunkExclusion verifies that when the input is a chunkID,
 // that chunk is excluded from its own recall results.
 // Refs: R2623

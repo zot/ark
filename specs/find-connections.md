@@ -72,8 +72,15 @@ extends it with richer result content.
    shared-tag candidates + evidence, posts the result via
    `--result`.
 6. The server writes
-   `tmp://connections/<id>.md` to `@connections-status: completed`
-   (atomic write through the write actor).
+   `tmp://connections/<id>.md` to `@connections-status: completed`.
+   The terminal transition — flipping the request's `Done` flag and
+   writing the doc — happens inside a single write-actor closure (for
+   every terminal path: sidecar result, in-process substrate result,
+   and timeout error). Because the write actor serializes closures,
+   the first terminal write wins over any racing one (a late `--result`
+   after timeout is discarded), and `Done` becomes observable only once
+   the write is durable, so a subscriber that sees the terminal status
+   never races the still-queued write.
 7. Subscription fires. Lua callback reads the tmp:// doc body,
    parses the proposals, populates `_connectionResults`. Reactive
    rebind renders the proposal panel.

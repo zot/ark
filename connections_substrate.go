@@ -104,26 +104,31 @@ const (
 // deferred "surface at --fetch" semantics). PathRange entries resolve
 // the path, intersect chunks with the line range, and expand into
 // one substrateInput per overlapping chunk. Text entries pass through.
+//
+// Takes the DB explicitly (like substrateChunkText / resolveSearchEntryChunkID)
+// so each caller passes its op's copy-bound read view: the fts-cache reads
+// here — FileIDPaths, PathFileID, FileInfoByID — must run through a private
+// fts.Copy() and not race the write actor's InvalidateCaches (R995, R3163).
 // R2568, R2569, R2570, R2571, R2572, R2573, R2574
-func (l *Librarian) normalizeInputs(raw []ConnectionsInput, strict bool) ([]substrateInput, []uint64, error) {
+func normalizeInputs(db *DB, raw []ConnectionsInput, strict bool) ([]substrateInput, []uint64, error) {
 	if len(raw) == 0 {
 		return nil, nil, errors.New("chunkIDs/text/range empty")
 	}
 	// Read FileIDPaths once for chunkID-side path resolution. The
 	// path:range branch uses PathFileID + FileInfoByID directly.
-	paths, err := l.db.fts.FileIDPaths()
+	paths, err := db.fts.FileIDPaths()
 	if err != nil {
 		return nil, nil, fmt.Errorf("file id paths: %w", err)
 	}
 	out := make([]substrateInput, 0, len(raw))
 	originalChunkIDs := make([]uint64, 0, len(raw))
-	err = l.db.fts.DB().View(func(txn *bbolt.Tx) error {
+	err = db.fts.DB().View(func(txn *bbolt.Tx) error {
 		for _, in := range raw {
 			switch {
 			case in.ChunkID != 0:
 				var path string
 				if strict {
-					crec, rerr := l.db.fts.ReadCRecord(txn, in.ChunkID)
+					crec, rerr := db.fts.ReadCRecord(txn, in.ChunkID)
 					if rerr != nil || len(crec.FileIDs) == 0 {
 						return fmt.Errorf("unknown chunk %d", in.ChunkID)
 					}
@@ -139,11 +144,11 @@ func (l *Librarian) normalizeInputs(raw []ConnectionsInput, strict bool) ([]subs
 				if perr != nil {
 					return fmt.Errorf("path:range parse error: %w", perr)
 				}
-				fileID, ok := l.db.PathFileID(in.Path)
+				fileID, ok := db.PathFileID(in.Path)
 				if !ok {
 					return fmt.Errorf("path %q not found", in.Path)
 				}
-				info, ierr := l.db.fts.FileInfoByID(fileID)
+				info, ierr := db.fts.FileInfoByID(fileID)
 				if ierr != nil {
 					return fmt.Errorf("path %q: %w", in.Path, ierr)
 				}
