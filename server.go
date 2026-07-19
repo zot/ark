@@ -465,13 +465,13 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// below), so the pump bypasses its own gate by construction.
 	srv.uiMux = mux
 
-	mux.HandleFunc("POST /search", srv.handleSearch)   // R90
-	mux.HandleFunc("POST /add", srv.handleAdd)         // R91
-	mux.HandleFunc("POST /remove", srv.handleRemove)   // R92
-	mux.HandleFunc("POST /scan", srv.handleScan)       // R93
-	mux.HandleFunc("POST /refresh", srv.handleRefresh) // R94
-	mux.HandleFunc("GET /status", srv.handleStatus)    // R95
-	mux.HandleFunc("GET /files", srv.handleFiles)      // R96
+	mux.HandleFunc("POST /search", srv.handleSearch)       // R90
+	mux.HandleFunc("POST /add", srv.handleAdd)             // R91
+	mux.HandleFunc("POST /remove", srv.handleRemove)       // R92
+	mux.HandleFunc("POST /scan", srv.handleScan)           // R93
+	mux.HandleFunc("POST /refresh", srv.handleRefresh)     // R94
+	mux.HandleFunc("GET /status", handle(srv, statusOp{})) // R95, R3167
+	mux.HandleFunc("GET /files", srv.handleFiles)          // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
 	mux.HandleFunc("GET /stale", srv.handleStale)            // R97
 	mux.HandleFunc("GET /missing", srv.handleMissing)        // R98
@@ -493,7 +493,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /config/remove-pattern", srv.handleConfigRemovePattern)
 	mux.HandleFunc("POST /config/show-why", srv.handleConfigShowWhy)
 	mux.HandleFunc("POST /config/add-strategy", srv.handleConfigAddStrategy)
-	mux.HandleFunc("POST /fetch", srv.handleFetch)
+	mux.HandleFunc("POST /fetch", handle(srv, fetchOp{})) // R3167
 	mux.HandleFunc("POST /chunks", srv.handleChunks)
 	mux.HandleFunc("POST /chunks/anchor", srv.handleAnchor) // R3077
 	mux.HandleFunc("POST /grams", srv.handleGrams)
@@ -558,7 +558,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 		mux.HandleFunc("GET /search/curate/result/{id}", srv.librarian.HandleExpandGet)
 		// R1383: expansion/matching endpoints remain under /search/expand/
 		mux.HandleFunc("POST /search/expand/fuzzy", srv.librarian.HandleFuzzyMatch)
-		mux.HandleFunc("POST /search/expand/search", srv.librarian.HandleExpandSearch)
+		mux.HandleFunc("POST /search/expand/search", handle(srv, expandSearchOp{})) // R3167
 		mux.HandleFunc("POST /search/expand/embed", srv.librarian.HandleEmbedMatch)
 		mux.HandleFunc("POST /sweep/correlations", srv.librarian.HandleSweepCorrelations)
 		// Find Connections (1G) — sidecar lotto-tube endpoints.
@@ -604,7 +604,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 // ride the DB actor, so they stay responsive and race-free against the
 // concurrent scan (R2986).
 func (srv *Server) registerReadOnlyRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /status", srv.handleStatus)
+	mux.HandleFunc("GET /status", handle(srv, statusOp{})) // R3167
 	mux.HandleFunc("POST /search", srv.handleSearch)
 	mux.HandleFunc("GET /files", srv.handleFiles)
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
@@ -1305,21 +1305,34 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// CRC: crc-Server.md | R257, R2477, R2480
-func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	wantDB := r.URL.Query().Get("db") == "true"
+// statusOp serves GET /status. The simplest operation shape: one query
+// parameter, one actor read, two possible response shapes, and no
+// classified errors (any failure is internal).
+//
+// CRC: crc-HTTPOperation.md | Seq: seq-http-operation.md#1.3 | R3166
+type statusOp struct {
+	srv    *Server
+	wantDB bool
+}
 
+func (o *statusOp) init(srv *Server, r *http.Request) {
+	o.srv = srv
+	o.wantDB = r.URL.Query().Get("db") == "true"
+}
+
+// CRC: crc-Server.md | R257, R2477, R2480
+func (o *statusOp) run() (any, error) {
 	type statusResult struct {
 		status   *StatusInfo
 		dbCounts *DBRecordCounts
 	}
-	result, err := Sync(srv.db, func(db *DB) (statusResult, error) {
+	result, err := Sync(o.srv.db, func(db *DB) (statusResult, error) {
 		status, err := db.Status()
 		if err != nil {
 			return statusResult{}, err
 		}
 		var dbCounts *DBRecordCounts
-		if wantDB {
+		if o.wantDB {
 			dbCounts, err = db.StatusDB()
 			if err != nil {
 				return statusResult{}, err
@@ -1328,26 +1341,24 @@ func (srv *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return statusResult{status, dbCounts}, nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
 	// R437-R441: Enrich with UI fields (not DB state — safe outside actor)
-	if srv.uiRuntime != nil {
+	if o.srv.uiRuntime != nil {
 		result.status.UIRunning = true
-		result.status.UIPort = srv.uiPort
+		result.status.UIPort = o.srv.uiPort
 	}
-	result.status.UIIndexing = len(srv.currentlyIndexing()) > 0
-	result.status.Spectral = srv.librarian.Available()
+	result.status.UIIndexing = len(o.srv.currentlyIndexing()) > 0
+	result.status.Spectral = o.srv.librarian.Available()
 
 	if result.dbCounts != nil {
-		writeJSON(w, struct {
+		return struct {
 			*StatusInfo
 			DB *DBRecordCounts `json:"db"`
-		}{result.status, result.dbCounts})
-		return
+		}{result.status, result.dbCounts}, nil
 	}
-	writeJSON(w, result.status)
+	return result.status, nil
 }
 
 func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -2269,21 +2280,35 @@ type fetchRequest struct {
 	Path string `json:"path"`
 }
 
+// fetchOp serves POST /fetch. Shows the two things statusOp does not: a
+// decoded request body, and a failure that is semantically *not found*
+// rather than internal — so the wrapper picks 404 without run() naming a
+// status code.
+//
+// CRC: crc-HTTPOperation.md | Seq: seq-http-operation.md#1.4 | R3166, R3168
+type fetchOp struct {
+	srv       *Server
+	req       fetchRequest
+	decodeErr error
+}
+
+func (o *fetchOp) init(srv *Server, r *http.Request) {
+	o.srv = srv
+	o.decodeErr = decodeBody(r, &o.req)
+}
+
 // CRC: crc-Server.md | R164, R165
-func (srv *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
-	var req fetchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+func (o *fetchOp) run() (any, error) {
+	if o.decodeErr != nil {
+		return nil, o.decodeErr
 	}
-	data, err := Sync(srv.db, func(db *DB) ([]byte, error) {
-		return db.Fetch(req.Path)
+	data, err := Sync(o.srv.db, func(db *DB) ([]byte, error) {
+		return db.Fetch(o.req.Path)
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
+		return nil, notFound(err)
 	}
-	writeJSON(w, map[string]string{"content": string(data)})
+	return map[string]string{"content": string(data)}, nil
 }
 
 // handleChunks serves chunk content for `ark chunks` while the server

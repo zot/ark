@@ -106,6 +106,24 @@ goroutines.
   `renderPdfChunksByPage`, `SearchGrouped`. Their `Sync(srv.db, …)` calls keep
   the live DB: a read view carries no actor. (R3165.)
 
+### The HTTP front door
+
+An operation is served over HTTP by the generic `handle(srv, someOp{})`
+wrapper, which copies the prototype per request, calls `init` (where the
+actor-or-copy-view decision is made **once**), then `run`. `run` is
+HTTP-agnostic — it returns a value and a semantically classified error, and
+the wrapper picks the status code — so one operation can back HTTP, the CLI,
+and in-process callers. Owned by [http-operations.md](http-operations.md)
+(R3166–R3170); `statusOp` and `fetchOp` (`server.go`) and `expandSearchOp`
+(`librarian.go`) are the worked examples, the last of them binding its own
+`fts.Copy()` view in `init`.
+
+Adoption is **incremental**: the remaining handlers stay ordinary
+`http.HandlerFunc`s and convert as they are touched. The end-state one-grep
+audit — every `srv.db` use is an operation's binding or a bug — arrives only
+at full adoption and is not on its own worth a mechanical sweep (R3170).
+Handlers that must write a non-JSON body are permanently outside the pattern.
+
 ### Direction (not yet built)
 
 The `Searcher`'s own cache readers (`search.go`) need **no** migration: every
@@ -115,10 +133,8 @@ construction. Raciness follows the calling goroutine, not the reader — see
 `specs/db-concurrency.md`, "Raciness is a property of the caller." An earlier
 plan counted those reader call sites as pending work; that was the wrong unit.
 
-What remains is converting HTTP handlers into operation wrappers
-(`srv.handler(SomeOp{})`, copying an empty prototype per request) so the
-discipline is grep-auditable across the server rather than re-derived by
-inspection at each handler. That is an **auditability** goal, not a live race:
-the known racy entry points are fixed (R3165). Tracked as **PENDING #46**
-(design.md **O156**). Design sketch:
+What remains is the opportunistic conversion of the rest of the handlers, and
+the `srv.db` audit that only becomes meaningful once that is far along. Both
+are **auditability** goals, not live races: the known racy entry points are
+fixed (R3165). Tracked as **PENDING #46** (design.md **O156**). Design sketch:
 [.scratch/OPERATION-OBJECTS-20260716.md](../.scratch/OPERATION-OBJECTS-20260716.md).

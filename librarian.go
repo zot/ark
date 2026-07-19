@@ -395,32 +395,47 @@ func (l *Librarian) HandleFuzzyMatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, matches)
 }
 
-// HandleExpandSearch runs a grouped search for curated tags and returns
-// chunk-level results. Called after the agent curates fuzzy matches.
+// expandSearchOp runs a grouped search for curated tags and returns
+// chunk-level results. Invoked after the agent curates fuzzy matches.
 // POST /search/expand/search
-func (l *Librarian) HandleExpandSearch(w http.ResponseWriter, r *http.Request) {
-	var alts []TagAlt
-	if err := json.NewDecoder(r.Body).Decode(&alts); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+//
+// The off-actor representative: its init binds one private fts.Copy()
+// read view, which is the whole concurrency decision for this request —
+// nothing under run() re-derives it.
+//
+// CRC: crc-HTTPOperation.md | Seq: seq-http-operation.md#1.5 | R3166
+type expandSearchOp struct {
+	rdb       *DB
+	alts      []TagAlt
+	decodeErr error
+}
+
+func (o *expandSearchOp) init(srv *Server, r *http.Request) {
+	o.decodeErr = decodeBody(r, &o.alts)
+	// R3165: this operation runs on the HTTP goroutine, not the actor, and
+	// SearchGrouped resolves result paths through the fts Go-side caches
+	// (FileIDPaths / FileInfoByID) that the write actor nils via
+	// InvalidateCaches. One private copy for the whole expansion loop —
+	// the same read seam as substrateOp and recallOp.
+	db := srv.librarian.db
+	o.rdb = db.withFTS(db.fts.Copy())
+}
+
+// CRC: crc-Librarian.md | R3165
+func (o *expandSearchOp) run() (any, error) {
+	if o.decodeErr != nil {
+		return nil, o.decodeErr
 	}
 	type searchResult struct {
 		Tag    string          `json:"tag"`
 		Value  string          `json:"value"`
 		Groups []GroupedResult `json:"groups"`
 	}
-	// R3165: HandleExpandSearch runs on the HTTP goroutine, not the actor,
-	// and SearchGrouped resolves result paths through the fts Go-side
-	// caches (FileIDPaths / FileInfoByID) that the write actor nils via
-	// InvalidateCaches. One private copy for the whole expansion loop —
-	// the same read seam as substrateOp and recallOp.
-	rdb := l.db.withFTS(l.db.fts.Copy())
-
 	var results []searchResult
-	for _, alt := range alts {
+	for _, alt := range o.alts {
 		regex := `@` + alt.Tag + `:.*` + alt.Value
 		opts := SearchOpts{Regex: []string{regex}}
-		groups, err := rdb.SearchGrouped("@"+alt.Tag+": "+alt.Value, opts)
+		groups, err := o.rdb.SearchGrouped("@"+alt.Tag+": "+alt.Value, opts)
 		if err != nil {
 			log.Printf("librarian: search for @%s: %s failed: %v", alt.Tag, alt.Value, err)
 			continue
@@ -429,7 +444,7 @@ func (l *Librarian) HandleExpandSearch(w http.ResponseWriter, r *http.Request) {
 			results = append(results, searchResult{Tag: alt.Tag, Value: alt.Value, Groups: groups})
 		}
 	}
-	writeJSON(w, results)
+	return results, nil
 }
 
 // HandleEmbedMatch runs embedding similarity search for tag values.
