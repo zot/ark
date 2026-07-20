@@ -696,8 +696,10 @@ ark ext reject    <target> <tag> [value]
 ```
 
 Author `@ext` routings into the target's **mirror file**
-(`~/.ark/external/<slug>/<target-path>.md`) — the CLI counterpart
-to the Frictionless workshop's `mcp.setExtTag`/`mcp.removeExtTag`,
+(`~/.ark/external/<slug>/<target-path>.md`, or
+`<source>/<ext_mirror>/<target-path>.md` when the target's source sets
+`ext_mirror` — see `specs/curation-workshop-primitives.md`) — the CLI
+counterpart to the Frictionless workshop's `mcp.setExtTag`/`mcp.removeExtTag`,
 so a plain-session assistant can apply an `@ext` proposal (e.g. a
 recall recommend) without the UI. All six verbs act only on the
 mirror file; they never scan or edit hand-authored `@ext` lines

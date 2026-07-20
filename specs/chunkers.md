@@ -41,6 +41,7 @@ interfaces; microfts2 type-asserts for them at index and retrieval time.
 | FuncChunker     | `lines`      | ✓      | ✗            | ✗        | ✗          | (def true) | chunker-strategies.md              |
 | JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | chat-transcript.md                 |
 | PDFChunker      | `pdf`        | ✓      | ✗            | ✓        | ✓          | **false**  | pdf-chunker.md                     |
+| bibleChunker    | `bible`      | ✓      | ✗            | ✗        | ✗          | **false**  | bible-chunker.md                   |
 
 Notes:
 - The four microfts2 *text* chunkers (Markdown, Line, bracket, indent) are
@@ -50,12 +51,19 @@ Notes:
   `IsWritable() == false`.
 - `lines` is registered via `AddStrategyFunc` ⇒ a `FuncChunker` (Chunks
   only), not the full `LineChunker`.
+- `bible` implements `Chunks` only, plus the `ChunkerMetadata` pair. It
+  chunks by paragraph (finer than any microfts2 chunker supplies) and
+  stamps `chapter` / `verses` attrs for CHAPTER.VERSE addressing; the
+  fast/incremental paths are omitted, so microfts2 falls back to
+  re-chunking, which suits a fixed reference corpus that never grows.
+  Like PDF it is **not writable**, so annotation routes to the external
+  disposition — see bible-chunker.md.
 - **Internal-tag wrapping (ark-side).** On `Open`, ark wraps the three writable
   *multi-line* text chunkers (markdown, bracket, indent) in an
   `internalTagChunker` that embeds the full microfts2 interface set (so every
   method above promotes) and adds one method, `InsertTag` — the `tagInserter`
   capability used by `ark ext accept` (internal disposition) to write a tag into
-  the file's own body. `lines` / `chat-jsonl` / `pdf` are **not** wrapped
+  the file's own body. `lines` / `chat-jsonl` / `pdf` / `bible` are **not** wrapped
   (single-line or read-only), so a `chunkerByName[strategy].(tagInserter)`
   assertion fails for them and internal disposition degrades to external. See
   `internal-disposition.md`.
@@ -92,6 +100,7 @@ hook to register against.
 
 - chunker-strategies.md — config-driven bracket/indent registration.
 - pdf-chunker.md — PDF → Block → Chunk mapping.
+- bible-chunker.md — paragraph chunks + chapter/verse attrs for scripture.
 - chunk-callback.md — the WithChunkCallback / WithIndexedChunkCallback path.
 - chunk-cache-threading.md — `ChunkCache` retrieval (the GetChunk fast path).
 - indexing.md — how chunks flow into the index.

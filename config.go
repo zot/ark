@@ -567,6 +567,10 @@ type Source struct {
 	Include    PatternSpec       `toml:"include,omitempty"`
 	Exclude    PatternSpec       `toml:"exclude,omitempty"`
 	FromGlob   string            `toml:"from_glob,omitempty"`
+	// ExtMirror, when set, redirects this source's @ext mirror tree from
+	// ~/.ark/external/<slug>/ into <Dir>/<ExtMirror>/ so routings travel
+	// with the source. Relative to Dir. R3171
+	ExtMirror string `toml:"ext_mirror,omitempty"`
 }
 
 // PatternSpec is a per-source include or exclude pattern list.
@@ -818,19 +822,32 @@ func (c *Config) IsInSource(path string) bool {
 	return false
 }
 
+// SourceForPath returns the concrete source whose root directory contains
+// path (exact match or path under root/), or ok=false when none claims it.
+// Glob-pattern sources (`src.Dir` containing `*?[`) are skipped — the
+// caller works with concrete roots only. Callers needing just the root use
+// SourceRootForPath; callers needing per-source fields (e.g. ext_mirror)
+// use this. CRC: crc-Config.md | R3171
+func (c *Config) SourceForPath(path string) (Source, bool) {
+	for _, src := range c.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		if path == src.Dir || strings.HasPrefix(path, src.Dir+string(filepath.Separator)) {
+			return src, true
+		}
+	}
+	return Source{}, false
+}
+
 // SourceRootForPath returns the absolute source-root directory that
 // contains path, or "" with ok=false when no concrete source claims
 // it. Glob-pattern sources (`src.Dir` containing `*?[`) are skipped —
 // the caller works with concrete roots only.
 // CRC: crc-Config.md | R2392
 func (c *Config) SourceRootForPath(path string) (string, bool) {
-	for _, src := range c.Sources {
-		if IsGlob(src.Dir) {
-			continue
-		}
-		if path == src.Dir || strings.HasPrefix(path, src.Dir+string(filepath.Separator)) {
-			return src.Dir, true
-		}
+	if src, ok := c.SourceForPath(path); ok {
+		return src.Dir, true
 	}
 	return "", false
 }
@@ -1211,12 +1228,15 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 			globOwned[m] = src.Dir
 			if !concreteSet[m] {
 				// New directory — add as concrete source
+				// R3171: ExtMirror travels with the other per-source
+				// fields — each expanded dir keeps its own in-tree mirror.
 				c.Sources = append(c.Sources, Source{
 					Dir:        m,
 					Strategies: src.Strategies,
 					Include:    src.Include,
 					Exclude:    src.Exclude,
 					FromGlob:   src.Dir,
+					ExtMirror:  src.ExtMirror,
 				})
 				concreteSet[m] = true
 				result.Added = append(result.Added, m)

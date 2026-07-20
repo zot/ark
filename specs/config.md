@@ -48,6 +48,7 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 | `include`    | PatternSpec   | `{}`    | Include glob patterns. Either `include = [...]` to replace defaults, or `include.add = [...]` to extend. | `source-monitoring.md` |
 | `exclude`    | PatternSpec   | `{}`    | Exclude glob patterns. Same Replace/Add forms as `include`.                                              | `source-monitoring.md` |
 | `from_glob`  | string        | `""`    | Marks this source as derived from a glob expansion; tracked for sources-check reconciliation.            | `source-monitoring.md` |
+| `ext_mirror` | string        | `""`    | Redirect this source's `@ext` mirror tree into `<source>/<ext_mirror>/` instead of `~/.ark/external/<slug>/`, so routings travel with the source. Empty = global default. | `curation-workshop-primitives.md` |
 
 ## `[[chunker]]` — repeated table
 

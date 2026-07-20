@@ -160,6 +160,11 @@ func Init(dbPath string, opts InitOpts) error {
 	if err := fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
 		return fmt.Errorf("register strategy chat-jsonl: %w", err)
 	}
+	// R3172: bible — paragraph chunks carrying chapter/verse attributes.
+	// Read-only (R3178), so it is not internal-tag wrapped.
+	if err := fts.AddChunker(bibleStrategy, bibleChunker{}); err != nil {
+		return fmt.Errorf("register strategy %s: %w", bibleStrategy, err)
+	}
 	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
 		return fmt.Errorf("register strategy lines: %w", err)
 	}
@@ -308,6 +313,13 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	if err := db.addChunker("chat-jsonl", JSONLChunker{}); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register chat-jsonl strategy: %w", err)
+	}
+	// R3172: bible — paragraph chunks carrying chapter/verse attributes.
+	// Not internal-tag wrapped: R3178 makes it read-only, so annotation
+	// routes to the external disposition rather than into the file body.
+	if err := db.addChunker(bibleStrategy, bibleChunker{}); err != nil {
+		fts.Close()
+		return nil, fmt.Errorf("register %s strategy: %w", bibleStrategy, err)
 	}
 	if err := db.addStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
 		fts.Close()
@@ -1796,6 +1808,18 @@ func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
 		return []uint64{info.Chunks[0].ChunkID}
 	}
 	if parts.AnchorKind == "range" {
+		// R3179: on a bible-strategy file the anchor slot holds CHAPTER.VERSE
+		// rather than a chunk location — `mark:12.1` addresses verse 12:1, not
+		// a line range. Gated on the file's strategy, so a range anchor on any
+		// other file keeps the exact-location match below unchanged.
+		if chapter, verse, ok := parseChapterVerse(parts.AnchorText); ok &&
+			db.FileStrategy(parts.BaseValue) == bibleStrategy {
+			// R3180: a chapter or verse that does not exist resolves to
+			// nothing — deliberately no fall-through to the location match or
+			// the first chunk, since silently annotating an unrelated
+			// paragraph is worse than annotating none.
+			return db.chunkForVerse(parts.BaseValue, info, chapter, verse)
+		}
 		for _, c := range info.Chunks {
 			if c.Location == parts.AnchorText {
 				return []uint64{c.ChunkID}
@@ -2154,18 +2178,30 @@ func (db *DB) resolveExtTargetFile(targetSpec string) (string, error) {
 }
 
 // extMirrorPath returns the mirror-file path for a target file under
-// sourceRoot. Source-slug is path-as-slug (every `/` → `-`, leading
-// `-` stripped). Mirror layout:
-// `~/.ark/external/<slug>/<target-path-within-source>.md`. The trailing
-// `.md` is always appended so mirror files are markdown-indexed
-// regardless of the target's extension. CRC: crc-DB.md | R2392
-func extMirrorPath(sourceRoot, targetFile string) (string, error) {
+// sourceRoot. The trailing `.md` is always appended so mirror files are
+// markdown-indexed regardless of the target's extension.
+//
+// Default layout is `~/.ark/external/<slug>/<target-path-within-source>.md`,
+// where source-slug is path-as-slug (every `/` → `-`, leading `-` stripped).
+// When extMirror is non-empty (the source's ext_mirror config), the base
+// moves in-tree to `<sourceRoot>/<extMirror>/<target-path>.md` so routings
+// travel with the source; a target already inside that dir has no mirror of
+// its own (it would nest mirrors/mirrors/…) and is rejected.
+// CRC: crc-DB.md | R2392, R3171
+func extMirrorPath(sourceRoot, targetFile, extMirror string) (string, error) {
 	rel, err := filepath.Rel(sourceRoot, targetFile)
 	if err != nil {
 		return "", fmt.Errorf("rel %s under %s: %w", targetFile, sourceRoot, err)
 	}
 	if strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("target %s not under source root %s", targetFile, sourceRoot)
+	}
+	// R3171: in-tree mirror override. Base moves under the source itself.
+	if extMirror != "" {
+		if rel == extMirror || strings.HasPrefix(rel, extMirror+string(filepath.Separator)) {
+			return "", fmt.Errorf("target %s is inside its source's ext_mirror dir %q; no mirror", targetFile, extMirror)
+		}
+		return filepath.Join(sourceRoot, extMirror, rel+".md"), nil
 	}
 	slug := strings.ReplaceAll(strings.TrimPrefix(sourceRoot, string(filepath.Separator)), string(filepath.Separator), "-")
 	if slug == "" {
@@ -2196,11 +2232,12 @@ func (db *DB) resolveExtMirror(targetSpec string) (mirrorPath string, err error)
 	if err != nil {
 		return "", err
 	}
-	sourceRoot, ok := db.config.SourceRootForPath(targetFile)
+	src, ok := db.config.SourceForPath(targetFile)
 	if !ok {
 		return "", fmt.Errorf("no source root contains %s", targetFile)
 	}
-	return extMirrorPath(sourceRoot, targetFile)
+	// R3171: src.ExtMirror redirects the base in-tree when set.
+	return extMirrorPath(src.Dir, targetFile, src.ExtMirror)
 }
 
 // readExtMirror reads a target's mirror file. A missing file yields nil
@@ -4601,4 +4638,33 @@ func extractJSONLText(line []byte) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// chunkForVerse resolves a CHAPTER.VERSE reference to the single paragraph
+// chunk that contains it: the chunk whose `chapter` attribute matches and
+// whose `verses` span covers the verse (R3179). Attributes come from
+// AllChunks — the FRecord entries carry locations and ids but not attrs — so
+// the two lists are correlated by index, the same correlation the string and
+// regex anchors below use.
+//
+// Returns nil when nothing matches (R3180): a reference naming a chapter or
+// verse the file does not have annotates nothing rather than falling back to
+// some other chunk.
+// CRC: crc-DB.md | R3179, R3180
+func (db *DB) chunkForVerse(path string, info microfts2.FRecord, chapter, verse int) []uint64 {
+	want := strconv.Itoa(chapter)
+	for i, c := range db.AllChunks(path) {
+		if i >= len(info.Chunks) {
+			break
+		}
+		if ch, ok := microfts2.PairGet(c.Attrs, "chapter"); !ok || string(ch) != want {
+			continue
+		}
+		span, ok := microfts2.PairGet(c.Attrs, "verses")
+		if !ok || !verseSpanContains(string(span), verse) {
+			continue
+		}
+		return []uint64{info.Chunks[i].ChunkID}
+	}
+	return nil
 }

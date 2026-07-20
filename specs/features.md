@@ -28,6 +28,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Ark tags & hypergraph structure             | shipping                                   | `ark-tags.md`                                                                 |
 | Tag drill-down (`<ark-tag>` element)        | shipping                                   | `ark-tag-element.md`                                                          |
 | Source monitoring & chunking                | shipping                                   | `chunkers.md`, `source-monitoring.md`                                         |
+| Verse-addressed scripture (`bible` strategy) | shipping                                   | `bible-chunker.md`                                                            |
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
@@ -177,6 +178,36 @@ updated. The user does not run "reindex" — they edit their files.
 **Surface.** `ark serve` runs the scanner; `ark scan`, `ark refresh`,
 `ark resolve` are manual entry points. Chunker strategies are
 registered in `db.go`.
+
+## Verse-addressed scripture (`bible` strategy)
+
+**Motivation.** Some corpora carry a second addressing scheme inside
+the prose. Scripture is the clearest case: a reader refers to
+"Mark 12:1", not to a line range or a paragraph index, and any note
+worth keeping is a note about a *verse*. Ark's chunks are paragraphs
+and its targets are chunks, so without help the finest thing an
+annotation can name is the paragraph — losing the distinction the
+reader actually thinks in.
+
+**Objective.** Address a verse without making storage carry verses.
+A `bible` chunking strategy splits by paragraph and stamps each chunk
+with its chapter and the span of verse marks it holds; an `@ext`
+target may then name `books/mark:12.1`, which resolves to the
+paragraph containing that verse; and the content view refines the
+position at display time, showing the annotation at the verse rather
+than at the top of the paragraph. Storage stays coarse and dumb —
+verse granularity is a rendering concern throughout.
+
+The strategy is read-only, which is not a limitation but the
+mechanism: a fixed reference text is annotated *beside* itself, so
+every annotation routes to a mirror file, and a source setting
+`ext_mirror` keeps those mirrors inside the checkout where they travel
+with it.
+
+**Surface.** Per-source config (`strategies = { "books/*" = "bible" }`,
+`ext_mirror = "mirrors"`); `@ext` targets of the form
+`PATH:CHAPTER.VERSE`; `<ark-verse n="N">` elements in the rendered
+content view.
 
 ## Hybrid full-text + vector search
 

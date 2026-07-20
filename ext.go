@@ -168,6 +168,23 @@ func indexNarrowerColon(target string) int {
 	return strings.IndexByte(target, ':')
 }
 
+// extTargetAnchorPart returns the raw anchor part of an @ext TARGET —
+// "whatever followed the `:`" per specs/tag-overview.md — delimiters
+// included, so a string anchor stays distinguishable from a regex one in
+// the rendered `externalTarget` attribute and the sidebar's `anchor:`
+// tooltip line. Empty for a bare path or bare UUID target. The MODIFIER
+// (`[N]` / `^`) sits before the narrower colon and is never part of the
+// result. Pure — the parsed counterpart, ParseExtTargetParts, unescapes
+// and strips delimiters, which is the wrong shape for display.
+// CRC: crc-ExtMap.md | R2073
+func extTargetAnchorPart(target string) string {
+	i := indexNarrowerColon(target)
+	if i < 0 {
+		return ""
+	}
+	return strings.TrimSpace(target[i+1:])
+}
+
 // indexUnescapedByte finds the first occurrence of c in s that is
 // NOT preceded by an unescaped `\`. Returns -1 if not found.
 //

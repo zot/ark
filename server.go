@@ -36,6 +36,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 	lua "github.com/yuin/gopher-lua"
@@ -3964,16 +3965,41 @@ func writeArkChunkOpen(buf *strings.Builder, rangeStr string, chunkID, fileID ui
 	buf.WriteString(`">`)
 }
 
-// handleContentView returns an HTML page that presents the file richly.
-// Markdown: goldmark-rendered HTML with pencil/eye toggle to ink-mde editor.
-// Other types: <pre> block.
+// contentRender carries the per-request state the /content/ render cases
+// share: the R3165 read view every off-actor read goes through, the resolved
+// file and optional chunk range, the file's chunking strategy, the per-file
+// fileID the curate-pin buttons need, and the shell being filled.
+// handleContentView builds one and dispatches to the renderer for the content
+// kind, so a kind is a case rather than a branch inside one long function.
 // CRC: crc-Server.md | Seq: seq-content-fetching.md | R1160-R1164, R1168-R1189
-func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
-	path, data, ok := srv.contentPath(w, r, "/content")
-	if !ok {
-		return
-	}
+type contentRender struct {
+	srv        *Server
+	rdb        *DB
+	path       string
+	data       []byte
+	rangeParam string
+	isChunk    bool
+	strategy   string
+	fileID     uint64
+	shell      contentShellData
 
+	// isBible selects the verse-aware markdown render (R3181). Bible files
+	// are markdown and take the markdown template like any other; only the
+	// per-chunk render differs.
+	isBible bool
+	// extOverride, when non-nil, supplies the chunk-level <ark-ext-tags>
+	// block instead of the ordinary lookup — the bible render places
+	// verse-targeted routings inside their verses and leaves only the rest
+	// for the chunk top (R3182). Keyed by chunkID, populated per chunk
+	// before chunkDiv emits it.
+	extOverride map[uint64]string
+}
+
+// newContentRender resolves everything the render cases share: the private
+// read view, the `?range=` chunk (falling back to the full file when the
+// range does not resolve), the strategy, the fileID, and the template shell.
+// CRC: crc-Server.md | R1423-R1428, R2415, R3165
+func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *contentRender {
 	// R3165: one private read view for the whole render. handleContentView
 	// runs on the HTTP goroutine, and its render subtree reads the fts
 	// Go-side caches all over — ChunkIDByLocation / ChunkIDsForPath
@@ -3985,35 +4011,39 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	// subtree at once: rdb is the sole door for off-actor reads below.
 	// The Sync(srv.db, ...) calls keep the live DB — the view carries no
 	// actor. CRC: crc-Server.md | R3165
-	rdb := srv.db.withFTS(srv.db.fts.Copy())
+	cr := &contentRender{
+		srv:  srv,
+		rdb:  srv.db.withFTS(srv.db.fts.Copy()),
+		path: path,
+		data: data,
+	}
 
 	// R1423-R1427: query params for iframe previews
-	rangeParam := r.URL.Query().Get("range")
-	hideToggle := r.URL.Query().Get("toggle") == "false"
-	autoEdit := r.URL.Query().Get("edit") == "true"
-	isChunk := false
+	cr.rangeParam = r.URL.Query().Get("range")
 
 	// R1423-R1425: resolve chunk range if specified
-	if rangeParam != "" {
+	if cr.rangeParam != "" {
 		chunkData, _ := Sync(srv.db, func(db *DB) ([]byte, error) {
-			return db.ChunkText(path, rangeParam), nil
+			return db.ChunkText(path, cr.rangeParam), nil
 		})
 		if chunkData != nil {
-			data = chunkData
-			isChunk = true
+			cr.data = chunkData
+			cr.isChunk = true
 		}
 		// R1425: if range invalid, fall back to full file (data unchanged)
 	}
 
-	strategy, _ := Sync(srv.db, func(db *DB) (string, error) {
+	cr.strategy, _ = Sync(srv.db, func(db *DB) (string, error) {
 		return db.FileStrategy(path), nil
 	})
+
+	cr.isBible = cr.strategy == bibleStrategy
 
 	// R2415: per-file fileID for the curate-button data attributes.
 	// One CheckFile call here is shared across every chunk div emitted
 	// below; the inline pin-button script reads data-fileid from each
 	// div to POST {chunkID, fileID, path}.
-	fileID, _ := Sync(srv.db, func(db *DB) (uint64, error) {
+	cr.fileID, _ = Sync(srv.db, func(db *DB) (uint64, error) {
 		info, err := db.fts.CheckFile(path)
 		if err != nil {
 			return 0, nil
@@ -4022,211 +4052,339 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Cache-busting hash for JS bundle
-	dbPath := rdb.Path()
 	bundleHash := ""
-	if info, err := os.Stat(filepath.Join(dbPath, "html", "ark-markdown-editor.js")); err == nil {
+	if info, err := os.Stat(filepath.Join(cr.rdb.Path(), "html", "ark-markdown-editor.js")); err == nil {
 		bundleHash = fmt.Sprintf("?v=%d", info.ModTime().Unix())
 	}
 
-	shell := contentShellData{
+	cr.shell = contentShellData{
 		Title:      path,
 		BundleHash: bundleHash,
-		HideToggle: hideToggle,
-		AutoEdit:   autoEdit,
-		IsChunk:    isChunk,
+		HideToggle: r.URL.Query().Get("toggle") == "false",
+		AutoEdit:   r.URL.Query().Get("edit") == "true",
+		IsChunk:    cr.isChunk,
 		IsSearch:   r.URL.Query().Get("highlight") != "",
 	}
+	return cr
+}
+
+// handleContentView returns an HTML page that presents the file richly.
+// Markdown: goldmark-rendered HTML with pencil/eye toggle to ink-mde editor.
+// Other types: <pre> block.
+// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1160-R1164, R1168-R1189
+func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
+	path, data, ok := srv.contentPath(w, r, "/content")
+	if !ok {
+		return
+	}
+	cr := srv.newContentRender(r, path, data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if StrategyToContentType(strategy) == "markdown" || strings.HasSuffix(path, ".md") {
-		tmpl, err := srv.loadContentTemplate("content-markdown.html")
-		if err != nil {
-			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// R2065, R2073, R2079: per-chunk markdown rendering so each chunk
-		// can carry its own <ark-ext-tags> indicator. Single-chunk views
-		// (?range=) render just that chunk; full-file views walk AllChunks.
-		// Falls back to single-blob rendering when the file is not indexed.
-		var buf strings.Builder
-		if isChunk {
-			rendered := wrapTagElements(renderMarkdownForContent(data, path), rdb)
-			cid := rdb.ChunkIDByLocation(path, rangeParam)
-			var extBlock string
-			if cid != 0 {
-				extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
-			}
-			writeArkChunkOpen(&buf, rangeParam, cid, fileID)
-			buf.WriteString(extBlock)
-			buf.WriteString(rendered)
-			buf.WriteString("</div>\n")
-		} else {
-			chunks, _ := Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
-				return db.AllChunks(path), nil
-			})
-			if len(chunks) > 0 {
-				chunkIDs := rdb.ChunkIDsForPath(path)
-				for i, ch := range chunks {
-					rendered := wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), rdb)
-					var extBlock string
-					var cid uint64
-					if i < len(chunkIDs) {
-						cid = chunkIDs[i]
-						extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
-					}
-					writeArkChunkOpen(&buf, ch.Range, cid, fileID)
-					buf.WriteString(extBlock)
-					buf.WriteString(rendered)
-					buf.WriteString("</div>\n")
-				}
-			} else {
-				buf.WriteString(wrapTagElements(renderMarkdownForContent(data, path), rdb))
-			}
-		}
-		// R2074, R2075: id anchors for sidebar — applied across the
-		// assembled chunked HTML.
-		shell.Content = template.HTML(assignSidebarIDs(buf.String()))
-		tmpl.Execute(w, shell)
-	} else {
-		tmpl, err := srv.loadContentTemplate("content-plain.html")
-		if err != nil {
-			http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// R1495-R1496, R1499, R1501: render chunks as divs for non-markdown files.
-		// Single-chunk views (isChunk) use the already-resolved data.
-		// Full-file views use AllChunks. Falls back to raw <pre> if no chunks.
-		var chunks []microfts2.ChunkResult
-		if !isChunk {
-			chunks, _ = Sync(srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
-				return db.AllChunks(path), nil
-			})
-		}
-		if len(chunks) > 0 {
-			shell.IsChunked = true
-			// R1739, R1740: PDFs use page-level aggregation — one <pdf-chunk>
-			// per page covering the full page, carrying every tag_rects
-			// entry from every chunk on that page. Block rects alone would
-			// leave gaps between text regions.
-			if strategy == "pdf" {
-				// R2074, R2075, R2076: id anchors for sidebar — applied to
-				// <ark-tag> and <ark-heading> overlays inside <pdf-chunk>.
-				shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, path, fileID, rdb)))
-				tmpl.Execute(w, shell)
-				return
-			}
-			// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
-			// render through goldmark. Other strategies stay pre-wrapped.
-			useMarkdown := strategy == "chat-jsonl"
-			// R2065, R2073, R2079: chunkIDs for per-chunk ext-routing lookup.
-			chunkIDs := rdb.ChunkIDsForPath(path)
-			var buf strings.Builder
-			prevRole := ""
-			groupOpen := false
-			for i, ch := range chunks {
-				var rendered string
-				if useMarkdown {
-					rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), path), rdb)
-				} else {
-					rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), rdb)
-				}
-				var extBlock string
-				var cid uint64
-				if i < len(chunkIDs) {
-					cid = chunkIDs[i]
-					extBlock = renderExtTagsBlock(rdb.extmap.ExtRoutingsForTargetChunk(cid, rdb), "")
-				}
-				// R1509-R1512: role grouping for chat-jsonl chunks.
-				role, _ := microfts2.PairGet(ch.Attrs, "role")
-				roleStr := string(role)
-				if roleStr != "" && roleStr != prevRole {
-					if groupOpen {
-						// Close skill details if needed.
-						if prevRole == "skill" {
-							buf.WriteString("</details>")
-						}
-						buf.WriteString("</div>\n")
-					}
-					buf.WriteString(`<div class="ark-role-group ark-role-`)
-					buf.WriteString(roleStr)
-					buf.WriteString(`">`)
-					switch roleStr {
-					case "skill":
-						skillName, _ := microfts2.PairGet(ch.Attrs, "skill")
-						buf.WriteString(`<details><summary class="ark-role-header">📋 `)
-						if len(skillName) > 0 {
-							buf.WriteString(template.HTMLEscapeString(string(skillName)))
-						} else {
-							buf.WriteString("skill")
-						}
-						buf.WriteString("</summary>")
-					case "human":
-						buf.WriteString(`<div class="ark-role-header">👤</div>`)
-					case "assistant":
-						buf.WriteString(`<div class="ark-role-header">🤖</div>`)
-					}
-					groupOpen = true
-					prevRole = roleStr
-				}
-				writeArkChunkOpen(&buf, ch.Range, cid, fileID)
-				buf.WriteString(extBlock)
-				buf.WriteString(rendered)
-				buf.WriteString("</div>\n")
-			}
-			if groupOpen {
-				if prevRole == "skill" {
-					buf.WriteString("</details>")
-				}
-				buf.WriteString("</div>\n")
-			}
-			// R2074, R2075: id anchors for sidebar — applied across the
-			// assembled chunked HTML (covers inline <ark-tag> from
-			// wrapTagElements and <ark-tag> children inside <ark-ext-tags>).
-			shell.Content = template.HTML(assignSidebarIDs(buf.String()))
-		} else {
-			// Single chunk or unchunked file — render through goldmark for JSONL,
-			// as <pdf-chunk> for PDF chunks with a rect, plain-text fallback
-			// otherwise. R1703-R1708
-			//
-			// When the URL specifies a range (?range=...) we know exactly
-			// which chunk we're showing, so wrap the rendered content in a
-			// <div class="ark-chunk" data-chunkid data-fileid> so the
-			// curate-pin inline JS can install a pin button. R2415
-			// CRC: crc-CuratePinButton.md | R2417
-			var body strings.Builder
-			switch {
-			case strategy == "chat-jsonl":
-				body.WriteString(wrapTagElements(renderMarkdownForContent(data, path), rdb))
-			case strategy == "pdf" && isChunk:
-				attrs, _ := Sync(srv.db, func(db *DB) ([]microfts2.Pair, error) {
-					return db.ChunkAttrs(path, rangeParam), nil
-				})
-				pdfZoom := rdb.config.PdfPreviewZoom
-				if pdfZoom <= 0 {
-					pdfZoom = 1.5
-				}
-				if pdfHTML, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
-					body.WriteString(pdfHTML)
-				} else {
-					body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), rdb))
-				}
-			default:
-				body.WriteString(wrapTagElements(template.HTMLEscapeString(string(data)), rdb))
-			}
-			if isChunk {
-				cid := rdb.ChunkIDByLocation(path, rangeParam)
-				var buf strings.Builder
-				writeArkChunkOpen(&buf, rangeParam, cid, fileID)
-				buf.WriteString(body.String())
-				buf.WriteString("</div>")
-				shell.IsChunked = true
-				shell.Content = template.HTML(buf.String())
-			} else {
-				shell.Content = template.HTML(body.String())
-			}
-		}
-		tmpl.Execute(w, shell)
+	if StrategyToContentType(cr.strategy) == "markdown" || strings.HasSuffix(path, ".md") {
+		cr.serveMarkdown(w)
+		return
 	}
+	cr.servePlain(w)
+}
+
+// serveMarkdown renders the markdown case through content-markdown.html.
+// CRC: crc-Server.md | R1160-R1164, R2074, R2075
+func (cr *contentRender) serveMarkdown(w http.ResponseWriter) {
+	tmpl, err := cr.srv.loadContentTemplate("content-markdown.html")
+	if err != nil {
+		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// R2074, R2075: id anchors for sidebar — applied across the assembled
+	// chunked HTML.
+	cr.shell.Content = template.HTML(assignSidebarIDs(cr.markdownBody()))
+	tmpl.Execute(w, cr.shell)
+}
+
+// markdownBody assembles the markdown chunk divs. R2065, R2073, R2079:
+// per-chunk rendering so each chunk can carry its own <ark-ext-tags>
+// indicator. Single-chunk views (?range=) render just that chunk; full-file
+// views walk AllChunks; a file with no indexed chunks falls back to
+// single-blob rendering.
+// CRC: crc-Server.md | R2065, R2073, R2079
+func (cr *contentRender) markdownBody() string {
+	var buf strings.Builder
+	if cr.isChunk {
+		cid := cr.rdb.ChunkIDByLocation(cr.path, cr.rangeParam)
+		// Rendered before chunkDiv, not inline in the call: the bible path
+		// populates extOverride for this chunk as a side effect, and chunkDiv
+		// reads it.
+		body := cr.markdownChunk(cr.data, cid)
+		cr.chunkDiv(&buf, cr.rangeParam, cid, body)
+		return buf.String()
+	}
+
+	chunks, _ := Sync(cr.srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
+		return db.AllChunks(cr.path), nil
+	})
+	if len(chunks) == 0 {
+		return cr.markdownChunk(cr.data, 0)
+	}
+	chunkIDs := cr.rdb.ChunkIDsForPath(cr.path)
+	for i, ch := range chunks {
+		cid := chunkIDAt(chunkIDs, i)
+		body := cr.markdownChunk([]byte(ch.Content), cid)
+		cr.chunkDiv(&buf, ch.Range, cid, body)
+	}
+	return buf.String()
+}
+
+// markdownChunk renders one chunk's markdown. An ordinary file goes straight
+// through goldmark; a bible file takes the verse pass, which places each
+// verse-targeted routing inside its verse and hands the rest back to the
+// chunk-level block via extOverride (R3181, R3182).
+// CRC: crc-Server.md | R3181, R3182
+func (cr *contentRender) markdownChunk(content []byte, cid uint64) string {
+	if !cr.isBible {
+		return wrapTagElements(renderMarkdownForContent(content, cr.path), cr.rdb)
+	}
+
+	byVerse, leftover := cr.partitionVerseRoutings(cid)
+	if cr.extOverride == nil {
+		cr.extOverride = map[uint64]string{}
+	}
+	cr.extOverride[cid] = renderExtTagsBlock(leftover, "")
+
+	// insertVerseExtBlocks runs after wrapTagElements on purpose — see its
+	// doc comment (design gap C2).
+	html := wrapTagElements(renderBibleMarkdownForContent(content, cr.path), cr.rdb)
+	return insertVerseExtBlocks(html, byVerse)
+}
+
+// partitionVerseRoutings splits a chunk's incoming @ext routings by whether
+// their recorded target anchor names a verse (R2073 supplies the anchor,
+// R3182 the rule). Verse-targeted routings come back as pre-rendered blocks
+// keyed by verse number; everything else — a bare path target, a quoted-text
+// or regex anchor — comes back as the leftover for the chunk-level block, so
+// nothing is dropped for lacking a verse.
+// CRC: crc-Server.md | R3182
+func (cr *contentRender) partitionVerseRoutings(cid uint64) (map[int]string, []IncomingExtRouting) {
+	if cid == 0 {
+		return nil, nil
+	}
+	routings := cr.rdb.extmap.ExtRoutingsForTargetChunk(cid, cr.rdb)
+	if len(routings) == 0 {
+		return nil, nil
+	}
+
+	grouped := map[int][]IncomingExtRouting{}
+	var leftover []IncomingExtRouting
+	for _, r := range routings {
+		// The chapter needs no re-check: a routing only reaches this chunk by
+		// having matched its chapter and verse span at resolution (R3179).
+		if _, verse, ok := parseChapterVerse(r.TargetAnchor); ok {
+			grouped[verse] = append(grouped[verse], r)
+			continue
+		}
+		leftover = append(leftover, r)
+	}
+
+	byVerse := make(map[int]string, len(grouped))
+	for verse, rs := range grouped {
+		byVerse[verse] = renderExtTagsBlock(rs, "")
+	}
+	return byVerse, leftover
+}
+
+// servePlain renders every non-markdown case through content-plain.html.
+// R1495-R1496, R1499, R1501: chunks become divs; PDFs aggregate by page;
+// a file with no indexed chunks (or a single-chunk ?range= view) renders as
+// one body.
+// CRC: crc-Server.md | R1495-R1496, R1499, R1501, R1739, R1740
+func (cr *contentRender) servePlain(w http.ResponseWriter) {
+	tmpl, err := cr.srv.loadContentTemplate("content-plain.html")
+	if err != nil {
+		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Single-chunk views use the already-resolved data, so they never walk
+	// the chunk list — they land in the unchunked case below.
+	var chunks []microfts2.ChunkResult
+	if !cr.isChunk {
+		chunks, _ = Sync(cr.srv.db, func(db *DB) ([]microfts2.ChunkResult, error) {
+			return db.AllChunks(cr.path), nil
+		})
+	}
+
+	switch {
+	case len(chunks) == 0:
+		// Only a ranged view emits a wrapping div (see unchunkedBody), so
+		// only it needs the chunked shell container.
+		cr.shell.IsChunked = cr.isChunk
+		cr.shell.Content = template.HTML(cr.unchunkedBody())
+	case cr.strategy == "pdf":
+		// R1739, R1740: PDFs use page-level aggregation — one <pdf-chunk>
+		// per page covering the full page, carrying every tag_rects entry
+		// from every chunk on that page. Block rects alone would leave gaps
+		// between text regions. R2074, R2075, R2076: id anchors for sidebar
+		// — applied to <ark-tag> and <ark-heading> overlays inside
+		// <pdf-chunk>.
+		cr.shell.IsChunked = true
+		cr.shell.Content = template.HTML(assignSidebarIDs(renderPdfChunksByPage(chunks, cr.path, cr.fileID, cr.rdb)))
+	default:
+		// R2074, R2075: id anchors for sidebar — applied across the
+		// assembled chunked HTML (covers inline <ark-tag> from
+		// wrapTagElements and <ark-tag> children inside <ark-ext-tags>).
+		cr.shell.IsChunked = true
+		cr.shell.Content = template.HTML(assignSidebarIDs(cr.chunkedBody(chunks)))
+	}
+	tmpl.Execute(w, cr.shell)
+}
+
+// chunkedBody assembles the non-markdown chunk divs, grouping consecutive
+// same-role chunks (chat-jsonl) into ark-role-group wrappers.
+// CRC: crc-Server.md | R1505-R1506, R1509-R1512, R2065, R2073, R2079
+func (cr *contentRender) chunkedBody(chunks []microfts2.ChunkResult) string {
+	// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
+	// render through goldmark. Other strategies stay pre-wrapped.
+	useMarkdown := cr.strategy == "chat-jsonl"
+	// R2065, R2073, R2079: chunkIDs for per-chunk ext-routing lookup.
+	chunkIDs := cr.rdb.ChunkIDsForPath(cr.path)
+
+	var buf strings.Builder
+	// prevRole stays "" until the first group opens and is only ever set to a
+	// non-empty role, so it doubles as the "a group is open" flag.
+	prevRole := ""
+	for i, ch := range chunks {
+		var rendered string
+		if useMarkdown {
+			rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), cr.path), cr.rdb)
+		} else {
+			rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), cr.rdb)
+		}
+		// R1509-R1512: role grouping for chat-jsonl chunks.
+		role, _ := microfts2.PairGet(ch.Attrs, "role")
+		roleStr := string(role)
+		if roleStr != "" && roleStr != prevRole {
+			if prevRole != "" {
+				closeRoleGroup(&buf, prevRole)
+			}
+			openRoleGroup(&buf, roleStr, ch.Attrs)
+			prevRole = roleStr
+		}
+		cr.chunkDiv(&buf, ch.Range, chunkIDAt(chunkIDs, i), rendered)
+	}
+	if prevRole != "" {
+		closeRoleGroup(&buf, prevRole)
+	}
+	return buf.String()
+}
+
+// unchunkedBody renders a file with no indexed chunks, or the single chunk a
+// ?range= view resolved: chat-jsonl through goldmark, a ranged PDF chunk as
+// <pdf-chunk>, plain-text escaping otherwise (R1703-R1708).
+//
+// When the URL specified a range we know exactly which chunk we're showing,
+// so the body is wrapped in a <div class="ark-chunk" data-chunkid
+// data-fileid> for the curate-pin inline JS to install a pin button (R2415).
+// That wrapper carries no <ark-ext-tags> block — unlike chunkDiv — so a
+// ranged view of an unchunked file shows no ext routings (design.md O157).
+// CRC: crc-CuratePinButton.md | R1703-R1708, R2415, R2417
+func (cr *contentRender) unchunkedBody() string {
+	var body string
+	switch {
+	case cr.strategy == "chat-jsonl":
+		body = wrapTagElements(renderMarkdownForContent(cr.data, cr.path), cr.rdb)
+	case cr.strategy == "pdf" && cr.isChunk:
+		attrs, _ := Sync(cr.srv.db, func(db *DB) ([]microfts2.Pair, error) {
+			return db.ChunkAttrs(cr.path, cr.rangeParam), nil
+		})
+		pdfZoom := cr.rdb.config.PdfPreviewZoom
+		if pdfZoom <= 0 {
+			pdfZoom = 1.5
+		}
+		if pdfHTML, ok := renderPdfPreview(attrs, cr.path, pdfZoom); ok {
+			body = pdfHTML
+		} else {
+			body = wrapTagElements(template.HTMLEscapeString(string(cr.data)), cr.rdb)
+		}
+	default:
+		body = wrapTagElements(template.HTMLEscapeString(string(cr.data)), cr.rdb)
+	}
+
+	if !cr.isChunk {
+		return body
+	}
+	var buf strings.Builder
+	writeArkChunkOpen(&buf, cr.rangeParam, cr.rdb.ChunkIDByLocation(cr.path, cr.rangeParam), cr.fileID)
+	buf.WriteString(body)
+	buf.WriteString("</div>")
+	return buf.String()
+}
+
+// chunkDiv emits one chunk: the ark-chunk open tag with its range and
+// identity attributes, the chunk's <ark-ext-tags> block, then its rendered
+// body. Every chunk-walking case funnels through here, so this is the single
+// place a chunk's ext routings are attached — the seam a strategy needing
+// finer-grained placement overrides.
+// CRC: crc-Server.md | R2065, R2073, R2415
+func (cr *contentRender) chunkDiv(buf *strings.Builder, rangeStr string, cid uint64, body string) {
+	writeArkChunkOpen(buf, rangeStr, cid, cr.fileID)
+	buf.WriteString(cr.extBlock(cid))
+	buf.WriteString(body)
+	buf.WriteString("</div>\n")
+}
+
+// extBlock returns a chunk's <ark-ext-tags> block — empty when the chunk has
+// no ID, since there is nothing to route from. R2065, R2073
+func (cr *contentRender) extBlock(cid uint64) string {
+	// R3182: the bible render has already placed this chunk's verse-targeted
+	// routings inside their verses and left only the remainder here.
+	if cr.extOverride != nil {
+		return cr.extOverride[cid]
+	}
+	if cid == 0 {
+		return ""
+	}
+	return renderExtTagsBlock(cr.rdb.extmap.ExtRoutingsForTargetChunk(cid, cr.rdb), "")
+}
+
+// chunkIDAt returns the chunk ID at index i, or 0 when the ID list is shorter
+// than the chunk list. R2415
+func chunkIDAt(ids []uint64, i int) uint64 {
+	if i < len(ids) {
+		return ids[i]
+	}
+	return 0
+}
+
+// openRoleGroup starts an ark-role-group wrapper with its sticky icon header;
+// a skill group collapses inside <details> with 📋 and the skill name.
+// R1509-R1512
+func openRoleGroup(buf *strings.Builder, role string, attrs []microfts2.Pair) {
+	buf.WriteString(`<div class="ark-role-group ark-role-`)
+	buf.WriteString(role)
+	buf.WriteString(`">`)
+	switch role {
+	case "skill":
+		skillName, _ := microfts2.PairGet(attrs, "skill")
+		buf.WriteString(`<details><summary class="ark-role-header">📋 `)
+		if len(skillName) > 0 {
+			buf.WriteString(template.HTMLEscapeString(string(skillName)))
+		} else {
+			buf.WriteString("skill")
+		}
+		buf.WriteString("</summary>")
+	case "human":
+		buf.WriteString(`<div class="ark-role-header">👤</div>`)
+	case "assistant":
+		buf.WriteString(`<div class="ark-role-header">🤖</div>`)
+	}
+}
+
+// closeRoleGroup closes the open ark-role-group, closing a skill group's
+// <details> first. R1509-R1512
+func closeRoleGroup(buf *strings.Builder, role string) {
+	if role == "skill" {
+		buf.WriteString("</details>")
+	}
+	buf.WriteString("</div>\n")
 }
 
 // handleContentRaw returns file content verbatim with appropriate Content-Type.
@@ -4278,23 +4436,50 @@ func (lr *contentLinkRewriter) Transform(node *ast.Document, reader text.Reader,
 // renderMarkdownForContent renders markdown to HTML with link/image rewriting
 // for the /content/ route. R1168-R1173
 func renderMarkdownForContent(data []byte, filePath string) string {
+	return renderMarkdownOpts(data, filePath, false)
+}
+
+// renderBibleMarkdownForContent renders a bible chunk: ordinary markdown, plus
+// the verse pass that turns each numeric code span into an `<ark-verse>`
+// element. The elements come out empty — insertVerseExtBlocks fills them after
+// wrapTagElements, for the reason documented there. R3181, R3183
+// CRC: crc-Server.md | R3181, R3183
+func renderBibleMarkdownForContent(data []byte, filePath string) string {
+	return renderMarkdownOpts(data, filePath, true)
+}
+
+// renderMarkdownOpts is the shared body. Raw HTML stays disabled in both
+// modes: the verse element reaches the output as a custom AST node with its
+// own renderer, never as smuggled markup (R3183).
+// CRC: crc-Server.md | R1168-R1173, R3181, R3183
+func renderMarkdownOpts(data []byte, filePath string, verses bool) string {
 	baseDir := filepath.Dir(filePath)
 	// R1194: Normalize tag lines so they render as line breaks even if the file
 	// on disk lacks trailing spaces (hand-edited files).
 	data = NormalizeTagLines(data)
-	md := goldmark.New(
+
+	transformers := []util.PrioritizedValue{
+		util.Prioritized(&contentLinkRewriter{baseDir: baseDir}, 100),
+	}
+	opts := []goldmark.Option{
 		goldmark.WithExtensions(
 			extension.GFM,
 			extension.Typographer,
 			extension.DefinitionList,
 		),
-		goldmark.WithParserOptions(
-			parser.WithAttribute(),
-			parser.WithASTTransformers(
-				util.Prioritized(&contentLinkRewriter{baseDir: baseDir}, 100),
-			),
-		),
-	)
+	}
+	if verses {
+		transformers = append(transformers, util.Prioritized(bibleVerseTransformer{}, 200))
+		opts = append(opts, goldmark.WithRendererOptions(
+			renderer.WithNodeRenderers(util.Prioritized(arkVerseRenderer{}, 100)),
+		))
+	}
+	opts = append(opts, goldmark.WithParserOptions(
+		parser.WithAttribute(),
+		parser.WithASTTransformers(transformers...),
+	))
+
+	md := goldmark.New(opts...)
 	var buf bytes.Buffer
 	if err := md.Convert(data, &buf); err != nil {
 		return template.HTMLEscapeString(string(data))

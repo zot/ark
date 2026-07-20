@@ -226,8 +226,10 @@ sources index, dropped as overlay items disappear.
 - SourceFilePath: string — path of the file containing the source
   chunk (drives `<ark-tag externalFile="...">`)
 - TargetAnchor: string — anchor portion of the target spec
-  (post-`:` text); always "" for v1 because anchored target forms
-  are not yet resolvable. Drives `<ark-tag externalTarget="...">`
+  (post-`:` text, delimiters kept so a string anchor stays
+  distinguishable from a regex), recovered from the tvid_ext's own
+  stored `@ext:` value; "" for a bare path or bare UUID target.
+  Drives `<ark-tag externalTarget="...">` (R2073)
 - Routed: []TagValue — the (tag, value) pairs the ext declaration
   contributed at this target chunk
 

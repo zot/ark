@@ -304,9 +304,18 @@ type IncomingExtRouting struct {
 // targetChunkID, fully resolved for rendering. Branches on
 // bothPersistent to read routed tvids from X records (LMDB) or from
 // the in-memory overlayRoutings map. Returns nil when no routings
-// target this chunk. TargetAnchor is always "" for v1 — anchored
-// target forms (path:section, UUID:section) aren't yet resolvable, so
-// chunkToTargets only holds bare-target routings.
+// target this chunk.
+//
+// TargetAnchor carries the anchor part of the routing's TARGET (R2073),
+// recovered from the tvid_ext's own stored value — the `@ext:` text holds
+// the original spec, so no separate record is needed. It is empty for a
+// bare path or bare UUID target, which is exactly what R2073 asks for.
+// (An earlier comment here claimed anchored targets were unresolvable in
+// v1 and that chunkToTargets held only bare targets. That was already
+// untrue: Rebuild ingests every X record regardless of anchor kind, and
+// resolveExtPathBase has resolved string/regex/range anchors since
+// R2376/R2377 — so anchored routings reached this function all along and
+// merely rendered with an empty externalTarget.)
 // CRC: crc-ExtMap.md | R2065, R2073, R2079
 func (m *ExtMap) ExtRoutingsForTargetChunk(targetChunkID uint64, db *DB) []IncomingExtRouting {
 	type pending struct {
@@ -371,10 +380,20 @@ func (m *ExtMap) ExtRoutingsForTargetChunk(targetChunkID uint64, db *DB) []Incom
 				}
 			}
 
+			// R2073: the anchor for display, recovered from the tvid_ext's
+			// stored `@ext:` value. A bare target yields "".
+			anchor := ""
+			if _, value, ok := db.store.tvids.Resolve(p.tvidExt); ok {
+				if target, _, parseOk := ParseExtTarget(value); parseOk {
+					anchor = extTargetAnchorPart(target)
+				}
+			}
+
 			out = append(out, IncomingExtRouting{
 				TvidExt:        p.tvidExt,
 				SourceChunkID:  p.sourceChunkID,
 				SourceFilePath: srcPath,
+				TargetAnchor:   anchor,
 				Routed:         routed,
 			})
 		}

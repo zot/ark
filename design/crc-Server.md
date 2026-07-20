@@ -509,6 +509,29 @@ Optionally starts the embedded ui-engine alongside.
     get role border/icon without grouping. Falls back to raw `<pre>`
     if no chunks exist.
     (R1160-R1164, R1168-R1189, R1495-R1496, R1499, R1504-R1513, R1739, R1740, R2415)
+
+    **Render structure — one case per content kind.** `handleContentView`
+    resolves the request into a `contentRender` value (the bound R3165
+    read view, the path/data/`?range=`, whether the view is a single
+    chunk, the file's strategy, the per-file fileID, and the shell being
+    filled), then dispatches. Each content kind is a named method on that
+    value rather than a branch inside one long function, so adding a kind
+    is adding a case:
+    - `serveMarkdown` — content-markdown.html. Single chunk when
+      `?range=` resolved, else the AllChunks walk, else a whole-file
+      goldmark blob when the file is not indexed.
+    - `servePlain` — content-plain.html. PDFs delegate to
+      `renderPdfChunksByPage` and return; other chunked files go through
+      the role-grouping chunk loop (`renderChunks`); unchunked files go
+      through the single-body fallback (`renderUnchunked`: chat-jsonl
+      through goldmark, a ranged PDF chunk through `renderPdfPreview`,
+      everything else HTML-escaped).
+    - `chunkDiv` — the shared per-chunk emission every case funnels
+      through: the `<div class="ark-chunk">` open tag with `data-range`
+      / `data-chunkid` / `data-fileid`, then the chunk's
+      `<ark-ext-tags>` block, then its rendered body. It is the single
+      place a chunk's ext routings are attached, which is the seam a
+      strategy needing finer-grained ext placement overrides.
   - GET /raw/PATH — raw file bytes with mime-type Content-Type
     header. (R1165-R1167)
   All three validate path is within a source dir (R1154-R1156). Registered on

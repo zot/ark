@@ -238,6 +238,53 @@ Slug collision (`/home/deck-foo/bar` vs `/home/deck/foo-bar` both
 → `home-deck-foo-bar`) is rare and not addressed in v1. Document
 the algorithm; revisit if it bites.
 
+### Per-source override: `ext_mirror`
+
+A source may redirect its mirror tree into itself. When the source
+owning the target sets `ext_mirror = "<dir>"` (a path relative to
+the source root), the mirror base for that source's targets becomes
+
+```
+<source-root>/<ext_mirror>/<target-path-within-source>.md
+```
+
+instead of the global `~/.ark/external/<slug>/<target-path>.md`.
+Everything downstream of the path is unchanged — the trailing `.md`
+still appends, the file format is identical, and the same
+authoring/read/cleanup code runs. Only the base directory moves.
+
+The point is portability: with `ext_mirror`, a source's `@ext`
+routings travel *with* the source (they live under it) instead of in
+ark's private home. A checkout like `~/work/KJV` with
+`ext_mirror = "mirrors"` keeps its per-verse annotations in
+`~/work/KJV/mirrors/books/mark.md.md`, so cloning the repo carries
+the annotations too.
+
+Because the mirror files now live inside the source tree, the scanner
+indexes them as ordinary source files — which is exactly how their
+routed `@ext` tags reach the ext map (the same mechanism as the
+`external/**` registration below, but in-tree). Two consequences the
+implementation must honor:
+
+- **No mirror-of-a-mirror.** A target that already resolves to a file
+  under the source's `ext_mirror` directory has no mirror of its own —
+  computing one would nest `mirrors/mirrors/…`. Such a target is
+  rejected the same way a self-referential `@ext` is (see
+  `at-ext-storage.md`, "Self-reference rejection").
+- **The `ext_mirror` dir needs no separate source registration.** It is
+  already within the source, so it inherits the source's include/exclude
+  and is scanned without the hardcoded `external/**` addition the global
+  tree relies on.
+
+A source with no `ext_mirror` key behaves exactly as before — the
+global `~/.ark/external/<slug>/` tree. The override is opt-in per
+source and changes nothing for existing sources.
+
+A **glob** source may set it too: like `strategies`, `include`, and
+`exclude`, `ext_mirror` propagates to every concrete source the glob
+expands into, so each expanded directory keeps its own in-tree mirror
+rather than sharing one.
+
 ### Source registration
 
 The hardcoded `~/.ark` source gains `external/**` in its include
