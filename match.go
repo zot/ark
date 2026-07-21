@@ -51,23 +51,28 @@ func (m *Matcher) Classify(includes, excludes []string, absPath, sourceDir strin
 	return Unresolved
 }
 
-// Match tests whether a single pattern matches a file. R2133.
+// Match tests whether a single pattern matches a file.
 //
-// Three anchoring forms by leading slashes:
+// Three anchoring forms by leading slashes (R3196):
 //
-//   - "./X": source-root-anchored. Strips "./", matches against the
-//     source-relative path (absPath relative to sourceDir).
 //   - "/X":  filesystem-absolute. Matches against absPath as-is.
-//   - "X":   bare. Prepends "**/", matches at any depth in source
-//     (or against absPath when sourceDir is empty).
+//   - "./X": anchored to the contextual root. Strips "./", matches
+//     against the path relative to that root.
+//   - "X":   bare, i.e. relative to the contextual root. Prepends "**/"
+//     and matches against the root-relative path.
+//
+// sourceDir *is* the context. Non-empty selects the source-scoped reading,
+// where bare X means SOURCE/**/X (R3198). Empty selects the rootless
+// reading, where the root-relative form degrades to absPath, so bare X
+// means **/X — any depth, any source (R3199) — and "./X" has nothing to
+// anchor to and falls back to the absolute path. The CLI is a third
+// context (R3197), but it resolves *before* this call: AnchorGlobToDir
+// rewrites a bare CLI glob to $PWD/X, so what arrives here is the "/X"
+// form. The pattern's shape carries the context.
 //
 // Trailing "/" on the pattern means directory-only.
 //
-// sourceDir may be empty for ad-hoc filtering callers (search filters,
-// `ark remove` patterns, etc.) — in that case, "./" and bare forms fall
-// back to matching against absPath directly.
-//
-// CRC: crc-Matcher.md | R16, R17, R18, R19, R20, R2133
+// CRC: crc-Matcher.md | R16, R17, R18, R19, R20, R3196, R3198, R3199
 func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 	dirPattern := strings.HasSuffix(pattern, "/")
 	if dirPattern != isDir {
@@ -107,6 +112,60 @@ func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 		}
 	}
 	return true
+}
+
+// MatchPathFilters is the one path-glob filter test in ark: does this path
+// pass an (include, exclude) glob pair? Every surface that scopes a file set
+// by path calls it — the CLI filter stack, chunk stats, subscription
+// delivery, and the rootless ark.toml keys — so a glob means the same thing
+// wherever it is written. Empty lists pass everything; a non-empty include
+// list requires a hit; any exclude hit rejects.
+//
+// The contextual root is empty here, which is the **rootless** reading: a
+// bare pattern means `**/X` (any depth, any source). CLI-supplied globs have
+// already been rewritten to the absolute form by AnchorGlobToDir, so they
+// take the `/X` branch instead — the pattern's own shape carries the
+// context, which is why one call site serves both.
+//
+// CRC: crc-Matcher.md | R3195, R3196, R3199
+func MatchPathFilters(path string, include, exclude []string) bool {
+	if len(include) == 0 && len(exclude) == 0 {
+		return true
+	}
+	m := &Matcher{Dotfiles: true}
+	if len(include) > 0 {
+		matched := false
+		for _, pat := range include {
+			if m.Match(ExpandTilde(pat), path, "", false) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, pat := range exclude {
+		if m.Match(ExpandTilde(pat), path, "", false) {
+			return false
+		}
+	}
+	return true
+}
+
+// FilterPaths returns the subset of paths passing MatchPathFilters.
+// CRC: crc-Matcher.md | R3195
+func FilterPaths(paths []string, include, exclude []string) []string {
+	if len(include) == 0 && len(exclude) == 0 {
+		return paths
+	}
+	var out []string
+	for _, p := range paths {
+		if MatchPathFilters(p, include, exclude) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // sourceRelative returns the source-relative form of absPath when

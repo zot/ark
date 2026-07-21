@@ -5,6 +5,7 @@ package ark
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -332,5 +333,105 @@ dir = "/nonexistent/path/that/will/never/exist"
 	}
 	if cfg.HasErrors() {
 		t.Errorf("should load without errors, got %v", cfg.Errors)
+	}
+}
+
+// Test: test-Config.md — ** in [[source]].dir is rejected.
+//
+// A recursive source glob makes every subdirectory its own source root, so a
+// single file change fires one watcher event per ancestor level — and the
+// fault is latent, appearing only once a nested directory exists, which is
+// exactly what validating the expansion at load time cannot catch. So the
+// pattern itself is refused. R3200, R3201
+func TestSourceDirRejectsDoubleStar(t *testing.T) {
+	err := ValidateSourceDir("~/work/**")
+	if err == nil {
+		t.Fatal("** in a source dir must be rejected")
+	}
+	if !strings.Contains(err.Error(), "*") {
+		t.Errorf("the error should name * as the single-level alternative, got %q", err)
+	}
+	if err := ValidateSourceDir("~/work/*"); err != nil {
+		t.Errorf("a single-level source glob stays legal, got %v", err)
+	}
+	if err := ValidateSourceDir("/home/me/proj"); err != nil {
+		t.Errorf("a concrete dir stays legal, got %v", err)
+	}
+
+	c := &Config{Sources: []Source{{Dir: "/tmp/a/**"}}}
+	c.validate()
+	if len(c.Errors) == 0 {
+		t.Error("a recursive source glob in ark.toml should be reported by validate()")
+	}
+	if err := c.AddSource("/tmp/b/**"); err == nil {
+		t.Error("AddSource must refuse a recursive glob outright")
+	}
+}
+
+// Test: test-Config.md — strategies honor ** under the source-scoped context.
+//
+// StrategyForFile used filepath.Match on the source-relative path with a
+// basename fallback, so `*.md` worked at any depth (via the fallback) but
+// `**/*.md` matched one level only — ** had no effect at all. Matching through
+// Matcher makes ** work; the no-slash case is unchanged, so existing configs
+// keep resolving as they did. R3202, R3198
+func TestStrategyForFileHonorsDoubleStar(t *testing.T) {
+	c := &Config{Strategies: map[string]string{"**/*.md": "markdown"}}
+	for _, p := range []string{"a.md", "docs/deep/b.md"} {
+		if got := c.StrategyForFile(p, nil); got != "markdown" {
+			t.Errorf("StrategyForFile(%q) = %q, want markdown", p, got)
+		}
+	}
+
+	// The additive half: a no-slash pattern still reaches any depth, which is
+	// what the retired basename fallback provided.
+	c2 := &Config{Strategies: map[string]string{"*.md": "markdown"}}
+	for _, p := range []string{"a.md", "docs/deep/b.md"} {
+		if got := c2.StrategyForFile(p, nil); got != "markdown" {
+			t.Errorf("StrategyForFile(%q) with bare *.md = %q, want markdown", p, got)
+		}
+	}
+	if got := c2.StrategyForFile("a.go", nil); got != "lines" {
+		t.Errorf("unmatched file should fall back to lines, got %q", got)
+	}
+}
+
+// Test: test-Config.md — validatePattern accepts what the matcher accepts.
+// Validator and matcher agree on legality: doublestar syntax, not
+// filepath.Match syntax. R3203
+func TestValidatePatternUsesDoublestar(t *testing.T) {
+	for _, p := range []string{"**/*.{md,txt}", "docs/**/*.txt", "*.md"} {
+		if err := validatePattern(p); err != nil {
+			t.Errorf("validatePattern(%q) = %v, want nil", p, err)
+		}
+	}
+	if err := validatePattern("["); err == nil {
+		t.Error("a malformed pattern should be rejected")
+	}
+	if err := validatePattern(""); err == nil {
+		t.Error("an empty pattern should be rejected")
+	}
+}
+
+// Test: test-Config.md — rootless keys reach any depth.
+// search_exclude and the [schedule] file keys have no contextual root, so a
+// bare pattern means **/X and a slash-bearing relative pattern matches rather
+// than silently matching nothing. R3199, R3195
+func TestRootlessConfigKeysReachAnyDepth(t *testing.T) {
+	cases := []struct {
+		pattern string
+		path    string
+	}{
+		{"*.jsonl", "/home/me/.claude/projects/x/a.jsonl"},
+		{"specs/**", "/home/me/proj/specs/x.md"},
+		{"**/*.md", "/home/me/proj/deep/x.md"},
+	}
+	for _, c := range cases {
+		if matchesFilterExclude(c.path, nil, []string{c.pattern}) {
+			t.Errorf("rootless exclude %q should reject %q", c.pattern, c.path)
+		}
+		if !matchesFilterExclude(c.path, []string{c.pattern}, nil) {
+			t.Errorf("rootless filter %q should admit %q", c.pattern, c.path)
+		}
 	}
 }

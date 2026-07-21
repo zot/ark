@@ -10,10 +10,11 @@ truncation.
 `--chunks` activates chunk statistics output on `ark status`. Without it,
 behavior is unchanged.
 
-`--filter-files GLOB` and `--exclude-files GLOB` (repeatable) scope the
-file set. Same semantics as search: filter-files is a positive filter
-(only matching files), exclude-files carves out exceptions. When neither
-is specified, all indexed files are included.
+`-files GLOB` rows (repeatable) scope the file set through the same
+filter stack `search` uses: `-with` (default) is positive, `-without`
+carves out exceptions. Globs follow the project-wide rules in
+[main.md](main.md#glob-patterns). When no row is given, all indexed files
+are included.
 
 `--tokenize` loads the configured embedding model and counts tokens per
 chunk instead of bytes. This is slower (requires model load for its

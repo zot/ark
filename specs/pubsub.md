@@ -27,7 +27,7 @@ ark subscribe --session $ID --file-tag 'to-project=ark'
 
 # exclude files from matching (prevents infinite loops)
 ark subscribe --session $ID --tag status \
-  --exclude-files '/home/deck/.claude/**/*.jsonl'
+  -without -files '/home/deck/.claude/**/*.jsonl'
 ```
 
 `--tag` and `--file-tag` accept the shared sigil match syntax
@@ -50,16 +50,22 @@ identically). A trailing `:` on the name is stripped via the
 separator-scan path. Users naturally type the `@tag:` form they
 see in files — the CLI accepts it.
 
-File filters parallel search flags:
-- `--filter-files GLOB` — only match tags in files matching the glob
-- `--exclude-files GLOB` — never match tags in files matching the glob
+File filters use the same `-files` filter stack as search:
+- `-files GLOB` — only match tags in files matching the glob
+- `-without -files GLOB` — never match tags in files matching the glob
 
-Both are checked at publish time before enqueue. They compose the
-same way as in search: `--filter-files` sets the scope,
-`--exclude-files` carves out exceptions within it. Example:
-`--filter-files '~/.claude/projects/**/*.jsonl'` watches only
-conversation logs; adding `--exclude-files '**/c9f6bd1d*.jsonl'`
-excludes your own session's log from that set.
+Both are checked at publish time before enqueue, and compose the same
+way as in search: positive rows set the scope, `-without` rows carve out
+exceptions within it. Example: `-files '~/.claude/projects/**/*.jsonl'`
+watches only conversation logs; adding `-without -files
+'/**/c9f6bd1d*.jsonl'` excludes your own session's log from that set.
+
+Globs follow the project-wide rules in
+[main.md](main.md#glob-patterns) — matched by the one shared matcher,
+anchored CLI-side to the current directory. This replaced a
+subscription-only anchoring path that fired only for patterns with no
+slash at all, so a relative glob such as `specs/**` silently matched
+nothing (O160).
 
 ### Cancel
 

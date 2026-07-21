@@ -411,11 +411,11 @@
 - **R939:** `search_exclude` patterns apply as the default exclude scope when the search carries no explicit file filter — no positive `-files GLOB` row and no structural `filter_files`/`exclude_files` (the `SearchOpts` fields the Lua UI sets). (Flag rename: the user-facing `--filter-files`/`--exclude-files` were subsumed by the filter stack's `-files` / `-without -files` — see search-cli-filters.md; the `filter_files`/`exclude_files` struct fields and JSON remain for the Lua UI.)
 - **R940:** An explicit file filter replaces the default scope entirely: a **positive** `-files GLOB` row (or a structural `filter_files`/`exclude_files`) disables `search_exclude`, so a positive `-files` pointed at a default-excluded path includes it. A `-without -files GLOB` subtracts the glob *without* disabling the default scope. Implemented by `Searcher.effectiveExcludeFiles` (R2951's funnel injects the same default on the index-lookup paths).
 - **R941:** Subscriptions without explicit file filters inherit `search_exclude` as their exclude-files list
-- **R942:** Subscriptions with explicit `--filter-files` or `--exclude-files` use those instead of `search_exclude`
+- **~~R942:~~** (Retired T268 — see R3204) Subscriptions with explicit `--filter-files` or `--exclude-files` use those instead of `search_exclude`
 - **R943:** (inferred) `search_exclude` is loaded from config at startup and on config reload
 
 ### Naming Normalization
-- **R944:** Pubsub `--except-files` CLI flag is renamed to `--exclude-files` for consistency with search
+- **~~R944:~~** (Retired T269 — see R3204) Pubsub `--except-files` CLI flag is renamed to `--exclude-files` for consistency with search
 - **R945:** Pubsub `ExceptFiles` struct field is renamed to `ExcludeFiles`
 - **R946:** Pubsub JSON wire format `except_files` is renamed to `exclude_files`
 
@@ -695,7 +695,7 @@
 - **R407:** Query tokens are highlighted with `<mark>` tags in all preview formats
 - **R408:** The file's chunking strategy determines which renderer to use
 - **~~R409:~~** (Retired T70 — no replacement) orphaned numbering gap
-- **R541:** `opts` table supports: `mode` (contains/about/fuzzy/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`
+- **R541:** `opts` table supports: `mode` (contains/about/fuzzy/combined), `k` (max results), `preview` (window size), `filter_files`, `exclude_files`, `filter_file_tags`, `exclude_file_tags`. The path globs are a **rootless** context (R3199) — the server has no current directory to anchor against.
 - **R750:** `mode = "fuzzy"` sets `opts.Fuzzy = true` and dispatches to `SearchFuzzy` via `SearchGrouped`
 - **R542:** (inferred) Default mode is "combined", default k is 20, default preview is 0
 
@@ -763,7 +763,7 @@
 - **R947:** `~` at the start of a path expands to the current user's home directory (`os.UserHomeDir()`)
 - **R948:** `~user` at the start of a path expands to the named user's home directory
 - **R949:** `~user` first tries the OS user database (`os/user.Lookup`); if that fails, falls back to `filepath.Join(filepath.Dir(homeDir), user)`
-- **R950:** Tilde expansion applies to all path-accepting fields: ark.toml (include, exclude, search_exclude, source dir), CLI flags (--filter-files, --exclude-files), glob arguments, and Lua API path parameters (mcp:search_grouped opts, etc.)
+- **R950:** Tilde expansion applies to all path-accepting fields: ark.toml (include, exclude, search_exclude, source dir), CLI filter-stack `-files` rows, glob arguments, and Lua API path parameters (mcp:search_grouped opts, etc.). Tilde expansion happens on every surface; what differs by surface is the *anchoring* of an unanchored pattern (R3197–R3199).
 - **R951:** (inferred) Expansion happens once at the boundary — config load and CLI flag parsing — before paths reach the matcher or search engine
 - **R952:** (inferred) After expansion, all paths are absolute; internal code never sees `~`
 
@@ -813,7 +813,7 @@
 - **R590:** `--multi` is mutually exclusive with `--score` — using both is an error
 - **R591:** `--multi` works with combined search (query arg) and `--contains`
 - **R592:** `--multi` does not apply to `--regex`, `--about`, or `--like-file` — using `--multi` with these is an error
-- **R593:** All filter flags (`--filter-files`, `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`, `--filter`, `--except`) apply to all strategies equally
+- **R593:** The whole filter stack (`-files`, `-tag`, `-contains`, `-regex`, `-about`, under either polarity) applies to all strategies equally
 
 ### Proximity reranking
 - **R594:** `--proximity` flag enables post-search proximity reranking
@@ -1105,7 +1105,7 @@
 - **R672:** `ark search` includes tmp:// results by default
 - **R673:** `ark search --no-tmp` excludes tmp:// results
 - **R674:** `ark tag files` includes tmp:// files carrying the queried tag
-- **R675:** `--filter-files` and `--exclude-files` glob patterns match tmp:// paths
+- **R675:** `-files` filter-stack globs (either polarity) match tmp:// paths
 - **R676:** (inferred) `ark status` reports tmp:// document count when any exist
 
 ### Search Proxy Optimization
@@ -1227,7 +1227,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Composable Flags
 
-- **R741:** `--fuzzy` composes with all filter flags (`--filter-files`, `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`, `--filter`, `--except`)
+- **R741:** `-fuzzy` composes with the whole filter stack (`-files`, `-tag`, `-contains`, `-regex`, `-about`, under either polarity)
 - **R742:** `--fuzzy` composes with `--proximity` for reranking
 - **R743:** `--fuzzy` composes with `--no-tmp`, `-k`, `--chunks`, `--files`, `--tags`, `--scores`, `--wrap`, `--preview`, `--after`, `--before`
 
@@ -1303,9 +1303,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **~~R779:~~** (Retired T61 — see R2458) `--value REGEX` optionally filters on tag content (Go RE2)
 - **~~R780:~~** (Retired T62 — see R2458) No `--value` means match any value for that tag
 - **R781:** Multiple `--tag` flags create multiple independent subscriptions (OR semantics)
-- **R782:** `--filter-files GLOB` restricts matching to files matching the glob
-- **R783:** `--except-files GLOB` excludes files matching the glob from matching
-- **R784:** `--filter-files` and `--except-files` compose: filter sets the scope, except carves out exceptions
+- **~~R782:~~** (Retired T261 — see R3204) `--filter-files GLOB` restricts matching to files matching the glob
+- **~~R783:~~** (Retired T262 — see R3204) `--except-files GLOB` excludes files matching the glob from matching
+- **~~R784:~~** (Retired T263 — see R3204) `--filter-files` and `--except-files` compose: filter sets the scope, except carves out exceptions
 - **R785:** File filters are checked at publish time before enqueue
 - **R786:** `--cancel` with no `--tag` cancels all subscriptions for the session
 - **R787:** `--cancel --tag TAG` cancels all subscriptions for that tag
@@ -1821,10 +1821,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 **Source:** specs/tag-value-filtering.md
 
 ### Flags
-- **R1131:** `ark tag values` accepts `--filter-files GLOB` (repeatable) to include only matching files
-- **R1132:** `ark tag values` accepts `--exclude-files GLOB` (repeatable) to exclude matching files
-- **R1133:** Both flags are composable: filter narrows first, exclude removes from the result
-- **R1134:** Without either flag, behavior is unchanged
+- **~~R1131:~~** (Retired T264 — see R3204) `ark tag values` accepts `--filter-files GLOB` (repeatable) to include only matching files
+- **~~R1132:~~** (Retired T265 — see R3204) `ark tag values` accepts `--exclude-files GLOB` (repeatable) to exclude matching files
+- **R1133:** Rows are composable: positive `-files` rows narrow first, `-without` rows remove from the result
+- **R1134:** With no `-files` row, behavior is unchanged
 
 ### Filtering Behavior
 - **R1135:** When filtering is active, fileids are resolved to paths and matched against the globs
@@ -2435,7 +2435,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Activation
 
 - **R1514:** `ark status --chunks` activates chunk size statistics. Without `--chunks`, behavior is unchanged.
-- **R1515:** `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) scope the file set for chunk stats. Same semantics as search filtering.
+- **~~R1515:~~** (Retired T267 — see R3204) `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) scope the file set for chunk stats. Same semantics as search filtering.
 - **R1516:** When neither filter flag is specified, all indexed files are included.
 
 ### Data Collection
@@ -2541,9 +2541,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Filtering
 
-- **R1573:** `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) set the base file set on `ark files`. Same semantics as search filtering.
+- **~~R1573:~~** (Retired T266 — see R3204) `--filter-files GLOB` and `--exclude-files GLOB` (repeatable) set the base file set on `ark files`. Same semantics as search filtering.
 - **R1574:** Positional glob arguments further narrow the result within the base set.
-- **R1575:** When neither `--filter-files` nor positional patterns are given, all indexed files are included.
+- **R1575:** When neither a positive `-files` row nor positional patterns are given, all indexed files are included.
 
 ### Status Output
 
@@ -3531,10 +3531,32 @@ implementation, not a separate format break.
 - **R2126:** When the user supplies `-compact` (or `-compact=false`) on the `ark serve` command line, the flag value wins regardless of `auto_compact` in ark.toml. The CLI distinguishes "flag supplied" from "flag absent at default" via `flag.FlagSet.Visit` after `Parse`.
 - **R2127:** When `-compact` is not supplied and `auto_compact` is absent from ark.toml, the default is `false` — preserving the historical opt-in compaction behaviour.
 
+## Feature: glob anchoring contexts
+**Source:** specs/main.md
+
+- **R3195:** Every path glob in ark is matched by the one shared matcher (`ark.Matcher`, doublestar). No surface implements its own glob matching, and no command carries a per-command anchoring rule.
+- **R3196:** Patterns have three anchoring forms by leading slashes. `/X` is **filesystem-absolute** — matched against the file's absolute path on disk. `./X` is anchored to the **contextual root** — after stripping `./`, the remainder is matched against the path relative to that root. Bare `X` is **relative to the contextual root**, whose meaning is fixed by the context (R3197–R3199). Replaces R2133, which stated the bare and `./` forms as source-relative unconditionally.
+- **R3197:** **CLI context** — globs supplied through the CLI filter stack (`-files` rows) are anchored to the client's current working directory, CLI-side, before the request is sent. A bare `X` therefore means `$PWD/X` (top level only), matching shell behavior; `/**/*` is the explicit "any directory" form.
+- **R3198:** **Source-scoped context** — `default_include`, `default_exclude`, `[[source]].include`, `[[source]].exclude`, `strategies`, and `[[source]].strategies` take the source's own directory as the contextual root. A bare `X` means `SOURCE/**/X` (any depth within that source).
+- **R3199:** **Rootless context** — `search_exclude`, `[schedule] filter_files`, `[schedule] exclude_files`, the `[schedule.tag.<NAME>]` overrides, and the Lua/MCP `filter_files`/`exclude_files` opts have no contextual root, because neither `ark.toml` nor a server-side call carries a current directory. A bare `X` means `**/X` (any depth, any source), and `./X` has nothing to anchor to and falls back to matching the absolute path.
+- **R3200:** `[[source]].dir` is filesystem *expansion*, not path filtering. The anchoring forms of R3196 do not apply to it; `~` expansion is the only rewriting performed.
+- **R3201:** A `[[source]].dir` pattern containing `**` is rejected with an error naming `*` as the single-level alternative. Rationale: a recursive source glob makes every subdirectory its own source root, so one file change fires a watcher event per ancestor level — and the fault is latent, appearing only once a nested directory is created, so validating the *expansion* at load time cannot catch it.
+- **R3202:** `strategies` glob matching uses `ark.Matcher` under the source-scoped context (R3198), replacing the `filepath.Match`-plus-basename-fallback path that gave `**` no effect.
+- **R3203:** `validatePattern` validates glob syntax with doublestar, so the validator and the matcher agree on what is legal.
+
+## Feature: unified `-files` filter stack
+**Source:** specs/cli-commands.md, specs/pubsub.md
+
+- **R3204:** `files`, `status`, `tag files`, `tag values`, and `subscribe` take path globs through the same `-files` filter stack as `search`: repeatable `-files GLOB` rows with `-with` (default) / `-without` polarity. With no positive row, all paths are candidates.
+- **R3205:** `--filter-files` and `--exclude-files` on those five commands exit non-zero with an error naming `-files` **and** the semantic change (a bare no-slash glob is now top-level-only). They are not aliased: the one shape whose meaning changed fails by returning fewer results, so an alias would reproduce the silent failure this unification removes.
+- **R3206:** The `ark tag values` boolean that lists per-file lines is `--show-files`, not `--files`. `parseFilterStack` normalizes `--files` to `-files` before `flag.Parse`, so a boolean named `files` would be consumed as a filter row and would take the following TAG as its glob — a silent misparse rather than an error.
+- **R3207:** Subscription path matching uses the shared matcher (R3195) rather than a subscription-local anchoring pass, so a relative glob such as `specs/**` matches instead of silently matching nothing.
+- **R3208:** Trailing positional globs on `files`, `stale`, and `missing` — the commands whose output is narrowed client-side by `filterPaths` — are anchored to the current directory exactly as a `-files` row is (R3197), so a positional glob is a shorthand for a positive filter row rather than a second path-glob surface. Without this a single command would carry two glob rules — `ark files '*.md'` any-depth, `ark files -files '*.md'` top-level-only — which is the divergence R3195 exists to remove. Commands whose patterns are *sent onward* rather than applied client-side (`refresh`, `resolve`, `remove`, `dismiss`) are out of scope: they are matched server-side against the shared matcher with no client cwd in play, so they keep the rootless reading (gap O161).
+
 ## Feature: pattern anchoring forms and source-shadow validation
 **Source:** specs/main.md, specs/source-monitoring.md
 
-- **R2133:** Patterns have three anchoring forms by leading slashes. **No leading slash** matches at any depth within the source directory (equivalent to prepending `**/`). **Single leading slash** (`/path`) is filesystem-absolute — matched against the file's absolute path on disk. **Leading `./`** is source-root-anchored — after stripping `./`, the remainder is matched against the source-relative path. Replaces R21 (Retired T48). The `./` form replaces the prior interpretation where `/path` meant source-anchored.
+- **~~R2133:~~** (Retired T260 — see R3196) Patterns have three anchoring forms by leading slashes. **No leading slash** matches at any depth within the source directory (equivalent to prepending `**/`). **Single leading slash** (`/path`) is filesystem-absolute — matched against the file's absolute path on disk. **Leading `./`** is source-root-anchored — after stripping `./`, the remainder is matched against the source-relative path. Replaces R21 (Retired T48). The `./` form replaces the prior interpretation where `/path` meant source-anchored.
 - **~~R2134:~~** (Retired T50 — no replacement) A filesystem-absolute exclude *shadows* a source when the pattern's literal prefix (the substring up to the first glob character `*`, `?`, `[`, `{`, or `\`) is equal to or an ancestor path of the source's directory. A shadowed source can never have any indexable file.
 - **~~R2135:~~** (Retired T51 — no replacement) Shadow detection runs at config-load. On detection, ark refuses to start (or refuses the config-mutation that produced the situation), names the offending pattern and source, and instructs the user to remove one or the other. The user must resolve the contradiction before ark proceeds.
 - **~~R2136:~~** (Retired T52 — no replacement) Shadow detection also runs on `ark config add-source`. If adding the new source would make it shadowed by an existing absolute exclude, the add fails before the source is persisted.

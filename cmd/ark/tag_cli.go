@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -27,12 +28,12 @@ import (
 
 // CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-cli-urfave.md#3.3 | R122, R123, R124, R615, R131
 func tagCommand() *ucli.Command {
-	fileFilterFlags := func() []ucli.Flag {
-		return []ucli.Flag{
-			&ucli.StringSliceFlag{Name: "filter-files", Usage: "path-based positive filter (repeatable, glob pattern)"},
-			&ucli.StringSliceFlag{Name: "exclude-files", Usage: "path-based negative filter (repeatable, glob pattern)"},
-		}
-	}
+	// R3204: `files` and `values` take path globs through the shared -files
+	// filter stack. The stack is order-sensitive (sticky polarity, repeated
+	// rows), which urfave cannot express, so both nodes SkipFlagParsing and
+	// hand their raw args to parsePathFilterStack + their own flag.Parse —
+	// the same arrangement `search` uses. Each therefore documents itself
+	// through a hand-written Description rather than generated flag help.
 	return &ucli.Command{
 		Name:  "tag",
 		Usage: "tag operations (list, counts, files, values, defs, set, get, chunk, check, verify, inspect)",
@@ -49,21 +50,26 @@ func tagCommand() *ucli.Command {
 				Action:    tagCountsAction,
 			},
 			{
-				Name:      "files",
-				Usage:     "show files containing specified tags",
-				ArgsUsage: "<tag>...",
-				Flags: append([]ucli.Flag{
-					&ucli.BoolFlag{Name: "context", Usage: "show tag occurrences with context (line from tag to EOL)"},
-				}, fileFilterFlags()...),
+				Name:            "files",
+				Usage:           "show files containing specified tags",
+				ArgsUsage:       "[-files GLOB]... [--context] <tag>...",
+				SkipFlagParsing: true,
+				Description: "Show files containing the specified tags.\n\n" +
+					"   --context   show tag occurrences with context (line from tag to EOL)\n\n" +
+					filterStackHelp,
 				Action: tagFilesAction,
 			},
 			{
-				Name:      "values",
-				Usage:     "show known values for tags",
-				ArgsUsage: "<tag>...",
-				Flags: append([]ucli.Flag{
-					&ucli.BoolFlag{Name: "files", Usage: "show file paths for each value"},
-				}, fileFilterFlags()...),
+				Name:            "values",
+				Usage:           "show known values for tags",
+				ArgsUsage:       "[-files GLOB]... [--show-files] <tag>...",
+				SkipFlagParsing: true,
+				Description: "Show known values for the specified tags.\n\n" +
+					"   --show-files   show file paths for each value\n\n" +
+					filterStackHelp +
+					"\n\nThe per-value file listing is --show-files, not --files: a boolean\n" +
+					"named 'files' would be read as a filter-stack row and would swallow\n" +
+					"the following TAG as its glob.",
 				Action: tagValuesAction,
 			},
 			{
@@ -186,15 +192,21 @@ func tagCountsAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R124, R125, R674
+// CRC: crc-CLITree.md, crc-CLI.md | R124, R125, R674, R3204
 func tagFilesAction(_ context.Context, c *ucli.Command) error {
-	filterFiles := c.StringSlice("filter-files")
-	excludeFiles := c.StringSlice("exclude-files")
-	tags := normalizeTagNames(c.Args().Slice())
+	if helpRequested(c.Args().Slice()) {
+		return ucli.ShowSubcommandHelp(c)
+	}
+	filterFiles, excludeFiles, rest := parsePathFilterStack("ark tag files", c.Args().Slice())
+	fs := flag.NewFlagSet("tag files", flag.ExitOnError)
+	showContext := fs.Bool("context", false, "show tag occurrences with context (line from tag to EOL)")
+	fs.Parse(rest)
+
+	tags := normalizeTagNames(fs.Args())
 	if len(tags) == 0 {
 		fatal(fmt.Errorf("no tags specified"))
 	}
-	if c.Bool("context") {
+	if *showContext {
 		cmdTagFilesContext(tags, filterFiles, excludeFiles)
 		return nil
 	}
@@ -227,17 +239,34 @@ func tagFilesAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138
+// CRC: crc-CLITree.md, crc-CLI.md | R1133, R1134, R1135, R1136, R1137, R1138, R3204, R3206
 func tagValuesAction(_ context.Context, c *ucli.Command) error {
-	showFiles := c.Bool("files")
-	filterFiles := c.StringSlice("filter-files")
-	excludeFiles := c.StringSlice("exclude-files")
-	tags := normalizeTagNames(c.Args().Slice())
+	if helpRequested(c.Args().Slice()) {
+		return ucli.ShowSubcommandHelp(c)
+	}
+	filterFiles, excludeFiles, rest := parsePathFilterStack("ark tag values", c.Args().Slice())
+	fs := flag.NewFlagSet("tag values", flag.ExitOnError)
+	// R3206: --show-files, not --files. parsePathFilterStack normalizes
+	// `--files` to `-files` before flag.Parse ever runs, so a boolean named
+	// `files` would be consumed as a filter row and would take the following
+	// TAG as its glob — a silent misparse, not an error. `search` hit the
+	// same collision and renamed its boolean to --file-content.
+	showFiles := fs.Bool("show-files", false, "show file paths for each value")
+	fs.Parse(rest)
+
+	tags := normalizeTagNames(fs.Args())
 	if len(tags) == 0 {
+		// R3206: `--files TAG` normalizes to `-files TAG`, so the TAG was
+		// eaten as a glob and there is nothing left. Name the likely cause
+		// rather than leaving the user staring at "no tags specified".
+		if len(filterFiles) > 0 || len(excludeFiles) > 0 {
+			fatal(fmt.Errorf("no tags specified — did you mean --show-files?\n" +
+				"  --files is a filter-stack row and consumed the following argument as a glob"))
+		}
 		fatal(fmt.Errorf("no tags specified"))
 	}
 	filtering := len(filterFiles) > 0 || len(excludeFiles) > 0
-	withFiles := showFiles || filtering
+	withFiles := *showFiles || filtering
 
 	// emitFiles/emitCounts format both arms identically. R3001
 	emitFiles := func(tag string, values []ark.TagValueFileInfo) {
@@ -255,7 +284,7 @@ func tagValuesAction(_ context.Context, c *ucli.Command) error {
 				}
 			}
 			fmt.Printf("%s\t%s\t%d\n", tag, v.Value, len(matched))
-			if showFiles {
+			if *showFiles {
 				for _, f := range matched {
 					fmt.Printf("\t%s\n", f)
 				}

@@ -475,3 +475,179 @@ func TestComposeDM_RejectsEmptySubject(t *testing.T) {
 		t.Fatal("expected error for whitespace-only subject")
 	}
 }
+
+// Test: test-FilterStack.md — the path-only filter stack.
+//
+// The stack was a search-only DSL exercised only by hand (gap O80). #51 makes
+// it the single path-glob surface for six commands, so its arg walker is now
+// load-bearing for files, status, tag files, tag values, and subscribe too.
+// It is a pure deterministic string transform, so it gets tested rather than
+// deferred. R3204, R3205, R3206, R3197
+
+// stackFixture runs parsePathFilterStack from a known directory so the
+// anchoring half is deterministic, and reports the results relative to it.
+func stackFixture(t *testing.T, args []string) (include, exclude, remaining []string, dir string) {
+	t.Helper()
+	dir = t.TempDir()
+	// t.TempDir on macOS hands back a /var symlink; the anchor joins the
+	// resolved cwd, so resolve here too or the comparisons are noise.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(prev)
+	include, exclude, remaining = parsePathFilterStack("test", args)
+	return include, exclude, remaining, dir
+}
+
+// Polarity is sticky: -without applies to every later row until -with.
+func TestPathFilterStackStickyPolarity(t *testing.T) {
+	inc, exc, rest, dir := stackFixture(t, []string{
+		"-files", "a.md", "-without", "-files", "b.md", "-with", "-files", "c.md",
+	})
+	wantInc := []string{filepath.Join(dir, "a.md"), filepath.Join(dir, "c.md")}
+	wantExc := []string{filepath.Join(dir, "b.md")}
+	if !reflect.DeepEqual(inc, wantInc) {
+		t.Errorf("include = %v, want %v", inc, wantInc)
+	}
+	if !reflect.DeepEqual(exc, wantExc) {
+		t.Errorf("exclude = %v, want %v", exc, wantExc)
+	}
+	if len(rest) != 0 {
+		t.Errorf("remaining = %v, want empty", rest)
+	}
+}
+
+// Everything that is not a stack token passes through untouched — flags for
+// the caller's own flag.Parse and positional arguments alike. This is why the
+// path stack is narrower than the search walker: the search walker coalesces
+// bare terms into a -contains group, which would swallow `ark tag files TAG`.
+func TestPathFilterStackPassesThroughNonStackArgs(t *testing.T) {
+	inc, _, rest, dir := stackFixture(t, []string{
+		"--status", "-files", "*.md", "mytag", "--detail", "extra",
+	})
+	if len(inc) != 1 || inc[0] != filepath.Join(dir, "*.md") {
+		t.Errorf("include = %v, want one anchored row", inc)
+	}
+	want := []string{"--status", "mytag", "--detail", "extra"}
+	if !reflect.DeepEqual(rest, want) {
+		t.Errorf("remaining = %v, want %v", rest, want)
+	}
+}
+
+// Double-dash and single-dash spellings are the same token, which is exactly
+// why the `tag values` boolean had to be renamed to --show-files: `--files`
+// normalizes to `-files` before any flag.Parse runs. R3206
+func TestPathFilterStackNormalizesDoubleDash(t *testing.T) {
+	inc, _, rest, dir := stackFixture(t, []string{"--files", "status"})
+	if len(inc) != 1 || inc[0] != filepath.Join(dir, "status") {
+		t.Errorf("--files should be read as a filter row consuming the next arg, got %v", inc)
+	}
+	if len(rest) != 0 {
+		t.Errorf("the following arg was consumed as a glob, so nothing remains; got %v", rest)
+	}
+}
+
+// No positive row means all paths are candidates — a stack of only negative
+// rows narrows rather than empties. R3204
+func TestPathFilterStackNegativeOnlyKeepsCandidates(t *testing.T) {
+	inc, exc, _, dir := stackFixture(t, []string{"-without", "-files", "vendor/**"})
+	if len(inc) != 0 {
+		t.Errorf("include = %v, want empty", inc)
+	}
+	if len(exc) != 1 {
+		t.Fatalf("exclude = %v, want one row", exc)
+	}
+	if !ark.MatchPathFilters(filepath.Join(dir, "src/a.go"), inc, exc) {
+		t.Error("a path outside the exclusion must still be a candidate")
+	}
+	if ark.MatchPathFilters(filepath.Join(dir, "vendor/x/a.go"), inc, exc) {
+		t.Error("a path inside the exclusion must be rejected")
+	}
+}
+
+// Anchoring rewrites relative rows and passes absolute ones through, so a
+// glob that has already been anchored survives a second pass unchanged
+// (filterPaths relies on that idempotence). R3197
+func TestPathFilterStackAnchoringIsIdempotent(t *testing.T) {
+	inc, _, _, dir := stackFixture(t, []string{
+		"-files", "*.md", "-files", "/**/*.md", "-files", "~/x/**",
+	})
+	if len(inc) != 3 {
+		t.Fatalf("include = %v, want three rows", inc)
+	}
+	if inc[0] != filepath.Join(dir, "*.md") {
+		t.Errorf("relative row should anchor to cwd, got %q", inc[0])
+	}
+	if inc[1] != "/**/*.md" {
+		t.Errorf("absolute row should pass through, got %q", inc[1])
+	}
+	if inc[2] != "~/x/**" {
+		t.Errorf("tilde row should pass through for later expansion, got %q", inc[2])
+	}
+	again := ark.AnchorGlobsToDir(inc, dir)
+	if !reflect.DeepEqual(again, inc) {
+		t.Errorf("re-anchoring changed the globs: %v -> %v", inc, again)
+	}
+}
+
+// The retired flags produce a pointing error, never an alias. The message
+// must carry BOTH facts: the new spelling and the semantic change. An alias
+// would have taught only the first, leaving the user with a filter that
+// silently returns fewer results — exactly the invisible failure this
+// unification removed. R3205
+func TestRetiredPathFlagError(t *testing.T) {
+	err := retiredPathFlagError("ark files", "--filter-files")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"--filter-files",  // what the user typed
+		"-files",          // the new spelling
+		"-without -files", // the negative form
+		"anchored",        // the semantic change...
+		"'/**/*.md'",      // ...and how to get the old behavior back
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("pointing error must mention %q; got:\n%s", want, msg)
+		}
+	}
+
+	// Every spelling the five commands used to accept is refused.
+	for _, f := range []string{"-filter-files", "-exclude-files", "-except-files"} {
+		if !retiredPathFlags[f] {
+			t.Errorf("%s should be a retired path flag", f)
+		}
+	}
+}
+
+// A SkipFlagParsing node's Action receives --help like any other token, so
+// without an explicit check the args reach the handler's own flag.Parse and
+// the command grows two different help texts: `ark help X` rendering the
+// node's Description and `ark X --help` printing the flag package's bare
+// listing. helpRequested is what keeps help single-source. R2917, R2918
+func TestHelpRequested(t *testing.T) {
+	for _, args := range [][]string{
+		{"--help"}, {"-h"}, {"-help"},
+		{"-files", "*.md", "--help"}, // help after stack rows still counts
+		{"mytag", "-h"},
+	} {
+		if !helpRequested(args) {
+			t.Errorf("helpRequested(%v) = false, want true", args)
+		}
+	}
+	for _, args := range [][]string{
+		{}, {"-files", "*.md"}, {"mytag"}, {"--show-files", "status"},
+	} {
+		if helpRequested(args) {
+			t.Errorf("helpRequested(%v) = true, want false", args)
+		}
+	}
+}

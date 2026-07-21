@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -68,6 +68,39 @@ CLITree owns how those bodies are *reached* and how their help is
   disambiguated command, exit without searching). Such a node documents
   itself through a single hand-written `Description` (single-source, not
   auto-derived).
+- Filter-stack nodes (R3204, R3205, R3206): `files`, `status`, `tag files`,
+  `tag values`, and `subscribe` join `search` as `SkipFlagParsing: true`
+  nodes, because the stack is order-sensitive (sticky `-with`/`-without`
+  polarity, repeated `(polarity, mode, query)` tuples) and urfave cannot
+  express it. Each hands its raw args to `parsePathFilterStack` + its own
+  `flag.Parse` for the non-DSL flags, and documents itself through one
+  hand-written `Description` as `search` does — all six sharing the single
+  `filterStackHelp` constant, so the stack's help cannot drift between
+  commands. This also **deletes** `flatFilesAction` and `flatStatusAction`
+  from the `flat_cli.go` re-serialization path, which rebuilt a legacy
+  `--filter-files V` argv for the handler body: a node whose flags are
+  re-serialized *cannot* carry the stack, since order and polarity are lost
+  in the rebuild. `files` and `status` become `filterStackAction`
+  pass-throughs.
+- **A `SkipFlagParsing` node must answer its own help (R2917, R2918).** Such a
+  node's `Action` receives `--help` like any other token, so left alone the
+  args reach the handler's `flag.Parse` and the command grows *two* help
+  texts — `ark help X` rendering the node's `Description`, `ark X --help`
+  printing the flag package's bare listing. `helpRequested(args)` intercepts
+  first and returns `ucli.ShowSubcommandHelp(c)`, so the `Description` stays
+  the single source. `filterStackAction` bundles that check with the raw-args
+  hand-off for the `flat_cli.go` nodes, whose handlers have no `*ucli.Command`
+  of their own. (`search` predates this and still prints a hand-written
+  `fs.Usage` — the same two-source shape, now the only one left; noted as
+  O162 rather than changed, since its help is long-standing and hand-tuned.) The `--filter-files` / `--exclude-files` pointing errors
+  (R3205) are detected in the body alongside the stack parse, the way the
+  connections legacy shims are (R2615): message + non-zero exit, no alias.
+  The `tag values` boolean is declared `--show-files` (R3206) — `--files`
+  would be normalized into a filter row by `parseFilterStack` before
+  `flag.Parse` ever saw it, exactly the collision `search` resolved by
+  renaming its boolean to `--file-content`. Note this is the first
+  deliberate exception to the flag-surface freeze (R2932), which scoped the
+  *migration*; #51 is later growth, like the bloodhound nodes.
 - Exit codes (R2926): handler bodies keep calling `fatal()` (which prints
   and `os.Exit(1)`) and `os.Exit(2)` directly, so meaningful codes survive
   unchanged — `connections recall next` `2`=done/`0`=doc; removed

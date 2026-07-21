@@ -61,3 +61,37 @@
 **Expected:** Reordered to ["--source", "/path/to/dir", "*.md"]
 **Refs:** crc-CLI.md, R232, R233
 
+
+## Test: `**` in [[source]].dir is rejected
+**Purpose:** A recursive source glob multiplies watcher events per ancestor
+level, and the fault is latent — harmless until someone creates a nested
+directory — so the pattern is refused at declaration rather than at expansion
+**Input:** TOML with `[[source]] dir = "~/work/**"`
+**Expected:** load fails with an error naming `*` as the single-level
+alternative; `dir = "~/work/*"` still loads and expands normally
+**Refs:** crc-Config.md, R3201, R3200
+
+## Test: strategies honor `**` under the source-scoped context
+**Purpose:** StrategyForFile matches through Matcher, so `**` finally does
+something — the old `filepath.Match`-plus-basename-fallback made `**/*.md`
+one-level-only while `*.md` worked at any depth
+**Input:** strategies={"**/*.md": "markdown"}, sourceDir="/proj",
+paths=["/proj/a.md", "/proj/docs/deep/b.md"]
+**Expected:** both resolve to "markdown"; a no-slash pattern (`*.md`) still
+resolves both, so the change is additive for existing configs
+**Refs:** crc-Config.md, R3202, R3198
+
+## Test: validatePattern accepts what the matcher accepts
+**Purpose:** Validator and matcher agree on legality — doublestar syntax,
+not `filepath.Match` syntax
+**Input:** AddInclude with "**/*.{md,txt}"; then a malformed "[" pattern
+**Expected:** the doublestar-legal pattern validates; the malformed one errors
+**Refs:** crc-Config.md, R3203
+
+## Test: rootless keys reach any depth
+**Purpose:** `search_exclude` / `[schedule] filter_files` have no contextual
+root, so a bare pattern means `**/X`, and a slash-bearing relative pattern
+matches instead of silently matching nothing
+**Input:** search_exclude=["*.jsonl", "specs/**"], candidate paths at several depths
+**Expected:** both patterns match at any depth below any source
+**Refs:** crc-Config.md, R3199, R3195

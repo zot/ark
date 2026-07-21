@@ -20,6 +20,11 @@ score (descending), chunks sorted by score within each file.
 - `k` — max results (default 20)
 - `filter_files` — glob pattern to restrict paths
 - `exclude_files` — glob pattern to exclude paths
+
+Lua/MCP opts are a **rootless** glob context: the server has no current
+directory to anchor against, so a bare pattern means any depth in any
+source (`*.md` is every markdown file), exactly as in `ark.toml`. See
+[main.md](main.md#glob-patterns).
 - `filter_file_tags` — tag name to restrict by
 - `exclude_file_tags` — tag name to exclude by
 

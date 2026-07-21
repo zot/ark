@@ -1,6 +1,6 @@
 # Tag Value File Filtering
 
-Add `--filter-files` and `--exclude-files` to `ark tag values`.
+Add path-glob filtering to `ark tag values`.
 Language: Go. Environment: ark CLI.
 
 ## Problem
@@ -12,15 +12,25 @@ the output.
 
 ## Flags
 
-Same pattern as `ark tag files` and `ark search`:
+Same `-files` filter stack as `ark tag files` and `ark search`:
 
-- `--filter-files GLOB` — only count values from files matching
-  the glob (repeatable)
-- `--exclude-files GLOB` — exclude files matching the glob
+- `-files GLOB` — only count values from files matching the glob
+  (repeatable; `-with` polarity is the default)
+- `-without -files GLOB` — exclude files matching the glob
   (repeatable)
 
-Both are composable: filter narrows first, exclude removes from
-the result. Without either flag, behavior is unchanged.
+Both are composable: positive rows narrow first, `-without` rows remove
+from the result. With no row, behavior is unchanged. Globs follow the
+project-wide rules in [main.md](main.md#glob-patterns) — anchored
+CLI-side to the current directory, so `/**/*.md` is the explicit
+"markdown anywhere" form.
+
+**The boolean is `--show-files`, not `--files`.** `parseFilterStack`
+runs before `flag.Parse` and normalizes `--files` to `-files`, so a
+boolean named `files` would be swallowed as a filter row and would eat
+the following TAG as its glob — a silent misparse rather than an error.
+`ark search` hit the same collision and resolved it the same way, by
+renaming its boolean to `--file-content`.
 
 ## Behavior
 
@@ -29,12 +39,12 @@ and apply the glob filters. Recompute the count from matching files
 only. Values that have zero matching files after filtering are
 omitted from output.
 
-The `-files` flag composes with filtering — it shows only the
-files that passed the filter.
+`--show-files` composes with filtering — it lists only the files that
+passed the filter.
 
 ## Usage
 
 ```
-ark tag values --filter-files '*.md' status
-ark tag values --exclude-files '*.jsonl' --files from-project
+ark tag values -files '/**/*.md' status
+ark tag values -without -files '/**/*.jsonl' --show-files from-project
 ```

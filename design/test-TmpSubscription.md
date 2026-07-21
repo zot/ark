@@ -186,3 +186,18 @@ draining.
 **Expected:** sub.Drops counter ≈ 16 after the burst. sub.Hits ≈ 4.
 Publisher never blocks.
 **Refs:** R2302
+
+## Test: subscription path filters — the O160 regression
+**Purpose:** `ark subscribe --filter-files 'specs/**'` used to match nothing:
+the local `anchorGlob` prefixed `**/` only when a pattern had no slash at all,
+so a relative glob with a slash was tested verbatim against absolute indexed
+paths and never hit. Pinned at the subscription surface, not just the matcher,
+because the failure was invisible — a subscription matching nothing is
+indistinguishable from a quiet corpus.
+**Input:** `matchFileFilters` with the relative form (`specs/**`), the
+cwd-anchored form the CLI now sends, a bare no-slash pattern, an
+include+exclude pair, no filters at all, and a `tmp://` pattern
+**Expected:** relative and anchored both match a specs path and both reject a
+path outside it; bare `*.md` still reaches any depth; an exclude hit wins over
+an include; no filters passes everything; `tmp://` subscriptions keep matching
+**Refs:** crc-PubSub.md, crc-Matcher.md, R3195, R3204, R3207, R2278

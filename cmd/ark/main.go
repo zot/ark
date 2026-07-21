@@ -975,6 +975,138 @@ func anchorFilterToCwd(glob, cwd string) string {
 	return ark.AnchorGlobToDir(glob, cwd)
 }
 
+// anchorGlobsToCwd anchors a glob list to the process's working directory.
+// Every CLI path glob passes through here — filter-stack rows and the
+// positional shorthands alike — so one command can never carry two glob
+// rules. Failure to read the cwd leaves the globs untouched rather than
+// guessing.
+// CRC: crc-CLI.md | R3197, R3208
+func anchorGlobsToCwd(globs []string) []string {
+	if len(globs) == 0 {
+		return globs
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return globs
+	}
+	return ark.AnchorGlobsToDir(globs, cwd)
+}
+
+// filterStackHelp is the one description of the shared path-glob stack,
+// written once and reused by every node that carries it — the help text
+// cannot drift between commands because there is only one of it. R3204
+const filterStackHelp = "Path scoping uses the shared filter stack:\n" +
+	"   -files GLOB            include paths matching GLOB (repeatable)\n" +
+	"   -without -files GLOB   exclude them instead; -with switches back\n" +
+	"A bare glob is anchored to the current directory, so '*.md' means this\n" +
+	"directory only; write '/**/*.md' for any depth."
+
+// retiredPathFlags are the per-command path-filter flags that #51 replaced
+// with the shared `-files` stack. They are refused, never aliased: the one
+// pattern shape whose meaning changed (a bare no-slash glob is now
+// top-level-only) fails by returning *fewer results*, never an error, so an
+// alias would silently reproduce the invisible failure the unification
+// removed. R3205
+var retiredPathFlags = map[string]bool{
+	"-filter-files": true, "-exclude-files": true, "-except-files": true,
+}
+
+// helpRequested reports whether a SkipFlagParsing node's raw args ask for
+// help. Such a node's Action receives `--help` like any other token, so
+// without this the args reach the handler's own `flag.Parse`, which prints
+// the flag package's bare listing — and the command ends up with two
+// different help texts (`ark help X` showing the node's Description, `ark X
+// --help` showing the flag dump). One node, one help. R2917, R2918
+// CRC: crc-CLITree.md | R2917, R2918
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "-help" {
+			return true
+		}
+	}
+	return false
+}
+
+// filterStackAction wraps a legacy `func(args []string)` handler for a node
+// that carries the `-files` filter stack: it answers help from the node's own
+// declaration (so the generated help stays single-source) and otherwise hands
+// the raw args through untouched, order and polarity intact.
+// CRC: crc-CLITree.md | R3204, R2917
+func filterStackAction(fn func([]string)) ucli.ActionFunc {
+	return func(_ context.Context, c *ucli.Command) error {
+		args := c.Args().Slice()
+		if helpRequested(args) {
+			return ucli.ShowSubcommandHelp(c)
+		}
+		fn(args)
+		return nil
+	}
+}
+
+// retiredPathFlagError builds the pointing error for a retired path flag.
+// It must name the new flag **and** the semantic change, because the one
+// pattern shape whose meaning changed fails by returning fewer results rather
+// than erroring — so a user who learns only the new spelling would carry the
+// silent failure across with them. R3205
+// CRC: crc-CLI.md | R3205
+func retiredPathFlagError(cmd, flag string) error {
+	return fmt.Errorf("%s: %s was replaced by the -files filter stack.\n"+
+		"  use:  %s -files GLOB          (positive)\n"+
+		"        %s -without -files GLOB (negative)\n"+
+		"  NOTE: the meaning changed too — a bare glob is now anchored to the\n"+
+		"  current directory, so '*.md' matches this directory only. Write\n"+
+		"  '/**/*.md' for any depth", cmd, flag, cmd, cmd)
+}
+
+// parsePathFilterStack is the path-only subset of the search filter-stack
+// DSL (parseFilterStack, seq-filter-stack.md): sticky `-with` / `-without`
+// polarity and repeatable `-files GLOB` rows, with everything else — flags
+// and positional arguments alike — passed through to the caller's own
+// flag.Parse.
+//
+// It is deliberately narrower than the search walker rather than a call into
+// it. The search walker coalesces bare terms into a `-contains` group, which
+// would swallow these commands' positional arguments: `ark tag files mytag`
+// would lose its TAG, and `ark files '*.md'` its glob. Both parsers share the
+// polarity grammar and produce the same meaning for a `-files` row; only the
+// mode vocabulary differs.
+//
+// Globs come back cwd-anchored (R3197). A retired flag aborts the process
+// with a message naming both the new flag and the semantic change (R3205).
+//
+// CRC: crc-CLI.md | Seq: seq-filter-stack.md | R3204, R3205, R3197
+func parsePathFilterStack(cmd string, args []string) (include, exclude, remaining []string) {
+	polarity := "with"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		norm := arg
+		if strings.HasPrefix(arg, "--") {
+			norm = arg[1:]
+		}
+		switch {
+		case norm == "-with":
+			polarity = "with"
+		case norm == "-without":
+			polarity = "without"
+		case norm == "-files":
+			i++
+			if i >= len(args) {
+				fatal(fmt.Errorf("%s: -files needs a glob", cmd))
+			}
+			if polarity == "without" {
+				exclude = append(exclude, args[i])
+			} else {
+				include = append(include, args[i])
+			}
+		case retiredPathFlags[norm]:
+			fatal(retiredPathFlagError(cmd, arg))
+		default:
+			remaining = append(remaining, arg)
+		}
+	}
+	return anchorGlobsToCwd(include), anchorGlobsToCwd(exclude), remaining
+}
+
 // CRC: crc-CLI.md | R77, R78
 func cmdSearch(args []string) {
 	// Subcommand dispatch
@@ -2281,23 +2413,22 @@ func writeEscaped(w io.Writer, s string, tag string) {
 	}
 }
 
-// filterPaths returns only paths matching at least one pattern.
-// If patterns is empty, returns all paths unchanged.
+// filterPaths narrows a path list by trailing positional globs — the
+// shorthand form on `files`, `stale`, `missing`, and `unresolved`. A path
+// is kept when it matches at least one glob; no globs leaves the list
+// unchanged.
+//
+// The globs are anchored to the current directory exactly as a `-files` row
+// is (R3208), so one command never carries two glob rules: `ark files '*.md'`
+// and `ark files -files '*.md'` mean the same thing. Anchoring is idempotent,
+// so repeated calls on the same patterns are safe.
+//
+// CRC: crc-CLI.md | R3195, R3208
 func filterPaths(paths []string, patterns []string) []string {
 	if len(patterns) == 0 {
 		return paths
 	}
-	m := &ark.Matcher{Dotfiles: true}
-	var out []string
-	for _, p := range paths {
-		for _, pat := range patterns {
-			if m.Match(pat, p, "", false) {
-				out = append(out, p)
-				break
-			}
-		}
-	}
-	return out
+	return ark.FilterPaths(paths, anchorGlobsToCwd(patterns), nil)
 }
 
 func printLines(lines []string) {
@@ -2308,20 +2439,20 @@ func printLines(lines []string) {
 
 // CRC: crc-CLI.md | R80, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531
 func cmdStatus(args []string) {
+	// R3204: shared -files stack, cwd-anchored, parsed before flag.Parse.
+	filterFiles, excludeFiles, rest := parsePathFilterStack("ark status", args)
+
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	showDB := fs.Bool("db", false, "show LMDB record counts by type")
 	showChunks := fs.Bool("chunks", false, "show chunk size statistics")
 	tokenize := fs.Bool("tokenize", false, "measure in tokens (requires tag_model)")
-	var filterFiles, excludeFiles stringSlice
-	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
-	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark status [options]")
+		fmt.Fprintln(os.Stderr, "Usage: ark status [-with|-without] [-files GLOB]... [options]")
 		fmt.Fprintln(os.Stderr, "\nShow database status. With --chunks, show chunk size statistics.")
 		fmt.Fprintln(os.Stderr, "\nOptions:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(rest)
 
 	proxied := false
 	if client := serverClient(arkDir); client != nil {
@@ -2476,23 +2607,21 @@ func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {
 
 // CRC: crc-CLI.md | R81, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586
 func cmdFiles(args []string) {
+	// R3204: path globs arrive through the shared -files stack, parsed
+	// (and cwd-anchored) before flag.Parse sees the rest.
+	ff, ef, rest := parsePathFilterStack("ark files", args)
+
 	fs := flag.NewFlagSet("files", flag.ExitOnError)
 	showStatus := fs.Bool("status", false, "show file status, bytes, and chunk count")
 	verbose := fs.Bool("detail", false, "show per-file chunk size stats (with --status)")
-	var filterFiles, excludeFiles stringSlice
-	fs.Var(&filterFiles, "filter-files", "path-based positive filter (repeatable, glob pattern)")
-	fs.Var(&excludeFiles, "exclude-files", "path-based negative filter (repeatable, glob pattern)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark files [options] [pattern...]")
+		fmt.Fprintln(os.Stderr, "Usage: ark files [-with|-without] [-files GLOB]... [options] [pattern...]")
 		fmt.Fprintln(os.Stderr, "\nList indexed files. Positional patterns narrow the result.")
 		fmt.Fprintln(os.Stderr, "\nOptions:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(rest)
 	patterns := fs.Args()
-
-	ff := ark.ExpandTildeSlice([]string(filterFiles))
-	ef := ark.ExpandTildeSlice([]string(excludeFiles))
 
 	if !*showStatus {
 		// Simple path: just list files
@@ -2615,38 +2744,12 @@ func cmdFiles(args []string) {
 	}
 }
 
-// matchBaseSet applies --filter-files/--exclude-files to get the base set.
+// matchBaseSet applies the `-files` stack's include/exclude globs to get the
+// base set, through the one shared matcher (R3195). The globs arrive
+// cwd-anchored from parsePathFilterStack, so they carry the absolute form.
+// CRC: crc-CLI.md | R3195, R3204
 func matchBaseSet(paths []string, include, exclude []string) []string {
-	if len(include) == 0 && len(exclude) == 0 {
-		return paths
-	}
-	m := &ark.Matcher{Dotfiles: true}
-	var out []string
-	for _, p := range paths {
-		if len(include) > 0 {
-			matched := false
-			for _, pat := range include {
-				if m.Match(pat, p, "", false) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-		excluded := false
-		for _, pat := range exclude {
-			if m.Match(pat, p, "", false) {
-				excluded = true
-				break
-			}
-		}
-		if !excluded {
-			out = append(out, p)
-		}
-	}
-	return out
+	return ark.FilterPaths(paths, include, exclude)
 }
 
 func percentileInts(sorted []int, p int) int {
@@ -4143,28 +4246,9 @@ func normalizeTagNames(names []string) []string {
 }
 
 // matchPath returns true if a path passes the include/exclude filters.
+// CRC: crc-CLI.md | R3195, R3204
 func matchPath(path string, include, exclude []string) bool {
-	include = ark.ExpandTildeSlice(include)
-	exclude = ark.ExpandTildeSlice(exclude)
-	m := &ark.Matcher{Dotfiles: true}
-	if len(include) > 0 {
-		matched := false
-		for _, pat := range include {
-			if m.Match(pat, path, "", false) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	for _, pat := range exclude {
-		if m.Match(pat, path, "", false) {
-			return false
-		}
-	}
-	return true
+	return ark.MatchPathFilters(path, include, exclude)
 }
 
 func cmdTagFilesContext(tags []string, filterFiles, excludeFiles []string) {

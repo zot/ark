@@ -115,3 +115,32 @@ Touches: architecture.md (canonical overview), db-concurrency.md
 (§Protected Resources), db-write-actor.md, find-connections-substrate.md
 (substrateOp — the pattern's first instance), http-operations.md (the
 HTTP front door for operations), chunk-cache-threading.md.
+
+### Glob anchoring
+
+Every path glob in ark runs through **one matcher** (`ark.Matcher`,
+doublestar). Surfaces differ only in what an *unanchored* pattern is
+measured against, and there are exactly three contexts:
+
+- **CLI flags** — root is the current directory, so bare `*.md` means
+  what it means in a shell (top level only).
+- **Source-scoped config** — root is the source's directory, so bare
+  `X` means `SOURCE/**/X`.
+- **Rootless** (`search_exclude`, `[schedule]` filters, and the
+  Lua/MCP `filter_files` opts) — no root exists, so bare `X` means
+  `**/X`. The server has no cwd to anchor against.
+
+Invariant: **a bare glob is relative to where you are standing; `/X` and
+`./X` mean the same thing on every surface.** Only the bare form varies,
+and only ever by narrowing. A spec that describes a *fourth* mechanism, a
+second matcher, or a per-command anchoring rule is drift — this is what
+O158 was.
+
+`[[source]].dir` is outside the invariant on purpose: it is filesystem
+*expansion*, not filtering, and rejects `**` because a recursive source
+glob multiplies watcher events per ancestor level (latently, only once a
+nested directory appears).
+
+Touches: main.md (canonical — §Glob Patterns), cli-commands.md,
+config.md, source-monitoring.md, chunker-strategies.md, scheduling.md,
+search-cli-filters.md, search-filtering.md, pubsub.md, bloodhound.md.

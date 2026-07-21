@@ -2775,7 +2775,6 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 		return nil, err
 	}
 
-	matcher := &Matcher{Dotfiles: true}
 	hasFilter := len(filterFiles) > 0 || len(excludeFiles) > 0
 	useContentLens := sizeFn == nil // nil sizeFn = use CRecord ContentLen (fast path)
 
@@ -2784,29 +2783,10 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 	var allSizes []int
 
 	for _, s := range stale {
-		if hasFilter {
-			if len(filterFiles) > 0 {
-				matched := false
-				for _, pat := range filterFiles {
-					if matcher.Match(pat, s.Path, "", false) {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-			}
-			excluded := false
-			for _, pat := range excludeFiles {
-				if matcher.Match(pat, s.Path, "", false) {
-					excluded = true
-					break
-				}
-			}
-			if excluded {
-				continue
-			}
+		// R3195: one matcher. Globs arrive cwd-anchored from the -files
+		// stack (R3204), so they carry the absolute form.
+		if hasFilter && !MatchPathFilters(s.Path, filterFiles, excludeFiles) {
+			continue
 		}
 
 		var sizes []int

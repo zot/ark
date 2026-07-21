@@ -141,6 +141,18 @@ ambient watcher.
 
 ## Notes
 
+- **Glob anchoring.** Every path glob here runs through one matcher
+  (`ark.Matcher`, doublestar); the keys differ only in what an
+  *unanchored* pattern is measured against. **Source-scoped** keys —
+  `default_include`, `default_exclude`, `[[source]].include`,
+  `[[source]].exclude`, `strategies`, `[[source]].strategies` — take the
+  source's own directory as the root, so bare `X` means `SOURCE/**/X`.
+  **Rootless** keys — `search_exclude`, `[schedule] filter_files` /
+  `exclude_files`, and the `[schedule.tag.<NAME>]` overrides — have no
+  root, so bare `X` means `**/X` (any depth, any source), and `./X` has
+  nothing to anchor to and falls back to the absolute path. `[[source]].dir`
+  is neither: it is filesystem *expansion* rather than filtering, and
+  rejects `**`. Canonical rules: [main.md](main.md#glob-patterns).
 - All durations follow Go's `time.ParseDuration` grammar (`"24h"`,
   `"30m"`, `"30s"`, `"500ms"`). `"0"` is allowed where the
   per-feature spec assigns it special semantics.

@@ -20,7 +20,7 @@ At session start, start ark, load tags, then run the dead drop:
 
 ```bash
 ~/.ark/ark serve &
-~/.ark/ark tag files --context --filter-files '*.md' tag
+~/.ark/ark tag files --context -files '/**/*.md' tag
 ```
 
 Then the two-step morning sweep — Hermes gathers, Franklin narrows:
@@ -149,7 +149,7 @@ Three categories — route by what you're doing, not by complexity:
 **Context loading** — direct Bash. You're loading data into yourself,
 not asking a question:
 ```bash
-~/.ark/ark tag files --context --filter-files '*.md' tag
+~/.ark/ark tag files --context -files '/**/*.md' tag
 ~/.ark/ark fetch --wrap knowledge <path>
 ```
 

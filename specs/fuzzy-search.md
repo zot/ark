@@ -25,12 +25,12 @@ default `SearchCombined`.
 mode that takes a positional query, like `--multi`.
 
 `--fuzzy` composes with:
-- All filter flags (`--filter-files`, `--exclude-files`,
-  `--filter-file-tags`, `--exclude-file-tags`, `--filter`, `--except`)
+- The whole filter stack (`-files`, `-tag`, `-contains`, `-regex`,
+  `-about`) under either polarity (`-with`, `-without`)
 - `--proximity` (reranking on top-k results)
 - `--no-tmp`
 - `-k` (max results)
-- `--chunks`, `--files`, `--tags`, `--scores`, `--wrap`, `--preview`
+- `--chunks`, `--file-content`, `--tags`, `--scores`, `--wrap`, `--preview`
 - `--after`, `--before`
 
 ## Go API

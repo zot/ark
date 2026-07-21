@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462, R2600, R2601, R2602, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616, R2617, R2618, R2619, R2625, R2627, R2630, R2631, R2632, R2633, R2635, R2636, R2637, R2638, R2641, R2483, R2484, R2485, R2645, R2646, R2650, R2651, R2652, R2653, R2654, R2655, R2656, R2657, R2658, R2659, R2663, R2662, R2716, R2717, R2718, R2719, R2722, R2723, R2724, R2725, R2726, R2727, R2720, R2721, R2744, R2745, R2755, R2756, R2757, R2758, R2782, R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2794, R2795, R2796, R2805, R2801, R2838, R2839, R2840, R2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956, R2957, R2958, R2960, R2984, R2985, R2990, R2993, R2995, R2996, R2997, R2998, R2999, R3000, R3001, R3002, R3003, R192, R3035, R3191, R3193
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462, R2600, R2601, R2602, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616, R2617, R2618, R2619, R2625, R2627, R2630, R2631, R2632, R2633, R2635, R2636, R2637, R2638, R2641, R2483, R2484, R2485, R2645, R2646, R2650, R2651, R2652, R2653, R2654, R2655, R2656, R2657, R2658, R2659, R2663, R2662, R2716, R2717, R2718, R2719, R2722, R2723, R2724, R2725, R2726, R2727, R2720, R2721, R2744, R2745, R2755, R2756, R2757, R2758, R2782, R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2794, R2795, R2796, R2805, R2801, R2838, R2839, R2840, R2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956, R2957, R2958, R2960, R2984, R2985, R2990, R2993, R2995, R2996, R2997, R2998, R2999, R3000, R3001, R3002, R3003, R192, R3035, R3191, R3193, R3197, R3204, R3205, R3206, R3208
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -114,6 +114,54 @@ dispatches operations via proxy or cold-start.
   non-about entries). Returns filter entries and remaining args for
   flag.Parse. The first entry becomes the primary search; the rest
   become ChunkFilterRow entries. (R1940)
+- **The filter stack is the one path-glob surface (R3204).** `files`,
+  `status`, `tag files`, `tag values`, and `subscribe` take path globs
+  through the same repeatable `-files GLOB` rows with `-with` (default) /
+  `-without` polarity that `search` does. With no positive row, all paths
+  are candidates. `anchorGlobsToCwd` then anchors every row (R3197/R2958),
+  so what leaves the client is always absolute and no server-side component
+  invents a working directory. The five stop carrying per-command matchers
+  of their own: `matchBaseSet` and `matchPath` become one-line calls to
+  `ark.FilterPaths` / `ark.MatchPathFilters` (crc-Matcher.md), as does
+  pubsub's pair (crc-PubSub.md).
+- parsePathFilterStack(cmd, args): the **path-only subset** of the search
+  DSL — sticky `-with`/`-without` polarity plus repeatable `-files GLOB`
+  rows, with every other token (flags *and* positional arguments) passed
+  through to the caller's own `flag.Parse`. Returns cwd-anchored globs.
+  It is deliberately a sibling of `parseFilterStack` rather than a call
+  into it: the search walker coalesces bare terms into a `-contains`
+  group, which would swallow these commands' positional arguments —
+  `ark tag files mytag` would lose its TAG and `ark files '*.md'` its
+  glob. The two share the polarity grammar and give a `-files` row
+  identical meaning; only the mode vocabulary differs. (R3204, R3197)
+- retiredPathFlagError(cmd, flag): builds the R3205 message. Extracted
+  from the parser so the *content* of the error is unit-testable —
+  `fatal()` exits the process, so the message would otherwise only ever
+  be checked by hand.
+- **Positional globs are the same mechanism (R3208).** `filterPaths` — the
+  trailing-glob shorthand on `files`, `stale`, and `missing` — anchors
+  through `anchorGlobsToCwd` too, so `ark files '*.md'` and `ark files
+  -files '*.md'` mean the same thing. Anchoring is idempotent, so the
+  repeated per-call pass is safe. Without this a single command would carry
+  two glob rules, which is the divergence R3195 exists to remove.
+  **Not** `unresolved` or `refresh`, despite both advertising
+  `[PATTERN...]`: `cmdUnresolved` never applies its patterns at all
+  (pre-existing, O161), and `refresh`/`resolve`/`remove`/`dismiss` pass
+  theirs onward to be matched where the work happens — `RefreshStale` already
+  takes `db.matcher`, so R3195 holds there — with no client cwd in play.
+- **`--filter-files` / `--exclude-files` on those five exit non-zero
+  (R3205)** with a message naming `-files` **and** the semantic change —
+  a bare no-slash glob is now top-level-only, `/**/*` is the explicit
+  any-depth form. They are deliberately **not** aliased: the single shape
+  whose meaning changed fails by returning *fewer results*, never an error,
+  so an alias would silently reproduce exactly the failure mode this
+  unification exists to remove. The user must learn both facts at once.
+- **`tag values` boolean is `--show-files`, not `--files` (R3206).**
+  `parseFilterStack` normalizes `--files` → `-files` *before* `flag.Parse`,
+  so a boolean spelled `files` would be eaten as a filter row and would
+  consume the following TAG as its glob — a silent misparse, not an error.
+  `search` hit this same collision and resolved it the same way, renaming
+  its boolean to `--file-content`.
 - -parse flag: prints the disambiguated command (explicit mode flags,
   quoted values, polarity toggles) and exits without searching.
 - -tag strips optional leading @ from TAG. Name-only (no :value)
@@ -139,7 +187,7 @@ dispatches operations via proxy or cold-start.
   cold-start). Outputs JSONL (one object per chunk: path, range, content,
   index). Supports --wrap for XML wrapping.
 - cmdFiles: list indexed files. Positional glob args filter the output.
-  --filter-files/--exclude-files set the base file set; positional
+  The `-files` filter stack sets the base file set (R3204); positional
   globs narrow within it. --status adds G/S/M status, bytes (os.Stat),
   and chunk count (DB.AllChunks) columns. -v with --status shows
   per-file chunk size stats (min/max/mean/median/p90/p95) as an
@@ -150,7 +198,7 @@ dispatches operations via proxy or cold-start.
   per bucket. Without --db, unchanged. When proxied, sets
   ?db=true query parameter. (R2473, R2474, R2475, R2476, R2477, R2480)
   --chunks activates chunk size statistics. Iterates files (scoped by
-  --filter-files/--exclude-files), calls DB.ChunkStats() to collect
+  the `-files` filter stack, R3204), calls DB.ChunkStats() to collect
   sizes, prints right-aligned table with "all" row + per-strategy rows.
   Columns: strategy, count, min, max, mean, median, p90, p95, p99.
   Unit is bytes (default) or tokens (--tokenize). --tokenize requires
@@ -292,7 +340,10 @@ dispatches operations via proxy or cold-start.
 
 - cmdSubscribe: register/cancel/list tag subscriptions. Proxies to
   server. R937: normalizes --tag values by stripping leading @ and
-  trailing : before sending to server.
+  trailing : before sending to server. Path scoping comes from the
+  `-files` filter stack (R3204), anchored client-side like every other
+  member of the stack, so `subscribe -files 'specs/**'` scopes to this
+  project's specs instead of silently matching nothing (O160, R3207).
 - cmdListen: long-poll for tag notifications. Outputs markdown crank
   handles. Proxies to server.
 

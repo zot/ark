@@ -13,6 +13,26 @@ removed via `ark config remove-source` — that's an error. The server
 ensures ~/.ark is a source on every startup, before reading ark.toml
 sources. It does not appear in ark.toml.
 
+## Source Directory Globs
+
+A `[[source]].dir` may be a glob (`~/work/*`), expanded against the
+filesystem to yield one source per matching directory. Expanded sources
+carry `from_glob` so `ark sources check` can reconcile additions,
+disappearances, and orphans.
+
+**`**` is rejected in a source dir**, with an error naming `*` as the
+single-level alternative. A recursive source glob makes every
+subdirectory its own source root, so one file change fires a watcher
+event per ancestor level. The failure is latent — `~/work/**` behaves
+correctly until someone creates a nested directory under `~/work` — so it
+cannot be caught by validating the expansion at load time, and the
+pattern itself is refused instead. Multiple *non-nested* directories stay
+fine.
+
+This is filesystem expansion, not path filtering, so the anchoring forms
+in [main.md](main.md#glob-patterns) do not apply here; `~` expansion is
+the only rewriting done.
+
 ## Phase A: Config-Triggered Reconcile
 
 When any config mutation command runs (add-source, remove-source,

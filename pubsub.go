@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/zot/microfts2"
 )
 
@@ -904,34 +903,17 @@ func looksSchedulable(value string) bool {
 	return false
 }
 
-// matchFileFilters checks path against filter and except globs.
-// CRC: crc-PubSub.md | R782, R783, R784, R785
-func matchFileFilters(path string, filterFiles, exceptFiles []string) bool {
-	if len(filterFiles) > 0 {
-		matched := false
-		for _, pattern := range filterFiles {
-			if ok, _ := doublestar.Match(anchorGlob(pattern), path); ok {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	for _, pattern := range exceptFiles {
-		if ok, _ := doublestar.Match(anchorGlob(pattern), path); ok {
-			return false
-		}
-	}
-	return true
-}
-
-// anchorGlob prepends **/ to unanchored patterns so *.md matches foo/bar/notes.md.
-// Same convention as Matcher in match.go.
-func anchorGlob(pattern string) string {
-	if !strings.Contains(pattern, "/") {
-		return "**/" + pattern
-	}
-	return pattern
+// matchFileFilters checks path against a subscription's filter and exclude
+// globs, through the one shared matcher (R3195, R3207).
+//
+// It used to prepend "**/" itself, but only to patterns containing no slash
+// at all — so `specs/**` was matched raw against an absolute indexed path and
+// hit nothing. A subscription that looked scoped was in fact dead, and a
+// subscription matching nothing is indistinguishable from a quiet corpus
+// (O160). MatchPathFilters prefixes every bare pattern, and the globs now
+// arrive cwd-anchored from the -files stack (R3204) besides.
+//
+// CRC: crc-PubSub.md | R785, R3195, R3207
+func matchFileFilters(path string, filterFiles, excludeFiles []string) bool {
+	return MatchPathFilters(path, filterFiles, excludeFiles)
 }

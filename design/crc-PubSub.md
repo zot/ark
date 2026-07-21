@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804, R2857
+**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804, R2857, R3195, R3197, R3204, R3207, R3199
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -22,8 +22,11 @@ no new struct, no new field (R2278).
 ### TagSub
 - Kind: enum {Tag, FileTag} — selects matching behavior (R2457, R2460)
 - Predicate: TagMatcher.MatchPredicate — parsed `[~]NAME [(=|:|~) VALUE]` from `-tag` / `-file-tag`; supersedes the prior `Tag string + ValueRE *regexp` pair (R2442, R2457, R2458, R2460)
-- FilterFiles: []doublestar.Pattern — only match these paths (nil = all)
-- ExcludeFiles: []doublestar.Pattern — exclude these paths (R945, renamed from ExceptFiles)
+- FilterFiles: []string — only match these paths (nil = all). Populated from
+  the `-files` filter stack, so the globs arrive **already anchored to the
+  subscribing client's cwd** (R3204, R3197)
+- ExcludeFiles: []string — exclude these paths (R945, renamed from ExceptFiles).
+  Same stack, same anchoring
 - FileTagMembers: map[uint64]bool — set of fileIDs currently matching this entry's predicate; populated/maintained only when Kind == FileTag (R2463, R2469)
 - Hits: uint64 — events successfully enqueued (atomic)
 - Drops: uint64 — events lost to full queue (atomic)
@@ -36,6 +39,16 @@ no new struct, no new field (R2278).
 - Time: time.Time — when the event occurred
 
 ## Does
+- **Path filtering delegates to Matcher (R3207, R3195).** The local
+  `matchFileFilters` / `anchorGlob` pair retires: `anchorGlob` prepended
+  `**/` only to patterns containing *no slash*, so a relative glob such as
+  `specs/**` was matched raw against an absolute indexed path and silently
+  matched **nothing** — a subscription that looked scoped and was in fact
+  dead (O160). Publish now tests each path with `Matcher.Match(pattern,
+  path, "", false)`. Subscription globs arrive anchored (R3204), so they
+  carry the absolute `/X` form and the failing case cannot recur.
+  Persisted subscriptions re-resolve on the next subscribe — no stored
+  record changes shape, so no migration record is needed.
 - Subscribe(sessionID string, subs []TagSub): add subscriptions for
   a session. Creates queue channel if needed. Resets lastListen.
   Append semantics preserved for HTTP and direct Go callers

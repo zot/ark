@@ -33,6 +33,110 @@ etc.), tags, and chunk embeddings (EC records). The Store and the
 Librarian share that index. The ark bucket holds its records
 alongside microfts2's — no separate vector bucket (R1911).
 
+## Glob Patterns
+
+Ark matches paths against globs in three places: CLI flags, `ark.toml`
+keys, and the source-directory expansion. **One matcher serves all of
+them** (`ark.Matcher`, doublestar syntax). They differ only in what an
+unanchored pattern is measured against.
+
+### Pattern language
+
+Pattern language uses doublestar glob syntax
+(`github.com/bmatcuk/doublestar/v4`). Two semantic modifiers
+control file-vs-directory matching:
+
+- Trailing `/` — pattern matches directories only (not files).
+  For exclude this means "don't walk into it."
+- No trailing `/` — pattern matches files only (not directories).
+
+Wildcards:
+- `*` matches any sequence of non-separator characters within a
+  single path component (including dotfiles by default — unlike
+  shell globs)
+- `**` matches zero or more path components (directories). Must
+  appear between separators or at pattern boundaries: `**/`, `/**/`,
+  `/**`. Mid-pattern `**` without separators (e.g. `**.md`) acts
+  as a single `*` — use `**/*.md` for recursive matching.
+- `?` matches any single non-separator character
+- `[abc]`, `[a-z]` — character classes
+- `{alt1,alt2}` — comma-separated alternatives (can nest)
+
+A `dotfiles` config preference controls whether `*` and `**`
+match dot-prefixed names — default true (match dotfiles), set to
+false for standard shell glob behavior.
+Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
+for filenames that contain them.
+`ark init` ships with default excludes for `.git/`, `.env`, etc.
+
+### Three anchoring forms
+
+| Form   | Meaning                                                                                                                                              |
+|--------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `/X`   | **Filesystem-absolute.** Matched against the file's absolute path on disk, whichever source it belongs to. Enables blanket rules such as `/tmp/**`.  |
+| `./X`  | **Anchored to the contextual root.** After stripping `./`, the remainder matches against the path relative to that root.                              |
+| `X`    | **Relative to where you are standing.** What that means depends on the context below.                                                                 |
+
+### Three contexts
+
+The contextual root differs by where the glob is written:
+
+| Context                   | Root                  | Bare `X` means                    | Applies to                                                                                                                       |
+|---------------------------|-----------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| **CLI flags**             | the current directory | `$PWD/X`                          | `-files` and the rest of the filter stack                                                                                        |
+| **Source-scoped config**  | the source's dir      | `SOURCE/**/X` (any depth in it)   | `default_include`, `default_exclude`, `[[source]].include`, `[[source]].exclude`, `strategies`, `[[source]].strategies`          |
+| **Rootless**              | none                  | `**/X` (any depth, any source)    | `search_exclude`, `[schedule] filter_files`, `[schedule] exclude_files`, `[schedule.tag.<NAME>]` overrides, and the Lua/MCP `filter_files` / `exclude_files` opts |
+
+The rule in one sentence: **a bare glob is relative to where you are
+standing.** At the CLI that is the current directory, so `*.md` means what it
+means in a shell. In `ark.toml` there is nowhere to stand, so it means any
+depth.
+
+Only the bare form varies. `/X` and `./X` mean the same thing wherever they
+are written, which makes them the portable forms. Prefer them when copying a
+pattern between a command line and a config file, because a bare glob moved
+from `ark.toml` to the CLI silently *narrows* (from any-depth to top-level)
+rather than failing.
+
+The Lua/MCP surface is rootless for the same reason `ark.toml` is: a call
+arriving at the server carries no current directory to anchor against.
+
+Rootless keys have no root for `./X` to anchor to, so there it falls
+back to matching the absolute path. Naming "the `specs` directory at the root
+of source X" from `[schedule]` requires writing that absolute path.
+
+Examples (source-scoped context):
+- `exclude: node_modules/` — skips node_modules dirs anywhere
+- `exclude: ./vendor/` — skips vendor/ only at the source root
+- `exclude: /tmp/**` — blanket exclude of anything under /tmp
+- `exclude: /home/me/project/vendor/**` — excludes that exact
+  filesystem subtree (works whether or not /home/me/project is
+  itself a source)
+- `include: *.md` — matches markdown files at any depth
+- `include: ./src/**` — matches everything under src/ at the
+  source root
+- `include: **/*.md` — same as `*.md` (explicit recursive form)
+- `include: docs/**/*.txt` — text files anywhere under docs/
+- `include: *.{md,txt,org}` — multiple extensions in one pattern
+
+### `[[source]].dir` is an expansion, not a filter
+
+A source's `dir` may itself be a glob (`~/work/*`), expanded against the
+filesystem to produce one source per matching directory. This is shell-style
+path expansion rather than path filtering, so the anchoring rules above do not
+apply and `~` expansion is the only rewriting done.
+
+**`**` is rejected in `[[source]].dir`.** A recursive source glob makes every
+subdirectory its own source root, so a single file change fires one watcher
+event per ancestor level. The breakage is *latent*: `~/work/**` is harmless
+while `~/work` has no nested directories, and silently begins multiplying
+events the day someone creates one. Validating the expansion at load time
+cannot catch that, so the pattern itself is refused with an error naming `*`
+as the single-level alternative.
+
+Multiple non-nested directories remain fine. `~/work/*` and the `from_glob`
+reconciliation it drives are unaffected.
+
 ## Source Configuration
 
 A config file has three levels:
@@ -97,59 +201,11 @@ No automagic indexing of unknown files. This prevents the
 virus-scanner / git-auto-add problem: nothing enters the index
 without an explicit rule or action.
 
-Pattern language uses doublestar glob syntax
-(`github.com/bmatcuk/doublestar/v4`). Two semantic modifiers
-control file-vs-directory matching:
-
-- Trailing `/` — pattern matches directories only (not files).
-  For exclude this means "don't walk into it."
-- No trailing `/` — pattern matches files only (not directories).
-
-Wildcards:
-- `*` matches any sequence of non-separator characters within a
-  single path component (including dotfiles by default — unlike
-  shell globs)
-- `**` matches zero or more path components (directories). Must
-  appear between separators or at pattern boundaries: `**/`, `/**/`,
-  `/**`. Mid-pattern `**` without separators (e.g. `**.md`) acts
-  as a single `*` — use `**/*.md` for recursive matching.
-- `?` matches any single non-separator character
-- `[abc]`, `[a-z]` — character classes
-- `{alt1,alt2}` — comma-separated alternatives (can nest)
-
-A `dotfiles` config preference controls whether `*` and `**`
-match dot-prefixed names — default true (match dotfiles), set to
-false for standard shell glob behavior.
-Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
-for filenames that contain them.
-`ark init` ships with default excludes for `.git/`, `.env`, etc.
-
-Three anchoring forms by leading slashes:
-
-- **No leading slash** — matches at any depth within the source
-  directory (equivalent to prepending `**/`).
-- **Single leading slash** (`/path`) — **filesystem-absolute**;
-  matches against the file's absolute path on disk, regardless of
-  which source it belongs to. Enables blanket excludes (e.g.
-  `/tmp/**`).
-- **Leading `./`** (`./path`) — **source-root-anchored**; matches
-  only at the root of the source directory. After stripping `./`,
-  the remainder is matched against the source-relative path.
-
-Examples:
-- `exclude: node_modules/` — skips node_modules dirs anywhere
-- `exclude: ./vendor/` — skips vendor/ only at the source root
-- `exclude: /tmp/**` — blanket exclude of anything under /tmp
-- `exclude: /home/me/project/vendor/**` — excludes that exact
-  filesystem subtree (works whether or not /home/me/project is
-  itself a source)
-- `include: *.md` — matches markdown files at any depth
-- `include: ./src/**` — matches everything under src/ at the
-  source root
-- `include: **/*.md` — same as `*.md` (explicit recursive form)
-- `include: docs/**/*.txt` — text files anywhere under docs/
-- `include: *.{md,txt,org}` — multiple extensions in one pattern
-
+Source `include` / `exclude` / `strategies` patterns are the
+**source-scoped context** described under [Glob Patterns](#glob-patterns)
+above: the source's own directory is the root, so a bare pattern matches at
+any depth within that source. `[[source]].dir` itself is an expansion rather
+than a filter, and rejects `**` — see the same section.
 
 ### Config file: `ark.toml`
 
@@ -412,11 +468,12 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
 - `ark refresh [--dir <path>] [<pattern>...]`
   Re-index stale files. If patterns given, only refresh matching
   files. No patterns = all stale files. Report missing files.
-- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--files] [--filter <query>...] [--except <query>...] [--filter-files <pat>...] [--exclude-files <pat>...] <query>...`
-  Combined search. `--chunks` emits chunk text as JSONL. `--files`
-  emits full file content as JSONL. Filter flags scope the search
-  (see specs/search-filtering.md).
-- `ark search [--dir <path>] --about <text> --contains <text> [--regex] [-k <num>] [--scores] [--chunks] [--files] [--filter <query>...] [--except <query>...] [--filter-files <pat>...] [--exclude-files <pat>...]`
+- `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--file-content] [filter-stack] <query>...`
+  Combined search. `--chunks` emits chunk text as JSONL.
+  `--file-content` emits full file content as JSONL. The filter stack
+  (`-with` / `-without` with `-contains`, `-tag`, `-files`, `-about`, …)
+  scopes the search (see specs/search-cli-filters.md).
+- `ark search [--dir <path>] -about <text> -contains <text> [-regex R] [-k <num>] [--scores] [--chunks] [--file-content] [filter-stack]`
   Split search.
 - `ark serve [--dir <path>]`
   Start the server.

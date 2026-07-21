@@ -1,10 +1,28 @@
 # Config
-**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397, R624, R625, R631, R632, R633, R634, R635, R646, R853, R854, R855, R856, R938, R943, R947, R948, R949, R950, R951, R952, R953, R954, R955, R956, R957, R958, R959, R960, R1012, R1274, R1588, R1589, R1590, R1591, R1592, R1919, R1920, R1921, R1922, R1938, R2125, R2143, R2144, R2145, R2146, R2147, R2148, R2149, R2150, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741, R2767, R2768, R2797, R2798, R2799, R2800, R2781, R2811, R2822, R2830, R2831, R2832, R2833, R2834, R2835, R2836, R2837, R2856, R2862, R2886, R2892, R2964, R2965, R2966, R2967, R2968, R3041, R3135, R3171
+**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397, R624, R625, R631, R632, R633, R634, R635, R646, R853, R854, R855, R856, R938, R943, R947, R948, R949, R950, R951, R952, R953, R954, R955, R956, R957, R958, R959, R960, R1012, R1274, R1588, R1589, R1590, R1591, R1592, R1919, R1920, R1921, R1922, R1938, R2125, R2143, R2144, R2145, R2146, R2147, R2148, R2149, R2150, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741, R2767, R2768, R2797, R2798, R2799, R2800, R2781, R2811, R2822, R2830, R2831, R2832, R2833, R2834, R2835, R2836, R2837, R2856, R2862, R2886, R2892, R2964, R2965, R2966, R2967, R2968, R3041, R3135, R3171, R3195, R3198, R3199, R3200, R3201, R3202, R3203
 
 Parses, validates, and mutates ark.toml. Provides the effective pattern
 sets for each source directory. Explains pattern resolution for any file.
 Resolves glob sources into concrete directories. Maps file patterns to
 chunking strategies.
+
+**Two anchoring contexts live in this file** (`specs/main.md` §Glob Patterns
+is canonical; crc-Matcher.md owns the matching). Every glob key here is one
+or the other, and the difference is only what a *bare* pattern means:
+
+- **Source-scoped (R3198)** — `default_include`, `default_exclude`,
+  `[[source]].include`, `[[source]].exclude`, `strategies`,
+  `[[source]].strategies`. Contextual root is the source's own directory;
+  bare `X` means `SOURCE/**/X`. Config passes that dir to Matcher.
+- **Rootless (R3199)** — `search_exclude`, `[schedule] filter_files`,
+  `[schedule] exclude_files`, `[schedule.tag.<NAME>]` overrides. There is no
+  current directory in a config file, so bare `X` means `**/X` (any depth,
+  any source) and Config passes an empty root. Consequence, accepted and
+  documented rather than fixed: `./X` has nothing to anchor to and degrades
+  to matching the absolute path, so naming "the `specs` dir at the root of
+  source X" from `[schedule]` requires an absolute path.
+
+`[[source]].dir` is neither — it is expansion, not filtering (R3200).
 
 ## Knows
 - dotfiles: bool — whether * matches dotfiles (default true)
@@ -81,11 +99,36 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
 - HasErrors(): true if validation errors exist (reported every operation)
 - AddSource(dir): add a new [[source]] entry. If dir contains glob chars, store as glob source (skip os.Stat). Otherwise validate dir exists.
 - RemoveSource(dir): remove a source entry by directory path. Error if source is managed by a glob. Error if dir is the ark database directory (~/.ark) — hardcoded source.
-- IsGlob(dir): true if dir contains *, ?, or [ characters
-- ResolveGlobs(): expand all glob source dirs, return list of resolved concrete dirs with their glob origin and strategy
-- StrategyForFile(path, sourceStrategies): merge sourceStrategies over global strategies, find longest matching pattern. Returns strategy name or "lines" as default
+- IsGlob(dir): true if dir contains *, ?, or [ characters — so `**` already
+  registers as a glob and reaches the check below
+- ResolveGlobs(): expand all glob source dirs, return list of resolved
+  concrete dirs with their glob origin and strategy. `[[source]].dir` is
+  filesystem **expansion**, not path filtering, so the three anchoring
+  forms do not apply to it and `~` expansion is the only rewriting done
+  (R3200). A `dir` containing `**` is **rejected with an error** naming `*`
+  as the single-level alternative (R3201) — a recursive source glob makes
+  every subdirectory its own source root, so one file change fires a
+  watcher event per ancestor level, and the fault is *latent* (harmless
+  until someone creates a nested directory), which is exactly what
+  validating the expansion at load time cannot catch. Non-nested multiples
+  (`~/work/*`) and the `from_glob` / `sources check` reconciliation
+  (R196-R203) are untouched.
+- StrategyForFile(path, sourceStrategies): merge sourceStrategies over
+  global strategies, find the longest matching pattern. Returns the
+  strategy name, or `lines` as default. Matching is `Matcher` under the
+  **source-scoped** context (R3202, R3198), replacing the
+  `filepath.Match`-on-source-relative-path-plus-basename-fallback pair,
+  under which `*.md` worked at any depth (via the fallback) but `**/*.md`
+  matched one level only — `**` had no effect. Near behavior-preserving:
+  for a no-slash pattern the basename fallback and the bare→`**/` rule
+  agree; what changes is that `**` starts working.
 - AddInclude(pattern, sourceDir): add include pattern — global if sourceDir empty, per-source otherwise. Validate pattern syntax.
 - AddExclude(pattern, sourceDir): add exclude pattern — global if sourceDir empty, per-source otherwise. Validate pattern syntax.
+- validatePattern(pattern): syntax-check with `doublestar.ValidatePattern`
+  rather than `filepath.Match`, so the validator and the matcher agree on
+  what is legal (R3203). Nothing legal today is rejected by the change —
+  it closes the gap where a `**` pattern passed a `filepath.Match`
+  syntax check that could not express it.
 - RemovePattern(pattern, sourceDir): remove pattern from include or exclude lists — global if sourceDir empty, per-source otherwise. No-op with message if not found.
 - ExpandTilde(path string) string: expand `~` to home dir, `~user`
   to user's home (os/user.Lookup first, ~/../user fallback). R947-R952.
@@ -110,7 +153,9 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
   modifies an existing declaration, never creates one. (R2840, R2841)
 - MatchesScheduleFilter(path string) bool: check if a file path
   passes top-level `[schedule] filter_files`/`exclude_files`.
-  (R953, R954, R955, R956)
+  (R953, R954, R955, R956). The underlying `matchesFilterExclude` tests via
+  Matcher with an empty root — the rootless context (R3199, R3195) — rather
+  than its own `**/`-prefixing pass.
 
 ## Collaborators
 - Matcher: uses patterns from Config for classification and ShowWhy resolution

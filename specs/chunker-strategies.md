@@ -7,6 +7,14 @@ strategies. This enables scope-aware chunking for code files — search
 results respect function, class, and block boundaries instead of
 splitting on raw lines.
 
+## Strategy globs
+
+The `strategies` map (top-level and per-source) keys chunker names by
+glob. These are **source-scoped** globs matched by the one shared matcher
+(`ark.Matcher`): the source's directory is the root, so a bare `*.md`
+matches markdown at any depth within the source, and `./src/**` anchors to
+the source root. See [main.md](main.md#glob-patterns).
+
 ## Config-driven language definitions
 
 Chunker language configs live in `ark.toml` as TOML, not in Go code.

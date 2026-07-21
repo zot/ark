@@ -3,19 +3,18 @@
 Two-pass scoped search. A filter query narrows the file set before
 the main query runs. Composes with path-based file filtering.
 
-> **Flag names vs. mechanism.** The user-facing `ark search` flag
-> *names* in this doc (`--filter`, `--except`, `--filter-files`,
-> `--exclude-files`, `--filter-file-tags`, `--exclude-file-tags`) were
-> **removed** from `ark search` and subsumed by the unified filter
-> stack — see [search-cli-filters.md](search-cli-filters.md), which
-> owns the user-facing `ark search` filter syntax (`-contains`, `-tag`,
-> `-files`, …) and the alias map. What persists, and what this spec
-> documents, is the underlying file-ID filter **mechanism**: the
-> `SearchOpts` structural fields (`FilterFiles`/`ExcludeFiles`, used by
-> the Lua UI for sidebar source filtering), the `search_exclude` config
-> (this doc is its canonical home), and the subscription/pubsub filter
-> flags. Read the flag-named sections below as describing that
-> mechanism, not current `ark search` CLI surface.
+> **This spec owns the mechanism, not a CLI surface.** The user-facing
+> `ark search` flag names it once used (`--filter`, `--except`,
+> `--filter-files`, `--exclude-files`, `--filter-file-tags`,
+> `--exclude-file-tags`) are **gone**, subsumed by the unified filter
+> stack — see [search-cli-filters.md](search-cli-filters.md), which owns
+> the user-facing syntax (`-contains`, `-tag`, `-files`, …) and the alias
+> map. What persists, and what this spec documents, is the underlying
+> file-ID filter **mechanism**: the `SearchOpts` structural fields
+> (`FilterFiles` / `ExcludeFiles`, set by the Lua UI for sidebar source
+> filtering), the `search_exclude` config (this doc is its canonical
+> home), and the pubsub subscription filters. Sections below name the
+> structural fields, never retired flags.
 
 ## Content filtering
 
@@ -36,31 +35,34 @@ Examples:
 
 ## Path filtering
 
-`--filter-files <pattern>` restricts search to files whose paths
-match the glob pattern. Multiple patterns supported (OR logic —
-file matches any pattern is included).
+`SearchOpts.FilterFiles` restricts search to files whose paths match a
+glob. Multiple patterns are OR'd — a file matching any one is included.
 
-`--exclude-files <pattern>` excludes files whose paths match the
-glob pattern. Multiple patterns supported (OR logic — file matches
-any pattern is excluded).
+`SearchOpts.ExcludeFiles` excludes files whose paths match a glob, also
+OR'd.
 
-These replace `--source` and `--not-source` entirely. Path filtering
-is more general — it matches against the full file path, not just
-the source directory name. No backward compatibility needed; nobody
-uses `--source`/`--not-source` yet outside of testing.
+Path filtering matches against the full file path, not just the source
+directory name, which is why it replaced the older `--source` /
+`--not-source` pair entirely.
 
-Examples:
-- `--filter-files "*.md"` — only search markdown files
-- `--filter-files "/home/deck/work/*"` — only files under work/
-- `--exclude-files "*.jsonl"` — skip conversation logs
+**Anchoring depends on who set the field.** CLI callers anchor to the
+client's current directory before the request is sent; the Lua/MCP and
+`search_exclude` callers are rootless, so a bare pattern means any depth.
+Both run through the one shared matcher. See
+[main.md](main.md#glob-patterns).
+
+Examples (as reaching the mechanism, already anchored):
+- `/**/*.md` — only search markdown files, at any depth
+- `/home/deck/work/*` — only files directly under work/
+- excluding `/**/*.jsonl` — skip conversation logs
 
 ## Composition
 
 All filters produce file ID sets and compose:
 - Positive content filters (`--filter`) intersect
 - Negative content filters (`--except`) subtract
-- Positive path filters (`--filter-files`) intersect
-- Negative path filters (`--exclude-files`) subtract
+- Positive path filters (`FilterFiles`) intersect
+- Negative path filters (`ExcludeFiles`) subtract
 
 Evaluation order: path filters first (cheap — no FTS needed), then
 content filters. The combined file ID set is passed to microfts2
@@ -84,18 +86,22 @@ Tag argument matches tag names, not values.
 Examples:
 - `--filter-file-tags "request"` — only search request files
 - `--exclude-file-tags "msg"` — skip files with legacy @msg tags
-- `--filter-file-tags "status"` combined with `--filter-files "requests/*"` — message files with status tags
+- `FilterFileTags "status"` combined with a `requests/*` path filter — message files with status tags
 
-## CLI
+## Mechanism fields
 
-- `--filter <query>` — repeatable, content-based positive filter
-- `--except <query>` — repeatable, content-based negative filter
-- `--filter-files <pattern>` — repeatable, path-based positive filter
-- `--exclude-files <pattern>` — repeatable, path-based negative filter
-- `--filter-file-tags <tag>` — repeatable, tag-based positive filter
-- `--exclude-file-tags <tag>` — repeatable, tag-based negative filter
+Each is repeatable and composes per the rules above:
 
-Quoting and backslash escaping supported (handles paths with spaces).
+- `Filter` — content-based positive filter
+- `Except` — content-based negative filter
+- `FilterFiles` — path-based positive filter
+- `ExcludeFiles` — path-based negative filter
+- `FilterFileTags` — tag-based positive filter
+- `ExcludeFileTags` — tag-based negative filter
+
+The CLI surface that populates these is the filter stack
+([search-cli-filters.md](search-cli-filters.md)); quoting and backslash
+escaping are handled there (paths with spaces).
 Works with combined search, split search, and tag search.
 
 ## Default search excludes
@@ -126,20 +132,16 @@ only *adds* a subtraction and leaves `search_exclude` in effect. The
 filter stack's user-facing surface is specified in
 [search-cli-filters.md](search-cli-filters.md); this is its config home.
 
-Subscriptions should respect `search_exclude` too, via
-`--except-files` defaults. A subscription without explicit file
-filters inherits `search_exclude` as its except-files list.
-A subscription with explicit `--filter-files` or `--except-files`
-uses those instead.
+Subscriptions respect `search_exclude` too. A subscription without
+explicit file filters inherits `search_exclude` as its exclude list; a
+subscription with explicit `-files` rows uses those instead.
 
 ### Naming normalization
 
-Pubsub uses `--except-files` and `ExceptFiles` while search uses
-`--exclude-files` and `ExcludeFiles`. Normalize to `exclude-files`
-and `ExcludeFiles` everywhere. The pubsub CLI flag becomes
-`--exclude-files` (rename from `--except-files`). The internal
-struct field becomes `ExcludeFiles`. JSON wire format becomes
-`exclude_files`.
+Pubsub once used `ExceptFiles` while search used `ExcludeFiles`.
+`ExcludeFiles` is the normalized name everywhere — struct field and
+`exclude_files` on the JSON wire. Subscriptions take their patterns
+from the same `-files` filter stack as every other command.
 
 ## Server API
 

@@ -33,10 +33,10 @@ The strategies used by `--multi`:
 All four are pure index lookups — no chunk text needed for scoring.
 
 `--multi` composes with existing flags:
-- Filters (`--filter-files`, `--exclude-files`, `--filter-file-tags`,
-  `--exclude-file-tags`, `--filter`, `--except`) apply to all
-  strategies equally.
-- `--chunks`, `--files`, `--wrap`, `--tags`, `--scores` work normally
+- Every filter-stack row (`-files`, `-tag`, `-file-tag`, `-contains`,
+  `-about`, `-regex`, in either polarity) applies to all strategies
+  equally.
+- `--chunks`, `--file-content`, `--wrap`, `--tags`, `--scores` work normally
   on the merged results.
 - `-k` applies to the final merged set, not per-strategy.
 - `--multi` is mutually exclusive with `--score` (which selects a

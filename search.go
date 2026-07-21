@@ -19,7 +19,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/zot/microfts2"
 	"go.etcd.io/bbolt"
 
@@ -1071,17 +1070,20 @@ func matchFilesGlob(glob string, paths map[uint64]string) map[uint64]bool {
 }
 
 // pathMatchesGlob reports whether one path matches an (already tilde-expanded)
-// glob, by basename (filepath.Match) or full-path doublestar — the same test
-// matchFilesGlob applies per file. Used by the path-level `-files` post-filter
-// (filterByPathGlobs) so a `-files` row matches the file each result is
-// reported under, not any file a content-deduplicated chunk happens to share.
-// CRC: crc-Searcher.md | R1770, R950, R2951
+// glob, through the one shared matcher — the same test matchFilesGlob applies
+// per file. Used by the path-level `-files` post-filter (filterByPathGlobs) so
+// a `-files` row matches the file each result is reported under, not any file
+// a content-deduplicated chunk happens to share.
+//
+// It used to test the basename with filepath.Match first, falling back to
+// full-path doublestar — a hand-rolled `**/X` that agreed with Matcher's bare
+// form for a no-slash pattern and matched *nothing* for a slash-bearing one.
+// A rootless `search_exclude = ["specs/**"]` therefore excluded nothing: the
+// same silent-empty failure as O160, in a second place (R3195).
+//
+// CRC: crc-Searcher.md | R1770, R950, R2951, R3195, R3199
 func pathMatchesGlob(glob, path string) bool {
-	if matched, _ := filepath.Match(glob, filepath.Base(path)); matched {
-		return true
-	}
-	matched, _ := doublestar.Match(glob, path)
-	return matched
+	return MatchPathFilters(path, []string{glob}, nil)
 }
 
 // AboutResolution bundles everything ResolveAboutFilters returns.

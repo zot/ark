@@ -113,14 +113,19 @@ func flatCommands() []*ucli.Command {
 			Action: flatFetchAction,
 		},
 		{
+			// R3204: the -files stack is order-sensitive, so this node cannot
+			// re-serialize its flags into a legacy argv the way its siblings
+			// do — order and polarity would be lost in the rebuild. Raw args
+			// go straight to cmdFiles, which runs parsePathFilterStack.
 			Name: "files", Usage: "list indexed files",
-			Flags: []ucli.Flag{
-				&ucli.BoolFlag{Name: "status", Usage: "show file status, bytes, and chunk count"},
-				&ucli.BoolFlag{Name: "detail", Usage: "show per-file chunk size stats (with --status)"},
-				&ucli.StringSliceFlag{Name: "filter-files", Usage: "path-based positive filter (repeatable, glob pattern)"},
-				&ucli.StringSliceFlag{Name: "exclude-files", Usage: "path-based negative filter (repeatable, glob pattern)"},
-			},
-			Action: flatFilesAction,
+			ArgsUsage:       "[-files GLOB]... [--status] [--detail] [PATTERN...]",
+			SkipFlagParsing: true,
+			Description: "List indexed files. Trailing PATTERNs narrow the result and are\n" +
+				"anchored just like -files rows.\n\n" +
+				"   --status   show file status, bytes, and chunk count\n" +
+				"   --detail   show per-file chunk size stats (with --status)\n\n" +
+				filterStackHelp,
+			Action: filterStackAction(cmdFiles),
 		},
 		{
 			Name: "init", Usage: "create a new database",
@@ -144,15 +149,17 @@ func flatCommands() []*ucli.Command {
 			Action: flatServeAction,
 		},
 		{
+			// R3204: same as `files` — the stack cannot survive flag
+			// re-serialization, so raw args reach cmdStatus directly.
 			Name: "status", Usage: "show database status",
-			Flags: []ucli.Flag{
-				&ucli.BoolFlag{Name: "db", Usage: "show LMDB record counts by type"},
-				&ucli.BoolFlag{Name: "chunks", Usage: "show chunk size statistics"},
-				&ucli.BoolFlag{Name: "tokenize", Usage: "measure in tokens (requires tag_model)"},
-				&ucli.StringSliceFlag{Name: "filter-files", Usage: "path-based positive filter (repeatable, glob pattern)"},
-				&ucli.StringSliceFlag{Name: "exclude-files", Usage: "path-based negative filter (repeatable, glob pattern)"},
-			},
-			Action: flatStatusAction,
+			ArgsUsage:       "[-files GLOB]... [--db] [--chunks] [--tokenize]",
+			SkipFlagParsing: true,
+			Description: "Show database status. With --chunks, show chunk size statistics.\n\n" +
+				"   --db         show record counts by type\n" +
+				"   --chunks     show chunk size statistics\n" +
+				"   --tokenize   measure in tokens (requires an [embedding] model)\n\n" +
+				filterStackHelp,
+			Action: filterStackAction(cmdStatus),
 		},
 		{
 			Name: "stop", Usage: "stop the running server",
@@ -242,24 +249,6 @@ func flatFetchAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-func flatFilesAction(_ context.Context, c *ucli.Command) error {
-	var a []string
-	if c.Bool("status") {
-		a = append(a, "--status")
-	}
-	if c.Bool("detail") {
-		a = append(a, "--detail")
-	}
-	for _, v := range c.StringSlice("filter-files") {
-		a = append(a, "--filter-files", v)
-	}
-	for _, v := range c.StringSlice("exclude-files") {
-		a = append(a, "--exclude-files", v)
-	}
-	cmdFiles(append(a, c.Args().Slice()...))
-	return nil
-}
-
 func flatInitAction(_ context.Context, c *ucli.Command) error {
 	var a []string
 	if v := c.String("embed-cmd"); v != "" {
@@ -297,27 +286,6 @@ func flatServeAction(_ context.Context, c *ucli.Command) error {
 		a = append(a, "--compact")
 	}
 	cmdServe(append(a, c.Args().Slice()...))
-	return nil
-}
-
-func flatStatusAction(_ context.Context, c *ucli.Command) error {
-	var a []string
-	if c.Bool("db") {
-		a = append(a, "--db")
-	}
-	if c.Bool("chunks") {
-		a = append(a, "--chunks")
-	}
-	if c.Bool("tokenize") {
-		a = append(a, "--tokenize")
-	}
-	for _, v := range c.StringSlice("filter-files") {
-		a = append(a, "--filter-files", v)
-	}
-	for _, v := range c.StringSlice("exclude-files") {
-		a = append(a, "--exclude-files", v)
-	}
-	cmdStatus(append(a, c.Args().Slice()...))
 	return nil
 }
 

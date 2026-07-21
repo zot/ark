@@ -13,14 +13,14 @@ files.
 
 ## Does
 - Scan(config): walk all source directories, classify each file
-  - For each file: Matcher.Classify(includes, excludes, absPath, src.Dir, isDir) — passes both forms so the matcher can pick filesystem-absolute or source-relative per pattern (R2133)
+  - For each file: Matcher.Classify(includes, excludes, absPath, src.Dir, isDir) — passing `src.Dir` selects the **source-scoped** anchoring context, and passing both path forms lets the matcher pick filesystem-absolute or root-relative per pattern (R3196, R3198)
   - included + size == 0 + already in empty-set with current mtime → skip (R1645, R1646)
   - included + size == 0 + not in empty-set (or mtime changed) → record in set, add to EmptyFiles result (R1647)
   - included + size > 0 + not already indexed → add to NewFiles list (R1649)
   - unresolved + not already tracked → add to NewUnresolved list
   - excluded → skip (don't walk into excluded directories)
 - ScanResults: struct with NewFiles []FileEntry, NewUnresolved []UnresolvedRecord, EmptyFiles []string
-- FileEntry: struct with path, strategy (from Config.StrategyForFile with source's strategies merged over global)
+- FileEntry: struct with path, strategy (from Config.StrategyForFile with source's strategies merged over global — matched through Matcher in the same source-scoped context, R3202)
 
 ## Collaborators
 - Config: provides directories and effective patterns

@@ -97,7 +97,7 @@ The check gates only the result-doc *write*, not the cleanup.
   point-in-time. A producer that wants to react when a subscriber
   arrives must poll.
 - File-filter or value-pattern resolution. The check ignores
-  `--filter-files` / `--exclude-files` on subscriptions — they
+  `-files` rows on subscriptions — they
   would require knowing the file path the would-be event came
   from, which the producer often doesn't have at decision time.
   Over-counting (a subscription whose filter would reject the

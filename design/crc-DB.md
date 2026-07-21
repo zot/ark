@@ -113,7 +113,9 @@ document this on the API. (R986, R993, R995, R3163)
   unlabeled class is silently omitted by buildRecordCounts. (R2473,
   R2478, R2479, R2480, R2481, R2482, R3078)
 - ChunkStats(filterFiles, excludeFiles []string, tokenize func(string) int):
-  iterate all indexed files (filtered by path globs), call AllChunks(path)
+  iterate all indexed files (filtered by path globs via Matcher rather than
+  an inline glob test — R3195; the globs arrive already cwd-anchored from
+  the `-files` stack, R3204), call AllChunks(path)
   for each, measure chunk sizes via len(Content) or tokenize callback.
   Collect strategy from StaleFiles. Return ChunkStatsResult with overall
   + per-strategy stats (count, min, max, mean, median, p90, p95, p99).

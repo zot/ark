@@ -70,7 +70,9 @@ CLI ──> DB.Add(path, strategy)
          ├──> if strategy == "":  [R2954, R2955]
          │     findSourceForPath(path)
          │     ├── in a source ──> Config.StrategyForFile(rel, src.Strategies)
-         │     │                    (per-source over global, default "lines")
+         │     │                    (per-source over global, default "lines";
+         │     │                     longest match via Matcher, source-scoped
+         │     │                     context — R3202, R3198)
          │     └── outside all sources ──> return ErrFileOutsideSource
          │                                  (handleAdd → HTTP 400)
          │

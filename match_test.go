@@ -192,3 +192,103 @@ func TestMatchCharacterClass(t *testing.T) {
 		t.Error("[abc] should not match 'd'")
 	}
 }
+
+// Test: test-Matcher.md — rootless context: bare pattern reaches any depth.
+// With no contextual root a bare pattern means **/X — the ark.toml reading,
+// where there is nowhere to stand. R3199
+func TestMatchRootlessBareAnyDepth(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	for _, p := range []string{"/a/x.md", "/a/b/c/y.md"} {
+		if !m.Match("*.md", p, "", false) {
+			t.Errorf("rootless bare *.md should match %q at any depth", p)
+		}
+	}
+}
+
+// Test: test-Matcher.md — rootless slash-bearing relative pattern matches.
+//
+// This is the O160 regression, and it pins the retirement of two hand-rolled
+// matchers that both prefixed **/ only when the pattern had no slash at all:
+// search.go's basename-first pathMatchesGlob and pubsub's anchorGlob. Under
+// either, `specs/**` was matched raw against an absolute indexed path and hit
+// nothing — a subscription or a search_exclude that looked scoped and was in
+// fact dead. R3195, R3199, R3207
+func TestMatchRootlessRelativeWithSlash(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	const path = "/home/me/proj/specs/x.md"
+	if !m.Match("specs/**", path, "", false) {
+		t.Errorf("rootless specs/** should match %q — matching nothing is the O160 bug", path)
+	}
+	if !MatchPathFilters(path, []string{"specs/**"}, nil) {
+		t.Error("MatchPathFilters should agree with Match on the same pattern")
+	}
+	if MatchPathFilters(path, nil, []string{"specs/**"}) {
+		t.Error("specs/** as an exclude should reject the path")
+	}
+}
+
+// Test: test-Matcher.md — rootless ./ falls back to the absolute path.
+// Documented as a degradation rather than a fix: it is why naming a directory
+// inside one source from a [schedule] key requires an absolute path. R3199
+func TestMatchRootlessDotSlashFallsBackToAbsolute(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if m.Match("./specs/**", "/home/me/proj/specs/x.md", "", false) {
+		t.Error("rootless ./X has no root to anchor to; it should test the absolute path and miss")
+	}
+	if !m.Match("./home/**", "home/me/x.md", "", false) {
+		t.Error("rootless ./X should match when the absolute path really does start that way")
+	}
+}
+
+// Test: test-Matcher.md — CLI context: a bare glob is top-level-only after
+// anchoring.
+//
+// THE one intentional behavior change of #51, pinned so it reads as decided
+// rather than accidental. `-files '*.go'` anchors to $PWD/*.go and stops
+// matching nested files; `/**/*` is the explicit any-depth form. The
+// positional shorthand (`ark files '*.go'`) goes through the same anchoring,
+// so a command never carries two glob rules. R3197, R3196, R3208
+func TestCLIAnchoredBareGlobIsTopLevelOnly(t *testing.T) {
+	const dir = "/proj"
+	m := &Matcher{Dotfiles: true}
+
+	bare := AnchorGlobToDir("*.go", dir)
+	if bare != "/proj/*.go" {
+		t.Fatalf("AnchorGlobToDir(*.go) = %q, want /proj/*.go", bare)
+	}
+	if !m.Match(bare, "/proj/main.go", "", false) {
+		t.Error("anchored bare glob should match a top-level file")
+	}
+	if m.Match(bare, "/proj/pkg/db.go", "", false) {
+		t.Error("anchored bare glob must NOT match a nested file — this is the decided change")
+	}
+
+	anyDepth := AnchorGlobToDir("/**/*.go", dir)
+	if anyDepth != "/**/*.go" {
+		t.Fatalf("an already-absolute glob must pass through, got %q", anyDepth)
+	}
+	for _, p := range []string{"/proj/main.go", "/proj/pkg/db.go"} {
+		if !m.Match(anyDepth, p, "", false) {
+			t.Errorf("/**/*.go should match %q at any depth", p)
+		}
+	}
+}
+
+// Test: test-Matcher.md — MatchPathFilters composes include and exclude the
+// way every filter surface needs: empty lists pass everything, a non-empty
+// include list requires a hit, any exclude hit rejects. R3195
+func TestMatchPathFiltersComposition(t *testing.T) {
+	const path = "/proj/specs/x.md"
+	if !MatchPathFilters(path, nil, nil) {
+		t.Error("no filters should pass everything")
+	}
+	if MatchPathFilters(path, []string{"*.go"}, nil) {
+		t.Error("a non-empty include list should require a hit")
+	}
+	if MatchPathFilters(path, []string{"*.md"}, []string{"specs/**"}) {
+		t.Error("an exclude hit should reject even when an include matched")
+	}
+	if got := FilterPaths([]string{path, "/proj/a.go"}, []string{"*.md"}, nil); len(got) != 1 || got[0] != path {
+		t.Errorf("FilterPaths = %v, want [%s]", got, path)
+	}
+}

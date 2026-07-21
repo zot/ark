@@ -55,29 +55,29 @@
 **Expected:** does not match
 **Refs:** crc-Matcher.md, R18
 
-## Test: source-anchored ./pattern only matches at source root
-**Purpose:** Pattern "./vendor/" only matches at source-directory root
+## Test: ./pattern only matches at the contextual root
+**Purpose:** Pattern "./vendor/" only matches at the root it is anchored to
 **Input:** pattern="./vendor/", sourceDir="/proj", absPaths=["/proj/vendor", "/proj/pkg/vendor"]
 **Expected:** root matches, nested does not
-**Refs:** crc-Matcher.md, R2133
+**Refs:** crc-Matcher.md, R3196
 
-## Test: bare pattern matches at any depth in source
-**Purpose:** Pattern "node_modules/" matches at any depth in source
+## Test: bare pattern matches at any depth below the contextual root
+**Purpose:** Pattern "node_modules/" matches at any depth in the source-scoped context
 **Input:** pattern="node_modules/", sourceDir="/proj", absPaths=["/proj/node_modules", "/proj/pkg/node_modules"]
 **Expected:** both match
-**Refs:** crc-Matcher.md, R2133
+**Refs:** crc-Matcher.md, R3196, R3198
 
 ## Test: filesystem-absolute pattern matches by absolute path
 **Purpose:** Pattern "/tmp/**" matches any file under /tmp regardless of source
 **Input:** pattern="/tmp/**", sourceDir="/home/me/proj", absPaths=["/tmp/foo", "/home/me/proj/tmp/foo"]
 **Expected:** first matches (under /tmp); second does not (under source's tmp/, but pattern is filesystem-rooted)
-**Refs:** crc-Matcher.md, R2133
+**Refs:** crc-Matcher.md, R3196
 
 ## Test: filesystem-absolute pattern unrelated to source is a no-op
 **Purpose:** Pattern "/var/log/**" with source elsewhere matches nothing in that source
 **Input:** pattern="/var/log/**", sourceDir="/home/me/proj", absPath="/home/me/proj/var/log/x"
 **Expected:** does not match (pattern's prefix does not contain the file's abs path)
-**Refs:** crc-Matcher.md, R2133
+**Refs:** crc-Matcher.md, R3196
 
 ## Test: include wins over exclude
 **Purpose:** Classify returns included when both match
@@ -102,3 +102,38 @@
 **Input:** pattern="file\\*name", path="file*name"
 **Expected:** matches
 **Refs:** crc-Matcher.md, R20
+
+## Test: rootless context — bare pattern reaches any depth
+**Purpose:** With no contextual root, a bare pattern means `**/X` — the
+`ark.toml` reading, where there is nowhere to stand
+**Input:** pattern="*.md", sourceDir="", absPaths=["/a/x.md", "/a/b/c/y.md"]
+**Expected:** both match
+**Refs:** crc-Matcher.md, R3199
+
+## Test: rootless context — slash-bearing relative pattern matches
+**Purpose:** The regression O160 named: `specs/**` in a rootless key must
+match, not silently match nothing. Pins the retirement of the basename-first
+`pathMatchesGlob` and pubsub's `anchorGlob`, both of which prefixed `**/`
+only when the pattern had no slash.
+**Input:** pattern="specs/**", sourceDir="", absPath="/home/me/proj/specs/x.md"
+**Expected:** matches
+**Refs:** crc-Matcher.md, R3195, R3199, R3207
+
+## Test: rootless ./ falls back to the absolute path
+**Purpose:** A rootless `./X` has no root to anchor to; documented as a
+degradation, not a fix — the reason `[schedule]` needs absolute paths to
+name a directory inside one source
+**Input:** pattern="./specs/**", sourceDir="", absPath="/home/me/proj/specs/x.md"
+**Expected:** does not match (the pattern is tested against the absolute path)
+**Refs:** crc-Matcher.md, R3199
+
+## Test: CLI context — a bare glob is top-level-only after anchoring
+**Purpose:** **The one intentional behavior change of #51**, pinned so it
+reads as decided rather than accidental. `-files '*.go'` anchors to
+`$PWD/*.go` and therefore stops matching nested files; `/**/*` is the
+explicit any-depth form.
+**Input:** AnchorGlobToDir("*.go", "/proj") → pattern; sourceDir="",
+absPaths=["/proj/main.go", "/proj/pkg/db.go"]
+**Expected:** "/proj/main.go" matches, "/proj/pkg/db.go" does not.
+With glob "/**/*.go" anchoring passes it through and both match.
+**Refs:** crc-Matcher.md, crc-Searcher.md, R3197, R3196

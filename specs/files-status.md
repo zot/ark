@@ -5,15 +5,19 @@ chunk distribution and tuning embedding context windows.
 
 ## Filtering
 
-`--filter-files GLOB` and `--exclude-files GLOB` (repeatable) set the
-base file set, same semantics as search. Positional glob arguments
-further narrow the result within the base set.
+`-files GLOB` rows (repeatable, with `-with` / `-without` polarity) set
+the base file set through the same filter stack `search` uses. Positional
+glob arguments further narrow the result within the base set.
 
-Example: `ark files --status --filter-files '~/.claude' '*.md'`
+Example: `ark files --status -files '~/.claude/**' '*.md'`
 means "from everything under ~/.claude, show me the markdown files."
 
-When neither `--filter-files` nor positional patterns are given,
-all indexed files are included.
+Globs follow the project-wide rules in [main.md](main.md#glob-patterns):
+anchored CLI-side to the current directory, so `/**/*.md` is the explicit
+"any directory" form.
+
+When neither `-files` nor positional patterns are given, all indexed files
+are included.
 
 ## --status Output
 

@@ -25,6 +25,11 @@ optional and take these defaults when unset:
   `[schedule]` scan scope.
 - `suppress = false` — the tag arms normally.
 
+These are **rootless** globs: `[schedule]` has no source context and no
+current directory, so a bare pattern matches at any depth in any source
+(`*.jsonl` is every jsonl anywhere). Absolute and `~`-rooted patterns work
+as written. See [main.md](main.md#glob-patterns) for the full rules.
+
 ```toml
 [schedule]
 exclude_files = ["*.jsonl", "~/.claude/**"]
@@ -435,8 +440,9 @@ field on `TagSub` are removed from pubsub.go. `ScanForSub` is
 removed from scheduler.go — replaced by the log-based startup scan.
 
 Subscriptions retain: `--tag` (sigil-form, see
-[file-tag-filter.md](file-tag-filter.md)), `--file-tag`,
-`--filter-files`, `--exclude-files`, `--cancel`, `--list`,
+[file-tag-filter.md](file-tag-filter.md)), `--file-tag`, path scoping
+through the `-files` filter stack (see
+[cli-commands.md](cli-commands.md#path-filters)), `--cancel`, `--list`,
 `--stats`. `--value` is retired (T61–T63); the value-match piece
 is encoded in the `--tag` sigil.
 

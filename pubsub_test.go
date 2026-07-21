@@ -306,3 +306,58 @@ func TestPublishWithValueRE(t *testing.T) {
 		t.Fatalf("want 2 events (completed+errored), got %d (%+v)", len(evts), evts)
 	}
 }
+
+// TestSubscriptionFileFiltersO160 pins the subscription half of the O160 bug.
+//
+// `ark subscribe --filter-files 'specs/**'` used to match **nothing**: the
+// local anchorGlob prefixed `**/` only when the pattern contained no slash at
+// all, so a relative glob with a slash was tested verbatim against absolute
+// indexed paths and never hit. The failure was invisible — a subscription
+// matching nothing is indistinguishable from a quiet corpus — which is why
+// this is pinned rather than left to the matcher tests.
+//
+// Path filtering now runs through the one shared matcher (R3207, R3195), and
+// subscription globs arrive cwd-anchored from the -files stack (R3204), so
+// both the relative and the anchored forms work.
+// CRC: crc-PubSub.md | R3195, R3204, R3207
+func TestSubscriptionFileFiltersO160(t *testing.T) {
+	const specPath = "/home/me/proj/specs/pubsub.md"
+	const otherPath = "/home/me/proj/design/crc-PubSub.md"
+
+	// The shape that silently matched nothing before.
+	if !matchFileFilters(specPath, []string{"specs/**"}, nil) {
+		t.Error("relative 'specs/**' must match a specs path — matching nothing is O160")
+	}
+	if matchFileFilters(otherPath, []string{"specs/**"}, nil) {
+		t.Error("'specs/**' must not admit a path outside specs/")
+	}
+
+	// The shape the CLI actually sends now: already cwd-anchored.
+	anchored := AnchorGlobToDir("specs/**", "/home/me/proj")
+	if anchored != "/home/me/proj/specs/**" {
+		t.Fatalf("anchoring produced %q", anchored)
+	}
+	if !matchFileFilters(specPath, []string{anchored}, nil) {
+		t.Error("anchored subscription glob must match")
+	}
+	if matchFileFilters(otherPath, []string{anchored}, nil) {
+		t.Error("anchored subscription glob must not over-match")
+	}
+
+	// The no-slash shape that always worked keeps working, and excludes still
+	// win over includes.
+	if !matchFileFilters(specPath, []string{"*.md"}, nil) {
+		t.Error("bare '*.md' should still reach any depth in a rootless filter")
+	}
+	if matchFileFilters(specPath, []string{"*.md"}, []string{"specs/**"}) {
+		t.Error("an exclude hit must reject even when an include matched")
+	}
+	if !matchFileFilters(specPath, nil, nil) {
+		t.Error("no filters means every path passes")
+	}
+
+	// tmp:// paths stay first-class citizens of the same filter (R2278).
+	if !matchFileFilters("tmp://watchdog/possible-typos", []string{"tmp://watchdog/**"}, nil) {
+		t.Error("tmp:// subscriptions must keep matching")
+	}
+}

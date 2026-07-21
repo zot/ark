@@ -57,7 +57,7 @@ otherwise emit a different order each run). R2953.
 | `dismiss`          | `dismiss PATTERN...`                                                                                                 | optional                 | drops M records                                      |
 | `embed`            | `embed SUBCOMMAND ...`                                                                                               | none                     | subcommands below                                    |
 | `fetch`            | `fetch [--wrap N] PATH...`                                                                                           | optional                 | reads file content from index; proxies to server when up; tmp:// requires server |
-| `files`            | `files [--status] [--detail] [--filter-files G] [--exclude-files G] [PATTERN...]`                                    | optional                 |                                                      |
+| `files`            | `files [--status] [--detail] [-with\|-without] [-files G]... [PATTERN...]`                                    | optional                 |                                                      |
 | `grams`            | `grams QUERY...`                                                                                                     | optional                 | shows trigram index for query; proxies to server when up, else local |
 | `init`             | `init [--embed-cmd C] [--query-cmd C] [--case-insensitive] [--aliases A] [--no-setup] [--if-needed]`                 | none                     |                                                      |
 | `install`          | (no flags)                                                                                                           | none                     | alias of `ui install`                                |
@@ -79,9 +79,9 @@ otherwise emit a different order each run). R2953.
 | `setup`            | `setup`                                                                                                              | none                     | bootstrap `~/.ark/` (extract bundle, install skills) |
 | `sources`          | `sources [check]`                                                                                                    | optional                 | currently only `check` subcommand                    |
 | `stale`            | `stale [PATTERN...]`                                                                                                 | optional                 |                                                      |
-| `status`           | `status [--db] [--chunks] [--tokenize] [--filter-files G] [--exclude-files G]`                                       | preferred                |                                                      |
+| `status`           | `status [--db] [--chunks] [--tokenize] [-with\|-without] [-files G]...`                                       | preferred                |                                                      |
 | `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
-| `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [--filter-files G] [--exclude-files G]` | required                 |                                                      |
+| `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [-with\|-without] [-files G]...` | required                 |                                                      |
 | `subscribers`      | `subscribers --tag T [--quiet]`                                                                                      | required                 | count subscriptions matching a tag                   |
 | `sweep`            | `sweep correlations`                                                                                                | required                 | hot-correlations top-K cache refresh (subcommands below) |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
@@ -203,42 +203,63 @@ that mix flags with positional arguments preprocess `args` through
 `config add-include`, `config add-exclude`, `config remove-pattern`,
 `schedule search`, `schedule change`, `chats`.
 
-### Filter stack (search)
+### Filter stack
 
-The `search` command parses a filter stack before `flag.Parse` via
-`parseFilterStack`. Mode flags (`-contains`, `-fuzzy`, `-regex`,
-`-tag`, `-about`, `-files`) consume the next argument as the query.
-Polarity flags (`-with`, `-without`) toggle the polarity of
-subsequent entries. `--filter-k N` after an `-about` entry overrides
-the per-row top-K. `-parse` prints the disambiguated command and
-exits without searching. Bare terms coalesce into a single `-contains`
-group. The first entry becomes the primary search; the rest become
-chunk-level post-filters. See `search-cli-filters.md` for examples
-and rationale.
+The filter stack is parsed before `flag.Parse` via `parseFilterStack`.
+Mode flags consume the next argument as the query; polarity flags
+(`-with`, `-without`) toggle the polarity of subsequent entries, with
+`-with` the default.
 
-### Path filters (`--filter-files` / `--exclude-files`)
+`search` uses the **full** mode set (`-contains`, `-fuzzy`, `-regex`,
+`-tag`, `-about`, `-files`). `--filter-k N` after an `-about` entry
+overrides the per-row top-K. `-parse` prints the disambiguated command
+and exits without searching. Bare terms coalesce into a single
+`-contains` group. The first entry becomes the primary search; the rest
+become chunk-level post-filters. See `search-cli-filters.md` for
+examples and rationale.
 
-Repeatable glob flags supported by `status`, `files`, `tag files`,
-`tag values`, and `subscribe`. Patterns use `~` expansion via
-`ark.ExpandTildeSlice`. `--filter-files` is positive; without any
-positive filters, all paths are candidates. `--exclude-files` is
-negative and applies after the positive set.
+`files`, `status`, `tag files`, `tag values`, and `subscribe` use the
+**`-files`-only** subset: `-files GLOB` rows with `-with` / `-without`
+polarity, no query modes. This is what makes a path glob mean the same
+thing on every command (see below).
 
-**These are not the same as `search -files`.** Two path-glob mechanisms
-exist and they match differently — worth knowing before assuming a glob
-means the same thing in both places:
+### Path filters (`-files`)
 
-| | `--filter-files` / `--exclude-files` (above) | `search -files` (and `bloodhound search`'s flags) |
-|---|---|---|
-| unanchored glob | prefixed `**/`, so `*.md` matches at any depth | joined to the client's cwd, so `*.md` means top-level only |
-| matcher | `ark.Matcher` (anchor, then doublestar) | basename match, else full-path doublestar |
-| anchoring | server-side | client-side, before the request is sent |
+`status`, `files`, `tag files`, `tag values`, `subscribe`, and `search` all
+take path globs through the same `-with` / `-without` + `-files` filter stack.
+`-with` is the default polarity; `-without -files GLOB` subtracts. Without any
+positive `-files` row, all paths are candidates.
 
-`bloodhound search --filter-files` follows the **`search -files`** column
-despite the flag name, because a hunt's globs also reach the secretary's
-own `ark search` calls and the two halves must agree
-([bloodhound.md](bloodhound.md), "Globs mean what `ark search -files`
-means").
+**One mechanism, one meaning.** Globs are anchored to the current directory
+CLI-side before the request is sent, so `*.md` means what it means in a shell
+(top level only) and `/**/*.md` means "any directory". The full vocabulary —
+the three anchoring forms and the three contexts — is in
+[main.md](main.md#glob-patterns); this table does not restate it.
+
+**Positional globs are the same mechanism.** `files`, `stale`, and `missing`
+narrow their output by trailing positional globs (`ark files '*.md'`). Those
+are anchored exactly like a `-files` row, so a command cannot carry two glob
+rules at once: `ark files '*.md'` and `ark files -files '*.md'` mean the same
+thing. A positional glob is a *shorthand* for a positive row, not a second
+surface.
+
+Commands that *hand their patterns onward* rather than filtering their own
+output — `refresh`, `resolve`, `remove`, `dismiss` — are matched where the
+work happens, with no client working directory in play, so a bare glob there
+keeps the rootless "any depth" reading.
+
+`bloodhound search --filter-files` keeps its flag *name* (it is two repeatable
+flags on a non-search command, not a filter stack) but has always carried these
+same semantics, because a hunt's globs also reach the secretary's own `ark
+search` calls and the two halves must agree ([bloodhound.md](bloodhound.md),
+"Globs mean what `ark search -files` means").
+
+> **Removed:** `--filter-files` / `--exclude-files` on `status`, `files`,
+> `tag files`, `tag values`, and `subscribe`. They exit non-zero with an error
+> naming `-files` **and** the semantic change, because the one pattern shape
+> that changed meaning (a bare no-slash glob is now top-level-only) would
+> otherwise fail *silently* by returning fewer results. An alias would have
+> reproduced exactly the invisible failure this unification removed.
 
 ### Aliases
 
@@ -297,7 +318,7 @@ behind the one command (Batteries Included).
 | `--scope S`    | `all`        | search scope: `code` \| `specs` \| `design` \| `notes` \| `chat` \| `all` |
 | `--depth D`    | `lookup`     | `lookup` (one pass) \| `investigate` (tune until the stop condition)     |
 | `--want W`     | `passages`   | `answer` \| `passages` \| …                                             |
-| `--filter-files GLOB`  | — | Repeatable positive path filter scoping the hunt. Carries `search -files` semantics (**not** the `files`/`status` path filters above): unanchored globs are anchored CLI-side to the client's cwd, then matched by basename or full-path glob |
+| `--filter-files GLOB`  | — | Repeatable positive path filter scoping the hunt. Two repeatable flags rather than a filter stack, but the glob semantics are the project-wide ones (see [main.md](main.md#glob-patterns)): unanchored globs are anchored CLI-side to the client's cwd |
 | `--exclude-files GLOB` | — | Repeatable negative path filter, applied after the positive set (`search -without -files`)                                     |
 | `--wait`       | `false`      | block stubbornly on a busy pool / server bounce instead of failing fast |
 | `--timeout N`  | `300`        | seconds to wait for the result                                          |
@@ -763,10 +784,10 @@ ark files [options] [PATTERN...]
 |------------------------|---------|------------------------------------------------------------------------------------------|
 | `--status`             | `false` | Add `STATUS BYTES CHUNKS PATH` columns; status is `G` (good), `S` (stale), `M` (missing) |
 | `--detail`             | `false` | With `--status`, add per-file chunk size statistics line                                 |
-| `--filter-files GLOB`  | —       | Repeatable positive path filter                                                          |
-| `--exclude-files GLOB` | —       | Repeatable negative path filter                                                          |
+| `-files GLOB`  | —       | Repeatable positive path filter                                                          |
+| `-without -files GLOB` | —       | Repeatable negative path filter                                                          |
 
-Positional patterns narrow within the filter-files set. Without
+Positional patterns narrow within the `-files` set. Without
 `--status`, output is one path per line.
 
 ### `grams` — show trigrams
@@ -1177,8 +1198,8 @@ ark status [options]
 | `--db`                 | `false` | Show index record counts by prefix (microfts2 + ark, with totals)                      |
 | `--chunks`             | `false` | Show chunk size statistics (count, min, max, mean, median, p90, p95, p99) per strategy |
 | `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `[embedding] model`                       |
-| `--filter-files GLOB`  | —       | Repeatable positive path filter for `--chunks`                                         |
-| `--exclude-files GLOB` | —       | Repeatable negative path filter                                                        |
+| `-files GLOB`  | —       | Repeatable positive path filter for `--chunks`                                         |
+| `-without -files GLOB` | —       | Repeatable negative path filter                                                        |
 
 Default output: file/chunk/source counts, database file size,
 server/UI status, plus a `warnings:` section listing E records (each
@@ -1208,8 +1229,8 @@ ark subscribe --session ID [options]
 | `--stats`              | `false`                      | Per-session totals                                                                     |
 | `--tag T`              | —                            | Sigil-form match `[~|:]NAME[(=|:|~)VALUE]`. Leading `@` stripped. Repeatable           |
 | `--file-tag T`         | —                            | Same syntax; matches every chunk on a file that has the tag. Repeatable                |
-| `--filter-files GLOB`  | —                            | Repeatable positive path filter                                                        |
-| `--exclude-files GLOB` | —                            | Repeatable negative path filter                                                        |
+| `-files GLOB`  | —                            | Repeatable positive path filter                                                        |
+| `-without -files GLOB` | —                            | Repeatable negative path filter                                                        |
 
 Match syntax is the same as `ark search -tag`. Name-side sigils:
 bare = exact, `:` prefix = contains (substring-AND), `~` prefix =
@@ -1264,8 +1285,8 @@ full success. Progress publishes through `tmp://sweep/hot-correlations.md`
 ```
 ark tag list
 ark tag counts TAG...
-ark tag files TAG... [--context] [--filter-files G] [--exclude-files G]
-ark tag values TAG... [--files] [--filter-files G] [--exclude-files G]
+ark tag files TAG... [--context] [-with|-without] [-files G]...
+ark tag values TAG... [--show-files] [-with|-without] [-files G]...
 ark tag defs [TAG...] [--path]
 ark tag set FILE TAG VAL [TAG VAL ...]
 ark tag get FILE [TAG ...] [--all]
@@ -1287,7 +1308,7 @@ normalization (see "Filter stack").
 | `list` | optional | All tags with totals (`tag\tcount`) |
 | `counts TAG...` | optional | Counts for the named tags |
 | `files TAG...` | optional | Files containing each tag (`path\tsize`); `--context` switches to per-occurrence lines |
-| `values TAG...` | cold-start | Values for each tag (`tag\tvalue\tcount`); with `--files`, follows up with per-file lines |
+| `values TAG...` | cold-start | Values for each tag (`tag\tvalue\tcount`); with `--show-files`, follows up with per-file lines |
 | `defs [TAG...]` | optional | Tag definitions (`tag description`); with `--path`, prefixes the source path (no dedup) |
 | `set FILE TAG VAL ...` | none (file I/O) | Pairs of TAG VAL into FILE's tag block. Setting `status` auto-sets `status-date` to today. Hint when setting `*-handled` bookmarks |
 | `get FILE [TAG...] [--all]` | none / optional (`--all`) | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1. `--all`: every tag in the file (union across all chunks), not just the block — needs the index; the `[TAG...]` filter composes |

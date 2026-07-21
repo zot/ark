@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // arkSourceIncludePatterns is the include list for the hardcoded ~/.ark
@@ -1004,29 +1005,12 @@ func (c *Config) MatchesScheduleFilterForTag(path, tag string) bool {
 }
 
 // matchesFilterExclude checks a path against filter/exclude glob lists.
+// These are rootless ark.toml keys — no current directory to anchor to —
+// so a bare pattern reads **/X, which is what MatchPathFilters does with
+// an empty contextual root.
+// CRC: crc-Config.md | R3195, R3199
 func matchesFilterExclude(path string, filterFiles, excludeFiles []string) bool {
-	if len(filterFiles) == 0 && len(excludeFiles) == 0 {
-		return true
-	}
-	m := &Matcher{Dotfiles: true}
-	if len(filterFiles) > 0 {
-		matched := false
-		for _, pat := range filterFiles {
-			if m.Match(pat, path, "", false) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	for _, pat := range excludeFiles {
-		if m.Match(pat, path, "", false) {
-			return false
-		}
-	}
-	return true
+	return MatchPathFilters(path, filterFiles, excludeFiles)
 }
 
 // ExpandTilde expands ~ and ~user at the start of a path.
@@ -1073,8 +1057,9 @@ func ExpandTildeSlice(paths []string) []string {
 	return out
 }
 
-// validate checks for identical include/exclude strings.
-// CRC: crc-Config.md | R11
+// validate checks for identical include/exclude strings, and refuses any
+// recursive `[[source]].dir` glob (R3201).
+// CRC: crc-Config.md | R11, R3201
 func (c *Config) validate() {
 	c.Errors = nil
 	// Check global patterns
@@ -1083,7 +1068,29 @@ func (c *Config) validate() {
 	for _, src := range c.Sources {
 		inc, exc := c.EffectivePatterns(src)
 		c.checkDuplicates(inc, exc, src.Dir)
+		if err := ValidateSourceDir(src.Dir); err != nil {
+			c.Errors = append(c.Errors, err.Error())
+		}
 	}
+}
+
+// ValidateSourceDir refuses a recursive glob in a source directory.
+//
+// `[[source]].dir` is filesystem *expansion*, not path filtering (R3200), and
+// a recursive one makes every subdirectory its own source root — so a single
+// file change fires one watcher event per ancestor level. The fault is
+// latent: `~/work/**` is harmless while `~/work` has no nested directories
+// and silently begins multiplying events the day someone creates one. Load-
+// time validation of the *expansion* cannot catch that, so the *pattern* is
+// what gets refused. R3201
+//
+// CRC: crc-Config.md | R3200, R3201
+func ValidateSourceDir(dir string) error {
+	if strings.Contains(dir, "**") {
+		return fmt.Errorf("source dir %q: ** is not allowed — a recursive source glob makes every "+
+			"subdirectory its own source root and multiplies watcher events; use * for one level", dir)
+	}
+	return nil
 }
 
 func (c *Config) checkDuplicates(includes, excludes []string, context string) {
@@ -1146,6 +1153,9 @@ func (c *Config) AddSource(dir string) error {
 		if src.Dir == dir {
 			return fmt.Errorf("source %q already configured", dir)
 		}
+	}
+	if err := ValidateSourceDir(dir); err != nil { // R3201
+		return err
 	}
 	if !IsGlob(dir) {
 		info, err := os.Stat(dir)
@@ -1216,6 +1226,12 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 		if !IsGlob(src.Dir) {
 			continue
 		}
+		// R3201: never expand a recursive source glob. validate() reports it;
+		// skipping here is what keeps the watcher-event multiplication from
+		// happening at all while the user still has the bad entry on disk.
+		if err := ValidateSourceDir(src.Dir); err != nil {
+			continue
+		}
 		matches, err := filepath.Glob(src.Dir)
 		if err != nil {
 			return nil, fmt.Errorf("glob %q: %w", src.Dir, err)
@@ -1284,22 +1300,22 @@ func (c *Config) StrategyForFile(relPath string, sourceStrategies map[string]str
 	for k, v := range sourceStrategies {
 		merged[k] = v
 	}
+	// R3202: match through the one shared Matcher, in the source-scoped
+	// context (R3198). relPath is *already* the source-relative form, so the
+	// contextual root and the given path coincide and an empty sourceDir is
+	// the right argument — bare `X` reads `**/X` against relPath, `./X`
+	// anchors at the source root.
+	//
+	// This replaces a filepath.Match on relPath with a basename fallback,
+	// under which `*.md` worked at any depth (via the fallback) but `**/*.md`
+	// matched one level only — `**` had no effect at all. For a no-slash
+	// pattern the old fallback and the bare→`**/` rule agree, so existing
+	// configs keep resolving as they did; what changes is that `**` works.
+	m := &Matcher{Dotfiles: true}
 	bestStrategy := ""
 	bestLen := 0
-	base := filepath.Base(relPath)
 	for pattern, strategy := range merged {
-		matched, err := filepath.Match(pattern, relPath)
-		if err != nil {
-			continue
-		}
-		// Also try matching just the filename for simple patterns like "*.md"
-		if !matched {
-			matched, err = filepath.Match(pattern, base)
-			if err != nil {
-				continue
-			}
-		}
-		if matched && len(pattern) > bestLen {
+		if m.Match(pattern, relPath, "", false) && len(pattern) > bestLen {
 			bestStrategy = strategy
 			bestLen = len(pattern)
 		}
@@ -1560,14 +1576,16 @@ func removeFromSlice(s *[]string, val string) bool {
 }
 
 // validatePattern checks that a pattern is syntactically valid.
+// Validated with doublestar, the same engine Matcher matches with, so the
+// validator and the matcher agree on what is legal — filepath.Match could
+// pass a `**` pattern it had no way to express. R3203
+// CRC: crc-Config.md | R3203
 func validatePattern(pattern string) error {
 	if pattern == "" {
 		return fmt.Errorf("empty pattern")
 	}
-	// Try to parse with filepath.Match to catch syntax errors
-	_, err := filepath.Match(pattern, "test")
-	if err != nil {
-		return fmt.Errorf("invalid pattern %q: %w", pattern, err)
+	if !doublestar.ValidatePattern(pattern) {
+		return fmt.Errorf("invalid pattern %q", pattern)
 	}
 	return nil
 }

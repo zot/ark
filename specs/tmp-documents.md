@@ -52,7 +52,7 @@ Existing commands handle `tmp://` paths naturally:
 - `ark search` — includes tmp:// results by default
 - `ark search --no-tmp` — excludes tmp:// results
 - `ark tag files @sometag` — includes tmp:// files carrying the tag
-- `--filter-files`, `--exclude-files` — glob patterns match tmp://
+- `-files`, `-without -files` — glob patterns match tmp://
   paths just like any other path
 
 There is no `--tmp` flag to include them — they're included by
