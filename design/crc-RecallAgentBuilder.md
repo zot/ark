@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2947, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -323,16 +323,27 @@ the shared `@ark-secretary-work` tube; the bloodhound's output is its
 `@ark-recall-result`) — the secretary's one `next` and the assistant's one
 `listen` carry all of it.
 
-- RecallBloodhoundOpen(session, B, payload, seed) (R2937, R2938, R3006)
+- RecallBloodhoundOpen(session, B, req, seed) (R2937, R2938, R3006)
   — Go-internal, called by the watcher's `dispatchBloodhound`. Writes
   `tmp://ARK-BLOODHOUND/task-<session>-<B>` (tag
   `@ark-secretary-work: <session>`) whose body `buildSearchTask`
   assembles in order: the `## Search task <cookie>` first line with the
-  raw payload; the **`## Recall seed`** block (the `seed` string the
+  raw payload; any **directives** (`no-tags`, and the hunt's scope);
+  the **`## Recall seed`** block (the `seed` string the
   watcher pre-rendered from `Librarian.Recall`, R3006); then the
   **search crank handle**. Stores `bloodhoundClues[cookie] = payload`
   for the finding header. The crank handle is a Go const (the CLI craft
   travels in the doc, Stencil-style); its first step reads the seed.
+- **Scope directive** (R3189, R3194): when `req` carries a file scope,
+  `buildSearchTask` renders it as a ready-made `-with -files '<glob>'` /
+  `-without -files '<glob>'` filter string — already anchored by the
+  watcher (R3193) and shell-quoted here — beside the `no-tags`
+  directive, and instructs the secretary to append it to **every**
+  search verbatim. The Haiku transcribes a finished string; it never
+  composes a glob, so a scope cannot be mistyped or forgotten by a weak
+  model (Baby Food / Shoulder the Fat). The string composes with the
+  crank handle's own `scope`-word mapping rather than replacing it —
+  both are `-with -files` rows, which intersect (R3194).
 - `next` dispatch priority (R2939, R2940): `RecallNext`'s loop scans
   `db.Files()` once and prioritizes a pending
   `ARK-BLOODHOUND/task-` doc over any `ARK-RECALL/curation-` doc for

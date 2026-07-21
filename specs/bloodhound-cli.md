@@ -63,7 +63,8 @@ pubsub.
 ## `ark bloodhound search`
 
 ```
-ark bloodhound search [CLUE...]  [--file PATH | --file -] [--wait] [--timeout S] [--raw] [--markdown]
+ark bloodhound search [CLUE...]  [--file PATH | --file -] [--filter-files G]... [--exclude-files G]...
+                      [--wait] [--timeout S] [--raw] [--markdown]
 ```
 
 The whole client protocol in one blocking command:
@@ -93,6 +94,26 @@ idea separately, unioning the hits (see the Recall-seed "per-idea seeding" in
 [bloodhound.md](bloodhound.md)). A one-liner clue is a single idea — unchanged.
 `argv` can't carry paragraph breaks, so the file/heredoc path is what makes the
 CLI a first-class multi-idea search client.
+### Scoping the hunt — `--filter-files` / `--exclude-files`
+
+Both flags are **repeatable** and carry exactly the semantics of the in-session
+watermark's `filter-files=` / `exclude-files=` attributes (see "Scoping a hunt"
+in [bloodhound.md](bloodhound.md)) — which are in turn the semantics of `ark
+search -files`. The scope rides the request doc alongside the clue, reaches the
+same admission-time filter in the `Recall` seed, and is rendered into the same
+ready-made filter string the pool secretary copies. An external client scopes a
+hunt the same way an in-session assistant does; there is one mechanism, reached
+through two front doors.
+
+Unanchored globs are **relative to the current project**, which for this surface
+is the **client's** working directory — the CLI anchors them before submitting,
+exactly as it already anchors `ark search -files` (only the client knows its own
+cwd). What rides the request doc is therefore always absolute, and the server
+never infers a working directory.
+
+A positive glob matching no indexed file is reported in the seed block rather
+than returning a silent empty hunt, as it is for the watermark.
+
 2. **Block for the result.** `ark bloodhound search` is synchronous: it waits
    on its result tag, then prints. `--wait` governs the one case that is not an
    ordinary wait — a **busy pool** (no free secretary, pool at `pool_max`):

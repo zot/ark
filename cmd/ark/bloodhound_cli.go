@@ -18,6 +18,7 @@ import (
 	"time"
 
 	ucli "github.com/urfave/cli/v3"
+	"github.com/zot/ark"
 )
 
 // CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1 | R3021, R3022, R3029
@@ -35,6 +36,8 @@ func bloodhoundCommand() *ucli.Command {
 					&ucli.StringFlag{Name: "scope", Value: "all", Usage: "search scope: code | specs | design | notes | chat | all"},
 					&ucli.StringFlag{Name: "depth", Value: "lookup", Usage: "depth: lookup | investigate"},
 					&ucli.StringFlag{Name: "want", Value: "passages", Usage: "want: answer | passages | ..."},
+					&ucli.StringSliceFlag{Name: "filter-files", Usage: "repeatable positive path `GLOB` scoping the hunt ('ark search -files' semantics; unanchored globs resolve against the current directory)"},
+					&ucli.StringSliceFlag{Name: "exclude-files", Usage: "repeatable negative path `GLOB`, applied after the positive set"},
 					&ucli.BoolFlag{Name: "wait", Usage: "block stubbornly on a busy pool / server bounce instead of failing fast"},
 					&ucli.IntFlag{Name: "timeout", Value: 300, Usage: "seconds to wait for the result (default 300)"},
 					&ucli.BoolFlag{Name: "raw", Usage: "skip Luhmann curation: return the secretary's own findings (markdown, Baby Food for agents) — curate in your own context"},
@@ -92,13 +95,20 @@ func bloodhoundSearchAction(_ context.Context, c *ucli.Command) error {
 		fatal(err)
 	}
 	if clue == "" {
-		fmt.Fprintln(os.Stderr, "ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]")
+		fmt.Fprintln(os.Stderr, "ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--filter-files G] [--exclude-files G] [--wait] [--timeout SECONDS] [--raw] [--markdown]")
 		os.Exit(2)
 	}
 	// The payload the watcher wraps as the ## Search task the secretary reads:
 	// scope/depth/want (and curate:false for --raw) as leading metadata lines, then
 	// the clue body last, so the watcher's clueOf splits only the clue (R3044, R3046).
-	payload := buildSearchPayload(clue, c.String("scope"), c.String("depth"), c.String("want"), raw)
+	// R3191/R3193: anchor the hunt's globs to *this* client's cwd before they
+	// leave, the same CLI-side move `ark search` makes for -files (R2958) and for
+	// the same reason — only the client knows its own working directory. What
+	// reaches the request doc is absolute, so no server-side stage has to guess.
+	cwd, _ := os.Getwd()
+	filterFiles := ark.AnchorGlobsToDir(c.StringSlice("filter-files"), cwd)
+	excludeFiles := ark.AnchorGlobsToDir(c.StringSlice("exclude-files"), cwd)
+	payload := buildSearchPayload(clue, c.String("scope"), c.String("depth"), c.String("want"), raw, filterFiles, excludeFiles)
 	wait := c.Bool("wait")
 	timeout := c.Int("timeout")
 
@@ -241,16 +251,24 @@ func resolveClue(args []string, file string, stdin io.Reader) (string, error) {
 }
 
 // buildSearchPayload assembles the request payload metadata-first: scope/depth/
-// want (and curate:false for --raw) as leading key:value lines, then the clue
-// body last, so the watcher's clueOf strips the metadata and splits only the clue
-// for the per-paragraph seed.
-// CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1.2 | R3044, R3046
-func buildSearchPayload(clue, scope, depth, want string, raw bool) string {
+// want (and curate:false for --raw, plus any file scope) as leading key:value
+// lines, then the clue body last, so the watcher's clueOf strips the metadata
+// and splits only the clue for the per-paragraph seed. The scope keys repeat,
+// one glob per line, which is what lets both directions carry several globs
+// through a format that is otherwise one value per key (R3191).
+// CRC: crc-CLITree.md | Seq: seq-bloodhound-cli.md#1.1.2 | R3044, R3046, R3191
+func buildSearchPayload(clue, scope, depth, want string, raw bool, filterFiles, excludeFiles []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "scope: %s\ndepth: %s\nwant: %s\n", scope, depth, want)
 	if raw {
 		// R3038: the watcher reads this marker to skip Luhmann curation.
 		b.WriteString("curate: false\n")
+	}
+	for _, g := range filterFiles {
+		fmt.Fprintf(&b, "filter-files: %s\n", g)
+	}
+	for _, g := range excludeFiles {
+		fmt.Fprintf(&b, "exclude-files: %s\n", g)
 	}
 	b.WriteString("\n")
 	b.WriteString(clue)

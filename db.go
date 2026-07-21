@@ -1983,6 +1983,22 @@ func (db *DB) chunkFileID(txn *bbolt.Tx, chunkID uint64) (uint64, bool) {
 	return crec.FileIDs[0].FileID, true
 }
 
+// ChunkFileID resolves chunkID to its owning fileid outside a caller-supplied
+// txn, opening its own read view — the same shape ChunkInfo uses. For callers
+// that need only the fileid, this skips ChunkInfo's FileInfoByID plus the
+// linear scan of the file's chunk list; the recall substrate's per-candidate
+// path-scope gate is the motivating caller.
+// CRC: crc-DB.md | R3186
+func (db *DB) ChunkFileID(chunkID uint64) (uint64, bool) {
+	var fileID uint64
+	var ok bool
+	_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
+		fileID, ok = db.chunkFileID(txn, chunkID)
+		return nil
+	})
+	return fileID, ok
+}
+
 // fileIDPath returns the canonical path for a fileid (Names[0]).
 // CRC: crc-DB.md | R2000
 func (db *DB) fileIDPath(fileID uint64) (string, bool) {

@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -109,7 +109,8 @@ CLITree owns how those bodies are *reached* and how their help is
 - Bloodhound + `luhmann next` nodes (R3010, R3021, R3022, R3027, R3029):
   post-migration growth added as tree nodes like any other. A new `ark
   bloodhound` group in `cmd/ark/bloodhound_cli.go` carries `search
-  [CLUE...] [--file PATH|-] [--wait] [--timeout S] [--raw] [--markdown]` (create the
+  [CLUE...] [--file PATH|-] [--filter-files G]... [--exclude-files G]...
+  [--wait] [--timeout S] [--raw] [--markdown]` (create the
   request doc + subscribe + block + print, R3021/R3022/R3029) and `add --result --loc --note
   [--chunk] | --result --done` (Luhmann's result stencil — one curated JSON
   line per call, `--done` writes the result doc + flips its tag, R3027). A new `next --session S
@@ -118,6 +119,13 @@ CLITree owns how those bodies are *reached* and how their help is
   its declarations; the `search` and `next` blocking bodies own their
   stubborn-plumbing redial (crc-CLI.md) — CLITree only routes and generates
   their help.
+- Hunt scope (R3191, R3193): `bloodhound search`'s repeatable
+  `--filter-files` / `--exclude-files` carry `search -files` semantics, so
+  the body anchors unanchored globs to the **client's** cwd via the shared
+  `ark.AnchorGlobToDir` before submitting — the same CLI-side move
+  `search` makes for `-files` (R2958), and for the same reason: only the
+  client knows its own working directory. What reaches the request doc is
+  always absolute, so no server-side component ever infers a cwd.
 - Bloodhound search **output modes** (R3037, R3038, R3040): `search` picks
   its output client-side from the flag it sent — the server returns the
   result-doc body either way (crc-Server.md), the CLI just formats it. Default

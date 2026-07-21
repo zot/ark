@@ -49,9 +49,16 @@ The watcher's per-append line scan
 branch, independent of the turn-boundary arm/fire machinery:
 
 - For each `type:"assistant"` line in `newBytes`, extract the text content
-  blocks and match `<BLOODHOUND>(.*?)</BLOODHOUND>` (non-greedy, DOTALL so a
+  blocks and match `<BLOODHOUND …>(.*?)</BLOODHOUND>` (non-greedy, DOTALL so a
   multi-line payload is captured whole). Each match's captured group is one
-  **bloodhound payload**.
+  **bloodhound payload**; the opening tag's attribute run is parsed separately
+  (below).
+- The opening tag admits an **attribute run** — `notags` and the repeatable
+  `filter-files=` / `exclude-files=` globs ("Scoping a hunt"). An attribute run
+  must be introduced by whitespace, so `<BLOODHOUNDER>` is not a watermark.
+  Attributes are parsed positionally-independently; an unrecognized attribute is
+  ignored rather than failing the match, so the watermark stays forward
+  compatible with attributes a future assistant emits.
 - Recognition is deterministic — a regex, no language model. It is once-only by
   construction: `newBytes` is the newly-appended slice, so a given assistant
   line is scanned exactly once. Two identical watermarks are two requests.
@@ -330,6 +337,119 @@ the hunt returns findings only. Plenty of directed searches are mere lookups
 where a connection is clutter; `notags` is the escape hatch for them. The
 ambient counterpart is `<RECALL notags/>` (see [simple-recall.md](simple-recall.md),
 "Opt-out").
+
+## Scoping a hunt — file globs
+
+A hunt is **pull**: the assistant asked a specific question, so narrowing where
+the answer may live is legitimate in a way it never is for ambient recall. The
+opening tag therefore takes two **repeatable** attributes, alongside `notags`:
+
+```
+<BLOODHOUND filter-files="~/work/ark/**" filter-files="~/work/microfts2/**" exclude-files="**/*.jsonl">
+where did we settle the chunker interface? pointers
+</BLOODHOUND>
+```
+
+- `filter-files="GLOB"` — positive. A path must match **at least one** positive
+  glob to be a candidate. With none present, every path is a candidate (the
+  unscoped default, which stays the norm).
+- `exclude-files="GLOB"` — negative, applied after the positive set; an
+  exclusion wins over a match.
+- Both repeat freely, in any order, mixed with each other and with `notags`.
+- An attribute whose value is empty is ignored rather than treated as a glob
+  that matches nothing — a stray `filter-files=""` must not silently empty the
+  corpus.
+
+### Globs mean what `ark search -files` means
+
+The secretary widens the trail with its own `ark search` calls, so a hunt's
+scope has **two** enforcement points: the Go-side `Recall` seed and the
+secretary's CLI searches. If they interpret a glob differently the hunt is
+scoped to two different things and nothing says so. They are therefore held to
+one meaning — the meaning `ark search -files GLOB` already has:
+
+- **Anchoring.** A glob starting with `/`, `~`, or `tmp://` is absolute and
+  passes through. Any other glob is **relative to the current project** and is
+  joined to it, exactly as the `ark search` CLI joins an unanchored `-files`
+  glob to the client's working directory ([cli-commands.md](cli-commands.md),
+  `-files`). So `**/*.jsonl` in a hunt means "the JSONL under this project",
+  which is what it reads as.
+- **Matching.** After anchoring, a path matches by basename or by full-path
+  glob — the same test `-files` applies.
+
+"The current project" is resolved per surface, and neither surface has to be
+told: a watermark takes the **session's own working directory**, read from the
+`cwd` field of the assistant JSONL line carrying it (every assistant line
+carries one); `ark bloodhound search` takes the **client's** working directory
+and anchors CLI-side before submitting, the way `ark search` already anchors
+`-files`.
+
+The leading `/` is therefore the escape hatch from project-anchoring, and the
+difference is easy to miss:
+
+| glob | means | matches |
+|---|---|---|
+| `/**/*.go` | any indexed Go file, anywhere in the corpus | every project |
+| `**/*.go` | Go files at any depth **within this project** | this project only |
+| `*.go` | Go files at this project's **top level** | no subdirectories |
+| `~/work/ark/**` | that tree, wherever the hunt was emitted from | one named tree |
+
+The third row is the sharp edge: a bare `*.go` is joined to the project
+directory *before* matching, so it never becomes the match-any-basename pattern
+it resembles. Depth always needs an explicit `**/`.
+
+Anchoring happens **once**, at the surface that knows the directory, and what
+travels onward is always an absolute glob. That is what makes the two
+enforcement points agree: the seed filters on the absolute glob, and the
+secretary's `ark search -files` receives the same absolute glob and passes it
+through its own anchoring untouched. No cwd is ever inferred server-side and no
+glob is anchored twice.
+
+**The scope is applied at admission, not after ranking.** The `Recall` substrate
+gates every candidate chunk through a single admission point, and the path check
+belongs *there* — so out-of-scope chunks never enter the scored set and the
+hunt's top-K is computed **within** the scope. Filtering the ranked result
+instead would apply K first, so a scoped hunt whose global top-K all fell
+outside the scope would return little or nothing while looking exactly like a
+hunt that found nothing. Admission-time filtering is the difference between a
+narrowed hunt and a silently truncated one.
+
+The scope governs **search candidates only**. Chunks the caller injects as
+conversation context (`RecallOpts.ConversationChunks`, the `--propose` path) are
+the caller's own material rather than search hits, and are never path-filtered.
+A bloodhound seed injects none, so this is a contract on the shared substrate,
+not a bloodhound behavior.
+
+**A positive glob that matches no indexed file says so.** If a hunt carries
+positive globs and none of them match any indexed path, the `## Recall seed`
+block states that explicitly, naming the globs — distinct from the ordinary
+empty-seed note. Otherwise a mistyped glob is indistinguishable from a corpus
+that has nothing, and the hunt returns a confident "nothing found" that is
+wrong. The hunt still dispatches: the secretary can widen, and the note tells it
+(and the reader of the finding) why the seed was bare.
+
+**The globs never become the secretary's judgment.** The Haiku is not told to
+add flags to its searches. The crank handle carries the scope as a **ready-made
+`-with -files` / `-without -files` filter string**, already anchored and quoted,
+which the secretary appends to every search verbatim — it transcribes, it does
+not compose. A mistyped or forgotten glob must never be a weak-model decision.
+The scope directive rides beside the `no-tags` directive under the `## Search
+task` header, where the crank handle's scope→filters step reads it. The filter
+string **composes with** the `scope` word's own mapping rather than replacing
+it: both are `-with -files` rows, which intersect, so `scope: code` plus
+`filter-files="~/work/ark/**"` means Go files under that tree.
+
+One asymmetry is worth naming because it is **pre-existing and untouched**: the
+seed applies the file globs but not the `scope` word, since `scope` is a
+directive rather than a search idea and was never folded into the seed search.
+The file globs are precisely the part of a hunt's scope this feature makes
+consistent across both enforcement points; the `scope` word's own looseness is
+unchanged.
+
+**Opt-in per hunt, never inherited.** Scope lives on the watermark that carries
+it and nowhere else. Ambient recall does not read this tag and so cannot acquire
+a scope from it; the standing rule that recall must not filter by current-project
+scope is untouched.
 
 ## Async only (sync deferred)
 

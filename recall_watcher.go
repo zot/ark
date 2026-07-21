@@ -19,10 +19,16 @@ import (
 )
 
 // bloodhoundRe recognizes a directed-search watermark in assistant output.
-// Non-greedy + DOTALL so a multi-line payload is captured whole. The optional
-// ` notags` attribute (group 1) suppresses the hunt's tag proposals; group 2 is
-// the payload. R2934, R3110
-var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND( notags)?>(.*?)</BLOODHOUND>`)
+// Non-greedy + DOTALL so a multi-line payload is captured whole. Group 1 is the
+// opening tag's optional attribute run (parsed by parseBloodhoundAttrs), group
+// 2 the payload. The leading `\s` in group 1 is load-bearing: without it
+// `<BLOODHOUNDER>` would start matching. R2934, R3110, R3184
+var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND(\s[^>]*)?>(.*?)</BLOODHOUND>`)
+
+// bloodhoundAttrRe pulls one `name="value"` attribute out of the opening tag's
+// attribute run. Bare attributes (`notags`) carry no `=` and are matched
+// separately by word, so the two forms coexist without a grammar. R3184
+var bloodhoundAttrRe = regexp.MustCompile(`([a-zA-Z-]+)\s*=\s*"([^"]*)"`)
 
 // recallTagsToggleRe recognizes the self-closing ambient tag-recommend toggle:
 // `<RECALL notags/>` suppresses recommends for the session (R3112),
@@ -241,16 +247,21 @@ func scanNewBytes(newBytes []byte) []jsonlSignal {
 }
 
 // assistantLineTexts yields the decoded prose text of each `type:"assistant"`
-// line in newBytes, skipping blank, unparseable, non-assistant, and text-less
-// lines. Shared by the watermark scanners (scanBloodhounds, scanRecallNotags).
-func assistantLineTexts(newBytes []byte) func(yield func(string) bool) {
-	return func(yield func(string) bool) {
+// line in newBytes together with that line's `cwd` — the working directory of
+// the session that wrote it, which Claude Code stamps on every assistant line.
+// Skips blank, unparseable, non-assistant, and text-less lines. Shared by the
+// watermark scanners (scanBloodhounds, scanRecallTagsDirective); the cwd is the
+// anchoring directory for a bloodhound's file globs (R3193) and is ignored by
+// scanners that have no use for it.
+func assistantLineTexts(newBytes []byte) func(yield func(string, string) bool) {
+	return func(yield func(string, string) bool) {
 		for line := range bytesIterLines(newBytes) {
 			if len(bytes.TrimSpace(line)) == 0 {
 				continue
 			}
 			var rec struct {
 				Type    string `json:"type"`
+				Cwd     string `json:"cwd"`
 				Message struct {
 					Content json.RawMessage `json:"content"`
 				} `json:"message"`
@@ -258,7 +269,7 @@ func assistantLineTexts(newBytes []byte) func(yield func(string) bool) {
 			if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
 				continue
 			}
-			if text := assistantText(rec.Message.Content); text != "" && !yield(text) {
+			if text := assistantText(rec.Message.Content); text != "" && !yield(text, rec.Cwd) {
 				return
 			}
 		}
@@ -267,28 +278,81 @@ func assistantLineTexts(newBytes []byte) func(yield func(string) bool) {
 
 // scanBloodhounds walks newBytes for directed-search watermarks in assistant
 // output: each `type:"assistant"` line's text (decoded via assistantText) is
-// regex-matched for `<BLOODHOUND>…</BLOODHOUND>`, and every capture is one
-// payload. Deterministic and once-only by construction — newBytes is the
+// regex-matched for `<BLOODHOUND …>…</BLOODHOUND>`, and every capture is one
+// request. Deterministic and once-only by construction — newBytes is the
 // newly-appended slice, so a given line is scanned exactly once (two identical
-// watermarks are two requests). R2934
+// watermarks are two requests).
+//
+// Each line's `cwd` is the anchoring directory for that watermark's file globs
+// (R3193): the session's own working directory, taken from the very line the
+// watermark rode in on. Anchoring here — once, at the surface that knows the
+// project — is what lets the Go-side seed and the secretary's own
+// `ark search -files` calls resolve a glob to the same thing.
+// R2934, R3184, R3193
 func scanBloodhounds(newBytes []byte) []bloodhoundReq {
 	var reqs []bloodhoundReq
-	for text := range assistantLineTexts(newBytes) {
+	for text, cwd := range assistantLineTexts(newBytes) {
 		for _, m := range bloodhoundRe.FindAllStringSubmatch(text, -1) {
-			// m[1] = " notags" (or ""), m[2] = payload. R3110
-			if p := strings.TrimSpace(m[2]); p != "" {
-				reqs = append(reqs, bloodhoundReq{payload: p, notags: m[1] != ""})
+			// m[1] = the attribute run (or ""), m[2] = payload.
+			p := strings.TrimSpace(m[2])
+			if p == "" {
+				continue
 			}
+			req := parseBloodhoundAttrs(m[1], cwd)
+			req.payload = p
+			reqs = append(reqs, req)
 		}
 	}
 	return reqs
 }
 
-// bloodhoundReq is one recognized `<BLOODHOUND>` watermark: the clue payload and
-// whether it opted out of tag proposals via `<BLOODHOUND notags>`. R3110
+// parseBloodhoundAttrs reads the opening tag's attribute run into a request:
+// the bare `notags` opt-out (R3110) plus the repeatable `filter-files=` /
+// `exclude-files=` globs (R3184, R3185), each anchored against dir (R3193).
+//
+// Attributes are order-independent and may repeat; an unrecognized one is
+// ignored rather than failing the match, so a watermark carrying an attribute
+// some future assistant emits still dispatches its hunt. Empty values are
+// dropped by AnchorGlobsToDir — a stray `filter-files=""` must not become a
+// glob that matches nothing and silently empties the corpus (R3185).
+// CRC: crc-RecallWatcher.md | R3110, R3184, R3185, R3193
+func parseBloodhoundAttrs(attrs, dir string) bloodhoundReq {
+	var req bloodhoundReq
+	if attrs == "" {
+		return req
+	}
+	var filter, exclude []string
+	for _, m := range bloodhoundAttrRe.FindAllStringSubmatch(attrs, -1) {
+		switch m[1] {
+		case "filter-files":
+			filter = append(filter, m[2])
+		case "exclude-files":
+			exclude = append(exclude, m[2])
+		}
+	}
+	req.filterFiles = AnchorGlobsToDir(filter, dir)
+	req.excludeFiles = AnchorGlobsToDir(exclude, dir)
+	// `notags` is bare (no `=value`), so look for it as a whole word in
+	// what remains after the name="value" pairs are stripped out.
+	req.notags = slices.Contains(strings.Fields(bloodhoundAttrRe.ReplaceAllString(attrs, " ")), "notags")
+	return req
+}
+
+// bloodhoundReq is one recognized `<BLOODHOUND>` watermark: the clue payload,
+// whether it opted out of tag proposals via `<BLOODHOUND notags>`, and the
+// hunt's file scope (already anchored — see scanBloodhounds). Carried as one
+// value so a hunt's attributes thread through dispatch and seeding without a
+// growing parameter list. R3110, R3184, R3185
 type bloodhoundReq struct {
-	payload string
-	notags  bool
+	payload      string
+	notags       bool
+	filterFiles  []string
+	excludeFiles []string
+}
+
+// scoped reports whether the hunt carries any file scope at all.
+func (r bloodhoundReq) scoped() bool {
+	return len(r.filterFiles) > 0 || len(r.excludeFiles) > 0
 }
 
 // scanRecallTagsDirective returns the final ambient tag-recommend toggle in
@@ -297,7 +361,7 @@ type bloodhoundReq struct {
 // are read in assistant-line order and the last one wins, so a batch that flips
 // the toggle resolves to its final state. R3112, R3113
 func scanRecallTagsDirective(newBytes []byte) (suppress, found bool) {
-	for text := range assistantLineTexts(newBytes) {
+	for text, _ := range assistantLineTexts(newBytes) {
 		for _, m := range recallTagsToggleRe.FindAllStringSubmatch(text, -1) {
 			suppress, found = m[1] == "notags", true
 		}
@@ -485,7 +549,7 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 		for _, req := range scanBloodhounds(newBytes) {
 			bid := w.nextBloodhoundLocked(sessionID)
 			r, sid := req, sessionID
-			svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, r.payload, r.notags) })
+			svc(w.jobs, func() { w.dispatchBloodhound(sid, bid, r) })
 		}
 	}
 	// R3112/R3113: a <RECALL notags/> | <RECALL tags/> marker toggles per-session
@@ -579,6 +643,12 @@ func (w *RecallWatcher) fire(sessionID string) {
 				// exactly the opposite of what ambient recall
 				// wants. R2746
 				[]ConnectionsInput{{Text: para}},
+				// R3190: no FilterFiles/ExcludeFiles here, and none should ever
+				// be added. A hunt's scope is opt-in per watermark and lives on
+				// the `<BLOODHOUND>` tag, which this ambient path does not read.
+				// Ambient recall is push — nobody asked it a question — so
+				// narrowing it by current-project scope would suppress exactly
+				// the cross-project tangents that make it worth having.
 				RecallOpts{
 					K:              cfg.EffectiveChunksPerDM(),
 					IncludeContent: true,
@@ -718,10 +788,12 @@ const bloodhoundSeedK = 10
 // dispatchBloodhound runs on the watcher's worker goroutine. It re-checks the
 // bloodhound gate (write-time backstop — secretary + bloodhound-result sub,
 // R2947), seeds the hunt with the deluxe combined Recall search (R3006, R3007),
-// then hands the payload + seed to the builder, which writes the task doc in
+// then hands the request + seed to the builder, which writes the task doc in
 // the ARK-BLOODHOUND namespace and retains the clue for the finding header.
-// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947, R3006, R3007
-func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload string, notags bool) {
+// The request carries the hunt's file scope, which reaches both the seed's
+// substrate filter and the secretary's ready-made filter string (R3185, R3189).
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947, R3006, R3007, R3185
+func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req bloodhoundReq) {
 	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
@@ -730,8 +802,8 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 	// with no derivation side-effects. Only Recall reaches the value→chunk tag
 	// axis (R2905/R2906) the subagent's content-only `ark search` cannot. A
 	// failed seed is not fatal — the empty-seed note still dispatches. R3006, R3007
-	seed := w.renderSeed(payload, notags)
-	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, payload, seed, notags); err != nil {
+	seed := w.renderSeed(req)
+	if err := w.builder.RecallBloodhoundOpen(sessionID, bid, req, seed); err != nil {
 		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
@@ -744,11 +816,23 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, payload
 // the wire (the crank handle opens each with `ark chunks --wrap recall <path:range>`). A
 // nil/empty result renders the empty-seed note so the task still dispatches.
 // When notags, the per-line `[tags]` are omitted — a no-tags hunt won't propose,
-// so the bridge vocabulary is dead weight (R3110). R3006
-// CRC: crc-RecallWatcher.md | R3006, R3110
-func renderBloodhoundSeed(result *RecallResult, notags bool) string {
+// so the bridge vocabulary is dead weight (R3110).
+//
+// A hunt whose positive globs matched no indexed file gets its own note naming
+// them (R3188). That case is *not* the ordinary empty seed: it says the scope
+// was wrong, where the plain note says the corpus was empty. Collapsing the two
+// would hand back a confident "nothing found" for a mistyped glob, which is the
+// one failure a reader cannot detect. R3006
+// CRC: crc-RecallWatcher.md | R3006, R3110, R3188
+func renderBloodhoundSeed(result *RecallResult, req bloodhoundReq) string {
+	notags := req.notags
 	var sb strings.Builder
 	sb.WriteString("## Recall seed\n\n")
+	if result != nil && result.ScopeEmpty {
+		fmt.Fprintf(&sb, "_(**scope matched no indexed file**: %s — the hunt's include globs match nothing in the corpus, so this seed is empty for that reason and not because the corpus lacks an answer. Search without them, or report the scope as wrong.)_\n",
+			strings.Join(req.filterFiles, ", "))
+		return sb.String()
+	}
 	if result == nil || len(result.Chunks) == 0 {
 		sb.WriteString("_(no corpus matches — start from your own searches)_\n")
 		return sb.String()

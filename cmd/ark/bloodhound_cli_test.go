@@ -79,7 +79,7 @@ func TestResolveClue(t *testing.T) {
 // breaks intact (R3044, R3046).
 func TestBuildSearchPayload(t *testing.T) {
 	clue := "idea one\n\nidea two"
-	p := buildSearchPayload(clue, "specs", "investigate", "passages", false)
+	p := buildSearchPayload(clue, "specs", "investigate", "passages", false, nil, nil)
 	if !strings.HasPrefix(p, "scope: specs\ndepth: investigate\nwant: passages\n") {
 		t.Errorf("metadata should lead:\n%q", p)
 	}
@@ -89,7 +89,7 @@ func TestBuildSearchPayload(t *testing.T) {
 	if !strings.HasSuffix(strings.TrimRight(p, "\n"), clue) {
 		t.Errorf("clue body (with blank-line break) should be last:\n%q", p)
 	}
-	if pr := buildSearchPayload(clue, "all", "lookup", "passages", true); !strings.Contains(pr, "curate: false\n") {
+	if pr := buildSearchPayload(clue, "all", "lookup", "passages", true, nil, nil); !strings.Contains(pr, "curate: false\n") {
 		t.Errorf("--raw should add curate:false:\n%q", pr)
 	}
 }

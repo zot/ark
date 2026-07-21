@@ -455,8 +455,10 @@ func (w *RecallWatcher) enhanceRequestDoc(path, composite string) error {
 	// CLI hunts are findings-only: their recommends have no in-session builder to
 	// land in (results route through Luhmann curation), so suppress step 8's tag
 	// proposals here — #38's tag-proposing is the in-session bloodhound path (R3110).
-	seed := w.renderSeed(payload, true)
-	body := buildSearchTask(composite, cliRequestID(path), payload, seed, true)
+	filter, exclude := scopeOf(payload)
+	req := bloodhoundReq{payload: payload, notags: true, filterFiles: filter, excludeFiles: exclude}
+	seed := w.renderSeed(req)
+	body := buildSearchTask(composite, cliRequestID(path), seed, req)
 	// UpdateTmpFile (not Add) — the request doc already exists (the CLI created
 	// it); this overwrites it in one write-actor flush, re-indexing the head tag
 	// from @ark-bloodhound-cli to @ark-secretary-work=<composite> (the baton flip).
@@ -517,8 +519,39 @@ const bloodhoundSeedKCap = 30
 
 // seedMetaKeys are the leading `key:` metadata fields clueOf strips before the
 // clue body — they shape the hunt (crank handle) but are not search ideas
-// (R3044). `curate:` is the #30 raw marker; the others are the CLI's flags.
-var seedMetaKeys = []string{"scope:", "depth:", "want:", "curate:"}
+// (R3044). `curate:` is the #30 raw marker; `filter-files:`/`exclude-files:`
+// are the hunt's file scope (R3191, repeatable); the others are the CLI's flags.
+var seedMetaKeys = []string{"scope:", "depth:", "want:", "curate:", "filter-files:", "exclude-files:"}
+
+// scopeKeys maps a scope metadata key to whether it is the positive side.
+var scopeKeys = map[string]bool{"filter-files:": true, "exclude-files:": false}
+
+// scopeOf pulls a CLI hunt's file scope out of the leading metadata lines the
+// CLI wrote (R3191). Both keys repeat, one glob per line; the CLI anchored them
+// against its own cwd before submitting (R3193), so these arrive absolute and
+// are used as-is.
+// CRC: crc-RecallWatcher.md | R3191, R3193
+func scopeOf(payload string) (filter, exclude []string) {
+	for _, line := range strings.Split(payload, "\n") {
+		t := strings.TrimSpace(line)
+		lower := strings.ToLower(t)
+		for key, positive := range scopeKeys {
+			if !strings.HasPrefix(lower, key) {
+				continue
+			}
+			glob := strings.TrimSpace(t[len(key):])
+			if glob == "" {
+				continue
+			}
+			if positive {
+				filter = append(filter, glob)
+			} else {
+				exclude = append(exclude, glob)
+			}
+		}
+	}
+	return filter, exclude
+}
 
 // clueOf extracts the searchable clue from a bloodhound payload: leading
 // scope/depth/want/curate metadata lines (and blank lines) are stripped, and the
@@ -576,19 +609,27 @@ func seedInputs(payload string) ([]ConnectionsInput, int) {
 // renderSeed runs the hypergraph-aware combined search on the clue and renders
 // the ## Recall seed block. Shared by dispatchBloodhound and the CLI Fixer. The
 // clue is split per paragraph (seedInputs) so each idea in a complex clue seeds
-// its own matches. A failed seed is not fatal — the empty-seed note still
-// dispatches the hunt. R3006, R3007, R3043
-func (w *RecallWatcher) renderSeed(payload string, notags bool) string {
-	inputs, k := seedInputs(payload)
+// its own matches. The hunt's file scope rides into RecallOpts, where it filters
+// at admission so the seed's top-K is computed within the scope rather than
+// trimmed to it afterwards (R3185, R3186). A failed seed is not fatal — the
+// empty-seed note still dispatches the hunt. R3006, R3007, R3043
+func (w *RecallWatcher) renderSeed(req bloodhoundReq) string {
+	inputs, k := seedInputs(req.payload)
 	result, err := w.librarian.Recall(
 		inputs,
-		RecallOpts{K: k, IncludeContent: true, KeepTagless: true},
+		RecallOpts{
+			K:              k,
+			IncludeContent: true,
+			KeepTagless:    true,
+			FilterFiles:    req.filterFiles,
+			ExcludeFiles:   req.excludeFiles,
+		},
 	)
 	if err != nil {
 		log.Printf("bloodhound-cli: seed Recall failed: %v", err)
 		result = nil
 	}
-	return renderBloodhoundSeed(result, notags)
+	return renderBloodhoundSeed(result, req)
 }
 
 // readCLIRequestPayload reads the request doc and strips its @ark-bloodhound-cli

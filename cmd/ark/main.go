@@ -965,24 +965,14 @@ func formatFilterStack(entries []filterEntry) string {
 }
 
 // anchorFilterToCwd resolves a -files/-exclude-files glob to an absolute
-// pattern relative to cwd, the way UNIX tools treat relative paths. Patterns
-// that are already absolute (`/`), home-relative (`~`), or virtual tmp://
-// overlay docs are left untouched. CLI-side only — the server cannot know the
-// client's cwd. A trailing slash (directory marker) is preserved across the
-// join, which filepath.Join would otherwise strip.
-// CRC: crc-CLI.md | R2958
+// pattern relative to cwd, the way UNIX tools treat relative paths. CLI-side
+// only — the server cannot know the client's cwd. The rule itself lives in
+// ark.AnchorGlobToDir, shared with the bloodhound's hunt scoping, which
+// anchors to the emitting session's cwd instead; one rule, several notions of
+// "the current project".
+// CRC: crc-CLI.md | R2958, R3193
 func anchorFilterToCwd(glob, cwd string) string {
-	if glob == "" ||
-		strings.HasPrefix(glob, "/") ||
-		strings.HasPrefix(glob, "~") ||
-		strings.HasPrefix(glob, "tmp://") {
-		return glob
-	}
-	joined := filepath.Join(cwd, glob)
-	if strings.HasSuffix(glob, "/") {
-		joined += "/"
-	}
-	return joined
+	return ark.AnchorGlobToDir(glob, cwd)
 }
 
 // CRC: crc-CLI.md | R77, R78

@@ -224,6 +224,22 @@ Repeatable glob flags supported by `status`, `files`, `tag files`,
 positive filters, all paths are candidates. `--exclude-files` is
 negative and applies after the positive set.
 
+**These are not the same as `search -files`.** Two path-glob mechanisms
+exist and they match differently — worth knowing before assuming a glob
+means the same thing in both places:
+
+| | `--filter-files` / `--exclude-files` (above) | `search -files` (and `bloodhound search`'s flags) |
+|---|---|---|
+| unanchored glob | prefixed `**/`, so `*.md` matches at any depth | joined to the client's cwd, so `*.md` means top-level only |
+| matcher | `ark.Matcher` (anchor, then doublestar) | basename match, else full-path doublestar |
+| anchoring | server-side | client-side, before the request is sent |
+
+`bloodhound search --filter-files` follows the **`search -files`** column
+despite the flag name, because a hunt's globs also reach the secretary's
+own `ark search` calls and the two halves must agree
+([bloodhound.md](bloodhound.md), "Globs mean what `ark search -files`
+means").
+
 ### Aliases
 
 | Alias              | Resolves to  |
@@ -265,7 +281,7 @@ External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.m
 Both subcommands require `ark serve` **and** a running Luhmann orchestrator.
 
 ```
-ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--wait] [--timeout SECONDS] [--raw] [--markdown]
+ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--filter-files G] [--exclude-files G] [--wait] [--timeout SECONDS] [--raw] [--markdown]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
 ```
@@ -281,6 +297,8 @@ behind the one command (Batteries Included).
 | `--scope S`    | `all`        | search scope: `code` \| `specs` \| `design` \| `notes` \| `chat` \| `all` |
 | `--depth D`    | `lookup`     | `lookup` (one pass) \| `investigate` (tune until the stop condition)     |
 | `--want W`     | `passages`   | `answer` \| `passages` \| …                                             |
+| `--filter-files GLOB`  | — | Repeatable positive path filter scoping the hunt. Carries `search -files` semantics (**not** the `files`/`status` path filters above): unanchored globs are anchored CLI-side to the client's cwd, then matched by basename or full-path glob |
+| `--exclude-files GLOB` | — | Repeatable negative path filter, applied after the positive set (`search -without -files`)                                     |
 | `--wait`       | `false`      | block stubbornly on a busy pool / server bounce instead of failing fast |
 | `--timeout N`  | `300`        | seconds to wait for the result                                          |
 | `--raw`        | `false`      | skip Luhmann curation: return the secretary's own findings (markdown, Baby Food for agents) — you curate in your own context |

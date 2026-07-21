@@ -1009,6 +1009,50 @@ func filterChunkScores(scores []ChunkScore, keep []uint64) []ChunkScore {
 	return out
 }
 
+// AnchorGlobToDir resolves an unanchored `-files` glob against dir, the
+// caller's notion of "the current project". A glob that already names an
+// absolute location — leading `/`, `~`, or `tmp://` — is returned unchanged;
+// anything else joins to dir (a trailing `/` survives the join, since
+// filepath.Join drops it and the dir-pattern form is significant to Matcher).
+//
+// This is half of `-files` semantics, the other half being pathMatchesGlob:
+// anchor, then match. It lives here rather than in the CLI because more than
+// one surface needs the same rule — the search CLI anchors to the client's
+// cwd, and a bloodhound hunt anchors to the emitting session's cwd. Anchoring
+// once, at the surface that knows the directory, is what lets a hunt's Go-side
+// seed and the secretary's own `ark search -files` calls agree: what travels
+// between them is always absolute, so nothing is anchored twice and no
+// server-side component has to invent a working directory.
+// CRC: crc-Searcher.md | R3192, R3193
+func AnchorGlobToDir(glob, dir string) string {
+	if glob == "" || dir == "" ||
+		strings.HasPrefix(glob, "/") ||
+		strings.HasPrefix(glob, "~") ||
+		strings.HasPrefix(glob, "tmp://") {
+		return glob
+	}
+	joined := filepath.Join(dir, glob)
+	if strings.HasSuffix(glob, "/") {
+		joined += "/"
+	}
+	return joined
+}
+
+// AnchorGlobsToDir maps AnchorGlobToDir over a glob list, dropping empty
+// entries so a stray `filter-files=""` cannot become a glob that matches
+// nothing. Returns nil for an empty result.
+// CRC: crc-Searcher.md | R3185, R3192
+func AnchorGlobsToDir(globs []string, dir string) []string {
+	var out []string
+	for _, g := range globs {
+		if g = strings.TrimSpace(g); g == "" {
+			continue
+		}
+		out = append(out, AnchorGlobToDir(g, dir))
+	}
+	return out
+}
+
 // matchFilesGlob returns the set of fileIDs whose path matches glob —
 // either by basename (`filepath.Match`) or full-path doublestar. A leading
 // `~/` (or `~user/`) is expanded first, so `-files '~/.claude/projects/**'`

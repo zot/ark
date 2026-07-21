@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -110,23 +110,36 @@ composes and writes each curation doc via the in-process
     `ark-bloodhound-result`, independent of the ambient bullets above:
     `scanBloodhounds(newBytes)` parses each
     `type:"assistant"` line's text (reusing `assistantText`) and
-    regex-matches `<BLOODHOUND( notags)?>(.*?)</BLOODHOUND>` (non-greedy,
-    DOTALL) — each capture is one payload, with a `notags` flag set when the
-    opening tag carried the attribute (R3110). Deterministic, once-only
+    regex-matches `<BLOODHOUND(\s[^>]*)?>(.*?)</BLOODHOUND>` (non-greedy,
+    DOTALL) — each capture is one payload, and the opening tag's **attribute
+    run** is parsed by `parseBloodhoundAttrs` into the `notags` flag (R3110)
+    plus the repeatable `filter-files=` / `exclude-files=` globs (R3184,
+    R3185). The leading `\s` is what keeps `<BLOODHOUNDER>` from matching;
+    attributes are order-independent, repeat freely, and an unrecognized one is
+    ignored rather than failing the match. Empty attribute values are dropped
+    (R3185), and each glob is anchored **once, here** via `AnchorGlobToDir`
+    against the session's own working directory — the `cwd` field of the same
+    assistant JSONL line the watermark rode in on, which every assistant line
+    carries (R3193). What leaves this scan is therefore always an absolute
+    glob; no cwd is inferred later and nothing is anchored twice.
+    Deterministic, once-only
     (newBytes is the newly-appended slice), and orthogonal to the
     turn machinery: it never reads or touches
     `pendingTimer`/`armReady`/`pendingChunks`, so a watermark
     dispatches on its own schedule and neither triggers nor
     suppresses a curation fire (R2935). For each payload, allocate
     `<B>` (`nextBloodhoundLocked`) under the lock and post a closure
-    to `jobs` → `dispatchBloodhound(…, notags)`, keeping OnAppend a fast
+    to `jobs` → `dispatchBloodhound(…, req)`, keeping OnAppend a fast
     line-scan (R2936). `scanRecallTagsDirective` separately reads the ambient
     tag-recommend toggle — `<RECALL notags/>` (suppress) / `<RECALL tags/>`
     (restore), last marker in the batch wins — and calls
     `builder.SetRecallNotags(session)` (R3112) or `ClearRecallNotags(session)`
     (R3113), so `RecommendItem` drops ambient recommends only while the session
     is suppressed; the `## Surface:` arm is unaffected.
-- dispatchBloodhound(sessionID, B, payload, notags): worker-goroutine job.
+- dispatchBloodhound(sessionID, B, req bloodhoundReq): worker-goroutine job.
+  `bloodhoundReq` carries the clue payload, the `notags` opt-out, and the
+  anchored file scope, so one value threads the hunt instead of a growing
+  parameter list.
   Re-checks the **bloodhound gate** as the write-time backstop —
   secretary present (`ark-secretary-work`) AND `ark-bloodhound-result`
   subscribed (R2947). Then **seeds the hunt** via `renderSeed` (R3006, R3007,
@@ -146,9 +159,18 @@ composes and writes each curation doc via the in-process
   locator list, no chunkid; empty-seed note when the corpus matches nothing).
   When `notags` is set (R3110), `renderBloodhoundSeed` omits the `[tags]` from
   each locator line and the search crank handle instructs the secretary to
-  propose no connecting tags, so the hunt returns findings only. The
+  propose no connecting tags, so the hunt returns findings only. When the hunt
+  carries a **file scope** (R3185), the anchored globs go into `RecallOpts`
+  so `Recall` filters at admission (R3186, owned by crc-Librarian.md) — the
+  seed's top-K is computed *within* the scope, not narrowed after ranking —
+  and `renderBloodhoundSeed` emits the **zero-match note** naming the positive
+  globs when `RecallResult.ScopeEmpty` reports that none of them matched any
+  indexed file (R3188). That note is distinct from the ordinary empty-seed
+  note: it says *the scope was wrong*, not *the corpus was empty*, which is
+  the difference between a mistyped glob and a real negative. The hunt
+  dispatches either way. The
   seed string is passed to
-  `builder.RecallBloodhoundOpen(sessionID, B, payload, seed)` — writes
+  `builder.RecallBloodhoundOpen(sessionID, B, req, seed)` — writes
   the task doc in the `ARK-BLOODHOUND` namespace and retains the clue for
   the finding header (R2937, owned by crc-RecallAgentBuilder.md). Reaching
   the value→chunk tag axis (R2905/R2906) is the point: the subagent's own

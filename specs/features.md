@@ -345,6 +345,14 @@ recommends *connecting tags* on the chunks it surfaced, promoting a query that
 proved its worth into a persistent tag (**Query Crystallization**) — the
 assistant winnows the proposals at its discernment gate and authors the durable
 candidates.
+A hunt can be **scoped to files**: repeatable `filter-files=` /
+`exclude-files=` attributes on the watermark (and matching flags on
+`ark bloodhound search`) narrow it to a source tree or keep the chat logs out.
+Scoping is opt-in per hunt and legitimate precisely because a hunt is *pull* —
+the ambient side stays unscoped on purpose. The globs filter inside the
+substrate's admission, so a scoped hunt's top-K is computed within the scope
+rather than trimmed to it afterwards, and a positive glob matching no indexed
+file says so instead of returning a confident empty hunt.
 The two are independent opt-ins (each its own subscription), so the
 bloodhound (level 3) can run without the ambient firehose (level 4). Async
 by default. The secretary is one agent doing both — a

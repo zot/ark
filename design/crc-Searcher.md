@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -43,6 +43,16 @@ Optionally retrieves chunk text or full file content.
   run preliminary FTS searches, collect matching file IDs. Positives
   intersect, negatives subtract. Returns a microfts2 WithOnly
   search option (negatives subtracted from the ID set).
+- AnchorGlobToDir(glob, dir) string (R3192, R3193): the shared
+  `-files` anchoring rule, lifted out of the search CLI so every caller
+  applies one rule. A glob beginning `/`, `~`, or `tmp://` is already
+  absolute and passes through; anything else joins to `dir` (a trailing
+  `/` is preserved). `cmd/ark`'s `anchorFilterToCwd` becomes a thin
+  wrapper passing the client's cwd, and the bloodhound's two surfaces pass
+  the session's cwd and the client's cwd respectively — so a hunt's globs
+  and the secretary's own `-files` searches resolve identically instead of
+  against two different directories. Lives beside `pathMatchesGlob`, the
+  matcher it feeds: together they *are* `-files` semantics.
 - Merge(ftsResults []microfts2.SearchResult, vecResults []ChunkScore):
   combine by (FileID, ChunkID) key, sum or weighted-combine scores (R1918)
 - Intersect(ftsResults []microfts2.SearchResult, vecResults []ChunkScore):

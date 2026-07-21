@@ -888,7 +888,7 @@ FIRST read the ## Recall seed above: strong candidates the deluxe combined searc
 
 Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search with ~/.ark/ark search; open any indexed file with ~/.ark/ark chunks --wrap recall <path:range> (a scoped range) or ~/.ark/ark fetch --wrap recall <path> (the whole file) — --wrap gives you clean text with a provenance tag instead of JSON; locate files by name with ~/.ark/ark files <pattern>; report with ~/.ark/ark connections recall (surface / recommend / finding / close). The Read tool, grep, find, ls, and awk are DENIED, and cat only reaches user-approved paths (it stalls on anything else) — so to look inside any indexed file use ~/.ark/ark chunks or ~/.ark/ark fetch, never Read or cat.
 
-1. SCOPE -> filters. Turn the scope word into search filters (-files globs are cwd-relative: 'specs/**' = this project's specs; '**/' for any depth):
+1. SCOPE -> filters. If a **scope:** directive appears above, copy its filter string verbatim into EVERY search and keep the mapping below as well (both are -files rows; they intersect). Then turn the scope word into search filters (-files globs are cwd-relative: 'specs/**' = this project's specs; '**/' for any depth):
      code   -> -with -files '**/*.go'
      specs  -> -with -files 'specs/**'      design -> -with -files 'design/**'
      notes  -> prose: top-level *.md, .scratch/**, knowledge/**
@@ -915,16 +915,20 @@ Your ONLY tools on this hunt are ~/.ark/ark commands — nothing else. Search wi
 
 // buildSearchTask renders the bloodhound task doc in order: the curate head tag
 // (so it rides the tube), the ## Search task header with the cookie + raw
-// payload, the pre-rendered ## Recall seed block (R3006), and the search crank
-// handle with the cookie filled. When notags, a "no-tags" directive rides right
-// under the header so the crank handle's step 8 (propose tags) is skipped for
-// this hunt — findings only (R3110). R2937, R2938, R3006, R3110
-func buildSearchTask(session, cookie, payload, seed string, notags bool) string {
+// payload, any directives, the pre-rendered ## Recall seed block (R3006), and
+// the search crank handle with the cookie filled. When notags, a "no-tags"
+// directive rides right under the header so the crank handle's step 8 (propose
+// tags) is skipped for this hunt — findings only (R3110). A scoped hunt gets
+// its filter string the same way (R3189). R2937, R2938, R3006, R3110, R3189
+func buildSearchTask(session, cookie, seed string, req bloodhoundReq) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "@ark-secretary-work: %s\n\n", session)
-	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, payload)
-	if notags {
+	fmt.Fprintf(&sb, "## Search task %s\n\n%s\n\n", cookie, req.payload)
+	if req.notags {
 		sb.WriteString("**no-tags: this hunt returns findings only — SKIP step 8 (propose connecting tags).**\n\n")
+	}
+	if directive := scopeDirective(req); directive != "" {
+		sb.WriteString(directive)
 	}
 	if seed != "" {
 		fmt.Fprintf(&sb, "%s\n", seed)
@@ -933,18 +937,45 @@ func buildSearchTask(session, cookie, payload, seed string, notags bool) string 
 	return sb.String()
 }
 
+// scopeDirective renders a hunt's file scope as a ready-made filter string the
+// secretary appends to every search verbatim. The globs arrive already anchored
+// (R3193), so this only has to quote them and say what to do with them.
+//
+// The point is that the weak agent never composes a glob: it copies a finished
+// string. A scope that had to be re-derived by a Haiku from prose would be
+// mistyped or dropped eventually, and a dropped scope fails silently — the hunt
+// simply searches more than it was told to, and reports nothing unusual
+// (Shoulder the Fat / Baby Food). The string composes with, rather than
+// replaces, the crank handle's own scope-word mapping: both are `-with -files`
+// rows and `ark search` intersects them (R3194).
+// CRC: crc-RecallAgentBuilder.md | R3189, R3194
+func scopeDirective(req bloodhoundReq) string {
+	if !req.scoped() {
+		return ""
+	}
+	var filters []string
+	for _, g := range req.filterFiles {
+		filters = append(filters, fmt.Sprintf("-with -files '%s'", g))
+	}
+	for _, g := range req.excludeFiles {
+		filters = append(filters, fmt.Sprintf("-without -files '%s'", g))
+	}
+	return fmt.Sprintf("**scope: append these filters to EVERY `ark search` on this hunt, exactly as written — %s. They narrow the hunt to what was asked for; add them to the step 1 scope filters rather than replacing them, and do not edit or re-derive the globs.**\n\n",
+		strings.Join(filters, " "))
+}
+
 // RecallBloodhoundOpen writes the directed-search task doc into the
 // ARK-BLOODHOUND namespace and retains the clue for the finding header. The
-// seed is the watcher's pre-rendered Recall result (R3006); notags suppresses
-// the tag-proposal step for this hunt (R3110). Go-internal, called by the
-// watcher's dispatchBloodhound.
-// CRC: crc-RecallAgentBuilder.md | R2937, R2938, R3006, R3110
-func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, payload, seed string, notags bool) error {
+// seed is the watcher's pre-rendered Recall result (R3006); req carries the
+// notags opt-out (R3110) and the hunt's file scope (R3185). Go-internal, called
+// by the watcher's dispatchBloodhound.
+// CRC: crc-RecallAgentBuilder.md | R2937, R2938, R3006, R3110, R3185
+func (b *RecallAgentBuilder) RecallBloodhoundOpen(session string, bid uint64, req bloodhoundReq, seed string) error {
 	cookie := bloodhoundToken(session, bid)
 	b.mu.Lock()
-	b.bloodhoundClues[cookie] = payload
+	b.bloodhoundClues[cookie] = req.payload
 	b.mu.Unlock()
-	body := buildSearchTask(session, cookie, payload, seed, notags)
+	body := buildSearchTask(session, cookie, seed, req)
 	path := bloodhoundTaskPath(session, bid)
 	return SyncVoid(b.db, func(db *DB) error {
 		_, e := db.AddTmpFile(path, "markdown", []byte(body))

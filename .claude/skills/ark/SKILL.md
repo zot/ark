@@ -7,9 +7,11 @@ sessionid=${CLAUDE_SESSION_ID}
 session8 is the prefix.
 
 **Searching is baseline ark literacy — invoke `/ark-search` first.** It carries
-the detective's craft: the filter-stack, the investigation loop, and how to
-direct the warm `<BLOODHOUND>` bloodhound (turn the bloodhound on with
-`/bloodhound`; ambient recall with `/recall`). Everything below assumes you can
+the detective's craft at the CLI: the filter-stack and the investigation loop,
+which need no machinery and work in any session. The warm paths are separate
+skills because they are gated on machinery you have to start: `/bloodhound`
+turns on directed search and owns the `<BLOODHOUND>` watermark craft;
+`/recall` adds the ambient push on top. Everything below assumes you can
 search well.
 
 ## Bootstrap
@@ -182,10 +184,11 @@ Agent(subagent_type="ark-messenger", run_in_background=true, prompt="Send a requ
 Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incoming, outgoing counts, what's new or stale. Use --unmatched for unanswered items.")
 ```
 
-**Search** — to search *well yourself* — the filter-stack craft, the
-investigation loop, and directing the warm **bloodhound** (emit a `<BLOODHOUND>`
-watermark; it runs the hunt and returns a curated finding via `recall listen`) —
-**invoke `/ark-search`.** The detective's craft lives there.
+**Search** — to search *well yourself* at the CLI — the filter-stack craft and
+the investigation loop — **invoke `/ark-search`.** To *direct* a warm hunt
+instead (emit a `<BLOODHOUND>` watermark; it runs the hunt and returns a curated
+finding via `recall listen`) — **invoke `/bloodhound`**, which sets up the
+secretary and `listen` the watermark depends on and owns that craft.
 
 To *delegate* a question instead, spawn ark-searcher — it expands queries and
 curates results, so you never interpret raw search results yourself:

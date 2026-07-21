@@ -114,8 +114,8 @@ func TestBuildSearchTask(t *testing.T) {
 	cookie := bloodhoundToken("sess-A", 3)
 	seed := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{
 		{Path: "knowledge/bm25.md", Range: "12-19", Score: 0.72, Content: "BM25 was considered for recall", Tags: []RecallTag{{Tag: "topic"}}},
-	}}, false)
-	body := buildSearchTask("sess-A", cookie, "where is the tag-strip logic? pointers", seed, false)
+	}}, bloodhoundReq{})
+	body := buildSearchTask("sess-A", cookie, seed, bloodhoundReq{payload: "where is the tag-strip logic? pointers"})
 	for _, want := range []string{
 		"@ark-secretary-work: sess-A",
 		"## Search task " + cookie,
@@ -152,7 +152,7 @@ func TestBuildSearchTask(t *testing.T) {
 func TestRenderBloodhoundSeed(t *testing.T) {
 	got := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{
 		{ChunkID: 84213, Path: "knowledge/bm25.md", Range: "12-19", Score: 0.72, Content: "BM25 was considered\nsecond line", Tags: []RecallTag{{Tag: "topic"}, {Tag: "method"}}},
-	}}, false)
+	}}, bloodhoundReq{})
 	for _, want := range []string{
 		"## Recall seed",
 		"knowledge/bm25.md:12-19",
@@ -169,7 +169,7 @@ func TestRenderBloodhoundSeed(t *testing.T) {
 	}
 	// Empty / nil result → empty-seed note, still a ## Recall seed block.
 	for _, empty := range []*RecallResult{nil, {}} {
-		note := renderBloodhoundSeed(empty, false)
+		note := renderBloodhoundSeed(empty, bloodhoundReq{})
 		if !strings.Contains(note, "## Recall seed") || !strings.Contains(note, "no corpus matches") {
 			t.Errorf("empty seed note wrong: %q", note)
 		}
@@ -177,7 +177,7 @@ func TestRenderBloodhoundSeed(t *testing.T) {
 	// notags omits the [tags] but keeps the locator line. (R3110)
 	tagged := renderBloodhoundSeed(&RecallResult{Chunks: []RecalledChunk{
 		{Path: "k/x.md", Range: "1-3", Score: 0.5, Content: "c", Tags: []RecallTag{{Tag: "topic"}}},
-	}}, true)
+	}}, bloodhoundReq{notags: true})
 	if strings.Contains(tagged, "[topic]") {
 		t.Errorf("notags seed should omit [tags]:\n%s", tagged)
 	}
@@ -210,7 +210,7 @@ func TestBloodhoundRoundTrip(t *testing.T) {
 	loc := info.Path + ":" + info.Range
 
 	const sess = "sess-A"
-	if err := b.RecallBloodhoundOpen(sess, 1, "where is the tag-strip logic? pointers", renderBloodhoundSeed(nil, false), false); err != nil {
+	if err := b.RecallBloodhoundOpen(sess, 1, bloodhoundReq{payload: "where is the tag-strip logic? pointers"}, renderBloodhoundSeed(nil, bloodhoundReq{})); err != nil {
 		t.Fatal(err)
 	}
 	cookie := bloodhoundToken(sess, 1)
@@ -247,7 +247,7 @@ func TestBloodhoundRoundTrip(t *testing.T) {
 	}
 
 	// Silent close: a fresh task with no findings writes no finding doc.
-	if err := b.RecallBloodhoundOpen(sess, 2, "anything?", "", false); err != nil {
+	if err := b.RecallBloodhoundOpen(sess, 2, bloodhoundReq{payload: "anything?"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.closeBloodhound(bloodhoundToken(sess, 2), sess, 2, 9); err != nil {
@@ -280,7 +280,7 @@ func TestBloodhoundRecommendRidesFindingStream(t *testing.T) {
 	loc := info.Path + ":" + info.Range
 
 	const sess = "sess-R"
-	if err := b.RecallBloodhoundOpen(sess, 1, "french-indian fusion dishes", "", false); err != nil {
+	if err := b.RecallBloodhoundOpen(sess, 1, bloodhoundReq{payload: "french-indian fusion dishes"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	cookie := bloodhoundToken(sess, 1)
@@ -314,14 +314,14 @@ func TestBloodhoundRecommendRidesFindingStream(t *testing.T) {
 // (R3108); a notags hunt gets the skip directive and a bare one does not (R3110).
 func TestBuildSearchTaskProposeStep(t *testing.T) {
 	cookie := bloodhoundToken("s", 1)
-	withTags := buildSearchTask("s", cookie, "clue", "", false)
+	withTags := buildSearchTask("s", cookie, "", bloodhoundReq{payload: "clue"})
 	if !strings.Contains(withTags, "PROPOSE connecting tags") || !strings.Contains(withTags, "connections recall recommend") {
 		t.Errorf("crank handle missing the propose step (R3108):\n%s", withTags)
 	}
 	if strings.Contains(withTags, "no-tags:") {
 		t.Errorf("a bare hunt should carry no skip directive")
 	}
-	noTags := buildSearchTask("s", cookie, "clue", "", true)
+	noTags := buildSearchTask("s", cookie, "", bloodhoundReq{payload: "clue", notags: true})
 	if !strings.Contains(noTags, "no-tags:") || !strings.Contains(noTags, "SKIP step 8") {
 		t.Errorf("a notags hunt should carry the skip directive (R3110):\n%s", noTags)
 	}

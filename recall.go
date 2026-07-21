@@ -57,6 +57,17 @@ type RecallOpts struct {
 	// to author, their content never surfaces.
 	// R3082
 	ConversationChunks []uint64 `json:"conversationChunks,omitempty"`
+	// FilterFiles / ExcludeFiles scope the substrate to a set of paths.
+	// FilterFiles is positive (a candidate's file must match at least
+	// one; none present means every path is a candidate); ExcludeFiles
+	// is negative and wins over a match. Globs carry `ark search -files`
+	// semantics and are expected **already anchored** — the surface that
+	// knows the caller's project resolves them (R3193), so the substrate
+	// never infers a working directory. Applied at admission, before K,
+	// so a scoped result's top-K is computed within the scope.
+	// R3185, R3186, R3192
+	FilterFiles  []string `json:"filterFiles,omitempty"`
+	ExcludeFiles []string `json:"excludeFiles,omitempty"`
 }
 
 // discussedExclusion is the per-chunk lookup table built from the
@@ -128,6 +139,12 @@ func (x discussedExclusion) filter(tags []TagValue) []TagValue {
 type RecallResult struct {
 	Chunks  []RecalledChunk `json:"chunks"`
 	Warning string          `json:"warning,omitempty"`
+	// ScopeEmpty reports that the caller supplied positive FilterFiles
+	// globs and none of them matched any indexed file — so an empty
+	// result means the scope was wrong, not that the corpus had nothing.
+	// The substrate states the fact; phrasing it for a reader is the
+	// caller's job. R3188
+	ScopeEmpty bool `json:"scopeEmpty,omitempty"`
 }
 
 // RecalledChunk is one retrieved chunk with similarity scores and metadata.
@@ -262,6 +279,99 @@ type chunkScoresAcc struct {
 	alreadyOn map[string]bool
 }
 
+// recallScope is one Recall's resolved path scope. `allowed` holds the
+// fileIDs whose canonical path passes the caller's globs, resolved once by
+// walking the FileIDPaths cache — so the glob work is one evaluation per
+// indexed file, not one per candidate chunk. `verdict` memoizes the
+// per-chunk answer, since a chunk reached by several substrate legs must
+// not pay for its fileID lookup more than once.
+//
+// Resolving up front also answers R3188 for free: an `allowed` set that
+// came out empty while positive globs were supplied means the globs match
+// no indexed file at all, which is a wrong scope rather than an empty
+// corpus — a distinction the caller cannot otherwise make.
+// CRC: crc-Librarian.md | R3185, R3186, R3188, R3192
+type recallScope struct {
+	active  bool
+	allowed map[uint64]bool
+	empty   bool
+	verdict map[uint64]bool
+}
+
+// resolveRecallScope builds the scope from already-anchored globs (R3193 —
+// anchoring belongs to the surface that knows the project). Path matching is
+// pathMatchesGlob, the matcher `ark search -files` uses, so a hunt's Go-side
+// seed and the secretary's own CLI searches read a glob the same way (R3192).
+// CRC: crc-Librarian.md | R3185, R3186, R3188, R3192
+func (op *recallOp) resolveRecallScope(filterFiles, excludeFiles []string) recallScope {
+	if len(filterFiles) == 0 && len(excludeFiles) == 0 {
+		return recallScope{}
+	}
+	paths, err := op.db.fts.FileIDPaths()
+	if err != nil {
+		// Without the path cache no scope can be honored. Failing open
+		// would silently run the hunt unscoped, which is the wrong way
+		// to be wrong: report the scope as matching nothing so the
+		// caller says so rather than quietly widening.
+		log.Printf("recall: scope resolution failed, no paths: %v", err)
+		return recallScope{active: true, allowed: map[uint64]bool{}, empty: len(filterFiles) > 0, verdict: map[uint64]bool{}}
+	}
+	allowed := make(map[uint64]bool)
+	for fileID, path := range paths {
+		if scopeAdmitsPath(path, filterFiles, excludeFiles) {
+			allowed[fileID] = true
+		}
+	}
+	return recallScope{
+		active:  true,
+		allowed: allowed,
+		empty:   len(filterFiles) > 0 && len(allowed) == 0,
+		verdict: make(map[uint64]bool),
+	}
+}
+
+// scopeAdmitsPath applies the positive-then-negative glob rule: with any
+// positive globs the path must match one of them, and any exclusion match
+// rejects regardless. Empty on both sides admits everything.
+// CRC: crc-Librarian.md | R3185, R3192
+func scopeAdmitsPath(path string, filterFiles, excludeFiles []string) bool {
+	if len(filterFiles) > 0 {
+		matched := false
+		for _, glob := range filterFiles {
+			if pathMatchesGlob(ExpandTilde(glob), path) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, glob := range excludeFiles {
+		if pathMatchesGlob(ExpandTilde(glob), path) {
+			return false
+		}
+	}
+	return true
+}
+
+// admits reports whether chunkID's owning file is in scope. An inactive
+// scope admits everything; a chunk whose file cannot be resolved is
+// rejected, since an unplaceable chunk cannot be shown to be in scope.
+// CRC: crc-Librarian.md | R3186
+func (s *recallScope) admits(op *recallOp, chunkID uint64) bool {
+	if !s.active {
+		return true
+	}
+	if v, ok := s.verdict[chunkID]; ok {
+		return v
+	}
+	fileID, ok := op.db.ChunkFileID(chunkID)
+	v := ok && s.allowed[fileID]
+	s.verdict[chunkID] = v
+	return v
+}
+
 // recallOp carries one Recall computation and is the sole mediator of its
 // fts-cache DB access (Monadic Wrapper / operation object). It reads through
 // op.db, a view bound to a private fts.Copy(), so its Go-side cache reads —
@@ -392,6 +502,21 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		return acc
 	}
 
+	// The caller's path scope, resolved once. admitInScope wraps admit for
+	// the three *search-candidate* legs (vector-EC, trigram-EC, tag-axis) so
+	// out-of-scope chunks never reach the scored set and K is applied to a
+	// set that is already within scope (R3186). The conversation-chunk
+	// injection below calls plain admit: those chunks are the caller's own
+	// context rather than search hits, so a file scope must not drop them
+	// (R3187). R3185, R3186
+	scope := op.resolveRecallScope(opts.FilterFiles, opts.ExcludeFiles)
+	admitInScope := func(chunkID uint64) *chunkScoresAcc {
+		if !scope.admits(op, chunkID) {
+			return nil
+		}
+		return admit(chunkID)
+	}
+
 	// Tag-axis value universe (R2905), scanned once: every (tag, value)
 	// attached to chunks, plus their EV vectors when embeddings are
 	// available. The trigram leg works without a model (seq-recall #1.16).
@@ -449,9 +574,9 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 					if selfChunks[cs.ChunkID] {
 						continue
 					}
-					acc := admit(cs.ChunkID)
+					acc := admitInScope(cs.ChunkID)
 					if acc == nil {
-						continue // tagless chunk and KeepTagless=false
+						continue // out of scope, or tagless with KeepTagless=false
 					}
 					normalized := normalizeCos(cs.Score)
 					if normalized > acc.vectorEC {
@@ -475,9 +600,9 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 					if selfChunks[cid] {
 						continue
 					}
-					acc := admit(cid)
+					acc := admitInScope(cid)
 					if acc == nil {
-						continue // tagless chunk and KeepTagless=false
+						continue // out of scope, or tagless with KeepTagless=false
 					}
 					chunkText, terr := substrateChunkText(op.db, cid)
 					if terr != nil {
@@ -543,7 +668,7 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 					if selfChunks[cid] {
 						continue
 					}
-					acc := admit(cid)
+					acc := admitInScope(cid)
 					if acc == nil {
 						continue
 					}
@@ -564,6 +689,11 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	// self-exclusion is bypassed by construction. These chunks carry no
 	// search-hit scores, so the 2×2 does not surface them; section 5d appends
 	// the ones that earned proposals (rendered tag-only by the watcher). R3082
+	//
+	// R3187: plain admit, deliberately — not admitInScope. These chunks are the
+	// caller's own conversation context, not search candidates, so a file scope
+	// must not reach them; scoping a hunt would otherwise also stop the
+	// conversation from earning proposals, which no caller asked for.
 	if opts.Propose {
 		for _, cid := range opts.ConversationChunks {
 			admit(cid)
@@ -765,6 +895,10 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	return &RecallResult{
 		Chunks:  recalled,
 		Warning: warning,
+		// R3188: positive globs that matched no indexed file. Reported
+		// alongside the (necessarily empty) chunks so the caller can say
+		// "your scope matched nothing" rather than "the corpus has nothing".
+		ScopeEmpty: scope.empty,
 	}, nil
 }
 

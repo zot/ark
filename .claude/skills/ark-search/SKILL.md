@@ -1,6 +1,6 @@
 ---
 name: ark-search
-description: "The detective's craft for searching ark. Load when investigating the corpus — what do we know about X, where is Y, did we ever discuss Z — or before designing a feature. Teaches how to direct the search (pull) and read what recall surfaces (push), the filter-stack craft, and when to delegate vs. search directly."
+description: "The detective's craft for searching ark at the CLI. Load when investigating the corpus — what do we know about X, where is Y, did we ever discuss Z — or before designing a feature. Teaches the filter-stack craft, the investigation loop, and when to delegate vs. search directly. Works in any session, no machinery needed; directing a hunt by <BLOODHOUND> watermark is /bloodhound, reading ambient push is /recall."
 ---
 
 # Ark Search — the detective's craft
@@ -17,9 +17,13 @@ a scent, and a skilled detective uses both:
   conversation unfolds. Fold it in; don't suppress cross-project tangents —
   in this partnership the small talk is often big.
 
-This skill is the **pull** craft — how to investigate well — plus how to read
-the **push**. Search will *always* be needed, so the craft lives here, in one
-home.
+This skill is the **pull** craft **at the CLI** — how to investigate well with
+`ark search` / `ark chunks` / `ark fetch`. It needs no machinery and works in
+any session, which is why it is the one home for search craft.
+
+The two neighbours are gated on machinery this skill does not set up, so their
+craft lives with them: directing a hunt by watermark is **`/bloodhound`** (it
+needs a secretary and a `listen`), and reading the **push** is **`/recall`**.
 
 > **The reference is authoritative, by commitment.** ark keeps
 > `specs/cli-commands.md` and every `--help` in lockstep with the code
@@ -35,10 +39,11 @@ Route by what you're doing, not by how hard it feels:
 - **Search directly** (you, one command) — a *known-item lookup*: a specific
   tag def, a known file, "does X exist," a quick yes/no. Fast, no hand-off.
   The filter-stack craft below is for this.
-- **Delegate to the bloodhound** (warm Haiku, *forthcoming* — see below) — an
-  *open question* or *investigation*: "what do we know about X," anything
-  needing query refinement and curation across specs/design/code. ~5× cheaper
-  than reading it yourself; you get a curated digest, not a dump.
+- **Delegate to the bloodhound** (warm Haiku — needs `/bloodhound` running; the
+  watermark craft lives there) — an *open question* or *investigation*: "what do
+  we know about X," anything needing query refinement and curation across
+  specs/design/code. ~5× cheaper than reading it yourself; you get a curated
+  digest, not a dump.
 - **Delegate to `ark-searcher`** (Hermes, *available now*) — the same open
   questions, today, via an ephemeral Haiku spawn:
   `Agent(subagent_type="ark-searcher", prompt="Find notes about append detection.")`.
@@ -47,75 +52,17 @@ Route by what you're doing, not by how hard it feels:
 When in doubt past a single lookup, delegate. Reading broad cross-layer corpus
 is exactly the work to offload to a cheaper model.
 
-## Directing the bloodhound — the `<BLOODHOUND>` watermark
+## Directing the bloodhound — see `/bloodhound`
 
-> **Status: live (2026-06-08).** The recall service recognizes `<BLOODHOUND>`
-> and dispatches it to the warm secretary, which runs the hunt and returns a
-> curated finding through your `recall listen` (Sherlock build-step 3 landed).
-> The warm path is available **whenever recall is running**; in a no-recall
-> session, fall back to **direct search** (below) or **`ark-searcher`**.
+A `<BLOODHOUND>` watermark is **not** a CLI move and does not work from this
+skill alone: it needs the bloodhound *service* up — a secretary spawned and
+running its loop, and a `recall listen` draining `@ark-bloodhound-result`.
+Emitted without that machinery it is ordinary text that nothing reads.
 
-Once live, you delegate a search by **emitting a watermark** in your normal
-output — no spawn, no tool call, because the recall watcher already scans the
-conversation. The watermark *is* the hand-off:
-
-```
-<BLOODHOUND>investigate how recall dedup works across specs and code — want a synthesis, stop when you can name the dedup key</BLOODHOUND>
-```
-
-You state the clue in **natural prose**; the canonical *want-words* (below) are
-the reliable anchor the hound keys on. It fills in the CLI craft from its crank
-handle. **The watermark displays to the user by design** — they get to follow
-the hunt (and judge whether you're on the trail). Write it readable.
-
-**Async by default** — fire the hound and keep reasoning; leads surface in a
-later turn, like recall. For "need it now," emit the watermark and explicitly
-block on the result.
-
-### The four fields you supply (the rest is the hound's craft)
-
-| field     | what it carries                                                        |
-|-----------|------------------------------------------------------------------------|
-| **clue**  | what to find — the question, or the distinctive terms                  |
-| **scope** | corpus: `code` / `specs` / `notes` / `chat` / `all`, + project + globs |
-| **depth** | `lookup` (one pass) or `investigate` (refine-and-narrow loop)          |
-| **want**  | the return *shape* (table below)                                       |
-
-For `depth: investigate`, add an optional **stop** condition — "stop when you
-can name the dedup key" — so the hound knows when to quit refining.
-
-### `want` — the return shape (the tightest coupling)
-
-`want` is orthogonal to `depth`: `want` is the output *shape*, `depth`+`stop`
-is *how hard to look*. Five values span "give me a conclusion" → "give me
-everything":
-
-| `want`        | you want…                    | the hound returns                                |
-|---------------|------------------------------|--------------------------------------------------|
-| **answer**    | a conclusion                 | 1–3 synthesized sentences + cited sources        |
-| **passages**  | material to read yourself    | the few curated chunks + sources (no synthesis)  |
-| **pointers**  | just where to look           | paths / chunk locators only (no chunk text)      |
-| **inventory** | the complete set             | every match, de-duped (paths or @tags), no read  |
-| **verdict**   | yes/no                       | "yes" + the one best source, or "no, not in …"   |
-
-Each value is one emit-branch the hound's crank handle teaches — the words on
-both sides match exactly. Phrase naturally, but land on a want-word.
-
-**Legible watermarks** (natural phrasing carries the fields; the want-word is
-the anchor):
-
-- `<BLOODHOUND>did we ever discuss BM25 for recall? check the chat history — yes/no with the turn</BLOODHOUND>`  *(verdict · chat)*
-- `<BLOODHOUND>where's the tag-strip-at-embed logic? just point me at the file</BLOODHOUND>`  *(pointers · lookup)*
-- `<BLOODHOUND>list every spec that mentions @ext routing — the complete set</BLOODHOUND>`  *(inventory · tag lens)*
-- `<BLOODHOUND>show me the passages on how the curation workshop stages ops, across the specs</BLOODHOUND>`  *(passages · specs)*
-- `<BLOODHOUND>what did we decide about the seehuhn GPL boundary? answer with the source</BLOODHOUND>`  *(answer · notes / cross-project)*
-
-### Reading the return
-
-A **curated digest** — the few passages that answer, with sources — not a raw
-dump. Trust the curation. If it comes back thin, hand back a *sharper clue* or
-*wider scope*; don't re-run raw searches yourself. That's the whole point of
-the hound.
+So the watermark craft — the tag syntax, the four prose fields, the file-scope
+attributes, the `want`-words, and how to read a `## Finding:` — lives in the
+skill that owns the machinery: **`/bloodhound`**. Load it when you want the
+warm path. Everything below is the CLI, which works in any session.
 
 ## Searching directly — the filter-stack craft
 
