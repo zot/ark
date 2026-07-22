@@ -51,13 +51,33 @@ Notes:
   `IsWritable() == false`.
 - `lines` is registered via `AddStrategyFunc` ⇒ a `FuncChunker` (Chunks
   only), not the full `LineChunker`.
-- `bible` implements `Chunks` only, plus the `ChunkerMetadata` pair. It
-  chunks by paragraph (finer than any microfts2 chunker supplies) and
-  stamps `chapter` / `verses` attrs for CHAPTER.VERSE addressing; the
-  fast/incremental paths are omitted, so microfts2 falls back to
-  re-chunking, which suits a fixed reference corpus that never grows.
+- `bible` implements `Chunks` only, plus the `ChunkerMetadata` pair. Its
+  content source is the publisher's **XHTML** (`*.text.xhtml` from a study-bible
+  epub), not markdown: it emits one chunk per prose paragraph or poetry stanza,
+  with the block's **prose alone** as content (display apparatus stripped) and
+  `chapter` / `verses` read from the publisher's `vBBCCCVVV` ids for
+  CHAPTER.VERSE addressing.
+  **Chunks-only is what makes a transforming chunker possible.** Because the
+  fast/incremental paths are omitted, microfts2 retrieves by re-running the
+  chunker and matching on `Range` (`retrieveStream`) rather than slicing the
+  file at a `Locator`. So a chunk's content does **not** have to be a byte-range
+  of the source — it can be transformed, as the bible chunker's extracted prose
+  is, and is re-derived on retrieval rather than stored. A chunker that
+  implements the `RandomAccessChunker` fast path takes on the opposite
+  obligation: `GetChunk` must reconstruct the content from the region alone.
+  Re-chunking also suits a fixed reference corpus that never grows.
   Like PDF it is **not writable**, so annotation routes to the external
   disposition — see bible-chunker.md.
+- **Per-source activation (ark-side).** A chunker may implement one optional
+  ark-side interface, `SourceChunker` (`ActivateForSource`). It is called at
+  config-resolve — every startup and every reload — once for each source that
+  maps the chunker through a **per-source** strategy entry, never for one
+  reached only through the global map, since a global mapping has no particular
+  source to set up for. The call receives the source and a handle for
+  registering in-memory strategy entries, and an error from it fails that
+  source's load. `bible` is the only implementer: it registers the
+  `<source>/BIBLE/**` virtual namespace and refuses a source with a real
+  `BIBLE` path. See `bible-chunker.md`.
 - **Internal-tag wrapping (ark-side).** On `Open`, ark wraps the three writable
   *multi-line* text chunkers (markdown, bracket, indent) in an
   `internalTagChunker` that embeds the full microfts2 interface set (so every

@@ -1,102 +1,131 @@
 # Test Design: BibleChunker
 **Source:** crc-BibleChunker.md
 
-Pure chunking — content in, chunks out. No DB, no index, no files: the
-chunker is a function over bytes, so every case below runs on a string
-literal. Covers R3173–R3178.
+Pure chunking where it can be — content in, chunks out over an XHTML string
+literal (a trimmed ESV fragment), so most cases need no DB or files. The
+book-index write and the per-source hook touch the DB and a source dir and are
+tested with a small fixture. Covers R3173, R3175, R3176, R3178, R3209–R3215,
+R3218, R3219.
 
-The verse-reference resolution that reads these attributes is separate
-(crc-DB.md, R3179/R3180) and tested with its own fixture.
+Verse-reference resolution that reads these attributes is separate
+(test-VerseResolution.md, crc-DB.md).
 
-## Test: one chunk per paragraph, with line ranges
-**Purpose:** R3173 — blocks are blank-line separated, in order, and a
-chapter heading stays with the block it introduces rather than splitting
-off.
-**Input:** a two-chapter sample: a `# Book` title, a blank, a
-`## Book Chapter 2` heading immediately followed by a verse paragraph,
-a blank, a second verse paragraph, a blank, then `## Book Chapter 3`
-with its paragraph.
-**Expected:** four chunks — title; heading+first paragraph; second
-paragraph; heading+its paragraph — with `Range` line spans matching the
-source lines and no chunk spanning a blank line boundary.
-**Refs:** crc-BibleChunker.md, R3173
+## Test: one chunk per prose paragraph, verses flow within it
+**Purpose:** R3173 — a `<p class="normal">` is one chunk and holds the several
+verses that flow through it, exactly as the publisher set them.
+**Input:** the Genesis 1 fragment — the `<p class="normal" id="v01001003">`
+paragraph carrying verse-num spans 3, 4, 5.
+**Expected:** one chunk for that paragraph; its `verses` is `3-5`; a following
+`<p class="normal" id="v01001006">` is a separate chunk.
+**Refs:** crc-BibleChunker.md, R3173, R3176
 
-## Test: chapter is carried forward and absent before the first heading
-**Purpose:** R3175 — the attribute belongs to every paragraph of the
-chapter, not just the one holding the heading, and is not invented for
-text preceding any heading.
-**Input:** the same sample.
-**Expected:** the title chunk has no `chapter`; both Chapter 2 blocks
-carry `chapter=2` (including the one with no heading in it); the
-Chapter 3 block carries `chapter=3`.
-**Refs:** crc-BibleChunker.md, R3175
+## Test: a poetry stanza is one chunk
+**Purpose:** R3212 — a stanza opens at `line-group`/`line-group-after-heading`
+and absorbs the following `line`/`line-indent`/`line-space` run, rather than
+one chunk per line.
+**Input:** the Psalm 1 fragment — `line-group-after-heading` followed by a run
+of `line-indent`/`line` paragraphs, then a second `line-group`.
+**Expected:** one chunk for the first stanza (all its lines joined), a second
+chunk beginning at the next `line-group`.
+**Refs:** crc-BibleChunker.md, R3212
 
-## Test: verse span covers first through last mark
-**Purpose:** R3176 — the span, the single-mark short form, and the
-absence when a block has no marks.
-**Input:** a block with marks 1 and 2; a block with only mark 3; a block
-with none.
-**Expected:** `verses=1-2`, `verses=3`, and no `verses` attribute
-respectively.
+## Test: chunk text is prose only — apparatus stripped
+**Purpose:** R3211 — the sentence a reader reads, with no numbers or apparatus,
+is what the index sees.
+**Input:** a paragraph containing `verse-num`, `chapter-num`, `book-name`,
+`footnote`, and `crossref` spans around the prose.
+**Expected:** the chunk `Content` is the prose alone — none of the five span
+kinds' text appears, no stray digits from the numbers.
+**Refs:** crc-BibleChunker.md, R3211
+
+## Test: chapter and verses read from the ids
+**Purpose:** R3175/R3176/R3210 — identity comes from the `vBBCCCVVV`/`hBBCCCVVV`
+ids, not from recognizing a mark in the text.
+**Input:** blocks under `id="v01003…"` and `id="v01004…"`; a preamble block with
+no verse-bearing id.
+**Expected:** the chapter-3 blocks carry `chapter=3`, the chapter-4 block
+`chapter=4`; the preamble carries no `chapter` and no `verses`; a block spanning
+verse ids 1 and 2 carries `verses=1-2`, a single-verse block the bare number.
+**Refs:** crc-BibleChunker.md, R3175, R3176, R3210
+
+## Test: verses is a range, so its end is present
+**Purpose:** R3176 — the span end is stored, not just the first verse, because
+R3180 rejects a verse past a chapter's last block by that end.
+**Input:** a chapter whose last block spans verses 30–31.
+**Expected:** that block's `verses` is `30-31`; verse 35 (nonexistent) is not
+within it.
 **Refs:** crc-BibleChunker.md, R3176
 
-## Test: only backtick-wrapped integers are verse marks
-**Purpose:** R3174 — the backticks are the discriminator, so bare digits
-in the prose (a year, a quantity) must not register as verses.
-**Input:** a paragraph containing `` `5` `` plus bare numbers and a
-backticked non-integer (`` `xii` ``).
-**Expected:** `verses=5` — the bare digits and the non-integer code span
-contribute nothing.
-**Refs:** crc-BibleChunker.md, R3174
+## Test: editorial headings are dropped
+**Purpose:** R3213 — a `<header><p class="heading">` pericope title is neither a
+chunk nor part of the following chunk's text (default behavior).
+**Input:** a fragment with a `heading` between two prose paragraphs.
+**Expected:** two chunks (the two paragraphs); the heading's text appears in
+neither.
+**Refs:** crc-BibleChunker.md, R3213
 
-## Test: chapter heading is recognized at any ATX level
-**Purpose:** R3175 — a file may put the book at `#` and chapters at
-`##`, or nest a level deeper; the heading is identified by its text, not
-its depth.
-**Input:** the same chapter heading written as `##` and as `###`.
-**Expected:** both yield the same `chapter` value.
-**Refs:** crc-BibleChunker.md, R3175
-
-## Test: locator byte range covers the chunk content exactly
-**Purpose:** the block-level `Locator` is computed rather than inherited,
-so random-access retrieval depends on it being right — an off-by-one here
-returns the wrong text with no error anywhere.
-**Input:** the two-chapter sample.
-**Expected:** every chunk's decoded `[start,end)` slices the source back
-to byte-for-byte that chunk's `Content`, trailing newline included.
-**Refs:** crc-BibleChunker.md, R3173
-
-## Test: a final line without a trailing newline still chunks
-**Purpose:** the common editor artifact; the block-flush path at EOF is
-separate from the flush-on-blank-line path and is easy to drop.
-**Input:** a paragraph with no terminating newline.
-**Expected:** one chunk whose content is that paragraph and whose byte
-range ends at EOF.
-**Refs:** crc-BibleChunker.md, R3173
-
-## Test: runs of blank lines produce no empty chunks
-**Purpose:** R3173 — separators are separators however many there are.
-**Input:** two paragraphs divided by three blank lines, plus leading and
-trailing blanks.
-**Expected:** exactly two chunks, neither blank.
-**Refs:** crc-BibleChunker.md, R3173
+## Test: only *.text.xhtml is handled
+**Purpose:** R3209 — the sibling apparatus files are not the chunker's input.
+**Input:** the strategy dispatch for `*.crossrefs.xhtml` / `*.footnotes.xhtml` /
+`*.main.xhtml` under a bible source.
+**Expected:** they are not classified `bible` by the `**/*.text.xhtml` rule, so
+the bible chunker never receives them.
+**Refs:** crc-BibleChunker.md, R3209
 
 ## Test: the strategy is read-only
-**Purpose:** R3178 — non-writability is the whole of the read-only
-behavior, so it is asserted directly; the downstream effects (no inline
-tag insertion, no edit affordance) are existing machinery keyed on it.
+**Purpose:** R3178 — non-writability is the whole of the read-only behavior.
 **Input:** the chunker value.
 **Expected:** `IsWritable()` is false and `CommentSyntax()` is empty.
 **Refs:** crc-BibleChunker.md, R3178
 
+## Test: book-index records are written, one per chapter
+**Purpose:** R3214/R3215 — the chunker persists `B<source>\0<book>\0<chapter> →
+path` for each chapter, with the book name normalized.
+**Input:** index a fixture `1-Samuel.text.xhtml` covering chapters 1–2 under a
+bible source.
+**Expected:** two records, keyed `B<source>\x001 Samuel\x001` and `…\x002` (the
+hyphen turned to a space), each valued the file path.
+**Refs:** crc-BibleChunker.md, R3214, R3215
+
+## Test: ActivateForSource registers the entry and runs the guard
+**Purpose:** R3218/R3219 — the per-source hook registers the source-prefixed
+virtual-namespace entry and fails the load on a real `BIBLE/` collision.
+**Input:** a bible source with no real `BIBLE/`, then one with a real `BIBLE/`
+directory. Call `ActivateForSource` with a fake `register` handle.
+**Expected:** first case — `<source>/BIBLE/** → bible` is registered (absolute
+form), no error; second case — an error is returned naming the collision, and
+no entry is registered.
+**Refs:** crc-BibleChunker.md, R3218, R3219
+
+## Test: a colliding source is announced durably, and the announcement clears
+**Purpose:** R3219 — a hook failure is otherwise silent, since the source keeps
+indexing and only its virtual addresses stop resolving. The E record is what
+makes it survivable, and re-deriving it per config load is what stops a fixed
+problem from being reported forever.
+**Input:** a bible source with a real `BIBLE/` directory, resolved through the
+per-source pass; then the same pass after the collision is removed.
+**Expected:** first pass — a `source_activation` E record exists naming the
+source, and the source is still in the config (dropping it would corrupt the
+config diff); second pass — the record is gone, with no dismissal step.
+**Refs:** crc-DB.md, crc-BibleChunker.md, R3219
+
+## Test: a source that stops being scripture loses its book-index records
+**Purpose:** R3221 — the book index is the only bible data on disk, so it is
+the only thing that can outlive its configuration; the config-resolve sweep is
+what keeps a removed source from leaving a stale lookup behind.
+**Input:** write book-index records for two sources, then run the reconcile
+with only one of them active; then run it again with none active.
+**Expected:** first run — the active source's records survive, the other
+source's are gone; second run — none remain. The empty-list case is the one
+that matters, since it is the source-removed case a per-source hook can never
+reach.
+**Refs:** crc-BibleChunker.md, crc-Store.md, R3221
+
 ## Test: attributes survive indexing
-**Purpose:** the attributes are only useful if they come back out of the
-index — CHAPTER.VERSE resolution (R3179) reads them via `AllChunks`, not
-from the chunker. Everything above tests the chunker in isolation and
-would pass even if nothing persisted.
-**Input:** register the `bible` strategy on a test index, write the
-two-chapter sample into the source dir, index it with that strategy, and
-read the chunks back with `AllChunks`.
-**Expected:** the same block count as the pure test, with `chapter` and
-`verses` intact on the round-tripped chunks.
-**Refs:** crc-BibleChunker.md, R3175, R3176, R3179
+**Purpose:** the attributes are only useful if they come back out of the index —
+resolution (R3179) reads them via `AllChunks`, not from the chunker.
+**Input:** index the ESV fragment with the `bible` strategy and read the chunks
+back with `AllChunks`.
+**Expected:** the same block count as the pure test, `chapter` and `verses`
+intact on the round-tripped chunks.
+**Refs:** crc-BibleChunker.md, R3175, R3176

@@ -13,7 +13,7 @@ func TestArkLabelsCoverRecordClasses(t *testing.T) {
 	// The ark-bucket prefixes from specs/record-formats.md, minus S
 	// (vector-freshness.md: "No status display").
 	want := []string{
-		"D", "E:", "EC", "ED", "EF", "EV", "F", "HC", "I", "M",
+		"B", "D", "E:", "EC", "ED", "EF", "EV", "F", "HC", "I", "M",
 		"PC", "RC", "RD", "RF", "RJ", "RM", "T", "U", "V", "X",
 	}
 	for _, prefix := range want {

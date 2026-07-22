@@ -40,7 +40,47 @@ condition resolves — either by config changing back, by
 Record key/value layout and the disambiguating colon prefix: see
 [record-formats.md](record-formats.md) (E: section). Known
 condition names (`model_mismatch`, `index_stale`,
-`config_catastrophe`) are also listed there.
+`config_catastrophe`, `source_activation`) are also listed there.
+
+### Every condition is re-derived, never dismissed
+
+A condition may only be recorded if it can be **re-derived from durable
+state that witnesses it**. Each config load recomputes the conditions it
+owns and reconciles the records to the answer: present conditions are
+written, absent ones deleted. A record therefore cannot outlive the problem
+it describes, and no condition ever needs dismissing. `source_activation`
+works this way (see `bible-chunker.md`): fix the source, reload, and the
+record is gone.
+
+The witness has to be chosen with care, because the obvious one is usually
+wrong. Comparing the loaded config against the stored I records compares
+*intent to intent*, and a condition like `index_stale` is a fact about a
+built artifact rather than about either config. Accepting the change
+updates the stored record, the comparison goes quiet, and the index is
+still wrong-shape. So a condition that describes damage to an artifact must
+be witnessed by a stamp on that artifact. The index carries the
+shape-determining config it was built under, and staleness is that stamp
+disagreeing with the live config. Only a rebuild rewrites the stamp, which
+is exactly the operation that repairs the damage.
+
+Where a witness exists, prefer healing to reporting. The `ec_version`
+marker is the model: EC records carry the schema version they were written
+under, and a mismatch at startup drops and regenerates them without ever
+surfacing a condition to anyone. An error condition is what is left over
+when the repair needs a human.
+
+Two consequences. Clearing is not a user-facing operation, so `--force`
+has no business clearing records; its job is accepting config changes. And
+a condition nothing can produce is not a condition: a declared name with no
+writer is either unimplemented or obsolete, and must be built or retired
+rather than documented as though it occurs.
+
+**This rule is not yet universally honored.** `source_activation` follows
+it; the conditions that do not are each recorded as a **conformance gap**
+in `design/design.md`, which is where to look for what remains rather than
+here. Deviations belong in the gap list because that list is queryable and
+gets closed; a conformance inventory written into spec prose drifts out of
+date silently and cannot be found by anything.
 
 ## Change Classification
 

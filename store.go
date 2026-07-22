@@ -139,6 +139,11 @@ const (
 	ECondModelMismatch     = "model_mismatch"
 	ECondIndexStale        = "index_stale"
 	ECondConfigCatastrophe = "config_catastrophe"
+	// ECondSourceActivation reports a source whose per-source chunker hook
+	// failed at config-resolve (R3219). Re-derived on every config load —
+	// written when any source fails, deleted when none do — so fixing the
+	// source and reloading clears it with no dismissal step.
+	ECondSourceActivation = "source_activation"
 )
 
 // TagFileRecord is a per-(chunk, file) tag count returned by TagFiles.
@@ -185,6 +190,7 @@ const (
 	prefixEmbedFileCent  = "EF" // R1599: file centroid (running sum + count)
 	prefixEmbedDef       = "ED" // R2151: tag-definition embeddings
 	prefixError          = 'E'  // R1543: persistent error conditions (E + name → JSON)
+	prefixBookIndex      = 'B'  // R3214: bible book index (B + source + \0 + book + \0 + chapter → file path)
 	prefixPageContent    = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting     = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
 	prefixSerial         = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
@@ -3329,6 +3335,72 @@ func (s *Store) RemovePageContents(fileID uint64) error {
 		prefix := []byte(prefixPageContent)
 		prefix = encodeVarint(prefix, fileID)
 		return scanPrefix(txn, prefix, func(k, _ []byte) error {
+			return bDel(txn, k)
+		})
+	})
+}
+
+// --- Bible book index (B) records ---
+
+// bookIndexKey builds the B[source]\0[book]\0[chapter] key. NUL bytes delimit
+// the variable-length fields — a literal `0` would collide with the digits in
+// a chapter number or a path — and the source leads the key so two scripture
+// sources cannot collide on the same book and chapter.
+// CRC: crc-Store.md | R3214
+func bookIndexKey(source, book string, chapter int) []byte {
+	key := make([]byte, 0, len(source)+len(book)+8)
+	key = append(key, byte(prefixBookIndex))
+	key = append(key, source...)
+	key = append(key, 0)
+	key = append(key, book...)
+	key = append(key, 0)
+	return strconv.AppendInt(key, int64(chapter), 10)
+}
+
+// WriteBookIndex records that a book's chapter lives in path — one record per
+// (source, book, chapter), written by the bible chunker at index time.
+// CRC: crc-Store.md | R3214
+func (s *Store) WriteBookIndex(source, book string, chapter int, path string) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, bookIndexKey(source, book, chapter), []byte(path))
+	})
+}
+
+// ReadBookIndex returns the file holding (source, book, chapter), or "" when
+// no such entry exists. An exact-key read, since chapters do not span files.
+// CRC: crc-Store.md | R3214
+func (s *Store) ReadBookIndex(source, book string, chapter int) (string, error) {
+	var out string
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		v, err := bGet(txn, bookIndexKey(source, book, chapter))
+		if isNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out = string(v)
+		return nil
+	})
+	return out, err
+}
+
+// PruneBookIndex deletes every book-index record whose source fails keep —
+// the config-resolve sweep that drops entries left by a source that no longer
+// declares the bible strategy, or that is gone from the config entirely
+// (R3221). The source is read back off the key, which is why it leads the key.
+//
+// A key with no delimiter is not a record this ever wrote, so it is left
+// alone: a sweep should remove what it recognizes, not everything it doesn't.
+// CRC: crc-Store.md | R3221
+func (s *Store) PruneBookIndex(keep func(source string) bool) error {
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixBookIndex)}, func(k, _ []byte) error {
+			rest := k[1:]
+			nul := bytes.IndexByte(rest, 0)
+			if nul < 0 || keep(string(rest[:nul])) {
+				return nil
+			}
 			return bDel(txn, k)
 		})
 	})

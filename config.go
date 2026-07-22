@@ -67,6 +67,16 @@ type Config struct {
 	Luhmann     LuhmannConfig  `toml:"luhmann"`  // R2797
 	Errors      []string       `toml:"-"`
 	dbPath      string         `toml:"-"`
+	// derivedStrategies holds strategy entries a chunker registered through
+	// the per-source hook at config-resolve (R3217, R3218). They live beside
+	// Strategies rather than inside it because they are re-derived on every
+	// startup and must not be persisted: Strategies is TOML-encoded by
+	// SaveConfig (a derived entry would be written into the user's ark.toml)
+	// and compared field-by-field by DiffConfig against the stored I record
+	// (a derived entry would report a phantom strategies change, and an
+	// index_stale error, on every boot). Matching treats the two as one map.
+	// CRC: crc-Config.md | R3218
+	derivedStrategies map[string]string
 }
 
 // LuhmannConfig collects the [luhmann] section of ark.toml — restart-
@@ -1289,17 +1299,6 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 // name, or "lines" if no pattern matches.
 // CRC: crc-Config.md | R205, R206, R207, R208
 func (c *Config) StrategyForFile(relPath string, sourceStrategies map[string]string) string {
-	if len(c.Strategies) == 0 && len(sourceStrategies) == 0 {
-		return "lines"
-	}
-	// Merge: start with global, overlay per-source (same key = per-source wins)
-	merged := make(map[string]string, len(c.Strategies)+len(sourceStrategies))
-	for k, v := range c.Strategies {
-		merged[k] = v
-	}
-	for k, v := range sourceStrategies {
-		merged[k] = v
-	}
 	// R3202: match through the one shared Matcher, in the source-scoped
 	// context (R3198). relPath is *already* the source-relative form, so the
 	// contextual root and the given path coincide and an empty sourceDir is
@@ -1311,19 +1310,72 @@ func (c *Config) StrategyForFile(relPath string, sourceStrategies map[string]str
 	// matched one level only — `**` had no effect at all. For a no-slash
 	// pattern the old fallback and the bare→`**/` rule agree, so existing
 	// configs keep resolving as they did; what changes is that `**` works.
-	m := &Matcher{Dotfiles: true}
-	bestStrategy := ""
-	bestLen := 0
-	for pattern, strategy := range merged {
-		if m.Match(pattern, relPath, "", false) && len(pattern) > bestLen {
-			bestStrategy = strategy
-			bestLen = len(pattern)
-		}
-	}
-	if bestStrategy != "" {
-		return bestStrategy
+	if s := c.matchStrategy(relPath, sourceStrategies); s != "" {
+		return s
 	}
 	return "lines"
+}
+
+// StrategyForPath resolves the strategy for an **absolute** path against the
+// global map — the configured entries plus the hook-derived ones (R3218) — in
+// the rootless reading, where a `/X` pattern matches the path as given.
+//
+// Unlike StrategyForFile this returns "" when nothing matches rather than
+// defaulting to "lines": its caller is asking *whether* a path classifies as
+// some strategy (R3220's dispatch), not which chunker should read a file, and
+// a default would answer a question that was never asked.
+// CRC: crc-Config.md | R3218, R3220
+func (c *Config) StrategyForPath(absPath string) string {
+	return c.matchStrategy(absPath, nil)
+}
+
+// matchStrategy finds the longest pattern matching path across the global
+// map, the hook-derived entries, and any per-source overlay (per-source wins
+// on an identical key). Returns "" when nothing matches.
+//
+// R3202: matching goes through the one shared Matcher. The pattern's own shape
+// carries the context (R3196) — a bare `X` reads `**/X` against the given
+// path, `./X` anchors at its root, `/X` matches it absolutely — so the same
+// loop serves a source-relative path and an absolute one.
+// CRC: crc-Config.md | R205, R206, R207, R208, R3202
+func (c *Config) matchStrategy(path string, sourceStrategies map[string]string) string {
+	merged := make(map[string]string, len(c.Strategies)+len(c.derivedStrategies)+len(sourceStrategies))
+	for k, v := range c.Strategies {
+		merged[k] = v
+	}
+	for k, v := range c.derivedStrategies {
+		merged[k] = v
+	}
+	for k, v := range sourceStrategies {
+		merged[k] = v
+	}
+	m := &Matcher{Dotfiles: true}
+	best, bestLen := "", 0
+	for pattern, strategy := range merged {
+		if m.Match(pattern, path, "", false) && len(pattern) > bestLen {
+			best, bestLen = strategy, len(pattern)
+		}
+	}
+	return best
+}
+
+// AddDerivedStrategy records a strategy entry a chunker registered through the
+// per-source hook (R3218). It is the `register` handle activateSourceChunkers
+// hands the chunker. In-memory only — see Config.derivedStrategies for why it
+// is deliberately not part of the persisted Strategies map.
+// CRC: crc-Config.md | R3218
+func (c *Config) AddDerivedStrategy(pattern, strategy string) error {
+	if err := validatePattern(pattern); err != nil {
+		return err
+	}
+	if strategy == "" {
+		return fmt.Errorf("strategy name required")
+	}
+	if c.derivedStrategies == nil {
+		c.derivedStrategies = make(map[string]string)
+	}
+	c.derivedStrategies[pattern] = strategy
+	return nil
 }
 
 // AddStrategy adds a global strategy mapping (e.g. "*.md" -> "markdown").

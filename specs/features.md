@@ -190,13 +190,23 @@ annotation can name is the paragraph — losing the distinction the
 reader actually thinks in.
 
 **Objective.** Address a verse without making storage carry verses.
-A `bible` chunking strategy splits by paragraph and stamps each chunk
-with its chapter and the span of verse marks it holds; an `@ext`
-target may then name `books/mark:12.1`, which resolves to the
-paragraph containing that verse; and the content view refines the
-position at display time, showing the annotation at the verse rather
-than at the top of the paragraph. Storage stays coarse and dumb —
-verse granularity is a rendering concern throughout.
+A `bible` chunking strategy reads a study bible in the publisher's own
+XHTML — kept on disk untouched, because it is the richest form of the
+text — and emits one chunk per prose paragraph or poetry stanza. Each
+chunk's indexed content is the **prose alone**, with verse numbers and
+apparatus stripped, while its `chapter` and `verses` range come from
+the publisher's own per-element ids rather than from marks recognized
+in the text.
+
+Addressing is by natural reference: `<source>/BIBLE/John:3.16` — a
+virtual path, resolved by a small book index (book + chapter → file)
+to the real file, then to the paragraph holding that verse. One
+reserved `BIBLE/` segment carries the namespace, so the sixty-six book
+names never shadow real files. The content view then refines position
+at display time, intermediating the XHTML into ark's own elements and
+showing the annotation at its verse rather than at the top of the
+paragraph. Storage stays coarse and dumb — verse granularity is a
+rendering concern throughout.
 
 The strategy is read-only, which is not a limitation but the
 mechanism: a fixed reference text is annotated *beside* itself, so
@@ -204,10 +214,12 @@ every annotation routes to a mirror file, and a source setting
 `ext_mirror` keeps those mirrors inside the checkout where they travel
 with it.
 
-**Surface.** Per-source config (`strategies = { "books/*" = "bible" }`,
-`ext_mirror = "mirrors"`); `@ext` targets of the form
-`PATH:CHAPTER.VERSE`; `<ark-verse n="N">` elements in the rendered
-content view.
+**Surface.** Per-source config (`strategies = { "**/*.text.xhtml" =
+"bible" }`, `ext_mirror = "mirrors"`); `@ext` targets of the form
+`PATH:CHAPTER.VERSE` or `<source>/BIBLE/<Book>:CHAPTER.VERSE`;
+`<ark-verse n="N">` elements in the rendered content view. The book
+index (`B` records) is the only bible data on disk, and it is
+reconciled against the config on every load.
 
 ## Hybrid full-text + vector search
 

@@ -1,16 +1,16 @@
 # Test Design: CHAPTER.VERSE resolution
 **Source:** crc-DB.md, crc-BibleChunker.md
 
-Covers R3179/R3180 — turning `books/mark:12.1` into the paragraph chunk
-holding that verse. Two layers: the pure format parsing, and the
-resolution itself driven through `resolveExtPathBase` against a real
-indexed bible file, since the attributes it reads only exist after
-indexing.
+Covers R3179/R3180/R3214/R3216/R3220 — turning a friendly
+`<source>/BIBLE/John:3.16` into the paragraph chunk holding that verse.
+Layers: the pure format parsing, the book-index virtual-path rewrite, and the
+resolution itself driven through `resolveBibleTarget` against a real indexed
+bible file, since the attributes it reads only exist after indexing.
 
 The regression case matters as much as the feature: a range anchor on a
-**non-bible** file must keep resolving by exact chunk location, because
-the verse branch is gated on strategy and a mistake there would silently
-change every existing `@ext` range routing in the corpus.
+**non-bible** file must keep resolving by exact chunk location, because the
+bible path is reached only when the target's strategy is `bible`, and a mistake
+there would silently change every existing `@ext` range routing in the corpus.
 
 ## Test: CHAPTER.VERSE parses, other anchor shapes don't
 **Purpose:** R3179 — the reference form is exactly one dot between two
@@ -42,6 +42,25 @@ paragraph chunking); 2.3 lands on the following paragraph; 3.1 lands in
 chapter 3. Each resolves to exactly one chunk.
 **Refs:** crc-DB.md, R3179
 
+## Test: the virtual BIBLE/<Book> address resolves through the book index
+**Purpose:** R3216/R3214/R3220 — the friendly form rewrites to the real file
+via the book index, then resolves to the chunk.
+**Input:** index a `John` fixture under a bible source; write its book-index
+records; resolve `<source>/BIBLE/John:3.16`.
+**Expected:** stage one looks up `B<source>\x00John\x003` → the real
+`*.text.xhtml`; stage two lands on the chapter-3 chunk whose verse span
+contains 16 — the same chunk the real path `<source>/OEBPS/.../John.text.xhtml:3.16`
+resolves to.
+**Refs:** crc-DB.md, R3216, R3214, R3220
+
+## Test: the address book name is the normalized form
+**Purpose:** R3215 — the address carries the spaced name, and it matches the
+records the chunker wrote from the hyphenated filename token.
+**Input:** index a `1-Samuel` fixture; resolve `<source>/BIBLE/1 Samuel:1.1`.
+**Expected:** resolves via `B<source>\x001 Samuel\x001` to the chapter-1 chunk;
+`<source>/BIBLE/1-Samuel:1.1` (the raw token) does **not** resolve.
+**Refs:** crc-DB.md, crc-BibleChunker.md, R3215
+
 ## Test: a nonexistent chapter or verse resolves to nothing
 **Purpose:** R3180 — no match means no chunks, with no fall-through to
 the location match or the bare-path first-chunk convention.
@@ -53,27 +72,27 @@ chunk, which is what a bare path would have returned.
 
 ## Test: a range anchor on a non-bible file is unaffected
 **Purpose:** ordinary `@ext` range routings keep resolving by exact chunk
-location after the verse branch was added.
+location — the bible dispatch (R3220) is reached only for bible-strategy
+targets.
 **Input:** a line-strategy file; resolve an anchor equal to a real
 chunk's location, and a dotted anchor that would parse as a verse.
 **Expected:** the location anchor resolves to its chunk as before; the
 dotted anchor resolves to nothing (no location matches it) rather than
 being interpreted as a verse.
-**Refs:** crc-DB.md, R2377, R3179
+**Refs:** crc-DB.md, R2377, R3179, R3220
 
 **What this test does NOT cover — measured, 2026-07-20.** It is tempting
-to read this as the guard on the `FileStrategy == bible` gate. It is not.
-Deleting that gate from `resolveExtPathBase` leaves every test here
-passing, because a non-bible file carries no `chapter` attribute either
-way, so the attribute check inside `chunkForVerse` reaches the same
-answer unaided.
+to read this as the guard on the strategy dispatch. It is not.
+Routing a non-bible file's dotted anchor into the bible decoder leaves every
+test here passing, because a non-bible file carries no `chapter` attribute, so
+the attribute check reaches the same empty answer unaided.
 
-The gate is therefore **defensive, not proven**. What it actually buys is
+The dispatch is therefore **defensive, not proven**. What it actually buys is
 confining R3180's no-fall-through rule to bible files: without it, a
 dotted anchor on *any* file would skip the exact-location match entirely.
 That difference is unobservable today because no shipped chunker emits a
 location containing a dot — which is exactly why no test can reach it,
 and exactly why this note exists instead of a test.
 
-A future chunker whose locations contain dots would make the gate
+A future chunker whose locations contain dots would make the dispatch
 load-bearing overnight, and this is the paragraph that says so.

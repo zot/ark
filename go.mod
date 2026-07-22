@@ -19,6 +19,7 @@ require (
 	github.com/zot/pdftext v0.2.1
 	github.com/zot/ui-engine v0.22.0
 	go.etcd.io/bbolt v1.4.3
+	golang.org/x/net v0.52.0
 	golang.org/x/term v0.41.0
 )
 
@@ -38,7 +39,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zot/change-tracker v1.4.0 // indirect
-	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

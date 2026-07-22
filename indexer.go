@@ -94,6 +94,7 @@ type Indexer struct {
 	scheduler     *EventScheduler // nil when running without server
 	config        *Config         // for schedule tag checks
 	pdfChunker    *PDFChunker     // R1720: flushes per-page blobs after microfts2 assigns fileids
+	bibleChunker  *bibleChunker   // R3214: flushes staged book-index records after a file commits
 	extmap        *ExtMap         // CRC: crc-ExtMap.md | R1996, R2000-R2008
 	db            *DB             // back-pointer for ExtMap routing — uses ResolveExtTarget + chunkFileID
 	recallWatcher *RecallWatcher  // nil when [recall].enabled=false; CRC: crc-Indexer.md | R2696, R2697
@@ -120,6 +121,7 @@ func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
 		scheduler:     idx.scheduler,
 		config:        idx.config,
 		pdfChunker:    idx.pdfChunker,
+		bibleChunker:  idx.bibleChunker,
 		recallWatcher: idx.recallWatcher,
 	}
 }
@@ -201,6 +203,13 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	if idx.pdfChunker != nil {
 		if err := idx.pdfChunker.FlushBlobs(path, fileid); err != nil {
 			log.Printf("pdf: flush blobs %s: %v", path, err)
+		}
+	}
+	// R3214: the book index records which file holds each of a book's
+	// chapters — staged during the chunk walk, persisted once the file is in.
+	if idx.bibleChunker != nil {
+		if err := idx.bibleChunker.FlushBookIndex(path); err != nil {
+			log.Printf("bible: flush book index %s: %v", path, err)
 		}
 	}
 
@@ -771,6 +780,13 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	if idx.pdfChunker != nil {
 		if err := idx.pdfChunker.FlushBlobs(prep.path, fileid); err != nil {
 			log.Printf("pdf: flush blobs %s: %v", prep.path, err)
+		}
+	}
+	// R3214: same book-index flush as the add path — a reindex re-walks the
+	// file, so its chapter set is staged again and overwrites in place.
+	if idx.bibleChunker != nil {
+		if err := idx.bibleChunker.FlushBookIndex(prep.path); err != nil {
+			log.Printf("bible: flush book index %s: %v", prep.path, err)
 		}
 	}
 

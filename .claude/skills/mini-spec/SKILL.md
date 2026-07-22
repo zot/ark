@@ -359,6 +359,28 @@ Mark implemented using minispec:
 
 Look out for language-specific "gotchas" like mixing functions and methods in Lua.
 
+**Codify what you verified — don't leave behavior hand-checked.** When you
+implement a behavior and confirm it works (a live run, a smoke test, an ad-hoc
+script), capture that verification as a `test-*.md` design + a test **in the same
+pass**. A hand-check proves it works *today*; the test is what catches the
+regression three sessions from now, when a future agent refactors the code that
+made it pass. This is a **default action of the Implementation phase** — not a
+Design-phase afterthought, and not something to defer to a Gaps-phase `O` entry.
+
+- **The cheap cases have no excuse.** Pure, deterministic logic — state
+  machines, parsers, ownership/routing decisions, config defaults — tests with a
+  fake collaborator (a small interface double) and a zero-value struct: no DB,
+  no server, no fixtures. Choose scenarios that avoid the expensive-to-reach
+  paths and you still pin the decision logic.
+- **Anchor the test like any artifact.** Add `test-*.md` to `design.md`
+  Artifacts mapped to the test file (so its refs harvest and future anchors
+  there are seen), then `minispec update check` it once it passes.
+- **`O`-gap is the exception, not the escape hatch.** Logging "missing tests" as
+  an Oversight gap is for behavior genuinely disproportionate to test now — needs
+  live external infra, a full rebuild, a real GPU. When you take that exception,
+  say *why* in the gap. Everything a fake-and-zero-value can reach is written,
+  not deferred.
+
 **Upon completion**, run `~/.claude/bin/minispec phase implementation` to verify traceability, then run the Simplification Phase.
 
 5. Simplification Phase
@@ -384,8 +406,8 @@ Run `~/.claude/bin/minispec phase gaps` to validate the gaps section, then run `
 - **Design→Code (Dn):** Designed features without code
 - **Code→Design (Cn):** Code without design artifacts
 - **Implementation (In):** Requirements with design coverage but no inline Rn ref in any code file
-- **Oversights (On):** Missing tests, tech debt, enhancements, security concerns, etc.
-- **Approved (An):** Approved gap. Permanent — written without a checkbox.
+- **Oversights (On):** Missing tests *that were genuinely disproportionate to write in the Implementation phase* (say why — the cheap deterministic cases get a test, not an O-gap), tech debt, enhancements, security concerns, etc.
+- **Approved (An):** Approved gap. Permanent — written without a checkbox. Good for "don't do it this way" requirements.
 - **'Tired (Tn):** Retired requirement — obsoleted by a later change. Each Tn names the original Rn, the replacement Rn (or "no replacement" if removed outright), and the reason (usually a migration or refactor). Retired Rn entries stay in requirements.md with their original text but get a `~~Rn:~~ (Retired Tn — see Rxxx)` marker so old design/code references still resolve. Permanent — written without a checkbox.
 
 Nest related items with checkboxes (only S/R/D/C/I/O take checkboxes; A and T are permanent and never carry one):
@@ -407,6 +429,47 @@ If you encounter legacy `- [ ] An:` lines, drop the `[ ]` —
 
 Use `minispec update add-gap` to add gaps; it writes the right
 shape automatically (no checkbox for A/T, checkbox for the rest).
+
+### Conformance deviations are gaps, and they link both ways
+
+When a requirement states a rule the code does not yet honor everywhere,
+**each deviation is its own gap** — not a paragraph of spec prose. Prose
+cannot be queried, is never checked off, and drifts out of date silently;
+a gap is greppable, carries a checkbox, and gets closed. So a spec states
+the rule and says "deviations are tracked as gaps"; the gap list holds the
+inventory.
+
+**One gap per deviation, not one gap listing several.** Splitting them is
+what makes each independently closable, and it surfaces ordering
+constraints a combined body hides — dependencies between deviations only
+become visible once they are separate entries that can block one another.
+
+**Link both ways.** A gap whose repair will require editing a requirement
+names that `Rn` in its body *and* says the requirement edit is part of the
+repair. The requirement then carries a short back-link — a consistent,
+greppable phrase such as `see gap <ID>` — noting that it is provisional
+and what changes when the gap closes.
+
+The back-link is the load-bearing half, and the one people skip. The
+forward link (gap → requirement) is discovered by whoever works the gap,
+who is already looking. The reverse is for everyone else: without it a
+requirement reads as settled current intent, and a future agent
+"fixes" code to match a clause that was already slated for removal —
+precisely the revert trap "Supersede at the source" exists to prevent.
+Write the requirement text so it still describes today truthfully, with
+the pending change marked; do not pre-apply an edit that has not landed,
+which would make the requirement a lie in the other direction.
+
+Two forms not to confuse with this: a **retired** requirement (`Tn`)
+already back-links by construction, since `minispec update retire` writes
+the `~~Rn:~~ (Retired Tn — see Rxxx)` marker; and a gap that merely *cites*
+a requirement as context needs no back-link, because nothing about that
+requirement changes when the gap is repaired. Back-link only where the
+repair edits the requirement.
+
+To audit: for every open S/R/D/C/I/O gap naming an `Rn`, ask whether
+repairing it changes that requirement's text. If yes, the requirement must
+carry the back-link.
 
 **Upon completion**, offer to update Documentation (Documentation Phase).
 

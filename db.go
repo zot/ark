@@ -50,6 +50,9 @@ type DB struct {
 	search     *Searcher
 	extmap     *ExtMap     // CRC: crc-ExtMap.md | R1992
 	pdfChunker *PDFChunker // CRC: crc-PDFChunker.md | R1720, R1726
+	// R3214: bible — staged book-index records, flushed after each file
+	// commits; also the per-source hook's receiver (R3217).
+	bibleChunker *bibleChunker
 
 	dbPath        string
 	tmpMu         sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
@@ -161,8 +164,11 @@ func Init(dbPath string, opts InitOpts) error {
 		return fmt.Errorf("register strategy chat-jsonl: %w", err)
 	}
 	// R3172: bible — paragraph chunks carrying chapter/verse attributes.
-	// Read-only (R3178), so it is not internal-tag wrapped.
-	if err := fts.AddChunker(bibleStrategy, bibleChunker{}); err != nil {
+	// Read-only (R3178), so it is not internal-tag wrapped. Unbound here:
+	// InitDB creates the index and exits, so nothing is chunked in this
+	// process and there is no book index to stage (R3214). Open binds a
+	// DB-carrying instance for the passes that do index.
+	if err := fts.AddChunker(bibleStrategy, &bibleChunker{}); err != nil {
 		return fmt.Errorf("register strategy %s: %w", bibleStrategy, err)
 	}
 	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
@@ -317,7 +323,9 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	// R3172: bible — paragraph chunks carrying chapter/verse attributes.
 	// Not internal-tag wrapped: R3178 makes it read-only, so annotation
 	// routes to the external disposition rather than into the file body.
-	if err := db.addChunker(bibleStrategy, bibleChunker{}); err != nil {
+	// Bound to db so FlushBookIndex can persist the staged book index (R3214).
+	db.bibleChunker = newBibleChunker(db)
+	if err := db.addChunker(bibleStrategy, db.bibleChunker); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register %s strategy: %w", bibleStrategy, err)
 	}
@@ -337,7 +345,15 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	if err := db.addChunker("pdf", db.pdfChunker); err != nil {
 		log.Printf("warning: register pdf chunker: %v", err)
 	}
-	db.indexer = &Indexer{fts: fts, store: store, config: config, pdfChunker: db.pdfChunker}
+	db.indexer = &Indexer{fts: fts, store: store, config: config, pdfChunker: db.pdfChunker, bibleChunker: db.bibleChunker}
+
+	// R3217: every chunker is registered, so the per-source hook can run.
+	// A failure here is a source misconfiguration (the bible chunker's
+	// reserved-path collision, R3219) — report it and leave the source's
+	// strategy unregistered rather than refusing to open the whole DB.
+	if err := db.activateSourceChunkers(config); err != nil {
+		log.Printf("ERROR: %v", err)
+	}
 
 	// R1859, R1860: migrate EC records from (fileID, chunkIdx) to chunkID key format
 	if v, _ := store.IGet("ec_version"); v != "2" {
@@ -630,6 +646,102 @@ func (db *DB) registerConfigChunkers(cfg *Config) {
 	}
 }
 
+// SourceChunker is the optional interface a chunker implements when it needs
+// per-source setup (R3217). It is called once per source that maps the chunker
+// through a **per-source** strategy entry; a chunker reached only through the
+// global strategy map is never called, because a global mapping has no
+// particular source to set up for. `register` adds entries to the in-memory
+// global strategy map; a returned error fails that source's load.
+// CRC: crc-DB.md | R3217
+type SourceChunker interface {
+	ActivateForSource(src *Source, register func(pattern, strategy string) error) error
+}
+
+// activateSourceChunkers runs the per-source chunker hook at config-resolve —
+// on every startup and on every reload, since nothing it establishes is
+// persisted (R3217). Each source's own strategy entries name the chunkers that
+// get the call; each chunker is called at most once per source even when the
+// source maps it through several patterns.
+// CRC: crc-DB.md | Seq: seq-bible-resolve.md#1.1 | R3217
+func (db *DB) activateSourceChunkers(cfg *Config) error {
+	// R3218: the pass re-derives the whole set, so it starts from empty.
+	// ReloadConfig already hands over a freshly loaded Config, but clearing
+	// here makes "re-derived, never accumulated" a property of the function
+	// rather than of every caller.
+	cfg.derivedStrategies = nil
+
+	// declared[strategy] is every source that maps that strategy locally —
+	// including any whose activation failed, since declaring a strategy is
+	// what the reconcile below keys on, and a misconfigured source is no
+	// reason to delete its persisted data.
+	declared := make(map[string][]*Source)
+	// failed[source.Dir] is the message for a source whose hook returned an
+	// error, and becomes the E record payload below (R3219).
+	failed := make(map[string]string)
+	var errs []error
+	for i := range cfg.Sources {
+		src := &cfg.Sources[i]
+		called := make(map[string]bool, len(src.Strategies))
+		for _, strategy := range src.Strategies {
+			if called[strategy] {
+				continue
+			}
+			called[strategy] = true
+			sc, ok := db.chunkerByName[strategy].(SourceChunker)
+			if !ok {
+				continue
+			}
+			declared[strategy] = append(declared[strategy], src)
+			if err := sc.ActivateForSource(src, cfg.AddDerivedStrategy); err != nil {
+				// One bad source must not stop the rest from activating. The
+				// source keeps indexing; only its hook-registered addressing
+				// is left unregistered, which is why R3219 makes the failure
+				// loud and durable rather than trusting the log alone.
+				errs = append(errs, fmt.Errorf("source %s: %s strategy: %w", src.Dir, strategy, err))
+				failed[src.Dir] = fmt.Sprintf("%s strategy: %v", strategy, err)
+			}
+		}
+	}
+
+	// R3221: the tail — persisted per-source state is reconciled against the
+	// config just resolved. Runs unconditionally, since an empty list is the
+	// source-removed case and is exactly what needs sweeping.
+	if db.bibleChunker != nil {
+		if err := db.bibleChunker.ReconcileBookIndex(declared[bibleStrategy]); err != nil {
+			errs = append(errs, fmt.Errorf("reconcile book index: %w", err))
+		}
+	}
+	db.recordActivationFailures(failed)
+	return errors.Join(errs...)
+}
+
+// recordActivationFailures keeps the `source_activation` E record in step with
+// the config just resolved (R3219): written when any source's hook failed,
+// deleted when none did.
+//
+// A failure here is otherwise silent — the source keeps indexing and only its
+// virtual addresses stop resolving, which a user reads as a reference that
+// returns nothing — so it needs a durable home beyond the log line.
+// Re-deriving it per config load is what keeps the record honest: fixing the
+// source and reloading clears it, with no dismissal step and no way for a
+// stale condition to outlive the problem it described. That is R3223's rule,
+// and the witness here is the source set itself — the condition is about
+// intent, so comparing intent is the right test. A condition about a *built
+// artifact* needs a stamp on that artifact instead; see R3223.
+// CRC: crc-DB.md | R3219, R3223
+func (db *DB) recordActivationFailures(failed map[string]string) {
+	if db.store == nil {
+		return
+	}
+	if len(failed) == 0 {
+		db.store.DeleteERecord(ECondSourceActivation)
+		return
+	}
+	if err := db.store.WriteERecord(ECondSourceActivation, failed); err != nil {
+		log.Printf("warning: record %s: %v", ECondSourceActivation, err)
+	}
+}
+
 // buildBracketLang converts a ChunkerConfig to a microfts2.BracketLang.
 // Handles both easy form (flat pairs) and full form (struct defs).
 // Strings and brackets unify into BracketGroup: strings get a non-nil
@@ -733,6 +845,13 @@ func (db *DB) ReloadConfig() error {
 	db.search.config = cfg
 	db.indexer.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
+
+	// R3217: the fresh config carries no derived strategy entries — nothing
+	// the hook establishes is persisted — so re-run it against the new
+	// sources before anything resolves a path against them.
+	if err := db.activateSourceChunkers(cfg); err != nil {
+		log.Printf("ERROR: %v", err)
+	}
 
 	// Diff and apply config changes
 	changes, err := db.DiffConfig()
@@ -1791,11 +1910,95 @@ func (db *DB) resolveExtUUIDBase(parts ExtTargetParts) []uint64 {
 	return db.filterChunksByAnchor(chunks, parts.AnchorKind, parts.AnchorText)
 }
 
-// resolveExtPathBase resolves a PATH-base TARGET to chunkids.
+// resolveExtPathBase resolves a PATH-base TARGET to chunkids, dispatching by
+// the target's strategy (R3220) before anything else: the bible resolver owns
+// the whole bible address path, including the virtual `BIBLE/<Book>` form that
+// has no indexed file for resolveExtFilePath's CheckFile to find.
+// CRC: crc-DB.md | Seq: seq-bible-resolve.md#3.2 | R2376, R2377, R3220
+func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
+	if db.targetStrategy(parts.BaseValue) == bibleStrategy {
+		return db.resolveBibleTarget(parts)
+	}
+	return db.resolveExtFilePath(parts)
+}
+
+// targetStrategy reports the strategy governing a TARGET's path. An indexed
+// file answers from the index; anything else — notably a virtual
+// `<source>/BIBLE/<Book>` address, which is deliberately not a file — falls
+// back to matching the global strategy map against the absolute path, where
+// the hook-derived source-prefixed entry (R3218) classifies it. Returns "" for
+// a path no rule claims.
+// CRC: crc-DB.md | R3218, R3220
+func (db *DB) targetStrategy(path string) string {
+	if s := db.FileStrategy(path); s != "" {
+		return s
+	}
+	if db.config == nil {
+		return "" // no config, no rules to classify an unindexed path by
+	}
+	return db.config.StrategyForPath(path)
+}
+
+// resolveBibleTarget decodes a bible address in two stages (R3220).
+//
+// Stage one (R3216): a `<source>/BIBLE/<Book>` path is virtual, so the anchor's
+// chapter and the book index name the real file, and BASE is rewritten to it.
+// Stage two (R3179): a CHAPTER.VERSE anchor selects the one chunk whose
+// `chapter` matches and whose `verses` span contains the verse.
+//
+// A bible target whose anchor is not CHAPTER.VERSE — a bare path, quoted text,
+// a regex, a line range — is ordinary path resolution against the real file,
+// so it falls through to the generic resolver. A *virtual* path with such an
+// anchor resolves to nothing: without a chapter there is no way to know which
+// of a book's several files it means.
+// CRC: crc-DB.md | Seq: seq-bible-resolve.md#3.3 | R3179, R3180, R3216, R3220
+func (db *DB) resolveBibleTarget(parts ExtTargetParts) []uint64 {
+	chapter, verse := 0, 0
+	isVerseRef := false
+	if parts.AnchorKind == "range" {
+		chapter, verse, isVerseRef = parseChapterVerse(parts.AnchorText)
+	}
+
+	if source, book, ok := bibleVirtualTarget(parts.BaseValue); ok {
+		if !isVerseRef {
+			return nil
+		}
+		path, err := db.lookupBookFile(source, book, chapter)
+		// R3180: a book or chapter with no entry resolves to nothing, with no
+		// fall-through — a reference that named a verse and silently annotated
+		// an unrelated paragraph would be worse than one that annotated none.
+		if err != nil || path == "" {
+			return nil
+		}
+		parts.BaseValue = path
+	}
+	if !isVerseRef {
+		return db.resolveExtFilePath(parts)
+	}
+
+	status, err := db.fts.CheckFile(parts.BaseValue)
+	if err != nil || status.FileID == 0 {
+		return nil
+	}
+	info, err := db.fts.FileInfoByID(status.FileID)
+	if err != nil || len(info.Chunks) == 0 {
+		return nil
+	}
+	return db.chunkForVerse(parts.BaseValue, info, chapter, verse)
+}
+
+// lookupBookFile reads the book-index record for (source, book, chapter),
+// returning "" when there is none. Exact key — chapters do not span files.
+// CRC: crc-DB.md | Seq: seq-bible-resolve.md#3.5 | R3214, R3216
+func (db *DB) lookupBookFile(source, book string, chapter int) (string, error) {
+	return db.store.ReadBookIndex(source, book, chapter)
+}
+
+// resolveExtFilePath resolves a PATH-base TARGET against a real indexed file.
 // Bare path → first chunk (preamble convention). Anchored path →
 // chunks in the file filtered by string/regex/range match.
 // CRC: crc-DB.md | R2376, R2377
-func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
+func (db *DB) resolveExtFilePath(parts ExtTargetParts) []uint64 {
 	status, err := db.fts.CheckFile(parts.BaseValue)
 	if err != nil || status.FileID == 0 {
 		return nil
@@ -1808,18 +2011,6 @@ func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
 		return []uint64{info.Chunks[0].ChunkID}
 	}
 	if parts.AnchorKind == "range" {
-		// R3179: on a bible-strategy file the anchor slot holds CHAPTER.VERSE
-		// rather than a chunk location — `mark:12.1` addresses verse 12:1, not
-		// a line range. Gated on the file's strategy, so a range anchor on any
-		// other file keeps the exact-location match below unchanged.
-		if chapter, verse, ok := parseChapterVerse(parts.AnchorText); ok &&
-			db.FileStrategy(parts.BaseValue) == bibleStrategy {
-			// R3180: a chapter or verse that does not exist resolves to
-			// nothing — deliberately no fall-through to the location match or
-			// the first chunk, since silently annotating an unrelated
-			// paragraph is worse than annotating none.
-			return db.chunkForVerse(parts.BaseValue, info, chapter, verse)
-		}
 		for _, c := range info.Chunks {
 			if c.Location == parts.AnchorText {
 				return []uint64{c.ChunkID}
@@ -2981,6 +3172,7 @@ type StatusInfo struct {
 // you add it to record-formats.md.
 // CRC: crc-DB.md | R3078
 var arkLabels = map[string]string{
+	"B":  "bible-books", // R3214
 	"D":  "tag-defs",
 	"F":  "file-tags",
 	"I":  "settings",

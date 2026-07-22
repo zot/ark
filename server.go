@@ -36,7 +36,6 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 	lua "github.com/yuin/gopher-lua"
@@ -3983,10 +3982,15 @@ type contentRender struct {
 	fileID     uint64
 	shell      contentShellData
 
-	// isBible selects the verse-aware markdown render (R3181). Bible files
-	// are markdown and take the markdown template like any other; only the
-	// per-chunk render differs.
+	// isBible selects the verse-aware XHTML render (R3181). Bible files take
+	// the markdown template like any other content; only the per-chunk render
+	// differs.
 	isBible bool
+	// raw is the file's bytes as they are on disk, kept even when data is
+	// replaced by a `?range=` chunk. The bible render needs them: a bible
+	// chunk's stored content is stripped prose (R3211), so the verse marks
+	// exist only in the publisher's XHTML. R3181
+	raw []byte
 	// extOverride, when non-nil, supplies the chunk-level <ark-ext-tags>
 	// block instead of the ordinary lookup — the bible render places
 	// verse-targeted routings inside their verses and leaves only the rest
@@ -4016,6 +4020,7 @@ func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *
 		rdb:  srv.db.withFTS(srv.db.fts.Copy()),
 		path: path,
 		data: data,
+		raw:  data,
 	}
 
 	// R1423-R1427: query params for iframe previews
@@ -4080,7 +4085,12 @@ func (srv *Server) handleContentView(w http.ResponseWriter, r *http.Request) {
 	cr := srv.newContentRender(r, path, data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if StrategyToContentType(cr.strategy) == "markdown" || strings.HasSuffix(path, ".md") {
+	// R3181: a bible file is XHTML, so StrategyToContentType calls it "text" —
+	// truthfully, since it is not markdown and must not be offered as editable
+	// markdown anywhere else. It still takes this branch, because the
+	// per-chunk render that intermediates its XHTML lives here; only that
+	// render differs from an ordinary rich content view.
+	if cr.isBible || StrategyToContentType(cr.strategy) == "markdown" || strings.HasSuffix(path, ".md") {
 		cr.serveMarkdown(w)
 		return
 	}
@@ -4114,7 +4124,7 @@ func (cr *contentRender) markdownBody() string {
 		// Rendered before chunkDiv, not inline in the call: the bible path
 		// populates extOverride for this chunk as a side effect, and chunkDiv
 		// reads it.
-		body := cr.markdownChunk(cr.data, cid)
+		body := cr.markdownChunk(cr.data, cr.rangeParam, cid)
 		cr.chunkDiv(&buf, cr.rangeParam, cid, body)
 		return buf.String()
 	}
@@ -4123,23 +4133,28 @@ func (cr *contentRender) markdownBody() string {
 		return db.AllChunks(cr.path), nil
 	})
 	if len(chunks) == 0 {
-		return cr.markdownChunk(cr.data, 0)
+		return cr.markdownChunk(cr.data, "", 0)
 	}
 	chunkIDs := cr.rdb.ChunkIDsForPath(cr.path)
 	for i, ch := range chunks {
 		cid := chunkIDAt(chunkIDs, i)
-		body := cr.markdownChunk([]byte(ch.Content), cid)
+		body := cr.markdownChunk([]byte(ch.Content), ch.Range, cid)
 		cr.chunkDiv(&buf, ch.Range, cid, body)
 	}
 	return buf.String()
 }
 
-// markdownChunk renders one chunk's markdown. An ordinary file goes straight
-// through goldmark; a bible file takes the verse pass, which places each
-// verse-targeted routing inside its verse and hands the rest back to the
-// chunk-level block via extOverride (R3181, R3182).
+// markdownChunk renders one chunk. An ordinary file goes straight through
+// goldmark; a bible file is intermediated from the publisher's XHTML, which
+// also places each verse-targeted routing inside its verse and hands the rest
+// back to the chunk-level block via extOverride (R3181, R3182).
+//
+// rangeLabel is the chunk's line span. The bible branch needs it because it
+// renders the *file's* markup for those lines rather than the chunk's stored
+// content: that content is stripped prose (R3211), so it carries no verse
+// marks to wrap. Empty (or unresolvable) falls back to content.
 // CRC: crc-Server.md | R3181, R3182
-func (cr *contentRender) markdownChunk(content []byte, cid uint64) string {
+func (cr *contentRender) markdownChunk(content []byte, rangeLabel string, cid uint64) string {
 	if !cr.isBible {
 		return wrapTagElements(renderMarkdownForContent(content, cr.path), cr.rdb)
 	}
@@ -4150,9 +4165,13 @@ func (cr *contentRender) markdownChunk(content []byte, cid uint64) string {
 	}
 	cr.extOverride[cid] = renderExtTagsBlock(leftover, "")
 
+	block := bibleLineSlice(cr.raw, rangeLabel)
+	if block == nil {
+		block = content
+	}
 	// insertVerseExtBlocks runs after wrapTagElements on purpose — see its
 	// doc comment (design gap C2).
-	html := wrapTagElements(renderBibleMarkdownForContent(content, cr.path), cr.rdb)
+	html := wrapTagElements(renderBibleXHTML(block), cr.rdb)
 	return insertVerseExtBlocks(html, byVerse)
 }
 
@@ -4436,23 +4455,14 @@ func (lr *contentLinkRewriter) Transform(node *ast.Document, reader text.Reader,
 // renderMarkdownForContent renders markdown to HTML with link/image rewriting
 // for the /content/ route. R1168-R1173
 func renderMarkdownForContent(data []byte, filePath string) string {
-	return renderMarkdownOpts(data, filePath, false)
+	return renderMarkdownOpts(data, filePath)
 }
 
-// renderBibleMarkdownForContent renders a bible chunk: ordinary markdown, plus
-// the verse pass that turns each numeric code span into an `<ark-verse>`
-// element. The elements come out empty — insertVerseExtBlocks fills them after
-// wrapTagElements, for the reason documented there. R3181, R3183
-// CRC: crc-Server.md | R3181, R3183
-func renderBibleMarkdownForContent(data []byte, filePath string) string {
-	return renderMarkdownOpts(data, filePath, true)
-}
-
-// renderMarkdownOpts is the shared body. Raw HTML stays disabled in both
-// modes: the verse element reaches the output as a custom AST node with its
-// own renderer, never as smuggled markup (R3183).
-// CRC: crc-Server.md | R1168-R1173, R3181, R3183
-func renderMarkdownOpts(data []byte, filePath string, verses bool) string {
+// renderMarkdownOpts is the shared body. Raw HTML stays disabled: nothing
+// stored ever reaches the page as markup (R3183). A bible file does not come
+// through here at all — it is XHTML, intermediated by renderBibleXHTML.
+// CRC: crc-Server.md | R1168-R1173
+func renderMarkdownOpts(data []byte, filePath string) string {
 	baseDir := filepath.Dir(filePath)
 	// R1194: Normalize tag lines so they render as line breaks even if the file
 	// on disk lacks trailing spaces (hand-edited files).
@@ -4467,12 +4477,6 @@ func renderMarkdownOpts(data []byte, filePath string, verses bool) string {
 			extension.Typographer,
 			extension.DefinitionList,
 		),
-	}
-	if verses {
-		transformers = append(transformers, util.Prioritized(bibleVerseTransformer{}, 200))
-		opts = append(opts, goldmark.WithRendererOptions(
-			renderer.WithNodeRenderers(util.Prioritized(arkVerseRenderer{}, 100)),
-		))
 	}
 	opts = append(opts, goldmark.WithParserOptions(
 		parser.WithAttribute(),

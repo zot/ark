@@ -27,6 +27,7 @@ change them, we need to update the CLI code so it's up-to-date.
 
 | Prefix | Record class        | Key shape                                         | Value                                   |
 |--------|---------------------|---------------------------------------------------|-----------------------------------------|
+| `B`    | Bible book index    | `B` + source + `\x00` + book + `\x00` + chapter    | file path (string)                      |
 | `D`    | Tag definition      | `D` + tagname + fileid:8                          | description bytes                       |
 | `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
 | `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
@@ -330,6 +331,31 @@ Full design: `specs/vector-freshness.md`.
 Full design: `specs/hot-correlations.md`. Alibi-stamp pattern:
 `~/.claude/personal/patterns/alibi-stamp.md`.
 
+## Bible Book Index (B)
+
+### B — book/chapter → file
+
+- **Key:** `B` + source + `\x00` + book + `\x00` + chapter. The source is
+  the source's directory; the book is the canonical name (the epub filename
+  token with hyphens turned to spaces — `1 Samuel`, `Psalm` singular); the
+  chapter is the decimal chapter number. **NUL bytes** delimit the
+  variable-length fields — a literal `0` would be ambiguous against the digits
+  in a chapter or a path.
+- **Value:** the file path holding that book's chapter (string).
+- **Semantic:** resolves a friendly virtual address
+  `<source>/BIBLE/<Book>:chapter.verse` to the real `*.text.xhtml` file. The
+  source is in the key so two scripture sources cannot collide on the same book
+  and chapter. **Exact-key lookup** — chapters do not span files, so no range
+  scan is needed. One record per (source, book, chapter); ~1,189 for a full
+  bible.
+- **Lifecycle:** written by the BibleChunker at index time through the write
+  actor, one record per chapter of each indexed `*.text.xhtml`. Read by
+  `DB.lookupBookFile` during `@ext` target resolution. Dropped wholesale by
+  `ark rebuild`.
+
+Full design: `specs/bible-chunker.md` §Addressing; `design/crc-BibleChunker.md`,
+`design/crc-DB.md`.
+
 ## Configuration Records (I)
 
 - **Key:** `I` + name (raw bytes).
@@ -387,7 +413,11 @@ during `ark init` and by config-mutating commands.
   collide with the embeddings.
 - **Value:** JSON describing the condition.
 - **Semantic:** persistent across restarts; surfaced in
-  `ark status` warnings.
+  `ark status` warnings. A condition may only be recorded if it is
+  re-derivable from durable state that witnesses it, so records are
+  reconciled on every config load and never dismissed — the rule and its
+  consequences live in [config-tracking.md](config-tracking.md)
+  ("Every condition is re-derived, never dismissed").
 
 ### Known E conditions
 
@@ -396,6 +426,7 @@ during `ark init` and by config-mutating commands.
 | `model_mismatch` | `tag_model` changed; stored embeddings are from a different model | Config edit reverts, or `ark rebuild` |
 | `index_stale` | `case_insensitive`, alias config, or chunker config changed; FTS index is wrong-shape | `ark rebuild` |
 | `config_catastrophe` | All sources removed, or config appears zeroed out | Restore via `ark config recover` from stored I records |
+| `source_activation` | A source's per-source chunker hook failed at config-resolve — today, a bible source with a real `<source>/BIBLE` path colliding with the reserved address namespace (R3219). Payload lists every failing source. | Fix the source (move or rename the colliding path) and reload; the condition is re-derived per config load, so it clears itself |
 
 ## File State Records
 

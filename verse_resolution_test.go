@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-DB.md, crc-BibleChunker.md | Test: test-VerseResolution.md | R3179, R3180
+// CRC: crc-DB.md, crc-BibleChunker.md | Test: test-VerseResolution.md | R3179, R3180, R3216, R3220
 
 import (
 	"os"
@@ -40,19 +40,33 @@ func TestVerseSpanContains(t *testing.T) {
 	}
 }
 
+// TestBibleVirtualTarget — R3216: `<source>/BIBLE/<Book>` is recognized as an
+// address rather than looked for on disk, and one reserved segment names
+// exactly one book.
+func TestBibleVirtualTarget(t *testing.T) {
+	source, book, ok := bibleVirtualTarget("/work/esv/BIBLE/1 Samuel")
+	if !ok || source != "/work/esv" || book != "1 Samuel" {
+		t.Errorf(`got (%q, %q, %v), want ("/work/esv", "1 Samuel", true)`, source, book, ok)
+	}
+	for _, p := range []string{
+		"/work/esv/OEBPS/Text/b43.00.John.text.xhtml", // a real file
+		"/work/esv/BIBLE/",                            // no book named
+		"/work/esv/BIBLE/John/3",                      // BIBLE names a book, not a subtree
+		"BIBLE/John",                                  // no source
+	} {
+		if _, _, ok := bibleVirtualTarget(p); ok {
+			t.Errorf("%q was read as a virtual book address; want not", p)
+		}
+	}
+}
+
 // setupBibleFile indexes the two-chapter fixture with the bible strategy and
 // returns the db plus the file's path and its chunk IDs in order.
 func setupBibleFile(t *testing.T) (*DB, string, []uint64) {
 	t.Helper()
-	_, db := setupRecall(t)
-	// Load-bearing: this harness never runs db.Open, which is what registers
-	// `bible` in production. See biblechunker_test.go.
-	if err := db.indexer.fts.AddChunker(bibleStrategy, bibleChunker{}); err != nil {
-		t.Fatalf("register bible strategy: %v", err)
-	}
-	db.config.Sources = []Source{{Dir: db.dbPath}}
+	db := setupBibleDB(t)
 
-	path := filepath.Join(db.dbPath, "zechariah.md")
+	path := filepath.Join(db.dbPath, "b38.00.Zechariah.text.xhtml")
 	if err := os.WriteFile(path, []byte(bibleFixture), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +126,48 @@ func TestVerseResolvesToItsParagraph(t *testing.T) {
 	}
 }
 
+// TestVirtualBookAddressResolves — test-VerseResolution.md "the virtual
+// BIBLE/<Book> address resolves through the book index", and "the address book
+// name is the normalized form". R3214, R3215, R3216, R3220.
+func TestVirtualBookAddressResolves(t *testing.T) {
+	db := setupBibleDB(t)
+	// The hook is what classifies the virtual namespace as bible; without it
+	// the address would never reach the bible resolver.
+	if err := db.activateSourceChunkers(db.config); err != nil {
+		t.Fatalf("activateSourceChunkers: %v", err)
+	}
+
+	path := filepath.Join(db.dbPath, "b09.00.1-Samuel.text.xhtml")
+	if err := os.WriteFile(path, []byte(bibleFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(path, bibleStrategy); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	virtual := filepath.Join(db.dbPath, "BIBLE", "1 Samuel")
+	got := resolveTarget(t, db, virtual+":2.2")
+	real := resolveTarget(t, db, path+":2.2")
+	if len(real) != 1 {
+		t.Fatalf("the real path resolved to %v; the virtual comparison needs it", real)
+	}
+	if len(got) != 1 || got[0] != real[0] {
+		t.Errorf("%s:2.2 → %v, want the same chunk the real path gives (%v)", virtual, got, real)
+	}
+
+	// The address carries the spaced name the chunker wrote, not the epub's
+	// hyphenated filename token (R3215).
+	raw := filepath.Join(db.dbPath, "BIBLE", "1-Samuel")
+	if got := resolveTarget(t, db, raw+":2.2"); len(got) != 0 {
+		t.Errorf("the hyphenated token resolved to %v; the address uses the spaced name", got)
+	}
+	// A book with no records resolves to nothing rather than erroring (R3180).
+	missing := filepath.Join(db.dbPath, "BIBLE", "Obadiah")
+	if got := resolveTarget(t, db, missing+":1.1"); len(got) != 0 {
+		t.Errorf("an unknown book resolved to %v, want nothing", got)
+	}
+}
+
 // TestVerseNotFoundResolvesToNothing — test-VerseResolution.md "a nonexistent
 // chapter or verse resolves to nothing". R3180.
 func TestVerseNotFoundResolvesToNothing(t *testing.T) {
@@ -128,14 +184,28 @@ func TestVerseNotFoundResolvesToNothing(t *testing.T) {
 	}
 }
 
+// TestBareBibleTargetStillResolves — a bible target that names no verse is
+// ordinary path resolution: the bible dispatch owns the path, so it must not
+// swallow the cases it does not decode. R2376, R3220.
+func TestBareBibleTargetStillResolves(t *testing.T) {
+	db, path, ids := setupBibleFile(t)
+
+	got := resolveTarget(t, db, path)
+	if len(got) != 1 || got[0] != ids[0] {
+		t.Errorf("bare bible path → %v, want the first chunk [%d] (the preamble convention)", got, ids[0])
+	}
+	if got := resolveTarget(t, db, path+`:"Third verse"`); len(got) != 1 || got[0] != ids[2] {
+		t.Errorf("quoted-text anchor on a bible file → %v, want [%d]", got, ids[2])
+	}
+}
+
 // TestRangeAnchorOnNonBibleFileUnaffected — test-VerseResolution.md "a range
 // anchor on a non-bible file is unaffected": ordinary @ext range routings still
-// resolve by exact chunk location after the verse branch landed.
+// resolve by exact chunk location after the strategy dispatch landed.
 //
-// This does NOT guard the FileStrategy == bible gate — deleting that gate
-// leaves this passing, because a non-bible file has no `chapter` attribute
-// either way. Measured, not assumed; see the test design for what the gate
-// actually buys. R2377, R3179.
+// This does NOT guard the dispatch — deleting it leaves this passing, because a
+// non-bible file has no `chapter` attribute either way. Measured, not assumed;
+// see the test design for what the dispatch actually buys. R2377, R3179, R3220.
 func TestRangeAnchorOnNonBibleFileUnaffected(t *testing.T) {
 	_, db := setupRecall(t)
 	db.config.Sources = []Source{{Dir: db.dbPath}}
@@ -160,8 +230,8 @@ func TestRangeAnchorOnNonBibleFileUnaffected(t *testing.T) {
 		t.Errorf("location anchor %q → %v, want [%d]", loc, got, info.Chunks[0].ChunkID)
 	}
 
-	// A dotted anchor is not a verse here — no strategy gate, so it is just a
-	// location that matches nothing.
+	// A dotted anchor is not a verse here — the file is not bible-strategy, so
+	// it is just a location that matches nothing.
 	if got := resolveTarget(t, db, path+":1.1"); len(got) != 0 {
 		t.Errorf("dotted anchor on a non-bible file → %v, want nothing", got)
 	}

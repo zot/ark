@@ -1,38 +1,52 @@
 # Test Design: Bible rendering
 **Source:** crc-BibleRenderer.md, crc-Server.md
 
-Covers R3181–R3183 — verse marks becoming addressable elements, and
+Covers R3181–R3183 — `verse-num` spans becoming addressable elements, and
 verse-targeted annotations rendering at their verse instead of at the
-paragraph. Two layers: the pure render (markdown in, HTML out, no DB) and
-the content view end to end, where the routings actually come from.
+paragraph. Two layers: the pure render (publisher XHTML in, ark-controlled
+HTML out, no DB) and the content view end to end, where the routings actually
+come from.
 
-## Test: verse marks become verse elements
-**Purpose:** R3181 — every mark is wrapped, annotated or not, and the
-`<code>` is preserved so the page still reads as markdown.
-**Input:** a chapter paragraph with two verse marks, rendered by the
-bible renderer.
-**Expected:** `<ark-verse n="1"><code>1</code></ark-verse>` and the same
-for 2, both inside the paragraph, with the surrounding prose intact.
+## Test: verse-num spans become verse elements
+**Purpose:** R3181 — every `verse-num` is wrapped, annotated or not, the number
+kept, giving each verse an identity in the page.
+**Input:** a `<p class="normal">` paragraph carrying two `verse-num` spans (1, 2),
+rendered by the bible renderer.
+**Expected:** `<ark-verse n="1">` around the number and the same for 2, both
+inside the paragraph, with the surrounding prose intact.
 **Refs:** crc-BibleRenderer.md, R3181
 
-## Test: only numeric marks are verses
-**Purpose:** R3183 — the discrimination that keeps ordinary inline code
-in a bible file untouched.
-**Input:** a paragraph containing `` `3` ``, `` `xii` ``, and
-`` `someFunc()` ``.
-**Expected:** only `3` becomes a verse element; the other two render as
-plain `<code>`.
+## Test: apparatus, scripts, and handlers are stripped
+**Purpose:** R3183 — ark emits its own elements, never the publisher's unsafe
+markup; serving the file directly would be raw-HTML injection.
+**Input:** a fragment carrying an inline `onclick`, a `crossref`/`footnote`
+popup anchor, and a `<script>` reference.
+**Expected:** none appear in the output — no `onclick`, no `<script>`, no
+popup-link markup; the prose and the `<ark-verse>` wrappers remain.
 **Refs:** crc-BibleRenderer.md, R3183
 
-## Test: a numeric span inside a fenced code block is not a verse
-**Purpose:** R3183 — the reason this is an AST pass rather than a rewrite
-of rendered HTML. A pass over output could not tell this case from a
-verse mark in prose.
-**Input:** a fenced code block whose body is a bare number, plus a real
-verse mark in a following paragraph.
-**Expected:** the fenced block renders as an ordinary code block with no
-verse element inside it; the paragraph's mark becomes one.
+## Test: only verse-num spans are verses
+**Purpose:** R3183 — the recognition is over the parsed document, so a number
+sitting in the prose is not mistaken for a verse.
+**Input:** a paragraph whose prose contains a bare digit alongside a real
+`verse-num` span.
+**Expected:** only the `verse-num` span becomes an `<ark-verse>`; the prose
+digit is left as text.
 **Refs:** crc-BibleRenderer.md, R3183
+
+## Test: a chapter's first verse is addressable though it has no number
+**Purpose:** R3222 — the edition prints a `chapter-num` drop cap instead of a
+verse number, so verse 1 of every chapter has identity but no `verse-num` span.
+Without an anchor it is the one verse per chapter nothing can address, and a
+routing targeting it resolves and then has nowhere to render.
+**Input:** a chapter-opening paragraph as the edition ships it — an
+`hBBCCC001` span holding a `book-name` and a `chapter-num` and then prose, with
+a following `hBBCCC002` span that does carry a `verse-num`.
+**Expected:** an empty `<ark-verse n="1">` appears where verse 1's text begins,
+and verse 2 still gets its ordinary number-wrapping element. Verse 1 is
+anchored exactly once even when the enclosing `<p>` repeats its identity, and a
+verse that *does* have a number gets no extra empty anchor.
+**Refs:** crc-BibleRenderer.md, R3222, R3181
 
 ## Test: ext blocks land in their own verse
 **Purpose:** R3182 — placement is keyed by verse number, and a verse with
