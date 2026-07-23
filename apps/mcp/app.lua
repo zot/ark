@@ -463,6 +463,11 @@ function mcp:displayArkCuration()
     mcp:display("ark")
 end
 
+function mcp:displayArkLuhmann()
+    if ark then ark:showLuhmann() end
+    mcp:display("ark")
+end
+
 function mcp:displayPrefs()
     mcp:display("prefs")
 end

@@ -3,16 +3,17 @@
 @note: add interactive searching -- this is the user's google and yahoo on all their stuff and all of the assistant's stuff. Frictionless chat and other events links to the AI partner directly
 @note: need to have a way to show unresolved files deep in the trees. Ark CLI should help with this. `ark unresolved` has "path" right now but it should be <pattern>
 
-The ark app has three top-level views:
+The ark app has four top-level views:
 
 - **Searching** — index manager + full-text search (ark-searcher)
 - **Messaging** — cross-project message dashboard (ark-messenger)
-- **Curation** — vocabulary-maintenance workshop (chunk → tag, tag → chunk, tag → tag)
+- **Curation** — the Tag Forge, a vocabulary-maintenance workshop (chunk → tag, tag → chunk, tag → tag). Displayed title: "Tag Forge".
+- **Luhmann** — terminal on the ark-hosted Luhmann session (browser counterpart of `ark luhmann attach`)
 
 A thin root object routes between them. The MCP shell's bottom bar
-has three ark buttons: searching (archive icon), messaging
-(envelope icon), and curation (multi-tag icon). Each sets the view
-mode and displays the ark app.
+has four ark buttons: searching (archive icon), messaging
+(envelope icon), curation (multi-tag icon), and luhmann (terminal
+icon). Each sets the view mode and displays the ark app.
 
 ## Architecture
 
@@ -665,12 +666,49 @@ on every mutation.
 - **Mirror-file compaction** — multi-tag lines targeting the
   same chunk stay one-tag-per-line in v1.
 
+## Luhmann View
+
+A terminal on the ark-hosted Luhmann session — the in-app
+counterpart of `ark luhmann attach`, following the worked example
+at `install/html/luhmann-terminal.html` (design:
+`design/ui-luhmann-terminal-page.md`).
+
+- **Layout** — flex column: one-line status strip on top,
+  `<luhmann-terminal>` filling the rest (`flex: 1; min-height: 0` —
+  the element sizes itself to its box via ResizeObserver, R3154).
+  The element's module loads from `/luhmann-terminal-element.js`
+  (idempotent: skip if the custom element is already registered).
+- **Status strip** — a lamp dot plus text, driven entirely by the
+  element's bubbling `luhmann-terminal-status` event (R3159; listen
+  on `document` — the strip is the terminal's sibling, so the event
+  never bubbles through it). States: `connecting` (dim), `connected`
+  (success, shows session id), `waiting` (warning, shows attempt),
+  `asleep` (muted, "no session"). The event is pushed to Lua via the
+  JS→Lua bridge so Lua state drives the strip and button visibility.
+- **Launch button** — visible only in `asleep` state. Opens a
+  confirmation dialog that says plainly this starts a paid Claude
+  session; on confirm, calls `sys.luhmannLaunch()`. Until the Go
+  side lands (PENDING #62), init.lua defines a stub that only
+  notifies the user to run `ark luhmann launch`. A user click is an
+  explicit action, so R3114 (ark never *proactively* starts a paid
+  session) is respected.
+- **Wake on CLI launch** — the element stops probing once it
+  reports `asleep`, so a session launched from the CLI while the
+  view is showing is invisible to it. `wake()` re-mounts the element
+  (bumps a mount nonce), forcing a fresh probe. The Go-side push
+  that calls `wake()` on launch is PENDING #62; until then the user
+  can re-enter the view (showing the view always re-mounts).
+- **Detach semantics** — leaving the view unmounts the element,
+  which closes the socket; the hosted session survives (R3121,
+  R3156). No terminal state is kept in Lua.
+
 ## MCP Shell Integration
 
-Three ark buttons in the MCP bottom bar:
+Four ark buttons in the MCP bottom bar:
 - **Archive icon** — displays ark in searching mode
 - **Envelope icon** — displays ark in messaging mode
 - **Multi-tag icon** — displays ark in curation mode
+- **Terminal icon** — displays ark in luhmann mode
 
 Each button sets the view mode on the ark instance before calling
 `mcp:display("ark")`.

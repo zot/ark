@@ -18,7 +18,7 @@
 - Messaging:isEmpty, Messaging:isLoading (empty state, loading indicator)
 
 ### External Methods (not dead — called from MCP app)
-- Ark:showSearching, Ark:showMessaging, Ark:showCuration — called by MCP displayArk/displayArkMessages/displayArkCuration
+- Ark:showSearching, Ark:showMessaging, Ark:showCuration, Ark:showLuhmann — called by MCP displayArk/displayArkMessages/displayArkCuration/displayArkLuhmann
 
 ### Missing Methods (referenced in viewdefs, not defined in Lua)
 - `noBookmarkLag()`, `bookmarkLabel()` — bookmark-lag display fields; viewdef references precede Lua implementation
@@ -59,3 +59,5 @@ Features added via rapid prototyping that may need review:
 - MessageDetail presenter (load, tabs, status controls, complete)
 - Message card click → showDetail() instead of openFile()
 - Detail dialog inline in Messaging viewdef
+- Tag Forge rename (displayed title "Curation" → "Tag Forge"; docs updated)
+- Search JS bridge: name_tokens/value_tokens/name_match → primary_tag_query/primary_file_tag (sigil-form tag predicate, R2442/R2453)

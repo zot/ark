@@ -78,7 +78,7 @@ local searching
 local messaging
 local curation
 -- Forward-declared so Ark:new/mutate can see them before their definitions
-local Searching, Messaging, MessageColumn, Message
+local Searching, Messaging, MessageColumn, Message, Luhmann
 -- Curation prototypes (Ark.Curation, Ark.PinnedChunk, Ark.TagSuggestion,
 -- Ark.HotChunk, Ark.RelatedTag, Ark.DriftPair) live in ark.curation,
 -- loaded via require near the bottom of this file.
@@ -166,7 +166,8 @@ local function nodePattern(node, mode)
 end
 
 ------------------------------------------------------------------------
--- Ark (root shell — routes between Searching, Messaging, Curation views)
+-- Ark (root shell — routes between Searching, Messaging, Curation,
+-- and Luhmann views)
 ------------------------------------------------------------------------
 
 Ark = session:prototype("Ark", {
@@ -174,6 +175,7 @@ Ark = session:prototype("Ark", {
     _searching = EMPTY,
     _messaging = EMPTY,
     _curation = EMPTY,
+    _luhmann = EMPTY,
 })
 
 function Ark:new(instance)
@@ -181,6 +183,7 @@ function Ark:new(instance)
     instance._searching = Searching:new()
     instance._messaging = Messaging:new()
     instance._curation = Curation:new()
+    instance._luhmann = Luhmann:new()
     return instance
 end
 
@@ -189,6 +192,8 @@ function Ark:currentView()
         return self._messaging
     elseif self._viewMode == "curation" then
         return self._curation
+    elseif self._viewMode == "luhmann" then
+        return self._luhmann
     end
     return self._searching
 end
@@ -207,6 +212,13 @@ function Ark:showCuration()
     self._curation:onViewOpen()
 end
 
+function Ark:showLuhmann()
+    self._viewMode = "luhmann"
+    -- Fresh mount + probe on every entry: the element stops probing once
+    -- it announces asleep, so re-entering the view must not trust stale state.
+    self._luhmann:wake()
+end
+
 -- Public entry point for "Curate this chunk" gestures. Always-add,
 -- never-flip: the pin lands on top of the workspace and the user
 -- stays where they are.
@@ -223,6 +235,103 @@ function Ark:mutate()
     end
     if self._curation == nil then
         self._curation = Curation:new()
+    end
+    if self._luhmann == nil then
+        self._luhmann = Luhmann:new()
+    end
+end
+
+------------------------------------------------------------------------
+-- Ark.Luhmann (terminal on the ark-hosted Luhmann session — the in-app
+-- counterpart of `ark luhmann attach`; worked example:
+-- install/html/luhmann-terminal.html)
+------------------------------------------------------------------------
+
+Ark.Luhmann = session:prototype("Ark.Luhmann", {
+    termStatus = "connecting",  -- element state: connecting|connected|waiting|asleep
+    termSession = "",
+    termAttempt = 0,
+    statusBridge = "",          -- JS→Lua bridge: JSON {state, session, attempt}
+    confirmOpen = false,
+    _mountNonce = 1,
+})
+Luhmann = Ark.Luhmann
+
+function Luhmann:new(instance)
+    return session:create(Luhmann, instance)
+end
+
+-- The element takes no attributes; the nonce comment exists only so wake()
+-- changes this value, re-mounting the element for a fresh probe.
+function Luhmann:terminalHtml()
+    return '<luhmann-terminal></luhmann-terminal><!-- mount ' .. self._mountNonce .. ' -->'
+end
+
+-- Public: the PENDING #62 Go push calls this when a CLI launch happens
+-- while the view is showing.
+function Luhmann:wake()
+    self.termStatus = "connecting"
+    self.termSession = ""
+    self.termAttempt = 0
+    self._mountNonce = self._mountNonce + 1
+end
+
+-- Bridge trigger (bound with ?priority=high): drain the status event
+-- pushed by the viewdef's document listener.
+function Luhmann:processStatus()
+    if self.statusBridge == "" then return end
+    local ok, detail = pcall(json.decode, self.statusBridge)
+    self.statusBridge = ""
+    if not ok or type(detail) ~= "table" then return end
+    self.termStatus = detail.state or "connecting"
+    self.termSession = detail.session or ""
+    self.termAttempt = detail.attempt or 0
+end
+
+-- Wording mirrors install/html/luhmann-terminal.html's status strip.
+function Luhmann:statusText()
+    local s = self.termStatus
+    if s == "connected" then
+        if self.termSession ~= "" then
+            return "Luhmann: awake (session " .. self.termSession .. ")"
+        end
+        return "Luhmann: awake"
+    elseif s == "waiting" then
+        return "Luhmann: reconnecting (attempt " .. self.termAttempt .. ")"
+    elseif s == "asleep" then
+        return "Luhmann: asleep — no session"
+    end
+    return "Luhmann: connecting…"
+end
+
+function Luhmann:lampColor()
+    local s = self.termStatus
+    if s == "connected" then return "var(--term-success, #3fb950)" end
+    if s == "waiting" then return "var(--term-warning, #d29922)" end
+    if s == "asleep" then return "var(--term-text-muted, #6a6a80)" end
+    return "var(--term-text-dim, #8888a0)"
+end
+
+function Luhmann:notAsleep()
+    return self.termStatus ~= "asleep"
+end
+
+function Luhmann:openLaunchConfirm()
+    self.confirmOpen = true
+end
+
+function Luhmann:cancelLaunch()
+    self.confirmOpen = false
+end
+
+function Luhmann:confirmLaunch()
+    self.confirmOpen = false
+    -- sys arrives after ui start (registerLuaFunctions); the init.lua stub
+    -- installs via setImmediate. Guard both in case neither has landed.
+    if sys ~= nil and sys.luhmannLaunch ~= nil then
+        sys.luhmannLaunch()
+    else
+        mcp:notify("Launching isn't wired up yet — run: ark luhmann launch", "warning")
     end
 end
 

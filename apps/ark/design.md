@@ -2,12 +2,14 @@
 
 ## Intent
 
-The ark app has three views: Searching (index manager + full-text
-search), Messaging (cross-project message dashboard), and Curation
+The ark app has four views: Searching (index manager + full-text
+search), Messaging (cross-project message dashboard), Curation
 (vocabulary-maintenance workshop sitting on top of the Phase 1
-chunk → tag, tag → chunk, and tag → tag bridges). A thin root
-object routes between them via `ui-view`. The MCP shell has three
-bottom-bar buttons, one per view.
+chunk → tag, tag → chunk, and tag → tag bridges), and Luhmann
+(terminal on the ark-hosted Luhmann session — the in-app
+counterpart of `ark luhmann attach`). A thin root object routes
+between them via `ui-view`. The MCP shell has four bottom-bar
+buttons, one per view.
 
 ## Layout
 
@@ -96,16 +98,55 @@ tag (or click one in the defined-tags picker), see top chunks,
 related tags, drift pairs. Click related → switch focus; click
 chunk → pin. Retained from the pre-reframe design.
 
+### Luhmann View (2026-07, PENDING #39)
+
+Follows the worked example `install/html/luhmann-terminal.html`
+(`design/ui-luhmann-terminal-page.md`).
+
+```
++------------------------------------------------------+
+| ● Luhmann: asleep — no session          [Launch…]    |  <- status strip
++------------------------------------------------------+
+|                                                      |
+|  <luhmann-terminal>                                  |  <- flex: 1, min-height: 0
+|    (xterm renders the hosted session here)           |
+|                                                      |
++------------------------------------------------------+
+```
+
+The strip's lamp + text and the Launch button's visibility are
+Lua-driven: the element's bubbling `luhmann-terminal-status`
+event (listened on `document` — the strip is the terminal's
+sibling) is pushed through the JS→Lua bridge. `[Launch…]` shows
+only in `asleep` and opens an `sl-dialog` confirming a paid
+session before calling `sys.luhmannLaunch()` (init.lua stub
+until PENDING #62 lands the Go verb). The terminal mounts via
+`ui-html="terminalHtml()"`, which carries a mount nonce —
+`wake()` bumps it, re-mounting the element and forcing a fresh
+probe (the element stops probing once it announces `asleep`).
+
 ## Data Model
 
 ### Ark (root shell)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| _viewMode | string | "searching", "messaging", or "curation" |
+| _viewMode | string | "searching", "messaging", "curation", or "luhmann" |
 | _searching | Ark.Searching | The index/search view |
 | _messaging | Ark.Messaging | The messaging view |
 | _curation | Ark.Curation | The Tag Forge view |
+| _luhmann | Ark.Luhmann | The Luhmann terminal view |
+
+### Ark.Luhmann
+
+| Field | Type | Description |
+|-------|------|-------------|
+| termStatus | string | Element state: "connecting", "connected", "waiting", or "asleep" |
+| termSession | string | Hosted session id (from the status event; "" when none) |
+| termAttempt | number | Reconnect attempt counter (from the status event) |
+| statusBridge | string | JS→Lua bridge: JSON `{state, session, attempt}` from the status event; cleared by `processStatus()` |
+| confirmOpen | bool | Launch confirmation dialog visibility |
+| _mountNonce | number | Bumped by `wake()`; changes `terminalHtml()` so the element re-mounts |
 
 ### Ark.Searching (renamed from Ark)
 
@@ -368,12 +409,28 @@ A row in the focused-tag panel's "Drift" list. Shape mirrors
 
 | Method | Description |
 |--------|-------------|
-| new() | Create instance with Searching, Messaging, and Curation children |
-| currentView() | Return _searching, _messaging, or _curation based on _viewMode |
+| new() | Create instance with Searching, Messaging, Curation, and Luhmann children |
+| currentView() | Return _searching, _messaging, _curation, or _luhmann based on _viewMode |
 | showSearching() | Set _viewMode = "searching" |
 | showMessaging() | Set _viewMode = "messaging", refresh messaging |
 | showCuration() | Set _viewMode = "curation", call _curation:onViewOpen() |
+| showLuhmann() | Set _viewMode = "luhmann", call _luhmann:wake() (fresh mount + probe on every entry) |
 | curate(chunkID, fileID, path) | Pin a chunk to the Tag Forge without flipping the view (always-add never-flip) |
+
+### Ark.Luhmann
+
+| Method | Description |
+|--------|-------------|
+| new() | Create instance |
+| terminalHtml() | `<luhmann-terminal></luhmann-terminal>` + mount-nonce comment; changing the nonce re-mounts the element |
+| wake() | Reset status to "connecting", bump _mountNonce — re-mount forces a fresh probe. Public: the PENDING #62 Go push calls this on CLI launch |
+| processStatus() | Bridge trigger (`?priority=high`): parse statusBridge JSON into termStatus/termSession/termAttempt, clear the bridge |
+| statusText() | Strip text per state (mirrors the worked example's wording) |
+| lampColor() | CSS color per state (`--term-*` vars, same mapping as the worked example) |
+| notAsleep() | Launch-button hiding (`ui-class-hidden`) |
+| openLaunchConfirm() | Set confirmOpen = true |
+| cancelLaunch() | Set confirmOpen = false (also wired to the dialog's sl-after-hide) |
+| confirmLaunch() | Close dialog, call `sys.luhmannLaunch()` (stub until PENDING #62) |
 
 ### Ark.Searching
 
@@ -636,6 +693,7 @@ Read-only display object. No actions.
 | File | Type | Purpose |
 |------|------|---------|
 | Ark.DEFAULT.html | Ark | Thin shell: `ui-view="currentView()"` |
+| Ark.Luhmann.DEFAULT.html | Ark.Luhmann | Status strip (lamp + text + Launch button) over `<luhmann-terminal>` in a flex column; launch-confirm `sl-dialog`; script loads the element module and forwards `luhmann-terminal-status` events through the JS→Lua bridge |
 | Ark.Searching.DEFAULT.html | Ark.Searching | Sidebar + `<ark-search>` element + JS SearchAPI bridge |
 | Ark.Messaging.DEFAULT.html | Ark.Messaging | Kanban columns with message cards |
 | Ark.Message.list-item.html | Ark.Message | Card in kanban column |
@@ -660,10 +718,15 @@ Read-only display object. No actions.
 
 ### MCP app.lua
 
-New method:
+New methods:
 ```lua
 function mcp:displayArkCuration()
     if ark then ark:showCuration() end
+    mcp:display("ark")
+end
+
+function mcp:displayArkLuhmann()
+    if ark then ark:showLuhmann() end
     mcp:display("ark")
 end
 ```
@@ -672,10 +735,13 @@ Existing `displayArk()` and `displayArkMessages()` unchanged.
 
 ### MCP.DEFAULT.html
 
-Third button in bottom bar (after the envelope icon):
+Third and fourth buttons in bottom bar (after the envelope icon):
 ```html
-<span class="mcp-build-mode-toggle" ui-event-click="displayArkCuration()" title="Ark Curation">
-  <sl-icon name="tags-fill"></sl-icon>
+<span class="mcp-build-mode-toggle" ui-event-click="displayArkCuration()" title="Tag Forge">
+  <!-- inline tag-forge SVG -->
+</span>
+<span class="mcp-build-mode-toggle" ui-event-click="displayArkLuhmann()" title="Luhmann">
+  <sl-icon name="terminal-fill"></sl-icon>
 </span>
 ```
 

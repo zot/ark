@@ -1,0 +1,88 @@
+<template>
+  <div class="ark-luhmann">
+    <div class="ark-luhmann-status panel-header">
+      <span class="ark-luhmann-lamp" ui-style-background="lampColor()"></span>
+      <span class="ark-luhmann-text" ui-value="statusText()"></span>
+      <sl-button size="small" variant="primary" outline class="ark-luhmann-launch"
+                 ui-class-hidden="notAsleep()" ui-action="openLaunchConfirm()">Launch…</sl-button>
+    </div>
+    <div class="ark-luhmann-term" ui-html="terminalHtml()"></div>
+
+    <!-- JS→Lua bridge: the document listener below pushes status events here -->
+    <span id="ark-luhmann-status-bridge" style="display:none" ui-value="statusBridge?access=rw"></span>
+    <span style="display:none" ui-value="processStatus()?priority=high"></span>
+
+    <sl-dialog label="Launch Luhmann?" class="ark-luhmann-confirm"
+               ui-attr-open="confirmOpen" ui-event-sl-after-hide="cancelLaunch()">
+      Launching starts a paid Claude session on this machine. It keeps
+      running (and spending) until you stop it with <code>ark luhmann stop</code>.
+      <sl-button slot="footer" ui-action="cancelLaunch()">Cancel</sl-button>
+      <sl-button slot="footer" variant="primary" ui-action="confirmLaunch()">Launch</sl-button>
+    </sl-dialog>
+  </div>
+
+  <script>
+    // Load the <luhmann-terminal> element module (idempotent)
+    if (!customElements.get('luhmann-terminal')) {
+      var s = document.createElement('script');
+      s.type = 'module';
+      s.src = '/luhmann-terminal-element.js';
+      document.head.appendChild(s);
+    }
+
+    // Forward the element's bubbling status events to Lua. On document, not
+    // the strip: the strip is the terminal's sibling, so the event never
+    // passes through it. Window-guarded so re-renders don't stack listeners.
+    if (!window.__arkLuhmannStatusForwarder) {
+      window.__arkLuhmannStatusForwarder = true;
+      document.addEventListener('luhmann-terminal-status', function (e) {
+        if (window.uiApp) {
+          window.uiApp.updateValue('ark-luhmann-status-bridge', JSON.stringify({
+            state: e.detail.state,
+            session: e.detail.session || '',
+            attempt: e.detail.attempt || 0,
+          }));
+        }
+      });
+    }
+  </script>
+
+  <style>
+    .ark-luhmann {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      color: var(--term-text, #e0e0e8);
+      background: var(--term-bg, #0a0a0f);
+    }
+    .ark-luhmann-status {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: .5em;
+      padding: .4em .8em;
+      border-bottom: 1px solid var(--term-border, #2a2a3a);
+      font-size: .85rem;
+    }
+    .ark-luhmann-lamp {
+      flex: none;
+      width: .6em;
+      height: .6em;
+      border-radius: 50%;
+    }
+    .ark-luhmann-text { flex: 1; }
+    /* The element's box IS the view minus the strip — its ResizeObserver
+       turns any resize into a pty resize with no layout code here. */
+    .ark-luhmann-term {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .ark-luhmann-term luhmann-terminal {
+      flex: 1;
+      min-height: 0;
+    }
+  </style>
+</template>
