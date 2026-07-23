@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-BibleRenderer.md, crc-Server.md | Test: test-BibleRender.md | R3181, R3182, R3183
+// CRC: crc-BibleRenderer.md, crc-Server.md | Test: test-BibleRender.md | R3181, R3182, R3183, R3229, R3232
 
 import (
 	"os"
@@ -24,7 +24,7 @@ const bibleRenderBlock = `<p class="normal" id="v38002001"><span class="h3800200
 func TestBibleRender_VerseSpansBecomeElements(t *testing.T) {
 	html := renderBibleXHTML([]byte(bibleRenderBlock))
 
-	for _, want := range []string{`<ark-verse n="1">1</ark-verse>`, `<ark-verse n="2">2</ark-verse>`} {
+	for _, want := range []string{`<ark-verse n="1" c="2">1</ark-verse>`, `<ark-verse n="2" c="2">2</ark-verse>`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %s in:\n%s", want, html)
 		}
@@ -51,9 +51,14 @@ func TestBibleRender_ApparatusAndHandlersStripped(t *testing.T) {
 		}
 	}
 	// The apparatus text goes with it — a crossref letter and a book label are
-	// not scripture.
-	if strings.Contains(html, "Zechariah") {
-		t.Errorf("book-name text survived:\n%s", html)
+	// not scripture. The label is still *known* (it names the book for the
+	// running head, R3233), so what must not survive is its appearance in the
+	// reading flow, not its presence as an attribute.
+	if strings.Contains(stripTagsForTest(html), "Zechariah") {
+		t.Errorf("book-name text was printed in the flow:\n%s", html)
+	}
+	if !strings.Contains(html, `b="Zechariah"`) {
+		t.Errorf("book label was dropped entirely; the running head needs it:\n%s", html)
 	}
 	if !strings.Contains(html, "tail prose.") || !strings.Contains(html, "Then said I.") {
 		t.Errorf("prose was lost along with the apparatus:\n%s", html)
@@ -93,10 +98,10 @@ func TestBibleRender_NumberlessVerseAnchored(t *testing.T) {
 
 	html := renderBibleXHTML([]byte(opening))
 
-	if !strings.Contains(html, `<ark-verse n="1"></ark-verse>`) {
+	if !strings.Contains(html, `<ark-verse n="1" c="1"></ark-verse>`) {
 		t.Errorf("verse 1 got no anchor; it is unaddressable:\n%s", html)
 	}
-	if !strings.Contains(html, `<ark-verse n="2">2</ark-verse>`) {
+	if !strings.Contains(html, `<ark-verse n="2" c="1">2</ark-verse>`) {
 		t.Errorf("verse 2 lost its numbered element:\n%s", html)
 	}
 	if n := strings.Count(html, `<ark-verse n="1"`); n != 1 {
@@ -107,7 +112,7 @@ func TestBibleRender_NumberlessVerseAnchored(t *testing.T) {
 		t.Errorf("anchor escaped its paragraph:\n%s", html)
 	}
 	// A verse that does carry a number gets no extra empty anchor.
-	if strings.Contains(html, `<ark-verse n="2"></ark-verse>`) {
+	if strings.Contains(html, `<ark-verse n="2" c="1"></ark-verse>`) {
 		t.Errorf("a numbered verse was double-anchored:\n%s", html)
 	}
 
@@ -218,7 +223,7 @@ func TestBibleRender_ContentViewIntermediatesXHTML(t *testing.T) {
 
 	html := getContentView(t, srv, path, "")
 
-	if !strings.Contains(html, `<ark-verse n="1">`) {
+	if !strings.Contains(html, `<ark-verse n="1"`) {
 		t.Errorf("content view emitted no verse elements:\n%s", html)
 	}
 	if strings.Contains(html, "onclick") || strings.Contains(html, "pop-link") {
@@ -244,7 +249,7 @@ func TestBibleRender_RangedViewIntermediates(t *testing.T) {
 	// chunks[1] is the paragraph spanning verses 1-2.
 	html := getContentView(t, srv, path, "?range="+chunks[1].Range)
 
-	if !strings.Contains(html, `<ark-verse n="2">`) {
+	if !strings.Contains(html, `<ark-verse n="2"`) {
 		t.Errorf("ranged bible view lost its verse elements:\n%s", html)
 	}
 	if strings.Contains(html, "onclick") {
@@ -260,7 +265,7 @@ func TestBibleRender_RoutingAtItsVerse(t *testing.T) {
 
 	html := getContentView(t, srv, path, "")
 
-	i := strings.Index(html, `<ark-verse n="1">`)
+	i := strings.Index(html, `<ark-verse n="1"`)
 	if i < 0 {
 		t.Fatalf("no verse 1 element:\n%s", html)
 	}
@@ -290,5 +295,94 @@ func TestBibleRender_RoutingWithoutVerseStaysAtParagraph(t *testing.T) {
 			strings.Contains(seg[:end], "whole file") {
 			t.Errorf("bare-target routing was placed inside a verse:\n%s", seg[:end])
 		}
+	}
+}
+
+// TestBibleRender_VerseCarriesChapter — a text file spans several chapters, so
+// a verse number alone does not identify a verse within the page. R3229.
+func TestBibleRender_VerseCarriesChapter(t *testing.T) {
+	twoChapters := `<p class="normal" id="v01001003"><span class="h01001003"><span class="verse-num"><a>3</a></span>Let there be light.</span></p>` +
+		`<p class="normal" id="v01002003"><span class="h01002003"><span class="verse-num"><a>3</a></span>And God blessed the seventh day.</span></p>`
+
+	html := renderBibleXHTML([]byte(twoChapters))
+
+	for _, want := range []string{`<ark-verse n="3" c="1">`, `<ark-verse n="3" c="2">`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %s — the two verse 3s are indistinguishable:\n%s", want, html)
+		}
+	}
+	// `n` must stay first: insertVerseExtBlocks finds a verse by scanning for
+	// the literal `<ark-verse n="`, so the order is load-bearing.
+	if strings.Contains(html, `<ark-verse c=`) {
+		t.Errorf("chapter was written before the verse number, which breaks insertVerseExtBlocks:\n%s", html)
+	}
+}
+
+// TestBibleRender_VerseChapterSurvivesExtInsertion — the chapter attribute must
+// not break the routing placement that scans for the verse tag. R3229, R3182.
+func TestBibleRender_VerseChapterSurvivesExtInsertion(t *testing.T) {
+	html := `<p class="ark-bible-p">` +
+		`<ark-verse n="1" c="2">1</ark-verse> one ` +
+		`<ark-verse n="2" c="2">2</ark-verse> two</p>`
+
+	got := insertVerseExtBlocks(html, map[int]string{2: `<ark-ext-tags>X</ark-ext-tags>`})
+
+	if !strings.Contains(got, `<ark-verse n="2" c="2">2<ark-ext-tags>X</ark-ext-tags></ark-verse>`) {
+		t.Errorf("routing was not placed inside the chaptered verse:\n%s", got)
+	}
+	if !strings.Contains(got, `<ark-verse n="1" c="2">1</ark-verse>`) {
+		t.Errorf("an unrouted verse was disturbed:\n%s", got)
+	}
+}
+
+// stripTagsForTest removes every tag, leaving only the text a reader sees —
+// so an assertion can tell "printed in the flow" from "carried as an
+// attribute".
+func stripTagsForTest(html string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range html {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// TestBibleRender_ChapterNumberShown — the chapter number is the one piece of
+// the publisher's apparatus the *page* keeps, because it is the structure a
+// reader navigates by rather than reference apparatus they can lose. The
+// chunker still strips it, so the index is unaffected. R3232.
+func TestBibleRender_ChapterNumberShown(t *testing.T) {
+	opening := `<p class="no-indent"><span class="h01002001"> ` +
+		`<span class="book-name"><a href="b01.main.xhtml">GENESIS</a></span>` +
+		`<span class="chapter-num"> 2 </span>Thus the heavens were finished. </span></p>`
+
+	html := renderBibleXHTML([]byte(opening))
+
+	if !strings.Contains(html, `<ark-chapter n="2" b="GENESIS">2</ark-chapter>`) {
+		t.Errorf("chapter marker missing or malformed:\n%s", html)
+	}
+	// The number the edition prints is the element's text, trimmed.
+	if strings.Contains(html, "> 2 <") {
+		t.Errorf("chapter number kept the publisher's padding:\n%s", html)
+	}
+	// The book label is not printed in the flow — only carried.
+	if strings.Contains(stripTagsForTest(html), "GENESIS") {
+		t.Errorf("book label was printed in the reading flow:\n%s", html)
+	}
+
+	// The chunker's view is unchanged: chunk text stays prose-only (R3211).
+	chunks := bibleChunksOf(t, "<section epub:type=\"chapter\">\n"+opening+"\n</section>\n")
+	if len(chunks) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(chunks))
+	}
+	if got := string(chunks[0].Content); got != "Thus the heavens were finished." {
+		t.Errorf("chunk text = %q; the chapter number must not reach the index", got)
 	}
 }

@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-BibleChunker.md | Test: test-BibleChunker.md | R3173, R3175, R3176, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221
+// CRC: crc-BibleChunker.md | Test: test-BibleChunker.md | R3173, R3175, R3176, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221, R3224, R3225
 
 import (
 	"fmt"
@@ -187,9 +187,128 @@ func TestBibleChunker_HeadingsDropped(t *testing.T) {
 	}
 	// A Psalter division label carries verse 1's id, so keeping it would
 	// shadow the real verse-1 stanza in resolution.
-	chunks := bibleChunksOf(t, "<p class=\"psalm-book\" id=\"v19001001\">Book One</p>\n<p class=\"line-group\" id=\"v19001001\"><span class=\"h19001001\">Blessed is the man</span></p>\n")
+	chunks := bibleChunksOf(t, "<section epub:type=\"chapter\">\n<p class=\"psalm-book\" id=\"v19001001\">Book One</p>\n<p class=\"line-group\" id=\"v19001001\"><span class=\"h19001001\">Blessed is the man</span></p>\n</section>\n")
 	if len(chunks) != 1 {
 		t.Fatalf("got %d chunks, want 1 — the division label must not become a chunk: %s", len(chunks), bibleDump(chunks))
+	}
+}
+
+// bibleApparatusFixture mirrors what the ESV appends to a text file after its
+// scripture: the footnote and cross-reference popups in a hidden section, and
+// the navigation templates in a hidden div. Both sit outside any chapter
+// section, which is what disqualifies them.
+const bibleApparatusFixture = `<section epub:type="chapter">
+<p class="no-indent" id="v38002001"><span class="h38002001"><span class="verse-num"><a class="pop-link">1</a></span>Real scripture.</span></p>
+</section>
+<section class="hidden">
+<aside epub:type="footnote">
+<p class="note">Zech. 2:1 [1] 2:1 Or a measuring cord</p>
+</aside>
+<aside epub:type="footnote">
+<p class="crossref"><span><span id="r38002001.a" class="crossref-popup">2:1</span></span></p>
+</aside>
+</section>
+<div class="hide">
+<p class="nav-header">ESV</p>
+<p class="nav">Matthew &#8226; Mark &#8226; Luke &#8226; John</p>
+</div>
+`
+
+// TestBibleChunker_ApparatusOutsideChapterSection — test-BibleChunker.md "only
+// blocks inside a chapter section are chunked". The apparatus a text file
+// carries alongside its scripture must not reach the index: on the ESV corpus
+// it was 46% of all chunks before this rule. R3224.
+func TestBibleChunker_ApparatusOutsideChapterSection(t *testing.T) {
+	chunks := bibleChunksOf(t, bibleApparatusFixture)
+
+	if len(chunks) != 1 {
+		t.Fatalf("got %d chunks, want 1 — only the scripture block qualifies: %s",
+			len(chunks), bibleDump(chunks))
+	}
+	if got := string(chunks[0].Content); !strings.Contains(got, "Real scripture") {
+		t.Errorf("kept the wrong block: %q", got)
+	}
+	for _, c := range chunks {
+		for _, leak := range []string{"measuring cord", "Matthew", "ESV"} {
+			if strings.Contains(string(c.Content), leak) {
+				t.Errorf("apparatus reached a chunk (%q): %q", leak, c.Content)
+			}
+		}
+	}
+}
+
+// TestBibleChunker_ChapterSectionReopens — a file holds several chapter
+// sections with apparatus between them, so leaving one section must not end
+// the walk's willingness to chunk. R3224.
+func TestBibleChunker_ChapterSectionReopens(t *testing.T) {
+	src := bibleApparatusFixture + `<section epub:type="chapter">
+<p class="no-indent" id="v38003001"><span class="h38003001"><span class="verse-num"><a class="pop-link">1</a></span>Later scripture.</span></p>
+</section>
+`
+	chunks := bibleChunksOf(t, src)
+	if len(chunks) != 2 {
+		t.Fatalf("got %d chunks, want 2 — the second chapter section still counts: %s",
+			len(chunks), bibleDump(chunks))
+	}
+	if got := string(chunks[1].Content); !strings.Contains(got, "Later scripture") {
+		t.Errorf("second chunk = %q, want the later scripture block", got)
+	}
+}
+
+// TestBibleChunker_ChapterSectionWithCompoundEpubType — epub:type may carry
+// several tokens; `chapter` is matched as one of them, not as the whole value.
+// R3224.
+func TestBibleChunker_ChapterSectionWithCompoundEpubType(t *testing.T) {
+	src := `<section epub:type="bodymatter chapter">
+<p class="no-indent" id="v38002001"><span class="h38002001"><span class="verse-num"><a class="pop-link">1</a></span>Compound type.</span></p>
+</section>
+`
+	if n := len(bibleChunksOf(t, src)); n != 1 {
+		t.Fatalf("got %d chunks, want 1 — `chapter` is a token of epub:type", n)
+	}
+}
+
+// TestBibleChunker_IdentityIsNotTheScriptureTest — the containment rule is not
+// interchangeable with "has a verse identity". A paragraph continuing a verse
+// that opened earlier carries no id of its own, and is scripture. R3225.
+func TestBibleChunker_IdentityIsNotTheScriptureTest(t *testing.T) {
+	src := `<section epub:type="chapter">
+<p class="normal">&#8220;You shall not boil a young goat in its mother's milk.</p>
+<p class="psalm-title">A Psalm of David, when he fled from Absalom his son.</p>
+</section>
+`
+	chunks := bibleChunksOf(t, src)
+	if len(chunks) != 2 {
+		t.Fatalf("got %d chunks, want 2 — identity-less scripture still counts: %s",
+			len(chunks), bibleDump(chunks))
+	}
+	for _, c := range chunks {
+		if _, ok := bibleAttr(c, "chapter"); ok {
+			t.Errorf("expected no chapter attribute on an identity-less block: %q", c.Content)
+		}
+	}
+}
+
+// TestBibleChunker_LineSpaceIsProse — `line-space` matches a `line` prefix but
+// the edition styles it as a paragraph with a gap above, not as verse. Read as
+// poetry it merges into the stanza above it, which is what happened to 150 of
+// its 151 occurrences in the ESV. R3212.
+func TestBibleChunker_LineSpaceIsProse(t *testing.T) {
+	src := `<section epub:type="chapter">
+<p class="line-group" id="v01001027"><span class="h01001027"><span class="verse-num"><a class="pop-link">27</a></span>So God created man in his own image.</span></p>
+<p class="line-space" id="v01001028"><span class="h01001028"><span class="verse-num"><a class="pop-link">28</a></span>And God blessed them.</span></p>
+</section>
+`
+	chunks := bibleChunksOf(t, src)
+	if len(chunks) != 2 {
+		t.Fatalf("got %d chunks, want 2 — line-space opens its own prose block: %s",
+			len(chunks), bibleDump(chunks))
+	}
+	if got := string(chunks[0].Content); strings.Contains(got, "blessed them") {
+		t.Errorf("the stanza swallowed the following prose paragraph: %q", got)
+	}
+	if got := string(chunks[1].Content); !strings.Contains(got, "blessed them") {
+		t.Errorf("second chunk = %q, want the line-space paragraph", got)
 	}
 }
 

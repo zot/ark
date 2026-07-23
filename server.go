@@ -4062,10 +4062,19 @@ func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *
 		bundleHash = fmt.Sprintf("?v=%d", info.ModTime().Unix())
 	}
 
+	// R3231: a non-writable strategy gets no edit affordance. Without this the
+	// toggle is suppressed only when a caller asks (`?toggle=false`), so a
+	// bible page draws the pencil and opens the publisher's XHTML in the
+	// markdown editor with a save action — against R3178, which makes
+	// non-writability the reason the view has no edit affordance at all.
+	writable, _ := Sync(srv.db, func(db *DB) (bool, error) {
+		w, _ := db.chunkerMetadata(cr.strategy)
+		return w, nil
+	})
 	cr.shell = contentShellData{
 		Title:      path,
 		BundleHash: bundleHash,
-		HideToggle: r.URL.Query().Get("toggle") == "false",
+		HideToggle: !writable || isReadOnlyPath(path) || r.URL.Query().Get("toggle") == "false",
 		AutoEdit:   r.URL.Query().Get("edit") == "true",
 		IsChunk:    cr.isChunk,
 		IsSearch:   r.URL.Query().Get("highlight") != "",

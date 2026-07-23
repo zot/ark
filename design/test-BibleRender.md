@@ -76,3 +76,31 @@ it resolves to the first chunk.
 **Expected:** the routed tag appears in that chunk's chunk-level
 `<ark-ext-tags>` block, and inside no verse element.
 **Refs:** crc-Server.md, R3182
+
+## Test: a verse element carries its chapter
+**Purpose:** R3229 — a text file spans several chapters, so a verse number alone
+does not identify a verse in the page. Genesis 1:3 and 2:3 are both "verse 3".
+**Input:** two prose paragraphs under `v01001003` and `v01002003`.
+**Expected:** `<ark-verse n="3" c="1">` and `<ark-verse n="3" c="2">` both
+present; no element writes `c` before `n`, since insertVerseExtBlocks scans for
+the literal `<ark-verse n="` and the order is therefore load-bearing.
+**Refs:** crc-BibleRenderer.md, R3229
+
+## Test: the chapter attribute does not disturb routing placement
+**Purpose:** the attribute is added to the element the routing insert scans for,
+so the insert is the thing most likely to break silently.
+**Input:** rendered HTML whose verses carry both attributes, with a routing
+block for verse 2.
+**Expected:** the block lands inside verse 2's element; verse 1 is untouched.
+**Refs:** crc-BibleRenderer.md, R3229, R3182
+
+## Test: the chapter number is shown, and only on the page
+**Purpose:** R3232 — the chapter number is the one piece of the publisher's
+apparatus the page keeps, because it is structure a reader navigates by. The
+index must not change with it.
+**Input:** a chapter opening carrying a `book-name` and a `chapter-num`, run
+through both the renderer and the chunker.
+**Expected:** the page holds `<ark-chapter n="2" b="GENESIS">2</ark-chapter>`
+with the publisher's padding trimmed; the book label appears only as an
+attribute, never in the reading flow; the chunk's text is the prose alone.
+**Refs:** crc-BibleRenderer.md, R3232, R3211

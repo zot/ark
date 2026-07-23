@@ -1,5 +1,5 @@
 # BibleChunker
-**Requirements:** R3172, R3173, R3175, R3176, R3177, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221, R3216
+**Requirements:** R3172, R3173, R3175, R3176, R3177, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221, R3216, R3224, R3225
 
 Chunks scripture held as a publisher's **XHTML** (an ESV epub is the worked
 example) into prose blocks, reading each block's chapter and verse identity
@@ -23,8 +23,10 @@ parses XHTML (via `golang.org/x/net/html`) rather than walking markdown blocks.
 - Prose block classes: `normal`, `no-indent` — a `<p>` of one of these opens a
   prose paragraph chunk (R3173).
 - Poetry block classes: a stanza opens at `line-group` / `line-group-after-heading`
-  and continues through the run of `line` / `line-indent` / `line-space`
-  paragraphs until the next opener or a prose block (R3212).
+  and continues through the run of `line` / `line-indent` / `line-indent2`
+  paragraphs until the next opener or a prose block (R3212). `line-space` is
+  **prose** despite the name — the edition styles it as a paragraph with a gap
+  above, not as a line of verse.
 - Apparatus classes stripped from chunk text: `verse-num`, `chapter-num`,
   `book-name`, `footnote`, `crossref` (R3211).
 - Heading marker: `<header><p class="heading">` — dropped by default (R3213).
@@ -32,12 +34,25 @@ parses XHTML (via `golang.org/x/net/html`) rather than walking markdown blocks.
   the source of every chunk's `chapter` and `verses` (R3210, R3175, R3176).
 - Only `*.text.xhtml` is handled; the `.main`/`.crossrefs`/`.footnotes`/
   `.resources` siblings are not (R3209).
+- The scripture container: `<section epub:type="chapter">`. A block outside one
+  is not scripture and is not chunked (R3224). Excluding the sibling apparatus
+  *files* is not enough — a text file also carries its own copy of the footnote
+  and cross-reference popups and the navigation templates, appended after the
+  text it annotates.
 
 ## Does
 - Chunks(path, content, yield): parse the XHTML and walk its blocks in
   document order, emitting one chunk per block (R3173, R3212).
   - A prose `<p class="normal">`/`no-indent` is one chunk; a poetry stanza
     (opener + its line-run) is one chunk; a `heading` is skipped (R3213).
+  - **Only inside a chapter section** (R3224). The walk tracks whether it is
+    within a `<section epub:type="chapter">` and yields nothing outside one,
+    which is what keeps the file's appended apparatus out of the index — 46% of
+    chunks before the rule. Chosen over a list of apparatus class names, which
+    would need re-deriving per edition and fails silently when incomplete;
+    containment fails toward an empty book instead. Not replaceable by "has a
+    verse identity" (R3225): a paragraph continuing an earlier verse, a psalm
+    superscription, and an acrostic letter title all lack ids and are all text.
   - **Chunk text is prose only** — the apparatus spans are stripped, leaving
     the sentence a reader reads, which is what the trigram index and embedder
     receive (R3211). `Range`/`Locator` are computed per block for

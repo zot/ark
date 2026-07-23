@@ -5,7 +5,7 @@ Pure chunking where it can be — content in, chunks out over an XHTML string
 literal (a trimmed ESV fragment), so most cases need no DB or files. The
 book-index write and the per-source hook touch the DB and a source dir and are
 tested with a small fixture. Covers R3173, R3175, R3176, R3178, R3209–R3215,
-R3218, R3219.
+R3218, R3219, R3224, R3225.
 
 Verse-reference resolution that reads these attributes is separate
 (test-VerseResolution.md, crc-DB.md).
@@ -21,7 +21,7 @@ paragraph carrying verse-num spans 3, 4, 5.
 
 ## Test: a poetry stanza is one chunk
 **Purpose:** R3212 — a stanza opens at `line-group`/`line-group-after-heading`
-and absorbs the following `line`/`line-indent`/`line-space` run, rather than
+and absorbs the following `line`/`line-indent`/`line-indent2` run, rather than
 one chunk per line.
 **Input:** the Psalm 1 fragment — `line-group-after-heading` followed by a run
 of `line-indent`/`line` paragraphs, then a second `line-group`.
@@ -63,6 +63,45 @@ chunk nor part of the following chunk's text (default behavior).
 **Expected:** two chunks (the two paragraphs); the heading's text appears in
 neither.
 **Refs:** crc-BibleChunker.md, R3213
+
+## Test: only blocks inside a chapter section are chunked
+**Purpose:** a text file carries its own copy of the apparatus, so excluding the
+sibling files (R3209) does not exclude it. This is the rule that does.
+**Input:** a fragment holding one scripture block inside
+`<section epub:type="chapter">`, followed by the footnote and cross-reference
+asides in a `<section class="hidden">` and the navigation templates in a
+`<div class="hide">` — the shape the ESV actually appends.
+**Expected:** one chunk, the scripture block; no chunk contains footnote,
+cross-reference, or navigation text.
+**Refs:** crc-BibleChunker.md, R3224
+
+## Test: a chapter section reopens
+**Purpose:** the apparatus sits *between* chapter sections as well as after
+them, so leaving one section must not end the walk's willingness to chunk —
+the failure this guards is a file yielding only its first chapter.
+**Input:** the apparatus fragment above with a second
+`<section epub:type="chapter">` appended.
+**Expected:** two chunks, the second being the later scripture block.
+**Refs:** crc-BibleChunker.md, R3224
+
+## Test: epub:type is matched by token
+**Purpose:** `epub:type` may carry several tokens (`bodymatter chapter`), so
+matching the whole attribute value would silently drop such an edition's text.
+**Input:** a chapter section declared `epub:type="bodymatter chapter"`.
+**Expected:** its block is chunked.
+**Refs:** crc-BibleChunker.md, R3224
+
+## Test: verse identity is not the scripture test
+**Purpose:** guards the tempting simplification. Dropping identity-less blocks
+would have discarded 157 genuine blocks on the ESV corpus while catching
+nothing containment does not already catch, so the rule must not be rewritten
+that way.
+**Input:** a chapter section holding two identity-less blocks — a paragraph
+continuing a verse that opened earlier (Exodus 34:26b in shape) and a psalm
+superscription.
+**Expected:** both are chunked, and both carry no `chapter` attribute — absence
+of identity is not absence of text.
+**Refs:** crc-BibleChunker.md, R3225
 
 ## Test: only *.text.xhtml is handled
 **Purpose:** R3209 — the sibling apparatus files are not the chunker's input.

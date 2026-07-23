@@ -613,6 +613,140 @@
        fill: currentColor;
      }
      @media print { .ark-curate-pin { display: none; } }
+
+     /* ========== bible content view ========== */
+     /* R3226: the edition's own stylesheet, expressed over ark's classes.
+        Lengths are the publisher's (4.5em stanza inset, 3em hang, 1em
+        first-line indent) so the page is set the way the edition sets it. */
+
+     /* A verse number is a mark on the text, not a word in it. Unstyled it
+        renders inline at body size and reads as part of the sentence — `2`
+        before `The earth was` reads as the word "2The". */
+     ark-verse {
+       font-weight: 600;
+       font-size: 75%;
+       vertical-align: super;
+       color: var(--term-accent-bright, #ff9966);
+       /* the number is a label, not prose: never selected with the text */
+       user-select: none;
+       scroll-margin-top: 2em;
+     }
+     /* R3222 anchors carry no number and must take up no space. */
+     ark-verse:empty { display: inline; }
+
+     /* R3232: the chapter number, set large where the edition sets it. The
+        one piece of the publisher's apparatus the page keeps, because it is
+        structure a reader navigates by rather than reference apparatus. */
+     ark-chapter {
+       font-size: 1.6em;
+       font-weight: 700;
+       line-height: 1;
+       margin-right: 0.15em;
+       color: var(--term-accent, #E07A47);
+       user-select: none;
+     }
+
+     /* R3233: the running head. Sticky rather than fixed so it keeps the
+        content column's width and centring; a direct child of #content, which
+        is the one box whose height spans the whole page — a chapter has no
+        container of its own, since the page is a flat run of per-chunk divs.
+
+        `html { overflow: auto }` above propagates to the viewport, which
+        leaves `body` with a used overflow of hidden — and a sticky element
+        whose nearest scrolling ancestor never scrolls does not stick. Restore
+        it, scoped to pages that actually have a running head so no other
+        content view is touched; the script adds the class only when the page
+        holds chapter marks. */
+     body.ark-bible-page { overflow: visible; }
+     .ark-bible-head {
+       position: sticky;
+       top: 0;
+       z-index: 20;
+       margin: -1em -2em 0.75em;
+       padding: 0.5em 2em;
+       background: var(--term-bg, #fff);
+       border-bottom: 1px solid var(--term-border, #ddd);
+       font-size: 0.8em;
+       font-weight: 600;
+       letter-spacing: 0.1em;
+       text-transform: uppercase;
+       text-indent: 0;
+       color: var(--term-text-dim, #8888a0);
+     }
+
+     .ark-bible-p {
+       text-indent: 1em;
+       margin: 0;
+     }
+     /* A chapter opening suppresses the indent to make room for the
+        chapter number the edition sets there. */
+     .ark-bible-noindent { text-indent: 0; }
+     .ark-bible-space { margin-top: 1em; }
+
+     /* Poetry hangs: the stanza is inset and each line's first row starts
+        back out to the left of that inset, so a wrapped line is visibly a
+        continuation rather than a new line of verse. */
+     .ark-bible-line {
+       margin: 0 0 0 4.5em;
+       text-indent: -3em;
+       text-align: left;
+     }
+     .ark-bible-indent { text-indent: -1.5em; }
+     .ark-bible-indent2 { margin-left: 6em; text-indent: -1.5em; }
+     /* A stanza opens with a blank line above it — the separation that makes
+        one stanza distinguishable from the next. */
+     .ark-bible-stanza { margin-top: 1em; }
+
+     .ark-bible-psalm-title {
+       font-size: 85%;
+       font-style: italic;
+       text-indent: 0;
+       margin-top: 0.5em;
+       margin-bottom: 0.2em;
+     }
+     .ark-bible-acrostic {
+       text-align: center;
+       font-variant: small-caps;
+       text-indent: 0;
+       margin-top: 1em;
+     }
+     .ark-bible-declares { text-align: right; }
+
+     /* R3228: the annotation indicator inside a verse renders inline. The
+        chunk-level form floats into the chunk's left margin, which would pull
+        a verse's icon away from the verse it marks. Gold distinguishes a
+        verse annotation from the accent-orange chunk indicator. */
+     ark-verse ark-ext-tags {
+       float: none;
+       display: inline;
+       margin: 0 0 0 0.15em;
+     }
+     ark-verse .ark-ext-tags-indicator {
+       vertical-align: baseline;
+       padding: 0 0.15em;
+       border: none;
+       background: none;
+       color: var(--term-gold, #d4a017);
+     }
+     ark-verse .ark-ext-tags-indicator svg { width: 0.9em; height: 0.9em; }
+
+     /* R3230: a verse reached by link is marked briefly so the reader's eye
+        lands on it rather than somewhere on the chapter. Two marks, because
+        one is not enough on its own: the number is the precise target but a
+        chapter-opening anchor (R3222) has no number to mark, and the block
+        tint is visible in that case while being too coarse to locate a verse
+        by itself. */
+     ark-verse.ark-verse-target {
+       background: var(--term-accent-dim, rgba(224,122,71,0.35));
+       border-radius: 2px;
+       box-shadow: 0 0 0 2px var(--term-accent-dim, rgba(224,122,71,0.35));
+     }
+     .ark-bible-target {
+       background: var(--term-accent-dim, rgba(224,122,71,0.12));
+       box-shadow: -0.5em 0 0 var(--term-accent, #E07A47);
+     }
+     ark-verse.ark-verse-target,
+     .ark-bible-target { transition: background 0.4s, box-shadow 0.4s; }
     </style>
 </head>
 <body>
@@ -855,6 +989,78 @@ if (window !== window.parent) {
   if (editorDiv) editorDiv.style.minHeight = '0';
   window.addEventListener('load', postHeight);
   new ResizeObserver(postHeight).observe(document.body);
+}
+
+// R3233: running head naming the book and chapter under the reader's eye. A
+// chapter number is visible only while the top of its chapter is, which on a
+// file holding eleven chapters leaves most of the page unlabelled.
+installBibleRunningHead();
+function installBibleRunningHead() {
+  const marks = Array.from(document.querySelectorAll('ark-chapter'));
+  if (!marks.length || !contentDiv) return;
+  // Restores body's overflow so the head can stick — see the CSS note.
+  document.body.classList.add('ark-bible-page');
+  const head = document.createElement('div');
+  head.className = 'ark-bible-head';
+  contentDiv.prepend(head);
+
+  const label = (el) => {
+    const book = el.getAttribute('b');
+    const num = el.getAttribute('n') || el.textContent.trim();
+    return book ? book + ' ' + num : num;
+  };
+  // The reader is in the last chapter whose mark has passed under the head.
+  // Marks are in document order, so the scan stops at the first one still
+  // below it.
+  let shown = null;
+  const update = () => {
+    const y = head.getBoundingClientRect().bottom;
+    let current = marks[0];
+    for (const m of marks) {
+      if (m.getBoundingClientRect().top > y) break;
+      current = m;
+    }
+    const text = label(current);
+    if (text !== shown) { head.textContent = text; shown = text; }
+  };
+  update();
+
+  let queued = false;
+  window.addEventListener('scroll', () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; update(); });
+  }, { passive: true });
+}
+
+// R3230: scroll to a verse named in the URL. `#3.16` or `?verse=3.16` is
+// chapter-and-verse, which is what identifies a verse in a file that spans
+// several chapters (R3229); a bare `#16` means verse 16 of whichever chapter
+// the page holds, and is ambiguous if it holds more than one, so it matches
+// the first.
+scrollToVerse();
+function scrollToVerse() {
+  const raw = new URL(location.href).searchParams.get('verse') ||
+    decodeURIComponent(location.hash.replace(/^#/, ''));
+  const m = /^(?:(\d+)\.)?(\d+)$/.exec(raw || '');
+  if (!m) return;
+  const [, chapter, verse] = m;
+  const sel = chapter
+    ? `ark-verse[c="${chapter}"][n="${verse}"]`
+    : `ark-verse[n="${verse}"]`;
+  const el = document.querySelector(sel);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center' });
+  // Mark the number and tint its block. The number is the precise target but
+  // a chapter-opening anchor has none (R3222), so the block carries the mark
+  // in that case.
+  el.classList.add('ark-verse-target');
+  const block = el.closest('p');
+  if (block) block.classList.add('ark-bible-target');
+  setTimeout(() => {
+    el.classList.remove('ark-verse-target');
+    if (block) block.classList.remove('ark-bible-target');
+  }, 2400);
 }
 
 // R2415-R2420, R2423-R2425: curate pin button. Fetch the pinned set once,

@@ -15,18 +15,33 @@ import (
 
 // bibleRenderClasses maps a publisher block class to the ark class its
 // rendered paragraph carries. Poetry keeps its per-line structure — a stanza
-// is one chunk but several lines on the page — while prose collapses to one
-// paragraph class. An unlisted class renders as prose rather than being
-// dropped, so an edition ark has not seen still reads.
-// CRC: crc-BibleRenderer.md | R3181
+// is one chunk but several lines on the page.
+//
+// Every distinction the edition's own stylesheet draws is preserved (R3227):
+// two publisher classes may share an ark class only where the edition styles
+// them identically. `no-indent` suppresses the first-line indent for the
+// chapter number, `line-group` opens a stanza with a blank line above it, and
+// `line-indent2` is inset a step deeper than `line-indent` — collapsing any of
+// these would discard the difference silently.
+//
+// An unlisted class renders as prose rather than being dropped, so an edition
+// ark has not seen still reads. That is why `speaker`, `psalm-doxology`, and
+// `textual-note` are absent: the edition gives them no rule of their own, so
+// plain prose is already what it asks for.
+// CRC: crc-BibleRenderer.md | R3181, R3227
 var bibleRenderClasses = map[string]string{
 	"normal":                   "ark-bible-p",
-	"no-indent":                "ark-bible-p",
-	"line-group":               "ark-bible-line",
+	"no-indent":                "ark-bible-p ark-bible-noindent",
+	"no-indent-line-space":     "ark-bible-p ark-bible-noindent ark-bible-space",
+	"line-space":               "ark-bible-p ark-bible-space",
+	"line-group":               "ark-bible-line ark-bible-stanza",
 	"line-group-after-heading": "ark-bible-line",
 	"line":                     "ark-bible-line",
 	"line-indent":              "ark-bible-line ark-bible-indent",
-	"line-space":               "ark-bible-line ark-bible-space",
+	"line-indent2":             "ark-bible-line ark-bible-indent2",
+	"psalm-title":              "ark-bible-p ark-bible-psalm-title",
+	"psalm-acrostic-title":     "ark-bible-p ark-bible-acrostic",
+	"declares":                 "ark-bible-p ark-bible-declares",
 }
 
 // renderBibleXHTML transforms a block of the publisher's XHTML into ark's own
@@ -55,7 +70,8 @@ func renderBibleXHTML(block []byte) string {
 	}
 
 	var buf strings.Builder
-	verse, anchored := 0, 0
+	chapter, verse, anchored := 0, 0, 0
+	book := ""
 	var walk func(n *html.Node)
 	walk = func(n *html.Node) {
 		switch n.Type {
@@ -73,21 +89,34 @@ func renderBibleXHTML(block []byte) string {
 		// cannot disagree. Every element carrying one updates the current
 		// verse — the enclosing `hBBCCCVVV` span, the `<p>`'s own `vBBCCCVVV`,
 		// or the verse-num span's id — so the mark itself needs no id.
-		if v, ok := bibleVerseOf(id, class); ok {
-			verse = v
+		if c, v, ok := bibleVerseOf(id, class); ok {
+			chapter, verse = c, v
 		}
 
 		switch {
+		case bibleHasClass(class, "book-name"):
+			// Remembered, not printed. The label names the book for the
+			// running head (R3233); a reader who opened Genesis does not need
+			// telling eleven times that it is Genesis, and the head says so
+			// continuously anyway. It precedes the chapter number in the
+			// markup, so it is in hand by the time that number is emitted.
+			book = strings.TrimSpace(bibleTextOf(n))
+			return
+		case bibleHasClass(class, "chapter-num"):
+			// Shown, unlike the rest of the apparatus (R3232). The chunker
+			// still strips it, so the indexed text stays prose-only; what
+			// differs is only the page, where the chapter number is the
+			// structure a reader navigates by rather than reference apparatus
+			// they can lose.
+			buf.WriteString(bibleChapterTag(chapter, book, bibleTextOf(n)))
+			return
 		case bibleHasApparatusClass(class) && !bibleHasClass(class, "verse-num"):
-			// chapter-num, book-name, footnote, crossref — display apparatus
-			// and popup anchors into sibling files. Dropped whole, children
-			// and all (R3211, R3183).
+			// footnote, crossref — popup anchors into sibling files. Dropped
+			// whole, children and all (R3211, R3183).
 			return
 		case bibleHasClass(class, "verse-num"):
 			anchored = verse
-			buf.WriteString(`<ark-verse n="`)
-			buf.WriteString(strconv.Itoa(verse))
-			buf.WriteString(`">`)
+			buf.WriteString(bibleVerseOpenTag(chapter, verse))
 			buf.WriteString(template.HTMLEscapeString(bibleTextOf(n)))
 			buf.WriteString(`</ark-verse>`)
 			return
@@ -100,14 +129,14 @@ func renderBibleXHTML(block []byte) string {
 				cls = "ark-bible-p"
 			}
 			buf.WriteString(`<p class="` + cls + `">`)
-			writeNumberlessAnchor(&buf, n, verse, &anchored)
+			writeNumberlessAnchor(&buf, n, chapter, verse, &anchored)
 			bibleWalkChildren(n, walk)
 			buf.WriteString(`</p>`)
 			return
 		}
 		// Any other element is transparent: its text belongs to the page, its
 		// markup does not.
-		writeNumberlessAnchor(&buf, n, verse, &anchored)
+		writeNumberlessAnchor(&buf, n, chapter, verse, &anchored)
 		bibleWalkChildren(n, walk)
 	}
 	for _, n := range nodes {
@@ -128,12 +157,47 @@ func renderBibleXHTML(block []byte) string {
 // high-water mark, so a verse whose identity is repeated by both a `<p>` and
 // its inner span is anchored once.
 // CRC: crc-BibleRenderer.md | R3222
-func writeNumberlessAnchor(buf *strings.Builder, n *html.Node, verse int, anchored *int) {
+func writeNumberlessAnchor(buf *strings.Builder, n *html.Node, chapter, verse int, anchored *int) {
 	if verse == 0 || verse == *anchored || bibleHasVerseNum(n) {
 		return
 	}
 	*anchored = verse
-	buf.WriteString(`<ark-verse n="` + strconv.Itoa(verse) + `"></ark-verse>`)
+	buf.WriteString(bibleVerseOpenTag(chapter, verse) + `</ark-verse>`)
+}
+
+// bibleChapterTag writes the chapter marker (R3232). `n` is the chapter from
+// the publisher's identity and is what the running head and any chapter-scoped
+// lookup read; the element's text is the number as the edition prints it. The
+// book label rides as an attribute rather than being printed in the flow.
+// CRC: crc-BibleRenderer.md | R3232, R3233
+func bibleChapterTag(chapter int, book, text string) string {
+	tag := `<ark-chapter`
+	if chapter > 0 {
+		tag += ` n="` + strconv.Itoa(chapter) + `"`
+	}
+	if book != "" {
+		tag += ` b="` + template.HTMLEscapeString(book) + `"`
+	}
+	return tag + `>` + template.HTMLEscapeString(strings.TrimSpace(text)) + `</ark-chapter>`
+}
+
+// bibleVerseOpenTag writes the `<ark-verse>` opening tag. The chapter rides
+// alongside the verse so a verse is identifiable within a page that spans
+// several chapters (R3229); it is omitted when unknown rather than written as
+// zero, so a page can tell "no chapter" from "chapter 0".
+//
+// `n` is written **first, and must stay first**: insertVerseExtBlocks finds a
+// verse element by scanning for the literal `<ark-verse n="`, so reordering
+// these attributes would silently stop every verse-targeted routing from being
+// placed. The scan is what that function's doc comment explains; this is the
+// end of the coupling that emits the shape it looks for.
+// CRC: crc-BibleRenderer.md | R3229
+func bibleVerseOpenTag(chapter, verse int) string {
+	tag := `<ark-verse n="` + strconv.Itoa(verse) + `"`
+	if chapter > 0 {
+		tag += ` c="` + strconv.Itoa(chapter) + `"`
+	}
+	return tag + `>`
 }
 
 // bibleHasVerseNum reports whether an element's subtree holds a `verse-num`
@@ -187,22 +251,32 @@ func bibleHasApparatusClass(class string) bool {
 	return false
 }
 
-// bibleVerseOf reads the verse number out of an element's `vBBCCCVVV` id or
-// `hBBCCCVVV` class — the identity the chunker reads (R3181). Reports ok=false
-// when the element carries no such token, or names a chapter opening rather
-// than a verse (verse field 000).
-// CRC: crc-BibleRenderer.md | R3181
-func bibleVerseOf(id, class string) (int, bool) {
+// bibleVerseOf reads the chapter and verse out of an element's `vBBCCCVVV` id
+// or `hBBCCCVVV` class — the identity the chunker reads (R3181). Reports
+// ok=false when the element carries no such token, or names a chapter opening
+// rather than a verse (verse field 000).
+//
+// The chapter comes back alongside the verse because a text file spans several
+// chapters, so a verse number alone does not identify a verse within the page
+// (R3229). It is the same token either way, so the chapter costs no extra work.
+// CRC: crc-BibleRenderer.md | R3181, R3229
+func bibleVerseOf(id, class string) (chapter, verse int, ok bool) {
 	for _, tok := range append(strings.Fields(id), strings.Fields(class)...) {
 		m := bibleIDRe.FindStringSubmatch(tok)
 		if m == nil {
 			continue
 		}
-		if v, err := strconv.Atoi(m[3]); err == nil && v > 0 {
-			return v, true
+		v, err := strconv.Atoi(m[3])
+		if err != nil || v <= 0 {
+			continue
 		}
+		c, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		return c, v, true
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // bibleTextOf collects an element's text, dropping its markup — used for a

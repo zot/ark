@@ -99,6 +99,11 @@ var biblePClassRe = regexp.MustCompile(`<p[^>]*\bclass="([^"]*)"`)
 // book (2 digits), chapter (3), verse (3). R3210.
 var bibleIDRe = regexp.MustCompile(`^[vh](\d{2})(\d{3})(\d{3})$`)
 
+// bibleChapterSectionRe recognizes the opening tag of the container that holds
+// scripture. `chapter` is matched as a whole token of epub:type, which may
+// carry several. R3224.
+var bibleChapterSectionRe = regexp.MustCompile(`<section[^>]*\bepub:type="[^"]*\bchapter\b[^"]*"`)
+
 // bibleApparatusClasses are the span classes whose text is display apparatus,
 // not scripture prose, and is stripped from a chunk's indexed text. R3211.
 var bibleApparatusClasses = map[string]bool{
@@ -135,6 +140,14 @@ func bibleClassKind(class string, hasP bool) bibleBlockKind {
 		// division label carries verse 1's id, so keeping it would shadow the
 		// real verse-1 chunk in resolution.
 		return blockSkip
+	case class == "line-space":
+		// Prose with a gap above it, despite the name. The edition gives
+		// line-space a top margin and nothing else, so it keeps the base
+		// paragraph's first-line indent, while every genuine poetry class
+		// overrides margin-left and text-indent. Reading it as poetry merged
+		// 150 of its 151 occurrences into the stanza above (Genesis 1:28 into
+		// the poetry of 1:27). R3212
+		return blockProse
 	case strings.Contains(class, "line-group"):
 		return blockPoetryOpen
 	case strings.HasPrefix(class, "line"):
@@ -150,7 +163,7 @@ func bibleClassKind(class string, hasP bool) bibleBlockKind {
 // whole lines, so Range is the line span and Locator the byte span; retrieval
 // re-runs this pass and matches by Range, so the transformed content is
 // re-derived rather than stored.
-// CRC: crc-BibleChunker.md | R3173, R3175, R3176, R3210, R3211, R3212, R3213
+// CRC: crc-BibleChunker.md | R3173, R3175, R3176, R3210, R3211, R3212, R3213, R3224
 func (c *bibleChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
 	open := false
 	var startLine, startByte, endLine, endByte int
@@ -179,11 +192,39 @@ func (c *bibleChunker) Chunks(path string, content []byte, yield func(microfts2.
 		})
 	}
 
+	// R3224: sectionDepth tracks nesting; chapterDepth records the depth the
+	// scripture container opened at, and is 0 whenever the walk is outside one.
+	sectionDepth, chapterDepth := 0, 0
+
 	for _, ln := range bibleLines(content) {
+		line := content[ln.start:ln.end]
+		if bytes.Contains(line, []byte("<section")) {
+			sectionDepth++
+			if chapterDepth == 0 && bibleChapterSectionRe.Match(line) {
+				chapterDepth = sectionDepth
+			}
+		}
+		if bytes.Contains(line, []byte("</section>")) {
+			if sectionDepth == chapterDepth {
+				chapterDepth = 0
+			}
+			if sectionDepth > 0 {
+				sectionDepth--
+			}
+		}
+
 		if ln.blank {
 			continue
 		}
-		class, hasP := biblePClass(content[ln.start:ln.end])
+		// Outside a chapter section nothing is scripture — the file's appended
+		// footnote, cross-reference, and navigation blocks live here. R3224
+		if chapterDepth == 0 {
+			if !flush() {
+				return nil
+			}
+			continue
+		}
+		class, hasP := biblePClass(line)
 		switch bibleClassKind(class, hasP) {
 		case blockSkip:
 			if !flush() {
