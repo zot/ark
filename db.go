@@ -2584,40 +2584,47 @@ func (db *DB) CandidateExtTag(targetSpec, tag, value, insight, disposition strin
 // The (disposition, replace) pair gives four cells: external-add appends the
 // @ext edge, external-replace collapses the mirror's values (extOpSet),
 // internal-add inserts an inline tag, internal-replace rewrites the existing
-// inline tag (R3106, R3107).
-// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3071, R3100, R3101, R3102, R3103, R3106, R3107
-func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
+// inline tag (R3106, R3107). `applied` reports the disposition actually
+// landed — "internal" when any internal write succeeded, "external" when only
+// external writes landed, "" when nothing matched — so callers (the
+// mcp.extAccept binding) can be honest about the capability degrade (R3248).
+// CRC: crc-DB.md | Seq: seq-ext-author.md#4.3 | R3054, R3071, R3100, R3101, R3102, R3103, R3106, R3107, R3248
+func (db *DB) AcceptExtTag(targetSpec, tag, value string) (applied string, err error) {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
-		return errors.New("tag must not be empty")
+		return "", errors.New("tag must not be empty")
 	}
 	mirrorPath, err := db.resolveExtMirror(targetSpec)
 	if err != nil {
-		return err
+		return "", err
 	}
 	data, err := os.ReadFile(mirrorPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("read %s: %w", mirrorPath, err)
+		return "", fmt.Errorf("read %s: %w", mirrorPath, err)
 	}
 	accepted := collectAcceptedCandidates(data, targetSpec, tag, value)
 	if len(accepted) == 0 {
-		return nil
+		return "", nil
 	}
 	// Consume the accepted candidate spans; branch each per its disposition.
 	newData, _, _ := applyExtMirrorEdit(data, targetSpec, tag, value, extOpRemove, extClassCandidate)
 	date := time.Now().Format("2006-01-02")
 	judged := make(map[string]bool)
+	applied = extDispositionExternal
 	for _, ac := range accepted {
 		external := true
 		if ac.disposition == extDispositionInternal {
 			wrote, werr := db.writeInternalTag(targetSpec, ac.tag, ac.value, ac.replace)
 			if werr != nil {
-				return werr
+				return "", werr
 			}
 			external = !wrote // internal write landed → do not also route external
+			if wrote {
+				applied = extDispositionInternal
+			}
 		}
 		if external {
 			// The (disposition, replace) axes give four accept cells; here the
@@ -2634,7 +2641,7 @@ func (db *DB) AcceptExtTag(targetSpec, tag, value string) error {
 			newData = upsertCountLine(newData, judgmentIdentity(targetSpec, ac.tag), date, 1)
 		}
 	}
-	return atomicWriteFile(mirrorPath, newData, 0644)
+	return applied, atomicWriteFile(mirrorPath, newData, 0644)
 }
 
 // writeInternalTag writes `@tag: value` into the source file body of the
@@ -2699,6 +2706,72 @@ func (db *DB) writeInternalTag(targetSpec, tag, value string, replace bool) (boo
 		return false, nil // write failed → external
 	}
 	return true, nil
+}
+
+// RemoveInternalTag is the internal-remove cell: delete the inline `@tag:`
+// line from the target file's own body via the chunker's RemoveTag stencil.
+// Scope resolution mirrors writeInternalTag (bare path → file-level tag
+// block, single-chunk address → chunk scope), and the write is the same
+// temp+rename on the DB actor. Unlike accept it never degrades: every gate
+// writeInternalTag silently falls back on is an error here, because a
+// fallback would delete a different fact (a mirror routing instead of the
+// inline line the caller named) while reporting success. Writes no judgment.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#5.4.2 | R3244, R3245
+func (db *DB) RemoveInternalTag(targetSpec, tag string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	parts, ok := ParseExtTargetParts(targetSpec, "")
+	if !ok || parts.Invalid {
+		return fmt.Errorf("invalid target: %s", targetSpec)
+	}
+	fileLevel := parts.BaseKind == "path" && parts.AnchorKind == "" && parts.ModifierN == 0
+	chunkIDs := db.ResolveExtTarget(targetSpec, "")
+	if len(chunkIDs) == 0 {
+		return fmt.Errorf("target resolves to no chunk: %s", targetSpec)
+	}
+	if !fileLevel && len(chunkIDs) != 1 {
+		return fmt.Errorf("target resolves to %d chunks — internal remove needs exactly one: %s", len(chunkIDs), targetSpec)
+	}
+	info, err := db.ChunkInfo(chunkIDs[0])
+	if err != nil {
+		return err
+	}
+	if !info.Writable {
+		return fmt.Errorf("%s is read-only", info.Path)
+	}
+	finfo, err := db.fts.FileInfoByID(info.FileID)
+	if err != nil {
+		return err
+	}
+	remover, ok := db.chunkerByName[finfo.Strategy].(tagInserter)
+	if !ok {
+		return fmt.Errorf("file type %q cannot host inline tags", finfo.Strategy)
+	}
+	st, err := os.Stat(info.Path)
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm()&0o200 == 0 {
+		return fmt.Errorf("%s is not writable", info.Path)
+	}
+	fileBytes, err := os.ReadFile(info.Path)
+	if err != nil {
+		return err
+	}
+	scope := tagScopeChunk
+	var chunk microfts2.Chunk
+	if fileLevel {
+		scope = tagScopeFile
+	} else {
+		chunk = microfts2.Chunk{Locator: microfts2.EncodeByteRangeLocator(int(info.ByteStart), int(info.ByteEnd))}
+	}
+	newBytes, ok := remover.RemoveTag(fileBytes, chunk, tag, scope)
+	if !ok {
+		return fmt.Errorf("no inline @%s: line in %s", tag, targetSpec)
+	}
+	return atomicWriteFile(info.Path, newBytes, st.Mode().Perm())
 }
 
 // RejectExtTag rewrites matching `@ext-candidate` line(s) to a single

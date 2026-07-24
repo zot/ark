@@ -1,5 +1,5 @@
 # Curation
-**Requirements:** R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362, R2363, R2381, R2382, R2383, R2384, R2385
+**Requirements:** R2355, R2356, R2357, R2358, R2359, R2360, R2361, R2362, R2363, R2381, R2382, R2383, R2384, R2385, R3251
 
 Server-owned in-memory state for the curation workshop's pinned
 chunks. Canonical store is the Go slice; the Lua table at
@@ -57,6 +57,15 @@ mirror through its standard variable-change detection.
   mutation's save overwrites the broken file. Format: TOML with
   `version = 1` and `[[pinned]]` tables carrying `chunkID`,
   `fileID`, `path`, `pinnedAt`. (R2382, R2383)
+- validatePins(resolve func(chunkID uint64) (path string, ok bool)):
+  post-hydration validation — reindexing can reassign chunk IDs, so
+  a persisted pin can silently resolve to a *different real chunk*
+  (observed 2026-07-23). Drops (with a log line) every pin whose
+  chunkID no longer resolves or whose resolved path differs from
+  the persisted `path`; saves the pruned list back when anything
+  was dropped so stale entries don't return. The resolver is a
+  seam (Server passes `db.ChunkInfo`); called from `Server.New`
+  right after Load(). (R3251)
 - save(): write the current `pinned` slice to `statePath` atomically
   (write to `curation.toml.tmp`, rename over `curation.toml`).
   Called inside `pin`, `dismiss`, and `sweepOlder` after the mutation

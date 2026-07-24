@@ -123,3 +123,24 @@
   remove(candidate) → per-distinct-tag upsertExtLine(add, judgment, value="")
 **Expected:** one `@ext-judgment: %abc @topic:` line
 **Refs:** crc-DB.md
+
+## Test: removeInternalTag stencils (R3244)
+**Purpose:** The internal-remove stencil deletes the inline `@tag:` line the
+  insert stencil authored — plain markdown in chunk scope, comment-wrapped in
+  a bracket/indent chunk (the comment wrapper must be removed with the line),
+  and the file-level top-of-file `@`-run — leaving the rest byte-identical.
+**Input:** each `TestInsertInternalTag_Stencils` fixture *after* insertion,
+  run through the removal stencil with the same scope/comment/kind.
+**Expected:** the original pre-insert bytes come back (`ok=true`); insertion
+  followed by removal is the identity.
+**Refs:** crc-Indexer.md, crc-DB.md
+
+## Test: removeInternalTag misses error, never degrade (R3245)
+**Purpose:** A removal that cannot apply reports `ok=false` — no matching
+  `@tag:` line in scope, or a line outside the target chunk's range — and the
+  caller surfaces an error rather than falling back to a mirror-routing
+  removal (which would delete a different fact).
+**Input:** chunk text without the tag; text where the tag line lies outside
+  the chunk byte range; both through the removal stencil.
+**Expected:** `ok=false`, input bytes unchanged in both cases.
+**Refs:** crc-Indexer.md, crc-DB.md

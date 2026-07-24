@@ -132,6 +132,8 @@ reindex is asynchronous via the watcher.
              temp+rename
 3.4.   remove → DB.RemoveExtTag(target, tag, value): flow 2.2–2.5
            with the value filter (empty = all values)
+3.4.1.   --disposition internal → DB.RemoveInternalTag(target, tag)
+             instead (flow 5.4.2); external stays the default
 3.5.   watcher/indexer reindex the mirror file (as 1.9 / 2.7)
 ```
 
@@ -169,6 +171,33 @@ class-aware `applyExtMirrorEdit`. Diagram 4.
 4.6.   watcher/indexer reindex: all three classes index as ordinary tags
          (F/V for the outer name); RC/RJ derivation for candidate/judgment
          is a later pass, not in this flow
+```
+
+## Flow: one-shot fire (`mcp.extAccept` / `mcp.extRemove`)
+
+The workshop's fire path (R3247–R3250): the Lua binding composes the
+candidate+accept pair inside one DB-actor operation, so the ledger trail
+matches the CLI pair with nothing interleaved. Diagram 5.
+
+```
+5.   Lua viewdef ──> mcp.extAccept(targetSpec, tag, value, opts)
+5.1.   Server bridge ──> one Sync closure on the DB actor:
+5.1.1.     DB.CandidateExtTag(target, tag, value, opts.insight,
+             opts.disposition, opts.replace)   // flow 4.2
+5.1.2.     DB.AcceptExtTag(target, tag, value) // flow 4.3
+             → applied ("internal" if any internal write landed,
+               else "external"; "" = nothing matched)
+5.2.   bridge returns {disposition = applied} or (nil, errstring)
+5.3.   watcher/indexer reindex as flow 4.6
+5.4.   Lua viewdef ──> mcp.extRemove(targetSpec, tag, opts)
+5.4.1.   external (default) → DB.RemoveExtTag(target, tag, "")  // flow 2
+5.4.2.   internal → DB.RemoveInternalTag(target, tag):
+5.4.2.1.     resolve target (bare path → file scope; single chunk →
+               chunk scope; else error — never degrade, R3245)
+5.4.2.2.     chunker RemoveTag stencil deletes the inline `@tag:` line
+               (no line / incapable type / read-only → error)
+5.4.2.3.     temp+rename on the DB actor; reindex materializes removal
+5.5.   bridge returns {disposition = applied} or (nil, errstring)
 ```
 
 ## Notes

@@ -200,3 +200,59 @@ func TestTagInserterGate(t *testing.T) {
 		t.Error("bare LineChunker must not implement tagInserter (excluded on granularity)")
 	}
 }
+
+// R3244: the removal stencil is the insert stencil's inverse — for every
+// insert fixture, inserting then removing returns the original bytes
+// (comment wrapper and indentation leave with the line).
+func TestRemoveInternalTag_Inverse(t *testing.T) {
+	cases := []struct {
+		name    string
+		file    string
+		scope   tagScope
+		comment string
+		kind    stencilKind
+	}{
+		{"markdown chunk-level", "## A\nbody\n", tagScopeChunk, "", stencilMarkdown},
+		{"markdown file-level", "## A\nbody\n", tagScopeFile, "", stencilMarkdown},
+		{"markdown headingless", "just prose\nmore\n", tagScopeChunk, "", stencilMarkdown},
+		{"bracket comment-wrapped", "func foo() {\n\tbody\n}\n", tagScopeChunk, "//", stencilBracket},
+		{"indent indented", "def foo():\n    body1\n    body2\n", tagScopeChunk, "#", stencilIndent},
+	}
+	for _, c := range cases {
+		orig := []byte(c.file)
+		inserted, ok := insertInternalTag(orig, chunkOver(0, len(orig)), "topic", "recall", c.scope, c.comment, c.kind, false)
+		if !ok {
+			t.Fatalf("%s: insert failed", c.name)
+		}
+		got, ok := removeInternalTag(inserted, chunkOver(0, len(inserted)), "topic", c.scope, c.comment, c.kind)
+		if !ok {
+			t.Errorf("%s: remove failed", c.name)
+			continue
+		}
+		if string(got) != c.file {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.file)
+		}
+	}
+}
+
+// R3245: a removal that cannot apply reports ok=false (the caller errors,
+// never degrades) — no matching line, line outside the chunk range,
+// comment-less code, tag below the file-scope preamble.
+func TestRemoveInternalTag_Misses(t *testing.T) {
+	file := []byte("## A\nbody\n")
+	if _, ok := removeInternalTag(file, chunkOver(0, len(file)), "topic", tagScopeChunk, "", stencilMarkdown); ok {
+		t.Error("no matching line should be ok=false")
+	}
+	file = []byte("## A\n@topic: recall\n## B\nbody\n")
+	bStart := strings.Index(string(file), "## B")
+	if _, ok := removeInternalTag(file, chunkOver(bStart, len(file)), "topic", tagScopeChunk, "", stencilMarkdown); ok {
+		t.Error("line outside the chunk range should be ok=false")
+	}
+	if _, ok := removeInternalTag([]byte("{\n}\n"), chunkOver(0, 4), "topic", tagScopeChunk, "", stencilBracket); ok {
+		t.Error("comment-less code should be ok=false")
+	}
+	file = []byte("# H\n@topic: recall\n")
+	if _, ok := removeInternalTag(file, microfts2.Chunk{}, "topic", tagScopeFile, "", stencilMarkdown); ok {
+		t.Error("tag below the file-scope preamble should not be removed")
+	}
+}

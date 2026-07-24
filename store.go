@@ -3958,7 +3958,8 @@ func (s *Store) AcceptDerived(db *DB, chunkID uint64, tagname, value string) err
 	if err != nil {
 		return nil // no locator to name the chunk — nothing to accept
 	}
-	return db.AcceptExtTag(info.Path+":"+info.Range, tagname, value)
+	_, err = db.AcceptExtTag(info.Path+":"+info.Range, tagname, value)
+	return err
 }
 
 // RejectDerived records a durable rejection of the (chunkID, tagname)

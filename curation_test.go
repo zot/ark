@@ -1,7 +1,7 @@
 package ark
 
 // CRC: crc-Curation.md | Test: test-Curation.md
-// R2381, R2382, R2383, R2384, R2385
+// R2381, R2382, R2383, R2384, R2385, R3251
 
 import (
 	"bytes"
@@ -120,5 +120,58 @@ func TestCurationEmptyDbPathDisablesPersistence(t *testing.T) {
 	}
 	if logs.Len() != 0 {
 		t.Fatalf("empty dbPath should be silent: %q", logs.String())
+	}
+}
+
+// CRC: crc-Curation.md | R3251
+// validatePins drops pins whose chunkID no longer resolves to the persisted
+// path (reindexing can reassign chunk IDs — the 2026-07-23 wrong-chunk
+// incident) and persists the pruned list.
+func TestCurationValidatePinsDropsStale(t *testing.T) {
+	dir := t.TempDir()
+	logs := captureCurationLog(t)
+	c := newCuration(dir)
+	c.pinned = []PinnedChunk{
+		{ChunkID: 11, FileID: 100, Path: "/a.md", PinnedAt: 1000},
+		{ChunkID: 22, FileID: 200, Path: "/b.md", PinnedAt: 2000}, // resolves elsewhere
+		{ChunkID: 33, FileID: 300, Path: "/c.md", PinnedAt: 3000}, // no longer indexed
+	}
+	c.validatePins(func(chunkID uint64) (string, bool) {
+		switch chunkID {
+		case 11:
+			return "/a.md", true
+		case 22:
+			return "/other.md", true
+		default:
+			return "", false
+		}
+	})
+	got := c.pinnedSnapshot()
+	if len(got) != 1 || got[0].ChunkID != 11 {
+		t.Fatalf("only the valid pin should survive, got %#v", got)
+	}
+	if logs.Len() == 0 {
+		t.Error("dropping pins should log")
+	}
+	// The prune was saved back: a fresh Load sees only the survivor.
+	fresh := newCuration(dir)
+	fresh.Load()
+	if got := fresh.pinnedSnapshot(); len(got) != 1 || got[0].ChunkID != 11 {
+		t.Fatalf("pruned list should persist, got %#v", got)
+	}
+}
+
+// CRC: crc-Curation.md | R3251
+// When every pin validates, validatePins must not write state.
+func TestCurationValidatePinsNoopWhenValid(t *testing.T) {
+	dir := t.TempDir()
+	c := newCuration(dir)
+	c.pinned = []PinnedChunk{{ChunkID: 11, FileID: 100, Path: "/a.md", PinnedAt: 1000}}
+	c.validatePins(func(uint64) (string, bool) { return "/a.md", true })
+	if got := c.pinnedSnapshot(); len(got) != 1 {
+		t.Fatalf("valid pin should survive, got %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "curation.toml")); !os.IsNotExist(err) {
+		t.Error("validatePins must not save when nothing was dropped")
 	}
 }

@@ -81,9 +81,10 @@ Notes:
 - **Internal-tag wrapping (ark-side).** On `Open`, ark wraps the three writable
   *multi-line* text chunkers (markdown, bracket, indent) in an
   `internalTagChunker` that embeds the full microfts2 interface set (so every
-  method above promotes) and adds one method, `InsertTag` — the `tagInserter`
-  capability used by `ark ext accept` (internal disposition) to write a tag into
-  the file's own body. `lines` / `chat-jsonl` / `pdf` / `bible` are **not** wrapped
+  method above promotes) and adds two methods, `InsertTag` and `RemoveTag` —
+  the `tagInserter` capability used by `ark ext accept` (internal disposition)
+  to write a tag into the file's own body and by the internal-remove cell to
+  delete one. `lines` / `chat-jsonl` / `pdf` / `bible` are **not** wrapped
   (single-line or read-only), so a `chunkerByName[strategy].(tagInserter)`
   assertion fails for them and internal disposition degrades to external. See
   `internal-disposition.md`.

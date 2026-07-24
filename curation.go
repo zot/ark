@@ -189,6 +189,39 @@ func (c *Curation) Load() {
 	c.mu.Unlock()
 }
 
+// validatePins drops every pin whose chunkID no longer resolves or whose
+// resolved path differs from the persisted Path. Reindexing can reassign
+// chunk IDs, so a stale pin does not merely dangle — it can silently resolve
+// to a *different real chunk* (observed 2026-07-23: a .scratch/ pin resolved
+// to a read-only chat-JSONL chunk and its widget locked to ext for the wrong
+// chunk). The resolver is a seam so tests need no DB; Server.New passes
+// db.ChunkInfo. When anything was dropped, the pruned list is saved back so
+// stale entries don't return on the next start.
+// CRC: crc-Curation.md | R3251
+func (c *Curation) validatePins(resolve func(chunkID uint64) (path string, ok bool)) {
+	c.mu.Lock()
+	var keep []PinnedChunk
+	dropped := 0
+	for _, p := range c.pinned {
+		path, ok := resolve(p.ChunkID)
+		if ok && path == p.Path {
+			keep = append(keep, p)
+			continue
+		}
+		dropped++
+		if ok {
+			log.Printf("curation: dropping stale pin chunk %d: recorded %s, resolves to %s", p.ChunkID, p.Path, path)
+		} else {
+			log.Printf("curation: dropping stale pin chunk %d (%s): chunk no longer indexed", p.ChunkID, p.Path)
+		}
+	}
+	c.pinned = keep
+	c.mu.Unlock()
+	if dropped > 0 {
+		c.save()
+	}
+}
+
 // save writes the current pinned slice to `statePath` atomically.
 // Called inside pin/dismiss/sweepOlder after the mutation and Lua
 // mirror refresh. On disk failure, logs and retains in-memory

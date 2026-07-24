@@ -36,3 +36,15 @@
 **Input:** newCuration("") followed by save()
 **Expected:** no file written anywhere; save returns without error or log
 **Refs:** crc-Curation.md, R2381
+
+## Test: validatePins drops unresolvable and path-mismatched pins
+**Purpose:** R3251 — reindexing can reassign chunk IDs, so a persisted pin can silently resolve to a different real chunk (the 2026-07-23 incident); validation after Load must drop exactly the bad pins and persist the pruned list
+**Input:** three pins seeded (A resolves to its recorded path; B's resolver path differs; C's resolver returns !ok); validatePins with a fake resolver func
+**Expected:** pinnedSnapshot() holds only A; curation.toml on disk holds only A (the prune was saved back)
+**Refs:** crc-Curation.md, R3251
+
+## Test: validatePins is a no-op when every pin validates
+**Purpose:** R3251 — validation must not rewrite state when nothing is stale
+**Input:** pins seeded in memory only (no prior save); validatePins with an all-ok resolver
+**Expected:** slice unchanged; no curation.toml written (save runs only when something was dropped)
+**Refs:** crc-Curation.md, R3251

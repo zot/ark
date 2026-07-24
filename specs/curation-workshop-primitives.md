@@ -535,6 +535,49 @@ signed judgment score (carried in the line's `@count`). **Still deferred:**
 a reject rationale and the reinforcement (positive-judgment) producer
 (seam 3b).
 
+### One-shot fire: `mcp.extAccept` and `mcp.extRemove`
+
+```lua
+local result, err = mcp.extAccept(targetSpec, tag, value, opts)
+local result, err = mcp.extRemove(targetSpec, tag, opts)
+```
+
+The workshop's fire path — one call per user gesture (the loaded
+gun). `extAccept` authors the `@ext-candidate` and accepts it
+back-to-back through the same machinery the CLI pair `ark ext
+candidate` + `ark ext accept` uses, as a single DB-actor
+operation, so nothing interleaves between the two steps and the
+ledger trail is real: dated candidate line (consumed by the
+accept), `@count`, the committed write per the accept's four
+cells, and the positive `@ext-judgment`.
+
+`extAccept`'s `opts` is an optional table:
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `disposition` | `"external"` | Where the accepted tag is written (see `internal-disposition.md`) |
+| `replace` | `false` | Collapse the target's values of the tag instead of the default add |
+| `insight` | `""` | Optional proposal rationale, recorded on the candidate line |
+
+`extRemove`'s `opts` carries `disposition` only. External removes
+the `(TARGET, tag)` mirror routings — all values,
+`mcp.removeExtTag` semantics. Internal removes the inline `@tag:`
+line from the target's own body via the chunker's removal stencil
+(see `internal-disposition.md` "Remove"); unlike accept there is
+**no degrade** — when the internal remove cannot apply
+(unresolvable or multi-chunk target, incapable chunker type,
+read-only or unwritable file, no matching inline line) the call
+errors rather than removing some other representation of the tag.
+
+Both take TARGET spec strings for either disposition and resolve
+them server-side at fire time on the DB actor — no client-carried
+byte ranges, so a fire cannot race a reindex into a stale range.
+
+`result` is `{disposition = "external"|"internal"}` — the
+disposition **actually applied** after the accept's capability
+degrade, so callers can be honest about what happened. On
+failure: `(nil, errstring)`.
+
 ## `mcp.suggestExtLocator(chunkID)`
 
 Returns the workshop's recommended base + locator for an `@ext`

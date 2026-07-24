@@ -162,3 +162,22 @@ R3059, R3065, R3066, R3067, R3069, R3071, R3074, R3075
 **Expected:** two `@ext-candidate:` lines, each with a leading `YYYY-MM-DD`;
   the external line at `@count: 1`, the internal line at `@count: 2`
 **Refs:** crc-DB.md
+
+## Test: AcceptExtTag reports the applied disposition (R3248)
+**Purpose:** The one-shot fire path is honest about capability degrade: accept
+  returns "internal" when the internal write landed, "external" when it
+  degraded (or was external all along)
+**Input:** the three internal-accept end-to-end tests capture the new return —
+  markdown internal (landed), line-chunked internal (degraded), internal
+  replace (landed)
+**Expected:** applied = internal / external / internal respectively
+**Refs:** crc-DB.md
+
+## Test: RemoveInternalTag end-to-end (R3244, R3245)
+**Purpose:** The internal-remove cell restores the pre-accept body, and a
+  second remove errors — never a silent no-op, never a mirror fallback
+**Input:** internal accept writes `@topic: recall` into a markdown file's
+  body; RemoveInternalTag(src, topic); then RemoveInternalTag again
+**Expected:** body byte-identical to the original after the first remove;
+  the second returns a "no inline line" error
+**Refs:** crc-DB.md, crc-Indexer.md

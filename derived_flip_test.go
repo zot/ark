@@ -477,8 +477,12 @@ func TestAcceptExtTag_InternalWritesSourceBody(t *testing.T) {
 	if err := db.CandidateExtTag(src, "topic", "recall", "", extDispositionInternal, false); err != nil {
 		t.Fatalf("candidate: %v", err)
 	}
-	if err := db.AcceptExtTag(src, "topic", "recall"); err != nil {
+	applied, err := db.AcceptExtTag(src, "topic", "recall")
+	if err != nil {
 		t.Fatalf("accept: %v", err)
+	}
+	if applied != extDispositionInternal { // R3248: internal write landed → reported
+		t.Errorf("applied = %q, want internal", applied)
 	}
 	body, _ := os.ReadFile(src)
 	if !strings.Contains(string(body), "@topic: recall") {
@@ -506,8 +510,12 @@ func TestAcceptExtTag_InternalFallsBackToExternal(t *testing.T) {
 	if err := db.CandidateExtTag(target, "food", "fruit", "", extDispositionInternal, false); err != nil {
 		t.Fatalf("candidate: %v", err)
 	}
-	if err := db.AcceptExtTag(target, "food", "fruit"); err != nil {
+	applied, err := db.AcceptExtTag(target, "food", "fruit")
+	if err != nil {
 		t.Fatalf("accept: %v", err)
+	}
+	if applied != extDispositionExternal { // R3248: degrade is reported honestly
+		t.Errorf("applied = %q, want external (degraded)", applied)
 	}
 	mirror := externalMirrors(t)
 	if !strings.Contains(mirror, "@ext: ") || !strings.Contains(mirror, "@food: fruit") {
@@ -558,8 +566,12 @@ func TestAcceptExtTag_InternalReplaceRewritesInline(t *testing.T) {
 	if err := db.CandidateExtTag(src, "cuisine", "italian", "", extDispositionInternal, true); err != nil {
 		t.Fatalf("candidate: %v", err)
 	}
-	if err := db.AcceptExtTag(src, "cuisine", "italian"); err != nil {
+	applied, err := db.AcceptExtTag(src, "cuisine", "italian")
+	if err != nil {
 		t.Fatalf("accept: %v", err)
+	}
+	if applied != extDispositionInternal { // R3248
+		t.Errorf("applied = %q, want internal", applied)
 	}
 	body, _ := os.ReadFile(src)
 	if strings.Contains(string(body), "@cuisine: french") {
@@ -597,4 +609,41 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// TestRemoveInternalTag_EndToEnd drives the internal-remove cell against the
+// same fixture the internal accept uses: insert an inline tag via accept,
+// remove it with RemoveInternalTag, and confirm the body is restored; a
+// second remove errors (no matching line — never a silent no-op, never a
+// mirror fallback). (R3244, R3245)
+func TestRemoveInternalTag_EndToEnd(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	db.chunkerByName = make(map[string]any)
+	if err := db.addChunker("markdown", wrapInternalTagChunker(microfts2.MarkdownChunker{}, stencilMarkdown)); err != nil {
+		t.Fatalf("register markdown: %v", err)
+	}
+	src := filepath.Join(db.dbPath, "note.md")
+	orig := "## A\nbody a\n"
+	if err := os.WriteFile(src, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(src, "markdown"); err != nil {
+		t.Fatalf("index source: %v", err)
+	}
+	if err := db.CandidateExtTag(src, "topic", "recall", "", extDispositionInternal, false); err != nil {
+		t.Fatalf("candidate: %v", err)
+	}
+	if _, err := db.AcceptExtTag(src, "topic", "recall"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if err := db.RemoveInternalTag(src, "topic"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	body, _ := os.ReadFile(src)
+	if string(body) != orig {
+		t.Errorf("remove should restore the original body:\n got %q\nwant %q", body, orig)
+	}
+	if err := db.RemoveInternalTag(src, "topic"); err == nil {
+		t.Error("second remove should error — no matching inline line (R3245)")
+	}
 }

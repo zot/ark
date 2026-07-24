@@ -45,9 +45,14 @@ func extCommand() *ucli.Command {
 			},
 			{
 				Name:      "remove",
-				Usage:     "remove <tag> routings on <target> (all values, or just <value>)",
+				Usage:     "remove <tag> routings on <target> (all values, or just <value>); --internal deletes the inline line instead",
 				ArgsUsage: "<target> <tag> [value]",
-				Action:    extRemoveAction,
+				Flags: []ucli.Flag{
+					// R3246: the internal-remove cell's CLI face, mirroring candidate's flags
+					&ucli.StringFlag{Name: "disposition", Value: dispositionExternal, Usage: "what to remove: external (mirror routing) or internal (inline line in the source file)"},
+					&ucli.BoolFlag{Name: "internal", Usage: "shorthand for --disposition internal"},
+				},
+				Action: extRemoveAction,
 			},
 			{
 				Name:      "candidate",
@@ -121,10 +126,16 @@ func extAddAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md | Seq: seq-ext-author.md#3 | R3048
+// CRC: crc-CLITree.md | Seq: seq-ext-author.md#3.4.1 | R3048, R3246
 func extRemoveAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("remove", target, tag, value, "", "", false, func(d *ark.DB) error { return d.RemoveExtTag(target, tag, value) })
+	disposition := extDisposition(c)
+	extProxyOrLocal("remove", target, tag, value, "", disposition, false, func(d *ark.DB) error {
+		if disposition == dispositionInternal {
+			return d.RemoveInternalTag(target, tag)
+		}
+		return d.RemoveExtTag(target, tag, value)
+	})
 	return nil
 }
 
@@ -160,7 +171,7 @@ func extDisposition(c *ucli.Command) string {
 // CRC: crc-CLITree.md | Seq: seq-ext-author.md#4.3 | R3056
 func extAcceptAction(_ context.Context, c *ucli.Command) error {
 	target, tag, value := extArgs(c, false)
-	extProxyOrLocal("accept", target, tag, value, "", "", false, func(d *ark.DB) error { return d.AcceptExtTag(target, tag, value) })
+	extProxyOrLocal("accept", target, tag, value, "", "", false, func(d *ark.DB) error { _, err := d.AcceptExtTag(target, tag, value); return err })
 	return nil
 }
 

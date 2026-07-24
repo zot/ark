@@ -125,6 +125,33 @@ value. For a single-value tag that is exactly "change the value"; for a tag
 that legitimately holds several values it is lossy — there is no "replace only
 this one value," which is out of scope here.
 
+## Remove — the internal-remove cell
+
+Removing an internal (inline) tag is the write-path inverse of
+internal accept: delete the inline `@tag:` line from the target
+file's own body, via the same per-chunker stencil family that owns
+insertion. The chunker interface grows a removal operation beside
+`InsertTag`; scope resolution mirrors the insert path — a bare-path
+target addresses the file-level tag block, a single-chunk target
+the chunk's scope.
+
+Unlike accept, remove **never degrades**. Internal accept falls
+back to external because both dispositions express the same intent
+(attach this tag to this target). A remove that fell back would
+delete a *different fact* — a mirror routing instead of the inline
+line the caller named — while reporting success. When the internal
+remove cannot apply (target unresolvable or multi-chunk, incapable
+chunker type, read-only zone, file unwritable, no matching inline
+line in scope) the operation errors.
+
+No judgment is written on remove, matching external `ark ext
+remove` — judgments record accept/reject verdicts on proposals,
+and a removal is neither.
+
+Faces: `ark ext remove --disposition internal` (CLI) and
+`mcp.extRemove(target, tag, {disposition = "internal"})` (Lua, see
+`curation-workshop-primitives.md`).
+
 ## Positive judgment — every accept reinforces
 
 Every accept — internal or external — also writes a positive `@ext-judgment

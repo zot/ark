@@ -302,12 +302,17 @@ Behavior:
   the error, leave the in-memory slice empty. The server keeps
   running. Subsequent mutations overwrite the broken file on
   next save.
-- Entries reference `chunkID`/`fileID` values that may or may
-  not still exist in the current DB. The workshop's chunk-
-  resolution path is responsible for handling stale references
-  (e.g., displaying "chunk no longer indexed" when a pinned
-  entry can't be reached). Load does not validate against the
-  DB.
+- Persisted `chunkID` values are validated against the DB after
+  hydration: reindexing can reassign chunk IDs, so a stale pin
+  does not merely dangle — it can silently resolve to a
+  *different real chunk* (observed 2026-07-23: a pin recorded
+  for a `.scratch/` file resolved to a read-only chat-JSONL
+  chunk, and its widget locked to ext for the wrong chunk). Each
+  pin's chunkID is resolved to its current chunk info; a pin
+  whose chunk no longer exists or whose resolved path differs
+  from the persisted `path` is dropped with a log line, and the
+  pruned list is saved back so the stale entries don't return on
+  the next start.
 
 ### Save
 

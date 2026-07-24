@@ -299,6 +299,14 @@ func Serve(dbPath string, opts ServeOpts) error {
 		nextQueue: make(chan LuhmannWork, luhmannNextQueueCap), // R3011: watcher→Luhmann handoff
 	}
 	srv.curation.Load() // R2383: hydrate pinned slice from curation.toml before luaTable is wired
+	// R3251: drop pins whose chunkID no longer resolves to the persisted path
+	srv.curation.validatePins(func(chunkID uint64) (string, bool) {
+		info, err := db.ChunkInfo(chunkID)
+		if err != nil {
+			return "", false
+		}
+		return info.Path, true
+	})
 
 	// Wire librarian into searcher for about filters
 	db.search.librarian = lib
@@ -2254,9 +2262,14 @@ func (srv *Server) handleExtAdd(w http.ResponseWriter, r *http.Request) {
 	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.AddExtTag(req.Target, req.Tag, req.Value) })
 }
 
-// CRC: crc-Server.md | R3049
+// CRC: crc-Server.md | R3049, R3246
 func (srv *Server) handleExtRemove(w http.ResponseWriter, r *http.Request) {
-	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.RemoveExtTag(req.Target, req.Tag, req.Value) })
+	srv.extMutate(w, r, func(db *DB, req extRequest) error {
+		if req.Disposition == extDispositionInternal {
+			return db.RemoveInternalTag(req.Target, req.Tag)
+		}
+		return db.RemoveExtTag(req.Target, req.Tag, req.Value)
+	})
 }
 
 // CRC: crc-Server.md | R3057
@@ -2268,7 +2281,10 @@ func (srv *Server) handleExtCandidate(w http.ResponseWriter, r *http.Request) {
 
 // CRC: crc-Server.md | R3057
 func (srv *Server) handleExtAccept(w http.ResponseWriter, r *http.Request) {
-	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.AcceptExtTag(req.Target, req.Tag, req.Value) })
+	srv.extMutate(w, r, func(db *DB, req extRequest) error {
+		_, err := db.AcceptExtTag(req.Target, req.Tag, req.Value)
+		return err
+	})
 }
 
 // CRC: crc-Server.md | R3057
@@ -6197,6 +6213,88 @@ func (srv *Server) registerLuaFunctions() {
 			return 1
 		}))
 
+		// mcp.extAccept(targetSpec, tag, value, opts) — the workshop's
+		// one-shot fire: candidate+accept composed inside a single Sync
+		// closure on the DB actor, so nothing interleaves and the ledger
+		// trail matches the CLI pair. Returns {disposition = <applied>}
+		// (honest about the capability degrade) or (nil, errstring).
+		// CRC: crc-Server.md | Seq: seq-ext-author.md#5.1 | R3247, R3248, R3250
+		L.SetField(tbl, "extAccept", L.NewFunction(func(L *lua.LState) int {
+			targetSpec := L.CheckString(1)
+			tag := L.CheckString(2)
+			value := L.OptString(3, "")
+			disposition, replace, insight := extDispositionExternal, false, ""
+			if optsTbl, ok := L.Get(4).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("disposition").(lua.LString); ok {
+					disposition = string(v)
+				}
+				if v, ok := optsTbl.RawGetString("replace").(lua.LBool); ok {
+					replace = bool(v)
+				}
+				if v, ok := optsTbl.RawGetString("insight").(lua.LString); ok {
+					insight = string(v)
+				}
+			}
+			if err := checkExtDisposition(disposition); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			applied, err := Sync(srv.db, func(db *DB) (string, error) {
+				if err := db.CandidateExtTag(targetSpec, tag, value, insight, disposition, replace); err != nil {
+					return "", err
+				}
+				return db.AcceptExtTag(targetSpec, tag, value)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			row := L.NewTable()
+			L.SetField(row, "disposition", lua.LString(applied))
+			L.Push(row)
+			return 1
+		}))
+
+		// mcp.extRemove(targetSpec, tag, opts) — disposition-dispatched
+		// remove: external (default) drops the (TARGET, tag) mirror
+		// routings; internal deletes the inline line via the removal
+		// stencil and never degrades. Returns {disposition = <applied>}
+		// or (nil, errstring).
+		// CRC: crc-Server.md | Seq: seq-ext-author.md#5.4 | R3248, R3249, R3250
+		L.SetField(tbl, "extRemove", L.NewFunction(func(L *lua.LState) int {
+			targetSpec := L.CheckString(1)
+			tag := L.CheckString(2)
+			disposition := extDispositionExternal
+			if optsTbl, ok := L.Get(3).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("disposition").(lua.LString); ok {
+					disposition = string(v)
+				}
+			}
+			if err := checkExtDisposition(disposition); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			// Dispatch inside the actor closure — the shape handleExtRemove uses.
+			err := SyncVoid(srv.db, func(db *DB) error {
+				if disposition == extDispositionInternal {
+					return db.RemoveInternalTag(targetSpec, tag)
+				}
+				return db.RemoveExtTag(targetSpec, tag, "")
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			row := L.NewTable()
+			L.SetField(row, "disposition", lua.LString(disposition))
+			L.Push(row)
+			return 1
+		}))
+
 		// mcp.replaceRegion(path, byteStart, byteEnd, newText) — atomic
 		// byte-range write through DB.ReplaceRegion. Returns (true, nil)
 		// or (false, errstring). CRC: crc-Server.md | R2390, R2391
@@ -6529,6 +6627,16 @@ func (srv *Server) registerLuaFunctions() {
 	if err != nil {
 		log.Printf("ui: register lua functions failed: %v", err)
 	}
+}
+
+// checkExtDisposition rejects anything but the two legal `@ext` dispositions,
+// naming both in the error. Shared by the mcp.extAccept and mcp.extRemove
+// bindings so the same rule reads the same way in both.
+func checkExtDisposition(disposition string) error {
+	if disposition != extDispositionExternal && disposition != extDispositionInternal {
+		return fmt.Errorf("disposition must be %s or %s, got %q", extDispositionExternal, extDispositionInternal, disposition)
+	}
+	return nil
 }
 
 // buildTagSubFromLua decodes a Lua filter table into a TagSub.
