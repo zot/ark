@@ -193,7 +193,7 @@ func (h *PtyHost) Launch(bootstrap string) (sessionID string, err error) {
 	h.env.ForceReleaseSeat()
 
 	// Fork the pty and start `claude` as a child of the server (R3116).
-	cmd := exec.Command("claude")
+	cmd := exec.Command("claude", "--model", "opus")
 	cmd.Dir = h.env.LuhmannDir()
 	cmd.Env = ptyChildEnv()
 	master, ferr := pty.StartWithSize(cmd, &pty.Winsize{Rows: ptyInitRows, Cols: ptyInitCols})

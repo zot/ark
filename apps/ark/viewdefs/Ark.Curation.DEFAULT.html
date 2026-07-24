@@ -7,9 +7,6 @@
         <sl-tooltip content="Run hot-correlations sweep (async)">
           <sl-icon-button name="lightning-charge-fill" ui-action="sweepNow()" ui-attr-disabled="sweepBusy()" label="Sweep"></sl-icon-button>
         </sl-tooltip>
-        <sl-tooltip content="Find connections across pinned chunks">
-          <sl-icon-button name="diagram-3" ui-action="findConnections()" ui-attr-disabled="connectionsInFlight()" label="Find connections"></sl-icon-button>
-        </sl-tooltip>
         <sl-tooltip content="Dismiss every pinned chunk with no changes">
           <sl-button size="small" ui-action="clearUnchanged()" ui-attr-disabled="noUnchanged()">
             <sl-icon slot="prefix" name="eraser"></sl-icon>
@@ -23,42 +20,6 @@
           ui-action="acceptChanges()"
           ui-attr-disabled="acceptDisabled()"
         ><span ui-value="acceptLabel()"></span></sl-button>
-      </div>
-    </div>
-
-    <!-- Accept warning dialog -->
-    <sl-dialog label="Pending changes not staged"
-               class="cur-accept-warn-dialog"
-               ui-attr-open="acceptWarnVisible()"
-               ui-event-sl-request-close="cancelAccept()">
-      <p>There are <span ui-value="pendingCount()"></span> pending changes you have not staged.</p>
-      <p class="cur-warn-hint">Pending widgets are not executed until you promote them via the per-card edit button.</p>
-      <sl-button slot="footer" variant="primary" ui-action="confirmAccept()">Save staged changes only</sl-button>
-      <sl-button slot="footer" ui-action="cancelAccept()">Go back to editing</sl-button>
-    </sl-dialog>
-
-    <!-- Find Connections proposals panel -->
-    <div class="cur-conn-panel" ui-class-hidden="noConnections()">
-      <div class="cur-conn-header">
-        <span class="cur-conn-title">Find Connections</span>
-        <span class="cur-conn-status" ui-value="connectionsStatusText()"></span>
-        <sl-tooltip content="Dismiss the proposals panel">
-          <sl-icon-button name="x-lg" ui-action="clearConnections()" label="Dismiss"></sl-icon-button>
-        </sl-tooltip>
-      </div>
-      <sl-alert variant="danger"
-                ui-attr-open="hasConnectionsError()"
-                class="cur-conn-error">
-        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-        <span ui-value="connectionsError()"></span>
-      </sl-alert>
-      <div class="cur-conn-themes" ui-class-hidden="noConnectionsThemes()">
-        <div class="cur-conn-section-header">Themes (<span ui-value="connectionsThemeCount()"></span>)</div>
-        <div ui-view="connectionsThemes()?wrapper=lua.ViewList"></div>
-      </div>
-      <div class="cur-conn-shared" ui-class-hidden="noConnectionsSharedTags()">
-        <div class="cur-conn-section-header">Shared tag candidates (<span ui-value="connectionsSharedTagCount()"></span>)</div>
-        <div ui-view="connectionsSharedTags()?wrapper=lua.ViewList"></div>
       </div>
     </div>
 
@@ -493,12 +454,30 @@
       margin-left: -4px;
     }
 
-    /* PendingWidget rows */
+    /* ProposalWidget rows */
     .cur-widget {
       display: flex;
       flex-direction: column;
       gap: 2px;
       padding: 2px 0;
+    }
+
+    .cur-widget-fire {
+      color: var(--term-accent, #E07A47);
+    }
+
+    .cur-widget-disposition,
+    .cur-widget-replace {
+      flex: 0 0 auto;
+    }
+
+    .cur-widget-fire-error {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--term-error, #ff6b6b);
     }
 
     .cur-widget-remove .cur-widget-tag,
@@ -516,11 +495,11 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
     }
 
     .cur-widget-tag {
-      flex: 0 0 140px;
+      flex: 1 1 110px;
       min-width: 0;
     }
 
@@ -674,7 +653,8 @@
       display: none;
     }
 
-    /* Current-tags rows — read-only widget shape with desired-state overlay */
+    /* Current-tags rows — read-only widget shape; affordances load
+       pre-filled proposal widgets */
     .cur-current-tag {
       display: flex;
       align-items: center;
@@ -686,23 +666,11 @@
     .cur-current-tag-ext {
       border-left-color: var(--term-accent, #E07A47);
     }
-    .cur-current-tag-removed .cur-current-tag-name,
-    .cur-current-tag-removed .cur-current-tag-value {
-      text-decoration: line-through;
-      opacity: 0.6;
-    }
-    .cur-current-tag-changed {
-      background: rgba(212, 166, 55, 0.08);
-    }
-    .cur-current-tag-added {
-      background: rgba(224, 122, 71, 0.08);
-    }
     .cur-current-tag-name { flex: 0 0 120px; min-width: 0; }
     .cur-current-tag-value { flex: 1 1 auto; min-width: 60px; }
-    .cur-current-tag-status {
-      font-size: 10px;
-      text-transform: uppercase;
-      color: var(--term-text-dim, #999);
+    .cur-current-tag-name,
+    .cur-current-tag-value {
+      cursor: pointer;
     }
     .cur-current-tag-ext-file {
       font-size: 10px;
@@ -711,63 +679,6 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       max-width: 180px;
-    }
-
-    /* Find Connections panel */
-    .cur-conn-panel {
-      flex-shrink: 0;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--term-border, #222);
-      background: var(--term-bg-alt, #111);
-    }
-    .cur-conn-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-    .cur-conn-title {
-      font-weight: 600;
-    }
-    .cur-conn-status {
-      flex: 1;
-      color: var(--term-text-dim, #999);
-      font-size: 11px;
-    }
-    .cur-conn-section-header {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--term-text-dim, #999);
-      margin: 4px 0;
-    }
-    .cur-conn-theme {
-      padding: 4px 0;
-      border-bottom: 1px dashed var(--term-border, #222);
-    }
-    .cur-conn-theme-text {
-      font-size: 12px;
-    }
-    .cur-conn-theme-evidence,
-    .cur-conn-shared {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      font-size: 11px;
-      color: var(--term-text-dim, #999);
-      padding: 2px 0;
-    }
-    .cur-conn-shared-label {
-      flex: 1;
-      color: var(--term-text, #e0e0e8);
-      font-weight: 500;
-    }
-    .cur-conn-evidence-label {
-      text-transform: uppercase;
-      font-size: 10px;
-    }
-    .cur-conn-evidence-list {
-      font-variant-numeric: tabular-nums;
     }
 
     /* Editing-card visual cue */

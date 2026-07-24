@@ -22,7 +22,6 @@ local TOP_CHUNKS_K = 12
 local RELATED_TAGS_K = 8
 
 local SWEEP_DOC_PATH = "tmp://sweep/hot-correlations.md"
-local CONNECTIONS_DOC_PREFIX = "tmp://connections/"
 
 local function nowSeconds()
     return os.time()
@@ -30,6 +29,11 @@ end
 
 local function fmtScore(s)
     return string.format("%.2f", s or 0)
+end
+
+-- Trim leading/trailing ASCII whitespace.
+local function trim(s)
+    return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 -- JSON decoder bound at module load. Frictionless ships rxi/json
@@ -42,14 +46,10 @@ jsonDecode = function(s)
     if not ok then return {} end
     return result
 end
-jsonEncode = function(v)
-    local ok, result = pcall(json_lib.encode, v)
-    if not ok then return "[]" end
-    return result
-end
 
--- Fold helpers for applyPendingsToText. Operate on string-as-bytes;
--- no UTF-8 awareness needed (tag lines are ASCII).
+-- Tag-line text transforms. Operate on string-as-bytes; no UTF-8
+-- awareness needed (tag lines are ASCII). These feed the approval
+-- shims' internal-disposition write paths below.
 
 -- Return the byte range [a, b) of the line beginning with `@tag:`
 -- (case-sensitive) in `text`. Matches only the leading tag block —
@@ -104,6 +104,70 @@ function prependTag(text, tag, value)
 end
 
 ----------------------------------------------------------------------
+-- Approval shims — the ext-candidate machinery's Lua face
+----------------------------------------------------------------------
+-- @prototype: go-ext-hooks
+-- Shims for the future Go bindings (PENDING #65), named and shaped
+-- like the bindings the /mini-spec pass will register on `mcp`:
+--   mcp.extAccept(target, tag, value, opts) → result, err
+--   mcp.extRemove(target, tag, opts)        → result, err
+-- One call = one-shot candidate+accept (the loaded gun). `opts`
+-- carries {disposition, replace} (accept) or {disposition} (remove).
+-- `result` is {disposition = <actually applied>} so callers can be
+-- honest about what happened. Target shapes:
+--   external: TARGET spec string (BASE or BASE:NARROWER)
+--   internal: {path, byteStart, byteEnd, text} — shim-only; the
+--             real hook resolves a spec server-side.
+-- The implementations ride the old primitives (setExtTag /
+-- removeExtTag / replaceRegion) with the markdown stencil only
+-- (per-chunker stencils are the real hook's job). The machinery's
+-- ledger trail (candidate line, @count, judgment) DOES NOT exist on
+-- this path — no caller may claim it does.
+
+local function extAccept(target, tag, value, opts)
+    opts = opts or {}
+    if (opts.disposition or "external") == "external" then
+        -- setExtTag's set semantics approximate both the add and
+        -- replace cells of the external disposition.
+        local _, err = mcp.setExtTag(target, tag, value or "")
+        if err then return nil, err end
+        return { disposition = "external" }, nil
+    end
+    -- internal: text transform + replaceRegion (markdown stencil).
+    local text = target.text or ""
+    local newText
+    if opts.replace and findTagLine(text, tag) then
+        newText = replaceTagLine(text, tag, value or "")
+    else
+        -- add, or replace degrading to add (no matching line).
+        newText = prependTag(text, tag, value or "")
+    end
+    local _, err = mcp.replaceRegion(target.path, target.byteStart,
+        target.byteEnd, newText)
+    if err then return nil, err end
+    return { disposition = "internal" }, nil
+end
+
+local function extRemove(target, tag, opts)
+    opts = opts or {}
+    if (opts.disposition or "external") == "external" then
+        local _, err = mcp.removeExtTag(target, tag)
+        if err then return nil, err end
+        return { disposition = "external" }, nil
+    end
+    -- internal remove: the machinery has no verb for this yet (the
+    -- internal-remove gap); the shim edits the text directly.
+    local text = target.text or ""
+    if not findTagLine(text, tag) then
+        return nil, "no inline @" .. tag .. ": line in this chunk"
+    end
+    local _, err = mcp.replaceRegion(target.path, target.byteStart,
+        target.byteEnd, removeTagLine(text, tag))
+    if err then return nil, err end
+    return { disposition = "internal" }, nil
+end
+
+----------------------------------------------------------------------
 -- Prototypes
 ----------------------------------------------------------------------
 
@@ -128,17 +192,6 @@ Ark.Curation = session:prototype("Ark.Curation", {
     -- mcp.definedTags(). Each entry is { tag = "...", description = "..." }.
     _definedTags = EMPTY,
     _definedTagsLoaded = false,
-    -- Find Connections orchestration. Set when findConnections() is in
-    -- flight; cleared on dismiss or new request.
-    _connRequestID = "",
-    _connStatus = "",
-    _connProgress = "",
-    _connElapsed = 0,
-    _connError = "",
-    _connThemes = EMPTY,
-    _connSharedTags = EMPTY,
-    -- Accept warning dialog visibility (M > 0 pending pendings).
-    _acceptWarnVisible = false,
     -- Presenter registry: chunkID -> Ark.PinnedChunk. Lets us reach a
     -- card's per-card state (widget stack, edit-mode flags) without
     -- walking the ViewList. Cleared on dismiss; entries for sweept-
@@ -149,9 +202,8 @@ Curation = Ark.Curation
 
 -- Presenter (itemWrapper) for each entry in sys.curation.pinned.
 -- See ~/.ark/patterns/itemwrapper-presenters.md (or `ark ui patterns`).
--- The presenter carries the per-card workshop state: pending widget
--- stack, staged-ops buffer (ready for Accept), lazy chunkInfo, lazy
--- tag suggestions.
+-- The presenter carries the per-card workshop state: proposal widget
+-- stack, lazy chunkInfo, lazy tag suggestions, edit-mode state.
 Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
     viewItem = EMPTY,
     -- Bridge-fire nonce. Bump whenever the iframe or editor bridge
@@ -159,8 +211,9 @@ Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
     -- emitted string so the engine's change-detection sees a fresh
     -- value and re-evaluates ui-code.
     _bridgeNonce = 0,
-    -- Widget stack (empty-start invariant: always at least one widget
-    -- when not in edit mode; hidden during edit mode).
+    -- Proposal widget stack (empty-start invariant: always at least
+    -- one widget). Independent of edit mode — tag authoring and
+    -- content editing are separate paths.
     _widgets = EMPTY,
     -- Lazy chunkInfo (mcp.chunkInfo): {chunkID, fileID, path, range,
     -- byteStart, byteEnd, writable, commentSyntax}
@@ -172,37 +225,25 @@ Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
     _chunkText = "",
     _chunkTextLoaded = false,
     _chunkTextError = "",
-    -- Edit-mode state.
+    -- Edit-mode state (content edits only — no tag authoring here).
     _editing = false,
     _chunkOriginalText = "",      -- snapshot at [edit] time; dirty check
     _isChunkEdited = false,        -- JS-pushed: editor.getDoc() != original
-    _savedPendings = EMPTY,        -- inline widgets folded at [edit]; restored on [revert]
     _savedEditorText = "",         -- editor draft preserved at [revert]; consumed by next [edit]
+    _editorInitialText = "",       -- doc the editor opens on (draft or original); published to JS
     _editorContent = "",           -- JS-synced editor text. Read by Accept.
-    -- Editor command queue. Each entry is a structured table like
-    --   {kind="replace-tag-line", name, occurrence, newName, newValue}
-    --   {kind="remove-tag-line",  name, occurrence}
-    --   {kind="insert-tag",       name, value}
-    -- Drained by the editor bridge JS on each fire; cleared by Lua
-    -- once dispatched. Used to apply current-tags row edits as CM6
-    -- transactions that are individually undoable.
-    _pendingEditorCmds = EMPTY,
     -- currentTagsView() result cache. Keyed by a signature of the
-    -- inputs (editor content + ext-tag list + widget list). When the
-    -- signature is unchanged across calls, the cached row list is
-    -- returned verbatim — preserving Lua identity for ViewList so
-    -- DOM presenters are reused.
+    -- inputs (chunk text + ext-tag list). When the signature is
+    -- unchanged across calls, the cached row list is returned
+    -- verbatim — preserving Lua identity for ViewList so DOM
+    -- presenters are reused.
     _currentTagsViewSig = "",
     _currentTagsViewRows = EMPTY,
     -- Per-row reuse table: key = `kind:name:occurrence` →
     -- Ark.CurrentTagRow. Even when the signature changes (text
     -- updated), rows with matching keys are reused; only their
-    -- text-derived fields update. The row's _lastSyncedValue
-    -- determines whether re-derivation may overwrite value (no
-    -- overwrite if user has typed since last sync — preserves the
-    -- in-progress edit through cycles).
+    -- text-derived fields update.
     _currentTagRowCache = EMPTY,
-    _foldedText = "",              -- pre-computed fold result; published to JS via hidden span
     -- Ext-tag cache: scraped from iframe's <ark-ext-tags> children on
     -- load. Persists across edit-mode transitions so current-tags
     -- continues to surface ext rows without the iframe.
@@ -212,7 +253,6 @@ Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
     -- mid-chunk @name: value tags that ParseTagBlock misses (it only
     -- handles the leading-block tags).
     _inlineScrapedTags = EMPTY,
-    _extTagsLoaded = false,
     -- Lazy tag suggestions (mcp.suggestTagNames) — surfaces under the
     -- "tag scores" collapsible.
     _suggestions = EMPTY,
@@ -225,20 +265,31 @@ Ark.PinnedChunk = session:prototype("Ark.PinnedChunk", {
 })
 PinnedChunk = Ark.PinnedChunk
 
--- One pending tag operation in a PinnedChunk's widget stack. Each
--- widget authors a single (tag, value) pair against the parent
--- chunk: add/change (default) or remove (when removeMode); inline
--- text edit (default) or routed via @ext mirror (when extMode).
-Ark.PendingWidget = session:prototype("Ark.PendingWidget", {
+-- A loaded gun in a PinnedChunk's widget stack (renamed from
+-- Ark.PendingWidget — nothing is pending anymore). Each widget
+-- authors one tag operation against the parent chunk — add/replace
+-- (default) or remove (when removeMode); written into the file body
+-- (internal disposition) or routed via @ext mirror (external) — and
+-- fires it in one gesture through the approval shims.
+Ark.ProposalWidget = session:prototype("Ark.ProposalWidget", {
     _chunk = EMPTY,                -- parent Ark.PinnedChunk
     tagName = "",
     tagValue = "",
     removeMode = false,
-    extMode = false,
-    -- Ext-mode fields, populated on first toggleExt() via
-    -- mcp.suggestExtLocator. The widget reads `locatorText` from the
-    -- Go result (`locator` field has a known bug — same value as
-    -- locatorKind; tracked as a /mini-spec follow-up).
+    -- The machinery's disposition taxonomy. Defaults internal for
+    -- writable chunks; locked external when the chunk can't host an
+    -- inline tag (the degrade, surfaced as a default).
+    disposition = "internal",      -- "internal" | "external"
+    -- The machinery's replace token: collapse the tag's values to
+    -- this one instead of adding. Pre-set true when the tag already
+    -- exists on the chunk (visible default, not a hidden rule).
+    replaceMode = false,
+    _fireError = "",               -- last fire error; widget keeps state for retry
+    -- External-targeting fields, populated on first switch to
+    -- external via mcp.suggestExtLocator. The widget reads
+    -- `locatorText` from the Go result (`locator` field has a known
+    -- bug — same value as locatorKind; tracked as a /mini-spec
+    -- follow-up).
     extBase = "",                  -- "uuid" | "path"
     extBaseValue = "",             -- UUID string or absolute path
     extLocatorKind = "",           -- "string" | "regex" | "absolute" | "bare"
@@ -248,7 +299,7 @@ Ark.PendingWidget = session:prototype("Ark.PendingWidget", {
     _withinFileDupCount = 0,
     _extLoaded = false,            -- true after first suggestExtLocator
 })
-PendingWidget = Ark.PendingWidget
+ProposalWidget = Ark.ProposalWidget
 
 Ark.TagSuggestion = session:prototype("Ark.TagSuggestion", {
     tag = "",
@@ -286,43 +337,23 @@ Ark.DefinedTag = session:prototype("Ark.DefinedTag", {
 })
 DefinedTag = Ark.DefinedTag
 
--- Current-tags row: desired-state view of a single tag on a pinned
--- chunk. Inline rows (from mcp.parseTagBlock of the chunk text) and
--- ext rows (from the iframe <ark-ext-tags> scrape) render with the
--- same shape. status carries the pending-op overlay: "" (no pending),
--- "added", "changed", "removed".
+-- Current-tags row: a read-only view of a single tag on a pinned
+-- chunk, as it stands on disk. Inline rows (parsed/scraped from the
+-- chunk text) and ext rows (from the iframe <ark-ext-tags> scrape)
+-- render with the same shape. The row's affordances (rem checkbox,
+-- row click) load pre-filled widgets into the proposal stack; the
+-- row itself never fires anything.
 Ark.CurrentTagRow = session:prototype("Ark.CurrentTagRow", {
     name = "",
     value = "",
     kind = "inline",          -- "inline" | "ext"
-    -- Plain boolean mirroring `kind == "ext"`. Bound to the
-    -- sl-checkbox via `ui-value`, which the engine sets and reads
-    -- as a true boolean — no presence-attribute ambiguity. Synced
-    -- from kind in reuseOrCreate; user clicks fire `setExtToggle`
-    -- which routes through toggleExt's transition logic.
-    extChecked = false,
     -- 1-based ordinal of this (name) among same-name occurrences in
-    -- the chunk text. The Nth row with name=X corresponds to the
-    -- Nth `@X:` line in the editor. Lets us route per-row edits to
-    -- the exact line when multiple tags share a name.
+    -- the chunk text. Keeps the reuse-cache key unique when multiple
+    -- tags share a name.
     occurrence = 1,
     externalfile = "",        -- ext only: mirror file path
     externaltarget = "",      -- ext only: TARGET spec
-    status = "",              -- "" | "added" | "changed" | "removed"
-    -- Last value this row pushed to the editor (or saw from text on
-    -- creation). `value` is updated by ui-value writeback on every
-    -- keystroke; `_lastSyncedValue` is updated when we apply the
-    -- edit. The two diverge while the user is typing — that
-    -- divergence drives onValueChange's incremental-search style
-    -- pump.
-    _lastSyncedValue = "",
-    -- Focus state of the value input. Set by sl-focus / sl-blur
-    -- handlers. While true, re-derivation skips value overwrites
-    -- (preserving the user's in-progress cursor + typing). Once
-    -- false, external CM6 changes (like Ctrl-Z undo) flow back
-    -- into the row.
-    _inputHasFocus = false,
-    _chunk = EMPTY,           -- back-reference for edit-mode mutations
+    _chunk = EMPTY,           -- back-reference for widget loading
 })
 CurrentTagRow = Ark.CurrentTagRow
 
@@ -334,31 +365,8 @@ Ark.ExtTagRow = session:prototype("Ark.ExtTagRow", {
     value = "",
     externalfile = "",
     externaltarget = "",
-    -- True when the user has converted this ext entry to inline.
-    -- The row vanishes from the current-tags display while hidden;
-    -- re-toggling ext on the now-inline row restores it.
-    _hidden = false,
 })
 ExtTagRow = Ark.ExtTagRow
-
--- Theme proposal from the ark-connections sidecar. Rendered in the
--- Find Connections panel.
-Ark.ConnectionTheme = session:prototype("Ark.ConnectionTheme", {
-    text = "",
-    evidence = EMPTY,         -- chunk ID list
-})
-ConnectionTheme = Ark.ConnectionTheme
-
--- Shared-tag candidate from the sidecar. Each row has a [Fill]
--- button that injects pre-filled pending widgets into evidence chunks.
-Ark.ConnectionSharedTag = session:prototype("Ark.ConnectionSharedTag", {
-    tag = "",
-    value = "",
-    evidence = EMPTY,         -- chunk ID list
-    _curation = EMPTY,        -- back-reference for fill action
-    _index = 0,               -- index in _connSharedTags (for fillProposal)
-})
-ConnectionSharedTag = Ark.ConnectionSharedTag
 
 ----------------------------------------------------------------------
 -- Curation methods
@@ -388,8 +396,7 @@ end
 -- ViewList presenters survive when the filter narrows.
 function Curation:filteredDefinedTags()
     self:loadDefinedTags()
-    local raw = self._focusInput or ""
-    local filter = raw:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    local filter = trim(self._focusInput):lower()
     local src = self._definedTags or {}
     if filter == "" then return src end
     local out = {}
@@ -458,8 +465,7 @@ end
 -- Tag focus ---------------------------------------------------------
 
 function Curation:focusTagFromInput()
-    local tag = self._focusInput or ""
-    tag = tag:gsub("^%s+", ""):gsub("%s+$", "")
+    local tag = trim(self._focusInput)
     if tag == "" then return end
     self:focusTag(tag)
 end
@@ -644,7 +650,6 @@ function PinnedChunk:new(listItem)
         _chunkInfo = {},
         _suggestions = {},
         _extTags = {},
-        _savedPendings = {},
         -- Start at 1 (not 0) so the iframe bridge's first emitted JS
         -- string already carries a non-default nonce. Initial-fire
         -- semantics for ui-code only run when the stored value is
@@ -653,7 +658,7 @@ function PinnedChunk:new(listItem)
         _bridgeNonce = 1,
     })
     -- Empty-start invariant: always at least one empty widget visible.
-    table.insert(p._widgets, PendingWidget:new(p))
+    table.insert(p._widgets, ProposalWidget:new(p))
     -- Register with the parent Curation so pendingCount/editedCount can
     -- find us.
     if ark and ark._curation then
@@ -794,32 +799,22 @@ end
 
 -- Empty-start invariant: the widget stack always shows at least one
 -- (empty) widget so the user has somewhere to type. Called wherever
--- the stack might have just gone empty. No-op in edit mode (stack
--- hidden anyway).
+-- the stack might have just gone empty.
 function PinnedChunk:_ensureEmptyWidget()
-    if self._editing then return end
     if #self._widgets == 0 then
-        table.insert(self._widgets, PendingWidget:new(self))
+        table.insert(self._widgets, ProposalWidget:new(self))
     end
 end
 
--- Returns the widget stack. Empty during edit mode (the editor is the
--- active authoring surface; pendings hide).
+-- Returns the widget stack. Visible in all states — tag authoring is
+-- independent of edit mode.
 function PinnedChunk:widgets()
-    if self._editing then return {} end
     self:_ensureEmptyWidget()
     return self._widgets
 end
 
--- True during edit mode (stack hidden); used by ui-class-hidden on
--- the pending-widget stack.
-function PinnedChunk:hideWidgets()
-    return self._editing
-end
-
 function PinnedChunk:addWidget()
-    if self._editing then return end
-    table.insert(self._widgets, PendingWidget:new(self))
+    table.insert(self._widgets, ProposalWidget:new(self))
 end
 
 -- Spreadsheet-like tab handling. When the [+] button receives
@@ -830,7 +825,6 @@ end
 -- browser tab focus would skip past the (newly-inserted) widget
 -- since it's earlier in DOM than the just-focused [+].
 function PinnedChunk:onPlusFocused()
-    if self._editing then return end
     -- Capture the widget count BEFORE the add so the JS can poll
     -- until the engine has pushed the new DOM element. Without
     -- this we'd focus the previous-last input (which is what was
@@ -905,26 +899,6 @@ function PinnedChunk:filledWidgetCount()
     return n
 end
 
-function PinnedChunk:filledInlineWidgets()
-    local out = {}
-    for _, w in ipairs(self._widgets) do
-        if w:isFilled() and not w.extMode then
-            table.insert(out, w)
-        end
-    end
-    return out
-end
-
-function PinnedChunk:filledExtWidgets()
-    local out = {}
-    for _, w in ipairs(self._widgets) do
-        if w:isFilled() and w.extMode then
-            table.insert(out, w)
-        end
-    end
-    return out
-end
-
 function PinnedChunk:pendingCount()
     return self:filledWidgetCount()
 end
@@ -933,14 +907,103 @@ function PinnedChunk:noPending()
     return self:pendingCount() == 0
 end
 
--- True when the chunk contributes to Accept(N): edited OR has filled
--- pending widgets. Drives the icon color cue.
+-- True when dismissing would lose work: unsaved editor changes or
+-- filled (unfired) proposal widgets. Guards the dismiss confirmation
+-- and Clear unchanged.
 function PinnedChunk:hasChanges()
     return self._isChunkEdited or self:filledWidgetCount() > 0
 end
 
 function PinnedChunk:noChanges()
     return not self:hasChanges()
+end
+
+-- Fire path ---------------------------------------------------------
+
+-- Fire one proposal widget through the approval shims (one-shot
+-- candidate+accept). On success the widget leaves the stack and the
+-- card's tag data refreshes; on error the widget keeps its state for
+-- retry. Internal targets are re-fetched fresh at fire time — the
+-- chunk's byte range shifts after every write. (Shim limitation: a
+-- fire racing the async reindex of a just-fired write can still see
+-- a stale range; the real Go hook resolves targets server-side.)
+function PinnedChunk:fireWidget(widget)
+    if not widget:isFilled() then return end
+    widget._fireError = ""
+    local tag = widget:trimmedTag()
+    local disposition = widget:effectiveDisposition()
+    local result, err
+    if disposition == "external" then
+        if not widget._extLoaded then widget:_loadExtSuggestion() end
+        local target = widget:targetSpec()
+        if widget.removeMode then
+            result, err = extRemove(target, tag, { disposition = "external" })
+        else
+            result, err = extAccept(target, tag, widget.tagValue,
+                { disposition = "external", replace = widget.replaceMode })
+        end
+    else
+        -- Fresh info + text: byte ranges go stale after any write.
+        self._chunkInfoLoaded = false
+        self._chunkTextLoaded = false
+        local info = self:chunkInfo()
+        if self._chunkInfoError ~= "" then
+            widget._fireError = "chunkInfo: " .. self._chunkInfoError
+            return
+        end
+        local target = {
+            path = (info and info.path) or self:path(),
+            byteStart = tonumber((info and info.byteStart) or 0) or 0,
+            byteEnd = tonumber((info and info.byteEnd) or 0) or 0,
+            text = self:chunkText() or "",
+        }
+        if widget.removeMode then
+            result, err = extRemove(target, tag, { disposition = "internal" })
+        else
+            result, err = extAccept(target, tag, widget.tagValue,
+                { disposition = "internal", replace = widget.replaceMode })
+        end
+    end
+    if err then
+        widget._fireError = tostring(err)
+        return
+    end
+    -- Honest feedback: say what actually happened. The shims write
+    -- no candidate ledger — never claim one.
+    local verb = widget.removeMode and "removed" or "applied"
+    local how = (result and result.disposition == "external")
+        and "routed via @ext mirror" or "written into the file"
+    mcp:notify(string.format("@%s %s — %s", tag, verb, how), "success")
+    self:removeWidget(widget)
+    self:refreshTags()
+end
+
+-- Post-fire refresh: drop the text/info/scrape caches and reload the
+-- iframe so the rendered chunk, ext-tag indicator, and current-tags
+-- rows all reflect the just-written state.
+function PinnedChunk:refreshTags()
+    self._chunkTextLoaded = false
+    self._chunkText = ""
+    self._chunkInfoLoaded = false
+    -- Drop the stale scrape and force currentTagsView to re-derive —
+    -- the signature alone can miss a same-shape change (e.g. an
+    -- internal remove leaves the ext count and text prefix intact).
+    self._inlineScrapedTags = {}
+    self._currentTagsViewSig = ""
+    self:bumpBridgeNonce()
+    local cid = self:chunkID()
+    mcp.code = string.format([[
+// cur-refresh-%d-%d
+(function() {
+    const root = document.querySelector('[data-cur-chunkid="%d"]');
+    if (!root) return;
+    const iframe = root.querySelector('.cur-pin-iframe');
+    if (iframe) {
+        delete iframe.dataset.armed;
+        try { iframe.contentWindow.location.reload(); } catch (e) {}
+    }
+})();
+]], cid, self._bridgeNonce or 0, cid)
 end
 
 -- Icon for the [edit|revert] button. pencil-square when not in edit
@@ -950,11 +1013,11 @@ function PinnedChunk:editButtonIcon()
     return "pencil-square"
 end
 
--- True when the icon should render in accent color (chunk has
--- changes); false for the gray clean state. Both states use the same
--- icon glyph; only the color differs.
+-- True when the icon should render in accent color (the editor holds
+-- unsaved changes); false for the gray clean state. Both states use
+-- the same icon glyph; only the color differs.
 function PinnedChunk:editButtonAccent()
-    return self:hasChanges()
+    return self._isChunkEdited
 end
 
 function PinnedChunk:notEditing()
@@ -968,7 +1031,7 @@ end
 -- Public accessors for fields that are private (underscore prefix)
 -- but need to surface to viewdef bindings or JS bridge.
 function PinnedChunk:chunkOriginalText() return self._chunkOriginalText or "" end
-function PinnedChunk:foldedText()        return self._foldedText or "" end
+function PinnedChunk:editorInitialText() return self._editorInitialText or "" end
 
 -- JS-side setter shims. ui-value bindings on hidden inputs invoke
 -- these when the JS bridge calls updateValue.
@@ -1009,18 +1072,15 @@ end
 -- carries the editing flag. Idempotent via dataset.armed guards.
 --
 -- Two branches:
---   editing: import /ark-markdown-editor.js, mount createInkArkEditor,
---            dispatch the fold transition, start polling for
---            dirty/content sync back to Lua via updateValue.
+--   editing: import /ark-markdown-editor.js, mount createInkArkEditor
+--            on the initial doc (original or preserved draft), start
+--            polling for dirty/content sync back to Lua via
+--            updateValue. No fold pass — tag operations never enter
+--            the editor.
 --   not editing: destroy any prior editor instance, clear poller.
 function PinnedChunk:editorBridgeCode()
     local cid = self:chunkID()
     if self._editing then
-        -- Encode the pending command queue. The bridge JS ack-drains
-        -- via ackEditorCmds() after applying; we don't clear here
-        -- (the engine may evaluate this method multiple times per
-        -- scan cycle and we'd lose commands queued between evals).
-        local cmdsJSON = jsonEncode(self._pendingEditorCmds or {})
         return string.format([[
 // editor-bridge-mount-%d-%d
 (async function() {
@@ -1028,146 +1088,72 @@ function PinnedChunk:editorBridgeCode()
     if (!root) return;
     const editorBlock = root.querySelector('.cur-pin-chunk-editor');
     if (!editorBlock) return;
-    const cmds = %s;
-
-    // Apply each command as a single CM6 transaction so undo
-    // (Ctrl-Z) reverts one logical edit at a time. After applying,
-    // ack the count to Lua so the queue can drain.
-    function applyCmds(editor) {
-        if (!cmds || cmds.length === 0) return;
-        if (editor) {
-            const doc = editor.getDoc ? editor.getDoc() : '';
-            let cur = doc;
-            for (const cmd of cmds) {
-                cur = applyOne(cur, cmd);
-            }
-            if (cur !== doc && editor.update) {
-                editor.update(cur);
-            }
-        }
-        const ackInput = editorBlock.querySelector('.cur-pin-editor-ack-input');
-        if (ackInput) {
-            window.uiApp.updateValue(ackInput.id, String(cmds.length));
-        }
-    }
-    function applyOne(text, cmd) {
-        if (cmd.kind === 'replace-tag-line') {
-            return replaceNthTagLine(text, cmd.name, cmd.occurrence, cmd.newName, cmd.newValue);
-        }
-        if (cmd.kind === 'remove-tag-line') {
-            return removeNthTagLine(text, cmd.name, cmd.occurrence);
-        }
-        if (cmd.kind === 'insert-tag') {
-            return insertTagAtTop(text, cmd.name, cmd.value);
-        }
-        return text;
-    }
-    function nthTagLineRange(text, name, occurrence) {
-        const prefix = '@' + name + ':';
-        let pos = 0;
-        let n = 0;
-        while (pos < text.length) {
-            const nl = text.indexOf('\n', pos);
-            const lineEnd = nl < 0 ? text.length : nl;
-            const line = text.slice(pos, lineEnd);
-            if (line.trimStart().startsWith(prefix)) {
-                n++;
-                if (n === occurrence) {
-                    return { start: pos, end: nl < 0 ? text.length : nl + 1 };
-                }
-            }
-            if (nl < 0) break;
-            pos = nl + 1;
-        }
-        return null;
-    }
-    function replaceNthTagLine(text, name, occurrence, newName, newValue) {
-        const r = nthTagLineRange(text, name, occurrence);
-        if (!r) return text;
-        const repl = '@' + newName + ': ' + newValue + '\n';
-        return text.slice(0, r.start) + repl + text.slice(r.end);
-    }
-    function removeNthTagLine(text, name, occurrence) {
-        const r = nthTagLineRange(text, name, occurrence);
-        if (!r) return text;
-        return text.slice(0, r.start) + text.slice(r.end);
-    }
-    function insertTagAtTop(text, name, value) {
-        return '@' + name + ': ' + value + '\n' + text;
-    }
-
-    // First-mount branch: build the editor.
-    if (root.dataset.editorArmed !== '1') {
-        root.dataset.editorArmed = '1';
-        const mount  = editorBlock.querySelector('.cur-pin-editor-mount');
-        const origEl = editorBlock.querySelector('.cur-pin-editor-orig');
-        const foldEl = editorBlock.querySelector('.cur-pin-editor-fold');
-        const pathEl = editorBlock.querySelector('.cur-pin-editor-path');
-        const dirtyInput   = editorBlock.querySelector('.cur-pin-editor-dirty-input');
-        const contentInput = editorBlock.querySelector('.cur-pin-editor-content-input');
-        if (!mount || !origEl || !foldEl || !pathEl) return;
-        const original = origEl.textContent || '';
-        const folded   = foldEl.textContent || '';
-        const path     = pathEl.textContent || '';
-        while (mount.firstChild) mount.removeChild(mount.firstChild);
-        let editor;
-        try {
-            const mod = await import('/ark-markdown-editor.js');
-            editor = await mod.createInkArkEditor({
-                parent: mount,
-                doc: original,
-                path: path,
-                api: {
-                    save: (_p, content) => {
-                        if (contentInput) {
-                            window.uiApp.updateValue(contentInput.id, content);
-                        }
-                    },
-                    search: () => Promise.resolve([]),
+    if (root.dataset.editorArmed === '1') return;
+    root.dataset.editorArmed = '1';
+    const mount  = editorBlock.querySelector('.cur-pin-editor-mount');
+    const origEl = editorBlock.querySelector('.cur-pin-editor-orig');
+    const initEl = editorBlock.querySelector('.cur-pin-editor-initial');
+    const pathEl = editorBlock.querySelector('.cur-pin-editor-path');
+    const dirtyInput   = editorBlock.querySelector('.cur-pin-editor-dirty-input');
+    const contentInput = editorBlock.querySelector('.cur-pin-editor-content-input');
+    if (!mount || !origEl || !initEl || !pathEl) return;
+    const original = origEl.textContent || '';
+    const initial  = initEl.textContent || '';
+    const path     = pathEl.textContent || '';
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    let editor;
+    try {
+        const mod = await import('/ark-markdown-editor.js');
+        editor = await mod.createInkArkEditor({
+            parent: mount,
+            doc: original,
+            path: path,
+            api: {
+                save: (_p, content) => {
+                    if (contentInput) {
+                        window.uiApp.updateValue(contentInput.id, content);
+                    }
                 },
-            });
-        } catch (e) {
-            console.error('cur-pin editor mount failed', e);
+                search: () => Promise.resolve([]),
+            },
+        });
+    } catch (e) {
+        console.error('cur-pin editor mount failed', e);
+        return;
+    }
+    if (initial !== original && editor && editor.update) {
+        editor.update(initial);
+    }
+    window['__curEditor_%d'] = editor;
+    // Poll for changes every 400ms. Only push to Lua when the
+    // value has actually changed — otherwise we flood the
+    // message channel.
+    let lastContent = original;
+    let lastDirty = null;
+    const poller = setInterval(() => {
+        const e = window['__curEditor_%d'];
+        if (!e || typeof e.getDoc !== 'function') {
+            clearInterval(poller);
             return;
         }
-        if (folded !== original && editor && editor.update) {
-            editor.update(folded);
+        const cur = e.getDoc();
+        if (cur !== lastContent) {
+            lastContent = cur;
+            if (contentInput) {
+                window.uiApp.updateValue(contentInput.id, cur);
+            }
         }
-        window['__curEditor_%d'] = editor;
-        applyCmds(editor);
-        // Poll for changes every 400ms. Only push to Lua when the
-        // value has actually changed — otherwise we flood the
-        // message channel.
-        let lastContent = original;
-        let lastDirty = null;
-        const poller = setInterval(() => {
-            const e = window['__curEditor_%d'];
-            if (!e || typeof e.getDoc !== 'function') {
-                clearInterval(poller);
-                return;
+        const dirty = (cur !== original) ? 'true' : 'false';
+        if (dirty !== lastDirty) {
+            lastDirty = dirty;
+            if (dirtyInput) {
+                window.uiApp.updateValue(dirtyInput.id, dirty);
             }
-            const cur = e.getDoc();
-            if (cur !== lastContent) {
-                lastContent = cur;
-                if (contentInput) {
-                    window.uiApp.updateValue(contentInput.id, cur);
-                }
-            }
-            const dirty = (cur !== original) ? 'true' : 'false';
-            if (dirty !== lastDirty) {
-                lastDirty = dirty;
-                if (dirtyInput) {
-                    window.uiApp.updateValue(dirtyInput.id, dirty);
-                }
-            }
-        }, 400);
-        window['__curPoller_%d'] = poller;
-    } else {
-        // Subsequent fire — just drain commands against the live editor.
-        applyCmds(window['__curEditor_%d']);
-    }
+        }
+    }, 400);
+    window['__curPoller_%d'] = poller;
 })();
-]], cid, self._bridgeNonce or 0, cid, cmdsJSON, cid, cid, cid, cid)
+]], cid, self._bridgeNonce or 0, cid, cid, cid, cid)
     end
     return string.format([[
 // editor-bridge-destroy-%d-%d
@@ -1189,33 +1175,6 @@ end
 -- so the engine's change detection sees a new value.
 function PinnedChunk:bumpBridgeNonce()
     self._bridgeNonce = (self._bridgeNonce or 0) + 1
-end
-
--- Queue an editor command (a structured table). The bridge JS will
--- consume the queue on its next fire, applying each command as a
--- single CM6 transaction so each is individually undoable.
-function PinnedChunk:queueEditorCmd(cmd)
-    if type(self._pendingEditorCmds) ~= "table" then
-        self._pendingEditorCmds = {}
-    end
-    table.insert(self._pendingEditorCmds, cmd)
-    self:bumpBridgeNonce()
-end
-
--- JS ack callback. The bridge JS calls this after applying N
--- commands; Lua drops the first N entries from the queue. We can't
--- clear inside editorBridgeCode itself because the engine may
--- evaluate that method multiple times per change cycle and would
--- lose commands queued between evals.
-function PinnedChunk:ackEditorCmds(count)
-    local n = tonumber(count) or 0
-    if n <= 0 then return end
-    if type(self._pendingEditorCmds) ~= "table" then return end
-    local remaining = {}
-    for i = n + 1, #self._pendingEditorCmds do
-        table.insert(remaining, self._pendingEditorCmds[i])
-    end
-    self._pendingEditorCmds = remaining
 end
 
 -- iframeBridgeCode emits the JS that runs on the read-only iframe:
@@ -1370,226 +1329,49 @@ function PinnedChunk:iframeURL()
 end
 
 -- Edit / Revert ---------------------------------------------------
+-- Content edits only: tag authoring fires through the approval
+-- shims and never touches the editor.
 
--- [edit] click handler.
--- 1. Snapshot _chunkOriginalText and _savedPendings.
--- 2. Compute foldedText from filled inline widgets.
--- 3. Clear folded inline widgets from the stack (ext widgets stay).
--- 4. Set _editing = true. The JS bridge mounts CM6 with initial doc =
---    _savedEditorText (consumed if present) else _chunkOriginalText,
---    then dispatches one transaction to apply the fold.
+-- [edit] click handler. Snapshot the original, pick the initial doc
+-- (a preserved draft from a prior [revert], else the original), and
+-- let the JS bridge mount CM6.
 function PinnedChunk:edit()
     if self._editing then return end
     if self:readOnly() then return end
     self:loadChunkText()
     self._chunkOriginalText = self._chunkText or ""
-    -- Snapshot inline pendings for restore on [revert].
-    local inlines = self:filledInlineWidgets()
-    self._savedPendings = {}
-    for _, w in ipairs(inlines) do
-        table.insert(self._savedPendings, {
-            tagName = w.tagName,
-            tagValue = w.tagValue,
-            removeMode = w.removeMode,
-        })
+    if self._savedEditorText ~= "" then
+        self._editorInitialText = self._savedEditorText
+        self._savedEditorText = ""
+    else
+        self._editorInitialText = self._chunkOriginalText
     end
-    -- Fold inline ops into the draft text. Ext widgets are skipped —
-    -- they don't fold into chunk text.
-    self._foldedText = self:applyPendingsToText(self._chunkOriginalText, inlines)
-    -- Drop folded inline widgets; keep ext widgets and empty rows.
-    local kept = {}
-    for _, w in ipairs(self._widgets) do
-        if not (w:isFilled() and not w.extMode) then
-            table.insert(kept, w)
-        end
-    end
-    self._widgets = kept
-    self._isChunkEdited = (self._foldedText ~= self._chunkOriginalText)
+    self._isChunkEdited = (self._editorInitialText ~= self._chunkOriginalText)
     self._editing = true
     self._acceptError = ""
     self:bumpBridgeNonce()
 end
 
--- [revert] click handler.
--- 1. Snapshot _savedEditorText (perfect-restore for next [edit]).
--- 2. Destroy editor (handled JS-side via ui-class binding).
--- 3. Restore _widgets from _savedPendings; ext widgets stay.
--- 4. Clear edit-mode state.
+-- [revert] click handler. Preserve the draft for perfect restore on
+-- the next [edit]; the JS bridge destroys the editor.
 function PinnedChunk:revert()
     if not self._editing then return end
     -- _editorContent is JS-synced — Lua already has the latest text.
     self._savedEditorText = self._editorContent
     self._editorContent = ""
-    -- Restore folded inline widgets, skipping any with empty tag name.
-    local restored = {}
-    for _, snap in ipairs(self._savedPendings or {}) do
-        local nm = (snap.tagName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if nm ~= "" then
-            local w = PendingWidget:new(self)
-            w.tagName = snap.tagName or ""
-            w.tagValue = snap.tagValue or ""
-            w.removeMode = snap.removeMode and true or false
-            table.insert(restored, w)
-        end
-    end
-    -- Keep filled ext widgets only; the empty-start invariant
-    -- will re-add a fresh trailing empty after.
-    for _, w in ipairs(self._widgets) do
-        if w.extMode and w:isFilled() then
-            table.insert(restored, w)
-        end
-    end
-    self._widgets = restored
-    self._savedPendings = {}
     self._chunkOriginalText = ""
-    self._foldedText = ""
+    self._editorInitialText = ""
     self._isChunkEdited = false
     self._editing = false
-    self:_ensureEmptyWidget()
     self._acceptError = ""
     self:bumpBridgeNonce()
 end
 
--- Fold inline widgets into chunk text. Pure function: no state
--- mutation. Strategy:
---   inline-add (removeMode=false): prepend "@tag: value\n" to the
---     leading tag block (above any blank line, above body).
---   inline-change (same tag exists, removeMode=false): replace the
---     existing "@tag: ..." line in place.
---   inline-remove (removeMode=true): delete the matching "@tag: ..."
---     line.
--- Operations apply in widget order; later operations see the
--- intermediate text from earlier ones.
-function PinnedChunk:applyPendingsToText(text, inlineWidgets)
-    local out = text or ""
-    -- Collect fresh prepends in widget order; concat once so the
-    -- order in the chunk matches the user's widget stack rather than
-    -- being reversed by individual prepends.
-    local prepends = {}
-    for _, w in ipairs(inlineWidgets or {}) do
-        local tag = (w.tagName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if tag ~= "" then
-            if w.removeMode then
-                out = removeTagLine(out, tag)
-            else
-                local exists = findTagLine(out, tag)
-                if exists then
-                    out = replaceTagLine(out, tag, w.tagValue or "")
-                else
-                    table.insert(prepends,
-                        "@" .. tag .. ": " .. (w.tagValue or "") .. "\n")
-                end
-            end
-        end
-    end
-    if #prepends > 0 then
-        out = table.concat(prepends, "") .. out
-    end
-    return out
-end
-
 -- JS bridge: docChanged callback. Receives the dirty flag from JS
--- (editor.getDoc() != _chunkOriginalText). Two reconciliation
--- passes happen here:
---   1. Fold-undo: pendings were folded at [edit] and the user has
---      undone back to the original; exit edit mode without
---      restoring pendings.
---   2. Ext-conversion-undo: when a hidden ext entry's inline line
---      no longer appears in the chunk text (user pressed Ctrl-Z
---      to undo our insert-tag), restore the ext entry to visible
---      and drop the matching ext-remove pending widget. The tag
---      returns to its original ext-routed state cleanly.
+-- (editor.getDoc() != _chunkOriginalText).
 function PinnedChunk:onEditorDocChanged(dirty, content)
     self._isChunkEdited = dirty and true or false
     if content then self._editorContent = content end
-    -- (1) Fold-undo auto-exit. When the user Ctrl-Z's the very
-    -- first change to the chunk (fold transaction), restore the
-    -- saved pending stack and exit edit mode. Same outcome as an
-    -- explicit `[revert]` — least surprise.
-    if not self._isChunkEdited
-        and self._savedPendings
-        and #self._savedPendings > 0
-    then
-        -- Drop existing empty widgets so the restored pendings don't
-        -- end up after a sprinkling of empties. Restore in order;
-        -- skip any saved snapshot whose tagName is empty (defensive
-        -- against any edge case where an empty made it into the
-        -- saved set).
-        local kept = {}
-        for _, w in ipairs(self._widgets or {}) do
-            if w:isFilled() then
-                table.insert(kept, w)
-            end
-        end
-        self._widgets = kept
-        for _, snap in ipairs(self._savedPendings) do
-            local nm = (snap.tagName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-            if nm ~= "" then
-                local w = PendingWidget:new(self)
-                w.tagName = snap.tagName or ""
-                w.tagValue = snap.tagValue or ""
-                w.removeMode = snap.removeMode and true or false
-                table.insert(self._widgets, w)
-            end
-        end
-        self._editing = false
-        self._chunkOriginalText = ""
-        self._foldedText = ""
-        self._savedPendings = {}
-        self._editorContent = ""
-        self._savedEditorText = ""
-        self:_ensureEmptyWidget()
-        self:bumpBridgeNonce()
-        return
-    end
-    -- (2) Ext-conversion-undo
-    self:_reconcileHiddenExtEntries()
-end
-
--- For every hidden ext entry, check whether its @name: line still
--- appears in the editor's current text. If not, the user has
--- undone our insert-tag cmd; restore the ext entry to visible and
--- drop the matching ext-remove pending widget.
-function PinnedChunk:_reconcileHiddenExtEntries()
-    if not self._extTags or #self._extTags == 0 then return end
-    local text = self._editorContent or ""
-    for _, et in ipairs(self._extTags) do
-        if et._hidden then
-            local hasInline = textHasTagLine(text, et.name)
-            if not hasInline then
-                et._hidden = false
-                -- Drop matching ext-remove widget.
-                local kept = {}
-                for _, w in ipairs(self._widgets or {}) do
-                    local drop = w.extMode and w.removeMode
-                        and (w.tagName or "") == (et.name or "")
-                    if not drop then table.insert(kept, w) end
-                end
-                self._widgets = kept
-            end
-        end
-    end
-end
-
--- True iff the chunk text contains any leading-of-line `@name:`.
-function textHasTagLine(text, name)
-    if not text or text == "" or not name or name == "" then return false end
-    local prefix = "@" .. name .. ":"
-    local pos = 1
-    while pos <= #text do
-        local lineEnd = text:find("\n", pos, true)
-        local line
-        if lineEnd then
-            line = text:sub(pos, lineEnd - 1)
-        else
-            line = text:sub(pos)
-        end
-        local trimmed = line:gsub("^%s+", "")
-        if trimmed:sub(1, #prefix) == prefix then return true end
-        if not lineEnd then break end
-        pos = lineEnd + 1
-    end
-    return false
 end
 
 -- JS bridge: tag-scrape callback. Receives a JSON array of
@@ -1599,7 +1381,6 @@ end
 -- rest — body-level inline tags including @id and any mid-chunk
 -- @name: value lines that parseTagBlock misses).
 function PinnedChunk:onExtTagsScraped(jsonStr)
-    self._extTagsLoaded = true
     local ok, list = pcall(jsonDecode, jsonStr or "[]")
     if not ok or type(list) ~= "table" then
         self._extTags = {}
@@ -1625,37 +1406,28 @@ function PinnedChunk:onExtTagsScraped(jsonStr)
     end
     self._extTags = extRows
     self._inlineScrapedTags = inlineRows
+    -- Invalidate the current-tags cache: the scrape is authoritative
+    -- and may change rows without changing the signature's inputs.
+    self._currentTagsViewSig = ""
 end
 
--- Current-tags desired-state view.
--- Sources for inline tags:
---   read-only mode: prefer _inlineScrapedTags (catches @id and any
---     mid-chunk @tag: value lines the iframe rendered as <ark-tag>),
---     falling back to mcp.parseTagBlock on the chunk text if the
---     scrape hasn't run yet.
---   edit mode: use mcp.parseTagBlock on the editor draft (the
---     iframe is destroyed; the draft is the source of truth).
--- Ext tags always come from _extTags (the iframe scrape), which
--- persists across edit-mode transitions.
+-- Current-tags view: the chunk's tags as they stand on disk. With
+-- one-shot firing there is no pending overlay — a fired operation is
+-- committed, and refreshTags() re-derives this list.
+-- Sources for inline tags: prefer _inlineScrapedTags (catches @id
+-- and any mid-chunk @tag: value lines the iframe rendered as
+-- <ark-tag>), falling back to mcp.extractTagValues on the chunk
+-- text if the scrape hasn't run yet. Ext tags always come from
+-- _extTags (the iframe scrape), which persists across edit-mode
+-- transitions.
 function PinnedChunk:currentTagsView()
     -- Signature of the upstream sources that drive the row list.
     -- If unchanged from the last call, return the cached row list
-    -- (preserving Lua identity) so ViewList reuses DOM presenters
-    -- and any user input mid-typing isn't snapped back. Per the
-    -- text-as-truth principle: re-derivation only happens when the
-    -- underlying text or ext/widget state actually changed.
-    local srcText
-    if self._editing then
-        srcText = self._editorContent ~= ""
-            and self._editorContent or self._foldedText
-    else
-        srcText = self:chunkText() or ""
-    end
+    -- (preserving Lua identity) so ViewList reuses DOM presenters.
+    local srcText = self:chunkText() or ""
     local extSig = "ext:" .. #(self._extTags or {})
-    local widgetSig = "w:" .. #(self._widgets or {}) ..
-                      ":f" .. self:filledWidgetCount()
-    local sig = string.format("e:%d:%s:%s:%s",
-        #srcText, srcText:sub(1, 64), extSig, widgetSig)
+    local sig = string.format("e:%d:%s:%s",
+        #srcText, srcText:sub(1, 64), extSig)
     if sig == self._currentTagsViewSig
         and type(self._currentTagsViewRows) == "table"
         and #self._currentTagsViewRows > 0 then
@@ -1664,397 +1436,100 @@ function PinnedChunk:currentTagsView()
     self._currentTagsViewSig = sig
 
     -- Per-row reuse: match against the cache by (kind, name,
-    -- occurrence). Reused rows keep their Lua identity (so ViewList
-    -- doesn't replace DOM presenters and the user's input keeps
-    -- focus); their text-derived fields update only when the user
-    -- isn't mid-edit (value == _lastSyncedValue).
+    -- occurrence). Reused rows keep their Lua identity so ViewList
+    -- doesn't replace DOM presenters.
     local cache = self._currentTagRowCache
     if type(cache) ~= "table" then cache = {} end
     local newCache = {}
-    -- Re-derivation rule for the row's value field:
-    --   - while the user has focus in the row's value input, the
-    --     input is the source of truth → don't overwrite (would
-    --     teleport the cursor when fast-typing races a poller push)
-    --   - when the user has blurred (or never focused), external
-    --     CM6 changes — including Ctrl-Z undo — propagate back
-    --   - even when allowed, only write if the value actually
-    --     differs (avoids no-op DOM updates)
-    -- Status and external{file,target} always refresh.
     local function reuseOrCreate(kind, name, occurrence, freshValue, opts)
         local key = kind .. ":" .. name .. ":" .. tostring(occurrence)
         local row = cache[key]
         if row then
-            if not row._inputHasFocus and row.value ~= freshValue then
-                row.value = freshValue
-                row._lastSyncedValue = freshValue
-            end
-            row.status = opts and opts.status or ""
+            row.value = freshValue
             row.externalfile = opts and opts.externalfile or ""
             row.externaltarget = opts and opts.externaltarget or ""
-            row.extChecked = (kind == "ext")
         else
             row = session:create(CurrentTagRow)
             row.name = name
             row.value = freshValue
-            row._lastSyncedValue = freshValue
             row.kind = kind
             row.occurrence = occurrence
             row._chunk = self
-            row.status = opts and opts.status or ""
             row.externalfile = opts and opts.externalfile or ""
             row.externaltarget = opts and opts.externaltarget or ""
-            row.extChecked = (kind == "ext")
         end
         newCache[key] = row
         return row
     end
 
-    -- Helper: build inline rows from a list of {name, value} tables.
-    -- Assigns 1-based occurrence ordinals so per-row edits can route
-    -- to the Nth `@name:` line in the editor.
-    local function buildInline(list)
-        local seen = {}
-        local rows = {}
-        for _, t in ipairs(list or {}) do
-            local nm = t.name or ""
-            seen[nm] = (seen[nm] or 0) + 1
-            local row = reuseOrCreate("inline", nm, seen[nm], t.value or "", nil)
-            table.insert(rows, row)
-        end
-        return rows
-    end
-
-    local inlineRows = {}
-    if self._editing then
-        -- Use mcp.extractTagValues over the editor draft so mid-chunk
-        -- @tag: value lines (including @id after a heading) surface in
-        -- current-tags. Match strategy is "markdown" by default.
-        local sourceText = self._editorContent ~= ""
-            and self._editorContent or self._foldedText
-        inlineRows = buildInline(mcp.extractTagValues(sourceText or "", "markdown"))
-    elseif self._inlineScrapedTags and #self._inlineScrapedTags > 0 then
-        inlineRows = buildInline(self._inlineScrapedTags)
+    local out = {}
+    -- Source 1: inline tags. Occurrence ordinals keep the reuse key
+    -- unique when multiple tags share a name.
+    local inlineList
+    if self._inlineScrapedTags and #self._inlineScrapedTags > 0 then
+        inlineList = self._inlineScrapedTags
     else
-        -- Fallback before the iframe scrape lands: extractTagValues
-        -- catches all tags anywhere in the chunk text.
-        inlineRows = buildInline(mcp.extractTagValues(self:chunkText() or "", "markdown"))
+        inlineList = mcp.extractTagValues(srcText, "markdown")
     end
-    -- Source 2: ext tags from the iframe scrape. Reused via cache
-    -- so the input stays stable across re-derivations (ext tags
-    -- typically have one occurrence per name, but use the seen
-    -- counter to handle any duplicates uniformly). Entries with
-    -- `_hidden = true` (converted to inline) are skipped — the
-    -- corresponding inline row carries the tag now; re-toggling
-    -- ext on that row restores the hidden entry.
-    local extRows = {}
+    local seen = {}
+    for _, t in ipairs(inlineList or {}) do
+        local nm = t.name or ""
+        seen[nm] = (seen[nm] or 0) + 1
+        table.insert(out, reuseOrCreate("inline", nm, seen[nm], t.value or "", nil))
+    end
+    -- Source 2: ext tags from the iframe scrape.
     local extSeen = {}
     for _, et in ipairs(self._extTags or {}) do
-        if not et._hidden then
-            local nm = et.name or ""
-            extSeen[nm] = (extSeen[nm] or 0) + 1
-            local row = reuseOrCreate("ext", nm, extSeen[nm], et.value or "",
-                { externalfile = et.externalfile or "",
-                  externaltarget = et.externaltarget or "" })
-            table.insert(extRows, row)
-        end
-    end
-    -- Overlay pending ops onto current-tags ONLY in edit mode. In
-    -- non-edit mode the pending widget stack above the URL is the
-    -- visible authoring surface; current-tags should reflect the
-    -- file's actual state (chunk text + ext entries), not pending
-    -- drafts. In edit mode the pending stack is hidden, so the
-    -- only place ext-pending changes can surface is via this overlay.
-    local removed = {}    -- map: "kind:name" → true
-    local added = {}      -- list of rows to append
-    if self._editing then
-        for _, w in ipairs(self._widgets or {}) do
-            if w:isFilled() then
-                local key = (w.extMode and "ext:" or "inline:") .. (w.tagName or "")
-                if w.removeMode then
-                    removed[key] = true
-                elseif w.extMode then
-                    local found = false
-                    for _, row in ipairs(extRows) do
-                        if row.name == w.tagName then
-                            row.value = w.tagValue or ""
-                            row.status = "changed"
-                            found = true
-                            break
-                        end
-                    end
-                    if not found then
-                        local row = session:create(CurrentTagRow)
-                        row.name = w.tagName or ""
-                        row.value = w.tagValue or ""
-                        row.kind = "ext"
-                        row.status = "added"
-                        row._chunk = self
-                        table.insert(added, row)
-                    end
-                end
-                -- Inline pendings in edit mode are already folded
-                -- into the editor draft, which extractTagValues
-                -- catches in inlineRows. No additional overlay needed.
-            end
-        end
-    end
-    -- Compose: inline rows then ext rows then any added rows. Mark
-    -- removals via status (or filter out — chose to mark for now so
-    -- the user sees the strike-through).
-    local out = {}
-    for _, row in ipairs(inlineRows) do
-        local key = "inline:" .. row.name
-        if removed[key] then row.status = "removed" end
-        table.insert(out, row)
-    end
-    for _, row in ipairs(extRows) do
-        local key = "ext:" .. row.name
-        if removed[key] then row.status = "removed" end
-        table.insert(out, row)
-    end
-    for _, row in ipairs(added) do
-        table.insert(out, row)
+        local nm = et.name or ""
+        extSeen[nm] = (extSeen[nm] or 0) + 1
+        table.insert(out, reuseOrCreate("ext", nm, extSeen[nm], et.value or "",
+            { externalfile = et.externalfile or "",
+              externaltarget = et.externaltarget or "" }))
     end
     self._currentTagRowCache = newCache
     self._currentTagsViewRows = out
     return out
 end
 
--- Edit-mode actions for current-tag rows. Each action is a one-way
--- mutation: it produces either (a) a CM6 command queued for the
--- bridge JS to apply as a transaction, or (b) a pending op queued
--- for Accept-time dispatch (ext-set/ext-remove). Both paths converge
--- on the next docChanged → re-derivation pass, so the row visually
--- updates without holding its own authoritative state.
+-- Current-tag row affordances. Rows are read-only; each affordance
+-- loads a pre-filled proposal widget into the stack for the user to
+-- fire — destructive operations stay behind an explicit fire click,
+-- never firing from the row itself.
 
--- Read-only mode: queue a pending remove widget. Acts as a
--- convenience that promotes the row's intent into the pending stack.
-function CurrentTagRow:queueRemove()
-    if not self._chunk then return end
-    -- Edit mode delegates directly to applyRemove which dispatches
-    -- through the proper channel (CM6 cmd or pending op).
-    if self._chunk._editing then
-        self:applyRemove()
-        return
-    end
-    local w = PendingWidget:new(self._chunk)
+-- Build a widget pre-filled from this row: tag name, disposition
+-- matching the row's kind, external targeting from the row's TARGET
+-- spec for ext rows. Inserted at the top of the stack so it's
+-- immediately visible.
+function CurrentTagRow:_loadWidget()
+    local w = ProposalWidget:new(self._chunk)
     w.tagName = self.name or ""
     w.tagValue = self.value or ""
-    w.removeMode = true
     if self.kind == "ext" then
-        w.extMode = true
-        w.extLocatorKind = "absolute"
-        w.extLocatorText = self.externaltarget or ""
+        -- The row's externaltarget is the full TARGET spec; carry it
+        -- as a bare base so targetSpec() emits it verbatim.
+        w.disposition = "external"
+        w.extBaseValue = self.externaltarget or ""
+        w.extLocatorKind = "bare"
         w._extLoaded = true
-    end
-    -- Insert above the empty row so the new widget is visible.
-    local widgets = self._chunk._widgets or {}
-    table.insert(widgets, 1, w)
-end
-
--- Edit mode: user changed the row's value. For inline rows, queue a
--- CM6 transaction replacing the Nth `@<name>:` line. For ext rows,
--- queue an ext-set pending op carrying the new value.
-function CurrentTagRow:applyValueEdit(newValue)
-    if not self._chunk then return end
-    local newVal = newValue or ""
-    if self.kind == "inline" then
-        self._chunk:queueEditorCmd({
-            kind = "replace-tag-line",
-            name = self.name or "",
-            occurrence = self.occurrence or 1,
-            newName = self.name or "",
-            newValue = newVal,
-        })
-        -- Track the new value locally so the input doesn't snap back
-        -- until docChanged re-derivation lands.
-        self.value = newVal
     else
-        -- Ext row: queue an ext-set pending op. The pending widget
-        -- becomes a current-tags overlay (status=changed) via
-        -- currentTagsView's pending merge.
-        local w = PendingWidget:new(self._chunk)
-        w.tagName = self.name or ""
-        w.tagValue = newVal
-        w.extMode = true
-        w.extLocatorKind = "absolute"
-        w.extLocatorText = self.externaltarget or ""
-        w._extLoaded = true
-        table.insert(self._chunk._widgets or {}, w)
-        self.value = newVal
+        w.disposition = "internal"
     end
+    table.insert(self._chunk._widgets or {}, 1, w)
+    return w
 end
 
--- Edit mode: user changed the row's name. Inline only — ext rename
--- isn't a single operation (would require removing the old ext and
--- writing a new one with new tag name).
-function CurrentTagRow:applyNameEdit(newName)
-    if not self._chunk or self.kind ~= "inline" then return end
-    local newN = newName or ""
-    self._chunk:queueEditorCmd({
-        kind = "replace-tag-line",
-        name = self.name or "",
-        occurrence = self.occurrence or 1,
-        newName = newN,
-        newValue = self.value or "",
-    })
-    self.name = newN
-end
-
--- Edit mode: user clicked rem. For inline, queue a CM6 transaction
--- removing the Nth `@<name>:` line. For ext, queue an ext-remove
--- pending op for Accept.
-function CurrentTagRow:applyRemove()
+-- `rem` checkbox: load a pre-filled remove widget.
+function CurrentTagRow:loadRemoveWidget()
     if not self._chunk then return end
-    if self.kind == "inline" then
-        self._chunk:queueEditorCmd({
-            kind = "remove-tag-line",
-            name = self.name or "",
-            occurrence = self.occurrence or 1,
-        })
-    else
-        local w = PendingWidget:new(self._chunk)
-        w.tagName = self.name or ""
-        w.removeMode = true
-        w.extMode = true
-        w.extLocatorKind = "absolute"
-        w.extLocatorText = self.externaltarget or ""
-        w._extLoaded = true
-        table.insert(self._chunk._widgets or {}, w)
-    end
-end
-
--- Edit mode: user toggled the ext checkbox.
---   ext → inline: insert into chunk text + queue ext-remove. Hide
---     the source ext entry. Any stale ext-set/ext-remove pending
---     widgets for this tag are dropped first (transition-clean).
---   inline → ext: two cases:
---     (a) Hidden ext entry pairs by name → un-hide; if the inline
---         value diverged from the original ext value, queue an
---         ext-set carrying the divergent value.
---     (b) Fresh conversion: queue an ext-set with a suggested
---         locator. Either way, stale ext widgets for this tag are
---         dropped first.
-function CurrentTagRow:toggleExt()
-    if not self._chunk or not self._chunk._editing then return end
-    local name = self.name or ""
-    if self.kind == "ext" then
-        -- ext → inline
-        local entry = self:_findExtEntry()
-        if entry then entry._hidden = true end
-        self:_dropPendingExt(name)
-        self._chunk:queueEditorCmd({
-            kind = "insert-tag",
-            name = name,
-            value = self.value or "",
-        })
-        self:_addPendingExtRemove(name)
-    else
-        -- inline → ext
-        self:_dropPendingExt(name)
-        local hidden = self:_findHiddenExt()
-        self._chunk:queueEditorCmd({
-            kind = "remove-tag-line",
-            name = name,
-            occurrence = self.occurrence or 1,
-        })
-        if hidden then
-            hidden._hidden = false
-            -- If the user edited the value while it was inline,
-            -- preserve the change via an ext-set; otherwise just
-            -- a clean un-hide.
-            if (self.value or "") ~= (hidden.value or "") then
-                self:_addPendingExtSet(name, self.value or "")
-            end
-        else
-            -- Fresh inline → ext.
-            self:_addPendingExtSet(name, self.value or "")
-        end
-    end
-end
-
--- Find the ExtTagRow in the chunk's scrape cache matching this
--- row's name. Returns nil if not found.
-function CurrentTagRow:_findExtEntry()
-    if not self._chunk then return nil end
-    for _, et in ipairs(self._chunk._extTags or {}) do
-        if et.name == self.name then return et end
-    end
-    return nil
-end
-
--- Find a hidden ext entry whose name matches this inline row.
-function CurrentTagRow:_findHiddenExt()
-    if not self._chunk then return nil end
-    for _, et in ipairs(self._chunk._extTags or {}) do
-        if et.name == self.name and et._hidden then return et end
-    end
-    return nil
-end
-
--- Drop every ext-mode pending widget (ext-set OR ext-remove) for
--- the named tag. Used at the start of every ext-toggle transition
--- to clean up stale ops before queueing fresh ones.
-function CurrentTagRow:_dropPendingExt(name)
-    if not self._chunk then return end
-    local kept = {}
-    for _, w in ipairs(self._chunk._widgets or {}) do
-        local drop = w.extMode and (w.tagName or "") == (name or "")
-        if not drop then table.insert(kept, w) end
-    end
-    self._chunk._widgets = kept
-end
-
--- Add an ext-remove pending widget for the named tag.
-function CurrentTagRow:_addPendingExtRemove(name)
-    if not self._chunk then return end
-    local w = PendingWidget:new(self._chunk)
-    w.tagName = name or ""
+    local w = self:_loadWidget()
     w.removeMode = true
-    w.extMode = true
-    w.extLocatorKind = "absolute"
-    w.extLocatorText = self.externaltarget or ""
-    w._extLoaded = true
-    table.insert(self._chunk._widgets or {}, w)
 end
 
--- Add an ext-set pending widget for the named tag with the given
--- value. Pulls locator defaults from mcp.suggestExtLocator.
-function CurrentTagRow:_addPendingExtSet(name, value)
+-- Row click: load a pre-filled replace widget ready to revise.
+function CurrentTagRow:loadReplaceWidget()
     if not self._chunk then return end
-    local w = PendingWidget:new(self._chunk)
-    w.tagName = name or ""
-    w.tagValue = value or ""
-    w.extMode = true
-    local sug, _ = mcp.suggestExtLocator(self._chunk:chunkID())
-    if sug then
-        w.extBase = sug.base or "path"
-        w.extBaseValue = sug.baseValue or self._chunk:path()
-        w.extLocatorKind = sug.locatorKind or "absolute"
-        w.extLocatorText = sug.locator or sug.locatorText or ""
-        w._extLoaded = true
-    end
-    table.insert(self._chunk._widgets or {}, w)
-end
-
--- ui-value=tagName setter shim. The viewdef wires sl-input change
--- events to set the row's tagName via this method, which routes
--- through applyNameEdit.
-function CurrentTagRow:setTagName(v)
-    if self._chunk and self._chunk._editing then
-        self:applyNameEdit(v)
-    else
-        self.name = v or ""
-    end
-end
-
--- ui-value=tagValue setter shim.
-function CurrentTagRow:setTagValue(v)
-    if self._chunk and self._chunk._editing then
-        self:applyValueEdit(v)
-    else
-        self.value = v or ""
-    end
+    local w = self:_loadWidget()
+    w.replaceMode = true
 end
 
 -- Display helpers for current-tag rows.
@@ -2064,115 +1539,6 @@ end
 
 function CurrentTagRow:isExt()
     return self.kind == "ext"
-end
-
-function CurrentTagRow:parentEditing()
-    return self._chunk and self._chunk._editing or false
-end
-
-function CurrentTagRow:parentNotEditing()
-    return not (self._chunk and self._chunk._editing)
-end
-
--- sl-change handler for the value input. Commits the typed value
--- through applyValueEdit (which queues the CM6 command). Used as
--- the on-blur fallback; the live-as-you-type path goes through
--- onValueChange below.
-function CurrentTagRow:onValueCommit()
-    if self:parentNotEditing() then return end
-    self:applyValueEdit(self.value)
-end
-
--- Focus / blur handlers for the value input. While focus is held,
--- re-derivation in currentTagsView skips overwrites of row.value
--- so the user's cursor + in-progress typing aren't disturbed by a
--- stale poller push. On blur, the flag clears and external
--- changes (CM6 undo, edits to the same line) flow back into the
--- row on the next re-derivation.
-function CurrentTagRow:onValueFocus()
-    self._inputHasFocus = true
-end
-
-function CurrentTagRow:onValueBlur()
-    self._inputHasFocus = false
-end
-
--- Incremental-search-style pump. Bound to a hidden span via
--- `ui-value="onValueChange()"` so the engine re-evaluates it on
--- every variable scan. When the user types into the value input,
--- the writeback updates `self.value` but `self._lastSyncedValue`
--- lags behind. We detect the divergence and apply the edit
--- immediately — propagating live to the CM6 editor. Returns ""
--- (the span's value is just a trigger; we don't display it).
-function CurrentTagRow:onValueChange()
-    if self:parentNotEditing() then return "" end
-    if self.value == self._lastSyncedValue then return "" end
-    self._lastSyncedValue = self.value
-    if self.kind == "inline" then
-        self._chunk:queueEditorCmd({
-            kind = "replace-tag-line",
-            name = self.name or "",
-            occurrence = self.occurrence or 1,
-            newName = self.name or "",
-            newValue = self.value or "",
-        })
-    else
-        -- ext: if the new value matches the original ext entry's
-        -- value, the edit is a no-op — drop any existing ext-set
-        -- pending widget so the row shows as unchanged. Otherwise
-        -- find/create an ext-set widget with the new value. Accept
-        -- will dispatch via mcp.setExtTag → the mirror file either
-        -- gets the line updated in place or appended if new.
-        local orig = self:_findExtEntry()
-        local origValue = orig and orig.value or nil
-        if origValue ~= nil and (self.value or "") == origValue then
-            -- Edited back to original. Drop any ext-set widget.
-            local kept = {}
-            for _, w in ipairs(self._chunk._widgets or {}) do
-                local drop = w.extMode and not w.removeMode
-                    and (w.tagName or "") == (self.name or "")
-                if not drop then table.insert(kept, w) end
-            end
-            self._chunk._widgets = kept
-            return ""
-        end
-        local found = nil
-        for _, w in ipairs(self._chunk._widgets or {}) do
-            if w.extMode and not w.removeMode
-                and (w.tagName or "") == (self.name or "")
-            then
-                found = w
-                break
-            end
-        end
-        if not found then
-            found = PendingWidget:new(self._chunk)
-            found.tagName = self.name or ""
-            found.extMode = true
-            found.extLocatorKind = "absolute"
-            found.extLocatorText = self.externaltarget or ""
-            found._extLoaded = true
-            table.insert(self._chunk._widgets or {}, found)
-        end
-        found.tagValue = self.value or ""
-    end
-    return ""
-end
-
-function CurrentTagRow:isRemoved()
-    return self.status == "removed"
-end
-
-function CurrentTagRow:isChanged()
-    return self.status == "changed"
-end
-
-function CurrentTagRow:isAdded()
-    return self.status == "added"
-end
-
-function CurrentTagRow:noStatus()
-    return self.status == ""
 end
 
 -- Accept-error display helpers
@@ -2245,11 +1611,6 @@ end
 -- Curation: Accept-changes (panel-level) methods
 ----------------------------------------------------------------------
 
--- Sum of (filled widgets + staged ops) across every PinnedChunk
--- presenter. Drives the `Accept changes (N)` badge in the header.
--- Skips presenters whose chunk has been dismissed (chunkID no longer
--- in sys.curation.pinned) — those entries linger in _presenters
--- until GC.
 -- Live-only presenter iteration. Cleans out _presenters entries whose
 -- chunkID is no longer in sys.curation.pinned (sweep/dismiss tombstones).
 function Curation:_livePresenters()
@@ -2278,8 +1639,9 @@ function Curation:editedCount()
     return n
 end
 
--- Count of cards with any filled pending widget. Drives the "M
--- pending" half of the Accept button label and the warning dialog.
+-- Sum of filled proposal widgets across all cards. Guards dismiss
+-- confirmation and Clear unchanged; Accept ignores it (tag
+-- operations fire per-widget).
 function Curation:pendingCount()
     local n = 0
     for _, p in ipairs(self:_livePresenters()) do
@@ -2294,47 +1656,22 @@ end
 
 function Curation:acceptLabel()
     local n = self:editedCount()
-    local m = self:pendingCount()
-    if n == 0 and m == 0 then return "Accept (no changes)" end
-    if n == 0 and m > 0 then return string.format("Accept — %d pending", m) end
-    if n > 0 and m == 0 then return string.format("Accept (%d changed)", n) end
-    return string.format("Accept (%d changed, %d pending)", n, m)
+    if n == 0 then return "Accept (no changes)" end
+    return string.format("Accept (%d changed)", n)
 end
 
--- Click handler for the panel-level Accept button.
--- If any cards have unstaged pendings, surface the warning dialog
--- first. Otherwise execute directly.
+-- Click handler for the panel-level Accept button. Content edits
+-- only — no warning dialog; tag operations are already committed by
+-- their own fire clicks.
 function Curation:acceptChanges()
-    if self:pendingCount() > 0 then
-        self._acceptWarnVisible = true
-        return
-    end
     self:_doAccept()
 end
 
-function Curation:confirmAccept()
-    self._acceptWarnVisible = false
-    self:_doAccept()
-end
-
-function Curation:cancelAccept()
-    self._acceptWarnVisible = false
-end
-
-function Curation:acceptWarnVisible()
-    return self._acceptWarnVisible
-end
-
--- Execute Accept: chunk-edit op for each editing-dirty card, plus
--- ext-set / ext-remove for every card's filled ext widgets. Inline
--- pending widgets on non-edited cards are NOT executed — they must
--- be promoted via [edit] first.
+-- Execute Accept: a chunk-edit op for each editing-dirty card.
 function Curation:_doAccept()
     for _, p in ipairs(self:_livePresenters()) do
-        local ok = true
-        local err = nil
-        -- chunk-edit op (editing-dirty cards)
         if p._isChunkEdited then
+            local ok = true
             local info = p:chunkInfo()
             if p._chunkInfoError ~= "" then
                 p._acceptError = "chunkInfo: " .. p._chunkInfoError
@@ -2343,53 +1680,28 @@ function Curation:_doAccept()
                 local path = (info and info.path) or p:path()
                 local byteStart = tonumber((info and info.byteStart) or 0) or 0
                 local byteEnd = tonumber((info and info.byteEnd) or 0) or byteStart
-                local text = p._editorContent ~= "" and p._editorContent or p._foldedText
+                local text = p._editorContent ~= "" and p._editorContent
+                    or p._editorInitialText
                 local _, e = mcp.replaceRegion(path, byteStart, byteEnd, text)
                 if e then
                     p._acceptError = "replaceRegion: " .. tostring(e)
                     ok = false
                 end
             end
-        end
-        -- ext widgets (regardless of edit mode)
-        if ok then
-            for _, w in ipairs(p:filledExtWidgets()) do
-                local rec = w:stagedOpRecord()
-                local _, e
-                if rec.kind == "ext-set" then
-                    _, e = mcp.setExtTag(rec.targetSpec, rec.tagName, rec.tagValue or "")
-                elseif rec.kind == "ext-remove" then
-                    _, e = mcp.removeExtTag(rec.targetSpec, rec.tagName)
-                end
-                if e then
-                    p._acceptError = (rec.kind or "ext") .. ": " .. tostring(e)
-                    ok = false
-                    break
-                end
+            -- On success, return the card to viewing state. Proposal
+            -- widgets are untouched — they're an independent path.
+            if ok then
+                p._isChunkEdited = false
+                p._editing = false
+                p._chunkOriginalText = ""
+                p._editorInitialText = ""
+                p._editorContent = ""
+                p._savedEditorText = ""
+                p._acceptError = ""
+                -- Force chunk text reload on next access (file changed).
+                p._chunkTextLoaded = false
+                p._chunkText = ""
             end
-        end
-        -- On success, return the card to clean state.
-        if ok then
-            p._isChunkEdited = false
-            p._editing = false
-            p._chunkOriginalText = ""
-            p._foldedText = ""
-            p._editorContent = ""
-            p._savedEditorText = ""
-            p._savedPendings = {}
-            -- Drop ext widgets that just dispatched; keep any other pendings.
-            local kept = {}
-            for _, w in ipairs(p._widgets or {}) do
-                if not (w:isFilled() and w.extMode) then
-                    table.insert(kept, w)
-                end
-            end
-            p._widgets = kept
-            p:_ensureEmptyWidget()
-            p._acceptError = ""
-            -- Force chunk text reload on next access (file changed).
-            p._chunkTextLoaded = false
-            p._chunkText = ""
         end
     end
 end
@@ -2420,330 +1732,125 @@ function Curation:noUnchanged()
     return not self:hasUnchanged()
 end
 
-----------------------------------------------------------------------
--- Find Connections orchestration
-----------------------------------------------------------------------
-
--- Kick off a find-connections request. Pins the current pinned-chunk
--- IDs as the request's evidence set. Returns immediately; live status
--- arrives via onConnectionsEvent.
-function Curation:findConnections()
-    if self._connRequestID ~= "" then return end  -- in flight
-    local ids = {}
-    for _, p in ipairs(sys.curation.pinned) do
-        table.insert(ids, p.chunkID)
-    end
-    if #ids == 0 then
-        self._connError = "No pinned chunks"
-        return
-    end
-    local id, err = mcp.findConnections(ids, {})
-    if err then
-        self._connError = err
-        return
-    end
-    self._connRequestID = id or ""
-    self._connStatus = "pending"
-    self._connProgress = ""
-    self._connElapsed = 0
-    self._connError = ""
-    self._connThemes = {}
-    self._connSharedTags = {}
-    self:_ensureSubscriptions()
-end
-
-function Curation:clearConnections()
-    self._connRequestID = ""
-    self._connStatus = ""
-    self._connProgress = ""
-    self._connElapsed = 0
-    self._connError = ""
-    self._connThemes = {}
-    self._connSharedTags = {}
-end
-
-function Curation:noConnections()
-    return self._connRequestID == ""
-end
-
-function Curation:connectionsInFlight()
-    return self._connStatus == "pending" or self._connStatus == "working"
-end
-
-function Curation:hasConnectionsError()
-    return self._connError ~= ""
-end
-
-function Curation:connectionsError()
-    return self._connError or ""
-end
-
-function Curation:connectionsStatusText()
-    if self._connStatus == "" then return "" end
-    if self._connStatus == "completed" then
-        return string.format("Completed (%d themes, %d shared tags)",
-            #(self._connThemes or {}), #(self._connSharedTags or {}))
-    end
-    if self._connStatus == "errored" then
-        return "Errored: " .. (self._connError or "")
-    end
-    if self._connProgress ~= "" then
-        return string.format("%s — %s (%ds)",
-            self._connStatus, self._connProgress, self._connElapsed or 0)
-    end
-    return string.format("%s (%ds)", self._connStatus, self._connElapsed or 0)
-end
-
-function Curation:connectionsThemes()
-    return self._connThemes or {}
-end
-
-function Curation:connectionsSharedTags()
-    return self._connSharedTags or {}
-end
-
-function Curation:connectionsThemeCount()
-    return #(self._connThemes or {})
-end
-
-function Curation:connectionsSharedTagCount()
-    return #(self._connSharedTags or {})
-end
-
-function Curation:noConnectionsThemes()
-    return #(self._connThemes or {}) == 0
-end
-
-function Curation:noConnectionsSharedTags()
-    return #(self._connSharedTags or {}) == 0
-end
-
--- Subscription callback for tmp://connections/<id>.md events. Updates
--- live status; on terminal, fetches the body via mcp.tmp_get and
--- parses themes / shared-tag candidates.
-function Curation:onConnectionsEvent(events)
-    if type(events) ~= "table" then return end
-    if self._connRequestID == "" then return end
-    local docPath = CONNECTIONS_DOC_PREFIX .. self._connRequestID .. ".md"
-    local terminal = nil
-    for _, e in ipairs(events) do
-        if e.path == docPath then
-            if e.tag == "connections-status" then
-                self._connStatus = e.value or ""
-                if e.value == "completed" or e.value == "errored" then
-                    terminal = e.value
-                end
-            elseif e.tag == "connections-progress" then
-                self._connProgress = e.value or ""
-            elseif e.tag == "connections-elapsed" then
-                self._connElapsed = tonumber(e.value) or 0
-            elseif e.tag == "connections-error" then
-                self._connError = e.value or ""
-            end
-        end
-    end
-    if terminal == "completed" then
-        local body, _ = mcp.tmp_get(docPath)
-        self:_parseConnectionsBody(body or "")
-    end
-end
-
--- Parse the connections doc body. The body has two markdown sections:
---   ## Themes
---   - @theme-evidence: 1,2,3
---     Theme text
---   ## Shared Tag Candidates
---   - @shared-tag: tagname
---     @shared-tag-value: value
---     @shared-tag-evidence: 1,2,3
-function Curation:_parseConnectionsBody(body)
-    self._connThemes = {}
-    self._connSharedTags = {}
-    if not body or body == "" then return end
-    local section = nil
-    local theme, shared
-    local function flushTheme()
-        if theme then
-            table.insert(self._connThemes, theme)
-            theme = nil
-        end
-    end
-    local function flushShared()
-        if shared then
-            shared._index = #self._connSharedTags + 1
-            shared._curation = self
-            table.insert(self._connSharedTags, shared)
-            shared = nil
-        end
-    end
-    for line in body:gmatch("[^\n]*") do
-        local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if trimmed:sub(1, 2) == "##" then
-            flushTheme()
-            flushShared()
-            if trimmed:lower():find("themes") then section = "themes"
-            elseif trimmed:lower():find("shared") then section = "shared"
-            else section = nil
-            end
-        elseif section == "themes" then
-            local evidence = trimmed:match("^@theme%-evidence:%s*(.+)")
-            if evidence then
-                flushTheme()
-                theme = session:create(ConnectionTheme)
-                theme.evidence = parseChunkIDList(evidence)
-                theme.text = ""
-            elseif theme and trimmed ~= "" then
-                if theme.text == "" then theme.text = trimmed
-                else theme.text = theme.text .. " " .. trimmed end
-            end
-        elseif section == "shared" then
-            local tag = trimmed:match("^@shared%-tag:%s*(.+)")
-            local val = trimmed:match("^@shared%-tag%-value:%s*(.+)")
-            local ev = trimmed:match("^@shared%-tag%-evidence:%s*(.+)")
-            if tag then
-                flushShared()
-                shared = session:create(ConnectionSharedTag)
-                shared.tag = tag
-                shared.value = ""
-                shared.evidence = {}
-            elseif val and shared then
-                shared.value = val
-            elseif ev and shared then
-                shared.evidence = parseChunkIDList(ev)
-            end
-        end
-    end
-    flushTheme()
-    flushShared()
-end
-
--- Fill action: inject pre-filled inline pending widgets into every
--- evidence chunk's pending stack. Cards not currently pinned are
--- skipped silently.
-function Curation:fillProposal(idx)
-    local proposal = (self._connSharedTags or {})[idx]
-    if not proposal then return end
-    for _, chunkID in ipairs(proposal.evidence or {}) do
-        local presenter = (self._presenters or {})[chunkID]
-        if presenter and not presenter._editing then
-            local w = PendingWidget:new(presenter)
-            w.tagName = proposal.tag or ""
-            w.tagValue = proposal.value or ""
-            -- Insert above the empty-row so the new widget shows up.
-            table.insert(presenter._widgets, 1, w)
-        end
-    end
-end
-
 -- Subscriptions setup. Idempotent — safe to call multiple times.
--- Registers the onpublish callback once and adds subscriptions for
--- both the sweep doc and any in-flight connections doc.
+-- Registers the onpublish callback once and adds the sweep-doc
+-- subscriptions.
 function Curation:_ensureSubscriptions()
     local sid = "curation"
     if not self._onpublishRegistered then
         mcp.onpublish(sid, function(events)
             self:onSweepEvent(events)
-            self:onConnectionsEvent(events)
         end)
         self._onpublishRegistered = true
     end
-    -- Sweep subscriptions
     mcp.subscribe(sid, { tag = "sweep-status",
         filterFiles = { SWEEP_DOC_PATH } })
     mcp.subscribe(sid, { tag = "sweep-progress",
         filterFiles = { SWEEP_DOC_PATH } })
-    -- Connections subscriptions (when a request is in flight)
-    if self._connRequestID ~= "" then
-        local docPath = CONNECTIONS_DOC_PREFIX .. self._connRequestID .. ".md"
-        mcp.subscribe(sid, { tag = "connections-status",
-            filterFiles = { docPath } })
-        mcp.subscribe(sid, { tag = "connections-progress",
-            filterFiles = { docPath } })
-        mcp.subscribe(sid, { tag = "connections-elapsed",
-            filterFiles = { docPath } })
-        mcp.subscribe(sid, { tag = "connections-error",
-            filterFiles = { docPath } })
-    end
     self._sweepSubscribed = true
 end
 
--- Parse a comma-separated list of chunk IDs into a numeric array.
-function parseChunkIDList(s)
-    local out = {}
-    if not s then return out end
-    for id in s:gmatch("[^,%s]+") do
-        local n = tonumber(id)
-        if n then table.insert(out, n) end
+----------------------------------------------------------------------
+-- ProposalWidget methods
+----------------------------------------------------------------------
+
+function ProposalWidget:new(chunk)
+    local w = session:create(ProposalWidget, { _chunk = chunk })
+    -- The degrade, surfaced as a default: chunks that can't host an
+    -- inline tag start (and stay) external.
+    if chunk and chunk:readOnly() then
+        w.disposition = "external"
     end
-    return out
+    return w
 end
 
-----------------------------------------------------------------------
--- ConnectionSharedTag / ConnectionTheme display helpers
-----------------------------------------------------------------------
-
-function ConnectionTheme:evidenceList()
-    return table.concat(self.evidence or {}, ", ")
+function ProposalWidget:trimmedTag()
+    return trim(self.tagName)
 end
 
-function ConnectionTheme:noEvidence()
-    return #(self.evidence or {}) == 0
-end
-
-function ConnectionSharedTag:evidenceList()
-    return table.concat(self.evidence or {}, ", ")
-end
-
-function ConnectionSharedTag:label()
-    if not self.value or self.value == "" then
-        return "@" .. (self.tag or "")
-    end
-    return "@" .. (self.tag or "") .. ": " .. self.value
-end
-
-function ConnectionSharedTag:fill()
-    if self._curation and self._index > 0 then
-        self._curation:fillProposal(self._index)
-    end
-end
-
-----------------------------------------------------------------------
--- PendingWidget methods
-----------------------------------------------------------------------
-
-function PendingWidget:new(chunk)
-    return session:create(PendingWidget, { _chunk = chunk })
-end
-
-local function trim(s)
-    return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-function PendingWidget:isFilled()
+function ProposalWidget:isFilled()
     -- A widget is "filled" once it has a tag name. Remove ops are
     -- valid even with empty value; add ops without value still apply
     -- (bare `@tag` is a meaningful annotation).
     return trim(self.tagName) ~= ""
 end
 
-function PendingWidget:toggleRemove()
+-- The loaded gun's trigger.
+function ProposalWidget:fire()
+    if not self._chunk then return end
+    self._chunk:fireWidget(self)
+end
+
+function ProposalWidget:fireDisabled()
+    return not self:isFilled()
+end
+
+function ProposalWidget:fireError()      return self._fireError end
+function ProposalWidget:noFireError()    return self._fireError == "" end
+function ProposalWidget:clearFireError() self._fireError = "" end
+
+function ProposalWidget:toggleRemove()
     self.removeMode = not self.removeMode
 end
 
-function PendingWidget:toggleExt()
-    if self.extMode then
-        -- Force-on when chunk is read-only.
-        if self._chunk and self._chunk:readOnly() then return end
-        self.extMode = false
+-- Effective disposition: the field, overridden to external when the
+-- chunk can't host an inline tag (degrade as a lock, not a surprise).
+function ProposalWidget:effectiveDisposition()
+    if self:dispositionLocked() then return "external" end
+    return self.disposition == "external" and "external" or "internal"
+end
+
+function ProposalWidget:isInternal()
+    return self:effectiveDisposition() == "internal"
+end
+
+function ProposalWidget:isExternal()
+    return self:effectiveDisposition() == "external"
+end
+
+function ProposalWidget:dispositionLabel()
+    return self:isInternal() and "int" or "ext"
+end
+
+-- Flip internal ↔ external. No-op when locked. On first switch to
+-- external, pull targeting defaults from mcp.suggestExtLocator.
+function ProposalWidget:toggleDisposition()
+    if self:dispositionLocked() then return end
+    if self:effectiveDisposition() == "external" then
+        self.disposition = "internal"
         return
     end
-    self.extMode = true
+    self.disposition = "external"
     if not self._extLoaded then
         self:_loadExtSuggestion()
     end
 end
 
-function PendingWidget:_loadExtSuggestion()
+function ProposalWidget:toggleReplace()
+    self.replaceMode = not self.replaceMode
+end
+
+function ProposalWidget:replaceLabel()
+    return self.replaceMode and "replace" or "add"
+end
+
+-- Tag-name change handler: when the entered tag already exists on
+-- the chunk, pre-set replaceMode — the visible default replacing the
+-- old infer-by-existence rule. Only auto-sets, never auto-clears
+-- (the user may have flipped it deliberately).
+function ProposalWidget:onTagNameChange()
+    if self.replaceMode then return end
+    local tag = trim(self.tagName)
+    if tag == "" or not self._chunk then return end
+    for _, row in ipairs(self._chunk:currentTagsView()) do
+        if row.name == tag then
+            self.replaceMode = true
+            return
+        end
+    end
+end
+
+function ProposalWidget:_loadExtSuggestion()
     self._extLoaded = true
     if not self._chunk then return end
     local sug, err = mcp.suggestExtLocator(self._chunk:chunkID())
@@ -2759,34 +1866,31 @@ function PendingWidget:_loadExtSuggestion()
     end
 end
 
-function PendingWidget:extToggleLocked()
-    return self._chunk and self._chunk:readOnly()
+-- Locked to external when the parent chunk can't host an inline tag.
+function ProposalWidget:dispositionLocked()
+    return (self._chunk and self._chunk:readOnly()) and true or false
 end
 
-function PendingWidget:notExt()
-    return not self.extMode
-end
-
-function PendingWidget:noDupFlag()
+function ProposalWidget:noDupFlag()
     return not self:hasDupFlag()
 end
 
-function PendingWidget:noScopeReadout()
+function ProposalWidget:noScopeReadout()
     return not self:hasScopeReadout()
 end
 
-function PendingWidget:locatorBare()
+function ProposalWidget:locatorBare()
     return self.extLocatorKind == "bare"
 end
 
-function PendingWidget:kill()
+function ProposalWidget:kill()
     if self._chunk then self._chunk:removeWidget(self) end
 end
 
 -- Bound to ui-event-sl-change on the base dropdown. The ui-value
 -- binding has already updated self.extBase; this handler refreshes
 -- the locator defaults to match the new base.
-function PendingWidget:onBaseChange()
+function ProposalWidget:onBaseChange()
     if self.extBase ~= "uuid" and self.extBase ~= "path" then return end
     self._extLoaded = false
     self:_loadExtSuggestion()
@@ -2795,13 +1899,13 @@ end
 -- Bound to ui-event-sl-change on the locator-kind dropdown. The
 -- ui-value binding has already updated self.extLocatorKind; this
 -- handler clears the locator text when kind is bare.
-function PendingWidget:onLocatorKindChange()
+function ProposalWidget:onLocatorKindChange()
     if self.extLocatorKind == "bare" then
         self.extLocatorText = ""
     end
 end
 
-function PendingWidget:dupFlag()
+function ProposalWidget:dupFlag()
     if (self._withinFileDupCount or 0) <= 1 then return "" end
     local shortVal = self.extBaseValue or ""
     if #shortVal > 12 then shortVal = shortVal:sub(1, 8) .. "..." end
@@ -2809,11 +1913,11 @@ function PendingWidget:dupFlag()
         shortVal, self._withinFileDupCount)
 end
 
-function PendingWidget:hasDupFlag()
+function ProposalWidget:hasDupFlag()
     return (self._withinFileDupCount or 0) > 1
 end
 
-function PendingWidget:scopeReadout()
+function ProposalWidget:scopeReadout()
     local c = self._extScopeChunks or 0
     local f = self._extScopeFiles or 0
     if c == 0 and f == 0 then return "" end
@@ -2822,7 +1926,7 @@ function PendingWidget:scopeReadout()
         f, f == 1 and "" or "s")
 end
 
-function PendingWidget:hasScopeReadout()
+function ProposalWidget:hasScopeReadout()
     return (self._extScopeChunks or 0) > 0 or (self._extScopeFiles or 0) > 0
 end
 
@@ -2831,7 +1935,7 @@ end
 -- filled AND is the last in its chunk's stack, append a new empty
 -- widget below it. Empty widgets don't auto-add (lets focus escape
 -- the stack naturally).
-function PendingWidget:autoAddOnTab()
+function ProposalWidget:autoAddOnTab()
     if not self:isFilled() then return end
     if not self._chunk then return end
     local widgets = self._chunk._widgets
@@ -2839,9 +1943,9 @@ function PendingWidget:autoAddOnTab()
     self._chunk:addWidget()
 end
 
--- Compose the @ext target spec from current ext fields. Used by
--- stagedOpRecord() when extMode is on.
-function PendingWidget:targetSpec()
+-- Compose the @ext target spec from the external-targeting fields.
+-- Used by fire() to build the external target.
+function ProposalWidget:targetSpec()
     local base = self.extBaseValue or ""
     local kind = self.extLocatorKind or ""
     local text = self.extLocatorText or ""
@@ -2857,18 +1961,3 @@ function PendingWidget:targetSpec()
     return base .. ":" .. text
 end
 
--- Build a record for the parent PinnedChunk's _stagedOps buffer.
-function PendingWidget:stagedOpRecord()
-    local tag = trim(self.tagName)
-    local value = trim(self.tagValue)
-    if self.extMode then
-        if self.removeMode then
-            return { kind = "ext-remove", tagName = tag, tagValue = value, targetSpec = self:targetSpec() }
-        end
-        return { kind = "ext-set", tagName = tag, tagValue = value, targetSpec = self:targetSpec() }
-    end
-    if self.removeMode then
-        return { kind = "inline-remove", tagName = tag, tagValue = value }
-    end
-    return { kind = "inline-add", tagName = tag, tagValue = value }
-end

@@ -59,15 +59,15 @@ buttons, one per view.
 Columns only shown when they have items. Cards use `content-card`
 theme class. Click card → `mcp:open(path)`.
 
-### Tag Forge (workshop slice B+C, 2026-05)
+### Tag Forge (machinery reconcile, 2026-07)
 ```
 +----------------------------------------+----------------------+
 | Curation  Sweep: idle  [⚡] [⌫ Clear unchanged] [Accept (…)] |
 +----------------------------------------+----------------------+
 | Pinned chunks (3) [⤓ Sweep older]      | Tag explorer        |
 | ┌────────────────────────────────────┐ | [_____________]     |
-| │ [tag ][value][rem][ext][X]         │ | Defined tags        |
-| │ [tag ][value][rem][ext][X]         │ |  • design-decision  |
+| │ [🔥][tag ][value][int|ext][add|rep][rem][X] │ Defined tags |
+| │ [🔥][tag ][value][int|ext][add|rep][rem][X] │  • design-dec|
 | │ [+]                                │ |  • feedback         |
 | │ [edit] NEW path/file.md         [X]│ |                     |
 | │  > current tags                    │ | Focused: design-dec │
@@ -81,17 +81,17 @@ theme class. Click card → `mcp:open(path)`.
 +----------------------------------------+----------------------+
 ```
 
-Primary surface: pinned cards with per-card pending widget
+Primary surface: pinned cards with per-card proposal widget
 stacks above the URL, three collapsibles below (current tags,
-tag scores, chunk text). The `[edit|revert]` button left of
-the URL drives a four-state machine: clean / pending-only /
-editing-clean / editing-dirty (see `.scratch/CHUNK-CARD.md`).
-On `[edit]`, inline widgets fold into a CM6 editor as one
-undoable transaction; ext widgets stay (they don't fold).
-Accept (panel-level) commits every card's edited text via
-`mcp.replaceRegion` and every card's filled ext widgets via
-`mcp.setExtTag` / `mcp.removeExtTag`. Pending inline widgets
-are NOT executed by Accept — they require `[edit]` first.
+tag scores, chunk text). Each widget is a **loaded gun**: the
+fire button sits ahead of its editing fields, and clicking it
+commits that one tag operation immediately through the
+approval shims (candidate+accept semantics — see §"Approval
+shims"). Tag authoring is fully detached from the editor: the
+`[edit|revert]` button left of the URL drives a two-state
+machine (viewing / editing) for genuine *content* edits only,
+and Accept (panel-level) commits edited text via
+`mcp.replaceRegion`. No fold, no staging, no warning dialog.
 
 Secondary surface (right column): the tag explorer — Type a
 tag (or click one in the defined-tags picker), see top chunks,
@@ -247,29 +247,25 @@ are retained from the pre-reframe design.
 | _sweepResult | string | Final sweep summary on terminal `@sweep-status` |
 | _definedTags | table[] | Lazy-loaded `{tag, description}` list for the picker |
 | _definedTagsLoaded | boolean | Whether `mcp.definedTags()` has been called |
-| _connRequestID | string | Current find-connections request ID (`""` when none in flight) |
-| _connStatus | string | Live `@connections-status` (`""`, `pending`, `working`, `completed`, `errored`) |
-| _connProgress | string | Live `@connections-progress` |
-| _connElapsed | number | Live `@connections-elapsed` (seconds) |
-| _connError | string | `@connections-error` on terminal errored state |
-| _connThemes | Ark.ConnectionTheme[] | Parsed themes section of the connections doc body |
-| _connSharedTags | Ark.ConnectionSharedTag[] | Parsed shared-tag candidates of the connections doc body |
-| _acceptWarnVisible | boolean | Accept warning dialog visibility |
 
-### Ark.PendingWidget
+### Ark.ProposalWidget
 
-A single pending tag operation queued on a `Ark.PinnedChunk`'s
-widget stack. Each widget authors one (tag, value) pair against
-the chunk, either inline (text edit) or routed (ext mirror).
+A loaded gun on a `Ark.PinnedChunk`'s widget stack (renamed from
+`Ark.PendingWidget` — nothing is pending anymore). Each widget
+authors one tag operation (add / replace / remove, internal or
+external disposition) against the chunk and fires it in one
+gesture through the approval shims.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| _chunk | Ark.PinnedChunk | Parent card reference (for stage callbacks) |
+| _chunk | Ark.PinnedChunk | Parent card reference (for fire + refresh callbacks) |
 | tagName | string | Tag name input value |
 | tagValue | string | Tag value input value (ignored when removeMode true) |
-| removeMode | boolean | true = remove this tag from chunk; false = add/change |
-| extMode | boolean | true = route via `@ext` mirror; false = inline text edit |
-| extBase | string | "uuid" or "path" — only meaningful when extMode |
+| removeMode | boolean | true = remove this tag from chunk; false = add/replace |
+| disposition | string | "internal" (tag written into the file body) or "external" (routed via `@ext` mirror). Locked to external when the chunk can't host an internal tag. |
+| replaceMode | boolean | The machinery's `replace` token: true = collapse the tag's values to this one; false = add. Pre-set true when the tag already exists on the chunk. |
+| _fireError | string | Last fire error ("" when none) — widget keeps its state for retry |
+| extBase | string | "uuid" or "path" — only meaningful when disposition external |
 | extBaseValue | string | UUID string or absolute path matching extBase |
 | extLocatorKind | string | "string", "regex", "absolute", or "bare" |
 | extLocatorText | string | Locator value to embed in the target spec |
@@ -289,20 +285,19 @@ chunk metadata, lazy-loaded tag suggestions, ext-tag cache.
 | Field | Type | Description |
 |-------|------|-------------|
 | viewItem | Variable | ViewList item handle (gives access to `baseItem` for chunkID/path/pinnedAt) |
-| _widgets | Ark.PendingWidget[] | Pending widget stack. Empty-start invariant: always at least one empty widget. |
+| _widgets | Ark.ProposalWidget[] | Proposal widget stack. Empty-start invariant: always at least one empty widget. |
 | _chunkInfo | table | Cached `mcp.chunkInfo` result: `{chunkID, fileID, path, range, byteStart, byteEnd, writable, commentSyntax}`. Nil until loaded. |
 | _chunkInfoLoaded | boolean | True after the first chunkInfo fetch (success or failure) |
 | _chunkInfoError | string | Last chunkInfo error ("" when none) |
 | _chunkText | string | Cached `mcp.chunkText` result. Populated lazily on `[edit]` click or current-tags expand. |
 | _chunkTextError | string | Last `mcp.chunkText` error ("" when none) |
-| _editing | boolean | True when CM6 editor is mounted (state ∈ {editing-clean, editing-dirty}) |
+| _editing | boolean | True when CM6 editor is mounted |
 | _chunkOriginalText | string | Snapshot of chunk text at `[edit]` time. Used for dirty check. |
 | _isChunkEdited | boolean | JS-bridge-pushed flag: `editor.getDoc() != _chunkOriginalText`. Drives Accept(N) reactively. |
-| _savedPendings | table[] | Snapshot of inline-mode filled widgets at `[edit]` time. Restored on explicit `[revert]`. |
 | _savedEditorText | string | Editor draft preserved on `[revert]`. Consumed by next `[edit]` as initial doc (perfect restore). |
 | _editorContent | string | JS-synced editor text. Read by Accept. |
 | _extTags | Ark.ExtTagRow[] | Scraped from iframe `<ark-ext-tags>` children: `{name, value, externalfile, externaltarget}`. Persists across edit-mode transition. |
-| _currentTagsView | Ark.CurrentTagRow[] | Derived: union of (inline tags from chunk text or editor draft) and `_extTags`, with pending ops applied for desired-state rendering. |
+| _currentTagsView | Ark.CurrentTagRow[] | Derived: union of inline tags from `_chunkText` and `_extTags` — the chunk's tags as they stand. Rebuilt after each fire. |
 | _suggestions | Ark.TagSuggestion[] | Loaded tag candidates from `mcp.suggestTagNames` |
 | _suggestionsLoaded | boolean | Whether the suggestion load completed |
 | _suggestionsError | string | Last suggestion load error ("" when none) |
@@ -311,18 +306,19 @@ chunk metadata, lazy-loaded tag suggestions, ext-tag cache.
 
 ### Ark.CurrentTagRow
 
-A row in the per-card current-tags collapsible. Renders desired-
-state: union of inline and ext sources with pending ops applied.
+A read-only row in the per-card current-tags collapsible: the
+union of inline and ext sources as they stand on disk. Its two
+affordances (`rem` checkbox, row click) load pre-filled widgets
+into the proposal stack — the row itself never fires anything.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | name | string | Tag name |
-| value | string | Tag value (desired state — reflects pending change if any) |
-| kind | string | "inline" or "ext" — drives row styling and edit semantics |
+| value | string | Tag value |
+| kind | string | "inline" or "ext" — drives row styling and the loaded widget's disposition |
 | externalfile | string | For ext rows: source mirror file path |
 | externaltarget | string | For ext rows: TARGET spec the routing carries |
-| status | string | "" \| "changed" \| "removed" — pending-op overlay indicator |
-| _chunk | Ark.PinnedChunk | Back-reference for edit-mode mutations |
+| _chunk | Ark.PinnedChunk | Back-reference for widget loading |
 
 ### Ark.ExtTagRow
 
@@ -336,25 +332,6 @@ persists when the iframe is destroyed during edit mode.
 | value | string | `<value>` child text |
 | externalfile | string | `externalfile` attribute (mirror file path) |
 | externaltarget | string | `externaltarget` attribute (TARGET spec) |
-
-### Ark.ConnectionTheme
-
-A theme row in the Find Connections proposals panel.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| text | string | Theme summary |
-| evidence | number[] | Chunk IDs the theme spans |
-
-### Ark.ConnectionSharedTag
-
-A shared-tag candidate row in the proposals panel.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| tag | string | Tag name |
-| value | string | Tag value |
-| evidence | number[] | Chunk IDs the proposal applies to |
 
 ### Ark.TagSuggestion
 
@@ -402,6 +379,62 @@ A row in the focused-tag panel's "Drift" list. Shape mirrors
 | pathA | string | Path of one definition file |
 | pathB | string | Path of the other definition file |
 | score | number | Cosine between the two ED vectors |
+
+## Approval shims
+
+@prototype: go-ext-hooks
+
+The fire path routes through two module-level Lua functions in
+`curation.lua`, named and shaped like the future `mcp` bindings
+(code as sketchpad — the shim *interface* is the concrete
+requirement PENDING #65 reads off when binding the real Go hooks;
+the shim *implementation* is disposable). Both are marked
+`-- @prototype: go-ext-hooks`.
+
+```lua
+-- future mcp.extAccept(target, tag, value, opts) → result, err
+extAccept(target, tag, value, opts)
+-- future mcp.extRemove(target, tag, opts) → result, err
+extRemove(target, tag, opts)
+```
+
+- `target` — external: the composed TARGET spec string
+  (`BASE` / `BASE:NARROWER`); internal: the chunk's
+  `{path, byteStart, byteEnd, text}` (shim-only shape — the real
+  hook resolves a spec server-side). Internal targets are
+  re-fetched fresh at fire time; a fire racing the async reindex
+  of a just-fired write can still see a stale range (shim
+  limitation, solved server-side by the real hook).
+- `opts` — `{disposition, replace}` for accept;
+  `{disposition}` for remove.
+- `result` — `{disposition}`: the disposition **actually
+  applied** after degrade, so the caller's feedback stays honest.
+- `err` — non-nil message on failure; nothing was written.
+
+Shim implementation over the old primitives:
+
+| cell | rides |
+|------|-------|
+| external add / replace | `mcp.setExtTag(target, tag, value)` (set semantics approximate both cells) |
+| external remove | `mcp.removeExtTag(target, tag)` |
+| internal add | `prependTag` transform → `mcp.replaceRegion` |
+| internal replace | `replaceTagLine` transform → `mcp.replaceRegion` (degrades to add when no matching line) |
+| internal remove | `removeTagLine` transform → `mcp.replaceRegion` (the machinery's internal-remove gap — shim-only path, decision rides with #65) |
+
+The `findTagLine` / `replaceTagLine` / `removeTagLine` /
+`prependTag` helpers are the old fold's text transforms,
+repurposed: they now feed `mcp.replaceRegion` directly instead of
+a CM6 transaction. Degrade approximation: internal on a chunk
+with `writable == false` locks to external before dispatch. The
+shims use the markdown stencil only — per-chunker stencils
+(comment-wrapping, indent matching) and the comment-syntax
+degrade are the real hooks' job (#65).
+
+**Honesty rule.** The real machinery writes a ledger trail
+(candidate line, `@count`, positive judgment); the shims do not.
+Fire feedback says what happened ("tag applied" / "routed
+externally — chunk can't host inline tags"), never "candidate
+recorded", until #65 lands the real hooks.
 
 ## Methods
 
@@ -543,7 +576,7 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 
 | Method | Description |
 |--------|-------------|
-| new(instance) | Construct; init subscriptions to `tmp://sweep/hot-correlations.md` and `tmp://connections/<id>.md` when sweeps / connections requests are in flight. |
+| new(instance) | Construct; init subscription to `tmp://sweep/hot-correlations.md` when a sweep is in flight. |
 | mutate() | Init missing arrays/fields on schema change |
 | pinned() | Return `sys.curation.pinned` for ViewList binding |
 | curate(chunkID, fileID, path) | Proxy to `sys.curation.pin` — always-add never-flip |
@@ -555,14 +588,12 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | noPinned() | inverse |
 | onViewOpen() | Rotate `_newCutoff = _lastViewedAt`; set `_lastViewedAt = now` |
 | **editedCount()** | Sum of cards where `_isChunkEdited == true`. |
-| **pendingCount()** | Sum of filled widgets (inline + ext) across all cards. |
+| **pendingCount()** | Sum of filled widgets across all cards (used by Clear-unchanged and dismiss guards, not by Accept). |
 | **acceptDisabled()** | `editedCount() == 0` (button gray, no-op label). |
-| **acceptLabel()** | Returns one of `"Accept (no changes)"`, `"Accept (N changed)"`, `"Accept — M pending"`, `"Accept (N changed, M pending)"` per the variants. |
-| **acceptChanges()** | If `pendingCount() > 0`, set `_acceptWarnVisible = true` and return. Otherwise call `_doAccept()`. |
-| **confirmAccept()** | Called by the "Save staged changes only" dialog button. Calls `_doAccept()`; clears `_acceptWarnVisible`. |
-| **cancelAccept()** | Called by "Go back to editing"; clears `_acceptWarnVisible`. |
-| **_doAccept()** | For each card: if `_isChunkEdited`, request editor.getDoc() via JS bridge → `mcp.replaceRegion(path, byteStart, byteEnd_orig, text)`. For each filled ext widget: `mcp.setExtTag` / `mcp.removeExtTag`. On success, card returns to clean state. On error, `_acceptError` set; visual cues activate. |
-| **clearUnchanged()** | Dismiss every card where `_isChunkEdited == false`, no filled inline widgets, no filled ext widgets. |
+| **acceptLabel()** | `"Accept (no changes)"` or `"Accept (N changed)"`. |
+| **acceptChanges()** | Call `_doAccept()` directly — no warning dialog (tag ops fire per-widget; Accept only covers content edits). |
+| **_doAccept()** | For each card with `_isChunkEdited`: request editor.getDoc() via JS bridge → `mcp.replaceRegion(path, byteStart, byteEnd_orig, text)`. On success, card returns to viewing state. On error, `_acceptError` set; visual cues activate. |
+| **clearUnchanged()** | Dismiss every card where `_isChunkEdited == false` and no filled proposal widgets. |
 | loadDefinedTags() | Lazy `mcp.definedTags()` populate of `_definedTags` |
 | filteredDefinedTags() | Filtered view over `_definedTags` per `_focusInput` |
 | filteredDefinedTagCount() | length of the filtered view |
@@ -573,10 +604,6 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | **sweepNow()** | Fire-and-forget: `mcp.sweepHotCorrelationsAsync()`; subscribe to `tmp://sweep/hot-correlations.md` for live `@sweep-status` / `@sweep-progress`. On terminal status, `mcp.tmp_get` reads the final body for the summary. |
 | sweepStatusText() / sweepBusy() | sweep-state accessors |
 | **onSweepEvent(events)** | Subscription callback for `tmp://sweep/hot-correlations.md`. Updates `_sweepBusy`, `_sweepProgress`, `_sweepResult`. |
-| **findConnections()** | Call `mcp.findConnections(pinnedChunkIDs, opts)`. Store request ID in `_connRequestID`. Subscribe to `tmp://connections/<id>.md`. |
-| **onConnectionsEvent(events)** | Subscription callback for `tmp://connections/<id>.md`. Updates `_connStatus`, `_connProgress`, `_connElapsed`. On terminal status, `mcp.tmp_get` reads the doc body, splits Themes and Shared Tag Candidates sections, populates `_connThemes` / `_connSharedTags`. |
-| **fillProposal(sharedTagIdx)** | For each evidence chunk ID in the selected `Ark.ConnectionSharedTag`, look up the matching pinned card's presenter and inject a pre-filled `Ark.PendingWidget` (inline, add, with the proposal's tag and value). |
-| **clearConnections()** | Reset `_connRequestID`, `_connStatus`, `_connThemes`, `_connSharedTags`. Used by retry / dismiss. |
 
 ### Ark.PinnedChunk
 
@@ -594,53 +621,55 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | commentSyntax() | `_chunkInfo.commentSyntax` (`""` for markdown) |
 | writable() | `_chunkInfo.writable` (true unless read-only chunker) |
 | readOnly() | inverse |
-| **widgets()** | Return `_widgets`; lazy ensures empty-start invariant. Returns empty in edit mode (pending stack hidden). |
-| **addWidget()** | Append a new empty `Ark.PendingWidget` to `_widgets`. No-op during edit mode. |
+| **widgets()** | Return `_widgets`; lazy ensures empty-start invariant. Visible in all states — tag authoring is independent of edit mode. |
+| **addWidget()** | Append a new empty `Ark.ProposalWidget` to `_widgets`. |
 | **removeWidget(widget)** | Kill `X` — remove `widget` from `_widgets`; ensure empty-start invariant |
-| **filledWidgetCount()** | Count of widgets where `:isFilled()` is true (across inline + ext) |
-| **filledInlineWidgets()** | Subset of `_widgets` with `isFilled() && !extMode`. Used by the fold algorithm. |
-| **filledExtWidgets()** | Subset of `_widgets` with `isFilled() && extMode`. Dispatched at Accept. |
-| **pendingCount()** | `filledWidgetCount()` (no longer separate staged-ops buffer). |
-| **hasChanges()** | `_isChunkEdited || filledWidgetCount() > 0` (the chunk contributes to Accept). |
+| **filledWidgetCount()** | Count of widgets where `:isFilled()` is true |
+| **pendingCount()** | `filledWidgetCount()` (guards dismiss + Clear unchanged; Accept ignores it). |
+| **hasChanges()** | `_isChunkEdited || filledWidgetCount() > 0` (guards dismiss confirmation). |
 | **noChanges()** | inverse |
+| **fireWidget(widget)** | Fire path. Compose the shim call from the widget (target: `widget:targetSpec()` for external, `{path, byteStart, byteEnd, text}` from `_chunkInfo`/`_chunkText` for internal); dispatch `extAccept` / `extRemove`; on success notify honestly (resolved disposition), reset the widget, and `refreshTags()`; on error set `widget._fireError`, keep state for retry. |
+| **refreshTags()** | Post-fire refresh: clear `_chunkText` cache and re-fetch, bump the iframe nonce (reload re-scrapes `_extTags`), rebuild `_currentTagsView`. |
 | **editButtonIcon()** | "pencil-square" when `!_editing`, "arrow-counterclockwise" when `_editing`. |
-| **editButtonAccent()** | true when `hasChanges()`; drives the icon's color (accent vs gray). |
-| **edit()** | `[edit]` click handler. Snapshot `_chunkOriginalText`, `_savedPendings`; fold filled inline widgets into a `foldedText`; mount CM6 with initial doc = `_savedEditorText` (if present, then clear it) else `_chunkOriginalText`, then dispatch fold as one CM6 transaction. Clear folded widgets. Set `_editing = true`. |
-| **revert()** | `[revert]` click handler. Snapshot `_savedEditorText = editor.getDoc()` via JS bridge; destroy editor; restore `_widgets` from `_savedPendings`; clear `_chunkOriginalText`, `_savedPendings`, `_isChunkEdited`. Set `_editing = false`. |
-| **applyPendingsToText(text, widgets)** | Pure Lua helper. For each `inline-add` widget: prepend `@tag: value\n` to the leading tag block. For `inline-change`: replace the matching `@tag:` line. For `inline-remove`: delete the matching `@tag:` line. Returns the folded text. |
-| **onEditorDocChanged(dirty)** | JS bridge callback. Sets `_isChunkEdited = dirty`. Triggers `_currentTagsView` re-derivation. If `dirty == false` AND `_savedPendings` was non-empty (i.e. fold-undo case), auto-exit edit mode (destroy editor, do NOT restore pendings, state → clean). |
+| **editButtonAccent()** | true when `_isChunkEdited`; drives the icon's color (accent vs gray). |
+| **edit()** | `[edit]` click handler. Snapshot `_chunkOriginalText`; mount CM6 with initial doc = `_savedEditorText` (if present, then clear it) else `_chunkOriginalText`. Set `_editing = true`. |
+| **revert()** | `[revert]` click handler. Snapshot `_savedEditorText = editor.getDoc()` via JS bridge; destroy editor; clear `_chunkOriginalText`, `_isChunkEdited`. Set `_editing = false`. |
+| **onEditorDocChanged(dirty)** | JS bridge callback. Sets `_isChunkEdited = dirty`. |
 | **onExtTagsScraped(json)** | JS bridge callback fired after iframe load. Decodes JSON into `_extTags`. Triggers `_currentTagsView` re-derivation. |
-| **currentTagsView()** | Compute the desired-state union: inline tags from `mcp.parseTagBlock(editor draft ? editor.getDoc() : _chunkText)` plus `_extTags`, with pending ops applied (additions overlayed, removals filtered or struck-through, changes shown with new value). Returns `Ark.CurrentTagRow[]`. |
-| **queueRemoveFromCurrent(row)** | Convenience for the `rem` checkbox in read-only current-tags. Adds a corresponding `inline-remove` or `ext-remove` widget to the pending stack. |
-| **applyCurrentTagEdit(row, newValue)** | In edit mode: for inline rows, dispatch a CM6 transaction rewriting the matching `@tag:` line. For ext rows, queue an `ext-set` pending op carrying the new value. |
+| **currentTagsView()** | Union of inline tags from `mcp.parseTagBlock(_chunkText)` plus `_extTags` — current state, no overlay. Returns `Ark.CurrentTagRow[]`. |
+| **loadRemoveWidget(row)** | `rem` checkbox on a current-tags row: load a pre-filled *remove* widget (tag name, disposition per row kind) into the stack for the user to fire. |
+| **loadReplaceWidget(row)** | Click on a current-tags row: load a pre-filled *replace* widget (tag, current value, disposition per row kind) into the stack for the user to revise and fire. |
 | acceptError() / noAcceptError() / hasAcceptError() | per-card error display helpers |
 | clearAcceptError() | Manual dismiss for the error alert |
 | loadSuggestions() | Lazy `mcp.suggestTagNames(chunkID, K)`; populates `_suggestions` / `_suggestionsError` |
 | suggestions() / suggestionsError() / noSuggestionsError() / hasSuggestions() | tag-scores accessors (renamed view; data path unchanged) |
 | iframeURL() | `/content<path>?range=…&toggle=false` for the read-only chunk-text iframe |
-| editorMountCode() | Returns inline JS string for `ui-code` binding: imports `/ark-markdown-editor.js`, calls `createInkArkEditor` on mount div, dispatches fold transaction, registers docChanged callback wiring to `onEditorDocChanged`. |
+| editorMountCode() | Returns inline JS string for `ui-code` binding: imports `/ark-markdown-editor.js`, calls `createInkArkEditor` on mount div, registers docChanged callback wiring to `onEditorDocChanged`. |
 
-### Ark.PendingWidget
+### Ark.ProposalWidget
 
 | Method | Description |
 |--------|-------------|
-| new(chunk) | Construct an empty widget bound to its parent PinnedChunk |
-| isEmpty() | true when `tagName == ""` and `tagValue == ""` and not removeMode and not extMode |
+| new(chunk) | Construct an empty widget bound to its parent PinnedChunk. Disposition defaults internal for writable chunks, external (locked) otherwise. |
+| isEmpty() | true when `tagName == ""` and `tagValue == ""` and no non-default modes |
 | isFilled() | true when `tagName != ""` (value can be empty for remove ops or boolean tags) |
+| **fire()** | The loaded gun's trigger: call parent `chunk:fireWidget(self)`. |
+| **fireDisabled()** | true when `tagName == ""`. |
+| **fireError() / noFireError() / clearFireError()** | Per-widget fire-error display for retry. |
 | toggleRemove() | Flip `removeMode` |
-| toggleExt() | Flip `extMode`. On first turn-on, call `mcp.suggestExtLocator(chunkID)` to populate `extBase` / `extBaseValue` / `extLocatorKind` / `extLocatorText` / `_extScopeChunks` / `_extScopeFiles` / `_withinFileDupCount`. Reads `locatorText` for the actual locator value (`locator` field has a known Go bug). |
+| **toggleDisposition()** | Flip internal ↔ external (no-op when locked to external). On first switch to external, call `mcp.suggestExtLocator(chunkID)` to populate `extBase` / `extBaseValue` / `extLocatorKind` / `extLocatorText` / `_extScopeChunks` / `_extScopeFiles` / `_withinFileDupCount`. Reads `locatorText` for the actual locator value (`locator` field has a known Go bug). |
+| **toggleReplace()** | Flip `replaceMode` (add ↔ replace). |
+| **onTagNameChange()** | When the entered tag already exists on the chunk (per `currentTagsView`), pre-set `replaceMode = true` — the visible default replacing the old infer-by-existence rule. |
 | kill() | Call parent `chunk:removeWidget(self)` |
 | setBase(base) | Update `extBase`; re-run suggestExtLocator to get new defaults if needed |
 | setLocatorKind(kind) | Update `extLocatorKind`; clear `extLocatorText` for `bare`, otherwise leave editable |
-| canStage() | true when isFilled() and parent chunk allows the operation (ext-only if read-only) |
-| extToggleLocked() | true when parent chunk is read-only (ext always-on, can't toggle off) |
+| dispositionLocked() | true when parent chunk can't host an internal tag (read-only, or comment-less code) — control locked to external |
 | scopeReadout() | `"will route to N chunks across M files"` string for the readout line |
 | baseChoices() | `["uuid", "path"]` or `["path"]` (UUID hidden when chunk has no @id) |
 | locatorChoices() | `["string", "regex", "absolute", "bare"]` |
 | dupFlag() | `"UUID: %s... (×%d in this file)"` when `_withinFileDupCount > 1`, empty otherwise |
 | autoAddOnTab() | Called from viewdef tab-out event. If `isFilled()` and the parent's last widget is this one, call `chunk:addWidget()`. |
-| targetSpec() | Compose `BASE` or `BASE:NARROWER` from the ext fields (used by stage to build setExtTag arg) |
-| stagedOpRecord() | Return a `{kind, tagName, tagValue, targetSpec}` record for the parent's `_stagedOps` |
+| targetSpec() | Compose `BASE` or `BASE:NARROWER` from the ext fields (used by fire to build the external target) |
 
 ### Ark.HotChunk
 
@@ -698,13 +727,11 @@ Read-only display object. No actions.
 | Ark.Messaging.DEFAULT.html | Ark.Messaging | Kanban columns with message cards |
 | Ark.Message.list-item.html | Ark.Message | Card in kanban column |
 | Ark.MessageDetail.DETAIL.html | Ark.MessageDetail | Dialog with rendered markdown, controls, Complete button |
-| Ark.Curation.DEFAULT.html | Ark.Curation | Two-column workshop: pinned chunks + tag explorer. Header carries `[⚡ sweep]`, `[⌫ Clear unchanged]`, `[Accept (…)]`, the Accept warning dialog, and the Find Connections proposals panel. |
-| Ark.PinnedChunk.list-item.html | Ark.PinnedChunk | Pinned-chunk card: pending widget stack + URL row with `[edit|revert]` button (color-changing icon: gray when clean, accent when has-changes) + three collapsibles (current tags, tag scores, chunk text). Chunk-text body holds the iframe-and-click-shield in read-only mode and the CM6 mount div in edit mode. Inline JS via `ui-code` drives the bridge (iframe scrape, editor mount/destroy/read). |
-| Ark.PendingWidget.list-item.html | Ark.PendingWidget | Pending-tag widget row: tag/value/remove/ext/X (+ base/locator/scope when ext) |
-| Ark.CurrentTagRow.list-item.html | Ark.CurrentTagRow | Current-tags row: same widget shape as `Ark.PendingWidget`, readonly in iframe mode / editable in edit mode. Ext rows carry an externalfile badge. |
+| Ark.Curation.DEFAULT.html | Ark.Curation | Two-column workshop: pinned chunks + tag explorer. Header carries `[⚡ sweep]`, `[⌫ Clear unchanged]`, `[Accept (…)]`. |
+| Ark.PinnedChunk.list-item.html | Ark.PinnedChunk | Pinned-chunk card: proposal widget stack + URL row with `[edit|revert]` button (color-changing icon: gray when clean, accent when the editor is dirty) + three collapsibles (current tags, tag scores, chunk text). Chunk-text body holds the iframe-and-click-shield in read-only mode and the CM6 mount div in edit mode. Inline JS via `ui-code` drives the bridge (iframe scrape, editor mount/destroy/read). |
+| Ark.ProposalWidget.list-item.html | Ark.ProposalWidget | Proposal widget row, fire first: 🔥/tag/value/int-ext/add-replace/remove/X (+ base/locator/scope when external) + fire-error alert |
+| Ark.CurrentTagRow.list-item.html | Ark.CurrentTagRow | Current-tags row: same widget shape as `Ark.ProposalWidget`, always readonly. `rem` loads a remove widget; row click loads a replace widget. Ext rows carry an externalfile badge. |
 | Ark.TagSuggestion.list-item.html | Ark.TagSuggestion | One-line tag candidate with score (rendered under the "tag scores" collapsible) |
-| Ark.ConnectionTheme.list-item.html | Ark.ConnectionTheme | Theme row in the Find Connections proposals panel — text + chunk-evidence chips. |
-| Ark.ConnectionSharedTag.list-item.html | Ark.ConnectionSharedTag | Shared-tag candidate row in the Find Connections panel — `tag: value`, evidence chunk IDs, `[Fill]` button. |
 | Ark.HotChunk.list-item.html | Ark.HotChunk | Focused-tag chunk row with pin button |
 | Ark.RelatedTag.list-item.html | Ark.RelatedTag | Focused-tag related-tag row, click-to-focus |
 | Ark.DriftPair.list-item.html | Ark.DriftPair | Focused-tag drift-pair row (read-only) |
@@ -803,15 +830,6 @@ upgraded), the bridge:
 Cross-document mutation requires same-origin — confirmed during
 `/ui-thorough`.
 
-### Desired-state overlay on iframe
-
-After the scrape, the bridge rewrites the iframe's
-`<ark-ext-tags>` `<ark-tag>` children to reflect pending ops
-(removing entries marked for removal, adding new entries from
-pending ext-set widgets, replacing values for changes). The
-custom element's existing dropdown reads from its current
-children, so the overlay propagates automatically.
-
 ### Click-shield (read-only mode)
 
 A transparent absolutely-positioned div sits over the iframe
@@ -832,16 +850,15 @@ Runs once per edit-mode entry. The bridge:
    `HostAPI` whose `save(_, content)` syncs to Lua via
    `updateValue('cur-content-<chunkID>', content)` instead of
    writing to disk.
-3. Reads the pre-computed `_foldedText` from a hidden span; if
-   different from `_chunkOriginalText`, dispatches one CM6
-   transaction inserting the diff (single undoable history
-   entry).
-4. Registers a `EditorView.updateListener.of(...)` callback that
+3. Registers a `EditorView.updateListener.of(...)` callback that
    on every `transaction` pushes
    `_isChunkEdited = (state.doc.toString() != originalText)`
    back via `updateValue('cur-dirty-<chunkID>', dirty)`.
-5. Stashes the editor on `window.__curEditor_<chunkID>` so the
+4. Stashes the editor on `window.__curEditor_<chunkID>` so the
    Accept-time read can find it.
+
+No fold pass: the editor opens on the chunk's original text (or
+the preserved draft) — tag operations never enter the editor.
 
 ### Editor destroy (`[revert]`)
 
@@ -858,17 +875,6 @@ restore).
 and `updateValue('cur-content-<chunkID>', text)`. Lua then
 dispatches `mcp.replaceRegion(path, byteStart, byteEnd_orig,
 text)` synchronously.
-
-### Current-tags edits during edit mode
-
-Inline rows: edit-on-blur dispatches via JS to find the
-`@tag:` line in the editor's doc (a regex scan over the doc's
-leading tag block) and dispatches a CM6 transaction replacing
-that line.
-
-Ext rows: edit-on-blur calls back through `updateValue` to add
-a new `ext-set` pending widget (Lua-side mutation, no editor
-involvement).
 
 ---
 
@@ -892,39 +898,12 @@ The retrofit lets the workspace remain responsive while a sweep
 runs and shows mid-flight progress. Subscription lifetime is the
 session — no explicit unsubscribe.
 
-## Find Connections orchestration
+## Proposal supply chain (Find Connections removed)
 
-The proposals panel surfaces themes and shared-tag candidates
-from the ark-connections sidecar.
-
-1. **Request**: `findConnections()` calls
-   `mcp.findConnections(pinnedChunkIDs, opts)`. On success
-   returns request ID → stored in `_connRequestID`. On
-   `"agent unavailable"` → surface a friendly message in the
-   panel.
-2. **Subscribe**: `mcp.subscribe(sessionID, {tag =
-   "connections-status", filterFiles =
-   {"tmp://connections/<id>.md"}})` plus parallel subs for
-   `connections-progress`, `connections-elapsed`,
-   `connections-error`. Events route to
-   `onConnectionsEvent(events)`.
-3. **Live updates**: callback updates `_connStatus`,
-   `_connProgress`, `_connElapsed` reactively. UI renders a
-   progress strip in the panel.
-4. **Terminal**: on `@connections-status: completed`, callback
-   calls `mcp.tmp_get("tmp://connections/<id>.md")`, splits the
-   body at `## Themes` and `## Shared Tag Candidates`, parses
-   each section's items via line-by-line scan (the body uses
-   `@theme-evidence:`, `@shared-tag:`, `@shared-tag-value:`,
-   `@shared-tag-evidence:` per `connections.go`). Populates
-   `_connThemes` and `_connSharedTags`.
-5. **Fill**: each `Ark.ConnectionSharedTag` row in the panel has
-   a `[Fill]` button bound to `fillProposal(idx)`. The handler
-   walks `evidence` chunk IDs, finds each matching pinned
-   presenter, and adds a pre-filled `Ark.PendingWidget` to its
-   stack: `tagName = proposal.tag`, `tagValue = proposal.value`,
-   `extMode = false`. Cards with no matching pin are skipped
-   silently.
-6. **Errored / retry**: `@connections-status: errored` sets
-   `_connError`; UI offers a "Retry" button that calls
-   `findConnections()` again.
+The ark-connections sidecar orchestration (`mcp.findConnections`
+→ `tmp://connections/<id>.md` → external `ark connections --wait`
+consumer) is removed from the app — the sidecar is retired, its
+role replaced by the luhmann secretary pool. The forge's future
+proposal source is the candidate ledger (agents author
+`@ext-candidate`s cross-session; the forge reviews them) — the
+review-queue surface is PENDING #9.

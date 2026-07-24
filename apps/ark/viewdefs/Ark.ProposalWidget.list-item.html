@@ -1,11 +1,19 @@
 <template>
-  <div class="cur-widget" ui-class-cur-widget-ext="extMode" ui-class-cur-widget-remove="removeMode">
+  <div class="cur-widget" ui-class-cur-widget-ext="isExternal()" ui-class-cur-widget-remove="removeMode">
     <div class="cur-widget-row">
+      <sl-tooltip content="Fire: commit this tag operation now">
+        <sl-icon-button name="send-fill"
+                        class="cur-widget-fire"
+                        ui-action="fire()"
+                        ui-attr-disabled="fireDisabled()"
+                        label="Fire"></sl-icon-button>
+      </sl-tooltip>
       <sl-input
         size="small"
         class="cur-widget-tag"
         placeholder="tag"
         ui-value="tagName?keypress"
+        ui-event-sl-change="onTagNameChange()"
       ></sl-input>
       <sl-input
         size="small"
@@ -14,27 +22,33 @@
         ui-value="tagValue?keypress"
         ui-attr-disabled="removeMode"
       ></sl-input>
-      <sl-tooltip content="Remove this tag from the chunk on Stage">
+      <sl-tooltip content="Disposition: int writes the tag into the file body, ext routes it via @ext mirror">
+        <sl-button size="small"
+                   class="cur-widget-disposition"
+                   ui-action="toggleDisposition()"
+                   ui-attr-disabled="dispositionLocked()"
+        ><span ui-value="dispositionLabel()"></span></sl-button>
+      </sl-tooltip>
+      <sl-tooltip content="add appends another value; replace collapses the tag's values to this one">
+        <sl-button size="small"
+                   class="cur-widget-replace"
+                   ui-action="toggleReplace()"
+                   ui-attr-disabled="removeMode"
+        ><span ui-value="replaceLabel()"></span></sl-button>
+      </sl-tooltip>
+      <sl-tooltip content="Remove this tag instead">
         <sl-checkbox
           size="small"
           ui-attr-checked="removeMode"
           ui-event-sl-change="toggleRemove()"
         >rem</sl-checkbox>
       </sl-tooltip>
-      <sl-tooltip content="Route via @ext mirror instead of inline">
-        <sl-checkbox
-          size="small"
-          ui-attr-checked="extMode"
-          ui-attr-disabled="extToggleLocked()"
-          ui-event-sl-change="toggleExt()"
-        >ext</sl-checkbox>
-      </sl-tooltip>
       <sl-tooltip content="Discard this widget">
         <sl-icon-button name="x-lg" ui-action="kill()" label="Kill"></sl-icon-button>
       </sl-tooltip>
     </div>
 
-    <div class="cur-widget-ext-row" ui-class-hidden="notExt()">
+    <div class="cur-widget-ext-row" ui-class-hidden="isInternal()">
       <sl-select
         size="small"
         class="cur-widget-base"
@@ -64,9 +78,14 @@
       ></sl-input>
     </div>
 
-    <div class="cur-widget-flags" ui-class-hidden="notExt()">
+    <div class="cur-widget-flags" ui-class-hidden="isInternal()">
       <span class="cur-widget-dup" ui-class-hidden="noDupFlag()" ui-value="dupFlag()"></span>
       <span class="cur-widget-scope" ui-class-hidden="noScopeReadout()" ui-value="scopeReadout()"></span>
+    </div>
+
+    <div class="cur-widget-fire-error" ui-class-hidden="noFireError()">
+      <span ui-value="fireError()"></span>
+      <sl-icon-button name="x-lg" ui-action="clearFireError()" label="Dismiss error"></sl-icon-button>
     </div>
   </div>
 </template>

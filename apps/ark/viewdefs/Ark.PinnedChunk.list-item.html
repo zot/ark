@@ -5,11 +5,11 @@
        ui-class-cur-pin-confirm="dismissPending()"
        ui-class-cur-pin-editing="isEditing()"
        ui-class-cur-pin-error="hasAcceptError()">
-    <!-- Pending widget stack (hidden during edit mode) -->
-    <div class="cur-pin-widgets" ui-class-hidden="hideWidgets()">
+    <!-- Proposal widget stack (independent of edit mode) -->
+    <div class="cur-pin-widgets">
       <div ui-view="widgets()?wrapper=lua.ViewList"></div>
       <div class="cur-pin-widget-add">
-        <sl-tooltip content="Add a pending widget (click or Tab+Enter)">
+        <sl-tooltip content="Add a proposal widget (click or Tab+Enter)">
           <sl-icon-button name="plus-lg"
                           ui-action="onPlusFocused()"
                           label="Add widget"></sl-icon-button>
@@ -30,7 +30,7 @@
       <span class="cur-pin-new-pill" ui-class-hidden="notNew()">NEW</span>
       <a class="cur-pin-path" target="_blank" ui-attr-href="contentURL()" ui-value="shortPath()" title="Open file"></a>
       <span class="cur-pin-pending" ui-class-hidden="noPending()">
-        (<span ui-value="pendingCount()"></span> pending)
+        (<span ui-value="pendingCount()"></span> unfired)
       </span>
       <sl-tooltip content="Dismiss this chunk">
         <sl-icon-button name="x-lg" ui-action="dismiss()" label="Dismiss"></sl-icon-button>
@@ -39,7 +39,7 @@
 
     <!-- Confirm-dismiss row -->
     <div class="cur-pin-confirm-row" ui-class-hidden="notDismissPending()">
-      <span class="cur-pin-confirm-msg">Discard pending changes?</span>
+      <span class="cur-pin-confirm-msg">Discard unfired proposals / unsaved edits?</span>
       <sl-button size="small" variant="danger" ui-action="confirmDismiss()">Discard</sl-button>
       <sl-button size="small" ui-action="cancelDismiss()">Cancel</sl-button>
     </div>
@@ -79,14 +79,12 @@
       <!-- Edit mode: CM6 mount + hidden data spans + bridge JS -->
       <div class="cur-pin-chunk-editor" ui-class-hidden="notEditing()">
         <span class="cur-pin-editor-orig" hidden ui-value="chunkOriginalText()"></span>
-        <span class="cur-pin-editor-fold" hidden ui-value="foldedText()"></span>
+        <span class="cur-pin-editor-initial" hidden ui-value="editorInitialText()"></span>
         <span class="cur-pin-editor-path" hidden ui-value="path()"></span>
         <input type="hidden" class="cur-pin-editor-content-input"
                ui-value="setEditorContent(_)?access=w" />
         <input type="hidden" class="cur-pin-editor-dirty-input"
                ui-value="setEditorDirty(_)?access=w" />
-        <input type="hidden" class="cur-pin-editor-ack-input"
-               ui-value="ackEditorCmds(_)?access=w" />
         <div class="cur-pin-editor-mount"></div>
       </div>
       <span hidden ui-code="editorBridgeCode()?priority=low"></span>

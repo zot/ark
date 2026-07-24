@@ -2,12 +2,13 @@
 
 ## Gaps
 
-### Tag Forge reframe (slice B/C deferred items)
-- **Per-line annotation** — author a tag *about* a specific line mid-chunk. v1's inline-remove deletes the matching `@tag:` line (the fold algorithm does this at `[edit]` time); inline-add prepends to the leading tag block. Mid-chunk authoring is deferred.
-- **Tab-out auto-add** — `PendingWidget:autoAddOnTab()` is wired to `ui-event-blur` on the value input as a proxy. True keyboard tab-out detection needs a JS bridge or keypress handler the engine doesn't yet expose.
-- **Same-origin iframe DOM mutation** — the desired-state overlay rewrites `<ark-ext-tags>` children in the chunk-text iframe. Requires same-origin; confirm during `/ui-thorough` testing.
-- **CurrentTagRow:applyEdit (ext-row in-edit editing)** — defined per design.md but the viewdef-side wiring (input edit-on-blur → applyEdit) is deferred. Read-only `queueRemove()` works in both modes.
-- **Desired-state overlay on iframe DOM** — `iframeBridgeCode` currently only scrapes; the overlay pass that rewrites `<ark-ext-tags>` children to reflect pending ops is deferred. Current-tags display still computes desired state Lua-side.
+### Tag Forge machinery reconcile (2026-07, PENDING #37)
+- **Shim: fire-vs-reindex race** — internal fires re-fetch chunkInfo/chunkText at fire time, but a fire racing the async reindex of a just-fired write can still see a stale byte range. Shim limitation; the real Go hooks (#65) resolve targets server-side on the DB actor.
+- **Shim: external add ≈ replace** — both external cells ride `mcp.setExtTag` (set semantics); the machinery's true external-add (append edge) waits for the real hooks.
+- **Shim: no ledger trail** — the candidate line, `@count`, and positive judgment do not exist on the shim path (honesty rule: no UI copy claims them). Discharged by #65.
+- **Per-line annotation** — author a tag *about* a specific line mid-chunk. Internal add prepends to the leading tag block (markdown stencil); mid-chunk authoring is deferred.
+- **Tab-out auto-add** — `ProposalWidget:autoAddOnTab()` is currently unwired (dead method kept per design). True keyboard tab-out detection needs a JS bridge or keypress handler the engine doesn't yet expose.
+- **Stale persisted pins (pre-existing, observed 2026-07-23)** — `state.json` pins persist chunkIDs across restarts, but reindexing can reassign IDs: a pin's `path` said `.scratch/BRAINSTORM.md` while its chunkID resolved to a read-only chat-JSONL chunk (so its widget correctly locked to ext for the *wrong* chunk). Pre-dates this pass (Accept had the same wrong-target exposure); wants an ark-core fix (validate pin path vs resolved chunkInfo path, drop or re-resolve mismatches).
 
 ### Unimplemented Design Features
 - Node:hideIgnoreCheckbox, Node:toggleHonorIgnore (ignore file integration)

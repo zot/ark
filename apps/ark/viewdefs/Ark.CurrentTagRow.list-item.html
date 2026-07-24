@@ -1,40 +1,25 @@
 <template>
   <div class="cur-current-tag"
        ui-class-cur-current-tag-ext="isExt()"
-       ui-class-cur-current-tag-inline="isInline()"
-       ui-class-cur-current-tag-removed="isRemoved()"
-       ui-class-cur-current-tag-changed="isChanged()"
-       ui-class-cur-current-tag-added="isAdded()"
-       ui-class-cur-current-tag-editable="parentEditing()">
-    <sl-input size="small"
-              class="cur-current-tag-name"
-              readonly
-              ui-value="name"></sl-input>
+       ui-class-cur-current-tag-inline="isInline()">
+    <sl-tooltip content="Load a replace widget pre-filled from this tag">
+      <sl-input size="small"
+                class="cur-current-tag-name"
+                readonly
+                ui-value="name"
+                ui-event-click="loadReplaceWidget()"></sl-input>
+    </sl-tooltip>
     <sl-input size="small"
               class="cur-current-tag-value"
-              ui-value="value?keypress&access=rw"
-              ui-attr-readonly="parentNotEditing()"
-              ui-event-sl-focus="onValueFocus()"
-              ui-event-sl-blur="onValueBlur()"></sl-input>
-    <span class="cur-current-tag-status" ui-class-hidden="noStatus()" ui-value="status"></span>
+              readonly
+              ui-value="value"
+              ui-event-click="loadReplaceWidget()"></sl-input>
     <span class="cur-current-tag-ext-file" ui-class-hidden="isInline()" ui-value="externalfile"></span>
-    <sl-tooltip content="Remove this tag">
+    <sl-tooltip content="Load a remove widget for this tag">
       <sl-icon-button name="dash-circle"
                       class="cur-current-tag-rem"
-                      ui-action="queueRemove()"
+                      ui-action="loadRemoveWidget()"
                       label="Remove"></sl-icon-button>
     </sl-tooltip>
-    <sl-tooltip content="Toggle inline / ext routing" ui-class-hidden="parentNotEditing()">
-      <sl-checkbox size="small"
-                   class="cur-current-tag-ext-toggle"
-                   ui-attr-checked="extChecked"
-                   ui-event-sl-change="toggleExt()">ext</sl-checkbox>
-    </sl-tooltip>
-    <!-- Incremental-search-style pump: the engine evaluates this
-         method on every variable scan. When the user types into the
-         value input, the writeback updates `value` but
-         `_lastSyncedValue` lags; the pump detects the divergence and
-         applies the edit immediately, propagating live to CM6. -->
-    <span hidden ui-value="onValueChange()"></span>
   </div>
 </template>
