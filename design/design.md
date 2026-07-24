@@ -157,6 +157,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
+- [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
 - [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
@@ -184,6 +185,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
 
 ### Sequences
+- [x] seq-checkpoint.md → `cmd/ark/checkpoint.go`
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
 - [x] seq-search.md → `search.go`
 - [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
@@ -294,6 +296,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-checkpoint.md → `cmd/ark/checkpoint_test.go`
 - [x] test-PtyProtocol.md → `luhmann-terminal/src/pty-protocol.test.ts`
 - [x] test-HTTPOperation.md → `httpop_test.go`
 - [x] test-DateParseGuards.md → `scheduler_test.go`

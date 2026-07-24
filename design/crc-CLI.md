@@ -27,7 +27,8 @@ dispatches operations via proxy or cold-start.
   serve, status, files, stale, missing, dismiss, config, unresolved, resolve,
   tag (with sub-subcommands: list, counts, files, set, get, check),
   ui (with sub-subcommands: run, display, event, checkpoint, audit,
-  status, open, install),
+  status, open, install; checkpoint's fossil machinery is
+  crc-Checkpoint.md),
   bundle, ls, cat, cp, chunks,
   embed (with sub-subcommands: text, bench, validate),
   message (with sub-subcommands: new-request, new-response, set-tags,

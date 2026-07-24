@@ -49,7 +49,7 @@ could sit in two; cross-listing is kept minimal).
 - **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md, inbox-bookmark-fields.md, inbox-entry-enrichment.md
 - **tmp:// documents** — tmp-documents.md, tmp-subscription.md, tmp-tag-overlay.md
 - **Storage & concurrency** — architecture.md *(overview — see Theme: Actors & DB-access discipline)*, record-formats.md, db-write-actor.md, db-concurrency.md, http-operations.md, rebuild-read-serve.md, cli-dispatch.md, chunk-cache-threading.md, pubsub.md, tvid-map-overlay.md, serve-compact.md
-- **UI / Frictionless** — embedded-ui.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md, ark-search.md, chunked-content-view.md, content-fetching.md, content-iframe.md, editor-endpoints.md, tag-overview.md, tag-search-panel.md, table-sort.md, chat-transcript.md
+- **UI / Frictionless** — embedded-ui.md, ui-checkpoints.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md, ark-search.md, chunked-content-view.md, content-fetching.md, content-iframe.md, editor-endpoints.md, tag-overview.md, tag-search-panel.md, table-sort.md, chat-transcript.md
 - **Nano (local LLM agent)** — nano-overview.md, nano-cli.md, nano-library.md, nano-sessions.md, nano-tool-loop.md
 - **Status & diagnostics** — status-db.md, status-enhanced.md, files-status.md, chunk-stats.md, tag-inspect.md, tag-verify.md, verbose-flags.md
 - **Server, config & infrastructure** — main.md, sessions.md, subscriber-presence.md, config-flag-bug.md, config-tracking.md, bundle-assets.md, infrastructure.md, managed-pty.md, luhmann-terminal-element.md

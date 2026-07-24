@@ -94,6 +94,8 @@ replacing the `.ui/mcp` shell script:
   these same events onto its own tube; see the `events` verb in
   [luhmann.md](luhmann.md). Unaffected when no orchestrator has asked.
 - `ark ui checkpoint <cmd> <app> [msg]` — manage app checkpoints
+  (fossil-backed; safety contract in
+  [ui-checkpoints.md](ui-checkpoints.md))
 - `ark ui audit <app>` — run code quality audit
 - `ark ui status` — ui-engine server status
 - `ark ui open` — open browser to current session

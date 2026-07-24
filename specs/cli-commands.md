@@ -1362,7 +1362,12 @@ thin wrappers over Lua API endpoints.
 | `variables` | `GET /variables` |
 
 `ui checkpoint` subcommands (Fossil-backed; require `~/.claude/bin/fossil`,
-which the command will print download instructions for if missing):
+which the command will print download instructions for if missing).
+Safety contract in [ui-checkpoints.md](ui-checkpoints.md): the app
+directory's checkout binding is verified before every fossil step (abort
+loudly on mismatch), opens are `--nested`/`--keep`, branch saves never
+modify the working tree, and every fossil failure surfaces on stderr with
+a nonzero exit — no unconditional success messages:
 
 | Sub-subcommand               | Behavior                                                                             |
 |------------------------------|--------------------------------------------------------------------------------------|
