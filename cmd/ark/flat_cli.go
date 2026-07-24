@@ -96,7 +96,7 @@ func flatCommands() []*ucli.Command {
 			Action: flatChunksAction,
 		},
 		{
-			Name: "chats", Usage: "show conversation transcripts from JSONL logs", ArgsUsage: "[PATH...]",
+			Name: "chats", Usage: "show conversation transcripts from JSONL logs", ArgsUsage: "PATH-OR-GLOB...",
 			Flags: []ucli.Flag{
 				&ucli.BoolFlag{Name: "with-tools", Usage: "display tool calls and results"},
 				&ucli.BoolFlag{Name: "thinking", Usage: "display chain-of-thought (thinking) blocks"},

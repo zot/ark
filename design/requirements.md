@@ -1559,13 +1559,15 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ## Feature: Chat Transcript
 **Source:** specs/chat-transcript.md
 
-- **R1044:** `ark chats GLOB` reads Claude Code JSONL logs and renders human-readable transcripts
+- **R1044:** `ark chats PATH-OR-GLOB...` reads Claude Code JSONL logs and renders human-readable transcripts
 - **R1045:** User turns introduced with `❯`, assistant turns with `●`, continuation lines indented 2 spaces
 - **R1046:** Text word-wrapped at `--line-length` (default 100)
 - **R1047:** `--with-tools` shows tool calls inline as `⚙ ToolName summary`
 - **R1048:** `--wrap NAME` surrounds output with `<NAME>...</NAME>` tags
 - **R1049:** Sidechain messages (subagent traffic) filtered out
-- **R1050:** GLOB matches against file basenames in `~/.claude/projects/` directories
+- **R1050:** An argument that is not an existing file is a glob matched against file basenames in `~/.claude/projects/` directories
+- **R3242:** An argument naming an existing file is rendered directly — any JSONL file on disk works, indexed or not, regardless of location
+- **R3243:** Multiple positional arguments accepted; resolved files render in argument order. An argument yielding no file warns on stderr; exit 1 only when no argument yields any file
 - **R3035:** `--thinking` renders assistant thinking (chain-of-thought) blocks inline as `✻ ...`, off by default; `--all` enables tools + thinking + sidechain together for a complete transcript. The chunker (`extractJSONLTextFast`) extracts the same `thinking` field, so display and index agree — but Claude Code stopped persisting thinking text ~2026-04 (signature-only since; see `.scratch/CHAT-THINKING-REDACTION-20260705.md`), so both carry reasoning only for pre-May transcripts. `--thinking` is thus effectively an archive reader for that window.
 
 ## Feature: Schedule Lifecycle

@@ -22,16 +22,17 @@ func cmdChats(args []string) {
 	wrap := fs.String("wrap", "", "wrap output with a name tag")
 	lineLen := fs.Int("line-length", 100, "word-wrap line length")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, `Usage: ark chats GLOB [options]
+		fmt.Fprintln(os.Stderr, `Usage: ark chats PATH-OR-GLOB... [options]
 
 Show conversation transcripts from Claude Code JSONL logs.
-GLOB matches against indexed JSONL file paths.
+An argument naming an existing file is rendered directly; otherwise
+it is a glob matched against file basenames under ~/.claude/projects/.
 
 Options:`)
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, `
 Examples:
-  ark chats '*.jsonl'
+  ark chats ./session.jsonl
   ark chats '*13051f62*.jsonl'
   ark chats '*.jsonl' --with-tools
   ark chats '*.jsonl' --wrap transcript`)
@@ -43,12 +44,10 @@ Examples:
 		fs.Usage()
 		os.Exit(1)
 	}
-	pattern := fs.Arg(0)
-
-	// Find matching JSONL files in indexed sources
-	files := findJSONLFiles(pattern)
+	// R3243: all positionals resolve, in argument order; per-arg no-match
+	// warnings come from resolveChatFiles, exit 1 only when nothing matched.
+	files := resolveChatFiles(fs.Args())
 	if len(files) == 0 {
-		fmt.Fprintf(os.Stderr, "no JSONL files matching: %s\n", pattern)
 		os.Exit(1)
 	}
 
@@ -73,7 +72,28 @@ Examples:
 	}
 }
 
-// findJSONLFiles searches indexed sources for JSONL files matching a glob pattern.
+// resolveChatFiles resolves positional arguments to JSONL files. An argument
+// naming an existing file is taken as-is; anything else is a glob handed to
+// findJSONLFiles. Arguments yielding no file warn on stderr.
+// CRC: crc-CLI.md | R3242, R3243
+func resolveChatFiles(args []string) []string {
+	var files []string
+	for _, arg := range args {
+		// R3242: an existing file renders directly — indexed or not, anywhere on disk
+		if st, err := os.Stat(arg); err == nil && st.Mode().IsRegular() {
+			files = append(files, arg)
+			continue
+		}
+		matched := findJSONLFiles(arg)
+		if len(matched) == 0 {
+			fmt.Fprintf(os.Stderr, "no JSONL files matching: %s\n", arg)
+		}
+		files = append(files, matched...)
+	}
+	return files
+}
+
+// findJSONLFiles walks ~/.claude/projects/ for JSONL files matching a glob pattern.
 // CRC: crc-CLI.md | R1050 — GLOB matches file basenames under ~/.claude/projects/
 func findJSONLFiles(pattern string) []string {
 	// Search common Claude Code conversation log locations

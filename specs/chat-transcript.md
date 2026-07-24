@@ -6,12 +6,17 @@ Language: Go. Environment: ark CLI (no server needed).
 ## ark chats
 
 ```
-ark chats GLOB [--with-tools] [--thinking] [--all] [--wrap NAME] [--line-length N]
+ark chats PATH-OR-GLOB... [--with-tools] [--thinking] [--all] [--wrap NAME] [--line-length N]
 ```
 
 Reads Claude Code JSONL conversation logs and renders them as
-human-readable transcripts. GLOB matches against file basenames
-in `~/.claude/projects/` directories.
+human-readable transcripts. Takes one or more positional arguments.
+Each argument that names an existing file is rendered directly — any
+JSONL file on disk works, whether or not it is indexed or lives under
+`~/.claude/projects/`. An argument that is not an existing file is a
+glob matched against file basenames in `~/.claude/projects/`
+directories. Arguments that match nothing get a warning on stderr;
+the command exits 1 only when no argument yields any file.
 
 Each user turn is introduced with `❯`, each assistant turn with `●`.
 Continuation lines within a turn are indented by 2 spaces. Text is

@@ -17,6 +17,26 @@ a `{"type":"thinking",…}` block ("SECRETTHOUGHT") and a `{"type":"text",…}` 
 present and carries the `✻` marker.
 **Refs:** crc-CLI.md
 
+## Test: an existing file path resolves directly
+**Purpose:** R3242 — an argument naming an existing file resolves to that file,
+with no index lookup and no `~/.claude/projects/` walk, so any on-disk JSONL
+renders. Guards the #66 contract: existence is the only test.
+**Input:** a JSONL file written under `t.TempDir()` (outside any projects dir);
+`resolveChatFiles` called with its absolute path.
+**Expected:** the returned list is exactly that path.
+**Refs:** crc-CLI.md
+
+## Test: non-file arguments fall back to the basename glob
+**Purpose:** R1050, R3243 — an argument that is not an existing file is treated
+as a basename glob against the projects walk; an argument yielding nothing
+leaves the result empty (caller warns and exits 1 only when the union is empty).
+**Input:** `resolveChatFiles` called with a pattern matching nothing (the walk
+reads `$HOME` at call time, so `t.Setenv("HOME", t.TempDir())` makes it
+hermetic), then with a mix: one existing file plus one no-match pattern.
+**Expected:** first call returns empty; second returns just the existing file,
+in argument order.
+**Refs:** crc-CLI.md
+
 ## Test: the urfave `chats` node declares the flags (wiring Sentry)
 **Purpose:** R3035 — guard the migration bug the render test can't see: a flag
 declared only on the legacy `cmdChats` flag set but not on the urfave node is
