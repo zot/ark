@@ -380,61 +380,46 @@ A row in the focused-tag panel's "Drift" list. Shape mirrors
 | pathB | string | Path of the other definition file |
 | score | number | Cosine between the two ED vectors |
 
-## Approval shims
+## One-shot fire hooks
 
-@prototype: go-ext-hooks
-
-The fire path routes through two module-level Lua functions in
-`curation.lua`, named and shaped like the future `mcp` bindings
-(code as sketchpad — the shim *interface* is the concrete
-requirement PENDING #65 reads off when binding the real Go hooks;
-the shim *implementation* is disposable). Both are marked
-`-- @prototype: go-ext-hooks`.
+The fire path calls the Go bindings `mcp.extAccept` /
+`mcp.extRemove` (`specs/curation-workshop-primitives.md`
+§"One-shot fire"; landed 2026-07-24, PENDING #65). Accept is
+candidate+accept composed in a single DB-actor operation, so the
+ledger trail is real: dated candidate line (consumed by the
+accept), `@count`, the committed write per the accept's four
+cells, and the positive `@ext-judgment`.
 
 ```lua
--- future mcp.extAccept(target, tag, value, opts) → result, err
-extAccept(target, tag, value, opts)
--- future mcp.extRemove(target, tag, opts) → result, err
-extRemove(target, tag, opts)
+local result, err = mcp.extAccept(targetSpec, tag, value, opts)
+local result, err = mcp.extRemove(targetSpec, tag, opts)
 ```
 
-- `target` — external: the composed TARGET spec string
-  (`BASE` / `BASE:NARROWER`); internal: the chunk's
-  `{path, byteStart, byteEnd, text}` (shim-only shape — the real
-  hook resolves a spec server-side). Internal targets are
-  re-fetched fresh at fire time; a fire racing the async reindex
-  of a just-fired write can still see a stale range (shim
-  limitation, solved server-side by the real hook).
-- `opts` — `{disposition, replace}` for accept;
-  `{disposition}` for remove.
+- `targetSpec` — a TARGET spec string for **both** dispositions,
+  resolved server-side at fire time on the DB actor (no
+  client-carried byte ranges — a fire cannot race a reindex into
+  a stale range). External fires compose it from the widget's
+  targeting fields (`BASE` / `BASE:NARROWER`); internal fires use
+  the chunk's direct address `path:range` from a fresh
+  `mcp.chunkInfo` (bare `path` when the chunk has no range).
+- `opts` — `{disposition, replace}` for accept (the machinery
+  also takes an optional `insight` rationale; the widget doesn't
+  pass one yet); `{disposition}` for remove.
 - `result` — `{disposition}`: the disposition **actually
-  applied** after degrade, so the caller's feedback stays honest.
+  applied** after the machinery's capability degrade, so the
+  caller's feedback stays honest. The app no longer approximates
+  degrade; `chunkInfo.writable` survives only as the UI
+  affordance that locks the disposition toggle.
 - `err` — non-nil message on failure; nothing was written.
+  Internal remove has **no degrade** — an inapplicable internal
+  remove errors (surfaced on the widget for retry) rather than
+  removing some other representation of the tag.
 
-Shim implementation over the old primitives:
-
-| cell | rides |
-|------|-------|
-| external add / replace | `mcp.setExtTag(target, tag, value)` (set semantics approximate both cells) |
-| external remove | `mcp.removeExtTag(target, tag)` |
-| internal add | `prependTag` transform → `mcp.replaceRegion` |
-| internal replace | `replaceTagLine` transform → `mcp.replaceRegion` (degrades to add when no matching line) |
-| internal remove | `removeTagLine` transform → `mcp.replaceRegion` (the machinery's internal-remove gap — shim-only path, decision rides with #65) |
-
-The `findTagLine` / `replaceTagLine` / `removeTagLine` /
-`prependTag` helpers are the old fold's text transforms,
-repurposed: they now feed `mcp.replaceRegion` directly instead of
-a CM6 transaction. Degrade approximation: internal on a chunk
-with `writable == false` locks to external before dispatch. The
-shims use the markdown stencil only — per-chunker stencils
-(comment-wrapping, indent matching) and the comment-syntax
-degrade are the real hooks' job (#65).
-
-**Honesty rule.** The real machinery writes a ledger trail
-(candidate line, `@count`, positive judgment); the shims do not.
-Fire feedback says what happened ("tag applied" / "routed
-externally — chunk can't host inline tags"), never "candidate
-recorded", until #65 lands the real hooks.
+**Honest feedback.** The ledger trail is real, so fire feedback
+says so: accepts report "candidate recorded + accepted", removes
+report the removal, and both name where the write landed from
+`result.disposition` ("written into the file" / "routed via @ext
+mirror").
 
 ## Methods
 

@@ -262,8 +262,6 @@ view independent of the file.
 
 ### Approval machinery
 
-@prototype: go-ext-hooks
-
 Widget approval routes through the `@ext-candidate` machinery
 (`specs/internal-disposition.md`, `specs/at-ext-parsing.md`): on
 fire, the app authors a candidate carrying the disposition and
@@ -276,29 +274,27 @@ comment-less languages, read-only files — falls back to external),
 and the ledger trail (dated candidate line, `@count`, positive
 `@ext-judgment`).
 
-**Lua shims until the Go hooks land.** The `mcp` surface has no
-candidate/accept/reject bindings yet. This slice implements the
-approval path as Lua shims named and shaped like the future
-bindings (code as sketchpad); the shim implementations ride the
-old primitives (`mcp.setExtTag` / `mcp.removeExtTag` /
-`mcp.replaceRegion`) and approximate the machinery's degrade rule
-via `chunkInfo.writable` alone, with the markdown stencil only —
-per-chunker stencils and the comment-syntax degrade are the real
-hooks' job. Every shim is
-marked `-- @prototype: go-ext-hooks`; the follow-up `/mini-spec`
-item (PENDING #65) binds the real hooks with signatures read off
-the molded shims and discharges the marks.
+**The Go hooks are real** (landed 2026-07-24, PENDING #65;
+`specs/curation-workshop-primitives.md` §"One-shot fire"). The app
+fires `mcp.extAccept` / `mcp.extRemove` directly: candidate+accept
+composed as a single DB-actor operation, TARGET spec strings for
+both dispositions resolved server-side at fire time, per-chunker
+stencils and the capability degrade owned by the machinery. The
+app no longer approximates degrade; `chunkInfo.writable` survives
+only as the UI affordance that locks the disposition toggle.
 
-**Honesty rule.** While the shims ride the old primitives, the
-ledger trail does not exist. No UI affordance may claim it does —
-fire-button feedback says what actually happened ("tag applied"),
-never "candidate recorded", until the real hooks land.
+**Honest feedback.** The ledger trail is real, and fire-button
+feedback says so: accepts report "candidate recorded + accepted";
+both accepts and removes report where the write actually landed
+from the hook's returned `result.disposition` (the machinery's
+degrade verdict), never a client-side guess.
 
-**Removals.** External-disposition removes map to the machinery's
-`ark ext remove`. Internal (inline) removal has no machinery verb
-yet (the internal-remove gap); the shim implements it as a direct
-text edit — locate the `@tag:` line in the chunk and rewrite the
-region via `mcp.replaceRegion`. The gap decision rides with #65.
+**Removals.** External-disposition removes drop the `(TARGET, tag)`
+mirror routings via `mcp.extRemove`. Internal (inline) removal is
+the machinery's internal-remove cell (`ark ext remove --internal`
+at the CLI), which never degrades — an inapplicable internal
+remove errors rather than removing some other representation of
+the tag; the error surfaces on the widget for retry.
 
 ### Layout
 

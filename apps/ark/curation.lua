@@ -47,126 +47,6 @@ jsonDecode = function(s)
     return result
 end
 
--- Tag-line text transforms. Operate on string-as-bytes; no UTF-8
--- awareness needed (tag lines are ASCII). These feed the approval
--- shims' internal-disposition write paths below.
-
--- Return the byte range [a, b) of the line beginning with `@tag:`
--- (case-sensitive) in `text`. Matches only the leading tag block —
--- lines after the first blank line are not searched. Returns nil if
--- not found.
-function findTagLine(text, tag)
-    if not text or text == "" then return nil end
-    local prefix = "@" .. tag .. ":"
-    local pos = 1
-    while pos <= #text do
-        local lineEnd = text:find("\n", pos, true)
-        local line
-        if lineEnd then
-            line = text:sub(pos, lineEnd - 1)
-        else
-            line = text:sub(pos)
-        end
-        -- End of leading tag block: a blank line breaks it.
-        if line:match("^%s*$") and pos > 1 then
-            return nil
-        end
-        if line:sub(1, #prefix) == prefix then
-            return pos, (lineEnd or #text) + 1
-        end
-        if not lineEnd then break end
-        pos = lineEnd + 1
-    end
-    return nil
-end
-
-function replaceTagLine(text, tag, newValue)
-    local a, b = findTagLine(text, tag)
-    if not a then return text end
-    local replacement = "@" .. tag .. ": " .. (newValue or "") .. "\n"
-    return text:sub(1, a - 1) .. replacement .. text:sub(b)
-end
-
-function removeTagLine(text, tag)
-    local a, b = findTagLine(text, tag)
-    if not a then return text end
-    return text:sub(1, a - 1) .. text:sub(b)
-end
-
--- Prepend a new "@tag: value\n" line at the top of the leading tag
--- block. If the text starts with @tag lines, the new line goes
--- above the first one. Otherwise it goes at the very top.
-function prependTag(text, tag, value)
-    local line = "@" .. tag .. ": " .. (value or "") .. "\n"
-    if not text or text == "" then return line end
-    -- Always insert above existing tag block (or body).
-    return line .. text
-end
-
-----------------------------------------------------------------------
--- Approval shims — the ext-candidate machinery's Lua face
-----------------------------------------------------------------------
--- @prototype: go-ext-hooks
--- Shims for the future Go bindings (PENDING #65), named and shaped
--- like the bindings the /mini-spec pass will register on `mcp`:
---   mcp.extAccept(target, tag, value, opts) → result, err
---   mcp.extRemove(target, tag, opts)        → result, err
--- One call = one-shot candidate+accept (the loaded gun). `opts`
--- carries {disposition, replace} (accept) or {disposition} (remove).
--- `result` is {disposition = <actually applied>} so callers can be
--- honest about what happened. Target shapes:
---   external: TARGET spec string (BASE or BASE:NARROWER)
---   internal: {path, byteStart, byteEnd, text} — shim-only; the
---             real hook resolves a spec server-side.
--- The implementations ride the old primitives (setExtTag /
--- removeExtTag / replaceRegion) with the markdown stencil only
--- (per-chunker stencils are the real hook's job). The machinery's
--- ledger trail (candidate line, @count, judgment) DOES NOT exist on
--- this path — no caller may claim it does.
-
-local function extAccept(target, tag, value, opts)
-    opts = opts or {}
-    if (opts.disposition or "external") == "external" then
-        -- setExtTag's set semantics approximate both the add and
-        -- replace cells of the external disposition.
-        local _, err = mcp.setExtTag(target, tag, value or "")
-        if err then return nil, err end
-        return { disposition = "external" }, nil
-    end
-    -- internal: text transform + replaceRegion (markdown stencil).
-    local text = target.text or ""
-    local newText
-    if opts.replace and findTagLine(text, tag) then
-        newText = replaceTagLine(text, tag, value or "")
-    else
-        -- add, or replace degrading to add (no matching line).
-        newText = prependTag(text, tag, value or "")
-    end
-    local _, err = mcp.replaceRegion(target.path, target.byteStart,
-        target.byteEnd, newText)
-    if err then return nil, err end
-    return { disposition = "internal" }, nil
-end
-
-local function extRemove(target, tag, opts)
-    opts = opts or {}
-    if (opts.disposition or "external") == "external" then
-        local _, err = mcp.removeExtTag(target, tag)
-        if err then return nil, err end
-        return { disposition = "external" }, nil
-    end
-    -- internal remove: the machinery has no verb for this yet (the
-    -- internal-remove gap); the shim edits the text directly.
-    local text = target.text or ""
-    if not findTagLine(text, tag) then
-        return nil, "no inline @" .. tag .. ": line in this chunk"
-    end
-    local _, err = mcp.replaceRegion(target.path, target.byteStart,
-        target.byteEnd, removeTagLine(text, tag))
-    if err then return nil, err end
-    return { disposition = "internal" }, nil
-end
-
 ----------------------------------------------------------------------
 -- Prototypes
 ----------------------------------------------------------------------
@@ -270,7 +150,8 @@ PinnedChunk = Ark.PinnedChunk
 -- authors one tag operation against the parent chunk — add/replace
 -- (default) or remove (when removeMode); written into the file body
 -- (internal disposition) or routed via @ext mirror (external) — and
--- fires it in one gesture through the approval shims.
+-- fires it in one gesture through the one-shot Go hooks
+-- (mcp.extAccept / mcp.extRemove).
 Ark.ProposalWidget = session:prototype("Ark.ProposalWidget", {
     _chunk = EMPTY,                -- parent Ark.PinnedChunk
     tagName = "",
@@ -920,60 +801,60 @@ end
 
 -- Fire path ---------------------------------------------------------
 
--- Fire one proposal widget through the approval shims (one-shot
--- candidate+accept). On success the widget leaves the stack and the
--- card's tag data refreshes; on error the widget keeps its state for
--- retry. Internal targets are re-fetched fresh at fire time — the
--- chunk's byte range shifts after every write. (Shim limitation: a
--- fire racing the async reindex of a just-fired write can still see
--- a stale range; the real Go hook resolves targets server-side.)
+-- Fire one proposal widget through the one-shot Go hooks —
+-- mcp.extAccept / mcp.extRemove, candidate+accept composed on the
+-- DB actor (specs/curation-workshop-primitives.md §"One-shot fire").
+-- On success the widget leaves the stack and the card's tag data
+-- refreshes; on error the widget keeps its state for retry. Both
+-- dispositions pass TARGET spec strings resolved server-side at
+-- fire time, so a fire cannot race a reindex into a stale byte
+-- range. Internal fires use the chunk's direct address path:range
+-- from a fresh chunkInfo.
 function PinnedChunk:fireWidget(widget)
     if not widget:isFilled() then return end
     widget._fireError = ""
     local tag = widget:trimmedTag()
     local disposition = widget:effectiveDisposition()
-    local result, err
+    local target
     if disposition == "external" then
         if not widget._extLoaded then widget:_loadExtSuggestion() end
-        local target = widget:targetSpec()
-        if widget.removeMode then
-            result, err = extRemove(target, tag, { disposition = "external" })
-        else
-            result, err = extAccept(target, tag, widget.tagValue,
-                { disposition = "external", replace = widget.replaceMode })
-        end
+        target = widget:targetSpec()
     else
-        -- Fresh info + text: byte ranges go stale after any write.
+        -- Fresh info: the chunk's range shifts after any write.
         self._chunkInfoLoaded = false
-        self._chunkTextLoaded = false
         local info = self:chunkInfo()
         if self._chunkInfoError ~= "" then
             widget._fireError = "chunkInfo: " .. self._chunkInfoError
             return
         end
-        local target = {
-            path = (info and info.path) or self:path(),
-            byteStart = tonumber((info and info.byteStart) or 0) or 0,
-            byteEnd = tonumber((info and info.byteEnd) or 0) or 0,
-            text = self:chunkText() or "",
-        }
-        if widget.removeMode then
-            result, err = extRemove(target, tag, { disposition = "internal" })
-        else
-            result, err = extAccept(target, tag, widget.tagValue,
-                { disposition = "internal", replace = widget.replaceMode })
-        end
+        local path = (info and info.path) or self:path()
+        local range = (info and info.range) or ""
+        target = range ~= "" and (path .. ":" .. range) or path
+    end
+    local result, err
+    if widget.removeMode then
+        result, err = mcp.extRemove(target, tag,
+            { disposition = disposition })
+    else
+        result, err = mcp.extAccept(target, tag, widget.tagValue,
+            { disposition = disposition, replace = widget.replaceMode })
     end
     if err then
         widget._fireError = tostring(err)
         return
     end
-    -- Honest feedback: say what actually happened. The shims write
-    -- no candidate ledger — never claim one.
-    local verb = widget.removeMode and "removed" or "applied"
+    -- The ledger trail is real: accept authors the candidate and
+    -- consumes it in one DB-actor operation. Trust result.disposition
+    -- for where the write actually landed (the machinery's degrade).
     local how = (result and result.disposition == "external")
         and "routed via @ext mirror" or "written into the file"
-    mcp:notify(string.format("@%s %s — %s", tag, verb, how), "success")
+    local msg
+    if widget.removeMode then
+        msg = string.format("@%s removed — %s", tag, how)
+    else
+        msg = string.format("@%s candidate recorded + accepted — %s", tag, how)
+    end
+    mcp:notify(msg, "success")
     self:removeWidget(widget)
     self:refreshTags()
 end
@@ -1329,8 +1210,8 @@ function PinnedChunk:iframeURL()
 end
 
 -- Edit / Revert ---------------------------------------------------
--- Content edits only: tag authoring fires through the approval
--- shims and never touches the editor.
+-- Content edits only: tag authoring fires through the one-shot
+-- hooks and never touches the editor.
 
 -- [edit] click handler. Snapshot the original, pick the initial doc
 -- (a preserved draft from a prior [revert], else the original), and

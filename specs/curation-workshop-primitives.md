@@ -572,6 +572,11 @@ errors rather than removing some other representation of the tag.
 Both take TARGET spec strings for either disposition and resolve
 them server-side at fire time on the DB actor — no client-carried
 byte ranges, so a fire cannot race a reindex into a stale range.
+Chunk identity makes anything else unsound: chunks are keyed by
+content hash as well as ID and may be shared by several files, so
+a content edit produces a *new* chunk — the file's reference moves
+to it and cleanup collects the orphan. A client-held chunkID or
+byte range is stale the moment any write lands.
 
 `result` is `{disposition = "external"|"internal"}` — the
 disposition **actually applied** after the accept's capability
