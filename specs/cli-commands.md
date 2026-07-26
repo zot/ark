@@ -735,6 +735,8 @@ ark ext remove    <target> <tag> [value] [--disposition internal|external] [--in
 ark ext candidate <target> <tag> [value] [--insight "why"] [--disposition internal|external] [--internal] [--replace]
 ark ext accept    <target> <tag> [value]
 ark ext reject    <target> <tag> [value]
+ark ext amend     <tvid> <tag> [value] [--insight "why"] [--disposition internal|external] [--internal] [--replace] [--target TARGET]
+ark ext pending   [--chunk <target>] [--limit N] [--json]
 ```
 
 Author `@ext` routings into the target's **mirror file**
@@ -743,16 +745,21 @@ Author `@ext` routings into the target's **mirror file**
 `ext_mirror` — see `specs/curation-workshop-primitives.md`) — the CLI
 counterpart to the Frictionless workshop's `mcp.setExtTag`/`mcp.removeExtTag`,
 so a plain-session assistant can apply an `@ext` proposal (e.g. a
-recall recommend) without the UI. All six verbs act only on the
+recall recommend) without the UI. Every verb acts only on the
 mirror file; they never scan or edit hand-authored `@ext` lines
-elsewhere in the corpus. The `candidate`/`accept`/`reject` verbs stage
-a routing through its proposed → committed → judged lifecycle (see
-`specs/curation-workshop-primitives.md` "Staging ledger"); deriving
-proposals and judgments to records is a later pass. `<target>` is a TARGET string per
+elsewhere in the corpus. The `candidate`/`accept`/`reject`/`amend` verbs
+stage a routing through its proposed → committed → judged lifecycle (see
+`specs/curation-workshop-primitives.md` "Staging ledger"), and `pending`
+reads that ledger back. `<target>` is a TARGET string per
 `specs/at-ext-parsing.md` (absolute paths for read-only chunks).
-Mutating, so each proxies through the running server (mutation runs
-in the DB actor) or opens the index exclusively when stopped —
-mirrors the `config` add/remove pattern.
+The mutating verbs proxy through the running server (mutation runs
+in the DB actor) or open the index exclusively when stopped —
+mirrors the `config` add/remove pattern. `pending` is a read, so it
+proxies to `GET /ext/pending` when a server is up and opens the index
+locally when none is. `pending`'s `--chunk` TARGET is resolved wherever
+the index lives — server-side over the wire, locally otherwise — and a
+TARGET matching no chunk is an error rather than a silent widening to
+the whole corpus.
 
 | Subcommand | Server | Behavior |
 |------------|--------|----------|
@@ -762,6 +769,8 @@ mirrors the `config` add/remove pattern.
 | `candidate <target> <tag> [value] [--insight "why"] [--disposition internal\|external] [--internal] [--replace]` | proxy-or-exclusive | Author an `@ext-candidate` (proposed routing) in the mirror file, stamped with today's first-seen date; optional quoted `--insight` rationale, `--disposition internal\|external` / `--internal` shorthand (default external), and `--replace` (accept collapses the target's values of the tag instead of the default add). Both disposition and `--replace` are part of the line identity — a differing disposition or a differing add-vs-replace is a distinct proposal; an exact-identity repeat increments the line's `@count` |
 | `accept <target> <tag> [value]` | proxy-or-exclusive | Commit matching `@ext-candidate`(s), each per its disposition **and** `replace` token → four cells: external-add appends the `@ext` mirror edge, external-replace collapses the mirror's values (`ext set` semantics), internal-add inserts an inline tag, internal-replace rewrites the existing inline tag (fallback to external when the type can't host it or the file isn't writable — see `internal-disposition.md`). Consumes the candidate(s) (leading date, disposition, `replace`, `insight` dropped) and writes a positive `@ext-judgment @count:+1` |
 | `reject <target> <tag> [value]` | proxy-or-exclusive | Rewrite matching `@ext-candidate` line(s) → a single dated `@ext-judgment: <date> TARGET @tag: @count: -N` (tag-name only, durable signed rejection) |
+| `amend <tvid> <tag> [value] [--insight "why"] [--disposition internal\|external] [--internal] [--replace] [--target TARGET]` | proxy-or-exclusive | Revise the `@ext-candidate` line whose source tvid is `<tvid>` (the handle `ark ext pending` prints): retire it and author the revision as one actor op, so the proposal stays pending rather than orphaning. Flags left off carry forward from the old line, `insight` included. The revision is a new identity at `@count: 1`; a revision colliding with an existing line merges into that line's tally |
+| `pending [--chunk <target>] [--limit N] [--json]` | proxy-or-local | List the pending `@ext-candidate` ledger, one row per candidate line, ranked unattached-first then tally-descending (see `curation-workshop-primitives.md` "Reading the ledger"). Corpus-wide by default; `--chunk` narrows to proposals landing on a TARGET's chunks, and a TARGET matching nothing is an error, not a silent corpus-wide scan. Markdown by default (an unattached row's chunk cell is an em dash), `--json` for machine reads |
 
 ### `fetch` — read indexed file content
 

@@ -96,6 +96,9 @@ corpus) and edit the matching `SetField` site.
 | `mcp.removeExtTag(targetSpec, tag)`               | `specs/curation-workshop-primitives.md`  | Remove a previously authored `@ext:` routing                                                          |
 | `mcp.extAccept(targetSpec, tag, value, opts)`     | `specs/curation-workshop-primitives.md`  | One-shot candidate+accept on the DB actor; returns `{disposition}` actually applied                   |
 | `mcp.extRemove(targetSpec, tag, opts)`            | `specs/curation-workshop-primitives.md`  | Disposition-dispatched remove: external mirror routings, or the inline line (no degrade)              |
+| `mcp.extReject(targetSpec, tag, value)`           | `specs/curation-workshop-primitives.md`  | Reject matching `@ext-candidate`(s) — the durable signed `@ext-judgment`                              |
+| `mcp.extAmend(sourceTvid, tag, value, opts)`      | `specs/curation-workshop-primitives.md`  | Revise the candidate line `sourceTvid` names, in place; omitted `opts` fields carry forward           |
+| `mcp.extPending(opts)`                            | `specs/curation-workshop-primitives.md`  | Read the pending `@ext-candidate` ledger, ranked; `opts` = `{chunk, limit}`                           |
 | `mcp.replaceRegion(path, byteStart, byteEnd, t)`  | `specs/curation-workshop-primitives.md`  | Atomically replace a byte range in an indexed file                                                    |
 | `mcp.suggestTagNames(chunkText, ...)`             | `specs/suggest-tag-names.md`             | LLM-backed tag-name suggestions for a chunk                                                           |
 | `mcp.chunksForTag(tag, opts)`                     | `specs/chunks-for-tag.md`                | Resolve a tag to candidate chunks                                                                     |

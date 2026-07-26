@@ -523,6 +523,12 @@ func (m *ExtMap) Rebuild(db *DB) error {
 		// until the wiring flip authors the first candidate/judgment.
 		// CRC: crc-ExtMap.md | R3064, R3065
 		if err := db.store.ScanAllDerivedCandidates(txn, func(srcTvid, targetChunk, tally uint64) error {
+			if targetChunk == 0 {
+				// The unattached sentinel is a record, not a proposal *on* a
+				// chunk — it must never key the reverse lookup (R3254).
+				m.unresolvedTargets[srcTvid] = true
+				return nil
+			}
 			m.candidateSourcesByChunk[targetChunk] = appendUnique(m.candidateSourcesByChunk[targetChunk], srcTvid)
 			return nil
 		}); err != nil {
@@ -594,6 +600,11 @@ func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, o
 func (m *ExtMap) applyIndexExt(txn *bbolt.Tx, tt *TvidTxn, db *DB, p extIndexPlan) error {
 	sourceOverlay := IsOverlayID(p.sourceChunkID)
 	if len(p.targets) == 0 {
+		// The TARGET resolved to nothing — the first of the three ways a
+		// candidate ends up attached to nothing (R3254).
+		if err := m.syncCandidateSentinel(txn, db, p.tvidExt, p.class, p.count, false, sourceOverlay); err != nil {
+			return err
+		}
 		m.mu.Lock()
 		m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
 		m.unresolvedTargets[p.tvidExt] = true
@@ -1067,6 +1078,30 @@ func candidateTally(count int64) uint64 {
 	return 1
 }
 
+// syncCandidateSentinel maintains `RC[tvid][0]`, the unattached sentinel:
+// written when a candidate attaches to no persistent chunk, deleted the
+// moment one attaches. It is the completeness invariant behind
+// Store.PendingCandidates — every candidate tvid holds at least one RC
+// record, so the RC prefix scan enumerates the *whole* pending set. Without
+// it a proposal attached to nothing leaves no trace at all, and that is
+// precisely the row a human most needs to see: a typo'd TARGET, a corpus
+// change that moved the content, a self-reference. Chunk 0 is never
+// allocated (microfts2 counts persistent ids up from 1, overlay ids down
+// from MaxUint64), so it cannot collide with a real target.
+//
+// A nil txn (fully-overlay flow), a non-candidate class, or an overlay
+// source are all no-ops — derived records are persistent-only (R3063).
+// CRC: crc-ExtMap.md | Seq: seq-ext-author.md#7.4.3 | R3254
+func (m *ExtMap) syncCandidateSentinel(txn *bbolt.Tx, db *DB, tvidExt uint64, class extClass, count int64, attached, sourceOverlay bool) error {
+	if txn == nil || class != extClassCandidate || sourceOverlay {
+		return nil
+	}
+	if attached {
+		return db.store.DeleteDerivedCandidate(txn, tvidExt, 0)
+	}
+	return db.store.WriteDerivedCandidate(txn, tvidExt, 0, candidateTally(count))
+}
+
 // setRejectLocked sets (or, when score==0, clears) the reject-filter entry
 // for (targetChunk, tagname). Caller holds m.mu.
 // CRC: crc-ExtMap.md | R3066
@@ -1131,6 +1166,12 @@ func (m *ExtMap) applyDerivedIndexExt(txn *bbolt.Tx, db *DB, p extIndexPlan, sou
 			}
 		}
 		writes = append(writes, derivedWrite{chunk: t, fileID: fid})
+	}
+	// The TARGET resolved, but every target may have been filtered out —
+	// self-reference, or an overlay chunk under the persistent-only rule
+	// (R3063). Either way the candidate attached to nothing (R3254).
+	if err := m.syncCandidateSentinel(txn, db, p.tvidExt, p.class, p.count, len(writes) > 0, sourceOverlay); err != nil {
+		return err
 	}
 	m.mu.Lock()
 	m.extByAnchor[p.targetBase] = appendUnique(m.extByAnchor[p.targetBase], p.tvidExt)
@@ -1210,6 +1251,15 @@ func (m *ExtMap) applyDerivedReresolve(txn *bbolt.Tx, db *DB, fileID uint64, p e
 		}
 	}
 
+	// Keyed off the GLOBAL new-target set, not the file-scoped `newScoped`
+	// diff above: the per-target RC deletes are scoped to the reindexed
+	// file, but "is this candidate attached to anything at all" is a
+	// property of the whole resolution (R3254) — the same set the
+	// unresolvedTargets marking below reads.
+	if err := m.syncCandidateSentinel(txn, db, tvidExt, p.class, p.count, len(p.newTargets) > 0, false); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	for _, removed := range removes {
 		if IsOverlayID(removed) {
@@ -1267,6 +1317,14 @@ func (m *ExtMap) cleanupDerivedSource(txn *bbolt.Tx, db *DB, tvidExt uint64, cla
 	type cleaned struct {
 		chunk  uint64
 		fileID uint64
+	}
+	// targetToChunk never holds the 0 sentinel (it is a record, not an
+	// edge), so a retiring source would leave RC[tvid][0] behind and the
+	// ledger would show a proposal whose line is gone. (R3254)
+	if txn != nil && class == extClassCandidate {
+		if err := db.store.DeleteDerivedCandidate(txn, tvidExt, 0); err != nil {
+			return err
+		}
 	}
 	done := make([]cleaned, 0, len(targets))
 	for _, targetChunk := range targets {

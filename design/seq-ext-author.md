@@ -200,6 +200,108 @@ matches the CLI pair with nothing interleaved. Diagram 5.
 5.5.   bridge returns {disposition = applied} or (nil, errstring)
 ```
 
+## Flow: amend a candidate in place (`ark ext amend` / `mcp.extAmend`)
+
+Revise a pending proposal without orphaning it (R3255–R3257, R3261).
+The old line is addressed by its **source tvid** because a
+`(target, tag, value)` triple can match several distinct candidate lines
+— identity is the six-tuple `(target, disposition, replace, insight,
+tag, value)`. Retire-then-author runs inside one actor operation, so no
+reader ever sees the proposal missing. Diagram 6.
+
+```
+6.   ark ext amend <tvid> <tag> [value] [--insight] [--disposition|--internal] [--replace] [--target]
+       (or mcp.extAmend(sourceTvid, tag, value, opts) from a viewdef)
+6.1.   Action reads each flag through c.IsSet before c.String/c.Bool, so an
+         unset flag stays nil in ExtAmendOpts (an unset --replace must not
+         read as --replace=false)
+6.2.   Action checks serverClient(arkDir):
+6.2.1.   server up → proxyOK(POST /ext/amend, {tvid, tag, value, ...})
+6.2.1.1.   handler decodes into pointer fields (absent key ≠ empty value)
+             → extMutate → SyncVoid(db, fn) on the DB actor
+6.2.2.   no server → withExclusiveDB(db) calling DB.AmendExtCandidate
+6.3.   DB.AmendExtCandidate(sourceTvid, tag, value, opts), one actor op:
+6.3.1.     TvidMap.Resolve(sourceTvid) → (tagname, value string)
+6.3.1.1.     not found, or tagname is not `@ext-candidate` → ERROR
+               (the caller named one specific line; silence would report
+               a revision that never happened — unlike accept/reject,
+               whose no-match is a legitimate no-op)
+6.3.2.     recover the old identity from the value string: peelDate,
+             peelExtCandidateDisposition, peelExtCandidateReplace,
+             stripLeadingInsight, ParseExtTarget, extractCountField
+6.3.3.     fill each nil opts field from the recovered old value
+             (target, insight, disposition, replace) — tag/value are
+             always the caller's, never inherited
+6.3.4.     dropCountLine drops exactly the old line (its date, insight,
+             and @count go with it) — matching the WHOLE recovered
+             identity, not applyExtMirrorEdit's (target, tag, value)
+             triple, which several distinct candidates can share; the
+             identity carries the disposition as WRITTEN, so a line
+             authored without a disposition token still matches
+6.3.5.     author the revision through flow 4.2's path —
+             upsertCountLine(candidateLine(...)) — so the two tally rules
+             fall out rather than needing their own code: a new identity
+             lands at `@count: 1`, and a revision colliding with an
+             existing line merges into that line's tally
+6.3.6.     atomicWriteFile(mirror_path) via temp+rename (as flow 1.7);
+             a retarget can move the proposal to a DIFFERENT mirror file,
+             in which case 6.3.4's drop and 6.3.5's author are two writes
+6.4.   caller gets nil / true; reindex is asynchronous (flow 4.6)
+6.4.1.   the old line's tvid retires → ExtMap.cleanupDerivedSource strikes
+           its RC records; the revision's own tvid derives fresh ones
+```
+
+## Flow: read the ledger (`ark ext pending` / `mcp.extPending`)
+
+The read side (R3252, R3253, R3258, R3259, R3262) — the only `ext` flow
+that mutates nothing, and so the only one that neither proxies as a
+mutation nor opens the index exclusively. Diagram 7.
+
+```
+7.   ark ext pending [--chunk <target>] [--limit N] [--json]
+       (or mcp.extPending({chunk = <chunkid>, limit = N}) from a viewdef)
+7.1.   --chunk given → DB.ResolveExtTarget(target) → filterChunks, run
+         WHEREVER THE INDEX LIVES: server-side at 7.2.1 when a server
+         holds the file lock, locally at 7.3 when none does. The CLI
+         addresses chunks by TARGET like every other ext verb; the Lua
+         binding passes a chunkid directly, since a viewdef already holds
+         one and this is a read — a stale chunkid costs a wrong row, not
+         a wrong write. A TARGET resolving to nothing is an ERROR: an
+         empty filter means corpus-wide, so silence would widen the query
+         instead of narrowing it
+7.2.   server up → proxyDecode(GET /ext/pending?target=…&chunk=…&limit=…)
+7.2.1.   handler binds one read view at the top (off-actor read
+           discipline), not SyncVoid — nothing here mutates — and
+           resolves each ?target= through it
+7.2.2.   malformed ?chunk= / ?limit= → 400, never a silent corpus scan;
+           an empty ledger serializes as [], never null
+7.3.   no server → ordinary local open through proxyOrLocal (there is no
+         read-only open: bbolt is single-process and ark.Open locks the
+         file either way; what differs from the mutating siblings is that
+         this takes the standard dispatch rather than their hand-rolled
+         proxy-or-exclusive shape)
+7.4.   Store.PendingCandidates(filterChunks, limit):
+7.4.1.     filterChunks empty → ScanAllDerivedCandidates walks the RC
+             prefix corpus-wide, folding rows into a per-tvid accumulator
+             (one row per candidate line, not per target chunk — accept,
+              reject and amend all act on the line)
+7.4.2.     filterChunks non-empty → ExtMap.candidateSourcesForChunk per
+             chunk supplies the tvids; same accumulator
+7.4.3.     target_chunkid 0 contributes NO entry to row.Chunks — it is the
+             unattached sentinel (R3254), and its only job is to put the
+             tvid into the scan at all
+7.4.4.     per tvid → decodeCandidateRow: TvidMap.Resolve → reject
+             non-candidate tvids → peel date/disposition/replace/insight →
+             ParseExtTarget → extractCountField
+7.4.5.     rank: rows with empty Chunks first, then tally desc, date desc,
+             tagname, tvid — total and stable
+7.4.6.     truncate to limit AFTER the ranking (limit <= 0 = unlimited),
+             so an unattached row can never be cut off by a limit
+7.5.   render: baby-food markdown table, or JSON under --json / the Lua
+         array of row tables. The caller sorts nothing — ranking is the
+         query's job, because a caller cannot sort what it never fetched
+```
+
 ## Notes
 
 The atomic write at 1.7 (and 2.5) is what gives the caller

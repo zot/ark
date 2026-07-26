@@ -331,6 +331,34 @@ func stripLeadingInsight(value string) string {
 	return value // unterminated quote — leave intact (degrade gracefully)
 }
 
+// peelExtCandidateInsight returns the quoted `insight: "…"` rationale an
+// `@ext-candidate` value carries, or "" when it has none. Where
+// stripLeadingInsight discards the field so the TARGET can be parsed, this
+// surfaces its text — the review console is judging the *why*, so a row
+// that reaches it without the rationale is not much of a proposal. Escaped
+// quotes are unescaped, the inverse of candidateLine's escaping.
+// CRC: crc-Store.md | R3252
+func peelExtCandidateInsight(value string) string {
+	s := strings.TrimLeft(stripLeadingDateDisposition(value), " \t")
+	kw := extInsightField + ":"
+	if !strings.HasPrefix(s, kw) {
+		return ""
+	}
+	rest := s[len(kw):]
+	trimmed := strings.TrimLeft(rest, " \t")
+	// Same two guards stripLeadingInsight applies: a space must follow the
+	// colon and the value must be quoted, else this is a TARGET whose base
+	// happens to be named `insight`.
+	if len(trimmed) == len(rest) || len(trimmed) == 0 || trimmed[0] != '"' {
+		return ""
+	}
+	end := indexUnescapedByte(trimmed[1:], '"')
+	if end < 0 {
+		return "" // unterminated quote — the peel degrades, as stripLeadingInsight does
+	}
+	return strings.ReplaceAll(trimmed[1:1+end], `\"`, `"`)
+}
+
 // isExtDate reports whether s is exactly a `YYYY-MM-DD` date shape: ten
 // characters, ASCII digits with `-` at positions 4 and 7. Shape-only — it
 // does not validate month/day ranges. The narrow, exact-length test is what
@@ -893,23 +921,8 @@ func withDate(identity, date string) string {
 func bumpCountLine(data []byte, identity string, delta int64) (newData []byte, bumped bool) {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
-		prefix, body, ok := splitMarkerPrefix(line)
+		ownDate, cur, ok := matchCountLine(line, identity)
 		if !ok {
-			continue
-		}
-		ownDate, datelessBody := peelDate(body)
-		dateless := prefix + datelessBody
-		var cur int64
-		switch {
-		case dateless == identity:
-			cur = 0
-		case strings.HasPrefix(dateless, identity+" @count:"):
-			n, err := strconv.ParseInt(strings.TrimSpace(dateless[len(identity)+len(" @count:"):]), 10, 64)
-			if err != nil {
-				continue
-			}
-			cur = n
-		default:
 			continue
 		}
 		nc := cur + delta
@@ -918,6 +931,51 @@ func bumpCountLine(data []byte, identity string, delta int64) (newData []byte, b
 		} else {
 			lines[i] = withDate(identity, ownDate) + " @count: " + strconv.FormatInt(nc, 10)
 		}
+		return []byte(strings.Join(lines, "\n")), true
+	}
+	return data, false
+}
+
+// matchCountLine reports whether one mirror line is the count-bearing form
+// of `identity` — the same DATELESS comparison bumpCountLine has always
+// made, factored out so amend can find *exactly* the line a tvid names.
+// Matching on the parsed identity rather than the literal text is what
+// makes it robust to leading whitespace and to whether a `@count` suffix is
+// present yet (a bare identity line reads as count 0). Returns the line's
+// own first-seen date and current count.
+// CRC: crc-Indexer.md | R3074, R3090, R3255
+func matchCountLine(line, identity string) (date string, count int64, ok bool) {
+	prefix, body, split := splitMarkerPrefix(line)
+	if !split {
+		return "", 0, false
+	}
+	ownDate, datelessBody := peelDate(body)
+	dateless := prefix + datelessBody
+	switch {
+	case dateless == identity:
+		return ownDate, 0, true
+	case strings.HasPrefix(dateless, identity+" @count:"):
+		n, err := strconv.ParseInt(strings.TrimSpace(dateless[len(identity)+len(" @count:"):]), 10, 64)
+		if err != nil {
+			return "", 0, false
+		}
+		return ownDate, n, true
+	}
+	return "", 0, false
+}
+
+// dropCountLine removes the first line matching `identity` outright,
+// whatever its `@count`. Where bumpCountLine deletes only as a side effect
+// of a count reaching 0, amend needs the line gone regardless — the
+// proposal is being *revised*, not decremented.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#6.3.4 | R3255
+func dropCountLine(data []byte, identity string) (newData []byte, dropped bool) {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if _, _, ok := matchCountLine(line, identity); !ok {
+			continue
+		}
+		lines = append(lines[:i], lines[i+1:]...)
 		return []byte(strings.Join(lines, "\n")), true
 	}
 	return data, false

@@ -46,7 +46,9 @@ func extRoutingFixture(t *testing.T, extTarget, wantChunkText string) []Incoming
 		t.Fatalf("index target: %v", err)
 	}
 
-	srcPath := filepath.Join(db.dbPath, "notes.md")
+	// R3264: only a mirror tree may author @ext; this fixture tests anchor
+	// capture, not authoring rights.
+	srcPath := extMirrorSource(t, db, "notes.md")
 	decl := "@ext: " + targetPath + extTarget + " @note: hello\n"
 	if err := os.WriteFile(srcPath, []byte(decl), 0o644); err != nil {
 		t.Fatal(err)

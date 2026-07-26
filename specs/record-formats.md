@@ -39,7 +39,7 @@ change them, we need to update the CLI code so it's up-to-date.
 | `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
 | `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
 | `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
-| `RC`   | Recall Candidate    | `RC` + source_tvid varint + target_chunkid varint | varint tally (materialized from `@ext-candidate` `@count`) |
+| `RC`   | Recall Candidate    | `RC` + source_tvid varint + target_chunkid varint (0 = unattached) | varint tally (materialized from `@ext-candidate` `@count`) |
 | `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
 | `RF`   | Recall Freshness (dormant, #36) | `RF` + chunkid varint                 | varint uint64 (max S-over-ED at last derivation) — no writer after #36 |
 | `RJ`   | Recall Judgment     | `RJ` + source_tvid varint + target_chunkid varint | signed-varint score (from `@ext-judgment` `@count`) + 8-byte big-endian unix nanos |
@@ -470,6 +470,9 @@ agent-layer design). Currently:
 - **Key:** `"RC"` + source_tvid varint + target_chunkid varint —
   a tag-derived family key, sibling of the X record. `source_tvid`
   is the tvid of the `@ext-candidate` tag whose TARGET named the chunk.
+  **`target_chunkid` 0 is the unattached sentinel**, never a real chunk:
+  microfts2 allocates persistent chunkids from 1 and overlay chunkids
+  downward from `MaxUint64`.
 - **Value:** varint tally, materialized from the `@ext-candidate` line's
   `@count` field.
 - **Semantic:** one record per (source `@ext-candidate` tvid, target
@@ -477,6 +480,12 @@ agent-layer design). Currently:
   recovered from the source tvid via `TvidMap.Resolve` → the
   `@ext-candidate` value → `ParseExtTarget`, exactly as X recovers its
   routed tag. Higher tally = stronger signal in the Tag Forge.
+- **Completeness invariant:** every candidate tvid holds at least one RC
+  record. A candidate attached to no chunk — unresolvable TARGET,
+  self-reference, or overlay-only targets — gets `RC[source_tvid][0]`,
+  cleared when a real target attaches. This is what makes the prefix scan
+  a complete enumeration of the pending set for the review console
+  (`ark ext pending`). Detail spec: `derived-tags.md`.
 - **Lifecycle:** **derived**, not directly written — the indexer derives
   it when the `@ext-candidate` file tag is (re)indexed. The propose pass
   (`ark connections recall --propose`) and `ark ext candidate` author that

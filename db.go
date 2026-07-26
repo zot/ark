@@ -2447,6 +2447,47 @@ func (db *DB) resolveExtMirror(targetSpec string) (mirrorPath string, err error)
 	return extMirrorPath(src.Dir, targetFile, src.ExtMirror)
 }
 
+// pathWithin reports whether path is root itself or lies beneath it.
+// CRC: crc-DB.md | R3264
+func pathWithin(root, path string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// IsExtMirrorPath reports whether path lies inside a mirror tree — the
+// global `~/.ark/external/`, or a source-local `<source>/<ext_mirror>/`
+// for any source that sets `ext_mirror` (R3171). It is the inverse of
+// extMirrorPath, and the authority check behind the rule that only a
+// mirror tree may author `@ext`-family directives.
+//
+// The rule exists because an `@ext` tag is an instruction, not a note:
+// without it, a transcript that merely *quotes* an `@ext-candidate` files
+// a real proposal into the human's review queue. Observed live
+// 2026-07-26 — a quoted example whose path had been elided to `…` for
+// readability turned up in the pending ledger as a genuine candidate.
+// CRC: crc-DB.md | Seq: seq-ext-routing.md | R3264
+func (db *DB) IsExtMirrorPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	if home := arkHomeDir(); home != "" && pathWithin(filepath.Join(home, "external"), path) {
+		return true
+	}
+	for i := range db.config.Sources {
+		s := &db.config.Sources[i]
+		if s.ExtMirror == "" || IsGlob(s.Dir) {
+			continue
+		}
+		if pathWithin(filepath.Join(s.Dir, s.ExtMirror), path) {
+			return true
+		}
+	}
+	return false
+}
+
 // readExtMirror reads a target's mirror file. A missing file yields nil
 // data and no error (the caller creates it on the subsequent write); a
 // genuine read failure is wrapped. Shared by the create-if-missing
@@ -2772,6 +2813,118 @@ func (db *DB) RemoveInternalTag(targetSpec, tag string) error {
 		return fmt.Errorf("no inline @%s: line in %s", tag, targetSpec)
 	}
 	return atomicWriteFile(info.Path, newBytes, st.Mode().Perm())
+}
+
+// ExtAmendOpts is the carry-forward half of AmendExtCandidate's signature.
+// Each field is a pointer so **nil means "keep the old line's value"** —
+// a plain string or bool could not say that, since an empty Insight and an
+// unset Replace are both meaningful revisions. The tag/value positionals
+// stay non-pointer because the subject is always stated: were they
+// inherited too, `amend <tvid> <tag>` could not distinguish "make this
+// name-only" from "leave the value alone".
+// CRC: crc-DB.md | R3255
+type ExtAmendOpts struct {
+	Target      *string // retarget the proposal
+	Insight     *string // edit the rationale
+	Disposition *string // internal | external
+	Replace     *bool   // on accept, collapse existing values vs. add
+}
+
+// orElse returns *p when p is non-nil, else the carried-forward old value.
+// The whole of ExtAmendOpts' nil-means-inherit rule, in one place.
+// CRC: crc-DB.md | R3255
+func orElse[T any](p *T, old T) T {
+	if p == nil {
+		return old
+	}
+	return *p
+}
+
+// ptrTo is orElse's inverse, for callers building ExtAmendOpts: it turns a
+// value the caller actually supplied into the non-nil pointer that says
+// "revise this field" rather than "inherit it".
+// CRC: crc-DB.md | R3255
+func ptrTo[T any](v T) *T { return &v }
+
+// AmendExtCandidate revises one `@ext-candidate` line in place, as a single
+// closure-actor operation. The line is addressed by its **source tvid**
+// because a (target, tag, value) triple can match several distinct
+// candidates — identity is the six-tuple (target, disposition, replace,
+// insight, tag, value) — so only the tvid names exactly one line.
+//
+// Retire-then-author is what makes an edited proposal *revise* rather than
+// orphan: without it, firing an edited widget authors a new candidate and
+// leaves the original pending with nobody to judge it. Because the revision
+// goes out through CandidateExtTag's own `upsertCountLine(candidateLine(…))`
+// path, the two settled tally rules fall out rather than needing their own
+// code — a new identity lands at `@count: 1` (the tally measured agreement
+// on a proposal the human just changed), and a revision colliding with an
+// existing line merges into that line's tally.
+//
+// Unlike accept/reject, a tvid that resolves to nothing — or to a tag that
+// is not `@ext-candidate` — is an **error**, not a silent no-op: the caller
+// named one specific line, so silence would report a revision that never
+// happened.
+// CRC: crc-DB.md | Seq: seq-ext-author.md#6.3 | R3255
+func (db *DB) AmendExtCandidate(sourceTvid uint64, tag, value string, opts ExtAmendOpts) error {
+	if tag = strings.TrimSpace(tag); tag == "" {
+		return errors.New("tag must not be empty")
+	}
+	if db.store == nil || db.store.tvids == nil {
+		return errors.New("tvid map unavailable")
+	}
+	_, valuePart, resolved := db.store.tvids.Resolve(sourceTvid)
+	old, ok := db.store.decodeCandidateRow(sourceTvid)
+	if !resolved || !ok {
+		return fmt.Errorf("tvid %d is not a live @ext-candidate", sourceTvid)
+	}
+	// The DROP identity must use the disposition as *written*, not the
+	// external default decodeCandidateRow supplies for display: a line
+	// authored without a disposition token has none in the file, and an
+	// identity carrying one would not match it. Carry-forward, by contrast,
+	// wants the normalized value — a revision is written afresh.
+	oldLine := candidateLine(old.Target, old.Tagname, old.Value, old.Insight,
+		peelExtCandidateDisposition(valuePart), old.Replace)
+
+	oldMirror, err := db.resolveExtMirror(old.Target)
+	if err != nil {
+		return err
+	}
+	oldData, err := os.ReadFile(oldMirror)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", oldMirror, err)
+	}
+	oldData, dropped := dropCountLine(oldData, oldLine)
+	if !dropped {
+		return fmt.Errorf("tvid %d: no matching @ext-candidate line in %s", sourceTvid, oldMirror)
+	}
+
+	newTarget := orElse(opts.Target, old.Target)
+	newLine := candidateLine(newTarget, tag, value,
+		orElse(opts.Insight, old.Insight),
+		orElse(opts.Disposition, old.Disposition),
+		orElse(opts.Replace, old.Replace))
+	newMirror, err := db.resolveExtMirror(newTarget)
+	if err != nil {
+		return err
+	}
+	date := time.Now().Format("2006-01-02")
+	// Retargeting can move the proposal to a different mirror file, so the
+	// drop and the author are not always the same write.
+	if newMirror == oldMirror {
+		return atomicWriteFile(oldMirror, upsertCountLine(oldData, newLine, date, 1), 0644)
+	}
+	if err := atomicWriteFile(oldMirror, oldData, 0644); err != nil {
+		return err
+	}
+	newData, err := readExtMirror(newMirror)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(newMirror), 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(newMirror), err)
+	}
+	return atomicWriteFile(newMirror, upsertCountLine(newData, newLine, date, 1), 0644)
 }
 
 // RejectExtTag rewrites matching `@ext-candidate` line(s) to a single

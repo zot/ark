@@ -1,5 +1,5 @@
 # Store
-**Requirements:** R6, R15, R45, R103, R104, R105, R106, R119, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2765, R2766, R2874, R2875, R2876, R2877, R2878, R2879, R2881, R2882, R2883, R2884, R2885, R2886, R2887, R2975, R2979, R2980, R2983, R3058, R3059, R3060, R3065, R3066, R3067, R3069, R3070, R3071, R3072, R3073, R3083, R3214, R3221, R3223
+**Requirements:** R6, R15, R45, R103, R104, R105, R106, R119, R121, R122, R123, R124, R125, R126, R367, R503, R504, R505, R511, R866, R867, R868, R871, R872, R873, R883, R884, R885, R886, R887, R888, R889, R911, R912, R913, R927, R928, R932, R933, R934, R935, R936, R2479, R2481, R1099, R1100, R1101, R1102, R1103, R1108, R1109, R1110, R1142, R1143, R1144, R1280, R1281, R1282, R1283, R1284, R1285, R1286, R1287, R1288, R1289, R1290, R1291, R1292, R1293, R1294, R1295, R1309, R1310, R1311, R1312, R1313, R1314, R1275, R1276, R1467, R1468, R1532, R1533, R1534, R1535, R1536, R1537, R1538, R1543, R1544, R1545, R1546, R1547, R1548, R1549, R1570, R1571, R1572, R1599, R1602, R1603, R1605, R1606, R1618, R1619, R1620, R1720, R1721, R1722, R1723, R1724, R1725, R1833, R1835, R1836, R1837, R1838, R1839, R1840, R1841, R1842, R1843, R1844, R1845, R1873, R1874, R1875, R1876, R1877, R1878, R1879, R1880, R1881, R1882, R1883, R1884, R1885, R1886, R1887, R1888, R1889, R1946, R1947, R1952, R1956, R1958, R1959, R1962, R1963, R1988, R1989, R1990, R1991, R2010, R2019, R2094, R2095, R2097, R2100, R2114, R2120, R2151, R2152, R2153, R2154, R2155, R2156, R2157, R2159, R2160, R2161, R2174, R2175, R2176, R2177, R2178, R2179, R2180, R2181, R2182, R2183, R2184, R2185, R2186, R2187, R2188, R2189, R2190, R2191, R2192, R2193, R2226, R2227, R2229, R2231, R2344, R2345, R2346, R2347, R2348, R2349, R2350, R2351, R1902, R1970, R1971, R1972, R1973, R1974, R1975, R2648, R2649, R2650, R2651, R2652, R2653, R2659, R2663, R2664, R2665, R2666, R2669, R2673, R2674, R2675, R2678, R2679, R2680, R2681, R2682, R2765, R2766, R2874, R2875, R2876, R2877, R2878, R2879, R2881, R2882, R2883, R2884, R2885, R2886, R2887, R2975, R2979, R2980, R2983, R3058, R3059, R3060, R3065, R3066, R3067, R3069, R3070, R3071, R3072, R3073, R3083, R3214, R3221, R3223, R3252, R3253, R3254, R3266, R3263
 
 Ark's own `ark` bucket inside microfts2's bbolt database. Manages missing
 files, unresolved files, ark-level settings, and tag tracking.
@@ -213,14 +213,30 @@ is no longer in the DB. See schedule-record-only.md.)
   not a direct key. The propose pass, the mention path, and the (retiring)
   read-side defense all consult the map. `reject_propose_ceiling` /
   `reject_mention_ceiling` read the map's signed magnitude. (R3066, R3070)
-- DerivedProposals(chunkID uint64) ([]DerivedProposal, error): read
-  `ExtMap.candidateSourcesByChunk[chunkID]` → source_tvids; for each,
-  `TvidMap.Resolve(source_tvid)` + `ParseExtTarget` recovers `(tagname, value)`
-  and the RC record supplies the tally. Skip tagnames net-rejected in
-  `rejectByChunk` (defense-in-depth). Return sorted by tally descending.
-  Supersedes the `"RC" + chunkid` prefix scan. The recall-path caller
-  (`enrichProposedTags`) is removed by #36 (R3080); retained as the
-  forge-facing reader (#37). (R3058, R3065, R3067)
+- PendingCandidates(filterChunks []uint64, limit int) ([]CandidateRow, error):
+  the exposed pending-ledger reader — **one row per `@ext-candidate` source
+  tvid**, since accept / reject / amend all act on the line, not on one of
+  its target chunks. Empty `filterChunks` scans the RC prefix corpus-wide
+  (`ScanAllDerivedCandidates`); a non-empty one narrows via
+  `candidateSourcesByChunk`. Both shapes fold RC rows into a per-tvid
+  accumulator, then `decodeCandidateRow` recovers everything but the tally
+  from the source tvid. Ranks unattached-first, tally desc, date desc,
+  tagname, tvid; truncates to `limit` **after** the ranking (`limit <= 0` =
+  unlimited). (R3252, R3253)
+- decodeCandidateRow(txn, srcTvid) (CandidateRow, bool): the shared
+  candidate decode — `TvidMap.Resolve` → reject non-`@ext-candidate` tvids →
+  peel date / disposition / replace / insight → `ParseExtTarget` →
+  `extractCountField`. The single place that knows how to read a candidate
+  line back; both `PendingCandidates` and `DerivedProposals` go through it.
+  (R3252)
+- DerivedProposals(chunkID uint64) ([]DerivedProposal, error): the per-chunk
+  narrow projection of `PendingCandidates` — same read, filtered to one
+  chunk and reduced to `(Tagname, Tally)`, minus tagnames net-rejected in
+  `rejectByChunk` (defense-in-depth) and minus the unattached sentinel row
+  (a candidate attached to nothing is not a proposal *on this chunk*).
+  Sorted by tally descending. The recall-path caller (`enrichProposedTags`)
+  was removed by #36 (R3080); this is the narrow shape kept for callers that
+  want only the pair. (R3058, R3065, R3067)
 - AcceptDerived(db *DB, chunkID uint64, tagname, value string) error:
   **re-homed to the mirror path.** Resolves the chunk's locator and delegates
   to `DB.AcceptExtTag` (`@ext-candidate` → `@ext`); on reindex the RC derivation
@@ -425,6 +441,14 @@ is no longer in the DB. See schedule-record-only.md.)
   source_tvids → separate records at one chunk. Reverse lookup via
   `ExtMap.candidateSourcesByChunk`. Supersedes the `chunkid + tagname → 8-byte
   tally` shape. (R3058, R3060, R3074)
+- RC target_chunkid **0 is the unattached sentinel** — never a real chunk
+  (microfts2 allocates persistent chunkids from 1 and overlay chunkids down
+  from `MaxUint64`). Every candidate source_tvid holds at least one RC
+  record: when the derivation attaches it to no persistent chunk, it writes
+  `RC[source_tvid][0]` and deletes that record once a real target attaches.
+  This is what makes the RC prefix scan a complete enumeration of the
+  pending set for `PendingCandidates`. Written and cleared by `ExtMap`, not
+  by Store. (R3254)
 - RJ key (re-keyed): `"RJ" + source_tvid varint + target_chunkid varint` —
   mirrors RC; source_tvid is the `@ext-judgment` tag's tvid. Value (v3):
   `signed-varint(score) + 8-byte BE unix nanos`; score materialized from the
@@ -448,6 +472,23 @@ is no longer in the DB. See schedule-record-only.md.)
 - Tagname: string
 - Tally: uint64 — number of derivation passes that have proposed
   this (chunkid, tagname)
+
+### CandidateRow (R3252)
+One pending `@ext-candidate` line, as the review console sees it. Every
+field but `Tally` and `Chunks` is recovered from the source tvid, so the
+record set stores nothing new.
+- SourceTvid: uint64 — the RC key's source half; the handle `amend`
+  addresses and the row's stable identity
+- Target: string — the TARGET spec text as authored
+- Chunks: []uint64 — resolved target chunkids; **empty = attached to
+  nothing** (the row backed only by the `RC[tvid][0]` sentinel)
+- Tagname, Value: string — the proposed routing (`Value` empty for a
+  name-only proposal)
+- Insight: string — the author's rationale, empty when none
+- Disposition: string — `internal` or `external`
+- Replace: bool — whether an accept collapses the tag's existing values
+- Tally: uint64 — the line's `@count`, read from the RC value
+- Date: string — the line's first-seen date
 
 ### Page Content Records (R1720-R1725)
 - WritePageContent(fileID uint64, page uint32, blob []byte): write

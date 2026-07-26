@@ -33,9 +33,26 @@ make `model_mismatch` errors and tag-value embeddings
 indistinguishable.
 
 `Store.RecordCounts()` returns counts keyed by the full prefix
-string. Prefix detection for each key: known multi-byte prefixes
-(`E:`, `EV`, `EC`, `EF`, `PC`) are matched first; anything else
-(including `X` ext-routings) falls back to its single-byte prefix.
+string. Prefix detection reads the label map itself: a key whose
+first two bytes name a label takes that two-byte prefix, and
+anything else (including `X` ext-routings) falls back to its
+single-byte prefix. **The label map is therefore the only inventory** —
+a class is recognized exactly when it is labelled, and adding a label
+is the whole job.
+
+That indirection is not tidiness. The recognizer was previously a
+hand-written switch, a second list that had to be kept in step with
+the labels, and it fell behind: `RC`, `RD`, `RF`, `RJ`, and `HC` were
+labelled but unrecognized, so their keys collapsed to a bare `R`/`H`
+that has no label and `buildRecordCounts` dropped them. Five populated
+record classes reported **0** — a diagnostic lying about the database
+it exists to describe, which cost a live debugging session on
+2026-07-26 before the count was disbelieved.
+
+The scheme requires that no single-byte label be a prefix of a
+multi-byte one (no bare `E`, `R`, `H`, or `P` class alongside `EV`,
+`RC`, `HC`, `PC`). The R3078 sentry asserts this rather than trusting
+it.
 
 ## Output
 

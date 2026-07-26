@@ -512,6 +512,8 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /ext/candidate", srv.handleExtCandidate) // R3057
 	mux.HandleFunc("POST /ext/accept", srv.handleExtAccept)       // R3057
 	mux.HandleFunc("POST /ext/reject", srv.handleExtReject)       // R3057
+	mux.HandleFunc("POST /ext/amend", srv.handleExtAmend)         // R3257
+	mux.HandleFunc("GET /ext/pending", srv.handleExtPending)      // R3259
 	mux.HandleFunc("POST /ui/reload", srv.handleUIReload)
 	mux.HandleFunc("POST /tmp/add", srv.handleTmpAdd)
 	mux.HandleFunc("POST /tmp/update", srv.handleTmpUpdate)
@@ -2290,6 +2292,94 @@ func (srv *Server) handleExtAccept(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | R3057
 func (srv *Server) handleExtReject(w http.ResponseWriter, r *http.Request) {
 	srv.extMutate(w, r, func(db *DB, req extRequest) error { return db.RejectExtTag(req.Target, req.Tag, req.Value) })
+}
+
+// extAmendRequest is POST /ext/amend's body. Every field but Tvid and Tag
+// is a pointer because **absent must stay distinguishable from empty**: a
+// JSON key the CLI never sent decodes to nil and carries the old line's
+// value forward (ExtAmendOpts), whereas an explicitly-sent empty string is
+// a real revision — clear the insight, make the proposal name-only.
+// CRC: crc-Server.md | R3257
+type extAmendRequest struct {
+	Tvid        uint64  `json:"tvid"`
+	Tag         string  `json:"tag"`
+	Value       string  `json:"value"`
+	Target      *string `json:"target,omitempty"`
+	Insight     *string `json:"insight,omitempty"`
+	Disposition *string `json:"disposition,omitempty"`
+	Replace     *bool   `json:"replace,omitempty"`
+}
+
+// handleExtAmend serves POST /ext/amend — revise one `@ext-candidate` line
+// in place. Runs inside the DB actor (SyncVoid), the same
+// temp+rename-on-actor path the other /ext mutations take.
+// CRC: crc-Server.md | Seq: seq-ext-author.md#6.2.1.1 | R3257
+func (srv *Server) handleExtAmend(w http.ResponseWriter, r *http.Request) {
+	var req extAmendRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err := SyncVoid(srv.db, func(db *DB) error {
+		return db.AmendExtCandidate(req.Tvid, req.Tag, req.Value, ExtAmendOpts{
+			Target:      req.Target,
+			Insight:     req.Insight,
+			Disposition: req.Disposition,
+			Replace:     req.Replace,
+		})
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleExtPending serves GET /ext/pending — the ledger read. Takes
+// repeatable `target` (a TARGET spec, resolved here) and `chunk` (a raw
+// chunkid) filters plus `limit`, and returns the ranked []CandidateRow as
+// JSON. TARGET resolution is server-side for the same reason every mutating
+// verb's is: the index lives here, and the CLI cannot open it while the
+// server holds the file lock.
+//
+// The one /ext handler that is a **read**, so it binds one private read
+// view at the top rather than running on the actor — ResolveExtTarget
+// reaches the fts Go-side caches, which race the write actor's
+// InvalidateCaches off-actor (the O154 class).
+// CRC: crc-Server.md | Seq: seq-ext-author.md#7.2.1 | R3259
+func (srv *Server) handleExtPending(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	rdb := srv.db.withFTS(srv.db.fts.Copy())
+	var filter []uint64
+	for _, target := range q["target"] {
+		filter = append(filter, rdb.ResolveExtTarget(target, "")...)
+	}
+	for _, raw := range q["chunk"] {
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("chunk %q: %v", raw, err), http.StatusBadRequest)
+			return
+		}
+		filter = append(filter, id)
+	}
+	limit := 0
+	if s := q.Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("limit %q: %v", s, err), http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	rows, err := rdb.store.PendingCandidates(filter, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []CandidateRow{} // an empty ledger is `[]`, never JSON null
+	}
+	writeJSON(w, rows)
 }
 
 type fetchRequest struct {
@@ -6292,6 +6382,120 @@ func (srv *Server) registerLuaFunctions() {
 			row := L.NewTable()
 			L.SetField(row, "disposition", lua.LString(disposition))
 			L.Push(row)
+			return 1
+		}))
+
+		// mcp.extReject(targetSpec, tag, value) — the third judgment
+		// gesture. Without it extAccept/extRemove make a review console
+		// that can only say yes. `value` is optional; empty rejects every
+		// value of the tag on that TARGET. Returns true or (nil, errstring).
+		// CRC: crc-Server.md | Seq: seq-ext-author.md#4.4 | R3260
+		L.SetField(tbl, "extReject", L.NewFunction(func(L *lua.LState) int {
+			targetSpec := L.CheckString(1)
+			tag := L.CheckString(2)
+			value := L.OptString(3, "")
+			if err := SyncVoid(srv.db, func(db *DB) error {
+				return db.RejectExtTag(targetSpec, tag, value)
+			}); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.extAmend(sourceTvid, tag, value, opts) — revise a pending
+		// proposal in place. opts is an optional table {target, insight,
+		// disposition, replace}; a key **absent from the table** becomes a
+		// nil ExtAmendOpts field, i.e. carry the old line's value forward.
+		// Lua's absent-vs-false distinction maps onto the pointer fields
+		// directly, which is why each key is read with a presence check
+		// rather than an OptString/OptBool default. Returns true or
+		// (nil, errstring).
+		// CRC: crc-Server.md | Seq: seq-ext-author.md#6 | R3261
+		L.SetField(tbl, "extAmend", L.NewFunction(func(L *lua.LState) int {
+			sourceTvid := uint64(L.CheckInt64(1))
+			tag := L.CheckString(2)
+			value := L.OptString(3, "")
+			var opts ExtAmendOpts
+			if optsTbl, ok := L.Get(4).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("target").(lua.LString); ok {
+					opts.Target = ptrTo(string(v))
+				}
+				if v, ok := optsTbl.RawGetString("insight").(lua.LString); ok {
+					opts.Insight = ptrTo(string(v))
+				}
+				if v, ok := optsTbl.RawGetString("disposition").(lua.LString); ok {
+					if err := checkExtDisposition(string(v)); err != nil {
+						L.Push(lua.LNil)
+						L.Push(lua.LString(err.Error()))
+						return 2
+					}
+					opts.Disposition = ptrTo(string(v))
+				}
+				if v, ok := optsTbl.RawGetString("replace").(lua.LBool); ok {
+					opts.Replace = ptrTo(bool(v))
+				}
+			}
+			if err := SyncVoid(srv.db, func(db *DB) error {
+				return db.AmendExtCandidate(sourceTvid, tag, value, opts)
+			}); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp.extPending(opts) — the ledger read behind {chunk, limit},
+		// both optional. Returns a Lua array of row tables carrying the
+		// CandidateRow fields (chunks as a nested array), already ranked
+		// (R3253), or (nil, errstring). The only mcp.ext* binding taking a
+		// chunkid rather than a TARGET spec, and only because it reads: the
+		// mutating bindings resolve TARGETs server-side at fire time so
+		// they cannot race a reindex into a stale identity (R3250).
+		// CRC: crc-Server.md | Seq: seq-ext-author.md#7.4 | R3262
+		L.SetField(tbl, "extPending", L.NewFunction(func(L *lua.LState) int {
+			var filter []uint64
+			limit := 0
+			if optsTbl, ok := L.Get(1).(*lua.LTable); ok && optsTbl != nil {
+				if v, ok := optsTbl.RawGetString("chunk").(lua.LNumber); ok {
+					filter = append(filter, uint64(v))
+				}
+				if v, ok := optsTbl.RawGetString("limit").(lua.LNumber); ok {
+					limit = int(v)
+				}
+			}
+			rows, err := Sync(srv.db, func(db *DB) ([]CandidateRow, error) {
+				return db.store.PendingCandidates(filter, limit)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			out := L.NewTable()
+			for _, row := range rows {
+				t := L.NewTable()
+				L.SetField(t, "tvid", lua.LNumber(row.SourceTvid))
+				L.SetField(t, "target", lua.LString(row.Target))
+				L.SetField(t, "tag", lua.LString(row.Tagname))
+				L.SetField(t, "value", lua.LString(row.Value))
+				L.SetField(t, "insight", lua.LString(row.Insight))
+				L.SetField(t, "disposition", lua.LString(row.Disposition))
+				L.SetField(t, "replace", lua.LBool(row.Replace))
+				L.SetField(t, "tally", lua.LNumber(row.Tally))
+				L.SetField(t, "date", lua.LString(row.Date))
+				chunks := L.NewTable()
+				for _, c := range row.Chunks {
+					chunks.Append(lua.LNumber(c))
+				}
+				L.SetField(t, "chunks", chunks)
+				out.Append(t)
+			}
+			L.Push(out)
 			return 1
 		}))
 

@@ -183,6 +183,32 @@ cheaper than full reindex.
 Append-only chunks lighten tag indexing too — only extract tags
 from new chunks, add to existing counts.
 
+### Saying which branch ran
+
+Every refresh names its outcome on one line, at the coarsest
+verbosity, in a shared vocabulary:
+
+```
+index: <path> APPENDED 179 bytes → 1 new chunk(s)
+index: <path> REINDEXED in full (fileID=9089)
+index: <path> UNCHANGED (skipped — same length and hash)
+index: <path> APPEND FAILED (<err>) — falling back to REINDEX
+```
+
+Which branch ran decides whether a change was re-derived at all, so
+it is the first thing anyone debugging the index needs and the last
+thing they should have to infer. Before this it could only be pieced
+together from `isAppend=` and `unchanged` buried mid-line across four
+separate `-vv` lines, and the two optimizations above are quiet enough
+to defeat a hand probe: touching a file takes the append path and
+re-derives nothing, while restoring its original bytes is skipped
+outright as unchanged.
+
+The append line carries the chunk count deliberately. An append that
+produces **zero** chunks means the file grew and nothing downstream
+re-ran, which looks identical to success in any log that reports only
+the branch.
+
 The new watermark ark stores after an append — file length plus
 content hash, the inputs the next detection compares against — comes
 from a single in-memory snapshot of the file. The stored length is the

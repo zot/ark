@@ -495,9 +495,9 @@ two proposals of the same tag with different insights are distinct
 lines, so both survive for the judge to weigh; insights are preserved,
 not collapsed into one.
 
-#### Verbs: `ark ext {candidate,accept,reject}`
+#### Verbs: `ark ext {candidate,accept,reject,amend}`
 
-Three verbs stage a routing through its lifecycle, all riding the same
+Four verbs stage a routing through its lifecycle, all riding the same
 class-aware mirror-file machinery (`applyExtMirrorEdit`) as
 `set`/`add`/`remove`:
 
@@ -505,6 +505,7 @@ class-aware mirror-file machinery (`applyExtMirrorEdit`) as
 ark ext candidate <target> <tag> [value] [--insight "why"]   # write an @ext-candidate
 ark ext accept    <target> <tag> [value]                     # @ext-candidate → @ext
 ark ext reject    <target> <tag> [value]                     # @ext-candidate → @ext-judgment
+ark ext amend     <tvid> <tag> [value]                       # revise an @ext-candidate in place
 ```
 
 - `candidate` — author an `@ext-candidate` line for `(target, tag[,
@@ -524,8 +525,37 @@ ark ext reject    <target> <tag> [value]                     # @ext-candidate �
   recording a durable rejection and consuming the candidate(s) for that
   `(target, tag)`. The first reject creates `@count: -1`; a repeat
   decrements it; a `@count` that reaches 0 removes the line.
+- `amend` — revise a proposal **in place**: retire one existing
+  `@ext-candidate` line and author the revised one, as a single
+  closure-actor operation. The proposal stays pending, so an edited
+  proposal revises rather than orphaning its original. Amend is also how
+  tentative curation becomes durable without being committed — "save my
+  thinking, decide later" is a first-class gesture, not a lost draft.
 
-Like every mutating `ark ext` verb, all three proxy through the running
+`amend` addresses the old line **by its source tvid**, not by `(target,
+tag, value)`. A candidate line's identity is the six-tuple `(target,
+disposition, replace, insight, tag, value)`, so a triple can match several
+distinct proposals; the tvid names exactly one line and is the same handle
+the ledger query returns (it is the RC record's key).
+
+The subject is stated, the metadata is inherited: `tag` and `value` are
+**always** the revised proposal (an omitted `value` means a name-only
+proposal, as it does for `candidate`), while every *option* left off —
+`target`, `insight`, `disposition`, `replace` — carries forward from the
+old line. So the reviewer **may** edit the rationale, but silence leaves
+it alone rather than discarding it. Splitting the rule this way is what
+keeps `amend <tvid> <tag>` unambiguous; were the positionals inherited
+too, it could not distinguish "make this name-only" from "leave the value
+alone."
+
+The revised line is authored through `candidate`, so amend inherits its
+identity semantics whole: a revision is a **new identity** and starts at
+`@count: 1`, and a revision that happens to collide with an existing line
+merges into that line's tally instead of duplicating it. The tally
+measures agreement on a *specific* proposal, so a proposal the human just
+changed does not inherit the old one's votes.
+
+Like every mutating `ark ext` verb, all four proxy through the running
 server or open the index exclusively when stopped, and act **only** on
 the target's mirror file.
 
@@ -534,6 +564,70 @@ derivation of `@ext-candidate` → RC and `@ext-judgment` → RJ, and the
 signed judgment score (carried in the line's `@count`). **Still deferred:**
 a reject rationale and the reinforcement (positive-judgment) producer
 (seam 3b).
+
+#### Reading the ledger: `ark ext pending`
+
+The write side is only half a review console. `pending` is the read
+side — the pending set, which is not a computed state but literally the
+set of `@ext-candidate` lines on disk:
+
+```
+ark ext pending [--chunk <target>] [--limit N] [--json]
+```
+
+Agents author proposals across sessions, so the ledger is **corpus-wide
+by default**: a proposal on a chunk the human never pinned is exactly the
+one a per-card view would hide. `--chunk` narrows to proposals landing on
+the chunk(s) a TARGET spec resolves to.
+
+**One row per candidate line**, not per (line, target chunk). The
+gestures — accept, reject, amend — all act on the line, so that is the
+unit the human judges; a line whose TARGET resolves to many chunks is one
+row listing them, not many rows repeating themselves.
+
+| Field | Meaning |
+|-------|---------|
+| `tvid` | source tvid — the handle `amend` addresses |
+| `target` | the TARGET spec text as authored |
+| `chunks` | resolved target chunkids; **empty = attached to nothing** |
+| `tag` | proposed tag name |
+| `value` | proposed value (empty for a name-only proposal) |
+| `insight` | the author's rationale (empty when none) |
+| `disposition` | `internal` or `external` |
+| `replace` | whether an accept collapses the tag's existing values |
+| `tally` | the line's `@count` |
+| `date` | first-seen date |
+
+`insight` and `tally` are what the human is actually judging — the why
+and how much independent agreement it drew — so both ride every row.
+
+**Ranking is the query's job, not the caller's.** A corpus-wide ledger
+can outgrow a screenful, and a caller cannot sort what it never fetched,
+so the query ranks and *then* limits:
+
+1. **Unattached rows first** (`chunks` empty). A proposal that reaches no
+   chunk is the row most likely to need a human — a typo in the TARGET at
+   authoring time, or a corpus change that moved the content out from
+   under a once-good target — and it must not sink to the bottom of a
+   tally sort where a `--limit` would cut it off.
+2. Then `tally` descending — the original intent, high-agreement
+   proposals first.
+3. Then `date` descending, then tag name, then tvid, so the order is
+   total and stable across calls.
+
+Recency and insight-presence are available as further axes and are
+deliberately deferred until there is a real ledger to rank.
+
+`pending` is the group's only **read** verb, so it breaks the
+proxy-or-open-exclusively pattern the mutating verbs share: it takes
+ark's standard CLI dispatch instead, proxying to `GET /ext/pending` when
+a server is up and opening the index locally when none is. It is not a
+*read-only* open — bbolt is single-process, so opening the index takes
+the file lock either way; what differs is the dispatch, not the lock.
+Because the index may be held by the server, `--chunk`'s TARGET is
+resolved on whichever side actually holds it: over the wire as
+`?target=`, or locally. `amend`, being a mutation, keeps the
+`POST /ext/amend` proxy-or-exclusive shape of its siblings.
 
 ### One-shot fire: `mcp.extAccept` and `mcp.extRemove`
 
@@ -582,6 +676,36 @@ byte range is stale the moment any write lands.
 disposition **actually applied** after the accept's capability
 degrade, so callers can be honest about what happened. On
 failure: `(nil, errstring)`.
+
+#### The rest of the console: `mcp.extReject`, `mcp.extAmend`, `mcp.extPending`
+
+```lua
+local ok, err   = mcp.extReject(targetSpec, tag, value)
+local ok, err   = mcp.extAmend(sourceTvid, tag, value, opts)
+local rows, err = mcp.extPending(opts)
+```
+
+`extAccept` and `extRemove` alone make a rubber stamp — a console that
+can only say yes. These three complete it, each a thin binding over the
+verb the CLI already runs, resolved on the DB actor like every other
+`mcp.ext*` call:
+
+- `extReject(targetSpec, tag, value)` — the third judgment gesture,
+  `ark ext reject`. `value` is optional; empty rejects every value of the
+  tag on that TARGET. Returns `true`, or `(nil, errstring)`.
+- `extAmend(sourceTvid, tag, value, opts)` — revise the candidate line
+  `sourceTvid` names. `opts` carries `insight`, `disposition`, `replace`,
+  and `target`; anything omitted is carried forward from the old line.
+  Returns `true`, or `(nil, errstring)`.
+- `extPending(opts)` — the ledger read. `opts` carries `chunk` (a
+  chunkid, narrowing to proposals landing there) and `limit`. Returns an
+  array of row tables with the fields tabled above, already ranked, or
+  `(nil, errstring)`.
+
+Only `extPending` takes a chunkid, and only because it reads. Every
+mutating binding takes a TARGET spec or a tvid and resolves it
+server-side at fire time, for the reason the previous section gives: a
+client-held chunkID is stale the moment any write lands.
 
 ## `mcp.suggestExtLocator(chunkID)`
 

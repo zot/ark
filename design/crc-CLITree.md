@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -192,6 +192,28 @@ CLITree owns how those bodies are *reached* and how their help is
   choice, default external — R3094) dispatch the same way to `DB.CandidateExtTag` /
   `AcceptExtTag` / `RejectExtTag` (POST `/ext/{candidate,accept,reject}` —
   crc-Server.md); `value` is optional for all three. (R3056)
+  The `amend` leaf takes `<tvid> <tag> [value]` plus `--insight`,
+  `--disposition`/`--internal`, `--replace`, and `--target`, dispatching to
+  `DB.AmendExtCandidate` (POST `/ext/amend`). Its flag reads go through
+  `c.IsSet` before `c.String`/`c.Bool`, because an unset flag must reach
+  `ExtAmendOpts` as nil (carry the old line's value forward) and `c.Bool`
+  alone cannot tell an unset `--replace` from `--replace=false`. (R3256)
+- `ext pending` leaf (R3258): `[--chunk <target>] [--limit N] [--json]`,
+  the group's only **read** verb, so it breaks its siblings' hand-rolled
+  proxy-or-**exclusive** shape and takes the standard `proxyOrLocal`
+  dispatch instead — proxy to GET `/ext/pending` when a server is up,
+  ordinary local open when none is, with the Stubborn Plumbing retry.
+  (There is no read-only index open to take: bbolt is single-process and
+  `ark.Open` locks the file either way.) `--chunk` takes a TARGET spec
+  (not a chunkid), so the CLI addresses chunks the way every other `ark
+  ext` verb does; it is resolved through `DB.ResolveExtTarget` **wherever
+  the index lives** — server-side via `?target=` when a server holds the
+  lock, locally otherwise — and a TARGET resolving to nothing is an error,
+  never a silent widening into the corpus-wide scan. Renders
+  `Store.PendingCandidates`'s rows as a baby-food markdown table (em dash
+  for an unattached row's chunks), or JSON under `--json`; the CLI does no
+  sorting or truncation of its own, since the ranking and limit are the
+  query's (R3253).
 
 ## Collaborators
 - CLI (crc-CLI.md): owns the command bodies the `Action`s call; CLITree

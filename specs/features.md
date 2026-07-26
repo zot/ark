@@ -305,9 +305,10 @@ with `--session` / `--discussed` for the dedup filter and
 derived-tag candidates per chunk),
 `ark discussed add/list/clear/prune` (per-session dedup state
 backed by RD records — see `specs/discussed-tags.md`),
-`Store.DerivedProposals` / `AcceptDerived` / `RejectDerived` (Go
-API consumed by the Tag Forge — see `specs/derived-tags.md` for
-the RC/RJ/RF record classes), `sys.recall` (Lua bridge), the
+`Store.PendingCandidates` / `DerivedProposals` / `AcceptDerived` /
+`RejectDerived` (Go API consumed by the Tag Forge — see
+`specs/derived-tags.md` for the RC/RJ/RF record classes) and its
+`ark ext pending` / `mcp.extPending` faces, `sys.recall` (Lua bridge), the
 substrate primitives shared with find connections. Statistical
 derivation runs on each recall call and **computes** candidates for
 display (#36); the pass persists nothing — the calling agent authors

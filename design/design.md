@@ -149,16 +149,16 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Config.md → `config.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
-- [x] crc-Store.md → `store.go`
+- [ ] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`, `emptyfiles_test.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
-- [x] crc-ExtMap.md → `extmap.go`
+- [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
-- [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
+- [ ] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
-- [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`
+- [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -326,7 +326,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-RecallScope.md → `recall_scope_test.go`
 - [x] test-OffActorReads.md → `contentview_race_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
-- [x] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`
+- [ ] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`
 - [x] test-Anchor.md → `locator_test.go`
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
@@ -908,3 +908,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O166: The rendered bible page shows no chapter number anywhere. renderBibleXHTML strips `chapter-num` as apparatus (R3211/R3183), which is right for the indexed text but leaves the reader unable to tell which chapter they are in — consecutive psalms run together separated only by a stanza gap, since editorial headings are dropped too (R3213). The chapter number is structure a reader navigates by, not reference apparatus like a footnote marker. Decide whether the renderer should emit it (as its own element, so it is display-only and still absent from chunk text) — the index/display split R3211 already draws makes that possible.
 - [ ] O167: R3233's running head is browser behaviour (sticky positioning, scroll tracking, the body-overflow restoration) with no automated test — ark has no JS test harness, the same reason recorded in O95 for the tag-overview frontend. Verified by Playwright this session: the head pins at top 0, tracks forward and backward across chapters, and a non-bible markdown page gains neither the class nor the head. The Go half (the <ark-chapter> element itself) is covered by test-BibleRender.md.
 - [x] O168: mcp.extAccept/extRemove Lua bindings, POST /ext/remove disposition dispatch, and ark ext remove --internal CLI dispatch are glue verified at build/help level only — the Lua/HTTP layers need the config-source + mirror fixture disproportionate to unit-test (O144/O145 precedent). The pure stencil, DB verbs, and applied-disposition return ARE unit/fixture-tested (ext_insert_test.go, derived_flip_test.go, curation_test.go). Live end-to-end verification lands with the #65 follow-on /ui-fast curation.lua rewire, which exercises both bindings through the workshop fire path. **Resolved 2026-07-24:** all four cells fired live through the rewired `PinnedChunk:fireWidget` (internal add — stencil insert + positive `@ext-judgment`; internal remove — inline line deleted, no degrade; external add — `@ext` routing + judgment; external remove — routing dropped, judgments retained). File writes and mirror-ledger trail confirmed on a scratch fixture.
+- [ ] O169: Stale LMDB prose in Go comments (~20 sites: indexer.go ×9 incl. :492 'read-only env.View', db.go, emptyfiles.go, tmp_tag_store.go, inspect.go). Load-bearing: they explain WHY concurrency code is shaped as it is, in terms of a database replaced by bbolt at v0.5.0. Found 2026-07-26 while auditing read-only assertions.
+- [x] O170: ~~@ext routing backlog needs a rebuild~~ — **WRONG, retracted same day (2026-07-26).** There is no backlog: the live corpus contains **zero** mirror files, so under R3264 there are no authorized authors and nothing to re-derive. The 14 `V[ext]` records that prompted this are the `@ext` tag indexed as an ordinary tag value — precisely what R3264 specifies for a non-mirror file ("searchable, visible, inert") — not routings. X records are 0. Mis-banked by reading a tag-value count as a routing count.
+- [x] O171: ~~Gate does not sweep records from now-unauthorized sources~~ — **empty in practice (2026-07-26).** X=0 and RC=0 after one `ark connections clean`, so there is no residue to sweep on this index. The general concern (a source losing authority leaves its records behind) is real but has no instance; reopen if one appears. Targeted repair, if ever needed, is `ark remove <path|pattern>` + `ark scan` rather than a full rebuild.
+- [ ] O172: Zero-chunk appends: 'APPENDED 51613 bytes → 0 new chunk(s)' is common on chat/workflow JSONLs (152 appends observed, most yielding 0). Probably correct — the chat-jsonl chunker skips tool_use/tool_result/planContent per R240-R243 — but unverified, and now visible thanks to R3266. Confirm the skip accounts for all of it.
+- [ ] O173: specs/bible-chunker.md recommends ext_mirror for a scripture source and explains why the non-writable strategy needs it, but nothing defaults or enforces it: add a bible source without the line and its annotations land in ~/.ark/external, contradicting the spec's stated intent. Decide whether a non-writable strategy should default ext_mirror.

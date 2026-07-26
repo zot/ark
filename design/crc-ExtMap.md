@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915, R3058, R3059, R3060, R3062, R3063, R3064, R3065, R3066, R3074
+**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915, R3058, R3059, R3060, R3062, R3063, R3064, R3065, R3066, R3074, R3254
 
 Owns the in-memory state and orchestration for the **tag-derived
 record family** — `@ext`→X (committed routing), `@ext-candidate`→RC
@@ -66,8 +66,12 @@ sources index, dropped as overlay items disappear.
   In-memory reverse lookup for "candidates proposed on chunk C,"
   replacing the RC bbolt prefix scan. Maintained on derive / reindex /
   cleanup, rebuilt at startup (pattern of routedTagsByTvidExt). Read by
-  `enrichProposedTags` / `DerivedProposals`, which then Resolve +
-  ParseExtTarget each source_tvid to recover (tagname, value). (R3065)
+  `Store.PendingCandidates`'s per-chunk shape and its `DerivedProposals`
+  projection, which then Resolve + ParseExtTarget each source_tvid to
+  recover (tagname, value). (`enrichProposedTags` stopped reading it at
+  #36 — R3080.) **Never keyed by chunk 0**: the unattached sentinel is a
+  record, not a proposal *on* a chunk, so the startup rebuild and the
+  derive path both skip target 0 here. (R3065, R3254)
 - rejectByChunk: map[uint64]map[string]int64 — target_chunkid → tagname
   → signed judgment score, the in-memory judgment lookup for the reject
   filter. "Is T net-rejected on C" is one hit with the negative-score
@@ -86,6 +90,23 @@ sources index, dropped as overlay items disappear.
   neutral); update rejectByChunk; no V edge, no virtualTagCount. Everything
   else — TARGET resolution, keying, the reindex diff, source-orphan cleanup,
   startup rebuild — is shared across classes. (R3062, R3063, R3064, R3074)
+- **Unattached-candidate sentinel.** A candidate that attaches to no
+  persistent chunk gets `RC[source_tvid][0]` rather than no record at all,
+  and the record is deleted the moment a real target attaches — the
+  invariant "every candidate tvid holds at least one RC record," which is
+  what makes the RC prefix scan a complete enumeration of the pending set
+  for `Store.PendingCandidates`. Three write sites, one per way a candidate
+  ends up attached to nothing, all of which today leave no trace:
+  `applyIndexExt`'s empty-`targets` early return (the TARGET resolved to
+  nothing), `applyDerivedIndexExt` when every resolved target is filtered
+  out (self-reference, or overlay when derived records are
+  persistent-only), and `applyDerivedReresolve` when `len(p.newTargets)`
+  goes to zero — the **global** new-target set, not the file-scoped
+  `newScoped` diff that drives the per-target RC deletes. Each site's
+  mirror-image clear runs where it already drops `unresolvedTargets`.
+  `chunkToTargets`/`fileidToTvids` are **not** given a 0 entry: the
+  sentinel is a durable record, not a graph edge, and chunk 0 has no
+  file. (R3254)
 - Rebuild(db *DB): startup scan of X records to repopulate the seven
   core maps (six from R1992 plus extSource). Reads `targetToChunk`
   and `virtualTagCount` directly from X record contents; derives

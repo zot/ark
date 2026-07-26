@@ -202,7 +202,8 @@ func setupBibleView(t *testing.T) (*Server, *DB, string) {
 // routing resolves the way an indexed declaration does.
 func routeExt(t *testing.T, db *DB, target, tag, value string) {
 	t.Helper()
-	src := filepath.Join(db.dbPath, "notes-"+tag+".md")
+	// R3264: only a mirror tree may author @ext.
+	src := extMirrorSource(t, db, "notes-"+tag+".md")
 	if err := os.WriteFile(src, []byte("@ext: "+target+" @"+tag+": "+value+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

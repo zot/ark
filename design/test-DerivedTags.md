@@ -181,3 +181,96 @@ R3059, R3065, R3066, R3067, R3069, R3071, R3074, R3075
 **Expected:** body byte-identical to the original after the first remove;
   the second returns a "no inline line" error
 **Refs:** crc-DB.md, crc-Indexer.md
+
+## Test: rankCandidateRows orders and truncates (R3253)
+**Purpose:** The ranking is the query's contract, and the one place a
+  `--limit` could silently drop the row a human most needs. Pure — a slice
+  in, a slice out, no DB.
+**Input:** hand-built `[]CandidateRow` mixing an unattached row (empty
+  `Chunks`) with a low tally against attached rows with higher tallies, plus
+  two rows equal on every key but `SourceTvid`, and `limit` values 0, -1, 1,
+  and larger than the slice.
+**Expected:** unattached first regardless of tally; then tally desc, date
+  desc, tagname, tvid; the tvid tiebreak makes the order total, so a repeat
+  call on a shuffled input yields the identical sequence. `limit <= 0`
+  returns everything; `limit = 1` returns the unattached row (never an
+  attached one), proving truncation happens after ranking.
+**Refs:** crc-Store.md, R3253
+
+## Test: PendingCandidates row carries the whole line (R3252)
+**Purpose:** The console judges `insight` and `@count`, so a row that
+  reaches it missing either is useless — and nothing but the tally is
+  stored, so every other field is a recovery that can regress silently.
+**Input:** file-backed harness; `CandidateExtTag` on an indexed chunk with
+  a quoted insight, `internal` disposition, and `replace` set; reindex.
+**Expected:** one row whose `Insight`, `Disposition`, `Replace`, `Tagname`,
+  `Value`, `Target`, `Date`, and `Tally` all match what was authored, and
+  whose `Chunks` holds the target chunkid.
+**Refs:** crc-Store.md, R3252
+
+## Test: PendingCandidates corpus-wide vs. per-chunk (R3252)
+**Purpose:** Agents author across sessions, so a proposal on a chunk the
+  human never pinned must still be visible — the corpus-wide default is the
+  whole point of the ledger over a per-card view.
+**Input:** candidates authored on two different indexed chunks; call with
+  an empty filter, then with each chunk's id.
+**Expected:** the empty filter returns both rows; each filtered call returns
+  only its own. One row per candidate *line* either way — a TARGET
+  resolving to several chunks yields one row listing them, not one row per
+  chunk.
+**Refs:** crc-Store.md, R3252
+
+## Test: unattached candidate survives as a sentinel row (R3254)
+**Purpose:** The completeness invariant. A proposal whose TARGET resolves to
+  nothing is the row most likely to need a human, and before the sentinel it
+  had no RC record at all — invisible to any prefix scan.
+**Input:** file-backed harness; `CandidateExtTag` against a TARGET naming a
+  path that is indexed by no source; reindex; then author a *second*
+  candidate whose target does resolve.
+**Expected:** the unresolvable candidate appears with `Chunks` empty and
+  sorts ahead of the resolvable one; `RC[tvid][0]` exists for it and no RC
+  record exists at any non-zero chunk; `DerivedProposals` on the resolvable
+  chunk does **not** include the sentinel row (it is not a proposal *on* a
+  chunk); `candidateSourcesByChunk` has no entry keyed 0.
+**Refs:** crc-ExtMap.md, crc-Store.md, R3254
+
+## Test: sentinel clears when a target resolves (R3254)
+**Purpose:** The invariant's other half — a stale `RC[tvid][0]` would leave
+  a resolved proposal permanently sorted into the alarm band at the top.
+**Input:** author a candidate against a path that exists in a source but is
+  not yet indexed (sentinel written); index the file so the TARGET resolves;
+  reindex the mirror.
+**Expected:** `RC[tvid][0]` is gone, `RC[tvid][chunk]` exists, and the row's
+  `Chunks` is non-empty.
+**Refs:** crc-ExtMap.md, R3254
+
+## Test: amend revises in place and resets the tally (R3255)
+**Purpose:** The amend contract — the proposal stays pending rather than
+  orphaning, and a changed proposal does not inherit the old one's votes.
+**Input:** author a candidate twice (tally 2) with an insight; resolve its
+  source tvid; `AmendExtCandidate(tvid, tag, "new value", ExtAmendOpts{})`;
+  reindex.
+**Expected:** exactly one candidate line for that tag in the mirror, holding
+  the new value at `@count: 1`; the old line is gone; the carried-forward
+  `Insight` and `Disposition` match the original (nil opts = inherit); the
+  ledger shows one row, not two.
+**Refs:** crc-DB.md, R3255
+
+## Test: amend merges into a colliding line's tally (R3255)
+**Purpose:** Reusing the candidate author is what makes merge-on-collision
+  fall out; if amend ever grows its own writer this is the behavior that
+  regresses into a duplicate line.
+**Input:** two distinct candidates A and B on one target; amend A so it
+  becomes byte-identical to B's identity.
+**Expected:** one line remains, carrying B's original `@count` incremented
+  by one — not two lines, and not a reset to 1.
+**Refs:** crc-DB.md, R3255
+
+## Test: amend rejects a tvid that is not a live candidate (R3255)
+**Purpose:** Unlike accept/reject, whose no-match is a legitimate no-op,
+  amend was handed one specific line — reporting success for a revision that
+  never happened is the failure mode worth pinning.
+**Input:** an unallocated tvid; and the tvid of an ordinary non-candidate
+  tag.
+**Expected:** an error both times, and the mirror file unchanged.
+**Refs:** crc-DB.md, R3255

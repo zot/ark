@@ -2277,22 +2277,16 @@ func (s *Store) PutScheduleConfig(serialized string) error {
 // first; otherwise the single-byte prefix is returned.
 // CRC: crc-Store.md | R2479, R2481, R2162
 func recordPrefixOf(k []byte) string {
+	// Two-byte prefixes are looked up in the label map rather than listed
+	// here. A hand-written switch is a second inventory that must be kept in
+	// step with arkLabels, and it silently lost RC/RD/RF/RJ/HC: their keys
+	// fell through to a bare "R"/"H" that has no label, so buildRecordCounts
+	// dropped them and `ark status -db` reported 0 for five live record
+	// classes — a diagnostic lying about the database it describes. Deriving
+	// from arkLabels makes adding a label the whole job. (R3263)
 	if len(k) >= 2 {
-		switch {
-		case k[0] == byte(prefixError) && k[1] == ':':
-			return "E:"
-		case k[0] == 'E' && k[1] == 'V':
-			return "EV"
-		case k[0] == 'E' && k[1] == 'C':
-			return "EC"
-		case k[0] == 'E' && k[1] == 'F':
-			return "EF"
-		case k[0] == 'E' && k[1] == 'D':
-			return "ED"
-		case k[0] == 'P' && k[1] == 'C':
-			return "PC"
-		case k[0] == 'R' && k[1] == 'M':
-			return "RM" // R2882 — RM surfaces in status -db
+		if _, ok := arkLabels[string(k[:2])]; ok {
+			return string(k[:2])
 		}
 	}
 	if len(k) == 0 {
@@ -3742,6 +3736,25 @@ type DerivedProposal struct {
 	Tally   uint64
 }
 
+// CandidateRow is one pending `@ext-candidate` line as the review console
+// sees it — one row per candidate *line*, not per (line, target chunk),
+// because accept, reject and amend all act on the line. Everything but
+// Tally and Chunks is recovered from SourceTvid, so the record set stores
+// nothing new.
+// CRC: crc-Store.md | R3252
+type CandidateRow struct {
+	SourceTvid  uint64   `json:"tvid"`
+	Target      string   `json:"target"`
+	Chunks      []uint64 `json:"chunks,omitempty"` // empty = attached to nothing
+	Tagname     string   `json:"tag"`
+	Value       string   `json:"value,omitempty"`
+	Insight     string   `json:"insight,omitempty"`
+	Disposition string   `json:"disposition"`
+	Replace     bool     `json:"replace,omitempty"`
+	Tally       uint64   `json:"tally"`
+	Date        string   `json:"date,omitempty"`
+}
+
 // derivedFreshnessKey returns the RF key for a chunk.
 // CRC: crc-Store.md | R2666
 func derivedFreshnessKey(chunkID uint64) []byte {
@@ -3846,58 +3859,160 @@ func (s *Store) MaxEVSerial() (uint64, error) {
 	return maxS, err
 }
 
-// DerivedProposals returns the derived-tag proposals for one chunk,
-// sorted by tally descending. It reads ExtMap.candidateSourcesByChunk
-// (the RC reverse lookup), recovers each candidate's (tagname, value)
-// from its source tvid via TvidMap.Resolve + ParseExtTarget, and reads
-// the RC tally from the source_tvid + target_chunkid record. Proposals
-// whose tagname is net-rejected in rejectByChunk are dropped as
-// defense-in-depth (the derivation already skips them). Supersedes the
-// "RC" + chunkid prefix scan. (R3058, R3065, R3067)
-// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R3058, R3065, R3067
-func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
-	if s.extmap == nil || s.tvids == nil {
+// decodeCandidateRow recovers a candidate line's shape from its source
+// tvid: the TARGET, the routed (tagname, value), and the metadata riding
+// the line — insight, disposition, replace, first-seen date. Tally and
+// Chunks come from the RC records, so the caller fills those. This is the
+// single place that knows how to read a candidate line back; both ledger
+// shapes go through it. Returns ok=false for a tvid that is not a live
+// `@ext-candidate` or whose value no longer parses.
+// CRC: crc-Store.md | R3252
+func (s *Store) decodeCandidateRow(srcTvid uint64) (CandidateRow, bool) {
+	tag, valuePart, ok := s.tvids.Resolve(srcTvid)
+	if !ok || tag != extCandidateTag {
+		return CandidateRow{}, false
+	}
+	target, routed, ok := ParseExtTarget(valuePart)
+	if !ok {
+		return CandidateRow{}, false
+	}
+	if routed, _, _ = extractCountField(routed); len(routed) == 0 {
+		return CandidateRow{}, false
+	}
+	date, _ := peelDate(strings.TrimLeft(valuePart, " \t"))
+	disposition := peelExtCandidateDisposition(valuePart)
+	if disposition == "" {
+		disposition = extDispositionExternal // the authoring default (R3094)
+	}
+	return CandidateRow{
+		SourceTvid:  srcTvid,
+		Target:      target,
+		Tagname:     routed[0].Tag,
+		Value:       routed[0].Value,
+		Insight:     peelExtCandidateInsight(valuePart),
+		Disposition: disposition,
+		Replace:     peelExtCandidateReplace(valuePart),
+		Date:        date,
+	}, true
+}
+
+// rankCandidateRows imposes the ledger's order and then truncates — never
+// the reverse. Unattached rows lead: such a row is the one most likely to
+// need a human (a typo'd TARGET, or a corpus change that moved the content
+// out from under a good one), and a plain tally sort would let a limit cut
+// it off. The tvid tiebreak makes the order total, so repeated calls agree.
+// limit <= 0 means unlimited.
+// CRC: crc-Store.md | Seq: seq-ext-author.md#7.4.5 | R3253
+func rankCandidateRows(rows []CandidateRow, limit int) []CandidateRow {
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := &rows[i], &rows[j]
+		if (len(a.Chunks) == 0) != (len(b.Chunks) == 0) {
+			return len(a.Chunks) == 0
+		}
+		if a.Tally != b.Tally {
+			return a.Tally > b.Tally
+		}
+		if a.Date != b.Date {
+			return a.Date > b.Date
+		}
+		if a.Tagname != b.Tagname {
+			return a.Tagname < b.Tagname
+		}
+		return a.SourceTvid < b.SourceTvid
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+// PendingCandidates returns the pending `@ext-candidate` ledger, ranked.
+// An empty filterChunks scans the RC prefix corpus-wide — the default,
+// because agents author across sessions and a proposal on a chunk the human
+// never pinned is exactly the one a per-card view would hide. A non-empty
+// filterChunks narrows through ExtMap.candidateSourcesByChunk, and each
+// row's Chunks then holds only the filtered targets the candidate lands on
+// (an unattached candidate is on no card, so it appears in the corpus-wide
+// shape only). Target chunk 0 is the unattached sentinel (R3254): it puts
+// the tvid into the scan without contributing a chunk.
+// CRC: crc-Store.md | Seq: seq-ext-author.md#7.4 | R3252, R3253, R3254
+func (s *Store) PendingCandidates(filterChunks []uint64, limit int) ([]CandidateRow, error) {
+	if s.tvids == nil {
 		return nil, nil
 	}
-	srcTvids := s.extmap.CandidateSourcesForChunk(chunkID)
-	if len(srcTvids) == 0 {
-		return nil, nil
+	chunksByTvid := make(map[uint64][]uint64)
+	tallyByTvid := make(map[uint64]uint64)
+	collect := func(srcTvid, targetChunk, tally uint64) {
+		if _, seen := chunksByTvid[srcTvid]; !seen {
+			chunksByTvid[srcTvid] = nil
+		}
+		if tally > tallyByTvid[srcTvid] {
+			tallyByTvid[srcTvid] = tally
+		}
+		if targetChunk != 0 {
+			chunksByTvid[srcTvid] = append(chunksByTvid[srcTvid], targetChunk)
+		}
 	}
-	var out []DerivedProposal
 	err := s.bolt.View(func(txn *bbolt.Tx) error {
-		for _, srcTvid := range srcTvids {
-			tag, valuePart, ok := s.tvids.Resolve(srcTvid)
-			if !ok || tag != extCandidateTag {
-				continue
+		if len(filterChunks) == 0 {
+			return s.ScanAllDerivedCandidates(txn, func(srcTvid, targetChunk, tally uint64) error {
+				collect(srcTvid, targetChunk, tally)
+				return nil
+			})
+		}
+		if s.extmap == nil {
+			return nil
+		}
+		for _, chunkID := range filterChunks {
+			for _, srcTvid := range s.extmap.CandidateSourcesForChunk(chunkID) {
+				tally, _, terr := s.ReadDerivedCandidate(txn, srcTvid, chunkID)
+				if terr != nil {
+					return terr
+				}
+				collect(srcTvid, chunkID, tally)
 			}
-			_, routed, ok := ParseExtTarget(valuePart)
-			if !ok {
-				continue
-			}
-			if routed, _, _ = extractCountField(routed); len(routed) == 0 {
-				continue
-			}
-			tagname := routed[0].Tag
-			if s.extmap.RejectScore(chunkID, tagname) < 0 {
-				continue
-			}
-			tally, _, terr := s.ReadDerivedCandidate(txn, srcTvid, chunkID)
-			if terr != nil {
-				return terr
-			}
-			out = append(out, DerivedProposal{ChunkID: chunkID, Tagname: tagname, Tally: tally})
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Tally != out[j].Tally {
-			return out[i].Tally > out[j].Tally
+	rows := make([]CandidateRow, 0, len(chunksByTvid))
+	for srcTvid, chunks := range chunksByTvid {
+		row, ok := s.decodeCandidateRow(srcTvid)
+		if !ok {
+			continue
 		}
-		return out[i].Tagname < out[j].Tagname
-	})
+		row.Chunks = chunks
+		row.Tally = tallyByTvid[srcTvid]
+		rows = append(rows, row)
+	}
+	return rankCandidateRows(rows, limit), nil
+}
+
+// DerivedProposals returns the derived-tag proposals for one chunk, sorted
+// by tally descending — the per-chunk projection of PendingCandidates,
+// reduced to the (tagname, tally) pair. Proposals whose tagname is
+// net-rejected in rejectByChunk are dropped as defense-in-depth (the
+// derivation already skips them). (R3058, R3065, R3067)
+// CRC: crc-Store.md | Seq: seq-derived-tags.md#1.7 | R3058, R3065, R3067
+func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error) {
+	if s.extmap == nil || s.tvids == nil {
+		return nil, nil
+	}
+	rows, err := s.PendingCandidates([]uint64{chunkID}, 0)
+	if err != nil {
+		return nil, err
+	}
+	var out []DerivedProposal
+	for _, row := range rows {
+		// A sentinel-only row is attached to nothing, so it is not a
+		// proposal *on* this chunk.
+		if len(row.Chunks) == 0 || s.extmap.RejectScore(chunkID, row.Tagname) < 0 {
+			continue
+		}
+		out = append(out, DerivedProposal{ChunkID: chunkID, Tagname: row.Tagname, Tally: row.Tally})
+	}
 	return out, nil
 }
 

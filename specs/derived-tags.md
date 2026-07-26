@@ -81,6 +81,7 @@ established by `RD` ([discussed-tags.md](discussed-tags.md)).
 - **Key:** `"RC"` + source_tvid varint + target_chunkid varint — a
   tag-derived family key, sibling of the X record. `source_tvid` is the
   tvid of the `@ext-candidate` tag whose TARGET named the chunk.
+  `target_chunkid` **0 is the unattached sentinel** (below).
 - **Value:** varint tally, materialized from the `@ext-candidate` line's
   `@count` field.
 - **Semantic:** one record per (source `@ext-candidate` tvid, target
@@ -88,6 +89,22 @@ established by `RD` ([discussed-tags.md](discussed-tags.md)).
   recovered from the source tvid (`TvidMap.Resolve` → the `@ext-candidate`
   value → `ParseExtTarget`), exactly as X recovers its routed tag. A higher
   tally is a stronger candidate.
+- **Every candidate tvid holds at least one RC record.** When a candidate
+  attaches to no chunk at all, the derivation writes `RC[source_tvid][0]`
+  instead of writing nothing, and clears that record as soon as a real
+  target attaches. Chunk 0 is safe as a sentinel: microfts2 allocates
+  persistent chunkids from 1 and overlay chunkids downward from
+  `MaxUint64`, so nothing collides with it.
+
+  This makes the RC prefix scan a **complete** enumeration of the pending
+  set, which is the property a review console rests on — a proposal
+  attached to nothing is precisely the one a human needs to see, and
+  without the sentinel it has no record and no console can find it. Three
+  ways a candidate ends up attached to nothing, all covered by the one
+  record: its TARGET resolves to no chunk (a typo at authoring time, or a
+  corpus change since); every resolved target is in the candidate's own
+  source file (self-reference, rejected); or every resolved target is an
+  overlay chunk (derived records are persistent-only).
 - **Lifecycle:** **derived** on (re)index of the `@ext-candidate` file tag,
   not written directly. `ark ext candidate` — authored by the calling
   agent — writes that tag; `Store.AcceptDerived` / `RejectDerived`
@@ -316,10 +333,33 @@ enrichment. The pass is read-only.
 New Store methods:
 
 ```go
+// PendingCandidates returns the pending ledger — one row per
+// @ext-candidate line — ranked unattached-first, then tally descending,
+// then date descending, then tag, then tvid. An empty filterChunks scans
+// the RC prefix corpus-wide; a non-empty one narrows to candidates
+// landing on those chunks via ExtMap.candidateSourcesByChunk. limit <= 0
+// means no limit; the limit applies after the ranking, never before.
+// Each row is recovered from its source tvid (TvidMap.Resolve +
+// ParseExtTarget), so the line's insight, disposition, replace flag, and
+// date ride along with the tally the RC record holds.
+func (s *Store) PendingCandidates(filterChunks []uint64, limit int) ([]CandidateRow, error)
+
+type CandidateRow struct {
+    SourceTvid  uint64   // the handle amend addresses
+    Target      string   // TARGET spec text as authored
+    Chunks      []uint64 // resolved targets; empty = attached to nothing
+    Tagname     string
+    Value       string
+    Insight     string
+    Disposition string // "internal" | "external"
+    Replace     bool
+    Tally       uint64
+    Date        string // first-seen
+}
+
 // DerivedProposals returns a chunk's derived proposals, sorted by tally
-// descending. Reads ExtMap.candidateSourcesByChunk, recovers each
-// candidate's (tagname, value) from its source tvid (TvidMap.Resolve +
-// ParseExtTarget), and reads the tally from the RC record. Skips
+// descending — the per-chunk projection of PendingCandidates, kept as the
+// narrow shape callers that only want (tagname, tally) can use. Skips
 // tagnames net-rejected in ExtMap.rejectByChunk (defense-in-depth).
 func (s *Store) DerivedProposals(chunkID uint64) ([]DerivedProposal, error)
 
@@ -371,9 +411,12 @@ local result = sys.recall(inputs, {
 })
 ```
 
-No new Lua methods for accept/reject in this slice — the forge UI
-isn't here yet. When it lands, `sys.derived` exposes `proposals`,
-`accept`, `reject` as a sibling family to `sys.discussed`.
+The forge's own Lua verbs are **not** a `sys.derived` family. They landed
+on the `mcp` global instead, alongside the other mirror-file authoring
+bindings, because that is what they are — `mcp.extAccept` / `mcp.extRemove`
+(#65), then `mcp.extReject` / `mcp.extAmend` / `mcp.extPending` (#67).
+`specs/curation-workshop-primitives.md` owns their contract; this spec
+owns only the records they move.
 
 ## Empty / Error Cases
 

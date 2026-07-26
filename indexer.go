@@ -115,11 +115,21 @@ type scheduleItem struct {
 // run indexing off the main actor.
 func (idx *Indexer) withFTS(fts *microfts2.DB) *Indexer {
 	return &Indexer{
-		fts:           fts,
-		store:         idx.store,
-		pubsub:        idx.pubsub,
-		scheduler:     idx.scheduler,
-		config:        idx.config,
+		fts:       fts,
+		store:     idx.store,
+		pubsub:    idx.pubsub,
+		scheduler: idx.scheduler,
+		config:    idx.config,
+		// extmap + db are the pair runExtRouting gates on. Every caller of
+		// withFTS is inside an enqueueWrite closure — the write actor, which
+		// is exactly where @ext routing belongs — so dropping them here does
+		// not make routing safer, it silently disables it: the gate returns
+		// nil and no @ext or @ext-candidate ever resolves on the watcher
+		// path. They were added to Indexer a month after this copier was
+		// written and never added here, so live routing was dead from then
+		// until the ledger read (#67) made the absence visible.
+		extmap:        idx.extmap,
+		db:            idx.db,
 		pdfChunker:    idx.pdfChunker,
 		bibleChunker:  idx.bibleChunker,
 		recallWatcher: idx.recallWatcher,
@@ -400,7 +410,21 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 	if idx.extmap == nil || idx.db == nil {
 		return nil
 	}
-	idxPlans := idx.collectIndexExtPlans(fileID, chunkTags)
+	// R3264: only a mirror tree may author @ext-family directives. An @ext
+	// tag is an instruction, not a note, so honoring one from any indexed
+	// file means *discussing* a routing authors it — a transcript quoting an
+	// @ext-candidate files a real proposal into the human's review queue.
+	// Re-resolution is not gated: it is driven by the target side and only
+	// ever re-resolves routings a mirror already authored.
+	var idxPlans []extIndexPlan
+	if path, ok := idx.db.fileIDPath(fileID); ok && idx.db.IsExtMirrorPath(path) {
+		idxPlans = idx.collectIndexExtPlans(fileID, chunkTags)
+	} else if n := countExtFamilyTags(chunkTags); n > 0 {
+		// Loud, because a silent skip is indistinguishable from a broken
+		// router — the failure mode that let @ext routing sit dead on this
+		// very path for three months without a symptom. (R3265)
+		Logv(1, "ext routing: %s is not in a mirror tree — %d @ext-family tag(s) indexed as text, not routed", path, n)
+	}
 	rrPlans := idx.collectReresolvePlans(fileID, addedChunkIDs, orphanedChunkIDs)
 	if len(idxPlans) == 0 && len(rrPlans) == 0 {
 		return nil
@@ -432,6 +456,22 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 // ResolveExtTarget so relative-path narrower bases absolutize
 // against the source file's directory. (R2374)
 // CRC: crc-Indexer.md | R1996, R2012, R2016, R2374, R3061, R3074
+// countExtFamilyTags counts the @ext-family tags in a file's chunk tags —
+// what the authority gate declined to route, so the log can say how much
+// was passed over rather than merely that something was.
+// CRC: crc-Indexer.md | R3265
+func countExtFamilyTags(chunkTags []ChunkTagValues) int {
+	n := 0
+	for _, ct := range chunkTags {
+		for _, tv := range ct.Values {
+			if isExtFamilyTag(tv.Tag) && tv.Value != "" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValues) []extIndexPlan {
 	sourceDir := idx.sourceDirFor(fileID)
 	var out []extIndexPlan
@@ -696,6 +736,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 	if prep.unchanged {
 		// R2864: byte-identical to the last index — a full refresh would
 		// re-chunk the whole file to produce the same index. Skip it.
+		Logv(1, "index: %s UNCHANGED (skipped — same length and hash)", prep.path)
 		Logv(2, "execute-refresh: %s unchanged — skipped full refresh", prep.path)
 		return nil
 	}
@@ -711,9 +752,17 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		Logv(2, "execute-refresh: %s AppendChunks err=%v newChunks=%d", prep.path, err, len(acc.chunkTags))
 		if err != nil {
 			// Append failed — fall through to full reindex
+			Logv(1, "index: %s APPEND FAILED (%v) — falling back to REINDEX", prep.path, err)
 			Logv(2, "execute-refresh: %s falling through to full refresh due to err: %v", prep.path, err)
 			return idx.executeFullRefresh(prep)
 		}
+		// R3266: name the outcome plainly, at default verbosity. Which
+		// branch ran decides whether a change was re-derived at all, and
+		// until now it could only be inferred from `isAppend=` and
+		// `unchanged` buried mid-line across four -vv lines. An append that
+		// yields no chunks is the case worth seeing: the file grew and
+		// nothing downstream re-ran.
+		Logv(1, "index: %s APPENDED %d bytes → %d new chunk(s)", prep.path, len(prep.newBytes), len(acc.chunkTags))
 		// Embeddings: orphan EC/EF cleanup ran inside the reindex callback;
 		// new chunks will be embedded by Librarian.BatchEmbedChunks
 		// post-reconcile (R1923, R1926).
@@ -764,8 +813,10 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 // by the reindex callback) drop their F/V/T contributions in the same txn.
 // CRC: crc-Indexer.md | R1849, R1852, R1854, R1891, R1899, R2913
 func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
-	// R731: level-1 (coarsest) verbosity tier — high-level refresh milestone
-	Logv(1, "full refresh: %s (fileID=%d)", prep.path, prep.oldID)
+	// R731: level-1 (coarsest) verbosity tier — high-level refresh milestone.
+	// R3266: say REINDEXED in the same vocabulary the append and unchanged
+	// branches use, so one grep separates the three outcomes.
+	Logv(1, "index: %s REINDEXED in full (fileID=%d)", prep.path, prep.oldID)
 	acc := chunkAccumulator{strategy: prep.strategy}
 	var fileid uint64
 	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {

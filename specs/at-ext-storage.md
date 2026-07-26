@@ -92,10 +92,51 @@ embedded in that text, so no separate cache field is needed.
   `applyIndexExt` (Adds), `applyReresolve` (Adds and Removes), and
   `CleanupSource` (drop on tvid_ext eviction).
 
+## Authoring authority: only a mirror tree may route
+
+An `@ext`-family tag is not a note, it is an **instruction to the
+curation system** — `@ext` attaches a tag to another chunk, and
+`@ext-candidate` places a proposal in the human's review queue. So the
+question of *where a directive is allowed to come from* is a question
+about trust, not about parsing, and it is answered before the indexing
+flow below ever runs.
+
+**Only a file inside a mirror tree may author `@ext`-family directives.**
+A mirror tree is either the global default, `~/.ark/external/<slug>/`, or
+a source-local one at `<source>/<ext_mirror>/` when that source sets
+`ext_mirror` (`specs/config.md`). Everywhere else, an `@ext`-family tag
+indexes and renders as ordinary text — searchable, visible, inert.
+
+The motivating case is that ark indexes conversation transcripts. Without
+this rule, *discussing* a routing authors it: an assistant that quotes an
+`@ext-candidate` line while explaining itself files a real proposal into
+the human's queue, and an agent's reasoning becomes an unreviewed write.
+Found live on 2026-07-26, when a transcript-quoted example — recognisable
+because its path had been elided to `…` for readability — appeared in the
+pending ledger as a genuine candidate. The same reasoning covers any
+indexed source a third party can write to.
+
+This restores the layering the workshop already assumes: proposals are
+*authored* through `ark ext` / the `mcp.ext*` bindings, which write the
+mirror, and the mirror is the only thing the indexer trusts. A file that
+is merely *discussed in* is not a file that is *written from*.
+
+**Skipping must be loud.** When a non-mirror file carries `@ext`-family
+tags, the indexer logs that it declined to route them and how many. A
+silent skip is indistinguishable from a broken router — the failure mode
+that let `@ext` routing sit dead on the watcher path for three months
+without a single symptom.
+
+Not gated: the tmp:// overlay routing path (below), which is the
+workshop's own live surface rather than an indexed file, and target
+re-resolution, which is driven by the *target* side and only ever
+re-resolves routings a mirror already authored.
+
 ## Indexing flow
 
 Handled in the indexer, after `ExtractTagValues` returns the chunk's
-tag values.
+tag values. It runs only for files that pass the authoring-authority
+check above.
 
 For each `TagValue{Tag: "ext", Value: V}`:
 
