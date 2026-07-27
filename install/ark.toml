@@ -68,6 +68,7 @@ model = "nomic-embed-text-v1.5.Q8_0.gguf"
 #   "apps/**/*.css", "apps/**/*.md",
 #   "storage/**/*.md", "storage/**/*.pdf",
 #   "external/**/*.md", "skills/**/*.md",
+#   "personal-patterns/**/*.md",
 # ]
 
 # Chunker language definitions

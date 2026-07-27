@@ -31,6 +31,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Verse-addressed scripture (`bible` strategy) | shipping                                   | `bible-chunker.md`                                                            |
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
+| Personal patterns                           | shipping                                   | `personal-patterns.md`                                                        |
 | Find connections (Tag Forge)                | 2A shipping; 2B/2C in progress             | `find-connections-substrate.md`, `tag-forge.md`                               |
 | Recall                                      | substrate shipping (`ark connections recall`); statistical derivation pass (`--propose`) shipping; simple-recall watcher v1 shipping; v2 agent layer in spec (long-running Haiku curator daemon between watcher and assistant, spawned once per generation by the Luhmann orchestrator; RJ rejection counter + propose / mention ceiling thresholds) | `recall.md`, `simple-recall.md`, `discussed-tags.md`, `derived-tags.md`, `.scratch/SIMPLE-RECALL.md` (working notes) |
 | Luhmann orchestrator (supervisor + chimes)  | Phase 2 in spec (Go-side `ark monitor` / `ark luhmann` CLI, `[luhmann]` config, `@chime-Nm` standard scheduling tags, subscriber-presence gate). Skill / agent files separate. One drain tube (`ark luhmann next`) now carries every producer: curation tasks + supervisor directives (watcher), commands (`ark luhmann send`, synchronous), and Frictionless UI events (`ark luhmann events` opt-in, shipping — single reader, gates `ark ui event`, no inheritance across seats). | `luhmann.md`, `monitor.md`, `chimes.md`, `subscriber-presence.md`, `.scratch/LUHMANN-ORCHESTRATOR.md` (working notes) |
@@ -256,6 +257,29 @@ embeddings derive from these definitions.
 **Surface.** `ark tag defs`, the D-record entry in
 `specs/record-formats.md`, the ED substrate documented in
 `specs/find-connections-substrate.md`.
+
+## Personal patterns
+
+**Motivation.** A named technique can be invoked in one word instead
+of re-derived every session. A collection of them is the private
+working vocabulary between a person and their assistant — but a
+vocabulary only works if it is *already in mind*. Search cannot supply
+it, because searching requires suspecting the thing exists; the
+patterns that matter most are the ones you would never have thought to
+look for.
+
+**Objective.** Hold the collection as markdown files with frontmatter
+and serve it two ways, because priming and retrieval are different
+mechanisms. `ark patterns list` emits a cheap names-and-summaries block
+for injection at session start, and never touches the server, so
+priming is unconditional. The bodies are reached through the ordinary
+index, so search and recall can surface a full pattern once the
+conversation names its territory. Each file also derives a tag
+definition, putting the pattern vocabulary into the tag vocabulary.
+
+**Surface.** `ark patterns list` / `ark patterns add`, the
+`patterns_dir` config key, derived D records.
+[personal-patterns.md](personal-patterns.md).
 
 ## Find connections (Tag Forge)
 

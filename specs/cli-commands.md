@@ -68,6 +68,7 @@ otherwise emit a different order each run). R2953.
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
 | `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
+| `patterns`         | `patterns list [--json]` <br> `patterns add SLUG --name N --summary S [--tags T] [--body-file F]`                    | none                     | personal pattern collection; never uses the server   |
 | `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up; read-only serve during scan |
 | `refresh`          | `refresh [PATTERN...]`                                                                                               | optional                 | re-index stale files                                 |
 | `remove`           | `remove PATTERN...`                                                                                                  | optional                 | tmp:// requires server                               |
@@ -1020,6 +1021,32 @@ matching unresolved entries.
 
 All four proxy to the server when running.
 
+### `patterns` — personal pattern collection
+
+```
+ark patterns list [--json]
+ark patterns add SLUG --name NAME --summary TEXT [--tags "a, b"] [--body-file FILE]
+```
+
+`list` writes the injection block — every pattern's name, tags, and
+summary, ordered by slug — from a plain directory walk over frontmatter.
+**Neither subcommand ever contacts the server**, because `list` runs at
+session start before anything is up. An absent or empty collection
+prints nothing and exits 0. `--json` emits `[{slug, name, tags,
+summary, path}]`.
+
+`add` writes `<patterns_dir>/<slug>.md` with the frontmatter block and
+a `# NAME` heading, appends `--body-file` when given, and refuses an
+existing slug rather than clobbering a body.
+
+The collection lives at the `patterns_dir` config key (default
+`~/.ark/personal-patterns/`). Each file also derives a tag definition
+(`slug` → its `summary`) at index time. Full behavior:
+[personal-patterns.md](personal-patterns.md).
+
+Distinct from `ark ui patterns`, which lists the separate Frictionless
+UI-development collection in `~/.ark/patterns/`.
+
 ### `rebuild` — drop and rebuild
 
 ```
@@ -1350,9 +1377,11 @@ ark ui update [-t]
 ark ui variables
 ```
 
-All UI subcommands except `open` (the no-args default) require the
-server: they send HTTP requests through `<dir>/ark.sock`. Most are
-thin wrappers over Lua API endpoints.
+Most UI subcommands require the server: they send HTTP requests
+through `<dir>/ark.sock`, and most are thin wrappers over Lua API
+endpoints. Two do not — `open` (the no-args default), and `patterns`,
+which is a plain directory walk over `~/.ark/patterns/` and never
+opens a socket.
 
 | Subcommand | Behavior |
 |------------|----------|

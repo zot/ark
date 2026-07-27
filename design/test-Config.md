@@ -95,3 +95,15 @@ matches instead of silently matching nothing
 **Input:** search_exclude=["*.jsonl", "specs/**"], candidate paths at several depths
 **Expected:** both patterns match at any depth below any source
 **Refs:** crc-Config.md, R3199, R3195
+
+## Test: the ~/.ark allowlist agrees across its three copies
+**Purpose:** R961, R962, R3278 — the spec states that `arkSourceIncludePatterns`, the commented `[[source]]` block in `install/ark.toml`, and the inventory in `source-monitoring.md` must stay in sync. A stated obligation with nothing enforcing it is how R961 drifted for months, still describing four bare globs while the constant held fourteen per-extension ones.
+**Input:** the constant, parsed to a set; the quoted patterns inside install/ark.toml's commented include block, parsed to a set.
+**Expected:** the sets are equal, reported per missing/extra entry in both directions. Verified to actually fail by deleting one entry from the template — a guard nobody has watched fail is not known to be awake.
+**Refs:** crc-Config.md, specs/source-monitoring.md
+
+## Test: the personal-patterns entry is present
+**Purpose:** R3278 — singled out because its absence is silent. `ark patterns list` reads the directory rather than the index, so priming keeps working perfectly while search and recall find nothing, and no diagnostic reports the discrepancy.
+**Input:** the constant.
+**Expected:** contains `personal-patterns/**/*.md`.
+**Refs:** crc-Config.md, specs/personal-patterns.md

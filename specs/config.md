@@ -38,6 +38,7 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 | `about_centroid_threshold`| float64    | (mode-dep.)          | Cosine threshold for the EF centroid prefilter.                                                                      | `search.md`                                                                 |
 | `about_filter_top_k`      | int        | (mode-dep.)          | Top-K cap applied after the EF centroid prefilter.                                                                   | `search.md`                                                                 |
 | `pdf_preview_zoom`        | float64    | `1.0`                | Zoom factor applied to PDF page previews in the content view.                                                        | `chunked-content-view.md`                                                   |
+| `patterns_dir`            | string     | `<db>/personal-patterns` | Directory holding the personal pattern collection. Set it to adopt an existing collection in place.               | `personal-patterns.md`                                                      |
 
 ## `[[source]]` — repeated table
 

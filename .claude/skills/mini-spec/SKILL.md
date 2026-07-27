@@ -663,12 +663,76 @@ onto), freeing the current file for the migration, then resume later from the
 parked sub-item. The freedom to intermix is the point — neither style is
 imposed.
 
+### Carves — the layer above the item
+
+An item is a unit of *work*. A **carve** is the layer above it: one coherent
+problem decomposed into items that may each need a different skill. It is the
+document those items point back at.
+
+It exists because coherence and schedulability have different natural units. A
+problem is coherent at the size of "the review console" — change one decision
+and the others move. Work is schedulable only in pieces that fit one session
+with one skill loaded. So no session can hold the whole problem and the queue
+can only hold pieces. Something has to carry the whole, and that is the carve.
+
+Both a carve and a migration are documents that spawn work, but their
+properties are close to inverted:
+
+| | Migration | Carve |
+|---|---|---|
+| End state | Defined (A→B); expires by design | None; decays as parts land |
+| Completion | Ritual: prose grep, `migration-complete`, `complete/NNN-` | A move to `done/` |
+| Spawns | One coherent change, phases run once | N items, scheduled independently over months |
+| Content | How to get from A to B | Decisions, open forks, and the split |
+| Kinds of work | One | Deliberately several |
+
+A migration says *the system is at A and must reach B*. A carve says *here is a
+problem area, here is what we have settled, here is how it breaks into
+schedulable pieces*. The lifetime difference is the sharpest: migrations are
+temporary by design, while a carve can stay open for months.
+
+**Where a carve lives: with the public design docs, not with the private
+trajectory files.** A carve is almost entirely facts about the code, and those
+belong where someone reading the project can find them. A top-level `carves/`
+beside `specs/` and `design/` is the default, with `carves/done/` for finished
+ones so they do not crowd out live ones. Deliberately not under `specs/`, which
+describes how the system *is*; a carve is a work-management artifact, which is
+the same reason migrations were exiled to `specs/migrations/`.
+
+**Promotion trigger: the first item.** Before that a carve is brainstorming and
+belongs in the project's planning scratch. Once it spawns an item, other work
+references it and it is a plan. Promote forward, moving an existing carve when
+it is next touched rather than in a sweep, and rewrite the links that pointed at
+the old path as part of the move. Promotion also forces an editorial pass
+separating the decision from the private reasoning behind it, and writing for a
+stranger is the cheapest clarity check available.
+
+**Three disciplines.** The first two tend to happen by instinct. The third does
+not, and it is the one that matters.
+
+1. **Per-part status in the doc.** Strike a landed part through, with its commit.
+2. **Dated, attributed decisions.** `DECIDED (name, date)`, append-only, so a
+   reader can tell a settled call from a musing and whose it was. This is the
+   single highest-value habit in the format.
+3. **Migrate on landing.** When a part lands, its decisions belong in `specs/`
+   and `design/` as requirements, spec prose, or a comment at the code; the
+   carve then points at where they went. A migration gets a forcing function for
+   free (the retire reminder, the prose grep, the completion ritual). A carve
+   gets none, so its decisions rot silently while still reading as current. This
+   is not hypothetical: a stale line in one working note sent a later carve down
+   a wrong path, and that carve had to mark the note stale by hand.
+
+Adopting discipline 3 also reframes the planning scratch usefully, as a staging
+area for reasoning that has not earned a public home yet rather than a permanent
+one.
+
 ### What's reusable vs. project-specific
 
-Reusable core: the three files, the lifecycle, the interleaving model. Each
-project parameterizes the rest — routing labels (which skill runs an item),
-the planning-scratch location, any batching rules, file siting and case
-convention, and whether the files carry a project prefix.
+Reusable core: the three files, the lifecycle, the interleaving model, and the
+carve layer above the item. Each project parameterizes the rest — routing labels
+(which skill runs an item), the planning-scratch location, any batching rules,
+file siting and case convention, whether carves sit at top level or elsewhere,
+and whether the files carry a project prefix.
 
 ## CRC Card Format
 ```markdown

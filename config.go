@@ -22,7 +22,7 @@ import (
 // Standard top-level files (ark.toml, chimes.md, tags.md) are listed
 // explicitly so ark-managed content is indexed regardless of the user's
 // [[source]] configuration in ark.toml.
-// CRC: crc-Config.md | R961, R962, R2393, R2811, R2856
+// CRC: crc-Config.md | R961, R962, R2393, R2811, R2856, R3278
 const arkSourceIncludePatterns = `
 	ark.toml
 	chimes.md
@@ -37,6 +37,7 @@ const arkSourceIncludePatterns = `
 	storage/**/*.pdf
 	external/**/*.md
 	skills/**/*.md
+	personal-patterns/**/*.md
 `
 
 // Config represents the parsed ark.toml configuration.
@@ -60,6 +61,10 @@ type Config struct {
 	AboutCentroidThreshold float64 `toml:"about_centroid_threshold,omitempty"`
 	AboutFilterTopK        int     `toml:"about_filter_top_k,omitempty"`
 	PdfPreviewZoom         float64 `toml:"pdf_preview_zoom,omitempty"`
+	// R3268: personal pattern collection directory. Empty means the
+	// default, resolved by PatternsDir() — configurable so an existing
+	// collection is adopted where it already lives rather than moved.
+	PatternsDir string `toml:"patterns_dir,omitempty"`
 	// CRC: crc-Config.md | R2125
 	AutoCompact bool           `toml:"auto_compact,omitempty"`
 	Schedule    ScheduleConfig `toml:"schedule"` // R853, R854
@@ -691,6 +696,14 @@ func LoadConfig(path string) (*Config, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	// The config lives at <db>/ark.toml by construction (DB.ConfigPath), so
+	// the file's directory *is* the db path. Setting it here rather than only
+	// at DB.Open is what lets a server-less command resolve db-relative
+	// defaults — PatternsRoot's, in particular (R3268). DB.Open re-assigns the
+	// same value. Side effect, deliberate: RemoveSource's ark-directory guard
+	// (R340) now also fires on the cold-start CLI path, where a nil dbPath
+	// previously disabled it.
+	cfg.dbPath = filepath.Dir(path)
 	cfg.validate()
 	cfg.initEmbedTiers() // R1590, R1591
 	if cfg.AboutCentroidThreshold == 0 {
@@ -703,6 +716,7 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.DefaultInclude = ExpandTildeSlice(cfg.DefaultInclude)
 	cfg.DefaultExclude = ExpandTildeSlice(cfg.DefaultExclude)
 	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude) // R943: search_exclude carried through LoadConfig (startup + reload)
+	cfg.PatternsDir = ExpandTilde(cfg.PatternsDir)          // R3268: adopt-in-place paths are typed as ~/...
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
 	for k, tc := range cfg.Schedule.Tag {
@@ -820,6 +834,25 @@ func (c *Config) EnsureLuhmannSource() {
 		Dir:     dir,
 		Include: PatternSpec{Replace: []string{"*.jsonl"}},
 	})
+}
+
+// PatternsRoot resolves the personal pattern collection's directory:
+// the configured patterns_dir when set, else <db>/personal-patterns.
+// Returns "" only when neither is knowable (no config, no dbPath), which
+// callers treat as an empty collection rather than an error — a new
+// installation has no patterns yet.
+// CRC: crc-Config.md | R3268
+func (c *Config) PatternsRoot() string {
+	if c == nil {
+		return ""
+	}
+	if c.PatternsDir != "" {
+		return c.PatternsDir
+	}
+	if c.dbPath == "" {
+		return ""
+	}
+	return filepath.Join(c.dbPath, "personal-patterns")
 }
 
 // IsInSource returns true if path falls under any configured source directory.

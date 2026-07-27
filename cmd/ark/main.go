@@ -169,6 +169,7 @@ func arkCommands() []*ucli.Command {
 		tagCommand(),
 		configCommand(),
 		extCommand(),
+		patternsCommand(),
 		scheduleCommand(),
 		messageCommand(),
 		uiCommand(),
@@ -3775,27 +3776,16 @@ func cmdUIPatterns(args []string) {
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".md")
-		// Extract description from frontmatter
 		data, err := os.ReadFile(filepath.Join(patternsDir, e.Name()))
 		if err != nil {
 			continue
 		}
-		desc := ""
-		lines := strings.Split(string(data), "\n")
-		inFrontmatter := false
-		for _, line := range lines {
-			if line == "---" {
-				if inFrontmatter {
-					break
-				}
-				inFrontmatter = true
-				continue
-			}
-			if inFrontmatter && strings.HasPrefix(line, "description:") {
-				desc = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-			}
-		}
-		fmt.Printf("- `%s.md` - %s\n", name, desc)
+		// Shared frontmatter reader with the personal collection, which keys
+		// on summary where this one keys on description (R3277). Stricter
+		// than the loop it replaces: that one opened a frontmatter block at
+		// the first `---` anywhere in the file, so a markdown horizontal rule
+		// mid-body could start one.
+		fmt.Printf("- `%s.md` - %s\n", name, ark.ParseFrontmatter(data)["description"])
 	}
 }
 

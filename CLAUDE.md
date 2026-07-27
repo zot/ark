@@ -100,6 +100,7 @@ cmd/ark/main.go        CLI entry point, all subcommands
 *.go                   Core library: db, store, indexer, search, server, config, etc.
 design/                Mini-spec: requirements.md, crc-*, seq-*, test-*, design.md
 specs/                 Human-readable feature specs (input to mini-spec)
+carves/                Why-this-way docs for multi-item problems (carves/README.md)
 apps/ark/              Frictionless UI app (Lua + viewdefs, also in Fossil)
 markdown-editor/       CM6 markdown editor (TypeScript, esbuild)
   src/                 index.ts, ark-tag-parser, tag-widget, tag-completion, etc.

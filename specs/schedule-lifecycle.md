@@ -42,81 +42,22 @@ dropping the declaration. See
 
 ## EnsureArkSource Scoping
 
-The hardcoded `~/.ark` source's include list whitelists
-ark-managed standard files at the top level and, under each
-content directory, only the file extensions that carry
-text content the indexer can chunk:
+`~/.ark` is a hardcoded source whose include list is an explicit
+allowlist — schedule logs are indexed because `schedule/**/*.md` is one
+of its entries, not because the source is recursive.
 
-```
-include = ["ark.toml", "chimes.md", "tags.md",
-           "schedule/**/*.md",
-           "apps/**/*.lua", "apps/**/*.js", "apps/**/*.html",
-           "apps/**/*.css", "apps/**/*.md",
-           "storage/**/*.md", "storage/**/*.pdf",
-           "external/**/*.md", "skills/**/*.md"]
-```
+**The allowlist and its per-entry rationale moved to
+[source-monitoring.md](source-monitoring.md) §"What inside ~/.ark is
+indexed"** (2026-07-27), which is the spec that owns "~/.ark is always a
+source". It lived here only because `schedule/**` happened to be the
+first entry, which meant nobody looking for "what does ark index in its
+own home" could find it.
 
-The top-level entries cover the standard files ark owns directly:
-`ark.toml` (user-edited config), `chimes.md` (auto-created chime
-declarations, see [chimes.md](chimes.md)), and `tags.md`
-(starter tag bible, written from the install seed). Listing them
-explicitly means ark-managed standard files are indexed
-regardless of the user's `[[source]]` configuration — pulling
-`~/.ark` out of `[[source]]` doesn't break chimes or tag
-suggestions.
-
-The directory entries are scoped per file extension, not as a
-bare `**` recursion. Under each content directory ark indexes
-only the extensions whose chunkers it ships:
-
-- `schedule/**/*.md` — schedule log files (markdown chunker).
-- `apps/**/*.{lua,js,html,css,md}` — Frictionless app sources
-  (Lua handlers, web assets, in-app markdown).
-- `storage/**/*.{md,pdf}` — app-managed user data ark can
-  chunk (notes, PDFs handled by the pdf chunker).
-- `external/**/*.md` — mirror chunks from external sources.
-- `skills/**/*.md` — ark-managed agent skill files. The
-  `~/.ark/skills/` entries are symlinks into the repo's skill
-  sources; indexing them under the `~/.ark/skills/` path lets a
-  hermetically-sealed subagent bootstrap by fetching its skill
-  (`ark fetch ~/.ark/skills/<skill>.md`) — `fetch` serves only
-  indexed content and does not resolve symlinks, so the
-  symlink path must itself be indexed. The skill content is
-  consequently indexed twice (once under the repo source, once
-  under `~/.ark/skills/`); accepted as the cost of keeping the
-  agent-facing path fetchable.
-
-This keeps non-text artifacts out of the index by construction:
-Fossil checkout files (`.fslckout`, `*.fossil`), binary office
-documents (`*.docx`), undo-tree dumps, lock files, build outputs,
-index pages, and the like. Each was previously surfaced as an
-`fts add ...: chunk "1-1" contains invalid UTF-8` line on every
-startup — extension-scoped includes drop them before they reach
-the chunker. Archived schedule logs go to
-`~/.ark/schedule-archive/` — outside the include list,
-unindexed, still searchable with xzgrep on disk. Rotation is:
-compress old log, move to archive dir, done.
-
-Adding a new chunkable extension under one of these directories
-means appending the matching `dir/**/*.ext` pattern to
-`arkSourceIncludePatterns` — not flipping to `**` and excluding
-binaries afterward.
-
-### Override path — commented in `install/ark.toml`
-
-The synthetic source is the default behavior, but a user may
-need to override it (add a new extension under `apps/`, add a
-top-level ark-managed file, etc.). `install/ark.toml` carries
-the same include list as a commented `[[source]] dir = "~/.ark"`
-block, in UNIX-config style — uncomment and edit to replace the
-synthetic defaults. `EnsureArkSource` skips its synthetic
-addition when any `[[source]]` already targets the database
-directory, so a user-defined block wins.
-
-The commented example in `install/ark.toml` and the
-`arkSourceIncludePatterns` constant in `config.go` must stay in
-sync — both express the same default. Edits to one are edits to
-the other.
+What stays schedule's business: archived logs go to
+`~/.ark/schedule-archive/`, which is deliberately **outside** the
+allowlist — rotated logs leave the index automatically and stay
+searchable on disk with xzgrep. Rotation is: compress old log, move to
+archive dir, done (R963).
 
 ## Log Writing on Event Fire
 

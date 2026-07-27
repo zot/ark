@@ -74,12 +74,25 @@ func (a *chunkAccumulator) indexedCallback(ic microfts2.IndexedChunk) {
 // its extracted chunk text and are picked up per-chunk (indexedCallback),
 // not at file level. R757: on a full refresh this scans the entire file
 // (the whole `content`), unaffected by any append-only handling.
-// CRC: crc-Indexer.md | R757, R2913
-func fileLevelTags(content []byte, strategy string) ([]TagValue, map[string]string) {
+// A pattern file additionally contributes a *derived* tag definition, computed
+// from its frontmatter rather than read from an @tag: line (R3274). It is
+// merged into the same defs map, so a pattern file carrying a literal @tag:
+// line keeps both. The derivation is content-gated, which is what makes the
+// append path contribute nothing without either path knowing about the other
+// (R3275) — see seq-patterns-derive.md.
+// CRC: crc-Indexer.md | Seq: seq-patterns-derive.md#1.1 | R757, R2913, R3274, R3275
+func (idx *Indexer) fileLevelTags(path string, content []byte, strategy string) ([]TagValue, map[string]string) {
 	if strategy == "pdf" {
 		return nil, nil
 	}
-	return ExtractTagValues(content, strategy), ExtractTagDefs(content)
+	vals, defs := ExtractTagValues(content, strategy), ExtractTagDefs(content)
+	if name, desc, ok := NewPatterns(idx.config.PatternsRoot()).DerivedDef(path, content); ok {
+		if defs == nil {
+			defs = map[string]string{}
+		}
+		defs[name] = desc
+	}
+	return vals, defs
 }
 
 // Indexer coordinates adding, removing, and refreshing files. Drives
@@ -230,7 +243,7 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		// File-level tags + defs come straight from the source content
 		// (faithful to dedup'd chunks; keeps map-typed defs out of Attrs).
 		// CRC: crc-Indexer.md | R2913
-		fileVals, fileDefs := fileLevelTags(content, strategy)
+		fileVals, fileDefs := idx.fileLevelTags(path, content, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
@@ -771,7 +784,7 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 			// Append file-level tags + defs from the appended bytes only
 			// (incremental, matching the prior callback semantics).
 			// CRC: crc-Indexer.md | R2913
-			fileVals, fileDefs := fileLevelTags(prep.newBytes, prep.strategy)
+			fileVals, fileDefs := idx.fileLevelTags(prep.path, prep.newBytes, prep.strategy)
 			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 			if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 				return fmt.Errorf("append tag values %s: %w", prep.path, err)
@@ -853,7 +866,7 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 		}
 		// File-level tags + defs re-extracted from the full file content.
 		// CRC: crc-Indexer.md | R2913
-		fileVals, fileDefs := fileLevelTags(prep.data, prep.strategy)
+		fileVals, fileDefs := idx.fileLevelTags(prep.path, prep.data, prep.strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("update tag values %s: %w", prep.path, err)
@@ -1015,7 +1028,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	if idx.store != nil {
 		// File-level tags + defs from the appended bytes (incremental).
 		// CRC: crc-Indexer.md | R2913
-		fileVals, fileDefs := fileLevelTags(newBytes, strategy)
+		fileVals, fileDefs := idx.fileLevelTags(path, newBytes, strategy)
 		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
 		if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("append tag values %s: %w", path, err)

@@ -13,6 +13,65 @@ removed via `ark config remove-source` — that's an error. The server
 ensures ~/.ark is a source on every startup, before reading ark.toml
 sources. It does not appear in ark.toml.
 
+### What inside ~/.ark is indexed — the allowlist (R961, R962)
+
+The source carries an explicit include **allowlist**, not a bare
+recursion. Two rules build it: ark-managed standard files at the top
+level are named individually, and under each content directory only the
+**file extensions ark ships a chunker for** are listed. This is the
+canonical inventory; `arkSourceIncludePatterns` in `config.go` and the
+commented `[[source]]` block in `install/ark.toml` both express it, and
+the three must stay in sync.
+
+| Entry | Covers | See |
+|---|---|---|
+| `ark.toml` | user-edited config | [config.md](config.md) |
+| `chimes.md` | auto-created chime declarations | [chimes.md](chimes.md) |
+| `tags.md` | starter tag bible, from the install seed | [tags.md](tags.md) |
+| `schedule/**/*.md` | schedule log files | [schedule-lifecycle.md](schedule-lifecycle.md) |
+| `apps/**/*.{lua,js,html,css,md}` | Frictionless app sources | [embedded-ui.md](embedded-ui.md) |
+| `storage/**/*.{md,pdf}` | app-managed user data ark can chunk | [embedded-ui.md](embedded-ui.md) |
+| `external/**/*.md` | `@ext` mirror chunks | [at-ext-storage.md](at-ext-storage.md) |
+| `skills/**/*.md` | ark-managed agent skill files | [infrastructure.md](infrastructure.md) |
+| `personal-patterns/**/*.md` | default personal pattern collection | [personal-patterns.md](personal-patterns.md) |
+
+**Why per-extension and not `dir/**`.** A bare recursion sweeps in
+Fossil checkout files, `*.docx`, undo-tree dumps, lock files, build
+outputs, and index pages — each of which used to surface as an `fts add
+…: chunk "1-1" contains invalid UTF-8` line on every startup.
+Extension-scoped includes drop them before they reach the chunker. So
+adding a new chunkable extension means appending the matching
+`dir/**/*.ext` pattern, **not** flipping to `**` and excluding binaries
+afterward.
+
+**Two entries carry consequences worth knowing.** `skills/**/*.md`
+indexes symlinks into the repo's skill sources, so the content is
+indexed twice — accepted, because `ark fetch` serves only indexed
+content and does not resolve symlinks, so a sealed subagent bootstrapping
+via `ark fetch ~/.ark/skills/<skill>.md` needs the symlink path itself
+indexed. `personal-patterns/**/*.md` is what makes that feature's
+retrieval half work at all: `ark patterns list` reads the directory
+rather than the index, so without this entry priming would keep working
+perfectly while search and recall found nothing, and nothing would
+report the discrepancy (R3278).
+
+**The allowlist is the whole gate.** Anything unmatched — `index.db`,
+logs, `schedule-archive/` — is simply not indexed, and forgetting to add
+an entry is silent, since nothing reports a file that was never a
+candidate. That silence is why this inventory is kept here, beside the
+source it scopes, rather than in whichever feature spec happened to add
+an entry first.
+
+### Override path — commented in `install/ark.toml`
+
+The synthetic source is the default, but a user may need to override it
+(a new extension under `apps/`, a new top-level ark-managed file).
+`install/ark.toml` carries the same include list as a commented
+`[[source]] dir = "~/.ark"` block, UNIX-config style — uncomment and
+edit to replace the synthetic defaults. `EnsureArkSource` skips its
+synthetic addition when any `[[source]]` already targets the database
+directory, so a user-defined block wins.
+
 ## Source Directory Globs
 
 A `[[source]].dir` may be a glob (`~/work/*`), expanded against the

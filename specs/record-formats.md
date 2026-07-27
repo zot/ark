@@ -25,30 +25,30 @@ Every key starts with a one- or two-byte prefix that identifies the
 record class. `ark status -db` shows these records so when we add or
 change them, we need to update the CLI code so it's up-to-date.
 
-| Prefix | Record class        | Key shape                                         | Value                                   |
-|--------|---------------------|---------------------------------------------------|-----------------------------------------|
-| `B`    | Bible book index    | `B` + source + `\x00` + book + `\x00` + chapter    | file path (string)                      |
-| `D`    | Tag definition      | `D` + tagname + fileid:8                          | description bytes                       |
-| `E:`   | Error condition     | `E:` + name                                       | JSON                                    |
-| `EC`   | Chunk embedding     | `EC` + chunkID varint                             | float32 vector (3072 bytes)             |
-| `ED`   | Tag-def embedding   | `ED` + tagname + fileid:8                         | float32 vector (3072 bytes)             |
-| `EF`   | File centroid       | `EF` + fileID varint                              | float32 sum (3072 bytes) + uint32 count |
-| `EV`   | Tag-value embedding | `EV` + tvid varint                                | float32 vector (3072 bytes)             |
-| `F`    | Chunk-tag           | `F` + chunkid varint + tagname                    | uint32 count + optional tvids           |
-| `HC`   | Hot correlations    | `HC` + tagname + chunkid:8                        | float64 score (8 bytes)                 |
-| `I`    | Info / settings     | `I` + name                                        | string or JSON or counter (8 bytes)     |
-| `M`    | Missing file        | `M` + fileid:8                                    | JSON                                    |
-| `PC`   | Page content        | `PC` + fileID varint + page varint                | zlib-compressed blob                    |
-| `RC`   | Recall Candidate    | `RC` + source_tvid varint + target_chunkid varint (0 = unattached) | varint tally (materialized from `@ext-candidate` `@count`) |
-| `RD`   | Recall discussed-tag| `RD` + session-bytes + `\x00` + tagname + `\x00` + value | 8-byte big-endian unix nanos     |
-| `RF`   | Recall Freshness (dormant, #36) | `RF` + chunkid varint                 | varint uint64 (max S-over-ED at last derivation) — no writer after #36 |
-| `RJ`   | Recall Judgment     | `RJ` + source_tvid varint + target_chunkid varint | signed-varint score (from `@ext-judgment` `@count`) + 8-byte big-endian unix nanos |
-| `RM`   | Recall surface-cooldown | `RM` + session-bytes + `\x00` + chunkid varint | 8-byte big-endian unix nanos (last surfaced) |
-| `S`    | Freshness stamp     | `S` + original-prefix + original-key              | varint uint64 (txn serial)              |
-| `T`    | Tag total           | `T` + tagname                                     | uint32 count + optional vector          |
-| `U`    | Unresolved file     | `U` + path                                        | JSON                                    |
-| `V`    | Tag value           | `V` + tag + `\x00` + value + `\x00` + tvid varint | packed chunkid varints (multi-set)      |
-| `X`    | @ext routing        | `X` + tvid_ext varint + target_chunkid varint     | packed routed_tvid varints              |
+| Prefix | Record class                    | Key shape                                                          | Value                                                                              |
+|--------|---------------------------------|--------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `B`    | Bible book index                | `B` + source + `\x00` + book + `\x00` + chapter                    | file path (string)                                                                 |
+| `D`    | Tag definition                  | `D` + tagname + fileid:8                                           | description bytes                                                                  |
+| `E:`   | Error condition                 | `E:` + name                                                        | JSON                                                                               |
+| `EC`   | Chunk embedding                 | `EC` + chunkID varint                                              | float32 vector (3072 bytes)                                                        |
+| `ED`   | Tag-def embedding               | `ED` + tagname + fileid:8                                          | float32 vector (3072 bytes)                                                        |
+| `EF`   | File centroid                   | `EF` + fileID varint                                               | float32 sum (3072 bytes) + uint32 count                                            |
+| `EV`   | Tag-value embedding             | `EV` + tvid varint                                                 | float32 vector (3072 bytes)                                                        |
+| `F`    | Chunk-tag                       | `F` + chunkid varint + tagname                                     | uint32 count + optional tvids                                                      |
+| `HC`   | Hot correlations                | `HC` + tagname + chunkid:8                                         | float64 score (8 bytes)                                                            |
+| `I`    | Info / settings                 | `I` + name                                                         | string or JSON or counter (8 bytes)                                                |
+| `M`    | Missing file                    | `M` + fileid:8                                                     | JSON                                                                               |
+| `PC`   | Page content                    | `PC` + fileID varint + page varint                                 | zlib-compressed blob                                                               |
+| `RC`   | Recall Candidate                | `RC` + source_tvid varint + target_chunkid varint (0 = unattached) | varint tally (materialized from `@ext-candidate` `@count`)                         |
+| `RD`   | Recall discussed-tag            | `RD` + session-bytes + `\x00` + tagname + `\x00` + value           | 8-byte big-endian unix nanos                                                       |
+| `RF`   | Recall Freshness (dormant, #36) | `RF` + chunkid varint                                              | varint uint64 (max S-over-ED at last derivation) — no writer after #36             |
+| `RJ`   | Recall Judgment                 | `RJ` + source_tvid varint + target_chunkid varint                  | signed-varint score (from `@ext-judgment` `@count`) + 8-byte big-endian unix nanos |
+| `RM`   | Recall surface-cooldown         | `RM` + session-bytes + `\x00` + chunkid varint                     | 8-byte big-endian unix nanos (last surfaced)                                       |
+| `S`    | Freshness stamp                 | `S` + original-prefix + original-key                               | varint uint64 (txn serial)                                                         |
+| `T`    | Tag total                       | `T` + tagname                                                      | uint32 count + optional vector                                                     |
+| `U`    | Unresolved file                 | `U` + path                                                         | JSON                                                                               |
+| `V`    | Tag value                       | `V` + tag + `\x00` + value + `\x00` + tvid varint                  | packed chunkid varints (multi-set)                                                 |
+| `X`    | @ext routing                    | `X` + tvid_ext varint + target_chunkid varint                      | packed routed_tvid varints                                                         |
 
 Encoding conventions used throughout:
 - **fileid:8** — 8-byte big-endian `uint64`.

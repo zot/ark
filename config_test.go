@@ -435,3 +435,72 @@ func TestRootlessConfigKeysReachAnyDepth(t *testing.T) {
 		}
 	}
 }
+
+// The `~/.ark` allowlist exists in three places that must agree: the
+// arkSourceIncludePatterns constant, the commented [[source]] block in
+// install/ark.toml, and the inventory in specs/source-monitoring.md. The spec
+// states that obligation; nothing enforced it, and R961 drifted for months as a
+// result — it still described four bare globs when the constant held fourteen
+// per-extension ones. This is the sentry that stomps past the gate: it fails the
+// moment someone adds an entry to one copy and not the other.
+// CRC: crc-Config.md | R961, R962, R3278
+func TestArkSourceIncludeMatchesInstallTemplate(t *testing.T) {
+	want := map[string]bool{}
+	for _, p := range strings.Fields(arkSourceIncludePatterns) {
+		want[p] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("arkSourceIncludePatterns parsed empty")
+	}
+
+	data, err := os.ReadFile("install/ark.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pull the quoted patterns out of the commented `# dir = "~/.ark"` block,
+	// which runs until the closing `# ]`.
+	got := map[string]bool{}
+	inBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+		switch {
+		case strings.HasPrefix(trimmed, "include = ["):
+			inBlock = true
+			continue
+		case inBlock && strings.HasPrefix(trimmed, "]"):
+			inBlock = false
+		}
+		if !inBlock {
+			continue
+		}
+		for _, field := range strings.Split(trimmed, ",") {
+			if p := strings.Trim(strings.TrimSpace(field), `"`); p != "" {
+				got[p] = true
+			}
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("found no include patterns in install/ark.toml — the commented block moved or changed shape")
+	}
+
+	for p := range want {
+		if !got[p] {
+			t.Errorf("install/ark.toml is missing %q (present in arkSourceIncludePatterns)", p)
+		}
+	}
+	for p := range got {
+		if !want[p] {
+			t.Errorf("install/ark.toml has %q, absent from arkSourceIncludePatterns", p)
+		}
+	}
+}
+
+// R3278: the entry the personal-patterns feature depends on. Called out
+// separately because its absence is silent — `ark patterns list` reads the
+// directory, so priming keeps working while search and recall find nothing.
+// CRC: crc-Config.md | R3278
+func TestArkSourceIncludesPersonalPatterns(t *testing.T) {
+	if !strings.Contains(arkSourceIncludePatterns, "personal-patterns/**/*.md") {
+		t.Error("the default pattern collection would not be indexed; retrieval dies silently while priming still works")
+	}
+}

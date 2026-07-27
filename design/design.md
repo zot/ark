@@ -152,13 +152,14 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`, `emptyfiles_test.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
+- [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [ ] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
-- [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`
+- [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`, `cmd/ark/patterns_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
 - [x] crc-Session.md → `session.go`
 - [x] crc-SearchCmd.md → `server.go`, `session.go`
@@ -186,6 +187,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### Sequences
 - [x] seq-checkpoint.md → `cmd/ark/checkpoint.go`
+- [x] seq-patterns-derive.md → `patterns.go`, `indexer.go`
 - [x] seq-add.md → `scanner.go`, `indexer.go`, `store.go`
 - [x] seq-search.md → `search.go`
 - [x] seq-server-startup.md → `server.go`, `scanner.go`, `indexer.go`
@@ -296,6 +298,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-Patterns.md → `patterns_test.go`, `cmd/ark/patterns_cli_test.go`
 - [x] test-checkpoint.md → `cmd/ark/checkpoint_test.go`
 - [x] test-PtyProtocol.md → `luhmann-terminal/src/pty-protocol.test.ts`
 - [x] test-HTTPOperation.md → `httpop_test.go`
@@ -384,7 +387,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A7: R235 (test for per-source add-include round-trip) — covered in test-Config.md
 - [ ] O7: Shutdown race: signal handler calls db.Close() while reconcileLoop and watchLoop goroutines may still be running. watcher.Close() stops watchLoop, but reconcileLoop can still be mid-Scan/Refresh against the index. Need to close reconcileCh and wait for goroutine to drain before db.Close().
 - [x] D1: R338-R339 (EnsureArkSource) — designed in crc-Server.md but not implemented. Server should ensure ~/.ark is a source on every startup, before reconciliation.
-- [x] D2: R340 (RemoveSource guard for ~/.ark) — designed in crc-Config.md line 25 but not implemented. Config.RemoveSource should reject the ark database directory.
+- [x] D2: R340 (RemoveSource guard for ~/.ark) — designed in crc-Config.md line 25 but not implemented. Config.RemoveSource should reject the ark database directory. **RESOLVED 2026-07-27 (#75), and the gap's premise was wrong in an instructive way:** the guard *was* implemented (config.go, `if c.dbPath != "" && dir == c.dbPath`), but `dbPath` was only ever set by `DB.Open`, so on the cold-start CLI path — the one `ark config remove-source` actually uses — it was empty and the guard silently no-opped. Implemented-but-inert reads identically to never-implemented from the design side, which is why this sat as a D-gap. `LoadConfig` now sets `dbPath` from the config file's directory (R3268's requirement, since server-less commands need db-relative defaults), which arms it. Verified: `ark --dir T config remove-source T` refuses with "hardcoded source" and leaves the entry in place.
 - [x] O8: ark install UI asset extraction not yet implemented — R276-R281 designed, bundle commands (R297-R318) implemented, install needs to call ExtractBundle
 - [x] O9: ~/.ark/mcp shell script (R283) not yet created — needs adaptation of .ui/mcp pattern for ~/.ark/ paths
 - A8: R294 (zip-graft allows layering without recompilation) — build process property, no code artifact
@@ -913,3 +916,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O171: ~~Gate does not sweep records from now-unauthorized sources~~ — **empty in practice (2026-07-26).** X=0 and RC=0 after one `ark connections clean`, so there is no residue to sweep on this index. The general concern (a source losing authority leaves its records behind) is real but has no instance; reopen if one appears. Targeted repair, if ever needed, is `ark remove <path|pattern>` + `ark scan` rather than a full rebuild.
 - [ ] O172: Zero-chunk appends: 'APPENDED 51613 bytes → 0 new chunk(s)' is common on chat/workflow JSONLs (152 appends observed, most yielding 0). Probably correct — the chat-jsonl chunker skips tool_use/tool_result/planContent per R240-R243 — but unverified, and now visible thanks to R3266. Confirm the skip accounts for all of it.
 - [ ] O173: specs/bible-chunker.md recommends ext_mirror for a scripture source and explains why the non-writable strategy needs it, but nothing defaults or enforces it: add a bible source without the line and its annotations land in ~/.ark/external, contradicting the spec's stated intent. Decide whether a non-writable strategy should default ext_mirror.
+- [ ] O174: Lua mcp.* bindings have no real test coverage. Reaching a registered binding needs srv.uiRuntime (the embedded ui-engine LuaRuntime), so it is disproportionate today — but the existing precedent is worse than absent: recall_test.go:493 builds a bare lua.NewState() and RE-IMPLEMENTS the binding body in the test, so it exercises code production never runs. Same anti-pattern as the withFTS hand-wiring found 2026-07-26. Affects R3260-R3262 (extReject/extAmend/extPending), unverified as of #67, and consumed by #9. Fix if it recurs: extract binding bodies as named func(*lua.LState) int so a bare LState can register the REAL closures.

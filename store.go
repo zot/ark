@@ -891,7 +891,12 @@ func unresolvedKey(path string) []byte {
 }
 
 // tagDefKey builds a D prefix key: D[tagname][fileid].
-// CRC: crc-Store.md | R504
+//
+// The trailing fileid is why one tag can hold several definitions at once,
+// each attributed to its source file. A pattern file's derived definition and
+// a hand-written @tag: line elsewhere in the corpus therefore coexist rather
+// than one clobbering the other, and neither claims precedence (R3276).
+// CRC: crc-Store.md | R504, R3276
 func tagDefKey(tag string, fileid uint64) []byte {
 	key := make([]byte, 1+len(tag)+8)
 	key[0] = byte(prefixTagDef)
