@@ -1,7 +1,10 @@
 # Carve: personal patterns as an ark feature
 
-**Opened** 2026-07-26 · **Status** open — the feature shipped, the tag-mirror
-cleanup has not · **Items** #75 (landed 2026-07-27), #77
+**Opened** 2026-07-26 · **Closed** 2026-07-27 · **Items** #75, #77 — both landed
+
+**CLOSED.** The feature shipped and the hand-maintained tag mirror is gone; each
+pattern file is now the single source of its own definition. Nothing here is
+pending. Retained as the record of why it was built this way.
 
 Making a person's private working vocabulary a first-class part of ark: named
 techniques that prime every session cheaply and can be retrieved in full when
@@ -150,13 +153,58 @@ Three things the build found that the design had not anticipated:
   sitting in every session's system prompt, priming nothing, looking like a
   pattern. Skipping it is R3271; the file itself still wants fixing.
 
-## Falls out: the tag mirror is now redundant — item #77
+## The tag mirror, removed (#77, 2026-07-27)
 
-All 40 hand-copied pattern definitions in `~/.ark/tags.md` are now duplicated
-by derivation, which is visible in `ark tag defs straycat` returning both. They
-are harmless (D records are keyed per file, so the two coexist by construction
-— R3276) but they are the drift this carve just measured, still ticking. Item
-#77 covers stripping them so the pattern file is the only source.
+The item was filed as "strip 40 redundant duplicates." Measuring it first showed
+that framing was wrong twice over, and acting on it literally would have
+destroyed data.
+
+**Only 13 of the 37 overlapping definitions were actually identical.** The other
+24 were independently edited variants, diverging in *both* directions — the
+`tags.md` line expanded the ANLP acronym, labelled `lock-flap` an anti-pattern,
+and noted that `sublooper` composes with lotto-tube, while the pattern file was
+richer for `alibi-stamp`, `baby-food`, and `librarian-search`. Stripping either
+side blindly loses something written deliberately. On inspection only **4**
+carried a clause the pattern file did not already hold — the rest differed by
+punctuation, ordering, or facts already living in the file's `name`/`tags`
+fields, which is why "24 conflicts" collapsed to four one-line merges.
+
+**And 3 would have been orphaned outright.** `context-coupling`, `secretary`,
+and `self-contained-tools` had incomplete frontmatter and derived nothing, so
+their `tags.md` line was their *only* definition. This is also what produced the
+blank `- **** (self-contained-tools.md)` entry: `List` needs only `name`,
+derivation needs `name` **and** `summary`, so a file can list while silently
+deriving nothing. All three repaired; `secretary` also had YAML-array tags
+(`[agentic, …, delegation]`) that left brackets stuck to the first and last tag.
+
+**DECIDED (Bill, 2026-07-27) — what `self-contained-tools` actually is.** Its
+tag definition described self-contained *output* ("pairs with crank-handle")
+while its body described self-contained *distribution*, and `batteries-included`
+seemed to cover the latter. Daneel proposed retiring or splitting it. Both were
+wrong, and the collection already held the answer: `batteries-included.md` cites
+`[[self-contained-tools]]` and draws the line itself — *"the system-side version:
+the tool carries its whole world, needs nothing external to **run**. Batteries
+Included is the interface-side corollary: the client needs nothing external to
+**use** it."* So the **body was right and the tag definition was the drift**; the
+stale definition described crank-handle. Kept, with a summary drawn from the
+body and the neighbour's characterisation.
+
+The lesson generalises past this file. A mature pattern here states its own
+borders — `turnstile.md` has a "Relationship to other patterns" section
+distinguishing it from Hermetic Seal, Crank Handle, Greased Pig, and Lotto Tube.
+`self-contained-tools.md` predates frontmatter and could not, so its neighbour
+had to carry the distinction, and the drift went unnoticed for as long as nobody
+read the neighbour. Stating borders is what makes drift visible.
+
+**Result:** 40 definitions removed, 29 non-pattern ones untouched, all 54
+patterns deriving exactly one definition. The two section intros in `tags.md`
+were rewritten rather than deleted — the convention prose is still useful, but
+it pointed at the pre-move path and implied the definitions lived below it.
+
+One apparent duplicate survives and is correct: `crank-handle` resolves to two
+definitions because Bill's blog posts define the tag for their own audience.
+That is R3276 working as designed — D records are keyed per file, so corpora
+coexist with attribution instead of clobbering each other.
 
 ## Why it belongs in the release
 
