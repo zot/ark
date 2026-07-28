@@ -100,3 +100,42 @@ the clue in its `## Finding:` header, names the distinguishing reason
 (orchestrator unavailable vs pool full), and points at
 `ark bloodhound search --raw`.
 **Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
+
+## Test: the reap deadline depends on who is still waiting
+**Purpose:** R3041, R3293 — a CLI request's client hit `--timeout` and exited, so
+it gets the generous configured TTL; a watermark's emitter is blocked on
+`listen`, so it learns sooner. Also pins the two ordering invariants the choice
+rests on: the strand deadline must exceed the re-issue threshold (or the sweep
+reaps before the stand-up it just pushed could land, turning a slow orchestrator
+into an absent one), and a configured TTL shorter than the strand deadline wins
+(a watermark must never outlive a CLI request submitted at the same moment).
+**Input:** `reapDeadline` over a zero-value `cliRequest` (CLI) and one carrying
+`origin`, at a 900s and a 30s configured TTL.
+**Expected:** CLI → the configured TTL; watermark → `bloodhoundStrandTTL`, unless
+the configured TTL is shorter, in which case that. Constants ordered as above.
+**Refs:** crc-RecallWatcher.md
+
+## Test: a reaped watermark reports rather than vanishing
+**Purpose:** R3293 — the #84 defect. R3282 covered only the dispatch-time
+refusal, so a hunt accepted into the pool and never served still disappeared
+quietly; the silence had moved from the gate to the reaper, where it is harder to
+spot because the hunt appeared to be accepted. Asserts the reason names the
+*strand* and not a dispatch-time condition, since all of those held when the hunt
+was accepted and naming one would misdescribe what happened.
+**Input:** a watermark-origin `cliRequest` submitted `2 × bloodhoundStrandTTL`
+ago, with an orchestrator seated; `sweepRequests`.
+**Expected:** the request is reaped, and a `## Finding:` doc appears on
+`@ark-bloodhound-result=<S>` carrying the clue, "Not served", "no secretary ever
+became available", and the `--raw` fallback — and containing neither
+"no orchestrator seated" nor "full with no room to grow".
+**Refs:** crc-RecallWatcher.md
+
+## Test: a reaped CLI request reports to nobody
+**Purpose:** R3293's other half. The discriminator is who is still waiting, so
+the CLI path must stay silent — writing a finding for every abandoned hunt would
+leave unread tmp docs behind. Guards against "fix the silence" being
+over-applied to the case where silence is correct.
+**Input:** a CLI-origin `cliRequest` (empty `origin`) older than the configured
+TTL; `sweepRequests`.
+**Expected:** reaped, and no finding doc written.
+**Refs:** crc-RecallWatcher.md

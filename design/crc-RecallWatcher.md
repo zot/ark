@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283, R3293
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -313,10 +313,18 @@ deterministic Go.
   points are time-based and nothing event-driven wakes the watcher for a
   stranded request. Each pass: (1) `pump()` — re-attempt routing in case a
   free secretary was missed; (2) **reap** — for each `cliPool.requests` entry
-  older than `request_ttl_seconds` (R3041), drop it from `requests` /
+  past its deadline (R3041), drop it from `requests` /
   `pending` and remove its request doc (the CLI hit `--timeout` and exited —
   no clean abandonment signal, so TTL is the trigger; the TTL is generous so
-  a live client is never reaped); (3) **re-issue** — if a request has sat
+  a live client is never reaped). The deadline is **per origin** (R3293):
+  `request_ttl_seconds` for a CLI request, whose client is already gone, and
+  the shorter `bloodhoundStrandTTL` for a **watermark** request, whose
+  emitting session is still blocked on `listen` and pays for every second.
+  A reaped watermark request emits the not-served finding with a **strand**
+  reason, so R3282's silence is not merely relocated from the gate to the
+  reaper; a reaped CLI request still reports to nobody, because nobody is
+  listening. `emitNotServedReason` is the shared writer both paths call;
+  (3) **re-issue** — if a request has sat
   pending, unrouted, past a re-issue threshold while the pool has room
   (`len(secretaries) < pool_max`), push one *stand up another* directive
   (R3042), recovering a stand-up Luhmann dropped (drift / garbled tool call —

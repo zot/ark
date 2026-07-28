@@ -860,14 +860,29 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req blo
 // must read as a failure, not as an answer.
 // CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#4 | R3282
 func (w *RecallWatcher) emitNotServed(sessionID string, bid uint64, req bloodhoundReq) {
-	if w.db == nil {
-		return
-	}
 	reason := "no secretary is running for this session and Luhmann's pool is unavailable (no orchestrator seated)"
 	if w.luhmann != nil && w.luhmann.LuhmannOwner() != "" {
 		reason = "no secretary is running for this session and Luhmann's pool is full with no room to grow"
 	}
-	body := bloodhoundFindingHeader(sessionID, clueOf(req.payload)) + fmt.Sprintf(
+	w.emitNotServedReason(sessionID, bid, clueOf(req.payload), reason)
+}
+
+// emitNotServedReason writes the not-served finding for a caller-supplied
+// reason. Split out of emitNotServed because the two failures that must report
+// are discovered at different places and hold different things: dispatch has the
+// bloodhoundReq, while the reaper has only a cliRequest — which already carries
+// the computed clue, so nothing needs re-deriving (R3282, R3293).
+//
+// Keeping one writer is the point. Two report paths that formatted their own doc
+// would drift, and a consumer that parses one shape would silently stop
+// recognizing the other as a failure — which lands it back at silence by a
+// longer road.
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#4 | R3282, R3293
+func (w *RecallWatcher) emitNotServedReason(sessionID string, bid uint64, clue, reason string) {
+	if w.db == nil {
+		return
+	}
+	body := bloodhoundFindingHeader(sessionID, clue) + fmt.Sprintf(
 		"\n**Not served.** %s.\n\n"+
 			"This hunt was recognized but never ran, so the absence of results says nothing about the corpus. "+
 			"Run it yourself with `ark bloodhound search --raw`, or spawn a session secretary and re-emit.\n",

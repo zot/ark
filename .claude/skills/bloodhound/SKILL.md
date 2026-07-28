@@ -1,6 +1,6 @@
 ---
 name: bloodhound
-description: "Turn on the warm search bloodhound for this session — spawn the per-session secretary and listen for findings — and the craft of directing a hunt: the <BLOODHOUND>…</BLOODHOUND> watermark, its file-scope attributes, the want-words, and how to read a finding. Load when the user types /bloodhound, asks to turn on directed search, or wants to emit a watermark; the watermark is inert without this skill's machinery. CLI searching you run yourself is /ark-search. Requires /ark."
+description: "Turn on the warm search bloodhound for this session — subscribe to findings, and optionally spawn a per-session secretary — and the craft of directing a hunt: the <BLOODHOUND>…</BLOODHOUND> watermark, its file-scope attributes, the want-words, and how to read a finding. Load when the user types /bloodhound, asks to turn on directed search, or wants to emit a watermark; the watermark is inert without this skill's subscription. CLI searching you run yourself is /ark-search. Requires /ark."
 ---
 <!-- CRC: crc-RecallAgent.md, crc-RecallAgentBuilder.md | R2890, R2947, R2950 -->
 
@@ -21,11 +21,47 @@ live *here*, because they are inert without the secretary and `listen` this
 skill sets up. Anything you type at the CLI lives in `/ark-search`, because it
 works in any session with no machinery at all.
 
-Two roles, both in your session: a per-session **secretary** (a Haiku subagent
-you spawn) that runs the hunt, and **you**, who consume its findings. Until both
-run, the bloodhound does nothing.
+Two roles: something that **runs** the hunt, and **you**, who consume its
+findings. Only the second is yours to set up. Subscribing (step 1) is the whole
+precondition — ark recognizes a watermark exactly while you hold
+`@ark-bloodhound-result`, and *who serves it* is a separate decision ark makes
+for you.
 
-## 1. Spawn the secretary
+**So the per-session secretary is an optimization, not a requirement.** Spawn one
+and it serves your hunts, dedicated and already warm. Skip it and a recognized
+watermark falls through to Luhmann's pool, if an orchestrator is seated. What
+that costs is scheduling latency and sharing a secretary with other hunts. What
+it does **not** cost is the tag recommends: a hunt served by the pool on your
+behalf proposes connecting tags exactly as your own secretary would.
+
+If nothing can serve a hunt, you get a **`## Finding:` doc that says so** rather
+than silence — including when it was accepted and then never ran because no
+secretary became available. So a hunt that produced nothing is a hunt that
+reported nothing; you never have to guess whether one is still in flight.
+
+## 1. Subscribe — the consumer loop
+
+Start the consumer, backgrounded:
+```
+~/.ark/ark connections recall listen --session <sessionid>
+```
+Run it with `run_in_background: true` so you stay conversational. It subscribes to
+`@ark-bloodhound-result` (the bloodhound opt-in) and blocks until a result
+arrives, then completes and the harness notifies you. At this level the results
+are **`## Finding:`** items — a curated answer to a `<BLOODHOUND>` you emitted,
+headed by your own clue echoed back. **Fold a finding into your reasoning** (you
+asked for it); surface it to the user only if it helps them. Then **relaunch**
+`listen` to keep the loop going.
+
+This subscription is what makes a watermark mean anything. Without it a
+`<BLOODHOUND>` is ordinary prose — nothing recognizes it, and nothing reports
+that nothing did.
+
+## 2. Optionally, spawn your own secretary
+
+Worth doing when you expect heavy iterative search and want a dedicated, warm
+secretary rather than the pool's. Skip it for one-off hunts, or when a Luhmann
+orchestrator is already seated with a pool to lend.
 
 Reserve a nonce:
 ```
@@ -42,25 +78,15 @@ its `@ark-secretary-work` tube — search tasks now, curation docs too once ambi
 is on — until its context fills, then it exits and the harness notifies you
 (step 3).
 
-## 2. Run the consumer loop
-
-Start the consumer, backgrounded:
-```
-~/.ark/ark connections recall listen --session <sessionid>
-```
-Run it with `run_in_background: true` so you stay conversational. It subscribes to
-`@ark-bloodhound-result` (the bloodhound opt-in) and blocks until a result
-arrives, then completes and the harness notifies you. At this level the results
-are **`## Finding:`** items — a curated answer to a `<BLOODHOUND>` you emitted,
-headed by your own clue echoed back. **Fold a finding into your reasoning** (you
-asked for it); surface it to the user only if it helps them. Then **relaunch**
-`listen` to keep the loop going.
+**Ambient recall does still require one.** `/recall` builds on this skill, and
+its arming gate needs a session-local secretary — the pool cannot stand in for it.
+If you are heading there, spawn now.
 
 ## 3. Respawn the secretary when it exits
 
 When the secretary subagent **completes** (the harness notifies you), it hit its
 context limit — normal and expected, not a failure. Reserve a fresh nonce and
-spawn it again exactly as in step 1. That is the whole of supervision: no streak
+spawn it again exactly as in step 2. That is the whole of supervision: no streak
 machine, no backoff. If it fails *repeatedly* in quick succession (not a clean
 context-limit exit), stop respawning and tell the user something is wrong.
 
@@ -181,9 +207,10 @@ you type at the CLI works in any session and belongs there.
 
 ## The rules
 
-Run both the secretary and `listen` backgrounded; never block the conversation;
-never poll or narrate the waiting. A finding is **async** — emit the watermark,
-keep working, fold the answer in when it lands. To stop the bloodhound, stop
-relaunching `listen` and stop respawning the secretary (its subscriptions drop
-and the service goes quiet for this session). To add **ambient recall** on top,
-run `/recall`.
+Run `listen` — and the secretary, if you spawned one — backgrounded; never block
+the conversation; never poll or narrate the waiting. A finding is **async** —
+emit the watermark, keep working, fold the answer in when it lands. To stop the
+bloodhound, stop relaunching `listen` (that subscription is what recognizes a
+watermark, so dropping it is what makes the service go quiet) and stop respawning
+any secretary you started. To add **ambient recall** on top, run `/recall` —
+which does need a session-local secretary, so spawn one if you skipped it.

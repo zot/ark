@@ -12,13 +12,19 @@ item.
 | Part | Status |
 |---|---|
 | ~~#80 — split recognition from service; pool fallback; not-served report~~ | **Landed** 2026-07-28, git `4c69e33` |
-| #84 — a reaped watermark hunt is still silent | Open — **defect in landed code** |
-| #83 — `/bloodhound` skill still calls the secretary spawn a precondition | Open |
+| ~~#84 — a reaped watermark hunt is still silent~~ | **Landed** 2026-07-28 — R3293 |
+| ~~#83 — `/bloodhound` skill still calls the secretary spawn a precondition~~ | **Landed** 2026-07-28 |
+
+**Closed 2026-07-28.** All three parts landed; the ordering constraint below was
+honoured (#84 before #83), so the silence was fixed before the path was
+advertised.
 
 **Where the decisions went.** Behavior is canonical in `specs/bloodhound.md`
-("Serving a watermark") and `specs/bloodhound-cli.md` ("Tag proposals are
-origin-dependent"), as R3279–R3283. This document is the reasoning trail and
-the split — read the specs for what the system does.
+("Serving a watermark", "Unservable — report, never drop" and its
+"Accepted, then stranded") and `specs/bloodhound-cli.md` ("Tag proposals are
+origin-dependent"), as **R3279–R3283 and R3293**. The `/bloodhound` skill carries
+the operator-facing half. This document is the reasoning trail and the split —
+read the specs for what the system does.
 
 ---
 
@@ -100,65 +106,68 @@ Luhmann's seat. A fallback that assumes an idle pool will grow itself would find
 none — which is why `poolCanServe()` checks for room to grow rather than
 assuming it.
 
-## Open parts
+## How the open parts closed
 
-**Order constraint: #84 before #83.** The strand defect is currently
-*unreachable in practice* because the `/bloodhound` skill still instructs a
-spawn, so nobody takes the pool path. #83 is exactly what makes #84 reachable.
-Landing the documentation first would convert a latent bug into a live one, so
-whatever else the queue does, keep the silence fixed before the path is
-advertised.
+**Order constraint, honoured: #84 before #83.** The strand defect was unreachable
+in practice while the `/bloodhound` skill still instructed a spawn, because
+nobody took the pool path. #83 is exactly what makes #84 reachable, so landing
+the documentation first would have converted a latent bug into a live one. Both
+landed the same day, in that order.
 
-### #84 — a reaped watermark hunt is still silent (defect in landed code)
+### #84 — a reaped watermark hunt was still silent → **R3293**
 
-**R3282 covers "cannot be served *at dispatch*", not "accepted, then stranded".**
-`sweepRequests` reaps a pending request older than `request_ttl_seconds`
-(default 900s): it drops the entry from `requests`/`pending`, removes the
-request doc, logs at `-v`, and notifies nobody. For a CLI hunt that is right —
-the client hit `--timeout` and exited, so there is no one to tell. For a
-**watermark** hunt the emitting session is alive and still blocked on `listen`.
+R3282 covered "cannot be served *at dispatch*", not "accepted, then stranded".
+`sweepRequests` reaped a pending request past `request_ttl_seconds` and notified
+nobody — correct for a CLI hunt whose client hit `--timeout` and exited, wrong
+for a **watermark** hunt whose emitting session is alive and blocked on `listen`.
+So the silence this carve exists to eliminate had been *moved* rather than
+removed: from the gate to the reaper, and harder to spot there because the hunt
+appeared to be accepted.
 
-The path that reaches it, and it is not exotic:
+The fix keys on **who is still waiting**. A watermark-origin reap emits the same
+not-served finding through a shared writer (`emitNotServedReason`), with a reason
+naming the strand rather than a dispatch-time condition — all of those held when
+the hunt was accepted, so naming one would misdescribe it. A CLI reap still
+reports to nobody, because nobody is listening.
 
-1. A session with no secretary emits a watermark.
-2. `poolCanServe()` returns true because the pool has *room to grow*.
-3. `enqueueWatermarkHunt` queues it and pushes a stand-up onto Luhmann's `next`.
-4. Nothing stands up — pool growth is **operator-driven**, as recorded above,
-   and a dropped directive only earns one re-issue attempt.
-5. Fifteen minutes later the request is reaped. The session waits forever.
+- **DECIDED (Bill, 2026-07-28):** `poolCanServe()` **keeps** counting *room to
+  grow* as servable. The tightening was tempting — refusing unless a secretary is
+  actually free makes the strand impossible — but this carve's own observation
+  refutes it: the pool read 0 secretaries before *and* after a hunt that
+  nonetheless returned findings. Fail-fast would refuse hunts that demonstrably
+  work, trading a rare 3-minute wait for a common outright refusal.
+- **DECIDED (Bill, 2026-07-28):** a stranded **watermark** is reaped on a
+  deadline shorter than the CLI TTL (`bloodhoundStrandTTL`, 180s). The 900s TTL
+  is tuned for a client already gone, where reaping late costs nothing; a blocked
+  assistant pays for every second. It stays above the 60s re-issue threshold so a
+  recovered stand-up has room to land and a *slow* orchestrator is not mistaken
+  for an absent one. A named constant rather than a config key — no operator has
+  a reason to turn it.
 
-So the silence this carve exists to eliminate was moved rather than removed:
-from the gate to the reaper. Same symptom, longer fuse, and harder to spot
-because the hunt appeared to be accepted.
+**Verified by making the test fail.** The new test was run against a disabled
+fix, and went red with the exact symptom (`no report for a reaped watermark — the
+session waits forever`). Same `sleeping-sentry` discipline that corrected the
+"silent drop" claim during #80, applied on purpose this time rather than by luck.
 
-**Fix direction (not yet a decision).** The reap path already knows the request
-record, so it knows the origin. A watermark-origin reap should emit the same
-not-served `## Finding:` doc R3282 defines, with a reason naming the strand
-("queued but no secretary ever became available") rather than the dispatch-time
-reasons. `emitNotServed` is close to reusable — it currently takes a
-`bloodhoundReq`, and the reaper holds a `cliRequest`, so either the reason
-string or the shared header helper wants factoring out.
+### #83 — the `/bloodhound` skill understated the machinery
 
-Worth deciding at the same time: whether `poolCanServe()` should count *room to
-grow* as servable at all when growth is operator-driven. Returning false when no
-secretary is actually free would fail fast and honestly at step 2, at the cost
-of refusing hunts a responsive Luhmann would have served.
+The skill presented spawning a session secretary as **step 1, a precondition**.
+Since R3279/R3280 it is an optimization, so the skill described less than the
+system does — which is how a capability quietly goes unused.
 
-### #83 — the `/bloodhound` skill understates the machinery
+The repair was more than wording: **the steps were in the wrong order.** `listen`
+is the actual precondition (recognition gates on the bloodhound-result
+subscription alone), so it became step 1 and the spawn became step 2, marked
+optional with what skipping it costs — scheduling latency and a shared secretary
+— and what it does *not* cost, the tag recommends (R3283). The frontmatter
+description was carrying the same false promise and was rewritten too, since that
+is the line the loader reads.
 
-`.claude/skills/bloodhound/SKILL.md` presents spawning a session secretary as
-**step 1, a precondition**. Since R3279/R3280 it is an optimization: a session
-can subscribe with `listen` and borrow the pool with no spawn at all. Nothing
-breaks — the spawn still works and is still preferred — but the skill describes
-less than the system does, which is how a capability quietly goes unused.
-
-What to say when updating it:
-
-- The spawn is **optional** when a Luhmann pool is staffed.
-- Skipping it costs the pool's scheduling latency and sharing a secretary with
-  other hunts.
-- It does **not** cost the tag recommends: a session-delegated pool hunt
-  proposes exactly as an in-session one does (R3283).
+One thing the pass had to be careful **not** to over-generalize: ambient recall
+(`/recall`) genuinely does still need a session-local secretary — R2949's arming
+gate drops ambient state when `@ark-secretary-work` is absent, and the pool
+cannot stand in. The skill now says so where a reader would otherwise conclude
+the spawn is never needed.
 
 ## Interim workaround (still valid for callers outside a session)
 

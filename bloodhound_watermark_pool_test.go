@@ -342,3 +342,115 @@ func TestEmitNotServedReportsRatherThanDropping(t *testing.T) {
 		})
 	}
 }
+
+// TestReapDeadlineIsPerOrigin pins the discriminator R3293 turns on: who is
+// still waiting. A CLI request's client has exited, so it gets the generous
+// configured TTL; a watermark's emitter is blocked on `listen`, so it learns
+// sooner. Pure logic — no DB, no pool, no clock.
+// Refs: R3041, R3293
+func TestReapDeadlineIsPerOrigin(t *testing.T) {
+	const cliTTL = 900 * time.Second
+	cli := &cliRequest{}                  // origin "" — a CLI hunt
+	mark := &cliRequest{origin: "sess-A"} // a watermark hunt
+
+	if got := reapDeadline(cli, cliTTL); got != cliTTL {
+		t.Errorf("CLI deadline = %v, want the configured TTL %v", got, cliTTL)
+	}
+	if got := reapDeadline(mark, cliTTL); got != bloodhoundStrandTTL {
+		t.Errorf("watermark deadline = %v, want the shorter strand TTL %v", got, bloodhoundStrandTTL)
+	}
+
+	// The strand deadline must clear the re-issue threshold, or the sweep would
+	// reap before the recovered stand-up it just pushed could possibly land —
+	// turning a slow orchestrator into an absent one.
+	if bloodhoundStrandTTL <= bloodhoundReissueThreshold {
+		t.Errorf("strand TTL %v must exceed the re-issue threshold %v",
+			bloodhoundStrandTTL, bloodhoundReissueThreshold)
+	}
+
+	// A configured TTL shorter than the strand deadline wins: the operator asked
+	// for prompt reaping, and a watermark must never outlive a CLI request
+	// submitted at the same moment.
+	short := 30 * time.Second
+	if got := reapDeadline(mark, short); got != short {
+		t.Errorf("with a short configured TTL, watermark deadline = %v, want %v", got, short)
+	}
+}
+
+// TestReapedWatermarkReports is the #84 defect itself: a hunt accepted into the
+// pool and then never served must not vanish quietly. R3282 covered only the
+// dispatch-time refusal, so the silence it exists to kill had merely moved to
+// the reaper — harder to spot, because the hunt appeared to be accepted.
+// Refs: R3293
+func TestReapedWatermarkReports(t *testing.T) {
+	const sess, bid = "sess-strand", uint64(7)
+	w := newPoolWatcher(t, &fakeLuhmannHub{owner: "L"})
+	subscribeFinding(t, w.db, sess)
+
+	// A watermark request that was accepted long enough ago to be reaped.
+	path := bloodhoundCLIPrefix + watermarkHuntID(sess, bid)
+	w.pool.pending = append(w.pool.pending, path)
+	w.pool.requests[path] = &cliRequest{
+		submitted: time.Now().Add(-2 * bloodhoundStrandTTL),
+		raw:       true,
+		origin:    sess,
+		bid:       bid,
+		clue:      "did we ever discuss BM25 for recall?",
+	}
+
+	w.sweepRequests()
+
+	if _, ok := w.pool.requests[path]; ok {
+		t.Error("request should have been reaped")
+	}
+	data, err := w.db.TmpContent(bloodhoundFindingPath(sess, bid))
+	if err != nil {
+		t.Fatalf("no report for a reaped watermark — the session waits forever: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"@ark-bloodhound-result: " + sess,
+		"## Finding: did we ever discuss BM25 for recall?",
+		"Not served",
+		"no secretary ever became available",
+		"ark bloodhound search --raw",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report missing %q; got:\n%s", want, got)
+		}
+	}
+	// The strand reason must not claim a dispatch-time condition: all of them
+	// held when this hunt was accepted, so naming one would misdescribe it.
+	for _, wrong := range []string{"no orchestrator seated", "full with no room to grow"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("strand report names a dispatch-time reason %q; got:\n%s", wrong, got)
+		}
+	}
+}
+
+// TestReapedCLIRequestReportsToNobody is the other half of R3293's
+// discriminator. A CLI client hit --timeout and exited, so writing it a finding
+// would leave an unread tmp doc behind for every abandoned hunt.
+// Refs: R3293
+func TestReapedCLIRequestReportsToNobody(t *testing.T) {
+	const sess, bid = "sess-cli", uint64(3)
+	w := newPoolWatcher(t, &fakeLuhmannHub{owner: "L"})
+	subscribeFinding(t, w.db, sess)
+
+	path := bloodhoundCLIPrefix + "cli-request"
+	w.pool.pending = append(w.pool.pending, path)
+	w.pool.requests[path] = &cliRequest{
+		submitted: time.Now().Add(-2 * w.requestTTL()),
+		clue:      "a CLI hunt whose caller has gone",
+		bid:       bid,
+	}
+
+	w.sweepRequests()
+
+	if _, ok := w.pool.requests[path]; ok {
+		t.Error("request should have been reaped")
+	}
+	if _, err := w.db.TmpContent(bloodhoundFindingPath(sess, bid)); err == nil {
+		t.Error("a reaped CLI request must not write a finding — nobody is listening")
+	}
+}

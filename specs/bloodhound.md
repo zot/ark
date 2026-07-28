@@ -228,6 +228,33 @@ miss is the same discipline as a glob that matches no indexed file saying so
 ("Scoping a hunt") rather than returning an empty hunt: a failure that reads as
 a failure, not as an answer.
 
+#### Accepted, then stranded
+
+The rule above covers a hunt refused **at dispatch**. A hunt can also be
+*accepted* and still never run, and that path has to report too or the silence
+simply moves further out.
+
+It happens because the pool is allowed to accept on **room to grow** rather than
+on a secretary being free — deliberately, since pool growth is operator-driven
+and requiring a free secretary would refuse hunts a responsive orchestrator would
+have served. So a watermark is queued, a stand-up is pushed, and if nothing ever
+stands up the request sits pending until the sweep reaps it. Reaping is right;
+reaping *quietly* is not.
+
+The distinction the report turns on is **who is still waiting**. A reaped CLI
+request has nobody to tell: the client hit `--timeout` and exited long ago. A
+reaped **watermark** request has a live session still blocked on `listen`. So a
+watermark-origin reap emits the same not-served finding, with a reason naming the
+strand — queued but no secretary ever became available — rather than the
+dispatch-time conditions, which were all satisfied when it was accepted.
+
+For the same reason a stranded watermark is reaped **sooner** than a stranded CLI
+request. The CLI TTL is tuned for a client that has already gone away, where
+reaping late costs nothing; a blocked assistant pays for every second of it. The
+strand deadline still clears the re-issue threshold with room for a recovered
+stand-up to land, so a merely slow orchestrator is not mistaken for an absent
+one.
+
 ## The secretary executes (seal + persona)
 
 The sealed Haiku secretary gains the ability to *run* a search task:

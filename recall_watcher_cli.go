@@ -44,6 +44,14 @@ const (
 	// Luhmann dropped (R3042). Shorter than request_ttl_seconds, so a stranded
 	// request gets a re-issue attempt well before it is reaped.
 	bloodhoundReissueThreshold = 60 * time.Second
+	// bloodhoundStrandTTL is the reap deadline for a **watermark** request,
+	// whose emitting session is still blocked on `listen`. request_ttl_seconds
+	// is tuned for a CLI client that hit --timeout and is already gone, where
+	// reaping late costs nothing; a blocked assistant pays for every second, so
+	// it learns sooner. Comfortably above bloodhoundReissueThreshold, so the
+	// re-issued stand-up has room to land and a merely slow orchestrator is not
+	// mistaken for an absent one (R3293).
+	bloodhoundStrandTTL = 180 * time.Second
 )
 
 // poolSec is one pool secretary's roster entry, keyed by its reserved nonce
@@ -455,6 +463,26 @@ func (w *RecallWatcher) relayRawResult(path string, req *cliRequest) error {
 // re-issue a stand-up for a request stranded by a dropped directive. Operates
 // only on pending requests — an in-flight one is bounded by the secretary
 // lifecycle, so the sweep never races a live secretary's write.
+// reapDeadline returns how long a pending request may sit before the sweep
+// reaps it. The discriminator is **who is still waiting** (R3293): a CLI
+// request's client hit `--timeout` and exited long ago, so a generous TTL costs
+// nothing and protects a slow-but-live client from being reaped out from under
+// itself; a watermark's emitting session is still blocked on `listen`, and every
+// second past the point of hope is spent by someone.
+// CRC: crc-RecallWatcher.md | R3041, R3293
+func reapDeadline(req *cliRequest, cliTTL time.Duration) time.Duration {
+	if req.origin == "" {
+		return cliTTL
+	}
+	// A configured CLI TTL shorter than the strand deadline wins: the operator
+	// asked for prompt reaping, and a watermark should never outlive a CLI
+	// request submitted at the same moment.
+	if cliTTL < bloodhoundStrandTTL {
+		return cliTTL
+	}
+	return bloodhoundStrandTTL
+}
+
 // CRC: crc-RecallWatcher.md | Seq: seq-bloodhound-cli.md#2.1 | R3041, R3042
 func (w *RecallWatcher) sweepRequests() {
 	if w == nil {
@@ -465,14 +493,23 @@ func (w *RecallWatcher) sweepRequests() {
 
 	ttl := w.requestTTL()
 	var reap []string
+	// R3293: a reaped watermark has a live session still blocked on `listen`,
+	// so it must be told. Collected under the lock, reported after it.
+	var stranded []cliRequest
 	standUp := false
 	w.pool.mu.Lock()
-	// 2.1.2 reap: a pending request older than the TTL — the client hit --timeout
-	// and exited. Drop it from requests + pending; its doc is removed below.
+	// 2.1.2 reap: a pending request past its deadline. For a CLI request that
+	// means the client hit --timeout and exited; for a watermark it means
+	// nothing ever stood up to serve it. Drop it from requests + pending; its
+	// doc is removed below.
 	kept := w.pool.pending[:0]
 	for _, path := range w.pool.pending {
-		if req := w.pool.requests[path]; req != nil && time.Since(req.submitted) > ttl {
+		req := w.pool.requests[path]
+		if req != nil && time.Since(req.submitted) > reapDeadline(req, ttl) {
 			reap = append(reap, path)
+			if req.origin != "" {
+				stranded = append(stranded, *req)
+			}
 			delete(w.pool.requests, path)
 			continue
 		}
@@ -496,6 +533,14 @@ func (w *RecallWatcher) sweepRequests() {
 		if w.db != nil {
 			_ = SyncVoid(w.db, func(db *DB) error { return db.RemoveTmpFile(path) })
 		}
+	}
+	// R3293: report the strand. The dispatch-time conditions all held when this
+	// hunt was accepted, so the reason names what actually happened instead —
+	// otherwise R3282's silence is merely moved from the gate to the reaper,
+	// where it is harder to spot because the hunt appeared to be accepted.
+	for _, req := range stranded {
+		w.emitNotServedReason(req.origin, req.bid, req.clue,
+			"this hunt was queued for Luhmann's pool, but no secretary ever became available to run it")
 	}
 	if standUp && w.luhmann != nil && w.luhmann.LuhmannOwner() != "" {
 		Logv(1, "bloodhound-cli: re-issuing a dropped stand-up for a stranded request")
