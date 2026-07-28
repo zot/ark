@@ -45,6 +45,13 @@ terminal moment and decays as its parts land.
 that it is brainstorming and lives in the private scratch area; after it, other
 work references it and it becomes a plan.
 
+**This directory is public, so promotion is publication** — and that is a
+second, independent question from the spawn trigger above. A carve whose
+*reasoning* is private (positioning deliberations, anything citing the
+fossil-only working docs) has a private counterpart directory and stays there;
+publishing it would hand a reader dangling pointers to files the repository
+does not contain. Ask both questions, not just the first.
+
 **A finished carve moves to `carves/done/`**, so completed ones do not crowd
 out live ones. The move rewrites the links pointing at it rather than leaving a
 stub.

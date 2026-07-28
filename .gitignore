@@ -5,6 +5,7 @@
 .fslckout
 checkpoint.fossil
 /.scratch/
+/.carves/
 /POST.md
 /notes.md
 /requests/
