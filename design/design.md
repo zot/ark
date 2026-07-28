@@ -146,7 +146,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### CRC Cards
 - [ ] crc-DB.md → `db.go`, `locator.go`, `compact.go`, `util.go`
-- [x] crc-Config.md → `config.go`
+- [x] crc-Config.md → `config.go`, `ptyhost.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [ ] crc-Store.md → `store.go`
@@ -157,7 +157,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Searcher.md → `search.go`
 - [ ] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `connections_doc.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
 - [ ] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`, `cmd/ark/patterns_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
@@ -341,6 +341,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-BloodhoundCLI.md → `cmd/ark/bloodhound_cli_test.go`
 - [x] test-FilterStack.md → `cmd/ark/main_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
+- [x] test-SourcePairing.md → `source_pairing_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
@@ -921,3 +922,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T271: R2947 retired by R3279 (2026-07-28 watermark-pool-fallback: recognition no longer requires a session-local secretary)
 - [x] O175: Pool-served watermarks lose the tag-recommend half: enhanceRequestDoc forces notags=true for every request-doc hunt (recommends have no in-session builder to land in, R3110), so a watermark served by the pool returns findings only, while the same watermark served by the session's own secretary also proposes connecting tags (R3109). Asymmetry is correct today but undocumented at the call site; revisit if the raw relay ever grows a recommend channel. R3280, R3281.
 - [ ] O176: R3282's not-served report covers dispatch-time unservability only. sweepRequests reaps a pending request past request_ttl_seconds and notifies nobody — correct for a CLI client that already exited, but a watermark-origin hunt's session is alive and blocked on listen, so the silence R3282 removed at the gate reappears at the reaper. Reap knows the cliRequest and therefore the origin; a watermark-origin reap should emit the not-served finding with a strand-specific reason. Also revisit whether poolCanServe should count room-to-grow as servable when growth is operator-driven. PENDING #84, carves/bloodhound-pool-fallback.md. R3281, R3282.
+- [ ] O177: mcp:chatSessions / mcp:chatTranscript are not exercised end-to-end from a running Frictionless app (R3291). The option marshalling IS tested against the production parsers (test-SourcePairing.md), and the listing/rendering below it is tested, so what remains unautomated is only the lua-VM-to-binding hop — which needs the UI runtime, not a fake. #71's chat panel is the first real caller and will exercise it; fold an assertion into that pass rather than standing up a Frictionless harness here.

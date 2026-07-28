@@ -94,6 +94,16 @@ logs_for = "ark"
 The value names another source. It is **declarative and explicit** — greppable,
 correctable, and meaningful for any log source, not only Claude Code's.
 
+**Naming a source.** A source is identified by its `dir`, and its **name** is
+that directory's last segment — `/home/deck/work/ark` is named `ark`. Anywhere
+a source name is accepted (`logs_for`, `--source`, `--for`), the full `dir` is
+accepted too and tried first, so the short form is a convenience rather than a
+second identity. Two sources sharing a last segment make the short form
+ambiguous; that is an error naming both candidates, not a silent pick, and the
+full `dir` resolves it. Taking a path's last segment is not the vendor mangling
+R3289 forbids — it derives a *label for a source ark already has*, whereas the
+mangling reconstructs *which directory another program would have chosen*.
+
 The pairing is *deliberately not computed at lookup time.* Claude Code derives
 that directory name by mangling the cwd (`/home/deck/work/ark` →
 `-home-deck-work-ark`), and reproducing that mangling inside ark would work

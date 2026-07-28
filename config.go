@@ -587,6 +587,11 @@ type Source struct {
 	// ~/.ark/external/<slug>/ into <Dir>/<ExtMirror>/ so routings travel
 	// with the source. Relative to Dir. R3171
 	ExtMirror string `toml:"ext_mirror,omitempty"`
+	// LogsFor names the source whose work this one records, pairing a chat
+	// source with the project it logs. Declared, never derived: the lookup
+	// path resolves it by name only, so no vendor's directory-naming scheme
+	// enters the query. R3288, R3289
+	LogsFor string `toml:"logs_for,omitempty"`
 }
 
 // PatternSpec is a per-source include or exclude pattern list.
@@ -1234,6 +1239,178 @@ func (c *Config) RemoveSource(dir string) error {
 	for i, src := range c.Sources {
 		if src.Dir == dir {
 			c.Sources = append(c.Sources[:i], c.Sources[i+1:]...)
+			c.validate()
+			return nil
+		}
+	}
+	return fmt.Errorf("source %q not found", dir)
+}
+
+// SourceName is a source's short name: the last segment of its directory,
+// so /home/deck/work/ark is named "ark". This is a label for a source ark
+// already holds — distinct from claudeProjectSlug, which reconstructs the
+// directory name a *different* program would have chosen (R3289).
+// CRC: crc-Config.md | R3292
+func SourceName(dir string) string {
+	return filepath.Base(strings.TrimRight(dir, string(filepath.Separator)))
+}
+
+// ErrAmbiguousSource reports a short name matching more than one source.
+// The full dir disambiguates; guessing would silently pair the wrong project.
+// CRC: crc-Config.md | R3292
+type ErrAmbiguousSource struct {
+	Name       string
+	Candidates []string
+}
+
+func (e *ErrAmbiguousSource) Error() string {
+	return fmt.Sprintf("ambiguous source %q: %s (use the full directory)",
+		e.Name, strings.Join(e.Candidates, ", "))
+}
+
+// ResolveSourceName returns the source a name denotes. The full dir is tried
+// first so `dir` remains the source's identity (specs/config.md); the last
+// segment is a convenience second. More than one last-segment match is an
+// error naming every candidate rather than a silent pick.
+// CRC: crc-Config.md | R3292
+func (c *Config) ResolveSourceName(name string) (Source, error) {
+	if name == "" {
+		return Source{}, fmt.Errorf("empty source name")
+	}
+	expanded := ExpandTilde(name)
+	for _, src := range c.Sources {
+		if src.Dir == expanded {
+			return src, nil
+		}
+	}
+	var matches []Source
+	for _, src := range c.Sources {
+		if SourceName(src.Dir) == name {
+			matches = append(matches, src)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return Source{}, fmt.Errorf("no source named %q", name)
+	case 1:
+		return matches[0], nil
+	}
+	dirs := make([]string, len(matches))
+	for i, m := range matches {
+		dirs[i] = m.Dir
+	}
+	return Source{}, &ErrAmbiguousSource{Name: name, Candidates: dirs}
+}
+
+// SourcesLoggingFor returns the sources whose logs_for names the same source
+// that `name` does — a comparison over declared values, never path mangling
+// (R3289). Backs `ark chats list --for`.
+// CRC: crc-Config.md | R3288, R3289, R3292
+func (c *Config) SourcesLoggingFor(name string) ([]Source, error) {
+	target, err := c.ResolveSourceName(name)
+	if err != nil {
+		return nil, err
+	}
+	var out []Source
+	for _, src := range c.Sources {
+		if src.LogsFor == "" {
+			continue
+		}
+		// Resolve the declared value too, so `logs_for = "ark"` and
+		// `logs_for = "/home/deck/work/ark"` are the same declaration.
+		declared, err := c.ResolveSourceName(src.LogsFor)
+		if err != nil {
+			continue // dangling logs_for — reported by `ark sources pair`, not here
+		}
+		if declared.Dir == target.Dir {
+			out = append(out, src)
+		}
+	}
+	return out, nil
+}
+
+// LogsForProposal is one proposed pairing from ProposeLogsFor.
+// CRC: crc-Config.md | R3290
+type LogsForProposal struct {
+	SourceDir string `json:"source_dir"` // the log source being paired
+	LogsFor   string `json:"logs_for"`   // proposed value (a source name)
+}
+
+// PairingReport is what `ark sources pair` has to say: what it would write, and
+// what is already broken.
+// CRC: crc-Config.md | R3290
+type PairingReport struct {
+	Proposals []LogsForProposal `json:"proposals"`
+	// Dangling lists sources whose declared logs_for names no source — the
+	// state R3290 calls worse than an absent pairing. It is reported rather
+	// than repaired, because only the operator knows which source was meant.
+	Dangling []LogsForProposal `json:"dangling,omitempty"`
+}
+
+// ProposeLogsFor proposes a logs_for for each unpaired **chat** source, by
+// mangling every source's dir and matching the result against this source's own
+// last path segment. Returns proposals for review and writes nothing (R3290) —
+// the write is the caller's, through the config path.
+//
+// A source the heuristic does not match is not a failed proposal; it is simply
+// not a log source (an ordinary code source never gets a logs_for), so it is
+// omitted rather than reported. Reporting it would put a permanent complaint
+// about every project directory in the output of a verb run repeatedly.
+//
+// A source already carrying logs_for is left untouched, so re-running is safe
+// and a hand-corrected pairing is never overwritten.
+// CRC: crc-Config.md | R3290
+func (c *Config) ProposeLogsFor() PairingReport {
+	// slug of each candidate source → its name
+	bySlug := make(map[string]string, len(c.Sources))
+	for _, src := range c.Sources {
+		if !IsGlob(src.Dir) {
+			bySlug[claudeProjectSlug(src.Dir)] = SourceName(src.Dir)
+		}
+	}
+
+	var report PairingReport
+	for _, src := range c.Sources {
+		if IsGlob(src.Dir) {
+			continue
+		}
+		if src.LogsFor != "" {
+			// R3290: a logs_for pointing at nothing is worse than an absent
+			// one, so an already-broken pairing is surfaced rather than left
+			// to fail silently at query time.
+			if _, err := c.ResolveSourceName(src.LogsFor); err != nil {
+				report.Dangling = append(report.Dangling,
+					LogsForProposal{SourceDir: src.Dir, LogsFor: src.LogsFor})
+			}
+			continue
+		}
+		name := SourceName(src.Dir)
+		target, ok := bySlug[name]
+		// A source never logs itself. Guard against the degenerate case where
+		// a source's own dir mangles to its own name.
+		if !ok || target == name {
+			continue
+		}
+		report.Proposals = append(report.Proposals,
+			LogsForProposal{SourceDir: src.Dir, LogsFor: target})
+	}
+	return report
+}
+
+// SetLogsFor sets (or clears, with an empty name) a source's logs_for. The
+// value must name an existing source — a dangling pairing is refused rather
+// than written (R3290).
+// CRC: crc-Config.md | R3288, R3290
+func (c *Config) SetLogsFor(dir, name string) error {
+	dir = ExpandTilde(dir)
+	if name != "" {
+		if _, err := c.ResolveSourceName(name); err != nil {
+			return err
+		}
+	}
+	for i := range c.Sources {
+		if c.Sources[i].Dir == dir {
+			c.Sources[i].LogsFor = name
 			c.validate()
 			return nil
 		}

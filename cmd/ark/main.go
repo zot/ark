@@ -2944,7 +2944,13 @@ func cmdGrams(args []string) {
 func cmdSources(args []string) {
 	fs := flag.NewFlagSet("sources", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark sources [check]\n\nManage source directories. Default subcommand is 'check':\nexpand globs from config, add new directories, report orphans.")
+		fmt.Fprintln(os.Stderr, "Usage: ark sources [check | pair]\n\nManage source directories. Default subcommand is 'check':\nexpand globs from config, add new directories, report orphans.\n\n'pair' proposes a logs_for for each unpaired chat source; --auto writes\nthe matches, --dry-run prints them and writes nothing.")
+	}
+
+	// `pair` takes its own flags, so it splits off before this flag set parses.
+	if len(args) > 0 && args[0] == "pair" {
+		cmdSourcesPair(args[1:])
+		return
 	}
 	fs.Parse(args)
 
@@ -2981,6 +2987,92 @@ func cmdSources(args []string) {
 		fmt.Fprintf(os.Stderr, "unknown sources subcommand: %s\n", sub)
 		os.Exit(1)
 	}
+}
+
+// cmdSourcesPair proposes a logs_for for each unpaired source and, with --auto,
+// writes the matches through the config path.
+//
+// The verb exists so the vendor path-mangling heuristic runs **once**, here,
+// instead of living in the lookup (R3289). Deleting it costs the convenience of
+// --auto and nothing else — the pairing itself is the declared logs_for field.
+// CRC: crc-CLI.md | R3289, R3290
+func cmdSourcesPair(args []string) {
+	fs := flag.NewFlagSet("sources pair", flag.ExitOnError)
+	auto := fs.Bool("auto", false, "write the proposed pairings into ark.toml")
+	dryRun := fs.Bool("dry-run", false, "print the proposals and write nothing")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage: ark sources pair [--auto] [--dry-run]
+
+Propose a logs_for for each source that carries none, by matching a chat
+source's directory name against the mangled form of each other source's
+directory. Sources already paired are left alone.
+
+Without --auto this only prints proposals. A proposal naming no existing
+source is reported as skipped and never written.
+
+Options:`)
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	var report ark.PairingReport
+	proxyOrLocal(
+		func(client *http.Client) error {
+			return proxyDecode(client, "POST", "/sources/pair", nil, &report)
+		},
+		func(d *ark.DB) error {
+			report = d.Config().ProposeLogsFor()
+			return nil
+		},
+	)
+
+	// R3290: an existing logs_for naming nothing is worse than an absent one,
+	// so it is reported first — it is a live defect, not a pending suggestion.
+	for _, d := range report.Dangling {
+		fmt.Fprintf(os.Stderr, "! %s — logs_for = %q names no source\n", d.SourceDir, d.LogsFor)
+	}
+
+	if len(report.Proposals) == 0 {
+		fmt.Println("no unpaired chat sources")
+		return
+	}
+
+	write := *auto && !*dryRun
+	for _, p := range report.Proposals {
+		if !write {
+			fmt.Printf("  %s → logs_for = %q\n", p.SourceDir, p.LogsFor)
+			continue
+		}
+		if err := setLogsFor(p.SourceDir, p.LogsFor); err != nil {
+			fmt.Fprintf(os.Stderr, "! %s: %v\n", p.SourceDir, err)
+			continue
+		}
+		fmt.Printf("+ %s → logs_for = %q\n", p.SourceDir, p.LogsFor)
+	}
+	if !write {
+		fmt.Fprintln(os.Stderr, "\nnothing written — re-run with --auto to apply")
+	}
+}
+
+// setLogsFor writes one pairing, proxying to the server when one is running so
+// config mutation never bypasses it.
+// CRC: crc-CLI.md | R3288, R3290
+func setLogsFor(dir, name string) error {
+	var failure error
+	proxyOrLocal(
+		func(client *http.Client) error {
+			return proxyOK(client, "POST", "/config/set-logs-for",
+				map[string]string{"dir": dir, "logs_for": name})
+		},
+		func(d *ark.DB) error {
+			if err := d.Config().SetLogsFor(dir, name); err != nil {
+				failure = err
+				return nil
+			}
+			return d.SaveConfig()
+		},
+	)
+	return failure
 }
 
 func printSourcesCheck(result *ark.SourcesCheckResult) {

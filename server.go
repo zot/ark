@@ -494,6 +494,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
 	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
+	mux.HandleFunc("POST /chats/list", srv.handleChatsList)                 // R3284, R3285, R3287
+	mux.HandleFunc("POST /sources/pair", srv.handleSourcesPair)             // R3290
+	mux.HandleFunc("POST /config/set-logs-for", srv.handleConfigSetLogsFor) // R3288, R3290
 	mux.HandleFunc("POST /config/add-source", srv.handleConfigAddSource)
 	mux.HandleFunc("POST /config/remove-source", srv.handleConfigRemoveSource)
 	mux.HandleFunc("POST /config/add-include", srv.handleConfigAddInclude)
@@ -2176,6 +2179,57 @@ func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request)
 func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
 	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemoveSource(req.Dir) })
+}
+
+// configLogsForRequest pairs a log source with the source it records.
+type configLogsForRequest struct {
+	Dir     string `json:"dir"`
+	LogsFor string `json:"logs_for"`
+}
+
+// handleConfigSetLogsFor writes one source's logs_for. `ark sources pair` goes
+// through here rather than editing ark.toml directly, per the standing rule
+// that config mutation never bypasses a running server.
+// CRC: crc-Server.md | R3288, R3290
+func (srv *Server) handleConfigSetLogsFor(w http.ResponseWriter, r *http.Request) {
+	var req configLogsForRequest
+	srv.configMutate(w, r, &req, func(db *DB) error {
+		return db.Config().SetLogsFor(req.Dir, req.LogsFor)
+	})
+}
+
+// handleSourcesPair returns the proposed pairings without writing any — the
+// caller decides which to accept and writes them back through
+// /config/set-logs-for.
+// CRC: crc-Server.md | R3290
+func (srv *Server) handleSourcesPair(w http.ResponseWriter, r *http.Request) {
+	report, err := Sync(srv.db, func(db *DB) (PairingReport, error) {
+		return db.Config().ProposeLogsFor(), nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, report)
+}
+
+// handleChatsList serves `ark chats list` so the CLI reaches the same index the
+// server holds (the index is single-process).
+// CRC: crc-Server.md | R3284, R3285, R3287
+func (srv *Server) handleChatsList(w http.ResponseWriter, r *http.Request) {
+	var opts ChatSessionOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sessions, err := Sync(srv.db, func(db *DB) ([]ChatSession, error) {
+		return db.ChatSessions(opts)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, sessions)
 }
 
 // CRC: crc-Server.md | R153
@@ -5624,6 +5678,54 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			L.Push(lua.LTrue)
+			return 1
+		}))
+
+		// mcp:chatSessions(opts) — indexed conversations, newest first.
+		// opts is an optional table {source=, ["for"]=, limit=}, honoring the
+		// same narrowing as `ark chats list`.
+		// CRC: crc-Server.md | R3284, R3285, R3286, R3287, R3291
+		L.SetField(tbl, "chatSessions", L.NewFunction(func(L *lua.LState) int {
+			opts := chatSessionOptionsFromLua(L, L.Get(1))
+			sessions, err := Sync(srv.db, func(db *DB) ([]ChatSession, error) {
+				return db.ChatSessions(opts)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			result := L.NewTable()
+			for i, s := range sessions {
+				row := L.NewTable()
+				L.SetField(row, "label", lua.LString(s.Label))
+				L.SetField(row, "path", lua.LString(s.Path))
+				L.SetField(row, "source", lua.LString(s.Source))
+				L.SetField(row, "turns", lua.LNumber(s.Turns))
+				// RFC3339 so mcp:sort's date comparison orders it correctly.
+				L.SetField(row, "modified", lua.LString(s.Modified.Format(time.RFC3339)))
+				result.RawSetInt(i+1, row)
+			}
+			L.Push(result)
+			return 1
+		}))
+
+		// mcp:chatTranscript(path, opts) — the rendered markdown for one
+		// session. Calls the same renderer `ark chats` uses, so CLI and UI
+		// output cannot drift (R3291) — the drift being the whole reason this
+		// is a binding rather than a reimplementation in Lua.
+		// opts is an optional table {withTools=, withThinking=, sidechain=, lineLength=}.
+		// CRC: crc-Server.md | R3291
+		L.SetField(tbl, "chatTranscript", L.NewFunction(func(L *lua.LState) int {
+			path := L.CheckString(1)
+			opts := chatRenderOptionsFromLua(L, L.Get(2))
+			var buf bytes.Buffer
+			if err := RenderChatFile(&buf, path, opts); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(buf.String()))
 			return 1
 		}))
 

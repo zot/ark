@@ -48,6 +48,7 @@ otherwise emit a different order each run). R2953.
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
 | `chats`            | `chats PATH-OR-GLOB... [--with-tools] [--thinking] [--all] [--sidechain] [--wrap N] [--line-length N]`               | none                     | existing files direct; globs walk `~/.claude/projects/` |
+| `chats list`       | `chats list [--source NAME] [--for NAME] [--limit N] [--json]`                                                       | optional                 | indexed conversations, newest first, labelled by first user turn |
 | `chunks`           | `chunks CHUNKID [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE [-before N] [-after N] [-wrap N]` <br> `chunks PATH:RANGE:"SNIPPET" [-wrap N]` <br> `chunks PATH RANGE [-before N] [-after N] [-wrap N]` <br> `chunks -status [PATTERN...]` | optional                 | `CHUNKID` resolves via `db.ChunkInfo`; `PATH:RANGE` accepts `NN` and `NN-MM` range labels; `PATH:RANGE:"SNIPPET"` is the recall chat sub-chunk locator (R2914) — returns the matched paragraph; drop the snippet for the whole turn |
 | `chunk-chat-jsonl` | `chunk-chat-jsonl FILE`                                                                                              | n/a                      | internal chunker (microfts2 protocol)                |
 | `config`           | `config [SUBCOMMAND ...]`                                                                                            | optional                 | subcommands below                                    |
@@ -78,7 +79,7 @@ otherwise emit a different order each run). R2953.
 | `search`           | `search [TERM...] [filter-stack] [options]` <br> `search expand ...`                                                 | preferred                | server proxy keeps caches warm                       |
 | `serve`            | `serve [--no-scan] [--force] [--compact]`                                                                            | starts                   |                                                      |
 | `setup`            | `setup`                                                                                                              | none                     | bootstrap `~/.ark/` (extract bundle, install skills) |
-| `sources`          | `sources [check]`                                                                                                    | optional                 | currently only `check` subcommand                    |
+| `sources`          | `sources [check | pair]`                                                                                             | optional                 | `check` reconciles globs; `pair` proposes `logs_for` |
 | `stale`            | `stale [PATTERN...]`                                                                                                 | optional                 |                                                      |
 | `status`           | `status [--db] [--chunks] [--tokenize] [-with\|-without] [-files G]...`                                       | preferred                |                                                      |
 | `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
@@ -388,6 +389,31 @@ disk); otherwise it is a glob matched against filenames (not full
 paths) discovered by walking `~/.claude/projects/`. User turns
 prefix `❯`, assistant turns prefix `●`. Arguments matching nothing
 warn on stderr; exits 1 when no argument yields any file.
+
+#### `chats list` — what conversations exist
+
+```
+ark chats list [--source NAME] [--for NAME] [--limit N] [--json]
+```
+
+| Flag            | Default | Meaning                                                   |
+|-----------------|---------|-----------------------------------------------------------|
+| `--source NAME` | —       | Restrict to one chat source (name or full directory)      |
+| `--for NAME`    | —       | Restrict to chat sources whose `logs_for` names this source |
+| `--limit N`     | `20`    | Maximum rows, newest first                                |
+| `--json`        | `false` | One JSON object per line                                  |
+
+Answers the question that precedes rendering a transcript. Each row
+carries the session's **label** — its first user turn, flattened to
+one line and truncated — plus modified time, turn count, and the path
+`ark chats` takes, so the two verbs compose. Sidechain records count
+toward neither the label nor the turn count.
+
+Sessions come from the index, not a directory walk: a JSONL on disk
+but unindexed does not appear, and `ark chats PATH` still renders it.
+`--source` and `--for` are mutually exclusive. A `NAME` matching more
+than one source is an error naming every candidate; the full
+directory disambiguates. Server-proxy if available.
 
 ### `chunks` — chunk content / chunk size status
 
@@ -1219,12 +1245,31 @@ Requires the running binary to be bundled.
 
 ```
 ark sources [check]
+ark sources pair [--auto] [--dry-run]
 ```
 
 Default subcommand is `check`: expand globs in ark.toml's
 `[sources]`, add new directories, report orphans. Output uses `+` /
 `-` / `?` prefixes (added / MIA / orphaned). Server-proxy if
 available.
+
+`pair` proposes a `logs_for` for each unpaired **chat** source, by
+matching a source's directory name against the mangled form of each
+other source's directory. This is the only place that mangling is
+applied — never the lookup path, which resolves `logs_for` by name —
+so the vendor scheme stays deletable.
+
+| Flag        | Default | Meaning                                        |
+|-------------|---------|------------------------------------------------|
+| `--auto`    | `false` | Write the proposed pairings into `ark.toml`    |
+| `--dry-run` | `false` | Print the proposals and write nothing          |
+
+A source already carrying `logs_for` is left untouched, so re-running
+is safe and a hand-corrected pairing is never overwritten. A source
+the heuristic does not match is not a log source and is omitted. An
+existing `logs_for` naming no source is reported on stderr with `!` —
+it is a live defect rather than a pending suggestion. Writes go
+through the config-mutation path, so they proxy to a running server.
 
 ### `status` — show database status
 

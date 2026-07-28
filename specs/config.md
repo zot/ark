@@ -44,12 +44,13 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 
 | Key          | Type          | Default | Meaning                                                                                                  | Owner                  |
 |--------------|---------------|---------|----------------------------------------------------------------------------------------------------------|------------------------|
-| `dir`        | string        | (req.)  | Source root directory. Identifies the source.                                                            | `source-monitoring.md` |
+| `dir`        | string        | (req.)  | Source root directory. Identifies the source; its last segment is the source's **name**, accepted wherever a name is (`logs_for`, `--source`, `--for`) when unambiguous. | `source-monitoring.md` |
 | `strategies` | map<str,str>  | `{}`    | Per-source glob → chunker overrides (layered over the top-level `strategies` map).                       | `chunker-strategies.md`|
 | `include`    | PatternSpec   | `{}`    | Include glob patterns. Either `include = [...]` to replace defaults, or `include.add = [...]` to extend. | `source-monitoring.md` |
 | `exclude`    | PatternSpec   | `{}`    | Exclude glob patterns. Same Replace/Add forms as `include`.                                              | `source-monitoring.md` |
 | `from_glob`  | string        | `""`    | Marks this source as derived from a glob expansion; tracked for sources-check reconciliation.            | `source-monitoring.md` |
 | `ext_mirror` | string        | `""`    | Redirect this source's `@ext` mirror tree into `<source>/<ext_mirror>/` instead of `~/.ark/external/<slug>/`, so routings travel with the source. Empty = global default. | `curation-workshop-primitives.md` |
+| `logs_for`   | string        | `""`    | Names the source whose work this one records, pairing a chat source with the project it logs. Declared, never derived. Accepts a source's name (its `dir`'s last segment) or the full `dir`. Populate with `ark sources pair --auto`. | `chat-transcript.md` |
 
 ## `[[chunker]]` — repeated table
 

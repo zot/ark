@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	ucli "github.com/urfave/cli/v3"
+	"github.com/zot/ark"
 )
 
 // TestChatsNodeDeclaresThinkingFlags is the wiring Sentry for R3035: the urfave
@@ -115,7 +116,7 @@ func TestRenderChatThinking(t *testing.T) {
 	}
 
 	// Default: text shown, thinking hidden.
-	out := captureStdout(t, func() { _ = renderChat(path, false, false, 100, false) })
+	out := captureStdout(t, func() { _ = renderChat(path, ark.ChatRenderOptions{}) })
 	if !strings.Contains(out, "VISIBLETEXT") {
 		t.Errorf("text should always render; got %q", out)
 	}
@@ -124,7 +125,7 @@ func TestRenderChatThinking(t *testing.T) {
 	}
 
 	// --thinking: thinking shown with the ✻ marker.
-	out = captureStdout(t, func() { _ = renderChat(path, false, true, 100, false) })
+	out = captureStdout(t, func() { _ = renderChat(path, ark.ChatRenderOptions{WithThinking: true}) })
 	if !strings.Contains(out, "SECRETTHOUGHT") {
 		t.Errorf("thinking should render with --thinking; got %q", out)
 	}

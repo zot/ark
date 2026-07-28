@@ -17,6 +17,7 @@ import (
 	"strconv"
 
 	ucli "github.com/urfave/cli/v3"
+	"github.com/zot/ark"
 )
 
 // flatDelegate adapts a legacy `func(args []string)` handler into an
@@ -45,7 +46,25 @@ func flatCommands() []*ucli.Command {
 		{Name: "stale", Usage: "list stale files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdStale)},
 		{Name: "missing", Usage: "list missing files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdMissing)},
 		{Name: "unresolved", Usage: "list unresolved files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdUnresolved)},
-		{Name: "sources", Usage: "manage source directories", ArgsUsage: "[check]", Action: flatDelegate(cmdSources)},
+		{
+			Name:   "sources",
+			Usage:  "manage source directories",
+			Action: flatDelegate(cmdSources), // default: `sources` alone → check
+			Commands: []*ucli.Command{
+				{Name: "check", Usage: "expand globs, add new directories, report orphans", Action: flatDelegate(cmdSources)},
+				{
+					// R3290: the vendor path-mangling heuristic runs once here,
+					// never in the lookup path (R3289).
+					Name:  "pair",
+					Usage: "propose logs_for for unpaired sources (pairs a chat source with the project it logs)",
+					Flags: []ucli.Flag{
+						&ucli.BoolFlag{Name: "auto", Usage: "write the proposed pairings into ark.toml"},
+						&ucli.BoolFlag{Name: "dry-run", Usage: "print the proposals and write nothing"},
+					},
+					Action: flatSourcesPairAction,
+				},
+			},
+		},
 		{Name: "grams", Usage: "show trigrams for a query (active/inactive, frequency)", ArgsUsage: "<query>", Action: flatDelegate(cmdGrams)},
 		{Name: "chunk-chat-jsonl", Usage: "chunk a JSONL file on newline boundaries (microfts2 protocol)", ArgsUsage: "<file>", Action: flatDelegate(cmdChunkJSONL)},
 		{Name: "ls", Usage: "list embedded assets", Action: flatDelegate(cmdBundleLs)},
@@ -103,7 +122,21 @@ func flatCommands() []*ucli.Command {
 				&ucli.BoolFlag{Name: "all", Usage: "display everything: tools + thinking + sidechain"},
 				&ucli.BoolFlag{Name: "sidechain", Usage: "display sidechain chatter"},
 				&ucli.StringFlag{Name: "wrap", Usage: "wrap output with a name tag"},
-				&ucli.IntFlag{Name: "line-length", Value: 100, Usage: "word-wrap line length"},
+				&ucli.IntFlag{Name: "line-length", Value: ark.DefaultChatLineLength, Usage: "word-wrap line length"},
+			},
+			Commands: []*ucli.Command{
+				{
+					// R3284: the question that precedes rendering one.
+					Name:  "list",
+					Usage: "list indexed conversations, newest first, labelled by their first user turn",
+					Flags: []ucli.Flag{
+						&ucli.StringFlag{Name: "source", Usage: "restrict to one chat source (name or directory)"},
+						&ucli.StringFlag{Name: "for", Usage: "restrict to chat sources logging this source (see: ark sources pair)"},
+						&ucli.IntFlag{Name: "limit", Usage: "maximum rows, newest first (default 20)"},
+						&ucli.BoolFlag{Name: "json", Usage: "emit one JSON object per line"},
+					},
+					Action: flatChatsListAction,
+				},
 			},
 			Action: flatChatsAction,
 		},
@@ -216,6 +249,38 @@ func flatChunksAction(_ context.Context, c *ucli.Command) error {
 		a = append(a, "--anchor")
 	}
 	cmdChunks(append(a, c.Args().Slice()...))
+	return nil
+}
+
+// CRC: crc-CLI.md | R3284, R3287
+func flatChatsListAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if v := c.String("source"); v != "" {
+		a = append(a, "--source", v)
+	}
+	if v := c.String("for"); v != "" {
+		a = append(a, "--for", v)
+	}
+	if v := c.Int("limit"); v > 0 {
+		a = append(a, "--limit", strconv.Itoa(int(v)))
+	}
+	if c.Bool("json") {
+		a = append(a, "--json")
+	}
+	cmdChatsList(a)
+	return nil
+}
+
+// CRC: crc-CLI.md | R3290
+func flatSourcesPairAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("auto") {
+		a = append(a, "--auto")
+	}
+	if c.Bool("dry-run") {
+		a = append(a, "--dry-run")
+	}
+	cmdSourcesPair(a)
 	return nil
 }
 

@@ -398,7 +398,7 @@ func luhmannSendAction(_ context.Context, c *ucli.Command) error {
 	resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		if rerr := renderChatLines(bytes.NewReader(data), true, false, 100, false); rerr != nil {
+		if rerr := renderChatLines(bytes.NewReader(data), ark.ChatRenderOptions{WithTools: true}); rerr != nil {
 			fatal(rerr)
 		}
 		return nil

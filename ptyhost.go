@@ -694,8 +694,23 @@ func claudeProjectDir(cwd string) string {
 	if err != nil {
 		return ""
 	}
-	enc := strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
-	return filepath.Join(home, ".claude", "projects", enc)
+	return filepath.Join(home, ".claude", "projects", claudeProjectSlug(cwd))
+}
+
+// claudeProjectSlug encodes a cwd the way Claude Code names its project log
+// directory: `/` and `.` become `-`, so /home/deck/work/ark → -home-deck-work-ark
+// and /home/deck/.ark → -home-deck--ark.
+//
+// **This is the single place the vendor scheme appears.** It is reached from two
+// callers with different standing: the launch path above, which must match what
+// Claude Code actually does, and Config.ProposeLogsFor, where it is a one-shot
+// *populator* rather than a rule (R3289) — no lookup path may call it, or one
+// vendor's naming scheme would be hardcoded where every caller inherits it.
+// Deleting the populator use costs `ark sources pair --auto` and nothing else,
+// because the pairing itself lives in the declared logs_for field.
+// CRC: crc-Config.md | R3289, R3290
+func claudeProjectSlug(cwd string) string {
+	return strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
 }
 
 // isNewClaudeProject reports whether Claude Code has never run in cwd — its project
