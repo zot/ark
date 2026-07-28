@@ -699,13 +699,25 @@ ones so they do not crowd out live ones. Deliberately not under `specs/`, which
 describes how the system *is*; a carve is a work-management artifact, which is
 the same reason migrations were exiled to `specs/migrations/`.
 
-**Promotion trigger: the first item.** Before that a carve is brainstorming and
-belongs in the project's planning scratch. Once it spawns an item, other work
-references it and it is a plan. Promote forward, moving an existing carve when
-it is next touched rather than in a sweep, and rewrite the links that pointed at
-the old path as part of the move. Promotion also forces an editorial pass
-separating the decision from the private reasoning behind it, and writing for a
-stranger is the cheapest clarity check available.
+**Promotion is a judgment call, and it belongs to the maintainer.** The test is
+*is this a meaty task?* — substantial enough to stay open a while and worth
+naming, because the name is what makes the surrounding work manageable. No count
+of queue items decides it: a one-item document can be carved on the expectation
+of more, and a two-item one can stay a working note if nobody needs the name.
+Keep the number of live carves small; they are a management tool, and a directory
+full of them stops being one.
+
+**An agent proposes; it does not decide.** Raise it once a document has spawned a
+second item — that is the prompt to ask, not a rule that fires. Below that,
+usually stay quiet. Treating the count as the criterion gets it wrong in both
+directions at once: it refuses a meaty single-item problem while mechanically
+promoting anything that happens to spawn two.
+
+Promote forward, moving an existing carve when it is next touched rather than in
+a sweep, and rewrite the links that pointed at the old path as part of the move.
+Promotion also forces an editorial pass separating the decision from the private
+reasoning behind it, and writing for a stranger is the cheapest clarity check
+available.
 
 **Three disciplines.** The first two tend to happen by instinct. The third does
 not, and it is the one that matters.

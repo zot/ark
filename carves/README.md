@@ -41,12 +41,22 @@ terminal moment and decays as its parts land.
 
 ## Conventions
 
-**A carve is promoted here the moment it spawns its first queue item.** Before
-that it is brainstorming and lives in the private scratch area; after it, other
-work references it and it becomes a plan.
+**The test is "is this a meaty task?", and it is the maintainer's call.** No
+count of queue items makes a document a carve. What makes one is that the
+problem is substantial enough to stay open for a while and to be worth naming —
+because once it has a name, the work around it is easier to manage.
+
+The item count is a **prompt to ask**, not a test that decides. Once a document
+has spawned a second item it is worth raising; before that it usually is not.
+But a single-item document can be carved on the expectation of more, and a
+two-item document can stay a working note if nobody needs the name. Ark's TUI
+carve was promoted while it had exactly one item, for precisely that reason.
+
+Aim for a small number of live carves. They are a management tool, and a
+directory full of them stops being one.
 
 **This directory is public, so promotion is publication** — and that is a
-second, independent question from the spawn trigger above. A carve whose
+second, independent question from the one above. A carve whose
 *reasoning* is private (positioning deliberations, anything citing the
 fossil-only working docs) has a private counterpart directory and stays there;
 publishing it would hand a reader dangling pointers to files the repository
