@@ -68,6 +68,40 @@ a thin set of result-builder CLI verbs.
 > consuming agent's scope (one session, not all), ownership (the assistant,
 > not Luhmann), and injected context changed. Full detail: the completed
 > `secretary-pipeline` migration.
+>
+> **Superseded in part.** A session-local secretary is now an
+> *optimization*, not a requirement — see "Who serves ambient" below.
+
+## Who serves ambient
+
+Ambient **arming** gates on the `@ark-recall-result=<S>` subscription alone.
+Who *serves* a fired curation doc is a separate, later decision — the same split
+the directed path makes between recognition and service, and for the same
+reason: conjoining them made a staffed pool worth nothing to a session that had
+not spawned its own agent.
+
+A fired doc is served by the session's own secretary when one is running —
+preferred, being dedicated, already warm, and given the session's recent
+conversation. Otherwise a **pool** secretary takes it. The work item carries its
+own origin (the `<session>-<fire>` token the result verbs key on), so a curated
+result returns to the session that produced it no matter who curated it.
+
+**A pool secretary serves any session; a per-session one serves only its own.**
+That asymmetry is the point: the per-session filter exists so a session's
+secretary cannot take work belonging to another, which is exactly the constraint
+a pool secretary must not have. The two roles are distinguished explicitly, by
+the agent declaring which it is, rather than inferred from the shape of its
+identity — an inference that would break silently if that shape ever changed.
+
+**Directed work is served ahead of ambient.** A directed hunt has an assistant
+blocked and waiting; a recollection has nobody. This ordering already governs a
+single secretary's dispatch and continues to hold for a pool one.
+
+**A recollection is never dropped for being late.** A session that has opted in
+wants the result even when it arrives slowly, so ambient *yields* to directed
+rather than expiring against a deadline. A doc whose session has no result
+subscriber is likewise left pending rather than discarded: the work is deferred,
+never thrown away.
 
 ## Architecture
 

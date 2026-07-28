@@ -139,3 +139,18 @@ over-applied to the case where silence is correct.
 TTL; `sweepRequests`.
 **Expected:** reaped, and no finding doc written.
 **Refs:** crc-RecallWatcher.md
+
+## Test: both capability gates ignore the session secretary
+**Purpose:** R3279, R3294 — the assertion **O133** was opened for and could not
+be written until a pubsub harness existed. Pins the two gates together: neither
+consults `secretaryPresent`, so each is on exactly while its own result tag is
+subscribed, and a session with no secretary of its own still arms ambient
+(borrowing the pool). Guards the revert direction specifically — restoring the
+conjunct is a one-line change that would look harmless.
+**Input:** `newPoolWatcher` (live PubSub — the nil-pubsub short-circuit returns
+true in both helpers, so a nil one would make this pass vacuously), no secretary
+ever registered, across the four subscription combinations.
+**Expected:** `bloodhoundEnabled` tracks the bloodhound-result sub alone;
+`ambientEnabled` tracks the recall-result sub alone. Verified red by restoring
+the conjunct: the `recall only` and `both` cases fail.
+**Refs:** crc-RecallWatcher.md

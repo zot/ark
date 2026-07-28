@@ -173,7 +173,9 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	// R2888: optional session value-scopes the curate subscription to one
 	// session (the per-session secretary). Empty = legacy bare-curate path.
 	session := r.URL.Query().Get("session")
-	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), session, limit)
+	// R3295: the pool role is declared, not inferred from the composite's shape.
+	pool := r.URL.Query().Get("pool") == "true"
+	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), session, limit, pool)
 	if rerr != nil {
 		// Client disconnect or transient — nothing to deliver.
 		return

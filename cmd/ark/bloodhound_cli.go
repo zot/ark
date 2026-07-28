@@ -46,6 +46,22 @@ func bloodhoundCommand() *ucli.Command {
 				Action: bloodhoundSearchAction,
 			},
 			{
+				// R3296: the consumer loop, named where the concept lives. It is
+				// the same behavior as `ark connections recall listen`, which
+				// remains as the older spelling.
+				Name:  "listen",
+				Usage: "consumer loop: block until a result arrives (findings; add ambient recollections with --recall)",
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (required)"},
+					&ucli.BoolFlag{
+						Name:    "recall",
+						Aliases: []string{"ambient"},
+						Usage:   "also subscribe to ambient recollections; this subscription IS the ambient opt-in",
+					},
+				},
+				Action: bloodhoundListenAction,
+			},
+			{
 				Name:      "add",
 				Usage:     "Luhmann's result stencil: append one curated finding to a CLI hunt, or --done to finish",
 				ArgsUsage: "--result tmp://BLOODHOUND-CLI/<id> (--loc PATH:RANGE --note TEXT [--chunk TEXT] | --done)",
@@ -274,4 +290,13 @@ func buildSearchPayload(clue, scope, depth, want string, raw bool, filterFiles, 
 	b.WriteString(clue)
 	b.WriteString("\n")
 	return b.String()
+}
+
+// bloodhoundListenAction runs the consumer loop under its bloodhound-side name.
+// The behavior is `ark connections recall listen`'s: the verb moved to where the
+// concept lives, and `--recall` is `--ambient` under the name the skill uses.
+// Keeping one implementation means the two spellings cannot drift.
+// CRC: crc-CLI.md | R3296
+func bloodhoundListenAction(ctx context.Context, c *ucli.Command) error {
+	return connRecallListenAction(ctx, c)
 }

@@ -454,3 +454,58 @@ func TestReapedCLIRequestReportsToNobody(t *testing.T) {
 		t.Error("a reaped CLI request must not write a finding — nobody is listening")
 	}
 }
+
+// subscribeRecall registers a consumer on @ark-recall-result=<session> — the
+// ambient opt-in, and after R3294 the *only* thing ambient arming gates on.
+func subscribeRecall(t *testing.T, db *DB, session string) {
+	t.Helper()
+	p, err := ParseMatchSyntax("ark-recall-result=" + session)
+	if err != nil {
+		t.Fatalf("ParseMatchSyntax: %v", err)
+	}
+	db.pubsub.Subscribe(session+"-recall", []*TagSub{{Kind: TagSubChunk, Predicate: p}})
+}
+
+// TestGatesAreIndependentOfTheSecretary is the assertion O133 was opened for and
+// could not write until a pubsub harness existed. It pins R3279 and R3294
+// together: **neither** capability consults the session secretary, so each is on
+// exactly while its own result tag is subscribed.
+//
+// The nil-pubsub short-circuit in both helpers returns true, which is why this
+// needs newPoolWatcher's live PubSub — with a nil one the test would pass
+// vacuously and prove nothing.
+// Refs: R3279, R3294
+func TestGatesAreIndependentOfTheSecretary(t *testing.T) {
+	const sess = "sess-gates"
+	cases := []struct {
+		name                   string
+		bloodhound, recall     bool
+		wantDirected, wantAmbi bool
+	}{
+		{"neither subscribed", false, false, false, false},
+		{"bloodhound only", true, false, true, false},
+		{"recall only", false, true, false, true},
+		{"both", true, true, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newPoolWatcher(t, &fakeLuhmannHub{owner: "L"})
+			if tc.bloodhound {
+				subscribeFinding(t, w.db, sess)
+			}
+			if tc.recall {
+				subscribeRecall(t, w.db, sess)
+			}
+			// No secretary is ever registered in this test — that is the point.
+			if w.secretaryPresent(sess) {
+				t.Fatal("fixture error: no secretary should be present")
+			}
+			if got := w.bloodhoundEnabled(sess); got != tc.wantDirected {
+				t.Errorf("bloodhoundEnabled = %v, want %v (must not consult the secretary)", got, tc.wantDirected)
+			}
+			if got := w.ambientEnabled(sess); got != tc.wantAmbi {
+				t.Errorf("ambientEnabled = %v, want %v — after R3294 ambient arms on its own subscription alone", got, tc.wantAmbi)
+			}
+		})
+	}
+}

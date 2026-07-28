@@ -396,13 +396,17 @@ bloodhound (level 3) can run without the ambient firehose (level 4). Async
 by default. The secretary is one agent doing both — a
 zettelkasten-keeper on an eternal hunt to flesh out the collection, curating
 what drifts past and tracking what it's sent after.
-A watermark is served by the session's **own** secretary when one is standing,
-otherwise by a secretary borrowed from **Luhmann's pool** — raw, returned
-straight to the emitting session, since a watermark comes from an assistant
-that already has the context to curate. So a session's own secretary is an
-optimization, not a precondition, and a recognized hunt that cannot be served
-**says so** rather than vanishing. Spec'd in
-`specs/bloodhound.md`.
+**Neither level needs a secretary of its own.** Both are served by the session's
+**own** secretary when one is standing — dedicated, warm, and holding the
+session's recent conversation — and otherwise by one borrowed from **Luhmann's
+pool**. A watermark served that way is raw and returns straight to the emitting
+session, since it came from an assistant that already has the context to curate;
+a curated recollection returns to the session that produced it because the work
+item carries its own origin. So a session's own secretary is an optimization
+rather than a precondition at either level, directed work is served ahead of
+ambient (one has someone waiting, the other does not), and a recognized hunt
+that cannot be served **says so** rather than vanishing. Spec'd in
+`specs/bloodhound.md` and `specs/simple-recall.md`.
 
 ## Luhmann orchestrator (supervisor + chimes)
 

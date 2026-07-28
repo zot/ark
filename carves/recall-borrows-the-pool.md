@@ -9,7 +9,7 @@ Opened 2026-07-28.
 
 | Part | Status |
 |---|---|
-| #86 — ambient reaches the pool; `ark bloodhound listen [--recall]` | Open (`/mini-spec`) |
+| ~~#86 — ambient reaches the pool; `ark bloodhound listen [--recall]`~~ | **Landed** 2026-07-28 — R3294–R3296, T272 |
 | #87 — `/bloodhound` and `/recall` describe the new surface | Open (docs) |
 | #88 — measure what the pool actually saves | Open (investigation, feeds #74) |
 
@@ -52,8 +52,53 @@ The pool path addresses the **same tube** at `@ark-secretary-work=<composite>`
 different addressee — so serving ambient from the pool is a routing choice, not
 new infrastructure.
 
-*(Traced at design granularity, not exhaustively. The implementing session should
-confirm the builder's addressing before relying on the size of this.)*
+### Confirmed 2026-07-28 — and most of it already exists
+
+The trace above was flagged as design-granularity only. Confirming it found the
+addressing correct **and four of the listed pieces already implemented**:
+
+- **Directed already preempts ambient — R2939.** `RecallNext`'s dispatch loop
+  serves a pending bloodhound task, then a CLI hunt, then a curation doc. Bill's
+  decision below confirms existing behavior rather than requesting new work, and
+  it keeps holding for a pool secretary with no extra code.
+- **Returns are already origin-routed.** `recall close` keys on the **fire
+  token** `<session>-<fire>`, so the originating session travels inside the work
+  item. Whoever curates it, the result goes home. No `relayRawResult` analogue is
+  needed.
+- **Cross-session dispatch already exists.** `lowestPendingCuration(target)`
+  filters by session *only when `target != ""`* (R2889, so a per-session
+  secretary cannot steal another session's work). Passing `""` — the "legacy
+  bare-curate path" — dispatches any session's doc. That is exactly pool
+  behavior.
+- **No-drop queueing already exists.** That same function skips a doc whose
+  session has no `ark-recall-result` subscriber, and the comment states the
+  intent: "the work is deferred, never discarded." Which is the decision below,
+  already built.
+
+**So what actually remains is small:** the gate conjunct in `ambientEnabled`, the
+ambient teardown that fires when no session secretary is present, a way for a
+pool secretary to say "I may take any session's curation", the CLI verb, and
+superseding R2949.
+
+**Landed 2026-07-28.** Smaller than the split below predicted, because of the
+four already-built pieces above. What changed: `ambientEnabled` lost its
+`secretaryPresent` conjunct (R3294, retiring R2949 as T272); the OnAppend
+teardown went with its premise, since the recall-result gate below it already
+drops lingering state on the condition that actually means "stop accumulating";
+`recall next --pool` declares the role (R3295); `ark bloodhound listen
+[--recall]` names the verb where the concept lives, delegating to the existing
+implementation so the two spellings cannot drift (R3296). One correctness catch
+along the way: the conversation injected into a curation doc must follow the
+**doc's** session, not the caller's — for a pool secretary the caller's is a
+composite with no conversation, which would have handed the curator no context
+exactly when judging fit matters most. **Gap O133 discharged** — its assertion
+(the gates are independent of the secretary) is now written, and verified red by
+restoring the conjunct.
+
+**The one real design choice** was the third: a pool secretary passes its composite
+as `session`, which makes `targetSession != ""` and filters out every other
+session's docs. It needs to keep the composite for *directed* routing
+(`lowestPendingCLIHunt`) while using `""` for *curation* lookup.
 
 ## Decisions
 

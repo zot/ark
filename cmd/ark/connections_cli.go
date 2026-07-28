@@ -216,8 +216,12 @@ func recallCommand() *ucli.Command {
 				Name:      "next",
 				Usage:     "daemon loop verb: block for the next curation doc (NONCE)",
 				ArgsUsage: "NONCE",
-				Flags:     []ucli.Flag{&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID — value-scope the curate subscription"}},
-				Action:    connRecallNextAction,
+				Flags: []ucli.Flag{
+					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID — value-scope the curate subscription"},
+					// R3295: declared, never inferred from the composite's shape.
+					&ucli.BoolFlag{Name: "pool", Usage: "serve ambient curation for any session (Luhmann pool secretary)"},
+				},
+				Action: connRecallNextAction,
 			},
 			{
 				Name:  "listen",
@@ -737,6 +741,9 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 	nextURL := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
 	if session != "" {
 		nextURL += "&session=" + session
+	}
+	if c.Bool("pool") {
+		nextURL += "&pool=true" // R3295
 	}
 	req, err := http.NewRequest("GET", nextURL, nil)
 	if err != nil {

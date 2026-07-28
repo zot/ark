@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3295
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -184,7 +184,7 @@ for these verbs — `ark serve` must be running.
   capability**: always to `@ark-bloodhound-result=<session>` (findings —
   the level-3 base); and, with `ambient` set (`listen --ambient`), also to
   `@ark-recall-result=<session>` (surfaces) — that recall-result sub is the
-  **ambient opt-in** the watcher keys on (R2949). Thereafter it blocks (a
+  **ambient opt-in** the watcher keys on (R3294). Thereafter it blocks (a
   `pubsub.Listen` loop) until a result event arrives, fetches the published
   doc(s) — a `finding-<session>-<B>` (`## Finding:`) or, with ambient, a
   `result-<session>-<fire>` (`## Surface:` / `## Recommend:`) — and returns

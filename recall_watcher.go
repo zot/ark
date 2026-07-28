@@ -456,16 +456,22 @@ func (w *RecallWatcher) poolCanServe() bool {
 	return w.pool.pickFreeLocked() != nil || len(w.pool.secretaries) < w.poolMax()
 }
 
-// ambientEnabled gates ambient curation (arm/accumulate/fire): the secretary
-// present AND the assistant subscribed to the recall-result tag (the level-4
-// opt-in). Shared by the OnAppend arming gate and the fire() backstop so the two
-// cannot drift. CRC: crc-RecallWatcher.md | R2806, R2949
+// ambientEnabled gates ambient curation (arm/accumulate/fire): the assistant
+// subscribed to the recall-result tag (the level-4 opt-in) — and nothing else.
+// Shared by the OnAppend arming gate and the fire() backstop so the two cannot
+// drift.
+//
+// Deliberately NOT conjoined with secretaryPresent, for the same reason
+// bloodhoundEnabled is not (R3279): a session without its own secretary can
+// still be served by Luhmann's pool, so requiring one *to arm* made a staffed
+// pool worth nothing to the more expensive of the two levels. Who serves a fired
+// curation doc is decided later, at dispatch (R3294).
+// CRC: crc-RecallWatcher.md | R2806, R3294
 func (w *RecallWatcher) ambientEnabled(sessionID string) bool {
 	if w.db == nil || w.db.pubsub == nil {
 		return true
 	}
-	return w.secretaryPresent(sessionID) &&
-		w.db.pubsub.SubscriberCount("ark-recall-result", sessionID) > 0
+	return w.db.pubsub.SubscriberCount("ark-recall-result", sessionID) > 0
 }
 
 // OnAppend is the indexer-side entry. Called synchronously from
@@ -482,25 +488,19 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 		return
 	}
 
-	// Per-capability gate (R3279, R2949): with the secretary absent there is no
-	// worker for *ambient*, so tear its per-session state down (R2868) — a later
-	// (re)subscription reactivates at the current JSONL end (no backfill). But do
-	// NOT return on that alone: bloodhound recognition survives a missing session
-	// secretary because Luhmann's pool can serve the hunt (R3280). Return early
-	// only when neither capability has anything to produce.
-	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2868, R3279, R2949
-	if !w.secretaryPresent(sessionID) {
-		w.mu.Lock()
-		if st, ok := w.sessions[sessionID]; ok {
-			if st.pendingTimer != nil {
-				st.pendingTimer.Stop()
-			}
-			delete(w.sessions, sessionID)
-		}
-		w.mu.Unlock()
-		if !w.bloodhoundEnabled(sessionID) {
-			return
-		}
+	// Per-capability gate (R3279, R3294): **neither** capability consults the
+	// session secretary. Both can be served by Luhmann's pool — directed per
+	// R3280, ambient per R3294 — so a missing secretary tears nothing down and
+	// decides nothing here. Return early only when there is nothing at all to
+	// produce, i.e. the assistant holds neither result subscription.
+	//
+	// The ambient teardown that used to live here (on secretary absence) is gone
+	// with its premise: the `ambientEnabled` block below already drops lingering
+	// state when the recall-result sub goes, which is the condition that actually
+	// means "stop accumulating".
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R3279, R3294
+	if !w.bloodhoundEnabled(sessionID) && !w.ambientEnabled(sessionID) {
+		return
 	}
 
 	w.mu.Lock()

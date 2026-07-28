@@ -44,7 +44,7 @@ otherwise emit a different order each run). R2953.
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
-| `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | external directed hunts against the warm bloodhound (subcommands below) |
+| `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | `search`/`add` need a Luhmann; `listen [--recall]` is the consumer loop and needs only the server |
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
 | `chats`            | `chats PATH-OR-GLOB... [--with-tools] [--thinking] [--all] [--sidechain] [--wrap N] [--line-length N]`               | none                     | existing files direct; globs walk `~/.claude/projects/` |
@@ -301,12 +301,14 @@ to resolve against and is rejected as a client error (HTTP 400) — pass
 ### `bloodhound` — external directed hunts
 
 External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.md)).
-Both subcommands require `ark serve` **and** a running Luhmann orchestrator.
+`search` and `add` require `ark serve` **and** a running Luhmann orchestrator;
+`listen` needs only `ark serve`.
 
 ```
 ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--filter-files G] [--exclude-files G] [--wait] [--timeout SECONDS] [--raw] [--markdown]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
+ark bloodhound listen --session SID [--recall]
 ```
 
 **`search`** — submit a directed hunt and print the findings (default: curated
@@ -525,13 +527,13 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
 ark connections recall reserve-nonce
-ark connections recall next [--session SID] NONCE
+ark connections recall next [--session SID] [--pool] NONCE
 ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT
 ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
 ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
-ark connections recall listen --session SID [--ambient]
+ark connections recall listen --session SID [--ambient]      (older spelling of `ark bloodhound listen`)
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -596,12 +598,20 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   roster (the reservation doubles as pool registration; see
   [bloodhound-cli.md](bloodhound-cli.md)). See
   [simple-recall.md](simple-recall.md).
-- `recall next [--session SID] NONCE` is the recall secretary's entire
+- `recall next [--session SID] [--pool] NONCE` is the recall secretary's entire
   loop — a batteries-included crank handle. With `--session SID` (the
   per-session secretary, seam 3a) it subscribes **value-scoped**
   `@ark-recall-curate=<SID>` and dispatches only that session's curation
   docs, prepending the session's last-N conversation turns
-  (`[recall].context_turns`) to the doc it hands back; without it, the
+  (`[recall].context_turns`) to the doc it hands back. **`--pool`** marks
+  the caller a Luhmann pool secretary: it keeps its composite identity for
+  directed routing but dispatches ambient curation for **any** session,
+  opting out of the per-session filter that exists to stop one session's
+  secretary taking another's work. The conversation prepended is always
+  the doc's own session's, not the caller's. The role is declared rather
+  than inferred from the identity's shape, since such an inference breaks
+  silently when the shape changes and presents as ambient work never being
+  served. Without `--session`, the
   legacy bare-curate, all-session scan is retained (one-shot/diagnostic).
   On first call it idempotently subscribes — subscription session
   `recall-curate-<SID>` with `--session` (keyed on the durable session so a
@@ -660,7 +670,11 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   the `nonce → .meta.json` lookup, sums tokens, and appends one
   record to `~/.ark/monitoring/recall.jsonl`.
 - `recall listen --session SID [--ambient]` is the consumer-side loop
-  verb — the mirror of `recall next` for the user-facing assistant. On
+  verb — the mirror of `recall next` for the user-facing assistant, and
+  the older spelling of **`ark bloodhound listen --session SID
+  [--recall]`**, where the concept lives. One implementation serves both,
+  so the spellings cannot drift; `--recall` and `--ambient` are the same
+  flag. On
   first call it idempotently subscribes **per capability**: always to
   `@ark-bloodhound-result=<SID>` (findings — level 3), and, with
   `--ambient`, also to `@ark-recall-result=<SID>` (ambient surfaces —

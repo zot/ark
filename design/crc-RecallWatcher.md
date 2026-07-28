@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283, R3293
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283, R3293, R3294, R3295, R3296
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -78,21 +78,18 @@ composes and writes each curation doc via the in-process
 - OnAppend(path, strategy, newBytes, addedChunkIDs):
   indexer-side entry called from `executeRefresh`'s isAppend
   branch. Source-qualifies first (R2741); if not qualified,
-  return immediately. Then the **per-capability gate** (R3279, R2949,
-  superseding the old both-ends R2867 and the secretary-conjunct R2947):
-  if the secretary is absent
-  (`SubscriberCount("ark-secretary-work", sid) == 0`), stop any armed
-  `pendingTimer` and delete `sessions[sid]` — **ambient** needs a
-  session-local secretary and leaves no state without one (R2868) — but
-  **do not return**: bloodhound recognition can still be served by
-  Luhmann's pool (R3280). Return early only when the bloodhound-result
-  sub is also absent, i.e. nothing at all to produce. Recognition and
-  ambient then gate **independently** on the assistant's per-capability
-  result subs: scan bloodhounds iff `ark-bloodhound-result` is
-  subscribed (R3279, regardless of the secretary); accumulate
-  `pendingChunks` + arm the timer iff `ark-recall-result` is subscribed
-  (R2949). The ambient bullets below run under the recall-result gate;
-  bloodhound recognition under its own:
+  return immediately. Then the **per-capability gate** (R3279, R3294,
+  superseding the old both-ends R2867, the secretary-conjunct R2947, and
+  R2949's ambient conjunct): **neither** capability consults the
+  secretary any more. Both gate solely on the assistant's per-capability
+  result subs — scan bloodhounds iff `ark-bloodhound-result` is
+  subscribed (R3279); accumulate `pendingChunks` + arm the timer iff
+  `ark-recall-result` is subscribed (R3294) — and a missing session
+  secretary tears **nothing** down, because either capability can be
+  served by Luhmann's pool (R3280 directed, R3294 ambient). Return early
+  only when both subs are absent, i.e. nothing at all to produce. The
+  ambient bullets below run under the recall-result gate; bloodhound
+  recognition under its own:
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
     (R2729, R2730).
   - Scan `newBytes` line-by-line; parse each line as JSON and

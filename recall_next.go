@@ -45,7 +45,12 @@ const recallNextKeepalive = 90 * time.Second
 // against the limit, then returns the lowest-fire pending curation doc
 // — blocking (true lotto-tube) until one exists. Returns the
 // crank-handle body and whether the directive is an exit.
-func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int) (body string, exit bool, err error) {
+// pool reports whether this secretary serves any session's ambient work rather
+// than one session's. Declared by the caller (`--pool`), never inferred from the
+// composite's shape: an inference over an identity format breaks silently when
+// the format changes, and the failure would present as ambient work quietly
+// never being served — the hardest kind to notice. R3295
+func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int, pool bool) (body string, exit bool, err error) {
 	// R2902: key the curate subscription on the durable session
 	// (`secretary-work-<session>`), not the volatile `recall-<nonce>`, so
 	// two secretary generations across a restart share one stable, unique
@@ -101,10 +106,25 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 		if content, ok := b.lowestPendingCLIHunt(session); ok {
 			return recallSearchTaskPrompt(session, nonce, content), false, nil
 		}
-		fire, docSession, content, ok := b.lowestPendingCuration(session)
+		// R3295: a pool secretary looks for curation work across **all**
+		// sessions, so it passes no target. The per-session filter it thereby
+		// opts out of (R2889) exists to stop a session's secretary taking
+		// another session's work — exactly the constraint a pool secretary must
+		// not carry. Its composite `session` is still used above, for directed
+		// routing, so the two roles differ only in this lookup.
+		curationTarget := session
+		if pool {
+			curationTarget = ""
+		}
+		fire, docSession, content, ok := b.lowestPendingCuration(curationTarget)
 		if ok {
-			if session != "" {
-				content = b.injectConversation(session, content) // R2891
+			// R2891: inject the conversation of the session the doc *belongs to*,
+			// which for a per-session secretary is its own. A pool secretary's
+			// `session` is its composite routing identity and has no
+			// conversation; injecting that would hand the curator the wrong
+			// context, or none, exactly when judging fit matters most.
+			if docSession != "" {
+				content = b.injectConversation(docSession, content)
 			}
 			// R2896: write the doc to a real file and hand back a short
 			// pointer — the large content never touches the agent's
