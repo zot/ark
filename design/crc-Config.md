@@ -1,5 +1,5 @@
 # Config
-**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397, R624, R625, R631, R632, R633, R634, R635, R646, R853, R854, R855, R856, R938, R943, R947, R948, R949, R950, R951, R952, R953, R954, R955, R956, R957, R958, R959, R960, R1012, R1274, R1588, R1589, R1590, R1591, R1592, R1919, R1920, R1921, R1922, R1938, R2125, R2143, R2144, R2145, R2146, R2147, R2148, R2149, R2150, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741, R2767, R2768, R2797, R2798, R2799, R2800, R2781, R2811, R2822, R2830, R2831, R2832, R2833, R2834, R2835, R2836, R2837, R2856, R2862, R2886, R2892, R2964, R2965, R2966, R2967, R2968, R3041, R3135, R3171, R3195, R3198, R3199, R3200, R3201, R3202, R3203, R3218, R3220, R3268, R3278
+**Requirements:** R8, R9, R10, R11, R12, R13, R14, R22, R23, R24, R25, R26, R27, R143, R144, R145, R146, R148, R149, R150, R151, R157, R158, R159, R194, R195, R200, R201, R203, R205, R206, R207, R208, R209, R340, R341, R396, R397, R624, R625, R631, R632, R633, R634, R635, R646, R853, R854, R855, R856, R938, R943, R947, R948, R949, R950, R951, R952, R953, R954, R955, R956, R957, R958, R959, R960, R1012, R1274, R1588, R1589, R1590, R1591, R1592, R1919, R1920, R1921, R1922, R1938, R2125, R2143, R2144, R2145, R2146, R2147, R2148, R2149, R2150, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2737, R2738, R2739, R2740, R2741, R2767, R2768, R2797, R2798, R2799, R2800, R2781, R2811, R2822, R2830, R2831, R2832, R2833, R2834, R2835, R2836, R2837, R2856, R2862, R2886, R2892, R2964, R2965, R2966, R2967, R2968, R3041, R3135, R3171, R3195, R3198, R3199, R3200, R3201, R3202, R3203, R3218, R3220, R3268, R3278, R3288, R3289, R3290
 
 Parses, validates, and mutates ark.toml. Provides the effective pattern
 sets for each source directory. Explains pattern resolution for any file.
@@ -28,7 +28,7 @@ or the other, and the difference is only what a *bare* pattern means:
 - dotfiles: bool — whether * matches dotfiles (default true)
 - defaultInclude: []string — default include patterns; per-source `include`, when set, replaces this for that source (R2143, R2144). TOML key `default_include`.
 - defaultExclude: []string — default exclude patterns; per-source `exclude`, when set, replaces this for that source (R2143, R2144). TOML key `default_exclude`.
-- sources: []Source — directory entries with optional per-source strategies, pattern overrides, and an `ext_mirror` dir that redirects the source's `@ext` mirror tree in-tree (R3171)
+- sources: []Source — directory entries with optional per-source strategies, pattern overrides, an `ext_mirror` dir that redirects the source's `@ext` mirror tree in-tree (R3171), and `logs_for` naming the source whose work this one records (R3288). `logs_for` is **declared, never derived**: the lookup path resolves it by name only, so no vendor's directory-naming scheme enters the query (R3289).
 - strategies: map[string]string — file glob pattern → strategy name
 - chunkers: []ChunkerConfig — language definitions from `[[chunker]]` entries. Carries easy-form `strings`/`brackets` flat pairs and full-form `string_defs`/`bracket_defs` structs; full-form bracket entries also accept optional `escape`, `allowed_inner`, and `allowed_parent` to mirror microfts2's BracketGroup model (R2147, R2148, R2149, R2150)
 - sessionTTL: time.Duration — session cache TTL (default 30s, from `session_ttl` in ark.toml)
@@ -99,6 +99,16 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
 - HasErrors(): true if validation errors exist (reported every operation)
 - AddSource(dir): add a new [[source]] entry. If dir contains glob chars, store as glob source (skip os.Stat). Otherwise validate dir exists.
 - RemoveSource(dir): remove a source entry by directory path. Error if source is managed by a glob. Error if dir is the ark database directory (~/.ark) — hardcoded source.
+- SourcesLoggingFor(name): the sources whose `logs_for` names `name` — a plain
+  field comparison, no path mangling (R3288, R3289). Backs `ark chats list --for`.
+- ProposeLogsFor(): for each source carrying no `logs_for`, propose one by
+  applying Claude Code's cwd-mangling heuristic to each *other* source's dir and
+  matching the result against this source's basename. Returns proposals for
+  review; **writes nothing** (R3290). This is the single place the vendor scheme
+  appears, and it is a populator rather than a rule — deleting it costs the
+  convenience of `--auto`, never the pairing itself. A proposal naming no
+  existing source is returned flagged so the caller reports and skips it,
+  because a `logs_for` pointing at nothing is worse than an absent one.
 - IsGlob(dir): true if dir contains *, ?, or [ characters — so `**` already
   registers as a glob and reaches the check below
 - ResolveGlobs(): expand all glob source dirs, return list of resolved

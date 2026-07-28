@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2947, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R2949, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -78,14 +78,18 @@ composes and writes each curation doc via the in-process
 - OnAppend(path, strategy, newBytes, addedChunkIDs):
   indexer-side entry called from `executeRefresh`'s isAppend
   branch. Source-qualifies first (R2741); if not qualified,
-  return immediately. Then the **per-capability gate** (R2947, R2949,
-  superseding the old both-ends R2867): if the secretary is absent
-  (`SubscriberCount("ark-secretary-work", sid) == 0`, level ≤2), stop
-  any armed `pendingTimer`, delete `sessions[sid]`, and return — no
-  worker, nothing to produce (R2868). With the secretary present,
-  recognition and ambient gate **independently** on the assistant's
-  per-capability result subs: scan bloodhounds iff
-  `ark-bloodhound-result` is subscribed (R2947); accumulate
+  return immediately. Then the **per-capability gate** (R3279, R2949,
+  superseding the old both-ends R2867 and the secretary-conjunct R2947):
+  if the secretary is absent
+  (`SubscriberCount("ark-secretary-work", sid) == 0`), stop any armed
+  `pendingTimer` and delete `sessions[sid]` — **ambient** needs a
+  session-local secretary and leaves no state without one (R2868) — but
+  **do not return**: bloodhound recognition can still be served by
+  Luhmann's pool (R3280). Return early only when the bloodhound-result
+  sub is also absent, i.e. nothing at all to produce. Recognition and
+  ambient then gate **independently** on the assistant's per-capability
+  result subs: scan bloodhounds iff `ark-bloodhound-result` is
+  subscribed (R3279, regardless of the secretary); accumulate
   `pendingChunks` + arm the timer iff `ark-recall-result` is subscribed
   (R2949). The ambient bullets below run under the recall-result gate;
   bloodhound recognition under its own:
@@ -106,8 +110,9 @@ composes and writes each curation doc via the in-process
       posts the fire closure. If not `armReady`, ignore — an
       agent-only turn does not re-arm, which stops the recall
       ping-pong (R2734).
-  - **Bloodhound recognition** (R2934, R2935, R2936, R2947) — gated on
-    `ark-bloodhound-result`, independent of the ambient bullets above:
+  - **Bloodhound recognition** (R2934, R2935, R2936, R3279) — gated on
+    `ark-bloodhound-result` alone, independent of the ambient bullets
+    above *and* of whether a session secretary is standing:
     `scanBloodhounds(newBytes)` parses each
     `type:"assistant"` line's text (reusing `assistantText`) and
     regex-matches `<BLOODHOUND(\s[^>]*)?>(.*?)</BLOODHOUND>` (non-greedy,
@@ -141,8 +146,15 @@ composes and writes each curation doc via the in-process
   anchored file scope, so one value threads the hunt instead of a growing
   parameter list.
   Re-checks the **bloodhound gate** as the write-time backstop —
-  secretary present (`ark-secretary-work`) AND `ark-bloodhound-result`
-  subscribed (R2947). Then **seeds the hunt** via `renderSeed` (R3006, R3007,
+  `ark-bloodhound-result` subscribed (R3279); the secretary is *not* part of
+  this check any more, since a pool secretary can serve the hunt. Then
+  **selects the server** (R3280): the session's own secretary when
+  `ark-secretary-work=<S>` has a subscriber, else a free pool secretary routed
+  through the Fixer's enhance-and-route path (R3023) — and if neither is
+  available and the pool cannot grow, emits the **not-served finding** (R3282)
+  rather than returning silently. A pool-served hunt is raw: its return goes
+  straight to `ark-bloodhound-result=<S>` with no Luhmann `next` push (R3281).
+  Then **seeds the hunt** via `renderSeed` (R3006, R3007,
   R3043–R3045): `clueOf` extracts the **clue** from the payload — stripping any
   leading `scope`/`depth`/`want`/`curate` metadata lines (R3044); free-form
   in-session prose has none, so it is returned whole — then `splitParagraphs`

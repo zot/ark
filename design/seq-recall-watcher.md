@@ -197,11 +197,12 @@ is in `seq-recall-agent.md`.
   per-session (R2901), seeded from the curation-dir on first
   use, and is consumed whether or not a curation doc gets written.
 
-## Flow 4: bloodhound recognition (R2934–R2937, R2947)
+## Flow 4: bloodhound recognition (R2934–R2937, R3279–R3282)
 
 Independent of the arm/fire state machine above, in the same `OnAppend`
-pass (after the activation gate, so a watermark is recognized only while
-both pipe ends are subscribed — R2933):
+pass. A watermark is recognized while `@ark-bloodhound-result=<S>` is
+subscribed — **the secretary is not part of the recognition gate** (R3279),
+because a session without one can borrow Luhmann's pool (R3280):
 
 - `scanBloodhounds(newBytes)` walks each `type:"assistant"` line, pulls
   its text via `assistantText`, and regex-matches
@@ -213,12 +214,23 @@ both pipe ends are subscribed — R2933):
   Nothing touches `pendingTimer`/`armReady`/`pendingChunks` (R2935), so a
   watermark neither arms nor suppresses a curation fire.
 - `dispatchBloodhound` (worker goroutine): re-check the **bloodhound gate**
-  (secretary present + `ark-bloodhound-result` subscribed, R2947) as the
-  write-time backstop, then **seed the hunt** — run
-  `librarian.Recall({Text: payload})` (clue-only, `Session`/`Propose` off,
-  R3006/R3007) and `renderBloodhoundSeed` the result into a compact
-  locator list — and `RecallBloodhoundOpen(session, B, payload, seed)`
-  writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag `@ark-secretary-work=<S>`,
-  body = `## Search task` payload + `## Recall seed` + search crank handle)
-  and retains the clue. The write actor publishes the secretary-work
-  event → wakes the secretary's `next` (seq-recall-agent.md, Flow 6).
+  (`ark-bloodhound-result` subscribed, R3279) as the write-time backstop,
+  then **seed the hunt** — run `librarian.Recall({Text: payload})`
+  (clue-only, `Session`/`Propose` off, R3006/R3007) and
+  `renderBloodhoundSeed` the result into a compact locator list — then
+  **select the server** (R3280):
+  - **Session secretary present** — `RecallBloodhoundOpen(session, B,
+    payload, seed)` writes `tmp://ARK-BLOODHOUND/task-<S>-<B>` (tag
+    `@ark-secretary-work=<S>`, body = `## Search task` payload + `## Recall
+    seed` + search crank handle) and retains the clue. The write actor
+    publishes the secretary-work event → wakes the secretary's `next`
+    (seq-recall-agent.md, Flow 6).
+  - **No session secretary, pool available** — route through the Fixer's
+    enhance-and-route path (Flow 5 / R3023): re-tag to a free pool
+    secretary's `@ark-secretary-work=<pool-sec>`, or push a *stand up
+    another secretary* directive onto Luhmann's `next` when the pool has
+    room. The return is **raw** — relayed to `@ark-bloodhound-result=<S>`
+    with no Luhmann curation push (R3281).
+  - **Neither available** — emit the not-served `## Finding:` doc on
+    `@ark-bloodhound-result=<S>` naming the failed condition (R3282). Never
+    a silent drop.

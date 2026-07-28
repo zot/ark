@@ -1,0 +1,102 @@
+# Test Design: Bloodhound watermark → pool fallback
+**Source:** crc-RecallWatcher.md
+
+Covers the three server-selection branches (R3280) and their observable
+effects: the pool route (R3281), the not-served report (R3282), and the
+recognition gate that no longer requires a session secretary (R3279).
+
+## Test: poolCanServe truth table
+**Purpose:** validates the pool pre-check that decides between the pool route
+and the not-served report (R3280). Pure decision logic over the roster — the
+cheap deterministic case, so it is tested with a fake hub and no DB.
+**Input:** `newFixerWatcher(&fakeLuhmannHub{...})` with the pool roster varied:
+nil hub; seated owner with an empty roster (room to grow); a free secretary; all
+secretaries busy with room; all busy at `pool_max`.
+**Expected:** false when no orchestrator is seated; true when a secretary is
+free; true when none is free but the roster is below `pool_max`; false when
+none is free and the roster is at `pool_max`.
+**Refs:** crc-RecallWatcher.md
+
+## Test: watermarkHuntID cannot collide with a CLI id
+**Purpose:** the two origins share one request-doc namespace, so a collision
+would cross-deliver one hunt's findings to the other's waiting reader — a
+silent, hard-to-diagnose failure. Pins the `wm-` prefix that keeps watermark ids
+out of the CLI's integer-nonce space (R3280).
+**Input:** `watermarkHuntID("sess-A", 7)`, and a representative CLI id (a bare
+decimal nonce).
+**Expected:** the watermark id carries the `wm-` prefix, embeds session and bid,
+and does not parse as a bare integer.
+**Refs:** crc-RecallWatcher.md
+
+## Test: enqueueWatermarkHunt writes a Fixer-shaped request doc
+**Purpose:** the pool path reuses the CLI pipeline's readers verbatim, so the
+doc it writes must be recoverable by `scopeOf` and `clueOf` and must mark the
+hunt raw (R3281). A body the Fixer can't parse would route a curated hunt to
+Luhmann and deliver a watermark's findings to nobody.
+**Input:** a watcher over `setupRecall(t)`'s DB with a seated fake hub; a
+`bloodhoundReq` carrying a clue plus one `filter-files` and one `exclude-files`
+glob.
+**Expected:** `tmp://BLOODHOUND-CLI/wm-<session>-<bid>` exists; its body carries
+the `@ark-bloodhound-cli` head tag, a `curate: false` line, one
+`filter-files:`/`exclude-files:` line per glob, and the clue; `scopeOf` recovers
+both globs and `clueOf` recovers the clue with the metadata stripped; the pool
+records `origin`/`bid`/`clue` and `raw == true` for the path.
+**Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
+
+## Test: relayRawResult routes by origin
+**Purpose:** the destination branch is the whole point of the fallback (R3281).
+A watermark-origin hunt must be delivered to the emitting session's finding
+channel in a doc indistinguishable from one its own secretary would write, and a
+CLI-origin hunt must be unaffected by the new field.
+**Input:** a request doc carrying a `## Raw findings` body; relayed twice — once
+with `cliRequest{origin: "sess-A", bid: 3, clue: …}` and once with a zero
+`origin` — with an `ark-bloodhound-result=sess-A` subscriber present.
+**Expected:** origin set → `bloodhoundFindingPath("sess-A", 3)` exists, headed
+`@ark-bloodhound-result: sess-A` and `## Finding: <clue>`, carrying the raw
+findings; no CLI result doc written. Origin empty → the CLI result doc at
+`bloodhoundCLIResultPath(id)` tagged `@ark-bloodhound-cli-result: <id>`,
+unchanged from before. Both branches drop the request doc.
+**Refs:** crc-RecallWatcher.md
+
+## Test: relayRawResult with no subscriber writes nothing but still cleans up
+**Purpose:** R2808 parity — a consumer that dropped mid-hunt must not leave an
+orphaned request doc, and must not get a doc written to a dead channel.
+**Input:** a watermark-origin relay with no `ark-bloodhound-result` subscriber.
+**Expected:** no finding doc; the request doc is removed.
+**Refs:** crc-RecallWatcher.md
+
+## Test: proposesTags is origin-dependent
+**Purpose:** pins the R3283 decision table in one place: session-delegated hunts
+propose, CLI-delegated ones never do, and a watermark's own `notags` overrides.
+Pure predicate — no DB.
+**Input:** `cliRequest` values covering nil, CLI origin (empty), watermark
+origin, and watermark origin with `notags` set.
+**Expected:** true only for a watermark origin without `notags`.
+**Refs:** crc-RecallWatcher.md
+
+## Test: a request-doc recommend survives close
+**Purpose:** the regression that made proposals unusable on this path (R3283).
+`RecommendItem` on a request-doc cookie must accumulate where `closeCLIHunt`
+flushes; routed to the session-result stream it fails with `unknown fire …
+(curation doc not in flight)` and the proposal is lost. **Verified to fail
+without the fix** (branch reverted, test went red), so it is a live sentry
+rather than a test that passes for its own reasons.
+**Input:** a live request doc; `FindingItem` then `RecommendItem` against its
+bare id; `closeCLIHunt`.
+**Expected:** the request doc's findings section carries both the finding and
+the `## Recommend:` item. Guards against a silent regression, which is the
+failure mode this path had before.
+**Refs:** crc-RecallAgentBuilder.md
+
+## Test: emitNotServed reports rather than dropping
+**Purpose:** the negative case is the defect this item exists to fix (R3282).
+Silence is indistinguishable from "still running" or "found nothing", so the
+assertion is that a doc *appears* and names the failed condition.
+**Input:** a watcher whose session has no secretary, with (a) no orchestrator
+seated and (b) a seated orchestrator whose pool is full.
+**Expected:** a finding doc at `bloodhoundFindingPath(session, bid)` tagged
+`@ark-bloodhound-result: <session>`, whose body contains "Not served", echoes
+the clue in its `## Finding:` header, names the distinguishing reason
+(orchestrator unavailable vs pool full), and points at
+`ark bloodhound search --raw`.
+**Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4

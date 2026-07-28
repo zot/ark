@@ -335,6 +335,16 @@ func (b *RecallAgentBuilder) RecommendItem(fireToken string, loc, tagSpec, reaso
 	var doc *recallResultDoc
 	if _, _, ok := parseBloodhoundToken(fireToken); ok {
 		doc = b.openBloodhound(fireToken) // R3109: directed recommend → finding stream
+	} else if b.isCLIHunt(fireToken) {
+		// R3283: a request-doc hunt's recommend must land in the SAME accumulator
+		// as that hunt's findings, because closeCLIHunt flushes only cliHunts[id].
+		// Without this branch the bare request id falls through to openResult,
+		// which finds no in-flight curation doc for it and fails with
+		// `unknown fire %q (curation doc not in flight)` — so the recommend never
+		// lands. Loud rather than silent (the secretary sees the error, and the
+		// Fumble Log records it), but broken either way, which is why proposals
+		// were suppressed on this path rather than merely unused.
+		doc = b.openCLIHunt(fireToken)
 	} else {
 		// R3112: drop an ambient recommend for a session that opted out via
 		// <RECALL notags/> — a clean no-op so the secretary's call still succeeds.
@@ -872,6 +882,17 @@ func bloodhoundTaskPath(session string, bid uint64) string {
 	return fmt.Sprintf("tmp://ARK-BLOODHOUND/task-%s-%d", session, bid)
 }
 
+// bloodhoundFindingHeader renders a finding doc's head tag + `## Finding:` H2,
+// echoing the originating clue verbatim on one line (R2946). Shared by every
+// producer of the doc — the secretary's close (closeBloodhound), the pool relay,
+// and the not-served report — so all three are byte-identical to the consumer
+// and a reader cannot tell which path served the hunt.
+// CRC: crc-RecallAgentBuilder.md | R2946, R3281, R3282
+func bloodhoundFindingHeader(session, clue string) string {
+	return fmt.Sprintf("@ark-bloodhound-result: %s\n\n## Finding: %s\n",
+		session, strings.TrimSpace(strings.ReplaceAll(clue, "\n", " ")))
+}
+
 func bloodhoundFindingPath(session string, bid uint64) string {
 	return fmt.Sprintf("tmp://ARK-BLOODHOUND/finding-%s-%d", session, bid)
 }
@@ -1059,9 +1080,7 @@ func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64,
 			b.db.pubsub.SubscriberCount("ark-bloodhound-result", session) == 0 {
 			outcome = "no-subscriber" // R2808 parity
 		} else {
-			headerClue := strings.TrimSpace(strings.ReplaceAll(clue, "\n", " "))
-			header := fmt.Sprintf("@ark-bloodhound-result: %s\n\n## Finding: %s\n", session, headerClue)
-			body := []byte(header + doc.buf.String())
+			body := []byte(bloodhoundFindingHeader(session, clue) + doc.buf.String())
 			path := bloodhoundFindingPath(session, bid)
 			if err := SyncVoid(b.db, func(db *DB) error {
 				_, e := db.AddTmpFile(path, "markdown", body)

@@ -189,6 +189,37 @@ curation costs only the CLI's own latency, never a held pool slot. Luhmann's
 [luhmann.md](luhmann.md)); there is no separate subscription — the ownership
 lease is the opt-in, and a session not draining `next` serves no CLI hunts.
 
+## Tag proposals are origin-dependent
+
+The pool serves two kinds of hunt — external CLI clients, and
+`<BLOODHOUND>` watermarks from a session with no secretary of its own
+([bloodhound.md](bloodhound.md), "Serving a watermark"). They share the request
+doc, the scheduling, and the return hop, and they differ on whether the
+secretary **proposes connecting tags**:
+
+- **Session-delegated (watermark origin)** — proposes. The recommends
+  accumulate alongside the findings in the request doc and relay to the emitting
+  session's finding channel, indistinguishable from an in-session hunt's.
+  A session assistant is exactly the reader that can winnow a proposal, so
+  suppressing them here would make borrowing the pool silently lossy.
+- **CLI-delegated** — findings only. A script has no assistant to winnow tag
+  candidates, and the curated path's consumer is Luhmann, whose job is refining
+  *findings*; proposals would be judged by the wrong reader or by none.
+
+Mechanically the origin sets the task doc's `notags` directive, so the choice is
+made once by the Fixer and the sealed secretary simply follows its crank handle
+(it is never asked to decide). `<BLOODHOUND notags>` still opts a watermark out
+independently.
+
+The corollary worth stating, because it was a real defect: a recommend on a
+request-doc hunt must land in the **same accumulator as that hunt's findings**.
+Routed to the session-result stream instead, it finds no in-flight curation doc
+for the bare request id and the verb **fails** (`unknown fire … (curation doc
+not in flight)`), so the proposal never lands. The failure is loud — the
+secretary sees the error and the Fumble Log records it — but the proposal is
+lost all the same, which is why proposals were suppressed on this path before
+rather than merely unused.
+
 ## Curation ownership: curated (default) vs `--raw`
 
 Directed search is not one tool but three points on a **curation-ownership

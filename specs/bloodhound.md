@@ -27,20 +27,27 @@ pointers / inventory / verdict) are the reliable anchor. The watermark
 
 ## Precondition: the bloodhound's own subscription
 
-The bloodhound is the warm path, and warmth comes from the secretary already
-standing. But it has its **own opt-in**, independent of ambient recall: the
-assistant subscribes to **`@ark-bloodhound-result=<S>`** (via `/bloodhound`'s
-`listen`). Recognition + dispatch are gated on *both* the secretary
-(`@ark-secretary-work=<S>`, established by its `next` loop) **and** that
-bloodhound-result subscription — so the watcher recognizes a watermark and
-produces a task exactly when someone is opted in to receive findings. This is
+The bloodhound is the warm path, and warmth comes from *a* secretary already
+standing — the session's own, or one of Luhmann's pool. It has its **own
+opt-in**, independent of ambient recall: the assistant subscribes to
+**`@ark-bloodhound-result=<S>`** (via `/bloodhound`'s `listen`).
+
+**That subscription alone gates recognition.** The watcher recognizes a
+watermark exactly when someone is opted in to receive findings. This is
 **decoupled** from ambient recall (which gates on `@ark-recall-result=<S>`,
 its own subscription): a session can run the bloodhound (level 3) with no
-ambient firehose (level 4). When neither the secretary nor the bloodhound-sub
-is present, no watermark is recognized — the assistant's fallback is the
-ephemeral `ark-searcher` Hermes spawn (an `ark-search`-skill concern, not this
-service's). No config knob: the bloodhound is active exactly when its
+ambient firehose (level 4). With no bloodhound-result subscriber, no watermark
+is recognized at all. No config knob: the bloodhound is active exactly when its
 subscription is.
+
+**Who serves a recognized watermark is a separate question** from whether it is
+recognized, and has two answers ("Serving a watermark — session secretary or
+pool" below): the session's own secretary (`@ark-secretary-work=<S>`,
+established by its `next` loop) when one is standing, else a free secretary
+from Luhmann's pool. Conflating the two — gating *recognition* on the
+session-local secretary — is what made an awake Luhmann with a staffed pool
+worth nothing to a watermark, and made an unservable watermark indistinguishable
+from a hunt that found nothing.
 
 ## Recognition (watcher)
 
@@ -159,6 +166,67 @@ docs; the bloodhound adds one ordering rule:
   `<B>`; it does not re-author the instructions.
 - Keepalive, context-gate, server-bounce redial, and the foreground window are
   unchanged — a bloodhound doc is just another dispatchable item on the tube.
+
+## Serving a watermark — session secretary or pool
+
+Recognition says a watermark *should* be served; this says *who* serves it. The
+watcher picks in a fixed order, deterministically, with no language model in the
+choice:
+
+1. **The session's own secretary**, when `@ark-secretary-work=<S>` has a
+   subscriber. Unchanged from the original path: the task doc goes on that tube,
+   the secretary hunts, and its close verbs emit the `## Finding:` doc tagged
+   `@ark-bloodhound-result=<S>`. Preferred because it is dedicated to this
+   session and already warm.
+2. **A secretary from Luhmann's pool**, when the session has none. The watcher
+   is already the Fixer that schedules the pool for CLI hunts
+   ([bloodhound-cli.md](bloodhound-cli.md), "The watcher as scheduler + hub +
+   router"); a watermark fallback reuses that machinery unchanged — enhance the
+   doc with the Recall seed and crank handle, route to a free pool secretary, or
+   push a *stand up another secretary* directive onto Luhmann's `next` if the
+   pool has room.
+
+**The pool path is always raw — never Luhmann-curated.** The return routes
+straight back to the emitting session's `@ark-bloodhound-result=<S>`, skipping
+the Luhmann `next` curation push exactly as `--raw` does. This is not a
+shortcut: it is the same argument the curation-ownership axis makes
+([bloodhound-cli.md](bloodhound-cli.md), "Curation ownership"). A watermark is
+by construction emitted by an assistant with the live context that provoked it,
+so it *is* the "curate in your own context" case, and Luhmann's separate-context
+discernment would be both the wrong judge and a serial step on the path most
+sensitive to latency. Pool occupancy is freed at the return hop as usual, so a
+watermark hunt never holds a slot through curation it does not perform.
+
+**A pool-served watermark still curates.** It carries the full
+"Recommend — the directed hunt also curates" behavior: the secretary proposes
+connecting tags and they ride the finding stream to the emitting session, exactly
+as an in-session hunt's do. The **origin**, not the pool, decides this — a
+session-delegated hunt proposes; a CLI-delegated one stays findings-only
+([bloodhound-cli.md](bloodhound-cli.md), "Tag proposals are origin-dependent"),
+because a script has no assistant to winnow proposals and Luhmann's curation
+consumes findings rather than tag candidates. So borrowing the pool costs a
+watermark nothing but the recommends' delivery latency, and `<BLOODHOUND notags>`
+opts out on either server.
+
+**Consequence for `/bloodhound`:** spawning a per-session secretary becomes an
+optimization rather than a precondition. A session that only wants directed
+search can subscribe and go, and it borrows the pool; a session doing heavy
+iterative search still benefits from its own dedicated secretary.
+
+### Unservable — report, never drop
+
+A watermark that is recognized but cannot be served — no session secretary, no
+free pool secretary, and no room to grow one — emits a `## Finding:` doc on
+`@ark-bloodhound-result=<S>` whose body says the hunt was not served, names
+which condition failed, and points at `ark bloodhound search --raw` as the
+caller-driven fallback.
+
+Silence is the one unacceptable outcome. An assistant blocked on `listen`
+cannot distinguish a dropped watermark from a hunt still running or a hunt that
+found nothing, so it waits forever on a request nobody holds. Reporting the
+miss is the same discipline as a glob that matches no indexed file saying so
+("Scoping a hunt") rather than returning an empty hunt: a failure that reads as
+a failure, not as an answer.
 
 ## The secretary executes (seal + persona)
 
@@ -500,7 +568,20 @@ it. Recorded for a later seam.
 - **Bloodhound gate (decoupled)** — with no `@ark-bloodhound-result=<S>`
   subscriber, a watermark writes no task doc *even if* `@ark-recall-result` is
   subscribed; with the bloodhound-sub present, it does. Independent of the
-  ambient gate.
+  ambient gate, **and independent of whether a session secretary is standing** —
+  recognition no longer requires one.
+- **Server selection** — with both a session secretary and a free pool
+  secretary available, the task doc lands on `@ark-secretary-work=<S>` (the
+  session's own is preferred); with only the pool available, it is routed to a
+  pool secretary as a raw hunt; with a session secretary and an empty pool, the
+  session's own serves it as before.
+- **Pool path is raw** — a watermark served by the pool returns to
+  `@ark-bloodhound-result=<S>` directly and pushes **nothing** onto Luhmann's
+  `next` queue, so an idle Luhmann is untouched by a watermark hunt.
+- **Unservable reports** — subscribed, but no session secretary and a full
+  pool with no room: a `## Finding:` doc lands on `@ark-bloodhound-result=<S>`
+  naming the failed condition, rather than nothing at all. The negative case is
+  the one this item exists to fix, so it is asserted, not assumed.
 - **Dispatch priority** — with both a pending curation doc and a pending
   bloodhound doc, `next` returns the bloodhound doc first; lowest id within kind.
 - **Seal** — the secretary running `ark search` / `ark chunks` is permitted;

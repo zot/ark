@@ -426,15 +426,34 @@ func (w *RecallWatcher) secretaryPresent(sessionID string) bool {
 	return w.db.pubsub.SubscriberCount("ark-secretary-work", sessionID) > 0
 }
 
-// bloodhoundEnabled gates directed-search recognition/dispatch: the secretary
-// present AND the assistant subscribed to the bloodhound-result tag (the level-3
-// opt-in). CRC: crc-RecallWatcher.md | R2947
+// bloodhoundEnabled gates directed-search *recognition*: the assistant
+// subscribed to the bloodhound-result tag (the level-3 opt-in) — and nothing
+// else. Deliberately NOT conjoined with secretaryPresent: a session without its
+// own secretary can still be served by Luhmann's pool, so requiring one here
+// made a staffed pool worth nothing to a watermark and turned an unservable
+// hunt into silence. Who serves a recognized watermark is decided later, in
+// dispatchBloodhound (R3280).
+// CRC: crc-RecallWatcher.md | R3279
 func (w *RecallWatcher) bloodhoundEnabled(sessionID string) bool {
 	if w.db == nil || w.db.pubsub == nil {
 		return true
 	}
-	return w.secretaryPresent(sessionID) &&
-		w.db.pubsub.SubscriberCount("ark-bloodhound-result", sessionID) > 0
+	return w.db.pubsub.SubscriberCount("ark-bloodhound-result", sessionID) > 0
+}
+
+// poolCanServe reports whether Luhmann's pool could take a hunt now — an
+// orchestrator is seated AND either a secretary is free or the pool has room to
+// grow one. The Fixer makes the same determination when it pumps; this is the
+// cheap pre-check dispatchBloodhound uses to choose between the pool route and
+// the not-served report (R3280, R3282).
+// CRC: crc-RecallWatcher.md | R3280
+func (w *RecallWatcher) poolCanServe() bool {
+	if w == nil || w.luhmann == nil || w.luhmann.LuhmannOwner() == "" {
+		return false
+	}
+	w.pool.mu.Lock()
+	defer w.pool.mu.Unlock()
+	return w.pool.pickFreeLocked() != nil || len(w.pool.secretaries) < w.poolMax()
 }
 
 // ambientEnabled gates ambient curation (arm/accumulate/fire): the secretary
@@ -463,12 +482,13 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 		return
 	}
 
-	// Per-capability gate (R2947, R2949): drop the session only when the
-	// secretary is absent (level ≤2) — no worker, nothing to produce; a later
-	// (re)subscription reactivates at the current JSONL end (no backfill). With
-	// the secretary present, ambient and bloodhound gate independently on the
-	// assistant's per-capability result subs.
-	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2868, R2947, R2949
+	// Per-capability gate (R3279, R2949): with the secretary absent there is no
+	// worker for *ambient*, so tear its per-session state down (R2868) — a later
+	// (re)subscription reactivates at the current JSONL end (no backfill). But do
+	// NOT return on that alone: bloodhound recognition survives a missing session
+	// secretary because Luhmann's pool can serve the hunt (R3280). Return early
+	// only when neither capability has anything to produce.
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R2868, R3279, R2949
 	if !w.secretaryPresent(sessionID) {
 		w.mu.Lock()
 		if st, ok := w.sessions[sessionID]; ok {
@@ -478,7 +498,9 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 			delete(w.sessions, sessionID)
 		}
 		w.mu.Unlock()
-		return
+		if !w.bloodhoundEnabled(sessionID) {
+			return
+		}
 	}
 
 	w.mu.Lock()
@@ -797,6 +819,21 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req blo
 	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
 		return
 	}
+	// R3280: server selection. The session's own secretary is preferred — it is
+	// dedicated and already warm, and its findings carry the tag-recommend half
+	// the raw pool relay cannot. Without one, borrow the pool; with neither, say
+	// so rather than dropping the hunt on the floor (R3282).
+	if !w.secretaryPresent(sessionID) {
+		if !w.poolCanServe() {
+			w.emitNotServed(sessionID, bid, req)
+			return
+		}
+		if err := w.enqueueWatermarkHunt(sessionID, bid, req); err != nil {
+			log.Printf("recall-watcher: watermark pool dispatch failed session=%s B=%d: %v", sessionID, bid, err)
+			w.emitNotServed(sessionID, bid, req)
+		}
+		return
+	}
 	// Seed the hunt with the hypergraph-aware combined search (renderSeed):
 	// clue-only and session-agnostic, so a directed *pull* hunt sees every match
 	// with no derivation side-effects. Only Recall reaches the value→chunk tag
@@ -808,6 +845,41 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req blo
 		return
 	}
 	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d", sessionID, bid)
+}
+
+// emitNotServed writes a `## Finding:` doc reporting that a recognized watermark
+// could not be served — no session secretary, and Luhmann's pool either unseated
+// or full with no room to grow (R3282).
+//
+// The failure mode this exists to kill is silence. An assistant blocked on
+// `listen` cannot tell a dropped watermark from a hunt still running or one that
+// legitimately found nothing, so it waits forever on a request nobody holds. The
+// doc shape is the ordinary finding shape, so the existing consumer needs no
+// change; only the body differs, naming the failed condition and the caller-driven
+// fallback. Same discipline as the scope-matched-nothing note (R3188): a failure
+// must read as a failure, not as an answer.
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#4 | R3282
+func (w *RecallWatcher) emitNotServed(sessionID string, bid uint64, req bloodhoundReq) {
+	if w.db == nil {
+		return
+	}
+	reason := "no secretary is running for this session and Luhmann's pool is unavailable (no orchestrator seated)"
+	if w.luhmann != nil && w.luhmann.LuhmannOwner() != "" {
+		reason = "no secretary is running for this session and Luhmann's pool is full with no room to grow"
+	}
+	body := bloodhoundFindingHeader(sessionID, clueOf(req.payload)) + fmt.Sprintf(
+		"\n**Not served.** %s.\n\n"+
+			"This hunt was recognized but never ran, so the absence of results says nothing about the corpus. "+
+			"Run it yourself with `ark bloodhound search --raw`, or spawn a session secretary and re-emit.\n",
+		reason)
+	if err := SyncVoid(w.db, func(db *DB) error {
+		_, e := db.AddTmpFile(bloodhoundFindingPath(sessionID, bid), "markdown", []byte(body))
+		return e
+	}); err != nil {
+		log.Printf("recall-watcher: not-served report failed session=%s B=%d: %v", sessionID, bid, err)
+		return
+	}
+	Logv(1, "recall-watcher: bloodhound not served session=%s B=%d (%s)", sessionID, bid, reason)
 }
 
 // renderBloodhoundSeed formats a Recall result as the `## Recall seed` block of

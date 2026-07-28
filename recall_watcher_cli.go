@@ -9,6 +9,7 @@ package ark
 // the deciding go-between (the Mediator/Fixer pattern), never a language model.
 
 import (
+	"fmt"
 	"log"
 	"slices"
 	"strconv"
@@ -55,13 +56,33 @@ type poolSec struct {
 }
 
 // cliRequest is the per-hunt state the Fixer records when a request first
-// arrives: its submit time (the reap clock, R3041) and whether the client asked
-// to skip curation (`--raw` → curate:false, R3038). Kept in memory because the
-// request doc's body is overwritten at the enhance/close hops, so the intent
-// cannot survive there.
+// arrives: its submit time (the reap clock, R3041), whether the client asked to
+// skip curation (`--raw` → curate:false, R3038), and — for a hunt that entered
+// from a `<BLOODHOUND>` watermark rather than the CLI — where the raw result
+// must be delivered (R3281). Kept in memory because the request doc's body is
+// overwritten at the enhance/close hops, so the intent cannot survive there.
+//
+// origin is the discriminator: empty means the external CLI (result goes to
+// @ark-bloodhound-cli-result: <id>, the waiting client), non-empty is the
+// session ID that emitted the watermark (result goes to that session's
+// @ark-bloodhound-result finding channel, indistinguishable from one its own
+// secretary would have produced). bid/clue carry what the finding doc's header
+// needs, since the pool path bypasses the builder that would otherwise hold them.
+// CRC: crc-RecallWatcher.md | R3038, R3041, R3281
 type cliRequest struct {
 	submitted time.Time
 	raw       bool
+	origin    string // R3281: emitting session for a watermark hunt; "" for CLI
+	bid       uint64 // R3281: the <B> the finding doc is keyed by
+	clue      string // R3281: echoed verbatim into the `## Finding:` header
+	notags    bool   // R3110/R3283: the watermark's own `<BLOODHOUND notags>` opt-out
+}
+
+// proposesTags reports whether this hunt's secretary should propose connecting
+// tags (R3283): session-delegated hunts do, CLI-delegated ones never do, and a
+// watermark's own `notags` opt-out (R3110) overrides on either server.
+func (r *cliRequest) proposesTags() bool {
+	return r != nil && r.origin != "" && !r.notags
 }
 
 // cliPool is the watcher's roster of CLI-bloodhound pool secretaries plus the
@@ -269,6 +290,70 @@ func (w *RecallWatcher) onBloodhoundCLIRequest(path string) {
 	w.pump()
 }
 
+// watermarkHuntID is the request id for a pool-served watermark. The `wm-`
+// prefix keeps it out of the CLI's integer-nonce id space, so the two origins
+// can never collide on a request-doc path.
+// CRC: crc-RecallWatcher.md | R3280
+func watermarkHuntID(sessionID string, bid uint64) string {
+	return "wm-" + sessionID + "-" + strconv.FormatUint(bid, 10)
+}
+
+// enqueueWatermarkHunt routes a recognized `<BLOODHOUND>` watermark to Luhmann's
+// pool when the emitting session has no secretary of its own (R3280). It reuses
+// the CLI hunt pipeline wholesale — same request-doc namespace, same Fixer
+// scheduling and enhance-and-route, same raw return hop — and differs only in
+// *origin* and *destination*, both of which ride the in-memory cliRequest record
+// rather than the doc body (which enhance overwrites).
+//
+// The body is written in the Fixer's own TERMS shape so the existing readers
+// recover the hunt unchanged: `curate: false` marks it raw (R3281) for the
+// return branch, and the watermark's already-anchored globs go out as
+// filter-files/exclude-files lines for scopeOf. clueOf then strips all of it
+// back off when seeding.
+// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#4 | R3280, R3281
+func (w *RecallWatcher) enqueueWatermarkHunt(sessionID string, bid uint64, req bloodhoundReq) error {
+	if w.db == nil {
+		return nil
+	}
+	id := watermarkHuntID(sessionID, bid)
+	path := bloodhoundCLIPrefix + id
+	var b strings.Builder
+	fmt.Fprintf(&b, "@%s: %s\n\ncurate: false\n", bloodhoundCLIRequestTag, id)
+	for _, g := range req.filterFiles {
+		fmt.Fprintf(&b, "filter-files: %s\n", g)
+	}
+	for _, g := range req.excludeFiles {
+		fmt.Fprintf(&b, "exclude-files: %s\n", g)
+	}
+	fmt.Fprintf(&b, "%s\n", strings.TrimRight(req.payload, "\n"))
+	if err := SyncVoid(w.db, func(db *DB) error {
+		_, e := db.AddTmpFile(path, "markdown", []byte(b.String()))
+		return e
+	}); err != nil {
+		return err
+	}
+
+	w.pool.mu.Lock()
+	w.pool.pending = append(w.pool.pending, path)
+	w.pool.requests[path] = &cliRequest{
+		submitted: time.Now(),
+		raw:       true, // R3281: a watermark is always raw — the emitter curates
+		origin:    sessionID,
+		bid:       bid,
+		clue:      clueOf(req.payload),
+		notags:    req.notags, // R3110: `<BLOODHOUND notags>` rides to the pool too
+	}
+	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax()
+	w.pool.mu.Unlock()
+
+	Logv(1, "bloodhound: watermark session=%s B=%d → pool (stand-up=%v)", sessionID, bid, needStandUp)
+	if needStandUp && w.luhmann != nil {
+		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "directive", Directive: "stand-up", Class: bloodhoundPoolClass})
+	}
+	w.pump()
+	return nil
+}
+
 // onBloodhoundCLIReturn handles a secretary's return (Fixer return trigger,
 // R3024): free the secretary into cooldown *before* curation, push the
 // request-doc path to Luhmann's next queue for curation (R3025), then pump.
@@ -289,7 +374,7 @@ func (w *RecallWatcher) onBloodhoundCLIReturn(path string) {
 	// the watcher relays the secretary's uncurated findings straight to the result
 	// doc; curated (default) routes to Luhmann for the discernment step.
 	if req != nil && req.raw {
-		if err := w.relayRawResult(path); err != nil {
+		if err := w.relayRawResult(path, req); err != nil {
 			log.Printf("bloodhound-cli: raw relay %s failed: %v", path, err)
 		}
 	} else if w.luhmann != nil {
@@ -309,7 +394,29 @@ func (w *RecallWatcher) onBloodhoundCLIReturn(path string) {
 // The mirror of BloodhoundCLIAddDone's curated write, but with no Luhmann in the
 // loop. Best-effort: a nil db (unit tests) is a no-op.
 // CRC: crc-RecallWatcher.md | Seq: seq-bloodhound-cli.md#1.4.3 | R3039, R3040
-func (w *RecallWatcher) relayRawResult(path string) error {
+// rawDestination decides where a raw hunt's findings are delivered and renders
+// the doc body for that destination — the one place the two origins diverge.
+// An empty path means "deliver nowhere"; the caller still drops the request doc
+// so a departed consumer leaks nothing.
+// CRC: crc-RecallWatcher.md | R3040, R3281
+func (w *RecallWatcher) rawDestination(id string, req *cliRequest, findings string) (path, body string) {
+	if req == nil || req.origin == "" {
+		// CLI origin: wake the waiting client on its own value-scoped result tag.
+		return bloodhoundCLIResultPath(id), "@" + bloodhoundCLIResultTag + ": " + id + "\n\n" + findings
+	}
+	if w.db.pubsub != nil && w.db.pubsub.SubscriberCount("ark-bloodhound-result", req.origin) == 0 {
+		// R2808 parity: the consumer dropped mid-hunt, so there is nothing to wake.
+		Logv(1, "bloodhound: watermark relay: no subscriber for session=%s", req.origin)
+		return "", ""
+	}
+	// R3281: watermark origin. Same doc path, tag, and `## Finding:` header
+	// closeBloodhound writes, so the consumer cannot tell a pool-served hunt from
+	// one the session's own secretary ran — no `listen` change is needed.
+	return bloodhoundFindingPath(req.origin, req.bid),
+		bloodhoundFindingHeader(req.origin, req.clue) + findings
+}
+
+func (w *RecallWatcher) relayRawResult(path string, req *cliRequest) error {
 	if w.db == nil {
 		return nil
 	}
@@ -326,12 +433,15 @@ func (w *RecallWatcher) relayRawResult(path string) error {
 			findings = body + "\n"
 		}
 	}
-	body := "@" + bloodhoundCLIResultTag + ": " + id + "\n\n" + findings
-	if err := SyncVoid(w.db, func(db *DB) error {
-		_, e := db.AddTmpFile(bloodhoundCLIResultPath(id), "markdown", []byte(body))
-		return e
-	}); err != nil {
-		return err
+
+	outPath, body := w.rawDestination(id, req, findings)
+	if outPath != "" {
+		if err := SyncVoid(w.db, func(db *DB) error {
+			_, e := db.AddTmpFile(outPath, "markdown", []byte(body))
+			return e
+		}); err != nil {
+			return err
+		}
 	}
 	// The request doc has served its purpose; drop it (mirrors BloodhoundCLIAddDone).
 	_ = SyncVoid(w.db, func(db *DB) error {
@@ -452,11 +562,17 @@ func (w *RecallWatcher) enhanceRequestDoc(path, composite string) error {
 	if err != nil {
 		return err
 	}
-	// CLI hunts are findings-only: their recommends have no in-session builder to
-	// land in (results route through Luhmann curation), so suppress step 8's tag
-	// proposals here — #38's tag-proposing is the in-session bloodhound path (R3110).
+	// R3283: proposals are origin-dependent. A session-delegated hunt (watermark
+	// origin) proposes — its recommends ride the findings back to an assistant
+	// that can winnow them. A CLI-delegated hunt stays findings-only: a script has
+	// no winnower, and the curated path's consumer is Luhmann, whose job is
+	// refining findings rather than judging tag candidates.
+	w.pool.mu.Lock()
+	propose := w.pool.requests[path].proposesTags()
+	w.pool.mu.Unlock()
+
 	filter, exclude := scopeOf(payload)
-	req := bloodhoundReq{payload: payload, notags: true, filterFiles: filter, excludeFiles: exclude}
+	req := bloodhoundReq{payload: payload, notags: !propose, filterFiles: filter, excludeFiles: exclude}
 	seed := w.renderSeed(req)
 	body := buildSearchTask(composite, cliRequestID(path), seed, req)
 	// UpdateTmpFile (not Add) — the request doc already exists (the CLI created

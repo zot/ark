@@ -337,6 +337,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-LuhmannSend.md → `luhmann_send_test.go`
 - [x] test-LuhmannEvents.md → `luhmann_events_test.go`
 - [x] test-BloodhoundCLIFixer.md → `bloodhound_cli_test.go`
+- [x] test-BloodhoundWatermarkPool.md → `bloodhound_watermark_pool_test.go`
 - [x] test-BloodhoundCLI.md → `cmd/ark/bloodhound_cli_test.go`
 - [x] test-FilterStack.md → `cmd/ark/main_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
@@ -917,3 +918,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O172: Zero-chunk appends: 'APPENDED 51613 bytes → 0 new chunk(s)' is common on chat/workflow JSONLs (152 appends observed, most yielding 0). Probably correct — the chat-jsonl chunker skips tool_use/tool_result/planContent per R240-R243 — but unverified, and now visible thanks to R3266. Confirm the skip accounts for all of it.
 - [ ] O173: specs/bible-chunker.md recommends ext_mirror for a scripture source and explains why the non-writable strategy needs it, but nothing defaults or enforces it: add a bible source without the line and its annotations land in ~/.ark/external, contradicting the spec's stated intent. Decide whether a non-writable strategy should default ext_mirror.
 - [ ] O174: Lua mcp.* bindings have no real test coverage. Reaching a registered binding needs srv.uiRuntime (the embedded ui-engine LuaRuntime), so it is disproportionate today — but the existing precedent is worse than absent: recall_test.go:493 builds a bare lua.NewState() and RE-IMPLEMENTS the binding body in the test, so it exercises code production never runs. Same anti-pattern as the withFTS hand-wiring found 2026-07-26. Affects R3260-R3262 (extReject/extAmend/extPending), unverified as of #67, and consumed by #9. Fix if it recurs: extract binding bodies as named func(*lua.LState) int so a bare LState can register the REAL closures.
+- T271: R2947 retired by R3279 (2026-07-28 watermark-pool-fallback: recognition no longer requires a session-local secretary)
+- [x] O175: Pool-served watermarks lose the tag-recommend half: enhanceRequestDoc forces notags=true for every request-doc hunt (recommends have no in-session builder to land in, R3110), so a watermark served by the pool returns findings only, while the same watermark served by the session's own secretary also proposes connecting tags (R3109). Asymmetry is correct today but undocumented at the call site; revisit if the raw relay ever grows a recommend channel. R3280, R3281.
