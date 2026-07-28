@@ -1,5 +1,5 @@
 # Patterns
-**Requirements:** R3267, R3269, R3271, R3272, R3273, R3277
+**Requirements:** R3267, R3269, R3271, R3272, R3273, R3277, R3297
 
 Reads and writes the personal pattern collection — a directory of
 markdown files whose frontmatter carries a named, summarized technique.

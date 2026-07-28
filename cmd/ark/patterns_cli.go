@@ -26,7 +26,7 @@ import (
 func patternsCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "patterns",
-		Usage: "personal pattern collection (list, add)",
+		Usage: "personal pattern collection (list, show, add)",
 		Commands: []*ucli.Command{
 			{
 				Name:  "list",
@@ -35,6 +35,14 @@ func patternsCommand() *ucli.Command {
 					&ucli.BoolFlag{Name: "json", Usage: "emit JSON array instead of the markdown block"},
 				},
 				Action: patternsListAction,
+			},
+			{
+				// R3297: reading, not priming — the frontmatter has already been
+				// paid for by `list`, so it is not reprinted.
+				Name:      "show",
+				Usage:     "print one pattern's body, without its frontmatter",
+				ArgsUsage: "SLUG",
+				Action:    patternsShowAction,
 			},
 			{
 				Name:      "add",
@@ -94,4 +102,13 @@ func patternsAddAction(_ context.Context, c *ucli.Command) error {
 	}
 	fmt.Println(path)
 	return nil
+}
+
+// patternsShowAction prints one pattern's body for reading.
+// CRC: crc-CLI.md | R3297
+func patternsShowAction(_ context.Context, c *ucli.Command) error {
+	if c.Args().Len() != 1 {
+		return fmt.Errorf("usage: ark patterns show SLUG")
+	}
+	return patternsCollection().Show(os.Stdout, c.Args().First())
 }

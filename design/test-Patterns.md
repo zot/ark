@@ -76,3 +76,38 @@ is exactly what makes it cheap to pin.
 **Input:** a personal-pattern file (`name`/`tags`/`summary`) and a UI-pattern file (`name`/`description`).
 **Expected:** both parse to maps carrying their respective keys; the reader itself privileges neither schema.
 **Refs:** crc-Patterns.md
+
+## Test: only the YAML block is stripped, never the body's `@tag:` lines
+**Purpose:** R3297 — the load-bearing boundary for `show`. Body `@tag:` lines
+look like metadata and are content: they carry origin and neighbouring-pattern
+connections the listing never showed, which is what a reader opens the file for.
+A "strip the metadata" implementation would remove exactly the payload.
+**Input:** content with frontmatter plus `@learned:`/`@connection:` body lines.
+**Expected:** frontmatter fields gone; every body tag and the prose retained.
+**Refs:** crc-Patterns.md
+
+## Test: unfenced or unterminated content passes through whole
+**Purpose:** R3297, other direction — a file with no frontmatter, or with an
+unterminated fence, must not lose its head to a half-matched block.
+**Input:** a body with no frontmatter; a body opening `---` that never closes.
+**Expected:** content returned unchanged, `had` false in both cases.
+**Refs:** crc-Patterns.md
+
+## Test: `show` prints exactly one naming line
+**Purpose:** R3297 — `patterns add` writes a `# NAME` heading, so a well-formed
+pattern already opens with its name and the header would state it twice, in the
+one verb whose purpose is spending fewer tokens. Also guards the opposite error:
+a leading H1 that is *not* the name is content, and dropping it would silently
+eat a section.
+**Input:** two `t.TempDir()` patterns — one whose body repeats its name as an
+H1, one whose leading H1 is a different heading.
+**Expected:** the first prints `# NAME (slug.md)` and the name appears exactly
+once; the second retains its `# Some Section`.
+**Refs:** crc-Patterns.md
+
+## Test: an unknown slug names the collection directory
+**Purpose:** R3297 — the likeliest cause of a miss is a collection that is not
+where the reader assumed, and the slug alone would not reveal that.
+**Input:** `Show` for a slug absent from a temp collection.
+**Expected:** an error whose text contains the directory path.
+**Refs:** crc-Patterns.md

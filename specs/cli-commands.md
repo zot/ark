@@ -69,7 +69,7 @@ otherwise emit a different order each run). R2953.
 | `message`          | `message SUBCOMMAND ...`                                                                                             | mixed                    | subcommands below                                    |
 | `missing`          | `missing [PATTERN...]`                                                                                               | optional                 |                                                      |
 | `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
-| `patterns`         | `patterns list [--json]` <br> `patterns add SLUG --name N --summary S [--tags T] [--body-file F]`                    | none                     | personal pattern collection; never uses the server   |
+| `patterns`         | `patterns list [--json]` <br> `patterns show SLUG` <br> `patterns add SLUG --name N --summary S [--tags T] [--body-file F]` | none                     | personal pattern collection; never uses the server   |
 | `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up; read-only serve during scan |
 | `refresh`          | `refresh [PATTERN...]`                                                                                               | optional                 | re-index stale files                                 |
 | `remove`           | `remove PATTERN...`                                                                                                  | optional                 | tmp:// requires server                               |
@@ -1065,15 +1065,27 @@ All four proxy to the server when running.
 
 ```
 ark patterns list [--json]
+ark patterns show SLUG
 ark patterns add SLUG --name NAME --summary TEXT [--tags "a, b"] [--body-file FILE]
 ```
 
 `list` writes the injection block — every pattern's name, tags, and
 summary, ordered by slug — from a plain directory walk over frontmatter.
-**Neither subcommand ever contacts the server**, because `list` runs at
+**No subcommand ever contacts the server**, because `list` runs at
 session start before anything is up. An absent or empty collection
 prints nothing and exits 0. `--json` emits `[{slug, name, tags,
 summary, path}]`.
+
+`show` prints one pattern's body for reading, **without the
+frontmatter** — `name`/`tags`/`summary` are what `list` already put in
+the context and what led the reader to this slug, so reprinting them
+charges twice for the field whose job was getting them here. A single
+header line names the pattern and its file, so a body pasted onward
+stays attributable; the body's own `# NAME` heading is dropped so the
+name appears once, while a leading H1 that is *not* the name is content
+and survives. Only the YAML block goes: the body's `@tag:` lines carry
+origin and neighbouring patterns, which is what a reader opened the file
+for. An unknown slug errors and names the collection directory.
 
 `add` writes `<patterns_dir>/<slug>.md` with the frontmatter block and
 a `# NAME` heading, appends `--body-file` when given, and refuses an

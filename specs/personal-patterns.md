@@ -107,6 +107,40 @@ having no patterns yet is the normal state for a new user, not an error.
 `--json` emits `[{slug, name, tags, summary, path}]` for machine
 consumers.
 
+## `ark patterns show`
+
+Prints one pattern's body, for reading rather than for priming.
+
+```
+ark patterns show <slug>
+```
+
+The frontmatter is **omitted**. It has already been paid for: the `name`,
+`tags`, and `summary` are exactly what `list` put in the context, and they are
+what led to naming this pattern in the first place. Reprinting them charges a
+second time for the field whose entire job was getting you here — and the
+collection is loaded into prompts, where that cost repeats.
+
+What is kept is a single header line naming the pattern and its file, because a
+bare body pasted somewhere else loses which pattern it belongs to, and an
+unattributed technique is hard to trace back or correct.
+
+**Exactly one naming line, never two.** `ark patterns add` writes a `# NAME`
+heading, so a well-formed pattern already opens with its own name; printing the
+header above that would state it twice in the one verb whose purpose is spending
+fewer tokens. The body's copy is dropped — but only when it *is* the name. A
+leading H1 saying anything else is content, and removing it would silently eat a
+section.
+
+**Only the YAML block is stripped, not every metadata-looking line.** The
+`@tag:` lines in the body — origin, connections to neighbouring patterns — are
+content: they carry what the listing never showed, which is *why* the pattern
+exists and what it sits beside. Dropping them would remove exactly the part a
+reader opened the file for.
+
+Unknown slug is an error naming the collection directory, since the likeliest
+cause is a collection that is not where the reader assumed.
+
 ## `ark patterns add`
 
 Authors a pattern file so nothing has to hand-format frontmatter.

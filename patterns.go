@@ -300,3 +300,83 @@ func (p *Patterns) DerivedDef(path string, content []byte) (name, desc string, o
 	}
 	return PatternSlug(path), fields[fmKeySummary], true
 }
+
+// StripFrontmatter returns the content with a leading YAML frontmatter block
+// removed, and reports whether one was found.
+//
+// Deliberately narrow: it removes the fenced block at the head of the file and
+// nothing else. The body's `@tag:` lines look like metadata and are not — they
+// carry the pattern's origin and its connections to neighbours, which the
+// listing never showed and which are the reason a reader opened the file
+// (R3297). A "strip the metadata" implementation that also took those would
+// remove exactly what `show` exists to deliver.
+// CRC: crc-Patterns.md | R3297
+func StripFrontmatter(content []byte) ([]byte, bool) {
+	s := string(content)
+	if !strings.HasPrefix(s, frontmatterFence+"\n") {
+		return content, false
+	}
+	rest := s[len(frontmatterFence)+1:]
+	end := strings.Index(rest, "\n"+frontmatterFence)
+	if end < 0 {
+		return content, false
+	}
+	body := rest[end+len("\n"+frontmatterFence):]
+	return []byte(strings.TrimLeft(body, "\n")), true
+}
+
+// Show writes one pattern's body, without its frontmatter, under a single
+// header line naming it (R3297).
+//
+// The header is what keeps the output attributable: `list` already carried the
+// name, but this text gets pasted onward, and a body that has lost its name is
+// a technique nobody can trace back or correct.
+// CRC: crc-Patterns.md | R3297
+func (p *Patterns) Show(w io.Writer, slug string) error {
+	if p.dir == "" {
+		return fmt.Errorf("no pattern collection configured")
+	}
+	path := filepath.Join(p.dir, slug+patternExt)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Name the directory: the likeliest cause is a collection that is
+			// not where the reader assumed, and the slug alone would not say so.
+			return fmt.Errorf("no pattern %q in %s", slug, p.dir)
+		}
+		return err
+	}
+	name := slug
+	if pat, ok := patternFrom(path, content); ok {
+		name = pat.Name
+	}
+	body, _ := StripFrontmatter(content)
+	// `patterns add` writes a `# NAME` heading, so a well-formed pattern already
+	// opens with its own name. Emitting the header on top of that would print
+	// the name twice — in the one verb whose purpose is spending fewer tokens.
+	// Drop the body's copy, but only when it *is* the name: an H1 saying
+	// something else is content, and removing it would lose a section.
+	body = dropLeadingHeading(body, name)
+	if _, err := fmt.Fprintf(w, "# %s (%s%s)\n\n", name, slug, patternExt); err != nil {
+		return err
+	}
+	_, err = w.Write(body)
+	return err
+}
+
+// dropLeadingHeading removes a leading `# <name>` line when it repeats name,
+// along with the blank line after it. Comparison is trimmed and
+// case-insensitive; anything else is left alone.
+// CRC: crc-Patterns.md | R3297
+func dropLeadingHeading(body []byte, name string) []byte {
+	s := string(body)
+	line, rest, found := strings.Cut(s, "\n")
+	if !found {
+		return body
+	}
+	h, ok := strings.CutPrefix(strings.TrimSpace(line), "# ")
+	if !ok || !strings.EqualFold(strings.TrimSpace(h), strings.TrimSpace(name)) {
+		return body
+	}
+	return []byte(strings.TrimLeft(rest, "\n"))
+}

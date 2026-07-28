@@ -9,6 +9,7 @@ package ark
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,4 +283,101 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestStripFrontmatterKeepsBodyTags is the load-bearing boundary for R3297:
+// only the YAML block goes. The body's `@tag:` lines look like metadata and are
+// content — they carry origin and neighbouring-pattern connections that the
+// listing never showed, which is what a reader opens the file for. A
+// "strip the metadata" implementation would remove exactly the payload.
+func TestStripFrontmatterKeepsBodyTags(t *testing.T) {
+	content := []byte("---\nname: X\ntags: a, b\nsummary: s\n---\n\n# X\n\n@learned: why it exists\n@connection: [[y]]\n\nBody.\n")
+	body, had := StripFrontmatter(content)
+	if !had {
+		t.Fatal("frontmatter should have been detected")
+	}
+	got := string(body)
+	for _, want := range []string{"@learned: why it exists", "@connection: [[y]]", "Body."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body must keep %q; got:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"summary: s", "tags: a, b"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("frontmatter field %q should be stripped; got:\n%s", gone, got)
+		}
+	}
+}
+
+// TestStripFrontmatterLeavesUnfencedContentAlone guards the other direction: a
+// file with no frontmatter, or an unterminated fence, must pass through whole
+// rather than losing its head to a half-matched block.
+func TestStripFrontmatterLeavesUnfencedContentAlone(t *testing.T) {
+	for _, tc := range []struct{ name, in string }{
+		{"no frontmatter", "# Title\n\nBody.\n"},
+		{"unterminated fence", "---\nname: X\n\n# Title\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, had := StripFrontmatter([]byte(tc.in))
+			if had {
+				t.Error("should not report frontmatter")
+			}
+			if string(body) != tc.in {
+				t.Errorf("content must pass through unchanged; got:\n%s", body)
+			}
+		})
+	}
+}
+
+// TestShowPrintsOneNamingLine pins R3297's dedup: `patterns add` writes a
+// `# NAME` heading, so the header would otherwise state the name twice — in the
+// verb whose whole purpose is spending fewer tokens.
+func TestShowPrintsOneNamingLine(t *testing.T) {
+	dir := t.TempDir()
+	write := func(slug, body string) {
+		if err := os.WriteFile(filepath.Join(dir, slug+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("dup", "---\nname: Dup Pattern\nsummary: s\n---\n\n# Dup Pattern\n\nBody here.\n")
+	// A leading H1 that is NOT the name is content, and must survive.
+	write("other", "---\nname: Other Pattern\nsummary: s\n---\n\n# Some Section\n\nBody here.\n")
+
+	p := NewPatterns(dir)
+
+	var buf bytes.Buffer
+	if err := p.Show(&buf, "dup"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if n := strings.Count(got, "Dup Pattern"); n != 1 {
+		t.Errorf("name should appear exactly once, got %d:\n%s", n, got)
+	}
+	if !strings.HasPrefix(got, "# Dup Pattern (dup.md)\n") {
+		t.Errorf("header must name pattern and file; got:\n%s", got)
+	}
+	if !strings.Contains(got, "Body here.") {
+		t.Errorf("body missing:\n%s", got)
+	}
+
+	buf.Reset()
+	if err := p.Show(&buf, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "# Some Section") {
+		t.Errorf("an H1 that is not the name is content and must survive; got:\n%s", buf.String())
+	}
+}
+
+// TestShowUnknownSlugNamesTheDirectory — the likeliest cause of a miss is a
+// collection that is not where the reader assumed, and the slug alone won't say.
+func TestShowUnknownSlugNamesTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	err := NewPatterns(dir).Show(io.Discard, "nosuch")
+	if err == nil {
+		t.Fatal("unknown slug must error")
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error should name the collection dir %q; got %v", dir, err)
+	}
 }
