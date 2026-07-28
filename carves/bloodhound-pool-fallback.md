@@ -102,6 +102,13 @@ assuming it.
 
 ## Open parts
 
+**Order constraint: #84 before #83.** The strand defect is currently
+*unreachable in practice* because the `/bloodhound` skill still instructs a
+spawn, so nobody takes the pool path. #83 is exactly what makes #84 reachable.
+Landing the documentation first would convert a latent bug into a live one, so
+whatever else the queue does, keep the silence fixed before the path is
+advertised.
+
 ### #84 — a reaped watermark hunt is still silent (defect in landed code)
 
 **R3282 covers "cannot be served *at dispatch*", not "accepted, then stranded".**
