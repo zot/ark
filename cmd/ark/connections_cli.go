@@ -216,24 +216,29 @@ func recallCommand() *ucli.Command {
 				},
 				Action: connRecallContextAction,
 			},
-			{
+			// R3318: --tube, not --session. The value is the subscription
+			// address a secretary pulls from — for a pool secretary the
+			// composite `<luhmann-session>-<nonce>`, deliberately no process's
+			// own id. The node ALSO declares a session need (R3313), so its
+			// identity travels separately and lets the server re-register
+			// nonce → parent every iteration (R3319).
+			needsClientSession(&ucli.Command{
 				Name:      "next",
 				Usage:     "daemon loop verb: block for the next curation doc (NONCE)",
 				ArgsUsage: "NONCE",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID — value-scope the curate subscription"},
+					&ucli.StringFlag{Name: "tube", Usage: "subscription address to pull work from — a session UUID, or the pool composite <luhmann-session>-<nonce>"},
 				},
 				Action: connRecallNextAction,
-			},
-			{
+			}),
+			needsClientSession(&ucli.Command{
 				Name:  "listen",
 				Usage: "consumer loop verb: block until a result arrives (findings; + ambient surfaces with --ambient)",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (optional — resolved from $CLAUDE_CODE_SESSION_ID; a disagreeing value loses, R3309)"},
 					&ucli.BoolFlag{Name: "ambient", Usage: "also subscribe to ambient surfaces (level 4); without it, findings only"},
 				},
 				Action: connRecallListenAction,
-			},
+			}),
 		},
 	}
 }
@@ -737,23 +742,38 @@ func connRecallContextAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
+// recallNextURL builds the `next` query with the tube and the caller's identity
+// as **distinct** parameters (R3317, R3318). The server routes on `tube` and
+// re-registers `nonce → parent` from `client_session` on every iteration
+// (R3319), which is what heals R3305's in-memory registry across a bounce.
+//
+// `tube` is omitted when empty — the legacy bare-curate path has no
+// subscription address. `client_session` is unconditional: a node declaring a
+// session need cannot reach its body without one (R3315, R3320).
+//
+// CRC: crc-CLITree.md | R3317, R3318, R3319
+func recallNextURL(nonce uint64, tube, session string) string {
+	url := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
+	if tube != "" {
+		url += "&tube=" + tube
+	}
+	return url + "&" + clientSessionWireField + "=" + session
+}
+
 // CRC: crc-CLITree.md | Seq: seq-recall-agent.md#3 | R2857, R2858, R2903
 func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 	rest := c.Args().Slice()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE")
+		fmt.Fprintln(os.Stderr, "ark connections recall next [--tube ADDR] NONCE")
 		os.Exit(2)
 	}
 	nonce, err := strconv.ParseUint(rest[0], 10, 32)
 	if err != nil || nonce == 0 {
-		fmt.Fprintln(os.Stderr, "ark connections recall next [--session SID] NONCE (positive integer)")
+		fmt.Fprintln(os.Stderr, "ark connections recall next [--tube ADDR] NONCE (positive integer)")
 		os.Exit(2)
 	}
-	session := c.String("session")
-	nextURL := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
-	if session != "" {
-		nextURL += "&session=" + session
-	}
+	tube := c.String("tube")
+	nextURL := recallNextURL(nonce, tube, clientSession(c))
 	req, err := http.NewRequest("GET", nextURL, nil)
 	if err != nil {
 		fatal(err)
@@ -768,7 +788,7 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 		client := serverClient(arkDir)
 		if client == nil {
 			if time.Now().After(deadline) {
-				os.Stdout.WriteString(recallRedialKeepalive(session, nonce))
+				os.Stdout.WriteString(recallRedialKeepalive(tube, nonce))
 				return nil
 			}
 			time.Sleep(backoff)
@@ -778,7 +798,7 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 		resp, derr := client.Do(req)
 		if derr != nil {
 			time.Sleep(backoff)
-			os.Stdout.WriteString(recallRedialKeepalive(session, nonce))
+			os.Stdout.WriteString(recallRedialKeepalive(tube, nonce))
 			return nil
 		}
 		data, _ := io.ReadAll(resp.Body)
@@ -794,19 +814,18 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 	}
 }
 
-// CRC: crc-CLITree.md | R2865
+// CRC: crc-CLITree.md | R2865, R3313, R3317
 func connRecallListenAction(_ context.Context, c *ucli.Command) error {
-	// R3309: own-session flag — the live environment is authoritative.
-	session := applyOwnSession(c.String("session"))
-	if session == "" {
-		fmt.Fprintln(os.Stderr, "ark connections recall listen [--session SID]")
-		os.Exit(2)
-	}
+	// The node declares a session need (R3313), so identity is already resolved
+	// and non-empty here — no flag to read, and no required-flag error to write:
+	// an unresolvable identity failed in Before, before this body ran (R3320).
+	session := clientSession(c)
 	client := serverClient(arkDir)
 	if client == nil {
 		fatal(errors.New("server not running; start with `ark serve`"))
 	}
-	listenURL := fmt.Sprintf("http://ark/connections/recall/listen?session=%s", session)
+	// R3317: identity travels in its own wire field, never as `session`.
+	listenURL := fmt.Sprintf("http://ark/connections/recall/listen?%s=%s", clientSessionWireField, session)
 	if c.Bool("ambient") {
 		listenURL += "&ambient=true" // R2950: ambient opt-in
 	}

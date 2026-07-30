@@ -16,7 +16,7 @@ pipeline has two layers:
   language model in this layer.
 - **Secretary** (Haiku, per-session). Each session's own assistant
   spawns a secretary for it via `/recall`. Its whole loop is a single
-  verb — `ark connections recall next --session <S> <nonce>` — which
+  verb — `ark connections recall next --tube <S> <nonce>` — which
   subscribes value-scoped to that session's curation docs
   (`@ark-secretary-work=<S>`), dispatches the next one (blocking up to a
   ~90-second keepalive otherwise), context-gates, and **prepends the
@@ -61,7 +61,7 @@ a thin set of result-builder CLI verbs.
 > orchestrator. Where prose below says "the agent" or "the daemon", read
 > "the per-session secretary": it subscribes **value-scoped** to its
 > session's curation docs (`@ark-secretary-work=<S>`), its loop verb is
-> `ark connections recall next --session <S> <nonce>`, and the server
+> `ark connections recall next --tube <S> <nonce>`, and the server
 > prepends the session's recent conversation (`[recall].context_turns`) to
 > each doc it hands over. The watcher, the curation/result doc shapes, the
 > builder verbs, and the subscriber-presence gates are unchanged — only the
@@ -193,7 +193,7 @@ RecallWatcher.fire(session)
                           whole loop is one verb:
                                        │
                                        ▼
-                          ark connections recall next --session <S> <N>
+                          ark connections recall next --tube <S> <N>
                                        │  server-side, in one verb:
                                        │   idempotent subscribe (value-scoped
                                        │   @ark-secretary-work=<S>, session
@@ -897,7 +897,7 @@ results by running one batteries-included verb — the consumer-side mirror
 of the secretary's `next`:
 
 ```
-ark connections recall listen --session <claude-code-session-uuid> [--ambient]
+ark connections recall listen [--ambient]
 ```
 
 `listen` carries the whole consumer loop:
@@ -922,7 +922,7 @@ ark connections recall listen --session <claude-code-session-uuid> [--ambient]
   return.
 - **Crank-handle.** The body ends with prose: "this is ambient recall —
   decide what genuinely helps the user (you have final say; skip stale /
-  off-topic), then run `recall listen --session <session>` again."
+  off-topic), then run `recall listen` again."
 
 The assistant's downstream judgment is unchanged: it consults the RJ
 counter for each `## Recommend:` (R2765 / R2766) and, on a user

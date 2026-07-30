@@ -184,18 +184,17 @@ func luhmannCommand() *ucli.Command {
 				},
 				Action: luhmannInspectExitAction,
 			},
-			{
+			needsClientSession(&ucli.Command{
 				Name:      "next",
 				Usage:     "orchestrator drain tube: block for the next curation task, directive, or keepalive (server)",
-				ArgsUsage: "--session SID [--first | --force] [--keepalive SECONDS]",
+				ArgsUsage: "[--first | --force] [--keepalive SECONDS]",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "orchestrator session identity holding the Luhmann seat (required)"},
 					&ucli.BoolFlag{Name: "first", Usage: "claim the seat if unowned (errors if another session owns it)"},
 					&ucli.BoolFlag{Name: "force", Usage: "reclaim the seat unconditionally (deliberate takeover of a dead owner)"},
 					&ucli.IntFlag{Name: "keepalive", Value: int(ark.LuhmannNextKeepalive / time.Second), Usage: "idle seconds before a keepalive (default ~45m; capped under the 1h main-agent cache)"},
 				},
 				Action: luhmannNextAction,
-			},
+			}),
 			{
 				Name:      "send",
 				Usage:     "push one instruction to the orchestrator and print its reply (server)",
@@ -205,18 +204,21 @@ func luhmannCommand() *ucli.Command {
 				},
 				Action: luhmannSendAction,
 			},
-			{
+			// R3313: the seat identity is declared, not flagged. R3145 routes
+			// events onto the *caller's* own tube and requires the caller to
+			// already own the seat, so this `--session` was always an own-session
+			// claim — one R3311's hand-maintained list had missed.
+			needsClientSession(&ucli.Command{
 				Name:      "events",
 				Usage:     "route Frictionless UI events onto this session's next tube (server)",
-				ArgsUsage: "--session SID [--off]",
+				ArgsUsage: "[--off]",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "orchestrator session identity holding the Luhmann seat (required)"},
 					// No backticks in Usage: urfave reads a backquoted span as the
 					// flag's value-placeholder name, which is nonsense on a bool.
 					&ucli.BoolFlag{Name: "off", Usage: "release event routing, so 'ark ui event' serves again"},
 				},
 				Action: luhmannEventsAction,
-			},
+			}),
 			{
 				Name:  "launch",
 				Usage: "start a hosted Claude Code session in a pty (spend consent gate; server)",
@@ -308,14 +310,11 @@ func luhmannInspectExitAction(_ context.Context, c *ucli.Command) error {
 // backgrounded loop re-invokes and re-validates ownership.
 // CRC: crc-CLITree.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3015
 func luhmannNextAction(_ context.Context, c *ucli.Command) error {
-	// R3309: the seat claim names the claimer itself, so the live environment
-	// is authoritative — a stale id here lets a re-hosted orchestrator claim the
-	// seat under its pre-fork identity.
-	session := applyOwnSession(c.String("session"))
-	if session == "" {
-		fmt.Fprintln(os.Stderr, "ark luhmann next [--session SID] [--first | --force] [--keepalive SECONDS]")
-		os.Exit(2)
-	}
+	// R3313: the seat claim names the claimer itself, so identity is declared on
+	// the node and resolved before this body runs — a stale id here would let a
+	// re-hosted orchestrator claim the seat under its pre-fork identity, and the
+	// ownership check would pass because the claim names the current owner.
+	session := clientSession(c)
 	if c.Bool("first") && c.Bool("force") {
 		fmt.Fprintln(os.Stderr, "ark luhmann next: --first and --force are mutually exclusive")
 		os.Exit(2)
@@ -327,7 +326,9 @@ func luhmannNextAction(_ context.Context, c *ucli.Command) error {
 	case c.Bool("force"):
 		mode = "force"
 	}
-	nextURL := fmt.Sprintf("http://ark/luhmann/next?session=%s&mode=%s&keepalive=%d", session, mode, c.Int("keepalive"))
+	// R3317: identity travels in its own wire field, never as `session`.
+	nextURL := fmt.Sprintf("http://ark/luhmann/next?%s=%s&mode=%s&keepalive=%d",
+		clientSessionWireField, session, mode, c.Int("keepalive"))
 	req, err := http.NewRequest("GET", nextURL, nil)
 	if err != nil {
 		fatal(err)
@@ -420,25 +421,25 @@ func luhmannSendAction(_ context.Context, c *ucli.Command) error {
 // route Frictionless UI events onto this session's `next` tube (or, with --off,
 // to stop). Routing hangs off the `next` seat, so the server refuses a session
 // that doesn't own it with the same stand-down string `next` uses (R3013).
-// CRC: crc-CLITree.md, crc-LuhmannEvents.md | Seq: seq-luhmann-events.md#1.1 | R3145
+// CRC: crc-CLITree.md, crc-LuhmannEvents.md | Seq: seq-luhmann-events.md#1.1 | R3145, R3313, R3317
 func luhmannEventsAction(_ context.Context, c *ucli.Command) error {
-	session := c.String("session")
-	if session == "" {
-		fmt.Fprintln(os.Stderr, "ark luhmann events --session SID [--off]")
-		os.Exit(2)
-	}
+	// R3313: the value was always an own-session claim — R3145 routes events onto
+	// the caller's own tube and requires the caller to already own the seat — so
+	// it is declared on the node rather than typed. R3311's hand-maintained list
+	// had missed this verb, which is the evidence for declaring the need.
+	session := clientSession(c)
 	off := c.Bool("off")
 	client := requireServer("luhmann events")
 	if err := proxyOK(client, "POST", "/luhmann/events", map[string]any{
-		"session": session,
-		"off":     off,
+		clientSessionWireField: session, // R3317
+		"off":                  off,
 	}); err != nil {
 		fatal(err)
 	}
 	if off {
 		fmt.Println("event routing released; `ark ui event` serves again")
 	} else {
-		fmt.Printf("Frictionless UI events now arrive on `ark luhmann next --session %s`\n", session)
+		fmt.Println("Frictionless UI events now arrive on `ark luhmann next`")
 	}
 	return nil
 }

@@ -45,14 +45,14 @@ func bloodhoundCommand() *ucli.Command {
 				},
 				Action: bloodhoundSearchAction,
 			},
-			{
+			needsClientSession(&ucli.Command{
 				// R3296: the consumer loop, named where the concept lives. It is
 				// the same behavior as `ark connections recall listen`, which
-				// remains as the older spelling.
+				// remains as the older spelling. Identity is declared on the node
+				// (R3313), so there is no `--session` to type or get stale.
 				Name:  "listen",
 				Usage: "consumer loop: block until a result arrives (findings; add ambient recollections with --recall)",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (optional — resolved from $CLAUDE_CODE_SESSION_ID; a disagreeing value loses, R3309)"},
 					&ucli.BoolFlag{
 						Name:    "recall",
 						Aliases: []string{"ambient"},
@@ -60,7 +60,7 @@ func bloodhoundCommand() *ucli.Command {
 					},
 				},
 				Action: bloodhoundListenAction,
-			},
+			}),
 			{
 				Name:      "add",
 				Usage:     "Luhmann's result stencil: append one curated finding to a CLI hunt, or --done to finish",

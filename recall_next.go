@@ -50,25 +50,33 @@ const recallNextKeepalive = 90 * time.Second
 // declare one, per call, via `--pool`; it is retired (T273) because the watcher
 // now routes work to a secretary rather than each secretary widening its own
 // search. R3302, R3303
-func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int) (body string, exit bool, err error) {
-	// R2902: key the curate subscription on the durable session
-	// (`secretary-work-<session>`), not the volatile `recall-<nonce>`, so
+//
+// The parameter is `tube`, not `session` (R3318): it is the subscription
+// *address* work is pulled from, which for a pool secretary is the composite
+// `<luhmann-session>-<nonce>` and no process's own id. It used to sit beside
+// `docSession` — the doc's origin — under the one word `session`, which needed
+// a comment mid-function to disentangle. The caller's own identity never
+// reaches here; `handleRecallNext` uses it to re-register the parent registry
+// (R3319) and nothing in the loop consults it.
+func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, tube string, contextLimit int) (body string, exit bool, err error) {
+	// R2902: key the curate subscription on the durable tube
+	// (`secretary-work-<tube>`), not the volatile `recall-<nonce>`, so
 	// two secretary generations across a restart share one stable, unique
 	// key and the SubCount re-subscribe guard never no-ops a colliding
 	// subscriber. Distinct prefix from the consumer's result-subscription
-	// key (bare `<session>`, R2865) so curate and result never cross-wake.
-	// The legacy bare-curate path (no session) keeps `recall-<nonce>`.
+	// key (bare `<tube>`, R2865) so curate and result never cross-wake.
+	// The legacy bare-curate path (no tube) keeps `recall-<nonce>`.
 	subSession := fmt.Sprintf("recall-%d", nonce)
-	if session != "" {
-		subSession = "secretary-work-" + session
+	if tube != "" {
+		subSession = "secretary-work-" + tube
 	}
 
 	// Idempotent subscribe to @ark-secretary-work. Subscribe appends, so
 	// guard with SubCount to keep later calls no-ops.
 	if b.db.pubsub.SubCount(subSession) == 0 {
 		match := "ark-secretary-work"
-		if session != "" {
-			match = "ark-secretary-work=" + session // R2888: per-session value-scope
+		if tube != "" {
+			match = "ark-secretary-work=" + tube // R2888: per-tube value-scope
 		}
 		p, perr := ParseMatchSyntax(match)
 		if perr != nil {
@@ -97,14 +105,14 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 		// R2939: directed search served ahead of ambient recall — dispatch a
 		// pending bloodhound task before any curation doc. Small doc, so it
 		// returns inline (no file materialization, no Read keyhole).
-		if _, _, content, ok := b.lowestPendingBloodhound(session); ok {
-			return recallSearchTaskPrompt(session, nonce, content), false, nil
+		if _, _, content, ok := b.lowestPendingBloodhound(tube); ok {
+			return recallSearchTaskPrompt(tube, nonce, content), false, nil
 		}
 		// R3030, R3032: a CLI-bloodhound request doc the watcher routed to this
 		// pool secretary via @ark-secretary-work=<composite>. Same crank-handle
 		// return as an in-session bloodhound task (the enhanced doc IS one).
-		if content, ok := b.lowestPendingCLIHunt(session); ok {
-			return recallSearchTaskPrompt(session, nonce, content), false, nil
+		if content, ok := b.lowestPendingCLIHunt(tube); ok {
+			return recallSearchTaskPrompt(tube, nonce, content), false, nil
 		}
 		// R3302/R3303: one lookup serves both roles, because the watcher
 		// addresses the work. A session's own secretary is sent its session's
@@ -114,11 +122,11 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 		// now the mechanism rather than an obstacle to it. (R3295 declared this
 		// role per call; retired T273, since there is no longer a role to
 		// declare.)
-		fire, docSession, content, ok := b.lowestPendingCuration(session)
+		fire, docSession, content, ok := b.lowestPendingCuration(tube)
 		if ok {
-			// R2891: inject the conversation of the session the doc *belongs to*,
-			// which for a per-session secretary is its own. A pool secretary's
-			// `session` is its composite routing identity and has no
+			// R2891: inject the conversation of the session the doc *belongs
+			// to*, which for a session's own secretary is its own. A pool secretary's
+			// `tube` is its composite routing identity and has no
 			// conversation; injecting that would hand the curator the wrong
 			// context, or none, exactly when judging fit matters most.
 			if docSession != "" {
@@ -131,11 +139,11 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 			if werr != nil {
 				return "", false, werr
 			}
-			return recallDocPrompt(fire, docSession, session, nonce, path), false, nil
+			return recallDocPrompt(fire, docSession, tube, nonce, path), false, nil
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return recallKeepalivePrompt(session, nonce), false, nil
+			return recallKeepalivePrompt(tube, nonce), false, nil
 		}
 		window := min(recallNextListenWindow, remaining)
 		if !b.waitForWork(ctx, subSession, window) {
@@ -326,10 +334,10 @@ func (b *RecallAgentBuilder) lowestPendingCLIHunt(session string) (content strin
 // strip the leading curate head-tag, substitute the agent's nonce into the
 // crank handle's close line, and tail with the loop instruction. R2940
 // CRC: crc-RecallAgentBuilder.md | R2940
-func recallSearchTaskPrompt(session string, nonce uint32, content string) string {
+func recallSearchTaskPrompt(tube string, nonce uint32, content string) string {
 	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
-	if session != "" {
-		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	if tube != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --tube %s %d", tube, nonce)
 	}
 	body := stripCurateTagLine(content)
 	body = strings.ReplaceAll(body, "<your nonce>", strconv.FormatUint(uint64(nonce), 10))
@@ -355,14 +363,14 @@ func stripCurateTagLine(s string) string {
 // re-overflow). A candidate marked `- tag-only: true` is the reader's own
 // conversation — recommend a tag for it but never surface it.
 // CRC: crc-RecallAgentBuilder.md | R2858, R2870, R2873, R2896
-func recallDocPrompt(fire uint64, docSession, session string, nonce uint32, path string) string {
+func recallDocPrompt(fire uint64, docSession, tube string, nonce uint32, path string) string {
 	// The surface/recommend/close cookie is the composite <session>-<fire>
 	// token (R2901), built from the doc's own session so it matches the
 	// in-flight map key even on the legacy all-session scan.
 	token := fireToken(docSession, fire)
 	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
-	if session != "" {
-		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	if tube != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --tube %s %d", tube, nonce)
 	}
 	return fmt.Sprintf(
 		"Curation doc %s is at:\n%s\n\n"+
@@ -387,13 +395,13 @@ func recallExitPrompt(tokens, limit int) string {
 // the agent to run `next` again; the short window keeps `next` returning
 // inline (foreground) before the harness auto-backgrounds it, never
 // reading as a stop.
-func recallKeepalivePrompt(session string, nonce uint32) string {
+func recallKeepalivePrompt(tube string, nonce uint32) string {
 	// Carry --session so the agent's next loop iteration stays on the
 	// per-session curate subscription (R2902), never falling back to the
 	// legacy bare-curate path.
 	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
-	if session != "" {
-		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	if tube != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --tube %s %d", tube, nonce)
 	}
 	return fmt.Sprintf("No curation doc is pending yet (no work, or no result subscriber). This is normal. Run `%s` again now to keep watching — do not stop, do not wait.\n", nextCmd)
 }
@@ -487,8 +495,8 @@ func (b *RecallAgentBuilder) recallListenPrompt(session string, events []Event) 
 			"Decide what genuinely helps the user right now — you have final say; skip anything stale or off-topic. "+
 			"%s"+
 			"If the user rejects a recommended tag, run `~/.ark/ark connections recall reject-derived`. "+
-			"Then run `~/.ark/ark connections recall listen --session %s` again to keep receiving.\n",
-		extTagNote, session)
+			"Then run `~/.ark/ark connections recall listen` again to keep receiving.\n",
+		extTagNote)
 	return sb.String()
 }
 
@@ -825,7 +833,7 @@ func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNe
 func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmannNextMode, keepalive time.Duration) (body string, disp luhmannNextDisposition, err error) {
 	disp, msg := srv.claimLuhmann(session, mode)
 	if disp != luhmannDispOK {
-		return luhmannOwnershipPrompt(disp, msg, session), disp, nil
+		return luhmannOwnershipPrompt(disp, msg), disp, nil
 	}
 	switch {
 	case keepalive <= 0:
@@ -849,9 +857,9 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 				content = stripLeadingTag(string(data))
 			}
 		}
-		return luhmannWorkPrompt(session, w, content), luhmannDispOK, nil
+		return luhmannWorkPrompt(w, content), luhmannDispOK, nil
 	case <-timer.C:
-		return luhmannKeepalivePrompt(session), luhmannDispOK, nil
+		return luhmannKeepalivePrompt(), luhmannDispOK, nil
 	}
 }
 
@@ -861,9 +869,9 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 // stands down — the losing side of a post-bounce --first race steps aside, so
 // exactly one orchestrator survives.
 // CRC: crc-LuhmannCLI.md | R3014
-func luhmannOwnershipPrompt(disp luhmannNextDisposition, msg, session string) string {
+func luhmannOwnershipPrompt(disp luhmannNextDisposition, msg string) string {
 	if disp == luhmannDispReclaim {
-		return fmt.Sprintf("The ark server has no Luhmann owner (%s) — it was restarted. Reclaim the seat: run `~/.ark/ark luhmann next --session %s --first`.\n", msg, session)
+		return fmt.Sprintf("The ark server has no Luhmann owner (%s) — it was restarted. Reclaim the seat: run `~/.ark/ark luhmann next --first`.\n", msg)
 	}
 	return fmt.Sprintf("Another session owns the Luhmann seat (%s). Stand down — do not run `next` again; a single orchestrator serves CLI hunts.\n", msg)
 }
@@ -873,8 +881,8 @@ func luhmannOwnershipPrompt(disp luhmannNextDisposition, msg, session string) st
 // to hold the seat warm. Exit 0, like a work item — only the stand-down signal
 // stops the loop.
 // CRC: crc-LuhmannCLI.md | R3011, R3016
-func luhmannKeepalivePrompt(session string) string {
-	return fmt.Sprintf("No curation task or directive is pending. This is normal. Run `~/.ark/ark luhmann next --session %s` again now to keep the seat warm — do not stop.\n", session)
+func luhmannKeepalivePrompt() string {
+	return "No curation task or directive is pending. This is normal. Run `~/.ark/ark luhmann next` again now to keep the seat warm — do not stop.\n"
 }
 
 // luhmannWorkPrompt renders one drained work item as a crank-handle (R3011). A
@@ -884,8 +892,8 @@ func luhmannKeepalivePrompt(session string) string {
 // R3027). A directive tells Luhmann to stand up or stop a pool secretary and
 // record it. `content` is the inlined curation body (empty for a directive).
 // CRC: crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3011, R3025, R3027
-func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
-	nextCmd := fmt.Sprintf("~/.ark/ark luhmann next --session %s", session)
+func luhmannWorkPrompt(w LuhmannWork, content string) string {
+	nextCmd := "~/.ark/ark luhmann next"
 	lead := relaunchFirst(nextCmd)
 	switch w.Kind {
 	case "curation":
@@ -911,7 +919,7 @@ func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 		// would land in the bloodhound pool — work for the other class would
 		// then never be served, with the symptom nowhere near the cause.
 		return fmt.Sprintf(
-			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann --class %s`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
+			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann --class %s`, spawn it via the Task tool with `--tube <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
 			lead, w.Class, w.Class, w.Class)
 	case "command":
 		// R3130: a synchronous `ark luhmann send` instruction. Handle it as an

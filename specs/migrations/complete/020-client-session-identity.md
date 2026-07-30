@@ -81,15 +81,14 @@ nobody writes to — indistinguishable from a corpus with nothing to say.
   a **subagent needing to act as itself**, since its environment reportedly
   holds its *parent's* id — contingent on semantics still unverified
   (`specs/session-identity.md`), so noted rather than designed for.
-
-## Open question
-
-**Rename `recall next --session`?** With identity travelling separately, that
-flag still says "session" while meaning "which tube" (the pool composite
-`<luhmann-session>-<nonce>`). Renaming it (`--tube`, `--for-session`) would end
-the last of the overload; the cost is a breaking change to
-`.claude/agents/ark-recall-agent.md` and `/bloodhound`'s spawn instructions,
-both edited 2026-07-29. Not blocking B.
+- **DECIDED (Bill, 2026-07-29):** `recall next --session` is **renamed
+  `--tube`**. It names the pool composite `<luhmann-session>-<nonce>` a secretary
+  pulls work from, never a claim of identity, and leaving it spelled `session`
+  would preserve the exact overload B exists to end — the more dangerously once
+  identity travels separately, because the two would then sit side by side on one
+  command line meaning different things. The cost is a breaking change to
+  `.claude/agents/ark-recall-agent.md` and `/bloodhound`'s spawn instructions,
+  both edited 2026-07-29; taken deliberately while the surface is small.
 
 ## Reconciliation inventory — everything state A wrote, mostly today
 
@@ -104,8 +103,8 @@ written hours before this migration and every one currently describes A:
 | `design/crc-CLITree.md` | the `resolveOwnSession` bullet + R3312's complement note |
 | `design/test-SessionIdentity.md` | five table cases written against the resolver's signature |
 | `cmd/ark/session_identity_test.go` | those cases + the call-site guard → becomes a node-declaration check |
-| `.claude/skills/bloodhound/SKILL.md` | the `printenv` step — **still needed for the secretary's tube**, no longer for identity; easy to over-delete |
-| `.claude/agents/ark-recall-agent.md` | only if the open question above is answered yes |
+| `.claude/skills/bloodhound/SKILL.md` | the `printenv` step — **still needed for the secretary's tube**, no longer for identity; easy to over-delete. Its spawn text also passes `--session` to the secretary loop → `--tube` |
+| `.claude/agents/ark-recall-agent.md` | the secretary's own loop line, `recall next --session <S>` → `--tube <S>` (renamed, DECIDED above) |
 | R3309–R3311 | retire the flag clauses; keep the env-authoritative reasoning |
 
 **Completion test** (step 7): could an agent reading only `specs/` and `design/`

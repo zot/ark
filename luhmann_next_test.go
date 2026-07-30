@@ -134,7 +134,7 @@ func TestLuhmannWorkPromptRelaunchFirst(t *testing.T) {
 		{"stop", LuhmannWork{Kind: "directive", Directive: "stop", Class: "bloodhound", Nonce: 7}, "exit-record"},
 	}
 	for _, tc := range cases {
-		body := luhmannWorkPrompt("S", tc.w, "raw results")
+		body := luhmannWorkPrompt(tc.w, "raw results")
 		rl := strings.Index(body, "re-launch the seat")
 		if rl < 0 || !strings.Contains(body, "backgrounded") {
 			t.Errorf("%s: prompt missing the backgrounded re-launch-first instruction: %q", tc.name, body)

@@ -1,67 +1,124 @@
 package main
 
-// CRC: crc-CLITree.md | R3309, R3310, R3311
+// CRC: crc-CLITree.md | R3313, R3314, R3315, R3316, R3320
 
 import (
+	"context"
 	"fmt"
 	"os"
+
+	ucli "github.com/urfave/cli/v3"
+	ark "github.com/zot/ark"
 )
 
-// claudeSessionEnv is the variable Claude Code exports into an agent's shell,
-// naming the session that shell belongs to.
-const claudeSessionEnv = "CLAUDE_CODE_SESSION_ID"
+const (
+	// claudeSessionEnv is the variable Claude Code exports into an agent's shell,
+	// naming the session that shell belongs to.
+	claudeSessionEnv = "CLAUDE_CODE_SESSION_ID"
 
-// resolveOwnSession resolves a `--session` flag that names **the caller's own
-// session**. It returns the session to use and, when the flag disagreed with the
-// live environment, a non-empty report for the caller to print to stderr.
+	// forceSessionFlag is the global override (R3316). Global rather than
+	// per-node because the *need* is declared per node: a per-node flag would
+	// have to be added by hand to each declaring node, which is the enumeration
+	// this design replaces.
+	forceSessionFlag = "force-session"
+
+	// clientSessionWireField is the query/body parameter the resolved identity
+	// travels in (R3317) — deliberately not `session`, so one word stops
+	// meaning both "who am I" and "which queue" depending on the verb. Aliased
+	// from the server-side constant so the two ends of the wire cannot drift.
+	clientSessionWireField = ark.ClientSessionField
+
+	// clientSessionNeedKey marks a node as acting *as* the calling session, and
+	// clientSessionValueKey holds the value its Before resolved. Both live in
+	// the node's Metadata so the tree itself carries the knowledge (R3313).
+	clientSessionNeedKey  = "ark.clientSession.needed"
+	clientSessionValueKey = "ark.clientSession.value"
+)
+
+// resolveClientSession answers "which session is calling me?" (R3314).
 //
-// The environment wins a disagreement (R3309). The flag's value can only have
-// reached the command line through text a model typed, and Claude Code may
+// `--force-session` wins when given, otherwise the live
+// `$CLAUDE_CODE_SESSION_ID`. The environment is preferred over anything typed
+// because a typed value can only have arrived as text, and Claude Code may
 // re-host a running session with `--session-id <new> --fork-session --resume
 // <old>.jsonl` — which replays the earlier conversation, including an
-// already-interpolated `sessionid=<old>`, into a process whose real id is
-// `<new>`. The environment is read from that live process, which is the only
+// already-rendered `sessionid=<old>` header, into a process whose real id is
+// `<new>`. That header is a skill-template substitution resolved at *load* time,
+// a snapshot; the variable is read from the live process, which is the only
 // party that knows its own identity.
 //
 // Why this matters more than it looks: a consumer that subscribes under a stale
 // id does not fail. The watcher keys sessions off the JSONL *filename*, so it
-// publishes for `<new>` while the consumer waits on `<old>` — and the consumer
-// blocks forever on a channel nobody writes to, which is indistinguishable from
-// a corpus with nothing to say.
+// publishes for `<new>` while the consumer waits on `<old>` — blocking forever
+// on a channel nobody writes to, which is indistinguishable from a corpus with
+// nothing to say.
 //
-// The disagreement is reported rather than silently corrected (R3310): fixing
-// each call while hiding the condition would leave no way to learn that sessions
-// are being re-hosted at all.
-//
-// NOT for `connections recall next --session` (R3311) — that flag is a routing
-// identity, the pool composite `<luhmann-session>-<nonce>`, deliberately no
-// process's own id. Resolving it here would aim every pool secretary at its
-// parent's tube.
-func resolveOwnSession(flag string) (session, report string) {
-	env := os.Getenv(claudeSessionEnv)
-	switch {
-	case env == "":
-		// Outside an agent shell (a human, a script). Nothing to check against,
-		// so the flag stands — including when it too is empty, leaving the
-		// caller's own required-flag error to fire.
-		return flag, ""
-	case flag == "", flag == env:
-		return env, ""
-	default:
-		return env, fmt.Sprintf(
-			"ark: --session %s disagrees with this session's live id %s; using the live id.\n"+
-				"     A re-hosted session (--fork-session --resume) replays a stale id into skill text.\n"+
-				"     Omit --session and let ark resolve it.",
-			flag, env)
+// Neither resolving is an error naming the remedy (R3315), never an empty
+// string: state A returned empty and let each caller's own required-flag message
+// fire, which here would name a `--session` flag that no longer exists.
+func resolveClientSession(force string) (string, error) {
+	if force != "" {
+		return force, nil
 	}
+	if env := os.Getenv(claudeSessionEnv); env != "" {
+		return env, nil
+	}
+	return "", fmt.Errorf(
+		"cannot tell which session is calling: $%s is unset (not an agent shell?); pass --%s ID",
+		claudeSessionEnv, forceSessionFlag)
 }
 
-// applyOwnSession resolves the flag and prints any disagreement report, keeping
-// the two-line dance out of every call site.
-func applyOwnSession(flag string) string {
-	session, report := resolveOwnSession(flag)
-	if report != "" {
-		fmt.Fprintln(os.Stderr, report)
+// needsClientSession declares that a node acts as the calling session, and
+// installs the resolution that runs before its Action (R3313, R3320).
+//
+// The declaration is what makes coverage structural. State A applied the rule
+// body by body, so the failure mode was forgetting one call site — silent, and
+// shaped exactly like the bug the rule exists to prevent. `ark luhmann events`
+// was in fact missed that way, despite R3145 routing events onto the *caller's*
+// own tube. Here a declaring node whose identity cannot be resolved never
+// reaches its body at all, because urfave abandons the Action when Before
+// errors.
+func needsClientSession(cmd *ucli.Command) *ucli.Command {
+	if cmd.Metadata == nil {
+		cmd.Metadata = map[string]any{}
 	}
-	return session
+	cmd.Metadata[clientSessionNeedKey] = true
+	inner := cmd.Before
+	cmd.Before = func(ctx context.Context, c *ucli.Command) (context.Context, error) {
+		session, err := resolveClientSession(c.String(forceSessionFlag))
+		if err != nil {
+			return ctx, err
+		}
+		if c.Metadata == nil {
+			c.Metadata = map[string]any{}
+		}
+		c.Metadata[clientSessionValueKey] = session
+		if inner != nil {
+			return inner(ctx, c)
+		}
+		return ctx, nil
+	}
+	return cmd
+}
+
+// clientSession returns the identity resolved for this node. Non-empty for any
+// node wrapped in needsClientSession, because its Before either resolved a value
+// or failed the command before the Action ran (R3320).
+func clientSession(c *ucli.Command) string {
+	if c.Metadata == nil {
+		return ""
+	}
+	s, _ := c.Metadata[clientSessionValueKey].(string)
+	return s
+}
+
+// declaresClientSession reports whether a node declared the need. Read by the
+// structural tests, which assert against the real tree rather than grepping
+// ark's own source the way state A's guard had to.
+func declaresClientSession(cmd *ucli.Command) bool {
+	if cmd == nil || cmd.Metadata == nil {
+		return false
+	}
+	declared, _ := cmd.Metadata[clientSessionNeedKey].(bool)
+	return declared
 }

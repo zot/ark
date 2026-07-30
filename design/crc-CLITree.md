@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270, R3309, R3310, R3311, R3312
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270, R3312, R3313, R3314, R3315, R3316, R3317, R3318, R3319, R3320
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -13,7 +13,7 @@ CLITree owns how those bodies are *reached* and how their help is
 
 ## Knows
 - root: `*cli.Command` named `ark` — the tree root carrying every command
-  node, the global flags (`--dir`/`-v`), the `Before` hook, the unknown-
+  node, the global flags (`--dir`/`-v`/`--force-session`), the `Before` hook, the unknown-
   command/bare-invocation `Action`, and the error/exit hook
   (`ExitErrHandler`). `main()` builds it and runs every invocation through
   it (R2916).
@@ -41,32 +41,72 @@ CLITree owns how those bodies are *reached* and how their help is
   from the flag declarations, so adding/renaming a flag needs no second
   edit. Retires `usage()`, `printConnectionsHelp`, `uiUsage`,
   `printConfigHelp`, and the `luhmann`/`schedule` usage blocks (R2931).
-- resolveOwnSession(flag string) (session string, report string)
-  (R3309, R3310, R3311): the single resolver for a `--session` flag that
-  names **the caller's own session**. Returns the live
-  `$CLAUDE_CODE_SESSION_ID` when the flag is empty; the flag when they
-  agree or the environment is empty; and the **environment** when they
-  disagree, with a non-empty `report` the caller prints to stderr naming
-  both values.
-  - The environment wins because the flag's value can only have arrived
-    via text a model typed, which `--fork-session --resume` may have
-    replayed from before a session was re-hosted — skills render
-    `${CLAUDE_SESSION_ID}` at *load* time, a snapshot, whereas the resolver
-    reads the live per-process `$CLAUDE_CODE_SESSION_ID` (different
-    mechanisms; the former is not an env var). Reporting rather than silently correcting is
-    load-bearing: a silent fix would repair each call and hide that
-    sessions are being re-hosted at all.
-  - Callers: `bloodhound listen`, `connections recall listen`,
-    `luhmann next`. **Not `connections recall next`** — that flag is a
-    routing identity (the pool composite `<luhmann>-<nonce>`, R3032), not
-    a claim of selfhood, and resolving it from the environment would aim
-    every pool secretary at its parent's tube.
-  - **Complement (R3312): the skills stop capturing the id.** No
-    `sessionid=${CLAUDE_SESSION_ID}` header and no `--session`
-    argument typed from one, in any of `/ark`, `/bloodhound`, `/recall`,
-    `/luhmann`, `/diag`. The resolver removes the need for the capture,
-    and the capture is what made the staleness reachable — so the two
-    halves land together or the hazard survives in the skill text.
+- Client session identity (R3313, R3314, R3315, R3316, R3317, R3320):
+  **identity is a declared property of a node, not a flag.** A node that
+  acts as the calling session is wrapped in `needsClientSession(...)`,
+  which records the need in the node's `Metadata` and installs the `Before`
+  hook that resolves the value before the node's `Action` runs; the body
+  reads it back with `clientSession(c)`. Declaring nodes: `bloodhound
+  listen`, `connections recall listen`, `luhmann next`, `luhmann events`,
+  `connections recall next`.
+  - Resolution order is `--force-session` when given, else the live
+    `$CLAUDE_CODE_SESSION_ID`. **Neither resolves → the node errors**,
+    naming `--force-session`, rather than passing an empty value into a
+    body whose own required-flag message would name a `--session` flag
+    that no longer exists (R3315).
+  - `--force-session` is a **global** flag beside `--dir` (R3316),
+    consulted only by declaring nodes. Global because the need is declared
+    per node: a per-node flag would have to be added by hand to each one,
+    reproducing the enumeration this replaces.
+  - The resolved value reaches the server as its own wire field,
+    `client_session` (R3317), distinct from any verb's own session-shaped
+    parameter. That is what ends the overload rather than relocating it:
+    one word stops meaning both "who am I" and "which queue" depending on
+    which verb is being read.
+  - The environment beats anything typed, because a typed value can only
+    have arrived as text and `--fork-session --resume` replays text
+    rendered before a session was re-hosted — skills render
+    `${CLAUDE_SESSION_ID}` at *load* time, a snapshot, whereas the live
+    per-process `$CLAUDE_CODE_SESSION_ID` is read where the command runs
+    (different mechanisms; the former is not an env var). A stale id fails
+    **silently**: the watcher keys sessions off the JSONL *filename*, so it
+    publishes for the live id while a consumer subscribed under the stale
+    one blocks forever on a channel nobody writes to — indistinguishable
+    from a corpus with nothing to say.
+  - Why the declaration and not the old resolver (R3309–R3311, retired
+    T275–T277): state A kept a `--session` flag and preferred the
+    environment over it, which made the flag **decorative** (with the
+    variable set, no value of the flag could change the outcome) and
+    silently removed deliberate cross-session use. It also applied the rule
+    body by body, so the failure mode was an omission at one call site —
+    and `luhmann events` was in fact missed, despite R3145 routing events
+    onto the *caller's* own tube. `--force-session` is the honest form of
+    the override, and the node declaration is what makes coverage
+    structural (R3320).
+- `connections recall next --tube` (R3318, R3319): the flag formerly spelled
+  `--session`, renamed with its wire parameter (`session=` → `tube=`)
+  because the value is the pool composite `<luhmann-session>-<nonce>`
+  (R3032) — deliberately no process's own id, so it answers "which tube?"
+  and never "who am I?". R3311 protected that distinction with an exclusion
+  list and a call-site guard; naming the flag for what it holds makes the
+  protection structural. The node **also** declares a session need, so it
+  sends `client_session` beside `tube` — which lets the server re-register
+  `nonce → parent` on every loop iteration and makes R3305's in-memory
+  registry self-healing across a bounce (R3319; the registering half lives
+  in crc-RecallAgentBuilder.md).
+- **Complement (R3312): the skills stop capturing the id.** No
+  `sessionid=${CLAUDE_SESSION_ID}` header and no identity argument typed
+  from one, in `/bloodhound`, `/recall`, or `/luhmann` — the three whose
+  captured value reached a session-scoped verb. `/ark` and `/diag` are
+  deliberately **out of scope** (their captured id only suffixes a filename
+  or prints a diagnostic line, so a stale value misnames a file rather than
+  silently disabling recall) and keep the header pending gap O181. The
+  declaration removes the need for the capture, and the capture is what
+  made the staleness reachable — so the two halves land together or the
+  hazard survives in the skill text. Where a spawner still needs a value
+  the CLI will not resolve for it (`recall next`'s `--tube`), the skill
+  directs it to read the id live with `printenv` at spawn time rather than
+  from earlier text.
 - Global flags (R2923): `&cli.StringFlag{Name: "dir"}` (default `~/.ark/`)
   and `&cli.BoolFlag{Name: "v", Config: cli.BoolConfig{Count: &verbosity}}`
   for repeated-`-v` counting sit on the root; a root `Before` hook copies
@@ -74,6 +114,9 @@ CLITree owns how those bodies are *reached* and how their help is
   any `Action` runs. `cli.ExpandVerbosityFlags` pre-tokenizes a bundled
   `-vvvv` into `-v -v -v -v` (urfave does not bundle short flags), so
   `--dir`/`-v` are recognized before the subcommand runs.
+  `--force-session` joins them (R3316) but is **not** copied into a package
+  global: it is read from the command context by the declaring node's
+  `Before`, so a node that never declares a session need cannot consume it.
 - Single-dash-long preserved (R2922): urfave/cli rides stdlib `flag`, so
   every node's flags accept one or two dashes (`-scores` ≡ `--scores`)
   with no per-flag work — the property is inherited.
@@ -172,9 +215,10 @@ CLITree owns how those bodies are *reached* and how their help is
   [--wait] [--timeout S] [--raw] [--markdown]` (create the
   request doc + subscribe + block + print, R3021/R3022/R3029) and `add --result --loc --note
   [--chunk] | --result --done` (Luhmann's result stencil — one curated JSON
-  line per call, `--done` writes the result doc + flips its tag, R3027). A new `next --session S
+  line per call, `--done` writes the result doc + flips its tag, R3027). A new `next
   [--first|--force] [--keepalive N]` node joins the existing `luhmann`
-  group in `cmd/ark/monitoring_cli.go` (R3010). Each self-documents from
+  group in `cmd/ark/monitoring_cli.go` (R3010) — its seat identity is
+  declared rather than flagged (R3313), so it carries no `--session`. Each self-documents from
   its declarations; the `search` and `next` blocking bodies own their
   stubborn-plumbing redial (crc-CLI.md) — CLITree only routes and generates
   their help.

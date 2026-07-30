@@ -1,5 +1,5 @@
 # LuhmannEvents
-**Requirements:** R3145, R3146, R3147, R3148
+**Requirements:** R3145, R3146, R3147, R3148, R3313, R3317
 
 Server-side **event-routing bridge** — the third producer onto the
 orchestrator drain tube. Frictionless events (a Lua app's `mcp.pushState()`
@@ -30,7 +30,13 @@ under the seat's existing lock and one goroutine under the seat's lifecycle.
 
 ## Does
 
-### `luhmann events --session S [--off]` → `LuhmannEvents(session, off)`
+### `luhmann events [--off]` → `LuhmannEvents(S, off)`
+- `S` is the **caller's declared identity** (R3313), not a flag. R3145 routes
+  events onto the caller's own `next` tube and requires the caller to already
+  own the seat, so the value was always an own-session claim; R3311's
+  hand-maintained list had missed it, which is the evidence for declaring the
+  need on the node instead of enumerating verbs. It arrives as
+  `client_session` (R3317).
 - Server-required. Under `luhmannMu`, gate on the seat (R3145): proceed only
   when `S == luhmannOwner`, else return `you don't have ownership` — R3013's
   string, driving the orchestrator's existing stand-down reflex. Routing is a

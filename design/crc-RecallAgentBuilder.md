@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307, R3317, R3318, R3319
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -107,11 +107,21 @@ for these verbs — `ark serve` must be running.
   in-memory; no DB write.
 
 ### Loop driver — `next` (CLI-driven)
-- RecallNext(nonce, session) — the secretary's single loop verb (R2857,
-  R2858, R2888, R2889, R2891). With `session` set (the per-session
-  secretary, seam 3a) it subscribes **value-scoped**
-  `@ark-secretary-work=<session>` under subscription session
-  `<session>` — keyed on the durable session, not `recall-<nonce>`,
+- RecallNext(nonce, tube) — the secretary's single loop verb
+  (R2857, R2858, R2888, R2889, R2891). The parameter is named **`tube`**
+  (R3318): it is the subscription *address* a secretary pulls from, which
+  for a pool secretary is the composite `<luhmann-session>-<nonce>` and no
+  process's own id. It sat beside `docSession` — the doc's origin — under
+  the one word `session`, which needed a comment mid-function to
+  disentangle; that is the overload this migration ends. The deeper pool
+  helpers (`lowestPendingCuration` and siblings) keep `session` meaning
+  "subscription address" consistently and are left alone.
+  The caller's own identity **does not reach this method**: `handleRecallNext`
+  spends it on `RegisterParentSession` (R3319) and nothing in the loop
+  consults it, so the loop verb keeps knowing only about routing.
+  With `tube` set (the per-session secretary, seam 3a) it subscribes
+  **value-scoped** `@ark-secretary-work=<tube>` under subscription session
+  `<tube>` — keyed on the durable session, not `recall-<nonce>`,
   so two secretary generations across a restart share one stable,
   unique key and the `SubCount == 0` re-subscribe guard never
   no-ops a colliding subscriber (R2902, mirroring the consumer's
@@ -289,6 +299,14 @@ for these verbs — `ark serve` must be running.
   from the **reserving agent's** `$CLAUDE_CODE_SESSION_ID`
   (R3305). In-memory; a bounce drops it, like the pool roster.
   This is the only source of a parent session on the server side.
+  **Re-registered on every `next` (R3319).** The reservation is a
+  single moment and the registry does not survive a bounce, so a
+  nonce reserved beforehand would report *unmeasured* for the rest
+  of its life. The secretary's loop calls `next` continuously and
+  now carries `client_session` (R3317), so the first `next` after a
+  bounce restores the mapping with nobody having to catch the
+  reservation. Registration stays a no-op for an empty session, so
+  a CLI run outside an agent shell still registers nothing.
 - discoverSubagentJSONL(nonce) → (jsonlPath string, found bool)
   (R3306, supersedes R2760):
   1. `parent := parents[nonce]`; **not found → return

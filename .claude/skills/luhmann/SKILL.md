@@ -401,7 +401,7 @@ wire; just don't stop re-invoking `next`.
 
 | Command | Purpose |
 |---------|---------|
-| `~/.ark/ark luhmann next --session S [--first \| --force] [--keepalive N]` | **The seat.** Drain the tube (backgrounded): one curation task / directive / keepalive per return; `--first` claims, plain validates, `--force` reclaims |
+| `~/.ark/ark luhmann next [--first \| --force] [--keepalive N]` | **The seat.** Drain the tube (backgrounded): one curation task / directive / keepalive per return; `--first` claims, plain validates, `--force` reclaims |
 | `~/.ark/ark bloodhound add --result P --loc L --note T [--chunk C]` | Curation: append one curated finding to a CLI hunt's result doc |
 | `~/.ark/ark bloodhound add --result P --done` | Curation: write the result doc + wake the waiting CLI (terminal) |
 | `~/.ark/ark connections recall reserve-nonce --luhmann` | Reserve a nonce **and** register it as a pool secretary in the watcher |
@@ -422,7 +422,7 @@ your orchestrator session  (Claude Code, Opus or Mythos)
    ├─ listens for ark UI events (single-listener, per-session)
    ├─ can spawn luhmann-researcher for ad-hoc audit work
    │
-   └─ drains `ark luhmann next --session S` (backgrounded, the seat)
+   └─ drains `ark luhmann next` (backgrounded, the seat)
         │  each return is a crank handle:
         ├─ keepalive  → re-invoke (holds the seat warm)
         ├─ curation   → refine raw results, `ark bloodhound add … --done`

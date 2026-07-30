@@ -172,7 +172,14 @@ func (srv *Server) handleRecallClose(w http.ResponseWriter, r *http.Request) {
 // — the agent's CLI, a bash loop, an IDE plugin — drives it the same
 // way. The `X-Recall-Exit` header signals the exit directive; the
 // body is the crank-handle prose.
-// CRC: crc-Server.md | R2857, R2858
+// ClientSessionField is the query/body field a client's own session identity
+// travels in (R3317). Exported because it is a wire contract shared by both
+// ends: `cmd/ark` writes it, these handlers read it. Deliberately not
+// `session` — that word already means "which queue" on some verbs, and one
+// word meaning two things is the overload this field exists to end.
+const ClientSessionField = "client_session"
+
+// CRC: crc-Server.md | R2857, R2858, R3317, R3318, R3319
 func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	n, err := strconv.ParseUint(r.URL.Query().Get("nonce"), 10, 32)
 	if err != nil || n == 0 {
@@ -182,10 +189,19 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	limit, _ := Sync(srv.db, func(db *DB) (int, error) {
 		return db.Config().Luhmann.EffectiveContextLimit(), nil
 	})
-	// R2888: optional session value-scopes the curate subscription to one
-	// session (the per-session secretary). Empty = legacy bare-curate path.
-	session := r.URL.Query().Get("session")
-	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), session, limit)
+	// R2888/R3318: the optional `tube` value-scopes the curate subscription to
+	// one subscription address (the per-session secretary, or a pool
+	// secretary's composite). Empty = legacy bare-curate path. Spelled `tube`
+	// rather than `session` because it is never a claim of identity.
+	tube := r.URL.Query().Get("tube")
+	// R3319: the caller's identity rides along on every iteration, so the
+	// nonce → parent registry re-registers itself. R3305 populates it only at
+	// reserve-nonce and it is in-memory, so without this a nonce reserved
+	// before a bounce reports unmeasured for the rest of its life. Empty is a
+	// no-op inside RegisterParentSession.
+	clientSession := r.URL.Query().Get(ClientSessionField)
+	srv.recallAgentBuilder.RegisterParentSession(uint32(n), clientSession)
+	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), tube, limit)
 	if rerr != nil {
 		// Client disconnect or transient — nothing to deliver.
 		return
@@ -200,11 +216,12 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 // handleRecallListen is the consumer-side loop verb: subscribe (idempotent)
 // per capability (bloodhound-result always; recall-result with --ambient),
 // block until a result doc arrives, return it plus a crank-handle.
-// CRC: crc-Server.md | R2865, R2950
+// CRC: crc-Server.md | R2865, R2950, R3317
 func (srv *Server) handleRecallListen(w http.ResponseWriter, r *http.Request) {
-	session := r.URL.Query().Get("session")
+	// R3317: the subscribing session identifies itself in the identity field.
+	session := r.URL.Query().Get(ClientSessionField)
 	if session == "" {
-		http.Error(w, "session required", http.StatusBadRequest)
+		http.Error(w, ClientSessionField+" required", http.StatusBadRequest)
 		return
 	}
 	ambient := r.URL.Query().Get("ambient") == "true" // R2950: ambient opt-in

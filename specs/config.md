@@ -110,7 +110,7 @@ ambient watcher.
 | `reject_propose_ceiling` | int | `0`     | Once a `(chunk, tag)` edge's Recall Judgment rejection magnitude (`-score`) reaches this, the propose pass stops surfacing it. `0` (unset) = infinite, safe default.   | `simple-recall.md`     |
 | `reject_mention_ceiling` | int | `0`     | Once a `(chunk, tag)` edge's rejection magnitude (`-score`) reaches this, the assistant stops mentioning the count to the user. `0` = infinite.                       | `simple-recall.md`     |
 | `surface_cooldown`  | string   | `"24h"` | Surface-cooldown window — a previously-surfaced `(session, chunk)` is suppressed within it. Doubles as the RM record's lazy-expiry TTL. Go duration string.            | `simple-recall.md`     |
-| `context_turns`     | int      | `3`     | How many trailing conversation turns `recall next --session` injects into the curation doc so the per-session secretary judges with the live conversation. `0` = none. | `simple-recall.md`     |
+| `context_turns`     | int      | `3`     | How many trailing conversation turns `recall next` injects into the curation doc so the per-session secretary judges with the live conversation. `0` = none. | `simple-recall.md`     |
 | `per_cell_count`    | int      | `3`     | Chunks per cell in the recall 2×2 (source × axis) grid; the per-call target is 4×this (R2907).                                                                        | `recall.md`            |
 | `chat_funnel_gate`  | int      | `8`     | Max conversation sub-chunks that survive the trigram pre-filter and get embedded per recall fire — the chat funnel's cost bound (R2910).                              | `recall.md`            |
 

@@ -42,7 +42,7 @@ add`, LuhmannCLI).
               from ## Raw findings, tag @ark-bloodhound-cli-result:<id>,
               drop request doc; skip Luhmann → 1.6                        (R3039, R3040)
 
-1.5  Luhmann drains it: `ark luhmann next --session S`  (curated only)     (R3010, R3011)
+1.5  Luhmann drains it: `ark luhmann next`  (curated only)               (R3010, R3011)
      1.5.1  refine the raw results (strong-parent discernment)            (R3025)
      1.5.2  ark bloodhound add --result <id> ...  (one item per call)      (R3027)
      1.5.3  terminal add flips result doc tag @ark-bloodhound-cli-result:<id> (R3027, R3028, R3031)

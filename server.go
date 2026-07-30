@@ -2991,11 +2991,14 @@ func (srv *Server) handleLuhmannRecord(w http.ResponseWriter, r *http.Request) {
 // X-Luhmann-Exit signals stand-down (you don't have ownership); X-Luhmann-Reclaim
 // signals re-invoke --first (there are no sessions); neither on a normal
 // work/keepalive return. The body is crank-handle prose the skill acts on.
-// CRC: crc-Server.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3016
+// CRC: crc-Server.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3016, R3317
 func (srv *Server) handleLuhmannNext(w http.ResponseWriter, r *http.Request) {
-	session := r.URL.Query().Get("session")
+	// R3317: the seat claimant identifies itself in the identity field. Note the
+	// sibling `handleListen` keeps a plain `session` parameter on purpose — that
+	// one names a pubsub *subscription*, not a Claude Code session.
+	session := r.URL.Query().Get(ClientSessionField)
 	if session == "" {
-		http.Error(w, "session required", http.StatusBadRequest)
+		http.Error(w, ClientSessionField+" required", http.StatusBadRequest)
 		return
 	}
 	mode := luhmannModePlain

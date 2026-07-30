@@ -154,7 +154,7 @@ carries an empty-seed note and the agent starts from its own searches.
 
 ## Dispatch — search ahead of recall (`next`)
 
-`ark connections recall next --session <S> <N>` dispatches a session's pending
+`ark connections recall next --tube <S> <N>` dispatches a session's pending
 docs; the bloodhound adds one ordering rule:
 
 - **Pending bloodhound docs dispatch before pending curation docs** for the

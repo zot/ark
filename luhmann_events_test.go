@@ -361,12 +361,12 @@ func TestEventPumpUndecodableBatch(t *testing.T) {
 // Refs: R3036, R3147
 func TestFrictionlessEventCrankHandle(t *testing.T) {
 	payload := `{"task":"summarize this listing"}`
-	body := luhmannWorkPrompt("S1", LuhmannWork{Kind: "frictionless-event", Event: payload}, "")
+	body := luhmannWorkPrompt(LuhmannWork{Kind: "frictionless-event", Event: payload}, "")
 
 	if !strings.HasPrefix(body, "**First, before anything else") {
 		t.Errorf("handle does not lead with re-launch-first (R3036):\n%s", body)
 	}
-	if !strings.Contains(body, "~/.ark/ark luhmann next --session S1") {
+	if !strings.Contains(body, "~/.ark/ark luhmann next") {
 		t.Error("handle does not name the successor next command")
 	}
 	if !strings.Contains(body, payload) {
@@ -388,9 +388,9 @@ func TestHandleLuhmannEventsStatuses(t *testing.T) {
 		body       string
 		wantStatus int
 	}{
-		{"owner-opt-in-succeeds", "A", `{"session":"A","off":false}`, http.StatusOK},
-		{"owner-release-succeeds", "A", `{"session":"A","off":true}`, http.StatusOK},
-		{"foreign-session-conflicts", "A", `{"session":"B","off":false}`, http.StatusConflict},
+		{"owner-opt-in-succeeds", "A", `{"client_session":"A","off":false}`, http.StatusOK},
+		{"owner-release-succeeds", "A", `{"client_session":"A","off":true}`, http.StatusOK},
+		{"foreign-session-conflicts", "A", `{"client_session":"B","off":false}`, http.StatusConflict},
 		{"malformed-body-rejected", "A", `not json`, http.StatusBadRequest},
 	}
 	for _, tc := range cases {

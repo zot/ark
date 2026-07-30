@@ -44,15 +44,17 @@ otherwise emit a different order each run). R2953.
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
-**`--session` on an own-session verb is optional and environment-resolved.**
-`bloodhound listen`, `connections recall listen`, and `luhmann next` name *the
-caller's own session*, so the CLI resolves the value from
-`$CLAUDE_CODE_SESSION_ID` when the flag is omitted and **prefers the environment
-when a given flag disagrees**, reporting the disagreement on stderr. A skill's
-rendered `sessionid=` can be stale after a session is re-hosted
-(`--fork-session --resume`), and a stale id there fails silently rather than
-loudly. `connections recall next --session` is **excluded** — that flag is a
-routing identity, not a claim of selfhood. Canonical:
+**A verb that acts as the calling session takes no identity flag at all.**
+`bloodhound listen`, `connections recall listen`, `luhmann next`, `luhmann
+events`, and `connections recall next` **declare** a session need on their
+command node; the CLI resolves it from the global `--force-session` when given,
+otherwise from `$CLAUDE_CODE_SESSION_ID`, and **errors naming `--force-session`
+when neither resolves**. A skill's rendered `sessionid=` can be stale after a
+session is re-hosted (`--fork-session --resume`), and a stale id there fails
+silently rather than loudly, so the value is resolved where the command runs
+rather than typed. `connections recall next --tube` is **not** an identity — it
+is a routing address (the pool composite `<luhmann-session>-<nonce>`), which is
+why it is no longer spelled `--session`. Canonical:
 [session-identity.md](session-identity.md).
 
 | `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | `search`/`add` need a Luhmann; `listen [--recall]` is the consumer loop and needs only the server |
@@ -121,6 +123,7 @@ routing identity, not a claim of selfhood. Canonical:
 |------------------------------|------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | `--dir PATH` or `--dir=PATH` | `~/.ark` (or `.ark` if HOME unavailable) | Database directory                                                                                                |
 | `-v` (repeatable)            | `0`                                      | Increase verbosity. `-vv`, `-vvv`, `-vvvv` are equivalent to repeating. Bound to package-level `Logv(level, ...)` |
+| `--force-session ID`         | unset                                    | Act as session `ID` instead of `$CLAUDE_CODE_SESSION_ID`. Consulted **only** by verbs that declare a session need (see [session-identity.md](session-identity.md)); deliberately not copied into a package global, so a verb that does not declare the need cannot consume it |
 | `--help` / `-h`              | —                                        | Show tree-generated help and exit 0 — at any node (`ark --help`, `ark connections --help`, `ark connections recall close --help`), each with the full command path |
 
 `help [COMMAND]` and bare `ark` also print the generated command list
@@ -538,7 +541,7 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
 ark connections recall reserve-nonce [--luhmann] [--class C]
-ark connections recall next [--session SID] NONCE
+ark connections recall next [--tube ADDR] NONCE
 ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT
 ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
 ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)
@@ -623,9 +626,9 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   See [secretary-pools.md](secretary-pools.md),
   [bloodhound-cli.md](bloodhound-cli.md), and
   [simple-recall.md](simple-recall.md).
-- `recall next [--session SID] NONCE` is the recall secretary's entire
-  loop — a batteries-included crank handle. With `--session SID` it
-  subscribes **value-scoped** `@ark-recall-curate=<SID>` and dispatches the
+- `recall next [--tube ADDR] NONCE` is the recall secretary's entire
+  loop — a batteries-included crank handle. With `--tube ADDR` it
+  subscribes **value-scoped** `@ark-recall-curate=<ADDR>` and dispatches the
   curation docs **addressed** to it — each doc's `@ark-secretary-work` head
   tag, which the watcher wrote when it chose a server. For a session's own
   secretary that address is its session; for a `recall`-class pool secretary
@@ -692,10 +695,11 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   `-preserve-curation`; locates the calling subagent's JSONL via
   the `nonce → .meta.json` lookup, sums tokens, and appends one
   record to `~/.ark/monitoring/recall.jsonl`.
-- `recall listen --session SID [--ambient]` is the consumer-side loop
+- `recall listen [--ambient]` is the consumer-side loop
   verb — the mirror of `recall next` for the user-facing assistant, and
-  the older spelling of **`ark bloodhound listen [--session SID]
-  [--recall]`**, where the concept lives. One implementation serves both,
+  the older spelling of **`ark bloodhound listen [--recall]`**, where the
+  concept lives. Both declare a session need, so neither takes an identity
+  flag. One implementation serves both,
   so the spellings cannot drift; `--recall` and `--ambient` are the same
   flag. On
   first call it idempotently subscribes **per capability**: always to
@@ -924,9 +928,9 @@ See: `subscribe`
 ark luhmann spawn-record --class C --nonce N --task-id T
 ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K] [--backoff S]
 ark luhmann inspect-exit --nonce N [--json]
-ark luhmann next --session S [--first | --force] [--keepalive SECONDS]
+ark luhmann next [--first | --force] [--keepalive SECONDS]
 ark luhmann send "<instruction>" [--timeout SECONDS]
-ark luhmann events --session S [--off]
+ark luhmann events [--off]
 ark luhmann launch [--bootstrap INPUT]
 ark luhmann attach
 ark luhmann status [--json]

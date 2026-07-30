@@ -13,7 +13,7 @@ Participants: **Luhmann** (the hosted orchestrator session) · **LuhmannEvents**
 Frictionless Lua app) · **Agent** (any non-Luhmann `ark ui event` caller).
 
 ```
-1.    Luhmann: ark luhmann events --session S            [opt-in; already owns the next seat]
+1.    Luhmann: ark luhmann events                        [opt-in; already owns the next seat]
 1.1     Luhmann -> LuhmannEvents: POST /luhmann/events {session:S, off:false}
 1.2     LuhmannEvents: under luhmannMu — S != luhmannOwner ? -> 4xx "you don't have ownership" (R3145)
 1.3     LuhmannEvents: eventOwner := S ; start eventPump(ctx) ; store eventPumpCancel  (idempotent for S)
@@ -34,7 +34,7 @@ Frictionless Lua app) · **Agent** (any non-Luhmann `ark ui event` caller).
 ```
 
 ```
-3.    Luhmann': ark luhmann next --session S' --force     [a new orchestrator takes the seat]
+3.    Luhmann': ark luhmann next --force                  [a new orchestrator takes the seat]
 3.1     Luhmann' -> LuhmannCLI: claimLuhmann(S', force) under luhmannMu
 3.2     LuhmannCLI: luhmannOwner := S'  AND  clearEventRouting() — same lock, one step (R3148)
 3.3     LuhmannEvents: eventOwner := "" ; eventPumpCancel() -> pump exits at 1.10

@@ -120,8 +120,14 @@ func TestWriteCurationFile_AndPointer(t *testing.T) {
 	if !strings.Contains(prompt, path) {
 		t.Error("recallDocPrompt must name the curation file path")
 	}
-	if !strings.Contains(prompt, "--session sess-A 2") {
-		t.Error("recallDocPrompt must carry the session+nonce re-run command")
+	// R3318: the dictated re-run command names the tube, not a session. The
+	// crank handle IS the secretary's instruction, so a flag that no longer
+	// exists here would fail its very next loop iteration.
+	if !strings.Contains(prompt, "--tube sess-A 2") {
+		t.Error("recallDocPrompt must carry the tube+nonce re-run command")
+	}
+	if strings.Contains(prompt, "--session") {
+		t.Error("recallDocPrompt dictates a --session flag the CLI no longer accepts (R3318)")
 	}
 }
 

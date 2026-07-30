@@ -11,7 +11,7 @@ moved into one server verb plus the agent persona):
 - `.claude/agents/ark-recall-agent.md` — the Claude Code agent
   definition: frontmatter (Haiku, `memory: local`) plus the secretary
   persona, which carries **both** the loop ("run `ark connections
-  recall next --session <S> <nonce>` and do what it says") and the
+  recall next --tube <S> <nonce>` and do what it says") and the
   judgment bar (does a candidate fit the **live conversation** injected
   into the doc, not merely resemble the source paragraph — and filter
   *and* sharpen tags, the bar being discrimination not mere accuracy).
@@ -51,7 +51,7 @@ allowlist, and the persona that drives the verb.
     <cookie> --nonce <N>`. The craft lives in the crank handle, not
     the persona.
   - The **loop instruction** (R2860, R2896): run `ark connections
-    recall next --session <S> <nonce>` — it blocks ≤~90s and returns a
+    recall next --tube <S> <nonce>` — it blocks ≤~90s and returns a
     **short pointer** inline; stay in the same turn and loop (no
     `sleep`, no polling, no backgrounding, no ending the turn) — on a
     curation-doc pointer, **Read the file it names** (`Read` is permitted
@@ -63,7 +63,7 @@ allowlist, and the persona that drives the verb.
     the reader's own conversation paragraph (R2873, R2898).
   - The session UUID and nonce arrive in the prompt (`Session: <S>`,
     `Nonce: <N>`) and the nonce also in the Task description; the agent
-    passes them to every `next --session <S> <N>` / `close` call (R2890).
+    passes them to every `next --tube <S> <N>` / `close` call (R2890).
 - Guard (`recall-agent-guard.sh`) carries:
   - The allowlist permitting `ark connections recall next | surface
     | recommend | close | finding`, `cat <file>` (single-arg, no
@@ -86,7 +86,7 @@ allowlist, and the persona that drives the verb.
   the `nonce <N>` description, and the prompt carrying its `Session: <S>`
   and `Nonce: <N>` (R2890).
 - Run the loop in one continuous foreground turn: `ark connections
-  recall next --session <S> <N>` (blocks ≤~90s, returns inline) → on a
+  recall next --tube <S> <N>` (blocks ≤~90s, returns inline) → on a
   curation doc, judge candidates against the injected conversation,
   `surface`/`recommend` the worthy ones, `close <F> --nonce <N>`; on a
   keepalive, loop; on an exit directive, stop so the spawning assistant

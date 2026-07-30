@@ -80,9 +80,9 @@ borrow from and nothing else can serve you; or you expect heavy iterative
 search and would rather not share. Skip it otherwise — a one-off hunt, or an
 ordinary session with an orchestrator up, is served perfectly well by the pool.
 
-**Get your live session id first** — the secretary needs it, and unlike
-`listen` its loop verb does not resolve one for itself (its `--session` is a
-routing identity, not a claim of selfhood):
+**Get your live session id first** — the secretary needs it to name its *tube*,
+and unlike `listen` its loop verb cannot resolve that for itself (`--tube` is a
+routing address, not a claim of selfhood, so the CLI never fills it in):
 ```
 printenv CLAUDE_CODE_SESSION_ID
 ```
@@ -100,7 +100,7 @@ Then launch it with the **Task tool**, `run_in_background: true`:
   substring is how the server finds the subagent's transcript; it must be present.
 - `prompt`: `Start the recall secretary loop now. Session: <sessionid>. Nonce: <N>.`
 
-The secretary loops internally (`recall next --session <sessionid> <N>`), draining
+The secretary loops internally (`recall next --tube <sessionid> <N>`), draining
 its `@ark-secretary-work` tube — search tasks now, curation docs too once ambient
 is on — until its context fills, then it exits and the harness notifies you
 (step 3).

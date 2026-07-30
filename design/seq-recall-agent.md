@@ -60,7 +60,7 @@ step 7.7.
 ## Flow 2: daemon loop iteration — `next` returns the doc
 
 ```
-3. ark connections recall next --session <S> <N>             (R2857, R2902)
+3. ark connections recall next --tube <S> <N>                (R2857, R2902)
          │  (the whole loop; the CLI redials on an ark serve
          │   bounce, R2903) server-side, in one verb: idempotent
          │  subscribe keyed on <S> (R2902) on first call →

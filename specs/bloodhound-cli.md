@@ -314,7 +314,7 @@ wakes:
   shared queue, no claim needed for one-grabs-each. Because the value is still a
   real session id with the nonce appended after a dash, it fits the existing
   `<session>-<segment>` shape, so the pool secretary runs the ordinary
-  `recall next --session <luhmann-session>-<nonce>` and every subscribe / route
+  `recall next --tube <luhmann-session>-<nonce>` and every subscribe / route
   path works unchanged.
 - **`@ark-bloodhound-cli-return`** — the secretary re-tags the request doc to
   it when its raw results are in; the watcher subscribes and wakes to free the

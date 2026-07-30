@@ -100,7 +100,7 @@ card covers only the Go surface the skill calls into.
   `user`), `last_error` (string or null), and `tokens_at_close`
   (the R2777 value, or `0` when unmeasured).
 
-### `luhmann next --session S [--first|--force] [--keepalive N]`
+### `luhmann next [--first|--force] [--keepalive N]`
 - Server-required. The orchestrator's **drain tube**: a blocking
   long-poll that returns one work item and is re-invoked in a loop
   (R3010). The Luhmann skill backgrounds it so the session stays

@@ -58,7 +58,7 @@ end. Old readers ignore unknown fields.
 ark luhmann spawn-record --class C --nonce N --task-id T
 ark luhmann exit-record  --class C --nonce N --reason R [--crashes K] [--quit-early K]
 ark luhmann inspect-exit --nonce N [--json]
-ark luhmann next --session S [--first | --force] [--keepalive N]
+ark luhmann next [--first | --force] [--keepalive N]
 ark luhmann send "<instruction>" [--timeout D]
 ```
 
@@ -289,7 +289,7 @@ serialized conversation thread it already uses for curation tasks,
 directives, and commands.
 
 ```
-ark luhmann events --session S [--off]
+ark luhmann events [--off]
 ```
 
 `--session S` must already own the `next` seat. Routing is a privilege of

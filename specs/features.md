@@ -349,7 +349,7 @@ processing one curation doc per fire) filters the candidates and
 writes a **result doc** the assistant reads — keeping an LLM
 out of the high-frequency watcher path while a cheap model
 curates before anything reaches the user. The assistant consumes
-that result doc through `ark connections recall listen --session SID`,
+that result doc through `ark connections recall listen`,
 a backgrounded consumer loop the **`/recall` skill** starts: it
 subscribes the session to its result tag and blocks until a doc
 arrives. That subscription is also the daemon's **opt-in gate** —

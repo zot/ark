@@ -101,6 +101,10 @@ func buildArkCommand() *ucli.Command {
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "dir", Value: defaultDB(), Usage: "database directory (default ~/.ark/)"}, // R71
 			&ucli.BoolFlag{Name: "v", Usage: "increase verbosity (repeatable, up to -vvvv)", Config: ucli.BoolConfig{Count: &verbosity}},
+			// R3316: consulted only by nodes that declare a session need
+			// (needsClientSession); deliberately NOT copied into a package
+			// global, so a node that never declares the need cannot consume it.
+			&ucli.StringFlag{Name: forceSessionFlag, Usage: "act as this Claude Code session instead of $CLAUDE_CODE_SESSION_ID (session-scoped verbs only)"},
 		},
 		// Before runs ahead of any subcommand Action, so the bodies that
 		// read arkDir / the verbosity level see the parsed globals. (R724,
@@ -4487,10 +4491,10 @@ const (
 // `next` cannot reach the server (a bounce). Shaped like the server's
 // own keepalive so the secretary loops without ever seeing an error.
 // CRC: crc-RecallAgentBuilder.md | R2903
-func recallRedialKeepalive(session string, nonce uint64) string {
+func recallRedialKeepalive(tube string, nonce uint64) string {
 	nextCmd := fmt.Sprintf("~/.ark/ark connections recall next %d", nonce)
-	if session != "" {
-		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --session %s %d", session, nonce)
+	if tube != "" {
+		nextCmd = fmt.Sprintf("~/.ark/ark connections recall next --tube %s %d", tube, nonce)
 	}
 	return fmt.Sprintf("The ark server is restarting or briefly unreachable — no work yet. This is normal. Run `%s` again now to keep watching; do not stop, do not wait.\n", nextCmd)
 }

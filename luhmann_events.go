@@ -165,10 +165,13 @@ func (srv *Server) gateFrictionlessWait(next http.Handler) http.Handler {
 }
 
 // handleLuhmannEvents is the `ark luhmann events` server verb (R3145).
-// CRC: crc-LuhmannEvents.md | Seq: seq-luhmann-events.md#1.1 | R3145
+// CRC: crc-LuhmannEvents.md | Seq: seq-luhmann-events.md#1.1 | R3145, R3317
 func (srv *Server) handleLuhmannEvents(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Session string `json:"session"`
+		// R3317: the caller's own identity, in the identity field. It was
+		// always an own-session claim (R3145 gates on the caller owning the
+		// seat), so it is declared by the node rather than typed as a flag.
+		Session string `json:"client_session"`
 		Off     bool   `json:"off"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

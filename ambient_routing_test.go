@@ -315,7 +315,7 @@ func TestDispatchMatchesAddressNotPath(t *testing.T) {
 func TestStandUpDirectiveCarriesClass(t *testing.T) {
 	for _, class := range []string{bloodhoundPoolClass, recallPoolClass} {
 		t.Run(class, func(t *testing.T) {
-			body := luhmannWorkPrompt("L", LuhmannWork{
+			body := luhmannWorkPrompt(LuhmannWork{
 				Kind: "directive", Directive: "stand-up", Class: class,
 			}, "")
 			want := "reserve-nonce --luhmann --class " + class

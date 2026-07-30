@@ -54,7 +54,7 @@ if [ "$TOOL" = Read ]; then
     if echo "$FP" | grep -qE '/recall-curation/curation-[^/]*\.md$'; then
         exit 0
     fi
-    echo "BLOCKED: the Read tool is permitted ONLY for the curation doc \`next\` names (a path under .../recall-curation/). Run \`~/.ark/ark connections recall next --session <S> <your nonce>\`, then Read the curation file it points you to." >&2
+    echo "BLOCKED: the Read tool is permitted ONLY for the curation doc \`next\` names (a path under .../recall-curation/). Run \`~/.ark/ark connections recall next --tube <S> <your nonce>\`, then Read the curation file it points you to." >&2
     exit 2
 fi
 
