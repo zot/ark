@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2760, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3295
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -116,10 +116,18 @@ for these verbs — `ark serve` must be running.
   unique key and the `SubCount == 0` re-subscribe guard never
   no-ops a colliding subscriber (R2902, mirroring the consumer's
   session-keyed result subscription). `lowestPendingCuration`
-  dispatches only that
-  session's `curation-<session>-<fire>` docs, and the returned doc is
-  prefixed with the session's last-`[recall].context_turns` conversation
-  turns (`injectConversation` / `recentConversation`, best-effort). With
+  dispatches the docs **addressed** to that subscription — matching each
+  doc's `@ark-secretary-work` head tag, not the session embedded in its
+  path (R3302). The distinction is invisible for a session's own
+  secretary, whose address and the docs' origin coincide; it is what
+  lets a `recall`-class pool secretary be sent another session's doc
+  by the watcher (R3303) while still taking only what it was sent.
+  The doc's **origin** (its path) continues to select the conversation
+  injected ahead of it — the session's last-`[recall].context_turns`
+  turns via `injectConversation` / `recentConversation`, best-effort —
+  and to gate on that session's result subscriber, so a pool secretary
+  curates with the originating session's context rather than its own
+  composite's, which has none (R2891). With
   no `session` it keeps the legacy bare-`@ark-secretary-work`, all-session
   scan (subscription session `recall-<nonce>`). It then
   checks the nonce's context fill (R2777) against
@@ -277,14 +285,28 @@ for these verbs — `ark serve` must be running.
     entry.
 
 ### Subagent JSONL discovery
+- parents: map[nonce]parentSession — recorded at `reserve-nonce`
+  from the **reserving agent's** `$CLAUDE_CODE_SESSION_ID`
+  (R3305). In-memory; a bounce drops it, like the pool roster.
+  This is the only source of a parent session on the server side.
 - discoverSubagentJSONL(nonce) → (jsonlPath string, found bool)
-  (R2760):
-  1. `cwd_encoded := strings.ReplaceAll(cwd, "/", "-")`
-  2. `parent_session := os.Getenv("CLAUDE_CODE_SESSION_ID")`
-  3. `dir := ~/.claude/projects/<cwd_encoded>/<parent_session>/subagents`
-  4. Scan `*.meta.json` for the first entry whose
+  (R3306, supersedes R2760):
+  1. `parent := parents[nonce]`; **not found → return
+     ("", false)**, which the caller must surface as *unmeasured*
+     rather than as a zero (R3307).
+  2. `dir := <chat-source project dir>/<parent>/subagents`
+  3. Scan `*.meta.json` for the first entry whose
      `description` body contains the substring `nonce <N>`.
-  5. Return the paired `agent-<id>.jsonl` path.
+  4. Return the paired `agent-<id>.jsonl` path.
+
+  **Never `os.Getenv("CLAUDE_CODE_SESSION_ID")` here.** The server
+  is not launched by an agent, so it is unset; and when it *is*
+  set, by inheritance from whatever shell started `ark serve`, it
+  resolves only that one session's children and silently misses
+  every other session's — which is worse than failing, because it
+  works often enough to look correct. The cold CLI path in
+  crc-LuhmannCLI.md keeps reading the environment on purpose: it
+  runs in an agent shell and must work with no server.
 - sumSubagentTokens(jsonlPath) → (inTokens, outTokens int)
   (R2761): line-by-line scan; for each `"type":"assistant"`
   record, add `usage.input_tokens` and `usage.output_tokens`.
@@ -351,7 +373,9 @@ the shared `@ark-secretary-work` tube; the bloodhound's output is its
   `lowestPendingCuration`); within a kind, lowest id first.
   `lowestPendingBloodhound` dispatches a task only while the session has an
   `ark-bloodhound-result` subscriber (R3279), mirroring how
-  `lowestPendingCuration` gates on `ark-recall-result`. A
+  `lowestPendingCuration` gates on the **origin** session's
+  `ark-recall-result` — the session the result will be delivered to,
+  which for a routed doc is not the secretary's own (R3302). A
   bloodhound doc is small (crank handle + payload), so `next`
   returns its body **inline** (no `writeCurationFile`, no Read
   keyhole) with the close directive framed by the `<session>-b<B>`

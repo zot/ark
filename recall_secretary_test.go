@@ -65,7 +65,7 @@ func TestAssistantText(t *testing.T) {
 func TestDropCooledCandidates(t *testing.T) {
 	_, db := setupRecall(t)
 	db.config.Recall.SurfaceCooldown = "24h"
-	w := &RecallWatcher{db: db, store: db.store}
+	w := NewRecallWatcher(db, nil, db.store, nil)
 
 	if err := db.store.MarkSurfaced("sess-A", 100); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestDropCooledCandidates(t *testing.T) {
 func TestDropCooledCandidates_Disabled(t *testing.T) {
 	_, db := setupRecall(t)
 	db.config.Recall.SurfaceCooldown = "0"
-	w := &RecallWatcher{db: db, store: db.store}
+	w := NewRecallWatcher(db, nil, db.store, nil)
 	if err := db.store.MarkSurfaced("sess-A", 100); err != nil {
 		t.Fatal(err)
 	}

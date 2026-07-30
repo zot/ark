@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270, R3309, R3310, R3311, R3312
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -41,6 +41,32 @@ CLITree owns how those bodies are *reached* and how their help is
   from the flag declarations, so adding/renaming a flag needs no second
   edit. Retires `usage()`, `printConnectionsHelp`, `uiUsage`,
   `printConfigHelp`, and the `luhmann`/`schedule` usage blocks (R2931).
+- resolveOwnSession(flag string) (session string, report string)
+  (R3309, R3310, R3311): the single resolver for a `--session` flag that
+  names **the caller's own session**. Returns the live
+  `$CLAUDE_CODE_SESSION_ID` when the flag is empty; the flag when they
+  agree or the environment is empty; and the **environment** when they
+  disagree, with a non-empty `report` the caller prints to stderr naming
+  both values.
+  - The environment wins because the flag's value can only have arrived
+    via text a model typed, which `--fork-session --resume` may have
+    replayed from before a session was re-hosted — skills render
+    `${CLAUDE_SESSION_ID}` at *load* time, a snapshot, whereas the resolver
+    reads the live per-process `$CLAUDE_CODE_SESSION_ID` (different
+    mechanisms; the former is not an env var). Reporting rather than silently correcting is
+    load-bearing: a silent fix would repair each call and hide that
+    sessions are being re-hosted at all.
+  - Callers: `bloodhound listen`, `connections recall listen`,
+    `luhmann next`. **Not `connections recall next`** — that flag is a
+    routing identity (the pool composite `<luhmann>-<nonce>`, R3032), not
+    a claim of selfhood, and resolving it from the environment would aim
+    every pool secretary at its parent's tube.
+  - **Complement (R3312): the skills stop capturing the id.** No
+    `sessionid=${CLAUDE_SESSION_ID}` header and no `--session`
+    argument typed from one, in any of `/ark`, `/bloodhound`, `/recall`,
+    `/luhmann`, `/diag`. The resolver removes the need for the capture,
+    and the capture is what made the staleness reachable — so the two
+    halves land together or the hazard survives in the skill text.
 - Global flags (R2923): `&cli.StringFlag{Name: "dir"}` (default `~/.ark/`)
   and `&cli.BoolFlag{Name: "v", Config: cli.BoolConfig{Count: &verbosity}}`
   for repeated-`-v` counting sit on the root; a root `Before` hook copies

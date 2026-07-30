@@ -42,6 +42,18 @@ log and reports:
   tail: for `luhmann`, the current crash and quit-early counters
   and the current nonce; for `recall`, the recent fire count and
   the average in/out tokens across the last N records.
+
+  **An average never counts an unmeasured record as a zero.** A
+  fire whose token fields could not be measured — the subagent's
+  transcript was not resolvable, so there is no count to report —
+  is excluded from the denominator, and the number of records the
+  average was actually taken over is reported beside it. Averaging
+  the gaps in as zeros is how a broken measurement comes to look
+  like a quiet system: the two are indistinguishable in the
+  output, and the reported figure drifts toward zero in exact
+  proportion to how badly the measurement is failing. A field that
+  was never populated and a field that is genuinely zero must not
+  render the same way.
 - An `emergency` flag — set when the class's latest state-defining
   record is a *storm* pause (reason `crash-storm` or
   `quit-early-storm`, written by the supervisor when a crash or

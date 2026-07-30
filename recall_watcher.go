@@ -65,12 +65,22 @@ type RecallWatcher struct {
 	// tmp://), reset on restart — distinct from fireCounters. R2937
 	bloodhoundCounters map[string]uint64
 
-	// CLI-bloodhound Fixer state (S2). luhmann is the S1 orchestrator-seat
-	// bridge (owner + nextQueue); pool is the pool-secretary roster + the
-	// pending-hunt queue. Both nil-safe: the Fixer no-ops without a hub.
-	// R3020, R3023, R3024
+	// Fixer state (S2). luhmann is the S1 orchestrator-seat bridge (owner +
+	// nextQueue). Nil-safe: the Fixer no-ops without a hub. R3020, R3023, R3024
 	luhmann luhmannHub
-	pool    *cliPool
+
+	// pools holds one secretary roster per class (R3298): "bloodhound" serves
+	// external hunts and stranded watermarks, "recall" serves ambient curation
+	// for sessions with no secretary of their own. Classes never share slots,
+	// so neither workload can starve the other and each is sized by its own
+	// class.<NAME>.pool_max. Read-only after construction — the rosters
+	// themselves carry the mutation locks.
+	pools map[string]*secretaryPool
+	// pool is pools[bloodhoundPoolClass], kept as a direct handle because the
+	// CLI-hunt paths are bloodhound-specific by construction (they touch
+	// `requests`, which only that class has). Class-generic work — autoscale,
+	// pruning, registration — goes through pools.
+	pool *secretaryPool
 }
 
 // recallSessionState carries the per-session accumulator and timer.
@@ -89,6 +99,14 @@ type recallSessionState struct {
 // NewRecallWatcher constructs a watcher. The worker goroutine
 // starts when Start is called. R2687
 func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgentBuilder) *RecallWatcher {
+	// R3298: one roster per class, built up front so no path has to decide
+	// whether a class "exists yet" — an absent roster and an empty one would
+	// otherwise mean the same thing to a caller and different things to a
+	// stand-up decision.
+	pools := map[string]*secretaryPool{
+		bloodhoundPoolClass: newSecretaryPool(),
+		recallPoolClass:     newSecretaryPool(),
+	}
 	return &RecallWatcher{
 		db:                 db,
 		librarian:          lib,
@@ -98,7 +116,8 @@ func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgent
 		sessions:           make(map[string]*recallSessionState),
 		fireCounters:       make(map[string]uint64),
 		bloodhoundCounters: make(map[string]uint64),
-		pool:               newCLIPool(),
+		pools:              pools,
+		pool:               pools[bloodhoundPoolClass],
 	}
 }
 
@@ -453,7 +472,7 @@ func (w *RecallWatcher) poolCanServe() bool {
 	}
 	w.pool.mu.Lock()
 	defer w.pool.mu.Unlock()
-	return w.pool.pickFreeLocked() != nil || len(w.pool.secretaries) < w.poolMax()
+	return w.pool.pickFreeLocked() != nil || len(w.pool.secretaries) < w.poolMax(bloodhoundPoolClass)
 }
 
 // ambientEnabled gates ambient curation (arm/accumulate/fire): the assistant
@@ -506,7 +525,7 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Ambient (R2949): accumulate + arm only when the recall-result sub is
+	// Ambient (R3294): accumulate + arm only when the recall-result sub is
 	// present; otherwise tear down any lingering ambient state so a dropped
 	// recall-result doesn't leave an armed timer or stale pendingChunks.
 	if !w.ambientEnabled(sessionID) {
@@ -608,12 +627,12 @@ func (w *RecallWatcher) fire(sessionID string) {
 		return
 	}
 
-	// Ambient backstop to the OnAppend arming gate (R2949): re-check the
+	// Ambient backstop to the OnAppend arming gate (R3294): re-check the
 	// secretary + recall-result subs in case the consumer dropped during
 	// activation_delay. Missing → skip the substrate call + disk write;
 	// pendingChunks is already cleared (R2735), so the next OnAppend starts
 	// fresh.
-	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.4 | R2806, R2949
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#5.4 | R2806, R3294
 	if !w.ambientEnabled(sessionID) {
 		Logv(2, "recall-watcher: no secretary/recall-result subscriber session=%s fire=%d pending=%d",
 			sessionID, fire, len(snapshot))
@@ -752,6 +771,15 @@ func (w *RecallWatcher) fire(sessionID string) {
 		log.Printf("recall-watcher: curation doc write failed: %v", err)
 		return
 	}
+
+	// Choose who serves it. The builder addressed the doc to its own session,
+	// which is right only when that session has a secretary; otherwise the
+	// watcher re-addresses it to a recall-class pool secretary, or reports it
+	// unservable. Routing is deliberately after the write rather than before:
+	// a doc that waits for a stand-up must already exist to be routed on
+	// registration.
+	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#6 | R3302, R3303, R3304
+	w.routeCuration(sessionID, fire)
 
 	// Mark-on-send RD writes. R2711, R2712, R2740
 	discussedCount := 0

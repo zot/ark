@@ -155,9 +155,13 @@ func recallCommand() *ucli.Command {
 		Action: connRecallDefaultAction,
 		Commands: []*ucli.Command{
 			{
-				Name:   "reserve-nonce",
-				Usage:  "return the next per-server monotonic nonce",
-				Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "luhmann", Usage: "also register the nonce as a CLI-bloodhound pool secretary in the watcher"}},
+				Name:  "reserve-nonce",
+				Usage: "return the next per-server monotonic nonce",
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{Name: "luhmann", Usage: "also register the nonce as a pool secretary in the watcher"},
+					// R3299: the class is declared by the reserving caller.
+					&ucli.StringFlag{Name: "class", Value: "bloodhound", Usage: "pool class to register into: bloodhound | recall"},
+				},
 				Action: connRecallReserveNonceAction,
 			},
 			{
@@ -218,8 +222,6 @@ func recallCommand() *ucli.Command {
 				ArgsUsage: "NONCE",
 				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID — value-scope the curate subscription"},
-					// R3295: declared, never inferred from the composite's shape.
-					&ucli.BoolFlag{Name: "pool", Usage: "serve ambient curation for any session (Luhmann pool secretary)"},
 				},
 				Action: connRecallNextAction,
 			},
@@ -227,7 +229,7 @@ func recallCommand() *ucli.Command {
 				Name:  "listen",
 				Usage: "consumer loop verb: block until a result arrives (findings; + ambient surfaces with --ambient)",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (required)"},
+					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (optional — resolved from $CLAUDE_CODE_SESSION_ID; a disagreeing value loses, R3309)"},
 					&ucli.BoolFlag{Name: "ambient", Usage: "also subscribe to ambient surfaces (level 4); without it, findings only"},
 				},
 				Action: connRecallListenAction,
@@ -587,6 +589,16 @@ func connRecallReserveNonceAction(_ context.Context, c *ucli.Command) error {
 	body := map[string]any{}
 	if c.Bool("luhmann") {
 		body["luhmann"] = true
+		body["class"] = c.String("class") // R3299
+	}
+	// R3305: capture the reserving agent's session here, in the agent's own
+	// shell, and hand it to the server — which has no such variable of its own
+	// and cannot discover a subagent's transcript without it. Read at
+	// reservation rather than at lookup because this is the only moment the
+	// parent is knowable: the CLI runs as the parent, the lookup runs in the
+	// server. Empty outside an agent shell, which registers nothing.
+	if sess := os.Getenv("CLAUDE_CODE_SESSION_ID"); sess != "" {
+		body["parent_session"] = sess
 	}
 	var resp struct {
 		Nonce uint32 `json:"nonce"`
@@ -742,9 +754,6 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 	if session != "" {
 		nextURL += "&session=" + session
 	}
-	if c.Bool("pool") {
-		nextURL += "&pool=true" // R3295
-	}
 	req, err := http.NewRequest("GET", nextURL, nil)
 	if err != nil {
 		fatal(err)
@@ -787,9 +796,10 @@ func connRecallNextAction(_ context.Context, c *ucli.Command) error {
 
 // CRC: crc-CLITree.md | R2865
 func connRecallListenAction(_ context.Context, c *ucli.Command) error {
-	session := c.String("session")
+	// R3309: own-session flag — the live environment is authoritative.
+	session := applyOwnSession(c.String("session"))
 	if session == "" {
-		fmt.Fprintln(os.Stderr, "ark connections recall listen --session SID")
+		fmt.Fprintln(os.Stderr, "ark connections recall listen [--session SID]")
 		os.Exit(2)
 	}
 	client := serverClient(arkDir)

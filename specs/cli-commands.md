@@ -44,6 +44,17 @@ otherwise emit a different order each run). R2953.
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
+**`--session` on an own-session verb is optional and environment-resolved.**
+`bloodhound listen`, `connections recall listen`, and `luhmann next` name *the
+caller's own session*, so the CLI resolves the value from
+`$CLAUDE_CODE_SESSION_ID` when the flag is omitted and **prefers the environment
+when a given flag disagrees**, reporting the disagreement on stderr. A skill's
+rendered `sessionid=` can be stale after a session is re-hosted
+(`--fork-session --resume`), and a stale id there fails silently rather than
+loudly. `connections recall next --session` is **excluded** — that flag is a
+routing identity, not a claim of selfhood. Canonical:
+[session-identity.md](session-identity.md).
+
 | `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | `search`/`add` need a Luhmann; `listen [--recall]` is the consumer loop and needs only the server |
 | `bundle`           | `bundle -o OUT [-src SRC] DIR`                                                                                       | n/a                      | build-time                                           |
 | `cat`              | `cat FILE`                                                                                                           | n/a                      | bundled binary only; alias of `bundle cat`           |
@@ -308,7 +319,7 @@ External-app access to the warm bloodhound ([bloodhound-cli.md](bloodhound-cli.m
 ark bloodhound search [CLUE...] [--file PATH|-] [--scope S] [--depth D] [--want W] [--filter-files G] [--exclude-files G] [--wait] [--timeout SECONDS] [--raw] [--markdown]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --loc PATH:RANGE --note NOTE [--chunk TEXT]
 ark bloodhound add --result tmp://BLOODHOUND-CLI/<id> --done
-ark bloodhound listen --session SID [--recall]
+ark bloodhound listen [--session SID] [--recall]
 ```
 
 **`search`** — submit a directed hunt and print the findings (default: curated
@@ -526,14 +537,14 @@ ark connections recall INPUTS... [--k N] [-all] [--no-content]
                                  [--type chunk|text] [--json]
                                  [--session SID] [--discussed @t[:v][,@t[:v]...]]
                                  [--propose]
-ark connections recall reserve-nonce
-ark connections recall next [--session SID] [--pool] NONCE
+ark connections recall reserve-nonce [--luhmann] [--class C]
+ark connections recall next [--session SID] NONCE
 ark connections recall surface FIRE -loc PATH:RANGE -reason TEXT
 ark connections recall recommend FIRE -loc PATH:RANGE -tag @t[:v] -reason TEXT
 ark connections recall finding COOKIE (-loc PATH:RANGE [-note TEXT] | -answer TEXT)
 ark connections recall close FIRE --nonce N [-preserve-curation]
 ark connections recall context --nonce N [--limit N] [--json]
-ark connections recall listen --session SID [--ambient]      (older spelling of `ark bloodhound listen`)
+ark connections recall listen [--session SID] [--ambient]      (older spelling of `ark bloodhound listen`)
 ark connections wait PATH [--timeout S] [--json]
 ark connections show PATH [--status] [--tags] [--tag NAME]
                           [--threshold N] [--json]
@@ -590,28 +601,40 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   [derived-tags.md](derived-tags.md). The simple-recall watcher
   built on top of this substrate is described in
   [simple-recall.md](simple-recall.md).
-- `recall reserve-nonce [--luhmann]` returns the next monotonic integer the
+- `recall reserve-nonce [--luhmann] [--class C]` returns the next monotonic integer the
   Luhmann orchestrator uses as the recall daemon's per-generation
   nonce (the `nonce → .meta.json` discovery key). The counter is
   in-memory and resets on `ark serve` restart. With `--luhmann` the server
-  also registers the nonce as a CLI-bloodhound pool secretary in the watcher's
-  roster (the reservation doubles as pool registration; see
-  [bloodhound-cli.md](bloodhound-cli.md)). See
+  also registers the nonce as a pool secretary in the watcher's roster for
+  the class named by **`--class`** (`bloodhound`, the default, or `recall`) —
+  the reservation doubles as pool registration. Classes hold separate
+  rosters and separate `pool_max` budgets, so the class decides which
+  workload the secretary will be sent.
+
+  **Every reservation also captures the caller's session**, with or
+  without `--luhmann`. The CLI reads `$CLAUDE_CODE_SESSION_ID` from its
+  own environment — it runs in the reserving agent's shell — and sends
+  it, so the server can later resolve that nonce's subagent transcript
+  (`simple-recall.md` §Subagent JSONL discovery). There is no flag for
+  it: the value is always present where this command runs and never
+  present where the lookup runs, so a flag would only add a way to
+  forget. Run outside an agent shell there is no session, nothing is
+  registered, and later lookups report *unmeasured* rather than zero.
+  See [secretary-pools.md](secretary-pools.md),
+  [bloodhound-cli.md](bloodhound-cli.md), and
   [simple-recall.md](simple-recall.md).
-- `recall next [--session SID] [--pool] NONCE` is the recall secretary's entire
-  loop — a batteries-included crank handle. With `--session SID` (the
-  per-session secretary, seam 3a) it subscribes **value-scoped**
-  `@ark-recall-curate=<SID>` and dispatches only that session's curation
-  docs, prepending the session's last-N conversation turns
-  (`[recall].context_turns`) to the doc it hands back. **`--pool`** marks
-  the caller a Luhmann pool secretary: it keeps its composite identity for
-  directed routing but dispatches ambient curation for **any** session,
-  opting out of the per-session filter that exists to stop one session's
-  secretary taking another's work. The conversation prepended is always
-  the doc's own session's, not the caller's. The role is declared rather
-  than inferred from the identity's shape, since such an inference breaks
-  silently when the shape changes and presents as ambient work never being
-  served. Without `--session`, the
+- `recall next [--session SID] NONCE` is the recall secretary's entire
+  loop — a batteries-included crank handle. With `--session SID` it
+  subscribes **value-scoped** `@ark-recall-curate=<SID>` and dispatches the
+  curation docs **addressed** to it — each doc's `@ark-secretary-work` head
+  tag, which the watcher wrote when it chose a server. For a session's own
+  secretary that address is its session; for a `recall`-class pool secretary
+  it is the composite `<luhmann-session>-<nonce>`, so the same call serves
+  both roles and there is no role for the caller to declare. The
+  conversation prepended is always the **doc's origin** session's (the
+  session in its path), not the caller's — a pool secretary's composite has
+  no conversation, and handing the curator none would be worst exactly when
+  judging fit matters most. Without `--session`, the
   legacy bare-curate, all-session scan is retained (one-shot/diagnostic).
   On first call it idempotently subscribes — subscription session
   `recall-curate-<SID>` with `--session` (keyed on the durable session so a
@@ -671,7 +694,7 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   record to `~/.ark/monitoring/recall.jsonl`.
 - `recall listen --session SID [--ambient]` is the consumer-side loop
   verb — the mirror of `recall next` for the user-facing assistant, and
-  the older spelling of **`ark bloodhound listen --session SID
+  the older spelling of **`ark bloodhound listen [--session SID]
   [--recall]`**, where the concept lives. One implementation serves both,
   so the spellings cannot drift; `--recall` and `--ambient` are the same
   flag. On

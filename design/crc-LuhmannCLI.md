@@ -71,9 +71,12 @@ card covers only the Go surface the skill calls into.
 
 ### `luhmann inspect-exit --nonce N [--json]`
 - Cold-start.
-- Reuse the nonce → `.meta.json` discovery from R2760
-  (`discoverSubagentJSONL(nonce)`). On lookup failure, label is
-  `unknown`.
+- Reuse the nonce → `.meta.json` scan (R2759). **This path keeps
+  reading `$CLAUDE_CODE_SESSION_ID` on purpose** — unlike the
+  server, `inspect-exit` runs in an agent shell by construction and
+  must work with no server at all, so the environment is the right
+  source here and the asymmetry with R3306 is deliberate. On lookup
+  failure, label is `unknown`.
 - Read the subagent's JSONL backwards. Classify (R2796):
   - **healthy** requires `tokens_at_close` (the R2777 value) at or
     over `[luhmann].context_limit` — the generation filled and
@@ -183,9 +186,10 @@ card covers only the Go surface the skill calls into.
 ## Collaborators
 - Monitor (crc-Monitor.md): reads back the log this card writes.
 - RecallAgentBuilder (crc-RecallAgentBuilder.md): provides the
-  `discoverSubagentJSONL` helper (R2760) and the same `.meta.json`
-  scanning behavior; LuhmannCLI calls into it for `inspect-exit`.
-  No new lookup code on this card.
+  the same `.meta.json` scanning behavior (R2759); LuhmannCLI has
+  its own cold-path parent lookup (above) because the server-side
+  helper resolves the parent from a registry this CLI cannot reach
+  without a server (R3306).
 - Server (crc-Server.md): hosts the HTTP handlers for the two
   write-actor verbs, and the `next` long-poll endpoint + the
   `luhmannOwner` / `nextQueue` state.

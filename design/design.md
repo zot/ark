@@ -172,11 +172,11 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
 - [x] crc-LlamaLibs.md → `llamalibs.go`
-- [x] crc-RecallWatcher.md → `recall_watcher.go`, `recall_watcher_cli.go`
-- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`
+- [x] crc-RecallWatcher.md → `recall_watcher.go`, `recall_watcher_cli.go`, `recall_routing.go`
+- [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`, `.claude/skills/bloodhound/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
-- [x] crc-LuhmannCLI.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`, `recall_next.go`
+- [x] crc-LuhmannCLI.md → `.claude/skills/luhmann/SKILL.md`, `monitoring.go`, `cmd/ark/main.go`, `server.go`, `recall_next.go`
 - [x] crc-LuhmannSend.md → `luhmann_send.go`
 - [x] crc-LuhmannEvents.md → `luhmann_events.go`
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
@@ -237,7 +237,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] seq-recall.md → `cmd/ark/main.go`, `server.go`, `recall.go`
 - [x] seq-discussed.md → `cmd/ark/main.go`, `server.go`, `recall.go`, `store.go`
 - [x] seq-derived-tags.md → `recall.go`, `store.go`, `cmd/ark/main.go`, `server.go`
-- [x] seq-recall-watcher.md → `recall_watcher.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
+- [x] seq-recall-watcher.md → `recall_watcher.go`, `recall_routing.go`, `indexer.go`, `server.go`, `cmd/ark/main.go`
 - [x] seq-recall-agent.md → `recall_watcher.go`, `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/agents/ark-recall-agent.md`
 - [ ] seq-ext-author.md → `db.go`, `ext.go`, `server.go`, `extmap.go`, `indexer.go`, `cmd/ark/ext_cli.go`
 - [ ] seq-suggest-locator.md → `db.go`, `server.go`
@@ -348,6 +348,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
 - [x] test-StatusDBLabels.md → `status_db_labels_test.go`
 - [ ] test-RecallWatcher.md → `recall_watcher_test.go`
+- [x] test-AmbientRouting.md → `ambient_routing_test.go`
+- [x] test-ContextDiscovery.md → `context_discovery_test.go`
+- [x] test-SessionIdentity.md → `cmd/ark/session_identity_test.go`
 
 ### CRC Cards (Nano)
 - [x] crc-Nano.md → `nano.go`
@@ -924,3 +927,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O176: R3282's not-served report covers dispatch-time unservability only. sweepRequests reaps a pending request past request_ttl_seconds and notifies nobody — correct for a CLI client that already exited, but a watermark-origin hunt's session is alive and blocked on listen, so the silence R3282 removed at the gate reappears at the reaper. Reap knows the cliRequest and therefore the origin; a watermark-origin reap should emit the not-served finding with a strand-specific reason. Also revisit whether poolCanServe should count room-to-grow as servable when growth is operator-driven. PENDING #84, carves/done/bloodhound-pool-fallback.md. R3281, R3282.
 - [ ] O177: mcp:chatSessions / mcp:chatTranscript are not exercised end-to-end from a running Frictionless app (R3291). The option marshalling IS tested against the production parsers (test-SourcePairing.md), and the listing/rendering below it is tested, so what remains unautomated is only the lua-VM-to-binding hop — which needs the UI runtime, not a fake. #71's chat panel is the first real caller and will exercise it; fold an assertion into that pass rather than standing up a Frictionless harness here.
 - T272: R2949 retired by R3294 (2026-07-28 ambient borrows the pool — arming no longer requires a session-local secretary)
+- T273: R3295 retired by R3303 (2026-07-29 recall pool class — the watcher addresses work, so no role is declared)
+- [ ] O178: Secretary-pool primitives still live in recall_watcher_cli.go, a file named for the bloodhound CLI. secretary-pools.md now specs them as shared across two classes (R3298), and the type was renamed cliPool→secretaryPool, but poolSec/pickFreeLocked/pump/prune/poolMax/cooldown and the Register/Deregister pair still sit in the CLI-hunt file. Extraction to its own file was deliberately deferred out of #90 to keep the behavioral change reviewable; the structure/concept mismatch is the same one #90 repaired one level down.
+- [ ] O179: test-AmbientRouting.md's last case (a routed doc carries the ORIGIN's conversation, not the curator's) is only partly covered: TestDispatchMatchesAddressNotPath asserts lowestPendingCuration reports the origin, which is what selects the injection, but not the injected text itself. injectConversation needs real chat-jsonl files on disk with turn records, which is the fixture cost the cheap-case rule exempts. The decision logic it guards is covered; the string-assembly is not.
+- T274: R2760 retired by R3306 (2026-07-29 context-discovery — the server cannot read the agent's environment)
+- [ ] O180: Recall records written before R3307 carry no 'unmeasured' flag, so the ~88 historical zero-token records in recall.jsonl are still counted as measured and still drag monitor averages toward zero — visible right after the fix as avg_context_tokens 6495 with measured_fires 20. Deliberately NOT back-filled by inference: a record with context_tokens 0 and outcome result-emitted is *probably* a gap, but treating 'probably a gap' as 'is a gap' is the same conflation of unknown-with-zero that R3307 exists to end, and it would bake a guess into the audit trail. The window is 20 records, so this self-heals after 20 new fires; until then the number is wrong in the already-documented direction.
+- [ ] O181: The /ark and /diag skills still carry a captured sessionid=${CLAUDE_SESSION_ID} header (R3312 scoped them out). Neither feeds a session-scoped verb: /ark uses it for a message-filename suffix, /diag for a diagnostic line, so a stale value misnames a file rather than silently killing recall. Left deliberately rather than swept along, because the requirement should claim only the harm it can show. The open question is whether the pattern itself should go — a future skill copying the header inherits a hazard those two do not have — which argues for removal on style even where the consequence is small.

@@ -308,9 +308,12 @@ func luhmannInspectExitAction(_ context.Context, c *ucli.Command) error {
 // backgrounded loop re-invokes and re-validates ownership.
 // CRC: crc-CLITree.md, crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3013, R3014, R3015
 func luhmannNextAction(_ context.Context, c *ucli.Command) error {
-	session := c.String("session")
+	// R3309: the seat claim names the claimer itself, so the live environment
+	// is authoritative — a stale id here lets a re-hosted orchestrator claim the
+	// seat under its pre-fork identity.
+	session := applyOwnSession(c.String("session"))
 	if session == "" {
-		fmt.Fprintln(os.Stderr, "ark luhmann next --session SID [--first | --force] [--keepalive SECONDS]")
+		fmt.Fprintln(os.Stderr, "ark luhmann next [--session SID] [--first | --force] [--keepalive SECONDS]")
 		os.Exit(2)
 	}
 	if c.Bool("first") && c.Bool("force") {

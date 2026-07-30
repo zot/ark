@@ -326,6 +326,10 @@ func Serve(dbPath string, opts ServeOpts) error {
 	srv.recallAgentBuilder = NewRecallAgentBuilder(db)
 	srv.recallWatcher = NewRecallWatcher(db, lib, db.store, srv.recallAgentBuilder)
 	srv.recallWatcher.SetLuhmannHub(srv) // R3020: S1 seat bridge for the CLI-hunt Fixer
+	// R3300: the close path frees the recall-class secretary that held the doc.
+	// Wired here rather than passed to the constructor because the two are
+	// mutually referential — the watcher already holds the builder.
+	srv.recallAgentBuilder.SetCurationFreer(srv.recallWatcher)
 	db.indexer.SetRecallWatcher(srv.recallWatcher)
 
 	// R3116: the managed-PTY host. Constructed unconditionally (its actor is

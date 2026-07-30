@@ -43,7 +43,7 @@ could sit in two; cross-listing is kept minimal).
 - **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, internal-disposition.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md, personal-patterns.md
 - **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md, embed-subcommands.md, llama-libs.md
 - **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md, search-profiling.md, chunk-filters.md, file-tag-filter.md
-- **Recall & substrate** — recall.md, simple-recall.md, bloodhound.md, bloodhound-cli.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md
+- **Recall & substrate** — recall.md, simple-recall.md, bloodhound.md, bloodhound-cli.md, secretary-pools.md, find-connections.md, find-connections-substrate.md, curation.md, curation-workshop-primitives.md, luhmann.md, hot-correlations.md
 - **Scheduling & monitoring** — scheduling.md, schedule-lifecycle.md, chimes.md, monitor.md
 - **PDF** — pdf-chunker.md, pdf-chunk-element.md *(see Theme: Dealing with PDFs)*
 - **Messaging** — messaging.md, messaging-support.md, inbox-enhancements.md, inbox-v-records.md, inbox-bookmark-fields.md, inbox-entry-enrichment.md
@@ -52,7 +52,7 @@ could sit in two; cross-listing is kept minimal).
 - **UI / Frictionless** — embedded-ui.md, ui-checkpoints.md, viewer.md, app-search.md, app-source-tree.md, content-view-edit.md, ark-search.md, chunked-content-view.md, content-fetching.md, content-iframe.md, editor-endpoints.md, tag-overview.md, tag-search-panel.md, table-sort.md, chat-transcript.md
 - **Nano (local LLM agent)** — nano-overview.md, nano-cli.md, nano-library.md, nano-sessions.md, nano-tool-loop.md
 - **Status & diagnostics** — status-db.md, status-enhanced.md, files-status.md, chunk-stats.md, tag-inspect.md, tag-verify.md, verbose-flags.md
-- **Server, config & infrastructure** — main.md, sessions.md, subscriber-presence.md, config-flag-bug.md, config-tracking.md, bundle-assets.md, infrastructure.md, managed-pty.md, luhmann-terminal-element.md
+- **Server, config & infrastructure** — main.md, sessions.md, session-identity.md, subscriber-presence.md, config-flag-bug.md, config-tracking.md, bundle-assets.md, infrastructure.md, managed-pty.md, luhmann-terminal-element.md
 
 ## Cross-cutting themes
 

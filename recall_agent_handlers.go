@@ -16,11 +16,23 @@ import (
 func (srv *Server) handleRecallReserveNonce(w http.ResponseWriter, r *http.Request) {
 	n := srv.recallAgentBuilder.ReserveNonce()
 	var req struct {
-		Luhmann bool `json:"luhmann"`
+		Luhmann       bool   `json:"luhmann"`
+		Class         string `json:"class"`
+		ParentSession string `json:"parent_session"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
+	// R3305: record who reserved this nonce, so a later transcript lookup has a
+	// parent to resolve against. Independent of --luhmann: a session's own
+	// secretary needs this exactly as much as a pool one.
+	srv.recallAgentBuilder.RegisterParentSession(uint32(n), req.ParentSession)
 	if req.Luhmann && srv.recallWatcher != nil {
-		srv.recallWatcher.RegisterPoolSecretary(uint64(n)) // R3033
+		// R3299: the class is declared by the reserving caller. Default to
+		// bloodhound so an older Luhmann that predates the flag keeps working.
+		class := req.Class
+		if class == "" {
+			class = bloodhoundPoolClass
+		}
+		srv.recallWatcher.RegisterPoolSecretary(class, uint64(n)) // R3033, R3299
 	}
 	writeJSON(w, map[string]any{"nonce": n})
 }
@@ -173,9 +185,7 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	// R2888: optional session value-scopes the curate subscription to one
 	// session (the per-session secretary). Empty = legacy bare-curate path.
 	session := r.URL.Query().Get("session")
-	// R3295: the pool role is declared, not inferred from the composite's shape.
-	pool := r.URL.Query().Get("pool") == "true"
-	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), session, limit, pool)
+	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), session, limit)
 	if rerr != nil {
 		// Client disconnect or transient — nothing to deliver.
 		return

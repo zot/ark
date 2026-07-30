@@ -163,11 +163,15 @@ step 7.7.
          │          the same session whose fire < <F>
          │          (other sessions' orphans untouched)
          │
-         ├── 7.4  discoverSubagentJSONL(nonce=<N>)         (R2759, R2760)
-         │          cwd_encoded = replace_slashes(cwd)
-         │          parent_session = $CLAUDE_CODE_SESSION_ID
-         │          dir = ~/.claude/projects/
-         │                 <cwd_encoded>/<parent_session>/
+         ├── 7.4  discoverSubagentJSONL(nonce=<N>)   (R2759, R3305, R3306)
+         │          parent_session = parents[<N>]  <- REGISTERED at
+         │            reserve-nonce from the reserving AGENT's env;
+         │            the server has no CLAUDE_CODE_SESSION_ID of
+         │            its own, and an inherited one resolves only
+         │            the launching session's children (R3306).
+         │          not registered -> ("", false) => UNMEASURED,
+         │            which must not be logged as zero (R3307)
+         │          dir = <chat-source project>/<parent_session>/
          │                 subagents
          │          scan *.meta.json for description
          │            containing "nonce <N>"

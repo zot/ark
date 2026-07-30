@@ -136,7 +136,11 @@ The recall watcher is the Fixer for CLI hunts: the deterministic Go go-between
 that schedules the pool and routes the request doc between the ends. All
 scheduling is deterministic Go; nothing is decided by a language model. The
 watcher is touched on **every** secretary transition (dispatch and return), so
-occupancy and pool bookkeeping stay entirely local to it. Two triggers:
+occupancy and pool bookkeeping stay entirely local to it.
+
+The roster, occupancy, autoscale, and identity rules below are shared by every
+pool class and are owned by [secretary-pools.md](secretary-pools.md); this
+section describes how the `bloodhound` class uses them. Two triggers:
 
 **On the request tag `@ark-bloodhound-cli`** (a new hunt):
 
@@ -330,11 +334,13 @@ secretary — and the watcher is the go-between that decides *when* one is neede
 So the secretary's identity (its nonce) is born where the launch happens, and
 the watcher learns it from the reservation rather than minting it:
 
-- **`ark connections recall reserve-nonce --luhmann`** — Luhmann reserves a
-  nonce (the ordinary monotonic counter) for a pool spawn; the `--luhmann` flag
-  makes the server also **register that nonce in the watcher's pool roster**
-  (`cliPool`) as a pending pool secretary. The reservation doubles as pool
-  registration, so the go-between learns the nonce with no report-back call.
+- **`ark connections recall reserve-nonce --luhmann [--class C]`** — Luhmann
+  reserves a nonce (the ordinary monotonic counter) for a pool spawn; the
+  `--luhmann` flag makes the server also **register that nonce in class `C`'s
+  roster** as a pending pool secretary, with `--class` defaulting to
+  `bloodhound`. The reservation doubles as pool registration, so the go-between
+  learns the nonce with no report-back call. The general contract is in
+  [secretary-pools.md](secretary-pools.md).
 - Luhmann then spawns the secretary via the Task tool with the composite
   `--session <luhmann-session>-<nonce>` in its prompt and records it with
   `spawn-record`. The watcher already holds both halves — the Luhmann seat owner

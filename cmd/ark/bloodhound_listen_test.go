@@ -67,19 +67,27 @@ func TestBloodhoundListenAliasResolves(t *testing.T) {
 	}
 }
 
-// TestRecallNextDeclaresPool guards R3295's declared-not-inferred rule at the
-// CLI edge: if the node stops declaring --pool, urfave rejects it before the
-// action runs and a pool secretary silently reverts to per-session scope.
-func TestRecallNextDeclaresPool(t *testing.T) {
+// TestRecallNextFlags guards the flag surface of `connections recall next`.
+//
+// It used to assert `--pool` as well, for R3295's declared-not-inferred rule.
+// R3295 is retired (T273): the watcher now *addresses* work to a secretary, so
+// there is no role left to declare and the flag is gone. The `--session`
+// assertion is what still matters, and for a sharper reason than before — that
+// flag carries a pool secretary's composite tube identity, and R3311
+// deliberately exempts it from the own-session environment resolution that
+// `listen` and `luhmann next` use. Losing the flag here would leave a pool
+// secretary with no way to name its own tube.
+func TestRecallNextFlags(t *testing.T) {
 	got := map[string]bool{}
 	for _, f := range findCmd(t, "connections", "recall", "next").Flags {
 		for _, n := range f.Names() {
 			got[n] = true
 		}
 	}
-	for _, want := range []string{"pool", "session"} {
-		if !got[want] {
-			t.Errorf("recall next must declare --%s", want)
-		}
+	if !got["session"] {
+		t.Error("recall next must declare --session (a pool secretary's composite tube, R3311)")
+	}
+	if got["pool"] {
+		t.Error("--pool is retired (T273); the watcher addresses work instead of the secretary declaring a role")
 	}
 }

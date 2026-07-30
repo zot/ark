@@ -55,9 +55,11 @@ is exactly the work to offload to a cheaper model.
 ## Directing the bloodhound — see `/bloodhound`
 
 A `<BLOODHOUND>` watermark is **not** a CLI move and does not work from this
-skill alone: it needs the bloodhound *service* up — a secretary spawned and
-running its loop, and a `recall listen` draining `@ark-bloodhound-result`.
-Emitted without that machinery it is ordinary text that nothing reads.
+skill alone: it needs a `bloodhound listen` draining `@ark-bloodhound-result`.
+That subscription is the whole precondition — *who* runs the hunt is a separate
+decision ark makes for you (your own secretary if you spawned one, else a
+Luhmann pool secretary), so you do not need one of your own. Emitted with no
+subscription, the watermark is ordinary text that nothing reads.
 
 So the watermark craft — the tag syntax, the four prose fields, the file-scope
 attributes, the `want`-words, and how to read a `## Finding:` — lives in the

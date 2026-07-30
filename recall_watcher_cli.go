@@ -22,6 +22,15 @@ import (
 // secretary pool (config lives under [luhmann].class.bloodhound). R3017, R3018
 const bloodhoundPoolClass = "bloodhound"
 
+// recallPoolClass is the Luhmann-managed class name for the ambient-recall
+// secretary pool (config under [luhmann].class.recall). A second class rather
+// than a second customer of the bloodhound pool: classes never share slots, so
+// a recollection cannot occupy a secretary a directed hunt needs, and the two
+// limits are tuned for arrival rates that differ by orders of magnitude — a
+// deliberate watermark against every turn boundary of every enabled session.
+// R3298
+const recallPoolClass = "recall"
+
 // bloodhoundCLIPrefix is the tmp:// namespace for CLI request docs, separate
 // from ambient recall (ARK-RECALL) and in-session bloodhound (ARK-BLOODHOUND).
 const bloodhoundCLIPrefix = "tmp://BLOODHOUND-CLI/"
@@ -93,20 +102,25 @@ func (r *cliRequest) proposesTags() bool {
 	return r != nil && r.origin != "" && !r.notags
 }
 
-// cliPool is the watcher's roster of CLI-bloodhound pool secretaries plus the
-// pending-hunt queue, the in-flight path→nonce map, and the per-request record.
-// Everything under mu. In-memory; a server bounce drops it and the CLI's --wait
-// re-drives. R3023, R3024, R3038, R3041
-type cliPool struct {
+// secretaryPool is one class's roster of pool secretaries plus its pending-work
+// queue and in-flight doc→nonce map. One instance per class (R3298); the
+// watcher holds them in `pools`. Everything under mu. In-memory; a server
+// bounce drops it and the CLI's --wait re-drives.
+//
+// `requests` is bloodhound-only: it records a hunt's submit time (the reap
+// clock) and its raw/curated intent. The recall class leaves it empty and has
+// no analogue — a recollection has no external client to strand and no
+// raw/curated fork. R3023, R3024, R3038, R3041
+type secretaryPool struct {
 	mu          sync.Mutex
 	secretaries map[uint64]*poolSec    // nonce → state
-	inflight    map[string]uint64      // request-doc path → the nonce running it
-	pending     []string               // request-doc paths awaiting a free secretary
-	requests    map[string]*cliRequest // request-doc path → submit time + raw intent
+	inflight    map[string]uint64      // work-doc path → the nonce running it
+	pending     []string               // work-doc paths awaiting a free secretary
+	requests    map[string]*cliRequest // bloodhound only: submit time + raw intent
 }
 
-func newCLIPool() *cliPool {
-	return &cliPool{
+func newSecretaryPool() *secretaryPool {
+	return &secretaryPool{
 		secretaries: make(map[uint64]*poolSec),
 		inflight:    make(map[string]uint64),
 		requests:    make(map[string]*cliRequest),
@@ -114,7 +128,7 @@ func newCLIPool() *cliPool {
 }
 
 // pickFreeLocked returns any not-busy secretary, or nil. Caller holds mu.
-func (p *cliPool) pickFreeLocked() *poolSec {
+func (p *secretaryPool) pickFreeLocked() *poolSec {
 	for _, s := range p.secretaries {
 		if !s.busy {
 			return s
@@ -124,29 +138,51 @@ func (p *cliPool) pickFreeLocked() *poolSec {
 }
 
 // PoolSize reports the pool-secretary roster count for the managed-PTY status
-// (R3124): how many CLI-bloodhound secretaries the hosted Luhmann is running.
+// (R3124): how many pool secretaries the hosted Luhmann is running, summed
+// across every class (R3298) — not the bloodhound roster alone.
 func (w *RecallWatcher) PoolSize() int {
 	if w == nil {
 		return 0
 	}
-	w.pool.mu.Lock()
-	defer w.pool.mu.Unlock()
-	return len(w.pool.secretaries)
+	// R3298: sum across every class. Reading only the bloodhound roster made a
+	// live recall secretary report as zero, which is how this was found.
+	total := 0
+	for _, pool := range w.pools {
+		pool.mu.Lock()
+		total += len(pool.secretaries)
+		pool.mu.Unlock()
+	}
+	return total
 }
 
-// PoolNonces returns a snapshot of the pool secretaries' nonces so a graceful
-// stop can record each one's exit before the pty teardown takes it down (R3125).
-func (w *RecallWatcher) PoolNonces() []uint64 {
+// PoolNonces returns a snapshot of every pool secretary, paired with the class
+// whose roster holds it, so a graceful stop can record each one's exit and
+// deregister it before the pty teardown takes it down (R3125, R3298).
+func (w *RecallWatcher) PoolNonces() []PoolMember {
 	if w == nil {
 		return nil
 	}
-	w.pool.mu.Lock()
-	defer w.pool.mu.Unlock()
-	nonces := make([]uint64, 0, len(w.pool.secretaries))
-	for nonce := range w.pool.secretaries {
-		nonces = append(nonces, nonce)
+	// R3298: every class, and each nonce paired with the class that owns it —
+	// the caller must exit-record and deregister against the right roster, and a
+	// bloodhound-only enumeration silently stranded recall secretaries as ghosts
+	// on a graceful stop (the failure R3125 exists to prevent).
+	var members []PoolMember
+	for class, pool := range w.pools {
+		pool.mu.Lock()
+		for nonce := range pool.secretaries {
+			members = append(members, PoolMember{Class: class, Nonce: nonce})
+		}
+		pool.mu.Unlock()
 	}
-	return nonces
+	return members
+}
+
+// PoolMember identifies one pool secretary by the class whose roster holds it.
+// The class is carried rather than assumed because a nonce alone cannot say
+// which roster to deregister from. R3298
+type PoolMember struct {
+	Class string
+	Nonce uint64
 }
 
 // PoolBusy reports whether the pool has no free secretary and is at pool_max — a
@@ -157,24 +193,26 @@ func (w *RecallWatcher) PoolBusy() bool {
 	}
 	w.pool.mu.Lock()
 	defer w.pool.mu.Unlock()
-	return w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) >= w.poolMax()
+	return w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) >= w.poolMax(bloodhoundPoolClass)
 }
 
-// poolMax reads the live [luhmann].class.bloodhound.pool_max (R3017).
-func (w *RecallWatcher) poolMax() int {
+// poolMax reads the live [luhmann].class.<class>.pool_max (R3017). Per class,
+// so the two rosters bound independently (R3298, R3301).
+func (w *RecallWatcher) poolMax(class string) int {
 	if w == nil || w.db == nil {
 		return 3
 	}
-	return w.db.Config().Luhmann.EffectivePoolMax(bloodhoundPoolClass)
+	return w.db.Config().Luhmann.EffectivePoolMax(class)
 }
 
-// cooldown reads the live [luhmann].class.bloodhound.cooldown_seconds (R3018) as
+// cooldown reads the live [luhmann].class.<class>.cooldown_seconds (R3018) as
 // a Duration — the warmth window an idle secretary must exceed before pruning.
-func (w *RecallWatcher) cooldown() time.Duration {
+// Per class (R3301). R3298
+func (w *RecallWatcher) cooldown(class string) time.Duration {
 	if w == nil || w.db == nil {
 		return 600 * time.Second
 	}
-	return time.Duration(w.db.Config().Luhmann.EffectiveCooldownSeconds(bloodhoundPoolClass)) * time.Second
+	return time.Duration(w.db.Config().Luhmann.EffectiveCooldownSeconds(class)) * time.Second
 }
 
 // requestTTL reads the live [luhmann].class.bloodhound.request_ttl_seconds
@@ -223,24 +261,38 @@ func (w *RecallWatcher) pruneLoop() {
 // not-busy secretary whose idle time exceeds cooldown_seconds, push a stop
 // directive naming its nonce onto Luhmann's nextQueue and drop it from the
 // roster. Needs a live Luhmann to receive the directive.
+// Runs per class (R3298, R3301), each against its own cooldown_seconds, and the
+// stop directive names the class it came from — Luhmann must not stop a
+// bloodhound secretary because a recall one went cold.
+//
+// A secretary serving ambient is `busy` for exactly as long as it holds the doc
+// (R3300), so this cannot retire one mid-curation. That is the whole of the
+// protection: before ambient was routed through the watcher it never set `busy`
+// at all, so a steadily-working secretary read as idle here and was stopped.
 func (w *RecallWatcher) prune() {
 	if w.luhmann == nil || w.luhmann.LuhmannOwner() == "" {
 		return
 	}
-	cooldown := w.cooldown()
-	var stop []uint64
-	w.pool.mu.Lock()
-	for nonce, s := range w.pool.secretaries {
-		if !s.busy && !s.idleSince.IsZero() && time.Since(s.idleSince) > cooldown {
-			stop = append(stop, nonce)
-			delete(w.pool.secretaries, nonce)
-		}
+	type stopReq struct {
+		class string
+		nonce uint64
 	}
-	w.pool.mu.Unlock()
-	for _, nonce := range stop {
+	var stop []stopReq
+	for class, pool := range w.pools {
+		cooldown := w.cooldown(class)
+		pool.mu.Lock()
+		for nonce, s := range pool.secretaries {
+			if !s.busy && !s.idleSince.IsZero() && time.Since(s.idleSince) > cooldown {
+				stop = append(stop, stopReq{class: class, nonce: nonce})
+				delete(pool.secretaries, nonce)
+			}
+		}
+		pool.mu.Unlock()
+	}
+	for _, r := range stop {
 		// R3019: one stop directive per over-cooldown secretary; Luhmann stops
 		// its Task and exit-records it.
-		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "directive", Directive: "stop", Class: bloodhoundPoolClass, Nonce: nonce})
+		w.luhmann.EnqueueLuhmann(LuhmannWork{Kind: "directive", Directive: "stop", Class: r.class, Nonce: r.nonce})
 	}
 }
 
@@ -288,7 +340,7 @@ func (w *RecallWatcher) onBloodhoundCLIRequest(path string) {
 	w.pool.mu.Lock()
 	w.pool.pending = append(w.pool.pending, path)
 	w.pool.requests[path] = &cliRequest{submitted: time.Now(), raw: raw} // R3038, R3041
-	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax()
+	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax(bloodhoundPoolClass)
 	w.pool.mu.Unlock()
 	Logv(1, "bloodhound-cli: request %s (raw=%v stand-up=%v)", path, raw, needStandUp)
 	if needStandUp {
@@ -351,7 +403,7 @@ func (w *RecallWatcher) enqueueWatermarkHunt(sessionID string, bid uint64, req b
 		clue:      clueOf(req.payload),
 		notags:    req.notags, // R3110: `<BLOODHOUND notags>` rides to the pool too
 	}
-	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax()
+	needStandUp := w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax(bloodhoundPoolClass)
 	w.pool.mu.Unlock()
 
 	Logv(1, "bloodhound: watermark session=%s B=%d → pool (stand-up=%v)", sessionID, bid, needStandUp)
@@ -518,7 +570,7 @@ func (w *RecallWatcher) sweepRequests() {
 	w.pool.pending = kept
 	// 2.1.3 re-issue: any surviving request pending past the threshold, with room
 	// in the pool, earns one stand-up to recover a directive Luhmann dropped.
-	if w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax() {
+	if w.pool.pickFreeLocked() == nil && len(w.pool.secretaries) < w.poolMax(bloodhoundPoolClass) {
 		for _, path := range w.pool.pending {
 			if req := w.pool.requests[path]; req != nil && time.Since(req.submitted) > bloodhoundReissueThreshold {
 				standUp = true
@@ -628,20 +680,34 @@ func (w *RecallWatcher) enhanceRequestDoc(path, composite string) error {
 	})
 }
 
-// RegisterPoolSecretary records a nonce as a pending pool secretary (R3033) and
-// pumps any waiting hunt to it. Called by the reserve-nonce --luhmann handler:
-// the reservation doubles as pool registration, so the Fixer learns the nonce
-// Luhmann will spawn with. Idempotent. R3033
-func (w *RecallWatcher) RegisterPoolSecretary(nonce uint64) {
+// RegisterPoolSecretary records a nonce as a pending pool secretary of `class`
+// (R3033, R3299) and pumps any waiting work to it. Called by the reserve-nonce
+// --luhmann handler: the reservation doubles as pool registration, so the Fixer
+// learns the nonce Luhmann will spawn with. The class is declared by the
+// reserving caller, not inferred — an unknown class is dropped rather than
+// silently defaulted, since defaulting would put a recall secretary in the
+// bloodhound roster and the symptom (work never served) would appear far from
+// the cause. Idempotent.
+func (w *RecallWatcher) RegisterPoolSecretary(class string, nonce uint64) {
 	if w == nil {
 		return
 	}
-	w.pool.mu.Lock()
-	if _, exists := w.pool.secretaries[nonce]; !exists {
-		w.pool.secretaries[nonce] = &poolSec{nonce: nonce, idleSince: time.Now()}
+	pool, ok := w.pools[class]
+	if !ok {
+		log.Printf("recall-watcher: reserve-nonce for unknown pool class %q (nonce %d) ignored", class, nonce)
+		return
 	}
-	w.pool.mu.Unlock()
-	w.pump()
+	pool.mu.Lock()
+	if _, exists := pool.secretaries[nonce]; !exists {
+		pool.secretaries[nonce] = &poolSec{nonce: nonce, idleSince: time.Now()}
+	}
+	pool.mu.Unlock()
+	switch class {
+	case bloodhoundPoolClass:
+		w.pump()
+	case recallPoolClass:
+		w.pumpCuration() // R3301: route a doc that was waiting on this stand-up
+	}
 }
 
 // DeregisterPoolSecretary drops a pool secretary from the roster on a terminal
@@ -656,22 +722,37 @@ func (w *RecallWatcher) RegisterPoolSecretary(nonce uint64) {
 // self-exit reconcile safely.
 // CRC: crc-RecallWatcher.md | R3034
 func (w *RecallWatcher) DeregisterPoolSecretary(class, kind string, nonce uint64) {
-	if w == nil || class != bloodhoundPoolClass {
+	if w == nil {
 		return
+	}
+	pool, ok := w.pools[class]
+	if !ok {
+		return // another class entirely (or none) — not ours to reconcile
 	}
 	switch kind {
 	case "exit", "crash", "quit-early":
 	default:
 		return // spawn/respawn (or anything non-terminal) never deregisters
 	}
-	w.pool.mu.Lock()
-	delete(w.pool.secretaries, nonce)
-	for path, n := range w.pool.inflight {
+	pool.mu.Lock()
+	delete(pool.secretaries, nonce)
+	var orphaned []string
+	for path, n := range pool.inflight {
 		if n == nonce {
-			delete(w.pool.inflight, path)
+			delete(pool.inflight, path)
+			orphaned = append(orphaned, path)
 		}
 	}
-	w.pool.mu.Unlock()
+	if class == recallPoolClass {
+		// R3304: a curation doc whose secretary died is not lost — requeue it so
+		// the next stand-up takes it. Dropping it here would be a silent loss,
+		// and nobody is blocked to notice.
+		pool.pending = append(pool.pending, orphaned...)
+	}
+	pool.mu.Unlock()
+	if class == recallPoolClass && len(orphaned) > 0 {
+		w.pumpCuration()
+	}
 }
 
 // bloodhoundSeedKCap bounds the per-idea seed budget so a many-paragraph clue

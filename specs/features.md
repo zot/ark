@@ -398,15 +398,18 @@ zettelkasten-keeper on an eternal hunt to flesh out the collection, curating
 what drifts past and tracking what it's sent after.
 **Neither level needs a secretary of its own.** Both are served by the session's
 **own** secretary when one is standing — dedicated, warm, and holding the
-session's recent conversation — and otherwise by one borrowed from **Luhmann's
-pool**. A watermark served that way is raw and returns straight to the emitting
+session's recent conversation — and otherwise by one from the **Luhmann-hosted
+pool for that level**: the `bloodhound` class for hunts, the `recall` class for
+recollections. The classes are separate so neither workload can starve the
+other. A watermark served that way is raw and returns straight to the emitting
 session, since it came from an assistant that already has the context to curate;
 a curated recollection returns to the session that produced it because the work
 item carries its own origin. So a session's own secretary is an optimization
 rather than a precondition at either level, directed work is served ahead of
-ambient (one has someone waiting, the other does not), and a recognized hunt
-that cannot be served **says so** rather than vanishing. Spec'd in
-`specs/bloodhound.md` and `specs/simple-recall.md`.
+ambient within a secretary that serves both (one has someone waiting, the other
+does not), and work that cannot be served **says so** rather than vanishing.
+Spec'd in `specs/bloodhound.md`, `specs/simple-recall.md`, and
+`specs/secretary-pools.md`.
 
 ## Luhmann orchestrator (supervisor + chimes)
 

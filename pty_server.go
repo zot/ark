@@ -77,15 +77,19 @@ func (srv *Server) RecordHostedExits(_ string) {
 	if srv.recallWatcher == nil {
 		return
 	}
-	for _, nonce := range srv.recallWatcher.PoolNonces() {
+	// R3298: record and deregister against the member's OWN class. Hardcoding
+	// bloodhound here meant a recall secretary was never exit-recorded and never
+	// dropped from its roster on a clean stop — a ghost that miscounts pool_max
+	// and draws work to a dead tube.
+	for _, m := range srv.recallWatcher.PoolNonces() {
 		rec := LuhmannRecord{
 			Kind:   "exit",
-			Class:  bloodhoundPoolClass,
-			Nonce:  int(nonce),
+			Class:  m.Class,
+			Nonce:  int(m.Nonce),
 			Reason: "luhmann-stopped",
 		}
 		_ = AppendLuhmannRecord(srv.db, srv.db.Path(), rec)
-		srv.recallWatcher.DeregisterPoolSecretary(bloodhoundPoolClass, "exit", nonce)
+		srv.recallWatcher.DeregisterPoolSecretary(m.Class, "exit", m.Nonce)
 	}
 }
 

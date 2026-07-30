@@ -63,6 +63,61 @@ type RecallAgentBuilder struct {
 	// R2896
 	curationDir string
 	logMu       sync.Mutex // serializes appends across both files
+
+	// parents maps a reserved nonce to the session of the agent that reserved
+	// it — which is the parent whose `subagents/` directory the spawned child
+	// will occupy. Captured at reserve time from the *reserving CLI's*
+	// environment, because that CLI runs in an agent shell and this server does
+	// not (R3305). In-memory; a bounce drops it, like the pool roster, and a
+	// nonce from before the bounce then resolves as unmeasured rather than zero.
+	parentsMu sync.Mutex
+	parents   map[uint32]string
+
+	// freer is the watcher's occupancy side, wired at Serve. A curation doc's
+	// close is the point its server stops working, so that is where a
+	// recall-class pool secretary is released back to its cooldown (R3300).
+	// An interface rather than a *RecallWatcher so the close path can be
+	// tested without standing a watcher up, and so the builder keeps knowing
+	// only what it needs about the collaborator.
+	freer curationFreer
+}
+
+// RegisterParentSession records the session of the agent that reserved `nonce`
+// (R3305). Empty session is a no-op: a CLI run outside an agent shell has no
+// session to register, and a lookup for that nonce reports unmeasured.
+func (b *RecallAgentBuilder) RegisterParentSession(nonce uint32, session string) {
+	if b == nil || session == "" {
+		return
+	}
+	b.parentsMu.Lock()
+	b.parents[nonce] = session
+	b.parentsMu.Unlock()
+}
+
+// parentSession returns the registered parent for a nonce, if any.
+func (b *RecallAgentBuilder) parentSession(nonce uint32) (string, bool) {
+	if b == nil {
+		return "", false
+	}
+	b.parentsMu.Lock()
+	defer b.parentsMu.Unlock()
+	s, ok := b.parents[nonce]
+	return s, ok
+}
+
+// curationFreer releases the pool secretary that was holding a curation doc.
+// Implemented by RecallWatcher. R3300
+type curationFreer interface {
+	FreeCuration(session string, fire uint64)
+}
+
+// SetCurationFreer wires the occupancy collaborator. Nil-safe on both sides:
+// with no freer, a close simply frees nothing, which is correct for a session's
+// own secretary — it was never in a roster.
+func (b *RecallAgentBuilder) SetCurationFreer(f curationFreer) {
+	if b != nil {
+		b.freer = f
+	}
 }
 
 // NewRecallAgentBuilder constructs a builder anchored at db.
@@ -72,6 +127,7 @@ func NewRecallAgentBuilder(db *DB) *RecallAgentBuilder {
 	monDir := filepath.Join(home, ".ark", "monitoring")
 	return &RecallAgentBuilder{
 		db:              db,
+		parents:         make(map[uint32]string),
 		curations:       make(map[string]*RecallCurationBuilder),
 		results:         make(map[string]*recallResultDoc),
 		bloodhounds:     make(map[string]*recallResultDoc),
@@ -406,6 +462,15 @@ func (b *RecallAgentBuilder) CloseResult(fireToken string, nonce uint32, preserv
 		return fmt.Errorf("unknown fire %q", fireToken)
 	}
 
+	// R3300: occupancy ends when the secretary stops working, before any of the
+	// result-doc work below — the same "free at the return hop, not after the
+	// consequences" rule the bloodhound return follows. Deferred so an early
+	// error return below cannot strand a secretary as permanently busy, which
+	// would silently shrink the pool by one on every failed close.
+	if b.freer != nil {
+		defer b.freer.FreeCuration(session, fire)
+	}
+
 	outcome := "silent-close"
 	surfaced, recommended := 0, 0
 	if doc != nil && doc.items > 0 {
@@ -447,12 +512,12 @@ func (b *RecallAgentBuilder) CloseResult(fireToken string, nonce uint32, preserv
 	}
 
 	in, out := b.lookupSubagentTokens(nonce)
-	contextTokens, _ := b.ContextTokens(nonce)
+	contextTokens, measured := b.ContextTokens(nonce) // R3307: keep the ok
 	latency := 0
 	if doc != nil && !doc.opened.IsZero() {
 		latency = int(time.Since(doc.opened).Milliseconds())
 	}
-	b.appendMonitor(fire, session, nonce, in, out, contextTokens, latency, surfaced, recommended, outcome)
+	b.appendMonitorMeasured(fire, session, nonce, in, out, contextTokens, latency, surfaced, recommended, outcome, measured)
 	return nil
 }
 
@@ -552,9 +617,18 @@ func (b *RecallAgentBuilder) lookupSubagentTokens(nonce uint32) (in, out int) {
 // description contains "nonce <N>".
 //
 // CRC: crc-RecallAgentBuilder.md | R2759, R2760
+// R3306: the parent comes from the reserve-time registry, never from this
+// process's environment. `ark serve` is not launched by an agent, so
+// CLAUDE_CODE_SESSION_ID is normally unset here — and when it IS set, by
+// inheritance from whatever shell started the server, it names only the
+// launching session, so the lookup silently resolves that one session's
+// children and misses every other session's. That is worse than failing
+// outright: it works often enough to look correct. Do not reintroduce the
+// getenv. (The cold CLI path in cmd/ark keeps it on purpose — it runs in an
+// agent shell and must work with no server.)
 func (b *RecallAgentBuilder) findSubagentJSONL(nonce uint32) string {
-	parent := os.Getenv("CLAUDE_CODE_SESSION_ID")
-	if parent == "" {
+	parent, ok := b.parentSession(nonce)
+	if !ok || parent == "" {
 		return ""
 	}
 	home, _ := os.UserHomeDir()
@@ -711,15 +785,31 @@ type monitorRecord struct {
 	Recommended   int    `json:"recommended"`
 	Outcome       string `json:"outcome"`
 	Timestamp     string `json:"timestamp"`
+	// Measured reports whether the token fields above are a count or a gap.
+	// R3307: an unresolvable transcript must not be written as zeros — a field
+	// that was never populated and a field that is genuinely zero are different
+	// facts, and rendering them alike is what let a dead measurement read as a
+	// quiet system for weeks. Emitted only when false, so existing tooling sees
+	// the same shape on the normal path and an absent flag means "measured".
+	Unmeasured bool `json:"unmeasured,omitempty"`
 }
 
 func (b *RecallAgentBuilder) appendMonitor(fire uint64, session string, nonce uint32, in, out, context, latency, surfaced, recommended int, outcome string) {
+	b.appendMonitorMeasured(fire, session, nonce, in, out, context, latency, surfaced, recommended, outcome, true)
+}
+
+// appendMonitorMeasured is appendMonitor with the R3307 measured/unmeasured
+// distinction made explicit. Callers that resolved a transcript pass true;
+// callers whose lookup failed pass false, and the token fields are written as
+// zeros *marked* as gaps rather than as counts.
+func (b *RecallAgentBuilder) appendMonitorMeasured(fire uint64, session string, nonce uint32, in, out, context, latency, surfaced, recommended int, outcome string, measured bool) {
 	rec := monitorRecord{
 		Fire: fire, Session: session, Nonce: nonce,
 		InTokens: in, OutTokens: out, ContextTokens: context,
 		LatencyMs: latency,
 		Surfaced:  surfaced, Recommended: recommended,
 		Outcome: outcome, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Unmeasured: !measured,
 	}
 	b.appendJSONL(b.monitorPath, rec)
 }
@@ -1099,13 +1189,13 @@ func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64,
 	})
 
 	in, out := b.lookupSubagentTokens(nonce)
-	contextTokens, _ := b.ContextTokens(nonce)
+	contextTokens, measured := b.ContextTokens(nonce) // R3307: keep the ok
 	latency := 0
 	if doc != nil && !doc.opened.IsZero() {
 		latency = int(time.Since(doc.opened).Milliseconds())
 	}
 	// findings counted in the surfaced slot of the monitor record.
-	b.appendMonitor(bid, session, nonce, in, out, contextTokens, latency, found, 0, outcome)
+	b.appendMonitorMeasured(bid, session, nonce, in, out, contextTokens, latency, found, 0, outcome, measured)
 	return nil
 }
 
@@ -1199,12 +1289,12 @@ func (b *RecallAgentBuilder) closeCLIHunt(id string, nonce uint32) error {
 		return fmt.Errorf("cli-hunt close: re-tag request doc: %w", err)
 	}
 	in, out := b.lookupSubagentTokens(nonce)
-	contextTokens, _ := b.ContextTokens(nonce)
+	contextTokens, measured := b.ContextTokens(nonce) // R3307: keep the ok
 	latency := 0
 	if doc != nil && !doc.opened.IsZero() {
 		latency = int(time.Since(doc.opened).Milliseconds())
 	}
-	b.appendMonitor(0, "cli-"+id, nonce, in, out, contextTokens, latency, found, 0, "cli-return")
+	b.appendMonitorMeasured(0, "cli-"+id, nonce, in, out, contextTokens, latency, found, 0, "cli-return", measured)
 	return nil
 }
 

@@ -197,10 +197,7 @@ func TestRecallWatcher_FireSeed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := &RecallWatcher{
-		builder:      &RecallAgentBuilder{curationDir: tmp},
-		fireCounters: make(map[string]uint64),
-	}
+	w := NewRecallWatcher(nil, nil, nil, &RecallAgentBuilder{curationDir: tmp})
 	w.mu.Lock()
 	first := w.nextFireLocked("sess-A")
 	second := w.nextFireLocked("sess-A")
@@ -246,7 +243,7 @@ func TestRecallWatcher_SourceQualifies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := &RecallWatcher{db: newWatcherTestDB(tc.cfg)}
+			w := NewRecallWatcher(newWatcherTestDB(tc.cfg), nil, nil, nil)
 			if got := w.SourceQualifies(tc.path, tc.strat); got != tc.want {
 				t.Errorf("SourceQualifies(%q, %q) = %v want %v", tc.path, tc.strat, got, tc.want)
 			}

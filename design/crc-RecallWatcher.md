@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283, R3293, R3294, R3295, R3296
+**Requirements:** R2687, R2688, R2689, R2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711, R2712, R2713, R2714, R2715, R2728, R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739, R2740, R2741, R2747, R2748, R2753, R2746, R2806, R2808, R2867, R2868, R2869, R2893, R2898, R2901, R2934, R2935, R2936, R2937, R2948, R3006, R3007, R3009, R3020, R3023, R3024, R3025, R3030, R3031, R3032, R3033, R3019, R3034, R3038, R3039, R3041, R3042, R3043, R3044, R3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279, R3280, R3281, R3282, R3283, R3293, R3294, R3296, R3298, R3299, R3300, R3301, R3302, R3303, R3304
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -56,16 +56,31 @@ composes and writes each curation doc via the in-process
   monotonic **bloodhound id** (`<B>`) counter (R2937). In-memory
   only, no dir-seeding (task docs are ephemeral tmp://), reset on
   restart — distinct from the dir-seeded `fireCounters`.
-- cliPool: the CLI-bloodhound pool roster (R3023, R3024) — pool-
-  secretary sessions with per-secretary state (free / busy /
-  idle-since for the cooldown clock), plus the in-flight request
-  docs keyed by `<id>`. The watcher marks a secretary busy on
-  dispatch and free on return; Luhmann owns the spawn/stop lifecycle
-  (crc-LuhmannCLI.md). In-memory; a bounce drops it and the CLI's
-  `--wait` re-drives the hunt. Also holds `requests`: a
+- **Every roster accessor spans every class.** `PoolSize` sums across
+  `pools`; `PoolNonces` returns `(class, nonce)` pairs so a caller can
+  exit-record and deregister against the right roster. Reading only the
+  bloodhound handle made a live recall secretary report as zero in
+  `luhmann status` and let a graceful stop strand it as a ghost —
+  spawn recorded, no exit, still counted against `pool_max` (R3298,
+  R3125). The class must be carried, never assumed: a nonce alone
+  cannot say which roster owns it.
+- pools: one secretary roster **per class**, keyed by class name
+  (R3298) — `bloodhound` and `recall`. Each roster holds its
+  pool-secretary sessions with per-secretary state (free / busy /
+  idle-since for the cooldown clock), the work in flight keyed to the
+  nonce holding it, and its own `pool_max` / `cooldown_seconds` read
+  live from `class.<NAME>` (R3301). The watcher marks a secretary busy
+  on dispatch and free on return (R3300); Luhmann owns the spawn/stop
+  lifecycle (crc-LuhmannCLI.md). **Classes do not share slots**, so
+  neither workload can starve the other and each is sized for its own
+  arrival rate. In-memory; a bounce drops the rosters, and the CLI's
+  `--wait` re-drives a hunt.
+  The **`bloodhound`** roster additionally holds `requests`: a
   path→`cliRequest{submitted, raw}` map recording each hunt's submit
   time (the reap clock, R3041) and its `--raw` curate-intent (R3038),
-  set when the request first arrives and read at the return hop.
+  set when the request first arrives and read at the return hop. The
+  `recall` class has no analogue — a recollection has no external
+  client to strand and no raw/curated fork.
 
 ## Does
 - Enabled() bool: true when `db.Config().Recall.Enabled` is
@@ -190,13 +205,15 @@ composes and writes each curation doc via the in-process
   (`fireCounters[sessionID]`, seeded from the curation-dir on
   first use, R2901), then runs the recall pipeline outside the
   lock (R2735). Before
-  invoking the substrate or opening the curation builder,
-  re-queries **both** `pubsub.SubscriberCount("ark-secretary-work",
-  sessionID)` and `pubsub.SubscriberCount("ark-recall-result",
-  sessionID)` as a backstop to the OnAppend activation gate (R2867)
-  — covering a consumer that dropped during `activation_delay`. If
-  either is zero, skips the substrate call entirely, appends one
-  record to `~/.ark/monitoring/recall.jsonl` with
+  invoking the substrate or opening the curation builder, re-checks
+  `ambientEnabled(sessionID)` — the `@ark-recall-result` subscription
+  **alone** (R3294) — as a backstop to the OnAppend activation gate
+  (R2867), covering a consumer that dropped during `activation_delay`.
+  A session-local secretary is deliberately **not** part of this
+  condition: who serves the doc is decided later, by routing (R3303),
+  and requiring one here would restore the conflation R3294 removed.
+  If the subscription is gone, skips the substrate call entirely,
+  appends one record to `~/.ark/monitoring/recall.jsonl` with
   `outcome: "no-subscriber"` (R2806, R2808), and returns. The
   `pendingChunks` slice is already cleared, so the next OnAppend
   starts fresh.
@@ -241,8 +258,26 @@ composes and writes each curation doc via the in-process
     no curation doc is written (R2753).
   - Otherwise call `b.Close()` to write
     `tmp://ARK-RECALL/curation-<session>-<fire>` with the
-    two head-of-chunk tags `@ark-secretary-work: <session>`
+    two head-of-chunk tags `@ark-secretary-work: <address>`
     and `@ark-recall-fire: <fire>` (R2747, R2748).
+    The path carries the doc's **origin**; the
+    `@ark-secretary-work` tag carries its **address** (R3302).
+    These were necessarily the same value while ambient had one
+    possible server, and dispatch still reads the origin off the
+    path — which is the defect R3303 repairs.
+  - **Route** (R3303): choose the address by fixed preference —
+    (1) the session itself when `ark-secretary-work=<session>`
+    has a subscriber; else (2) a free secretary of the **`recall`**
+    class, addressed by its composite `<luhmann-session>-<nonce>`
+    and marked busy at that moment (R3300), pushing a *stand up
+    another* directive and routing on registration when the class
+    has room (R3301); else (3) emit the unservable report of
+    R3304 on `@ark-recall-result=<session>`. No language model
+    participates. A doc waiting on a full pool is left pending,
+    **not** reported — deferral is not unservability.
+  - **Free on return** (R3300): a `recall close` for the fire
+    token frees the secretary that held it into cooldown, so a
+    curating secretary is never read as idle by `prune`.
   - Mark-on-send: for every candidate chunk written in any
     surfaced section, call `store.AddDiscussed(sessionID,
     tag, value)` for each inline + ext-routed tag (R2711,

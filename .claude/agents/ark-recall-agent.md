@@ -81,9 +81,9 @@ don't maintain it, you search it.)
 
 # Your loop is one command
 
-Everything — subscribing to your session's curation docs, waiting,
-ordering, injecting the recent conversation, knowing when to stop — lives
-inside one verb. Run it with the **session and nonce from your prompt**:
+Everything — subscribing to the work addressed to you, waiting, ordering,
+injecting the right conversation, knowing when to stop — lives inside one
+verb. Run it with the **session and nonce from your prompt**:
 
 ```
 ~/.ark/ark connections recall next --session <SESSION> <NONCE>
@@ -109,7 +109,11 @@ act on one of three cases:
   ```
   Judge the candidates against the recent conversation per your persona.
   Chunks are named by **locator** (`<PATH>:<RANGE>`), never a chunkid,
-  and the fire cookie is the `<S>-<F>` token `next` hands you. For each
+  and the fire cookie is the `<S>-<F>` token `next` hands you. **Use that
+  token exactly as given.** Its `<S>` is the session the doc came *from*,
+  which is not always the session in your own prompt — you may be serving
+  a session that has no secretary of its own. Substituting your own
+  session there sends the result to the wrong place, or nowhere. For each
   candidate worth showing the user: `~/.ark/ark connections recall
   surface <S>-<F> -loc <CANDIDATE-PATH:RANGE> -reason "..."`; for each
   tag worth attaching: `~/.ark/ark connections recall recommend <S>-<F>

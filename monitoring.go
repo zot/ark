@@ -270,17 +270,29 @@ func deriveClassSummary(class string, recs []map[string]any) MonitorClassSummary
 		}
 		tail := recs[start:]
 		sum.Counters["recent_fires"] = len(tail)
-		var inTok, outTok int
-		var ctxTok int
+		// R3308: average over MEASURED records only. Counting an unmeasured
+		// record as a zero drags the reported figure toward zero in exact
+		// proportion to how badly measurement is failing — which reads as a
+		// quiet system rather than a broken gauge. `avg_context_tokens` once
+		// reported 6495 against a measured mean of 43304 over the same 20
+		// records, because 17 of them were gaps counted as zeros.
+		var inTok, outTok, ctxTok, measured int
 		for _, r := range tail {
+			if boolField(r, "unmeasured") {
+				continue
+			}
+			measured++
 			inTok += intField(r, "in_tokens")
 			outTok += intField(r, "out_tokens")
 			ctxTok += intField(r, "context_tokens")
 		}
-		if len(tail) > 0 {
-			sum.Counters["avg_in_tokens"] = inTok / len(tail)
-			sum.Counters["avg_out_tokens"] = outTok / len(tail)
-			sum.Counters["avg_context_tokens"] = ctxTok / len(tail)
+		// Report the denominator beside the averages, so a reader can see how
+		// much of the window the number actually rests on.
+		sum.Counters["measured_fires"] = measured
+		if measured > 0 {
+			sum.Counters["avg_in_tokens"] = inTok / measured
+			sum.Counters["avg_out_tokens"] = outTok / measured
+			sum.Counters["avg_context_tokens"] = ctxTok / measured
 		}
 	}
 	// Emergency: a storm pause on this class's log lights the flag,
@@ -337,6 +349,15 @@ func MonitorEmergencies(arkDir string) ([]EmergencyState, error) {
 		}
 	}
 	return out, nil
+}
+
+// boolField reads a JSON bool, defaulting to false when absent. R3307's
+// `unmeasured` flag is emitted only when true, so an absent field correctly
+// means "this record was measured" — which keeps every pre-existing record
+// readable without a migration.
+func boolField(rec map[string]any, name string) bool {
+	v, _ := rec[name].(bool)
+	return v
 }
 
 func intField(rec map[string]any, name string) int {

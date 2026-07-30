@@ -187,8 +187,8 @@ Agent(subagent_type="ark-messenger", prompt="Check inbox for ark. Report incomin
 **Search** — to search *well yourself* at the CLI — the filter-stack craft and
 the investigation loop — **invoke `/ark-search`.** To *direct* a warm hunt
 instead (emit a `<BLOODHOUND>` watermark; it runs the hunt and returns a curated
-finding via `recall listen`) — **invoke `/bloodhound`**, which sets up the
-secretary and `listen` the watermark depends on and owns that craft.
+finding via `bloodhound listen`) — **invoke `/bloodhound`**, which sets up the
+`listen` the watermark depends on and owns that craft.
 
 To *delegate* a question instead, spawn ark-searcher — it expands queries and
 curates results, so you never interpret raw search results yourself:

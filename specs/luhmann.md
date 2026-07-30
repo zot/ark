@@ -343,21 +343,30 @@ quit_early_pause_after = 3
 backoff_seconds = [1, 5, 30]
 ```
 
-**Recall is no longer a Luhmann class.** As of the secretary-pipeline
-migration (seam 3a), the per-session recall secretary is spawned and
-supervised by each session's own assistant via `/recall` (see
-`simple-recall.md`); the orchestrator no longer hosts a `recall` class. The
-supervisor *mechanism* — the `ark luhmann` verbs, the crash/quit-early
-streak machine, and `class.<NAME>.enabled` — remains for a future managed
-class and for Luhmann's promotion to the user-side majordomo role.
+**A session's own recall secretary is not a Luhmann class.** As of the
+secretary-pipeline migration (seam 3a), the per-session recall secretary is
+spawned and supervised by each session's own assistant via `/recall` (see
+`simple-recall.md`). The orchestrator does not host it, and nothing below
+changes that.
 
-The **CLI-bloodhound secretary pool** ([bloodhound-cli.md](bloodhound-cli.md))
-is the first use of that retained mechanism. On the watcher's `next`
-directives Luhmann stands up and stops pool secretaries (recording each with
-`spawn-record` / `exit-record`), and their crashes and quit-earlies feed the
-same streak machine and `[luhmann]` policy the recall class once used. Unlike
-recall, this pool *is* Luhmann-hosted: pool secretaries serve every session's
-CLI hunts, so no single session's assistant can own them.
+Luhmann hosts **pools** instead — sets of interchangeable secretaries serving
+work that belongs to no single session ([secretary-pools.md](secretary-pools.md)).
+On the watcher's `next` directives Luhmann stands up and stops pool secretaries
+(recording each with `spawn-record` / `exit-record`), and their crashes and
+quit-earlies feed the same streak machine and `[luhmann]` policy, counted per
+class. Two classes exist:
+
+- **`bloodhound`** ([bloodhound-cli.md](bloodhound-cli.md)) — serves external
+  `ark bloodhound search` hunts and stranded watermarks.
+- **`recall`** ([simple-recall.md](simple-recall.md)) — serves ambient curation
+  docs for sessions that have no secretary of their own.
+
+**The `recall` class is not the old one restored.** The class the
+secretary-pipeline migration removed hosted *a session's* secretary, which is why
+it had to go: that secretary belongs to the session's assistant. This one is a
+pool of session-agnostic secretaries which no single assistant could own, and it
+exists for the case the old design had no answer for — a session that wants
+ambient recall without paying for a dedicated agent to sit idle through it.
 
 | Key                              | Type     | Default       | Meaning                                                                                                                                              |
 |----------------------------------|----------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -366,7 +375,7 @@ CLI hunts, so no single session's assistant can own them.
 | `quit_early_pause_after`         | int      | `3`           | After this many consecutive quit-earlies for a class (independent counter), the supervisor stops respawning and writes a `quit-early-storm` `pause` record. User clears with `ark monitor resume`. |
 | `backoff_seconds`                | []int    | `[1, 5, 30]`  | The seconds to wait between successive crash respawns. Last value is used for any further attempts up to `crash_pause_after`.                        |
 | `class.<NAME>.enabled`           | bool     | `true`        | Whether the orchestrator should host this class. Setting to `false` disables it without removing supervisor state from the log.                      |
-| `class.<NAME>.pool_max`          | int      | `3`           | For a pooled class (the CLI-bloodhound pool), the maximum concurrent secretaries Luhmann stands up on `stand up another` directives. See [bloodhound-cli.md](bloodhound-cli.md).             |
+| `class.<NAME>.pool_max`          | int      | `3`           | For a pooled class (`bloodhound`, `recall`), the maximum concurrent secretaries Luhmann stands up on `stand up another` directives. Classes do not share slots. See [secretary-pools.md](secretary-pools.md).             |
 | `class.<NAME>.cooldown_seconds`  | int      | `600`         | For a pooled class, how long a secretary that has returned to idle stays warm before it is eligible for pruning (damps spawn/stop churn; warm enough for interactive-burst reuse).           |
 | `class.<NAME>.request_ttl_seconds` | int    | `900`         | For the CLI-bloodhound pool: the watcher reaps a stranded request (a client that hit `--timeout` and exited) older than this. Read by the watcher, not Luhmann. See [bloodhound-cli.md](bloodhound-cli.md).           |
 

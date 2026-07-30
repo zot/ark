@@ -35,15 +35,19 @@ is in `seq-recall-agent.md`.
          │
          ├── 2.2  sessionID = sessionFromJSONLPath(path)
          │
-         ├── 2.3  activation gate (R2867):
-         │          curate = pubsub.SubscriberCount("ark-secretary-work", sessionID)
-         │          result = pubsub.SubscriberCount("ark-recall-result", sessionID)
-         │          if curate == 0 || result == 0:
-         │            lock; stop any armed pendingTimer;
-         │              delete sessions[sessionID]; unlock
-         │            return   (unsubscribed → never accumulated, armed,
-         │                      or fired; no leaked state; reactivates at
+         ├── 2.3  activation gate (R2867, R3279, R3294) — TWO INDEPENDENT
+         │          gates, one per level; a session secretary is part of
+         │          NEITHER, since both levels can be served by a pool:
+         │            bloodhoundEnabled = SubscriberCount("ark-bloodhound-result", sessionID) > 0
+         │            ambientEnabled    = SubscriberCount("ark-recall-result", sessionID) > 0
+         │          if !bloodhoundEnabled && !ambientEnabled:
+         │            return   (nothing at all to produce; reactivates at
          │                      JSONL end, R2868)
+         │          then, under the lock:
+         │            if !ambientEnabled: stop any armed pendingTimer and
+         │              clear pendingChunks — the recall-result sub going
+         │              away is what means "stop accumulating"; a missing
+         │              secretary tears down nothing (R3294).
          │
          ├── 2.4  lock sessions[sessionID]
          │
@@ -93,11 +97,12 @@ is in `seq-recall-agent.md`.
          │         curation-dir on first use, then in-memory)
          │        cfg = db.Config().Recall                        (R2695)
          │
-         ├── 5.4  subscriber backstop (R2806): re-query both
-         │          SubscriberCount("ark-secretary-work", sessionID) and
-         │          SubscriberCount("ark-recall-result", sessionID).
-         │          if either == 0 (consumer dropped during
-         │          activation_delay): append recall.jsonl record with
+         ├── 5.4  subscriber backstop (R2806): re-check ambientEnabled,
+         │          i.e. SubscriberCount("ark-recall-result", sessionID)
+         │          ALONE (R3294). A session-local secretary is NOT part
+         │          of this gate — who serves is decided later, at 6.x.
+         │          if == 0 (consumer dropped during activation_delay):
+         │          append recall.jsonl record with
          │          outcome="no-subscriber" (R2808); return.
          │          pendingChunks already cleared at 5.1 → next
          │          OnAppend starts fresh.
@@ -148,6 +153,9 @@ is in `seq-recall-agent.md`.
          │        b.Close()                                       (R2747, R2748)
          │        → writes tmp://ARK-RECALL/curation-
          │            <sessionID>-<fire>
+         │          path = the doc's ORIGIN; the @ark-secretary-work
+         │          head tag = its ADDRESS, chosen by routing at 6.x
+         │          (R3302, R3303) — not necessarily <sessionID>
          │          (write actor publishes pubsub event for
          │           subscribers to @ark-secretary-work)
          │
@@ -226,7 +234,7 @@ because a session without one can borrow Luhmann's pool (R3280):
     publishes the secretary-work event → wakes the secretary's `next`
     (seq-recall-agent.md, Flow 6).
   - **No session secretary, pool available** — route through the Fixer's
-    enhance-and-route path (Flow 5 / R3023): re-tag to a free pool
+    enhance-and-route path (seq-bloodhound-cli.md#1 / R3023): re-tag to a free pool
     secretary's `@ark-secretary-work=<pool-sec>`, or push a *stand up
     another secretary* directive onto Luhmann's `next` when the pool has
     room. The return is **raw** — relayed to `@ark-bloodhound-result=<S>`
@@ -234,3 +242,44 @@ because a session without one can borrow Luhmann's pool (R3280):
   - **Neither available** — emit the not-served `## Finding:` doc on
     `@ark-bloodhound-result=<S>` naming the failed condition (R3282). Never
     a silent drop.
+
+## Flow 5: ambient routing — choosing the doc's address (R3300–R3304)
+
+Runs inside `fire`, at the point the curation doc is written (5.7). The doc's
+**origin** is fixed by its path; this flow decides its **address**. Distinct
+from Flow 4, which routes a *watermark*: that path has an assistant blocked on
+`listen`, this one has nobody, so its failure modes differ.
+
+```
+6. RecallWatcher.routeCuration(origin, fire)
+         │
+         ├── 6.1  if SubscriberCount("ark-secretary-work", origin) > 0:  (R3303 rule 1)
+         │          address = origin  → the session's own secretary
+         │          no pool slot is consumed; return
+         │
+         ├── 6.2  else if no Luhmann seated (luhmannOwner == ""):        (R3304)
+         │          emit the unservable result on
+         │            @ark-recall-result=<origin> naming the failed
+         │            condition; drop the curation doc; return.
+         │          NOT silence — the remedy belongs to the session.
+         │
+         ├── 6.3  else consult pools["recall"]:                          (R3303 rule 2)
+         │         │
+         │         ├── 6.3.1  free secretary found:
+         │         │            address = <luhmann-session>-<nonce>
+         │         │            mark busy + clear idleSince              (R3300)
+         │         │            re-tag doc's @ark-secretary-work
+         │         │
+         │         ├── 6.3.2  none free, len(roster) < class.recall.pool_max:
+         │         │            push "stand up another" (class=recall)
+         │         │            onto Luhmann's next; leave doc pending;
+         │         │            route on registration                    (R3301)
+         │         │
+         │         └── 6.3.3  none free, roster at pool_max:
+         │                      leave doc pending. DEFERRAL, not
+         │                      unservability — no report (R3304).
+         │
+         └── 6.4  on `recall close` for the <origin>-<fire> token:       (R3300)
+                    free the holding secretary into cooldown, so prune
+                    never reads a curating secretary as idle.
+```

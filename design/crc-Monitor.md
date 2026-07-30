@@ -1,5 +1,5 @@
 # Monitor
-**Requirements:** R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2861, R2863
+**Requirements:** R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2861, R2863, R3308
 
 CLI surface for reading and lightly mutating the per-class JSONL
 supervisory logs under `~/.ark/monitoring/`. Read-only by intent —
@@ -37,6 +37,16 @@ this card and the dispatch table.
     most recent record that carries them). For `recall`, the count
     of records in the last window and the average `in_tokens` /
     `out_tokens` across those records.
+  - **Averages skip unmeasured records (R3308).** A recall record
+    whose token fields could not be measured is excluded from both
+    numerator and denominator, and the count actually averaged over
+    is reported beside the average. Counting an unmeasured record
+    as a zero pulls the reported figure toward zero in proportion
+    to how badly measurement is failing — which reads as a quiet
+    system rather than a broken gauge. This is not hypothetical:
+    `avg_context_tokens` reported 6495 against a measured mean of
+    43304 over the same 20 records, because 17 of them were
+    unmeasured and counted as zeros.
   - Derive `emergency` (R2863): true when the latest state-defining
     record is a storm `pause` (reason `crash-storm` or
     `quit-early-storm`); reported as `{active, class, reason}`.

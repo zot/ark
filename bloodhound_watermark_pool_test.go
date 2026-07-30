@@ -34,7 +34,9 @@ func newPoolWatcher(t *testing.T, hub *fakeLuhmannHub) *RecallWatcher {
 		t.Fatalf("AddChunker(markdown): %v", err)
 	}
 	db.SetPubSub(NewPubSub(time.Minute, 32))
-	return &RecallWatcher{db: db, pool: newCLIPool(), luhmann: hub}
+	w := NewRecallWatcher(db, nil, nil, nil)
+	w.luhmann = hub
+	return w
 }
 
 // Refs: R3280
@@ -42,22 +44,22 @@ func TestPoolCanServe(t *testing.T) {
 	cases := []struct {
 		name  string
 		hub   *fakeLuhmannHub
-		setup func(p *cliPool)
+		setup func(p *secretaryPool)
 		want  bool
 	}{
 		{"no orchestrator seated", &fakeLuhmannHub{owner: ""}, nil, false},
 		{"seated, empty roster has room", &fakeLuhmannHub{owner: "L"}, nil, true},
 		{
 			"seated, a secretary is free", &fakeLuhmannHub{owner: "L"},
-			func(p *cliPool) { p.secretaries[1] = &poolSec{nonce: 1} }, true,
+			func(p *secretaryPool) { p.secretaries[1] = &poolSec{nonce: 1} }, true,
 		},
 		{
 			"seated, all busy but room to grow", &fakeLuhmannHub{owner: "L"},
-			func(p *cliPool) { p.secretaries[1] = &poolSec{nonce: 1, busy: true} }, true,
+			func(p *secretaryPool) { p.secretaries[1] = &poolSec{nonce: 1, busy: true} }, true,
 		},
 		{
 			"seated, all busy at pool_max", &fakeLuhmannHub{owner: "L"},
-			func(p *cliPool) {
+			func(p *secretaryPool) {
 				for i := uint64(1); i <= 3; i++ { // default pool_max is 3
 					p.secretaries[i] = &poolSec{nonce: i, busy: true}
 				}
@@ -76,7 +78,7 @@ func TestPoolCanServe(t *testing.T) {
 		})
 	}
 	// A nil hub must not panic — the watcher runs without an orchestrator.
-	if (&RecallWatcher{pool: newCLIPool()}).poolCanServe() {
+	if NewRecallWatcher(nil, nil, nil, nil).poolCanServe() {
 		t.Error("poolCanServe() with nil hub = true, want false")
 	}
 }

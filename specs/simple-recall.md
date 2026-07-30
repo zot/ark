@@ -80,28 +80,65 @@ the directed path makes between recognition and service, and for the same
 reason: conjoining them made a staffed pool worth nothing to a session that had
 not spawned its own agent.
 
-A fired doc is served by the session's own secretary when one is running —
-preferred, being dedicated, already warm, and given the session's recent
-conversation. Otherwise a **pool** secretary takes it. The work item carries its
-own origin (the `<session>-<fire>` token the result verbs key on), so a curated
-result returns to the session that produced it no matter who curated it.
+### The address and the origin are different things
 
-**A pool secretary serves any session; a per-session one serves only its own.**
-That asymmetry is the point: the per-session filter exists so a session's
-secretary cannot take work belonging to another, which is exactly the constraint
-a pool secretary must not have. The two roles are distinguished explicitly, by
-the agent declaring which it is, rather than inferred from the shape of its
-identity — an inference that would break silently if that shape ever changed.
+A curation doc carries two identities, and keeping them apart is what makes
+everything below work.
 
-**Directed work is served ahead of ambient.** A directed hunt has an assistant
-blocked and waiting; a recollection has nobody. This ordering already governs a
-single secretary's dispatch and continues to hold for a pool one.
+- Its **origin** is the session that produced it, held in its path
+  (`curation-<session>-<fire>`). The result verbs key on that token, so a curated
+  result returns to the session that produced it no matter who curated it. The
+  origin also decides whose recent conversation is injected into the doc and
+  whose result subscription gates dispatch.
+- Its **address** is the `@ark-secretary-work` head tag: the tube of the
+  secretary that will serve it. A secretary looks for work addressed to itself,
+  and only that.
+
+They were the same value for as long as ambient had exactly one possible server,
+which is why the distinction had not needed stating. Routing is the watcher
+setting an address that differs from the origin.
+
+### The dispatch ladder
+
+The watcher **routes** a fired doc — it chooses a secretary and writes that
+secretary's address on the doc, exactly as it routes a CLI hunt
+([secretary-pools.md](secretary-pools.md)). Choosing is not left to whoever asks
+first:
+
+1. **The session's own secretary**, if one is running. It is dedicated, so the
+   session's recollections never queue behind another session's work.
+2. **Otherwise the `recall` pool**, if a Luhmann is seated — a free secretary
+   from that class, or a stand-up directive and dispatch once it registers.
+3. **Otherwise the session is told**, through the consumer loop it already holds,
+   that its recollection will not be served. Rule 3 of
+   [secretary-pools.md](secretary-pools.md): never silence.
+
+Because the doc arrives addressed, no secretary can take work meant for another,
+and a secretary needs no way to widen its own search. The per-session scoping
+that once had to be relaxed for a pool server is now simply how dispatch works.
+
+**Ambient is its own pool class.** It does not borrow the bloodhound pool. A
+recollection therefore cannot consume a slot a directed hunt needs, and the two
+workloads size independently — which matters, because ambient fires per turn
+boundary across every enabled session while watermarks are deliberate.
+
+**Directed work is served ahead of ambient** *within* a secretary that serves
+both — a session's own secretary, which takes that session's hunts and its
+recollections. A directed hunt has an assistant blocked and waiting; a
+recollection has nobody. Across the two pool classes the ordering does not arise,
+since neither can occupy the other's secretaries.
 
 **A recollection is never dropped for being late.** A session that has opted in
 wants the result even when it arrives slowly, so ambient *yields* to directed
 rather than expiring against a deadline. A doc whose session has no result
 subscriber is likewise left pending rather than discarded: the work is deferred,
 never thrown away.
+
+**Late and unservable are different states, and only one of them is silent.**
+Deferral needs no report — nobody is blocked on a recollection, and it will
+arrive. A doc that *cannot* be served at all is reported (ladder rule 3),
+because the remedy belongs to the requesting session and it can only act if it
+is told.
 
 ## Architecture
 
@@ -653,13 +690,39 @@ the prompt copy is what the agent types into its `subscribe`,
 
 ### Subagent JSONL discovery
 
-At `close` time:
+**A subagent's transcript can only be found by knowing its parent
+session.** The parent session UUID is a *directory name* on the
+path — `~/.claude/projects/<project>/<parent>/subagents/` — and it
+appears nowhere inside the `.meta.json`, so it cannot be recovered
+from the sidecar. Everything below follows from that.
 
-1. `cwd_encoded := replace_slashes_with_dashes(cwd)` — the ark
-   CLI assumes cwd is the session's project directory.
-2. `parent_session := $CLAUDE_CODE_SESSION_ID` — exposed by
-   Claude Code in the subagent's environment.
-3. `subagents_dir := ~/.claude/projects/<cwd_encoded>/<parent_session>/subagents/`.
+**Who knows the parent, and who needs it, are different processes.**
+`$CLAUDE_CODE_SESSION_ID` holds the parent session and is exported
+into an **agent's** shell, so any `ark` CLI invocation an agent
+makes can read it. The **server** is not launched by an agent and
+has no such variable. Since the CLI verbs proxy to the server and
+the server is what performs the lookup, reading the variable at
+lookup time cannot work — and reading a variable the server merely
+*inherited* is worse than useless, because it would resolve only
+that one launching session's children and silently mis-resolve or
+miss every other session's.
+
+So the parent is **registered, not discovered**: it is captured
+once, in the agent shell that reserves the nonce, and stored
+server-side against that nonce for its lifetime.
+
+1. **At `reserve-nonce`**, the CLI reads `$CLAUDE_CODE_SESSION_ID`
+   from its own environment — it is running in the reserving
+   agent's shell — and sends it with the reservation. The server
+   records `nonce → parent session`. The reserving caller is always
+   the spawning parent (an assistant for its own secretary,
+   Luhmann for a pool secretary), which is exactly whose
+   `subagents/` directory the child will live under.
+2. **At lookup** (`close`, `context`, and the `next` context gate),
+   the server resolves the nonce through that registry. No
+   environment variable is read.
+3. `subagents_dir := <project>/<parent>/subagents/`, where
+   `<project>` is matched among the configured chat sources.
 4. Scan `<subagents_dir>/*.meta.json` for entries whose
    `description` field contains `nonce <N>`.
 5. The matched basename gives `agent-<id>.jsonl` (paired with
@@ -1147,8 +1210,8 @@ Lands in this pass:
   result doc / remove curation / discover subagent JSONL /
   append monitor log."
 - `~/.ark/monitoring/recall.jsonl` log file format + writer.
-- Subagent JSONL discovery routine (cwd → encoded project dir;
-  `$CLAUDE_CODE_SESSION_ID` → parent session UUID; scan
+- Subagent JSONL discovery routine (parent session from the
+  reserve-time registry, not from the server's environment; scan
   `*.meta.json` for nonce; sum tokens from paired
   `agent-*.jsonl`).
 - RJ value: signed Recall Judgment, v3 (see "Recall Judgment

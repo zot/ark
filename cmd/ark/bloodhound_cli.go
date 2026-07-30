@@ -52,7 +52,7 @@ func bloodhoundCommand() *ucli.Command {
 				Name:  "listen",
 				Usage: "consumer loop: block until a result arrives (findings; add ambient recollections with --recall)",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (required)"},
+					&ucli.StringFlag{Name: "session", Usage: "Claude Code session UUID (optional — resolved from $CLAUDE_CODE_SESSION_ID; a disagreeing value loses, R3309)"},
 					&ucli.BoolFlag{
 						Name:    "recall",
 						Aliases: []string{"ambient"},

@@ -45,12 +45,12 @@ const recallNextKeepalive = 90 * time.Second
 // against the limit, then returns the lowest-fire pending curation doc
 // — blocking (true lotto-tube) until one exists. Returns the
 // crank-handle body and whether the directive is an exit.
-// pool reports whether this secretary serves any session's ambient work rather
-// than one session's. Declared by the caller (`--pool`), never inferred from the
-// composite's shape: an inference over an identity format breaks silently when
-// the format changes, and the failure would present as ambient work quietly
-// never being served — the hardest kind to notice. R3295
-func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int, pool bool) (body string, exit bool, err error) {
+// A secretary takes only what it was addressed, whether it serves one session
+// or the recall pool, so there is no role for the caller to declare. R3295 did
+// declare one, per call, via `--pool`; it is retired (T273) because the watcher
+// now routes work to a secretary rather than each secretary widening its own
+// search. R3302, R3303
+func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, session string, contextLimit int) (body string, exit bool, err error) {
 	// R2902: key the curate subscription on the durable session
 	// (`secretary-work-<session>`), not the volatile `recall-<nonce>`, so
 	// two secretary generations across a restart share one stable, unique
@@ -106,17 +106,15 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, sessi
 		if content, ok := b.lowestPendingCLIHunt(session); ok {
 			return recallSearchTaskPrompt(session, nonce, content), false, nil
 		}
-		// R3295: a pool secretary looks for curation work across **all**
-		// sessions, so it passes no target. The per-session filter it thereby
-		// opts out of (R2889) exists to stop a session's secretary taking
-		// another session's work — exactly the constraint a pool secretary must
-		// not carry. Its composite `session` is still used above, for directed
-		// routing, so the two roles differ only in this lookup.
-		curationTarget := session
-		if pool {
-			curationTarget = ""
-		}
-		fire, docSession, content, ok := b.lowestPendingCuration(curationTarget)
+		// R3302/R3303: one lookup serves both roles, because the watcher
+		// addresses the work. A session's own secretary is sent its session's
+		// docs; a recall-class pool secretary is sent whatever the watcher
+		// routed to its composite. Neither needs to widen its search, and
+		// R2889's constraint — a secretary must not take another's work — is
+		// now the mechanism rather than an obstacle to it. (R3295 declared this
+		// role per call; retired T273, since there is no longer a role to
+		// declare.)
+		fire, docSession, content, ok := b.lowestPendingCuration(session)
 		if ok {
 			// R2891: inject the conversation of the session the doc *belongs to*,
 			// which for a per-session secretary is its own. A pool secretary's
@@ -177,14 +175,15 @@ func (b *RecallAgentBuilder) waitForWork(ctx context.Context, session string, wi
 // itself contains dashes, so the fire is the integer after the *last*
 // dash and the session is everything before it. Processing
 // lowest-fire-first keeps Close's same-session orphan sweep (R2758) safe.
-// With targetSession set, only that session's docs are dispatched (R2889).
-// CRC: crc-RecallAgentBuilder.md | R2889
-func (b *RecallAgentBuilder) lowestPendingCuration(targetSession string) (fire uint64, docSession string, content string, ok bool) {
+// With `address` set, only docs the watcher ADDRESSED to it are dispatched —
+// its @ark-secretary-work head tag, not the origin in its path (R3302).
+// CRC: crc-RecallAgentBuilder.md | R2889, R3302
+func (b *RecallAgentBuilder) lowestPendingCuration(address string) (fire uint64, docSession string, content string, ok bool) {
 	files, err := Sync(b.db, func(db *DB) ([]string, error) { return db.Files() })
 	if err != nil {
 		return 0, "", "", false
 	}
-	var path, bestSession string
+	var bestSession, bestBody string
 	for _, p := range files {
 		if !strings.HasPrefix(p, curationPrefix) {
 			continue
@@ -198,32 +197,52 @@ func (b *RecallAgentBuilder) lowestPendingCuration(targetSession string) (fire u
 		if perr != nil {
 			continue
 		}
-		// Gate on a result subscriber for this doc's session (R2857):
-		// only dispatch work whose result `close` will be able to deliver.
-		// With no subscriber the doc is left pending (it piles up) and the
-		// daemon keeps blocking — the work is deferred, never discarded.
-		// The session is the path segment before the trailing -<fire>.
+		// The path segment before the trailing -<fire> is the doc's ORIGIN —
+		// the session the result goes back to. It is NOT necessarily the
+		// session that serves the doc. R3302
 		session := rest[:dash]
-		if targetSession != "" && session != targetSession {
-			continue // R2889: per-session secretary dispatches only its own docs
-		}
+		// Gate on a result subscriber for the ORIGIN (R2857): only dispatch
+		// work whose result `close` will be able to deliver. With no subscriber
+		// the doc is left pending (it piles up) and the daemon keeps blocking —
+		// the work is deferred, never discarded.
 		if b.db.pubsub.SubscriberCount("ark-recall-result", session) == 0 {
 			continue
 		}
-		if !ok || f < fire {
-			path, fire, bestSession, ok = p, f, session, true
+		if ok && f >= fire {
+			continue // already holding a lower fire; no need to read this one
 		}
+		raw, derr := b.db.TmpContent(p)
+		if derr != nil {
+			continue // vanished between listing and read (concurrent close)
+		}
+		body := string(raw)
+		// Match the doc's ADDRESS — its @ark-secretary-work head tag, which the
+		// watcher wrote when it chose a server (R3303). A secretary takes only
+		// what it was sent, so the per-session filter that once had to be
+		// relaxed for a pool server is simply how dispatch works now: for a
+		// session's own secretary the address is its session, and for a pool
+		// secretary it is the composite it subscribes on. R3302
+		if address != "" && !addressedTo(body, address) {
+			continue
+		}
+		fire, bestSession, bestBody, ok = f, session, body, true
 	}
 	if !ok {
 		return 0, "", "", false
 	}
-	data, err := b.db.TmpContent(path)
-	if err != nil {
-		// The doc vanished between listing and read (e.g. a concurrent
-		// close); treat as nothing pending — the caller re-checks.
-		return 0, "", "", false
+	return fire, bestSession, bestBody, true
+}
+
+// addressedTo reports whether a curation doc's head tag addresses it to the
+// given secretary. The head tag is the first line by construction (the builder
+// writes it there), so a body whose first line is anything else is not
+// addressed to anyone. R3302
+func addressedTo(body, address string) bool {
+	first, _, found := strings.Cut(body, "\n")
+	if !found {
+		return false
 	}
-	return fire, bestSession, string(data), true
+	return strings.TrimSpace(first) == strings.TrimSpace(curationHeadTag+address)
 }
 
 // lowestPendingBloodhound finds the lowest-id pending directed-search task doc
@@ -886,9 +905,14 @@ func luhmannWorkPrompt(session string, w LuhmannWork, content string) string {
 				"%sSupervisor directive: stop the `%s` pool secretary with nonce %d (idle past its cooldown). Stop its Task and record it with `~/.ark/ark luhmann exit-record --class %s --nonce %d --reason context-limit`.\n",
 				lead, w.Class, w.Nonce, w.Class, w.Nonce)
 		}
+		// R3299: the reserve command carries `--class`, because that is what
+		// files the nonce in the right roster. Naming the class only in the
+		// prose would leave the dictated command class-less and every secretary
+		// would land in the bloodhound pool — work for the other class would
+		// then never be served, with the symptom nowhere near the cause.
 		return fmt.Sprintf(
-			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
-			lead, w.Class, w.Class)
+			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann --class %s`, spawn it via the Task tool with `--session <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
+			lead, w.Class, w.Class, w.Class)
 	case "command":
 		// R3130: a synchronous `ark luhmann send` instruction. Handle it as an
 		// ordinary user request; the reply ends the turn, which is where the

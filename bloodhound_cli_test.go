@@ -35,7 +35,9 @@ func (f *fakeLuhmannHub) EnqueueLuhmann(w LuhmannWork) bool {
 // must avoid the pending+free coincidence so enhanceRequestDoc (the only
 // DB-touching path) is never reached.
 func newFixerWatcher(hub *fakeLuhmannHub) *RecallWatcher {
-	return &RecallWatcher{pool: newCLIPool(), luhmann: hub}
+	w := NewRecallWatcher(nil, nil, nil, nil)
+	w.luhmann = hub
+	return w
 }
 
 func intp(n int) *int { return &n }
@@ -136,8 +138,8 @@ func TestCLIReturnFreesAndRoutesToCuration(t *testing.T) {
 func TestRegisterPoolSecretaryIdempotent(t *testing.T) {
 	hub := &fakeLuhmannHub{owner: "S"}
 	w := newFixerWatcher(hub)
-	w.RegisterPoolSecretary(42)
-	w.RegisterPoolSecretary(42) // idempotent
+	w.RegisterPoolSecretary(bloodhoundPoolClass, 42)
+	w.RegisterPoolSecretary(bloodhoundPoolClass, 42) // idempotent
 	if len(w.pool.secretaries) != 1 {
 		t.Fatalf("secretaries = %d, want 1 (idempotent)", len(w.pool.secretaries))
 	}
@@ -444,7 +446,7 @@ func TestExitRecordDeregistersPoolSecretary(t *testing.T) {
 	b := NewRecallAgentBuilder(db)
 	w := NewRecallWatcher(db, l, db.store, b)
 	srv := &Server{db: db, recallWatcher: w}
-	w.RegisterPoolSecretary(5)
+	w.RegisterPoolSecretary(bloodhoundPoolClass, 5)
 	if _, ok := w.pool.secretaries[5]; !ok {
 		t.Fatal("secretary 5 should be registered")
 	}
@@ -523,7 +525,8 @@ func TestCLIRequestRecordsRawIntent(t *testing.T) {
 	}
 	b := NewRecallAgentBuilder(db)
 	hub := &fakeLuhmannHub{owner: "S"}
-	w := &RecallWatcher{pool: newCLIPool(), luhmann: hub, db: db}
+	w := NewRecallWatcher(db, nil, nil, nil)
+	w.luhmann = hub
 
 	rawID, err := b.BloodhoundCLIOpen("clue: x\nscope: all\ncurate: false\n")
 	if err != nil {
