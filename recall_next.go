@@ -726,6 +726,15 @@ var LuhmannNextKeepalive = 45 * time.Minute // R3016
 // cross the 1-hour cache TTL that governs the backgrounded loop (R3016).
 const luhmannNextKeepaliveMax = 55 * time.Minute // R3016
 
+// luhmannLeaseGrace is how long the seat lease survives between an owner's
+// `next` calls (R3321). It is sized by one orchestrator *work turn* — refine a
+// hunt, emit the `bloodhound add` calls, re-invoke — and deliberately NOT by
+// the keepalive cadence, because the owner spends its keepalive inside a call
+// where luhmannActive already proves it alive. So a 55-minute --keepalive never
+// makes a live orchestrator look stale, while a departed one is displaceable in
+// minutes instead of after a full cadence.
+const luhmannLeaseGrace = 10 * time.Minute // R3321
+
 // luhmannNextQueueCap buffers the watcher→Luhmann handoff so a watcher push
 // never blocks while the drain sits idle between invocations (R3011).
 const luhmannNextQueueCap = 64 // R3011
@@ -785,8 +794,52 @@ const (
 func (srv *Server) setLuhmannOwnerLocked(session string) {
 	if srv.luhmannOwner != session {
 		srv.clearEventRoutingLocked()
+		// R3321: the liveness pair describes the *outgoing* owner's drain, so a
+		// seat change starts it fresh. Inherit it instead and the displaced
+		// owner's in-flight count reads as the successor's proof of life — the
+		// lease would then never go stale again, which is the failure this
+		// requirement exists to prevent, reintroduced one level down.
+		srv.luhmannActive, srv.luhmannLiveUntil = 0, time.Time{}
 	}
 	srv.luhmannOwner = session
+}
+
+// luhmannLeaseLiveLocked reports whether the seat's lease is still live
+// (R3321). An in-flight `next` call from the owner is proof of life, because
+// the server is the party blocking on it; after the last one returns, the grace
+// window carries the lease across the gap while the orchestrator does the work
+// it was handed. Caller holds luhmannMu.
+// CRC: crc-LuhmannCLI.md | R3321
+func (srv *Server) luhmannLeaseLiveLocked() bool {
+	return srv.luhmannActive > 0 || time.Now().Before(srv.luhmannLiveUntil)
+}
+
+// endLuhmannCall releases one of the owner's in-flight `next` calls (R3321).
+// A normal return means the orchestrator is alive and will re-invoke, so the
+// lease keeps its grace window. A cancelled request means the client is gone —
+// killed process or dropped connection — so the lease expires immediately and
+// the next `--first` may take the seat; that is what makes a re-hosted
+// orchestrator able to displace the identity it was forked from. A call whose
+// session no longer owns the seat is ignored, its era's counters having been
+// reset when the seat moved (setLuhmannOwnerLocked).
+// CRC: crc-LuhmannCLI.md | R3321
+func (srv *Server) endLuhmannCall(session string, cancelled bool) {
+	srv.luhmannMu.Lock()
+	defer srv.luhmannMu.Unlock()
+	if srv.luhmannOwner != session {
+		return
+	}
+	if srv.luhmannActive > 0 {
+		srv.luhmannActive--
+	}
+	if srv.luhmannActive > 0 {
+		return
+	}
+	if cancelled {
+		srv.luhmannLiveUntil = time.Time{}
+		return
+	}
+	srv.luhmannLiveUntil = time.Now().Add(luhmannLeaseGrace)
 }
 
 // claimLuhmann applies the in-memory ownership lease for one `next` call
@@ -800,12 +853,32 @@ func (srv *Server) setLuhmannOwnerLocked(session string) {
 func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNextDisposition, string) {
 	srv.luhmannMu.Lock()
 	defer srv.luhmannMu.Unlock()
+	disp, msg := srv.applyLuhmannClaimLocked(session, mode)
+	if disp == luhmannDispOK {
+		// R3321: register the in-flight call in the SAME locked step as the
+		// claim, so there is no instant where the seat is owned but nothing
+		// proves the owner alive. Increment afterwards and a concurrent
+		// --first could read that gap as staleness and displace an
+		// orchestrator that had just claimed.
+		srv.luhmannActive++
+	}
+	return disp, msg
+}
+
+// applyLuhmannClaimLocked decides the disposition for one claim (R3013, R3321).
+// Caller holds luhmannMu. --first is the only verb that displaces a stale
+// incumbent; --force needs no staleness judgment, and plain validates without
+// ever claiming.
+// CRC: crc-LuhmannCLI.md | R3012, R3013, R3321
+func (srv *Server) applyLuhmannClaimLocked(session string, mode luhmannNextMode) (luhmannNextDisposition, string) {
 	switch mode {
 	case luhmannModeForce:
 		srv.setLuhmannOwnerLocked(session)
 		return luhmannDispOK, ""
 	case luhmannModeFirst:
-		if srv.luhmannOwner == "" || srv.luhmannOwner == session {
+		// R3321: a stale incumbent is displaced. This is what lets a re-hosted
+		// orchestrator take the seat its own pre-fork identity is still holding.
+		if srv.luhmannOwner == "" || srv.luhmannOwner == session || !srv.luhmannLeaseLiveLocked() {
 			srv.setLuhmannOwnerLocked(session)
 			return luhmannDispOK, ""
 		}
@@ -817,6 +890,10 @@ func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNe
 		case session:
 			return luhmannDispOK, ""
 		default:
+			// R3321: validating is not claiming, so a stale owner is left in
+			// place here on purpose. Were plain to take over too, both the
+			// incumbent and the newcomer could validate as owner and two
+			// orchestrators would drain one tube.
 			return luhmannDispExit, luhmannErrNoOwnership
 		}
 	}
@@ -835,6 +912,11 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 	if disp != luhmannDispOK {
 		return luhmannOwnershipPrompt(disp, msg), disp, nil
 	}
+	// R3321: the claim registered this call as in flight, so release it on every
+	// exit path. Cancellation is singled out because it is the one exit meaning
+	// the client is gone rather than about to come back.
+	cancelled := false
+	defer func() { srv.endLuhmannCall(session, cancelled) }()
 	switch {
 	case keepalive <= 0:
 		keepalive = LuhmannNextKeepalive
@@ -845,6 +927,7 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		cancelled = true // R3321: the drain died; the lease expires at once
 		return "", luhmannDispOK, ctx.Err()
 	case w := <-srv.nextQueue:
 		// For a curation task, inline the request doc's content (query + raw

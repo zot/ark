@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130, R3147, R3148
+**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130, R3147, R3148, R3321
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
@@ -22,6 +22,16 @@ card covers only the Go surface the skill calls into.
   Luhmann role (R3012). In-memory server state, empty when
   unowned; cleared on a server restart (no persistence). The
   ownership lease `next` enforces.
+- luhmannActive: int — how many `next` calls the seat owner has in flight
+  (R3321). Normally 0 or 1, the drain being a single loop. Non-zero is
+  proof of life: the server is the party blocking on that call, and sees a
+  dead client as a cancelled request.
+- luhmannLiveUntil: time — the instant the lease expires once nothing is in
+  flight (R3321). Set to `now + luhmannLeaseGrace` when a call returns
+  normally, and to the **zero time** when one is cancelled, since then no
+  caller is coming back. A lease neither active nor within this instant is
+  stale, and a stale lease is claimable by another session's `--first`
+  (R3013).
 - nextQueue: chan work — in-memory queue of work items `next` drains
   (R3011): curation tasks (a request-doc path to refine) and supervisor
   directives (stand up / stop a pool secretary), both pushed by the recall
@@ -107,18 +117,35 @@ card covers only the Go surface the skill calls into.
   conversational; on completion the harness re-injects the result,
   Luhmann acts, and re-invokes. Same background-lotto-tube family as
   `RecallNext` and `{cmd} event`.
-- **Ownership lease** (R3012): `--session S` is an *identity*, not a
+- **Ownership lease** (R3012): the calling session is an *identity*, not a
   tube scope — the queue is one global feed of all CLI hunts and
-  directives, and a single `luhmannOwner` holds the role.
-  - **`--first`** claims: sets `luhmannOwner := S` if unowned; if a
-    *different* session owns it, errors `you don't have ownership`
-    (R3013).
+  directives, and a single `luhmannOwner` holds the role. The identity is
+  resolved from the live environment rather than typed (R3314), so a
+  re-hosted session cannot claim under the id its replayed history carries.
+  - **`--first`** claims: sets `luhmannOwner := S` when unowned, when `S`
+    already owns it, or when the incumbent's lease is **stale** (R3321);
+    when a *live* different session owns it, errors `you don't have
+    ownership` (R3013).
   - **plain** (no flag) validates and **never claims**: proceeds only
     if `S == luhmannOwner`; errors `there are no sessions` when
     unowned, `you don't have ownership` when a different session owns
-    it (R3013).
+    it — stale or not, since validating is not claiming (R3013).
   - **`--force`** sets `luhmannOwner := S` unconditionally — the
-    deliberate takeover of a dead-but-registered owner (R3013).
+    deliberate takeover that needs no staleness judgment (R3013).
+  - **Liveness** (R3321): the lease is held by the drain, not by a timer.
+    `luhmannActive` rises for the duration of an owner's `next` call and
+    falls on every exit path including cancellation, stamping
+    `luhmannLiveUntil`; the lease is live while active, and for the grace
+    window after a **normal** return. A **cancelled** return opens no window —
+    the grace is for a caller that is coming back, and a cancelled request
+    means the client is gone — so a killed drain frees the seat at once. The window is sized by a work turn rather than by the
+    keepalive cadence, because the owner spends its keepalive *inside* a
+    call where it is visibly in flight — so no permitted `--keepalive`
+    makes a live orchestrator look stale (R3016). This is what makes a
+    forked-away orchestrator displaceable at all: the re-host kills its
+    backgrounded drain, and ark cannot learn of the departure any other
+    way, the pty host having lost custody of the very child whose exit it
+    would otherwise have seen (R3125).
   - Whenever the seat changes to a **different** session, the claim also
     clears Frictionless event routing in the same locked step
     (`clearEventRouting`, crc-LuhmannEvents.md, R3148): routing does not

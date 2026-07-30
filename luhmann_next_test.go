@@ -23,27 +23,36 @@ func TestClaimLuhmannMatrix(t *testing.T) {
 		name      string
 		mode      luhmannNextMode
 		owner     string // owner before the call ("" = unowned)
+		live      bool   // incumbent's lease still live (R3321)
 		session   string
 		wantDisp  luhmannNextDisposition
 		wantMsg   string
 		wantOwner string // owner after the call
 	}{
 		// --force always claims (idempotent on self, reclaims a foreign seat).
-		{"force/unowned", luhmannModeForce, "", "A", luhmannDispOK, "", "A"},
-		{"force/self", luhmannModeForce, "A", "A", luhmannDispOK, "", "A"},
-		{"force/foreign-reclaims", luhmannModeForce, "A", "B", luhmannDispOK, "", "B"},
-		// --first claims when unowned or self, else stands the caller down.
-		{"first/unowned-claims", luhmannModeFirst, "", "A", luhmannDispOK, "", "A"},
-		{"first/self-idempotent", luhmannModeFirst, "A", "A", luhmannDispOK, "", "A"},
-		{"first/foreign-standdown", luhmannModeFirst, "A", "B", luhmannDispExit, luhmannErrNoOwnership, "A"},
-		// plain validates only — never claims.
-		{"plain/unowned-reclaim", luhmannModePlain, "", "A", luhmannDispReclaim, luhmannErrNoSessions, ""},
-		{"plain/self-ok", luhmannModePlain, "A", "A", luhmannDispOK, "", "A"},
-		{"plain/foreign-standdown", luhmannModePlain, "A", "B", luhmannDispExit, luhmannErrNoOwnership, "A"},
+		{"force/unowned", luhmannModeForce, "", false, "A", luhmannDispOK, "", "A"},
+		{"force/self", luhmannModeForce, "A", true, "A", luhmannDispOK, "", "A"},
+		{"force/live-foreign-reclaims", luhmannModeForce, "A", true, "B", luhmannDispOK, "", "B"},
+		// --first claims when unowned, on self, or when the incumbent is stale.
+		{"first/unowned-claims", luhmannModeFirst, "", false, "A", luhmannDispOK, "", "A"},
+		{"first/self-idempotent", luhmannModeFirst, "A", true, "A", luhmannDispOK, "", "A"},
+		{"first/live-foreign-standdown", luhmannModeFirst, "A", true, "B", luhmannDispExit, luhmannErrNoOwnership, "A"},
+		{"first/stale-foreign-takes-over", luhmannModeFirst, "A", false, "B", luhmannDispOK, "", "B"},
+		// plain validates only — never claims, stale incumbent or not.
+		{"plain/unowned-reclaim", luhmannModePlain, "", false, "A", luhmannDispReclaim, luhmannErrNoSessions, ""},
+		{"plain/self-ok", luhmannModePlain, "A", true, "A", luhmannDispOK, "", "A"},
+		{"plain/live-foreign-standdown", luhmannModePlain, "A", true, "B", luhmannDispExit, luhmannErrNoOwnership, "A"},
+		// The load-bearing row: a stale seat is claimable by --first and by
+		// nothing else. If plain took over too, incumbent and newcomer would
+		// both validate as owner and two orchestrators would drain one tube.
+		{"plain/stale-foreign-standdown", luhmannModePlain, "A", false, "B", luhmannDispExit, luhmannErrNoOwnership, "A"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &Server{luhmannOwner: tc.owner}
+			if tc.live {
+				srv.luhmannLiveUntil = time.Now().Add(time.Minute)
+			}
 			disp, msg := srv.claimLuhmann(tc.session, tc.mode)
 			if disp != tc.wantDisp {
 				t.Errorf("disposition = %d, want %d", disp, tc.wantDisp)
@@ -199,4 +208,89 @@ func TestLuhmannNextContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("want context error, got nil")
 	}
+	// R3321: a dead client must not leak its in-flight count, or the seat would
+	// become permanently unclaimable — strictly worse than the stale seat this
+	// requirement exists to fix. The lease also expires at once rather than
+	// holding the grace window open for a caller that is not coming back.
+	srv.luhmannMu.Lock()
+	defer srv.luhmannMu.Unlock()
+	if srv.luhmannActive != 0 {
+		t.Errorf("luhmannActive = %d after cancellation, want 0", srv.luhmannActive)
+	}
+	if srv.luhmannLeaseLiveLocked() {
+		t.Error("lease still live after the drain's client vanished")
+	}
+}
+
+// TestLuhmannLeaseLiveness pins the lease to the drain rather than to a timer
+// (R3321): an in-flight call is proof of life however stale the last return is,
+// the grace window carries the lease across one work turn, and a cancelled call
+// expires it at once so a re-hosted orchestrator can displace the pre-fork
+// identity still sitting in the seat.
+// Refs: R3321
+func TestLuhmannLeaseLiveness(t *testing.T) {
+	t.Run("in-flight outranks any age", func(t *testing.T) {
+		// The case that matters most: an owner parked in a 55-minute keepalive
+		// has no recent return at all, and must still never read as stale.
+		srv := &Server{luhmannOwner: "A", luhmannActive: 1, luhmannLiveUntil: time.Now().Add(-time.Hour)}
+		srv.luhmannMu.Lock()
+		defer srv.luhmannMu.Unlock()
+		if !srv.luhmannLeaseLiveLocked() {
+			t.Error("lease read stale with a call in flight")
+		}
+	})
+	t.Run("grace window carries a work turn", func(t *testing.T) {
+		srv := &Server{luhmannOwner: "A", luhmannLiveUntil: time.Now().Add(time.Minute)}
+		srv.luhmannMu.Lock()
+		defer srv.luhmannMu.Unlock()
+		if !srv.luhmannLeaseLiveLocked() {
+			t.Error("lease read stale inside the grace window")
+		}
+	})
+	t.Run("expired window yields the seat to --first", func(t *testing.T) {
+		srv := &Server{luhmannOwner: "A", luhmannLiveUntil: time.Now().Add(-time.Second)}
+		if disp, _ := srv.claimLuhmann("B", luhmannModeFirst); disp != luhmannDispOK {
+			t.Fatalf("--first on a stale seat = %d, want OK", disp)
+		}
+		if srv.luhmannOwner != "B" {
+			t.Errorf("owner = %q, want B after takeover", srv.luhmannOwner)
+		}
+	})
+	t.Run("normal return opens the grace window", func(t *testing.T) {
+		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
+		srv.endLuhmannCall("A", false)
+		srv.luhmannMu.Lock()
+		defer srv.luhmannMu.Unlock()
+		if srv.luhmannActive != 0 {
+			t.Errorf("active = %d, want 0", srv.luhmannActive)
+		}
+		if !srv.luhmannLeaseLiveLocked() {
+			t.Error("a normal return must leave the lease live for the grace window")
+		}
+	})
+	t.Run("cancelled return expires at once", func(t *testing.T) {
+		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
+		srv.endLuhmannCall("A", true)
+		srv.luhmannMu.Lock()
+		defer srv.luhmannMu.Unlock()
+		if srv.luhmannLeaseLiveLocked() {
+			t.Error("a cancelled drain must expire the lease immediately")
+		}
+	})
+	t.Run("a displaced owner's late return cannot drain its successor", func(t *testing.T) {
+		// A holds the seat with a call in flight when B force-reclaims. A's
+		// call eventually returns; it must not touch B's counters, or B's lease
+		// would expire while B is perfectly alive.
+		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
+		srv.claimLuhmann("B", luhmannModeForce) // resets the pair, then registers B
+		srv.endLuhmannCall("A", true)           // A's late return
+		srv.luhmannMu.Lock()
+		defer srv.luhmannMu.Unlock()
+		if srv.luhmannActive != 1 {
+			t.Errorf("active = %d, want 1 (B's own call)", srv.luhmannActive)
+		}
+		if !srv.luhmannLeaseLiveLocked() {
+			t.Error("B's lease died when A's stale call returned")
+		}
+	})
 }

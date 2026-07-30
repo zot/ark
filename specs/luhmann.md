@@ -173,25 +173,64 @@ returned body:
   handles it as a task the UI is asking for. Fire-and-forget like a
   directive: nothing blocks on the reply.
 
-#### Ownership lease — `--session`, `--first`, `--force`
+#### Ownership lease — identity, `--first`, `--force`
 
 Luhmann is a **singleton**: "it's the server" for the external-CLI
-bloodhound. So `--session S` is not a tube *scope* (the tube is one
-global queue of every CLI hunt and directive) but an **ownership
+bloodhound. The tube is one global queue of every CLI hunt and directive,
+so the caller's session is not a tube *scope* but an **ownership
 identity**, which lets the service detect a second Luhmann and keep
-exactly one draining. The lease is **in-memory** server state with no
+exactly one draining. The identity is never typed: `next` declares that it
+acts as the calling session and resolves it from the live environment (see
+session-identity.md), because a re-hosted session replays an id that no
+longer names it. The lease is **in-memory** server state with no
 persistence, so a server bounce clears it.
 
-- **`--first`** claims the role. It succeeds when the role is unowned;
-  when a *different* session already owns it, it errors `you don't have
-  ownership`.
-- **plain `next --session S`** (no flag) **validates and never claims**.
-  It proceeds only when S is the owner. When the role is unowned it
-  errors `there are no sessions`; when a different session owns it, it
-  errors `you don't have ownership`.
+- **`--first`** claims the role. It succeeds when the role is unowned, when
+  the caller already owns it, and when the incumbent's lease has gone
+  **stale** (below). When a *live* different session owns it, it errors
+  `you don't have ownership`.
+- **plain `next`** (no flag) **validates and never claims**. It proceeds
+  only when the caller owns the seat. When the role is unowned it errors
+  `there are no sessions`; when a different session owns it, it errors
+  `you don't have ownership`, whether or not that owner is stale, because
+  validating is not claiming.
 - **`--force`** reclaims the role unconditionally, the deliberate
-  takeover for when a prior owner has died but its in-memory lease still
-  lingers (the server itself never bounced).
+  takeover that needs no staleness judgment.
+
+##### Liveness — the lease is held by the drain
+
+A seat held by a session that is no longer draining is worse than an empty
+one. `ark luhmann send` and the CLI bloodhound both gate on *someone owns
+the seat*, so against a dead owner they enqueue into a tube nobody reads and
+report a timeout rather than an absence.
+
+Two events produce exactly that state and neither is under ark's control.
+Claude Code may re-host a running session under a new id (`--session-id
+<new> --fork-session --resume <old>.jsonl`), which kills the old process's
+backgrounded drain; and the pty host learns of a child's exit only while it
+holds that child, which a re-host takes away. So ownership cannot rest on
+ark noticing a departure.
+
+Instead the lease is **held by the drain itself**. The server knows whether
+a `next` call from the owner is in flight, because it is the party blocking
+on it, and it learns of a dead client from the cancelled request. The lease
+is live while such a call is in flight, and for a grace window after the
+last one returns; that window covers an orchestrator that is off doing the
+work `next` just handed it. Past the window with nothing in flight, the
+lease is stale and the next `--first` takes the seat.
+
+A **cancelled** call gets no grace window. The window exists for an
+orchestrator that is coming back; a cancelled request means the client is
+gone, killed process or dropped connection, so the lease expires at once.
+That is what makes the seat claimable within seconds of a re-host rather
+than a work-turn later, and the re-host is precisely the case that kills the
+old drain.
+
+The window is sized by work turns rather than by the keepalive cadence
+(R3016). The owner spends its keepalive *inside* a call, where it is
+visibly in flight, so even a 55-minute `--keepalive` never makes a live
+orchestrator look stale, and a dead one is displaceable in minutes rather
+than after a full cadence.
 
 The two error strings drive two orchestrator reflexes, and together they
 make the protocol **self-converging** with no persistence and no human
@@ -292,7 +331,7 @@ directives, and commands.
 ark luhmann events [--off]
 ```
 
-`--session S` must already own the `next` seat. Routing is a privilege of
+The calling session must already own the `next` seat. Routing is a privilege of
 the seat rather than a second identity, so a session that does not own the
 seat errors `you don't have ownership` — the same string driving the same
 stand-down reflex as `next`.

@@ -342,7 +342,7 @@ the watcher learns it from the reservation rather than minting it:
   learns the nonce with no report-back call. The general contract is in
   [secretary-pools.md](secretary-pools.md).
 - Luhmann then spawns the secretary via the Task tool with the composite
-  `--session <luhmann-session>-<nonce>` in its prompt and records it with
+  `--tube <luhmann-session>-<nonce>` in its prompt and records it with
   `spawn-record`. The watcher already holds both halves — the Luhmann seat owner
   (the S1 `luhmannOwner` lease) and the reserved nonce — so it composes the same
   `<luhmann-session>-<nonce>` and routes a hunt by tagging

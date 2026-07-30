@@ -4,17 +4,20 @@
 
 Covers the bloodhound-CLI S1 drain tube: the in-memory ownership lease
 (`claimLuhmann`) and the blocking drain (`LuhmannNext`). Both are exercised
-against a bare `&Server{}` — the lease touches only `luhmannMu`/`luhmannOwner`
-and the drain only those plus `nextQueue`, so no DB, pubsub, or socket is
-needed. R3010, R3011, R3012, R3013, R3014, R3016.
+against a bare `&Server{}` — the lease touches only
+`luhmannMu`/`luhmannOwner`/`luhmannActive`/`luhmannLiveUntil` and the drain only
+those plus `nextQueue`, so no DB, pubsub, or socket is needed. R3010, R3011,
+R3012, R3013, R3014, R3016, R3321.
 
 ## Test: ownership matrix
 **Purpose:** `claimLuhmann` applies the lease correctly across all three modes ×
-three owner-states, returning the right disposition + error string and mutating
-`luhmannOwner` only when it claims (R3012, R3013, R3014).
+the owner-states, including whether a foreign incumbent's lease is live or stale,
+returning the right disposition + error string and mutating `luhmannOwner` only
+when it claims (R3012, R3013, R3014, R3321).
 **Input:** a `Server` with `luhmannOwner` preset to "", the calling session, or a
-foreign session; call `claimLuhmann(session, mode)`.
-**Expected:** the nine rows —
+foreign session, and `luhmannLiveUntil` set ahead of now for the live rows; call
+`claimLuhmann(session, mode)`.
+**Expected:** the eleven rows —
 
 | mode  | owner before | session | disposition | error string           | owner after |
 |-------|--------------|---------|-------------|------------------------|-------------|
@@ -23,10 +26,41 @@ foreign session; call `claimLuhmann(session, mode)`.
 | force | A            | B       | OK          | ""                     | B (reclaimed) |
 | first | ""           | A       | OK          | ""                     | A           |
 | first | A            | A       | OK          | ""                     | A (self, idempotent) |
-| first | A            | B       | Exit        | you don't have ownership | A (unchanged) |
+| first | A (live)     | B       | Exit        | you don't have ownership | A (unchanged) |
+| first | A (stale)    | B       | OK          | ""                     | B (taken over) |
 | plain | ""           | A       | Reclaim     | there are no sessions  | "" (unchanged) |
 | plain | A            | A       | OK          | ""                     | A           |
-| plain | A            | B       | Exit        | you don't have ownership | A (unchanged) |
+| plain | A (live)     | B       | Exit        | you don't have ownership | A (unchanged) |
+| plain | A (stale)    | B       | Exit        | you don't have ownership | A (unchanged) |
+
+The last row is the load-bearing one: a stale incumbent is claimable by
+`--first` and by nothing else, because validating is not claiming (R3013,
+R3321). Without it, a future reader sees the takeover and generalizes it to
+plain `next`, at which point two orchestrators both validate as owner.
+
+**Refs:** crc-LuhmannCLI.md
+
+## Test: lease liveness follows the drain
+**Purpose:** the lease is live while an owner's `next` call is in flight and for
+the grace window after the last one returns **normally**, stale beyond that, and
+stale *immediately* when the last call was cancelled (R3321).
+**Input:** a bare `Server`; raise and lower `luhmannActive` through the same
+helper `LuhmannNext` uses, and preset `luhmannLiveUntil` to stand in for
+elapsed time.
+**Expected:**
+- active > 0 → live, however old `luhmannLiveUntil` is. This is the case that
+  matters: an owner parked in a 55-minute keepalive must never read as stale.
+- active == 0 and `luhmannLiveUntil` within the grace window → live.
+- active == 0 and the window elapsed → stale, and `claimLuhmann(B, first)` then
+  takes the seat.
+- a ctx-cancelled `LuhmannNext` leaves `luhmannActive` at 0 and zeroes
+  `luhmannLiveUntil`, so the lease is stale at once rather than holding the
+  window open for a caller that is gone. The count must not leak either, or the
+  seat becomes permanently unclaimable — strictly worse than the stale seat
+  R3321 exists to fix.
+- a displaced owner's late return is ignored: after B force-reclaims, A's
+  returning call must not decrement B's count, or B's lease would expire while
+  B is alive.
 
 **Refs:** crc-LuhmannCLI.md
 
@@ -80,7 +114,8 @@ still "".
 **Purpose:** a cancelled request context unblocks the drain with the context error
 rather than a spurious work/keepalive return (R3010).
 **Input:** owned `Server`, empty `nextQueue`, an already-cancelled ctx, long keepalive.
-**Expected:** non-nil error (context cancelled).
+**Expected:** non-nil error (context cancelled), `luhmannActive` back to 0, and
+the lease no longer live (R3321).
 **Refs:** crc-LuhmannCLI.md
 
 ## Test: work crank handles lead with re-launch-first
