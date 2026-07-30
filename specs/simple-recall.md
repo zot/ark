@@ -16,8 +16,10 @@ pipeline has two layers:
   language model in this layer.
 - **Secretary** (Haiku, per-session). Each session's own assistant
   spawns a secretary for it via `/recall`. Its whole loop is a single
-  verb — `ark connections recall next --tube <S> <nonce>` — which
-  subscribes value-scoped to that session's curation docs
+  verb — `ark connections recall next <nonce>` — which resolves its own
+  tube server-side rather than being told it (see
+  [secretary-pools.md](secretary-pools.md) §The address is derived, never
+  typed), subscribes value-scoped to that session's curation docs
   (`@ark-secretary-work=<S>`), dispatches the next one (blocking up to a
   ~90-second keepalive otherwise), context-gates, and **prepends the
   session's last-N conversation turns** so the secretary judges with the
@@ -61,7 +63,7 @@ a thin set of result-builder CLI verbs.
 > orchestrator. Where prose below says "the agent" or "the daemon", read
 > "the per-session secretary": it subscribes **value-scoped** to its
 > session's curation docs (`@ark-secretary-work=<S>`), its loop verb is
-> `ark connections recall next --tube <S> <nonce>`, and the server
+> `ark connections recall next <nonce>`, and the server
 > prepends the session's recent conversation (`[recall].context_turns`) to
 > each doc it hands over. The watcher, the curation/result doc shapes, the
 > builder verbs, and the subscriber-presence gates are unchanged — only the
@@ -189,11 +191,11 @@ RecallWatcher.fire(session)
                                        ▼
                           secretary (Haiku, per-session) — spawned by
                           the session's own assistant via /recall, with
-                          session <S> + nonce <N> in its prompt. Its
-                          whole loop is one verb:
+                          nonce <N> in its prompt. Its whole loop is
+                          one verb:
                                        │
                                        ▼
-                          ark connections recall next --tube <S> <N>
+                          ark connections recall next <N>
                                        │  server-side, in one verb:
                                        │   idempotent subscribe (value-scoped
                                        │   @ark-secretary-work=<S>, session

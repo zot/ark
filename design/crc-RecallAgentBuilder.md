@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307, R3317, R3318, R3319
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307, R3317, R3318, R3319, R3322
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -117,8 +117,11 @@ for these verbs — `ark serve` must be running.
   helpers (`lowestPendingCuration` and siblings) keep `session` meaning
   "subscription address" consistently and are left alone.
   The caller's own identity **does not reach this method**: `handleRecallNext`
-  spends it on `RegisterParentSession` (R3319) and nothing in the loop
-  consults it, so the loop verb keeps knowing only about routing.
+  spends it on `RegisterParentSession` (R3319) and, when the request omits
+  `tube`, on **deriving** the address (R3322) — a nonce sitting in a class
+  roster yields the pool composite `<client-session>-<nonce>`, any other nonce
+  the bare `<client-session>`. Either way a concrete address arrives here, so
+  the loop verb still knows only about routing and never about who is calling.
   With `tube` set (the per-session secretary, seam 3a) it subscribes
   **value-scoped** `@ark-secretary-work=<tube>` under subscription session
   `<tube>` — keyed on the durable session, not `recall-<nonce>`,
@@ -137,9 +140,13 @@ for these verbs — `ark serve` must be running.
   turns via `injectConversation` / `recentConversation`, best-effort —
   and to gate on that session's result subscriber, so a pool secretary
   curates with the originating session's context rather than its own
-  composite's, which has none (R2891). With
-  no `session` it keeps the legacy bare-`@ark-secretary-work`, all-session
-  scan (subscription session `recall-<nonce>`). It then
+  composite's, which has none (R2891). `tube` is **always** set by the time
+  it reaches here: `handleRecallNext` derives it from the caller's identity
+  and nonce when the request omits it (R3322), so the legacy
+  bare-`@ark-secretary-work` all-session scan under `recall-<nonce>` is
+  retired — it dispatched docs addressed to other secretaries, and its only
+  observed effect was making a misconfigured setup look like an idle tube.
+  It then
   checks the nonce's context fill (R2777) against
   `[luhmann].context_limit`: at or over the limit it returns an
   **exit** directive (exit status `2`). Otherwise it picks the

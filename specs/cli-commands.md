@@ -54,7 +54,9 @@ session is re-hosted (`--fork-session --resume`), and a stale id there fails
 silently rather than loudly, so the value is resolved where the command runs
 rather than typed. `connections recall next --tube` is **not** an identity — it
 is a routing address (the pool composite `<luhmann-session>-<nonce>`), which is
-why it is no longer spelled `--session`. Canonical:
+why it is no longer spelled `--session`. It is also **optional**: omitted, the
+server derives the address from the identity and nonce the call already carries,
+so no agent types a routing address either. Canonical:
 [session-identity.md](session-identity.md).
 
 | `bloodhound`       | `bloodhound SUBCOMMAND ...`                                                                                          | required                 | `search`/`add` need a Luhmann; `listen [--recall]` is the consumer loop and needs only the server |
@@ -627,7 +629,10 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   [bloodhound-cli.md](bloodhound-cli.md), and
   [simple-recall.md](simple-recall.md).
 - `recall next [--tube ADDR] NONCE` is the recall secretary's entire
-  loop — a batteries-included crank handle. With `--tube ADDR` it
+  loop — a batteries-included crank handle. `--tube` is an **override**;
+  omitted, the server resolves the address from the caller's identity and
+  NONCE (`<client-session>-<nonce>` when that nonce sits in a pool roster,
+  the bare `<client-session>` otherwise). With `--tube ADDR` it
   subscribes **value-scoped** `@ark-recall-curate=<ADDR>` and dispatches the
   curation docs **addressed** to it — each doc's `@ark-secretary-work` head
   tag, which the watcher wrote when it chose a server. For a session's own
@@ -637,11 +642,13 @@ lives at `tmp://connections/<id>.md` with `@purpose` /
   conversation prepended is always the **doc's origin** session's (the
   session in its path), not the caller's — a pool secretary's composite has
   no conversation, and handing the curator none would be worst exactly when
-  judging fit matters most. Without `--session`, the
-  legacy bare-curate, all-session scan is retained (one-shot/diagnostic).
+  judging fit matters most. Without `--tube`, the
+  address is derived server-side, so there is no unaddressed path: the
+  bare-curate, all-session scan is **retired** (it dispatched docs addressed
+  to other secretaries, and only ever made a misconfigured setup look idle).
   On first call it idempotently subscribes — subscription session
-  `recall-curate-<SID>` with `--session` (keyed on the durable session so a
-  restart can't recycle it, R2902), else legacy `recall-<NONCE>`; thereafter
+  `recall-curate-<ADDR>`, keyed on the durable address so a restart can't
+  recycle it (R2902); thereafter
   it context-gates, then returns the
   lowest-fire pending curation doc **whose session has a result
   subscriber** (docs for unsubscribed sessions pile up, never dispatched),

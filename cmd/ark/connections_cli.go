@@ -227,7 +227,7 @@ func recallCommand() *ucli.Command {
 				Usage:     "daemon loop verb: block for the next curation doc (NONCE)",
 				ArgsUsage: "NONCE",
 				Flags: []ucli.Flag{
-					&ucli.StringFlag{Name: "tube", Usage: "subscription address to pull work from — a session UUID, or the pool composite <luhmann-session>-<nonce>"},
+					&ucli.StringFlag{Name: "tube", Usage: "override the subscription address to pull work from; omit and the server derives it from your session and NONCE (R3322)"},
 				},
 				Action: connRecallNextAction,
 			}),
@@ -747,11 +747,12 @@ func connRecallContextAction(_ context.Context, c *ucli.Command) error {
 // re-registers `nonce → parent` from `client_session` on every iteration
 // (R3319), which is what heals R3305's in-memory registry across a bounce.
 //
-// `tube` is omitted when empty — the legacy bare-curate path has no
-// subscription address. `client_session` is unconditional: a node declaring a
+// `tube` is omitted when empty, which is the ordinary case since R3322: the
+// server then derives the address from `client_session` + nonce, so no agent
+// types a routing address. `client_session` is unconditional: a node declaring a
 // session need cannot reach its body without one (R3315, R3320).
 //
-// CRC: crc-CLITree.md | R3317, R3318, R3319
+// CRC: crc-CLITree.md | R3317, R3318, R3319, R3322
 func recallNextURL(nonce uint64, tube, session string) string {
 	url := fmt.Sprintf("http://ark/connections/recall/next?nonce=%d", nonce)
 	if tube != "" {

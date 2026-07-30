@@ -226,11 +226,12 @@ waiting.
   - `description`: `ark-bloodhound pool secretary nonce <N>` — the
     `nonce <N>` substring must be present (the server finds the
     subagent's transcript by it).
-  - `prompt`: `Start the recall secretary loop now. Session: <sessionid>-<N>. Nonce: <N>.`
-    The **composite** `<sessionid>-<N>` is the secretary's routing tube
-    (R3032): the watcher re-tags each hunt to
-    `@ark-secretary-work=<sessionid>-<N>`, and the secretary drains
-    exactly that. Get it wrong and its hunts never arrive.
+  - `prompt`: `Start the recall secretary loop now. Nonce: <N>.`
+    Pass **no address**. Its `next` derives the routing tube server-side from
+    the calling identity and the nonce (R3322) — the same composite
+    `<your-session>-<N>` the watcher re-tags each hunt to. You could not have
+    supplied that reliably anyway: a re-hosted session replays a stale id, and
+    a secretary spawned with one waits forever on a tube nobody writes to.
 
   The Task tool returns a task ID — that is `<TID>`. Record the spawn:
   ```

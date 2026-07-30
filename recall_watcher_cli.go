@@ -177,6 +177,26 @@ func (w *RecallWatcher) PoolNonces() []PoolMember {
 	return members
 }
 
+// IsPoolNonce reports whether `nonce` sits in any class's roster (R3322). That
+// membership is what distinguishes a pool secretary, whose tube is the composite
+// `<parent>-<nonce>`, from a session's own secretary, whose tube is the bare
+// parent session — so it is the one bit the address derivation needs.
+// CRC: crc-RecallAgentBuilder.md | R3322
+func (w *RecallWatcher) IsPoolNonce(nonce uint64) bool {
+	if w == nil {
+		return false
+	}
+	for _, pool := range w.pools {
+		pool.mu.Lock()
+		_, ok := pool.secretaries[nonce]
+		pool.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
 // PoolMember identifies one pool secretary by the class whose roster holds it.
 // The class is carried rather than assumed because a nonce alone cannot say
 // which roster to deregister from. R3298

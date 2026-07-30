@@ -1,5 +1,5 @@
 # CLITree
-**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270, R3312, R3313, R3314, R3315, R3316, R3317, R3318, R3319, R3320
+**Requirements:** R2916, R2917, R2918, R2919, R2920, R2921, R2922, R2923, R2924, R2925, R2926, R2927, R2928, R2929, R2931, R2932, R2953, R2956, R2957, R2960, R3010, R3021, R3022, R3027, R3029, R3033, R3037, R3038, R3040, R3046, R3048, R3056, R3077, R3084, R3085, R3086, R3087, R3088, R3089, R3094, R3105, R3129, R3133, R3191, R3204, R3205, R3206, R3246, R3256, R3258, R3270, R3312, R3313, R3314, R3315, R3316, R3317, R3318, R3319, R3320, R3322
 
 The `urfave/cli` v3 command-tree builder and router. Assembles ark's
 commands as a `*cli.Command` tree whose `--help` is generated from the
@@ -83,8 +83,9 @@ CLITree owns how those bodies are *reached* and how their help is
     onto the *caller's* own tube. `--force-session` is the honest form of
     the override, and the node declaration is what makes coverage
     structural (R3320).
-- `connections recall next --tube` (R3318, R3319): the flag formerly spelled
-  `--session`, renamed with its wire parameter (`session=` → `tube=`)
+- `connections recall next --tube` (R3318, R3319, R3322): optional, and the
+  flag formerly spelled `--session`, renamed with its wire parameter
+  (`session=` → `tube=`)
   because the value is the pool composite `<luhmann-session>-<nonce>`
   (R3032) — deliberately no process's own id, so it answers "which tube?"
   and never "who am I?". R3311 protected that distinction with an exclusion
@@ -103,10 +104,10 @@ CLITree owns how those bodies are *reached* and how their help is
   silently disabling recall) and keep the header pending gap O181. The
   declaration removes the need for the capture, and the capture is what
   made the staleness reachable — so the two halves land together or the
-  hazard survives in the skill text. Where a spawner still needs a value
-  the CLI will not resolve for it (`recall next`'s `--tube`), the skill
-  directs it to read the id live with `printenv` at spawn time rather than
-  from earlier text.
+  hazard survives in the skill text. Since R3322 there is no longer a value
+  the CLI will not resolve: `recall next`'s `--tube` became optional and
+  server-derived, so a spawner passes the nonce alone and no skill reads an
+  id at spawn time.
 - Global flags (R2923): `&cli.StringFlag{Name: "dir"}` (default `~/.ark/`)
   and `&cli.BoolFlag{Name: "v", Config: cli.BoolConfig{Count: &verbosity}}`
   for repeated-`-v` counting sit on the root; a root `Before` hook copies

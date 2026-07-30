@@ -313,9 +313,11 @@ wakes:
   secretary's reserved nonce), so each pool secretary owns a *unique* tube — no
   shared queue, no claim needed for one-grabs-each. Because the value is still a
   real session id with the nonce appended after a dash, it fits the existing
-  `<session>-<segment>` shape, so the pool secretary runs the ordinary
-  `recall next --tube <luhmann-session>-<nonce>` and every subscribe / route
-  path works unchanged.
+  `<session>-<segment>` shape, so every subscribe / route path works unchanged.
+  The secretary is **not told** this address: it runs the ordinary `recall next
+  <nonce>` and the server derives the composite from the identity and nonce the
+  call already carries (see
+  [secretary-pools.md](secretary-pools.md) §The address is derived, never typed).
 - **`@ark-bloodhound-cli-return`** — the secretary re-tags the request doc to
   it when its raw results are in; the watcher subscribes and wakes to free the
   secretary and route to curation.
@@ -341,8 +343,8 @@ the watcher learns it from the reservation rather than minting it:
   `bloodhound`. The reservation doubles as pool registration, so the go-between
   learns the nonce with no report-back call. The general contract is in
   [secretary-pools.md](secretary-pools.md).
-- Luhmann then spawns the secretary via the Task tool with the composite
-  `--tube <luhmann-session>-<nonce>` in its prompt and records it with
+- Luhmann then spawns the secretary via the Task tool with its **nonce** in the
+  prompt, passing no address at all, and records it with
   `spawn-record`. The watcher already holds both halves — the Luhmann seat owner
   (the S1 `luhmannOwner` lease) and the reserved nonce — so it composes the same
   `<luhmann-session>-<nonce>` and routes a hunt by tagging

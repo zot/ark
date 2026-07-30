@@ -98,9 +98,11 @@ Then launch it with the **Task tool**, `run_in_background: true`:
 - `subagent_type`: `ark-recall-agent`
 - `description`: `ark-recall secretary loop nonce <N>` — the `nonce <N>`
   substring is how the server finds the subagent's transcript; it must be present.
-- `prompt`: `Start the recall secretary loop now. Session: <sessionid>. Nonce: <N>.`
+- `prompt`: `Start the recall secretary loop now. Nonce: <N>.` — no session
+  id: the secretary's `next` resolves its own tube server-side, so there is no
+  address to type and none to go stale.
 
-The secretary loops internally (`recall next --tube <sessionid> <N>`), draining
+The secretary loops internally (`recall next <N>`), draining
 its `@ark-secretary-work` tube — search tasks now, curation docs too once ambient
 is on — until its context fills, then it exits and the harness notifies you
 (step 3).

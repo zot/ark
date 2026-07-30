@@ -1002,7 +1002,12 @@ func luhmannWorkPrompt(w LuhmannWork, content string) string {
 		// would land in the bloodhound pool — work for the other class would
 		// then never be served, with the symptom nowhere near the cause.
 		return fmt.Sprintf(
-			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann --class %s`, spawn it via the Task tool with `--tube <your-session>-<nonce>` in its prompt, and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
+			// R3322: the directive names the nonce and nothing else. It used to
+			// dictate `--tube <your-session>-<nonce>`, which asked the model for
+			// the one value it cannot hold reliably — a re-host replays a stale
+			// id, and a secretary spawned with it waits on a tube nobody
+			// publishes to. The server derives the address instead.
+			"%sSupervisor directive: stand up another `%s` pool secretary. Reserve its nonce with `~/.ark/ark connections recall reserve-nonce --luhmann --class %s`, spawn it via the Task tool with `Nonce: <nonce>` in its prompt — it needs no address, since `next` resolves its own tube — and record it with `~/.ark/ark luhmann spawn-record --class %s --nonce <nonce> --task-id <id>`.\n",
 			lead, w.Class, w.Class, w.Class)
 	case "command":
 		// R3130: a synchronous `ark luhmann send` instruction. Handle it as an

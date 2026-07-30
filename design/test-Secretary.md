@@ -1,6 +1,29 @@
 # Test Design: Recall Secretary (seam 3a)
 **Source:** crc-RecallAgentBuilder.md, crc-RecallWatcher.md
 
+## Test: tube derivation — the address is never typed
+**Purpose:** R3322. `deriveTube` resolves a secretary's routing address from the
+identity and nonce the call already carries, so no agent types one. A nonce in a
+class roster is a pool secretary and gets the composite; any other nonce is a
+session's own secretary and gets the bare identity.
+**Input:** `deriveTube(session, nonce, pooled)` across the four combinations,
+plus the handler-level override and empty-identity cases.
+**Expected:**
+- `("S", 7, true)` → `"S-7"` — the pool composite (R3032), matching what the
+  watcher composes from `luhmannOwner` + nonce, with nothing reported back.
+- `("S", 7, false)` → `"S"` — a session's own secretary.
+- an explicit `--tube ADDR` is passed through untouched, derivation not
+  consulted: the flag is an override, not a hint.
+- `("", 7, …)` → `""`. With no identity there is nothing to derive from, and
+  the handler must not invent an address. Unreachable from the CLI, which
+  declares the identity need and fails before its Action, but asserted so the
+  server never fabricates a tube if some other caller omits it.
+
+The pooled/non-pooled split is the load-bearing pair: collapse it and every
+session's own secretary would subscribe to `<S>-<nonce>`, a tube the watcher
+never publishes to, which is silent (R3322).
+**Refs:** crc-RecallAgentBuilder.md, R3322, R3032
+
 ## Test: userProse — genuine vs. injected vs. tool-result
 **Purpose:** Verify genuine-user extraction for conversation injection. R3009 keys on the positive human-origin marker (`origin.kind == "human"`), not origin-absence: a `"human"`-stamped prose string yields the text; an unstamped turn, a `task-notification` origin, array (tool-result) content, and empty content are all rejected. (Used by the R2891 injection path.)
 **Input:** `userProse("human", `"hello there"`)` → text; `userProse("", `"hello there"`)`, `userProse("task-notification", `"x"`)`, `userProse("human", `[{"type":"tool_result"}]`)`, `userProse("human", ``)` → all rejected.

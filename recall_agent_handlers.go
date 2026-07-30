@@ -4,6 +4,7 @@ package ark
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -179,7 +180,37 @@ func (srv *Server) handleRecallClose(w http.ResponseWriter, r *http.Request) {
 // word meaning two things is the overload this field exists to end.
 const ClientSessionField = "client_session"
 
-// CRC: crc-Server.md | R2857, R2858, R3317, R3318, R3319
+// deriveTube resolves a secretary's routing address from what its `next` call
+// already carries (R3322). A nonce in a class roster belongs to a pool
+// secretary, whose address is the composite `<parent>-<nonce>` the watcher
+// composes from its own side (R3032); any other nonce belongs to a session's
+// own secretary, addressed by the bare session. An address a model types is a
+// snapshot, and a re-host makes every snapshot stale, after which the secretary
+// waits on a tube nobody publishes to — silent, and shaped exactly like a
+// corpus with nothing to say. Deriving at use time removes the class of
+// failure instead of narrowing its window.
+//
+// With no identity there is nothing to derive from, and the server must not
+// invent an address: an empty return leaves the caller unaddressed rather than
+// subscribed to the wrong tube. Unreachable from ark's own CLI, which declares
+// the identity need and fails before its Action (R3320).
+// A `requested` address wins outright: `--tube` is an override, not a hint, so
+// the derivation is not consulted when the caller named one.
+// CRC: crc-RecallAgentBuilder.md | R3322, R3032
+func resolveTube(requested, clientSession string, nonce uint32, pooled bool) string {
+	if requested != "" {
+		return requested
+	}
+	if clientSession == "" {
+		return ""
+	}
+	if pooled {
+		return fmt.Sprintf("%s-%d", clientSession, nonce)
+	}
+	return clientSession
+}
+
+// CRC: crc-Server.md | R2857, R2858, R3317, R3318, R3319, R3322
 func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	n, err := strconv.ParseUint(r.URL.Query().Get("nonce"), 10, 32)
 	if err != nil || n == 0 {
@@ -201,6 +232,11 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	// no-op inside RegisterParentSession.
 	clientSession := r.URL.Query().Get(ClientSessionField)
 	srv.recallAgentBuilder.RegisterParentSession(uint32(n), clientSession)
+	// R3322: an omitted tube is derived here, from the identity and nonce this
+	// request already carries, so no agent ever types a routing address. Doing
+	// it in the handler keeps the loop verb knowing only about routing — it
+	// receives a concrete address either way and never learns who called.
+	tube = resolveTube(tube, clientSession, uint32(n), srv.recallWatcher.IsPoolNonce(n))
 	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), tube, limit)
 	if rerr != nil {
 		// Client disconnect or transient — nothing to deliver.

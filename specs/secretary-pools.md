@@ -44,11 +44,12 @@ learns it from the reservation rather than minting it.
   next monotonic nonce and registers it in class `C`'s roster as a pending pool
   secretary. The reservation doubles as registration, so the watcher learns the
   nonce with no report-back call. `--class` defaults to `bloodhound`.
-- Luhmann spawns the secretary with the composite `<luhmann-session>-<nonce>`
-  as its session and records it with `spawn-record --class C`. The watcher holds
-  both halves already — the seat owner's lease and the reserved nonce — so it
-  composes the identical composite with nothing reported back, and addresses work
-  to that secretary by tagging `@ark-secretary-work=<composite>`.
+- Luhmann spawns the secretary with its **nonce** and records it with
+  `spawn-record --class C`. It does not pass an address: the secretary's `next`
+  derives the composite itself (below). The watcher holds both halves already,
+  the seat owner's lease and the reserved nonce, so it composes the identical
+  composite with nothing reported back, and addresses work to that secretary by
+  tagging `@ark-secretary-work=<composite>`.
 - **`ark luhmann exit-record --class C`** deregisters the nonce when the
   secretary finishes, whether by a clean context-limit fill, a crash, or a
   quit-early. Without the bookend a self-exited secretary lingers in the roster,
@@ -57,6 +58,33 @@ learns it from the reservation rather than minting it.
 
 The composite is the secretary's **address**, and it is per-secretary rather than
 per-class, so a class's members never contend for the same tube.
+
+### The address is derived, never typed
+
+A secretary is not told its own tube. `ark connections recall next` already
+sends the calling agent's identity alongside its nonce, and the server already
+holds both halves of the answer: the nonce's class roster, filed by
+`reserve-nonce`, and the nonce → parent-session registration made at reservation
+and refreshed on every iteration. So when `--tube` is omitted the server derives
+the address. A nonce in a pool roster resolves to `<client-session>-<nonce>`; a
+nonce that is not resolves to the bare `<client-session>`, which is a session's
+own secretary. `--tube` survives only as an explicit override.
+
+The alternative is a *typed* id, and an id a model types is a snapshot. Claude
+Code may re-host a session under a new id while replaying the old one into the
+conversation, so a secretary spawned with the stale composite subscribes to a
+tube nobody publishes to and blocks forever, which reads exactly like a corpus
+with nothing to say. Resolving at use time from the calling process's own
+environment removes that class of failure instead of narrowing its window.
+
+**One boundary, stated here rather than discovered later.** The derivation is
+only as fresh as the *secretary's* environment, which is fixed when it is
+spawned, since a subagent's `$CLAUDE_CODE_SESSION_ID` reports its parent's id as
+of that moment (see [subagent-environment.md](subagent-environment.md)). A
+secretary whose parent is re-hosted mid-life would therefore still compute the
+pre-fork composite. That does not bite in practice: subagents live inside the
+parent process and die with it, so a re-hosted orchestrator spawns fresh
+secretaries rather than inheriting the old ones.
 
 ## Occupancy — busy on dispatch, free on return
 

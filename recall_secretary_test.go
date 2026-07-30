@@ -157,3 +157,55 @@ func TestSurfaceItem_MarksSurfaced(t *testing.T) {
 		t.Errorf("SurfaceItem should MarkSurfaced(sess-A,%d); got present=%v nanos=%d err=%v", cid, present, nanos, err)
 	}
 }
+
+// TestResolveTube pins the address derivation (R3322): a secretary is never
+// told its own tube, so the server works it out from the identity and nonce the
+// call already carries. An address a model types is a snapshot, and a re-host
+// makes every snapshot stale, after which the secretary waits on a tube nobody
+// publishes to — silent, and shaped exactly like a corpus with nothing to say.
+// Refs: R3322, R3032
+func TestResolveTube(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested string
+		session   string
+		nonce     uint32
+		pooled    bool
+		want      string
+	}{
+		// The load-bearing pair. Collapse it and every session's own secretary
+		// subscribes to <S>-<nonce>, a tube the watcher never publishes to.
+		{"pool secretary gets the composite", "", "S", 7, true, "S-7"},
+		{"own-session secretary gets the bare session", "", "S", 7, false, "S"},
+		// --tube is an override, not a hint: derivation must not second-guess it.
+		{"explicit tube wins over derivation", "OTHER-9", "S", 7, true, "OTHER-9"},
+		{"explicit tube wins when unpooled too", "OTHER-9", "S", 7, false, "OTHER-9"},
+		// No identity means nothing to derive from. The server must leave the
+		// caller unaddressed rather than invent a tube. Unreachable from ark's
+		// own CLI, which fails before its Action without an identity (R3320).
+		{"no identity derives nothing", "", "", 7, true, ""},
+		{"no identity, unpooled, derives nothing", "", "", 7, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveTube(tc.requested, tc.session, tc.nonce, tc.pooled); got != tc.want {
+				t.Errorf("resolveTube(%q, %q, %d, %v) = %q, want %q",
+					tc.requested, tc.session, tc.nonce, tc.pooled, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsPoolNonceNilSafe confirms the roster lookup the derivation depends on is
+// safe on a server with no watcher — the derivation runs on every `next` call,
+// so a nil-panic here would take down the loop verb for every secretary.
+// Refs: R3322
+func TestIsPoolNonceNilSafe(t *testing.T) {
+	var w *RecallWatcher
+	if w.IsPoolNonce(7) {
+		t.Error("a nil watcher must report no pool membership")
+	}
+	if (&RecallWatcher{}).IsPoolNonce(7) {
+		t.Error("a watcher with no rosters must report no pool membership")
+	}
+}
