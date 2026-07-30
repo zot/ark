@@ -22,12 +22,12 @@ import (
 // fakePtyEnv is an inert PtyEnv for the fan-out tests (no seat, no roster).
 type fakePtyEnv struct{}
 
-func (fakePtyEnv) SeatOwner() string        { return "" }
-func (fakePtyEnv) ForceReleaseSeat()        {}
-func (fakePtyEnv) ReleaseSeat(string)       {}
-func (fakePtyEnv) RecordHostedExits(string) {}
-func (fakePtyEnv) LuhmannDir() string       { return "" }
-func (fakePtyEnv) PoolRosterCount() int     { return 0 }
+func (fakePtyEnv) SeatOwner() string                { return "" }
+func (fakePtyEnv) ForceReleaseSeat()                {}
+func (fakePtyEnv) ReleaseSeat(string)               {}
+func (fakePtyEnv) RecordHostedExits(string, string) {}
+func (fakePtyEnv) LuhmannDir() string               { return "" }
+func (fakePtyEnv) PoolRosterCount() int             { return 0 }
 
 // fakePtyClient captures broadcast bytes through a bounded buffer: once cap is
 // exceeded Write returns false (drop). cap == 0 means unbounded.
@@ -499,5 +499,135 @@ func TestMaybeAcceptTrustWaitsWithoutDialog(t *testing.T) {
 	case got := <-h.inCh:
 		t.Errorf("no keystrokes should be sent, got %q", got)
 	default:
+	}
+}
+
+// recordingPtyEnv captures the teardown calls, so a test can assert which
+// obligations ran, with what reason, and — the point of R3323's idempotence —
+// how many times. Embeds fakePtyEnv for the methods it does not care about.
+type recordingPtyEnv struct {
+	fakePtyEnv
+	mu       sync.Mutex
+	released []string
+	exits    []string // one entry per RecordHostedExits call: "session/reason"
+}
+
+func (e *recordingPtyEnv) ReleaseSeat(session string) {
+	e.mu.Lock()
+	e.released = append(e.released, session)
+	e.mu.Unlock()
+}
+
+func (e *recordingPtyEnv) RecordHostedExits(session, reason string) {
+	e.mu.Lock()
+	e.exits = append(e.exits, session+"/"+reason)
+	e.mu.Unlock()
+}
+
+func (e *recordingPtyEnv) recorded() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.exits...)
+}
+
+// installSession gives the host a confirmed session id through the actor, as a
+// successful launch's seat claim would (R3126).
+func installSession(h *PtyHost, sid string) {
+	_ = svcSyncVoid(h.jobs, func() error {
+		h.sessionID = sid
+		return nil
+	})
+}
+
+// hostOnPipe wires a host whose master is the read end of a pipe, so a test can
+// make the child "go away" by closing the write end. Returns the write end.
+func hostOnPipe(t *testing.T, env PtyEnv, sid string) (*PtyHost, *os.File) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	h := NewPtyHost(env)
+	installMaster(h, r, func(PtyWinsize) {})
+	if sid != "" {
+		installSession(h, sid)
+	}
+	go h.readLoop(r)
+	return h, w
+}
+
+// waitForExits polls until at least n exit recordings have landed; the teardown
+// records off the actor, so the assertion cannot be synchronous.
+func waitForExits(t *testing.T, env *recordingPtyEnv, n int) []string {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if got := env.recorded(); len(got) >= n {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d exit recording(s); got %v", n, env.recorded())
+	return nil
+}
+
+// Test: a child that exits on its own still gets its pool secretaries exit-
+// recorded (R3323). Recording only on Stop left them in the roster as ghosts,
+// holding pool_max slots and drawing work to tubes nobody listens on.
+func TestPtyHostSelfExitRecordsHostedExits(t *testing.T) {
+	env := &recordingPtyEnv{}
+	h, w := hostOnPipe(t, env, "sess-self")
+
+	w.Close() // the child goes away on its own → EOF → readLoop finalizes
+
+	got := waitForExits(t, env, 1)
+	if want := "sess-self/" + ptyReasonSelfExit; got[0] != want {
+		t.Errorf("recorded %q, want %q (the reason must say the child chose this, R3324)", got[0], want)
+	}
+	if hosted, _ := h.Status(); hosted {
+		t.Error("host still reports a session after the child self-exited")
+	}
+	env.mu.Lock()
+	defer env.mu.Unlock()
+	if len(env.released) != 1 || env.released[0] != "sess-self" {
+		t.Errorf("seat releases = %v, want exactly [sess-self]", env.released)
+	}
+}
+
+// Test: Stop records exactly once and with its own reason, even though closing
+// the master raises a second, racing finalize on the reader (R3323, R3324).
+func TestPtyHostStopRecordsHostedExitsOnce(t *testing.T) {
+	env := &recordingPtyEnv{}
+	h, _ := hostOnPipe(t, env, "sess-stop")
+
+	if err := h.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	got := waitForExits(t, env, 1)
+	if want := "sess-stop/" + ptyReasonStopped; got[0] != want {
+		t.Errorf("recorded %q, want %q (a stop is ark's teardown, not the child's)", got[0], want)
+	}
+	// The reader's finalize fires on the master close Stop triggers; give it room
+	// to double-record before asserting it did not.
+	time.Sleep(100 * time.Millisecond)
+	if got := env.recorded(); len(got) != 1 {
+		t.Errorf("recorded %d times (%v), want exactly 1 — the chokepoint must be idempotent", len(got), got)
+	}
+}
+
+// Test: a teardown with no confirmed session records nothing (R3323) — an
+// abandoned launch never claimed the seat, so it can have stood up no
+// secretaries, and any roster entries belong to somebody else.
+func TestPtyHostFinalizeWithoutSessionRecordsNothing(t *testing.T) {
+	env := &recordingPtyEnv{}
+	h := NewPtyHost(env)
+	m := fakeMaster(t)
+	installMaster(h, m, func(PtyWinsize) {})
+
+	h.finalize(m, ptyReasonLaunchFailed)
+
+	if got := env.recorded(); len(got) != 0 {
+		t.Errorf("recorded %v, want nothing — no seat claim means no secretaries of ours", got)
 	}
 }

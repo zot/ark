@@ -55,6 +55,12 @@ learns it from the reservation rather than minting it.
   quit-early. Without the bookend a self-exited secretary lingers in the roster,
   miscounting `pool_max` and drawing work to a dead tube. Deregistration is
   idempotent with pruning, so a self-exit and a stop directive reconcile safely.
+- **The hosted session's teardown** records and deregisters every pool secretary
+  at once ([managed-pty.md](managed-pty.md) "Teardown"). Pool secretaries are
+  subagents inside the orchestrator's process and have no existence apart from
+  it, so when that process goes down they cannot file the bookend above for
+  themselves — somebody must do it for them, on both ways it can go down. This is
+  the same harm as a missing bookend, arriving by a route no secretary can see.
 
 The composite is the secretary's **address**, and it is per-secretary rather than
 per-class, so a class's members never contend for the same tube.

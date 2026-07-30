@@ -1,5 +1,5 @@
 # PtyHost
-**Requirements:** R3114, R3115, R3116, R3117, R3118, R3119, R3120, R3121, R3122, R3124, R3125, R3126, R3127, R3128, R3136, R3139
+**Requirements:** R3114, R3115, R3116, R3117, R3118, R3119, R3120, R3121, R3122, R3124, R3125, R3126, R3127, R3128, R3136, R3139, R3323, R3324
 
 The server-side owner of one hosted Claude Code pty session. Holds the pty
 master and the `claude` child, multiplexes the child's byte stream out to a set
@@ -24,12 +24,13 @@ through its channel, so no lock is held across pty I/O.
 - resize: recompute the pty size as the minimum of all attached clients' sizes on every attach, detach, or resize, and `SIGWINCH` the child; a disconnect re-runs the min, so the pty grows when the smallest client leaves (R3120).
 - forceRepaint: force the child to repaint the whole screen by toggling the pty size one row (shrink, **hold `ptyRepaintNudge`**, then restore) — a real `SIGWINCH` the Ink TUI redraws on, since a same-size `TIOCSWINSZ` is a kernel no-op. The hold matters: a synchronous shrink-then-restore coalesces and the child sees no net change, so the shrink must persist to be observed. Requested over a `repaint` client→host frame (a third frame kind beside input and resize), so one mechanism serves every transport; used on attach (a new client sees the full screen, not only later output) and on a detach-cancel to wipe the prompt. Needed because ark holds no virtual screen (R3115) — only the child can redraw (R3136).
 - attach / detach: register / deregister a client; the session survives zero clients (R3121).
-- stop: graceful teardown — release the Luhmann seat lease and record the hosted session's pool secretaries' exits, then kill the child, so the monitoring log shows no ghosts (R3125).
+- finalize: the single teardown chokepoint, idempotent on master identity, reached both from `stop` and from readLoop's EOF when the child exits on its own. It discharges **both** teardown obligations, so neither path can skip one (R3323): release the Luhmann seat lease, then record an exit for every pool secretary the session was running, so the monitoring log shows no ghosts. The recording runs **off** the actor (the appends are DB writes) and **after** the release, which additionally makes a requeue-driven `pumpCuration` a no-op instead of standing a fresh secretary up into a session being torn down. The caller's reason is carried into the records (R3324). Then clear the actor state, close the clients, and hand the child + master to an off-actor graceful shutdown (R3114, R3116, R3125).
+- stop: the graceful-teardown entry point, not a bare kill — ask the child to exit and let it flush its transcript before the kill, and name the reason as ark's own. The obligations themselves belong to finalize (R3125, R3323, R3324).
 - status: report whether a session is hosted (master non-nil) plus the pool-secretary roster count from the supervisor state (R3124).
 
 ## Collaborators
 - attached clients: the transport-agnostic client interface it broadcasts to and merges input from — PtyAttach (CLI, unix socket) and PtyBrowser (browser, websocket) are its two implementations (R3117, R3144). Connected-to.
-- Luhmann seat lease: launch waits for the session's `ark luhmann next --first` claim on it — the authoritative confirmation and the session-id source (R3126); stop releases the same lease (R3125). Connected-to, not part-of.
+- Luhmann seat lease: launch waits for the session's `ark luhmann next --first` claim on it — the authoritative confirmation and the session-id source (R3126); the teardown releases the same lease, on either path down (R3125, R3323). Connected-to, not part-of.
 - creack/pty: the pty master primitive.
 - Server: holds the PtyHost and exposes launch/attach/status/stop over the unix socket (R3116).
 

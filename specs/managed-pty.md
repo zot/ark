@@ -116,6 +116,28 @@ The fan-out contract, all of it multi-client by design:
   attached clients leaves the session running (detached), and one client's
   detach never disturbs another.
 
+## Teardown
+
+A hosted session goes down two ways. `ark luhmann stop` tears it down, or the
+child exits on its own because the human quit it or the process died. Both take
+the session's in-session pool secretaries with them, since those subagents live
+inside the child process and have no existence apart from it.
+
+So the teardown obligations belong to the going-down itself and run on **both**
+paths: release the seat lease, and record an exit for every pool secretary the
+session was running. Doing this on the `stop` verb alone is what leaves a
+self-exit's secretaries behind as ghosts. A ghost is not merely untidy
+bookkeeping; it holds a slot against `class.<NAME>.pool_max` and the supervisor
+keeps routing work to a tube nobody is listening on, so the work is accepted and
+then silently never done.
+
+The exit record names which of the two happened. A teardown ark performed and
+one the child chose are different events, and a later reader asking whether the
+hosted session survived should be able to answer from the record rather than
+infer it. The secretaries' records are often the only trace available: the
+session's own exit record is written by the session, over the CLI, so a child
+that dies abruptly writes nothing about itself.
+
 ## CLI
 
 ```
@@ -163,11 +185,13 @@ is what a UI lamp and the CLI test both read. Server required.
 
 ### `stop`
 
-A **graceful teardown** of the hosted session, not a bare kill. Stopping the
-pty takes the session's in-session subagents (its pool secretaries) down with
-it, so `stop` also releases the seat lease and records the secretaries' exits,
-leaving the monitoring log truthful instead of showing ghosts. (UI label: "End
-session".) Server required.
+A **graceful teardown** of the hosted session, not a bare kill: the child is
+asked to exit and given time to flush its transcript before it is killed
+outright. The seat-lease release and the pool secretaries' exit records are not
+this verb's own doing — they are the teardown obligations above, discharged
+identically when the child exits on its own. What `stop` contributes is the
+reason carried into those records, which says the teardown was ark's. (UI
+label: "End session".) Server required.
 
 ## Launch confirmation — content-free
 

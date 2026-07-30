@@ -96,3 +96,21 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 **Input:** an armed host fed (a) the full dialog, (b) the dialog split across two reads, (c) ordinary output with no menu.
 **Expected:** (a) disarms, closes `trustDone`, and sends `1\r` to the input funnel; (b) still detects across the split; (c) stays armed, `trustDone` open, no keystrokes sent.
 **Refs:** crc-PtyHost.md, seq-pty-launch.md#1.3.1
+
+## Test: a child self-exit records its pool secretaries' exits
+**Purpose:** R3323 — the teardown obligations run on the path down that no verb drives; before this, a child that died on its own left its secretaries in the roster as ghosts.
+**Input:** a host with a fake master (pipe read end) and a hosted session id, its `readLoop` running; close the write end so the master reaches EOF, as a child going away on its own does.
+**Expected:** exactly one exit recording, for that session id and carrying the self-exit reason (R3324); the seat is released and the host reports nothing hosted.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3
+
+## Test: stop records once, with the stop reason, despite the reader's racing finalize
+**Purpose:** R3323, R3324 — the chokepoint's idempotence is what lets both callers ask unconditionally, and the reason distinguishes ark's teardown from the child's.
+**Input:** the same host, with `readLoop` running so the master's close raises a second, racing finalize; call `Stop`.
+**Expected:** exactly one exit recording, carrying the stop reason — never two, and never relabelled by the reader's finalize that follows.
+**Refs:** crc-PtyHost.md
+
+## Test: a teardown with no confirmed session records nothing
+**Purpose:** R3323 — the recording is guarded on a hosted session id, so an abandoned launch (no seat claim, hence no secretaries) writes no records, and an unmanaged Luhmann's roster is left alone.
+**Input:** a host with a master installed but no session id, finalized with the launch-failed reason.
+**Expected:** no exit recordings at all.
+**Refs:** crc-PtyHost.md

@@ -68,12 +68,18 @@ func (srv *Server) LuhmannDir() string { return luhmannCwd() }
 func (srv *Server) PoolRosterCount() int { return srv.recallWatcher.PoolSize() }
 
 // RecordHostedExits records an exit for every pool secretary of the hosted
-// session and drops it from the roster (R3125): killing the pty takes these
+// session and drops it from the roster (R3125): the pty going down takes these
 // in-session subagents down with it, so recording their exits leaves the
-// monitoring log truthful rather than showing ghosts. A clean stop is kind
-// "exit" (resets the streak counters), not a crash. PtyEnv.
-// CRC: crc-Server.md | R3125
-func (srv *Server) RecordHostedExits(_ string) {
+// monitoring log truthful rather than showing ghosts. Called on either path down
+// — an `ark luhmann stop` or the child exiting on its own (R3323).
+//
+// The kind is "exit" either way (it resets the streak counters): the secretaries
+// were healthy, and the session they lived in went away. `reason` is what
+// distinguishes the two, and it is load-bearing — these records are frequently
+// the only trace, since a child that dies abruptly writes no exit record of its
+// own (R3324). PtyEnv.
+// CRC: crc-Server.md | R3125, R3323, R3324
+func (srv *Server) RecordHostedExits(_, reason string) {
 	if srv.recallWatcher == nil {
 		return
 	}
@@ -86,7 +92,7 @@ func (srv *Server) RecordHostedExits(_ string) {
 			Kind:   "exit",
 			Class:  m.Class,
 			Nonce:  int(m.Nonce),
-			Reason: "luhmann-stopped",
+			Reason: reason,
 		}
 		_ = AppendLuhmannRecord(srv.db, srv.db.Path(), rec)
 		srv.recallWatcher.DeregisterPoolSecretary(m.Class, "exit", m.Nonce)

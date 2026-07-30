@@ -55,6 +55,22 @@ const (
 	// flush its transcript and run its exit hooks rather than being hard-killed.
 	ptyStopGrace = 5 * time.Second
 
+	// The teardown reasons (R3324). A teardown ark performed and one the child
+	// chose are different events, and these are what keep the monitoring log from
+	// reporting one as the other — frequently the only trace, since a child that
+	// dies abruptly writes no exit record of its own (that verb is the session's).
+	//
+	// ptyReasonStopped is an `ark luhmann stop` (R3125).
+	ptyReasonStopped = "luhmann-stopped"
+	// ptyReasonSelfExit is the child exiting on its own — the human quit it, or
+	// the process died (R3323).
+	ptyReasonSelfExit = "luhmann-exited"
+	// ptyReasonLaunchFailed is a launch abandoned at the confirmation gate
+	// (R3126). It reaches no record today, since a session that never claimed the
+	// seat has no id and can have stood up no secretaries; it is named so the
+	// third teardown path states its cause rather than borrowing another's.
+	ptyReasonLaunchFailed = "luhmann-launch-failed"
+
 	// ptyTrustTimeout bounds how long a new-project launch waits for the "trust
 	// this folder" dialog to be accepted before sending the bootstrap (R3128).
 	// Generous: the dialog renders within ~2s; if it never appears (the project
@@ -92,17 +108,19 @@ type ptyClientReg struct {
 }
 
 // PtyEnv is the narrow slice of the server the host depends on: the Luhmann seat
-// lease (launch waits on a claim, stop releases it), the pool roster (status
-// count + stop exit recording), and the two directories the confirmation
-// protocol reads. Kept small so the host stays decoupled and testable with a
-// fake env. R3124, R3125, R3126
+// lease (launch waits on a claim, the teardown releases it), the pool roster
+// (status count + the teardown's exit recording), and the two directories the
+// confirmation protocol reads. Kept small so the host stays decoupled and
+// testable with a fake env. R3124, R3125, R3126
 type PtyEnv interface {
-	SeatOwner() string                // current Luhmann seat owner ("" = unowned)
-	ForceReleaseSeat()                // clear any seat claim before a launch (R3126)
-	ReleaseSeat(session string)       // release the lease this session holds (R3125)
-	RecordHostedExits(session string) // record + deregister the hosted pool secretaries (R3125)
-	LuhmannDir() string               // ~/.ark/luhmann — the hosted session's cwd
-	PoolRosterCount() int             // pool-secretary roster size (R3124)
+	SeatOwner() string          // current Luhmann seat owner ("" = unowned)
+	ForceReleaseSeat()          // clear any seat claim before a launch (R3126)
+	ReleaseSeat(session string) // release the lease this session holds (R3125)
+	// RecordHostedExits records + deregisters the hosted pool secretaries on
+	// either path down, with reason naming which one it was (R3125, R3323, R3324).
+	RecordHostedExits(session, reason string)
+	LuhmannDir() string   // ~/.ark/luhmann — the hosted session's cwd
+	PoolRosterCount() int // pool-secretary roster size (R3124)
 }
 
 // PtyHost owns one hosted Claude Code pty session (R3116). A Closure Actor: the
@@ -251,7 +269,7 @@ func (h *PtyHost) Launch(bootstrap string) (sessionID string, err error) {
 	// event that teaches ark the session id (R3126). Fail fast if the child exits.
 	sid, serr := h.waitSeatClaim(master, ptyLaunchSeatTimeout)
 	if serr != nil {
-		h.finalize(master)
+		h.finalize(master, ptyReasonLaunchFailed)
 		return "", fmt.Errorf("launch: %w", serr)
 	}
 	_ = svcSyncVoid(h.jobs, func() error {
@@ -276,7 +294,11 @@ func (h *PtyHost) hosting(m *os.File) bool {
 // master closes — child self-exit or Stop (R3116). It then finalizes: a self-exit
 // leaves the session down, never auto-relaunched (R3114). Output is never parsed
 // for session state (R3115); it is opaque bytes to fan out.
-// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3 | R3115, R3118
+//
+// This finalize is the *only* teardown a child that dies on its own ever gets,
+// so it is what discharges the obligations for that path (R3323) — the reason it
+// passes is the self-exit one, since nobody asked for this teardown (R3324).
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3 | R3115, R3118, R3323
 func (h *PtyHost) readLoop(m *os.File) {
 	for {
 		buf := make([]byte, ptyReadChunk)
@@ -291,7 +313,7 @@ func (h *PtyHost) readLoop(m *os.File) {
 			break
 		}
 	}
-	h.finalize(m)
+	h.finalize(m, ptyReasonSelfExit)
 }
 
 // maybeAcceptTrust accumulates early child output and, on detecting the "trust
@@ -498,31 +520,28 @@ func (h *PtyHost) ForceRepaint() {
 
 // --- stop + status (R3124, R3125) -------------------------------------------
 
-// Stop is a graceful teardown, not a bare kill (R3125): because tearing the pty
-// down takes the hosted session's pool secretaries with it, Stop first records
-// their exits (so the monitoring log shows no ghosts), then finalizes — which
-// SIGTERMs the child (SIGKILL only if it hangs), letting claude flush its
-// transcript, and releases the seat lease. Errors when no session is hosted.
-// CRC: crc-PtyHost.md | R3125
+// Stop is a graceful teardown, not a bare kill (R3125): finalize SIGTERMs the
+// child (SIGKILL only if it hangs), letting claude flush its transcript, then
+// releases the seat lease and records the hosted pool secretaries' exits, so the
+// monitoring log shows no ghosts. Errors when no session is hosted.
+//
+// What Stop itself contributes is the *reason* — this teardown was ark's, not
+// the child's choice (R3324). The obligations belong to finalize, the one
+// chokepoint both paths down pass through, because a child that exits on its own
+// never reaches this function at all (R3323).
+// CRC: crc-PtyHost.md | R3125, R3324
 func (h *PtyHost) Stop() error {
-	var session string
 	var m *os.File
 	_ = svcSyncVoid(h.jobs, func() error {
-		session, m = h.sessionID, h.master
+		m = h.master
 		return nil
 	})
 	if m == nil {
 		return errors.New("no Luhmann session is hosted")
 	}
-	// R3125: record the hosted pool secretaries' exits before the teardown that
-	// takes them down, leaving the monitoring log truthful.
-	if session != "" {
-		h.env.RecordHostedExits(session)
-	}
-	// finalize kills the child, closes the clients, and releases the seat; it is
-	// idempotent with the reader's finalize on the resulting EOF. Synchronous, so
+	// Idempotent with the reader's finalize on the resulting EOF. Synchronous, so
 	// status reflects the teardown the moment Stop returns.
-	h.finalize(m)
+	h.finalize(m, ptyReasonStopped)
 	return nil
 }
 
@@ -540,17 +559,32 @@ func (h *PtyHost) Status() (hosted bool, sessionID string) {
 
 // finalize tears down the hosted session exactly once (idempotent on the master
 // identity): closes every client, clears the actor state, releases the seat lease
-// so status stays truthful, and hands the child + master to an off-actor graceful
-// shutdown. Called on child self-exit (readLoop) and by Stop; the second caller
-// is a no-op. The actor clears state immediately; the SIGTERM grace wait and the
-// master close happen off the actor so it never stalls.
-// CRC: crc-PtyHost.md | R3114, R3116, R3125
-func (h *PtyHost) finalize(m *os.File) {
+// so status stays truthful, records the hosted pool secretaries' exits, and hands
+// the child + master to an off-actor graceful shutdown. Called on child self-exit
+// (readLoop) and by Stop; the second caller is a no-op.
+//
+// It is the single teardown chokepoint, which is why BOTH obligations live here
+// rather than at a caller (R3323): recording exits in Stop alone meant a child
+// that died on its own left its secretaries in the roster as ghosts, holding
+// slots against pool_max and drawing routed work to tubes nobody listens on. The
+// idempotence is what lets both callers ask unconditionally — a stop racing the
+// child's own exit records once, not twice.
+//
+// The actor clears state immediately; the SIGTERM grace wait, the master close,
+// and the exit records all happen off the actor so it never stalls (the records
+// are DB appends). Recording *after* the seat release is deliberate: a requeue
+// driven by deregistration then finds no seat owner, so it cannot stand a fresh
+// secretary up into the session being torn down.
+// CRC: crc-PtyHost.md | R3114, R3116, R3125, R3323, R3324
+func (h *PtyHost) finalize(m *os.File, reason string) {
+	// Set only by the call that actually finalizes, so it doubles as the
+	// exactly-once guard for the off-actor recording below.
+	var session string
 	_ = svcSyncVoid(h.jobs, func() error {
 		if h.master != m {
 			return nil // already finalized (self-exit + Stop race)
 		}
-		session := h.sessionID
+		session = h.sessionID
 		for reg := range h.clients {
 			reg.client.Close()
 		}
@@ -566,6 +600,9 @@ func (h *PtyHost) finalize(m *os.File) {
 		go gracefulShutdown(child, m)
 		return nil
 	})
+	if session != "" {
+		h.env.RecordHostedExits(session, reason)
+	}
 }
 
 // gracefulShutdown asks the child to exit with SIGTERM, waits up to ptyStopGrace,
