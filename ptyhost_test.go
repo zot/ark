@@ -22,12 +22,13 @@ import (
 // fakePtyEnv is an inert PtyEnv for the fan-out tests (no seat, no roster).
 type fakePtyEnv struct{}
 
-func (fakePtyEnv) SeatOwner() string                { return "" }
-func (fakePtyEnv) ForceReleaseSeat()                {}
-func (fakePtyEnv) ReleaseSeat(string)               {}
-func (fakePtyEnv) RecordHostedExits(string, string) {}
-func (fakePtyEnv) LuhmannDir() string               { return "" }
-func (fakePtyEnv) PoolRosterCount() int             { return 0 }
+func (fakePtyEnv) SeatOwner() string                   { return "" }
+func (fakePtyEnv) ForceReleaseSeat()                   {}
+func (fakePtyEnv) ReleaseSeat(string)                  {}
+func (fakePtyEnv) RecordHostedExits(string, string)    {}
+func (fakePtyEnv) PublishLaunchOutcome(string, string) {}
+func (fakePtyEnv) LuhmannDir() string                  { return "" }
+func (fakePtyEnv) PoolRosterCount() int                { return 0 }
 
 // fakePtyClient captures broadcast bytes through a bounded buffer: once cap is
 // exceeded Write returns false (drop). cap == 0 means unbounded.
@@ -434,22 +435,21 @@ func TestClaudeProjectDirEncoding(t *testing.T) {
 //
 // CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
 func TestMaybeAcceptTrustFires(t *testing.T) {
-	h := &PtyHost{inCh: make(chan []byte, 4)}
-	h.trustArmed.Store(true)
-	h.trustDone = make(chan struct{})
+	sent := make(chan []byte, 4)
+	ta := newTrustAccepter(func(p []byte) { sent <- p })
 
-	h.maybeAcceptTrust([]byte(trustDialog))
+	ta.feed([]byte(trustDialog))
 
-	if h.trustArmed.Load() {
+	if ta.armed.Load() {
 		t.Error("accepter should disarm after handling the dialog")
 	}
 	select {
-	case <-h.trustDone:
+	case <-ta.done:
 	default:
-		t.Error("trustDone should be closed after acceptance")
+		t.Error("done should be closed after acceptance")
 	}
 	select {
-	case got := <-h.inCh:
+	case got := <-sent:
 		if string(got) != "1\r" {
 			t.Errorf("sent %q, want \"1\\r\"", got)
 		}
@@ -463,15 +463,14 @@ func TestMaybeAcceptTrustFires(t *testing.T) {
 //
 // CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
 func TestMaybeAcceptTrustAccumulates(t *testing.T) {
-	h := &PtyHost{inCh: make(chan []byte, 4)}
-	h.trustArmed.Store(true)
-	h.trustDone = make(chan struct{})
+	sent := make(chan []byte, 4)
+	ta := newTrustAccepter(func(p []byte) { sent <- p })
 
 	half := len(trustDialog) / 2
-	h.maybeAcceptTrust([]byte(trustDialog[:half]))
-	h.maybeAcceptTrust([]byte(trustDialog[half:]))
+	ta.feed([]byte(trustDialog[:half]))
+	ta.feed([]byte(trustDialog[half:]))
 
-	if h.trustArmed.Load() {
+	if ta.armed.Load() {
 		t.Error("dialog split across chunks should still be detected")
 	}
 }
@@ -481,22 +480,21 @@ func TestMaybeAcceptTrustAccumulates(t *testing.T) {
 //
 // CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
 func TestMaybeAcceptTrustWaitsWithoutDialog(t *testing.T) {
-	h := &PtyHost{inCh: make(chan []byte, 4)}
-	h.trustArmed.Store(true)
-	h.trustDone = make(chan struct{})
+	sent := make(chan []byte, 4)
+	ta := newTrustAccepter(func(p []byte) { sent <- p })
 
-	h.maybeAcceptTrust([]byte("\x1b[2mStarting up…\x1b[22m no menu here"))
+	ta.feed([]byte("\x1b[2mStarting up…\x1b[22m no menu here"))
 
-	if !h.trustArmed.Load() {
+	if !ta.armed.Load() {
 		t.Error("accepter should stay armed until the dialog appears")
 	}
 	select {
-	case <-h.trustDone:
-		t.Error("trustDone should not close without a dialog")
+	case <-ta.done:
+		t.Error("done should not close without a dialog")
 	default:
 	}
 	select {
-	case got := <-h.inCh:
+	case got := <-sent:
 		t.Errorf("no keystrokes should be sent, got %q", got)
 	default:
 	}
@@ -507,9 +505,10 @@ func TestMaybeAcceptTrustWaitsWithoutDialog(t *testing.T) {
 // how many times. Embeds fakePtyEnv for the methods it does not care about.
 type recordingPtyEnv struct {
 	fakePtyEnv
-	mu       sync.Mutex
-	released []string
-	exits    []string // one entry per RecordHostedExits call: "session/reason"
+	mu        sync.Mutex
+	released  []string
+	exits     []string // one entry per RecordHostedExits call: "session/reason"
+	published []string // one entry per PublishLaunchOutcome call: "session/failure"
 }
 
 func (e *recordingPtyEnv) ReleaseSeat(session string) {
@@ -522,6 +521,18 @@ func (e *recordingPtyEnv) RecordHostedExits(session, reason string) {
 	e.mu.Lock()
 	e.exits = append(e.exits, session+"/"+reason)
 	e.mu.Unlock()
+}
+
+func (e *recordingPtyEnv) PublishLaunchOutcome(session, failure string) {
+	e.mu.Lock()
+	e.published = append(e.published, session+"/"+failure)
+	e.mu.Unlock()
+}
+
+func (e *recordingPtyEnv) publications() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.published...)
 }
 
 func (e *recordingPtyEnv) recorded() []string {
@@ -553,7 +564,7 @@ func hostOnPipe(t *testing.T, env PtyEnv, sid string) (*PtyHost, *os.File) {
 	if sid != "" {
 		installSession(h, sid)
 	}
-	go h.readLoop(r)
+	go h.readLoop(r, nil)
 	return h, w
 }
 
@@ -629,5 +640,119 @@ func TestPtyHostFinalizeWithoutSessionRecordsNothing(t *testing.T) {
 
 	if got := env.recorded(); len(got) != 0 {
 		t.Errorf("recorded %v, want nothing — no seat claim means no secretaries of ours", got)
+	}
+}
+
+// Test: Reserve rejects a second launch while one is hosted or mid-flight
+// (R3122), which is what lets the async binding report that synchronously
+// instead of losing it inside a goroutine (R3325).
+func TestPtyHostReserveRejectsSecond(t *testing.T) {
+	h := NewPtyHost(&recordingPtyEnv{})
+
+	if err := h.Reserve(); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	if err := h.Reserve(); err == nil {
+		t.Error("second reserve succeeded; a launch is already mid-flight")
+	}
+
+	// A host with a session already up refuses too, by the other half of the
+	// same check.
+	h2 := NewPtyHost(&recordingPtyEnv{})
+	installMaster(h2, fakeMaster(t), func(PtyWinsize) {})
+	if err := h2.Reserve(); err == nil {
+		t.Error("reserve succeeded while a session is hosted")
+	}
+}
+
+// Test: a launch rejected at the reservation publishes nothing (R3326). It
+// never started, so announcing a failure would be a false record — and worse,
+// would overwrite the hosted tag while that session is still up.
+func TestPtyHostRejectedLaunchPublishesNothing(t *testing.T) {
+	env := &recordingPtyEnv{}
+	h := NewPtyHost(env)
+	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+
+	if _, err := h.Launch(""); err == nil {
+		t.Fatal("launch succeeded while a session is hosted")
+	}
+	if got := env.publications(); len(got) != 0 {
+		t.Errorf("published %v, want nothing — a rejected launch never started", got)
+	}
+}
+
+// Test: the launch-outcome body is one line, whatever the reason looked like
+// (R3326) — a tag's value ends at the newline, so a multi-line error would be
+// truncated and its tail indexed as loose prose.
+func TestLaunchOutcomeContent(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		session, failure string
+		want             string
+	}{
+		{"confirmed", "sess-1", "", "@" + tagLuhmannHosted + ": sess-1\n"},
+		{"failed", "", "seat claim timed out", "@" + tagLuhmannLaunchFailed + ": seat claim timed out\n"},
+		{"multiline reason collapses", "", "launch: dial\nfailed\n  twice", "@" + tagLuhmannLaunchFailed + ": launch: dial failed twice\n"},
+		{"nothing to say", "", "", ""},
+		{"blank reason is nothing to say", "", "   \n ", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := launchOutcomeContent(tc.session, tc.failure)
+			if string(got) != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Test: ReleaseReservation frees a reservation whose launch never ran (R3325).
+// The async caller's panic path needs it: without it, `launching` would stay set
+// and every later launch would be refused as "already hosted".
+func TestPtyHostReleaseReservation(t *testing.T) {
+	h := NewPtyHost(&recordingPtyEnv{})
+
+	if err := h.Reserve(); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	h.ReleaseReservation()
+	if err := h.Reserve(); err != nil {
+		t.Errorf("reserve after release: %v — the reservation stayed wedged", err)
+	}
+}
+
+// Test: a detached session allocates nothing to broadcast, and an attached one
+// gets a copy that survives the reader moving on (R3328). The reader reuses one
+// scratch buffer, so a client that received the scratch itself would see its
+// queued bytes rewritten by the next read.
+func TestPtyHostBroadcastCopiesOnlyForClients(t *testing.T) {
+	h := NewPtyHost(&recordingPtyEnv{})
+	m := fakeMaster(t)
+	installMaster(h, m, func(PtyWinsize) {})
+
+	// Detached: the reader skips the hop entirely, so nothing is allocated —
+	// not the chunk copy, and not the actor round-trip's channel and closures.
+	scratch := []byte("first-----")
+	if h.clientCount.Load() != 0 {
+		t.Fatalf("clientCount = %d with nothing attached", h.clientCount.Load())
+	}
+	if n := testing.AllocsPerRun(50, func() {
+		if h.clientCount.Load() > 0 {
+			h.broadcast(m, scratch)
+		}
+	}); n != 0 {
+		t.Errorf("detached read path allocated %v times, want 0 — nobody is listening", n)
+	}
+
+	c := &fakePtyClient{}
+	if _, err := h.Attach(c, PtyWinsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if h.clientCount.Load() != 1 {
+		t.Fatalf("clientCount = %d after one attach, want 1", h.clientCount.Load())
+	}
+	h.broadcast(m, scratch)
+	copy(scratch, []byte("second----")) // the reader reuses the buffer
+	if got := string(c.bytes()); got != "first-----" {
+		t.Errorf("client saw %q, want %q — the chunk must not alias the reader's scratch", got, "first-----")
 	}
 }

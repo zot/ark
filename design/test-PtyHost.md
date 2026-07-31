@@ -92,8 +92,8 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 **Refs:** crc-PtyHost.md
 
 ## Test: accepter fires, accumulates, and waits
-**Purpose:** R3128 — the armed accepter handles the dialog exactly once, across chunk boundaries, and stays quiet otherwise.
-**Input:** an armed host fed (a) the full dialog, (b) the dialog split across two reads, (c) ordinary output with no menu.
+**Purpose:** R3128, R3327 — the armed accepter handles the dialog exactly once, across chunk boundaries, and stays quiet otherwise. Driven against a standalone per-launch accepter, which is the point of R3327: it needs no host at all, because it is owned by one reader rather than shared on the host.
+**Input:** an armed accepter fed (a) the full dialog, (b) the dialog split across two reads, (c) ordinary output with no menu.
 **Expected:** (a) disarms, closes `trustDone`, and sends `1\r` to the input funnel; (b) still detects across the split; (c) stays armed, `trustDone` open, no keystrokes sent.
 **Refs:** crc-PtyHost.md, seq-pty-launch.md#1.3.1
 
@@ -114,3 +114,33 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 **Input:** a host with a master installed but no session id, finalized with the launch-failed reason.
 **Expected:** no exit recordings at all.
 **Refs:** crc-PtyHost.md
+
+## Test: Reserve rejects a second launch
+**Purpose:** R3122, R3325 — one launch at a time, and the rejection must be a *return value* so the asynchronous binding can report it instead of losing it in a goroutine.
+**Input:** a fresh host reserved twice; and a second host with a master already installed, reserved once.
+**Expected:** the second reserve errors (launch mid-flight), and the reserve against a hosted session errors too.
+**Refs:** crc-PtyHost.md
+
+## Test: a launch rejected at the reservation publishes nothing
+**Purpose:** R3326 — the announcement speaks only for launches that started; publishing a failure for one that never began would be a false record, and would overwrite the hosted tag while that session is still up.
+**Input:** a host with a session already hosted; call `Launch`.
+**Expected:** an error, and zero publications.
+**Refs:** crc-PtyHost.md
+
+## Test: the launch-outcome body is always one line
+**Purpose:** R3326 — a tag's value runs to end of line, so a multi-line error would be cut at the first newline and its tail indexed as loose prose.
+**Input:** a confirmed session; a single-line reason; a reason containing newlines and runs of spaces; an empty reason; a whitespace-only reason.
+**Expected:** the hosted tag for the first, the failed tag for the next two with all whitespace folded to single spaces, and *no content at all* for the last two — an empty-valued tag is never published.
+**Refs:** crc-Server.md
+
+## Test: ReleaseReservation frees a launch that never ran
+**Purpose:** R3325 — the asynchronous caller's panic path is the one exit `LaunchReserved` cannot clean up after, and a stuck reservation would refuse every later launch as "already hosted".
+**Input:** reserve, release, reserve again.
+**Expected:** the second reserve succeeds.
+**Refs:** crc-PtyHost.md
+
+## Test: a detached session allocates nothing, an attached one gets its own bytes
+**Purpose:** R3328 — the reader reuses one scratch buffer, so the fan-out must copy for anyone who retains the slice, and must do nothing at all (not even an actor round-trip) when nobody is attached.
+**Input:** a host with a master and no clients, running the reader's guarded fan-out call under an allocation counter; then attach a client, broadcast, and overwrite the scratch as the next read would.
+**Expected:** zero allocations while detached; the attached client's captured bytes are the original chunk, unaffected by the scratch being rewritten.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3

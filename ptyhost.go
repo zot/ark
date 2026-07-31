@@ -119,6 +119,10 @@ type PtyEnv interface {
 	// RecordHostedExits records + deregisters the hosted pool secretaries on
 	// either path down, with reason naming which one it was (R3125, R3323, R3324).
 	RecordHostedExits(session, reason string)
+	// PublishLaunchOutcome announces a launch on the pub/sub integration plane
+	// (R3326). Exactly one argument is set: session on a confirmed launch,
+	// failure on an abandoned one.
+	PublishLaunchOutcome(session, failure string)
 	LuhmannDir() string   // ~/.ark/luhmann — the hosted session's cwd
 	PoolRosterCount() int // pool-secretary roster size (R3124)
 }
@@ -135,6 +139,12 @@ type PtyHost struct {
 	inCh chan []byte // serialized input funnel → inputLoop → master (R3119)
 
 	masterPtr atomic.Pointer[os.File] // current master, for inputLoop's lock-free read
+	// clientCount mirrors len(clients) for the reader's lock-free check (R3328),
+	// the same trick masterPtr plays for the input path. Without it the reader
+	// paid a synchronous actor round-trip — a channel and two closures per call —
+	// for every chunk, to iterate an empty map. A detached session is the
+	// ordinary state, so that was the common case, not the corner.
+	clientCount atomic.Int32
 
 	// actor-owned — touch ONLY inside a jobs closure:
 	master    *os.File
@@ -148,14 +158,67 @@ type PtyHost struct {
 	// wins logic (R3120) is unit-testable without a real pty (test-PtyHost.md).
 	resizeSink func(PtyWinsize)
 
-	// trust-dialog acceptance (R3128), armed only when launching into a project
-	// Claude Code has not seen. trustBuf is touched by readLoop alone; trustArmed
-	// and trustDone are established by Launch before readLoop starts and are the
-	// synchronization with it.
-	trustArmed atomic.Bool
-	trustBuf   []byte        // readLoop-only: early output accumulated while hunting
-	trustDone  chan struct{} // closed once the dialog is accepted
+	// No trust-dialog state lives here: it is per-launch and owned by that
+	// launch's readLoop (trustAccepter, R3327).
 }
+
+// trustAccepter watches one launch's early child output for the "trust this
+// folder" dialog and answers it (R3128). **Per-launch, and owned by exactly one
+// readLoop**, which is why `buf` needs no guard (R3327).
+//
+// It used to be three fields on PtyHost, justified by a comment calling the
+// readLoop their sole owner. That was not true: `finalize` clears `h.master`
+// inside the actor but hands the master to `gracefulShutdown`, which holds it
+// open for up to `ptyStopGrace`, so the old readLoop keeps draining. `Reserve`
+// checks only `master`/`launching`, both already clear, so a launch started in
+// that window ran a second readLoop alongside the first — two goroutines
+// appending to one buffer, and the old one able to win the CAS and report a
+// dialog acceptance to the *new* launch from the dying session's output. Giving
+// each launch its own accepter removes the sharing rather than guarding it, so
+// the race cannot be reintroduced by a future caller who does not know the rule.
+type trustAccepter struct {
+	// armed is the one genuinely cross-goroutine field: the launch clears it on
+	// timeout while its readLoop may be reading it. Atomic, and per-launch, so
+	// two launches can never contend.
+	armed atomic.Bool
+	buf   []byte        // readLoop-only: early output accumulated while hunting
+	done  chan struct{} // closed once the dialog is answered
+	input func([]byte)  // where the accept keystrokes go (the host's input funnel)
+}
+
+// newTrustAccepter arms an accepter for one launch (R3128, R3327).
+func newTrustAccepter(input func([]byte)) *trustAccepter {
+	ta := &trustAccepter{done: make(chan struct{}), input: input}
+	ta.armed.Store(true)
+	return ta
+}
+
+// feed accumulates early child output and, on detecting the dialog, selects the
+// "Yes, I trust" option by the number read from the stream and disarms — so the
+// bootstrap that follows lands in the message box, not the menu (R3128). Runs on
+// the readLoop goroutine, which owns this accepter outright (R3327).
+// CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.3.1 | R3128, R3327
+func (ta *trustAccepter) feed(chunk []byte) {
+	ta.buf = append(ta.buf, chunk...)
+	if len(ta.buf) > ptyTrustScanCap {
+		ta.buf = ta.buf[len(ta.buf)-ptyTrustScanCap:]
+	}
+	keys, ok := scanTrustAccept(ta.buf)
+	if !ok {
+		return
+	}
+	if !ta.armed.CompareAndSwap(true, false) {
+		return // the launch already disarmed on timeout
+	}
+	ta.buf = nil
+	ta.input(keys)
+	close(ta.done)
+}
+
+// syncClientCount republishes the client-set size to the lock-free mirror
+// (R3328). MUST be called inside a jobs closure, after any mutation of
+// h.clients — the mirror is only as truthful as its last update.
+func (h *PtyHost) syncClientCount() { h.clientCount.Store(int32(len(h.clients))) }
 
 // NewPtyHost constructs the host and starts its actor + input goroutines. The
 // host idles with no session until Launch (R3114: never proactive — construction
@@ -181,26 +244,66 @@ func NewPtyHost(env PtyEnv) *PtyHost {
 // concurrent session (R3122). Returns the confirmed session id or a timeout
 // error. Blocks for the length of the protocol, so it runs on the caller's
 // goroutine, not the actor.
+//
+// The synchronous entry point, and a thin pair over Reserve + LaunchReserved —
+// the split exists for the asynchronous caller (R3325), not for this one.
 // CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.1 | R3114, R3122, R3126, R3128
-func (h *PtyHost) Launch(bootstrap string) (sessionID string, err error) {
-	if strings.TrimSpace(bootstrap) == "" {
-		bootstrap = ptyDefaultBootstrap
+func (h *PtyHost) Launch(bootstrap string) (string, error) {
+	if err := h.Reserve(); err != nil {
+		return "", err
 	}
-	// Reserve: reject if a session is already hosted or a launch is mid-flight
-	// (R3122 — one at a time).
-	if rerr := svcSyncVoid(h.jobs, func() error {
+	return h.LaunchReserved(bootstrap)
+}
+
+// Reserve claims the host for one launch, rejecting a second while a session is
+// hosted or a launch is mid-flight (R3122 — one at a time).
+//
+// It is split out of Launch so an *asynchronous* caller can still report the
+// rejection to its user synchronously (R3325): the launch's publication speaks
+// only for launches that actually started, so "already hosted" has to come back
+// as a return value or it is lost inside a goroutine with nobody to surface it.
+// CRC: crc-PtyHost.md | R3122, R3325
+func (h *PtyHost) Reserve() error {
+	return svcSyncVoid(h.jobs, func() error {
 		if h.master != nil || h.launching {
 			return errors.New("a Luhmann session is already hosted")
 		}
 		h.launching = true
 		return nil
-	}); rerr != nil {
-		return "", rerr
+	})
+}
+
+// ReleaseReservation clears a reservation whose launch will never run — the
+// panic path of an asynchronous caller (R3325). LaunchReserved releases it on
+// every ordinary exit, so this exists only for the exit it cannot cover: without
+// it a panicked launch would leave `launching` set and the host would refuse
+// every later launch as "already hosted".
+// CRC: crc-PtyHost.md | R3122, R3325
+func (h *PtyHost) ReleaseReservation() {
+	_ = svcSyncVoid(h.jobs, func() error { h.launching = false; return nil })
+}
+
+// LaunchReserved runs the launch protocol for a caller that already holds the
+// reservation (Reserve). Blocks for the length of the confirmation, so an
+// asynchronous caller runs it on its own goroutine. Releases the reservation on
+// every exit path, and announces the outcome (R3326).
+// CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.1 | R3114, R3122, R3126, R3128, R3326
+func (h *PtyHost) LaunchReserved(bootstrap string) (sessionID string, err error) {
+	if strings.TrimSpace(bootstrap) == "" {
+		bootstrap = ptyDefaultBootstrap
 	}
+	// Announce the outcome on the way out, whichever way that is (R3326). This
+	// defer is installed *after* the reservation deliberately: a launch rejected
+	// because one is already hosted never started, so it must not publish — a
+	// failure tag written while a session is up would be a lie, and would wake
+	// every UI for an event that did not happen.
 	defer func() {
 		if err != nil {
 			_ = svcSyncVoid(h.jobs, func() error { h.launching = false; return nil })
+			h.env.PublishLaunchOutcome("", err.Error())
+			return
 		}
+		h.env.PublishLaunchOutcome(sessionID, "")
 	}()
 
 	// Clear any prior seat claim so the new session's --first is the one we
@@ -234,23 +337,21 @@ func (h *PtyHost) Launch(bootstrap string) (sessionID string, err error) {
 	// trust accepter before the reader starts, so readLoop clears the dialog
 	// first. Armed only for new projects, so it cannot misfire on a normal
 	// session's later output.
-	newProject := isNewClaudeProject(cmd.Dir)
-	if newProject {
-		h.trustBuf = nil
-		h.trustDone = make(chan struct{})
-		h.trustArmed.Store(true)
+	var trust *trustAccepter
+	if isNewClaudeProject(cmd.Dir) {
+		trust = newTrustAccepter(h.Input)
 	}
-	go h.readLoop(master)
+	go h.readLoop(master, trust)
 
 	// For a new project, wait for the trust dialog to be accepted before the
 	// bootstrap so it lands in the message box, not the menu (R3128). Best
 	// effort: if the dialog never appears (the heuristic was wrong), proceed
 	// after the timeout rather than block the launch.
-	if newProject {
+	if trust != nil {
 		select {
-		case <-h.trustDone:
+		case <-trust.done:
 		case <-time.After(ptyTrustTimeout):
-			h.trustArmed.Store(false) // close the scan window; no dialog came
+			trust.armed.Store(false) // close the scan window; no dialog came
 		}
 	}
 
@@ -299,46 +400,34 @@ func (h *PtyHost) hosting(m *os.File) bool {
 // so it is what discharges the obligations for that path (R3323) — the reason it
 // passes is the self-exit one, since nobody asked for this teardown (R3324).
 // CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3 | R3115, R3118, R3323
-func (h *PtyHost) readLoop(m *os.File) {
+func (h *PtyHost) readLoop(m *os.File, trust *trustAccepter) {
+	// One scratch buffer for the whole loop, reused every read (R3328). Nothing
+	// downstream retains it: trust.feed copies by appending, and broadcast copies
+	// only when a client exists to retain it. Allocating a fresh ptyReadChunk per
+	// read instead meant spending 32KB to carry whatever actually arrived — tens
+	// of bytes, for a TUI spinner — and doing it even with nobody attached, which
+	// is the ordinary state of a detached session.
+	scratch := make([]byte, ptyReadChunk)
 	for {
-		buf := make([]byte, ptyReadChunk)
-		n, rerr := m.Read(buf)
+		n, rerr := m.Read(scratch)
 		if n > 0 {
-			if h.trustArmed.Load() {
-				h.maybeAcceptTrust(buf[:n]) // R3128: clear a fresh-project trust dialog
+			if trust != nil && trust.armed.Load() {
+				trust.feed(scratch[:n]) // R3128: clear a fresh-project trust dialog
 			}
-			h.broadcast(m, buf[:n])
+			// R3328: with nobody attached there is nothing to hand the bytes to,
+			// so skip the actor hop entirely rather than pay it to iterate an
+			// empty map. The read still happens — the child blocks on a full pty
+			// buffer if the stream is not drained (R3121) — but draining does not
+			// mean retaining.
+			if h.clientCount.Load() > 0 {
+				h.broadcast(m, scratch[:n])
+			}
 		}
 		if rerr != nil {
 			break
 		}
 	}
 	h.finalize(m, ptyReasonSelfExit)
-}
-
-// maybeAcceptTrust accumulates early child output and, on detecting the "trust
-// this folder" dialog, selects the "Yes, I trust" option (by the number read from
-// the stream) and disarms — so the bootstrap that follows lands in the message
-// box, not the menu (R3128). Runs on the readLoop goroutine (sole owner of
-// trustBuf) and sends the accept through Input, keeping the single serialized
-// writer (R3119). The CompareAndSwap makes the accept fire at most once and lose
-// cleanly to a launch that has already timed out and disarmed.
-// CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.3.1 | R3128
-func (h *PtyHost) maybeAcceptTrust(chunk []byte) {
-	h.trustBuf = append(h.trustBuf, chunk...)
-	if len(h.trustBuf) > ptyTrustScanCap {
-		h.trustBuf = h.trustBuf[len(h.trustBuf)-ptyTrustScanCap:]
-	}
-	keys, ok := scanTrustAccept(h.trustBuf)
-	if !ok {
-		return
-	}
-	if !h.trustArmed.CompareAndSwap(true, false) {
-		return // launch already disarmed on timeout
-	}
-	h.trustBuf = nil
-	h.Input(keys)
-	close(h.trustDone)
 }
 
 // broadcast writes one output chunk to every attached client, dropping any whose
@@ -351,9 +440,19 @@ func (h *PtyHost) broadcast(m *os.File, chunk []byte) {
 		if h.master != m {
 			return nil // stale reader after finalize
 		}
+		if len(h.clients) == 0 {
+			return nil // R3328: nobody to retain it, so nothing to copy
+		}
+		// R3328: a client queues the slice and drains it on its own goroutine
+		// (R3118), so what it receives must outlive this call and therefore
+		// cannot be the reader's scratch. One exact-size copy serves every
+		// client, as the shared chunk always did — what changes is its size, and
+		// that it is not made at all when no one is listening.
+		owned := make([]byte, len(chunk))
+		copy(owned, chunk)
 		var dropped []*ptyClientReg
 		for reg := range h.clients {
-			if !reg.client.Write(chunk) {
+			if !reg.client.Write(owned) {
 				dropped = append(dropped, reg)
 			}
 		}
@@ -361,6 +460,7 @@ func (h *PtyHost) broadcast(m *os.File, chunk []byte) {
 			delete(h.clients, reg)
 			reg.client.Close()
 		}
+		h.syncClientCount()
 		if len(dropped) > 0 {
 			h.recomputeSizeLocked() // R3120: a drop is a detach — recompute the min
 		}
@@ -400,6 +500,7 @@ func (h *PtyHost) Attach(c PtyClient, size PtyWinsize) (*ptyClientReg, error) {
 		}
 		reg = &ptyClientReg{client: c, size: size}
 		h.clients[reg] = struct{}{}
+		h.syncClientCount()
 		h.recomputeSizeLocked()
 		return nil
 	})
@@ -426,6 +527,7 @@ func (h *PtyHost) Detach(reg *ptyClientReg) {
 	_ = svcSyncVoid(h.jobs, func() error {
 		if _, ok := h.clients[reg]; ok {
 			delete(h.clients, reg)
+			h.syncClientCount()
 			reg.client.Close()
 			h.recomputeSizeLocked()
 		}
@@ -589,6 +691,7 @@ func (h *PtyHost) finalize(m *os.File, reason string) {
 			reg.client.Close()
 		}
 		h.clients = make(map[*ptyClientReg]struct{})
+		h.syncClientCount()
 		child := h.child
 		h.masterPtr.Store(nil)
 		h.master, h.child, h.sessionID, h.launching = nil, nil, "", false

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -5064,6 +5065,64 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			L.Push(lua.LString(id))
+			return 1
+		}))
+
+		// sys.luhmannLaunch([bootstrap]) — start a managed-pty launch and return
+		// at once: (true, nil) if the host accepted it, (nil, errstring) if one is
+		// already hosted or launching, or there is no host.
+		//
+		// Asynchronous by necessity (R3325). PtyHost.Launch waits out the seat
+		// claim under a timeout generous enough to cover Claude Code's startup
+		// plus a skill load; waiting with it here would hold this session's Lua
+		// executor for minutes and freeze the very UI the launch serves. So the
+		// return value is the *acceptance*, and the outcome arrives instead as the
+		// launch's own publication (R3326) — which is also why a launch typed at
+		// the CLI reaches this UI.
+		//
+		// Not a proactive start (R3114): the caller is the app's paid-session
+		// confirm dialog, so a human opened this door.
+		// CRC: crc-Server.md | R3325
+		L.SetField(sysTable, "luhmannLaunch", L.NewFunction(func(L *lua.LState) int {
+			if srv.ptyHost == nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("no pty host"))
+				return 2
+			}
+			bootstrap := L.OptString(1, "")
+			// Reserve synchronously so "already hosted" is reported to the caller
+			// rather than lost inside the goroutine, where nothing would surface
+			// it: the publication only speaks for launches that actually started.
+			if err := srv.ptyHost.Reserve(); err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			// A bare goroutine, deliberately: it guards no state of its own, so
+			// there is no lock here for an actor to replace. Everything mutable
+			// LaunchReserved touches is already behind the PtyHost actor, and the
+			// reservation keeps a single launch in flight, which is what keeps the
+			// trust fields single-writer. Neither existing actor could host this
+			// anyway — a 150s protocol on the write actor or on h.jobs would stall
+			// every DB write, or every attach and resize, for its whole duration.
+			//
+			// It does need its own recover, though. On the synchronous path this
+			// ran on an HTTP handler goroutine, where net/http contains a panic;
+			// here a panic would take the server down instead. Releasing the
+			// reservation matters as much as surviving: without it the host would
+			// refuse every later launch as "already hosted".
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("luhmann: launch panicked: %v\n%s", r, debug.Stack())
+						srv.ptyHost.ReleaseReservation()
+					}
+				}()
+				if _, err := srv.ptyHost.LaunchReserved(bootstrap); err != nil {
+					Logv(1, "luhmann: launch failed: %v", err)
+				}
+			}()
+			L.Push(lua.LTrue)
 			return 1
 		}))
 

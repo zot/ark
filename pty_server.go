@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,20 @@ import (
 // many undelivered chunks the client is dropped rather than allowed to stall the
 // fan-out.
 const ptyClientBufChunks = 256
+
+const (
+	// luhmannLaunchDoc is the tmp:// document every launch announces itself on
+	// (R3326). One document, **replaced** per launch rather than appended, so
+	// PublishTmpDiff fires exactly the pair that changed and the prior outcome
+	// drops out of the tag-set cache instead of accumulating.
+	luhmannLaunchDoc = "tmp://luhmann/launch.md"
+	// tagLuhmannHosted carries the confirmed session id of a launch that came up.
+	tagLuhmannHosted = "luhmann-hosted"
+	// tagLuhmannLaunchFailed carries the reason a launch was abandoned. It is
+	// published rather than swallowed because a user who pressed Launch would
+	// otherwise get nothing at all for as long as the seat-claim timeout runs.
+	tagLuhmannLaunchFailed = "luhmann-launch-failed"
+)
 
 // --- Server as PtyEnv (R3124, R3125, R3126) ---------------------------------
 
@@ -96,6 +111,57 @@ func (srv *Server) RecordHostedExits(_, reason string) {
 		}
 		_ = AppendLuhmannRecord(srv.db, srv.db.Path(), rec)
 		srv.recallWatcher.DeregisterPoolSecretary(m.Class, "exit", m.Nonce)
+	}
+}
+
+// launchOutcomeContent renders the tmp-doc body announcing a launch outcome
+// (R3326), or nil when there is nothing to say. Split out of
+// PublishLaunchOutcome so the collapsing below is testable without a DB.
+//
+// The collapsing is not cosmetic: a tag's value runs to end of line, so a
+// multi-line error would be cut at the first newline and its tail indexed as
+// loose prose rather than as part of the reason. Fields folds every run of
+// whitespace, newlines included, into single spaces.
+// CRC: crc-Server.md | R3326
+func launchOutcomeContent(session, failure string) []byte {
+	tag, value := tagLuhmannHosted, session
+	if session == "" {
+		tag, value = tagLuhmannLaunchFailed, failure
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return nil // never publish an empty-valued tag
+	}
+	return []byte("@" + tag + ": " + value + "\n")
+}
+
+// PublishLaunchOutcome announces a launch's outcome on the pub/sub integration
+// plane (R3326): `@luhmann-hosted: <session>` when it came up,
+// `@luhmann-launch-failed: <reason>` when it was abandoned. Exactly one argument
+// is set. Subscribers are symmetric — the ark app's Luhmann view, a test, a
+// monitor — so this is a publication, not a UI call.
+//
+// The host calls it at its confirmation point, which is what makes a CLI `ark
+// luhmann launch` reach a browser that never asked: both ways in pass through
+// there. Failures are logged rather than returned, since a launch that worked
+// must not be reported as failed because its announcement did not land. PtyEnv.
+// CRC: crc-Server.md | R3326
+func (srv *Server) PublishLaunchOutcome(session, failure string) {
+	if srv.db == nil {
+		return
+	}
+	content := launchOutcomeContent(session, failure)
+	if content == nil {
+		return // nothing to say
+	}
+	if err := SyncVoid(srv.db, func(db *DB) error {
+		if uerr := db.UpdateTmpFile(luhmannLaunchDoc, "markdown", content); uerr != nil {
+			_, aerr := db.AddTmpFile(luhmannLaunchDoc, "markdown", content)
+			return aerr
+		}
+		return nil
+	}); err != nil {
+		Logv(1, "luhmann: publishing launch outcome: %v", err)
 	}
 }
 

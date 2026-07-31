@@ -85,6 +85,16 @@ claim, the same symptom as any other bootstrap that did not take. Recovering
 from a backtracking renderer would mean maintaining a virtual screen — tracking
 the cursor into a grid and reading the grid — which is out of scope until then.
 
+**The accepter belongs to one launch, not to the host.** Two output readers can
+briefly overlap: a teardown stops publishing the session immediately but leaves
+the child's stream draining for a grace window, so a launch started in that
+window runs a second reader alongside the first. Accepter state kept on the host
+is therefore shared between them — two readers appending to one scan buffer, and
+the departing one able to answer the *arriving* launch's dialog out of the dying
+session's output. Giving each launch its own accepter removes the sharing
+instead of guarding it, so the hazard cannot come back through a later caller
+who does not know the rule.
+
 The master's byte stream fans out to a set of attached **clients**. A client
 is transport-agnostic: anything that can receive the output stream, send input,
 and report a terminal size. Phase 1 ships one client transport, the CLI
@@ -212,6 +222,42 @@ it:
 
 Nothing here reads the *content* of a record: the sole confirmation is ark's own
 seat lease (step 3).
+
+## Launching from the UI, and how a launch announces itself
+
+The ark app's Luhmann view has a Launch button, shown only when the terminal
+reports `asleep` and gated behind a dialog confirming a paid session. It needs a
+door into the launch, and that door is `sys.luhmannLaunch()` — an ark-only Lua
+binding ([lua-api.md](lua-api.md)).
+
+**The binding cannot block.** `launch` waits for the seat claim, and that wait is
+generous by design because it covers Claude Code's startup plus a skill load. A
+Lua binding that waited with it would hold the calling session's executor for
+minutes, freezing the UI it was trying to serve. So the binding **starts** the
+launch and returns at once, reporting only whether the launch was *accepted* —
+that is, whether the host was free to take it. It does not report whether the
+session came up, because it cannot know yet.
+
+**The outcome arrives on the integration plane instead.** Every launch that
+reaches its confirmation point publishes the result on a `tmp://` document,
+success or failure alike, and any subscriber sees it — the UI, a test, a
+monitor, symmetric subscribers all ([tmp-subscription.md](tmp-subscription.md)).
+A failure publishes too: a launch that dies at the seat-claim gate would
+otherwise leave a user who pressed the button with nothing at all, for as long
+as the timeout runs.
+
+**Publishing at the confirmation point, rather than in the binding, is what
+makes the CLI case work for free.** A `ark luhmann launch` typed in a shell
+passes through the same confirmation, so it publishes identically, so a UI with
+the terminal on screen learns about it. That case is not a nicety: the terminal
+element stops probing once it has announced `asleep`, so without the
+announcement it would sit there asleep beside a session that is in fact running,
+and stay that way until the user navigated away and back.
+
+**None of this weakens the spend-consent invariant.** ark still never starts a
+paid session on its own. The binding is reached only from a deliberate user
+action behind the confirmation dialog; it is a second door for a human to open,
+not a mechanism that opens by itself.
 
 ## Indexing the orchestrator's session
 

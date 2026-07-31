@@ -80,15 +80,11 @@ borrow from and nothing else can serve you; or you expect heavy iterative
 search and would rather not share. Skip it otherwise — a one-off hunt, or an
 ordinary session with an orchestrator up, is served perfectly well by the pool.
 
-**Get your live session id first** — the secretary needs it to name its *tube*,
-and unlike `listen` its loop verb cannot resolve that for itself (`--tube` is a
-routing address, not a claim of selfhood, so the CLI never fills it in):
-```
-printenv CLAUDE_CODE_SESSION_ID
-```
-Read it at spawn time rather than from anything written earlier: a session can be
-re-hosted under a new id mid-run, and a value copied from older text would send
-the secretary to a tube nobody fills.
+**You do not need your session id** (R3322, 2026-07-30). The secretary's tube is
+derived server-side from what the call already carries — `client_session` plus
+the nonce, against the server's own nonce→class and nonce→parent records — so
+there is no address to type and none to go stale under a re-host. `--tube`
+survives only as an override.
 
 Reserve a nonce:
 ```

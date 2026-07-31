@@ -19,7 +19,7 @@ inside `ark serve` and `ark ui`.
 |-----------|--------------|-----------------------------------------------------------------------|----------------------------------------------------------------|
 | `mcp`     | frictionless | `Server.setupMCPGlobal` in `internal/mcp/tools.go`                    | App-facing MCP toolset; extended by ark with corpus primitives |
 | `MCP`     | frictionless | `Server.setupMCPGlobal` (same file)                                   | Namespace for nested prototypes like `MCP.AppMenuItem`         |
-| `sys`     | ark          | `Server.registerLuaFunctions` in `server.go`                          | Ark-specific Go-owned state; today only `sys.curation`         |
+| `sys`     | ark          | `Server.registerLuaFunctions` in `server.go`                          | Ark-specific Go-owned state and bridges into ark's own verbs   |
 | `session` | ui-engine    | `LuaSession.createSessionTable` in `internal/lua/runtime.go`          | Per-session runtime: variables, prototypes, timers             |
 | `ui`      | ui-engine    | `LuaSession.setupUIMod` (called by runtime setup)                     | Presenter registration + JSON helpers                          |
 | `EMPTY`   | ui-engine    | runtime setup in `internal/lua/runtime.go`                            | Sentinel empty table used by `_objectToId` weak-key bookkeeping |
@@ -171,6 +171,10 @@ is ark's namespace.
 | `sys.curation.pin(chunkID, ...)`   | method   | Pin a chunk; updates the Go slice and refreshes the mirror in the same tick. R2356     |
 | `sys.curation.dismiss(chunkID)`    | method   | Unpin a chunk                                                                           |
 | `sys.curation.sweepOlder()`        | method   | Drop pinned entries older than the configured cutoff                                    |
+| `sys.findConnections(inputs, opts)` | method  | Unified find-connections entry (normal + turbo). Returns `(requestID, nil)` or `(nil, err)`. R2567, R2600 |
+| `sys.recall(inputs, opts)`         | method   | Retrieve the top-K chunks relevant to `inputs` via `Librarian.Recall`. R2628, R2660      |
+| `sys.discussed.{add,list,clear,prune}` | methods | Mirror the `ark discussed` CLI verbs, per session. R2661                              |
+| `sys.luhmannLaunch(bootstrap?)`    | method   | **Start** a managed-pty launch and return at once — `(true, nil)` accepted, `(nil, err)` if one is already hosted. **Asynchronous by necessity**: the launch waits out the seat claim, and blocking here would freeze the UI it serves, so the return value is the *acceptance* and the outcome arrives as a publication on `tmp://luhmann/launch.md` instead (`@luhmann-hosted:` / `@luhmann-launch-failed:`). Never starts a session unbidden — the caller is the app's paid-session confirm dialog. R3325, R3326 |
 
 ## `session` — ui-engine per-session table
 
