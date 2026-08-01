@@ -1,0 +1,376 @@
+# Symlinks: one file, many names
+
+Ark's implicit model is that a file *is* its absolute path. The filesystem
+disagrees, and has for as long as there have been symbolic links. This carve
+covers teaching ark that a file can have more than one name, and doing it
+without making the index believe there is more than one file.
+
+## How it surfaced
+
+The Hermes bootstrap had been failing for an unknown length of time. Both the
+`ark-messenger` and `ark-searcher` agents open with a fetch of their reference
+skill, and that fetch returned `404: not indexed`. The file is indexed. It is
+indexed at `/home/deck/work/ark/.claude/skills/ark/hermes-messaging.md`, and
+the agents asked for it through a symlink farm under the ark home directory.
+Same bytes, two names, and ark knew one of them.
+
+The failure was invisible for two compounding reasons, both worth keeping.
+
+**The onboarding was unenforced.** The `PreToolUse` guard denies a subagent's
+first tool call and uses the denial to deliver bootstrap instructions
+(*fumble onboarding*: subagent lifecycle hooks are unreliable, so the error is
+the channel). But the guard never checks that the fetch *succeeded*. It
+allowlists commands by prefix, so an agent that failed to load its reference
+still passes every subsequent gate. The agents had been operating without
+their messaging reference and mostly working anyway, because the allowlist was
+doing the real constraining.
+
+**The guard scripted the wrong diagnosis.** Having failed the fetch, the agent
+tried to start the server. A different branch of the guard blocked that, with:
+"If a command reports the server is down, stop and report that cleanly." The
+agent then reported, confidently and coherently, that the server was down and
+it was facing a bootstrap deadlock. The server had been running for forty
+minutes. The half about the deadlock was correct; the attribution came from
+our own deny message. A hook that tells an agent what conclusion to draw will
+get that conclusion, including when it is false.
+
+## What was established
+
+Facts, measured 2026-08-01, as distinct from the proposals below.
+
+- `scanner.go:48` walks with `filepath.WalkDir`, which does not follow
+  symlinks.
+- `d.IsDir()` is **false** for a directory symlink, so it falls through to the
+  *file* classification branch and is matched against file patterns. A
+  directory symlink named `ark` fails `*.md` and disappears with no error and
+  no log line. Its contents are never reached. This is the exact shape of the
+  Hermes failure.
+- Walking a **symlinked source root** returns the symlink node itself as a
+  single file entry: `files=1`, `err=<nil>`, contents unindexed. It does not
+  even produce a zero to disbelieve.
+- Nothing currently indexed is a symlink, so there is no existing duplication
+  to unwind. Clean starting position.
+- `db.go:3776` (`DB.Fetch`) calls `filepath.Abs`, which does not resolve
+  links, then reports `not indexed: <path>`.
+- `config.go:791` expands `~` in `Sources[i].Dir` and does nothing else. It is
+  the natural home for source-path resolution.
+- `config.go:925`/`943` match a path against `src.Dir` **by prefix**.
+- The correct resolver already exists, written for an unrelated reason and
+  never generalized: `cmd/ark/checkpoint.go:139`, carrying the comment "app
+  dirs are routinely reached via symlinks." It includes the dangling-link
+  fallback the general version needs.
+- `IsGlob` (used at `config.go:940` to skip pattern sources) already
+  distinguishes a concrete path from a pattern.
+
+## Why people make symlinks
+
+This decides the design, so it comes before the design. The uses split into
+two groups that hold **opposite** views about which name is the real one.
+
+**Group A: point at the most up-to-date version.** A reference to a file in a
+development project, so the runtime always gets what the repo currently holds.
+Also dotfile managers, one artifact shared across projects, and convenience
+aliases for deep paths. Ark's own layout is this, several times over
+(`~/.ark/skills/*`). A user would say the file *is* in the repo and merely
+*appears* at the link. Canonicalizing to the target is plainly right.
+
+**Group B: filesystem concerns.** Some files must live on an encrypted
+partition while the rest do not. A volume runs low and a new one is grafted on
+to extend space. Version pinning, where `libllama.so` points at
+`libllama.so.0.0.9592` and the target rotates on every upgrade. Active-slot
+patterns, where `current` points at a dated release directory. Here the link
+is where the file logically lives and the target is a storage decision.
+Canonicalizing to the target keeps the volatile name and discards the stable
+one.
+
+**Both groups are confirmed against actual usage** (Bill, 2026-08-01) rather
+than imagined, which matters because they pull in opposite directions and a
+design that serves only the imagined one would look fine on paper.
+
+**Group C, the fifth child** (Bill's name for it, 2026-08-01): the case the
+enumeration did not plan for and must handle anyway. Dangling links left by a
+move or an uninstall, currently invisible. And cycles: this repository has a
+live one, a link pointing at the very farm that contains it. Nobody makes
+these on purpose, which is exactly why a design derived from intent will not
+cover them.
+
+The tension between A and B is the crux, and it is what makes *recording* the
+link better than merely resolving it. If both names are known, a target that
+moves is a repair rather than a corruption, and ark can answer in whichever
+namespace the caller used. It may also mean ark never has to classify which
+group a link belongs to, which would be a good outcome: the taxonomy motivates
+the design and then stops mattering.
+
+## Decisions
+
+**DECIDED (Bill, 2026-08-01): symlinks work for every path ark accepts.** Not
+`fetch` alone. CLI path arguments, search file filters, `@ext` tag targets,
+`/content/` URLs, `remove`, and the `dir=` entries in `ark.toml`. A fix that
+covers most paths relocates the mystery rather than ending it.
+
+**DECIDED (Bill, 2026-08-01): the scan records symlinks and their targets, and
+ark resolves them internally.** Two alternatives were considered and rejected.
+*Follow links while walking* duplicates file records and, worse, makes the
+same content reachable under paths governed by different include/exclude
+rules. *Resolve only at the door*, which this document originally proposed,
+works but discards the alias: it is correct for Group A and wrong for Group B,
+and it leaves ark unable to say anything about a link it did not follow.
+Recording keeps the no-duplication property, survives a target moving, and
+turns a dangling link from an invisible skip into a statable fact.
+
+**DECIDED (Bill, 2026-08-01): hardlinks are treated as separate files.** They
+are the sibling case, and the argument for ignoring them is strong in four
+independent ways. Content dedup already makes the storage cost near zero (see
+below). There is no link to record, because two hardlinks are equally real and
+neither points at the other, so the alias design has nothing to attach to.
+Hardlinked directories are effectively forbidden, so the prefix-resolution
+problem does not arise. And detecting them requires per-file inode tracking on
+every scan, paid always, against no evidence that duplication exists in
+practice; inodes also fail to survive a restore from backup, a filesystem
+migration, or a `cp -a`, so building identity on them would introduce a
+rebuild hazard.
+
+## A wrong turn, recorded because the correction matters
+
+This document first argued against following symlinks on the grounds that the
+symlink farm would produce "triplicate chunks and triplicate embeddings" for
+25 files. That is false, and it understated how good ark's existing dedup is.
+
+Chunks are content-addressed with refcount-bumped C records.
+`WithIndexedChunkCallback` fires only for newly-inserted chunkids, and
+`indexer.go:46` states the consequence directly: content-dedup'd chunks "share
+the chunkid and its F/V/T records." V records are the vectors. So identical
+content costs one chunk and one embedding however many files carry it, and
+`AddFile`'s comment says it outright: "dedup'd chunks cost zero."
+
+Duplication would have cost file records and file-to-chunk references, not
+chunks and not vectors. The argument against following links on scan survives,
+but it rests on rule ambiguity and scope, not on storage.
+
+The useful thing this turned up: **ark has already solved the many-names
+problem once, for a different reason.** `search.go:877` notes that "a
+deduplicated chunk belongs to several files, so the path it is reported under
+is what `-files` must match." Content dedup already forced a decision about
+which of several paths a shared chunk reports under. Symlink aliases should
+ride that mechanism rather than inventing a parallel one.
+
+## Principles
+
+**A link never admits its target. It proposes it.** **DECIDED (Bill,
+2026-08-01.)** Adjunct content is indexed because the user adds it as a source
+directly, never implicitly because a link pointed at it. A recorded link whose
+target is not indexed becomes a **candidate the UI can flag**, and the user
+decides.
+
+This settled after the document argued both extremes and both were wrong.
+First: a link must not drag outside content in, so the content is simply lost
+— which fails the storage-placement case outright, where the bytes live
+outside every source *by construction* (an encrypted partition, a disk grafted
+on to extend space) and are plainly wanted. Then the reverse: the link's
+presence inside a source is intent, so follow it — which silently expands
+scope on the user's behalf and makes an enormous foreign tree something you
+discover from a disk-usage graph. The resolution is neither, because the real
+question was never "index it or not" but *who decides*. This is
+discernment-gated authoring: the blind layer proposes into a surface, and the
+sole author of durable state is the discerning approver. The same move that
+revitalized the Tag Forge by externalizing candidates as visible lines.
+
+**DECIDED (Bill, 2026-08-01): the candidate is a `U` record**, carrying a
+`symlink` field in its JSON value. Not a new record class and not an `E:`
+condition. `U` already means "seen during a scan, not covered by config,
+persisted across scans, cleared when the user adds a covering rule, dismisses
+it, or the file goes away," which is the mechanism this needs almost verbatim.
+The deciding axis against `E:` was **dismissibility**: `E:` conditions are
+explicitly never dismissed and re-derived on every config load, so a
+deliberate link into a tree the user will never index would make ark's warning
+output permanently noisy for a choice already made.
+
+Reuse also sidesteps a trap: a new record class needs both a
+`specs/record-formats.md` entry and an `arkLabels` entry in `status -db`, and
+one without the other makes the diagnostic report a silent zero — the exact
+failure mode this carve exists because of.
+
+**Two things the spec pass must not skip.**
+
+*The U semantic broadens.* Today's wording is "files **seen during a scan**
+that don't match any include/exclude pattern." A symlink target outside every
+source is never seen — the walker does not reach it. It is *proposed* rather
+than encountered, which is a new way for a U record to come into being.
+`specs/record-formats.md` must widen that sentence or the next reader will
+believe the record class does something narrower than it does.
+
+*The field should carry the proposing link, not a bare `true`.* The U record
+is keyed on the **target** path, which is the thing not covered. A boolean
+says "a link proposed this" but not which one, and the link is the context
+that makes the decision obvious — "you linked this from `~/Documents/x.md`"
+answers "why am I being asked about a volume I don't recognise." A present
+string is as truthy as `true` to every consumer, so the explanation is free.
+Proposed, not yet ratified.
+
+*And U now has at least three reasons, which argues for naming the reason.*
+The vast majority of today's ~10,200 unresolved files are **unindexible**:
+nothing chunks them, so no pattern change will ever help. That is a third
+category beside "not covered by config" and "proposed by a link", and they
+call for different treatment — unindexible files want optional hiding,
+config-uncovered files want a pattern edit, link-proposed files want a new
+source. A flag per category proliferates; a `reason` field with the symlink
+path alongside it does not. **DECIDED (Bill, 2026-08-01): the unindexible
+category rides with this carve** rather than becoming its own item, since it
+lands in the same code as the symlink U-record work, or close enough to it
+that splitting would just mean touching the same lines twice.
+
+The determination has an obvious source: a file whose `StrategyForFile` yields
+no strategy is unindexible. Whether that is exactly the right test is not
+established.
+
+**Hiding is a visual convenience, not an exclusion** (Bill, 2026-08-01), and
+the distinction is load-bearing rather than pedantic. An unindexible file must
+remain a U record, because "unindexible" is a statement about ark's current
+chunker set and not about the file. Add a chunker for that type and every such
+file should become a candidate again with no user action at all. Excluding
+them instead would look identical on the day it was done and silently lose the
+revival — a failure with no symptom, which is the shape this carve exists
+because of.
+
+What survives from the rejected principles is narrower: **the scan must not be
+surprised.** Recorded links are visible, cycles terminate, and nothing enters
+the index without the user having said so.
+
+**Canonical name = the lexically first one. DECIDED (Bill, 2026-08-01.)**
+Arbitrary, and deliberately so: the property being bought is **determinism**,
+not correctness, because there is no correct answer to buy.
+
+A rule that tried to be correct was proposed first and failed, which is worth
+keeping because it shows why arbitrary is the right target. The rule was
+"canonical = the name inside a configured source," on the reasoning that
+source config already encodes which names the user considers theirs. It
+resolves nothing: in both real cases *both* names are already in sources
+(`/home/deck/.ark` and `/home/deck/work/ark` are both declared, so a
+dev-project link has two in-source names), and storage placement ends the same
+way as soon as the adjunct volume is added as its own source. Worse, the two
+groups want **opposite** answers from identical structure — a dev-project
+reference wants the target, a grafted partition wants the link — and nothing
+in the filesystem distinguishes them. Any rule claiming to pick correctly is
+therefore claiming to read intent it cannot see. Better to be plainly
+arbitrary and stable than subtly arbitrary and unstable.
+
+**"Which file owns this chunk?" is the same question in different clothes**,
+and it is **already deterministic**: the owner is the first fileid in the
+chunk record (Bill, 2026-08-01). Content dedup forces the choice —
+`search.go:878` notes "the path it is reported under is what `-files` must
+match" — so no change is needed there. Recorded because reading did not settle
+it: the resolver is wired from `DB.Open` through microfts2 rather than from
+the `Store` resolver, and `Store.FilesForChunks` takes and returns maps, so
+the shape *looked* like it might be order-dependent.
+
+The one residual, judged acceptable: first-fileid means earliest-indexed, so a
+full `ark rebuild` could reorder it if scan order ever changed. That matters
+only if something persists a reported path and compares it later. Nothing is
+known to.
+
+General practice this belongs to: **sort before emitting**, so output never
+depends on map iteration order.
+
+**Alias names appear only when the requested prefix passes through a link.**
+The reporting rule for `ark files` and for search. A pattern rooted at a link
+is a request in that link's namespace and reports those paths;
+`<link>/**/*` behaves as expected. A pattern with no concrete prefix, or whose
+prefix does not pass through a link, is a request about the corpus and reports
+canonical names — so `**/*` does not list each aliased file twice, and neither
+does `/home/deck/**/*`, which a naive "return every matching name" rule would
+get wrong since both names live under it.
+The load-bearing argument is stability rather than elegance: **adding a
+symlink must not change how many files you have.** Under "every matching
+name," a single `ln -s` silently inflates every global count and every
+unfiltered search, and scripts built on `ark files '**/*'` break for a reason
+nobody would think to look for.
+
+**Never half-resolve.** `config.go:925`/`943` prefix-match an incoming path
+against `src.Dir`. Resolve one side and not the other and a file that
+genuinely is in a source begins reporting "not in source" — a *new* wrong
+answer traded for the old one. Both sides resolve, or neither.
+
+**Directory links mean prefix resolution.** The failing path was
+`<farm>/ark/hermes-messaging.md`, where `<farm>/ark` is the link. Resolution
+walks path *components* against recorded links; it cannot treat the path as an
+opaque string.
+
+**Record what you skipped.** Every silent skip in this system has cost time.
+A directory symlink that is not descended into should leave a trace.
+
+## Open forks
+
+- **Tie-break when both names lie inside sources.** The canonical-name rule
+  above is silent on it. First source in config order, shortest path, and
+  source declaration order are all defensible and none is obviously right.
+- **Chains: record each hop, or the resolved endpoint?** Each hop is faithful
+  and survives a mid-chain repoint; the endpoint is cheaper at lookup.
+- **Whose include/exclude rules apply** when a file becomes reachable from two
+  sources with different patterns? Unanswerable today because it cannot
+  happen. It can as soon as links are recorded.
+- **When does a recorded link go stale?** A target can be repointed without
+  either file changing. `lstat` mtime tracks the link itself, so a repoint is
+  detectable, but only if something looks. Scan-time only, or watched?
+- **Does the error message split belong here or on its own?** The current
+  `not indexed: <path>` conflates three situations — file absent, file present
+  but in no source, and file indexed under a different name. Haiku could not
+  distinguish them and neither could a human without running `ark files`. That
+  ambiguity is most of why this survived so long.
+
+## The split
+
+Provisional; not yet agreed.
+
+**Item 1 — record and resolve** (`/mini-spec`). The link record class, scan
+recording of both file and directory symlinks, and component-wise prefix
+resolution. Promotes `checkpoint.go`'s `resolvePath` to a shared helper.
+Requires `specs/record-formats.md` and the `arkLabels` allowlist in
+`status -db`; a record class added without its label makes the diagnostic
+report a silent zero, which is precisely the failure mode this carve is about.
+
+**Item 2 — apply at every door** (`/mini-spec`). `DB.Fetch`, `IsIndexed`,
+`ReadSourceFile`, `config.go:791` for `dir=`, `@ext` target resolution,
+`/content/` URLs, and the search file filters. Needs the glob wrinkle settled:
+a pattern is not a path, so the longest concrete prefix resolves and the
+pattern tail re-attaches. `IsGlob` is the existing discriminator.
+
+**A confirmed live instance, found 2026-08-01 while checking something else.**
+`@ext` re-resolution works: indexing a file reaches
+`ExtMap.candidatesForFileChange`, which looks up `extByAnchor[path]` with the
+file's absolute path, and the anchor is keyed on the absolutized target
+(`ext.go:21`, `:124`), so a dangling target finds its file the moment that
+file appears. **Except through a symlink.** `absolutizeExtPath`
+(`ext.go:236`) does tilde expansion, `IsAbs`, and `filepath.Join`, and no
+symlink resolution — so a target written through a link keys the anchor on
+the link spelling while `db.fileIDPath` returns the real path. They never
+match, and the route never fires however many times the file is reindexed.
+Silent in the worst available way: an `@ext` route that never fires is
+indistinguishable from one nobody wrote, which is the same shape as the
+three-month `@ext` routing outage. This is why the scope is every door rather
+than `fetch`.
+
+**Item 3 — say what happened** (`/mini-spec`, foldable into 1 or 2).
+Distinguish absent from unindexed from aliased in the error text, and log
+skipped or recorded links at `-v`. Includes the `U`-record work: the `symlink`
+field, and the widened semantic in `specs/record-formats.md`.
+
+*The UI half is a separate queue item, not part of this carve.* Showing `E:`
+conditions and giving U records resolvable by adding a source an affordance is
+a Frictionless pass, and the two workflows are forbidden from mixing in one
+stream. The `E:` half of it has no dependency on this carve at all.
+
+**Item 4 — fail fast when onboarding does not take.** **DECIDED (Bill,
+2026-08-01): in scope for this carve.** The guard delivers bootstrap
+instructions and never verifies they were followed. It allowlists by command
+prefix, so an agent whose reference fetch failed passes every subsequent gate
+and works well enough to hide the failure. That is what let a broken path
+persist: the symptom was not an error, it was months of intermittent
+flakiness that read as the agents being unreliable.
+
+The requirement is that a failed bootstrap **stops the agent** rather than
+degrading it. An agent running without its reference should be a loud failure
+at the first gate, not a quiet one distributed across every task it ever
+performs. Note the ordering constraint with Items 1 and 2: fail-fast landing
+first would have turned this bug from silent flakiness into an immediate hard
+stop, which is the outcome we want, so it does not need to wait for the
+symlink work.

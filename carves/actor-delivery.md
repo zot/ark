@@ -233,9 +233,31 @@ work built directly on ordered delivery — and would have been silently wrong t
 day before. Recorded here because it is the evidence that this carve's guarantee
 is load-bearing rather than theoretical.
 
-**Item 2 — tell ui-engine** (`ark-messenger`).
-The defect was modelled from there, so its actor has the same missing guarantee.
-Cross-project message, not a change made from this repo.
+~~**Item 2 — tell ui-engine** (`ark-messenger`).~~ **SENT 2026-08-01**, as a
+cross-project message rather than a change made from this repo. The defect was
+modelled from there, so its actor has the same missing guarantee. Everything
+the message reported is stated below, so nothing is lost by not having it.
+
+**Confirmed present before sending, and it is worse there in two ways.**
+`internal/server/svc.go:25` is the identical `go func() { s <- code }()`, and
+`RunSvc` (`:42`) runs each closure inline in the loop goroutine — same defect,
+same cause. Beyond that:
+
+- **Their channel is unbuffered.** `make(ChanSvc)` at
+  `internal/server/websocket.go:101` takes no capacity, so each spawned sender
+  parks on a rendezvous rather than on a full buffer. Ours had 8 or 16 slots to
+  absorb a burst before goroutines began accumulating; theirs has none.
+- **Their diagnostic cannot see it.** The `verboseSvc` path increments
+  `svcCount` *inside* the spawned goroutine, so the `QUEUE SVC n` numbering is
+  itself racy with respect to caller order. The instrument reports the same
+  scrambled order it exists to detect — which is why nobody watching that output
+  would ever have caught this.
+
+**What was deliberately not claimed.** We read `svc.go` and the `make(ChanSvc)`
+call site; we did **not** audit ui-engine's call sites for the shape that
+actually bites (two posts from one goroutine whose relative order matters). The
+message says the guarantee is absent, not that a specific behaviour is currently
+wrong. Same standard this carve applies to ark's own instances above.
 
 **Item 3 — cost** (deferred; `/mini-spec` if taken). *The capacity half is
 settled — see Item 1's DECIDED. What remains is cost.*

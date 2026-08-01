@@ -10,7 +10,7 @@ hooks:
     - matcher: startup
       hooks:
         - type: prompt
-          prompt: "run this command exactly: `~/.ark/ark fetch --wrap knowledge ~/.ark/skills/hermes-search.md`"
+          prompt: "run this command exactly: `~/.ark/ark fetch --wrap knowledge ~/.ark/skills/ark/hermes-search.md`"
   PreToolUse:
     - matcher: "Bash|Read|Grep|Glob|Search|Write"
       hooks:
