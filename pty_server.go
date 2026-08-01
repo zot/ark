@@ -8,20 +8,13 @@ package ark
 // CRC: crc-PtyHost.md, crc-Server.md | R3117, R3122, R3123, R3124, R3125, R3126
 
 import (
-	"bufio"
 	"encoding/json"
 	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
-
-// ptyClientBufChunks bounds a socket client's output buffer (R3118): past this
-// many undelivered chunks the client is dropped rather than allowed to stall the
-// fan-out.
-const ptyClientBufChunks = 256
 
 const (
 	// luhmannLaunchDoc is the tmp:// document every launch announces itself on
@@ -78,6 +71,14 @@ func (srv *Server) ReleaseSeat(session string) { srv.ReleaseLuhmann(session) }
 func luhmannCwd() string { return filepath.Join(arkHomeDir(), "luhmann") }
 
 func (srv *Server) LuhmannDir() string { return luhmannCwd() }
+
+// LuhmannChildArgv resolves the pty child's command line, delegating to the
+// config so the rule lives in exactly one place (R3329, R3330, R3331). PtyEnv —
+// this indirection is what keeps the host free of any config dependency.
+// CRC: crc-Server.md | R3329
+func (srv *Server) LuhmannChildArgv(model string) ([]string, error) {
+	return srv.db.Config().Luhmann.EffectiveChildArgv(model)
+}
 
 // PoolRosterCount is the pool-secretary roster size for status (R3124). PtyEnv.
 func (srv *Server) PoolRosterCount() int { return srv.recallWatcher.PoolSize() }
@@ -174,9 +175,13 @@ func (srv *Server) PublishLaunchOutcome(session, failure string) {
 func (srv *Server) handleLuhmannLaunch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Bootstrap string `json:"bootstrap"`
+		// Model names the model for this launch only (R3329). The CLI omits
+		// the field when --model was not given, so absent and empty mean the
+		// same thing here: fall back to config.
+		Model string `json:"model"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	sid, err := srv.ptyHost.Launch(req.Bootstrap)
+	sid, err := srv.ptyHost.Launch(req.Bootstrap, req.Model)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -246,7 +251,6 @@ func (srv *Server) handleLuhmannAttach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := newSocketPtyClient(conn)
-	go client.writeLoop()
 	reg, aerr := srv.ptyHost.Attach(client, ws)
 	if aerr != nil {
 		client.Close()
@@ -273,76 +277,34 @@ func (srv *Server) handleLuhmannAttach(w http.ResponseWriter, r *http.Request) {
 // --- socketPtyClient: the unix-socket transport as a PtyClient (R3117) -------
 
 // socketPtyClient adapts a hijacked connection to the host's PtyClient interface
-// (R3117): a bounded output channel drained by writeLoop, so a stalled reader
-// backs up into the buffer and is dropped (Write returns false) rather than
-// blocking the fan-out (R3118).
+// (R3117). It buffers nothing: a bounded channel, a drain goroutine, and an 8ms
+// flush ticker used to live here, and all three moved into the host, where the
+// bounded buffering and the R3118 drop are written once instead of once per
+// transport (R3336, R3340, R3341). What is left is the transport itself.
 type socketPtyClient struct {
 	conn      net.Conn
-	out       chan []byte
-	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func newSocketPtyClient(conn net.Conn) *socketPtyClient {
-	return &socketPtyClient{
-		conn: conn,
-		out:  make(chan []byte, ptyClientBufChunks),
-		done: make(chan struct{}),
-	}
+	return &socketPtyClient{conn: conn}
 }
 
-// Write enqueues an output chunk non-blockingly; false means the bounded buffer
-// overflowed and the host should drop this client (R3118).
-func (c *socketPtyClient) Write(p []byte) bool {
-	select {
-	case <-c.done:
-		return false
-	case c.out <- p:
-		return true
-	default:
-		return false // R3118: buffer full — signal drop
-	}
+// Write writes the host's buffer to the connection in full, blocking until it is
+// written (R3341). It runs on the host's per-connection write goroutine, so a
+// stalled reader blocks only that goroutine; the host's pending buffer grows and
+// the connection is dropped at the cap (R3340). Close is what unblocks a write
+// stuck here. No bufio: the host coalesces whatever accumulates during a write
+// into the next one, so batching is adaptive and there is nothing left for a
+// flush timer to bound.
+func (c *socketPtyClient) Write(p []byte) error {
+	_, err := c.conn.Write(p)
+	return err
 }
 
 // Close releases the transport once; the second call (drop + detach race) no-ops.
 func (c *socketPtyClient) Close() {
-	c.closeOnce.Do(func() {
-		close(c.done)
-		c.conn.Close()
-	})
-}
-
-// writeLoop streams enqueued output to the connection until Close. A write error
-// closes the client, which the host observes as a drop on the next broadcast.
-func (c *socketPtyClient) writeLoop() {
-	w := bufio.NewWriter(c.conn)
-	flush := time.NewTicker(8 * time.Millisecond)
-	defer flush.Stop()
-	for {
-		select {
-		case <-c.done:
-			return
-		case chunk := <-c.out:
-			if _, err := w.Write(chunk); err != nil {
-				c.Close()
-				return
-			}
-			// Coalesce any immediately-available chunks, then flush.
-			if len(c.out) == 0 {
-				if err := w.Flush(); err != nil {
-					c.Close()
-					return
-				}
-			}
-		case <-flush.C:
-			if w.Buffered() > 0 {
-				if err := w.Flush(); err != nil {
-					c.Close()
-					return
-				}
-			}
-		}
-	}
+	c.closeOnce.Do(func() { c.conn.Close() })
 }
 
 var _ PtyClient = (*socketPtyClient)(nil)

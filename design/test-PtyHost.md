@@ -99,13 +99,13 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 
 ## Test: a child self-exit records its pool secretaries' exits
 **Purpose:** R3323 — the teardown obligations run on the path down that no verb drives; before this, a child that died on its own left its secretaries in the roster as ghosts.
-**Input:** a host with a fake master (pipe read end) and a hosted session id, its `readLoop` running; close the write end so the master reaches EOF, as a child going away on its own does.
+**Input:** a host with a fake master (pipe read end) and a hosted session id, its read chain running (R3333); close the write end so the master reaches EOF, as a child going away on its own does.
 **Expected:** exactly one exit recording, for that session id and carrying the self-exit reason (R3324); the seat is released and the host reports nothing hosted.
 **Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3
 
 ## Test: stop records once, with the stop reason, despite the reader's racing finalize
 **Purpose:** R3323, R3324 — the chokepoint's idempotence is what lets both callers ask unconditionally, and the reason distinguishes ark's teardown from the child's.
-**Input:** the same host, with `readLoop` running so the master's close raises a second, racing finalize; call `Stop`.
+**Input:** the same host, with the read chain running so the master's close raises a second, racing finalize; call `Stop`.
 **Expected:** exactly one exit recording, carrying the stop reason — never two, and never relabelled by the reader's finalize that follows.
 **Refs:** crc-PtyHost.md
 
@@ -139,8 +139,55 @@ lease, so it is exercised at integration level, not here (see the Gaps phase).
 **Expected:** the second reserve succeeds.
 **Refs:** crc-PtyHost.md
 
-## Test: a detached session allocates nothing, an attached one gets its own bytes
-**Purpose:** R3328 — the reader reuses one scratch buffer, so the fan-out must copy for anyone who retains the slice, and must do nothing at all (not even an actor round-trip) when nobody is attached.
-**Input:** a host with a master and no clients, running the reader's guarded fan-out call under an allocation counter; then attach a client, broadcast, and overwrite the scratch as the next read would.
-**Expected:** zero allocations while detached; the attached client's captured bytes are the original chunk, unaffected by the scratch being rewritten.
+## Test: output reaches a client in order, and the reader's buffer may be reused behind it
+**Purpose:** R3333, R3339 — the read buffer is handed around rather than shared, so a connection must end up with its own copy of the bytes, and the copies must arrive in read order. This is the successor to the retired R3328 test: what it checked (the client's bytes survive the reader overwriting its buffer) is still required, by ownership rather than by an exact-size copy.
+**Input:** a host with a master and one attached client; append several distinct chunks through the actor, overwriting the source buffer between appends as the next read would.
+**Expected:** the client receives every chunk, concatenated in append order, none of them corrupted by the source buffer being rewritten.
 **Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3
+
+## Test: at most one write goroutine per connection
+**Purpose:** R3338 — a second concurrent writer would break both the ordering guarantee and gorilla's one-writer rule, and the flag that prevents it is only correct if every transition happens inside the actor.
+**Input:** a client whose Write blocks on a release channel and records its concurrent-entry count; append many chunks while the first write is in flight, then release.
+**Expected:** the recorded maximum concurrency is 1, and every appended byte is eventually delivered.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.4
+
+## Test: bytes appended during an in-flight write are not lost
+**Purpose:** R3337 — the no-lost-wakeup property. Output arriving while a writer is in flight is picked up by the continuation, not dropped and not left sitting in pending with nothing scheduled to write it.
+**Input:** a client whose Write blocks; append chunk A (starts the writer), append B and C while it is blocked, then release the writer.
+**Expected:** the client's captured bytes are A+B+C in that order, with no further append needed to flush B and C.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.5
+
+## Test: a connection past the pending cap is dropped, and the others are not
+**Purpose:** R3340, R3118 — the byte cap is where the bounded-buffer contract is now enforced, and the whole point of dropping is that one stalled client does not stall the fan-out.
+**Input:** two clients, one blocking in Write and one draining freely; append more than the cap's worth of output.
+**Expected:** the blocked client is dropped and closed and leaves the client set; the draining client keeps receiving; the pty size is recomputed, since a drop is a detach.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.2
+
+## Test: a failed write deregisters its connection
+**Purpose:** R3341, R3118 — a transport that errors is the ordinary way a client goes away, and the continuation has to deregister rather than continue writing into a dead socket.
+**Input:** a client whose Write returns an error; append one chunk.
+**Expected:** the client is dropped from the set and closed, and no further Write is attempted on it.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.5
+
+## Test: a continuation for a detached connection spawns nothing
+**Purpose:** R3342 — a write completing after its connection is gone must not respawn, or every teardown racing an in-flight write leaks a goroutine.
+**Input:** a client whose Write blocks; append a chunk to start the writer, Detach the connection, then release the write.
+**Expected:** the host settles with an empty client set, no panic, and no further Write on the detached client.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.5
+
+## Test: the read cycle hands one buffer around across many reads
+**Purpose:** R3333, R3334 — the read runs on a goroutine and the actor spawns the successor, so the cycle must survive many reads on one buffer without dropping or reordering anything.
+**Input:** a pipe standing in for the master with the read cycle running and one attached client; write eight chunks, waiting for each to land before writing the next so the assertion is about order rather than framing.
+**Expected:** the client receives every chunk, concatenated in write order.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.1
+
+*The EOF half of the cycle — the chain ending and finalizing exactly once — is
+covered by the self-exit and stop-race tests above, which drive the same
+`startRead` chain over a pipe and then close the write end.*
+
+## Test: a read chain outliving its session distributes nothing
+**Purpose:** R3343 — after a teardown the old master stays open through the stop grace, and its remaining output must not reach the clients of a launch that started in that window.
+**Input:** a pipe master with the read cycle running; install a *different* master (standing in for a later launch) and attach a client, then write into the original pipe twice.
+**Expected:** the new client receives nothing from either write.
+**Note — what this does not prove.** It asserts the "publishes nothing" half only. The "keeps draining" half is inferred from the second write being accepted rather than measured: proving it properly means filling the pipe buffer past what the kernel will hold, which needs a real pty and belongs to the live smoke test (O152, PENDING #40), not to a fake-and-zero-value unit test.
+**Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.3

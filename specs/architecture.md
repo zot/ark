@@ -1,23 +1,48 @@
 # Architecture
 
 A cross-cutting map of ark's in-process concurrency model: the DB closure
-actor, the write-actor split, the resources the actor protects, and the
-operation-object discipline that governs off-actor DB access. This is an
+actor, the write-actor split, the resources the actor protects, the
+operation-object discipline that governs off-actor DB access, and the two
+named patterns that govern how work crosses an actor boundary. This is an
 **overview** — the per-feature specs it names are canonical and win on any
 disagreement; this doc states the invariants they can't see on their own,
 and is where a reader looks *first* before touching DB access.
 
+The DB actor is the largest instance of the model, not the only one: the
+managed-pty host is a second closure actor with its own protected state
+([managed-pty.md](managed-pty.md) canonical), and the vocabulary below is
+shared by both.
+
 ## The DB closure actor
 
 All DB operations are serialized through one closure actor: a channel of
-`func()` closures (`db.svc`) drained by a single goroutine (`runSvc`).
-Callers reach it through `Sync` / `SyncVoid` (block for a result) or `Do`
-(fire-and-forget). Code inside the actor runs sequentially, so shared DB
-state has no races by construction. (R986; `db-concurrency.md` canonical.)
+`func()` closures fed by `db.svc`, with a single goroutine keeping the
+queue. Callers reach it through `Sync` / `SyncVoid` (block for a result)
+or `Do` (fire-and-forget). Exactly one closure runs at any instant, so
+shared DB state has no races by construction. (R986; `db-concurrency.md`
+canonical.)
 
-**Deadlock rule:** never call `Sync`/`SyncVoid` from inside the actor — it
-enqueues a closure and blocks on the reply, but the actor is the caller,
-so it waits for itself.
+**Delivery is ordered per posting goroutine.** Closures posted by one
+goroutine run in the order it posted them, across `Do` and `Sync` alike,
+which is what makes "post the follow-up behind the message" a valid
+substitute for synchronizing against it. Two constraints hold that up:
+the post is a **direct send** on the calling goroutine, and the actor's
+own goroutine **never runs a closure** — each executes in its own
+goroutine and posts back on completion. Escaping the send into a fresh
+goroutine surrenders ordering, and running work on the loop is what makes
+escaping it tempting. (`db-concurrency.md` §Delivery canonical.)
+
+**Deadlock rule:** never call `Sync`/`SyncVoid` from inside a running
+closure. The nested post queues behind the closure making it, and that
+closure is blocked waiting for the nested one to run. `Do` from inside a
+closure **is** safe, since the work is off the loop and the post merely
+queues — do not generalize from that to `Sync`.
+
+**Panics are not recovered** at the actor. A panicking closure takes the
+process down; the actor's state is already unknown at that point, and a
+central recovery that failed to release the running flag would wedge the
+actor with no symptom. A closure that can survive its own panic recovers
+internally, as the write goroutine does (R1059).
 
 ## The write-actor split
 

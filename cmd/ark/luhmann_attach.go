@@ -53,6 +53,12 @@ func luhmannLaunchAction(_ context.Context, c *ucli.Command) error {
 	if bs := c.String("bootstrap"); bs != "" {
 		body["bootstrap"] = bs
 	}
+	// R3329: send the model only when --model was given. Omitting an unset flag
+	// is what lets the server treat absent and empty as the same thing and fall
+	// back to config, so the CLI never has to know what the default is.
+	if m := c.String("model"); m != "" {
+		body["model"] = m
+	}
 	var resp struct {
 		Session string `json:"session"`
 	}

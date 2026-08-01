@@ -815,13 +815,29 @@ func (srv *Server) indexPaths(paths []string) {
 }
 
 // reconcile sends a reconciliation cycle through the DB actor.
-// Fire-and-forget — the watcher doesn't need the result. R992
-// A second reconcile requested while one runs queues behind it on the
-// DB actor (FIFO) rather than being dropped, so it runs after (R346);
-// the dispatch returns immediately so HTTP handlers don't block (R345).
-// CRC: crc-DB.md | R345, R346, R987, R990
+// Fire-and-forget — the watcher doesn't need the result. R992. The dispatch
+// returns immediately so HTTP handlers don't block (R345).
+//
+// **At most one reconcile is active and one pending** (R346, R3351). A request
+// arriving while one already waits merges into it rather than queueing a scan of
+// its own: the waiting scan has not begun, so it will observe everything each
+// merged request was asking about. That matters because a reconcile is a full
+// pass over every source — N requests during one run would otherwise buy N
+// further full passes to reach a state one pass already reaches.
+//
+// The gate is a **separate, earlier closure** than the scan, and that is the
+// mechanism rather than a stylistic choice. The pending mark must clear when the
+// scan *begins*, not when it ends, so that a request arriving mid-run queues a
+// fresh scan — a running scan cannot be relied on to have seen a change made
+// after it passed that part of the tree. Deciding in one closure and scanning in
+// the next is what makes "clears at the start" expressible. It is the
+// post-the-follow-up-behind-the-message idiom, and it is sound only because
+// delivery is ordered (R3344).
+//
+// Same rule, same reason, as the per-path refresh coalescing (R3005).
+// CRC: crc-DB.md | R345, R346, R987, R990, R3351
 func (srv *Server) reconcile() {
-	srv.db.Do(func(db *DB) {
+	srv.db.postCoalescedReconcile(func(db *DB) {
 		// Wire schedule callback for async write goroutines.
 		// CRC: crc-Server.md | R1014 — schedule processing is deferred outside the
 		// DB actor: items accumulate during indexing, drain after scan/refresh, and
@@ -5090,6 +5106,11 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			bootstrap := L.OptString(1, "")
+			// R3332: the model for this launch, the same parameter the CLI
+			// --model flag sets. Present so a model chooser in the Luhmann view
+			// is a Lua-only change — the binding is a view's only door, and one
+			// added later would cost a second Go pass for a dropdown.
+			model := L.OptString(2, "")
 			// Reserve synchronously so "already hosted" is reported to the caller
 			// rather than lost inside the goroutine, where nothing would surface
 			// it: the publication only speaks for launches that actually started.
@@ -5118,7 +5139,7 @@ func (srv *Server) registerLuaFunctions() {
 						srv.ptyHost.ReleaseReservation()
 					}
 				}()
-				if _, err := srv.ptyHost.LaunchReserved(bootstrap); err != nil {
+				if _, err := srv.ptyHost.LaunchReserved(bootstrap, model); err != nil {
 					Logv(1, "luhmann: launch failed: %v", err)
 				}
 			}()

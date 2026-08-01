@@ -99,9 +99,9 @@ func TestAddTmpFileExtractsTags(t *testing.T) {
 	tmp := NewTmpTagStore(store.TvidMap())
 	store.SetTmpTagStore(tmp)
 	db := &DB{fts: fts, store: store, tmpPaths: map[string]uint64{}}
-	db.svc = make(chan func(), 16)
-	go runSvc(db.svc)
-	defer close(db.svc)
+	db.svc = newChanSvc(chanSvcSlots)
+	db.svc.start()
+	defer db.svc.stop()
 
 	content := []byte("@status: zzunique\n@from-project: ark\nbody line\n")
 	fid, err := Sync(db, func(d *DB) (uint64, error) {

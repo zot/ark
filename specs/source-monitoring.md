@@ -107,6 +107,25 @@ If a reconcile is already running when another is requested, the new
 request waits for the current one to finish and then runs. Not
 dropped — config may have changed again during the previous run.
 
+**Beyond that, requests merge: at most one reconcile is active and one
+pending.** A third, fourth and fiftieth request arriving while one is
+already waiting all fold into that single pending scan rather than
+queueing scans of their own. Nothing is lost by merging, because the
+pending scan has not started yet and will therefore observe everything
+every merged request was asking about. A reconcile is a full pass over
+every source, so N requests during one run would otherwise cost N
+further full passes to reach a state one pass already reaches.
+
+The correctness of this rests on **when** the pending mark clears, and
+it is easy to get backwards. It clears as the pending scan *begins*,
+not when it ends. A request arriving during a run therefore queues a
+fresh scan rather than merging into the one already underway — which
+it must, because a scan cannot be relied on to see a change made after
+it passed that part of the tree. Merging only ever happens into a scan
+that has not started. This is the same rule, for the same reason, that
+the per-path refresh coalescing follows (db-concurrency.md §Refresh
+Coalescing).
+
 ### Sweep step: drop newly-excluded files
 
 Scan adds new files and Refresh re-indexes stale ones, but neither

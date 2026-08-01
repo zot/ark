@@ -55,7 +55,7 @@ type RecallWatcher struct {
 	store     *Store
 	builder   *RecallAgentBuilder // R2754: curation-doc builder factory
 
-	jobs chan func()
+	jobs *ChanSvc
 
 	mu           sync.Mutex
 	sessions     map[string]*recallSessionState // R2730
@@ -112,7 +112,7 @@ func NewRecallWatcher(db *DB, lib *Librarian, store *Store, builder *RecallAgent
 		librarian:          lib,
 		store:              store,
 		builder:            builder,
-		jobs:               make(chan func(), 16),
+		jobs:               newChanSvc(chanSvcSlots),
 		sessions:           make(map[string]*recallSessionState),
 		fireCounters:       make(map[string]uint64),
 		bloodhoundCounters: make(map[string]uint64),
@@ -127,7 +127,7 @@ func (w *RecallWatcher) Start() {
 	if w == nil {
 		return
 	}
-	runSvc(w.jobs)
+	w.jobs.start()
 	w.startFixer() // R3023, R3024: subscribe + drain @ark-bloodhound-cli[-return]
 }
 

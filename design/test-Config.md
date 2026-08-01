@@ -107,3 +107,21 @@ matches instead of silently matching nothing
 **Input:** the constant.
 **Expected:** contains `personal-patterns/**/*.md`.
 **Refs:** crc-Config.md, specs/personal-patterns.md
+
+## Test: the pty child's argv resolves through its three levels
+**Purpose:** R3329, R3330, R3331 — `EffectiveChildArgv` is the only place the
+resolution rule lives, so every branch of it is worth pinning. Cheap to test and
+therefore not deferrable: the function is pure, so a zero-value `LuhmannConfig`
+exercises it with no DB, server, or pty.
+**Input:** a `LuhmannConfig` with, in turn: nothing set; `Model` set; `Model` set
+plus an explicit parameter; `Command` set; `Command` set plus an explicit
+parameter; `Command` set to an empty slice.
+**Expected:** `claude --model opus` from the bare default; config's model when
+only config is set; the parameter when both are; the override verbatim when
+`Command` is set, with the model chain skipped; an **error** naming the rejected
+model when a parameter meets an override; and fall-through to the default when
+`Command` is `[]`, since an empty slice must not become an empty argv. Two
+further properties: resolving with a parameter leaves `lc.Model` untouched (a
+parameter never writes config, which is what makes a UI chooser safe), and
+mutating the returned slice does not reach back into the loaded config.
+**Refs:** crc-Config.md, R3329, R3330, R3331

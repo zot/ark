@@ -30,6 +30,99 @@ Wrap `ark.DB` in a closure actor (ChanSvc). All DB operations go
 through the actor's channel. The code inside the actor is sequential
 — no races by construction.
 
+## Delivery
+
+Sequential execution is only half the contract. The other half is
+**order**: closures posted by one goroutine run in the order that
+goroutine posted them. Without it, the standard idiom of posting a
+follow-up behind a message instead of synchronizing against it does
+not work, because queue position stops meaning anything.
+
+The guarantee is that ordering holds **per posting goroutine**, across
+both fire-and-forget and synchronous posts, since both enter by the
+same door. Posts from *different* goroutines interleave arbitrarily,
+which is expected and is what the actor exists to make safe.
+
+Two design constraints follow, and they depend on each other.
+
+**A post is a direct send.** The posting goroutine puts the closure on
+the channel itself. Handing the send to a freshly spawned goroutine
+would surrender ordering entirely, because two such goroutines race
+and the scheduler picks the winner. This is not a hypothetical: it is
+what ark did until 2026-07-31, and the ordering guarantee above was
+absent for as long as that was true.
+
+**The actor's own goroutine never runs a closure.** It maintains a
+queue and an "a closure is running" flag, and each closure executes in
+its own goroutine, which on completion posts back so the next one can
+start. Only one closure runs at any instant, so serialization is
+unchanged.
+
+Running work on the loop goroutine instead is what makes a direct send
+untenable, and is the reason ark's send was originally escaped into a
+goroutine. A closure that takes a long time (a search, say) stops the
+loop receiving, senders back up behind it, and the pressure to escape
+the send becomes irresistible. With work off the loop, the loop is
+never held for longer than a queue operation, so it is effectively
+always at the receive and a direct send does not block in practice.
+
+Back-pressure remains available and is not the normal case. Bursts are
+absorbed by the queue, which is unbounded, and not by the channel,
+which is **one slot deep**. The previous arrangement did not remove
+the backlog either; it stored it in parked sender goroutines holding
+whole stacks, and delivered it out of order afterwards.
+
+**One slot is a diagnostic choice, not a capacity one.** Since the loop
+does only bookkeeping, depth would buy a poster nothing beyond the
+chance to skip a rendezvous. What it would cost is the ability to
+notice a loop that has wrongly been given real work: a deeper channel
+absorbs the first several posts, so the stall appears later and
+somewhere other than its cause, while one slot blocks the very next
+poster at the site. A misbehaving actor should be loud.
+
+**Panics are not recovered.** A closure that panics takes the process
+down, which is deliberate: a panic inside the actor means the state
+the actor protects is already in an unknown condition, and continuing
+on it is worse than stopping. A closure that can meaningfully survive
+its own panic recovers internally, as the write goroutine does
+(R1059). Recovering centrally would also introduce a failure mode with
+no symptom: a recovery path that forgot to release the running flag
+would queue every subsequent closure forever, silently.
+
+### Calling the actor from inside a closure
+
+**Fire-and-forget from inside a running closure is safe.** The closure
+runs off the loop goroutine, so the loop is free to receive the post,
+and it simply queues behind the closure making it.
+
+**Synchronous calls from inside a running closure deadlock**, and this
+is the rule that has always applied here, unchanged. The nested post
+is queued because a closure is already running; the queued closure can
+only start when the active one finishes; the active one is blocked
+waiting for it. Nothing breaks the cycle.
+
+The asymmetry is worth stating plainly because the natural inference
+from the first rule to the second is wrong. It is also not worth
+"fixing" by detecting the nested case and running it immediately:
+that is re-entrancy, which would let the inner closure observe the
+outer one's half-finished mutations, and preventing exactly that is
+why the actor exists.
+
+**Where this is auditable.** Go has no dynamically-scoped values, so
+there is no way to ask at runtime whether the current call is inside a
+closure. Threading an operation object is the stand-in: a scoped value
+made lexical, carried as the receiver rather than consulted. An
+operation holding its DB handle as a private field cannot reach an
+actor call by accident, so "does this operation call the actor
+synchronously?" is answerable by inspection.
+
+That reach is currently partial. `substrateOp` and `recallOp` have it;
+search, recall normalization, and fetch-payload assembly are still
+bare `fts` readers, and in those the question is still a whole-call-
+graph one. Completing that migration is the tech debt named under
+Protected Resources below, and it is what would make the rule fully
+checkable rather than mostly checkable.
+
 ## Caller Categories
 
 **Fire-and-forget (Svc):**

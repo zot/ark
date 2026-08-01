@@ -84,11 +84,37 @@ type Config struct {
 	derivedStrategies map[string]string
 }
 
+// Defaults for the managed-pty child command (R3329). The model is named
+// rather than written inline at the fork because it is a spend decision: the
+// orchestrator is a long-lived paid session, so which model it runs is a choice
+// ark makes deliberately, and a reader asking "what does this cost" should find
+// the answer in one place instead of inside an exec call.
+const (
+	luhmannChildBinary  = "claude"
+	luhmannModelFlag    = "--model"
+	luhmannDefaultModel = "opus"
+)
+
 // LuhmannConfig collects the [luhmann] section of ark.toml — restart-
 // policy knobs read by the Luhmann orchestrator session (a Claude Code
-// session, not Go code) when it acts on managed-subagent completions.
+// session, not Go code) when it acts on managed-subagent completions,
+// plus the managed-pty child command ark itself forks.
 // CRC: crc-Config.md | R2797, R2798, R2799, R2800, R2801, R2862
 type LuhmannConfig struct {
+	// Model is the model the hosted orchestrator runs. The standing
+	// fallback for an explicit launch parameter, which overrides it for
+	// one launch without writing config. Ignored when Command is set.
+	// A plain string, not a pointer like the counters below: "" is not a
+	// valid model, so it already means "unset" and needs no sentinel.
+	// R3329
+	Model string `toml:"model,omitempty"`
+
+	// Command replaces the pty child's whole argv when set, bypassing
+	// Model. The escape hatch for putting a throwaway stand-in in the
+	// pty to exercise the fan-out without spending on a real session.
+	// R3330
+	Command []string `toml:"command,omitempty"`
+
 	// ContextLimit is the token ceiling the orchestrator passes to
 	// each spawned subagent. Used by the subagent's self-recycle
 	// check via `ark connections recall context --limit`. R2797
@@ -140,6 +166,38 @@ type LuhmannClass struct {
 	// 900 — generously longer than a typical --timeout so a live client is
 	// never reaped. R3041
 	RequestTTLSeconds *int `toml:"request_ttl_seconds,omitempty"`
+}
+
+// EffectiveChildArgv resolves the managed-pty child's argv. This is the one
+// place the resolution rule lives, so the pty host asks for an argv rather than
+// composing one and never grows a dependency on ark.toml.
+//
+// Three levels (R3329): the explicit launch parameter wins, then [luhmann]
+// model, then the compiled-in default. They exist because the callers differ —
+// a UI chooser picks per launch, a standing preference belongs in ark.toml, and
+// a fresh install has neither.
+//
+// A non-empty Command short-circuits all of it and is returned verbatim
+// (R3330), since an override supplies its own flags and the model chain has
+// nowhere to apply. Asking for both is an error rather than a silent preference
+// (R3331): honoring one and discarding the other reports nothing at all, which
+// is the failure mode that costs the most to find.
+// CRC: crc-Config.md | R3329, R3330, R3331
+func (lc LuhmannConfig) EffectiveChildArgv(model string) ([]string, error) {
+	if len(lc.Command) > 0 {
+		if model != "" {
+			return nil, fmt.Errorf("model %q conflicts with the [luhmann] command override %v: the override supplies its own arguments, so only one of the two can be honored", model, lc.Command)
+		}
+		// Copy: the caller must not be able to mutate the loaded config.
+		return append([]string(nil), lc.Command...), nil
+	}
+	if model == "" {
+		model = lc.Model
+	}
+	if model == "" {
+		model = luhmannDefaultModel
+	}
+	return []string{luhmannChildBinary, luhmannModelFlag, model}, nil
 }
 
 // EffectiveContextLimit returns ContextLimit with the default applied.

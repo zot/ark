@@ -1,5 +1,5 @@
 # PtyAttach
-**Requirements:** R3117, R3120, R3123, R3137, R3138, R3140
+**Requirements:** R3117, R3120, R3123, R3137, R3138, R3140, R3329
 
 The CLI-side `ark luhmann attach` client: a raw-mode terminal loop that connects
 to the hosted session over the unix socket. It is one implementation of
@@ -13,6 +13,7 @@ implementation of the same contract.
 - detachSeq: the tmux-style escape sequence that ends the attach without stopping the session (R3123).
 
 ## Does
+- launchAction: proxy `ark luhmann launch` to `POST /luhmann/launch`, sending `bootstrap` and `model` only when the corresponding flag was given (R3329). Omitting an unset flag is what lets the server treat absent and empty identically and fall back to config, so the CLI never has to know the default.
 - attach: put the local terminal in raw mode, connect to the PtyHost, then pipe stdin → host and host → stdout until detach or disconnect (R3123). Detaching leaves the session running.
 - reportSize: send the terminal size on connect and on every local `SIGWINCH`, so the host can recompute the min (R3120).
 - receiveOutput: write the host's broadcast bytes to stdout — the client-interface output sink (R3117).

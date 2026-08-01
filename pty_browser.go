@@ -17,11 +17,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ptyWSBufChunks bounds a websocket client's output buffer (R3142, R3144): past
-// this many undelivered chunks the client is dropped rather than allowed to
-// stall the fan-out (R3118), matching the unix-socket client's bound.
-const ptyWSBufChunks = 256
-
 // ptyWSWriteWait bounds a single websocket write so a wedged browser socket
 // surfaces as a write error (and thus a drop) instead of blocking the write
 // goroutine indefinitely.
@@ -108,7 +103,6 @@ func (srv *Server) handleLuhmannPty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := newWSPtyClient(conn)
-	go client.writeLoop()
 	reg, aerr := srv.ptyHost.Attach(client, ctrl.Size)
 	if aerr != nil {
 		client.Close()
@@ -142,63 +136,37 @@ func (srv *Server) handleLuhmannPty(w http.ResponseWriter, r *http.Request) {
 // --- wsPtyClient: the websocket transport as a PtyClient (R3117, R3144) ------
 
 // wsPtyClient adapts an upgraded websocket connection to the host's PtyClient
-// interface (R3144): a bounded output channel drained by writeLoop, so a stalled
-// browser tab backs up into the buffer and is dropped (Write returns false)
-// rather than blocking the fan-out (R3118). Each output chunk is sent as one
-// binary websocket message (R3142).
+// interface (R3144). It buffers nothing: the bounded channel and drain goroutine
+// that used to live here moved into the host, where the buffering and the R3118
+// drop are written once rather than once per transport (R3336, R3340, R3341).
+// Each buffer the host hands over is sent as one binary message (R3142).
 type wsPtyClient struct {
 	conn      *websocket.Conn
-	out       chan []byte
-	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func newWSPtyClient(conn *websocket.Conn) *wsPtyClient {
-	return &wsPtyClient{
-		conn: conn,
-		out:  make(chan []byte, ptyWSBufChunks),
-		done: make(chan struct{}),
-	}
+	return &wsPtyClient{conn: conn}
 }
 
-// Write enqueues an output chunk non-blockingly; false means the bounded buffer
-// overflowed and the host should drop this client (R3118).
-func (c *wsPtyClient) Write(p []byte) bool {
-	select {
-	case <-c.done:
-		return false
-	case c.out <- p:
-		return true
-	default:
-		return false // R3118: buffer full — signal drop
-	}
+// Write sends the host's buffer as one binary message, blocking until it is
+// written and returning the error if it is not (R3142, R3341). It runs on the
+// host's per-connection write goroutine, which is also what satisfies gorilla's
+// one-concurrent-writer rule: the host guarantees at most one writer per
+// connection (R3338), while handleLuhmannPty is the sole reader. The deadline
+// makes a wedged socket surface as an error — and so as a drop — rather than
+// pinning the goroutine indefinitely. A stalled tab that is merely slow is
+// dropped the other way, at the host's pending cap (R3340).
+func (c *wsPtyClient) Write(p []byte) error {
+	_ = c.conn.SetWriteDeadline(time.Now().Add(ptyWSWriteWait))
+	return c.conn.WriteMessage(websocket.BinaryMessage, p)
 }
 
-// Close tears down the websocket once; the second call (drop + detach race) no-ops.
+// Close tears down the websocket once; the second call (drop + detach race)
+// no-ops. gorilla permits Close concurrently with a write in flight, which is
+// what lets a drop unblock a stuck writer.
 func (c *wsPtyClient) Close() {
-	c.closeOnce.Do(func() {
-		close(c.done)
-		c.conn.Close()
-	})
-}
-
-// writeLoop streams enqueued output to the browser as binary messages until Close
-// (R3142). A write error closes the client, which the host observes as a drop on
-// the next broadcast. gorilla permits one concurrent writer — this goroutine is
-// it, while handleLuhmannPty is the sole reader.
-func (c *wsPtyClient) writeLoop() {
-	for {
-		select {
-		case <-c.done:
-			return
-		case chunk := <-c.out:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(ptyWSWriteWait))
-			if err := c.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
-				c.Close()
-				return
-			}
-		}
-	}
+	c.closeOnce.Do(func() { c.conn.Close() })
 }
 
 var _ PtyClient = (*wsPtyClient)(nil)

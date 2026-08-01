@@ -504,3 +504,103 @@ func TestArkSourceIncludesPersonalPatterns(t *testing.T) {
 		t.Error("the default pattern collection would not be indexed; retrieval dies silently while priming still works")
 	}
 }
+
+// TestLuhmannEffectiveChildArgv covers the three-level model chain and the
+// wholesale command override — the whole resolution rule for what ark forks
+// into the pty (R3329, R3330, R3331). Pure and collaborator-free: a zero-value
+// config, no DB, no server, no pty.
+func TestLuhmannEffectiveChildArgv(t *testing.T) {
+	withModel := func(s string) LuhmannConfig { return LuhmannConfig{Model: s} }
+
+	t.Run("bare default", func(t *testing.T) {
+		// Neither parameter nor config: the compiled-in default (R3329).
+		got, err := LuhmannConfig{}.EffectiveChildArgv("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"claude", "--model", "opus"}
+		if !equalStrings(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("config supplies the model", func(t *testing.T) {
+		got, err := withModel("sonnet").EffectiveChildArgv("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := []string{"claude", "--model", "sonnet"}; !equalStrings(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("parameter beats config", func(t *testing.T) {
+		got, err := withModel("sonnet").EffectiveChildArgv("haiku")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := []string{"claude", "--model", "haiku"}; !equalStrings(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("parameter does not write config", func(t *testing.T) {
+		// The point of a parameter: a one-off launch leaves the standing
+		// default alone, which is what makes a UI chooser safe (R3329).
+		lc := withModel("sonnet")
+		if _, err := lc.EffectiveChildArgv("haiku"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if lc.Model != "sonnet" {
+			t.Errorf("config model became %q; a parameter must not write config", lc.Model)
+		}
+	})
+
+	t.Run("command override wins and bypasses the model chain", func(t *testing.T) {
+		lc := LuhmannConfig{Model: "sonnet", Command: []string{"node", "spinner.js"}}
+		got, err := lc.EffectiveChildArgv("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := []string{"node", "spinner.js"}; !equalStrings(got, want) {
+			t.Errorf("got %v, want %v — an override supplies its own argv (R3330)", got, want)
+		}
+	})
+
+	t.Run("override result is a copy", func(t *testing.T) {
+		// A caller must not be able to reach back into loaded config.
+		lc := LuhmannConfig{Command: []string{"node", "spinner.js"}}
+		got, err := lc.EffectiveChildArgv("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got[0] = "clobbered"
+		if lc.Command[0] != "node" {
+			t.Errorf("mutating the result changed config to %v", lc.Command)
+		}
+	})
+
+	t.Run("explicit model against an override is an error", func(t *testing.T) {
+		// Neither can be honored, so it fails loudly instead of silently
+		// discarding one (R3331).
+		lc := LuhmannConfig{Command: []string{"node", "spinner.js"}}
+		got, err := lc.EffectiveChildArgv("haiku")
+		if err == nil {
+			t.Fatalf("got %v, want an error: a model and a command override cannot both apply", got)
+		}
+		if !strings.Contains(err.Error(), "haiku") {
+			t.Errorf("error %q should name the rejected model so the user can see what was dropped", err)
+		}
+	})
+
+	t.Run("empty command slice is not an override", func(t *testing.T) {
+		// command = [] in ark.toml must fall through, not produce an empty argv.
+		got, err := LuhmannConfig{Command: []string{}}.EffectiveChildArgv("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := []string{"claude", "--model", "opus"}; !equalStrings(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+}

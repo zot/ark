@@ -35,14 +35,14 @@ func setupTmpDB(t *testing.T) (*DB, *PubSub, func()) {
 	store.SetTmpTagStore(tmpStore)
 
 	db := &DB{fts: fts, store: store, tmpPaths: map[string]uint64{}}
-	db.svc = make(chan func(), 16)
-	go runSvc(db.svc)
+	db.svc = newChanSvc(chanSvcSlots)
+	db.svc.start()
 
 	ps := NewPubSub(time.Minute, 32)
 	db.SetPubSub(ps)
 
 	cleanup := func() {
-		close(db.svc)
+		db.svc.stop()
 		_ = fts.Close()
 	}
 	return db, ps, cleanup

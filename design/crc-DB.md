@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263, R3344, R3346, R3351
 
 Main ark facade. Owns the bbolt database lifecycle — the file is microfts2's
 (`fts.DB() *bbolt.DB`); ark opens its own `ark` bucket inside it, and a
@@ -7,11 +7,15 @@ Main ark facade. Owns the bbolt database lifecycle — the file is microfts2's
 atomic (R2976, R2977). Coordinates microfts2, the Librarian/EC embedding
 pipeline, and the ark bucket. Entry point for all operations.
 
-All operations are serialized through a closure actor (ChanSvc).
-The actor is an implementation detail — the public API stays unchanged
-(db.Search, db.AddFile, etc.). Each method wraps itself in Svc
-(fire-and-forget for watcher mutations) or SvcSync (synchronous for
-operations that return results). Callers never see the channel.
+All operations are serialized through a closure actor (**crc-ChanSvc.md**,
+which owns the actor's own contract — ordered delivery, work off the loop
+goroutine, the panic policy). It is a shared component rather than a DB
+detail: the recall watcher and the pty host hold their own. What stays a
+detail here is that the public API is unchanged (db.Search, db.AddFile,
+etc.) — each method wraps itself in Svc (fire-and-forget for watcher
+mutations) or SvcSync (synchronous for operations that return results),
+and callers never see the channel. Callers may rely on posts from one
+goroutine running in the order posted (R3344).
 Go-side caches (pathCache/pathToID/frecordCache) are protected by the
 actor: an off-actor read operation reads through a private fts.Copy()
 (withFTS returns a read view bound to the copy), never the shared
@@ -25,13 +29,20 @@ document this on the API. (R986, R993, R995, R3163)
 - store: *Store — ark's own bucket (R1909, R1910)
 - config: *Config — parsed source configuration
 - dbPath: string — database directory path
-- svc: ChanSvc — closure actor channel, serializes all DB access
+- svc: ChanSvc — the closure actor serializing all DB access (crc-ChanSvc.md). Not a bare channel: it keeps a queue and an in-flight flag so caller work runs off its loop goroutine, which is what makes delivery ordered (R3344, R3346).
 - writeQueue: []func() — queued write closures, drained one at a time (R1053)
 - writing: bool — true while a write goroutine is in flight (R1067)
 - writeIdleWaiters: []chan struct{} — one-shot channels signaled when the
   write queue drains; actor-only, drives WaitWritesIdle (R2989)
 - pendingRefresh: map[string]struct{} — paths with a refresh queued or in
   flight; coalesces duplicate watcher events. Guarded by refreshMu (R3005)
+- reconcilePending: bool — a reconcile scan is queued but has not begun, so
+  further requests merge into it rather than queueing scans of their own
+  (R346, R3351). Actor-owned, hence a plain bool with no guard. Cleared as the
+  scan *starts*: a request arriving mid-scan must queue a fresh one, since a
+  running scan cannot be relied on to have seen a change made after it walked
+  past that part of the tree. Same rule and reason as pendingRefresh's
+  per-path clearing.
 
 ## Does
 - Init(path, opts): create new database — open microfts2, create ark
@@ -182,10 +193,23 @@ document this on the API. (R986, R993, R995, R3163)
   the same canonical removal path as `ark remove`, so chunks/tag
   values/ext routings drop consistently (R2141). Sweep is part of every
   Reconcile cycle (R2138, R2142).
-- StartActor(): create ChanSvc channel, start RunSvc goroutine. Called
-  by Server on startup, or by CLI for cold-start operations. (R986)
-- StopActor(): close the ChanSvc channel. Actor goroutine exits on
-  channel drain. Called before Close(). (R986)
+- postCoalescedReconcile(scan): post scan so at most one reconcile is active and
+  one pending (R346, R3351). The gate is a **separate, earlier closure** than the
+  scan, and that is the mechanism rather than a style choice: the pending mark
+  must clear when the scan *begins*, and deciding in one closure while scanning
+  in the next is what makes that expressible. It is the
+  post-the-follow-up-behind-the-message idiom, sound only because the actor
+  delivers in order (R3344). A merged request's scan closure is **discarded**, so
+  callers must pass work equivalent on every call — a reconcile is, by
+  construction. Server.reconcile is the sole caller.
+- actor lifecycle: the ChanSvc is built with the DB (`newChanSvc`) and its loop
+  started in `OpenWithTimeout`, once the rest of the DB's state exists; `Close`
+  stops it. There is no `StartActor`/`StopActor` pair — this card named one until
+  2026-07-31 and no such methods have ever existed. Stopping is a **sentinel
+  post, not a channel close**: every closure posts back on completion (R3346), so
+  closing would let a work goroutine finishing after the close panic on a send.
+  Everything posted before the stop still drains, since the sentinel queues
+  behind it. (R986, R3348)
 - enqueueWrite(fn): append write closure to writeQueue. If queue was
   empty and not currently writing, call startWrite(). Called from
   inside the actor only. (R1053)

@@ -126,6 +126,152 @@ The fan-out contract, all of it multi-client by design:
   attached clients leaves the session running (detached), and one client's
   detach never disturbs another.
 
+## The output path: ownership instead of synchronization
+
+The contract above says *what* the multiplexer guarantees. How it gets there is
+a second commitment, because the mechanism is what the bugs were made of. Two
+arrived on one afternoon: a scan buffer mutated outside the actor and justified
+by a comment asserting sole ownership, and a synchronous actor round-trip paid
+per chunk whether or not anyone was attached. Both taught the same lesson. An
+invariant that lives in an argument decays as unrelated changes move the pieces
+it rested on, while an invariant that lives in ownership does not, because you
+cannot forget to take a baton that is identical to being the goroutine that
+exists.
+
+So the output path is built out of ownership hand-offs, and carries no lock, no
+mutex, and no atomic anywhere along it. Two named patterns do the work, and the
+names are the point rather than decoration: **baton** is an object with exactly
+one holder by construction, and **sewing** is serialized control passed between
+actors as posted continuations instead of calls. They are orthogonal — control
+can travel with nothing, and an object can move with no control passing — and
+here they compose, so it is worth keeping straight which one is carrying the
+weight in each direction. `design/design.md` develops both under "Actor-Resident
+I/O".
+
+**Reading.** One goroutine owns the read buffer and blocks on the master. When
+the read returns it hands that buffer to the actor and terminates. The actor
+copies the bytes out to every attached connection, and only once it is finished
+with the buffer does it spawn a fresh goroutine holding the same buffer, which
+blocks on the next read. No two goroutines touch the buffer at any instant, and
+the buffer is one allocation for the life of the session.
+
+The read must not happen on the actor. It blocks indefinitely while the child is
+quiet, and an idle orchestrator can go minutes without writing a byte, so a read
+inside an actor closure would hold the actor for that whole time and stall every
+attach, detach, resize, status and stop — worst exactly when the system looks
+idlest. The goroutine does the waiting; the actor does the state changes.
+
+The hand-off is a **post, not a call**: the reader never waits for the actor to
+finish. Waiting is what the old path actually cost. A synchronous round-trip per
+chunk tied the reader's rate to the actor's queue depth, and the workaround was a
+lock-free mirror of the client-set size letting a detached session skip the trip
+entirely. An asynchronous hand-off makes the mirror unnecessary, so the actor
+goes back to being the only place the client set is known.
+
+**Writing.** Each connection owns two buffers and a flag, all held by the actor.
+Output is appended into the connection's pending buffer. If a write is already in
+flight nothing more happens, since the writer in flight will pick the new bytes
+up; otherwise the buffers are swapped, the connection is marked as writing, and a
+write goroutine is spawned owning the filled buffer.
+
+That goroutine writes the whole buffer to its transport, blocking, off the actor.
+It then empties the buffer and posts a continuation back to the actor **carrying
+the buffer with it**. If output accumulated meanwhile, the continuation swaps and
+spawns again; if not, it clears the writing flag. The flag is set, cleared and
+read only inside the actor, so it needs no atomic.
+
+Three properties follow, and they are the reason for the shape:
+
+- **No wakeup is lost.** Should the writer finish and more data arrive before its
+  continuation runs, the append sees the connection already writing and does
+  nothing, and the continuation then finds pending non-empty and spawns again.
+  Should the continuation run first, it clears the flag and the next append
+  spawns. The actor serializes both orders, so there is no interleaving to reason
+  about.
+- **At most one writer exists per connection.** The flag goes false→true in one
+  place, inside the actor, and the only thing that can spawn a second writer is a
+  continuation the first one posted after its write had completed.
+- **Order is preserved.** Appends happen in read order, buffers leave in swap
+  order, and one writer runs at a time. A terminal stream that reorders is
+  garbage, so this is load-bearing rather than incidental.
+
+**The bound is a byte cap on pending, and it belongs to the host.** R3118's
+contract does not change: a connection that cannot keep up is dropped rather than
+allowed to stall the fan-out. Where the bound lives does change. Each transport
+used to carry its own bounded channel of undelivered chunks, its own drain
+goroutine and its own flush timer, so the drop policy was implemented once per
+transport and free to drift between them. The host now caps the pending buffer in
+bytes on the append path and drops a connection that exceeds it. One number
+replaces the per-transport machinery and states the same policy more directly.
+
+Bytes are also a more honest bound than a chunk count. A count of undelivered
+chunks bounds memory only when chunks have a bounded size, and a pty read ranges
+from a few bytes to the full read size, so the old bound described a window
+anywhere between kilobytes and megabytes depending on what the child happened to
+be emitting.
+
+**A transport writes; it does not buffer.** With the buffering in the host, a
+client transport reduces to a blocking write of a byte slice plus a close. It
+runs on the host's write goroutine, which makes blocking correct there rather
+than merely tolerated: a stalled browser tab blocks its own writer, its pending
+buffer grows, and it is dropped at the cap, while every other connection and the
+child carry on untouched. Dropping closes the transport, and that is what
+unblocks the stuck write.
+
+Batching becomes adaptive as a side effect. Output accumulated while a write is
+in flight leaves as one larger write when that write completes, so a fast client
+gets small frequent writes and a slow one gets large coalesced ones, each tuned
+to itself rather than to a constant. The fixed flush timer the socket transport
+ran is deleted with the buffered writer whose latency it existed to bound.
+
+**A continuation tolerates a connection that is already gone.** One arriving
+after its connection was dropped, detached, or torn down must spawn nothing, or
+every teardown racing an in-flight write leaks a goroutine.
+
+**A read chain outliving its session keeps draining and publishes nothing.** A
+teardown clears the host's master at once but hands the real one to a graceful
+shutdown holding it open for a grace window, so reads keep returning the child's
+flush-on-exit output after the session has stopped being the hosted one. That
+output must still be drained, since an undrained pty blocks the child, and it
+must not reach the clients of whatever launch came next. The chain reads and
+discards until the master closes.
+
+## The child command
+
+What ark runs in the pty is configuration, not a literal. There are two knobs:
+one for the everyday case, one for the escape hatch.
+
+**The model is a launch parameter that falls back to config.** `launch` takes an
+optional model. With none given it reads `[luhmann] model` from ark.toml; with
+that unset it uses a compiled-in default. The three levels exist because the
+three callers differ — a UI dropdown picks per launch, a user who always wants
+the same model says so once in ark.toml, and a fresh install has to work with
+neither. A parameter never writes config, so launching once at a different model
+leaves the default alone. That is what makes a dropdown safe to experiment with.
+
+ark pins a model rather than letting `claude` choose one, because the
+orchestrator is a long-lived paid session and the choice is a spend decision. The
+compiled-in default is conservative for the same reason.
+
+**`[luhmann] command` replaces the whole argv.** When set it is run verbatim and
+the model chain does not apply, since an override supplies its own flags. Its
+purpose is to put a throwaway stand-in in the pty when the thing being exercised
+is the pty machinery rather than the orchestrator — the reader, the fan-out, the
+client multiplexing. A stand-in never claims the Luhmann seat, so the launch
+fails at the confirmation gate once the seat timeout expires and the child is
+torn down. The pty runs normally for that window, which is the point of the
+substitution.
+
+**An explicit model together with a `command` override is an error**, not a
+silent preference. The two cannot both be honored, and discarding a parameter the
+user typed is exactly the quiet wrong answer this project keeps paying for
+elsewhere.
+
+None of this weakens the spend-consent invariant above. Configuration changes
+*what* a launch starts, never *when* one happens, and every launch still begins
+with an explicit human act. A stand-in child is cheaper than the session it
+replaces, never more expensive.
+
 ## Teardown
 
 A hosted session goes down two ways. `ark luhmann stop` tears it down, or the
@@ -151,7 +297,7 @@ that dies abruptly writes nothing about itself.
 ## CLI
 
 ```
-ark luhmann launch [--bootstrap INPUT]
+ark luhmann launch [--bootstrap INPUT] [--model MODEL]
 ark luhmann attach
 ark luhmann status [--json]
 ark luhmann stop
@@ -166,7 +312,9 @@ inventory.
 
 ### `launch`
 
-Forks the pty with cwd `~/.ark/luhmann`, starts `claude` as the child, and
+Forks the pty with cwd `~/.ark/luhmann`, starts the child command (see The child
+command above — `--model` names the model for this launch, falling back to
+`[luhmann] model` and then the compiled-in default), and
 sends the **bootstrap first input** — the string that loads the orchestrator
 skill (default `load /luhmann`; overridable with `--bootstrap`). No project
 `CLAUDE.md` is required: Claude Code acts only on its first input anyway, so
@@ -228,7 +376,9 @@ seat lease (step 3).
 The ark app's Luhmann view has a Launch button, shown only when the terminal
 reports `asleep` and gated behind a dialog confirming a paid session. It needs a
 door into the launch, and that door is `sys.luhmannLaunch()` — an ark-only Lua
-binding ([lua-api.md](lua-api.md)).
+binding ([lua-api.md](lua-api.md)). The binding carries the **model** as well as
+the bootstrap, so a model chooser in the view reaches the same parameter the CLI
+`--model` flag does and needs no Go work of its own when it is built.
 
 **The binding cannot block.** `launch` waits for the seat claim, and that wait is
 generous by design because it covers Claude Code's startup plus a skill load. A
@@ -372,6 +522,10 @@ it asks.
   feeding the session input, a precise idle/working `status`, or the UI
   "stopped-up" case. Phase-1 launch confirmation is content-free and needs none
   of it.
-- **A Lua API.** No Frictionless feature authors pty lifecycle yet; the UI
-  desk-lamp reads `status` and calls these verbs, a downstream `/ui-thorough`
-  slice.
+- **Lua bindings for the rest of the lifecycle.** `sys.luhmannLaunch` exists
+  (R3325) because the Launch button needed a door and the launch is
+  asynchronous; `attach`, `status`, and `stop` have none, and the UI reaches
+  status over HTTP instead. Bindings for those are a downstream `/ui-thorough`
+  slice, added when a view actually authors them. (This bullet said "no Lua API"
+  until 2026-07-30, which had been false since R3325 landed and contradicted
+  Launching from the UI above.)

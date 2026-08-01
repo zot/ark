@@ -63,8 +63,8 @@ func setupConnections(t *testing.T) (*Librarian, *DB, *PubSub) {
 		dbPath:   dir,
 		tmpPaths: map[string]uint64{},
 	}
-	db.svc = make(chan func(), 16)
-	go runSvc(db.svc)
+	db.svc = newChanSvc(chanSvcSlots)
+	db.svc.start()
 
 	ps := NewPubSub(time.Minute, 32)
 	db.SetPubSub(ps)
@@ -87,8 +87,9 @@ func setupConnections(t *testing.T) (*Librarian, *DB, *PubSub) {
 		// (e.g. writeConnectionsDoc → AppendTmpFile → ensureOverlay), so
 		// closing fts while a write is in flight is a data race.
 		// WaitWritesIdle blocks until the write queue has drained. The
-		// actor goroutine itself intentionally leaks (db.svc is left
-		// open, still serving WaitWritesIdle); the test process exits clean.
+		// actor goroutine itself intentionally leaks (db.svc is never
+		// stopped, so it keeps serving WaitWritesIdle); the test process
+		// exits clean.
 		db.WaitWritesIdle()
 		_ = fts.Close()
 	})

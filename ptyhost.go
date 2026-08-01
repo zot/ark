@@ -29,9 +29,24 @@ const (
 	// loads the orchestrator skill (R3122). Overridable with --bootstrap.
 	ptyDefaultBootstrap = "load /luhmann"
 
-	// ptyReadChunk bounds one master read; a fresh slice is allocated per read
-	// so each broadcast chunk is independent of the next.
+	// ptyReadChunk bounds one master read. One buffer of this size serves the
+	// whole session: it is handed read goroutine → actor → successor goroutine,
+	// never shared and never reallocated (R3333).
 	ptyReadChunk = 32 * 1024
+
+	// ptyClientPendingMax bounds one connection's undelivered output in bytes.
+	// This is where R3118's "a client that cannot keep up is dropped" is enforced
+	// now — on the append path, in the host, one number instead of a bounded
+	// channel per transport (R3340). Bytes rather than a count of undelivered
+	// chunks: a count bounds memory only when chunks have a bounded size, and a
+	// pty read ranges from a few bytes to ptyReadChunk, so the old 256-chunk bound
+	// described a window anywhere between kilobytes and megabytes depending on
+	// what the child happened to be emitting.
+	ptyClientPendingMax = 1 << 20
+
+	// ptyClientBufInit sizes a connection's two buffers at attach so the ordinary
+	// case never reallocates: one full read fits without a grow.
+	ptyClientBufInit = ptyReadChunk
 
 	// ptyLaunchSettle lets Claude Code's TUI initialize and switch the pty to raw
 	// mode before we type the bootstrap (R3126). Sending earlier risks the input
@@ -91,20 +106,35 @@ type PtyWinsize struct{ Cols, Rows uint16 }
 // broadcasts output to it and closes it on drop or teardown; input and size flow
 // the other way, into the host (Input / Attach / Resize).
 type PtyClient interface {
-	// Write enqueues output bytes for delivery to this client's transport.
-	// Non-blocking: it returns false when the client's bounded buffer has
-	// overflowed, which signals the host to drop this client rather than let it
-	// stall the fan-out (R3118).
-	Write(p []byte) bool
+	// Write writes p to this client's transport **in full**, blocking until it is
+	// written, and returns the error if it is not (R3341). A transport buffers
+	// nothing of its own: the bounded buffering and the R3118 drop live in the
+	// host, written once rather than once per transport. Blocking is correct
+	// here because this runs on the host's per-connection write goroutine, off
+	// the actor — a stalled client blocks only its own writer, its pending buffer
+	// grows, and it is dropped at ptyClientPendingMax while every other
+	// connection and the child carry on untouched.
+	Write(p []byte) error
 	// Close tears down the client's transport (on drop, detach, or host stop).
+	// It is also what unblocks a Write stuck on a stalled transport.
 	Close()
 }
 
-// ptyClientReg is the host's per-client record: the client plus its last
-// reported size, both owned by the actor (touched only inside jobs closures).
+// ptyClientReg is the host's per-client record: the client, its last reported
+// size, and the double buffer driving its output. Every field is owned by the
+// actor and touched only inside jobs closures — except `client` itself, which is
+// immutable after construction and so is safe for the write goroutine to read.
+//
+// pending is what the actor appends into; spare is the idle buffer, nil exactly
+// while a write goroutine holds it; writing says a writer is in flight. Because
+// all three live in the actor, `writing` needs no atomic: its only false→true
+// transition happens inside a jobs closure (R3336, R3338).
 type ptyClientReg struct {
-	client PtyClient
-	size   PtyWinsize
+	client  PtyClient
+	size    PtyWinsize
+	pending []byte
+	spare   []byte
+	writing bool
 }
 
 // PtyEnv is the narrow slice of the server the host depends on: the Luhmann seat
@@ -125,26 +155,31 @@ type PtyEnv interface {
 	PublishLaunchOutcome(session, failure string)
 	LuhmannDir() string   // ~/.ark/luhmann — the hosted session's cwd
 	PoolRosterCount() int // pool-secretary roster size (R3124)
+	// LuhmannChildArgv resolves the child's command line from the launch's
+	// optional model parameter plus config (R3329, R3330), erroring when the
+	// two cannot both be honored (R3331). The host asks rather than composes,
+	// so it never depends on ark.toml and a fake env still drives it.
+	LuhmannChildArgv(model string) ([]string, error)
 }
 
 // PtyHost owns one hosted Claude Code pty session (R3116). A Closure Actor: the
 // master, child, and client set are touched only inside jobs closures, so no
-// lock is held across pty I/O. Two dedicated goroutines keep the streaming reads
-// and writes off the actor: readLoop drains the master and broadcasts; inputLoop
-// serializes client input onto the master (R3119). masterPtr mirrors the current
-// master for the lock-free input path.
+// lock is held across pty I/O. The streaming I/O stays off the actor: the read
+// chain blocks on the master one goroutine at a time (R3333), a per-connection
+// write goroutine blocks on its transport (R3336), and inputLoop serializes
+// client input onto the master (R3119). masterPtr mirrors the current master for
+// the lock-free input path.
 type PtyHost struct {
 	env  PtyEnv
-	jobs chan func() // actor: client set + lifecycle state
+	jobs *ChanSvc    // actor: client set + lifecycle state
 	inCh chan []byte // serialized input funnel → inputLoop → master (R3119)
 
 	masterPtr atomic.Pointer[os.File] // current master, for inputLoop's lock-free read
-	// clientCount mirrors len(clients) for the reader's lock-free check (R3328),
-	// the same trick masterPtr plays for the input path. Without it the reader
-	// paid a synchronous actor round-trip — a channel and two closures per call —
-	// for every chunk, to iterate an empty map. A detached session is the
-	// ordinary state, so that was the common case, not the corner.
-	clientCount atomic.Int32
+
+	// There is no client-count mirror. R3328 kept one so the reader could skip a
+	// *synchronous* actor round-trip when nobody was attached; the reader posts
+	// now and never waits (R3335), so there is no round-trip left to skip and the
+	// actor is once again the only place the client set is known.
 
 	// actor-owned — touch ONLY inside a jobs closure:
 	master    *os.File
@@ -159,29 +194,29 @@ type PtyHost struct {
 	resizeSink func(PtyWinsize)
 
 	// No trust-dialog state lives here: it is per-launch and owned by that
-	// launch's readLoop (trustAccepter, R3327).
+	// launch's read chain (trustAccepter, R3327).
 }
 
 // trustAccepter watches one launch's early child output for the "trust this
 // folder" dialog and answers it (R3128). **Per-launch, and owned by exactly one
-// readLoop**, which is why `buf` needs no guard (R3327).
+// read chain**, which is why `buf` needs no guard (R3327).
 //
 // It used to be three fields on PtyHost, justified by a comment calling the
-// readLoop their sole owner. That was not true: `finalize` clears `h.master`
+// reader their sole owner. That was not true: `finalize` clears `h.master`
 // inside the actor but hands the master to `gracefulShutdown`, which holds it
-// open for up to `ptyStopGrace`, so the old readLoop keeps draining. `Reserve`
+// open for up to `ptyStopGrace`, so the old read chain keeps draining. `Reserve`
 // checks only `master`/`launching`, both already clear, so a launch started in
-// that window ran a second readLoop alongside the first — two goroutines
+// that window ran a second read chain alongside the first — two goroutines
 // appending to one buffer, and the old one able to win the CAS and report a
 // dialog acceptance to the *new* launch from the dying session's output. Giving
 // each launch its own accepter removes the sharing rather than guarding it, so
 // the race cannot be reintroduced by a future caller who does not know the rule.
 type trustAccepter struct {
 	// armed is the one genuinely cross-goroutine field: the launch clears it on
-	// timeout while its readLoop may be reading it. Atomic, and per-launch, so
+	// timeout while its read chain may be reading it. Atomic, and per-launch, so
 	// two launches can never contend.
 	armed atomic.Bool
-	buf   []byte        // readLoop-only: early output accumulated while hunting
+	buf   []byte        // read-chain-only: early output accumulated while hunting
 	done  chan struct{} // closed once the dialog is answered
 	input func([]byte)  // where the accept keystrokes go (the host's input funnel)
 }
@@ -196,7 +231,7 @@ func newTrustAccepter(input func([]byte)) *trustAccepter {
 // feed accumulates early child output and, on detecting the dialog, selects the
 // "Yes, I trust" option by the number read from the stream and disarms — so the
 // bootstrap that follows lands in the message box, not the menu (R3128). Runs on
-// the readLoop goroutine, which owns this accepter outright (R3327).
+// the read-chain goroutine, which owns this accepter outright (R3327).
 // CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.3.1 | R3128, R3327
 func (ta *trustAccepter) feed(chunk []byte) {
 	ta.buf = append(ta.buf, chunk...)
@@ -215,22 +250,17 @@ func (ta *trustAccepter) feed(chunk []byte) {
 	close(ta.done)
 }
 
-// syncClientCount republishes the client-set size to the lock-free mirror
-// (R3328). MUST be called inside a jobs closure, after any mutation of
-// h.clients — the mirror is only as truthful as its last update.
-func (h *PtyHost) syncClientCount() { h.clientCount.Store(int32(len(h.clients))) }
-
 // NewPtyHost constructs the host and starts its actor + input goroutines. The
 // host idles with no session until Launch (R3114: never proactive — construction
 // starts no `claude`).
 func NewPtyHost(env PtyEnv) *PtyHost {
 	h := &PtyHost{
 		env:     env,
-		jobs:    make(chan func(), 16),
+		jobs:    newChanSvc(chanSvcSlots),
 		inCh:    make(chan []byte, 64),
 		clients: make(map[*ptyClientReg]struct{}),
 	}
-	runSvc(h.jobs)
+	h.jobs.start()
 	go h.inputLoop()
 	return h
 }
@@ -248,11 +278,11 @@ func NewPtyHost(env PtyEnv) *PtyHost {
 // The synchronous entry point, and a thin pair over Reserve + LaunchReserved —
 // the split exists for the asynchronous caller (R3325), not for this one.
 // CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.1 | R3114, R3122, R3126, R3128
-func (h *PtyHost) Launch(bootstrap string) (string, error) {
+func (h *PtyHost) Launch(bootstrap, model string) (string, error) {
 	if err := h.Reserve(); err != nil {
 		return "", err
 	}
-	return h.LaunchReserved(bootstrap)
+	return h.LaunchReserved(bootstrap, model)
 }
 
 // Reserve claims the host for one launch, rejecting a second while a session is
@@ -273,11 +303,21 @@ func (h *PtyHost) Reserve() error {
 	})
 }
 
-// ReleaseReservation clears a reservation whose launch will never run — the
-// panic path of an asynchronous caller (R3325). LaunchReserved releases it on
-// every ordinary exit, so this exists only for the exit it cannot cover: without
-// it a panicked launch would leave `launching` set and the host would refuse
+// ReleaseReservation clears a reservation whose launch is over or will never
+// run. It is the single place `launching` is cleared on a non-success path, with
+// two callers: LaunchReserved's error defer, and the asynchronous caller's panic
+// recovery (R3325) — the one exit LaunchReserved's own defer cannot cover, since
+// the panic unwinds past it. Either way, a reservation left set would refuse
 // every later launch as "already hosted".
+//
+// **Synchronous deliberately, though nothing observes the result.** Both callers
+// are already-failing paths, and one round-trip on a path taken once in a blue
+// moon buys a guarantee worth having: when this returns, the reservation is
+// provably clear rather than clear soon. A fire-and-forget release that arrived
+// late would recreate exactly the bug this function exists to prevent, and would
+// do it invisibly. Note also that the project's fire-and-forget helper (`svc`)
+// sends from a fresh goroutine and so does not preserve order between posts —
+// an asynchronous version here would have to use a raw send, not that helper.
 // CRC: crc-PtyHost.md | R3122, R3325
 func (h *PtyHost) ReleaseReservation() {
 	_ = svcSyncVoid(h.jobs, func() error { h.launching = false; return nil })
@@ -288,7 +328,7 @@ func (h *PtyHost) ReleaseReservation() {
 // asynchronous caller runs it on its own goroutine. Releases the reservation on
 // every exit path, and announces the outcome (R3326).
 // CRC: crc-PtyHost.md | Seq: seq-pty-launch.md#1.1 | R3114, R3122, R3126, R3128, R3326
-func (h *PtyHost) LaunchReserved(bootstrap string) (sessionID string, err error) {
+func (h *PtyHost) LaunchReserved(bootstrap, model string) (sessionID string, err error) {
 	if strings.TrimSpace(bootstrap) == "" {
 		bootstrap = ptyDefaultBootstrap
 	}
@@ -299,7 +339,7 @@ func (h *PtyHost) LaunchReserved(bootstrap string) (sessionID string, err error)
 	// every UI for an event that did not happen.
 	defer func() {
 		if err != nil {
-			_ = svcSyncVoid(h.jobs, func() error { h.launching = false; return nil })
+			h.ReleaseReservation()
 			h.env.PublishLaunchOutcome("", err.Error())
 			return
 		}
@@ -313,8 +353,20 @@ func (h *PtyHost) LaunchReserved(bootstrap string) (sessionID string, err error)
 	// launch is the authoritative start, so it takes the seat.
 	h.env.ForceReleaseSeat()
 
-	// Fork the pty and start `claude` as a child of the server (R3116).
-	cmd := exec.Command("claude", "--model", "opus")
+	// The child's argv is configuration, not a literal (R3329, R3330): the
+	// launch's optional model, else [luhmann] model, else the compiled-in
+	// default — or a wholesale [luhmann] command override. Resolved *before*
+	// the fork so a request that cannot be honored (R3331) fails with no child
+	// started and nothing to unwind.
+	argv, aerr := h.env.LuhmannChildArgv(model)
+	if aerr != nil {
+		return "", aerr
+	}
+	if len(argv) == 0 {
+		return "", fmt.Errorf("launch: empty child command")
+	}
+	// Fork the pty and start the child as a child of the server (R3116).
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = h.env.LuhmannDir()
 	cmd.Env = ptyChildEnv()
 	master, ferr := pty.StartWithSize(cmd, &pty.Winsize{Rows: ptyInitRows, Cols: ptyInitCols})
@@ -334,14 +386,16 @@ func (h *PtyHost) LaunchReserved(bootstrap string) (sessionID string, err error)
 
 	// R3128: a directory Claude Code has not seen shows a "trust this folder"
 	// dialog that would swallow the bootstrap. If this project is new, arm the
-	// trust accepter before the reader starts, so readLoop clears the dialog
-	// first. Armed only for new projects, so it cannot misfire on a normal
-	// session's later output.
+	// trust accepter before the reader starts, so the read chain clears the
+	// dialog first. Armed only for new projects, so it cannot misfire on a
+	// normal session's later output.
 	var trust *trustAccepter
 	if isNewClaudeProject(cmd.Dir) {
 		trust = newTrustAccepter(h.Input)
 	}
-	go h.readLoop(master, trust)
+	// One buffer, allocated once for this launch, then handed around for the life
+	// of the session (R3333).
+	h.startRead(master, make([]byte, ptyReadChunk), trust)
 
 	// For a new project, wait for the trust dialog to be accepted before the
 	// bootstrap so it lands in the message box, not the menu (R3128). Best
@@ -389,83 +443,181 @@ func (h *PtyHost) hosting(m *os.File) bool {
 	return ok
 }
 
-// --- fan-out: broadcast, input merge, resize (R3117–R3121) ------------------
-
-// readLoop drains the master and broadcasts each chunk to every client until the
-// master closes — child self-exit or Stop (R3116). It then finalizes: a self-exit
-// leaves the session down, never auto-relaunched (R3114). Output is never parsed
-// for session state (R3115); it is opaque bytes to fan out.
+// --- fan-out: the output cycle, input merge, resize (R3117–R3121) -----------
 //
-// This finalize is the *only* teardown a child that dies on its own ever gets,
-// so it is what discharges the obligations for that path (R3323) — the reason it
-// passes is the self-exit one, since nobody asked for this teardown (R3324).
-// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3 | R3115, R3118, R3323
-func (h *PtyHost) readLoop(m *os.File, trust *trustAccepter) {
-	// One scratch buffer for the whole loop, reused every read (R3328). Nothing
-	// downstream retains it: trust.feed copies by appending, and broadcast copies
-	// only when a client exists to retain it. Allocating a fresh ptyReadChunk per
-	// read instead meant spending 32KB to carry whatever actually arrived — tens
-	// of bytes, for a TUI spinner — and doing it even with nobody attached, which
-	// is the ordinary state of a detached session.
-	scratch := make([]byte, ptyReadChunk)
-	for {
-		n, rerr := m.Read(scratch)
-		if n > 0 {
-			if trust != nil && trust.armed.Load() {
-				trust.feed(scratch[:n]) // R3128: clear a fresh-project trust dialog
-			}
-			// R3328: with nobody attached there is nothing to hand the bytes to,
-			// so skip the actor hop entirely rather than pay it to iterate an
-			// empty map. The read still happens — the child blocks on a full pty
-			// buffer if the stream is not drained (R3121) — but draining does not
-			// mean retaining.
-			if h.clientCount.Load() > 0 {
-				h.broadcast(m, scratch[:n])
-			}
+// The output path below is two named patterns composed, and the names are worth
+// carrying because they say in two words what the mechanism takes a page to
+// spell out. See design/design.md, "Actor-Resident I/O — Baton and Sewing".
+/*
+@pattern: baton — the pty read buffer has exactly one holder at any instant, handed read goroutine → actor → successor goroutine, each holder terminating as it passes it on, so ownership needs no lock and no comment asserting it (R3333)
+@pattern: sewing — the write cycle passes serialized control actor → write goroutine → actor as posted continuations rather than calls, holding nothing at any instant: post, don't call (R3336)
+@pattern: actor-queue-ordering — the successor read is spawned from inside the closure that finished with the buffer, so "the buffer is free again" is expressed by queue position instead of by a flag (R3333)
+@pattern: closure-actor — the substrate both of those sit on (ChanSvc, svc.go)
+*/
+
+// startRead spawns the goroutine that owns buf and blocks on the master. On
+// return it hands buf to the actor in a posted closure and terminates; the actor
+// distributes the bytes and only then spawns the successor with the same buffer
+// (onRead). So the buffer has exactly one owner at every instant, by
+// construction rather than by a comment that has to stay true, and it is one
+// allocation for the life of the session (R3333).
+//
+// The read must not run on the actor: it blocks indefinitely while the child is
+// quiet, and an idle orchestrator goes minutes without a byte, so a read inside
+// a jobs closure would stall every attach, detach, resize, status and stop —
+// worst exactly when the system looks idlest (R3334). The goroutine waits; the
+// actor changes state.
+//
+// The hand-off is a **post, not a call** (R3335). The reader never waits for the
+// distribution to finish, which is what R3328's client-count mirror existed to
+// avoid paying; a blocking send on a full jobs queue is the only back-pressure,
+// and it cannot deadlock because the actor never waits on a reader.
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.1 | R3333, R3334, R3335
+func (h *PtyHost) startRead(m *os.File, buf []byte, trust *trustAccepter) {
+	go func() {
+		n, rerr := m.Read(buf)
+		if n > 0 && trust != nil && trust.armed.Load() {
+			// R3128/R3327: the accepter belongs to this launch's read chain, and
+			// exactly one goroutine of that chain exists at a time, so its scan
+			// buffer needs no guard. Fed here rather than in the actor because
+			// accepting types into the input funnel, which can block.
+			trust.feed(buf[:n])
 		}
-		if rerr != nil {
-			break
-		}
-	}
-	h.finalize(m, ptyReasonSelfExit)
+		svc(h.jobs, func() { h.onRead(m, buf, n, rerr, trust) })
+	}()
 }
 
-// broadcast writes one output chunk to every attached client, dropping any whose
-// bounded buffer overflowed rather than letting it stall the others or the
-// session (R3118). Runs in the actor (client-set access) but does only
-// non-blocking Writes, so the streaming read never stalls on a slow client.
-// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3 | R3118
-func (h *PtyHost) broadcast(m *os.File, chunk []byte) {
-	_ = svcSyncVoid(h.jobs, func() error {
-		if h.master != m {
-			return nil // stale reader after finalize
-		}
-		if len(h.clients) == 0 {
-			return nil // R3328: nobody to retain it, so nothing to copy
-		}
-		// R3328: a client queues the slice and drains it on its own goroutine
-		// (R3118), so what it receives must outlive this call and therefore
-		// cannot be the reader's scratch. One exact-size copy serves every
-		// client, as the shared chunk always did — what changes is its size, and
-		// that it is not made at all when no one is listening.
-		owned := make([]byte, len(chunk))
-		copy(owned, chunk)
-		var dropped []*ptyClientReg
-		for reg := range h.clients {
-			if !reg.client.Write(owned) {
-				dropped = append(dropped, reg)
+// onRead is the actor half of the read cycle: distribute, then hand the buffer
+// back to a fresh reader (R3333). Output is never parsed for session state
+// (R3115); it is opaque bytes to fan out.
+//
+// A chain whose master is no longer the hosted one keeps reading and distributes
+// nothing (R3343). Both halves matter: the output must still be drained, because
+// an undrained pty blocks the child (R3121) and finalize deliberately leaves the
+// old master open through the stop grace so claude's flush-on-exit output is
+// still read; and it must not reach the clients of a launch that started in that
+// window, which is the same overlap R3327 addresses for the trust accepter.
+//
+// The EOF finalize is the *only* teardown a child that dies on its own ever
+// gets, so it discharges that path's obligations (R3323) with the self-exit
+// reason, since nobody asked for this teardown (R3324). It calls finalizeLocked
+// rather than finalize: this closure is already running on the actor, and the
+// wrapper would post to the actor it is running on and self-deadlock.
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.3 | R3115, R3323, R3333, R3343
+func (h *PtyHost) onRead(m *os.File, buf []byte, n int, rerr error, trust *trustAccepter) {
+	live := h.master == m
+	if n > 0 && live {
+		h.distributeLocked(buf[:n])
+	}
+	if rerr != nil {
+		if live {
+			if session := h.finalizeLocked(m); session != "" {
+				// Off the actor: these are DB appends (R3323).
+				go h.env.RecordHostedExits(session, ptyReasonSelfExit)
 			}
 		}
-		for _, reg := range dropped {
-			delete(h.clients, reg)
-			reg.client.Close()
+		return // the chain ends with the master
+	}
+	h.startRead(m, buf, trust)
+}
+
+// distributeLocked appends one output chunk to every attached connection and
+// drops those that have fallen too far behind (R3118, R3340). Must run inside a
+// jobs closure. Deleting the entry the range is currently on is defined
+// behavior in Go, so a drop takes effect in place rather than being collected
+// for a second pass; only the resize is deferred, so a range that drops several
+// connections recomputes once.
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.2 | R3118, R3340
+func (h *PtyHost) distributeLocked(chunk []byte) {
+	var dropped bool
+	for reg := range h.clients {
+		if !h.appendOutputLocked(reg, chunk) {
+			h.dropLocked(reg)
+			dropped = true
 		}
-		h.syncClientCount()
-		if len(dropped) > 0 {
-			h.recomputeSizeLocked() // R3120: a drop is a detach — recompute the min
-		}
-		return nil
-	})
+	}
+	if dropped {
+		h.recomputeSizeLocked() // R3120: a drop is a detach — recompute the min
+	}
+}
+
+// appendOutputLocked copies one chunk into a connection's pending buffer and
+// kicks its writer, reporting false when the connection has exceeded the cap and
+// must be dropped (R3340) — the one number that replaced a bounded channel per
+// transport. Steady state allocates nothing: the two buffers reach their
+// high-water mark and are reused for the life of the connection.
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.2 | R3336, R3340
+func (h *PtyHost) appendOutputLocked(reg *ptyClientReg, chunk []byte) bool {
+	if len(reg.pending)+len(chunk) > ptyClientPendingMax {
+		return false // R3118: cannot keep up — drop rather than stall the fan-out
+	}
+	reg.pending = append(reg.pending, chunk...)
+	h.kickWriterLocked(reg)
+	return true
+}
+
+// kickWriterLocked starts a write for a connection that has output and no writer
+// in flight: swap the buffers, mark it writing, and spawn the goroutine that
+// owns the filled one (R3336). A connection already writing is left alone — the
+// in-flight writer picks up whatever accumulates, which is what makes at most
+// one writer per connection possible (R3338).
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.4 | R3336, R3338
+func (h *PtyHost) kickWriterLocked(reg *ptyClientReg) {
+	if reg.writing || len(reg.pending) == 0 {
+		return
+	}
+	buf := reg.pending
+	reg.pending, reg.spare = reg.spare[:0], nil
+	reg.writing = true
+	go h.writeOut(reg, buf)
+}
+
+// writeOut writes one buffer to a connection's transport, blocking and off the
+// actor, then empties it and posts the continuation back **carrying the buffer**
+// (R3336, R3341). Blocking here is the design rather than a tolerance: a stalled
+// client blocks only its own writer, its pending grows, and it is dropped at the
+// cap, while every other connection and the child are untouched. reg.client is
+// immutable after construction, so reading it off the actor is safe.
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.4 | R3336, R3341
+func (h *PtyHost) writeOut(reg *ptyClientReg, buf []byte) {
+	werr := reg.client.Write(buf)
+	buf = buf[:0]
+	svc(h.jobs, func() { h.onWritten(reg, buf, werr) })
+}
+
+// onWritten is the continuation: take the emptied buffer back, clear the flag,
+// and spawn again if output accumulated while the write was in flight (R3336).
+// No wakeup can be lost whichever order this and an append run in, because the
+// actor serializes them — an append during the write sees `writing` and does
+// nothing, and this then finds pending non-empty and respawns; if this runs
+// first it clears the flag and the next append spawns (R3337).
+//
+// A continuation whose connection is already gone spawns nothing and returns,
+// or every teardown racing an in-flight write would leak a goroutine (R3342).
+// A failed write deregisters instead of continuing (R3118, R3341).
+// CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.5 | R3336, R3337, R3342
+func (h *PtyHost) onWritten(reg *ptyClientReg, buf []byte, werr error) {
+	if _, ok := h.clients[reg]; !ok {
+		return // R3342: dropped, detached, or torn down — spawn nothing
+	}
+	reg.writing = false
+	reg.spare = buf
+	if werr != nil {
+		h.dropLocked(reg)
+		h.recomputeSizeLocked() // R3120: a drop is a detach
+		return
+	}
+	h.kickWriterLocked(reg)
+}
+
+// dropLocked deregisters one connection and closes its transport. Closing is
+// also what unblocks a Write stuck on a stalled client (R3118). Any continuation
+// still in flight for it finds it gone and stops (R3342). Must run inside a jobs
+// closure.
+// CRC: crc-PtyHost.md | R3118, R3342
+func (h *PtyHost) dropLocked(reg *ptyClientReg) {
+	delete(h.clients, reg)
+	reg.client.Close()
 }
 
 // inputLoop is the single serialized writer to the master (R3119): it drains
@@ -498,9 +650,15 @@ func (h *PtyHost) Attach(c PtyClient, size PtyWinsize) (*ptyClientReg, error) {
 		if h.master == nil {
 			return errors.New("no Luhmann session is hosted")
 		}
-		reg = &ptyClientReg{client: c, size: size}
+		// Both buffers up front, so `spare` is non-nil whenever no writer holds
+		// it and the ordinary case never reallocates (R3336).
+		reg = &ptyClientReg{
+			client:  c,
+			size:    size,
+			pending: make([]byte, 0, ptyClientBufInit),
+			spare:   make([]byte, 0, ptyClientBufInit),
+		}
 		h.clients[reg] = struct{}{}
-		h.syncClientCount()
 		h.recomputeSizeLocked()
 		return nil
 	})
@@ -526,9 +684,8 @@ func (h *PtyHost) Resize(reg *ptyClientReg, size PtyWinsize) {
 func (h *PtyHost) Detach(reg *ptyClientReg) {
 	_ = svcSyncVoid(h.jobs, func() error {
 		if _, ok := h.clients[reg]; ok {
-			delete(h.clients, reg)
-			h.syncClientCount()
-			reg.client.Close()
+			// Any write still in flight for it finds it gone and stops (R3342).
+			h.dropLocked(reg)
 			h.recomputeSizeLocked()
 		}
 		return nil
@@ -663,7 +820,7 @@ func (h *PtyHost) Status() (hosted bool, sessionID string) {
 // identity): closes every client, clears the actor state, releases the seat lease
 // so status stays truthful, records the hosted pool secretaries' exits, and hands
 // the child + master to an off-actor graceful shutdown. Called on child self-exit
-// (readLoop) and by Stop; the second caller is a no-op.
+// (the read chain's EOF) and by Stop; the second caller is a no-op.
 //
 // It is the single teardown chokepoint, which is why BOTH obligations live here
 // rather than at a caller (R3323): recording exits in Stop alone meant a child
@@ -683,29 +840,44 @@ func (h *PtyHost) finalize(m *os.File, reason string) {
 	// exactly-once guard for the off-actor recording below.
 	var session string
 	_ = svcSyncVoid(h.jobs, func() error {
-		if h.master != m {
-			return nil // already finalized (self-exit + Stop race)
-		}
-		session = h.sessionID
-		for reg := range h.clients {
-			reg.client.Close()
-		}
-		h.clients = make(map[*ptyClientReg]struct{})
-		h.syncClientCount()
-		child := h.child
-		h.masterPtr.Store(nil)
-		h.master, h.child, h.sessionID, h.launching = nil, nil, "", false
-		if session != "" {
-			h.env.ReleaseSeat(session)
-		}
-		// Off the actor: leave the master open through the grace window so
-		// claude's flush-on-exit output is still drained by readLoop, then close.
-		go gracefulShutdown(child, m)
+		session = h.finalizeLocked(m)
 		return nil
 	})
 	if session != "" {
 		h.env.RecordHostedExits(session, reason)
 	}
+}
+
+// finalizeLocked is finalize's in-actor body, returning the session it
+// finalized — empty when another caller got there first, which is what makes the
+// pair idempotent on the master identity. It exists separately because the
+// second caller is now already on the actor: onRead's EOF branch would
+// self-deadlock calling the wrapper, since that posts to the actor it is running
+// on. The file already carries this convention (recomputeSizeLocked,
+// minSizeLocked). The caller owns the recording, which must stay off the actor
+// (DB appends) and after the seat release (R3323).
+// CRC: crc-PtyHost.md | R3114, R3116, R3125, R3323
+func (h *PtyHost) finalizeLocked(m *os.File) string {
+	if h.master != m {
+		return "" // already finalized (self-exit + Stop race)
+	}
+	session := h.sessionID
+	for reg := range h.clients {
+		reg.client.Close()
+	}
+	h.clients = make(map[*ptyClientReg]struct{})
+	child := h.child
+	h.masterPtr.Store(nil)
+	h.master, h.child, h.sessionID, h.launching = nil, nil, "", false
+	if session != "" {
+		h.env.ReleaseSeat(session)
+	}
+	// Off the actor: leave the master open through the grace window so claude's
+	// flush-on-exit output is still drained by the read chain — which by then is
+	// reading a master that is no longer the hosted one, so it drains and
+	// discards (R3343) — then close.
+	go gracefulShutdown(child, m)
+	return session
 }
 
 // gracefulShutdown asks the child to exit with SIGTERM, waits up to ptyStopGrace,

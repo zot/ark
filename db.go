@@ -57,7 +57,7 @@ type DB struct {
 	dbPath        string
 	tmpMu         sync.RWMutex      // protects tmpPaths against concurrent write-actor and actor reads
 	tmpPaths      map[string]uint64 // R664: tmp:// path → fileid tracking
-	svc           chan func()       // R986: closure actor channel
+	svc           *ChanSvc          // R986: the closure actor (crc-ChanSvc.md)
 	pubsub        *PubSub           // R2281: set by SetPubSub; nil disables centralized tmp:// publish
 	chunkerByName map[string]any    // R2386, R2389: mirror of microfts2's chunker registry for ChunkerMetadata lookup by strategy name
 
@@ -70,6 +70,15 @@ type DB struct {
 
 	refreshMu      sync.Mutex          // R3005: guards pendingRefresh
 	pendingRefresh map[string]struct{} // R3005: paths with a refresh queued or in flight
+
+	// reconcilePending is set while a reconcile scan is queued but has not yet
+	// begun, so further requests merge into it instead of queueing scans of
+	// their own (R346, R3351). Actor-owned — read and written only inside
+	// closures, which is what lets it be a plain bool rather than needing
+	// refreshMu's treatment. Cleared as the scan *starts*, so a request
+	// arriving mid-scan queues a fresh one rather than being swallowed by a
+	// scan that may already have walked past whatever changed.
+	reconcilePending bool
 }
 
 // InitOpts are options for creating a new ark database.
@@ -301,7 +310,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		scanner:       &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
 		search:        &Searcher{fts: fts, store: store, config: config},
 		dbPath:        dbPath,
-		svc:           make(chan func(), 8),
+		svc:           newChanSvc(chanSvcSlots),
 		chunkerByName: make(map[string]any),
 	}
 
@@ -424,7 +433,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		},
 	)
 
-	runSvc(db.svc)
+	db.svc.start()
 	return db, nil
 }
 
@@ -433,6 +442,39 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 // CRC: crc-DB.md | R987
 func (db *DB) Do(fn func(*DB)) {
 	svc(db.svc, func() { fn(db) })
+}
+
+// postCoalescedReconcile posts scan so that **at most one reconcile is active
+// and one pending** (R346, R3351): a request arriving while one already waits
+// merges into it instead of queueing a scan of its own. Merging loses nothing,
+// because the waiting scan has not begun and will therefore observe everything
+// each merged request was asking about — and it matters because a reconcile is a
+// full pass over every source, so N requests during one run would otherwise buy
+// N further full passes to reach a state one pass already reaches.
+//
+// The gate is a **separate, earlier closure** than the scan, and that is the
+// mechanism rather than a style choice. The pending mark has to clear when the
+// scan *begins* so a request arriving mid-scan queues a fresh one: a running
+// scan cannot be relied on to have seen a change made after it walked past that
+// part of the tree. Deciding in one closure and scanning in the next is what
+// makes "clears at the start" expressible at all. That is the
+// post-the-follow-up-behind-the-message idiom, and it is sound only because the
+// actor delivers in order (R3344).
+//
+// A merged request's scan closure is **discarded**, so callers must pass work
+// that is equivalent on every call — a reconcile is, by construction.
+// CRC: crc-DB.md | R346, R3351
+func (db *DB) postCoalescedReconcile(scan func(*DB)) {
+	db.Do(func(db *DB) {
+		if db.reconcilePending {
+			return // one already waits; it will start after this request
+		}
+		db.reconcilePending = true
+		db.Do(func(db *DB) {
+			db.reconcilePending = false // cleared as the scan BEGINS
+			scan(db)
+		})
+	})
 }
 
 // Sync sends an operation to the DB actor and blocks until it completes.
@@ -585,7 +627,7 @@ func (db *DB) drainWriteSchedule(idx *Indexer) {
 // Close stops the actor and closes the database in reverse order.
 func (db *DB) Close() error {
 	if db.svc != nil {
-		close(db.svc)
+		db.svc.stop()
 		db.svc = nil
 	}
 	// store doesn't need explicit close (shares env with fts)

@@ -34,11 +34,11 @@ func setupRecall(t *testing.T) (*Librarian, *DB) {
 	if err := db.extmap.Rebuild(db); err != nil {
 		t.Fatalf("ExtMap.Rebuild: %v", err)
 	}
-	db.svc = make(chan func(), 16)
-	go runSvc(db.svc)
+	db.svc = newChanSvc(chanSvcSlots)
+	db.svc.start()
 	t.Cleanup(func() {
 		if db.svc != nil {
-			close(db.svc)
+			db.svc.stop()
 			db.svc = nil
 		}
 	})

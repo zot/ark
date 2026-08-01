@@ -224,6 +224,7 @@ func luhmannCommand() *ucli.Command {
 				Usage: "start a hosted Claude Code session in a pty (spend consent gate; server)",
 				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "bootstrap", Usage: "first input that loads the orchestrator skill (default: load /luhmann)"},
+					&ucli.StringFlag{Name: "model", Usage: "model for this launch only, not written to config (default: [luhmann] model, else opus)"},
 				},
 				Action: luhmannLaunchAction,
 			},

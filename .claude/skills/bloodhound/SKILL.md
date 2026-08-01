@@ -136,6 +136,39 @@ the hunt (and judge whether you're on the trail). Write it readable.
 later turn, like recall. For "need it now," emit the watermark and explicitly
 block on the result.
 
+### Three layers, and only the last one has judgment
+
+Knowing the shape tells you where your effort lands:
+
+1. **A paragraph-based vector search** (the watcher) builds the seed set.
+   Mechanical similarity — no judgment, no idea what you meant.
+2. **A weak model** (the secretary) reads those seeds, widens, and curates. It
+   **only adds**, so a miss at layer 1 survives unless layer 2 happens to search
+   into it anyway. Layer 1 bounds the whole result from below.
+3. **You.** The only layer with judgment. What comes back is a draft.
+
+Everything below is layer-1 craft, because layer 1 is the part you steer.
+
+**One ask per paragraph — separate ideas with blank lines.** Layer 1 embeds
+*paragraphs*. Three questions packed into one paragraph become a single blended
+vector sitting near none of them, and the seeds come back vaguely about your
+topic and specifically about nothing. Split them and each gets its own seed.
+
+**Scope when your own corpus restates the topic.** The general advice below is to
+scope sparingly, and it holds. But a claim you have written up many times —
+marketing copy, resumes, drafts, pitches — exists as many near-duplicate
+restatements, and near-duplicates are worse than exact ones: dedup cannot catch
+them, and each variant sits at a slightly different point, so together they
+blanket the neighbourhood around the claim rather than competing for one slot.
+When you know that is true of a topic, `filter-files` to where the evidence
+lives.
+
+**Ask in the vocabulary of the evidence, not of the claim.** Similarity ranks by
+resemblance to your *question*, so asking in the claim's own words returns
+whatever states the claim most cleanly — usually the advocacy, not the research.
+The summary outranks the source. Ask instead for what only the evidence contains:
+effect sizes, cited studies, the control condition, the numbers.
+
 ### The four fields you supply (the rest is the hound's craft)
 
 | field     | what it carries                                                        |
@@ -223,6 +256,15 @@ A **curated digest** — the few passages that answer, with sources — not a ra
 dump. Trust the curation. If it comes back thin, hand back a *sharper clue* or
 *wider scope* in a fresh watermark; don't re-run raw searches yourself. That's
 the whole point of the hound.
+
+**Telling a thin hunt from a thin corpus.** These look identical and mean
+opposite things — one says re-run, the other says stop. The reliable check is
+whether the return contains **the places you named**. If you asked about a
+project, a directory, or a class of document and nothing from it came back, the
+*query* is the problem: sharpen and re-run before believing anything about what
+exists. A hunt that names a place and returns nothing from that place is thin by
+construction, however plausible its contents look. Reporting "we have little on
+X" from such a hunt is a claim about your watermark, not about the corpus.
 
 **Chasing a finding yourself is a different skill.** Once a finding lands and
 you want to open what it pointed at, widen around it, or run a known-item

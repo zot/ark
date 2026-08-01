@@ -1,16 +1,20 @@
 package ark
 
 // Unit tests for the PtyHost fan-out + lifecycle logic (test-PtyHost.md). The
-// deterministic parts — smallest-wins resize, broadcast drop-slow, serialized
-// input, launch reject-second, zero-client survival — run against a fake client,
-// a fake env, and a fake master (an os.Pipe), no real pty or server. The launch
-// confirmation protocol (R3126) touches a real JSONL + the seat lease and is
-// left to integration (see design.md Gaps).
+// deterministic parts — smallest-wins resize, the output cycle (order, one
+// writer, coalescing, the pending-cap drop, gone-connection continuations),
+// serialized input, launch reject-second, zero-client survival — run against a
+// fake client, a fake env, and a fake master (an os.Pipe), no real pty or
+// server. The launch confirmation protocol (R3126) touches a real JSONL + the
+// seat lease and is left to integration (see design.md Gaps).
 //
 // CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3118, R3119, R3120, R3121, R3122, R3136, R3139
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3333, R3334, R3336, R3337, R3338, R3339, R3340, R3341, R3342, R3343
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -30,29 +34,71 @@ func (fakePtyEnv) PublishLaunchOutcome(string, string) {}
 func (fakePtyEnv) LuhmannDir() string                  { return "" }
 func (fakePtyEnv) PoolRosterCount() int                { return 0 }
 
-// fakePtyClient captures broadcast bytes through a bounded buffer: once cap is
-// exceeded Write returns false (drop). cap == 0 means unbounded.
-type fakePtyClient struct {
-	mu     sync.Mutex
-	got    []byte
-	cap    int
-	closed bool
+// LuhmannChildArgv returns a command that cannot exist, so a test that reaches
+// the fork fails at exec rather than starting a real `claude` (R3329).
+func (fakePtyEnv) LuhmannChildArgv(string) ([]string, error) {
+	return []string{"/nonexistent/ark-test-child"}, nil
 }
 
-func (c *fakePtyClient) Write(p []byte) bool {
+// fakePtyClient is a transport double for the host's fan-out (R3341). Write is
+// blocking and complete, as the interface now requires: it records the bytes,
+// returns failWith when set, and waits on gate when set — which is how a test
+// stalls one connection without stalling the others. It also tracks how many
+// Writes are in flight at once, which is what makes the one-writer-per-
+// connection property (R3338) observable rather than merely argued.
+type fakePtyClient struct {
+	mu        sync.Mutex
+	got       []byte
+	closed    bool
+	writes    int
+	inFlight  int
+	maxFlight int
+	released  bool
+	failWith  error
+	gate      chan struct{}
+}
+
+func (c *fakePtyClient) Write(p []byte) error {
+	c.mu.Lock()
+	c.inFlight++
+	if c.inFlight > c.maxFlight {
+		c.maxFlight = c.inFlight
+	}
+	gate, fail := c.gate, c.failWith
+	c.mu.Unlock()
+
+	if gate != nil {
+		<-gate // stalled until release() or Close()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.cap > 0 && len(c.got)+len(p) > c.cap {
-		return false
+	c.inFlight--
+	c.writes++
+	if fail != nil {
+		return fail
 	}
 	c.got = append(c.got, p...)
-	return true
+	return nil
 }
 
+// release unblocks a stalled Write. Idempotent, so Close may also call it.
+func (c *fakePtyClient) release() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gate != nil && !c.released {
+		c.released = true
+		close(c.gate)
+	}
+}
+
+// Close mirrors a real transport: closing is what unblocks a Write stuck on it
+// (R3118), which is the mechanism that makes a drop take effect.
 func (c *fakePtyClient) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
+	c.release()
 }
 
 func (c *fakePtyClient) bytes() []byte {
@@ -67,14 +113,59 @@ func (c *fakePtyClient) isClosed() bool {
 	return c.closed
 }
 
-// fakeMaster returns a non-nil *os.File to stand in for the pty master.
-func fakeMaster(t *testing.T) *os.File {
+func (c *fakePtyClient) stats() (writes, maxFlight int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writes, c.maxFlight
+}
+
+// pushOutput appends one chunk to every attached connection the way onRead does,
+// so the write cycle can be driven without a real pty behind it.
+func pushOutput(h *PtyHost, chunk []byte) {
+	_ = svcSyncVoid(h.jobs, func() error {
+		h.distributeLocked(chunk)
+		return nil
+	})
+}
+
+// waitFor polls cond until it holds. The write cycle is asynchronous by design
+// (R3336), so assertions about delivered output cannot be synchronous.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// attachFake attaches c at a default size, failing the test if the host refuses.
+func attachFake(t *testing.T, h *PtyHost, c *fakePtyClient) *ptyClientReg {
+	t.Helper()
+	reg, err := h.Attach(c, PtyWinsize{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	return reg
+}
+
+// testPipe returns a fresh pipe with both ends closed at the end of the test.
+func testPipe(t *testing.T) (r, w *os.File) {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
 	t.Cleanup(func() { r.Close(); w.Close() })
+	return r, w
+}
+
+// fakeMaster returns a non-nil *os.File to stand in for the pty master.
+func fakeMaster(t *testing.T) *os.File {
+	t.Helper()
+	_, w := testPipe(t)
 	return w
 }
 
@@ -86,6 +177,16 @@ func installMaster(h *PtyHost, m *os.File, sink func(PtyWinsize)) {
 		h.resizeSink = sink
 		return nil
 	})
+}
+
+// hostWithMaster is the starting point for the fan-out tests: a host with a fake
+// master installed and its resizes discarded. Tests that assert on the resizes
+// call installMaster themselves with a recording sink.
+func hostWithMaster(t *testing.T, env PtyEnv) *PtyHost {
+	t.Helper()
+	h := NewPtyHost(env)
+	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+	return h
 }
 
 func clientCount(h *PtyHost) int {
@@ -206,45 +307,188 @@ func TestPtyHostSmallestWinsResize(t *testing.T) {
 	}
 }
 
-// Test: broadcast drops a slow client, never blocks (R3118).
-func TestPtyHostBroadcastDropsSlowClient(t *testing.T) {
-	h := NewPtyHost(fakePtyEnv{})
-	m := fakeMaster(t)
-	installMaster(h, m, func(PtyWinsize) {})
+// Test: a stalled connection is dropped at the pending cap, and the fan-out
+// carries on for everyone else (R3340, R3118). This is the successor to the
+// bounded-channel drop test: the policy is unchanged, but the bound is now one
+// byte cap in the host rather than a 256-deep channel per transport.
+func TestPtyHostPendingCapDropsStalledClient(t *testing.T) {
+	h := hostWithMaster(t, fakePtyEnv{})
 
-	normal := &fakePtyClient{}        // unbounded
-	stuck := &fakePtyClient{cap: 100} // overflows after 100 bytes
-	if _, err := h.Attach(normal, PtyWinsize{Cols: 80, Rows: 24}); err != nil {
-		t.Fatalf("attach normal: %v", err)
+	stuck := &fakePtyClient{gate: make(chan struct{})} // never completes a write
+	normal := &fakePtyClient{}                         // drains freely
+	attachFake(t, h, stuck)
+	attachFake(t, h, normal)
+
+	// Small chunks, many of them: the stalled connection accumulates past
+	// ptyClientPendingMax while the draining one keeps its pending near zero.
+	chunk := make([]byte, 4096)
+	for i := range chunk {
+		chunk[i] = 'z'
 	}
-	if _, err := h.Attach(stuck, PtyWinsize{Cols: 80, Rows: 24}); err != nil {
-		t.Fatalf("attach stuck: %v", err)
+	// A few chunks past the cap, not exactly one: the first append leaves in the
+	// swapped-out buffer the stalled writer holds, so pending trails the total
+	// sent by one chunk and an exact-cap total would stop just short of tripping
+	// the strict comparison.
+	for sent := 0; sent < ptyClientPendingMax+4*len(chunk); sent += len(chunk) {
+		pushOutput(h, chunk)
 	}
 
-	chunk := []byte("0123456789") // 10 bytes
-	for i := 0; i < 50; i++ {
-		h.broadcast(m, chunk) // 500 bytes total — well past the stuck cap
-	}
-
-	if got := len(normal.bytes()); got != 500 {
-		t.Errorf("normal client received %d bytes, want 500", got)
-	}
+	waitFor(t, "the stalled client to be dropped", func() bool { return clientCount(h) == 1 })
 	if !stuck.isClosed() {
-		t.Error("stuck client was not closed on drop")
+		t.Error("stalled client was not closed on drop (R3118: closing is what unblocks its write)")
 	}
-	if n := clientCount(h); n != 1 {
-		t.Errorf("client set has %d after drop, want 1 (only normal)", n)
+	if normal.isClosed() {
+		t.Error("the draining client was dropped too — one slow client stalled the fan-out (R3118)")
+	}
+	if got := len(normal.bytes()); got == 0 {
+		t.Error("the draining client received nothing while the other stalled")
+	}
+}
+
+// Test: output reaches a connection in order, and the source buffer may be
+// rewritten behind it (R3333, R3339). The read buffer is a baton handed around
+// rather than shared, so what a connection holds must be its own copy.
+func TestPtyHostOutputOrderSurvivesBufferReuse(t *testing.T) {
+	h := hostWithMaster(t, fakePtyEnv{})
+	c := &fakePtyClient{}
+	attachFake(t, h, c)
+
+	// One buffer for every append, exactly as the read cycle reuses its baton.
+	buf := make([]byte, 4)
+	var want string
+	for _, s := range []string{"aaaa", "bbbb", "cccc", "dddd"} {
+		copy(buf, s)
+		pushOutput(h, buf)
+		want += s
+	}
+	copy(buf, "XXXX") // what the next read would do to it
+
+	waitFor(t, "all output delivered", func() bool { return len(c.bytes()) == len(want) })
+	if got := string(c.bytes()); got != want {
+		t.Errorf("client received %q, want %q", got, want)
+	}
+}
+
+// Test: at most one write goroutine per connection, and bytes appended during an
+// in-flight write are picked up by its continuation rather than lost (R3337,
+// R3338). The second write also shows the adaptive batching R3341 describes: it
+// carries everything that accumulated, in one call.
+func TestPtyHostOneWriterCoalescesPending(t *testing.T) {
+	h := hostWithMaster(t, fakePtyEnv{})
+	c := &fakePtyClient{gate: make(chan struct{})}
+	attachFake(t, h, c)
+
+	// The first append starts a writer that blocks; the rest accumulate behind
+	// it. pushOutput is synchronous through the actor, so all 20 have landed
+	// before the gate opens.
+	for i := 0; i < 20; i++ {
+		pushOutput(h, []byte("chunk"))
+	}
+	c.release()
+
+	want := 20 * len("chunk")
+	waitFor(t, "all output delivered", func() bool { return len(c.bytes()) == want })
+	writes, maxFlight := c.stats()
+	if maxFlight != 1 {
+		t.Errorf("max concurrent writers = %d, want 1 (R3338)", maxFlight)
+	}
+	if writes != 2 {
+		t.Errorf("writes = %d, want 2 — one in flight plus one carrying everything that accumulated (R3337, R3341)", writes)
+	}
+}
+
+// Test: a failed transport write deregisters its connection (R3341, R3118).
+func TestPtyHostWriteErrorDropsClient(t *testing.T) {
+	h := hostWithMaster(t, fakePtyEnv{})
+	c := &fakePtyClient{failWith: errors.New("transport gone")}
+	attachFake(t, h, c)
+
+	pushOutput(h, []byte("anything"))
+
+	waitFor(t, "the failed client to be dropped", func() bool { return clientCount(h) == 0 })
+	if !c.isClosed() {
+		t.Error("a client whose write failed was not closed")
+	}
+}
+
+// Test: a write continuation whose connection is already gone spawns nothing
+// (R3342). Without this every teardown racing an in-flight write leaks a
+// goroutine, and the host would keep writing into a detached transport.
+func TestPtyHostContinuationForGoneConnection(t *testing.T) {
+	h := hostWithMaster(t, fakePtyEnv{})
+	c := &fakePtyClient{gate: make(chan struct{})}
+	reg := attachFake(t, h, c)
+
+	pushOutput(h, []byte("first"))  // starts the writer, which blocks
+	pushOutput(h, []byte("second")) // accumulates behind it
+	h.Detach(reg)                   // Close releases the stalled write
+
+	waitFor(t, "the client set to empty", func() bool { return clientCount(h) == 0 })
+	// The continuation now runs and must find the connection gone. Give it room
+	// to do the wrong thing before asserting it did not.
+	time.Sleep(50 * time.Millisecond)
+	if writes, _ := c.stats(); writes != 1 {
+		t.Errorf("writes = %d, want 1 — the continuation respawned into a detached connection (R3342)", writes)
+	}
+}
+
+// Test: a read chain outliving its session drains without distributing (R3343).
+// After a teardown the old master stays open through the stop grace, so its
+// remaining output must not reach the clients of whatever launched next.
+func TestPtyHostStaleReadChainDoesNotDistribute(t *testing.T) {
+	h, w := hostOnPipe(t, fakePtyEnv{}, "")
+
+	// Stand in for the teardown window: a later launch has installed its own
+	// master while the old pipe is still open and still being read.
+	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+	c := &fakePtyClient{}
+	attachFake(t, h, c)
+
+	if _, err := w.Write([]byte("output from the dying session")); err != nil {
+		t.Fatalf("write to the old master: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := c.bytes(); len(got) != 0 {
+		t.Errorf("the new client received %q from a stale read chain (R3343)", got)
+	}
+	// The chain is still draining rather than wedged: a second write goes
+	// through, and still reaches nobody.
+	if _, err := w.Write([]byte("more")); err != nil {
+		t.Fatalf("second write to the old master: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := c.bytes(); len(got) != 0 {
+		t.Errorf("the new client received %q on the second write (R3343)", got)
+	}
+}
+
+// Test: the read cycle carries one buffer around for many reads and delivers
+// every chunk in order (R3333, R3334) — the goroutine blocks on the master, the
+// actor distributes and spawns the successor.
+func TestPtyHostReadCycleDeliversEveryChunk(t *testing.T) {
+	h, w := hostOnPipe(t, fakePtyEnv{}, "")
+	c := &fakePtyClient{}
+	attachFake(t, h, c)
+
+	var want string
+	for i := 0; i < 8; i++ {
+		s := fmt.Sprintf("chunk-%d;", i)
+		if _, err := w.Write([]byte(s)); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		want += s
+		// One write per read keeps the assertion about order rather than framing.
+		waitFor(t, "chunk "+s, func() bool { return len(c.bytes()) == len(want) })
+	}
+	if got := string(c.bytes()); got != want {
+		t.Errorf("client received %q, want %q", got, want)
 	}
 }
 
 // Test: input merge is serialized (R3119).
 func TestPtyHostInputSerialized(t *testing.T) {
 	h := NewPtyHost(fakePtyEnv{})
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	t.Cleanup(func() { r.Close(); w.Close() })
+	r, w := testPipe(t)
 	h.masterPtr.Store(w) // Input drains through masterPtr
 
 	a := bytes.Repeat([]byte{'A'}, 1000)
@@ -275,10 +519,9 @@ func TestPtyHostInputSerialized(t *testing.T) {
 
 // Test: launch rejects a second session (R3122).
 func TestPtyHostLaunchRejectsSecond(t *testing.T) {
-	h := NewPtyHost(fakePtyEnv{})
-	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+	h := hostWithMaster(t, fakePtyEnv{})
 
-	_, err := h.Launch("")
+	_, err := h.Launch("", "")
 	if err == nil {
 		t.Fatal("expected launch to reject a second session, got nil")
 	}
@@ -286,8 +529,7 @@ func TestPtyHostLaunchRejectsSecond(t *testing.T) {
 
 // Test: zero clients keeps the session running (R3121).
 func TestPtyHostZeroClientsKeepsRunning(t *testing.T) {
-	h := NewPtyHost(fakePtyEnv{})
-	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+	h := hostWithMaster(t, fakePtyEnv{})
 
 	reg, err := h.Attach(&fakePtyClient{}, PtyWinsize{Cols: 80, Rows: 24})
 	if err != nil {
@@ -554,17 +796,13 @@ func installSession(h *PtyHost, sid string) {
 // make the child "go away" by closing the write end. Returns the write end.
 func hostOnPipe(t *testing.T, env PtyEnv, sid string) (*PtyHost, *os.File) {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	t.Cleanup(func() { r.Close(); w.Close() })
+	r, w := testPipe(t)
 	h := NewPtyHost(env)
 	installMaster(h, r, func(PtyWinsize) {})
 	if sid != "" {
 		installSession(h, sid)
 	}
-	go h.readLoop(r, nil)
+	h.startRead(r, make([]byte, ptyReadChunk), nil)
 	return h, w
 }
 
@@ -572,14 +810,10 @@ func hostOnPipe(t *testing.T, env PtyEnv, sid string) (*PtyHost, *os.File) {
 // records off the actor, so the assertion cannot be synchronous.
 func waitForExits(t *testing.T, env *recordingPtyEnv, n int) []string {
 	t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
-		if got := env.recorded(); len(got) >= n {
-			return got
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d exit recording(s); got %v", n, env.recorded())
-	return nil
+	waitFor(t, fmt.Sprintf("%d exit recording(s)", n), func() bool {
+		return len(env.recorded()) >= n
+	})
+	return env.recorded()
 }
 
 // Test: a child that exits on its own still gets its pool secretaries exit-
@@ -589,7 +823,7 @@ func TestPtyHostSelfExitRecordsHostedExits(t *testing.T) {
 	env := &recordingPtyEnv{}
 	h, w := hostOnPipe(t, env, "sess-self")
 
-	w.Close() // the child goes away on its own → EOF → readLoop finalizes
+	w.Close() // the child goes away on its own → EOF → the read chain finalizes
 
 	got := waitForExits(t, env, 1)
 	if want := "sess-self/" + ptyReasonSelfExit; got[0] != want {
@@ -658,8 +892,7 @@ func TestPtyHostReserveRejectsSecond(t *testing.T) {
 
 	// A host with a session already up refuses too, by the other half of the
 	// same check.
-	h2 := NewPtyHost(&recordingPtyEnv{})
-	installMaster(h2, fakeMaster(t), func(PtyWinsize) {})
+	h2 := hostWithMaster(t, &recordingPtyEnv{})
 	if err := h2.Reserve(); err == nil {
 		t.Error("reserve succeeded while a session is hosted")
 	}
@@ -670,10 +903,9 @@ func TestPtyHostReserveRejectsSecond(t *testing.T) {
 // would overwrite the hosted tag while that session is still up.
 func TestPtyHostRejectedLaunchPublishesNothing(t *testing.T) {
 	env := &recordingPtyEnv{}
-	h := NewPtyHost(env)
-	installMaster(h, fakeMaster(t), func(PtyWinsize) {})
+	h := hostWithMaster(t, env)
 
-	if _, err := h.Launch(""); err == nil {
+	if _, err := h.Launch("", ""); err == nil {
 		t.Fatal("launch succeeded while a session is hosted")
 	}
 	if got := env.publications(); len(got) != 0 {
@@ -721,38 +953,34 @@ func TestPtyHostReleaseReservation(t *testing.T) {
 }
 
 // Test: a detached session allocates nothing to broadcast, and an attached one
-// gets a copy that survives the reader moving on (R3328). The reader reuses one
-// scratch buffer, so a client that received the scratch itself would see its
-// queued bytes rewritten by the next read.
-func TestPtyHostBroadcastCopiesOnlyForClients(t *testing.T) {
-	h := NewPtyHost(&recordingPtyEnv{})
-	m := fakeMaster(t)
-	installMaster(h, m, func(PtyWinsize) {})
+// allocates nothing at all (R3336). This is the successor to the R3328 test,
+// and it asks for more than that one did: R3328 removed the per-read 32KB and
+// copied exact-size only when someone would retain the bytes, whereas the two
+// per-connection buffers reach their high-water mark and are then reused for the
+// life of the connection, so there is no per-chunk allocation left to count.
+//
+// Measured inside a jobs closure so everything runs where it really runs — the
+// actor — rather than being reached from the test goroutine.
+func TestPtyHostSteadyStateAppendAllocatesNothing(t *testing.T) {
+	h := hostWithMaster(t, &recordingPtyEnv{})
 
-	// Detached: the reader skips the hop entirely, so nothing is allocated —
-	// not the chunk copy, and not the actor round-trip's channel and closures.
-	scratch := []byte("first-----")
-	if h.clientCount.Load() != 0 {
-		t.Fatalf("clientCount = %d with nothing attached", h.clientCount.Load())
-	}
-	if n := testing.AllocsPerRun(50, func() {
-		if h.clientCount.Load() > 0 {
-			h.broadcast(m, scratch)
-		}
-	}); n != 0 {
-		t.Errorf("detached read path allocated %v times, want 0 — nobody is listening", n)
+	// A stalled client keeps the write in flight, so the measured runs exercise
+	// the append path alone: no writer is spawned and no continuation lands.
+	c := &fakePtyClient{gate: make(chan struct{})}
+	attachFake(t, h, c)
+	chunk := make([]byte, 512)
+
+	var allocs float64
+	_ = svcSyncVoid(h.jobs, func() error {
+		h.distributeLocked(chunk) // grow pending past its first append
+		allocs = testing.AllocsPerRun(50, func() { h.distributeLocked(chunk) })
+		return nil
+	})
+	if allocs != 0 {
+		t.Errorf("steady-state append allocated %v times, want 0 — the buffers are reused (R3336)", allocs)
 	}
 
-	c := &fakePtyClient{}
-	if _, err := h.Attach(c, PtyWinsize{Cols: 80, Rows: 24}); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	if h.clientCount.Load() != 1 {
-		t.Fatalf("clientCount = %d after one attach, want 1", h.clientCount.Load())
-	}
-	h.broadcast(m, scratch)
-	copy(scratch, []byte("second----")) // the reader reuses the buffer
-	if got := string(c.bytes()); got != "first-----" {
-		t.Errorf("client saw %q, want %q — the chunk must not alias the reader's scratch", got, "first-----")
-	}
+	// And the bytes are real: releasing the stall delivers everything appended.
+	c.release()
+	waitFor(t, "the stalled output to drain", func() bool { return len(c.bytes()) == 52*len(chunk) })
 }
