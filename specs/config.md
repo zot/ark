@@ -44,7 +44,7 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 
 | Key          | Type          | Default | Meaning                                                                                                  | Owner                  |
 |--------------|---------------|---------|----------------------------------------------------------------------------------------------------------|------------------------|
-| `dir`        | string        | (req.)  | Source root directory. Identifies the source; its last segment is the source's **name**, accepted wherever a name is (`logs_for`, `--source`, `--for`) when unambiguous. | `source-monitoring.md` |
+| `dir`        | string        | (req.)  | Source root directory. Identifies the source; its last segment is the source's **name**, accepted wherever a name is (`logs_for`, `--source`, `--for`) when unambiguous. Tilde-expanded and symlink-resolved at load — an unresolved directory link scans to the link node and none of its contents. | `source-monitoring.md`, `symlinks.md` |
 | `strategies` | map<str,str>  | `{}`    | Per-source glob → chunker overrides (layered over the top-level `strategies` map).                       | `chunker-strategies.md`|
 | `include`    | PatternSpec   | `{}`    | Include glob patterns. Either `include = [...]` to replace defaults, or `include.add = [...]` to extend. | `source-monitoring.md` |
 | `exclude`    | PatternSpec   | `{}`    | Exclude glob patterns. Same Replace/Add forms as `include`.                                              | `source-monitoring.md` |

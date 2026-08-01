@@ -204,6 +204,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-TagMatcher.md → `tagmatch.go`
 - [ ] crc-Store.md → `store.go`
 - [x] crc-Scanner.md → `scanner.go`, `emptyfiles_test.go`
+- [ ] crc-LinkTable.md → `links.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
 - [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
@@ -255,6 +256,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-pty-launch.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`
 - [x] seq-pty-attach.md → `ptyhost.go`, `pty_server.go`, `cmd/ark/luhmann_attach.go`, `pty_browser.go`
+- [ ] seq-link-resolve.md → `links.go`
+- [ ] seq-ext-tag-retrieval.md → `extmap.go`, `server.go`
 - [x] seq-message.md → `cmd/ark/main.go`, `tagblock.go`
 - [x] seq-session-search.md → `session.go`, `server.go`, `search.go`, `cmd/ark/main.go`
 - [x] seq-tmp-documents.md → `db.go`, `server.go`, `cmd/ark/main.go`, `search.go`
@@ -264,6 +267,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-ChanSvc.md → `svc.go`
 - [x] test-DBReconcile.md → `reconcile_coalesce_test.go`
 - [x] test-ChanSvc.md → `svc_test.go`
+- [ ] test-LinkTable.md → `links_test.go`
+- [ ] test-ExtAssumptions.md → `ext_assumptions_test.go`
 - [x] seq-rebuild-read-serve.md → `cmd/ark/main.go`, `server.go`, `db.go`
 - [x] seq-editor-endpoints.md → `server.go`, `search.go`
 - [x] seq-tag-value-index.md → `store.go`, `indexer.go`, `server.go`

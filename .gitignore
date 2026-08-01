@@ -1,7 +1,8 @@
 /bin/
 *~
 .*~
-.#*
+.\#*
+\#*
 .fslckout
 checkpoint.fossil
 /.scratch/

@@ -28,6 +28,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Ark tags & hypergraph structure             | shipping                                   | `ark-tags.md`                                                                 |
 | Tag drill-down (`<ark-tag>` element)        | shipping                                   | `ark-tag-element.md`                                                          |
 | Source monitoring & chunking                | shipping                                   | `chunkers.md`, `source-monitoring.md`                                         |
+| Path identity (symlink aliases)             | planned; spec landed 2026-08-01, design not yet | `symlinks.md`                                                            |
 | Verse-addressed scripture (`bible` strategy) | shipping                                   | `bible-chunker.md`                                                            |
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
 | Tag definitions (D records)                 | shipping                                   | `tag-defs.md`                                                                 |
@@ -581,6 +582,32 @@ in `~/.claude/`.
 **Surface.** `ark bundle`, `ark setup`, `ark install`, the
 `~/.ark/` directory layout, the bundle subcommands documented in
 `specs/cli-commands.md`.
+
+## Path identity (symlink aliases)
+
+**Motivation.** Ark knows a file by its absolute path, and the filesystem
+lets one file have several. Until those agree, a path reached through a
+symlink names a file ark cannot find — even one it has indexed under
+another name. The failure is quiet and reads as something else entirely:
+a plausible "not indexed", a routing that never fires, a source that
+appears to scan and indexes nothing. It went undetected for months in
+ark's own agent bootstrap.
+
+This matters more than a lookup bug because symlinks are how people
+express two ordinary intentions. One points at the most up-to-date
+version of something — a development checkout, a dotfile repository, an
+artifact shared between projects. The other places files where they have
+to live: an encrypted partition, a volume grafted on when another ran
+low. Ark cannot see a user's whole filesystem correctly while treating
+either as a broken path.
+
+**Objective.** One canonical name per file, with every externally
+supplied path resolved into that namespace before use, and aliases
+recorded rather than followed. Recording is what keeps one file from
+becoming several index entries under different rules, while still
+letting ark *say something* about a link — including that its target
+lies outside every source, which becomes a candidate the user can accept
+rather than a silent expansion of what ark indexes.
 
 ## How to update this file
 

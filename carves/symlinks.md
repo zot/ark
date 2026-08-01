@@ -236,23 +236,41 @@ What survives from the rejected principles is narrower: **the scan must not be
 surprised.** Recorded links are visible, cycles terminate, and nothing enters
 the index without the user having said so.
 
-**Canonical name = the lexically first one. DECIDED (Bill, 2026-08-01.)**
-Arbitrary, and deliberately so: the property being bought is **determinism**,
-not correctness, because there is no correct answer to buy.
+**Canonical name = the path the scan gave it. DECIDED (Bill, 2026-08-01,
+superseding two earlier answers the same day.)** Rooted at the source's
+configured directory, no mid-path rewriting below it. Because a scan stops at
+a directory symlink instead of descending, exactly one source walk reaches
+each file, so there is one canonical name and **no tie-break to make at all**.
 
-A rule that tried to be correct was proposed first and failed, which is worth
-keeping because it shows why arbitrary is the right target. The rule was
-"canonical = the name inside a configured source," on the reasoning that
-source config already encodes which names the user considers theirs. It
-resolves nothing: in both real cases *both* names are already in sources
-(`/home/deck/.ark` and `/home/deck/work/ark` are both declared, so a
-dev-project link has two in-source names), and storage placement ends the same
-way as soon as the adjunct volume is added as its own source. Worse, the two
-groups want **opposite** answers from identical structure — a dev-project
-reference wants the target, a grafted partition wants the link — and nothing
-in the filesystem distinguishes them. Any rule claiming to pick correctly is
-therefore claiming to read intent it cannot see. Better to be plainly
-arbitrary and stable than subtly arbitrary and unstable.
+The question took three answers before dissolving, and the sequence is the
+useful part.
+
+*First: "the name inside a configured source."* Resolves nothing — in both
+real cases both names are already in sources (`/home/deck/.ark` and
+`/home/deck/work/ark` are both declared), and storage placement ends the same
+way the moment the adjunct volume becomes its own source.
+
+*Then: "the lexically first."* Chosen on the grounds that the two habits want
+opposite answers from identical structure, so no rule can pick *correctly* and
+determinism is the only property left worth buying. True as far as it went,
+and it broke on a case neither of us had in view: mid-path **system** links.
+Where `/var` is a link, `/private/var/...` sorts first and becomes the name a
+user reads for a file they only ever addressed as `/var/...`. A rule meant to
+be harmlessly arbitrary turned out to let the operating system's plumbing
+choose user-visible names.
+
+*Finally, the dissolution.* Both earlier answers assumed resolution
+**rewrites stored paths**. It does not. Resolution is a lookup-time
+translation between addresses; canonical naming is a separate question the
+scan already answers. Once those are separated the tie-break has no occasion
+to fire, and the `/private/var` problem cannot arise, because a system link
+points outside every source and is therefore never tracked.
+
+The general lesson, which is why this is written out: **a question that keeps
+producing unsatisfying answers is often two questions wearing one name.** Both
+failed rules were sincere attempts to answer "which of these names is the real
+one?" — a question that stops existing once addressing and naming are pulled
+apart.
 
 **"Which file owns this chunk?" is the same question in different clothes**,
 and it is **already deterministic**: the owner is the first fileid in the
@@ -303,8 +321,17 @@ A directory symlink that is not descended into should leave a trace.
 - **Tie-break when both names lie inside sources.** The canonical-name rule
   above is silent on it. First source in config order, shortest path, and
   source declaration order are all defensible and none is obviously right.
-- **Chains: record each hop, or the resolved endpoint?** Each hop is faithful
-  and survives a mid-chain repoint; the endpoint is cheaper at lookup.
+~~**Chains: record each hop, or the resolved endpoint?**~~ **DECIDED (Bill,
+2026-08-01): record each hop.** The fork was framed as faithfulness versus
+lookup cost, and that framing was wrong — the real reason is that an endpoint
+alone is **unhealable**. For `a → b → c`, repointing the middle link changes
+what `a` resolves to while leaving *both ends untouched*: the name the user
+wrote is unchanged and the target file is unchanged, so nothing watching
+either end has cause to look again, and the stale answer stands indefinitely.
+The information needed to notice is precisely what endpoint-only storage
+discards. Recorded hops make the link set a dependency graph, so a changed
+link invalidates every resolution running through it. R3369, with R3367
+covering the `@ext` anchor case.
 - **Whose include/exclude rules apply** when a file becomes reachable from two
   sources with different patterns? Unanswerable today because it cannot
   happen. It can as soon as links are recorded.
@@ -316,6 +343,61 @@ A directory symlink that is not descended into should leave a trace.
   but in no source, and file indexed under a different name. Haiku could not
   distinguish them and neither could a human without running `ark files`. That
   ambiguity is most of why this survived so long.
+
+## The address-space design
+
+**DECIDED (Bill, 2026-08-01.)** The shape the whole feature settled into, after
+several of this document's earlier answers were superseded in one sitting.
+
+A scan indexes a directory symlink **as an entity and stops** — it does not
+descend — so one file keeps one index entry while gaining a legal *address
+prefix*. The alias lives on the link, not on each file beneath it, so the cost
+is one record per link (74 on this corpus) rather than one per aliased file.
+Patterns match **addresses**, which is why an exact path answers with one and
+`/**/a` answers with two; `--links` expands a result to every address of its
+file, `--nolinks` restricts to canonical. **Search reports canonical paths
+only** — an alias is a way to reach a file, not something the file says, and
+prefix-only duplicates are exactly what deduplication cannot collapse.
+
+**One predicate decides everything:** a directory link whose target is inside a
+source is tracked, one whose target is outside is proposed as a U candidate.
+Over (target path, source config), no index lookup — deliberately *not* "has
+indexed files beneath it", which would need a cross-source reverse index, would
+flap on ordinary editing, and would break add-in-either-order.
+
+R3373–R3381, R3383. Spec: [specs/symlinks.md](../specs/symlinks.md).
+Design: `crc-LinkTable.md`, `seq-link-resolve.md`.
+
+## Accuracy on `@ext`, and the machinery that got deleted
+
+**DECIDED (Bill, 2026-08-01): slow is bounded, wrong is not.** Tags are about
+to become load-bearing, so no flakiness gets built in on purpose.
+
+Each linked-`@ext` association records the premise it was computed under —
+(target, fileid) — so verification is a comparison rather than a re-derivation,
+and an unchanged fileid does no X-record work at all. Three tiers, each taking
+the cheapest mechanism still correct: **single-hop** invalidates precisely (the
+event names the link's own path); **internal multi-hop** dirties on any file
+change and recomputes on retrieval (precision would need a reverse index that
+costs more than it saves); **external multi-hop** recomputes every retrieval
+(no event can reach it). 71 / 5 / 0 on this corpus. Tier is **re-derived on
+every recompute** — the one failure that is silent in the wrong direction.
+Unresolvable is **unresolved, never last-known-good**. Retrieval is **sewn**:
+update-and-retrieve runs on the actor owning ext state, tags travel forward as
+a posted continuation, and any mutation posts to the write actor — sound only
+because of R3344–R3350, which landed the same morning.
+
+**A large amount of machinery was built and then deleted, and the reason is the
+useful part.** Back pointers, watching out-of-source hops, and revalidation at
+use were all defending a *cached forward resolution*. Forward resolution does
+not need a cache: it is 20–35 µs and O(queries), since the query resolves once
+and comparison is canonical-to-canonical. The table exists for the **reverse**
+direction, which the filesystem cannot answer. Once that was seen, three
+requirements were dropped before implementation. The general form: **when a
+design keeps sprouting machinery to keep something honest, check whether the
+something needs to exist.**
+
+R3382, R3384–R3388. Design: `seq-ext-tag-retrieval.md`, `test-ExtAssumptions.md`.
 
 ## The split
 

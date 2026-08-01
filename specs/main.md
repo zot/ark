@@ -124,7 +124,10 @@ Examples (source-scoped context):
 A source's `dir` may itself be a glob (`~/work/*`), expanded against the
 filesystem to produce one source per matching directory. This is shell-style
 path expansion rather than path filtering, so the anchoring rules above do not
-apply and `~` expansion is the only rewriting done.
+apply. Two rewritings are done: `~` expansion, and symlink resolution
+([symlinks.md](symlinks.md)) — a `dir` that is itself a symlink resolves to
+its target, because a scan of an unresolved directory link finds the link node
+and none of its contents.
 
 **`**` is rejected in `[[source]].dir`.** A recursive source glob makes every
 subdirectory its own source root, so a single file change fires one watcher

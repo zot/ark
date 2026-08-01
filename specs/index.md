@@ -39,7 +39,7 @@ axes (this is the pinned list CLAUDE.md refers to).
 Every per-feature spec has a home here, placed by primary concern (a few
 could sit in two; cross-listing is kept minimal).
 
-- **Indexing & chunking** — chunkers.md, chunker-strategies.md, pdf-chunker.md, bible-chunker.md, chunk-callback.md, chunk-context.md, parallel-indexing.md, source-monitoring.md, indexing.md, v25-enhancements.md
+- **Indexing & chunking** — chunkers.md, chunker-strategies.md, pdf-chunker.md, bible-chunker.md, chunk-callback.md, chunk-context.md, parallel-indexing.md, source-monitoring.md, indexing.md, symlinks.md *(see Theme: Path identity)*, v25-enhancements.md
 - **Tags** — tags.md, ark-tag-element.md, tag-extraction-fixes.md, tag-value-index.md, derived-tags.md, discussed-tags.md, at-ext-parsing.md, at-ext-storage.md, internal-disposition.md, at-id.md, at-link.md, tag-block-commands.md, tags-baby-food.md, tag-value-filtering.md, suggest-tag-names.md, chunks-for-tag.md, tag-name-contains-tokens.md, personal-patterns.md
 - **Embeddings** — chunk-embeddings.md, tag-embeddings.md, tag-def-embeddings.md, embed-dedup.md, vector-freshness.md, vec-bench.md, embed-subcommands.md, llama-libs.md
 - **Search** — search.md, fuzzy-search.md, bigram-search.md, multisearch.md, search-filtering.md, search-cli-filters.md, spectral-search.md, search-profiling.md, chunk-filters.md, file-tag-filter.md
@@ -115,6 +115,39 @@ Touches: architecture.md (canonical overview), db-concurrency.md
 (§Protected Resources), db-write-actor.md, find-connections-substrate.md
 (substrateOp — the pattern's first instance), http-operations.md (the
 HTTP front door for operations), chunk-cache-threading.md.
+
+### Path identity
+
+One file may have several paths. Ark keeps **one canonical name per file** —
+the path its scan gave it — and every path arriving from outside is resolved
+into that namespace before it is used: CLI arguments, `[[source]].dir`, `@ext`
+tag targets, content URLs, and the search file filters. Aliases are
+**recorded, never followed**: a scan that meets a symlink records the link and
+its target and does not descend, so one file never becomes several index
+entries governed by different include/exclude rules, and exactly one source
+walk reaches each file.
+
+**Aliases are addresses, not content.** A tracked directory link makes its
+subtree addressable under the link's prefix, and answers keep that prefix; but
+search reports canonical paths only, because a chunk has one home and
+prefix-only duplicates are the kind deduplication cannot collapse.
+
+Invariant: **a surface that skips resolution disagrees with every surface that
+does not, about whether a file exists.** That disagreement is silent — the
+answer is a plausible "not indexed" or a routing that never fires — so partial
+adoption is worse than none. This theme exists because a bootstrap fetch
+through a symlink farm returned `not indexed` for an indexed file, undetected
+for months, while other surfaces answered correctly for the same file.
+
+Two consequences that are easy to get backwards. Resolution is
+**component-wise**, since the link is usually a directory. And a **pattern is
+not a path** — only its longest wildcard-free prefix resolves, with the
+remainder applying unchanged, which is what makes `<link>/**/*` answer in the
+link's namespace while `**/*` answers canonically.
+
+Touches: symlinks.md (canonical), main.md (§`[[source]].dir` is an expansion),
+config.md (`dir`), record-formats.md (§U — Unresolved files),
+at-ext-storage.md (§In-memory ExtMap), status-db.md, files-status.md.
 
 ### Glob anchoring
 

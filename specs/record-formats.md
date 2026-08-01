@@ -441,11 +441,30 @@ during `ark init` and by config-mutating commands.
 ### U — Unresolved files
 
 - **Key:** `U` + path bytes.
-- **Value:** JSON `{path: string, firstSeen: number, dir: string}`.
-- **Semantic:** files seen during a scan that don't match any
-  include/exclude pattern. Persisted so the list survives across
-  scans. Cleared when the user adds a covering rule, dismisses
-  them, or the file no longer exists on disk.
+- **Value:** JSON `{path: string, firstSeen: number, dir: string,
+  reason: string, symlink?: string}`.
+- **Semantic:** files ark noticed and did not index. Persisted so the
+  list survives across scans. Cleared when the user adds a covering
+  rule, dismisses them, or the file no longer exists on disk.
+- **`reason`** says *why* it was not indexed, because the three ways
+  call for different responses ([symlinks.md](symlinks.md)):
+  - `uncovered` — seen during a scan, matched no include/exclude
+    pattern. Resolved by editing patterns.
+  - `unindexable` — no chunker handles this kind of file. No pattern
+    change helps today; a UI may hide these by default, but they stay
+    candidates so that adding a chunker revives them with no user
+    action. **Hidden is not excluded.**
+  - `symlink` — reached only through a symlink whose target lies
+    outside every source. Resolved by adding a source.
+- **`symlink`** is present only for `reason: symlink`, and holds the
+  path of the *proposing link*. The record is keyed on the target, so
+  without this the candidate cannot explain why a directory the user
+  does not recognise is being offered.
+- **A `symlink` candidate was never "seen during a scan."** The walker
+  does not reach outside a source; the target is *proposed* by a
+  recorded link. This is why the semantic above is stated as "noticed
+  and did not index" rather than the narrower scan-encountered form
+  this record originally carried.
 
 ## Page Content Records (PC)
 

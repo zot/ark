@@ -1,5 +1,5 @@
 # Scanner
-**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651
+**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373
 
 Walks configured source directories and classifies files using the
 pattern matcher. Identifies new files to index and new unresolved

@@ -75,6 +75,33 @@ embedded in that text, so no separate cache field is needed.
 - `unresolvedTargets[tvid_ext] → true` — set of @ext tvids whose
   target spec currently resolves to nothing. Re-checked on every
   reindex that could plausibly produce a resolution.
+
+  **A path-base anchor key is symlink-resolved as well as absolutized**
+  ([symlinks.md](symlinks.md)). The "appearing" case works by looking
+  the newly-indexed file's own path up in `extByAnchor`, so the two must
+  be the same spelling of the same file. A target written through a
+  symlink and an indexed path recorded canonically are different
+  strings, and the lookup then misses however many times the file is
+  reindexed — a routing that never fires, indistinguishable from one
+  nobody wrote.
+
+  **And the key is re-keyed when the chain beneath it changes.** Storing
+  a resolved key introduces a staleness the `@ext` flow cannot otherwise
+  see: for `a → b → c`, a TARGET naming `a` is keyed on `c`, and
+  repointing `b` leaves the declaration's text and the target file both
+  unchanged, so neither `fileidToTvids` nor `extByAnchor` has any reason
+  to re-resolve. The routing then points at a file the user's link no
+  longer reaches. Ark records link chains hop by hop precisely so this
+  is detectable, and an anchor key is invalidated when any link on its
+  path changes.
+
+  **Unresolved targets are surfaced, not merely tracked.** They appear
+  in `ark status` alongside the other diagnostic counts, so a broken
+  routing is visible without running `ark inspect`. The set stays
+  in-memory: it is re-derived from indexed tag values on every load, so
+  a durable record would duplicate state that is already correct, and
+  a record class costs an entry in this document plus a `status -db`
+  label that, if forgotten, makes the diagnostic report a silent zero.
 - `virtualTagCount[tag] → int` — counter for ext-routed contributions
   per tag, used in T-total queries (see "T accounting" below).
 - `extSource[tvid_ext] → source_chunkid` — single source chunkid per

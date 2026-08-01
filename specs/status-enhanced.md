@@ -40,7 +40,8 @@ plain text, one field per line, same as current status. Example:
 files: 1273 (156 MB)
 stale: 0
 missing: 12
-unresolved: 3
+unresolved: 3 (uncovered=1 unindexable=1 symlink=1)
+ext-unresolved: 2
 chunks: 8451
 sources: 5
 strategies: lines=1200 chat-jsonl=73
@@ -51,6 +52,17 @@ server: not running
 The total size appears parenthesized after the file count. The
 `strategies` line lists each strategy with its file count,
 space-separated. The `db` line shows the database file size.
+
+`unresolved` breaks down by reason ([symlinks.md](symlinks.md)) because
+one reason normally dominates: `unindexable` files are usually the great
+majority, and a bare total lets an actionable handful hide behind them.
+
+`ext-unresolved` counts `@ext` tags whose target currently resolves to
+nothing ([at-ext-storage.md](at-ext-storage.md)). It is surfaced here
+because the failure is otherwise silent — a routing that never fires
+looks exactly like one nobody wrote — and until now the only way to see
+it was `ark inspect`. The count comes from the in-memory ExtMap, which
+is re-derived on every load, so no record backs it.
 
 ## Server Endpoint
 

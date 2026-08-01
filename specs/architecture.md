@@ -25,7 +25,13 @@ canonical.)
 **Delivery is ordered per posting goroutine.** Closures posted by one
 goroutine run in the order it posted them, across `Do` and `Sync` alike,
 which is what makes "post the follow-up behind the message" a valid
-substitute for synchronizing against it. Two constraints hold that up:
+substitute for synchronizing against it. **Posts from *different*
+goroutines interleave arbitrarily** — expected, and what the actor exists
+to make safe. State both halves together: "order" names two different
+relations here, a total order within one sender and a partial order
+across senders, and collapsing them into "ordering isn't guaranteed"
+discards the only half anything can be built on. Two constraints hold
+the guarantee up:
 the post is a **direct send** on the calling goroutine, and the actor's
 own goroutine **never runs a closure** — each executes in its own
 goroutine and posts back on completion. Escaping the send into a fresh

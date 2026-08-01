@@ -1083,15 +1083,41 @@ See: [monitor.md](monitor.md), [luhmann.md](luhmann.md),
 ```
 ark missing    [PATTERN...]
 ark stale      [PATTERN...]
-ark unresolved
+ark unresolved [--reason uncovered|unindexable|symlink]
 ark resolve    PATTERN...
 ```
 
 `missing` lists files indexed but no longer on disk (M records).
 `stale` lists files whose mtime is newer than their last index pass.
-`unresolved` lists files seen during a scan that don't match any
-include/exclude rule (U records). `resolve PATTERN` dismisses
-matching unresolved entries.
+`unresolved` lists files ark noticed and did not index (U records).
+`resolve PATTERN` dismisses matching unresolved entries.
+
+Path-listing commands honor the global link-view selector — see
+[symlinks.md](symlinks.md). Briefly: a pattern matches *addresses*, so
+`~/s2/link/a` and `~/s1/a` are both legal names for one file and `'**/a'`
+returns both. `--links` expands each result to every address of that file;
+`--nolinks` restricts matching to canonical addresses, which is how a script
+gets a file set that does not change when someone creates a symlink.
+`ark files --status` reports canonical paths whatever spelling was asked, so
+it is also how two listed addresses are shown to be one file. Search does not
+consult the selector: it reports canonical paths only, because an alias is a
+way to reach a file rather than something the file says.
+
+Each unresolved entry names its **reason**, and `--reason` narrows to
+one kind ([symlinks.md](symlinks.md)):
+
+- `uncovered` — matched no include/exclude rule; fix by editing patterns.
+- `unindexable` — no chunker handles this kind of file; the great
+  majority of entries. Fix by adding a chunker, which revives every
+  such entry with no user action, since these are hidden rather than
+  excluded.
+- `symlink` — reached only through a symlink pointing outside every
+  source; fix by adding a source. The entry names the proposing link,
+  since the record is keyed on the target and would otherwise be
+  offering a directory the user does not recognise.
+
+The reason is what lets a caller hide the `unindexable` bulk without
+losing it — a convenience for readers, never an exclusion.
 
 All four proxy to the server when running.
 
