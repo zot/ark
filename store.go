@@ -109,7 +109,39 @@ type UnresolvedRecord struct {
 	Path      string `json:"path"`
 	FirstSeen int64  `json:"firstSeen"`
 	Dir       string `json:"dir"`
+	// Reason says why the file was not indexed. R3356
+	Reason string `json:"reason,omitempty"`
+	// Symlink is the proposing link, present only for
+	// UnresolvedReasonSymlink. The record is keyed on the target, so
+	// without this the candidate cannot explain why a directory the user
+	// may not recognise is being offered. R3357
+	Symlink string `json:"symlink,omitempty"`
 }
+
+// Unresolved-file reasons — why ark noticed a file and did not index it.
+// The three call for different responses (edit a pattern, add a chunker,
+// add a source), so a bare list of unresolved paths cannot tell a reader
+// what to do about any of them.
+// CRC: crc-Store.md | R3356, R3358
+const (
+	// UnresolvedReasonUncovered: seen during a scan, matched no
+	// include/exclude pattern. Resolved by editing patterns.
+	UnresolvedReasonUncovered = "uncovered"
+	// UnresolvedReasonUnindexable: no chunker handles this kind of file.
+	// A statement about ark's current chunkers and not about the file, so
+	// the record persists and adding a chunker revives every such
+	// candidate with no user action. A reader may hide these by default
+	// since they are normally the great majority — **hidden is never
+	// excluded**, and excluding them would look identical on the day it
+	// was done while silently losing the revival. R3358
+	UnresolvedReasonUnindexable = "unindexable"
+	// UnresolvedReasonSymlink: reached only through a symlink whose
+	// target lies outside every source. Resolved by adding a source. Such
+	// a candidate was never "seen during a scan" at all — the walker does
+	// not reach outside a source, and the target is proposed by a
+	// recorded link. R3355
+	UnresolvedReasonSymlink = "symlink"
+)
 
 // I record field names — pseudo-enum for known config and operational fields.
 // CRC: crc-Store.md | R1532, R1533

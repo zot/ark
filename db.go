@@ -307,7 +307,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		store:         store,
 		config:        config,
 		matcher:       matcher,
-		scanner:       &Scanner{config: config, matcher: matcher, fts: fts, emptyFiles: emptyFiles},
+		scanner:       NewScanner(config, matcher, fts, emptyFiles),
 		search:        &Searcher{fts: fts, store: store, config: config},
 		dbPath:        dbPath,
 		svc:           newChanSvc(chanSvcSlots),

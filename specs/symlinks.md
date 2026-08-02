@@ -144,66 +144,87 @@ a resolution failure.
 leading portion of a pattern that contains no wildcards is resolved, and the
 pattern's remainder applies unchanged after it.
 
-## Tracked links are a cache, with a recheck beneath the watches
+## What is stored records the premise it was computed under
 
 Ark sees only the links it scans, and it scans only inside sources. A link
-elsewhere on a resolution path — an intermediate hop in a directory ark does
-not index, a remounted ancestor — can change with nothing to witness it.
+elsewhere on a resolution path, an intermediate hop in a directory ark does not
+index or a remounted ancestor, can change with nothing to witness it.
 
-That failure is worse than the one this feature exists to fix. A stale entry
-does not degrade into "not indexed"; it keeps resolving an address to the file
-it *used* to name, so the address quietly answers with another file's
-contents.
+That failure is worse than the one this feature exists to fix. A stale answer
+does not degrade into "not indexed"; it keeps naming the file an address *used*
+to reach, so the address quietly answers with another file's contents. Tags are
+about to become load-bearing, so nothing flaky is built in on purpose: slowness
+is bounded and visible, wrongness is neither.
 
-**But a tracked link's own node is not one of those blind spots.** It lives
-inside a source — a scan of a source is what found it — so repointing it is an
-ordinary change to a directory entry, seen by exactly the machinery that sees
+Most of the problem never arises, because **no forward resolution is cached**.
+Resolving an address costs tens of microseconds and scales with queries rather
+than with files, so a resolution performed at the moment of use cannot be stale.
+What needs keeping honest is the narrow set of facts computed *from* a
+resolution and then stored: an `@ext` routing recorded against the chunk it
+resolved to.
+
+**Each such association records the premise it was computed under** — the target
+and the fileid it resolved to. That pair turns verification into a comparison
+rather than a re-derivation, so an unchanged fileid means no records are
+rewritten and no maps are touched. The schedule decides *when* to verify; the
+recorded fileid decides *whether* to act.
+
+### Three tiers, each the cheapest mechanism still correct
+
+**A tracked link's own node is not one of those blind spots.** It lives inside a
+source, since a scan of a source is what found it, so repointing it is an
+ordinary change to a directory entry and is seen by the machinery that sees
 every other change in a source. Only *later* hops in a chain can sit in
-territory ark never looks at.
+territory ark never looks at. That gives three shapes, and they do not share a
+mechanism.
 
-That gives three cases, and they do not share a mechanism.
+- **Single hop.** Recompute when the link entry itself changes: repointed,
+  replaced by a real file, or deleted. Precise invalidation is affordable here
+  because the event names the link's own path, so a lookup by path suffices and
+  no reverse index is needed.
+- **Internal multi-hop**, every hop inside a source. Mark dirty on any file
+  change and recompute at the next retrieval. Precise invalidation would need a
+  hop-to-dependents reverse index, and dirtying a handful of entries costs less
+  to maintain than that index.
+- **External multi-hop**, some hop outside every source. Recompute on every
+  retrieval and never cache, because no event can reach it.
 
-When the **first** hop changes, the path that changed *is* the tracked link,
-so its own identity says what to update.
+Measured on this corpus: 71 single-hop, 5 internal multi-hop, no external ones.
 
-When a **later** hop inside a source changes, the change names an intermediate
-path that is not a tracked link at all. Ark has the event and no idea what it
-affects. So each hop after the first keeps a back pointer to the links whose
-resolution runs through it — a list, since one intermediate may feed several —
-and that is what turns the event into an update. Those registrations must be
-withdrawn when a chain is recomputed; a hop left pointing at links it no
-longer feeds keeps waking them, a fault whose symptom is extra work rather
-than missing work, and so a quiet one.
+**A tier is derived state, re-derived on every recomputation.** A single-hop
+link becomes multi-hop the moment its target is replaced by a symlink, and an
+internal chain becomes external when an intermediate moves out of a source. If
+recomputation refreshes the fileid but keeps the old tier, that association
+holds a verification schedule suited to a shape it no longer has, and stops
+being checked for the hop that now exists beyond it. It then reads as
+trustworthy while its premise goes unchecked, which is the one way this scheme
+fails silently in the wrong direction. Re-tiering is therefore part of
+recomputation rather than a pass of its own.
 
-When a later hop lies **outside every source**, ark cannot scan it but can
-still watch it: a watch on the hop's parent, narrowed to that entry, turns a
-repoint into an event that feeds the same back pointers. So all three cases
-become event-driven, and the recheck below stops being a parallel mechanism.
+**An association that cannot be computed is unresolved, never last-known-good.**
+An unmounted volume or a vanished intermediate makes resolution fail at
+retrieval. A tag that does not apply is an absence someone can see and a number
+they can watch; a tag routed to the wrong chunk is neither.
 
-Watching outside the corpus needs care in two places. A watched directory that
-is not a source is a **new kind of thing**, and the code that handles events
-must keep the two apart — treating one as a source would start indexing
-outside every source on the strength of a link, which is the thing this design
-refuses, arrived at from behind. And a path that does not exist cannot be
-watched at all: storage placement is exactly where out-of-source hops live,
-and an unmounted volume means there is no parent to watch, so ark watches the
-nearest ancestor that does exist and re-arms as the rest appears.
+A target directory vanishing while its link is untouched is deliberately not a
+trigger. No event names the link, and the target's files leave the index through
+the ordinary removal path, so the stale association is cleared by the orphan
+cleanup that already exists rather than by a fourth mechanism.
 
-So the recheck is scoped to the hops ark can neither scan nor watch — chiefly
-a hop whose parent does not currently exist, where no watch can be placed.
-Read each such hop again and compare; a mismatch re-resolves and updates the
-entry, healing at the moment it matters. The test for "outside every source"
-is the same one that decides whether a link is tracked or proposed, so one
-predicate serves both.
+### Retrieval is sewn, not called
 
-In practice this is currently free. Of the links ark would track today, nearly
-all are a single hop and the few longer ones have every hop inside a source —
-so they are the second case above, handled by back pointers, and nothing at
-all needs rechecking. The recheck exists for the intermediate link in
-unwatched territory that someone creates tomorrow.
+A retrieval that finds a changed fileid must mutate, so a read path cannot
+compute over ext state without touching actor-owned state off the actor.
+Update-and-retrieve therefore runs on the actor that owns that state, any
+mutation posts to the write actor, and the retrieved tags travel forward as a
+posted continuation. Nothing is held at any instant.
 
-What remains is the interval between checking and using, which no filesystem
-check can close.
+This is sound only because the closure actor delivers in order. Posting a
+follow-up behind a message is what sequences the continuation after the mutation
+it depends on, and before that guarantee was restored the continuation could
+overtake it. A recomputation triggered by a changed fileid reuses the existing
+re-resolution path rather than a parallel one, so the records and maps that must
+move together keep moving together.
 
 ## Chains are recorded hop by hop, so a resolution can heal
 
@@ -218,14 +239,13 @@ file is unchanged — so nothing that watches either end has any reason to look
 again. The stale answer would stand indefinitely, and the information needed
 to notice is exactly what endpoint-only storage throws away.
 
-Recording the hops makes the set of recorded links a dependency graph. A scan
-that sees a link's target has changed invalidates every resolution whose path
-runs through it; a link that disappears returns whatever depended on it to
-unresolved, rather than leaving it pointing at a file it can no longer reach.
+Recording the hops is what makes a mid-chain change noticeable at all. A link
+that disappears returns whatever depended on it to unresolved rather than
+leaving it pointing at a file it can no longer reach.
 
-This governs every stored resolution, not merely file lookups — `@ext` tag
-targets and unresolved-file candidates are both keyed on a resolved path and
-both go wrong in the same silent way.
+The hop list is also the input to the tier question above: whether every hop
+lies inside a source is what separates a chain ark can invalidate on an event
+from one it must recompute on every use.
 
 ## A tracked directory symlink makes its subtree addressable
 
@@ -279,6 +299,16 @@ tracked prefix matches, with a cycle guard. Iteration is not defensive: ark
 already contains a link inside the very tree that other links point at, so
 some paths take two rewrites. The guard is not defensive either — the layout
 permits a cycle, and one link already points at the farm containing it.
+
+**Going the other way is bounded by depth, and the bound is a real limit
+rather than a safety net.** Listing every address of a file cannot be
+terminated by remembering which addresses have been seen, because under a
+cycle the set is genuinely infinite rather than repeating: given `a/link`
+pointing at `b` and `b/link` pointing at `a`, every further `link`
+component names another real, legal address of the same file, and each is a
+string nobody has seen before. So expansion stops at a fixed number of
+substitutions, and beyond it there are addresses ark does not report. Eight
+is generous against a corpus whose deepest real case is two.
 
 ## Three views of the address space
 

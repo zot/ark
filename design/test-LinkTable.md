@@ -98,6 +98,23 @@ already has a link pointing at the farm containing it.
 exhaustion.
 **Refs:** crc-LinkTable.md, seq-link-resolve.md#2.2.3
 
+## Test: a scan records a directory symlink and does not descend
+
+**Purpose:** R3352, R3373 — the originating defect, at the site that
+caused it. `WalkDir` does not follow links, so `d.IsDir()` is false for a
+directory symlink and it falls through to the *file* branch, is matched
+against file patterns, and is silently dropped when its name fails them.
+Its contents are then unreachable with no error and no log line.
+**Input:** sources `s1`, `s2`; a file `s1/a.txt`; `s2/link` → `s1`. Scan.
+**Expected:** `s2/link` in TrackedLinks; `s1/a.txt` in NewFiles exactly
+once; neither `s2/link` nor `s2/link/a.txt` in NewFiles. One file keeps
+one index entry while gaining a legal address, because the alias lives on
+the link rather than on each file beneath it.
+**Fire alarm:** delete the symlink branch and confirm this goes red. The
+link then falls to the file branch exactly as it does today, which is the
+state the whole feature exists to change.
+**Refs:** crc-Scanner.md, crc-LinkTable.md
+
 ## Test: a symlinked source root resolves rather than scanning to one entry
 
 **Purpose:** R3354. The failure this prevents does not present as zero —

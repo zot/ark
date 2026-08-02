@@ -83,7 +83,7 @@ func testScanner(t *testing.T) (*Scanner, string, *EmptyFiles) {
 	t.Cleanup(func() { fts.Close() })
 
 	ef := NewEmptyFiles()
-	sc := &Scanner{config: cfg, matcher: matcher, fts: fts, emptyFiles: ef}
+	sc := NewScanner(cfg, matcher, fts, ef)
 	return sc, dir, ef
 }
 

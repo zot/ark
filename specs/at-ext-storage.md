@@ -76,24 +76,30 @@ embedded in that text, so no separate cache field is needed.
   target spec currently resolves to nothing. Re-checked on every
   reindex that could plausibly produce a resolution.
 
-  **A path-base anchor key is symlink-resolved as well as absolutized**
+  **The anchor key stays unresolved; the lookup resolves instead**
   ([symlinks.md](symlinks.md)). The "appearing" case works by looking
   the newly-indexed file's own path up in `extByAnchor`, so the two must
   be the same spelling of the same file. A target written through a
   symlink and an indexed path recorded canonically are different
-  strings, and the lookup then misses however many times the file is
-  reindexed — a routing that never fires, indistinguishable from one
-  nobody wrote.
+  strings, and a lookup trying only the canonical path misses however
+  many times the file is reindexed — a routing that never fires,
+  indistinguishable from one nobody wrote.
 
-  **And the key is re-keyed when the chain beneath it changes.** Storing
-  a resolved key introduces a staleness the `@ext` flow cannot otherwise
-  see: for `a → b → c`, a TARGET naming `a` is keyed on `c`, and
-  repointing `b` leaves the declaration's text and the target file both
-  unchanged, so neither `fileidToTvids` nor `extByAnchor` has any reason
-  to re-resolve. The routing then points at a file the user's link no
-  longer reaches. Ark records link chains hop by hop precisely so this
-  is detectable, and an anchor key is invalidated when any link on its
-  path changes.
+  The repair goes on the lookup side rather than the key side. The key
+  remains what the user wrote, and therefore cannot go stale; the
+  indexed file's canonical path is expanded to every address naming it,
+  and each is tried. This is the *same* reverse expansion that makes
+  `ark files '**/action.go'` list the real files and all their aliases,
+  so the anchor lookup consumes machinery the address space already
+  requires rather than adding its own.
+
+  Resolving the key instead would store a resolution, and a stored
+  resolution goes wrong invisibly: for `a → b → c`, a TARGET naming `a`
+  keyed on `c` survives a repoint of `b` with the declaration's text and
+  the target file both unchanged, so nothing has cause to re-resolve and
+  the routing points at a file the user's link no longer reaches.
+  Keeping the volatile half out of the key removes that failure instead
+  of defending against it.
 
   **Unresolved targets are surfaced, not merely tracked.** They appear
   in `ark status` alongside the other diagnostic counts, so a broken

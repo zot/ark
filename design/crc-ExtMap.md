@@ -77,6 +77,21 @@ sources index, dropped as overlay items disappear.
   filter. "Is T net-rejected on C" is one hit with the negative-score
   check. Score is materialized from the `@ext-judgment` `@count` field.
   Maintained fresh, rebuilt at startup. (R3066)
+- linkAssumptions: map[uint64]LinkAssumption — tvid_ext → the premise a
+  linked routing was computed under. Present only for routings whose
+  TARGET resolves through a tracked link; a routing naming a path that
+  traverses none needs no verification and gets no entry, which is what
+  bounds how much is tracked at all (R3372). (R3382)
+- LinkAssumption: {target string, fileid uint64, tier LinkTier, dirty
+  bool} — the target as written and the fileid it resolved to, plus the
+  verification tier and, for the internal multi-hop tier only, whether a
+  file change has landed since the last recompute. The (target, fileid)
+  pair is what makes verification a **comparison** rather than a
+  re-derivation: after resolving, an unchanged fileid means no X records
+  and no map updates are touched at all. Recorded by *every* tier
+  including the one that never caches its resolution — without it that
+  tier has only bad options, redoing X-record work on every retrieval or
+  never redoing it. (R3382, R3384, R3385)
 
 ## Does
 - Class-branched write step: IndexExt / ReresolveOnReindex / CleanupSource
@@ -232,6 +247,63 @@ sources index, dropped as overlay items disappear.
   fire only when the chunker drops and replaces the previous last
   chunk. No "is this an append?" branch. (R2007)
 
+- **Verify a linked routing in three tiers** (R3384), each the cheapest
+  mechanism still correct for that shape of chain. **The tier decides when
+  to verify; the recorded fileid decides whether to act.**
+  - *single-hop* — trusted between events, invalidated precisely, because
+    the change event names the link's own path so a lookup by path
+    suffices and no reverse index is needed. Rests on the refresh path
+    recognising a directory-symlink entry (crc-Scanner.md)
+  - *internal multi-hop* (every hop inside a source) — recompute when
+    `dirty`, then clear it. Precise invalidation would need a
+    hop-to-dependents reverse index costing more to maintain than the
+    dirtying saves
+  - *external multi-hop* (some hop outside every source) — recompute on
+    every retrieval, never cached, because no event can reach it
+  - A target directory vanishing while its link is untouched is
+    deliberately **not** a trigger: no event names the link, and the
+    target's files leave the index through the ordinary removal path, so
+    the stale association is cleared by existing orphan cleanup rather
+    than by a fourth mechanism
+- **Mark internal multi-hop assumptions dirty on any file change**
+  (R3384). Runs from the same indexed-chunk callback that already drives
+  `ReresolveOnReindex`, so the dirtying needs no new trigger. Sets the
+  flag on every internal-multi-hop entry rather than on the affected ones
+  — that imprecision *is* the tier's bargain, and the recorded fileid
+  keeps it cheap, since a dirty entry resolving unchanged does no work
+- **Re-derive the tier on every recomputation** (R3385), never carry the
+  old one forward. A single-hop link becomes multi-hop the moment its
+  target is replaced by a symlink, and an internal chain becomes external
+  when an intermediate moves out of a source. Refreshing the fileid while
+  keeping the tier leaves the association on a verification schedule for a
+  shape it no longer has, so it stops being verified for the hop that now
+  exists beyond it, reading as trustworthy while its premise goes
+  unchecked. The one failure in this scheme that is silent in the wrong
+  direction, so re-tiering is part of recomputation rather than a pass of
+  its own
+- **An association that cannot be computed is unresolved, never
+  last-known-good** (R3386). An unmounted volume or a vanished
+  intermediate makes resolution fail at retrieval; the routing joins
+  `unresolvedTargets` and is counted in `ext-unresolved` (R3371). Slowness
+  is bounded and visible while wrongness is neither, so an absence someone
+  can see beats a tag routed to the wrong chunk
+- **Retrieve sewn, not called** (R3387). Update-and-retrieve runs on the
+  actor owning ext state, any mutation posts to the write actor, and the
+  retrieved tags travel forward as a posted continuation, so nothing is
+  held at any instant. A retrieval finding a changed fileid must mutate —
+  X records, `targetToChunk`, `fileidToTvids`, `virtualTagCount` — so a
+  read path cannot compute over ext state itself without touching
+  actor-owned state off-actor. Sound only because of R3344–R3350: posting
+  the continuation behind the mutation is Actor Queue Ordering, and before
+  the closure actor's delivery guarantee was restored the continuation
+  could overtake the mutation it was sequenced after
+- **A fileid-changed recomputation reuses `applyReresolve`** (R3388)
+  rather than a parallel updater. That path already moves X records,
+  `targetToChunk`, `chunkToTargets`, `fileidToTvids`, `extByAnchor`,
+  `virtualTagCount` and `routedTagsByTvidExt` as one unit; a second
+  implementation of that set would drift from it, and the drift shows up
+  as tags routing correctly through one path and not the other
+
 ## Types
 
 ### OverlayError (R2029)
@@ -269,7 +341,14 @@ sources index, dropped as overlay items disappear.
   routed-tag tvid allocator for overlay sources (R2017, R2023)
 - Indexer: invokes IndexExt during chunk callback, ReresolveOnReindex
   from the indexed-chunk callback, CleanupSource from the orphan
-  callback
+  callback; the same indexed-chunk callback marks internal multi-hop
+  assumptions dirty (R3384)
+- LinkTable: `Resolve` for a TARGET naming a path through a link, and
+  `Expand` for the appearing-case anchor lookup, so a target written
+  through a link still matches a file indexed canonically (R3367).
+  LinkTable owns the address space; the assumption records are ExtMap's
+  (crc-LinkTable.md)
 
 ## Sequences
 - seq-ext-routing.md
+- seq-ext-tag-retrieval.md

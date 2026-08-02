@@ -399,6 +399,73 @@ something needs to exist.**
 
 R3382, R3384–R3388. Design: `seq-ext-tag-retrieval.md`, `test-ExtAssumptions.md`.
 
+## What the change of direction left behind
+
+**Recorded because it cost a whole session to rediscover.** The design above
+was revised *mid-sitting*: back pointers, out-of-source watches and
+revalidation went out, the tiers came in. The requirement list was updated to
+match. Three other layers were not, and none of them announces that it is
+stale:
+
+- **`specs/symlinks.md` still described the deleted machinery** and carried no
+  prose at all for R3382 and R3384–R3388 — the section that should have
+  *become* the tiers was simply left as the cache-and-recheck design.
+- **Nine requirements had validator-green coverage and no design.**
+  `crc-Scanner.md` claimed R3352/R3353/R3373 with no symlink behavior in its
+  body; `crc-ExtMap.md` claimed R3382 and R3384–R3388 without the words
+  *tier*, *premise* or *LinkTable* appearing in 275 lines, leaving
+  `seq-ext-tag-retrieval.md` an orphan no card pointed at.
+- **R3367 specified the opposite mechanism** to the sequence and test design
+  written after it (below).
+
+The mechanism is worth understanding rather than just the instance:
+`minispec validate` computes requirements→design coverage from each card's
+**top-line `**Requirements:**` field**, which `update add-ref` maintains. So
+when a direction changes, the refs move in one cheap command and the bodies do
+not — and coverage goes green *because* the design is missing. **Read the card
+body; never take the coverage report as evidence that a card was updated.**
+Repaired 2026-08-01 evening.
+
+## Two calls that resolved the residue
+
+~~**Is the `extByAnchor` key resolved, or does the lookup expand?**~~
+**DECIDED (Bill, 2026-08-01): the key stays unresolved; the lookup expands.**
+R3367 said the key is symlink-resolved and re-keyed when the chain beneath it
+changes; `seq-link-resolve.md` diagram 2 and `test-ExtAssumptions.md` said the
+key stays the absolutized-but-unresolved text and the *lookup* expands the
+indexed file's canonical path to every address naming it. Both were committed
+together, on either side of the revision.
+
+The argument that settles it is one sentence: **reverse expansion is already
+what makes `ark files '**/action.go'` list the real files and all their
+aliases.** So the anchor lookup consumes machinery the address space must have
+regardless, instead of growing a second mechanism — and a resolved key would be
+a stored resolution, the exact thing the deleted back pointers existed to keep
+honest.
+
+The objection raised against it was **wrong, and the correction matters more
+than the objection**: an untracked ancestor (`/home` being a symlink) does not
+create a blind spot, because R3363 makes canonical *the name the scan gave it*,
+so a source configured as `/home/…` indexes under that spelling and ark never
+manufactures a name the user's own path would fail against. The real residue is
+narrow — a target spelled through a link outside every source (never scanned,
+never tracked) whose file does not exist yet at declaration time. A miss rather
+than a misroute, healing at the next reindex of the declaring file. R3367
+reworded; `specs/at-ext-storage.md` reconciled.
+
+~~**How does reverse expansion terminate under a cycle?**~~ **DECIDED (Bill,
+2026-08-01): a depth bound of 8, stated as a requirement (R3389).** A visited
+set cannot do it, and the reason is the whole point: under a cycle the address
+set is genuinely *infinite* rather than repeating, because `a/link → b` with
+`b/link → a` makes every further `link` component another real, legal address
+and a string never seen before. Forward rewriting has no such problem — each
+substitution consumes a prefix, so the walk shrinks.
+
+Written as a requirement rather than an approved gap **because an unstated
+bound reads as defensive and invites deletion**, and deleting it does not make
+the termination test fail — it makes it *hang*. Found by writing that test,
+which did not terminate against the first implementation.
+
 ## The split
 
 Provisional; not yet agreed.
