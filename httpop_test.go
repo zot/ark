@@ -203,3 +203,61 @@ func TestInitFailureShortCircuitsRun(t *testing.T) {
 		}
 	})
 }
+
+// Test: test-SearchRequestValidation.md — a request the server cannot honour
+// is refused at the door.
+//
+// R3399. Bad input is not an internal failure (R3165), but /search is an
+// ordinary handler rather than an operation, so it does not inherit that
+// mapping. Before this, an uncompilable pattern failed several frames down
+// inside the FTS search and came back 500 — the server reporting that it had
+// malfunctioned, when it had understood the request perfectly and found it
+// invalid.
+func TestValidateSearchRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     searchRequest
+		wantErr bool
+	}{
+		{"empty request is fine", searchRequest{}, false},
+		{"ordinary query", searchRequest{Query: "hello"}, false},
+		{"valid regex", searchRequest{Regex: []string{`^foo.*bar$`}}, false},
+		{"several valid regexes", searchRequest{Regex: []string{`a+`, `b?`}}, false},
+		// The demonstration case: `[` opens a character class and never closes.
+		{"unclosed character class", searchRequest{Regex: []string{"["}}, true},
+		{"several valid regexes, one bad", searchRequest{Regex: []string{"ok", "("}}, true},
+		{"bad except-regex", searchRequest{ExceptRegex: []string{"*"}}, true},
+		// What `ark search --regex ok --regex '('` ACTUALLY sends: the CLI puts
+		// only the first pattern in Regex and every later one arrives as a
+		// chunk-filter row, which BuildChunkFilters hands to microfts2
+		// uncompiled. The first version of this test asserted a two-element
+		// Regex instead — a request shape no client produces — and passed while
+		// the real command still returned 500. The live run is what caught it.
+		{"bad regex arriving as a chunk filter", searchRequest{
+			Regex:        []string{"ok"},
+			ChunkFilters: []ChunkFilterRow{{Polarity: "with", Mode: "regex", Query: "("}},
+		}, true},
+		{"bad regex in a negative chunk filter", searchRequest{
+			ChunkFilters: []ChunkFilterRow{{Polarity: "without", Mode: "regex", Query: "["}},
+		}, true},
+		{"valid chunk-filter regex", searchRequest{
+			ChunkFilters: []ChunkFilterRow{{Polarity: "with", Mode: "regex", Query: `\d+`}},
+		}, false},
+		// A non-regex row carrying regex-looking text is not a pattern.
+		{"contains filter is not compiled", searchRequest{
+			ChunkFilters: []ChunkFilterRow{{Polarity: "with", Mode: "contains", Query: "("}},
+		}, false},
+		{"mutually exclusive output modes", searchRequest{Chunks: true, Files: true}, true},
+	}
+	for _, tt := range tests {
+		err := validateSearchRequest(tt.req)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%s: validateSearchRequest() error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			continue
+		}
+		// A rejection the caller cannot act on is barely better than a 500.
+		if tt.wantErr && err.Error() == "" {
+			t.Errorf("%s: rejected with an empty message", tt.name)
+		}
+	}
+}

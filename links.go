@@ -197,11 +197,68 @@ func (lt *LinkTable) Observe(linkPath string) (*LinkEntry, LinkStatus) {
 	return entry, LinkTracked
 }
 
+// SyncPath brings the table in line with what is on disk at one path — the
+// per-path counterpart of the walk's Observe, for the change events a link
+// produces once it exists. A link lives in a source like any other entry, so
+// repointing, deleting or replacing it produces an ordinary change event and
+// never a full scan; the single-hop tier is defined on exactly that event
+// (R3384), which is why nothing verified by it can be trusted without this.
+//
+// Lstat first, and dispatch on what the path *is* rather than on what it
+// points at. That is the order the scan already uses, and getting it backwards
+// is the whole defect: following the link and asking whether the destination
+// is a directory answers yes for a perfectly ordinary repoint, so the caller
+// concludes there is nothing to do.
+//
+// Bounded by what lstat can state on its own. "Is a symlink now" (created or
+// repointed) and "is gone" (deleted) are answered exactly; a link replaced in
+// place by a non-indexable regular file is indistinguishable from any other
+// uninteresting file, and only the table knows the path used to be an alias
+// prefix — see gap O196.
+//
+// CRC: crc-LinkTable.md | Seq: seq-file-change.md#1.3.5 | R3390
+func (lt *LinkTable) SyncPath(path string) (*LinkEntry, LinkStatus) {
+	p := filepath.Clean(ExpandTilde(path))
+	fi, err := os.Lstat(p)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		// Gone, or no longer a symlink. Either way it has stopped being an
+		// alias prefix, and a link that disappears must return whatever
+		// depended on it to unresolved rather than leave it pointing at a
+		// path it can no longer reach. R3369
+		lt.Remove(p)
+		return nil, LinkUnresolvable
+	}
+	if linksToRegularFile(p) {
+		return nil, LinkUnresolvable
+	}
+	return lt.Observe(p)
+}
+
+// linksToRegularFile reports whether a symlink's chain ends at something that
+// is not a directory. Such a link is a file by another name rather than an
+// alias prefix, and keeps ark's pre-existing handling.
+//
+// One function on purpose. The scan and the per-path refresh must dispose of
+// the same link identically — two surfaces that disagree about what a link is
+// are worse than one that is consistently wrong — and a duplicated three-line
+// predicate is exactly the shape that drifts.
+//
+// CRC: crc-LinkTable.md | R3352, R3390
+func linksToRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // Remove forgets a link, from both the forward map and the reverse index.
 // A link that disappears returns whatever depended on it to unresolved
 // rather than leaving it pointing at a file it can no longer reach. R3369
+//
+// Cleans its argument for the same reason Lookup does: the table is keyed on
+// the cleaned form, so a caller passing the path a user or a watcher gave it
+// would otherwise silently forget nothing.
 // CRC: crc-LinkTable.md | R3369
 func (lt *LinkTable) Remove(linkPath string) {
+	linkPath = filepath.Clean(ExpandTilde(linkPath))
 	entry, ok := lt.links[linkPath]
 	if !ok {
 		return

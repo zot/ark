@@ -152,6 +152,33 @@ density normalization.
 - `--after <date>` — only results newer than date (time filtering)
 - `--score <mode>` — scoring strategy: auto (default), coverage, density
 
+## A request the server cannot honour is refused at the door
+
+`POST /search` validates the request before dispatching it, and a request it
+cannot honour comes back **400**, never a 500. The classification is the one
+[http-operations.md](http-operations.md) already states — bad input is not an
+internal failure — but `/search` is an ordinary handler rather than an
+operation, so it does not inherit that mapping and has to draw the line itself.
+
+What the server can decide from the request alone is checked there: the
+mutually-exclusive output modes, and whether every regex compiles — in the
+primary position, in `--except-regex`, and in the **filter rows**, since only
+the first `-regex` is the primary and every later one arrives as a chunk
+filter. An uncompilable pattern otherwise fails several layers down, inside the
+FTS search, where nothing left in the stack can tell a caller's mistake from
+ark's own — so `ark search --regex '['` reported that the *server* had
+malfunctioned, when the server had understood the request perfectly and found it
+invalid.
+
+A pattern is only compiled where the request says it is one. The same
+parenthesis in a `-contains` filter is literal text, and rejecting it would turn
+a legitimate search into an error.
+
+The 500 was invisible while the CLI swallowed proxy errors and reported a lock
+instead (see [cli-dispatch.md](cli-dispatch.md), "A failed proxy is not an
+absent server"). One defect hid the other; fixing the first is what exposed
+this.
+
 ## Search during incomplete embedding
 
 When chunk embedding is in progress, combined search compensates:

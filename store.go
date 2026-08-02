@@ -641,6 +641,24 @@ func (s *Store) WriteERecord(name string, payload any) error {
 }
 
 // ReadERecords scans all E: prefix records.
+// Warnings returns the outstanding E-record conditions in the form that
+// travels in StatusInfo — condition name → its stored text. Separate from
+// ReadERecords because the wire form is a plain map a JSON round-trip
+// preserves, and because keeping the conversion here lets it be tested
+// against a bare Store rather than a whole DB.
+// CRC: crc-Store.md | R3395
+func (s *Store) Warnings() (map[string]string, error) {
+	records, err := s.ReadERecords()
+	if err != nil {
+		return nil, err
+	}
+	warnings := make(map[string]string, len(records))
+	for name, cond := range records {
+		warnings[name] = string(cond)
+	}
+	return warnings, nil
+}
+
 func (s *Store) ReadERecords() (map[string]json.RawMessage, error) {
 	result := make(map[string]json.RawMessage)
 	err := s.bolt.View(func(txn *bbolt.Tx) error {

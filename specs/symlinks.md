@@ -259,13 +259,36 @@ of `~/source1`. What the link record buys is that `~/source2/link` becomes a
 legal *address prefix*: paths beneath it name real files, and answers keep the
 prefix unaltered.
 
-Because the link entry is indexed like any other entry in its source, a change
-to it — repointed, replaced, removed — arrives through the ordinary refresh
-path. That path must therefore recognise a directory-symlink entry and update
-the link table. It does not today: a directory symlink is classified as a
-non-directory, tested against file patterns, and dropped, so the change event
-fires and nothing acts on it. Making that path handle link entries is what
-lets everything below rely on links staying current.
+Because the link entry lives in a source like any other entry, a change to it —
+repointed, replaced, removed — arrives through the **per-path refresh** rather
+than through a full scan. That path recognises a directory-symlink entry and
+brings the link table in line with it, which is what lets everything below rely
+on links staying current.
+
+Two things had to give way for that, and both are the same mistake in different
+clothes: treating a link as a file. A directory symlink matches no *file*
+pattern, so the indexability filter that guards the refresh dropped the very
+event that repoints a tracked link — and then cached the path as uninteresting
+for the life of the process, so no later event on it was examined either. And
+the refresh itself, reaching the path, followed the link before asking what the
+path was, saw a directory, and returned. The event fired and nothing acted on
+it, twice over.
+
+So the filter now lets a path through when the filesystem says it is not a
+plain regular file, or that it is gone, and it never caches such a path as
+uninteresting. That test is deliberately made of nothing but `lstat`: the link
+table is owned by the actor and the filter runs on the watch loop, so a test
+needing the table could not be asked there. The table itself is then updated on
+the actor that owns it, before anything is queued for the write actor that runs
+off it.
+
+The two transitions `lstat` can state on its own — *the path is a symlink now*
+(created or repointed) and *the path is gone* (deleted) — are therefore covered
+exactly. A link replaced in place by a **non-indexable regular file** is not:
+nothing about the new file distinguishes it from any other uninteresting file,
+and only the table knows the path used to be an alias prefix. The stale entry
+then keeps answering for an alias that no longer exists until the next restart
+rebuilds the table from what the scan finds.
 
 ```
 ark files ~/source2/link/a       →  ~/source2/link/a

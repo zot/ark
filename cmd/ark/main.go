@@ -203,13 +203,55 @@ func defaultDB() string {
 }
 
 // withDB opens the database, runs fn, and closes it. Fatals on error.
+//
+// This is the cold-start arm: a command that can answer without a server lands
+// here when the dial finds none. The open is **bounded** — the bound belongs to
+// the act of a CLI opening the index, not to proxyOrLocal, which merely happens
+// to be the other place that does it.
+//
+// It used ark.Open until 2026-08-01, and that was correct when written: under
+// LMDB several reader processes could hold the index at once. The bbolt port
+// made the lock exclusive and single-process, turning the same call into an
+// unbounded wait — bbolt's flock reads a zero timeout as wait-forever — with no
+// failing test, because the hazard needs a race against a server to appear.
+// `ark status --chunks` against a running server hung indefinitely.
+//
+// CRC: crc-CLI.md | R3391, R2994, R2997
 func withDB(fn func(db *ark.DB)) {
-	d, err := ark.Open(arkDir)
-	if err != nil {
-		fatal(err)
-	}
+	d := openLocalBounded()
 	defer d.Close()
 	fn(d)
+}
+
+// openLocalBounded opens the index locally, waiting through a server bounce but
+// never indefinitely.
+//
+// On a lock timeout it asks whether a server is answering *now*, because the
+// two ways the index can be held want opposite responses: one coming up will
+// take a dial shortly, so waiting is right; one already running owns the index
+// for as long as it lives, so waiting cannot help and the command should say so
+// rather than spend the whole window reaching a failure that was certain at the
+// first attempt.
+//
+// CRC: crc-CLI.md | R3391, R2997
+func openLocalBounded() *ark.DB {
+	start := time.Now()
+	for {
+		d, err := ark.OpenWithTimeout(arkDir, dispatchLockTimeout)
+		if err == nil {
+			return d
+		}
+		if !errors.Is(err, bolterrors.ErrTimeout) {
+			fatal(err) // config or schema failure: real, and not about the lock
+		}
+		if client := serverClient(arkDir); client != nil {
+			fatal(fmt.Errorf("a server is running and holds the index; stop it with `ark stop` to run this command"))
+		}
+		if time.Since(start) >= dispatchStubbornWindow {
+			fatal(fmt.Errorf("index is locked by another process after %s; stop it, or retry", dispatchStubbornWindow))
+		}
+		time.Sleep(dispatchRetryInterval)
+	}
 }
 
 // Stubborn dispatch tunables.
@@ -275,9 +317,17 @@ func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 			// up, or a bounce in progress). Other open failures (config,
 			// schema) are real; fatal at once.
 			// CRC: crc-CLI.md | R2997
-			if errors.Is(err, bolterrors.ErrTimeout) && time.Since(start) < dispatchStubbornWindow {
-				time.Sleep(dispatchRetryInterval)
-				continue
+			if errors.Is(err, bolterrors.ErrTimeout) {
+				if time.Since(start) < dispatchStubbornWindow {
+					time.Sleep(dispatchRetryInterval)
+					continue
+				}
+				// Say what happened in the caller's terms. The raw error
+				// ("open microfts2: bbolt Open …: timeout") names the
+				// storage layer and no remedy; openLocalBounded already
+				// words this the useful way, and the two paths reach the
+				// identical condition.
+				fatal(fmt.Errorf("index is locked by another process after %s; stop it, or retry", dispatchStubbornWindow))
 			}
 			fatal(err)
 		}
@@ -298,6 +348,45 @@ func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 func withExclusiveDB(fn func(*ark.DB)) {
 	proxyOrLocal(nil, func(d *ark.DB) error { fn(d); return nil })
 }
+
+// statusPlan says where each part of `ark status`'s output comes from.
+// CRC: crc-CLI.md | R3392, R3393, R3394
+type statusPlan struct {
+	proxy       bool  // ask the server for the status block
+	proxyChunks bool  // chunk statistics come from POST /status/chunks
+	local       bool  // open the index; it answers everything
+	err         error // refuse outright, with the reason
+}
+
+// planStatus resolves the whole of `ark status`'s dispatch from three
+// booleans.
+//
+// It is a separate function because the defect it exists for was a
+// *decision*, not plumbing: the command proxied its status block, printed it,
+// and then opened the index for the chunk table — with the server still
+// holding the lock, which hung before R3391 and now blames the lock for data
+// the server could have returned (R3392). Written this way the choice is
+// testable without a socket, a lock or a subprocess, and a future command
+// copying `cmdStatus` inherits the shape rather than the trap.
+//
+// CRC: crc-CLI.md | R3392, R3393, R3394
+func planStatus(serverUp, wantChunks, wantTokenize bool) statusPlan {
+	if !serverUp {
+		return statusPlan{local: true}
+	}
+	// R3394: tokenizing loads the embedding model for its vocabulary — the
+	// same thing that makes embed text/bench/validate exclusive (R3002).
+	if wantChunks && wantTokenize {
+		return statusPlan{err: errTokenizeNeedsExclusive}
+	}
+	// R3393: chunk statistics come from the server too. This is the case
+	// that used to reach for the index a second time.
+	return statusPlan{proxy: true, proxyChunks: wantChunks}
+}
+
+// CRC: crc-CLI.md | R3394
+var errTokenizeNeedsExclusive = errors.New(
+	"--tokenize loads the embedding model and needs the index to itself; stop the server with `ark stop`")
 
 // serverClient returns an http.Client that connects over Unix socket,
 // or nil if no server is running.
@@ -1340,9 +1429,17 @@ func cmdSearch(args []string) {
 	}
 
 	// Server-first: proxy to server if available, fall back to local.
-	// Server keeps caches warm (file name map, LMDB pages).
-	// CRC: crc-CLI.md | R1783, R1784
-	if client := serverClient(arkDir); client != nil {
+	// Server keeps caches warm (file name map, bbolt pages).
+	//
+	// R3398: through proxyOrLocal, not a hand-rolled dial. This used to be
+	// `if err := proxyDecode(...); err == nil { print; return }` with the
+	// error dropped, so a server that answered and *refused* was
+	// indistinguishable from no server at all: the command fell through to
+	// the local open, failed against the lock the server was holding, and
+	// reported that instead of what the server had said. `ark search
+	// --regex '['` was the demonstration.
+	// CRC: crc-CLI.md | R1783, R1784, R3398, R3003
+	proxyOrLocal(func(client *http.Client) error {
 		// R1786: old filter flags removed — filter stack subsumes them
 		req := struct {
 			Query           string               `json:"query"`
@@ -1389,26 +1486,24 @@ func cmdSearch(args []string) {
 			// producing empty output).
 			// CRC: crc-CLI.md | R2432, R2441
 			var tagResults []ark.TagResult
-			if err := proxyDecode(client, "POST", "/search", req, &tagResults); err == nil {
-				if *tagsJSON {
-					emitTagsJSONL(tagResults)
-				} else {
-					printTagsBabyFood(tagResults, buildTagsCfg(filterEntries, *noValues, *noChunks, *noFiles), *scores)
-				}
-				return
+			if err := proxyDecode(client, "POST", "/search", req, &tagResults); err != nil {
+				return err
 			}
-		} else {
-			var results []ark.SearchResultEntry
-			if err := proxyDecode(client, "POST", "/search", req, &results); err == nil {
-				printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
-				return
+			if *tagsJSON {
+				emitTagsJSONL(tagResults)
+			} else {
+				printTagsBabyFood(tagResults, buildTagsCfg(filterEntries, *noValues, *noChunks, *noFiles), *scores)
 			}
+			return nil
 		}
-		// Server proxy failed — fall through to local search
-	}
-
-	// Local LMDB path (fallback when server not running)
-	withDB(func(d *ark.DB) {
+		var results []ark.SearchResultEntry
+		if err := proxyDecode(client, "POST", "/search", req, &results); err != nil {
+			return err
+		}
+		printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
+		return nil
+	}, func(d *ark.DB) error {
+		// The cold-start arm: reached only when no server answered the dial.
 		done := d.NewSearchCache()
 		defer done()
 		opts := ark.SearchOpts{
@@ -1511,6 +1606,7 @@ func cmdSearch(args []string) {
 		} else {
 			printSearchResults(results, *scores, *chunks, *files, *wrap, *preview, queryStr)
 		}
+		return nil
 	})
 }
 
@@ -2459,8 +2555,17 @@ func cmdStatus(args []string) {
 	}
 	fs.Parse(rest)
 
-	proxied := false
-	if client := serverClient(arkDir); client != nil {
+	// CRC: crc-CLI.md | R3392, R3393, R3394 — one decision, made up front.
+	client := serverClient(arkDir)
+	plan := planStatus(client != nil, *showChunks, *tokenize)
+	if plan.err != nil {
+		fatal(plan.err)
+	}
+
+	ff := ark.ExpandTildeSlice([]string(filterFiles))
+	ef := ark.ExpandTildeSlice([]string(excludeFiles))
+
+	if plan.proxy {
 		path := "/status"
 		if *showDB {
 			path = "/status?db=true"
@@ -2480,51 +2585,49 @@ func cmdStatus(args []string) {
 			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
 				resp.Version, ark.Version)
 		}
-		if !*showChunks {
+		printWarnings(resp.Warnings)
+		if !plan.proxyChunks {
 			return
 		}
-		proxied = true
+		// R3393: the chunk table comes from the server. Opening the index
+		// here — after the block above already proxied — is the defect.
+		var result ark.ChunkStatsResult
+		if err := proxyDecode(client, "POST", "/status/chunks", map[string]any{
+			"filterFiles":  ff,
+			"excludeFiles": ef,
+		}, &result); err != nil {
+			fatal(err)
+		}
+		if len(result.Rows) == 0 {
+			fmt.Println("no chunks found")
+			return
+		}
+		printChunkStats(&result, "bytes", "")
+		return
 	}
 
 	withDB(func(d *ark.DB) {
-		if !proxied {
-			status, err := d.Status()
+		status, err := d.Status()
+		if err != nil {
+			fatal(err)
+		}
+		printStatus(status, false)
+		if *showDB {
+			dbCounts, err := d.StatusDB()
 			if err != nil {
 				fatal(err)
 			}
-			printStatus(status, false)
-			if *showDB {
-				dbCounts, err := d.StatusDB()
-				if err != nil {
-					fatal(err)
-				}
-				printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
-			}
+			printDBCounts(dbCounts, status.MapUsed, status.MapTotal)
 		}
 
-		// CRC: crc-CLI.md | R1565, R1566, R1567
-		eRecords, _ := d.Store().ReadERecords()
-		if len(eRecords) > 0 {
-			fmt.Println("warnings:")
-			// R2953: sort by name for deterministic, scannable output.
-			warnNames := make([]string, 0, len(eRecords))
-			for name := range eRecords {
-				warnNames = append(warnNames, name)
-			}
-			sort.Strings(warnNames)
-			for _, name := range warnNames {
-				fmt.Printf("  %s: %s\n", name, string(eRecords[name]))
-			}
-		}
+		// CRC: crc-CLI.md | R1565, R1566, R1567, R3395
+		printWarnings(status.Warnings)
 
 		if !*showChunks {
 			return
 		}
 
 		// Chunk stats
-		ff := ark.ExpandTildeSlice([]string(filterFiles))
-		ef := ark.ExpandTildeSlice([]string(excludeFiles))
-
 		var sizeFn func(string) int // nil = use CRecord ContentLen (fast path)
 		unit := "bytes"
 		modelName := ""
@@ -2556,6 +2659,28 @@ func cmdStatus(args []string) {
 
 		printChunkStats(result, unit, modelName)
 	})
+}
+
+// printWarnings prints the outstanding E-record conditions under a "warnings:"
+// header, sorted by name for deterministic, scannable output (R2953). The
+// conditions ride in StatusInfo (R3395), so this prints the same block whether
+// the status was answered by a server or by a local open — before, they were
+// read inside whatever local open the command happened to make, and a proxied
+// `ark status` printed none at all.
+// CRC: crc-CLI.md | R1565, R1566, R1567, R2953, R3395
+func printWarnings(warnings map[string]string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Println("warnings:")
+	names := make([]string, 0, len(warnings))
+	for name := range warnings {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Printf("  %s: %s\n", name, warnings[name])
+	}
 }
 
 func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {

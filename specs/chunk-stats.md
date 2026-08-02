@@ -21,6 +21,13 @@ chunk instead of bytes. This is slower (requires model load for its
 vocabulary) but gives exact token counts — the unit that matters for
 `n_ctx_seq`. Without `--tokenize`, sizes are in bytes.
 
+`--tokenize` **requires the server stopped.** It loads the embedding
+model for itself, which is the same thing `embed bench`, `embed
+validate` and `embed text` do, and they refuse for the same reason. With
+a server running it says so and exits rather than reaching for the
+index — see [cli-dispatch.md](cli-dispatch.md). Byte-mode `--chunks` has
+no such restriction.
+
 ## Output
 
 When `--chunks` is active, after the normal status output, print a
@@ -54,6 +61,19 @@ For each file in scope, use `DB.AllChunks(path)` to get chunk content.
 `len(chunk.Content)` gives byte size. With `--tokenize`, tokenize each
 chunk's content through the model's tokenizer and count the resulting
 tokens.
+
+## Dispatch
+
+Chunk statistics are index data, so with a server running they come
+**from the server** — the CLI sends the filter stack and renders what
+comes back. It does not open the index for them, which is the rule in
+[cli-dispatch.md](cli-dispatch.md); doing so was what made this command
+hang, since `--chunks` runs *after* the ordinary status block has already
+been proxied and printed.
+
+The warnings block above the chunk table is index data too, and it rode
+in the same local open. It now travels in the status response instead —
+see [config-tracking.md](config-tracking.md#status-display).
 
 ## Tokenizer context
 

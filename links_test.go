@@ -402,6 +402,156 @@ func TestScanRecordsDirectorySymlinkAndStops(t *testing.T) {
 	}
 }
 
+// A repointed link is followed through the per-path refresh. A link change
+// never arrives as a scan, so SyncPath is the only thing that re-derives a
+// tracked link's resolution — and the single-hop tier is defined on exactly
+// that event. R3390, R3384
+func TestLinkSyncPathFollowsRepoint(t *testing.T) {
+	root := linkTempRoot(t)
+	s1a, s1b, s2 := filepath.Join(root, "s1a"), filepath.Join(root, "s1b"), filepath.Join(root, "s2")
+	mkDirs(t, s1a, s1b, s2)
+	link := filepath.Join(s2, "link")
+	mkSymlink(t, s1a, link)
+
+	lt := NewLinkTable(linkCfg(s1a, s1b, s2))
+	if _, status := lt.Observe(link); status != LinkTracked {
+		t.Fatalf("initial status = %v, want LinkTracked", status)
+	}
+
+	// Repoint: unlink then symlink, which is what `ln -sfn` does and what the
+	// watcher sees as a Remove followed by a Create.
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove(link): %v", err)
+	}
+	mkSymlink(t, s1b, link)
+
+	entry, status := lt.SyncPath(link)
+	if status != LinkTracked {
+		t.Fatalf("status after repoint = %v, want LinkTracked", status)
+	}
+	// Asserting the new target rather than merely that something changed: the
+	// old answer is a real path that still exists and still reads as correct.
+	if entry.Resolved != s1b {
+		t.Errorf("Resolved = %q, want %q", entry.Resolved, s1b)
+	}
+	if got, want := lt.Resolve(filepath.Join(link, "a.md")), filepath.Join(s1b, "a.md"); got != want {
+		t.Errorf("Resolve = %q, want %q", got, want)
+	}
+}
+
+// A deleted link is forgotten, returning whatever depended on it to
+// unresolved rather than leaving it pointing at a file it can no longer
+// reach. R3369, R3390
+func TestLinkSyncPathForgetsDeletedLink(t *testing.T) {
+	root := linkTempRoot(t)
+	s1, s2 := filepath.Join(root, "s1"), filepath.Join(root, "s2")
+	mkDirs(t, s1, s2)
+	link := filepath.Join(s2, "link")
+	mkSymlink(t, s1, link)
+
+	lt := NewLinkTable(linkCfg(s1, s2))
+	lt.Observe(link)
+	if lt.Len() != 1 {
+		t.Fatalf("Len = %d before removal, want 1", lt.Len())
+	}
+
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove(link): %v", err)
+	}
+	if _, status := lt.SyncPath(link); status != LinkUnresolvable {
+		t.Errorf("status = %v, want LinkUnresolvable", status)
+	}
+	if lt.Len() != 0 {
+		t.Errorf("Len = %d after removal, want 0", lt.Len())
+	}
+	// A vanished alias is ark's ordinary not-indexed answer, not an error.
+	addr := filepath.Join(link, "a.md")
+	if got := lt.Resolve(addr); got != addr {
+		t.Errorf("Resolve = %q, want the literal %q", got, addr)
+	}
+}
+
+// A link replaced by a regular file stops being an alias prefix and is handed
+// back as not the table's business, so the caller indexes it as the file it
+// now is. Lstat-before-following is the whole correction: a routine that stats
+// first sees a directory for a repoint and a file here, and in both cases has
+// already lost the question it was asked. R3390
+func TestLinkSyncPathForgetsLinkReplacedByFile(t *testing.T) {
+	root := linkTempRoot(t)
+	s1, s2 := filepath.Join(root, "s1"), filepath.Join(root, "s2")
+	mkDirs(t, s1, s2)
+	link := filepath.Join(s2, "link")
+	mkSymlink(t, s1, link)
+
+	lt := NewLinkTable(linkCfg(s1, s2))
+	lt.Observe(link)
+
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove(link): %v", err)
+	}
+	mkFile(t, link)
+
+	if _, status := lt.SyncPath(link); status != LinkUnresolvable {
+		t.Errorf("status = %v, want LinkUnresolvable", status)
+	}
+	if _, tracked := lt.Lookup(link); tracked {
+		t.Errorf("%q is still tracked after being replaced by a regular file", link)
+	}
+}
+
+// A proposed link's target is recorded as an unresolved candidate through the
+// refresh, exactly as the scan records it. The scan and the refresh must
+// dispose of the same link identically: two surfaces that disagree about what
+// a link is are worse than one that is consistently wrong. R3355, R3357, R3390
+func TestSyncLinkPathRecordsProposedTarget(t *testing.T) {
+	root := linkTempRoot(t)
+	s2, outside := filepath.Join(root, "s2"), filepath.Join(root, "outside")
+	mkDirs(t, s2, outside)
+	link := filepath.Join(s2, "link")
+	mkSymlink(t, outside, link)
+
+	dbPath := filepath.Join(t.TempDir(), "db")
+	mkDirs(t, dbPath)
+	fts, err := microfts2.Create(IndexPath(dbPath), microfts2.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fts.Close() })
+	store, err := OpenStore(fts.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Sources: []Source{{Dir: s2}}}
+	db := &DB{
+		fts:     fts,
+		store:   store,
+		config:  cfg,
+		dbPath:  dbPath,
+		scanner: NewScanner(cfg, &Matcher{}, fts, NewEmptyFiles()),
+	}
+
+	db.SyncLinkPath(link)
+
+	recs, err := store.ListUnresolved()
+	if err != nil {
+		t.Fatalf("ListUnresolved: %v", err)
+	}
+	var found bool
+	for _, r := range recs {
+		if r.Path == outside {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("unresolved records %+v carry no candidate for the proposed target %q", recs, outside)
+	}
+	// The link proposes its target; it never admits it.
+	if n := db.scanner.Links().Len(); n != 0 {
+		t.Errorf("tracked links = %d, want 0 — a proposed link was tracked", n)
+	}
+}
+
 // A tier is derived state, re-derived on every recomputation. A recompute
 // that refreshes the fileid but keeps the tier leaves an association on a
 // verification schedule for a shape it no longer has — the one failure in

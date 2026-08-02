@@ -1,5 +1,5 @@
 # LinkTable
-**Requirements:** R3359, R3360, R3361, R3362, R3363, R3364, R3372, R3373, R3374, R3375, R3376, R3378, R3379, R3380, R3381, R3383, R3365, R3369, R3353, R3389
+**Requirements:** R3359, R3360, R3361, R3362, R3363, R3364, R3372, R3373, R3374, R3375, R3376, R3378, R3379, R3380, R3381, R3383, R3365, R3369, R3353, R3389, R3390
 
 Ark's map of directory symlinks that join one indexed region to another,
 and the translation between an address a caller used and the canonical
@@ -26,6 +26,23 @@ assumption records — those are ExtMap's, and consult this component
 - **View selection** (R3375, R3379): the global link-view selector — default matches addresses, `--links` expands each result to all of them, `--nolinks` matches canonical only. Consulted by nodes that emit paths as addresses and not by those that emit content (R3377)
 - **Classify tier** (R3385): single-hop / internal multi-hop / external multi-hop, from the hop list and source membership. **Derived, never cached across a recompute** — a single-hop link becomes multi-hop the moment its target is replaced by a symlink, and keeping a stale tier means keeping a verification schedule for a shape the link no longer has, which fails open
 - **Rebuild**: reconstruct the whole table from the persisted is-a-directory-symlink facts, one `readlink` chain each, at startup
+- **SyncPath** (R3390): the per-path counterpart of the walk's Observe, for
+  the change events a link produces once it exists. `lstat` first, then
+  dispatch on what the path *is* rather than on what it points at — the
+  order the scan already uses, so the two surfaces cannot disagree about
+  what a link is
+  - a symlink to a directory (or a dangling one) → Observe, which re-derives
+    the tier as well as the resolution (R3385)
+  - gone, or no longer a symlink → forget it. A link that disappears returns
+    whatever depended on it to unresolved rather than leaving it pointing at
+    a path it can no longer reach (R3369)
+  - a symlink to a regular file, or a path that was never a link → not this
+    component's business; the caller treats it as an ordinary file, exactly
+    as the scan does
+  - **Bounded by what `lstat` can state.** *Is a symlink now* and *is gone*
+    are answered exactly; a link replaced in place by a non-indexable
+    regular file is indistinguishable from any other uninteresting file and
+    is not (gap O196)
 
 ## Collaborators
 - Config: source membership for the track/propose predicate and for tier classification

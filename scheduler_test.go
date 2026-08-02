@@ -1,8 +1,9 @@
 package ark
 
-// CRC: crc-EventScheduler.md
+// CRC: crc-EventScheduler.md | Test: test-DateParseGuards.md, test-ScheduleSuppression.md
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -276,5 +277,91 @@ func TestLogChunkBoundsRoundTrip(t *testing.T) {
 	}
 	if c.NotAfter.Year() != 2026 || c.NotAfter.Month() != 5 || c.NotAfter.Day() != 30 {
 		t.Errorf("NotAfter = %v, want 2026-05-30", c.NotAfter)
+	}
+}
+
+// Test: test-ScheduleSuppression.md — suppression travels on the event.
+//
+// R3397. MarkSuppressed is the single place both arms of `ark schedule search`
+// get the answer, so the server and the CLI's local arm cannot disagree about
+// which tags are suppressed. The alternative — asking the server for events and
+// then opening the index to look suppression up — is what made the command fail
+// in both directions for seven weeks.
+func TestMarkSuppressed(t *testing.T) {
+	cfg := &Config{Schedule: ScheduleConfig{Tag: map[string]ScheduleTagConfig{
+		"standup": {Suppress: true},
+		"review":  {},
+	}}}
+	es := NewEventScheduler(nil, nil, "", cfg)
+
+	events := []ScheduleEvent{
+		{Tag: "standup"},
+		{Tag: "review"},
+		// A tag whose [schedule.tag.X] block was removed between the log
+		// write and the query. Config.Tag is a map, so the zero value is
+		// the right answer and the lookup must not panic.
+		{Tag: "retired"},
+	}
+	es.MarkSuppressed(events)
+
+	if !events[0].Suppressed {
+		t.Error("standup is suppress = true but its event came back unsuppressed")
+	}
+	if events[1].Suppressed {
+		t.Error("review is not suppressed but its event was marked")
+	}
+	if events[2].Suppressed {
+		t.Error("an undeclared tag must read as unsuppressed")
+	}
+}
+
+// Test: test-ScheduleSuppression.md — the query runs with no server around it.
+//
+// R3396. A scheduler built the way a CLI local arm builds one — nil pubsub, nil
+// error reporter — answers QueryRange exactly as the server's does. This is a
+// Sleeping Sentry: the guarantee is the *absence* of a dependency, which
+// nothing else in the suite would notice being added, because the server always
+// supplies a real pubsub. R1027 claimed this server-free path from the day the
+// command was written, and the CLI refused at the door for just as long.
+func TestQueryRangeNeedsNeitherPubsubNorReporter(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []LogChunk{{
+		Event:  "standup",
+		Source: filepath.Join(dir, "notes.md"),
+		SpecMarkers: []SpecMarker{{
+			Kind: "initial",
+			Time: time.Date(2026, 3, 1, 0, 0, 0, 0, time.Local),
+			Spec: "every Monday at 09:00",
+		}},
+	}}
+	if err := WriteLogFile(filepath.Join(dir, "standup.md"), chunks); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Schedule: ScheduleConfig{Tag: map[string]ScheduleTagConfig{
+		"standup": {Suppress: true},
+	}}}
+	// Both collaborators nil — exactly what the CLI's local arm passes.
+	es := NewEventScheduler(nil, nil, dir, cfg)
+
+	start := time.Date(2026, 3, 2, 0, 0, 0, 0, time.Local) // a Monday
+	end := time.Date(2026, 3, 16, 0, 0, 0, 0, time.Local)
+	events := es.QueryRange(start, end, "", false)
+	if len(events) == 0 {
+		t.Fatal("no occurrences returned — a weekly spec over a fortnight must yield some")
+	}
+	for _, ev := range events {
+		if ev.Tag != "standup" {
+			t.Errorf("unexpected tag %q", ev.Tag)
+		}
+	}
+
+	// And the local arm's second half: it marks suppression itself, from the
+	// same config, so its output matches what the server would have sent.
+	es.MarkSuppressed(events)
+	for _, ev := range events {
+		if !ev.Suppressed {
+			t.Errorf("event on %s not marked suppressed", ev.Date)
+		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,52 +99,81 @@ func scheduleCommand() *ucli.Command {
 	}
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-scheduling.md | R914-R920, R2845
+// CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-scheduling.md | R914-R920, R2845, R3396, R3397
 func scheduleSearchAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("ark schedule search: DATE is required"))
 	}
 	// Join all positional args — allows "April 15 2026" as separate words.
 	dateArg := strings.Join(c.Args().Slice(), " ")
+	tagFilter := c.String("tag")
+	gaps := c.Bool("gaps")
+	asJSON := c.Bool("json")
 
-	client := serverClient(arkDir)
-	if client == nil {
-		fatal(fmt.Errorf("server not running (schedule requires server)"))
-	}
-
-	reqBody := map[string]any{"date": dateArg}
-	if tag := c.String("tag"); tag != "" {
-		reqBody["tag"] = tag
-	}
-	if c.Bool("gaps") {
-		reqBody["gaps"] = true
-	}
-
-	if c.Bool("json") {
-		data, err := proxyRaw(client, "POST", "/schedule/search", reqBody)
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Println(string(data))
-		return nil
-	}
-
-	// Decode and format as markdown
-	// CRC: crc-CLI.md | R916
-	var events []ark.ScheduleEvent
-	if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &events); err != nil {
-		fatal(err)
-	}
-	// R2845: identify suppressed tags so we can mark their events.
-	suppressed := map[string]bool{}
-	withDB(func(db *ark.DB) {
-		cfg := db.Config()
-		for name := range cfg.ScheduleTags() {
-			if cfg.IsSuppressed(name) {
-				suppressed[name] = true
+	// R3396: ordinary proxy/local dispatch. The query itself never needed a
+	// server — QueryRange reads the schedule directory and cranks forward
+	// from recurrence specs — but the command had no arm to run it in, so
+	// R1027's "works without a running server" had been false since the
+	// command was written. R3392/R3397: the proxy arm is the end of the
+	// road, so suppression rides on the events rather than being looked up
+	// in a second index open the server is holding the lock against.
+	proxyOrLocal(
+		func(client *http.Client) error {
+			reqBody := map[string]any{"date": dateArg}
+			if tagFilter != "" {
+				reqBody["tag"] = tagFilter
 			}
-		}
-	})
+			if gaps {
+				reqBody["gaps"] = true
+			}
+			if asJSON {
+				// CRC: crc-CLI.md | R916 — --json passes the server's own bytes through.
+				data, err := proxyRaw(client, "POST", "/schedule/search", reqBody)
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+			var events []ark.ScheduleEvent
+			if err := proxyDecode(client, "POST", "/schedule/search", reqBody, &events); err != nil {
+				return err
+			}
+			printScheduleEvents(events)
+			return nil
+		},
+		func(d *ark.DB) error {
+			// CRC: crc-CLI.md | R3396 — the query half of EventScheduler
+			// touches neither the pubsub nor the error reporter, so the
+			// local arm builds one with both nil and gets the server's
+			// answers.
+			dr, err := ark.ParseDateValue(dateArg, "", time.Now().Location())
+			if err != nil {
+				return fmt.Errorf("bad date: %w", err)
+			}
+			sched := ark.NewEventScheduler(nil, nil, filepath.Join(arkDir, "schedule"), d.Config())
+			events := sched.QueryRange(dr.Start, dr.End, tagFilter, gaps)
+			sched.MarkSuppressed(events)
+			if asJSON {
+				data, err := json.Marshal(events)
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+			printScheduleEvents(events)
+			return nil
+		},
+	)
+	return nil
+}
+
+// printScheduleEvents renders the markdown (crank-handle) form shared by both
+// dispatch arms, so their output cannot drift — the same argument
+// emitChunkResult makes for `ark chunks` (R2998).
+// CRC: crc-CLI.md | R916, R2845, R2849
+func printScheduleEvents(events []ark.ScheduleEvent) {
 	lastKey := ""
 	for _, ev := range events {
 		key := ev.Date + "|" + ev.Tag + "|" + ev.Source
@@ -152,8 +182,10 @@ func scheduleSearchAction(_ context.Context, c *ucli.Command) error {
 				fmt.Println()
 			}
 			marker := ""
-			if suppressed[ev.Tag] {
-				marker = " [suppressed]" // R2845
+			// R2845, R3397: read off the event — whichever side computed it
+			// is the side that consulted the config.
+			if ev.Suppressed {
+				marker = " [suppressed]"
 			}
 			fmt.Printf("## %s — @%s:%s (%s)\n\n", ev.Date, ev.Tag, marker, ev.Source)
 			lastKey = key
@@ -177,7 +209,6 @@ func scheduleSearchAction(_ context.Context, c *ucli.Command) error {
 		}
 		fmt.Println()
 	}
-	return nil
 }
 
 // CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-scheduling.md | R921-R925

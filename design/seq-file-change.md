@@ -26,14 +26,23 @@ and append detection.
   │     │   (full reconciliation, not per-file)
   │     └── 1.2.2. clearIgnoredPaths() (invalidate negative cache)
   │
-  ├── 1.3. isIgnored(path)?
+  ├── 1.3. classifyEvent(path) — index / link / ignore
   │     ├── 1.3.1. check ignoredPaths set (negative cache)
   │     ├── 1.3.2. if miss: DB.IsIndexable(path)
   │     │     ├── 1.3.2.1. find source for path
   │     │     ├── 1.3.2.2. Config.EffectivePatterns(src)
   │     │     └── 1.3.2.3. Matcher.Classify(includes, excludes, relPath, false)
-  │     ├── 1.3.3. if not indexable: add to ignoredPaths, skip event
-  │     └── 1.3.4. if indexable: continue to throttle
+  │     ├── 1.3.3. if not indexable AND not a link candidate:
+  │     │         add to ignoredPaths, skip event
+  │     ├── 1.3.4. if indexable: continue to throttle
+  │     └── 1.3.5. if not indexable but a link candidate — lstat says not a
+  │               plain regular file, or the path is gone (R3390):
+  │               ├── 1.3.5.1. never cached; a directory symlink matches no
+  │               │           file pattern, so caching it would swallow every
+  │               │           later event that repoints a tracked link
+  │               └── 1.3.5.2. post DB.SyncLinkPath(path) to the DB actor and
+  │                           skip the throttle — the table is actor-owned
+  │                           and a link carries no content to coalesce
   │
   ├── 1.4. if source file changed (passes indexability check):
   │     │

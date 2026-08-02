@@ -487,13 +487,14 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// below), so the pump bypasses its own gate by construction.
 	srv.uiMux = mux
 
-	mux.HandleFunc("POST /search", srv.handleSearch)       // R90
-	mux.HandleFunc("POST /add", srv.handleAdd)             // R91
-	mux.HandleFunc("POST /remove", srv.handleRemove)       // R92
-	mux.HandleFunc("POST /scan", srv.handleScan)           // R93
-	mux.HandleFunc("POST /refresh", srv.handleRefresh)     // R94
-	mux.HandleFunc("GET /status", handle(srv, statusOp{})) // R95, R3167
-	mux.HandleFunc("GET /files", srv.handleFiles)          // R96
+	mux.HandleFunc("POST /search", srv.handleSearch)              // R90
+	mux.HandleFunc("POST /add", srv.handleAdd)                    // R91
+	mux.HandleFunc("POST /remove", srv.handleRemove)              // R92
+	mux.HandleFunc("POST /scan", srv.handleScan)                  // R93
+	mux.HandleFunc("POST /refresh", srv.handleRefresh)            // R94
+	mux.HandleFunc("GET /status", handle(srv, statusOp{}))        // R95, R3167
+	mux.HandleFunc("POST /status/chunks", srv.handleStatusChunks) // R3393
+	mux.HandleFunc("GET /files", srv.handleFiles)                 // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
 	mux.HandleFunc("GET /stale", srv.handleStale)            // R97
 	mux.HandleFunc("GET /missing", srv.handleMissing)        // R98
@@ -1093,6 +1094,53 @@ func (srv *Server) GetOrCreateSession(name string) *Session {
 }
 
 // CRC: crc-Server.md | R986, R988
+// validateSearchRequest reports what the server can decide about a search
+// request from the request alone. A failure here is the caller's, so the
+// handler answers 400 — bad input is not an internal failure (R3165,
+// specs/http-operations.md), and `/search` is an ordinary handler rather than
+// an operation, so it does not inherit that mapping and has to draw the line
+// itself.
+//
+// Patterns are checked with regexp.Compile, the same call microfts2 makes, so
+// validation and execution cannot disagree about the dialect. Left to the FTS
+// layer an uncompilable pattern surfaces several frames down, where nothing
+// can tell a caller's mistake from ark's own — which is how `ark search
+// --regex '['` came to report that the server had malfunctioned.
+//
+// Pure over the decoded request, so the whole table is testable with no
+// server. It is the single door: a new decidable-at-the-door rule belongs
+// here rather than as another early return in the handler.
+// CRC: crc-Server.md | R3399, R110
+func validateSearchRequest(req searchRequest) error {
+	if req.Chunks && req.Files {
+		return errors.New("--chunks and --files are mutually exclusive")
+	}
+	for _, pat := range req.Regex {
+		if _, err := regexp.Compile(pat); err != nil {
+			return fmt.Errorf("bad --regex %q: %w", pat, err)
+		}
+	}
+	for _, pat := range req.ExceptRegex {
+		if _, err := regexp.Compile(pat); err != nil {
+			return fmt.Errorf("bad --except-regex %q: %w", pat, err)
+		}
+	}
+	// The CLI puts only the *first* regex in Regex; every later `-regex` row
+	// arrives here as a chunk filter, and BuildChunkFilters hands those
+	// straight to microfts2 uncompiled. So this loop, not the one above, is
+	// the one that catches what a user actually typed — found by running the
+	// real command rather than by re-reading the request struct.
+	for _, row := range req.ChunkFilters {
+		if row.Mode != "regex" || row.Query == "" {
+			continue
+		}
+		if _, err := regexp.Compile(row.Query); err != nil {
+			return fmt.Errorf("bad -regex filter %q: %w", row.Query, err)
+		}
+	}
+	return nil
+}
+
 func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req searchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1100,8 +1148,9 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Chunks && req.Files {
-		http.Error(w, "--chunks and --files are mutually exclusive", http.StatusBadRequest)
+	// CRC: crc-Server.md | R3399 — refuse at the door, 400 not 500.
+	if err := validateSearchRequest(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -1402,6 +1451,37 @@ func (o *statusOp) run() (any, error) {
 		}{result.status, result.dbCounts}, nil
 	}
 	return result.status, nil
+}
+
+// handleStatusChunks serves POST /status/chunks — the chunk size statistics
+// that `ark status --chunks` used to compute from an index open of its own.
+// That open could never succeed: `--chunks` runs *after* the status block has
+// already been proxied and printed, so this server was holding the lock
+// (R3392, R3393).
+//
+// There is no tokenize mode here, deliberately. Tokenizing loads the embedding
+// model for its vocabulary, which makes the command exclusive-access like
+// `embed bench` (R3394), so it never reaches this endpoint. The nil size
+// function is the byte fast path — `ChunkContentLens` off the C records, no
+// disk I/O — which is what keeps this cheap enough to run on the actor.
+// CRC: crc-Server.md | R3393
+func (srv *Server) handleStatusChunks(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FilterFiles  []string `json:"filterFiles,omitempty"`
+		ExcludeFiles []string `json:"excludeFiles,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := Sync(srv.db, func(db *DB) (*ChunkStatsResult, error) {
+		return db.ChunkStats(req.FilterFiles, req.ExcludeFiles, nil)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -3204,6 +3284,9 @@ func (srv *Server) handleScheduleSearch(w http.ResponseWriter, r *http.Request) 
 	}
 	// R1027: compute events from schedule logs
 	events := srv.scheduler.QueryRange(dr.Start, dr.End, req.Tag, req.Gaps)
+	// CRC: crc-Server.md | R3397 — suppression travels with the events, so
+	// the CLI never opens the index this server is holding to look it up.
+	srv.scheduler.MarkSuppressed(events)
 	writeJSON(w, events)
 }
 

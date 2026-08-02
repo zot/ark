@@ -1565,6 +1565,14 @@ func (db *DB) IndexPathsAsync(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
+	// Settle each path's link status here, on the actor that owns the table,
+	// before anything is queued for the write actor that runs off it. Order
+	// matters as well as goroutine: a link replaced by an indexable file must
+	// stop being an alias prefix before its replacement is indexed, or the
+	// two answers disagree for as long as the queue is deep. R3390
+	for _, path := range paths {
+		db.SyncLinkPath(path)
+	}
 	// R3005: coalesce — skip paths whose refresh is already queued or in
 	// flight, so a saturated write actor doesn't accumulate duplicate no-op
 	// refresh closures for the same file.
@@ -1612,6 +1620,38 @@ func (db *DB) releaseRefreshPath(path string) {
 	db.refreshMu.Lock()
 	delete(db.pendingRefresh, path)
 	db.refreshMu.Unlock()
+}
+
+// SyncLinkPath brings the link table in line with one path, and records a
+// proposed link's target as an unresolved candidate naming the link that
+// proposed it — the same disposal the scan makes, so the two surfaces cannot
+// answer differently about the same link.
+//
+// Actor-only: the link table is DB-actor state, and the write actor runs its
+// closures on a separate goroutine (specs/db-concurrency.md).
+//
+// Reached two ways, and they are not redundant. IndexPathsAsync calls it for a
+// path that *is* indexable, which is how a link replaced by an indexable file
+// stops being an alias prefix. The watch loop calls it directly for a path
+// that is not — which is every ordinary link event, since a directory symlink
+// matches no file pattern and would otherwise never reach the actor at all.
+//
+// CRC: crc-DB.md | Seq: seq-file-change.md#1.3.5.2 | R3390, R3355, R3357
+func (db *DB) SyncLinkPath(path string) {
+	entry, status := db.scanner.Links().SyncPath(path)
+	if status != LinkProposed || entry == nil {
+		return
+	}
+	// The link proposes its target; it never admits it. The candidate is keyed
+	// on the target, so it needs the source the *link* lives in to say where
+	// the proposal came from. R3355, R3357
+	src, _, ok := db.findSourceForPath(entry.Path)
+	if !ok {
+		return
+	}
+	if err := db.store.AddUnresolved(entry.Resolved, src.Dir); err != nil {
+		log.Printf("watch: unresolved %s (proposed by %s): %v", entry.Resolved, entry.Path, err)
+	}
 }
 
 // syncOnePath brings one path's index entry in line with disk. Inside the
@@ -3366,6 +3406,11 @@ func (db *DB) Status() (*StatusInfo, error) {
 		mapUsed = fi.Size()
 	}
 
+	// CRC: crc-DB.md | R3395 — the warnings travel with the status rather
+	// than depending on the caller opening the index itself, which is why a
+	// proxied `ark status` used to print none at all.
+	warnings, _ := db.store.Warnings()
+
 	db.tmpMu.RLock()
 	tmpCount := len(db.tmpPaths)
 	db.tmpMu.RUnlock()
@@ -3383,6 +3428,7 @@ func (db *DB) Status() (*StatusInfo, error) {
 		MapUsed:    mapUsed,
 		MapTotal:   mapTotal,
 		TmpFiles:   tmpCount,
+		Warnings:   warnings,
 	}, nil
 }
 
@@ -3430,6 +3476,12 @@ type StatusInfo struct {
 	UIIndexing bool `json:"uiIndexing"`
 	// R1249: spectral search availability
 	Spectral bool `json:"spectral"`
+	// Warnings carries the outstanding E-record conditions, keyed by
+	// condition name (R3395). It rides in the status so a proxied
+	// `ark status` reports the same warnings a local one does; they used
+	// to be read from the index in whatever local open the CLI happened
+	// to make, so the proxied form printed none.
+	Warnings map[string]string `json:"warnings,omitempty"`
 }
 
 // arkLabels maps every ark-bucket record prefix that `status -db` displays to

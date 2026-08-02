@@ -1931,3 +1931,45 @@ func TestAllTagsForFileNilResolver(t *testing.T) {
 		t.Errorf("AllTagsForFile with nil resolver: want nil, got %+v", got)
 	}
 }
+
+// Test: test-ProxyThenLocal.md — warnings survive the proxy.
+//
+// R3395. The E-record conditions ride in StatusInfo so they print on either
+// path. They used to be read inside whatever local open `ark status` happened
+// to make, which meant the plain proxied form printed none — a condition
+// serious enough to warrant a warning was invisible in exactly the state ark
+// normally runs in, and removing that local open would have made it permanent.
+func TestStoreWarnings(t *testing.T) {
+	s := testStore(t)
+
+	// Empty index: an empty map, not a nil-crash, so R1567's "nothing extra
+	// is printed" still holds at the caller.
+	warnings, err := s.Warnings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("fresh store reported %d warnings, want 0", len(warnings))
+	}
+
+	if err := s.WriteERecord("model_mismatch", "tag_model changed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteERecord("index_stale", "case_insensitive changed"); err != nil {
+		t.Fatal(err)
+	}
+
+	warnings, err = s.Warnings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("got %d warnings, want 2: %v", len(warnings), warnings)
+	}
+	for _, name := range []string{"model_mismatch", "index_stale"} {
+		if warnings[name] == "" {
+			t.Errorf("condition %q carries no text — the name alone tells the "+
+				"user nothing about what to do (R1566)", name)
+		}
+	}
+}

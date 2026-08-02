@@ -129,9 +129,16 @@ func (srv *Server) watchLoop() {
 			}
 
 			// New directory created — add a watch for it.
+			//
+			// Lstat, so a directory *symlink* is not a directory here. A link
+			// is recorded and not descended (R3373), and the target is either
+			// already watched through its real path or deliberately outside
+			// every source (R3355). watchDirRecursive would in fact decline
+			// anyway — filepath.Walk lstats its own root — but stating it here
+			// is what keeps the invariant readable at the branch that decides.
 			// Seq: seq-file-change.md#1.1
 			if event.Has(fsnotify.Create) {
-				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+				if info, err := os.Lstat(event.Name); err == nil && info.IsDir() {
 					srv.watchDirRecursive(event.Name) // Seq: seq-file-change.md#1.1.1
 				}
 			}
@@ -155,13 +162,15 @@ func (srv *Server) watchLoop() {
 				continue
 			}
 
-			// Indexability filter — skip non-indexable files via negative cache + pattern check.
+			// Indexability filter — skip non-indexable files via negative
+			// cache + pattern check, and divert what is the link table's
+			// business rather than a file's.
 			// Seq: seq-file-change.md#1.3
-			if _, ignored := srv.ignoredPaths[event.Name]; ignored {
-				continue // Seq: seq-file-change.md#1.3.1
-			}
-			if !srv.db.IsIndexable(event.Name) { // Seq: seq-file-change.md#1.3.2
-				srv.ignoredPaths[event.Name] = struct{}{} // Seq: seq-file-change.md#1.3.3
+			switch srv.classifyEvent(event.Name) {
+			case eventIgnore:
+				continue
+			case eventLink:
+				srv.syncLink(event.Name) // Seq: seq-file-change.md#1.3.5.2
 				continue
 			}
 
@@ -275,6 +284,79 @@ func (srv *Server) watchLoop() {
 			}
 		}
 	}
+}
+
+// eventDisposition is what the watch loop does with one event path.
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.3 | R3390
+type eventDisposition int
+
+const (
+	// eventIndex: an indexable file — throttle and refresh it.
+	eventIndex eventDisposition = iota
+	// eventLink: the link table's business, not a file's. R3390
+	eventLink
+	// eventIgnore: nothing here for ark.
+	eventIgnore
+)
+
+// classifyEvent decides what the watch loop does with a path.
+//
+// The link arm is the reason this is three-way rather than the boolean it
+// used to be. A directory symlink matches no *file* pattern, so the
+// indexability check alone drops the very event that repoints a tracked link
+// — and then caches the path as uninteresting for the life of the process, so
+// no later event on it is examined either. The single-hop tier is defined on
+// that event (R3384), which makes the cheapest and most-used tier verify
+// against a premise nothing re-derives. A link path is therefore never added
+// to the negative cache.
+//
+// Runs on the watch-loop goroutine, which is why linkCandidate is made of
+// nothing but lstat: the link table is DB-actor state (R3349), so a test
+// needing the table could not be asked here.
+//
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.3 | R388, R392, R3390
+func (srv *Server) classifyEvent(path string) eventDisposition {
+	if _, ignored := srv.ignoredPaths[path]; ignored {
+		return eventIgnore // Seq: seq-file-change.md#1.3.1
+	}
+	if srv.db.IsIndexable(path) { // Seq: seq-file-change.md#1.3.2
+		return eventIndex // Seq: seq-file-change.md#1.3.4
+	}
+	if linkCandidate(path) {
+		return eventLink // Seq: seq-file-change.md#1.3.5.1
+	}
+	srv.ignoredPaths[path] = struct{}{} // Seq: seq-file-change.md#1.3.3
+	return eventIgnore
+}
+
+// linkCandidate reports whether a path might be the link table's business,
+// using only the filesystem.
+//
+// It answers the two transitions lstat can state on its own: the path **is** a
+// symlink (created or repointed), and the path is **gone** (deleted), where
+// only the actor's table knows whether what vanished was a tracked link. A
+// real directory is included for the same reason and at the same near-zero
+// cost — a link replaced by one leaves no other trace.
+//
+// What it cannot see is a link replaced in place by a non-indexable regular
+// file: nothing distinguishes that file from any other uninteresting file.
+// Gap O196.
+//
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.3.5 | R3390
+func linkCandidate(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return true
+	}
+	return !fi.Mode().IsRegular()
+}
+
+// syncLink hands one path to the link table on the actor that owns it.
+// Fire-and-forget: the watch loop does not need the result, and the work is
+// one readlink chain rather than anything worth coalescing.
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.3.5.2 | R3390
+func (srv *Server) syncLink(path string) {
+	srv.db.Do(func(db *DB) { db.SyncLinkPath(path) })
 }
 
 // pathSetToSlice converts a deduplicated path set to a slice.

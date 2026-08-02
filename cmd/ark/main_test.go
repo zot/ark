@@ -651,3 +651,161 @@ func TestHelpRequested(t *testing.T) {
 		}
 	}
 }
+
+// TestCLIHasNoUnboundedIndexOpen is the Sleeping Sentry for R3391: no CLI code
+// path may open the index with ark.Open, whose zero timeout bbolt's flock reads
+// as wait-forever.
+//
+// The defect this guards was invisible to every other kind of test. withDB
+// called ark.Open, which was correct under LMDB — several reader processes
+// could hold the index at once — and became an unbounded wait when the bbolt
+// port made the lock exclusive and single-process. Nothing failed, because the
+// hazard needs a CLI racing a server for the lock; it surfaced months later as
+// `ark status --chunks` hanging forever against a running server.
+//
+// A source scan rather than a behavioural test on purpose: the failure path
+// calls fatal (os.Exit), so asserting the behaviour needs a held lock and a
+// subprocess, while the invariant that actually regressed is exactly this one
+// — and a command added next year will get it wrong by copying whichever
+// helper it finds.
+//
+// CRC: crc-CLI.md | R3391, R2994
+func TestCLIHasNoUnboundedIndexOpen(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		// Production files only. A test fixture may open unbounded — nothing
+		// holds the lock in a test — and this file necessarily contains the
+		// literal it searches for.
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scanned++
+		for i, line := range strings.Split(string(src), "\n") {
+			code, _, _ := strings.Cut(line, "//")
+			if strings.Contains(code, "ark.Open(") {
+				t.Errorf("%s:%d opens the index unbounded:\n\t%s\n"+
+					"ark.Open passes a zero timeout, which bbolt's flock reads as wait-forever, so this "+
+					"blocks until something is killed whenever a server holds the index. The unbounded "+
+					"form is the server's alone (R2994); use withDB or ark.OpenWithTimeout (R3391).",
+					e.Name(), i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+	// Guard the guard: a scan that reads nothing passes for the wrong reason.
+	if scanned == 0 {
+		t.Fatal("scanned no .go files — this test would pass no matter what the code did")
+	}
+}
+
+// Test: test-ProxyThenLocal.md — where each part of `ark status` comes from.
+//
+// R3392/R3393/R3394. The defect this pins was a decision, not plumbing: the
+// command proxied its status block, printed it, and then opened the index for
+// the chunk table while the server still held the lock. Every case is three
+// booleans, so no socket, no lock and no subprocess are needed to assert the
+// whole table.
+func TestPlanStatus(t *testing.T) {
+	tests := []struct {
+		name                               string
+		serverUp, wantChunks, wantTokenize bool
+		want                               statusPlan
+	}{
+		// The case that used to hang: proxied status, then a local open.
+		{"server + chunks proxies both", true, true, false,
+			statusPlan{proxy: true, proxyChunks: true}},
+		{"server + plain status proxies", true, false, false,
+			statusPlan{proxy: true}},
+		// --tokenize alone has never meant anything without --chunks, so it
+		// must not turn a working proxied status into a refusal.
+		{"server + tokenize without chunks still proxies", true, false, true,
+			statusPlan{proxy: true}},
+		{"server + chunks + tokenize refuses", true, true, true,
+			statusPlan{err: errTokenizeNeedsExclusive}},
+		{"no server answers locally", false, false, false,
+			statusPlan{local: true}},
+		{"no server + chunks answers locally", false, true, false,
+			statusPlan{local: true}},
+		{"no server + tokenize is allowed", false, true, true,
+			statusPlan{local: true}},
+		{"no server + tokenize without chunks", false, false, true,
+			statusPlan{local: true}},
+	}
+	for _, tt := range tests {
+		got := planStatus(tt.serverUp, tt.wantChunks, tt.wantTokenize)
+		if got != tt.want {
+			t.Errorf("%s: planStatus(%v, %v, %v) = %+v, want %+v",
+				tt.name, tt.serverUp, tt.wantChunks, tt.wantTokenize, got, tt.want)
+		}
+		// The whole point, stated separately so a failure says why: with a
+		// server up nothing may open the index, whatever else the plan says.
+		if tt.serverUp && got.local {
+			t.Errorf("%s: plan opens the index with a server running — that open "+
+				"cannot succeed, the server holds the lock (R3392)", tt.name)
+		}
+	}
+}
+
+// Test: test-ProxyThenLocal.md — no command treats a refused proxy as an
+// absent server (Sleeping Sentry).
+//
+// R3398. Dispatch has three outcomes — nothing answered, served, refused — and
+// only the first licenses opening the index. The natural spelling of a
+// hand-rolled dial drops the error and continues:
+//
+//	if err := proxyDecode(...); err == nil { print; return }
+//
+// which makes a server that answered and refused indistinguishable from no
+// server at all. Since a running server holds the index, the fallback can only
+// fail, reporting a lock where the server had reported the real problem.
+//
+// Asserted by source scan for the same reason test-LocalOpenBound.md is: the
+// behaviour needs a live server that errors on demand, while the invariant that
+// regressed is one grep wide — and a command added next year gets this wrong by
+// copying whichever neighbour it reads first.
+func TestCLIDoesNotSwallowProxyErrors(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scanned++
+		for i, line := range strings.Split(string(src), "\n") {
+			// Comments describe the trap; only code sets it.
+			code, _, _ := strings.Cut(line, "//")
+			if !strings.Contains(code, "err == nil") {
+				continue
+			}
+			if !strings.Contains(code, "proxyDecode(") &&
+				!strings.Contains(code, "proxyRaw(") &&
+				!strings.Contains(code, "proxyOK(") {
+				continue
+			}
+			t.Errorf("%s:%d treats a refused proxy as an absent server:\n\t%s\n"+
+				"A non-nil proxy error here falls through to the local open while the server "+
+				"still holds the index, so the command reports a lock instead of what the "+
+				"server said. Dispatch through proxyOrLocal, which tells a bounce (wait and "+
+				"resume, R2996) from a live server's refusal (report it at once) — R3398, R3003.",
+				e.Name(), i+1, strings.TrimSpace(line))
+		}
+	}
+	// Guard the guard: a scan that reads nothing passes for the wrong reason.
+	if scanned == 0 {
+		t.Fatal("scanned no .go files — this test would pass no matter what the code did")
+	}
+}

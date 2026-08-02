@@ -163,6 +163,13 @@ warnings:
 
 When no E records exist, nothing extra is printed.
 
+The warnings travel in the status **response**, so a status answered by
+a running server carries the same warnings a local one does. They used
+to be read from the index in whatever local open `ark status` happened
+to make, which meant the plain proxied form printed none at all —
+a condition serious enough to warrant a warning was invisible in exactly
+the state ark normally runs in.
+
 ## Recovery
 
 `ark rebuild` is the universal fix: it deletes the database, re-runs

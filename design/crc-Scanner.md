@@ -42,14 +42,13 @@ files.
   chain-following, which is `LinkTable.Observe`'s guard. A link may point at
   a directory containing links back to it and ark's own layout has one, so
   termination is a property of the walk rather than of the data
-- **The refresh path must recognise a directory-symlink entry.** A change to
-  a tracked link — repointed, replaced, removed — arrives through the
-  ordinary per-path refresh, not through a full scan, and that path today
-  classifies a directory symlink as a non-directory, tests it against file
-  patterns, and drops it. The event already fires and nothing acts on it.
-  Every association verified by the single-hop tier rests on this
-  (crc-ExtMap.md, R3384), and the failure is invisible when present: the
-  association keeps returning its old, once-correct answer
+- **A change to a link does not come back through here.** Once a link
+  exists, repointing, deleting or replacing it arrives through the
+  **per-path refresh** (crc-DB.md `SyncLinkPath`, crc-Server.md
+  `classifyEvent`, R3390), never through a full scan — which is why the
+  single-hop tier is defined on that event (crc-ExtMap.md, R3384). What the
+  Scanner owns is the *first* sighting and the rule the refresh copies:
+  dispatch on what the path **is** before following it anywhere
 - ScanResults: struct with NewFiles []FileEntry, NewUnresolved []UnresolvedRecord, EmptyFiles []string
 - FileEntry: struct with path, strategy (from Config.StrategyForFile with source's strategies merged over global — matched through Matcher in the same source-scoped context, R3202)
 

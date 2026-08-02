@@ -174,6 +174,27 @@ type ScheduleEvent struct {
 	AllDay  bool      `json:"allDay,omitempty"`
 	Source  string    `json:"source"` // source file path
 	Spec    string    `json:"spec"`   // recurrence spec or one-shot value
+	// Suppressed rides with the event so the renderer marks `[suppressed]`
+	// without a config lookup of its own — whichever side computed the
+	// events read the config, so the two arms cannot disagree. R3397
+	Suppressed bool `json:"suppressed,omitempty"`
+}
+
+// MarkSuppressed stamps each event with its tag's suppression state. Both
+// arms of `ark schedule search` call it — the server after QueryRange, the
+// CLI's local arm after its own — so the answer is computed in one place
+// and neither arm reaches for state the other owns. An event naming a tag
+// whose [schedule.tag.X] block has since been removed reads as
+// unsuppressed rather than panicking: Config.Tag is a map, and its zero
+// value is the right answer.
+// CRC: crc-EventScheduler.md | R3397
+func (es *EventScheduler) MarkSuppressed(events []ScheduleEvent) {
+	if es.config == nil {
+		return
+	}
+	for i := range events {
+		events[i].Suppressed = es.config.IsSuppressed(events[i].Tag)
+	}
 }
 
 // QueryRange computes all events between start and end by reading schedule

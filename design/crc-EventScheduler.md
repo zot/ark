@@ -1,5 +1,5 @@
 # EventScheduler
-**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043, R2780, R2779, R2783, R2778, R2809, R2810, R2812, R2813, R2814, R2815, R2816, R2817, R2818, R2819, R2820, R2821, R2822, R2823, R2824, R2825, R2826, R2827, R2828, R2829, R2846, R2847, R2848, R3000
+**Requirements:** R805, R806, R807, R809, R810, R811, R812, R821, R822, R823, R824, R825, R857, R858, R859, R860, R861, R862, R863, R864, R865, R869, R874, R875, R876, R877, R878, R902, R903, R905, R907, R899, R900, R901, R904, R906, R908, R890, R891, R892, R964, R965, R966, R967, R968, R969, R970, R971, R972, R973, R974, R978, R996, R997, R998, R999, R1000, R1001, R1002, R1003, R1004, R1005, R1006, R1007, R1008, R1012, R1013, R1014, R1015, R1016, R1017, R1023, R1024, R1025, R1026, R1027, R1035, R1036, R1038, R1039, R1040, R1041, R1043, R2780, R2779, R2783, R2778, R2809, R2810, R2812, R2813, R2814, R2815, R2816, R2817, R2818, R2819, R2820, R2821, R2822, R2823, R2824, R2825, R2826, R2827, R2828, R2829, R2846, R2847, R2848, R3000, R3396, R3397
 
 Priority queue of time-tagged events with a single timer. Reads
 schedule logs at startup. Delivers events as crank handles through
@@ -153,6 +153,23 @@ occurrences from recurrence specs + schedule logs — no stored buckets.
   from recurrence specs (no stored buckets), apply @remove:/@add:
   exceptions, merge @ack: status. Used by schedule search CLI and
   calendar UI. (R1027, R1039, R1041)
+- MarkSuppressed(events []ScheduleEvent): stamp each event's
+  `Suppressed` field from the scheduler's own `Config.IsSuppressed(ev.Tag)`.
+  An event naming a tag whose `[schedule.tag.X]` block has since been
+  removed reads as unsuppressed rather than panicking — `Config.Tag` is a
+  map and its zero value is the right answer. One method, called
+  by both arms of `ark schedule search` — the server after `QueryRange`,
+  and the CLI's local arm after its own — so the two cannot drift about
+  which tags are suppressed, the same argument `emitChunkResult` makes for
+  chunk output (R2998). The field travels with the event, which is what
+  lets the renderer mark `[suppressed]` (R2845) without reading config
+  itself. (R3397)
+- **Constructible without a server (R3396).** `NewEventScheduler` takes a
+  pubsub, an error reporter, a schedule directory and a config; the query
+  half (`QueryRange`, `ComputeGaps`) touches neither the pubsub nor the
+  reporter, so a CLI local arm builds one with both nil and gets the same
+  answers the server gets. This is what makes R1027's "works without a
+  running server" true of the command and not only of the computation.
 - ComputeGaps(start, end time.Time, acks []AckEntry) []Event:
   compare spec occurrences against ack dates, return unacked past
   events. (R1041, R1043)

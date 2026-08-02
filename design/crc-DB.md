@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263, R3344, R3346, R3351
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263, R3344, R3346, R3351, R3390, R3395
 
 Main ark facade. Owns the bbolt database lifecycle — the file is microfts2's
 (`fts.DB() *bbolt.DB`); ark opens its own `ark` bucket inside it, and a
@@ -116,6 +116,10 @@ document this on the API. (R986, R993, R995, R3163)
   count by summing ChunkRanges from FileInfoByID per file. Computes
   total size by summing FileLength from FileInfoByID per file. Counts
   files per strategy from StaleFiles.
+  Also fills `StatusInfo.Warnings` from the E records (R3395), so the
+  warnings block travels with the status rather than depending on the
+  caller making its own index open — which is why a proxied `ark status`
+  used to print none.
 - StatusDB(): return DBRecordCounts with per-prefix counts for both
   buckets. Delegates to microfts2.RecordCounts() and
   Store.RecordCounts(). The package-level `arkLabels` map is the
@@ -245,6 +249,19 @@ document this on the API. (R986, R993, R995, R3163)
   write actor. Coalesces via claimRefreshPaths — only paths without a
   refresh already queued/in-flight are enqueued; each is released as its
   refresh begins so a change during the refresh re-queues. (R991, R3005)
+  Calls SyncLinkPath for each path **first, on the actor** (R3390): the
+  link table is actor-owned and the write actor runs off the actor, so a
+  path that has stopped being a link must be forgotten before its
+  replacement is queued as a file
+- SyncLinkPath(path): bring the link table in line with one path and, when
+  the link's target lies outside every source, record that target as an
+  unresolved candidate naming the proposing link — the same disposal the
+  scan makes, so the two surfaces agree (R3390, R3355, R3357). **Actor-only**;
+  the table is DB-actor state (R3349). Reached two ways, and they are not
+  redundant: from IndexPathsAsync for a path that *is* indexable (a link
+  replaced by an indexable file), and directly from the watch loop for one
+  that is not (every ordinary link event, since a link matches no file
+  pattern)
 - claimRefreshPaths(paths) []string: under refreshMu, return the subset of
   paths not already in pendingRefresh, marking them queued. (R3005)
 - releaseRefreshPath(path): under refreshMu, clear a path's pendingRefresh

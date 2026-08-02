@@ -326,7 +326,9 @@ merged from the source file. Query flow:
 
 `ark schedule search` runs this without a server: open the DB, read
 the schedule log files, compute the query. Same code path, no server
-dependency.
+dependency — the scheduler needed for the query is built from config
+and the schedule directory, so the local arm can construct one as
+cheaply as the server does.
 
 Earlier iterations stored events as TD/TF day-bucket index records,
 then as in-memory month buckets; both were removed (event management
@@ -501,7 +503,19 @@ ark schedule search 2026-04-01..2026-06-30 --tag standup
 Output is markdown by default (crank-handle style), JSON with
 `--json`. Events are computed from recurrence specs and schedule
 log files — no DB bucket records. Works without a running
-server.
+server: the command takes the ordinary proxy/local dispatch
+([cli-dispatch.md](cli-dispatch.md)), so with a server it asks the
+server and without one it computes the same query itself from
+`ark.toml` and `~/.ark/schedule/`.
+
+**Suppression travels with the events.** Each returned event carries
+whether its tag is suppressed, and the renderer marks those with
+`[suppressed]`. The side that computed the events is the side that
+knows the config, so neither arm consults a config the other one
+owns. Getting this wrong is what made the command unusable for
+seven weeks: it asked the server for events and then opened the
+index a second time purely to look up suppression, which cannot
+work while that same server holds the index.
 
 Each event renders as a bullet. The time range collapses when it
 carries no extra information:

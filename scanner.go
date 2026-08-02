@@ -105,8 +105,7 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 			// omission into a statable fact.
 			// CRC: crc-Scanner.md | R3352, R3353, R3373
 			if d.Type()&os.ModeSymlink != 0 {
-				info, statErr := os.Stat(path)
-				if statErr == nil && !info.IsDir() {
+				if linksToRegularFile(path) {
 					return nil // a link to a regular file keeps today's handling
 				}
 				entry, status := sc.links.Observe(path)

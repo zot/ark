@@ -206,12 +206,19 @@ a wait-and-retry, not an error — and rechecks server liveness if a
 local open hits lock contention. Full behavior: specs/cli-dispatch.md.
 
 Commands with no server endpoint that need exclusive local access
-(`embed text`, `embed bench`, `embed validate`, `config recover`)
-fail fast with a "stop the server" message when a server is running,
-rather than hanging. Server-backed read commands proxy to: `/fetch`
-(fetch), `/chunks` (chunks), `/grams` (grams), `/schedule/tags`
-(schedule tags), `/tags/values` (tag values, `files` flag for the
-file-resolved variant).
+(`embed text`, `embed bench`, `embed validate`, `config recover`,
+`status --chunks --tokenize`) fail fast with a "stop the server"
+message when a server is running, rather than hanging. Server-backed
+read commands proxy to: `/fetch` (fetch), `/chunks` (chunks),
+`/grams` (grams), `/schedule/tags` (schedule tags), `/tags/values`
+(tag values, `files` flag for the file-resolved variant),
+`/schedule/search` (schedule search), `/status/chunks`
+(status `--chunks`).
+
+A command that proxied successfully does **not** then open the index
+for the remainder of its output — the server still holds the lock, so
+that second open cannot succeed. Whatever is left comes from the
+server too, or the command declares itself server-must-be-stopped.
 
 ### `reorderArgs`
 
@@ -1214,7 +1221,7 @@ ark schedule unsuppress TAG
 
 | Subcommand | Flags | Behavior |
 |------------|-------|----------|
-| `search DATE` | `--tag` (filter), `--gaps` (only past unacked), `--json` (raw response) | Server-required. DATE is a single date or `START..END` range; `dateparse` handles flexible formats (see parse-robustness note below). Default output is markdown grouped by date; each bullet collapses `START–END` when start==end and drops the trailing `: ` when there's no summary (so chime ticks don't render as `- 13:45–13:45:`). |
+| `search DATE` | `--tag` (filter), `--gaps` (only past unacked), `--json` (raw response) | Proxy/local — the local arm builds its own scheduler from `ark.toml` and `~/.ark/schedule/`. Returned events carry their own suppression state, marked `[suppressed]` in the render. DATE is a single date or `START..END` range; `dateparse` handles flexible formats (see parse-robustness note below). Default output is markdown grouped by date; each bullet collapses `START–END` when start==end and drops the trailing `: ` when there's no summary (so chime ticks don't render as `- 13:45–13:45:`). |
 | `change PATH TAG NEWSTART [NEWEND]` | `--dry-run` | Server-required. Rewrites date in schedule tag value, preserves trailing description. Re-indexes after write. Updates `@ark-event-upcoming:` for recurring events. |
 | `tags` | `--values` | Cold-start. Lists configured schedule tags from ark.toml. With `--values`, also reads schedule logs (`~/.ark/schedule/`) for next upcoming dates. |
 | `parse DATE` | — | Cold-start (no DB). Parses a date expression, prints start/end/all-day/text. Recognizes recurring specs and computes next occurrence. |
@@ -1367,7 +1374,7 @@ ark status [options]
 |------------------------|---------|----------------------------------------------------------------------------------------|
 | `--db`                 | `false` | Show index record counts by prefix (microfts2 + ark, with totals)                      |
 | `--chunks`             | `false` | Show chunk size statistics (count, min, max, mean, median, p90, p95, p99) per strategy |
-| `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `[embedding] model`                       |
+| `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `[embedding] model` **and the server stopped** — it loads the model for its vocabulary, like `embed bench` |
 | `-files GLOB`  | —       | Repeatable positive path filter for `--chunks`                                         |
 | `-without -files GLOB` | —       | Repeatable negative path filter                                                        |
 

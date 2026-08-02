@@ -147,6 +147,62 @@ moment of the change — the divergence only appears later, when the
 unverified hop moves.
 **Refs:** crc-LinkTable.md, crc-ExtMap.md
 
+## Test: a repointed link is followed through the per-path refresh
+
+**Purpose:** R3390, and the load-bearing half of it. A link change never
+arrives as a scan, so `SyncPath` is the *only* thing that re-derives a
+tracked link's resolution — and the single-hop tier (R3384) is defined on
+exactly that event.
+**Input:** `s2/link` → `s1a`, observed and tracked. Repoint it to `s1b`
+(unlink + symlink, which is what `ln -sfn` does). `SyncPath(s2/link)`.
+**Expected:** the entry resolves to `s1b`, and `Resolve(s2/link/a.md)`
+answers under `s1b`. Asserting the *new* target rather than merely that
+something changed, because the old answer is a real path that still exists
+and still reads as correct.
+**Fire alarm:** return early when `Lookup` already knows the path — the
+"we've seen this link" shortcut, which is the plausible wrong
+implementation. Confirm this goes red; every other test here still passes.
+**Refs:** crc-LinkTable.md, crc-DB.md, seq-file-change.md#1.3.5
+
+## Test: a deleted link is forgotten
+
+**Purpose:** R3369 through the same path — a link that disappears must return
+whatever depended on it to unresolved rather than leave it pointing at a file
+it can no longer reach.
+**Input:** a tracked `s2/link` → `s1`; remove the link node;
+`SyncPath(s2/link)`.
+**Expected:** the table no longer tracks it, and `Resolve(s2/link/a.md)`
+falls back to the literal address. Not an error — a vanished alias is
+ark's ordinary not-indexed answer (R3361).
+**Fire alarm:** drop the `Remove` from the gone branch, returning the status
+alone. Confirm red.
+**Refs:** crc-LinkTable.md
+
+## Test: a link replaced by a regular file stops being an alias prefix
+
+**Purpose:** R3390's dispatch order. `lstat` before following is the whole
+correction: a routine that stats first sees a directory for a repoint and a
+file here, and in both cases has already lost the question it was asked.
+**Input:** a tracked `s2/link` → `s1`; replace the link with a real file at
+the same path; `SyncPath(s2/link)`.
+**Expected:** untracked, and the path is handed back as not the table's
+business so the caller indexes it as the file it now is.
+**Fire alarm:** swap `os.Lstat` for `os.Stat` in `SyncPath`. The repoint test
+above goes red too, which is the point — one wrong call breaks both
+directions.
+**Refs:** crc-LinkTable.md
+
+## Test: a proposed link's target is recorded as an unresolved candidate
+
+**Purpose:** R3355, R3357 through the refresh rather than the scan. The scan
+and the refresh must dispose of the same link identically; two surfaces that
+disagree about what a link is are worse than one that is consistently wrong.
+**Input:** a DB whose only source is `s2`; create `s2/link` → `outside/`;
+`DB.SyncLinkPath(s2/link)`.
+**Expected:** an unresolved record for `outside/`, and the link untracked.
+**Fire alarm:** delete the proposal arm of `SyncLinkPath`. Confirm red.
+**Refs:** crc-DB.md, crc-Store.md
+
 ## Test: creating a symlink does not change the canonical file set
 
 **Purpose:** R3375's reason for existing. `--nolinks` is what a script

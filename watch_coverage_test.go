@@ -1,6 +1,7 @@
 package ark
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -58,5 +59,82 @@ func TestIsWatchableDirMatchesScannerDescent(t *testing.T) {
 	// A path outside every source is never watchable.
 	if db.IsWatchableDir("/elsewhere/.scratch") {
 		t.Error("IsWatchableDir returned true for a path under no source")
+	}
+}
+
+// A link event survives the indexability filter and is never cached. This is
+// the half of R3390 that is invisible when it fails: a directory symlink
+// matches no *file* pattern, so the filter guarding the refresh drops the very
+// event that repoints a tracked link and then writes the path into the
+// negative cache, after which no later event on it is classified at all. The
+// single-hop tier is defined on that event (R3384), so the association simply
+// keeps returning its old, once-correct answer.
+// CRC: crc-Server.md | Seq: seq-file-change.md#1.3.5 | R3390
+func TestClassifyEventDivertsLinkPaths(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "src")
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	indexable := filepath.Join(src, "a.md")
+	plain := filepath.Join(src, "notes.txt")
+	link := filepath.Join(src, "link") // no extension: matches nothing
+	gone := filepath.Join(src, "vanished.md")
+	for _, p := range []string{indexable, plain} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{
+		Sources:        []Source{{Dir: src}},
+		DefaultInclude: []string{"*.md"},
+	}
+	srv := &Server{
+		db:           &DB{config: cfg, matcher: &Matcher{}},
+		ignoredPaths: make(map[string]struct{}),
+	}
+
+	cases := []struct {
+		path string
+		want eventDisposition
+		why  string
+	}{
+		{indexable, eventIndex, "an indexable file takes the ordinary refresh path"},
+		{link, eventLink, "a directory symlink matches no file pattern — the filter dropped it"},
+		{plain, eventIgnore, "a plain non-indexable file is still uninteresting"},
+		{gone, eventIndex, "a deleted indexable file must still reach the removal path"},
+	}
+	for _, c := range cases {
+		if got := srv.classifyEvent(c.path); got != c.want {
+			t.Errorf("classifyEvent(%s) = %v, want %v — %s", filepath.Base(c.path), got, c.want, c.why)
+		}
+	}
+
+	// A path that vanished without matching any pattern could still have been
+	// a tracked link; only the actor's table knows, so it goes to the table.
+	goneUnknown := filepath.Join(src, "vanished")
+	if got := srv.classifyEvent(goneUnknown); got != eventLink {
+		t.Errorf("classifyEvent(vanished) = %v, want eventLink — a deleted link must reach the table", got)
+	}
+
+	// The load-bearing assertion. Caching the link path is what makes the
+	// second and every subsequent event on it disappear without being seen.
+	if _, cached := srv.ignoredPaths[link]; cached {
+		t.Errorf("%q was written to the negative cache; every later link event is now invisible", link)
+	}
+	if _, cached := srv.ignoredPaths[plain]; !cached {
+		t.Errorf("%q was not cached — the negative cache stopped doing its job", plain)
 	}
 }

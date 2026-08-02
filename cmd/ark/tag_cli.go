@@ -443,7 +443,7 @@ func tagVerifyAction(_ context.Context, c *ucli.Command) error {
 	}
 
 	if client := serverClient(arkDir); client != nil {
-		fmt.Fprintln(os.Stderr, "error: ark tag verify requires the server to be stopped (uses LMDB write txn)")
+		fmt.Fprintln(os.Stderr, "error: ark tag verify requires the server to be stopped (it needs a write transaction on the index)")
 		fmt.Fprintln(os.Stderr, "       run 'ark stop' first")
 		os.Exit(2)
 	}

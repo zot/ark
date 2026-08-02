@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462, R2600, R2601, R2602, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616, R2617, R2618, R2619, R2625, R2627, R2630, R2631, R2632, R2633, R2635, R2636, R2637, R2638, R2641, R2483, R2484, R2485, R2645, R2646, R2650, R2651, R2652, R2653, R2654, R2655, R2656, R2657, R2658, R2659, R2663, R2662, R2716, R2717, R2718, R2719, R2722, R2723, R2724, R2725, R2726, R2727, R2720, R2721, R2744, R2745, R2755, R2756, R2757, R2758, R2782, R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2794, R2795, R2796, R2805, R2801, R2838, R2839, R2840, R2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956, R2957, R2958, R2960, R2984, R2985, R2990, R2993, R2995, R2996, R2997, R2998, R2999, R3000, R3001, R3002, R3003, R192, R3035, R3191, R3193, R3197, R3204, R3205, R3206, R3208, R3242, R3243, R3284, R3285, R3286, R3287, R3290, R3296, R3297
+**Requirements:** R29, R71, R72, R73, R74, R75, R76, R77, R78, R79, R80, R81, R82, R83, R84, R85, R86, R87, R88, R108, R109, R110, R131, R139, R140, R141, R142, R143, R144, R145, R146, R147, R159, R161, R166, R169, R170, R172, R174, R165, R173, R178, R179, R180, R181, R182, R183, R185, R189, R196, R197, R198, R199, R201, R230, R232, R233, R234, R256, R273, R274, R275, R276, R277, R278, R279, R280, R281, R259, R260, R282, R283, R284, R285, R286, R287, R288, R289, R290, R291, R292, R293, R295, R297, R298, R299, R300, R301, R302, R304, R305, R306, R307, R308, R309, R310, R311, R312, R313, R314, R315, R316, R317, R318, R323, R324, R325, R326, R327, R328, R329, R330, R331, R332, R333, R334, R335, R336, R337, R370, R371, R396, R397, R398, R399, R400, R401, R402, R429, R430, R431, R432, R433, R434, R435, R436, R437, R442, R450, R451, R452, R453, R454, R455, R456, R457, R458, R462, R464, R466, R467, R468, R469, R470, R471, R477, R479, R480, R481, R482, R483, R484, R485, R486, R487, R488, R489, R490, R491, R492, R493, R494, R495, R496, R497, R499, R500, R501, R506, R507, R508, R509, R510, R512, R513, R514, R515, R516, R525, R526, R527, R528, R529, R530, R531, R532, R533, R534, R535, R536, R537, R538, R539, R540, R572, R573, R579, R580, R581, R582, R583, R584, R585, R590, R591, R592, R594, R599, R605, R606, R607, R608, R609, R610, R611, R612, R613, R614, R615, R616, R639, R654, R655, R656, R669, R670, R671, R672, R673, R674, R675, R676, R677, R678, R679, R680, R681, R692, R693, R694, R695, R696, R708, R709, R710, R711, R712, R713, R715, R718, R722, R724, R725, R726, R727, R728, R729, R730, R731, R732, R733, R734, R738, R739, R740, R741, R742, R743, R748, R849, R850, R851, R852, R881, R882, R909, R910, R914, R915, R916, R917, R918, R919, R920, R921, R922, R923, R924, R925, R926, R937, R938, R939, R940, R944, R2473, R2474, R2475, R2476, R2477, R2480, R981, R982, R983, R984, R985, R1015, R1016, R1017, R1027, R1033, R1034, R1043, R1044, R1045, R1046, R1047, R1048, R1049, R1050, R1129, R1131, R1132, R1133, R1134, R1135, R1136, R1137, R1138, R1252, R1378, R1514, R1515, R1516, R1523, R1524, R1525, R1526, R1527, R1528, R1531, R1565, R1566, R1567, R1568, R1569, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R1770, R1771, R1772, R1773, R1774, R1775, R1776, R1777, R1778, R1779, R1780, R1781, R1782, R1786, R1787, R1788, R1789, R1790, R1791, R1792, R1793, R1794, R1795, R1796, R1797, R1798, R1799, R1800, R1801, R1802, R1803, R1804, R1805, R1806, R1807, R1808, R1809, R1810, R1811, R1812, R1813, R1814, R1815, R1816, R1855, R1856, R1857, R1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103, R2104, R2105, R2106, R2107, R2113, R2126, R2127, R2315, R2316, R2317, R2318, R2430, R2431, R2432, R2433, R2434, R2435, R2436, R2437, R2438, R2439, R2440, R2441, R2442, R2443, R2444, R2445, R2446, R2447, R2448, R2449, R2450, R2451, R2452, R2453, R2454, R2455, R2456, R2457, R2458, R2459, R2460, R2461, R2462, R2600, R2601, R2602, R2604, R2605, R2606, R2607, R2608, R2609, R2610, R2611, R2612, R2613, R2614, R2615, R2616, R2617, R2618, R2619, R2625, R2627, R2630, R2631, R2632, R2633, R2635, R2636, R2637, R2638, R2641, R2483, R2484, R2485, R2645, R2646, R2650, R2651, R2652, R2653, R2654, R2655, R2656, R2657, R2658, R2659, R2663, R2662, R2716, R2717, R2718, R2719, R2722, R2723, R2724, R2725, R2726, R2727, R2720, R2721, R2744, R2745, R2755, R2756, R2757, R2758, R2782, R2784, R2785, R2786, R2787, R2788, R2789, R2790, R2794, R2795, R2796, R2805, R2801, R2838, R2839, R2840, R2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956, R2957, R2958, R2960, R2984, R2985, R2990, R2993, R2995, R2996, R2997, R2998, R2999, R3000, R3001, R3002, R3003, R192, R3035, R3191, R3193, R3197, R3204, R3205, R3206, R3208, R3242, R3243, R3284, R3285, R3286, R3287, R3290, R3296, R3297, R3391, R3392, R3393, R3394, R3396, R3397, R3398
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -22,6 +22,50 @@ dispatches operations via proxy or cold-start.
 - Proxy(conn, request): forward operation to running server as HTTP,
   return JSON response
 - ColdStart(dbPath): open DB directly, execute operation, close
+- withDB(fn) (R3391): the cold-start arm for commands that can answer
+  without a server. The **open is bounded** — `OpenWithTimeout` with
+  `dispatchLockTimeout`, retried at `dispatchRetryInterval` through
+  `dispatchStubbornWindow` — exactly as `proxyOrLocal`'s local arm is,
+  because the bound belongs to the act of a CLI opening the index and not
+  to one dispatcher. `ark.Open`'s unbounded form is the server's alone
+  (R2994); bbolt's `flock` reads a zero timeout as wait-forever, so an
+  unbounded open here blocks until one side is killed
+  - **on timeout, recheck liveness before waiting.** A server *coming up*
+    will accept a dial shortly, so retrying is right. A server already
+    *running* owns the index for as long as it lives, so retrying cannot
+    help — fail at once with the stop-the-server message rather than pay
+    the whole window to reach a certain failure
+- **A failed proxy is not an absent server (R3398).** Dispatch has three
+  outcomes — no answer, served, refused — and only the first licenses a local
+  open. `search` and `message inbox` dialed for themselves and wrote the
+  natural spelling, `if err := proxy(...); err == nil { print; return }`, which
+  drops the error and continues into the local arm: the index open then fails
+  against the server that just answered, so the user hears about a lock and
+  never hears what the server said. Both now go through `proxyOrLocal`, which
+  is the only thing here that tells a bounce (wait and resume, R2996) from a
+  live server's refusal (report it, at once).
+- **A successful proxy ends the command's business with the index (R3392).**
+  Reaching the server and then opening locally for the rest of the output
+  cannot work: the server holds the lock for as long as it lives, so the
+  second open hung before R3391 and now reports a *lock* problem for data
+  the server could have returned. Whatever remains is fetched from the
+  server too, or that part declares itself server-must-be-stopped
+  (`withExclusiveDB`, R3002). The rule is stated here rather than left to
+  each command because both offenders looked locally correct: each proxied
+  what it obviously should and reached for the index only for a *fragment*
+  — chunk statistics in one case, a suppressed-tag lookup in the other.
+- planStatus(serverUp, wantChunks, wantTokenize) → statusPlan (R3392,
+  R3393, R3394): the whole of `ark status`'s dispatch decision, as a pure
+  function, so the three-way choice is testable without a socket, a lock
+  or a subprocess. It answers where each part of the output comes from:
+  - server up, `--chunks --tokenize` → refuse, "stop the server". Tokenizing
+    loads the embedding model for its vocabulary, the same thing that makes
+    `embed text` / `embed bench` / `embed validate` exclusive (R3002)
+  - server up → proxy the status block, and `--chunks` proxies too, to
+    `POST /status/chunks` with the filter stack (R3393). No local open
+  - no server up → one local open answers everything, as before
+  The warnings block is not part of this decision: it rides in the status
+  response (R3395), so it prints on either path.
 - CleanStaleSocket(dbPath): if connect fails, remove socket file
 - Each subcommand: init, setup, rebuild, add, remove, scan, refresh, search,
   serve, status, files, stale, missing, dismiss, config, unresolved, resolve,
@@ -311,10 +355,26 @@ dispatches operations via proxy or cold-start.
   START END as flexible dates (dateparse). Flags: --tag (filter),
   --gaps (only unacked past events), --json (JSON output).
   Default output is markdown crank-handle style. Renders
-  suppressed events with `[suppressed]` prefix. Proxies to server.
+  suppressed events with `[suppressed]` prefix.
   Time-range render collapses when start==end and drops the trailing
   `: ` when the summary is empty, so zero-duration ticks don't print
   as `- 13:45–13:45:`. (R914-R920, R2845, R2849)
+  - **Dispatches through `proxyOrLocal` (R3396).** The proxy arm posts to
+    `/schedule/search`; the local arm builds an `EventScheduler` from the
+    opened config and `<arkDir>/schedule` and runs the same `QueryRange`.
+    R1027 has claimed a server-free path since the command was written and
+    the CLI refused at the door for just as long — the *query* never needed
+    a server, but the command had no arm to run it in. Nothing about
+    `QueryRange` resists this: `NewEventScheduler` takes a pubsub, a
+    reporter, a directory and a config, and the query half uses none of the
+    first two.
+  - **Suppression arrives on the event, not from a second lookup (R3397).**
+    The renderer reads `ev.Suppressed`; it consults no config of its own.
+    Whichever side computed the events read the config for suppression, so
+    the two arms cannot disagree and neither reaches for state the other
+    owns. Doing it the other way is what broke the command: it asked the
+    server for events and then opened the index purely to look suppression
+    up, which cannot work while that same server holds the index (R3392).
 - cmdScheduleChange: rewrite date in schedule tag value.
   PATH TAG NEWSTART [NEWEND]. PATH accepts both disk paths and
   `tmp://` URIs. Preserves trailing description text. --dry-run

@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -496,27 +497,36 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 
 	// Server-first so tmp:// inbox messages (only in server memory) are
 	// visible. Cold-path fallback when no server is running.
-	// CRC: crc-CLI.md | R501, R535, R536, R1952, R2484
+	//
+	// R3398: through proxyOrLocal, not a hand-rolled dial. The old form
+	// dropped a non-nil proxy error and continued into the local open, so a
+	// server that answered and refused looked exactly like no server at
+	// all — and since a running server holds the index, the fallback could
+	// only fail, reporting a lock where the server had reported the real
+	// problem. Never demonstrated on this command (nothing made /inbox
+	// error), which is the point: it was the same latent shape as `search`.
+	// CRC: crc-CLI.md | R501, R535, R536, R1952, R2484, R3398, R3003
 	// We always fetch with showAll=true so completed responses remain in
 	// the entry stream for byID pair lookup; --all is applied as a CLI
 	// post-filter in printEntries.
-	if client := serverClient(arkDir); client != nil {
+	proxyOrLocal(func(client *http.Client) error {
 		req := struct {
 			ShowAll         bool `json:"showAll,omitempty"`
 			IncludeArchived bool `json:"includeArchived,omitempty"`
 		}{ShowAll: true, IncludeArchived: includeArchived}
 		var entries []ark.InboxEntry
-		if err := proxyDecode(client, "POST", "/inbox", req, &entries); err == nil {
-			printEntries(entries)
-			return nil
-		}
-	}
-	withDB(func(d *ark.DB) {
-		entries, err := d.Inbox(true, includeArchived)
-		if err != nil {
-			fatal(err)
+		if err := proxyDecode(client, "POST", "/inbox", req, &entries); err != nil {
+			return err
 		}
 		printEntries(entries)
+		return nil
+	}, func(d *ark.DB) error {
+		entries, err := d.Inbox(true, includeArchived)
+		if err != nil {
+			return err
+		}
+		printEntries(entries)
+		return nil
 	})
 	return nil
 }
