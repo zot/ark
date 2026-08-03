@@ -133,6 +133,45 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
   validating the expansion at load time cannot catch. Non-nested multiples
   (`~/work/*`) and the `from_glob` / `sources check` reconciliation
   (R196-R203) are untouched.
+- **A source `dir` that is itself a symlink is refused (R3354).** Two doors,
+  because there are two: `ValidateSourceDir` rejects it as written, and the
+  glob expansion lstats each match so an expanded `~/work/*` cannot auto-add
+  one either. `os.Stat` was the wrong call there and looked right — it follows
+  the link, so a symlinked match passes `IsDir()` and becomes a concrete
+  source.
+  - A source root that is a link asks ark to *follow* one, which is the single
+    thing this design does not do, and both ways of granting it cost more than
+    refusing. Resolving to the target makes the user's own configured path a
+    name ark cannot answer, since a scan starts *below* the root and so never
+    meets the link that would make it resolvable. Walking the target while
+    recording the configured path makes a stored name depend on config, so a
+    later `dir` edit silently renames every file in the source.
+  - The check is skipped for glob *patterns*, which name no file to lstat;
+    their expansions are checked instead, which is where a real link can
+    actually appear.
+  - Unchecked, this is not an error but a convincing success: `filepath.WalkDir`
+    lstats its root, so a symlinked one yields the link node as a single *file*
+    entry and none of the contents. The scan reports one file having indexed
+    nothing — worse than a zero to disbelieve, because nothing looks anomalous.
+  - The supported way to gather scattered directories under one root is a
+    **real** directory of links, which puts them inside a source and hands them
+    to the predicate below. (Bill's call, 2026-08-02, replacing an earlier
+    "resolve at config load".)
+- **The track/propose predicate is re-derived at config load (R3381).**
+  `LinkTable.Rebuild` already *was* the re-derivation and had no caller;
+  `DB.ReloadConfig` is the trigger it was missing. `SetConfig` runs first and
+  is not optional — the table's config **is** the source membership the
+  predicate tests, so rebuilding against the previous one classifies links
+  correctly for a configuration nobody is running.
+  - **The demotion direction works; the promotion direction is not built yet.**
+    Rebuild re-Observes the paths it is given, and the only paths available
+    to give it are the *tracked* ones, so a link whose source was removed
+    correctly drops to proposed. A link that was **proposed** is not in the
+    table at all (`Observe` records only the tracked branch), and its identity
+    lives in a symlink-reason U record whose `symlink` field is still dropped
+    on the floor (O197). So "add the link first, add the source later, and the
+    reload promotes it" — the half R3381 exists for — waits on U-record
+    storage, which is the next item on this feature's list. Gap O202.
 - StrategyForFile(path, sourceStrategies): merge sourceStrategies over
   global strategies, find the longest matching pattern. Returns the
   strategy name, or `lines` as default. Matching is `Matcher` under the

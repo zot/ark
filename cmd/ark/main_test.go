@@ -809,3 +809,33 @@ func TestCLIDoesNotSwallowProxyErrors(t *testing.T) {
 		t.Fatal("scanned no .go files — this test would pass no matter what the code did")
 	}
 }
+
+// Test: test-Unresolved.md — the unresolved count is broken down by reason.
+//
+// R3370. One reason normally dominates — `unindexable` is usually the great
+// majority — so a bare total lets the handful of entries a user can act on
+// hide behind thousands no pattern change will clear, and a count nobody can
+// act on teaches its reader to skip the line.
+func TestFormatUnresolvedReasons(t *testing.T) {
+	tests := []struct {
+		name string
+		in   map[string]int
+		want string
+	}{
+		{"nothing unresolved", nil, ""},
+		{"empty map", map[string]int{}, ""},
+		// Fixed order, not sorted: the reasons read in the order a user works
+		// through them — patterns, then chunkers, then sources.
+		{"all three", map[string]int{"symlink": 3, "uncovered": 1, "unindexable": 2},
+			" (uncovered=1 unindexable=2 symlink=3)"},
+		{"one reason only", map[string]int{"unindexable": 4074}, " (unindexable=4074)"},
+		// A zero is noise, not information.
+		{"zeros omitted", map[string]int{"uncovered": 0, "symlink": 2}, " (symlink=2)"},
+		{"all zero reads as nothing", map[string]int{"uncovered": 0}, ""},
+	}
+	for _, tt := range tests {
+		if got := formatUnresolvedReasons(tt.in); got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

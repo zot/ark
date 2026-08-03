@@ -17,6 +17,40 @@ assumption records — those are ExtMap's, and consult this component
 - byTarget: map[canonicalPrefix][]linkPath — the reverse index. Cannot be derived from the filesystem, which answers "what does this point at" and never "what points here"; this is the only reason a table exists at all rather than plain on-demand resolution
 - config: *Config — source membership, the single predicate behind track-vs-propose (R3381)
 
+## Concurrency — published snapshots, not locks
+
+Every mutator (`Observe`, `SyncPath`, `Remove`, `Rebuild`, `SetConfig`) runs on
+the DB actor. Every **door** that resolves a caller's path — `Fetch`,
+`IsIndexed`, `ReadSourceFile`, the `/content` URLs, the search file filters —
+is an off-actor read. A bare map read from a door is the same latent race O154
+was.
+
+So the contents live in an immutable `linkSnapshot` behind an
+`atomic.Pointer`. A mutator clones the current snapshot, changes the clone, and
+publishes it with one store; a reader takes the current snapshot with one load
+and works from it. The actor stays the only writer, so this is **publication
+rather than locking** — no reader blocks a writer or another reader, and
+"actors, not mutexes" holds. (Bill's call, 2026-08-02, over a `Copy()` bound
+like `withFTS` and over resolving on the actor via `Sync`; the latter would
+deadlock from any door already on the actor.)
+
+**Publication belongs to the table, not to its callers.** A scheme where the
+actor mutates and then remembers to publish is one a future edit forgets, and
+the symptom would be a door quietly resolving against a stale table — the same
+silent shape as everything else in this feature. Making the mutators clone-and-
+swap internally means every existing call site is unchanged and mutating
+without publishing is not expressible.
+
+Two consequences worth stating. A reader that needs several lookups — `Resolve`
+walking prefixes, `Expand` walking the reverse index — loads **once** and holds
+one picture, so a mutation mid-walk cannot show it a half-changed table. And
+`Observe` publishes **once** for what is logically one change: dropping the old
+reverse-index entry and adding the new one must not be visible separately.
+
+`cfg` is not in the snapshot. It is read by the predicate and by tier
+classification, both actor-only, and written only by `SetConfig`, also
+actor-only. No door touches it.
+
 ## Does
 - **Track or propose** (R3381): a directory symlink whose target lies inside a source is tracked; one whose target lies outside every source is proposed as a U-record candidate. One predicate over (target path, source config), no index lookup — which is what lets links and sources be added in either order and reach the same state
 - **Resolve** (R3359, R3360): translate a caller's address to the canonical path, component-wise, since the link is usually a directory and any component may be one (R3372). Falls back to the literal path when resolution fails, so a dangling link yields ark's ordinary not-found rather than a resolution error (R3361)

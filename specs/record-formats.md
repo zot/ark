@@ -466,6 +466,29 @@ during `ark init` and by config-mutating commands.
   and did not index" rather than the narrower scan-encountered form
   this record originally carried.
 
+### L — Directory symlinks
+
+- **Key:** `L` + the link's own path bytes.
+- **Value:** empty.
+- **Semantic:** this path is a directory symlink. The **fact only** —
+  nothing derived from the target is stored, because a stored
+  resolution for `a → b → c` goes wrong when the middle link is
+  repointed while both ends stay untouched, which is the staleness the
+  back-pointer machinery was deleted to avoid ([symlinks.md](symlinks.md)).
+  Everything else is rebuilt from the filesystem at load, one readlink
+  chain per record.
+- **Both dispositions are recorded**, tracked and proposed alike,
+  because both *are* directory symlinks. Which one a link is today is
+  re-derived against the current config and never stored — that is what
+  lets a user add links and sources in either order and reach the same
+  state.
+- **Why it is persisted at all:** the link table is otherwise in memory
+  only, so a process that has never scanned — every CLI command that
+  finds no running server — would resolve its doors against an empty
+  table while a server that happened to scan resolved them correctly.
+  The two would disagree about whether the same file exists, silently,
+  as a plausible "not indexed".
+
 ## Page Content Records (PC)
 
 - **Key:** `PC` + fileID varint + page varint.

@@ -120,8 +120,10 @@ HTTP front door for operations), chunk-cache-threading.md.
 
 One file may have several paths. Ark keeps **one canonical name per file** —
 the path its scan gave it — and every path arriving from outside is resolved
-into that namespace before it is used: CLI arguments, `[[source]].dir`, `@ext`
-tag targets, content URLs, and the search file filters. Aliases are
+into that namespace before it is used: CLI arguments, `@ext` tag targets,
+content URLs, and the search file filters. `[[source]].dir` is not among them —
+a source root that is a link is **rejected** rather than resolved, since a scan
+starts below the root and would never meet the link that made it resolvable. Aliases are
 **recorded, never followed**: a scan that meets a symlink records the link and
 its target and does not descend, so one file never becomes several index
 entries governed by different include/exclude rules, and exactly one source

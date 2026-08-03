@@ -45,7 +45,23 @@ func flatCommands() []*ucli.Command {
 		{Name: "dismiss", Usage: "dismiss missing files", ArgsUsage: "<path|pattern>...", Action: flatDelegate(cmdDismiss)},
 		{Name: "stale", Usage: "list stale files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdStale)},
 		{Name: "missing", Usage: "list missing files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdMissing)},
-		{Name: "unresolved", Usage: "list unresolved files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdUnresolved)},
+		// `unresolved` declares its flag on the node, not in the legacy
+		// FlagSet: flatDelegate passes only positionals, so a flag parsed
+		// inside the handler is never reached and urfave rejects it as
+		// undefined. ArgsUsage carries no PATTERN because the command has
+		// never filtered by one — `stale` and `missing` do, this does not.
+		// CRC: crc-CLITree.md, crc-CLI.md | R3366
+		{
+			Name:  "unresolved",
+			Usage: "list unresolved files, with why each was not indexed",
+			Flags: []ucli.Flag{
+				&ucli.StringFlag{Name: "reason", Usage: "show only this reason: uncovered, unindexable, or symlink"},
+			},
+			Action: func(_ context.Context, c *ucli.Command) error {
+				cmdUnresolved(c.String("reason"))
+				return nil
+			},
+		},
 		{
 			Name:   "sources",
 			Usage:  "manage source directories",

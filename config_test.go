@@ -1,10 +1,12 @@
 package ark
 
-// CRC: crc-Config.md | Test: test-Config.md
+// CRC: crc-Config.md | Test: test-Config.md, test-LinkTable.md
 
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -603,4 +605,77 @@ func TestLuhmannEffectiveChildArgv(t *testing.T) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
+}
+
+// Test: test-LinkTable.md — a symlinked source root is refused, not walked.
+//
+// R3354. The failure this prevents does not present as a zero to disbelieve:
+// filepath.WalkDir lstats its root, so a symlinked one yields the link node as
+// a single *file* entry and none of the contents. The scan reports one file
+// having indexed nothing, and nothing about it looks anomalous.
+func TestValidateSourceDirRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "notes")
+	if err := os.Mkdir(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link-to-notes")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ValidateSourceDir(link); err == nil {
+		t.Error("a symlinked source dir was accepted; ark records links, it does not follow them")
+	} else if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("rejection does not say why: %v", err)
+	}
+	if err := ValidateSourceDir(real); err != nil {
+		t.Errorf("a real directory was refused: %v", err)
+	}
+	// A glob names no file to lstat; its expansions are checked instead.
+	if err := ValidateSourceDir(filepath.Join(dir, "*")); err != nil {
+		t.Errorf("a glob pattern was refused: %v", err)
+	}
+	// A missing dir is the sources check's business (R198), not this one's.
+	if err := ValidateSourceDir(filepath.Join(dir, "nonexistent")); err != nil {
+		t.Errorf("a missing dir was refused here: %v", err)
+	}
+}
+
+// Test: test-LinkTable.md — the glob door refuses one too.
+//
+// R3354. os.Stat was the wrong call and looked right: it follows the link, so
+// a symlinked match passes IsDir() and gets auto-added as a concrete source,
+// arriving at the same broken state through the other door.
+func TestResolveGlobsSkipsSymlinkedMatch(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dir, "alpha"), filepath.Join(dir, "gamma")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Sources: []Source{{Dir: filepath.Join(dir, "*")}}}
+	if _, err := cfg.ResolveGlobs(); err != nil {
+		t.Fatal(err)
+	}
+
+	var added []string
+	for _, src := range cfg.Sources {
+		if !IsGlob(src.Dir) {
+			added = append(added, filepath.Base(src.Dir))
+		}
+	}
+	sort.Strings(added)
+	want := []string{"alpha", "beta"}
+	if !reflect.DeepEqual(added, want) {
+		t.Errorf("expanded sources = %v, want %v — the symlinked match must not become a source", added, want)
+	}
+	// Guard the guard: an expansion that found nothing would pass vacuously.
+	if len(added) == 0 {
+		t.Fatal("the glob matched no real directories, so this proves nothing")
+	}
 }

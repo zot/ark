@@ -1973,3 +1973,97 @@ func TestStoreWarnings(t *testing.T) {
 		}
 	}
 }
+
+// Test: test-Unresolved.md — a symlink proposal dies with its proposer.
+//
+// O197 / R3357. The record is keyed on the *target*, which is a real directory
+// outside every source — the one thing that has emphatically not disappeared.
+// What disappears is the proposal. Asking the ordinary "does the path still
+// exist?" of such a record is not an approximation, it is the wrong question:
+// a withdrawn proposal survives every scan, indistinguishable from a live one.
+func TestUnresolvedLivenessFollowsTheProposer(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "outside")
+	other := filepath.Join(dir, "elsewhere")
+	for _, d := range []string{target, other} {
+		if err := os.Mkdir(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "proposer")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	rec := UnresolvedRecord{Path: target, Reason: UnresolvedReasonSymlink, Symlink: link}
+
+	if !unresolvedIsLive(rec) {
+		t.Error("proposal reported dead while its link still points at the target")
+	}
+
+	// Repoint the link. The target still exists — that is the whole trap —
+	// but nothing is asking for it any more.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, link); err != nil {
+		t.Fatal(err)
+	}
+	if unresolvedIsLive(rec) {
+		t.Error("proposal survived its link being repointed; the target existing is not the question")
+	}
+
+	// Delete the link outright.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if unresolvedIsLive(rec) {
+		t.Error("proposal survived its link being deleted")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatal("the target must still exist, or this proves nothing about which path was tested")
+	}
+
+	// A record written before the field was persisted cannot be judged on its
+	// proposer, so it falls back rather than being dropped.
+	legacy := UnresolvedRecord{Path: target, Reason: UnresolvedReasonSymlink}
+	if !unresolvedIsLive(legacy) {
+		t.Error("a legacy record with no proposer was dropped instead of falling back to the path test")
+	}
+
+	// Non-symlink reasons keep the ordinary test.
+	if !unresolvedIsLive(UnresolvedRecord{Path: target, Reason: UnresolvedReasonUncovered}) {
+		t.Error("an uncovered record for an existing path was reported dead")
+	}
+	if unresolvedIsLive(UnresolvedRecord{Path: filepath.Join(dir, "gone"), Reason: UnresolvedReasonUncovered}) {
+		t.Error("an uncovered record for a missing path was reported live")
+	}
+}
+
+// Test: test-Unresolved.md — the record keeps what it was told.
+// R3356, R3357. AddUnresolved(path, dir) dropped both fields on the floor,
+// which is why a proposal could not explain itself or be withdrawn.
+func TestAddUnresolvedRecordKeepsReasonAndProposer(t *testing.T) {
+	s := testStore(t)
+	if err := s.AddUnresolvedRecord(UnresolvedRecord{
+		Path: "/outside/notes", Dir: "/outside/notes",
+		Reason: UnresolvedReasonSymlink, Symlink: "/src/link",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListUnresolved()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	if got[0].Reason != UnresolvedReasonSymlink {
+		t.Errorf("reason = %q, want %q", got[0].Reason, UnresolvedReasonSymlink)
+	}
+	if got[0].Symlink != "/src/link" {
+		t.Errorf("proposing link = %q, want /src/link — without it the candidate cannot explain itself", got[0].Symlink)
+	}
+	if got[0].FirstSeen == 0 {
+		t.Error("FirstSeen was not stamped")
+	}
+}

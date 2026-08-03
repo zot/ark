@@ -2425,8 +2425,9 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 		fmt.Printf("db format: %s\n", status.DBFormat)
 	}
 	// R605, R606: total size parenthesized after file count
-	fmt.Printf("files: %d (%s)\nstale: %d\nmissing: %d\nunresolved: %d\n",
-		status.Files, formatBytes(status.TotalSize), status.Stale, status.Missing, status.Unresolved)
+	fmt.Printf("files: %d (%s)\nstale: %d\nmissing: %d\nunresolved: %d%s\n",
+		status.Files, formatBytes(status.TotalSize), status.Stale, status.Missing,
+		status.Unresolved, formatUnresolvedReasons(status.UnresolvedByReason))
 	fmt.Printf("chunks: %d\nsources: %d\n", status.Chunks, status.Sources)
 	if status.TmpFiles > 0 {
 		fmt.Printf("tmp files: %d\n", status.TmpFiles)
@@ -2659,6 +2660,39 @@ func cmdStatus(args []string) {
 
 		printChunkStats(result, unit, modelName)
 	})
+}
+
+// formatUnresolvedReasons renders the parenthesised breakdown that follows the
+// unresolved count — ` (uncovered=a unindexable=b symlink=c)` — or "" when
+// there is nothing unresolved.
+//
+// The breakdown exists because one reason normally dominates: `unindexable` is
+// usually the great majority, so a bare total lets the handful of entries a
+// user can actually act on hide behind thousands that no pattern change will
+// ever clear. A count nobody can act on teaches its reader to skip the line.
+//
+// Order is fixed rather than sorted, so the reasons read in the order a user
+// would work through them — patterns, then chunkers, then sources. A reason
+// with no entries is omitted; a zero is noise.
+// CRC: crc-CLI.md | R3370
+func formatUnresolvedReasons(byReason map[string]int) string {
+	if len(byReason) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, reason := range []string{
+		ark.UnresolvedReasonUncovered,
+		ark.UnresolvedReasonUnindexable,
+		ark.UnresolvedReasonSymlink,
+	} {
+		if n := byReason[reason]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", reason, n))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, " ") + ")"
 }
 
 // printWarnings prints the outstanding E-record conditions under a "warnings:"
@@ -3220,9 +3254,19 @@ func printSourcesCheck(result *ark.SourcesCheckResult) {
 }
 
 // CRC: crc-CLI.md | R86
-func cmdUnresolved(args []string) {
-	fs := flag.NewFlagSet("unresolved", flag.ExitOnError)
-	fs.Parse(args)
+// cmdUnresolved takes the reason directly rather than parsing it, because the
+// urfave node declares the flag (`flat_cli.go`) — a FlagSet here would never
+// see it.
+// CRC: crc-CLI.md | R86, R3366
+func cmdUnresolved(reason string) {
+	if reason != "" {
+		switch reason {
+		case ark.UnresolvedReasonUncovered, ark.UnresolvedReasonUnindexable, ark.UnresolvedReasonSymlink:
+		default:
+			fatal(fmt.Errorf("invalid --reason %q (want %s, %s, or %s)", reason,
+				ark.UnresolvedReasonUncovered, ark.UnresolvedReasonUnindexable, ark.UnresolvedReasonSymlink))
+		}
+	}
 
 	proxyOrLocal(
 		func(client *http.Client) error {
@@ -3230,9 +3274,7 @@ func cmdUnresolved(args []string) {
 			if err := proxyDecode(client, "GET", "/unresolved", nil, &unresolved); err != nil {
 				return err
 			}
-			for _, u := range unresolved {
-				fmt.Println(u.Path)
-			}
+			printUnresolved(unresolved, reason)
 			return nil
 		},
 		func(d *ark.DB) error {
@@ -3240,12 +3282,41 @@ func cmdUnresolved(args []string) {
 			if err != nil {
 				return err
 			}
-			for _, u := range unresolved {
-				fmt.Println(u.Path)
-			}
+			printUnresolved(unresolved, reason)
 			return nil
 		},
 	)
+}
+
+// printUnresolved lists candidates with the reason each was not indexed, and
+// narrows to one reason when asked.
+//
+// The reason is on the line because the three call for different responses —
+// edit a pattern, add a chunker, add a source — so a bare list of paths cannot
+// tell a reader what to do about any of them. `--reason` is what lets a caller
+// hide the `unindexable` bulk without losing it; with one reason normally
+// dominating, an undifferentiated list is not usable, because the handful of
+// actionable entries are invisible among thousands no pattern change can help.
+//
+// A symlink-reason entry names its proposing link, since the record is keyed
+// on the *target*: without the link it offers a directory the user may not
+// recognise, with no indication of what asked for it.
+// CRC: crc-CLI.md | R3356, R3357, R3366
+func printUnresolved(records []ark.UnresolvedRecord, reason string) {
+	for _, u := range records {
+		r := u.Reason
+		if r == "" {
+			r = ark.UnresolvedReasonUncovered // written before reasons existed
+		}
+		if reason != "" && r != reason {
+			continue
+		}
+		if r == ark.UnresolvedReasonSymlink && u.Symlink != "" {
+			fmt.Printf("%s\t%s\tvia %s\n", u.Path, r, u.Symlink)
+			continue
+		}
+		fmt.Printf("%s\t%s\n", u.Path, r)
+	}
 }
 
 // CRC: crc-CLI.md | R87

@@ -124,10 +124,15 @@ Examples (source-scoped context):
 A source's `dir` may itself be a glob (`~/work/*`), expanded against the
 filesystem to produce one source per matching directory. This is shell-style
 path expansion rather than path filtering, so the anchoring rules above do not
-apply. Two rewritings are done: `~` expansion, and symlink resolution
-([symlinks.md](symlinks.md)) — a `dir` that is itself a symlink resolves to
-its target, because a scan of an unresolved directory link finds the link node
-and none of its contents.
+apply. One rewriting is done: `~` expansion.
+
+**A `dir` that is itself a symlink is rejected**, both as written and when a
+glob expands onto one ([symlinks.md](symlinks.md)). A source root that is a
+link asks ark to follow one, which it does not do; a real directory containing
+links achieves the same thing through machinery that already exists. Unchecked,
+the failure is a convincing success rather than an error — the walk lstats its
+root, so it finds the link node as a single file entry and none of the
+contents.
 
 **`**` is rejected in `[[source]].dir`.** A recursive source glob makes every
 subdirectory its own source root, so a single file change fires one watcher

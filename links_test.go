@@ -591,3 +591,195 @@ func TestLinkTierRederivedWhenShapeChanges(t *testing.T) {
 		t.Errorf("Hops = %v, want two", entry.Hops)
 	}
 }
+
+// Test: test-LinkTable.md — the predicate is re-derived against the new config.
+//
+// R3381. The predicate is a test over (target, source config) with no index
+// lookup, so a config change is the whole trigger. SetConfig before Rebuild is
+// not optional: the table's config *is* the source membership the predicate
+// tests, so rebuilding against the previous one classifies links correctly for
+// a configuration nobody is running — which looks like the reload did nothing.
+//
+// This covers the DEMOTION direction only. Promotion (proposed -> tracked)
+// needs the proposal list, which lives in U records that do not yet carry the
+// proposing link — gap O202.
+func TestRebuildRederivesAgainstNewConfig(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "notes")
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	linkHome := filepath.Join(dir, "src")
+	if err := os.Mkdir(linkHome, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(linkHome, "notes-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// With the target inside a source, the link is tracked.
+	withTarget := &Config{Sources: []Source{{Dir: linkHome}, {Dir: target}}}
+	lt := NewLinkTable(withTarget)
+	if _, status := lt.Observe(link); status != LinkTracked {
+		t.Fatalf("target is inside a source but the link was not tracked (status %v)", status)
+	}
+	if lt.Len() != 1 {
+		t.Fatalf("tracked set has %d entries, want 1", lt.Len())
+	}
+
+	// Drop the target's source — the same edit a user makes in ark.toml — and
+	// re-derive. The link must fall back to proposed.
+	without := &Config{Sources: []Source{{Dir: linkHome}}}
+	lt.SetConfig(without)
+	proposed := lt.Rebuild(lt.Links())
+
+	if lt.Len() != 0 {
+		t.Errorf("link still tracked after its target's source was removed (%d entries)", lt.Len())
+	}
+	if len(proposed) != 1 {
+		t.Fatalf("Rebuild returned %d proposals, want 1 — the demoted link must be offered as a candidate", len(proposed))
+	}
+	if proposed[0].Path != link {
+		t.Errorf("proposal names %q, want %q", proposed[0].Path, link)
+	}
+}
+
+// Test: test-LinkTable.md — every door resolves, and none of them races.
+//
+// R3359. The doors are `Fetch`, `IsIndexed`, `ReadSourceFile` (which the
+// `/content` URL handler reaches through), and the search file filters. Each
+// takes a path from outside and must translate it before use, because stored
+// paths are canonical: an alias-spelled path that skips resolution produces a
+// plausible "not indexed" for a file that is indexed — the original defect.
+//
+// The single-door assertion is deliberately absent. What matters is that the
+// *set* agrees, since a surface that resolves and one that does not disagree
+// silently, so this exercises the shared translation every door calls.
+func TestResolveIsComponentWiseAndFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "src")
+	sub := filepath.Join(real, "deep")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "alias")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Sources: []Source{{Dir: dir}}}
+	lt := NewLinkTable(cfg)
+	if _, status := lt.Observe(link); status != LinkTracked {
+		t.Fatalf("link not tracked (status %v)", status)
+	}
+
+	// Component-wise: the link is a mid-path *directory*, not the leaf. This
+	// is the shape of the original defect — a file at <farm>/<dir>/<file>
+	// where <farm>/<dir> was the link.
+	if got, want := lt.Resolve(filepath.Join(link, "deep", "a.md")),
+		filepath.Join(real, "deep", "a.md"); got != want {
+		t.Errorf("mid-path link not resolved: got %q, want %q", got, want)
+	}
+	// A path traversing no tracked link is returned unchanged — the cheap
+	// test for whether any of this applies at all.
+	untouched := filepath.Join(dir, "elsewhere", "b.md")
+	if got := lt.Resolve(untouched); got != untouched {
+		t.Errorf("unrelated path rewritten: got %q, want %q", got, untouched)
+	}
+	// A pattern is not a path: only the wildcard-free prefix resolves.
+	if got, want := lt.ResolvePattern(filepath.Join(link, "**", "*.md")),
+		filepath.Join(real, "**", "*.md"); got != want {
+		t.Errorf("pattern prefix not resolved: got %q, want %q", got, want)
+	}
+	// A wildcard in the first component leaves nothing concrete to resolve.
+	if got := lt.ResolvePattern("**/*.md"); got != "**/*.md" {
+		t.Errorf("rootless pattern rewritten: got %q", got)
+	}
+	// Dangling: resolution still happens, and that is the point. The chain
+	// is read with readlink, which does not stat the target, so the answer
+	// is the target path — which then does not exist, so the door replies
+	// with ark's ordinary not-indexed. A resolver that refused here would
+	// turn a missing file into a resolution *error*, which is exactly what
+	// R3361 forbids.
+	if err := os.RemoveAll(real); err != nil {
+		t.Fatal(err)
+	}
+	lt2 := NewLinkTable(cfg)
+	if _, status := lt2.Observe(link); status != LinkTracked {
+		t.Errorf("a dangling link stopped being tracked (status %v); its target path is still inside a source", status)
+	}
+	if got, want := lt2.Resolve(filepath.Join(link, "deep", "a.md")),
+		filepath.Join(real, "deep", "a.md"); got != want {
+		t.Errorf("dangling link did not resolve: got %q, want %q", got, want)
+	}
+	if _, err := os.Stat(lt2.Resolve(filepath.Join(link, "deep", "a.md"))); !os.IsNotExist(err) {
+		t.Error("the resolved path exists, so this case proves nothing about dangling links")
+	}
+}
+
+// Test: test-LinkTable.md — a cycle falls back to the literal path.
+//
+// R3361, R3374. This is the case that genuinely cannot be resolved. The
+// layout permits it: ark already contains a link pointing at the farm that
+// contains it, so the guard is a real limit rather than defensive coding.
+func TestResolveCycleFallsBackToLiteral(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+	lt := NewLinkTable(&Config{Sources: []Source{{Dir: dir}}})
+	lt.Observe(a)
+	lt.Observe(b)
+
+	literal := filepath.Join(a, "x.md")
+	if got := lt.Resolve(literal); got != literal {
+		t.Errorf("a cycle did not fall back to the literal path: got %q, want %q", got, literal)
+	}
+}
+
+// Test: test-LinkTable.md — readers never see a half-built table.
+//
+// R3359. Every mutator runs on the DB actor and every door is an off-actor
+// read, so the contents live in an immutable snapshot behind an atomic
+// pointer. This is the guard on that: run readers flat out against a mutator
+// and let -race judge. Without publication it is the same latent map race
+// O154 was.
+func TestLinkTableReadsAreRaceFree(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"t1", "t2"} {
+		if err := os.Mkdir(filepath.Join(dir, n), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "alias")
+	if err := os.Symlink(filepath.Join(dir, "t1"), link); err != nil {
+		t.Fatal(err)
+	}
+	lt := NewLinkTable(&Config{Sources: []Source{{Dir: dir}}})
+	lt.Observe(link)
+
+	done := make(chan struct{})
+	go func() { // the actor side
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			lt.Observe(link)
+			lt.Remove(link)
+			lt.Rebuild([]string{link})
+		}
+	}()
+	for i := 0; i < 200; i++ { // the doors
+		lt.Resolve(filepath.Join(link, "a.md"))
+		lt.ResolvePattern(filepath.Join(link, "**", "*.md"))
+		lt.Expand(filepath.Join(dir, "t1", "a.md"))
+		lt.Links()
+		lt.Len()
+		lt.Lookup(link)
+	}
+	<-done
+}

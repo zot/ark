@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // LinkTier says how a tracked link's resolution is verified — each the
@@ -142,8 +143,10 @@ type LinkEntry struct {
 // LinkTable holds the tracked directory symlinks and the reverse index from
 // resolved directory to the links that name it.
 // CRC: crc-LinkTable.md | R3383
-type LinkTable struct {
-	cfg *Config
+// linkSnapshot is one immutable version of the table's contents. Nothing
+// mutates a published snapshot; a change builds the next one.
+// CRC: crc-LinkTable.md | R3359
+type linkSnapshot struct {
 	// links is the tracked set, keyed by the link's own path.
 	links map[string]*LinkEntry
 	// byTarget is the reverse index: resolved directory -> the link paths
@@ -154,16 +157,76 @@ type LinkTable struct {
 	byTarget map[string][]string
 }
 
+// clone copies the maps so a mutation can build the next version without
+// touching the one readers are holding. The entries themselves are shared
+// and never mutated in place.
+func (s *linkSnapshot) clone() *linkSnapshot {
+	next := &linkSnapshot{
+		links:    make(map[string]*LinkEntry, len(s.links)),
+		byTarget: make(map[string][]string, len(s.byTarget)),
+	}
+	for k, v := range s.links {
+		next.links[k] = v
+	}
+	for k, v := range s.byTarget {
+		next.byTarget[k] = append([]string(nil), v...)
+	}
+	return next
+}
+
+// LinkTable is written only on the DB actor and read from anywhere.
+//
+// Every mutator — Observe, SyncPath, Remove, Rebuild — runs on the actor, and
+// every *door* that resolves a caller's path (Fetch, IsIndexed,
+// ReadSourceFile, the content URLs, the search file filters) is an off-actor
+// read. A bare map read from a door would be the same latent race O154 was.
+//
+// So the contents live in an immutable snapshot behind an atomic pointer: a
+// mutator builds the next version and publishes it with one store, a reader
+// takes the current version with one load and holds a consistent picture for
+// as long as it needs. The actor remains the only writer, so this is
+// publication rather than locking — no reader ever blocks a writer or another
+// reader, and the "actors, not mutexes" rule is kept.
+//
+// Publication belongs to the table rather than to its callers deliberately.
+// A scheme where the actor mutates and then remembers to publish is one a
+// future edit forgets, and the symptom would be a door quietly resolving
+// against a stale table — the same shape as every other silent failure in
+// this feature.
+//
+// cfg is a separate matter: it is read by the predicate and by tier
+// classification, both actor-only, and written only by SetConfig, also
+// actor-only. No door touches it.
+// CRC: crc-LinkTable.md | R3359, R3383
+type LinkTable struct {
+	cfg  *Config
+	snap atomic.Pointer[linkSnapshot]
+}
+
+// load returns the currently published snapshot. Readers call this once and
+// work from the result, so a mutation mid-read cannot change what they see.
+func (lt *LinkTable) load() *linkSnapshot { return lt.snap.Load() }
+
+// mutate builds the next snapshot from the current one and publishes it.
+// Actor-only. The clone is what makes the published version immutable, which
+// is what lets readers go lock-free.
+func (lt *LinkTable) mutate(fn func(*linkSnapshot)) {
+	next := lt.load().clone()
+	fn(next)
+	lt.snap.Store(next)
+}
+
 // NewLinkTable returns an empty table bound to a config. The config
 // supplies source membership, which is the whole of the track/propose
 // predicate and of tier classification.
 // CRC: crc-LinkTable.md | R3381
 func NewLinkTable(cfg *Config) *LinkTable {
-	return &LinkTable{
-		cfg:      cfg,
+	lt := &LinkTable{cfg: cfg}
+	lt.snap.Store(&linkSnapshot{
 		links:    make(map[string]*LinkEntry),
 		byTarget: make(map[string][]string),
-	}
+	})
+	return lt
 }
 
 // Observe classifies a directory symlink and, when tracked, records it.
@@ -191,9 +254,14 @@ func (lt *LinkTable) Observe(linkPath string) (*LinkEntry, LinkStatus) {
 		lt.Remove(linkPath)
 		return entry, LinkProposed
 	}
-	lt.Remove(linkPath) // drop any previous reverse-index entry before re-adding
-	lt.links[linkPath] = entry
-	lt.byTarget[resolved] = append(lt.byTarget[resolved], linkPath)
+	// One publication, not two: dropping the old reverse-index entry and
+	// adding the new one are a single change, and a reader must never see
+	// the gap between them.
+	lt.mutate(func(s *linkSnapshot) {
+		s.forget(linkPath)
+		s.links[linkPath] = entry
+		s.byTarget[resolved] = append(s.byTarget[resolved], linkPath)
+	})
 	return entry, LinkTracked
 }
 
@@ -259,23 +327,40 @@ func linksToRegularFile(path string) bool {
 // CRC: crc-LinkTable.md | R3369
 func (lt *LinkTable) Remove(linkPath string) {
 	linkPath = filepath.Clean(ExpandTilde(linkPath))
-	entry, ok := lt.links[linkPath]
+	if _, ok := lt.load().links[linkPath]; !ok {
+		return // nothing to publish
+	}
+	lt.mutate(func(s *linkSnapshot) { s.forget(linkPath) })
+}
+
+// forget drops a link from both indexes. Operates on an unpublished
+// snapshot, so callers must be inside mutate.
+func (s *linkSnapshot) forget(linkPath string) {
+	entry, ok := s.links[linkPath]
 	if !ok {
 		return
 	}
-	delete(lt.links, linkPath)
-	rest := lt.byTarget[entry.Resolved][:0]
-	for _, p := range lt.byTarget[entry.Resolved] {
+	delete(s.links, linkPath)
+	var rest []string
+	for _, p := range s.byTarget[entry.Resolved] {
 		if p != linkPath {
 			rest = append(rest, p)
 		}
 	}
 	if len(rest) == 0 {
-		delete(lt.byTarget, entry.Resolved)
+		delete(s.byTarget, entry.Resolved)
 	} else {
-		lt.byTarget[entry.Resolved] = rest
+		s.byTarget[entry.Resolved] = rest
 	}
 }
+
+// SetConfig rebinds the table to a reloaded config. Source membership is the
+// whole of the track/propose predicate and of tier classification, so a table
+// left pointing at the previous config re-derives against source membership
+// that no longer exists — the failure would be a link classified correctly for
+// a configuration nobody is running. Actor-only, like every other writer here.
+// CRC: crc-LinkTable.md | R3381
+func (lt *LinkTable) SetConfig(cfg *Config) { lt.cfg = cfg }
 
 // Rebuild reconstructs the whole table from the persisted
 // is-a-directory-symlink facts, one readlink chain each. This is both the
@@ -287,8 +372,10 @@ func (lt *LinkTable) Remove(linkPath string) {
 // their unresolved-file candidates.
 // CRC: crc-LinkTable.md | R3381, R3383
 func (lt *LinkTable) Rebuild(linkPaths []string) []*LinkEntry {
-	lt.links = make(map[string]*LinkEntry, len(linkPaths))
-	lt.byTarget = make(map[string][]string, len(linkPaths))
+	lt.snap.Store(&linkSnapshot{
+		links:    make(map[string]*LinkEntry, len(linkPaths)),
+		byTarget: make(map[string][]string, len(linkPaths)),
+	})
 	var proposed []*LinkEntry
 	for _, p := range linkPaths {
 		if entry, status := lt.Observe(p); status == LinkProposed {
@@ -301,7 +388,7 @@ func (lt *LinkTable) Rebuild(linkPaths []string) []*LinkEntry {
 // Lookup returns the tracked entry for a link path.
 // CRC: crc-LinkTable.md | R3384
 func (lt *LinkTable) Lookup(linkPath string) (*LinkEntry, bool) {
-	entry, ok := lt.links[filepath.Clean(ExpandTilde(linkPath))]
+	entry, ok := lt.load().links[filepath.Clean(ExpandTilde(linkPath))]
 	return entry, ok
 }
 
@@ -311,8 +398,9 @@ func (lt *LinkTable) Lookup(linkPath string) (*LinkEntry, bool) {
 // an address space whose own structure is invisible. R3380
 // CRC: crc-LinkTable.md | R3380
 func (lt *LinkTable) Links() []string {
-	out := make([]string, 0, len(lt.links))
-	for p := range lt.links {
+	snap := lt.load()
+	out := make([]string, 0, len(snap.links))
+	for p := range snap.links {
 		out = append(out, p)
 	}
 	sort.Strings(out)
@@ -321,7 +409,7 @@ func (lt *LinkTable) Links() []string {
 
 // Len reports the tracked link count.
 // CRC: crc-LinkTable.md | R3383
-func (lt *LinkTable) Len() int { return len(lt.links) }
+func (lt *LinkTable) Len() int { return len(lt.load().links) }
 
 // Resolve translates a caller's address into the canonical namespace by
 // longest-prefix rewrite, iterated until no tracked prefix matches.
@@ -339,6 +427,7 @@ func (lt *LinkTable) Len() int { return len(lt.links) }
 // (R3361).
 // CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.2 | R3359, R3360, R3361, R3372, R3374
 func (lt *LinkTable) Resolve(path string) string {
+	snap := lt.load() // one picture for the whole walk
 	literal := filepath.Clean(ExpandTilde(path))
 	p := literal
 	seen := make(map[string]bool, 4)
@@ -347,11 +436,11 @@ func (lt *LinkTable) Resolve(path string) string {
 			return literal // cycle among tracked prefixes: literal, never a loop
 		}
 		seen[p] = true
-		prefix := lt.longestTrackedPrefix(p)
+		prefix := snap.longestTrackedPrefix(p)
 		if prefix == "" {
 			return p
 		}
-		p = filepath.Clean(lt.links[prefix].Resolved + p[len(prefix):])
+		p = filepath.Clean(snap.links[prefix].Resolved + p[len(prefix):])
 	}
 	return literal
 }
@@ -385,6 +474,7 @@ func (lt *LinkTable) ResolvePattern(pattern string) string {
 // link also targets, and the visited set is the cycle guard.
 // CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#2 | R3364, R3374, R3378
 func (lt *LinkTable) Expand(canonical string) []string {
+	snap := lt.load() // one picture for the whole expansion
 	start := filepath.Clean(ExpandTilde(canonical))
 	out := []string{start}
 	seen := map[string]bool{start: true}
@@ -400,7 +490,7 @@ func (lt *LinkTable) Expand(canonical string) []string {
 		}
 		// Walk cur.path's ancestors longest-first against the reverse index.
 		for dir := cur.path; ; dir = filepath.Dir(dir) {
-			for _, linkPath := range lt.byTarget[dir] {
+			for _, linkPath := range snap.byTarget[dir] {
 				alias := filepath.Clean(linkPath + cur.path[len(dir):])
 				if !seen[alias] {
 					seen[alias] = true
@@ -423,9 +513,9 @@ func (lt *LinkTable) Expand(canonical string) []string {
 // nested links deterministic when both a directory and one of its ancestors
 // are tracked. R3374
 // CRC: crc-LinkTable.md | R3374
-func (lt *LinkTable) longestTrackedPrefix(p string) string {
+func (s *linkSnapshot) longestTrackedPrefix(p string) string {
 	for dir := p; ; dir = filepath.Dir(dir) {
-		if _, ok := lt.links[dir]; ok {
+		if _, ok := s.links[dir]; ok {
 			return dir
 		}
 		if parent := filepath.Dir(dir); parent == dir {

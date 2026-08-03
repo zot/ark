@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -226,6 +227,7 @@ const (
 	prefixPageContent    = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting     = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
 	prefixSerial         = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
+	prefixLink           = 'L'  // R3383: this path is a directory symlink (L + path → empty). The FACT only — everything derived from the target is rebuilt from the filesystem
 	prefixHotCorrelation = "HC" // R2226: tag → top-K chunks cosine cache (HC + tag + chunkid:8 → score:float64)
 	// prefixDiscussed is the first occupant of the `R` recall-feature
 	// namespace; future R* records (proposals, processed-stamps, etc.)
@@ -343,15 +345,78 @@ func (s *Store) ListMissing() ([]MissingRecord, error) {
 
 // AddUnresolved records an unresolved file.
 func (s *Store) AddUnresolved(path, dir string) error {
-	rec := UnresolvedRecord{Path: path, FirstSeen: time.Now().UnixNano(), Dir: dir}
+	return s.AddUnresolvedRecord(UnresolvedRecord{Path: path, Dir: dir})
+}
+
+// AddUnresolvedRecord stores a candidate with everything it carries — the
+// reason it was not indexed (R3356) and, for a symlink-reason record, the link
+// that proposed it (R3357).
+//
+// This exists because the two-argument form silently dropped both. A record
+// keyed on the *target* with no proposing link cannot explain itself: it
+// offers the user a directory they may not recognise with no indication of
+// what asked for it, and nothing can later tell whether the proposal is still
+// live. FirstSeen is stamped here so callers never have to.
+// CRC: crc-Store.md | R3356, R3357
+func (s *Store) AddUnresolvedRecord(rec UnresolvedRecord) error {
+	if rec.FirstSeen == 0 {
+		rec.FirstSeen = time.Now().UnixNano()
+	}
 	val, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	key := unresolvedKey(path)
+	key := unresolvedKey(rec.Path)
 	return s.bolt.Update(func(txn *bbolt.Tx) error {
 		return bPut(txn, key, val)
 	})
+}
+
+// linkKey builds the L-record key: the prefix byte plus the link's own path.
+// CRC: crc-Store.md | R3383
+func linkKey(path string) []byte {
+	return append([]byte{byte(prefixLink)}, []byte(path)...)
+}
+
+// AddLink records that a path is a directory symlink.
+//
+// The value is empty on purpose. R3383 persists the *fact* and nothing
+// derived from it: storing the target would be storing a resolution, and a
+// stored resolution for `a → b → c` goes wrong when the middle link is
+// repointed while both ends stay untouched — the staleness the deleted
+// back-pointer machinery existed to chase. Everything else is rebuilt from
+// the filesystem by one readlink chain per record.
+//
+// Both tracked and proposed links are recorded, because both *are* directory
+// symlinks; which one a link is today is re-derived by Rebuild against the
+// current config, and that is what lets a user add links and sources in
+// either order.
+// CRC: crc-Store.md | R3383, R3381
+func (s *Store) AddLink(path string) error {
+	key := linkKey(filepath.Clean(ExpandTilde(path)))
+	return s.bolt.Update(func(txn *bbolt.Tx) error { return bPut(txn, key, nil) })
+}
+
+// RemoveLink forgets a path that is no longer a directory symlink.
+// CRC: crc-Store.md | R3383
+func (s *Store) RemoveLink(path string) error {
+	key := linkKey(filepath.Clean(ExpandTilde(path)))
+	return s.bolt.Update(func(txn *bbolt.Tx) error { return bDel(txn, key) })
+}
+
+// ListLinks returns every recorded directory-symlink path. This is Rebuild's
+// input at startup (R3383): without it the table is empty in any process that
+// has not itself scanned, and every door then resolves against nothing.
+// CRC: crc-Store.md | R3383
+func (s *Store) ListLinks() ([]string, error) {
+	var out []string
+	err := s.bolt.View(func(txn *bbolt.Tx) error {
+		return scanPrefix(txn, []byte{byte(prefixLink)}, func(k, _ []byte) error {
+			out = append(out, string(k[1:]))
+			return nil
+		})
+	})
+	return out, err
 }
 
 // RemoveUnresolved removes an unresolved file record.
@@ -387,13 +452,46 @@ func (s *Store) CleanUnresolved() error {
 		return err
 	}
 	for _, rec := range records {
-		if _, err := os.Stat(rec.Path); os.IsNotExist(err) {
+		if !unresolvedIsLive(rec) {
 			if err := s.RemoveUnresolved(rec.Path); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// unresolvedIsLive reports whether a candidate is still worth offering.
+//
+// For most records the test is the obvious one: the path is gone, so the
+// candidate is gone. A **symlink**-reason record needs the opposite question
+// asked, and asking the obvious one is a bug rather than an approximation
+// (O197). Such a record is keyed on the *target*, which is a real directory
+// living outside every source — the one thing that has emphatically not
+// disappeared. What can disappear is the **proposal**: delete the link, or
+// repoint it elsewhere, and nothing is asking for that target any more. Tested
+// on the target instead, a withdrawn proposal survives every scan,
+// indistinguishable from a live one.
+//
+// So the liveness of a proposal is the liveness of its proposer: the link must
+// still exist and must still resolve to the target it proposed.
+// CRC: crc-Store.md | R3357, R3355
+func unresolvedIsLive(rec UnresolvedRecord) bool {
+	if rec.Reason == UnresolvedReasonSymlink {
+		if rec.Symlink == "" {
+			// Written before the field was persisted; fall back to the
+			// path test rather than dropping a record we cannot judge.
+			_, err := os.Stat(rec.Path)
+			return !os.IsNotExist(err)
+		}
+		resolved, err := filepath.EvalSymlinks(rec.Symlink)
+		if err != nil {
+			return false // the proposing link is gone or dangling
+		}
+		return filepath.Clean(resolved) == filepath.Clean(rec.Path)
+	}
+	_, err := os.Stat(rec.Path)
+	return !os.IsNotExist(err)
 }
 
 // DismissByPattern removes missing records where the path matches any pattern.

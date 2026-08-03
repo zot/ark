@@ -1190,11 +1190,40 @@ func (c *Config) validate() {
 // time validation of the *expansion* cannot catch that, so the *pattern* is
 // what gets refused. R3201
 //
-// CRC: crc-Config.md | R3200, R3201
+// ValidateSourceDir also refuses a source root that is itself a symlink.
+//
+// A source root that is a link asks ark to follow one, which is the single
+// thing the symlink design does not do, and both ways of granting it cost more
+// than refusing: resolving to the target makes the user's own configured path
+// a name ark cannot answer (a scan starts *below* the root, so it never meets
+// the link that would make it resolvable), and walking the target while
+// recording the configured path makes a stored name depend on config, so a
+// later `dir` edit silently renames every file in the source. A real directory
+// of links does the same job through machinery that already exists.
+//
+// Unchecked this is not an error but a convincing success: filepath.WalkDir
+// lstats its root, so a symlinked one yields the link node as a single *file*
+// entry and none of the contents — the scan reports one file having indexed
+// nothing, which is worse than a zero to disbelieve.
+//
+// Glob patterns are skipped here: they name no file to lstat. Their
+// expansions are checked in ResolveGlobs, which is where a link can really
+// turn up.
+//
+// CRC: crc-Config.md | R3200, R3201, R3354
 func ValidateSourceDir(dir string) error {
 	if strings.Contains(dir, "**") {
 		return fmt.Errorf("source dir %q: ** is not allowed — a recursive source glob makes every "+
 			"subdirectory its own source root and multiplies watcher events; use * for one level", dir)
+	}
+	if IsGlob(dir) {
+		return nil
+	}
+	// A missing dir is not this check's business — sources check flags it (R198).
+	if fi, err := os.Lstat(dir); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source dir %q is a symlink — ark records links, it does not follow them, "+
+			"so a symlinked source root indexes nothing; point the source at the real directory, or "+
+			"at a real directory containing links", dir)
 	}
 	return nil
 }
@@ -1515,7 +1544,12 @@ func (c *Config) ResolveGlobs() (*SourcesCheckResult, error) {
 			return nil, fmt.Errorf("glob %q: %w", src.Dir, err)
 		}
 		for _, m := range matches {
-			info, err := os.Stat(m)
+			// Lstat, not Stat: a symlinked match must not become a source
+			// (R3354). os.Stat follows the link, so a link to a directory
+			// passes IsDir() and gets auto-added as a concrete source — the
+			// same refusal as ValidateSourceDir, arriving by the other door.
+			// CRC: crc-Config.md | R3354
+			info, err := os.Lstat(m)
 			if err != nil || !info.IsDir() {
 				continue
 			}

@@ -15,10 +15,30 @@ files, unresolved files, ark-level settings, and tag tracking.
 - AddMissing(fileid, path, lastSeen): store missing file record (M prefix)
 - RemoveMissing(fileid): remove missing record
 - ListMissing(): all missing file records
-- AddUnresolved(path, dir): store unresolved file record (U prefix)
+- AddUnresolved(path, dir): store unresolved file record (U prefix). Thin
+  wrapper on AddUnresolvedRecord, kept for callers with nothing else to say
+- AddUnresolvedRecord(rec): store a candidate with everything it carries — the
+  reason it was not indexed (R3356) and, for a symlink-reason record, the link
+  that proposed it (R3357). The two-argument form dropped both on the floor,
+  which is why a proposal could neither explain itself nor be withdrawn: keyed
+  on the *target*, with no proposing link it offers the user a directory they
+  may not recognise and nothing can later tell whether the proposal is live.
+  Stamps FirstSeen so callers never have to
 - RemoveUnresolved(path): remove unresolved record
 - ListUnresolved(): all unresolved file records
-- CleanUnresolved(): remove entries for files no longer on disk
+- CleanUnresolved(): drop candidates that are no longer live, per
+  unresolvedIsLive
+- unresolvedIsLive(rec) (R3357, R3355): for most records the obvious test —
+  the path is gone, so the candidate is gone. A **symlink**-reason record
+  needs the opposite question asked, and asking the obvious one is a bug
+  rather than an approximation (O197): such a record is keyed on the target,
+  a real directory outside every source, which is the one thing that has
+  emphatically **not** disappeared. What disappears is the *proposal*. So
+  liveness is the proposer's: the link must still exist and still resolve to
+  the target it proposed. Tested on the target instead, a withdrawn proposal
+  survives every scan, indistinguishable from a live one — which is exactly
+  what it did. A record written before the field was persisted has no
+  proposer to judge and falls back to the path test rather than being dropped
 - DismissByPattern(patterns): remove missing records matching patterns
 - ResolveByPattern(patterns): remove unresolved records matching patterns
 - iGet(name): read a single I record string value. Returns "" if not found. (R1537, R1538)

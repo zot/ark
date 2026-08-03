@@ -302,13 +302,19 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	// and the Indexer copies made via withFTS.
 	emptyFiles := NewEmptyFiles()
 
+	// One table, shared: the Scanner writes it on the actor and the Searcher
+	// reads it at the filter door (R3359). Built here rather than inside
+	// NewScanner so the sharing is visible at the assembly point — two
+	// tables would mean the doors resolving against something the scan never
+	// updated, which is the silent-disagreement failure R3359 names.
+	scanner := NewScanner(config, matcher, fts, emptyFiles)
 	db := &DB{
 		fts:           fts,
 		store:         store,
 		config:        config,
 		matcher:       matcher,
-		scanner:       NewScanner(config, matcher, fts, emptyFiles),
-		search:        &Searcher{fts: fts, store: store, config: config},
+		scanner:       scanner,
+		search:        &Searcher{fts: fts, store: store, config: config, links: scanner.Links()},
 		dbPath:        dbPath,
 		svc:           newChanSvc(chanSvcSlots),
 		chunkerByName: make(map[string]any),
@@ -432,6 +438,13 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 			return ids
 		},
 	)
+
+	// R3383: re-derive the link table from the persisted facts before anyone
+	// can ask a door a question. Without this a process that never scanned —
+	// every CLI command that finds no server — resolves against an empty
+	// table while a server that happened to scan resolves correctly, and the
+	// two disagree about whether a file exists (R3359).
+	db.rebuildLinkTable()
 
 	db.svc.start()
 	return db, nil
@@ -888,6 +901,63 @@ func (db *DB) ReloadConfig() error {
 	db.indexer.config = cfg
 	db.matcher.Dotfiles = cfg.Dotfiles
 
+	// R3381: re-derive the track/propose predicate against the new sources.
+	// The predicate is a test over (target, source config) with no index
+	// lookup, so a config change is the whole trigger — which is what lets a
+	// user add links and sources in either order and reach the same state.
+	// Rebinding first is not optional: the table's cfg is the source
+	// membership the predicate *is*, so rebuilding against the old one
+	// classifies links correctly for a configuration nobody is running.
+	// CRC: crc-DB.md, crc-LinkTable.md | R3381
+	//
+	// Rebuild is given the tracked links *and* the links that proposed the
+	// symlink-reason candidates, which is what makes the promotion direction
+	// work: a proposed link is not in the table at all (Observe records only
+	// the tracked branch), so its identity lives solely in the U record it
+	// wrote. Without those paths the reload could only demote, and "add the
+	// link first, add the source later" — the case R3381 exists for — would
+	// wait for a full rescan while looking like the proposal was ignored.
+	links := db.scanner.Links()
+	links.SetConfig(cfg)
+	// The L records are the complete set of known directory symlinks
+	// (R3383), tracked and proposed alike, so one list is Rebuild's whole
+	// input. Before they existed this had to dig proposals out of the U
+	// records, which only worked for proposals this process had seen.
+	known, err := db.store.ListLinks()
+	if err != nil {
+		log.Printf("reload: list links: %v", err)
+		known = links.Links()
+	}
+	candidates, _ := db.store.ListUnresolved()
+
+	stillProposed := make(map[string]bool)
+	for _, entry := range links.Rebuild(known) {
+		stillProposed[entry.Path] = true
+		// Still outside every source: re-record, so a candidate already
+		// offered stays offered with its proposer intact.
+		if err := db.store.AddUnresolvedRecord(UnresolvedRecord{
+			Path: entry.Resolved, Dir: entry.Resolved,
+			Reason: UnresolvedReasonSymlink, Symlink: entry.Path,
+		}); err != nil {
+			log.Printf("re-record symlink candidate %s: %v", entry.Resolved, err)
+		}
+	}
+	// Withdraw the candidates whose links are no longer proposing. The test
+	// is on the *link*, not the target: a promoted link still resolves to
+	// exactly the same directory, so a liveness test asked of the target
+	// would keep the record forever. Not-proposed covers both ways a
+	// proposal ends — the target became a source, or the link went away.
+	for _, rec := range candidates {
+		if rec.Reason != UnresolvedReasonSymlink || rec.Symlink == "" {
+			continue
+		}
+		if !stillProposed[rec.Symlink] {
+			if err := db.store.RemoveUnresolved(rec.Path); err != nil {
+				log.Printf("withdraw symlink candidate %s: %v", rec.Path, err)
+			}
+		}
+	}
+
 	// R3217: the fresh config carries no derived strategy entries — nothing
 	// the hook establishes is persisted — so re-run it against the new
 	// sources before anything resolves a path against them.
@@ -1219,6 +1289,7 @@ func (db *DB) addDirectory(dir string) error {
 		return err
 	}
 	evictEmpty(db.fts, results.EmptyFiles) // R1648
+	db.recordScannedLinks(results)         // R3383
 
 	absDir, _ := filepath.Abs(dir)
 	for _, f := range results.NewFiles {
@@ -1242,7 +1313,7 @@ func (db *DB) addDirectory(dir string) error {
 		if !strings.HasPrefix(absPath, absDir+string(filepath.Separator)) && absPath != absDir {
 			continue
 		}
-		if err := db.store.AddUnresolved(u.Path, u.Dir); err != nil {
+		if err := db.store.AddUnresolvedRecord(u); err != nil {
 			return fmt.Errorf("track unresolved %s: %w", u.Path, err)
 		}
 	}
@@ -1306,10 +1377,27 @@ func (db *DB) Scan() (*ScanResults, error) {
 		return nil, err
 	}
 	evictEmpty(db.fts, results.EmptyFiles) // R1648
+	db.recordScannedLinks(results)         // R3383
 
 	for _, f := range results.NewFiles {
 		if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
-			if errors.Is(err, microfts2.ErrNoChunks) || errors.Is(err, microfts2.ErrAlreadyIndexed) {
+			// R3358: a file the patterns admitted, handed to a chunker, that
+			// yielded nothing. That is a statement about ark's current
+			// chunkers rather than about the file — so it is *recorded*, not
+			// dropped, and adding a chunker for that kind of file revives
+			// every such candidate with no user action. Empty files are a
+			// different thing and are already handled by EmptyFiles (R1648),
+			// so this reaches only files with content nothing could chunk.
+			// CRC: crc-DB.md | R3358
+			if errors.Is(err, microfts2.ErrNoChunks) {
+				results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
+					Path:   f.Path,
+					Dir:    f.Path,
+					Reason: UnresolvedReasonUnindexable,
+				})
+				continue
+			}
+			if errors.Is(err, microfts2.ErrAlreadyIndexed) {
 				continue
 			}
 			if errors.Is(err, os.ErrNotExist) {
@@ -1318,9 +1406,17 @@ func (db *DB) Scan() (*ScanResults, error) {
 			}
 			return results, fmt.Errorf("add %s: %w", f.Path, err)
 		}
+		// The file indexed, so any candidate recorded for it — an
+		// `unindexable` from a run before its chunker existed — is stale.
+		// Nothing else drops one: CleanUnresolved tests whether the *path*
+		// still exists, and an indexable file's path exists.
+		// CRC: crc-DB.md | R3358
+		if err := db.store.RemoveUnresolved(f.Path); err != nil {
+			return results, fmt.Errorf("clear unresolved %s: %w", f.Path, err)
+		}
 	}
 	for _, u := range results.NewUnresolved {
-		if err := db.store.AddUnresolved(u.Path, u.Dir); err != nil {
+		if err := db.store.AddUnresolvedRecord(u); err != nil {
 			return results, fmt.Errorf("track unresolved %s: %w", u.Path, err)
 		}
 	}
@@ -1457,7 +1553,7 @@ func (db *DB) ScanAsync() (*ScanResults, error) {
 
 	// Handle unresolved synchronously (small metadata writes)
 	for _, u := range results.NewUnresolved {
-		if err := db.store.AddUnresolved(u.Path, u.Dir); err != nil {
+		if err := db.store.AddUnresolvedRecord(u); err != nil {
 			return results, fmt.Errorf("track unresolved %s: %w", u.Path, err)
 		}
 	}
@@ -1639,6 +1735,17 @@ func (db *DB) releaseRefreshPath(path string) {
 // CRC: crc-DB.md | Seq: seq-file-change.md#1.3.5.2 | R3390, R3355, R3357
 func (db *DB) SyncLinkPath(path string) {
 	entry, status := db.scanner.Links().SyncPath(path)
+	// R3383: record (or forget) the *fact* that this path is a directory
+	// symlink, so a process that has not scanned can still rebuild the table.
+	// Both tracked and proposed links are directory symlinks; which one a link
+	// is today is re-derived, never stored.
+	if status == LinkUnresolvable || entry == nil {
+		if err := db.store.RemoveLink(path); err != nil {
+			log.Printf("watch: forget link %s: %v", path, err)
+		}
+	} else if err := db.store.AddLink(entry.Path); err != nil {
+		log.Printf("watch: record link %s: %v", entry.Path, err)
+	}
 	if status != LinkProposed || entry == nil {
 		return
 	}
@@ -1649,7 +1756,12 @@ func (db *DB) SyncLinkPath(path string) {
 	if !ok {
 		return
 	}
-	if err := db.store.AddUnresolved(entry.Resolved, src.Dir); err != nil {
+	// The whole record, not just path and dir: a proposal with no reason and
+	// no proposer can neither explain itself nor be withdrawn (R3356, R3357).
+	if err := db.store.AddUnresolvedRecord(UnresolvedRecord{
+		Path: entry.Resolved, Dir: src.Dir,
+		Reason: UnresolvedReasonSymlink, Symlink: entry.Path,
+	}); err != nil {
 		log.Printf("watch: unresolved %s (proposed by %s): %v", entry.Resolved, entry.Path, err)
 	}
 }
@@ -3376,6 +3488,17 @@ func (db *DB) Status() (*StatusInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	// CRC: crc-DB.md | R3370 — the total alone is unreadable once one
+	// reason dominates. A record written before reasons existed counts as
+	// uncovered, which is what it was.
+	byReason := make(map[string]int, 3)
+	for _, u := range unresolved {
+		reason := u.Reason
+		if reason == "" {
+			reason = UnresolvedReasonUncovered
+		}
+		byReason[reason]++
+	}
 
 	// CRC: crc-DB.md | R252, R253, R254, R258 — chunk total (sum of per-file ChunkRanges), per-strategy file tally, source count
 	var staleCount, totalChunks int
@@ -3429,6 +3552,8 @@ func (db *DB) Status() (*StatusInfo, error) {
 		MapTotal:   mapTotal,
 		TmpFiles:   tmpCount,
 		Warnings:   warnings,
+
+		UnresolvedByReason: byReason,
 	}, nil
 }
 
@@ -3476,6 +3601,12 @@ type StatusInfo struct {
 	UIIndexing bool `json:"uiIndexing"`
 	// R1249: spectral search availability
 	Spectral bool `json:"spectral"`
+	// UnresolvedByReason breaks the unresolved total down (R3370). One
+	// reason normally dominates — `unindexable` is usually the great
+	// majority — so a bare total lets a handful of actionable entries hide
+	// behind thousands no user action can clear, and a count nobody can act
+	// on trains its reader to ignore the line.
+	UnresolvedByReason map[string]int `json:"unresolvedByReason,omitempty"`
 	// Warnings carries the outstanding E-record conditions, keyed by
 	// condition name (R3395). It rides in the status so a proxied
 	// `ark status` reports the same warnings a local one does; they used
@@ -3498,6 +3629,7 @@ var arkLabels = map[string]string{
 	"I":  "settings",
 	"M":  "missing",
 	"T":  "tag-totals",
+	"L":  "links", // R3383
 	"U":  "unresolved",
 	"V":  "tag-values",
 	"X":  "ext-routings",
@@ -3819,6 +3951,83 @@ func (db *DB) Resolve(patterns []string) error {
 // Fetch returns the full content of an indexed file.
 // The file must be known to microfts2 (in the index).
 // CRC: crc-DB.md | R161, R162, R163
+// resolvePath translates a path arriving from outside ark into the canonical
+// namespace (R3359).
+//
+// Every door calls this, and that is the whole point: a surface that resolves
+// and a surface that does not will disagree about whether the same file
+// exists, and the disagreement is silent — it presents as a plausible "not
+// indexed". Partial adoption is worse than none, which is why this is one
+// helper and not five open-coded calls.
+//
+// Absolute is not resolved. `filepath.Abs` on `~/x`-expanded input yields a
+// *lexically* absolute path whether or not a component is a link, which is
+// exactly how an @ext target came to be stored under a spelling its own file
+// would never match. A path that traverses no tracked link comes back
+// unchanged, and a dangling one falls back to its literal form so the answer
+// stays ark's ordinary not-found rather than a resolution error (R3361).
+//
+// Read off the actor without synchronizing, which the table's published
+// snapshots make safe (crc-LinkTable.md).
+// CRC: crc-DB.md | Seq: seq-link-resolve.md#1.2 | R3359, R3360, R3361
+// recordScannedLinks persists the directory symlinks a scan met, so the table
+// can be rebuilt by a process that never scanned (R3383).
+//
+// Both dispositions are recorded, because both *are* directory symlinks — a
+// proposed link is one whose target happens to lie outside every source today,
+// and that is re-derived at load, never stored. Recording only the tracked
+// ones would make the promotion in ReloadConfig impossible after a restart,
+// since nothing would remember the proposal existed.
+// CRC: crc-DB.md | R3383, R3381
+func (db *DB) recordScannedLinks(results *ScanResults) {
+	for _, entry := range results.TrackedLinks {
+		if err := db.store.AddLink(entry.Path); err != nil {
+			log.Printf("scan: record link %s: %v", entry.Path, err)
+		}
+	}
+	for _, u := range results.NewUnresolved {
+		if u.Reason == UnresolvedReasonSymlink && u.Symlink != "" {
+			if err := db.store.AddLink(u.Symlink); err != nil {
+				log.Printf("scan: record link %s: %v", u.Symlink, err)
+			}
+		}
+	}
+}
+
+// rebuildLinkTable re-derives the whole table from the persisted L records,
+// one readlink chain each (R3383). Called at Open, which is what stops a cold
+// process — every CLI command that finds no server — from resolving its
+// doors against an empty table while a server that happened to scan resolves
+// them correctly. The two would disagree about whether a file exists, which
+// is the failure R3359 exists to prevent.
+// CRC: crc-DB.md | R3383, R3359
+func (db *DB) rebuildLinkTable() {
+	paths, err := db.store.ListLinks()
+	if err != nil {
+		log.Printf("rebuild link table: %v", err)
+		return
+	}
+	if len(paths) == 0 {
+		return
+	}
+	for _, entry := range db.scanner.Links().Rebuild(paths) {
+		// Still outside every source: keep the candidate current.
+		if err := db.store.AddUnresolvedRecord(UnresolvedRecord{
+			Path: entry.Resolved, Dir: entry.Resolved,
+			Reason: UnresolvedReasonSymlink, Symlink: entry.Path,
+		}); err != nil {
+			log.Printf("rebuild link table: candidate %s: %v", entry.Resolved, err)
+		}
+	}
+}
+
+func (db *DB) resolvePath(path string) string {
+	if db.scanner == nil {
+		return path
+	}
+	return db.scanner.Links().Resolve(path)
+}
+
 func (db *DB) Fetch(path string) ([]byte, error) {
 	// R692: tmp:// paths read from overlay's stored content
 	if strings.HasPrefix(path, "tmp://") {
@@ -3829,6 +4038,7 @@ func (db *DB) Fetch(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
+	absPath = db.resolvePath(absPath) // R3359
 	if !db.IsIndexed(absPath) {
 		return nil, fmt.Errorf("not indexed: %s", absPath)
 	}
@@ -3848,6 +4058,9 @@ func (db *DB) ReadSourceFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
+	// R3359. This is also the `/content` door: the URL handler reaches the
+	// bytes through here, so resolving once covers both.
+	absPath = db.resolvePath(absPath)
 	if !db.config.IsInSource(absPath) {
 		return nil, fmt.Errorf("not in source: %s", absPath)
 	}
@@ -4080,6 +4293,7 @@ func (db *DB) IsIndexed(path string) bool {
 	if err != nil {
 		return false
 	}
+	absPath = db.resolvePath(absPath) // R3359
 	status, err := db.fts.CheckFile(absPath)
 	if err != nil {
 		return false

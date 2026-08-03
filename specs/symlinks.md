@@ -43,9 +43,25 @@ dangling link becomes a statable fact instead of an invisible omission, and
 Cycles terminate. A link may point at a directory containing links back to
 it, and a scan meeting one must not loop.
 
-A **symlinked source directory** is resolved, not walked as a link. Without
-this a source whose `dir` is a symlink appears to scan successfully while
-indexing nothing at all.
+A **symlinked source directory is refused**, at config load and again when a
+glob source expands onto one. A source root that is a link asks ark to do the
+one thing it does not do — follow — and every way of granting the request is
+worse than declining it. Resolving to the target makes the user's own
+configured path a name ark cannot answer, since a scan starts *below* the root
+and so never meets the link that would make it resolvable. Walking the target
+while recording the configured path makes a stored name depend on config, so a
+later `dir` edit silently renames every file in the source.
+
+Left unchecked it is not an error but a convincing success: `filepath.WalkDir`
+lstats its root, so a symlinked one yields the link node as a single *file*
+entry and none of the directory's contents. The scan reports one file and
+indexes nothing. That is worse than a zero to disbelieve — there is nothing
+anomalous to notice.
+
+Someone who genuinely needs scattered directories under one root makes a real
+directory of links and points the source at that. Then the links are *inside* a
+source, which is the case this whole design already handles: each is recorded,
+classified by the one predicate, and either tracked or proposed.
 
 ## One predicate decides a link's fate
 

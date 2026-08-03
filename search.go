@@ -279,8 +279,14 @@ type chunkKey struct {
 // then merges or intersects results.
 // CRC: crc-Searcher.md | R1909, R1916, R1923
 type Searcher struct {
-	fts       *microfts2.DB
-	store     *Store
+	fts   *microfts2.DB
+	store *Store
+	// links resolves the file filters into the canonical namespace before
+	// they are matched (R3359). It is read here off the actor, which is
+	// safe because the table publishes immutable snapshots — see
+	// crc-LinkTable.md. A search runs before the scanner exists in some
+	// tests, so a nil table simply resolves nothing.
+	links     *LinkTable
 	config    *Config
 	librarian *Librarian
 }
@@ -294,6 +300,7 @@ type Searcher struct {
 func (s *Searcher) withFTS(fts *microfts2.DB) *Searcher {
 	return &Searcher{
 		fts:       fts,
+		links:     s.links,
 		store:     s.store,
 		config:    s.config,
 		librarian: s.librarian,
@@ -305,6 +312,7 @@ func (s *Searcher) withFTS(fts *microfts2.DB) *Searcher {
 // returns file/chunk matches with trigram scores (R47).
 // CRC: crc-Searcher.md | R46, R47, R228
 func (s *Searcher) SearchCombined(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
 	}
@@ -382,6 +390,7 @@ func (s *Searcher) aboutSearch(query string, k int) ([]ChunkScore, error) {
 // an FTS flag intersects (R57, via s.intersect).
 // CRC: crc-Searcher.md | R53, R54, R55, R56, R228
 func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
 	}
@@ -1286,6 +1295,58 @@ func computeCentroidFilters(metas []aboutFilterMeta, centroids map[uint64][]floa
 // resolveFilters builds a microfts2 search option from all filter flags.
 // Path filters first (cheap), then content filters. Positives intersect,
 // negatives subtract. Returns nil if no filtering is requested.
+// normalizeOpts resolves every path-shaped input on the way in, so nothing
+// downstream has to remember to (R3359).
+//
+// Called at each public entry point rather than at the one place the flags
+// happen to be read, because a `-files` glob reaches the matcher by **three**
+// routes: `FilterFiles`, `ExcludeFiles`, and a `ChunkFilterRow` of mode
+// `files` — the CLI makes the first `-files` row the primary and sends later
+// ones as rows. Resolving only the first two left an alias-spelled filter
+// finding nothing where the canonical spelling found the file, which is
+// exactly the silent disagreement R3359 exists to prevent (gap O204). The rows
+// are consumed in two further functions that take `row.Query` raw, and both
+// are free functions with no table, so the resolution belongs here at the
+// door.
+//
+// ResolvePattern, not Resolve: a pattern is not a path, so only its longest
+// wildcard-free prefix resolves and the remainder rides along unchanged
+// (R3362).
+// CRC: crc-Searcher.md | R3359, R3362
+func (s *Searcher) normalizeOpts(opts SearchOpts) SearchOpts {
+	if s.links == nil {
+		return opts
+	}
+	opts.FilterFiles = s.resolvePatterns(opts.FilterFiles)
+	opts.ExcludeFiles = s.resolvePatterns(opts.ExcludeFiles)
+	if len(opts.ChunkFilters) > 0 {
+		rows := make([]ChunkFilterRow, len(opts.ChunkFilters))
+		copy(rows, opts.ChunkFilters)
+		for i := range rows {
+			if rows[i].Mode == "files" && rows[i].Query != "" {
+				rows[i].Query = s.links.ResolvePattern(rows[i].Query)
+			}
+		}
+		opts.ChunkFilters = rows
+	}
+	return opts
+}
+
+// resolvePatterns maps each file-glob row into the canonical namespace. A nil
+// table (tests that never built a scanner) resolves nothing, which is the
+// pre-symlink behaviour.
+// CRC: crc-Searcher.md | R3359, R3362
+func (s *Searcher) resolvePatterns(pats []string) []string {
+	if s.links == nil || len(pats) == 0 {
+		return pats
+	}
+	out := make([]string, len(pats))
+	for i, p := range pats {
+		out[i] = s.links.ResolvePattern(p)
+	}
+	return out
+}
+
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
 	// R939, R940: inject the default search_exclude scope when the caller
 	// supplied no explicit file filter. Shared with the index-lookup funnel
@@ -1623,6 +1684,7 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 // primary-mode-independent. Caps to opts.K. Caller fills chunks/files.
 // CRC: crc-Searcher.md | Seq: seq-search.md | R2442, R2951
 func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	if def := s.effectiveExcludeFiles(opts); def != nil {
 		opts.ExcludeFiles = def
 	}
@@ -1650,6 +1712,7 @@ func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]Search
 // grouping/preview pipeline used by SearchGrouped.
 // CRC: crc-Searcher.md | R2442
 func (s *Searcher) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	results, err := s.SearchTagChunks(chunkIDs, opts)
 	if err != nil {
 		return nil, err
@@ -2004,6 +2067,7 @@ func StrategyToContentType(strategy string) string {
 // by (fileid, chunknum), keeping the best score per chunk across strategies.
 // CRC: crc-Searcher.md | Seq: seq-search.md | R587, R588, R589, R593, R594, R595, R596, R598, R601, R602
 func (s *Searcher) SearchMulti(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
 	}
@@ -2117,6 +2181,7 @@ func (s *Searcher) buildStrategies(query string) (map[string]microfts2.ScoreFunc
 // CRC: crc-Searcher.md | Seq: seq-search.md
 // R745, R746
 func (s *Searcher) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEntry, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	if err := validateSearchFlags(opts); err != nil {
 		return nil, err
 	}
@@ -2167,6 +2232,7 @@ func (s *Searcher) SearchFuzzy(query string, opts SearchOpts) ([]SearchResultEnt
 // sorted by score (descending). Each chunk includes a pre-rendered HTML preview.
 // CRC: crc-Searcher.md | R1935
 func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, error) {
+	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
 	// R1402-R1403, R1787, R1935: combined about coordination.
 	// One ResolveAboutFilters call covers the primary --about and
 	// every Mode == "about" filter row via a single SearchChunksMulti

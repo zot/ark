@@ -115,15 +115,58 @@ link then falls to the file branch exactly as it does today, which is the
 state the whole feature exists to change.
 **Refs:** crc-Scanner.md, crc-LinkTable.md
 
-## Test: a symlinked source root resolves rather than scanning to one entry
+## Test: a symlinked source root is refused, at both doors
 
-**Purpose:** R3354. The failure this prevents does not present as zero —
-`filepath.WalkDir` on a symlinked root yields the link node as a single
-*file* entry and none of the contents, so the scan looks like it worked.
-**Input:** a source whose `dir` is a symlink to a directory of files.
-**Expected:** the source's files are found. Asserting a count greater than
-one, since one is the broken outcome.
-**Refs:** crc-Config.md, crc-Scanner.md
+**Purpose:** R3354. **Reframed 2026-08-02 (Bill's call):** this case was
+designed as "resolves rather than scanning to one entry", and a symlinked
+source root is now *refused* instead — resolving it would make the user's own
+configured path a name ark cannot answer, since a scan starts below the root
+and never meets the link that would make it resolvable.
+
+The failure being prevented is unchanged and is why the check exists at all:
+`filepath.WalkDir` lstats its root, so a symlinked one yields the link node as
+a single *file* entry and none of the contents. The scan reports one file
+having indexed nothing, and nothing about that looks anomalous — it is not even
+a zero to disbelieve.
+
+**Input:** two doors, because there are two. `ValidateSourceDir` on a symlink,
+a real directory, a glob pattern, and a missing path. Then `ResolveGlobs` over
+a directory holding two real subdirectories and one symlink to one of them.
+**Expected:** the symlink is refused with a message naming the reason; the real
+directory, the glob pattern (which names no file to lstat) and the missing path
+(the sources check's business, R198) all pass. The glob expansion adds the two
+real directories and not the link.
+**Fire alarm:** disable the lstat branch and confirm the first goes red; put
+`os.Stat` back in the expansion — the literal pre-fix line, which follows the
+link so it passes `IsDir()` — and confirm the second reports the link among the
+added sources.
+**Guard the guard:** the expansion test fails if it added nothing, since an
+expansion that matched no directories would pass the assertion vacuously.
+**Refs:** crc-Config.md, crc-Scanner.md, specs/symlinks.md, R3354
+**Code:** config_test.go
+
+## Test: the predicate is re-derived against the new config
+
+**Purpose:** R3381 — a config change is the whole trigger for reclassifying a
+link, since the predicate is a test over (target, source config) with no index
+lookup. `SetConfig` before `Rebuild` is not optional: the table's config *is*
+the source membership being tested, so rebuilding against the previous one
+classifies links correctly for a configuration nobody is running, which
+presents as the reload having done nothing.
+**Input:** a link inside one source pointing at a directory that is a second
+source, so it starts tracked. Then remove the target's source — the edit a user
+makes in `ark.toml` — rebind, and rebuild.
+**Expected:** the link is no longer tracked and comes back as a proposal naming
+its own path.
+**Fire alarm:** make `SetConfig` a no-op and confirm red on both assertions.
+Injected in `links.go` rather than by deleting the call in the test, which only
+produced an unused variable and a *build* failure — a build error is not
+evidence that a test detects anything.
+**Covers the demotion direction only.** Promotion (proposed → tracked) needs
+the proposal list, which lives in U records that do not yet carry the proposing
+link — gap O202, blocked on the U-record storage item.
+**Refs:** crc-Config.md, crc-LinkTable.md, specs/symlinks.md, R3381
+**Code:** links_test.go
 
 ## Test: the address space is listable, links included
 
@@ -210,3 +253,58 @@ uses to get a stable set.
 **Input:** list with `--nolinks`; create a new tracked link; list again.
 **Expected:** identical output both times, while the default listing grows.
 **Refs:** crc-LinkTable.md
+
+## Test: resolution is component-wise, and what falls back
+
+**Purpose:** R3359, R3360, R3361, R3362 — the doors share one translation, so
+this exercises the translation rather than each door. Asserting a single door
+would be the wrong shape: what R3359 protects is that the *set* agrees.
+**Input:** a tracked directory link with a subtree; a mid-path address; an
+unrelated path; a pattern with a resolvable prefix; a pattern whose wildcard is
+in the first component; then the same link left dangling.
+**Expected:** the mid-path link resolves — the original defect was exactly this
+shape, a file at `<farm>/<dir>/<file>` where `<farm>/<dir>` was the link, so a
+leaf-only lookup would miss it. An unrelated path comes back unchanged. Only a
+pattern's wildcard-free prefix resolves. A **dangling** link still resolves, to
+a path that then does not exist, so the door replies with ark's ordinary
+not-indexed: a resolver that refused here would turn a missing file into a
+resolution error, which is what R3361 forbids.
+**Guard the guard:** the dangling case asserts the resolved path really does
+not exist, or it would prove nothing about dangling links.
+**Corrected while writing:** the first version asserted that a dangling link
+stops being tracked and that resolution falls back to the literal path. Both
+were assumptions rather than the spec's words — `followLinkChain` reads the
+chain with `readlink`, which does not stat the target. Falling back to the
+literal is the **cycle** case, below.
+**Fire alarm:** replace the prefix walk with a leaf-only lookup — the pre-fix
+shape — and confirm the mid-path case goes red.
+**Refs:** crc-LinkTable.md, crc-DB.md, crc-Searcher.md, specs/symlinks.md,
+R3359, R3360, R3361, R3362
+**Code:** links_test.go
+
+## Test: a cycle falls back to the literal path
+
+**Purpose:** R3361, R3374 — the case that genuinely cannot be resolved. The
+layout permits it rather than merely allowing it in theory: ark already
+contains a link pointing at the farm that contains it.
+**Input:** two links pointing at each other, both tracked.
+**Expected:** the literal path, not a loop and not an error.
+**Refs:** crc-LinkTable.md, R3361, R3374
+**Code:** links_test.go
+
+## Test: readers never see a half-built table
+
+**Purpose:** R3359 — every mutator is on the DB actor and every door is an
+off-actor read, so the contents live in an immutable snapshot behind an atomic
+pointer.
+**Input:** a goroutine running `Observe`/`Remove`/`Rebuild` flat out while the
+main goroutine runs every reader — `Resolve`, `ResolvePattern`, `Expand`,
+`Links`, `Len`, `Lookup`. Judged by `-race`, which is the only thing that can
+see this.
+**Expected:** no race, and no torn read.
+**Fire alarm:** have `mutate` write the published snapshot in place instead of
+cloning and swapping, and confirm `-race` reports an actual `DATA RACE`. That
+is the point of the whole design, and it is not visible any other way — the
+test passes without the detector.
+**Refs:** crc-LinkTable.md, specs/db-concurrency.md, R3359
+**Code:** links_test.go

@@ -103,7 +103,7 @@ so no agent types a routing address either. Canonical:
 | `sweep`            | `sweep correlations`                                                                                                | required                 | hot-correlations top-K cache refresh (subcommands below) |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
-| `unresolved`       | `unresolved`                                                                                                         | optional                 | lists U records                                      |
+| `unresolved`       | `unresolved [--reason KIND]`                                                                                         | optional                 | lists U records with why; `--reason` narrows to one  |
 | `version`          | `version`                                                                                                           | none                     | prints `ark <version>` (from README.md)              |
 
 "Server" column:
