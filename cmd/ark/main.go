@@ -1551,7 +1551,7 @@ func cmdSearch(args []string) {
 			opts.SetExtraOpts(ar.Early...)
 			if paths, pathErr := d.FTS().FileIDPaths(); pathErr == nil {
 				cache := d.FTS().NewChunkCache()
-				opts.SetExtraOpts(ark.BuildChunkFilters(ar.Remaining, cache, paths, d.Store())...)
+				opts.SetExtraOpts(ark.BuildChunkFilters(ar.Remaining, d.LinkTable(), cache, paths, d.Store())...)
 			}
 			opts.SetExtraOpts(ar.Late...)
 		}

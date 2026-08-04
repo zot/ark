@@ -1209,7 +1209,7 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 					opts.extraOpts = append(opts.extraOpts, ar.Early...)
 					opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
 					if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
-						opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, cache, paths, db.Store())...)
+						opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, db.LinkTable(), cache, paths, db.Store())...)
 					}
 					opts.extraOpts = append(opts.extraOpts, ar.Late...)
 				}
@@ -1272,7 +1272,7 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
 			if paths, pathErr := db.FTS().FileIDPaths(); pathErr == nil {
 				cache := db.FTS().NewChunkCache()
-				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, cache, paths, db.Store())...)
+				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, db.LinkTable(), cache, paths, db.Store())...)
 			}
 			opts.extraOpts = append(opts.extraOpts, ar.Late...)
 		}
@@ -4280,6 +4280,26 @@ type contentRender struct {
 // range does not resolve), the strategy, the fileID, and the template shell.
 // CRC: crc-Server.md | R1423-R1428, R2415, R3165
 func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *contentRender {
+	// R3387 step 1.1: verify this file's link premises on the actor, ONCE for
+	// the whole render, and do it BEFORE the read view is bound below. Order is
+	// load-bearing rather than tidy: a premise that moved rewrites X records
+	// and the ExtMap maps, so an fts copy taken first would freeze the state
+	// this render is about to correct — and the page would render the
+	// pre-correction answer while looking entirely normal.
+	//
+	// Once here rather than per chunk, because the per-chunk
+	// ExtRoutingsForTargetChunk calls below then read verified state. The
+	// common path walks a short list and does nothing: single-hop premises are
+	// recomputed at their own event, not here.
+	Sync(srv.db, func(db *DB) (struct{}, error) {
+		// Resolved, because a /content URL may name the file through an alias
+		// (R3367) and the premises are filed under the canonical fileid.
+		if status, err := db.fts.CheckFile(db.resolvePath(path)); err == nil {
+			db.VerifyExtPremisesForFile(status.FileID)
+		}
+		return struct{}{}, nil
+	})
+
 	// R3165: one private read view for the whole render. handleContentView
 	// runs on the HTTP goroutine, and its render subtree reads the fts
 	// Go-side caches all over — ChunkIDByLocation / ChunkIDsForPath

@@ -1550,6 +1550,19 @@ func (db *DB) ScanAsync() (*ScanResults, error) {
 	if err != nil {
 		return nil, err
 	}
+	// R3383: record the links this walk met. Missing here for as long as the
+	// async path has existed, and invisible the whole time — this is the path
+	// the *server* takes (doReconcile, runRebuildScan), so every startup and
+	// every reconcile walked past every symlink and persisted none of them,
+	// while the synchronous Scan() beside it recorded them correctly. Two
+	// paths, one behaviour, and the divergence surfaced only as a cold CLI
+	// resolving aliases differently from a running server — which is the exact
+	// failure R3359 exists to prevent (gap O208).
+	//
+	// Ahead of the unresolved loop deliberately: that loop returns early on a
+	// write error, and losing the link records as collateral damage to an
+	// unrelated failure is how a partial scan becomes a silently wrong table.
+	db.recordScannedLinks(results)
 
 	// Handle unresolved synchronously (small metadata writes)
 	for _, u := range results.NewUnresolved {
@@ -1735,6 +1748,30 @@ func (db *DB) releaseRefreshPath(path string) {
 // CRC: crc-DB.md | Seq: seq-file-change.md#1.3.5.2 | R3390, R3355, R3357
 func (db *DB) SyncLinkPath(path string) {
 	entry, status := db.scanner.Links().SyncPath(path)
+	// R3384: the single-hop tier's entire invalidation mechanism. This event
+	// names the link's own path — repointed, replaced by a real file, or
+	// deleted — and nothing else re-derives a premise spelled through it.
+	// Flagged for every disposition including LinkUnresolvable, because a link
+	// that vanished invalidates exactly as surely as one that moved; the
+	// recompute at the next retrieval is what decides the difference.
+	//
+	// Verified here rather than deferred to a reader, because this runs on the
+	// actor owning ext state and single-hop is the one tier whose schedule is
+	// its event: "recompute only on changes to their target path itself."
+	// The other two tiers are the ones a retrieval has to look at.
+	if db.extmap != nil {
+		if flagged := db.extmap.MarkLinkChanged(path); len(flagged) > 0 {
+			if changed := db.extmap.verifyLinkAssumptions(db, flagged); len(changed) > 0 {
+				// R3388: the premise moving is only half the work — without
+				// this the in-memory premise is corrected while the X records
+				// still point at the old file, which is a disagreement no
+				// event would ever resolve.
+				if err := db.indexer.reresolveMovedPremises(changed); err != nil {
+					log.Printf("link %s: re-resolve moved routings: %v", path, err)
+				}
+			}
+		}
+	}
 	// R3383: record (or forget) the *fact* that this path is a directory
 	// symlink, so a process that has not scanned can still rebuild the table.
 	// Both tracked and proposed links are directory symlinks; which one a link
@@ -2072,20 +2109,47 @@ func (db *DB) locateChunkInFile(chunkID, fileID uint64) (path, location string, 
 // no-op annotation.
 // CRC: crc-DB.md | R1985, R1986, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377
 func (db *DB) ResolveExtTarget(target, sourceDir string) []uint64 {
+	return db.ResolveExtTargetVia(target, sourceDir).Chunks
+}
+
+// ExtResolution is what an @ext TARGET resolved to, together with the premise
+// that resolution rests on when the path crossed tracked links. One walk
+// produces both, so the premise can never describe a resolution other than
+// the one actually returned — the drift R3388 exists to prevent, applied a
+// layer earlier.
+// CRC: crc-DB.md | R3382
+type ExtResolution struct {
+	// Chunks is the routing's target chunks — exactly what ResolveExtTarget
+	// has always returned.
+	Chunks []uint64
+	// FileID is the file the TARGET named. Zero when the TARGET is UUID-based
+	// (it names chunks across many files, so no single fileid is the premise)
+	// or when it resolved to nothing at all.
+	FileID uint64
+	// Hops is the link chain the path crossed, nil when it crossed none —
+	// which is precisely the case needing no premise record (R3372).
+	Hops []string
+}
+
+// ResolveExtTargetVia resolves a TARGET and reports the premise its
+// resolution rests on, so a caller recording a LinkAssumption gets the
+// fileid and the chain from the same walk that produced the chunks.
+// CRC: crc-DB.md | Seq: seq-ext-tag-retrieval.md#1.4 | R3382, R3384
+func (db *DB) ResolveExtTargetVia(target, sourceDir string) ExtResolution {
 	parts, ok := ParseExtTargetParts(target, sourceDir)
 	if !ok || parts.Invalid {
-		return nil
+		return ExtResolution{}
 	}
-	var chunks []uint64
+	var res ExtResolution
 	if parts.BaseKind == "uuid" {
-		chunks = db.resolveExtUUIDBase(parts)
+		res.Chunks = db.resolveExtUUIDBase(parts)
 	} else {
-		chunks = db.resolveExtPathBase(parts)
+		res = db.resolveExtPathBase(parts)
 	}
 	if parts.ModifierN > 0 {
-		chunks = applyExtModifier(chunks, parts.ModifierN)
+		res.Chunks = applyExtModifier(res.Chunks, parts.ModifierN)
 	}
-	return chunks
+	return res
 }
 
 // resolveExtUUIDBase resolves a UUID-base TARGET to chunkids.
@@ -2109,9 +2173,16 @@ func (db *DB) resolveExtUUIDBase(parts ExtTargetParts) []uint64 {
 // the whole bible address path, including the virtual `BIBLE/<Book>` form that
 // has no indexed file for resolveExtFilePath's CheckFile to find.
 // CRC: crc-DB.md | Seq: seq-bible-resolve.md#3.2 | R2376, R2377, R3220
-func (db *DB) resolveExtPathBase(parts ExtTargetParts) []uint64 {
-	if db.targetStrategy(parts.BaseValue) == bibleStrategy {
-		return db.resolveBibleTarget(parts)
+func (db *DB) resolveExtPathBase(parts ExtTargetParts) ExtResolution {
+	// R3367: ask the strategy about the path the file is actually indexed
+	// under. A bible file spelled through a link would otherwise miss the
+	// bible branch here and fall to the file resolver, which resolves — so
+	// the address would find the right file by the wrong reader.
+	if db.targetStrategy(db.resolvePath(parts.BaseValue)) == bibleStrategy {
+		// A bible address names a virtual location rather than an indexed
+		// file, so there is no fileid to hold a premise and no chain to
+		// classify.
+		return ExtResolution{Chunks: db.resolveBibleTarget(parts)}
 	}
 	return db.resolveExtFilePath(parts)
 }
@@ -2167,7 +2238,10 @@ func (db *DB) resolveBibleTarget(parts ExtTargetParts) []uint64 {
 		parts.BaseValue = path
 	}
 	if !isVerseRef {
-		return db.resolveExtFilePath(parts)
+		// A bible address resolves to a real indexed file here; only the
+		// chunks matter, since the caller already knows a bible target holds
+		// no link premise.
+		return db.resolveExtFilePath(parts).Chunks
 	}
 
 	status, err := db.fts.CheckFile(parts.BaseValue)
@@ -2191,44 +2265,60 @@ func (db *DB) lookupBookFile(source, book string, chapter int) (string, error) {
 // resolveExtFilePath resolves a PATH-base TARGET against a real indexed file.
 // Bare path → first chunk (preamble convention). Anchored path →
 // chunks in the file filtered by string/regex/range match.
-// CRC: crc-DB.md | R2376, R2377
-func (db *DB) resolveExtFilePath(parts ExtTargetParts) []uint64 {
-	status, err := db.fts.CheckFile(parts.BaseValue)
+// CRC: crc-DB.md | Seq: seq-ext-tag-retrieval.md#1.4 | R2376, R2377, R3367, R3382
+func (db *DB) resolveExtFilePath(parts ExtTargetParts) ExtResolution {
+	// R3367: the TARGET is stored as the user wrote it (absolutized but
+	// unresolved), so a path spelled through a symlink names a file the index
+	// only knows canonically. Resolving here — at the lookup, never at the key
+	// — is what lets that routing fire, while an @ext written canonically is
+	// unaffected because a canonical path crosses no tracked prefix.
+	//
+	// R3382: the same walk reports the chain it crossed, so the premise this
+	// resolution is recorded under cannot describe a different resolution.
+	base, hops := db.resolvePathVia(parts.BaseValue)
+	status, err := db.fts.CheckFile(base)
 	if err != nil || status.FileID == 0 {
-		return nil
+		// R3386: unresolved, never last-known-good. The caller records a
+		// premise carrying the chain but no fileid, so the routing reads as
+		// an absence someone can see rather than a tag pointing at whatever
+		// it used to mean.
+		return ExtResolution{Hops: hops}
 	}
+	res := ExtResolution{FileID: status.FileID, Hops: hops}
 	info, err := db.fts.FileInfoByID(status.FileID)
 	if err != nil || len(info.Chunks) == 0 {
-		return nil
+		return res
 	}
 	if parts.AnchorKind == "" {
-		return []uint64{info.Chunks[0].ChunkID}
+		res.Chunks = []uint64{info.Chunks[0].ChunkID}
+		return res
 	}
 	if parts.AnchorKind == "range" {
 		for _, c := range info.Chunks {
 			if c.Location == parts.AnchorText {
-				return []uint64{c.ChunkID}
+				res.Chunks = []uint64{c.ChunkID}
+				return res
 			}
 		}
-		return nil
+		return res
 	}
 	// string or regex — load file's chunks with content and filter by
-	// index correlation with info.Chunks.
-	all := db.AllChunks(parts.BaseValue)
+	// index correlation with info.Chunks. Reads the same resolved path
+	// CheckFile just answered for, so content and fileid cannot disagree.
+	all := db.AllChunks(base)
 	pattern := compileAnchorRegex(parts.AnchorKind, parts.AnchorText)
 	if parts.AnchorKind == "regex" && pattern == nil {
-		return nil
+		return res
 	}
-	var out []uint64
 	for i, c := range all {
 		if i >= len(info.Chunks) {
 			break
 		}
 		if anchorMatches(c.Content, parts.AnchorKind, parts.AnchorText, pattern) {
-			out = append(out, info.Chunks[i].ChunkID)
+			res.Chunks = append(res.Chunks, info.Chunks[i].ChunkID)
 		}
 	}
-	return out
+	return res
 }
 
 // filterChunksByAnchor takes a list of chunkIDs (possibly spanning
@@ -4022,10 +4112,88 @@ func (db *DB) rebuildLinkTable() {
 }
 
 func (db *DB) resolvePath(path string) string {
-	if db.scanner == nil {
-		return path
+	resolved, _ := db.resolvePathVia(path)
+	return resolved
+}
+
+// VerifyExtPremisesForFile runs the update half of the sewn retrieval for one
+// file — steps 1.1 through 1.4 of seq-ext-tag-retrieval.md.
+//
+// Called **once at the start of a bulk retrieval**, never per chunk: "at the
+// start of a bulk operation that retrieves ext tags, retrieve all the ext link
+// associations for that fileid". The per-chunk `ExtRoutingsForTargetChunk`
+// reads that follow then see verified state and pay nothing for it, which is
+// what keeps this affordable on a render touching hundreds of chunks.
+//
+// Only the two *cached-or-uncacheable* tiers can have work here.
+// `verifyLinkAssumptions` skips a clean single-hop premise, because that tier
+// is recomputed at its own event (DB.SyncLinkPath) rather than at retrieval —
+// so on the common path this walks a short list and does nothing at all.
+//
+// **Must run on the DB actor** (R3387): the verification mutates ExtMap's
+// premise records, and a moved premise writes X records, so a read path cannot
+// do this work itself without touching actor-owned state off-actor. Callers
+// reach it through Sync/Do. It posts nothing on its own behalf, so it is safe
+// to call from inside a closure that is already running — the R3349 trap is
+// nested *posting*, not nested calling.
+// CRC: crc-DB.md | Seq: seq-ext-tag-retrieval.md#1.1 | R3384, R3387
+func (db *DB) VerifyExtPremisesForFile(fileID uint64) {
+	if db.extmap == nil || db.indexer == nil || fileID == 0 {
+		return
 	}
-	return db.scanner.Links().Resolve(path)
+	tvids := db.extmap.tvidsForFile(fileID)
+	if len(tvids) == 0 {
+		return
+	}
+	changed := db.extmap.verifyLinkAssumptions(db, tvids)
+	if len(changed) == 0 {
+		return
+	}
+	// R3388: the premise moving is half the work; without this the corrected
+	// premise and the stale X records disagree, and nothing would reconcile
+	// them — a link moving changes neither file, so no file event ever fires.
+	if err := db.indexer.reresolveMovedPremises(changed); err != nil {
+		log.Printf("verify ext premises for file %d: %v", fileID, err)
+	}
+}
+
+// expandAliases returns every address naming the file at a canonical path,
+// the canonical path itself included. The inverse of resolvePath, and the
+// half of R3367 that runs when a *file* changes: the routing was keyed under
+// the spelling its author wrote, so asking only the canonical name finds
+// nothing when that author wrote a path through a link.
+// CRC: crc-DB.md | R3367
+func (db *DB) expandAliases(canonical string) []string {
+	if db.scanner == nil {
+		return []string{canonical}
+	}
+	return db.scanner.Links().Expand(canonical)
+}
+
+// resolvePathVia resolves like resolvePath and additionally reports the link
+// chain the walk traversed, so a caller recording a premise can classify that
+// chain's verification tier (R3384) and re-derive it on every recomputation
+// (R3385). Nil hops when there is no table or when the address crossed no
+// tracked link — which is precisely the case needing no premise at all.
+// CRC: crc-DB.md | R3382, R3384, R3385
+func (db *DB) resolvePathVia(path string) (string, []string) {
+	if db.scanner == nil {
+		return path, nil
+	}
+	return db.scanner.Links().ResolveVia(path)
+}
+
+// LinkTable exposes the one shared table so out-of-package callers — the CLI,
+// which builds its own chunk filters against a cold-opened DB — can resolve
+// path-shaped inputs against the same table the scan writes. Nil when no
+// scanner was assembled, which BuildChunkFilters tolerates the way
+// Searcher.normalizeOpts does.
+// CRC: crc-DB.md | R3400
+func (db *DB) LinkTable() *LinkTable {
+	if db.scanner == nil {
+		return nil
+	}
+	return db.scanner.Links()
 }
 
 func (db *DB) Fetch(path string) ([]byte, error) {

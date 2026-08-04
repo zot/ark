@@ -51,6 +51,22 @@ get to you, and says nothing in the meantime. A report means nothing is coming �
 usually because no Luhmann is seated — and the remedy is yours: spawn your own
 secretary (step 2), or tell the user the orchestrator is down.
 
+**The routing, so you can tell which remedy applies.** A watermark goes to your
+own secretary if you have one; else to the seated Luhmann's pool; else it errors.
+Your own secretary is therefore sufficient on its own — an unseated Luhmann does
+not block a hunt you can serve yourself, which is exactly when step 2 stops being
+an optimization.
+
+Do **not** reach for `ark bloodhound search` as the fallback here — neither form
+helps. Both route through Luhmann's secretary pool, so both need the seat and
+both fail on the same missing orchestrator that just failed your watermark.
+
+The flag only decides **who curates**. Without `--raw`, Luhmann curates the pool's
+findings and returns those. With `--raw`, you get the secretary's own findings
+back and curate in your own context, which is what tools and integrations built
+on ark consume. Neither is an escape hatch from a missing seat. If a "Not served"
+message suggests `--raw` to you, the message is wrong; spawn the secretary.
+
 ## 1. Subscribe — the consumer loop
 
 Start the consumer, backgrounded:
@@ -154,6 +170,30 @@ Everything below is layer-1 craft, because layer 1 is the part you steer.
 vector sitting near none of them, and the seeds come back vaguely about your
 topic and specifically about nothing. Split them and each gets its own seed.
 
+**Those paragraphs ride in one watermark, not three.** A single block carries as
+many paragraphs as you like, and each becomes its own hunt inside one round trip.
+Splitting them across three blocks costs three of everything and buys nothing —
+if you catch yourself emitting a second watermark in the same breath as the
+first, they were always one block:
+
+```
+<BLOODHOUND>
+where did we settle the chunker interface? pointers
+
+did we ever benchmark trigram against vector recall on the same corpus? verdict
+
+what did we decide about the GPL boundary in vendored code? answer with the source
+</BLOODHOUND>
+```
+
+Note that `want` is per-paragraph here, because each paragraph is its own hunt.
+The tag attributes (`filter-files`, `exclude-files`, `notags`) are not — they sit
+on the opening tag and scope every paragraph in the block alike. When one ask
+needs a different file scope than the others, that one earns its own watermark.
+
+The CLI half works the same way: `ark bloodhound search --file -` with a heredoc
+takes the identical multi-paragraph clue, one hunt per paragraph.
+
 **Scope when your own corpus restates the topic.** The general advice below is to
 scope sparingly, and it holds. But a claim you have written up many times —
 marketing copy, resumes, drafts, pitches — exists as many near-duplicate
@@ -249,6 +289,10 @@ the anchor):
 - `<BLOODHOUND>list every spec that mentions @ext routing — the complete set</BLOODHOUND>`  *(inventory · tag lens)*
 - `<BLOODHOUND>show me the passages on how the curation workshop stages ops, across the specs</BLOODHOUND>`  *(passages · specs)*
 - `<BLOODHOUND>what did we decide about the seehuhn GPL boundary? answer with the source</BLOODHOUND>`  *(answer · notes / cross-project)*
+
+Each is written on one line to isolate one want-word. Don't read that as the
+shape of a real hunt — when you have several asks at once, they belong in one
+block separated by blank lines, each with its own want-word, as above.
 
 ### Reading the return
 

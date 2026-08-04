@@ -308,3 +308,36 @@ is the point of the whole design, and it is not visible any other way — the
 test passes without the detector.
 **Refs:** crc-LinkTable.md, specs/db-concurrency.md, R3359
 **Code:** links_test.go
+
+## Test: an alias-spelled `-files` filter finds what the canonical spelling finds
+
+**Purpose:** R3400 — a file filter is resolved where it becomes a *closure*,
+not where it enters a struct. This is the case that was silently broken on
+both doors while every unit test stayed green (gap O204/O206), because the
+existing tests exercised `ResolvePattern` directly and the door under test
+was never on the path the CLI or the server actually takes.
+**Input:** a tracked directory link, one indexed file beneath its subtree and
+two fillers outside it, a `files` row spelled through the link, built into
+search options by `BuildChunkFilters` and carried as **extraOpts** — the
+CLI's own shape.
+**Expected:** the canonical spelling, the alias glob, and the alias exact
+path each return exactly the one file.
+**Why extraOpts and not `opts.ChunkFilters`:** routing the row through
+`ChunkFilters` would let `Searcher.normalizeOpts` resolve it, and the test
+would pass with the fix removed — testing the door that already worked.
+**Why three files and not one:** the trigram filter (R572, `FilterByRatio`
+0.50) discards any trigram carried by more than half the chunks, so a
+one-chunk corpus finds nothing for reasons unrelated to the filter under
+test. Learned by measuring: bare and `-contains` searches return nothing in a
+one-file rig while `-regex` finds the file.
+**Guard the guard:** the canonical spelling is asserted *first* and with
+`t.Fatalf`. Without it every assertion below is vacuous — an earlier
+measurement of this same defect proved nothing because both spellings
+returned nothing and the corpus simply was not matching.
+**Fire alarm:** delete the resolution from `BuildChunkFilters` and confirm
+the alias glob and the alias exact path both go red while the control stays
+green. **Pulled 2026-08-03: rang** — both alias assertions reported "found 0
+results", the control passed, and the restore was byte-clean.
+**Refs:** crc-Searcher.md, seq-filter-stack.md, specs/symlinks.md, R3359,
+R3362, R3400
+**Code:** links_test.go

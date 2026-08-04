@@ -25,14 +25,51 @@ import (
 	"github.com/yuin/goldmark"
 )
 
+// trigramRatio is the share of all chunks above which a trigram stops
+// discriminating and is skipped at query time. R572, R574, R575
+const trigramRatio = 0.50
+
+// filterByRatioFloored is microfts2.FilterByRatio with the threshold floored
+// at one (R3401).
+//
+// The unfloored threshold is int(totalChunks × ratio), which is **zero** on a
+// one-chunk corpus. Every real trigram occurs at least once, so `count <= 0`
+// rejects all of them: every trigram of every query is discarded and the
+// search returns no candidates at all — a silent empty answer indistinguishable
+// from an empty index. A lone note naming Neil Armstrong could not be found by
+// searching for Armstrong.
+//
+// Zero is a rounding artifact rather than a judgment about discrimination,
+// since nothing can discriminate among one chunk. The floor is **provably a
+// no-op for every larger corpus**: for totalChunks >= 2, int(total × 0.50) is
+// already >= 1, so this cannot change the answer anywhere but the degenerate
+// case it exists for. That bound comes from the arithmetic rather than from a
+// corpus-size test someone chose, which is why there is no threshold constant
+// here to tune or to get wrong.
+// Seq: seq-search.md | R3401
+// CRC: crc-Searcher.md | R3401
+func filterByRatioFloored(maxRatio float64) microfts2.TrigramFilter {
+	return func(trigrams []microfts2.TrigramCount, totalChunks int) []microfts2.TrigramCount {
+		threshold := max(1, int(float64(totalChunks)*maxRatio))
+		var keep []microfts2.TrigramCount
+		for _, t := range trigrams {
+			if t.Count <= threshold {
+				keep = append(keep, t)
+			}
+		}
+		return keep
+	}
+}
+
 // defaultSearchOpts returns FTS search options with dynamic trigram filtering.
 // The filter uses a 50% ratio threshold — trigrams appearing in more than
-// half of all chunks are skipped as non-discriminating.
+// half of all chunks are skipped as non-discriminating — with the threshold
+// floored at one so a one-chunk corpus is still searchable (R3401).
 // Seq: seq-search.md | R572, R574, R575
 // CRC: crc-Searcher.md | R572, R574, R575
 func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts SearchOpts) []microfts2.SearchOption {
 	opts := []microfts2.SearchOption{
-		microfts2.WithTrigramFilter(microfts2.FilterByRatio(0.50)),
+		microfts2.WithTrigramFilter(filterByRatioFloored(trigramRatio)),
 	}
 	if score == "density" {
 		opts = append(opts, microfts2.WithDensity())
@@ -812,12 +849,30 @@ func rowChunkFilter(row ChunkFilterRow, cache *microfts2.ChunkCache, paths map[u
 // for the inline FTS scan. Regex keeps the dedicated microfts2 option; every
 // other mode is built from rowChunkFilter so the inline semantics match the
 // post-hoc funnel exactly (R2951).
-// CRC: crc-Searcher.md | R1403, R1471, R2452, R2951
-func BuildChunkFilters(rows []ChunkFilterRow, cache *microfts2.ChunkCache, paths map[uint64]string, store *Store) []microfts2.SearchOption {
+//
+// links is REQUIRED, not optional, and that is the whole point (R3400). This
+// is where a `files` glob stops being data and becomes a decision, and three
+// of the four callers — the CLI and both server sites — never pass through
+// Searcher.normalizeOpts at all. Resolving only there left an alias-spelled
+// `-files` glob matching nothing while the canonical spelling matched the
+// file, on the cold CLI and the proxied path alike: the options were resolved
+// correctly and too late, after this closure had already been built from the
+// raw glob (gap O204/O206). A caller holding no table cannot build a filter,
+// so the next call site inherits resolution without knowing it needed to.
+// The overlap with normalizeOpts is deliberate and free — Resolve iterates to
+// a fixed point, so an already-canonical path is a no-op.
+// CRC: crc-Searcher.md | Seq: seq-filter-stack.md | R1403, R1471, R2452, R2951, R3400
+func BuildChunkFilters(rows []ChunkFilterRow, links *LinkTable, cache *microfts2.ChunkCache, paths map[uint64]string, store *Store) []microfts2.SearchOption {
 	var opts []microfts2.SearchOption
 	for _, row := range rows {
 		if row.Query == "" {
 			continue
+		}
+		// R3400: resolve the path-shaped row before it becomes a closure.
+		// ResolvePattern, not Resolve: a pattern is not a path, so only its
+		// longest wildcard-free prefix resolves (R3362).
+		if row.Mode == "files" && links != nil {
+			row.Query = links.ResolvePattern(row.Query)
 		}
 		// Regex mode uses dedicated microfts2 options (more efficient).
 		// CRC: crc-Server.md | R1404
@@ -2256,7 +2311,7 @@ func (s *Searcher) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult
 		opts.extraOpts = append(opts.extraOpts, ar.ChunkFilterOpts...)
 		if opts.Cache != nil {
 			if paths, pathErr := s.fts.FileIDPaths(); pathErr == nil {
-				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, opts.Cache, paths, s.store)...)
+				opts.extraOpts = append(opts.extraOpts, BuildChunkFilters(ar.Remaining, s.links, opts.Cache, paths, s.store)...)
 			}
 		}
 		opts.extraOpts = append(opts.extraOpts, ar.Late...)

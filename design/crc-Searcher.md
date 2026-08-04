@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3377, R3359, R3362
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3377, R3359, R3362, R3400, R3401
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -20,7 +20,8 @@ Optionally retrieves chunk text or full file content.
   apply -k limit. Falls back to FTS-only when the embedding pipeline
   is unavailable (Librarian.EmbeddingAvailable() reports false).
   All FTS queries use (R1916)
-  dynamic trigram filtering (FilterByRatio 0.50) via defaultSearchOpts.
+  dynamic trigram filtering (ratio 0.50, threshold floored at 1) via
+  defaultSearchOpts — see filterByRatioFloored below (R3401).
   When opts.Cache is non-nil, defaultSearchOpts also appends
   WithChunkCache so microfts2's internal post-filters (verify, regex)
   share the session cache instead of re-reading files.
@@ -198,17 +199,32 @@ Optionally retrieves chunk text or full file content.
   closure that checks crec.ChunkID against the resulting chunkID
   set. Polarity negation handled by BuildChunkFilters. (R1787,
   R1916, R1932, R1934)
-- BuildChunkFilters(rows, cache, paths, store, librarian, cfg):
+- BuildChunkFilters(rows, links, cache, paths, store):
   convert filter rows into microfts2 search options. Each row's
   `Mode` selects the constructor: `tag` → TagChunkFilter,
   `file-tag` → FileTagChunkFilter (R2453), `contains`/`fuzzy`/
   `regex` → existing chunk-text filters, `about` → AboutChunkFilter
-  with threshold from cfg.AboutCentroidThreshold. Tag and
+  with threshold from the config the store carries. Tag and
   file-tag rows arrive carrying a pre-parsed `MatchPredicate`
   (R2442) so the parser is shared with the CLI and subscribe
   paths. Polarity from each row maps to `WithChunkFilter` (with)
   or `WithChunkExclude` (without). (R1471, R1787, R1932, R1933,
   R2454)
+- BuildChunkFilters resolves every `files` row against `links` before
+  building its closure, and takes the table as a **required** parameter
+  (R3400). This is the point where a path stops being data and becomes a
+  decision, and three of its four callers — the CLI and both server sites —
+  are outside any Searcher, so they never reach `normalizeOpts` beforehand.
+  Resolving only at the Searcher's entry points left an alias-spelled
+  `-files` glob matching nothing while the canonical spelling matched the
+  file, on both the cold CLI and the proxied path: the options were resolved
+  correctly and too late, after the closure had already been built from the
+  raw glob (gap O204/O206). The parameter is mandatory rather than optional
+  so a caller with no table cannot build a filter at all — forgetting is
+  inexpressible, not merely discouraged. It overlaps `resolvePatterns`
+  deliberately: `Resolve` iterates to a fixed point, so resolving an
+  already-canonical path is a no-op, and the overlap is what keeps the
+  defect from returning through whichever door is added next.
 - Multi-query about coordination: SearchSplit and SearchCombined
   collect the primary --about (AboutTopK) plus every Mode == "about"
   filter row (AboutSet), submit one Librarian.SearchChunksMulti
@@ -216,13 +232,28 @@ Optionally retrieves chunk text or full file content.
   AboutSet ChunkIDs map into a microfts2.WithChunkFilter closure
   delivered through extraOpts. (R1935)
 
+- filterByRatioFloored(ratio) (R3401): the trigram selection ark supplies to
+  microfts2, replacing `microfts2.FilterByRatio`. Identical except the
+  threshold is `max(1, int(totalChunks × ratio))`. Unfloored, the threshold is
+  **zero** on a one-chunk corpus, and since every real trigram occurs at least
+  once, `count <= 0` discards all of them: every query returns no candidates,
+  which reads as an empty index rather than as an empty result. **The floor is
+  provably a no-op above that** — `int(total × 0.50) >= 1` for any
+  `total >= 2` — so the repair is bounded by arithmetic rather than by a
+  chosen corpus-size test. A term carried by more than half a small corpus is
+  still skipped, deliberately: that is the rule working at that size, and the
+  broader fallback would buy only stopword queries at the cost of the fattest
+  postings the filter exists to avoid.
 - resolvePatterns(pats) (R3359, R3362): maps each file-glob row into the
   canonical namespace before `resolveFilters` matches anything. Stored paths
   are canonical, so an alias-spelled filter matches nothing while looking like
   a filter that simply excluded everything. `ResolvePattern`, not `Resolve`:
   only the longest wildcard-free prefix resolves and the remainder rides along
   unchanged. A nil table (a Searcher built without a scanner, as some tests do)
-  resolves nothing, which is the pre-symlink behaviour.
+  resolves nothing, which is the pre-symlink behaviour. **This is not the only
+  place a file filter resolves, and it is not the last one to run** — see
+  BuildChunkFilters above (R3400), which resolves the same rows where they
+  become closures, for the callers that never pass through here.
 - links: the shared `LinkTable`, read off the actor — safe because the table
   publishes immutable snapshots (crc-LinkTable.md). It is the **same** table
   the Scanner writes: two tables would mean the filter door resolving against

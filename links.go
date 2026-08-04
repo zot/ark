@@ -427,23 +427,68 @@ func (lt *LinkTable) Len() int { return len(lt.load().links) }
 // (R3361).
 // CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.2 | R3359, R3360, R3361, R3372, R3374
 func (lt *LinkTable) Resolve(path string) string {
+	resolved, _ := lt.ResolveVia(path)
+	return resolved
+}
+
+// ResolveVia resolves exactly as Resolve does and additionally reports
+// every link component the walk traversed, in traversal order.
+//
+// The hops are what let a caller classify the *resolution chain* rather
+// than a single entry, and the distinction is the whole reason this exists.
+// A tier is a property of the chain, not of a LinkEntry: one address can
+// cross two separately-tracked links — ark's own layout does, since a link
+// living inside another link's target tree takes two rewrites — and an
+// association built on that address has to be verified on a schedule
+// covering both. Concatenating each traversed entry's own Hops yields the
+// full chain, which is what classify already reasons about, so a
+// two-link address classifies as multi-hop without a special case.
+//
+// hops is nil when the address crosses no tracked link, which is the signal
+// that the caller needs no premise record at all (R3372), and nil likewise
+// when the walk falls back to the literal form — a cycle or rewrite
+// exhaustion leaves no resolution to record a premise against, so the
+// routing resolves against the literal path and fails closed (R3386).
+// CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.2 | R3359, R3360, R3361, R3372, R3374, R3384, R3385
+func (lt *LinkTable) ResolveVia(path string) (resolved string, hops []string) {
 	snap := lt.load() // one picture for the whole walk
 	literal := filepath.Clean(ExpandTilde(path))
 	p := literal
 	seen := make(map[string]bool, 4)
 	for i := 0; i < maxLinkRewrites; i++ {
 		if seen[p] {
-			return literal // cycle among tracked prefixes: literal, never a loop
+			return literal, nil // cycle among tracked prefixes: literal, never a loop
 		}
 		seen[p] = true
 		prefix := snap.longestTrackedPrefix(p)
 		if prefix == "" {
-			return p
+			return p, hops
 		}
-		p = filepath.Clean(snap.links[prefix].Resolved + p[len(prefix):])
+		entry := snap.links[prefix]
+		hops = append(hops, entry.Hops...)
+		p = filepath.Clean(entry.Resolved + p[len(prefix):])
 	}
-	return literal
+	return literal, nil
 }
+
+// PathUnder reports whether p is prefix itself, or lies beneath it on a
+// component boundary. A bare string prefix is wrong here — `/a/bc` is not
+// under `/a/b` — and that is the same component-vs-string distinction Resolve
+// rests on.
+// CRC: crc-LinkTable.md | R3374
+func PathUnder(p, prefix string) bool {
+	if p == prefix {
+		return true
+	}
+	return len(p) > len(prefix) && strings.HasPrefix(p, prefix) && p[len(prefix)] == filepath.Separator
+}
+
+// ClassifyChain derives the verification tier for a resolution chain — the
+// hop list ResolveVia reports — rather than for a single entry. Exported
+// because the tier is ExtMap's to record and re-derive (R3385) while source
+// membership is the table's to know.
+// CRC: crc-LinkTable.md | R3384, R3385
+func (lt *LinkTable) ClassifyChain(hops []string) LinkTier { return lt.classify(hops) }
 
 // ResolvePattern resolves only the longest wildcard-free leading portion of
 // a pattern and re-attaches the remainder unchanged. A pattern is not a

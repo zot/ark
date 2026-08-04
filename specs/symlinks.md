@@ -160,6 +160,24 @@ a resolution failure.
 leading portion of a pattern that contains no wildcards is resolved, and the
 pattern's remainder applies unchanged after it.
 
+**A file filter is resolved where it becomes a closure, not where it enters a
+struct.** Those are two different moments, and an alias-spelled `-files` glob
+silently found nothing in the gap between them: the search options were
+resolved correctly and too late, because the CLI and the server had each
+already built the filter from the raw glob before any search entry point ran.
+Resolving at the entry point is therefore not sufficient by itself, since not
+every caller goes through one.
+
+So the routine that turns filter rows into closures cannot be called without
+the link table. A caller holding no table cannot build a filter at all, which
+is the whole intent: forgetting becomes inexpressible rather than merely
+discouraged, and every future call site inherits the resolution without
+knowing it needed to. This overlaps with the resolution already done at the
+search entry points, and the overlap is deliberate — resolving an
+already-canonical path is a no-op, so the cost of the redundancy is nothing
+and the cost of removing it is this defect returning by a route nobody
+watched.
+
 ## What is stored records the premise it was computed under
 
 Ark sees only the links it scans, and it scans only inside sources. A link

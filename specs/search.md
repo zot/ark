@@ -145,6 +145,30 @@ chooses a scoring strategy, ark respects that choice without fallback.
 since file-content queries are inherently long and benefit from
 density normalization.
 
+## Trigram selection never discards every trigram of the query
+
+Before scoring, ark uses only the query's *discriminating* trigrams: one
+carried by more than half the chunks is skipped, because scanning its postings
+costs a great deal and narrows almost nothing. The threshold is a fraction of
+the corpus size, and on a corpus of a single chunk it computes to zero. Every
+real trigram occurs at least once, so at that size the rule discards all of
+them and the search returns nothing at all — not "no matches found", but no
+candidates to match against in the first place. One indexed note naming Neil
+Armstrong cannot be found by searching for Armstrong, and the empty answer is
+indistinguishable from a corpus that simply does not contain him.
+
+Zero is a rounding artifact rather than a judgment about discrimination, since
+nothing can discriminate among one chunk. The threshold is therefore floored at
+one. For any corpus of two chunks or more the fraction already reaches one, so
+the floor changes nothing there: the repair is confined by arithmetic to the
+only case it was meant for, rather than by a size test someone chose.
+
+This does not make every term findable on a small corpus, and it is not meant
+to. A term carried by more than half of a three-chunk corpus is still skipped,
+which is the rule working as intended at that size rather than a second
+instance of the same defect. What the floor fixes is the case where "more than
+half" has degenerated into "all".
+
 ## Common search options
 
 - `-k <num>` — max results (default 20)

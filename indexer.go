@@ -423,6 +423,12 @@ func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs
 	if idx.extmap == nil || idx.db == nil {
 		return nil
 	}
+	// R3384: any file change dirties every internal-multi-hop premise. It goes
+	// here, ahead of the plan collection and its early return, because the
+	// trigger is *this file changed* rather than *this file carries @ext tags*
+	// — an intermediate directory link's own file moving is precisely the
+	// event no premise on it would otherwise hear about.
+	idx.extmap.MarkInternalMultiHopDirty()
 	// R3264: only a mirror tree may author @ext-family directives. An @ext
 	// tag is an instruction, not a note, so honoring one from any indexed
 	// file means *discussing* a routing authors it — a transcript quoting an
@@ -506,6 +512,7 @@ func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValu
 			// materializes into the RC tally / signed RJ score downstream.
 			routed, count, _ := extractCountField(routed)
 			parts, _ := ParseExtTargetParts(target, sourceDir)
+			res := idx.db.ResolveExtTargetVia(target, sourceDir)
 			out = append(out, extIndexPlan{
 				sourceChunkID: ct.ChunkID,
 				sourceFileID:  fileID,
@@ -514,7 +521,9 @@ func (idx *Indexer) collectIndexExtPlans(fileID uint64, chunkTags []ChunkTagValu
 				count:         count,
 				target:        target,
 				targetBase:    parts.BaseValue,
-				targets:       idx.db.ResolveExtTarget(target, sourceDir),
+				targets:       res.Chunks,
+				targetFileID:  res.FileID,
+				targetHops:    res.Hops,
 				routedTags:    routed,
 			})
 		}
@@ -574,7 +583,17 @@ func (idx *Indexer) runOverlayExtRouting(fileID uint64, chunkTags []ChunkTagValu
 // per-tvid_ext via ExtMap.SourceChunkID → chunkFileID → fileIDPath.
 // CRC: crc-Indexer.md | R2000, R2001, R2374, R3061, R3074
 func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64) []extReresolvePlan {
-	candidates := idx.extmap.candidatesForFileChange(idx.db, fileID, addedChunkIDs, orphanedChunkIDs)
+	return idx.reresolvePlansFor(idx.extmap.candidatesForFileChange(idx.db, fileID, addedChunkIDs, orphanedChunkIDs))
+}
+
+// reresolvePlansFor builds re-resolution plans for an explicit set of
+// routings. Split out of collectReresolvePlans so the two things that can
+// invalidate a routing — a file changing, and a link moving under a premise —
+// share one plan builder instead of growing a second. R3388's rule applied to
+// the plan step: a parallel implementation would drift, and the drift shows up
+// as tags routing correctly through one path and not the other.
+// CRC: crc-Indexer.md | R2000, R2001, R3388
+func (idx *Indexer) reresolvePlansFor(candidates map[uint64]bool) []extReresolvePlan {
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -606,6 +625,63 @@ func (idx *Indexer) collectReresolvePlans(fileID uint64, addedChunkIDs, orphaned
 		})
 	}
 	return out
+}
+
+// reresolveMovedPremises rewrites the routings whose link premise stopped
+// holding — a link repointed, replaced, or deleted under an @ext target.
+//
+// R3388: reuses applyReresolve rather than a parallel updater, so X records,
+// targetToChunk, chunkToTargets, fileidToTvids, extByAnchor, virtualTagCount
+// and routedTagsByTvidExt all move together as one unit.
+//
+// It runs applyReresolve **once per file the routing touches**, because that
+// function is deliberately file-scoped (filterByFileWithIDs keeps only chunks
+// whose fileid matches) and a moved premise spans two files: the one the
+// routing is leaving and the one it is arriving at. A file change never needs
+// both, since each file's own change event supplies its own scope — but a link
+// moving changes *neither* file, which is exactly the hole the single-hop tier
+// exists to plug, and why this is the one caller that must supply both. Both
+// calls share one transaction, so the routing is never half-moved.
+// Deliberately does NOT claim R3387. This runs on the actor and posts nothing
+// forward, because its caller (SyncLinkPath) is a link *event* rather than a
+// retrieval. R3387 is the sewn retrieval — update-and-retrieve on the actor
+// with the tags travelling forward as a continuation — and that half is still
+// open as gap O209. Naming it here would turn its coverage green while the
+// work is missing.
+// CRC: crc-Indexer.md | Seq: seq-ext-tag-retrieval.md#1.4.2 | R3388
+func (idx *Indexer) reresolveMovedPremises(changed []extPremiseChange) error {
+	if idx.extmap == nil || idx.db == nil || len(changed) == 0 {
+		return nil
+	}
+	candidates := make(map[uint64]bool, len(changed))
+	scopes := make(map[uint64]bool, 2*len(changed))
+	for _, c := range changed {
+		candidates[c.TvidExt] = true
+		// Zero is not a file; it is what an unresolvable premise records
+		// (R3386), and filterByFileWithIDs would match nothing for it anyway.
+		if c.Was != 0 {
+			scopes[c.Was] = true
+		}
+		if c.Now != 0 {
+			scopes[c.Now] = true
+		}
+	}
+	plans := idx.reresolvePlansFor(candidates)
+	if len(plans) == 0 || len(scopes) == 0 {
+		return nil
+	}
+	return idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		return idx.store.bolt.Update(func(txn *bbolt.Tx) error {
+			for fileID := range scopes {
+				for _, p := range plans {
+					if err := idx.extmap.applyReresolve(txn, tt, idx.db, fileID, p); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+	})
 }
 
 // reresolveSourceDir returns the source directory for tvidExt's
@@ -646,7 +722,15 @@ type extIndexPlan struct {
 	target        string   // TARGET text as authored (verbatim for V record / debugging)
 	targetBase    string   // BASE of the TARGET — absolutized path or UUID value — for extByAnchor keying (R2380)
 	targets       []uint64
-	routedTags    []TagValue
+	// R3382: the premise `targets` rests on — the fileid the TARGET resolved
+	// to, and the link chain crossed getting there. Both come from the same
+	// walk that produced `targets`, so the premise can never describe a
+	// resolution other than the one recorded. targetHops is nil when the
+	// TARGET crossed no tracked link, which is exactly the case needing no
+	// premise at all (R3372).
+	targetFileID uint64
+	targetHops   []string
+	routedTags   []TagValue
 }
 
 type extReresolvePlan struct {

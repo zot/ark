@@ -93,7 +93,7 @@ func resolveTarget(t *testing.T, db *DB, target string) []uint64 {
 	if !ok {
 		t.Fatalf("ParseExtTargetParts(%q) failed", target)
 	}
-	return db.resolveExtPathBase(parts)
+	return db.resolveExtPathBase(parts).Chunks
 }
 
 // TestVerseResolvesToItsParagraph — test-VerseResolution.md "a verse resolves

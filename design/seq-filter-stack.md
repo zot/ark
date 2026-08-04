@@ -97,7 +97,11 @@ is the any-depth form.
       includes req.ChunkFilters → opts.ChunkFilters
     handleSearch → primary search (SearchCombined/SearchSplit/SearchFuzzy)
       → results []SearchResultEntry
-    handleSearch → BuildChunkFilters(opts.ChunkFilters, cache, paths, store)
+    handleSearch → BuildChunkFilters(opts.ChunkFilters, links, cache, paths, store)
+      resolve every "files" row against links FIRST — this is where a
+      path stops being data and becomes a decision (R3400). The server
+      never reaches Searcher.normalizeOpts, so resolving there alone
+      left an alias-spelled glob matching nothing (O204/O206).
       for each ChunkFilterRow:
         "contains" → ContainsChunkFilter
         "fuzzy"    → FuzzyChunkFilter
@@ -119,6 +123,7 @@ is the any-depth form.
     cmdSearch → withDB
       same split: entries[0] → primary search opts,
                   entries[1:] → opts.ChunkFilters
-      BuildChunkFilters called inline
+      BuildChunkFilters called inline — with the DB's LinkTable, the
+      same table the scan writes (R3400)
       search + filter + format results
 ```

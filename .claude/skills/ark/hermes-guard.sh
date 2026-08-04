@@ -71,5 +71,5 @@ case "$AGENT" in
   *)            SKILL="hermes-messaging.md" ;;
 esac
 
-echo "BLOCKED. Run this command exactly: \`~/.ark/ark fetch --wrap knowledge ~/.ark/skills/$SKILL\` — then use ~/.ark/ark commands for everything." >&2
+echo "BLOCKED. Run this command exactly: \`~/.ark/ark fetch --wrap knowledge ~/.ark/skills/ark/$SKILL\` — then use ~/.ark/ark commands for everything." >&2
 exit 2

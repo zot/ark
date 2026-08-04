@@ -783,3 +783,190 @@ func TestLinkTableReadsAreRaceFree(t *testing.T) {
 	}
 	<-done
 }
+
+// An alias-spelled `-files` filter must find the file its canonical spelling
+// finds. The row is resolved where it becomes a *closure*, not where it
+// enters a struct: the CLI and both server sites build their filters through
+// BuildChunkFilters without ever reaching Searcher.normalizeOpts, so
+// resolving at the search entry points alone left this exact case broken on
+// both doors while every unit test stayed green (gap O204/O206).
+//
+// This test therefore goes through BuildChunkFilters and carries the built
+// options as extraOpts — the CLI's own shape. Routing the glob through
+// opts.ChunkFilters instead would be resolved by normalizeOpts and the test
+// would pass with the fix removed.
+//
+// Three files, not one: the trigram filter (R572, FilterByRatio 0.50)
+// discards any trigram present in more than half the chunks, so on a
+// one-chunk corpus every trigram is discarded and the search finds nothing
+// for reasons that have nothing to do with the filter under test.
+// CRC: crc-Searcher.md | Seq: seq-filter-stack.md | R3400
+func TestBuildChunkFiltersResolvesAliasSpelledFilesRow(t *testing.T) {
+	root := linkTempRoot(t)
+	realDir := filepath.Join(root, "real")
+	deep := filepath.Join(realDir, "deep")
+	src := filepath.Join(root, "src")
+	mkDirs(t, deep, src)
+	link := filepath.Join(src, "alias")
+	mkSymlink(t, realDir, link)
+
+	ftsDir := filepath.Join(t.TempDir(), "fts")
+	mkDirs(t, ftsDir)
+	fts, err := microfts2.Create(IndexPath(ftsDir), microfts2.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fts.Close() })
+	if err := fts.AddChunker("line", microfts2.FuncChunker{Fn: microfts2.LineChunkFunc}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(fts.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := &Indexer{fts: fts, store: store}
+
+	// The target file lives under the link's subtree; the fillers do not, so
+	// a filter that resolves keeps exactly one result and a filter that does
+	// not keeps none.
+	note := filepath.Join(deep, "note.md")
+	if err := os.WriteFile(note, []byte("the quick brown fox\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"f1.md", "f2.md"} {
+		p := filepath.Join(root, f)
+		if err := os.WriteFile(p, []byte("unrelated maritime cartography\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := idx.AddFile(p, "line"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := idx.AddFile(note, "line"); err != nil {
+		t.Fatal(err)
+	}
+
+	lt := NewLinkTable(linkCfg(realDir, src))
+	if _, status := lt.Observe(link); status != LinkTracked {
+		t.Fatalf("Observe(%q) = %v, want tracked — the fixture is wrong, not the code", link, status)
+	}
+
+	paths, err := fts.FileIDPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	search := func(glob string) []microfts2.SearchResult {
+		t.Helper()
+		var opts SearchOpts
+		rows := []ChunkFilterRow{{Mode: "files", Query: glob, Polarity: "with"}}
+		opts.SetExtraOpts(BuildChunkFilters(rows, lt, nil, paths, store)...)
+		fr, serr := fts.Search("fox", defaultSearchOpts(nil, "", opts)...)
+		if serr != nil {
+			t.Fatalf("search %q: %v", glob, serr)
+		}
+		return fr.Results
+	}
+
+	// Control first. Without it every assertion below is vacuous — an earlier
+	// measurement of this exact defect proved nothing because BOTH spellings
+	// returned nothing and the corpus was simply not matching.
+	canonical := search(realDir + "/**")
+	if len(canonical) != 1 || canonical[0].Path != note {
+		t.Fatalf("canonical spelling found %d results (%v), want exactly %q — control failed, the rest of this test proves nothing",
+			len(canonical), canonical, note)
+	}
+
+	alias := search(link + "/**")
+	if len(alias) != 1 || alias[0].Path != note {
+		t.Errorf("alias-spelled -files found %d results (%v), want exactly %q — the glob reached the matcher unresolved",
+			len(alias), alias, note)
+	}
+
+	// An exact path, no wildcard: ResolvePattern hands the whole string to
+	// Resolve rather than resolving a prefix. Both spellings of the same file
+	// must agree, which is the disagreement R3359 exists to prevent.
+	exact := search(filepath.Join(link, "deep", "note.md"))
+	if len(exact) != 1 || exact[0].Path != note {
+		t.Errorf("alias-spelled exact path found %d results (%v), want exactly %q",
+			len(exact), exact, note)
+	}
+}
+
+// Both scan paths must persist the links they walked past. ScanAsync is the
+// one the *server* takes (doReconcile, runRebuildScan) while Scan is the CLI's,
+// and for as long as both existed only Scan recorded them — so every startup
+// and every reconcile met every symlink and persisted none, silently. The
+// symptom was a cold CLI resolving aliases differently from a running server,
+// which is exactly the disagreement R3359 exists to prevent (gap O208).
+//
+// Asserting the two paths AGREE rather than checking one in isolation: the
+// defect was a divergence, and a test pinned to one path is what let it live.
+//
+// Fire alarm: delete the recordScannedLinks call in ScanAsync and this must go
+// red. The property is invisible when absent — nothing fails, the scan reports
+// success, and the links are simply not there.
+// CRC: crc-DB.md | R3383
+func TestBothScanPathsRecordLinks(t *testing.T) {
+	build := func(t *testing.T) (*DB, string) {
+		t.Helper()
+		root := linkTempRoot(t)
+		s1, s2 := filepath.Join(root, "s1"), filepath.Join(root, "s2")
+		mkDirs(t, s1, s2)
+		link := filepath.Join(s2, "link")
+		mkSymlink(t, s1, link)
+
+		dbPath := filepath.Join(t.TempDir(), "db")
+		mkDirs(t, dbPath)
+		fts, err := microfts2.Create(IndexPath(dbPath), microfts2.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { fts.Close() })
+		store, err := OpenStore(fts.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := &Config{Sources: []Source{{Dir: s1}, {Dir: s2}}}
+		return &DB{
+			fts:     fts,
+			store:   store,
+			config:  cfg,
+			dbPath:  dbPath,
+			scanner: NewScanner(cfg, &Matcher{}, fts, NewEmptyFiles()),
+		}, link
+	}
+
+	recorded := func(t *testing.T, db *DB, link string) bool {
+		t.Helper()
+		paths, err := db.store.ListLinks()
+		if err != nil {
+			t.Fatalf("ListLinks: %v", err)
+		}
+		for _, p := range paths {
+			if p == link {
+				return true
+			}
+		}
+		return false
+	}
+
+	syncDB, syncLink := build(t)
+	if _, err := syncDB.Scan(); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	// Control: if the synchronous path does not record, the fixture never
+	// tracked a link and the async assertion below would be vacuous.
+	if !recorded(t, syncDB, syncLink) {
+		t.Fatalf("control: Scan recorded no L record for %q — fixture problem, not a path problem", syncLink)
+	}
+
+	asyncDB, asyncLink := build(t)
+	if _, err := asyncDB.ScanAsync(); err != nil {
+		t.Fatalf("ScanAsync: %v", err)
+	}
+	if !recorded(t, asyncDB, asyncLink) {
+		t.Errorf("ScanAsync recorded no L record for %q, while Scan recorded its equivalent — "+
+			"the server's scan path drops every link it walks past", asyncLink)
+	}
+}

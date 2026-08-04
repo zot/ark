@@ -28,6 +28,44 @@ type OverlayError struct {
 	Message       string
 }
 
+// LinkAssumption is the premise a linked routing was computed under: the
+// TARGET as written and the fileid it resolved to, plus the schedule on which
+// that premise gets re-checked.
+//
+// The (Target, FileID) pair is what makes verification a **comparison**
+// rather than a re-derivation — after resolving, an unchanged fileid means no
+// X records and no ExtMap maps are touched at all. Every tier records it,
+// including the one that never caches its resolution: without it that tier
+// has only bad options, redoing X-record work on every retrieval or never
+// redoing it.
+//
+// Tier decides *when* to verify; FileID decides *whether* to act.
+// CRC: crc-ExtMap.md | R3382, R3384, R3385
+type LinkAssumption struct {
+	// Target is the TARGET's BASE as authored — absolutized but never
+	// resolved. The key stays unresolved and the lookup expands (O194).
+	Target string
+	// FileID is what Target resolved to when this premise was recorded. Zero
+	// means the premise is unresolved rather than last-known-good (R3386).
+	FileID uint64
+	// Tier is derived from the resolution chain, not from any single link,
+	// and is re-derived on every recomputation — never carried forward
+	// (R3385). A stale tier keeps a cheap verification schedule for a shape
+	// the chain no longer has, which is the one way this scheme fails
+	// silently in the wrong direction.
+	Tier LinkTier
+	// Dirty marks a *cached* premise as needing recomputation at the next
+	// retrieval, and the two cached tiers set it from different events —
+	// which is the whole of their difference. Single-hop is flagged precisely,
+	// by an event naming the link's own path (MarkLinkChanged); internal
+	// multi-hop is flagged wholesale by any file change at all
+	// (MarkInternalMultiHopDirty), because pinpointing it would need a
+	// hop-to-dependents reverse index that costs more than it saves.
+	// Meaningless for TierExternalMultiHop, which caches nothing and so has
+	// nothing to invalidate.
+	Dirty bool
+}
+
 // ExtMap holds the in-memory state that supports @ext routing.
 // CRC: crc-ExtMap.md | R1992, R2013, R2014, R2029
 type ExtMap struct {
@@ -48,6 +86,11 @@ type ExtMap struct {
 	overlayRoutings         map[uint64]map[uint64][]uint64 // tvid_ext → target_chunkid → routed_tvids (R2013)
 	overlayValues           map[string]map[string][]uint64 // tag → value → target_chunkids (R2014)
 	overlayErrors           []OverlayError                 // session diagnostics (R2029)
+	// linkAssumptions holds the premise for routings whose TARGET resolves
+	// through a tracked link. A routing naming a path that traverses none
+	// needs no verification and gets no entry, which is what bounds how much
+	// is tracked at all (R3372). R3382
+	linkAssumptions map[uint64]LinkAssumption // tvid_ext → premise
 }
 
 // NewExtMap constructs an empty ExtMap.
@@ -66,6 +109,7 @@ func NewExtMap() *ExtMap {
 		rejectByChunk:           make(map[uint64]map[string]int64),
 		overlayRoutings:         make(map[uint64]map[uint64][]uint64),
 		overlayValues:           make(map[string]map[string][]uint64),
+		linkAssumptions:         make(map[uint64]LinkAssumption),
 	}
 }
 
@@ -560,6 +604,11 @@ func (m *ExtMap) Rebuild(db *DB) error {
 // CRC: crc-ExtMap.md | R2000, R2027
 func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64) map[uint64]bool {
 	path, _ := db.fileIDPath(fileID)
+	// R3367: a routing is keyed under the TARGET as its author wrote it, so a
+	// path spelled through a symlink is filed under a name this canonical path
+	// never equals. Expanded before the lock, since the table is lock-free and
+	// there is no reason to hold m.mu across it.
+	addrs := db.expandAliases(path)
 	var addedUUIDs []string
 	if len(addedChunkIDs) > 0 {
 		_ = db.fts.DB().View(func(txn *bbolt.Tx) error {
@@ -575,8 +624,10 @@ func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, o
 	for _, tv := range m.fileidToTvids[fileID] {
 		out[tv] = true
 	}
-	for _, tv := range m.extByAnchor[path] {
-		out[tv] = true
+	for _, addr := range addrs {
+		for _, tv := range m.extByAnchor[addr] {
+			out[tv] = true
+		}
 	}
 	for _, cid := range orphanedChunkIDs {
 		for _, tv := range m.chunkToTargets[cid] {
@@ -591,13 +642,211 @@ func (m *ExtMap) candidatesForFileChange(db *DB, fileID uint64, addedChunkIDs, o
 	return out
 }
 
+// recordLinkAssumption stores the premise a routing was computed under, or
+// clears it when the routing crosses no tracked link.
+//
+// Clearing matters as much as storing: a TARGET that used to traverse a link
+// and no longer does needs no verification, and leaving its old entry behind
+// would keep it on a schedule for a shape it has stopped having — the same
+// silent-wrong-direction failure R3385 names, arriving by way of a stale
+// record rather than a stale tier.
+//
+// The tier is re-derived from the chain on every call and never carried
+// forward (R3385). With no table to classify against, the premise falls to
+// the most conservative tier rather than the cheapest: recomputing more often
+// than necessary costs time, and time is bounded and visible.
+// CRC: crc-ExtMap.md | Seq: seq-ext-tag-retrieval.md#1.3 | R3382, R3384, R3385
+func (m *ExtMap) recordLinkAssumption(lt *LinkTable, tvidExt uint64, target string, fileID uint64, hops []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(hops) == 0 {
+		delete(m.linkAssumptions, tvidExt)
+		return
+	}
+	tier := TierExternalMultiHop
+	if lt != nil {
+		tier = lt.ClassifyChain(hops)
+	}
+	m.linkAssumptions[tvidExt] = LinkAssumption{Target: target, FileID: fileID, Tier: tier}
+}
+
+// LinkAssumptionFor reports the premise recorded for a routing, if any.
+// CRC: crc-ExtMap.md | R3382
+func (m *ExtMap) LinkAssumptionFor(tvidExt uint64) (LinkAssumption, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.linkAssumptions[tvidExt]
+	return a, ok
+}
+
+// tvidsForFile returns the routings currently targeting a file — a copy, so
+// the caller can resolve against it without holding the lock. "Currently" is
+// the operative word: fileidToTvids reflects the last resolution, which is
+// exactly the premise being checked, so a routing whose target has moved is
+// still filed here under the fileid it is about to leave.
+// CRC: crc-ExtMap.md | R3382
+func (m *ExtMap) tvidsForFile(fileID uint64) []uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]uint64(nil), m.fileidToTvids[fileID]...)
+}
+
+// extPremiseChange is one routing whose premise stopped holding: the fileid
+// it was computed under, and the fileid it names now. A zero Now means the
+// target could not be resolved at all, which is unresolved rather than
+// last-known-good (R3386).
+// CRC: crc-ExtMap.md | R3382, R3386
+type extPremiseChange struct {
+	TvidExt uint64
+	Was     uint64
+	Now     uint64
+}
+
+// MarkLinkChanged flags single-hop premises whose TARGET is spelled through
+// the link that just changed — repointed, replaced by a real file, or
+// deleted. This is the cheap tier's whole invalidation mechanism, and it is
+// precise: the event names the link's own path, so a lookup by path suffices
+// and no reverse index is needed.
+//
+// The prefix test is exact for this tier and *only* this tier. A single-hop
+// chain is that one link, so the address its author wrote necessarily begins
+// with the link's own path. A longer chain's later hops never appear in the
+// written target — they become reachable only after the first rewrite — which
+// is exactly why the multi-hop tiers do not use this door at all and are
+// dirtied or recomputed unconditionally instead.
+// Returns the routings it flagged, because this tier is recomputed at its
+// event rather than at retrieval — the caller is already on the actor that
+// owns ext state, so it can verify and act immediately instead of leaving
+// work for a reader to find.
+// CRC: crc-ExtMap.md | Seq: seq-ext-tag-retrieval.md#1.2.1 | R3384
+func (m *ExtMap) MarkLinkChanged(linkPath string) []uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var flagged []uint64
+	for tv, a := range m.linkAssumptions {
+		if a.Tier == TierSingleHop && PathUnder(a.Target, linkPath) {
+			a.Dirty = true
+			m.linkAssumptions[tv] = a
+			flagged = append(flagged, tv)
+		}
+	}
+	return flagged
+}
+
+// MarkInternalMultiHopDirty flags every internal-multi-hop premise for
+// recomputation at the next retrieval. Driven by the same indexed-chunk
+// callback that already runs ReresolveOnReindex, so it needs no new trigger.
+//
+// Deliberately imprecise: it sets the flag on every entry of that tier rather
+// than on the ones a given change could have touched. That imprecision *is*
+// the tier's bargain — precise invalidation would need a hop-to-dependents
+// reverse index costing more to maintain than the dirtying saves — and the
+// recorded fileid keeps it cheap, since a dirty entry that resolves unchanged
+// does no X-record work at all.
+// CRC: crc-ExtMap.md | Seq: seq-ext-tag-retrieval.md#1.2.2 | R3384
+func (m *ExtMap) MarkInternalMultiHopDirty() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tv, a := range m.linkAssumptions {
+		if a.Tier == TierInternalMultiHop && !a.Dirty {
+			a.Dirty = true
+			m.linkAssumptions[tv] = a
+		}
+	}
+}
+
+// verifyLinkAssumptions re-checks the premises a set of routings rest on and
+// reports the ones whose resolution moved. Step 1.2 of the sewn retrieval.
+//
+// Each tier takes the cheapest mechanism still correct for its shape:
+//   - single-hop is trusted between events; MarkLinkChanged is what marks it
+//   - internal multi-hop recomputes when dirty, then clears the flag
+//   - external multi-hop recomputes every time, because no event reaches a
+//     hop outside every source
+//
+// The tier decides *when* to verify; the recorded fileid decides *whether* to
+// act. A resolution that comes back unchanged touches nothing — no X records,
+// no map updates, nothing posted — which is what makes the always-recomputing
+// tier affordable at all.
+//
+// The tier is re-derived from the chain the walk just crossed and never
+// carried forward (R3385): a single-hop link becomes multi-hop the moment its
+// target is replaced by a symlink, and keeping the old tier would leave the
+// association on a schedule for a shape it no longer has, reading as
+// trustworthy while the hop that now exists beyond it goes unchecked.
+// CRC: crc-ExtMap.md | Seq: seq-ext-tag-retrieval.md#1.2 | R3382, R3384, R3385, R3386
+func (m *ExtMap) verifyLinkAssumptions(db *DB, tvids []uint64) []extPremiseChange {
+	type pending struct {
+		tvid uint64
+		a    LinkAssumption
+	}
+	var todo []pending
+	m.mu.RLock()
+	for _, tv := range tvids {
+		a, ok := m.linkAssumptions[tv]
+		if !ok {
+			continue // crosses no tracked link: nothing to verify (R3372)
+		}
+		if a.Tier != TierExternalMultiHop && !a.Dirty {
+			continue // cached and still trusted
+		}
+		todo = append(todo, pending{tv, a})
+	}
+	m.mu.RUnlock()
+	if len(todo) == 0 {
+		return nil
+	}
+
+	// Resolution touches lstat and the index, so it runs outside the lock:
+	// holding m.mu across it would serialize every reader behind the slowest
+	// unmounted volume in the corpus.
+	lt := db.LinkTable()
+	var changed []extPremiseChange
+	for _, p := range todo {
+		base, hops := db.resolvePathVia(p.a.Target)
+		var now uint64
+		if status, err := db.fts.CheckFile(base); err == nil {
+			now = status.FileID
+		}
+		// R3386: a target that cannot be resolved leaves `now` zero, and zero
+		// is what gets recorded. The previously-known fileid is deliberately
+		// not retained — an absence someone can see and count beats a tag
+		// routed to whatever it used to mean.
+		tier := TierExternalMultiHop
+		if lt != nil && len(hops) > 0 {
+			tier = lt.ClassifyChain(hops)
+		}
+		m.mu.Lock()
+		if len(hops) == 0 {
+			// The chain is gone: the address crosses no tracked link now, so
+			// it needs no schedule and keeping the record would be keeping a
+			// verification promise for a shape that no longer exists.
+			delete(m.linkAssumptions, p.tvid)
+		} else {
+			// Dirty is cleared by construction here — the recompute this
+			// entry was flagged for has just happened.
+			m.linkAssumptions[p.tvid] = LinkAssumption{Target: p.a.Target, FileID: now, Tier: tier}
+		}
+		m.mu.Unlock()
+		if now != p.a.FileID {
+			changed = append(changed, extPremiseChange{TvidExt: p.tvid, Was: p.a.FileID, Now: now})
+		}
+	}
+	return changed
+}
+
 // applyIndexExt writes records for one pre-resolved index plan.
 // Resolution and parsing already happened outside the txn; this
 // runs only LMDB writes (when bothPersistent) plus in-memory state
 // updates. txn and tt may be nil for fully-overlay-source flows
 // where no LMDB writes can fire.
-// CRC: crc-ExtMap.md | R1995, R1996, R1997, R1998, R1999, R2012, R2016, R2017, R2018, R2030
+// CRC: crc-ExtMap.md | R1995, R1996, R1997, R1998, R1999, R2012, R2016, R2017, R2018, R2030, R3382
 func (m *ExtMap) applyIndexExt(txn *bbolt.Tx, tt *TvidTxn, db *DB, p extIndexPlan) error {
+	// R3382: recorded before the branch, because every exit below is a
+	// disposition of the same resolution — including the ones that resolved
+	// to nothing, which still need their premise so the routing reads as
+	// unresolved rather than as never-linked (R3386).
+	m.recordLinkAssumption(db.LinkTable(), p.tvidExt, p.targetBase, p.targetFileID, p.targetHops)
 	sourceOverlay := IsOverlayID(p.sourceChunkID)
 	if len(p.targets) == 0 {
 		// The TARGET resolved to nothing — the first of the three ways a
