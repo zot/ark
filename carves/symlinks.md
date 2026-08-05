@@ -528,8 +528,13 @@ down, and is the original split as written.
   real check.
 - ~~**Item 5**~~ (`4c6e974`). Premise records, the three schedules, re-tiering,
   unresolved-never-last-known-good, and the sewn verification on `/content`.
-  Verified live by `.scratch/content-sewn-rig.sh` and, for the scan half,
-  `.scratch/scanasync-links-rig.sh`.
+  Both halves verified against a real server rather than only in tests. The
+  retrieval hop does not deadlock: `/content` answers 200 with rendered HTML,
+  through an alias path as well as a canonical one, which is R3367 working live
+  rather than only under test. The scan half persists a link **no watcher ever
+  saw** — created while ark was down, recorded by the next startup scan alone.
+  (Two private rigs did the measuring; what they showed is stated here, so
+  nothing is lost by not having them.)
 - **Item 6.** Two designed cases in `test-LinkTable.md` are waiting on it: "the
   address space is listable, links included" and "creating a symlink does not
   change the canonical file set". Update `specs/cli-commands.md` when it lands.
