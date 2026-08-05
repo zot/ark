@@ -5,6 +5,36 @@ disagrees, and has for as long as there have been symbolic links. This carve
 covers teaching ark that a file can have more than one name, and doing it
 without making the index believe there is more than one file.
 
+## Status
+
+What is still open, at a glance; the detail for each part is further down, keyed
+by bare number. **The checkbox is authoritative** where the three markings on a
+line disagree. Accepted residue carries no checkbox, the way an approved gap
+does not.
+
+- [x] ~~**Item 1 — record and resolve.**~~ **LANDED (`4c6e974`, 2026-08-04.)**
+- [x] ~~**Item 2 — apply at every door.**~~ **LANDED (`4c6e974`, 2026-08-04.)**
+- [ ] **Item 3 — say what happened.** **NOT VERIFIED.** The `U`-record half is
+      in; whether the error text distinguishes absent from unindexed from
+      aliased, and whether links log at `-v`, has never been checked.
+- [ ] **Item 4 — fail fast when onboarding does not take.** **NOT VERIFIED**, and
+      the most misreadable line here: the broken bootstrap *path* was repaired,
+      which is the symptom — a failed bootstrap *stopping* the agent is a
+      different requirement and is not built.
+- [x] ~~**Item 5 — the verification tiers** (R3382, R3384–R3388).~~
+      **LANDED (`4c6e974`, 2026-08-04.)** Postdates the split below, which is
+      why it appears in no item description there.
+- [ ] **Item 6 — the CLI `--links` / `--nolinks` selector.** **OPEN.** R3375,
+      R3376, R3379 carry **zero** code references, so it is genuinely unbuilt;
+      two designed cases in `test-LinkTable.md` ride on it.
+- [ ] **Item 7 — search results and `/content` can disagree about a moved
+      routing.** **OPEN (#120.)** Behavioural, not merely unproven.
+- [ ] **Item 8 — a test harness that builds a whole `*DB`.** **OPEN (#121.)**
+      Three gaps now want it — O199, O203, O210 — where two did before.
+- **O196 — the watch-loop filter's two escaping transitions.** Accepted residue,
+  deliberately not built: one repair covers both, judged more machinery than two
+  exotic transitions justify.
+
 ## How it surfaced
 
 The Hermes bootstrap had been failing for an unknown length of time. Both the
@@ -468,16 +498,72 @@ which did not terminate against the first implementation.
 
 ## The split
 
-Provisional; not yet agreed.
+Agreed and largely landed; **Items 5–8 postdate it** and appear only in the
+`## Status` block and below. Everything here is keyed by **bare number** — the
+titles and the current status live in that block and *only* there, so no fact
+appears twice and the two places cannot come to disagree.
 
-**Item 1 — record and resolve** (`/mini-spec`). The link record class, scan
+Two views follow, and they answer different questions. **Where each part
+stands** is immediately below. **What each part was scoped to cover** is further
+down, and is the original split as written.
+
+### Where each part stands
+
+- ~~**Item 1**~~ (`7892e96`, `2e66ad2`, `4c6e974`). LinkTable, both scanner
+  halves, the `L` record class with its `specs/record-formats.md` entry and
+  `arkLabels` label — and the R3078 sentry caught that drift itself, which is
+  what it is for.
+- ~~**Item 2**~~ (`4c6e974`). `db.resolvePath` is the one translation
+  `Fetch`/`IsIndexed`/`ReadSourceFile` call; `BuildChunkFilters` takes the table
+  as a mandatory parameter, so a call site without one will not compile. The
+  `@ext` half — the confirmed live instance recorded below — is closed by R3367,
+  in both directions.
+- **Item 3.** The `U`-record work (the `symlink` field, the widened semantic) is
+  in. The rest was never checked in the pass that landed the tiers, so do not
+  read this as either done or undone.
+- **Item 4.** The broken bootstrap **path** was repaired (`hermes-guard.sh`,
+  2026-08-03), which is the *symptom* this item was written about — but the
+  requirement is that a failed bootstrap **stops** the agent, and that is a
+  different thing from the path being correct. Unclear from inspection; needs a
+  real check.
+- ~~**Item 5**~~ (`4c6e974`). Premise records, the three schedules, re-tiering,
+  unresolved-never-last-known-good, and the sewn verification on `/content`.
+  Verified live by `.scratch/content-sewn-rig.sh` and, for the scan half,
+  `.scratch/scanasync-links-rig.sh`.
+- **Item 6.** Two designed cases in `test-LinkTable.md` are waiting on it: "the
+  address space is listable, links included" and "creating a symlink does not
+  change the canonical file set". Update `specs/cli-commands.md` when it lands.
+- **Item 7.** `search.go`'s ext-tag loop spans many files, so R3387's
+  "verify once for this fileid at the start of the bulk operation" does not map
+  onto it directly — it wants a grouping pass, or a verify keyed on the result
+  set's distinct fileids.
+- **Item 8.** It is also what would have caught the `ScanAsync` divergence
+  below, which is the strongest argument for building it.
+- **O196.** The watch-loop filter is filesystem-only because the table is
+  actor-owned, so a link replaced in place by a non-indexable regular file, and
+  a path cached as ignored before it became a link, both escape it.
+
+**A lesson this carve produced, worth carrying past it.** O208 and O205 were the
+same defect met from two ends a day apart: `ScanResults.TrackedLinks` was
+consumed by `db.Scan()` and dropped by `db.ScanAsync()`, and `ScanAsync` is the
+path the *server* takes on every startup and reconcile. One behaviour, two
+paths, a test pinned to one of them — the third instance in this repo, after the
+`withFTS`/extmap outage and R3388's own prose predicting the shape. The guard
+that closed it asserts the two paths **agree** rather than testing either alone.
+
+### What each part was scoped to cover
+
+The split as originally written. Items 5–8 are absent by construction: they
+postdate it, and their scope is stated in the `## Status` block instead.
+
+**Item 1** (`/mini-spec`). The link record class, scan
 recording of both file and directory symlinks, and component-wise prefix
 resolution. Promotes `checkpoint.go`'s `resolvePath` to a shared helper.
 Requires `specs/record-formats.md` and the `arkLabels` allowlist in
 `status -db`; a record class added without its label makes the diagnostic
 report a silent zero, which is precisely the failure mode this carve is about.
 
-**Item 2 — apply at every door** (`/mini-spec`). `DB.Fetch`, `IsIndexed`,
+**Item 2** (`/mini-spec`). `DB.Fetch`, `IsIndexed`,
 `ReadSourceFile`, `config.go:791` for `dir=`, `@ext` target resolution,
 `/content/` URLs, and the search file filters. Needs the glob wrinkle settled:
 a pattern is not a path, so the longest concrete prefix resolves and the
@@ -498,7 +584,7 @@ indistinguishable from one nobody wrote, which is the same shape as the
 three-month `@ext` routing outage. This is why the scope is every door rather
 than `fetch`.
 
-**Item 3 — say what happened** (`/mini-spec`, foldable into 1 or 2).
+**Item 3** (`/mini-spec`, foldable into 1 or 2).
 Distinguish absent from unindexed from aliased in the error text, and log
 skipped or recorded links at `-v`. Includes the `U`-record work: the `symlink`
 field, and the widened semantic in `specs/record-formats.md`.
@@ -508,7 +594,7 @@ conditions and giving U records resolvable by adding a source an affordance is
 a Frictionless pass, and the two workflows are forbidden from mixing in one
 stream. The `E:` half of it has no dependency on this carve at all.
 
-**Item 4 — fail fast when onboarding does not take.** **DECIDED (Bill,
+**Item 4.** **DECIDED (Bill,
 2026-08-01): in scope for this carve.** The guard delivers bootstrap
 instructions and never verifies they were followed. It allowlists by command
 prefix, so an agent whose reference fetch failed passes every subsequent gate

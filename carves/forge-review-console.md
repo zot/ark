@@ -1,7 +1,24 @@
 # Carve: the Tag Forge as a review console
 
-**Opened** 2026-07-25 · **Status** open — the Go substrate landed, the UI has
-not started · **Items** #67 (landed, `aea5e9e`), #9, #68, #69, #70
+**Opened** 2026-07-25.
+
+## Status
+
+Keyed by queue item, since every part of this carve has one. The checkbox is
+authoritative where the markings on a line disagree.
+
+- [x] ~~**#67 `/mini-spec`** — expose the ledger.~~
+      **LANDED (`aea5e9e`, fossil `01c46fb8`, 2026-07-26.)** R3252–R3262,
+      verified live end to end. **One caveat that is not a checkbox:** the three
+      Lua bindings are **NOT VERIFIED** — reaching a registered binding needs
+      `srv.uiRuntime`. Banked as O174, and #9 is what will exercise them.
+- [ ] **#9 `/ui-thorough`** — the review console as a Tag Forge tab. **OPEN.**
+      Hydration into the widget stack, the amend/commit pair, the pending and
+      rejected tabs, ranking. The UI has not started.
+- [ ] **#68 `/mini-spec`** — RC doc-drift audit. **OPEN.**
+- [ ] **#69 `/mini-spec`** — tvid and chunkid cleanup audit across the record
+      classes, against the invariant in carve 1. **OPEN.**
+- [ ] **#70 `/mini-spec`** — EV cleanup on tvid removal. **OPEN.**
 
 The Tag Forge is where a person works on their tags. This carve works out how
 it also becomes where they *review* what agents have proposed, and how that job

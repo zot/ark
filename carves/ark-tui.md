@@ -16,6 +16,16 @@ below was settled and the document stopped being a brainstorm.
 
 ---
 
+## Status
+
+One part, not yet started. The fork below is **settled**, so what remains is
+building rather than deciding.
+
+- [ ] **#72 `/mini-spec`** — the TUI itself: a Go+Charm client over ark's own
+      API. **OPEN, not started.** The second-renderer fork is DECIDED (Bill,
+      2026-07-28) in favour of (b), so the design question this carve opened is
+      closed and only the work is outstanding.
+
 ## The fork
 
 "The same API the browser uses" reads two ways.

@@ -8,10 +8,19 @@ meant guessing which timestamp it had been.
 Opened 2026-07-25 as a working note. Promoted here 2026-07-28 when its first part
 landed and it became the record two queue items point at.
 
-| Part | Status |
-|---|---|
-| ~~#73 — the Go substrate: listing, pairing, the Lua surface~~ | **Landed** 2026-07-28 |
-| #71 — the Frictionless chat panel | Open (`/ui-thorough`) |
+## Status
+
+Keyed by queue item. The checkbox is authoritative where the markings on a line
+disagree.
+
+- [x] ~~**#73** — the Go substrate: listing, pairing, the Lua surface.~~
+      **LANDED (2026-07-28.)** Behavior is canonical in
+      `specs/chat-transcript.md` as R3284–R3292.
+- [ ] **#71 `/ui-thorough`** — the Frictionless chat panel. **OPEN.** The
+      substrate is ready and the panel must use it, through
+      `mcp.chatSessions` / `mcp.chatTranscript` rather than shelling out; going
+      through the bindings is what makes R3291's no-drift guarantee real and
+      discharges gap **O177**.
 
 **Where the decisions went.** Behavior is canonical in
 [`specs/chat-transcript.md`](../specs/chat-transcript.md) as **R3284–R3292**,

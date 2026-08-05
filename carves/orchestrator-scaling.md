@@ -21,6 +21,25 @@ something forces the question.
 
 ---
 
+## Status
+
+Nothing here has started; this carve is still a discussion (#95), and the parts
+below are its shape rather than a committed split. The checkbox is
+authoritative.
+
+- **Part A — the addressing.** Already in place, and not work: a secretary's
+  tube is `<luhmann-session>-<nonce>` (R3032), so two seats' pools namespace
+  apart with no collision. Built for routing rather than scale-out, but it
+  anticipates it. Carries no checkbox because there is nothing to do.
+- [ ] **Part B — a second seat currently adds no capacity.** **OPEN, not
+      started.** `pool_max` is checked against the watcher's per-class roster,
+      which is **global rather than per-owner**, so two seats would share one
+      budget of three `recall`-class secretaries between them.
+- [ ] **Part C — top-level Haiku workers for bursty load.** **OPEN, not
+      started.** Proposed by Bill, 2026-07-29: the lotto tube does not require
+      its consumer to be a subagent, so a top-level Haiku session could take
+      work the same way, likely cheaper for infrequent high-intensity bursts.
+
 ## The shape it already has
 
 **Noted by Bill, 2026-07-29:** this is the shape Classic Blend Smalltalk servers
