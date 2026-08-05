@@ -341,3 +341,93 @@ results", the control passed, and the restore was byte-clean.
 **Refs:** crc-Searcher.md, seq-filter-stack.md, specs/symlinks.md, R3359,
 R3362, R3400
 **Code:** links_test.go
+
+## Test: both doors answer `--links` with the same set
+
+**Purpose:** R3378, R3379 — `--links` is match-then-expand, and the expansion
+half needs the link table. The cold CLI holds one; a CLI talking to a running
+server does not, because bbolt's exclusive lock is why that door proxies at
+all. So the expansion happens server-side over `POST /files/expand`, and this
+asserts the two doors **agree** rather than testing either alone (gap O212).
+**Input:** an indexed file under a tracked directory link; one matched
+address; expanded once through `LinkTable.ExpandMatches` directly and once
+through `Server.handleFilesExpand` driven by `httptest`.
+**Expected:** the same address set from both, canonical and alias included.
+**Guard the guard:** the cold answer is asserted to contain the alias
+*first*, with `t.Fatalf`. Two doors that both return the unexpanded input
+agree perfectly and prove nothing.
+**Why agreement and not either door:** one behaviour reachable by two paths
+with only one tested is what let gap O208 live for as long as both paths
+existed, and it is the third instance of that shape in this repo (see also
+the `withFTS`/extmap note).
+**Fire alarm:** make `handleFilesExpand` return `req.Paths` unchanged — the
+shape this door had while O212 was open — and confirm the test goes red. The
+property is invisible when absent: an unexpanded answer under a `--links`
+banner is byte-identical to what the default view returns. **Pulled
+2026-08-05: rang**, printing both sets (`[s1/target.md s2/link/target.md]` vs
+`[s1/target.md]`), and the restore was byte-clean.
+**Refs:** crc-Server.md, crc-LinkTable.md, specs/symlinks.md, R3378, R3379
+**Code:** link_view_test.go
+
+## Test: `--status` answers canonically for an alias-spelled query
+
+**Purpose:** R3376 — `--status` is the view that says what each file *is*, so
+it answers in the canonical namespace whatever spelling the query used. That
+makes it the way to discover that two listed addresses are one file, which
+only works if the alias-spelled query reaches the file at all. The plain
+listing is the deliberate opposite (R3364): it matches addresses and keeps
+the caller's prefix, so it must **not** resolve.
+**Input:** an indexed file under a tracked directory link; `POST
+/files/status` driven by `httptest`, once with the canonical spelling and
+once with the alias.
+**Expected:** one entry either way, and the reported `path` is the canonical
+one in both.
+**Guard the guard:** the canonical spelling is asserted first with
+`t.Fatalf`. A corpus that matches nothing answers empty for every spelling,
+so without the control the alias assertion proves nothing — the same trap
+that made an earlier O204 measurement vacuous.
+**Fire alarm:** delete the `ResolvePattern` loop in `handleFilesStatus` and
+confirm the alias case goes red while the control stays green. Invisible when
+absent: an alias query that resolves nothing returns an empty listing, which
+reads exactly like a pattern that genuinely matches no file. **Pulled
+2026-08-05: rang** — the alias spelling answered `[]`, the control passed,
+and the restore was byte-clean.
+**Not covered here:** the cold door's half of R3376, which runs through
+`canonicalizePatterns` in `cmd/ark/link_view.go` and needs a whole `*DB` plus
+a CLI invocation to drive. It is also the door whose *matcher* differs from
+the server's (gap O213).
+**Refs:** crc-Server.md, crc-CLITree.md, specs/symlinks.md, R3363, R3364,
+R3376
+**Code:** link_view_test.go
+
+## Test: the selector reaches address-emitting nodes and no others
+
+**Purpose:** R3377, R3379 — the link-view selector is global, and
+applicability is a property of the *command*. Nodes that emit paths as
+addresses declare the need; nodes that emit content must not.
+**Input:** the real command tree (`arkCommands()` / `buildArkCommand()`),
+read through `declaresLinkView` and `linkViewOf`. Two lists: `files` on the
+address side, `search`/`fetch`/`chunks` on the content side.
+**Expected:** `files` declares; none of the content verbs does; `--links` and
+`--nolinks` are both root flags; an undeclared node resolves to the default
+view even though the flags exist globally.
+**Why the tree and not a source grep:** a grep proxy cannot see a verb that
+simply never calls the resolver, which is exactly how `ark luhmann events`
+was missed under the session-identity guard's earlier form (R3313).
+**Why the negative half is the one that matters:** wrapping `search` would
+not error. It would return each passage once per address — seven times over
+for files in ark's most-aliased directory — and a caller reading results
+cannot tell duplicated hits from a corpus that genuinely repeats itself.
+Near-duplicates differing only by path prefix are precisely what dedup cannot
+collapse, the content being identical while the file records are not.
+**Fire alarms, both directions, both pulled 2026-08-05: rang.** Wrapping
+`searchCommand()` in `emitsAddresses` turned the negative test red naming
+`ark search`; removing the wrap from the `files` node turned the positive
+test red naming `ark files`. Both restores were byte-clean. Both were needed:
+a guard that only ever asserts a property nothing is trying to violate is an
+assertion, not a test, and the negative half passes by default.
+**Also covers:** `resolveLinkView`'s whole axis, including that giving both
+`--links` and `--nolinks` is an error naming *both* flags — a message naming
+one reads as "that flag is wrong" when the truth is that the pair is.
+**Refs:** crc-CLITree.md, specs/symlinks.md, R3375, R3377, R3378, R3379
+**Code:** cmd/ark/link_view_test.go

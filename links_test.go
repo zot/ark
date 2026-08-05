@@ -970,3 +970,99 @@ func TestBothScanPathsRecordLinks(t *testing.T) {
 			"the server's scan path drops every link it walks past", asyncLink)
 	}
 }
+
+// linkViewRig builds a table over two sources with one tracked link, and
+// returns the table, the canonical file set, and the paths under test.
+func linkViewRig(t *testing.T) (lt *LinkTable, canonical []string, s1, s2, link, canonFile string) {
+	t.Helper()
+	root := linkTempRoot(t)
+	s1, s2 = filepath.Join(root, "s1"), filepath.Join(root, "s2")
+	mkDirs(t, s1, s2)
+	canonFile = filepath.Join(s1, "a.md")
+	mkFile(t, canonFile)
+	link = filepath.Join(s2, "link")
+	mkSymlink(t, s1, link)
+
+	cfg := &Config{Sources: []Source{{Dir: s1}, {Dir: s2}}}
+	lt = NewLinkTable(cfg)
+	if _, st := lt.Observe(link); st != LinkTracked {
+		t.Fatalf("fixture: link status = %v, want tracked — every assertion below would be vacuous", st)
+	}
+	return lt, []string{canonFile}, s1, s2, link, canonFile
+}
+
+// The address space is listable, links included, and --nolinks omits both the
+// link and the addresses beneath it. R3380, R3375.
+// CRC: crc-LinkTable.md | R3375, R3380
+func TestAddressSpaceListableLinksIncluded(t *testing.T) {
+	lt, canonical, _, _, link, canonFile := linkViewRig(t)
+	alias := filepath.Join(link, "a.md")
+
+	def := lt.AddressSpaceFor(canonical, LinkViewDefault)
+	for _, want := range []string{canonFile, alias, link} {
+		if !hasAddr(def, want) {
+			t.Errorf("default view is missing %q; got %v", want, def)
+		}
+	}
+
+	// R3375: canonical-only, as if no symlink had been indexed. The link itself
+	// must go too — listing a link while omitting what it addresses, or the
+	// reverse, would describe an address space whose structure is invisible.
+	only := lt.AddressSpaceFor(canonical, LinkViewCanonical)
+	if len(only) != 1 || only[0] != canonFile {
+		t.Errorf("--nolinks view = %v, want exactly [%q]", only, canonFile)
+	}
+}
+
+// Creating a symlink does not change the canonical file set — R3375's whole
+// reason for existing, since a script counting files needs a stable answer
+// while a human enumerating addresses wants the growing one.
+// CRC: crc-LinkTable.md | R3375
+func TestNolinksIsStableAcrossNewLinks(t *testing.T) {
+	lt, canonical, s1, s2, _, _ := linkViewRig(t)
+
+	before := lt.AddressSpaceFor(canonical, LinkViewCanonical)
+	defBefore := lt.AddressSpaceFor(canonical, LinkViewDefault)
+
+	second := filepath.Join(s2, "link2")
+	mkSymlink(t, s1, second)
+	if _, st := lt.Observe(second); st != LinkTracked {
+		t.Fatalf("fixture: second link status = %v, want tracked", st)
+	}
+
+	after := lt.AddressSpaceFor(canonical, LinkViewCanonical)
+	if len(after) != len(before) {
+		t.Errorf("--nolinks grew from %d to %d when a link was created: %v", len(before), len(after), after)
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			t.Errorf("--nolinks entry %d changed: %q -> %q", i, before[i], after[i])
+		}
+	}
+
+	// Control: the default view MUST grow, or the stability above proves
+	// nothing — a table that saw no new link would hold both views still.
+	defAfter := lt.AddressSpaceFor(canonical, LinkViewDefault)
+	if len(defAfter) <= len(defBefore) {
+		t.Fatalf("control: default view did not grow (%d -> %d); the new link was never tracked", len(defBefore), len(defAfter))
+	}
+}
+
+// --links expands each matched result to every address of that file (R3378).
+// The default matches addresses; this is the inverse question, asked after
+// matching, which is why naming one address answers with all of them.
+// CRC: crc-LinkTable.md | R3378
+func TestExpandMatchesGivesEveryAddress(t *testing.T) {
+	lt, _, _, _, link, canonFile := linkViewRig(t)
+	alias := filepath.Join(link, "a.md")
+
+	got := lt.ExpandMatches([]string{canonFile})
+	if !hasAddr(got, canonFile) || !hasAddr(got, alias) {
+		t.Errorf("naming the canonical address expanded to %v, want both %q and %q", got, canonFile, alias)
+	}
+	// Naming the alias must expand to the same set, not a different one.
+	viaAlias := lt.ExpandMatches([]string{alias})
+	if len(viaAlias) != len(got) {
+		t.Errorf("expanding from the alias gave %v, from the canonical %v — one file, one address set", viaAlias, got)
+	}
+}

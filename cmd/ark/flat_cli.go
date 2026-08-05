@@ -161,7 +161,11 @@ func flatCommands() []*ucli.Command {
 			Flags:  []ucli.Flag{&ucli.StringFlag{Name: "wrap", Usage: "wrap output in XML tags (e.g. memory, knowledge)"}},
 			Action: flatFetchAction,
 		},
-		{
+		// CRC: crc-CLITree.md | R3379
+		// emitsAddresses: `files` answers with paths *as addresses*, so it
+		// consults the link-view selector. The wrap is the declaration —
+		// content-emitting nodes must not carry it (R3377).
+		emitsAddresses(&ucli.Command{
 			// R3204: the -files stack is order-sensitive, so this node cannot
 			// re-serialize its flags into a legacy argv the way its siblings
 			// do — order and polarity would be lost in the rebuild. Raw args
@@ -175,7 +179,7 @@ func flatCommands() []*ucli.Command {
 				"   --detail   show per-file chunk size stats (with --status)\n\n" +
 				filterStackHelp,
 			Action: filterStackAction(cmdFiles),
-		},
+		}),
 		{
 			Name: "init", Usage: "create a new database",
 			Flags: []ucli.Flag{

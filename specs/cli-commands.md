@@ -126,6 +126,8 @@ so no agent types a routing address either. Canonical:
 | `--dir PATH` or `--dir=PATH` | `~/.ark` (or `.ark` if HOME unavailable) | Database directory                                                                                                |
 | `-v` (repeatable)            | `0`                                      | Increase verbosity. `-vv`, `-vvv`, `-vvvv` are equivalent to repeating. Bound to package-level `Logv(level, ...)` |
 | `--force-session ID`         | unset                                    | Act as session `ID` instead of `$CLAUDE_CODE_SESSION_ID`. Consulted **only** by verbs that declare a session need (see [session-identity.md](session-identity.md)); deliberately not copied into a package global, so a verb that does not declare the need cannot consume it |
+| `--links`                    | unset                                    | Expand each result to **every** address of that file, canonical included ([symlinks.md](symlinks.md)). Consulted **only** by nodes that emit paths as addresses, declared node-by-node the way `--force-session` is; nodes that emit content — `search` above all — never consult it |
+| `--nolinks`                  | unset                                    | Match canonical addresses only, as if no symlink were indexed; the way a script gets a file set that does not change when someone creates a link. Giving both `--links` and `--nolinks` is an **error**, not a preference to resolve: they are opposite ends of one axis |
 | `--help` / `-h`              | —                                        | Show tree-generated help and exit 0 — at any node (`ark --help`, `ark connections --help`, `ark connections recall close --help`), each with the full command path |
 
 `help [COMMAND]` and bare `ark` also print the generated command list
@@ -883,6 +885,13 @@ ark files [options] [PATTERN...]
 
 Positional patterns narrow within the `-files` set. Without
 `--status`, output is one path per line.
+
+`files` emits paths as addresses, so it honors the global `--links` /
+`--nolinks` selector; `--status` answers in the canonical namespace whatever
+spelling the query used. Both work against a running server as well as cold:
+matching is client-side either way, and `--links`' post-match expansion needs
+the link table, which a CLI cannot hold while a server owns the index — so
+that half is asked of the server over `POST /files/expand`.
 
 ### `grams` — show trigrams
 

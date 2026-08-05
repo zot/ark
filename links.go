@@ -471,6 +471,105 @@ func (lt *LinkTable) ResolveVia(path string) (resolved string, hops []string) {
 	return literal, nil
 }
 
+// LinkView selects which of the three views of the address space a listing
+// answers in. One axis, three points (R3375, R3378): the default matches
+// addresses, LinkViewExpand matches then expands each result to every address
+// of that file, and LinkViewCanonical matches canonical addresses only.
+//
+// Defined here rather than in the CLI so the cold and proxied doors share one
+// type. Two parallel enums would drift, and the drift would show as a listing
+// that answers differently depending on whether a server happened to be up —
+// the failure R3359 exists to prevent.
+// CRC: crc-LinkTable.md | R3375, R3378
+type LinkView int
+
+const (
+	// LinkViewDefault matches addresses: `**/a` answers the canonical path and
+	// the alias both, because both are strings in the address space.
+	LinkViewDefault LinkView = iota
+	// LinkViewExpand (--links) matches addresses, then expands each result to
+	// every address of that file. The inverse question: what else is this file
+	// called? (R3378)
+	LinkViewExpand
+	// LinkViewCanonical (--nolinks) matches canonical addresses only, as if no
+	// link were indexed — how a caller needing a stable file set gets one,
+	// since creating a link does change what an unfiltered listing returns
+	// (R3375).
+	LinkViewCanonical
+)
+
+func (v LinkView) String() string {
+	switch v {
+	case LinkViewExpand:
+		return "links"
+	case LinkViewCanonical:
+		return "nolinks"
+	}
+	return "default"
+}
+
+// AddressSpaceFor returns the addresses a listing matches against under a given
+// view, from a canonical file set.
+//
+// Under LinkViewCanonical the canonical set is returned untouched — that is the
+// whole point of the view, and it is why creating a link cannot change what a
+// `--nolinks` listing returns (R3375).
+//
+// Otherwise every alias of every file joins the space, and so does each tracked
+// link's own path (R3380): the link is an indexed entity, so `ark files '**/*'`
+// lists it beside the files addressable beneath it. Omitting the link while
+// listing paths that exist only because of it would describe an address space
+// whose own structure is invisible.
+// CRC: crc-LinkTable.md | R3375, R3378, R3380
+func (lt *LinkTable) AddressSpaceFor(canonical []string, view LinkView) []string {
+	if view == LinkViewCanonical || lt == nil {
+		return canonical
+	}
+	seen := make(map[string]bool, len(canonical)*2)
+	out := make([]string, 0, len(canonical)*2)
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, c := range canonical {
+		for _, addr := range lt.Expand(c) {
+			add(addr)
+		}
+	}
+	// R3380: the links themselves, as directory entries.
+	for _, linkPath := range lt.Links() {
+		add(linkPath)
+	}
+	return out
+}
+
+// ExpandMatches turns matched addresses into every address of each matched
+// file, which is what --links asks for (R3378). Applied *after* matching, so
+// `ark --links files ~/source1/a` answers both addresses while the bare form
+// answers the one the pattern named.
+//
+// Canonicalizes first, because two matched aliases of one file must expand to
+// the same set rather than to two overlapping ones.
+// CRC: crc-LinkTable.md | R3378
+func (lt *LinkTable) ExpandMatches(matched []string) []string {
+	if lt == nil {
+		return matched
+	}
+	seen := make(map[string]bool, len(matched)*2)
+	out := make([]string, 0, len(matched)*2)
+	for _, m := range matched {
+		for _, addr := range lt.Expand(lt.Resolve(m)) {
+			if !seen[addr] {
+				seen[addr] = true
+				out = append(out, addr)
+			}
+		}
+	}
+	return out
+}
+
 // PathUnder reports whether p is prefix itself, or lies beneath it on a
 // component boundary. A bare string prefix is wrong here — `/a/bc` is not
 // under `/a/b` — and that is the same component-vs-string distinction Resolve

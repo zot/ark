@@ -105,6 +105,12 @@ func buildArkCommand() *ucli.Command {
 			// (needsClientSession); deliberately NOT copied into a package
 			// global, so a node that never declares the need cannot consume it.
 			&ucli.StringFlag{Name: forceSessionFlag, Usage: "act as this Claude Code session instead of $CLAUDE_CODE_SESSION_ID (session-scoped verbs only)"},
+			// R3379: the link-view axis, consulted only by nodes that declare
+			// they emit paths as addresses (emitsAddresses). Global for the
+			// same reason as --force-session above, and likewise NOT readable
+			// by a node that never declared the need.
+			&ucli.BoolFlag{Name: linksFlag, Usage: "expand each result to every address of that file, canonical included"},
+			&ucli.BoolFlag{Name: nolinksFlag, Usage: "match canonical addresses only, as if no symlink were indexed"},
 		},
 		// Before runs ahead of any subcommand Action, so the bodies that
 		// read arkDir / the verbosity level see the parsed globals. (R724,
@@ -2769,7 +2775,7 @@ func printChunkStats(result *ark.ChunkStatsResult, unit, modelName string) {
 	}
 }
 
-// CRC: crc-CLI.md | R81, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586
+// CRC: crc-CLI.md | R81, R1573, R1574, R1575, R1576, R1577, R1578, R1579, R1580, R1581, R1582, R1583, R1584, R1585, R1586, R3375, R3376, R3378, R3379, R3380
 func cmdFiles(args []string) {
 	// R3204: path globs arrive through the shared -files stack, parsed
 	// (and cwd-anchored) before flag.Parse sees the rest.
@@ -2789,12 +2795,40 @@ func cmdFiles(args []string) {
 
 	if !*showStatus {
 		// Simple path: just list files
+		// R3379: both doors apply the same view through the same two helpers,
+		// so a listing cannot answer differently depending on whether a server
+		// happened to be up — the disagreement R3359 exists to prevent, and the
+		// shape O204 took when only one door was taught to resolve.
+		// R3379: both doors answer in the same address space. The server
+		// applies the view because it holds the link table; the cold path
+		// applies it from the table it opened. Either way the *matching* is
+		// client-side, so the two cannot disagree about what a pattern selects
+		// — the disagreement R3359 exists to prevent, and the shape O204 took
+		// when only one door was taught to resolve.
 		if client := serverClient(arkDir); client != nil {
 			var files []string
-			if err := proxyDecode(client, "GET", "/files", nil, &files); err != nil {
+			path := "/files"
+			if currentLinkView != ark.LinkViewDefault {
+				path += "?view=" + currentLinkView.String()
+			}
+			if err := proxyDecode(client, "GET", path, nil, &files); err != nil {
 				fatal(err)
 			}
-			printLines(filterPaths(matchBaseSet(files, ff, ef), patterns))
+			matched := filterPaths(matchBaseSet(files, ff, ef), patterns)
+			// R3378 is match-then-expand, and only the *space* came back
+			// expanded — so a pattern naming one address would match one and
+			// never expand it, which reads exactly like the default view. The
+			// post-match expansion needs the link table, which this door does
+			// not hold while a server owns the index, so it is asked of the
+			// server that does. Matching stays here either way (O212).
+			if currentLinkView == ark.LinkViewExpand {
+				if err := proxyDecode(client, "POST", "/files/expand", map[string]any{
+					"paths": matched,
+				}, &matched); err != nil {
+					fatal(err)
+				}
+			}
+			printLines(matched)
 			return
 		}
 		withDB(func(d *ark.DB) {
@@ -2802,7 +2836,12 @@ func cmdFiles(args []string) {
 			if err != nil {
 				fatal(err)
 			}
-			printLines(filterPaths(matchBaseSet(files, ff, ef), patterns))
+			space := d.LinkTable().AddressSpaceFor(files, currentLinkView)
+			matched := filterPaths(matchBaseSet(space, ff, ef), patterns)
+			if currentLinkView == ark.LinkViewExpand {
+				matched = d.LinkTable().ExpandMatches(matched)
+			}
+			printLines(matched)
 		})
 		return
 	}
@@ -2848,7 +2887,11 @@ func cmdFiles(args []string) {
 			for _, m := range missingList {
 				missingSet[m.Path] = true
 			}
-			files = filterPaths(matchBaseSet(files, ff, ef), patterns)
+			// R3376: --status answers in the canonical namespace whatever
+			// spelling the query used, so the query is resolved into it. The
+			// plain listing above deliberately does not — it matches in the
+			// address namespace and keeps the caller's prefix (R3364).
+			files = filterPaths(matchBaseSet(files, ff, ef), canonicalizePatterns(d.LinkTable(), patterns))
 			for _, f := range files {
 				status := "G"
 				if missingSet[f] {

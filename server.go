@@ -496,16 +496,17 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /status/chunks", srv.handleStatusChunks) // R3393
 	mux.HandleFunc("GET /files", srv.handleFiles)                 // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
-	mux.HandleFunc("GET /stale", srv.handleStale)            // R97
-	mux.HandleFunc("GET /missing", srv.handleMissing)        // R98
-	mux.HandleFunc("POST /dismiss", srv.handleDismiss)       // R99
-	mux.HandleFunc("GET /config", srv.handleConfig)          // R100
-	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)  // R101
-	mux.HandleFunc("POST /resolve", srv.handleResolve)       // R102
-	mux.HandleFunc("GET /tags", srv.handleTags)              // R132
-	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts) // R133
-	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)   // R134
-	mux.HandleFunc("POST /tags/chunk", srv.handleTagChunk)   // R3086, R3087, R3089
+	mux.HandleFunc("POST /files/expand", srv.handleFilesExpand) // R3378, R3379
+	mux.HandleFunc("GET /stale", srv.handleStale)               // R97
+	mux.HandleFunc("GET /missing", srv.handleMissing)           // R98
+	mux.HandleFunc("POST /dismiss", srv.handleDismiss)          // R99
+	mux.HandleFunc("GET /config", srv.handleConfig)             // R100
+	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)     // R101
+	mux.HandleFunc("POST /resolve", srv.handleResolve)          // R102
+	mux.HandleFunc("GET /tags", srv.handleTags)                 // R132
+	mux.HandleFunc("POST /tags/counts", srv.handleTagCounts)    // R133
+	mux.HandleFunc("POST /tags/files", srv.handleTagFiles)      // R134
+	mux.HandleFunc("POST /tags/chunk", srv.handleTagChunk)      // R3086, R3087, R3089
 	mux.HandleFunc("POST /tags/inspect", srv.handleTagInspect)
 	mux.HandleFunc("POST /inbox", srv.handleInbox)
 	mux.HandleFunc("POST /tags/defs", srv.handleTagDefs)
@@ -636,6 +637,7 @@ func (srv *Server) registerReadOnlyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /search", srv.handleSearch)
 	mux.HandleFunc("GET /files", srv.handleFiles)
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
+	mux.HandleFunc("POST /files/expand", srv.handleFilesExpand)
 	mux.HandleFunc("GET /stale", srv.handleStale)
 	mux.HandleFunc("GET /missing", srv.handleMissing)
 	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)
@@ -1484,15 +1486,60 @@ func (srv *Server) handleStatusChunks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// R3379: `?view=` carries the link-view selector, so the proxied door answers
+// in the same address space the cold one does. Without it the CLI would have to
+// hold a link table of its own while a server holds the index — and a listing
+// that differs depending on whether a server is up is exactly the disagreement
+// R3359 exists to prevent. An absent or unrecognised value is the default view,
+// since an old client asking for no view means the view it always got.
+// CRC: crc-Server.md | R3375, R3378, R3379, R3380
 func (srv *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	view := LinkViewDefault
+	switch r.URL.Query().Get("view") {
+	case LinkViewExpand.String():
+		view = LinkViewExpand
+	case LinkViewCanonical.String():
+		view = LinkViewCanonical
+	}
 	files, err := Sync(srv.db, func(db *DB) ([]string, error) {
-		return db.Files()
+		canonical, err := db.Files()
+		if err != nil {
+			return nil, err
+		}
+		return db.LinkTable().AddressSpaceFor(canonical, view), nil
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, files)
+}
+
+// handleFilesExpand performs R3378's post-match half where the link table
+// lives, so `--links` answers the same set through both doors (R3379).
+//
+// The split is deliberate and mirrors the cold path exactly: matching stays
+// client-side (`matchBaseSet`/`filterPaths` take flags and globs the server
+// never sees), and only the expansion — which needs the table the CLI cannot
+// hold while a server owns the index — crosses the wire. Pushing the match
+// across instead would move two CLI helpers server-side to buy nothing.
+// CRC: crc-Server.md | R3378, R3379
+func (srv *Server) handleFilesExpand(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	out, err := Sync(srv.db, func(db *DB) ([]string, error) {
+		return db.LinkTable().ExpandMatches(req.Paths), nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, out)
 }
 
 // fileStatusEntry is the JSON response for /files/status.
@@ -1549,9 +1596,24 @@ func (srv *Server) handleFilesStatus(w http.ResponseWriter, r *http.Request) {
 			tmpInfos[ti.Path] = ti
 		}
 
+		// R3376: --status answers in the canonical namespace whatever spelling
+		// the query used. `files` is db.Files(), which is canonical by
+		// construction (R3363), so an alias-spelled query matches nothing
+		// until it is resolved into that namespace. GET /files is the door
+		// that must NOT resolve — it answers in the address namespace and
+		// keeps the caller's prefix (R3364).
+		// CRC: crc-Server.md | R3363, R3376
+		patterns := req.Patterns
+		if lt := db.LinkTable(); lt != nil {
+			patterns = make([]string, len(req.Patterns))
+			for i, p := range req.Patterns {
+				patterns[i] = lt.ResolvePattern(p)
+			}
+		}
+
 		var entries []fileStatusEntry
 		for _, f := range files {
-			if len(req.Patterns) > 0 && !matchAny(f, req.Patterns) {
+			if len(patterns) > 0 && !matchAny(f, patterns) {
 				continue
 			}
 			if ti, ok := tmpInfos[f]; ok {
