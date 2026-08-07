@@ -24,9 +24,11 @@ does not.
 - [x] ~~**Item 5 — the verification tiers** (R3382, R3384–R3388).~~
       **LANDED (`4c6e974`, 2026-08-04.)** Postdates the split below, which is
       why it appears in no item description there.
-- [ ] **Item 6 — the CLI `--links` / `--nolinks` selector.** **OPEN.** R3375,
-      R3376, R3379 carry **zero** code references, so it is genuinely unbuilt;
-      two designed cases in `test-LinkTable.md` ride on it.
+- [x] ~~**Item 6 — the CLI `--links` / `--nolinks` selector.**~~
+      **LANDED (`cd70fce`, 2026-08-05.)** R3375–R3380 all carry code
+      references now, and the two designed cases riding on it are written.
+      Left behind: **O213**, the two `--status` doors matching with different
+      semantics — found because R3376 had to be written once per door.
 - [ ] **Item 7 — search results and `/content` can disagree about a moved
       routing.** **OPEN (#120.)** Behavioural, not merely unproven.
 - [ ] **Item 8 — a test harness that builds a whole `*DB`.** **OPEN (#121.)**

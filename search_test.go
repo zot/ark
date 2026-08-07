@@ -103,47 +103,104 @@ func TestMatchFilesGlob_ExpandsTilde(t *testing.T) {
 	}
 }
 
-// A one-chunk corpus is searchable. The unfloored threshold is
-// int(1 × 0.50) = 0, and every real trigram occurs at least once, so
-// `count <= 0` discarded all of them and every query returned no candidates —
-// silently, and indistinguishably from an empty index. R3401
+// A one-chunk corpus is searchable — the property ark requires (R3401),
+// asserted against the dependency that now delivers it.
+//
+// This is a `sleeping-sentry`: microfts2.FilterByRatio abstains below two
+// chunks by its own contract (its R674), and ark neither owns nor pins that
+// code. A permissive dependency returning a wrong-but-valid answer is a guard
+// asleep at the gate, so the check keeps stomping past the post. It has
+// already woken once — it went red the moment microfts2 fixed this upstream,
+// which is how ark learned the fix had landed at all.
+//
+// The failure it guards is total and silent: every trigram of every query
+// discarded means no candidates rather than no matches, and a lone note naming
+// Neil Armstrong simply cannot be found by searching for Armstrong.
 // CRC: crc-Searcher.md | Seq: seq-search.md | R3401
 func TestTrigramFilterKeepsSingleChunkCorpusSearchable(t *testing.T) {
 	tg := []microfts2.TrigramCount{{Trigram: 1, Count: 1}}
-	kept := filterByRatioFloored(trigramRatio)(tg, 1)
+	// minCount 0 deliberately: with a live cost clause this would pass even if
+	// the below-two-chunks guard were gone, and the guard is what is under test.
+	kept := microfts2.FilterByRatio(trigramRatio, 0)(tg, 1)
 	if len(kept) != 1 {
-		t.Errorf("one-chunk corpus kept %d of 1 trigrams, want 1 — every query on it returns nothing", len(kept))
-	}
-	// The unfloored rule is what the fix replaces; asserting it still
-	// discards everything keeps this test honest about what changed.
-	if base := microfts2.FilterByRatio(trigramRatio)(tg, 1); len(base) != 0 {
-		t.Errorf("microfts2.FilterByRatio kept %d trigrams at totalChunks=1; this test's premise is stale", len(base))
+		t.Errorf("one-chunk corpus kept %d of 1 trigrams, want 1 — every query on it returns nothing, "+
+			"which reads as an empty index rather than an empty result (R3401)", len(kept))
 	}
 }
 
-// The floor is claimed to be provably scoped to the one-chunk case, because
-// int(total × 0.50) is already >= 1 for total >= 2. That claim is load-bearing
-// — it is the whole argument for the fix being safe — so it is tested rather
-// than merely asserted in prose. Widening the floor (max(2, ...)) turns this
-// red, which is the point. R3401
+// The filter still DISCRIMINATES at low ratios — the other half of the sentry,
+// and the half ark got wrong.
+//
+// Ark briefly shipped its own copy of the filter with the threshold floored at
+// one, arguing the floor was provably scoped to the one-chunk case because
+// int(total × 0.50) >= 1 for total >= 2. The proof holds only at ratio 0.50,
+// and the function took the ratio as a parameter: the floor actually fires
+// whenever ratio < 1/totalChunks, so at 50 chunks and ratio 0.0 it kept
+// trigrams the contract says to skip. Refuted by measurement in microfts2's
+// response (2026-08-05), not by anything ark ran.
+//
+// Ark's own guard could not have caught it: it swept totalChunks 2..200 with
+// the ratio pinned at 0.50 — varying the axis where the claim was safe while
+// holding fixed the one where it broke. That is `leading-the-witness` in a
+// test rather than in a grep, and it is why this case pins the ratio low
+// instead of sweeping the corpus size.
 // CRC: crc-Searcher.md | R3401
-func TestTrigramFilterFloorIsNoOpAboveOneChunk(t *testing.T) {
-	floored := filterByRatioFloored(trigramRatio)
-	base := microfts2.FilterByRatio(trigramRatio)
-	for total := 2; total <= 200; total++ {
-		var tg []microfts2.TrigramCount
-		for c := 1; c <= total; c++ {
-			tg = append(tg, microfts2.TrigramCount{Trigram: uint32(c), Count: c})
+func TestTrigramFilterDiscriminatesAtLowRatios(t *testing.T) {
+	tg := []microfts2.TrigramCount{{Trigram: 1, Count: 1}}
+	for _, ratio := range []float64{0.0, 0.01} {
+		if kept := microfts2.FilterByRatio(ratio, 0)(tg, 50); len(kept) != 0 {
+			t.Errorf("FilterByRatio(%v) at totalChunks=50 kept a Count=1 trigram (2%% of the corpus); "+
+				"the contract says skip, and keeping it is the defect ark's own floor introduced", ratio)
 		}
-		got, want := floored(tg, total), base(tg, total)
-		if len(got) != len(want) {
-			t.Fatalf("totalChunks=%d: floored kept %d, FilterByRatio kept %d — the floor is not a no-op above one chunk",
-				total, len(got), len(want))
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Fatalf("totalChunks=%d: trigram %d differs (%+v vs %+v)", total, i, got[i], want[i])
-			}
+	}
+}
+
+// A trigram cheap enough to scan is kept whatever its share of the corpus
+// (R3402). This is the case that motivated the cost clause: on a 10-chunk
+// corpus a trigram in 6 of them is over the 50% bar, and skipping it saves a
+// 6-posting scan while potentially costing the whole answer.
+//
+// A `sleeping-sentry` on the same dependency as its neighbours — ark supplies
+// the number, microfts2 owns the rule, and ark pins neither.
+//
+// The control matters: with minCount 0 the same trigram MUST be skipped, or
+// this proves only that something returned a non-empty slice. The pair is what
+// distinguishes the cost clause from the clause simply not running.
+// CRC: crc-Searcher.md | Seq: seq-search.md | R3402
+func TestTrigramFilterKeepsCheapPostings(t *testing.T) {
+	tg := []microfts2.TrigramCount{{Trigram: 1, Count: 6}}
+
+	if kept := microfts2.FilterByRatio(trigramRatio, trigramMinCount)(tg, 10); len(kept) != 1 {
+		t.Errorf("a 6-posting trigram on a 10-chunk corpus was skipped (kept %d of 1); "+
+			"skipping it saves a 6-posting scan and can cost the entire answer (R3402)", len(kept))
+	}
+
+	// Control: without the cost clause the ratio alone still discards it.
+	if kept := microfts2.FilterByRatio(trigramRatio, 0)(tg, 10); len(kept) != 0 {
+		t.Errorf("control: with minCount 0 the ratio must still skip 6 of 10 chunks, but kept %d — "+
+			"the assertion above then proves nothing about the cost clause", len(kept))
+	}
+}
+
+// The cost clause is inert where it should be: above minCount/ratio chunks it
+// cannot change a verdict, which is the bound R3402 rests on and the reason
+// 1,000 is chosen rather than profiled.
+//
+// Deliberately swept across counts on BOTH sides of the threshold. Ark's
+// retired R3401 guard swept only the axis where its claim was safe, and that
+// is exactly why it never rang; a single count above the threshold would pass
+// here even if the clause were applied in the wrong direction.
+// CRC: crc-Searcher.md | R3402
+func TestTrigramCostClauseInertAboveItsReach(t *testing.T) {
+	const total = 4000 // > trigramMinCount/trigramRatio (2000)
+	for _, count := range []int{1, 500, 1999, 2001, 3000, 3999} {
+		tg := []microfts2.TrigramCount{{Trigram: 1, Count: count}}
+		withClause := microfts2.FilterByRatio(trigramRatio, trigramMinCount)(tg, total)
+		pureRatio := microfts2.FilterByRatio(trigramRatio, 0)(tg, total)
+		if len(withClause) != len(pureRatio) {
+			t.Errorf("count=%d at totalChunks=%d: cost clause kept %d, pure ratio kept %d — "+
+				"the clause must be inert above minCount/ratio (R3402)",
+				count, total, len(withClause), len(pureRatio))
 		}
 	}
 }

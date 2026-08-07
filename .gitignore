@@ -7,6 +7,10 @@
 checkpoint.fossil
 /.scratch/
 /.carves/
+# Trajectory files are private in every project
+/PENDING.md
+/CURRENT.md
+/DONE.md
 /POST.md
 /notes.md
 /requests/

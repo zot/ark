@@ -1028,7 +1028,152 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] O204: The doors resolve opts.FilterFiles/ExcludeFiles but NOT the -files globs that arrive as ChunkFilterRow{Mode:"files"}. The CLI splits a -files stack: the first row can become the primary and later rows travel as chunk-filter rows, whose Query is consumed raw in two places — rowChunkFilter's case "files" (matchFilesGlob) and the fileRows loop in the post-filter pass (ExpandTilde only). Measured live 2026-08-02 with a populated table: 'ark fetch <alias>/deep/note.md' returns content (the Fetch door works) while 'ark search -files "<alias>/**" fox' returns nothing where the canonical spelling returns the file. That is precisely the silent disagreement R3359 names, so this is the door item's remaining half rather than a follow-on. Found by running the real command; the unit tests exercise ResolvePattern directly and cannot see it — same lesson as the R3399 regex test. R3359, R3362. **CLOSED 2026-08-03 by R3400** — and the cause named above is wrong, which is worth keeping: the row-vs-primary split was not it (a single -files row already travels as a chunk-filter row), and neither raw consumer was the door. The CLI and BOTH server sites build the filter closure themselves via the exported BuildChunkFilters *before* any Searcher method runs, so normalizeOpts resolved a copy of a row whose closure was already built from the raw glob. BuildChunkFilters now takes the LinkTable as a mandatory parameter and resolves files rows where they become closures. Verified live on both doors (.scratch/o204-rig.sh, .scratch/o204-server-rig.sh); regression test + fire alarm in links_test.go, pulled and rang. Full diagnosis: .scratch/O204-DIAGNOSIS-20260803.md.
 - [x] O205: **RESOLVED 2026-08-04, and it was NOT closed by the L-record work alone — the checkbox outlasting a prose claim of closure was correct.** A session note declared this closed when the `L` record class, `recordScannedLinks` and `rebuildLinkTable`-at-`Open` landed, but this gap's own wording is "`ScanResults.TrackedLinks` is collected and never consumed", and that stayed literally true for the **server**: only `db.Scan()` consumed it, while `db.ScanAsync()` — the path `doReconcile` and `runRebuildScan` take — dropped it, so every startup and reconcile persisted nothing (that is O208, diagnosed from this same sentence). Closed once `ScanAsync` records too. Both halves verified live: an explicit scan took `L` from 0 to 84 on the real corpus, and `.scratch/scanasync-links-rig.sh` showed a link created while ark was **down** being persisted by the next startup scan (6 → 7), which no watcher could have seen. Guarded by `TestBothScanPathsRecordLinks`, fire-alarmed. Original text follows. Nothing persists 'this path is a directory symlink', so the LinkTable is empty in any process that has not itself scanned — and the doors then resolve against nothing. links.go's own header states the intended design (R3383: the index persists only THAT a path is a directory symlink, and Rebuild reconstructs the rest from the filesystem), but ScanResults.TrackedLinks is collected and never consumed, specs/record-formats.md has no link record class, and DB.Open never calls Rebuild — only ReloadConfig does. Measured live 2026-08-02: 'ark fetch <alias>/...' answers 'not indexed' from a cold CLI and returns the content from a server that had scanned in-process. All doors agree with each other in a given process, so this is not the partial adoption R3359 forbids; it is the missing persistence half of R3383. Closing it means a record class (+ specs/record-formats.md, + the status -db arkLabels allowlist, R3078) written where TrackedLinks lands, and a Rebuild at Open. R3383, R3359.
 - [x] O206: O204 is NOT closed by normalizeOpts, and the remaining cause is unidentified. Measured 2026-08-02 on a cold CLI with the L records in place: plain 'ark search fox' finds the file, 'ark search -files "<real>/**" fox' finds it, and 'ark search -files "<alias>/**" fox' still finds nothing — so the corpus is matching and the comparison is not vacuous (checked explicitly after an earlier run where BOTH spellings returned nothing and proved nothing). Searcher.normalizeOpts now resolves FilterFiles, ExcludeFiles and every ChunkFilterRow of mode files at all seven public entry points, and the Fetch door through the same table works cold, so the table IS populated and tracked. Candidates not yet eliminated: the CLI may not route this query through a patched entry point; matchFilesGlob may match on something other than the resolved query; or Rebuild may classify the source-root-adjacent link differently from Observe. Next step is to instrument which of the three, not to add more resolution calls. R3359, R3362. **CLOSED 2026-08-03 — the instrument was right and all three candidates were wrong.** One debug.Stack() in matchFilesGlob answered it: the raw glob reaches the matcher from cmd/ark/main.go:1554 → BuildChunkFilters → rowChunkFilter, and prints BEFORE normalizeOpts runs. The discriminating observation was that both spellings reached normalizeOpts with byte-identical resolved options (a full %+v diff was empty) while returning different results — identical opts, identical corpus, deterministic code, so the divergence had to be outside SearchOpts entirely. Candidate 1 was closest but understated: it is not that the CLI misses a patched entry point, it is that three of the four BuildChunkFilters call sites are outside any Searcher, the server included. Fixed by R3400.
-- [ ] O207: A query term carried by more than half the chunks returns ZERO results, silently, and no spec says so. defaultSearchOpts applies microfts2.WithTrigramFilter(FilterByRatio(0.50)) (R572/R574/R575), which discards any trigram appearing in more than half of all chunks as non-discriminating; if that removes every trigram of the query, the search finds nothing. Measured 2026-08-03 with .scratch/contains-threshold-rig.sh: on a one-chunk corpus EVERY term is at 100% so bare and -contains find nothing while -regex finds the file (regex never goes through trigram selection); the boundary is exactly N=2 (1/2 is not GREATER than 50%). It is not a small-corpus quirk — in a 10-file corpus 'maritime' (9 of 10 chunks) missed while 'fox' (1 of 10) hit. NOT a live defect at real scale: against 6,705 files / 194,997 chunks only 'the' misses, which is the trade R572 intends. Two costs remain: (a) the failure is zero-results rather than too-many, the same silent-empty class as O160 and R3195, and nothing tells the user their term was discarded; (b) any hermetic rig with a one-chunk corpus reports zero for every bare search, indistinguishable from a broken index — this nearly made the O204 measurement vacuous and is why test-LinkTable's new case indexes three files. specs/bigram-search.md mentions FilterByRatio only to say the discarded fat-head bigrams are harmless, which is true of scoring and false of retrieval. Wants a sentence in the search spec stating the floor; whether ark should also warn on an all-trigrams-discarded query is Bill's call, not filed. R572, R574, R575. **PARTLY CLOSED 2026-08-03 by R3401 (Bill's call), and the spec sentence is written** (specs/search.md, "Trigram selection never discards every trigram of the query"). The one-chunk half is fixed: the threshold is floored at 1, since int(total × 0.50) = 0 there is a rounding artifact rather than a judgment about discrimination. Provably scoped — int(total × 0.50) >= 1 for total >= 2 — and that claim is *tested*, not just asserted, by an equivalence check against microfts2.FilterByRatio across totalChunks 2..200. Verified live: a one-chunk corpus holding "Neil Armstrong walked on the moon" now answers `search Armstrong`. **What deliberately remains** (the reason this is not resolved outright): a term carried by more than half a *small* corpus is still discarded — 9 of 11 chunks still misses — which is the rule working as intended at that size. Repairing that class needs a fallback whenever the filter empties the query, which on the real corpus buys only stopword queries at the cost of scanning the fattest postings the filter exists to avoid; weighed and declined 2026-08-03. Also still open: nothing tells a user their term was discarded, and the rig trap is unchanged for corpora of 2+ chunks where a term is common.
+- [ ] O207: A query term carried by more than half the chunks returns ZERO results, silently, and no spec says so. `defaultSearchOpts` applies `microfts2.WithTrigramFilter(FilterByRatio(0.50))` (R572/R574/R575), which discards any trigram appearing in more than half of all chunks as non-discriminating; if that removes every trigram of the query, the search finds nothing. R572, R574, R575.
+
+  **Status** — rewritten in place; this is what is true now.
+
+  - **OPEN** — nothing tells a user their term was discarded. The failure is
+    zero-results rather than too-many, the same silent-empty class as O160 and
+    R3195. Whether ark should warn on an all-trigrams-discarded query is Bill's
+    call, unfiled since 2026-08-03. **Possibly aimed at the wrong target:** a
+    warning is the remedy for a rule that discards too much, and the re-opened
+    item below proposes fixing the rule. If that lands, what remains is the
+    genuine large-corpus stopword case, where a warning is still right but much
+    smaller. Decide after microfts2 answers.
+  - **HAZARD, permanent** — any hermetic rig whose corpus is small enough that a
+    term is common answers zero for a bare search, which is indistinguishable
+    from a broken index. This nearly made the O204 measurement vacuous, and is
+    why `test-LinkTable.md`'s case indexes three files rather than one. Not a
+    defect; a standing trap for whoever writes the next rig.
+  - **BUILT 2026-08-05 (R3402), was DECLINED 2026-08-03, re-opened by Bill's
+    reframing** — a term carried by more than half a *small* corpus is no longer
+    skipped when it is cheap. The 2026-08-03 decline was against one specific
+    repair, the unfiltered re-run, which scans precisely the fattest postings
+    the filter exists to avoid; it stays declined. Bill's reframing supplied a
+    different one — skip only if non-discriminating **and** absolutely expensive
+    — which can only ever *keep* thin postings, so that objection does not reach
+    it. microfts2 built it as `FilterByRatio(maxRatio, minCount)` (their R675)
+    and deliberately left the number to ark: `trigramMinCount = 1000`, chosen
+    rather than profiled because the parameter bounds its own blast radius
+    (inert above `minCount/ratio` = 2,000 chunks, and on a corpus that small
+    both the extra scan and the extra verification it admits are bounded by the
+    same number).
+  - **CLOSED 2026-08-05** — the one-chunk case, **by microfts2 v0.4.3 (their
+    R674), not by ark**: `FilterByRatio` abstains below two chunks. The spec
+    sentence is written (`specs/search.md`). Ark's own repair was wrong and is
+    retired; see the log.
+  - **NOT a live defect at real scale — and microfts2 corrected how this entry
+    framed that.** The fat-keep half is **calibration, not a defect**: `" th"`
+    at 49.3% is under a 50% bar because that is where the bar was set, and
+    `FilterByRatio(0.30, …)` drops it with or without the cost clause. It is
+    also **throughput, not correctness** — query trigrams are intersected, so
+    keeping a fat trigram only ever *narrows* the candidate set and cannot admit
+    a false positive; dropping it widens the set and hands more chunks to
+    verification. Which cost is larger on ark's corpus is unmeasured and is
+    ark's to measure. The request led with this half as though it were the
+    defect, and it was not. The measurement itself stands: At 196,841 chunks the
+    threshold is 98,420, and the fattest trigrams probed through `ark grams`
+    all sit *under* it and are kept — `" th"` at 97,116 (49.3%), `"the"` at
+    94,258 (47.9%), `"ing"` at 77,672. So the posting lists the rule exists to
+    avoid scanning are the ones it passes. The margin is 1.3%, meaning ~1,300
+    chunks of unrelated growth flips `" th"` from kept to skipped while its
+    scan cost is unchanged — which is the cleanest available statement that the
+    rule measures a quantity that moves when the one it cares about does not.
+    **Probed, not enumerated:** no trigram above the threshold was found; that
+    is not the same as none existing. The earlier "only 'the' misses" reading
+    was taken at 194,997 chunks and no longer holds — `"the"` is now below the
+    bar, which is itself the bistability.
+
+  **Log** — append-only. A superseded claim is struck rather than removed,
+  because the reasoning that produced it is the part worth keeping.
+
+  - *2026-08-03 — found and measured.* `.scratch/contains-threshold-rig.sh`: on
+    a one-chunk corpus EVERY term is at 100%, so bare and `-contains` find
+    nothing while `-regex` finds the file (regex never goes through trigram
+    selection); the boundary is exactly N=2, since 1/2 is not GREATER than 50%.
+    Not a small-corpus quirk — in a 10-file corpus 'maritime' (9 of 10) missed
+    while 'fox' (1 of 10) hit. `specs/bigram-search.md` mentioned FilterByRatio
+    only to say the discarded fat-head bigrams are harmless, which is true of
+    scoring and false of retrieval.
+  - *2026-08-03 — R3401, ark's own floor.* **SUPERSEDED 2026-08-05, and it was
+    wrong on both counts.** ~~The one-chunk half is fixed: the threshold is
+    floored at 1, since int(total × 0.50) = 0 there is a rounding artifact rather
+    than a judgment about discrimination. Provably scoped — int(total × 0.50) >=
+    1 for total >= 2 — and that claim is *tested*, not just asserted, by an
+    equivalence check against microfts2.FilterByRatio across totalChunks
+    2..200.~~ Verified live at the time: a one-chunk corpus holding "Neil
+    Armstrong walked on the moon" answered `search Armstrong`.
+  - *2026-08-05 — microfts2 resolved it upstream, and refuted ark's reasoning.*
+    Found by `TestTrigramFilterKeepsSingleChunkCorpusSearchable` going red with
+    **no ark change** — its *premise* assertion existed to say the unfloored rule
+    still discards everything, and it no longer did. That is `sleeping-sentry`
+    working as designed: a dependency ark neither owns nor pins changed
+    behaviour, and the test that kept stomping past the post is how ark learned.
+    Two corrections from their response
+    (`microfts2/requests/RESP-microfts2-filterbyratio-single-chunk.md`), both
+    re-verified here rather than accepted. **(a)** The zero threshold was **not a
+    rounding artifact** — at one chunk a `Count == 1` trigram genuinely is in
+    100% of chunks, and 100% does exceed a 50% ceiling, so the code did exactly
+    what the contract said. The defect was in the *contract*, which is why the
+    repair began with a spec amendment and took the shape it did: a rule that
+    cannot discriminate should abstain, not be nudged into discriminating.
+    **(b)** The floor was **not** provably scoped. `int(total × 0.50) >= 1` for
+    `total >= 2` holds only at ratio **0.50**, while `filterByRatioFloored` took
+    the ratio as a *parameter* — so the floor fired whenever
+    `ratio < 1/totalChunks`, and at 50 chunks with ratio 0.0 or 0.01 it kept
+    trigrams the contract says to skip. Re-confirmed by reintroducing the retired
+    floor under the new test and watching it ring on both ratios.
+  - *2026-08-05 — why ark's own guard could not have caught it.*
+    `TestTrigramFilterFloorIsNoOpAboveOneChunk` swept `totalChunks` 2..200 with
+    the ratio pinned at `trigramRatio`: it varied the axis where the claim was
+    safe and held fixed the one where it broke. The claim *was* tested rather
+    than asserted, which was the right instinct — and tested along an axis that
+    could only agree, which is `leading-the-witness` inside a test rather than a
+    grep. Ark now calls `microfts2.FilterByRatio` directly; R3401 keeps the
+    *behaviour* as a requirement and hands the mechanism to the dependency,
+    guarded by a sentry pair (one-chunk searchable, and still discriminating at
+    low ratios — the second being the case ark got wrong).
+  - *2026-08-05 — released, and ark's pin was stale.* microfts2 shipped the guard
+    in **v0.4.3** (present in v0.4.4) while ark's `go.mod` still pinned
+    **v0.4.2**, which predates it. `go.work` hid that completely: the workspace
+    copy wins over the pinned version, so ark's suite was green while a fresh
+    clone would have resolved v0.4.2 and got the unguarded filter back. Bumped to
+    v0.4.4 and re-verified with **`GOWORK=off`** — build and full suite both
+    pass. **Worth generalizing:** a shared `go.work` means the local suite cannot
+    see a stale pin *at all*; the workspace is a permanently-passing witness for
+    every dependency claim, which is the same `leading-the-witness` shape at the
+    build level. Any ark requirement resting on dependency behaviour wants one
+    `GOWORK=off` run before it is believed.
+  - *2026-08-05 — the cost clause, and the correction that came with it.* Bill's
+    reframing: the ratio is a proxy for two absolute quantities (postings
+    scanned, candidates surviving), and it tracks them only while the corpus is
+    large enough that a fraction of it is itself large. Measured through
+    `ark grams` at 196,841 chunks: `" th"` at 97,116 (49.3%) kept, `"the"` at
+    94,258 kept, while a 10-chunk corpus discards a count of 6 — the same rule
+    calling a 6-posting scan too expensive and a 97,116-posting scan acceptable.
+    Requested the *contract* change rather than reimplementing it in ark
+    (`requests/microfts2-trigram-filter-absolute-cost.md`), which is the R3401
+    lesson applied. microfts2 accepted and built it, and **corrected the half
+    the request led with**: the fat-keep is calibration and throughput, not
+    correctness, since intersected trigrams can only narrow. They also verified
+    ark's scoping bound rather than taking it — `total < minCount/maxRatio` —
+    and noted that carrying the ratio through is what made it checkable. Their
+    own caveat, pointed back at themselves: an absolute floor reaches as
+    `1/maxRatio`, the same shape of reach they objected to in R3401, differing
+    in that it is stated in the contract deliberately rather than by accident.
+    Ark uses exactly one ratio and one call site, so that reach is 2,000 chunks
+    here; the `trigramRatio` comment now warns that a second, lower-ratio call
+    site would widen it.
+  - *2026-08-05 — the release gate, inverted.* microfts2's two-parameter
+    signature is **not committed or released**. Ark now builds only against the
+    workspace copy: `GOWORK=off go build` fails with "too many arguments in call
+    to microfts2.FilterByRatio", because the published v0.4.4 still has the
+    one-parameter form. **Ark must not be committed until microfts2 commits,
+    releases, and ark's `go.mod` is bumped to that tag.** Worth noting that the
+    same `GOWORK=off` check caught a *silent* stale pin an hour earlier and a
+    *loud* build break now — the first is the one it exists for, since the
+    second would have surfaced eventually anyway.
+
 - [x] O208: L records are EMPTY on the real corpus even though alias resolution works there, so a cold CLI would still 404 through an alias. Measured 2026-08-03 23:0x on the live index right after Bill remade and restarted (server pid 360971, non-deleted binary, so the R3383 code IS loaded — the L row appears in status -db at all, which the pre-restart server did not show). Evidence the zero is real and not a broken counter (CURRENT.md's disbelieve-a-zero rule): prefixLink = 'L' at store.go:230 matches the arkLabels 'L' entry at db.go:3632, linkKey is prefixLink+path, and ListLinks scans that same single-byte prefix; the server log has no 'record link' errors. Meanwhile 'ark fetch ~/.ark/skills/ark/hermes-messaging.md' now RETURNS CONTENT where it 404'd before the restart, so the in-memory LinkTable does hold that tracked link. So Observe ran but recordScannedLinks persisted nothing. Competing hypotheses, none eliminated: (a) results.TrackedLinks is empty on a startup reconcile because the walk short-circuits for unchanged trees, so only a link met for the FIRST time is ever persisted — which would mean every link predating the feature stays unpersisted forever, since nothing re-meets it; (b) the NewUnresolved half has the same shape and is confirmed to be inert here, since status shows symlink=2 unresolved records that already existed from an earlier scan, so this run reported no NEW ones and called AddLink zero times; (c) recordScannedLinks is not reached on the startup path at all (two call sites, db.go:1292 and db.go:1380). Matters because persistence is the entire point of R3383/O205: rebuildLinkTable at Open is what lets a cold CLI resolve without scanning, and with zero records it rebuilds nothing. O205's 'verified live: a cold CLI that never scanned now fetches through an alias, and status -db shows the record' was presumably measured in a rig HOME, where the link IS met for the first time — which is exactly the case hypothesis (a) says works. Next step is to instrument which of the three, not to add another write call. R3383, R3381 **RESOLVED 2026-08-04: hypothesis (c), and the instrument was reading the two call sites rather than adding a probe.** `db.Scan()` (the CLI's path, and `handleScan`'s) calls `recordScannedLinks`; `db.ScanAsync()` — which is what the *server* takes, via `doReconcile` and `runRebuildScan` — never did, so it walked past every symlink and dropped `results.TrackedLinks` on the floor. Hypothesis (a) was wrong: `TrackedLinks` is appended for **every** link the walk classifies as tracked, not only newly-met ones, so a re-scan does re-persist. That is also why the rig worked and the real corpus did not — the rig ran `ark scan` (sync path) while the corpus only ever got server startups. Bill's explicit scan took `L` from 0 to **84** on the live corpus, which both confirms the sync path and makes the cold-CLI Hermes bootstrap unconditionally healthy for the first time. Fixed by one call in `ScanAsync`, placed ahead of the unresolved loop so an unrelated write error cannot take the link records with it. Now guarded by `TestBothScanPathsRecordLinks`, which asserts the two paths **agree** rather than testing either alone — a test pinned to one path is exactly what let this live for as long as both existed; fire alarm pulled by re-deleting the call, and it rang. Third instance in this repo of one behaviour reachable by two paths with only one tested (see the `withFTS`/extmap note and R3388's own prose predicting the shape).
 - [x] O209: Retrieval-side tier verification is built but not reached. verifyLinkAssumptions implements all three schedules and is wired to the single-hop event path (DB.SyncLinkPath, on-actor), which is correct and complete for that tier. The other two tiers are verified only 'at the start of a bulk operation that retrieves ext tags' — and nothing calls it there yet, because the retrieval entry points (ExtMap.ExtRoutingsForTargetChunk, reached from server.go /content and search.go) run OFF the DB actor, while acting on a moved premise needs enqueueWrite, which appends to db.writeQueue unsynchronized and is therefore actor-only. That is exactly the gap R3387's sewing exists to close: post update-and-retrieve to db.svc, act on changes via enqueueWrite, and post the retrieved tags forward as a continuation (R3388 reuses applyReresolve for the write). Deliberately NOT faked with a synchronous call from the handler, which is the deadlock shape Sewing exists to avoid. CONSEQUENCE while open: an internal-multi-hop premise dirtied by a file change, and an external-multi-hop premise that should recompute every retrieval, are both currently never recomputed — the routing keeps its last-known-good answer silently. Single-hop, which the spec measured at 71 of 76 associations, is unaffected. R3387, R3388.
 - [ ] O210: reresolveMovedPremises is unproven end-to-end: no test exercises a real link repoint moving a routing's X records from one file to another. The composition argument is a reading, not a measurement — applyReresolve is file-scoped, so a moved premise needs it run once per file (Was and Now); each call re-reads oldAll from targetToChunk, so scoped-to-Was sees old={Was chunks}/new={} and removes, scoped-to-Now sees old={}/new={Now chunks} and adds, and the two are order-independent (which matters, since 'scopes' is a Go map with randomized iteration). Both calls share one txn so the routing is never half-moved. NOT tested because the fixture is substantial rather than cheap: it needs two indexed files in separate sources, a tracked link, an @ext authored inside an ext-mirror tree (R3264 gates authoring), real X records, and a repoint through SyncLinkPath — this is the full-*DB harness that gaps O199/O203 already name as missing, not a fake-and-zero-value case. The unit halves ARE covered: premise movement detection is tested and fire-alarmed (TestUnresolvableTargetIsUnresolvedNotLastKnownGood, TestTierIsRederivedNotCarriedForward), and the plan builder is shared with the file-change path that existing tests exercise. What is unproven is specifically the two-scope applyReresolve composition. R3387, R3388.

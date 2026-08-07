@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3377, R3359, R3362, R3400, R3401
+**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3377, R3359, R3362, R3400, R3401, R3402
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -20,8 +20,10 @@ Optionally retrieves chunk text or full file content.
   apply -k limit. Falls back to FTS-only when the embedding pipeline
   is unavailable (Librarian.EmbeddingAvailable() reports false).
   All FTS queries use (R1916)
-  dynamic trigram filtering (ratio 0.50, threshold floored at 1) via
-  defaultSearchOpts — see filterByRatioFloored below (R3401).
+  dynamic trigram filtering via defaultSearchOpts, using
+  microfts2.FilterByRatio(0.50, 1000) directly — skipping a trigram only when
+  it is both non-discriminating and expensive (R3402), and abstaining below two
+  chunks so a one-chunk corpus stays searchable (R3401).
   When opts.Cache is non-nil, defaultSearchOpts also appends
   WithChunkCache so microfts2's internal post-filters (verify, regex)
   share the session cache instead of re-reading files.
@@ -232,18 +234,32 @@ Optionally retrieves chunk text or full file content.
   AboutSet ChunkIDs map into a microfts2.WithChunkFilter closure
   delivered through extraOpts. (R1935)
 
-- filterByRatioFloored(ratio) (R3401): the trigram selection ark supplies to
-  microfts2, replacing `microfts2.FilterByRatio`. Identical except the
-  threshold is `max(1, int(totalChunks × ratio))`. Unfloored, the threshold is
-  **zero** on a one-chunk corpus, and since every real trigram occurs at least
-  once, `count <= 0` discards all of them: every query returns no candidates,
-  which reads as an empty index rather than as an empty result. **The floor is
-  provably a no-op above that** — `int(total × 0.50) >= 1` for any
-  `total >= 2` — so the repair is bounded by arithmetic rather than by a
-  chosen corpus-size test. A term carried by more than half a small corpus is
-  still skipped, deliberately: that is the rule working at that size, and the
+- trigram selection (R3401, R3402): ark supplies
+  `microfts2.FilterByRatio(trigramRatio, trigramMinCount)` unchanged. The
+  second parameter is the **cost floor** — the ratio answers "does this
+  discriminate?" and nothing was answering "is this expensive?", though the
+  filter exists for both. `trigramMinCount = 1000` is ark's number (microfts2
+  declined to choose it) and is chosen rather than profiled, because the
+  parameter bounds its own blast radius: inert above `minCount/ratio` chunks,
+  and on a corpus that small both the extra scan and the extra verification it
+  admits are bounded by that same number. Ark has exactly **one** ratio and one
+  call site; a second at a lower ratio would widen that reach. The one-chunk case is the dependency's guarantee — it abstains
+  below two chunks (microfts2 R674) — because a rule that cannot discriminate
+  should decline rather than be nudged into discriminating. Ark states the
+  requirement and guards it with a `sleeping-sentry` pair rather than owning
+  the mechanism. **Ark's own copy is retired (2026-08-05) and the reason is
+  the useful part:** it floored the threshold at `max(1, int(total × ratio))`
+  and claimed the floor was provably a no-op above one chunk because
+  `int(total × 0.50) >= 1` for `total >= 2`. That holds only at ratio 0.50
+  while the function took `ratio` as a parameter, so the floor fired whenever
+  `ratio < 1/totalChunks` and kept trigrams the contract says to skip on
+  corpora of any size. The guard that was supposed to prove the claim swept
+  `totalChunks` 2..200 with the ratio pinned — the safe axis — so it could not
+  have caught it. A term carried by more than half a small corpus is still
+  skipped, deliberately: that is the rule working at that size, and the
   broader fallback would buy only stopword queries at the cost of the fattest
   postings the filter exists to avoid.
+
 - resolvePatterns(pats) (R3359, R3362): maps each file-glob row into the
   canonical namespace before `resolveFilters` matches anything. Stored paths
   are canonical, so an alias-spelled filter matches nothing while looking like

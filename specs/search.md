@@ -157,17 +157,34 @@ candidates to match against in the first place. One indexed note naming Neil
 Armstrong cannot be found by searching for Armstrong, and the empty answer is
 indistinguishable from a corpus that simply does not contain him.
 
-Zero is a rounding artifact rather than a judgment about discrimination, since
-nothing can discriminate among one chunk. The threshold is therefore floored at
-one. For any corpus of two chunks or more the fraction already reaches one, so
-the floor changes nothing there: the repair is confined by arithmetic to the
-only case it was meant for, rather than by a size test someone chose.
+A trigram is skipped only when it is **both** non-discriminating and
+expensive to scan. The share answers the first question; a posting count
+answers the second, and nothing was asking it. Without that second clause the
+rule discards a trigram appearing in 6 of 10 chunks — saving a six-entry scan,
+at the price of the whole answer — while on a large index it keeps the fattest
+posting list there is, because at that size "half the corpus" is a very large
+number. Ark skips only above 1,000 postings, which is inert on any index of
+more than a couple of thousand chunks and rescues every small one.
+
+And below two chunks the rule abstains entirely: the filter passes every
+trigram through untouched rather than trying to discriminate. That is deliberate and
+it belongs to the index layer rather than to ark — a rule that cannot
+discriminate should decline, not be nudged into discriminating. Ark states the
+requirement and tests that the guarantee holds; it does not implement it.
+
+The alternative, briefly shipped and withdrawn, was to floor the threshold at
+one. It reads as the same repair and is not: "skip trigrams in more than
+`ratio` of chunks, except always keep a trigram appearing in exactly one
+chunk" is a stranger rule, and its exception has nothing to do with the case
+that motivated it. It also misbehaves away from the one ratio it was checked
+at — a floor fires whenever `ratio < 1/totalChunks`, so at a low enough ratio
+it keeps trigrams on a large corpus too.
 
 This does not make every term findable on a small corpus, and it is not meant
 to. A term carried by more than half of a three-chunk corpus is still skipped,
 which is the rule working as intended at that size rather than a second
-instance of the same defect. What the floor fixes is the case where "more than
-half" has degenerated into "all".
+instance of the same defect. What abstention fixes is only the case where
+"more than half" has degenerated into "all".
 
 ## Common search options
 

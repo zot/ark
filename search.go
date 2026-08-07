@@ -27,49 +27,58 @@ import (
 
 // trigramRatio is the share of all chunks above which a trigram stops
 // discriminating and is skipped at query time. R572, R574, R575
+//
+// Ark has exactly one ratio and one call site, which matters for the reach of
+// trigramMinCount below: a second call site at a *lower* ratio would make the
+// cost clause live on a much larger corpus. Add one and re-read that comment.
 const trigramRatio = 0.50
 
-// filterByRatioFloored is microfts2.FilterByRatio with the threshold floored
-// at one (R3401).
+// trigramMinCount is the posting count below which a trigram is too cheap to
+// bother skipping, whatever its share of the corpus (R3402).
 //
-// The unfloored threshold is int(totalChunks × ratio), which is **zero** on a
-// one-chunk corpus. Every real trigram occurs at least once, so `count <= 0`
-// rejects all of them: every trigram of every query is discarded and the
-// search returns no candidates at all — a silent empty answer indistinguishable
-// from an empty index. A lone note naming Neil Armstrong could not be found by
-// searching for Armstrong.
+// The ratio answers "does this discriminate?"; it does not answer "is this
+// expensive?", and the filter exists for both. On a 10-chunk corpus a trigram
+// in 6 of them is over the bar and costs 6 postings to scan — skipping it
+// saves nothing and can cost the entire answer, since a query whose trigrams
+// are all skipped returns no candidates rather than no matches.
 //
-// Zero is a rounding artifact rather than a judgment about discrimination,
-// since nothing can discriminate among one chunk. The floor is **provably a
-// no-op for every larger corpus**: for totalChunks >= 2, int(total × 0.50) is
-// already >= 1, so this cannot change the answer anywhere but the degenerate
-// case it exists for. That bound comes from the arithmetic rather than from a
-// corpus-size test someone chose, which is why there is no threshold constant
-// here to tune or to get wrong.
-// Seq: seq-search.md | R3401
-// CRC: crc-Searcher.md | R3401
-func filterByRatioFloored(maxRatio float64) microfts2.TrigramFilter {
-	return func(trigrams []microfts2.TrigramCount, totalChunks int) []microfts2.TrigramCount {
-		threshold := max(1, int(float64(totalChunks)*maxRatio))
-		var keep []microfts2.TrigramCount
-		for _, t := range trigrams {
-			if t.Count <= threshold {
-				keep = append(keep, t)
-			}
-		}
-		return keep
-	}
-}
+// **The value is low-stakes because the parameter bounds its own blast
+// radius.** The clause changes a verdict only where
+// `int(total × ratio) < count < minCount`, which is non-empty only for
+// `total < minCount/ratio` — 2,000 chunks here. And on a corpus that small a
+// posting list holds at most 2,000 entries, so the extra scan it admits and
+// the extra candidates it sends to verification are both bounded by the same
+// number. Reach and cost scale together, which is why this is chosen rather
+// than profiled.
+//
+// It is inert on ark's own corpus (196,841 chunks) by three orders of
+// magnitude. What it buys is every *small* index: a fresh install, a small
+// project, and every hermetic test rig — where the unfiltered rule returns
+// nothing for a common term and reads exactly like a broken index.
+const trigramMinCount = 1000
 
 // defaultSearchOpts returns FTS search options with dynamic trigram filtering.
-// The filter uses a 50% ratio threshold — trigrams appearing in more than
-// half of all chunks are skipped as non-discriminating — with the threshold
-// floored at one so a one-chunk corpus is still searchable (R3401).
-// Seq: seq-search.md | R572, R574, R575
-// CRC: crc-Searcher.md | R572, R574, R575
+// The filter uses a 50% ratio threshold — trigrams appearing in more than half
+// of all chunks are skipped as non-discriminating.
+//
+// A one-chunk corpus stays searchable (R3401), and that is now the
+// dependency's guarantee rather than ark's: microfts2.FilterByRatio abstains
+// entirely below two chunks (its R674). Ark briefly carried its own copy with
+// the threshold floored at one, on the argument that `int(total × 0.50) >= 1`
+// for `total >= 2` makes the floor provably a no-op elsewhere. **That proof
+// was wrong** — it holds only at ratio 0.50, while the function took the ratio
+// as a parameter, so the floor actually fired whenever `ratio < 1/totalChunks`
+// and silently kept trigrams the contract says to skip, at any corpus size.
+// Refuted by measurement in microfts2's response, 2026-08-05.
+//
+// The second parameter is the cost floor (R3402): a trigram is skipped only if
+// it is *both* non-discriminating and expensive, because the ratio measures
+// discrimination and nothing was measuring cost.
+// Seq: seq-search.md | R572, R574, R575, R3401, R3402
+// CRC: crc-Searcher.md | R572, R574, R575, R3401, R3402
 func defaultSearchOpts(filterOpt microfts2.SearchOption, score string, sopts SearchOpts) []microfts2.SearchOption {
 	opts := []microfts2.SearchOption{
-		microfts2.WithTrigramFilter(filterByRatioFloored(trigramRatio)),
+		microfts2.WithTrigramFilter(microfts2.FilterByRatio(trigramRatio, trigramMinCount)),
 	}
 	if score == "density" {
 		opts = append(opts, microfts2.WithDensity())
