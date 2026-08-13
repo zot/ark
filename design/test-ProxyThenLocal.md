@@ -32,6 +32,7 @@ are one table.
 true` — the literal pre-repair behaviour — and confirm the table goes red on
 that row and only that row. A change that reintroduces the defect cannot be
 subtle here: it *is* this field.
+**Inject:** cmd/ark/main.go:planStatus
 **Refs:** crc-CLI.md, specs/cli-dispatch.md, specs/chunk-stats.md, R3392,
 R3393, R3394
 **Code:** cmd/ark/main_test.go
@@ -75,6 +76,7 @@ confirm this goes red naming that file. Chosen over `search` deliberately —
 inbox is the site the `#115` audit could never make fail, because nothing would
 make `/inbox` error, so the alarm is the only evidence that half of the repair
 was needed at all.
+**Inject:** cmd/ark/message_cli.go:messageInboxAction
 **Refs:** crc-CLI.md, specs/cli-dispatch.md, R3398, R3003, R2996
 **Code:** cmd/ark/main_test.go
 

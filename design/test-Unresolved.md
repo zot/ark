@@ -30,6 +30,7 @@ was tested.
 **Fire alarm:** disable the symlink branch so liveness asks the target again —
 the literal pre-fix logic — and confirm the repoint and delete cases go red
 while the rest stay green.
+**Inject:** store.go:unresolvedIsLive
 **Refs:** crc-Store.md, specs/symlinks.md, R3357, R3355, O197
 **Code:** store_test.go
 
@@ -44,6 +45,7 @@ that does not name its link cannot be withdrawn or promoted.
 stamped by the writer so no caller has to remember.
 **Fire alarm:** rebuild the record from path and dir alone before storing —
 what the two-argument form did — and confirm both fields come back empty.
+**Inject:** store.go:AddUnresolved
 **Refs:** crc-Store.md, specs/record-formats.md, R3356, R3357
 **Code:** store_test.go
 
@@ -61,6 +63,7 @@ reasons omitted, because a zero is noise rather than information. A map whose
 counts are all zero reads as nothing at all.
 **Fire alarm:** return the empty string unconditionally, which is the bare
 total the line used to carry, and confirm every non-empty row goes red.
+**Inject:** cmd/ark/main.go:formatUnresolvedReasons
 **Refs:** crc-CLI.md, specs/status-enhanced.md, R3370
 **Code:** cmd/ark/main_test.go
 

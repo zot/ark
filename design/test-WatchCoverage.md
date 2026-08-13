@@ -41,4 +41,5 @@ second and every subsequent event disappear.
 **Fire alarm:** delete the `linkCandidate` arm of `classifyEvent`. The link
 path then falls to the cache exactly as it does today, which is the state
 this requirement exists to change. Confirm red.
+**Inject:** watcher.go:classifyEvent
 **Refs:** crc-Server.md, seq-file-change.md#1.3.5, R3390

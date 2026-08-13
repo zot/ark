@@ -44,6 +44,7 @@ leaving only the pre-existing mode check — literally the state that produced t
 the chunk-filter loop and confirm only the chunk-filter rows go red. Pulling
 them apart is what shows the second loop is load-bearing rather than a
 restatement of the first.
+**Inject:** server.go:validateSearchRequest
 **Refs:** crc-Server.md, specs/search.md, specs/http-operations.md, R3399,
 R3165, R110
 **Code:** httpop_test.go

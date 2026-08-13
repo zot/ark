@@ -29,6 +29,7 @@ unbounded form is the server's alone.
 **Fire alarm:** put `ark.Open(arkDir)` back into `withDB` and confirm this goes
 red. That is the literal pre-2026-08-01 code, so the alarm re-creates the
 defect exactly rather than approximating it.
+**Inject:** cmd/ark/main.go:withDB
 **Refs:** crc-CLI.md, specs/cli-dispatch.md, R3391, R2994
 **Code:** cmd/ark/main_test.go
 

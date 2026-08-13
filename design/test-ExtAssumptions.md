@@ -129,4 +129,5 @@ confirm this goes red. It is the same injection that scrambled delivery to
 `[0 3 1 2 10 4 …]` when the guarantee was restored, and it is what makes
 this design's dependency on that guarantee a tested fact rather than a
 comment.
+**Inject:** svc.go:post
 **Refs:** crc-ExtMap.md, crc-ChanSvc.md, seq-ext-tag-retrieval.md

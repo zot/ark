@@ -28,6 +28,7 @@ true`. The undeclared tag is false, not a panic — an event can name a tag whos
 **Fire alarm:** make `MarkSuppressed` a no-op and confirm red. Worth pulling
 because the assertion is on a *false-by-default* boolean: a function that never
 sets it passes every test that only checks the unsuppressed rows.
+**Inject:** scheduler.go:MarkSuppressed
 **Refs:** crc-EventScheduler.md, crc-Server.md, crc-CLI.md, specs/scheduling.md,
 R3397, R2845
 **Code:** scheduler_test.go
@@ -48,5 +49,6 @@ confirm this goes red with a nil dereference. That is a Sleeping Sentry: the
 guarantee being kept is *the absence of a dependency*, which nothing else in the
 suite would notice being added, because the server always supplies a real
 pubsub.
+**Inject:** scheduler.go:QueryRange
 **Refs:** crc-EventScheduler.md, crc-CLI.md, specs/scheduling.md, R3396, R1027
 **Code:** scheduler_test.go

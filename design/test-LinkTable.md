@@ -113,6 +113,7 @@ the link rather than on each file beneath it.
 **Fire alarm:** delete the symlink branch and confirm this goes red. The
 link then falls to the file branch exactly as it does today, which is the
 state the whole feature exists to change.
+**Inject:** scanner.go:Scan
 **Refs:** crc-Scanner.md, crc-LinkTable.md
 
 ## Test: a symlinked source root is refused, at both doors
@@ -140,6 +141,7 @@ real directories and not the link.
 `os.Stat` back in the expansion — the literal pre-fix line, which follows the
 link so it passes `IsDir()` — and confirm the second reports the link among the
 added sources.
+**Inject:** config.go:ValidateSourceDir, config.go:ResolveGlobs
 **Guard the guard:** the expansion test fails if it added nothing, since an
 expansion that matched no directories would pass the assertion vacuously.
 **Refs:** crc-Config.md, crc-Scanner.md, specs/symlinks.md, R3354
@@ -162,6 +164,7 @@ its own path.
 Injected in `links.go` rather than by deleting the call in the test, which only
 produced an unused variable and a *build* failure — a build error is not
 evidence that a test detects anything.
+**Inject:** links.go:SetConfig
 **Covers the demotion direction only.** Promotion (proposed → tracked) needs
 the proposal list, which lives in U records that do not yet carry the proposing
 link — gap O202, blocked on the U-record storage item.
@@ -205,6 +208,7 @@ and still reads as correct.
 **Fire alarm:** return early when `Lookup` already knows the path — the
 "we've seen this link" shortcut, which is the plausible wrong
 implementation. Confirm this goes red; every other test here still passes.
+**Inject:** links.go:SyncPath
 **Refs:** crc-LinkTable.md, crc-DB.md, seq-file-change.md#1.3.5
 
 ## Test: a deleted link is forgotten
@@ -219,6 +223,7 @@ falls back to the literal address. Not an error — a vanished alias is
 ark's ordinary not-indexed answer (R3361).
 **Fire alarm:** drop the `Remove` from the gone branch, returning the status
 alone. Confirm red.
+**Inject:** links.go:SyncPath
 **Refs:** crc-LinkTable.md
 
 ## Test: a link replaced by a regular file stops being an alias prefix
@@ -233,6 +238,7 @@ business so the caller indexes it as the file it now is.
 **Fire alarm:** swap `os.Lstat` for `os.Stat` in `SyncPath`. The repoint test
 above goes red too, which is the point — one wrong call breaks both
 directions.
+**Inject:** links.go:SyncPath
 **Refs:** crc-LinkTable.md
 
 ## Test: a proposed link's target is recorded as an unresolved candidate
@@ -244,6 +250,7 @@ disagree about what a link is are worse than one that is consistently wrong.
 `DB.SyncLinkPath(s2/link)`.
 **Expected:** an unresolved record for `outside/`, and the link untracked.
 **Fire alarm:** delete the proposal arm of `SyncLinkPath`. Confirm red.
+**Inject:** db.go:SyncLinkPath
 **Refs:** crc-DB.md, crc-Store.md
 
 ## Test: creating a symlink does not change the canonical file set
@@ -278,6 +285,7 @@ chain with `readlink`, which does not stat the target. Falling back to the
 literal is the **cycle** case, below.
 **Fire alarm:** replace the prefix walk with a leaf-only lookup — the pre-fix
 shape — and confirm the mid-path case goes red.
+**Inject:** links.go:ResolveVia
 **Refs:** crc-LinkTable.md, crc-DB.md, crc-Searcher.md, specs/symlinks.md,
 R3359, R3360, R3361, R3362
 **Code:** links_test.go
@@ -306,6 +314,7 @@ see this.
 cloning and swapping, and confirm `-race` reports an actual `DATA RACE`. That
 is the point of the whole design, and it is not visible any other way — the
 test passes without the detector.
+**Inject:** links.go:mutate
 **Refs:** crc-LinkTable.md, specs/db-concurrency.md, R3359
 **Code:** links_test.go
 
@@ -336,8 +345,10 @@ measurement of this same defect proved nothing because both spellings
 returned nothing and the corpus simply was not matching.
 **Fire alarm:** delete the resolution from `BuildChunkFilters` and confirm
 the alias glob and the alias exact path both go red while the control stays
-green. **Pulled 2026-08-03: rang** — both alias assertions reported "found 0
-results", the control passed, and the restore was byte-clean.
+green.
+**Inject:** search.go:BuildChunkFilters
+**Pulled:** 2026-08-03 — rang: both alias assertions reported "found 0 results",
+the control passed, and the restore was byte-clean.
 **Refs:** crc-Searcher.md, seq-filter-stack.md, specs/symlinks.md, R3359,
 R3362, R3400
 **Code:** links_test.go
@@ -363,9 +374,10 @@ the `withFTS`/extmap note).
 **Fire alarm:** make `handleFilesExpand` return `req.Paths` unchanged — the
 shape this door had while O212 was open — and confirm the test goes red. The
 property is invisible when absent: an unexpanded answer under a `--links`
-banner is byte-identical to what the default view returns. **Pulled
-2026-08-05: rang**, printing both sets (`[s1/target.md s2/link/target.md]` vs
-`[s1/target.md]`), and the restore was byte-clean.
+banner is byte-identical to what the default view returns.
+**Inject:** server.go:handleFilesExpand
+**Pulled:** 2026-08-05 — rang, printing both sets
+(`[s1/target.md s2/link/target.md]` vs `[s1/target.md]`); restore was byte-clean.
 **Refs:** crc-Server.md, crc-LinkTable.md, specs/symlinks.md, R3378, R3379
 **Code:** link_view_test.go
 
@@ -389,9 +401,10 @@ that made an earlier O204 measurement vacuous.
 **Fire alarm:** delete the `ResolvePattern` loop in `handleFilesStatus` and
 confirm the alias case goes red while the control stays green. Invisible when
 absent: an alias query that resolves nothing returns an empty listing, which
-reads exactly like a pattern that genuinely matches no file. **Pulled
-2026-08-05: rang** — the alias spelling answered `[]`, the control passed,
-and the restore was byte-clean.
+reads exactly like a pattern that genuinely matches no file.
+**Inject:** server.go:handleFilesStatus
+**Pulled:** 2026-08-05 — rang: the alias spelling answered `[]`, the control
+passed, and the restore was byte-clean.
 **Not covered here:** the cold door's half of R3376, which runs through
 `canonicalizePatterns` in `cmd/ark/link_view.go` and needs a whole `*DB` plus
 a CLI invocation to drive. It is also the door whose *matcher* differs from
