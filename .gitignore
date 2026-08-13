@@ -24,3 +24,4 @@ node_modules
 /tag-overview/dist/
 /luhmann-terminal/dist/
 /release/
+/.minispec/backup

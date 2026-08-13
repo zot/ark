@@ -10,3 +10,4 @@
 # (The built-in ` -->` closer is retained and stripped best-effort on read.)
 comment_patterns:
   .html: "<!--\\s*|//\\s*|/\\*\\s*"
+track: private-trajectory
