@@ -15,7 +15,7 @@ where the markings on a line disagree.
 
 - [x] ~~**Item 1 — the Go substrate: listing, pairing, the Lua surface.**~~ **LANDED (2026-07-28 — `#73`.)**
       Behavior is canonical in `specs/chat-transcript.md` as R3284–R3292.
-- [ ] **Item 2 — the Frictionless chat panel** (`/ui-thorough`). **OPEN (#71.)**
+- [ ] **Item 2 — the Frictionless chat panel (`/ui-thorough`).** **OPEN (#71.)**
       The substrate is ready and the panel must use it, through
       `mcp.chatSessions` / `mcp.chatTranscript` rather than shelling out; going
       through the bindings is what makes R3291's no-drift guarantee real and

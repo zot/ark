@@ -21,7 +21,7 @@ does not.
       the most misreadable line here: the broken bootstrap *path* was repaired,
       which is the symptom — a failed bootstrap *stopping* the agent is a
       different requirement and is not built.
-- [x] ~~**Item 5 — the verification tiers** (R3382, R3384–R3388).~~ **LANDED (`4c6e974`, 2026-08-04.)**
+- [x] ~~**Item 5 — the verification tiers (R3382, R3384–R3388).**~~ **LANDED (`4c6e974`, 2026-08-04.)**
       Postdates the split below, which is why it appears in no item description
       there.
 - [x] ~~**Item 6 — the CLI `--links` / `--nolinks` selector.**~~ **LANDED (`cd70fce`, 2026-08-05.)**

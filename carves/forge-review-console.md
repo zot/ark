@@ -9,18 +9,18 @@ where the markings on a line disagree. *Note that `Item N` here and the numbered
 sections of `## The carve` below are different sequences — prose saying "carve 1"
 means the latter.*
 
-- [x] ~~**Item 1 — expose the ledger** (`/mini-spec`).~~ **LANDED (`aea5e9e`, fossil `01c46fb8`, 2026-07-26 — `#67`.)**
+- [x] ~~**Item 1 — expose the ledger (`/mini-spec`).**~~ **LANDED (`aea5e9e`, fossil `01c46fb8`, 2026-07-26 — `#67`.)**
       R3252–R3262, verified live end to end. **One caveat that is not a
       checkbox:** the three Lua bindings are **NOT VERIFIED** — reaching a
       registered binding needs `srv.uiRuntime`. Banked as O174, and Item 2 is
       what will exercise them.
-- [ ] **Item 2 — the review console as a Tag Forge tab** (`/ui-thorough`). **OPEN (#9.)**
+- [ ] **Item 2 — the review console as a Tag Forge tab (`/ui-thorough`).** **OPEN (#9.)**
       Hydration into the widget stack, the amend/commit pair, the pending and
       rejected tabs, ranking. The UI has not started.
-- [ ] **Item 3 — RC doc-drift audit** (`/mini-spec`). **OPEN (#68.)**
-- [ ] **Item 4 — tvid and chunkid cleanup audit across the record classes** (`/mini-spec`). **OPEN (#69.)**
+- [ ] **Item 3 — RC doc-drift audit (`/mini-spec`).** **OPEN (#68.)**
+- [ ] **Item 4 — tvid and chunkid cleanup audit across the record classes (`/mini-spec`).** **OPEN (#69.)**
       Against the invariant in carve 1.
-- [ ] **Item 5 — EV cleanup on tvid removal** (`/mini-spec`). **OPEN (#70.)**
+- [ ] **Item 5 — EV cleanup on tvid removal (`/mini-spec`).** **OPEN (#70.)**
 
 The Tag Forge is where a person works on their tags. This carve works out how
 it also becomes where they *review* what agents have proposed, and how that job

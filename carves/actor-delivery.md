@@ -13,14 +13,14 @@ restoring it, and the redesign that turns out to be the right way to do so.
 The checkbox is authoritative where the markings on a line disagree. Banked
 gaps carry no checkbox, the way an approved gap does not.
 
-- [x] ~~**Item 1 — `ChanSvc` and the three actors** (`/mini-spec`).~~ **LANDED (`51d3418`, 2026-07-31.)**
+- [x] ~~**Item 1 — `ChanSvc` and the three actors (`/mini-spec`).**~~ **LANDED (`51d3418`, 2026-07-31.)**
       R3344–R3350, with `crc-ChanSvc.md` and `test-ChanSvc.md` as new artifacts.
       The ordering tests were verified to *fail* under the old spawned sender
       before being accepted.
-- [x] ~~**Item 2 — tell ui-engine** (`ark-messenger`).~~ **SENT (2026-08-01.)**
+- [x] ~~**Item 2 — tell ui-engine (`ark-messenger`).**~~ **SENT (2026-08-01.)**
       A cross-project message rather than a change made from this repo, so it
       lands as *sent* rather than as a commit here.
-- [ ] **Item 3 — cost** (deferred; `/mini-spec` if taken). **DEFERRED**, not
+- [ ] **Item 3 — cost (`/mini-spec` if taken).** **DEFERRED**, not
       merely unstarted — the capacity half was settled by Item 1's DECIDED, and
       what remains is an unmeasured cost question nobody has needed answered.
 - **O191** — the operation-object audit surface reaches only part of the read
