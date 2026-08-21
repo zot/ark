@@ -8,23 +8,15 @@ like one project and is actually two, with an order-of-magnitude between them.
 Opened 2026-07-25 as a working note. Promoted here 2026-07-28, when the fork
 below was settled and the document stopped being a brainstorm.
 
-| Part | Status |
-|---|---|
-| The fork: second renderer vs API client | **DECIDED** 2026-07-28 — client (b) |
-| #72 — build the TUI, first screen first | Open (`/mini-spec`) |
-| Whether Lua is earned | Deliberately deferred |
-
----
-
 ## Status
 
 One part, not yet started. The fork below is **settled**, so what remains is
 building rather than deciding.
 
-- [ ] **#72 `/mini-spec`** — the TUI itself: a Go+Charm client over ark's own
-      API. **OPEN, not started.** The second-renderer fork is DECIDED (Bill,
-      2026-07-28) in favour of (b), so the design question this carve opened is
-      closed and only the work is outstanding.
+- [ ] **Item 1 — the TUI itself: a Go+Charm client over ark's own API** (`/mini-spec`). **OPEN (#72.)**
+      The second-renderer fork is DECIDED (Bill, 2026-07-28) in favour of (b), so
+      the design question this carve opened is closed and only the work is
+      outstanding.
 
 ## The fork
 
@@ -90,9 +82,10 @@ the chat-list screen.
 
 ## Open questions
 
-- Does the TUI talk to a running server, or work standalone against the DB the
-  way the CLI does? `ark status` already distinguishes server-required verbs, so
-  the distinction exists to be inherited rather than invented.
-- One binary or two? An `ark tui` subcommand keeps the install story at one file,
-  which is the self-contained-tool property the rest of the project holds to.
-- Unix socket or HTTP port? Ark listens on both, for different callers.
+- [ ] **1. Does the TUI talk to a running server, or work standalone against the
+  DB the way the CLI does?** `ark status` already distinguishes server-required
+  verbs, so the distinction exists to be inherited rather than invented.
+- [ ] **2. One binary or two?** An `ark tui` subcommand keeps the install story at
+  one file, which is the self-contained-tool property the rest of the project
+  holds to.
+- [ ] **3. Unix socket or HTTP port?** Ark listens on both, for different callers.

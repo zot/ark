@@ -13,13 +13,13 @@ restoring it, and the redesign that turns out to be the right way to do so.
 The checkbox is authoritative where the markings on a line disagree. Banked
 gaps carry no checkbox, the way an approved gap does not.
 
-- [x] ~~**Item 1 — `ChanSvc` and the three actors** (`/mini-spec`).~~
-      **LANDED (`51d3418`, 2026-07-31.)** R3344–R3350, with `crc-ChanSvc.md`
-      and `test-ChanSvc.md` as new artifacts. The ordering tests were verified
-      to *fail* under the old spawned sender before being accepted.
-- [x] ~~**Item 2 — tell ui-engine** (`ark-messenger`).~~
-      **SENT (2026-08-01.)** A cross-project message rather than a change made
-      from this repo, so it lands as *sent* rather than as a commit here.
+- [x] ~~**Item 1 — `ChanSvc` and the three actors** (`/mini-spec`).~~ **LANDED (`51d3418`, 2026-07-31.)**
+      R3344–R3350, with `crc-ChanSvc.md` and `test-ChanSvc.md` as new artifacts.
+      The ordering tests were verified to *fail* under the old spawned sender
+      before being accepted.
+- [x] ~~**Item 2 — tell ui-engine** (`ark-messenger`).~~ **SENT (2026-08-01.)**
+      A cross-project message rather than a change made from this repo, so it
+      lands as *sent* rather than as a commit here.
 - [ ] **Item 3 — cost** (deferred; `/mini-spec` if taken). **DEFERRED**, not
       merely unstarted — the capacity half was settled by Item 1's DECIDED, and
       what remains is an unmeasured cost question nobody has needed answered.
@@ -292,16 +292,16 @@ queue wants a depth warning is open.
 
 ## Open questions
 
-- **Channel capacity**, now that the loop cannot be held. A very small buffer may
-  be sufficient, since the queue absorbs the backlog.
-- **Should the internal queue be bounded, or report depth?** It replaces
+- [ ] **1. Channel capacity**, now that the loop cannot be held. A very small
+  buffer may be sufficient, since the queue absorbs the backlog.
+- [ ] **2. Should the internal queue be bounded, or report depth?** It replaces
   unbounded parked goroutines with an unbounded slice, which is strictly cheaper
   but still unbounded.
-- **Is the goroutine-per-closure cost acceptable on the hot path**, or does the
-  DB actor's closure mix skew small enough to want an inline fast path? An inline
-  path reintroduces head-of-line blocking, so the answer is probably "accept,"
-  but it should be measured rather than assumed.
-- **A better name**, for the carve and for the guarantee itself.
+- [ ] **3. Is the goroutine-per-closure cost acceptable on the hot path**, or does
+  the DB actor's closure mix skew small enough to want an inline fast path? An
+  inline path reintroduces head-of-line blocking, so the answer is probably
+  "accept," but it should be measured rather than assumed.
+- [ ] **4. A better name**, for the carve and for the guarantee itself.
 
 ## Where decisions go as parts land
 

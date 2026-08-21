@@ -27,18 +27,18 @@ Nothing here has started; this carve is still a discussion (#95), and the parts
 below are its shape rather than a committed split. The checkbox is
 authoritative.
 
-- **Part A — the addressing.** Already in place, and not work: a secretary's
+- **Item 1 — the addressing.** Already in place, and not work: a secretary's
   tube is `<luhmann-session>-<nonce>` (R3032), so two seats' pools namespace
   apart with no collision. Built for routing rather than scale-out, but it
   anticipates it. Carries no checkbox because there is nothing to do.
-- [ ] **Part B — a second seat currently adds no capacity.** **OPEN, not
-      started.** `pool_max` is checked against the watcher's per-class roster,
-      which is **global rather than per-owner**, so two seats would share one
-      budget of three `recall`-class secretaries between them.
-- [ ] **Part C — top-level Haiku workers for bursty load.** **OPEN, not
-      started.** Proposed by Bill, 2026-07-29: the lotto tube does not require
-      its consumer to be a subagent, so a top-level Haiku session could take
-      work the same way, likely cheaper for infrequent high-intensity bursts.
+- [ ] **Item 2 — a second seat currently adds no capacity.** **OPEN (not queued.)**
+      `pool_max` is checked against the watcher's per-class roster, which is
+      **global rather than per-owner**, so two seats would share one budget of
+      three `recall`-class secretaries between them.
+- [ ] **Item 3 — top-level Haiku workers for bursty load.** **OPEN (not queued.)**
+      Proposed by Bill, 2026-07-29: the lotto tube does not require its consumer
+      to be a subagent, so a top-level Haiku session could take work the same
+      way, likely cheaper for infrequent high-intensity bursts.
 
 ## The shape it already has
 
@@ -102,7 +102,7 @@ tiers in the same component. That is mostly good — one place reasons about
 occupancy — but it makes the Fixer the only thing that understands the whole
 topology, and that should be a choice rather than a side effect.
 
-## Part B: a second seat currently adds no capacity
+## Item 2: a second seat currently adds no capacity
 
 `pool_max` is checked against `len(pool.secretaries)` on the watcher's per-class
 roster, which is **global rather than per-owner**. Two seats would share one
@@ -115,7 +115,7 @@ per-seat means each orchestrator gets its own pool the way Blend gave each
 process its own sessions. What is not defensible is arriving at one of them by
 accident, which is the current state.
 
-## Part C: top-level Haiku workers for bursty load
+## Item 3: top-level Haiku workers for bursty load
 
 **Proposed by Bill, 2026-07-29.** The lotto tube does not require its consumer
 to be a subagent. A **top-level** Haiku session could take work the same way, and
@@ -212,17 +212,17 @@ opened to correct and then had to correct twice in its own write-up.
 
 ## Open questions
 
-- **What selects a seat?** Least-loaded, round-robin, affinity by originating
-  session, or by class (one seat per pool class)? Affinity has a real argument:
-  a hunt's curation is better if the curator has seen that session's earlier
-  hunts.
-- **Who curates a return when the spawning seat is gone?** A secretary outlives
-  a bounce of its owner's session today only by accident. With several seats,
-  "the seat that spawned it" and "a seat that can curate it" come apart.
-- **Does a top-level worker use the same lotto tube verb, or its own?** The
-  crank handle currently tells a secretary to call `recall next --session <S>
+- [ ] **1. What selects a seat?** Least-loaded, round-robin, affinity by
+  originating session, or by class (one seat per pool class)? Affinity has a real
+  argument: a hunt's curation is better if the curator has seen that session's
+  earlier hunts.
+- [ ] **2. Who curates a return when the spawning seat is gone?** A secretary
+  outlives a bounce of its owner's session today only by accident. With several
+  seats, "the seat that spawned it" and "a seat that can curate it" come apart.
+- [ ] **3. Does a top-level worker use the same lotto tube verb, or its own?**
+  The crank handle currently tells a secretary to call `recall next --session <S>
   <N>`. A top-level worker's loop shape differs — it ends its turn rather than
   blocking — so the crank handle's next-command may need a second form.
-- **Is `pool_max` even the right knob for a mixed fleet?** With subagent
-  secretaries and top-level workers serving the same classes, a single count
-  caps two things with different cost shapes.
+- [ ] **4. Is `pool_max` even the right knob for a mixed fleet?** With subagent
+  secretaries and top-level workers serving the same classes, a single count caps
+  two things with different cost shapes.

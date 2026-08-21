@@ -21,16 +21,16 @@ does not.
       the most misreadable line here: the broken bootstrap *path* was repaired,
       which is the symptom — a failed bootstrap *stopping* the agent is a
       different requirement and is not built.
-- [x] ~~**Item 5 — the verification tiers** (R3382, R3384–R3388).~~
-      **LANDED (`4c6e974`, 2026-08-04.)** Postdates the split below, which is
-      why it appears in no item description there.
-- [x] ~~**Item 6 — the CLI `--links` / `--nolinks` selector.**~~
-      **LANDED (`cd70fce`, 2026-08-05.)** R3375–R3380 all carry code
-      references now, and the two designed cases riding on it are written.
-      Left behind: **O213**, the two `--status` doors matching with different
-      semantics — found because R3376 had to be written once per door.
-- [ ] **Item 7 — search results and `/content` can disagree about a moved
-      routing.** **OPEN (#120.)** Behavioural, not merely unproven.
+- [x] ~~**Item 5 — the verification tiers** (R3382, R3384–R3388).~~ **LANDED (`4c6e974`, 2026-08-04.)**
+      Postdates the split below, which is why it appears in no item description
+      there.
+- [x] ~~**Item 6 — the CLI `--links` / `--nolinks` selector.**~~ **LANDED (`cd70fce`, 2026-08-05.)**
+      R3375–R3380 all carry code references now, and the two designed cases
+      riding on it are written. Left behind: **O213**, the two `--status` doors
+      matching with different semantics — found because R3376 had to be written
+      once per door.
+- [ ] **Item 7 — search results and `/content` can disagree about a moved routing.** **OPEN (#120.)**
+      Behavioural, not merely unproven.
 - [ ] **Item 8 — a test harness that builds a whole `*DB`.** **OPEN (#121.)**
       Three gaps now want it — O199, O203, O210 — where two did before.
 - **O196 — the watch-loop filter's two escaping transitions.** Accepted residue,
@@ -350,11 +350,11 @@ A directory symlink that is not descended into should leave a trace.
 
 ## Open forks
 
-- **Tie-break when both names lie inside sources.** The canonical-name rule
-  above is silent on it. First source in config order, shortest path, and
+- [ ] **1. Tie-break when both names lie inside sources.** The canonical-name
+  rule above is silent on it. First source in config order, shortest path, and
   source declaration order are all defensible and none is obviously right.
-~~**Chains: record each hop, or the resolved endpoint?**~~ **DECIDED (Bill,
-2026-08-01): record each hop.** The fork was framed as faithfulness versus
+- [x] ~~**2. Chains: record each hop, or the resolved endpoint?**~~ **DECIDED (Bill,
+  2026-08-01): record each hop.** The fork was framed as faithfulness versus
 lookup cost, and that framing was wrong — the real reason is that an endpoint
 alone is **unhealable**. For `a → b → c`, repointing the middle link changes
 what `a` resolves to while leaving *both ends untouched*: the name the user
@@ -364,13 +364,13 @@ The information needed to notice is precisely what endpoint-only storage
 discards. Recorded hops make the link set a dependency graph, so a changed
 link invalidates every resolution running through it. R3369, with R3367
 covering the `@ext` anchor case.
-- **Whose include/exclude rules apply** when a file becomes reachable from two
-  sources with different patterns? Unanswerable today because it cannot
+- [ ] **3. Whose include/exclude rules apply** when a file becomes reachable from
+  two sources with different patterns? Unanswerable today because it cannot
   happen. It can as soon as links are recorded.
-- **When does a recorded link go stale?** A target can be repointed without
+- [ ] **4. When does a recorded link go stale?** A target can be repointed without
   either file changing. `lstat` mtime tracks the link itself, so a repoint is
   detectable, but only if something looks. Scan-time only, or watched?
-- **Does the error message split belong here or on its own?** The current
+- [ ] **5. Does the error message split belong here or on its own?** The current
   `not indexed: <path>` conflates three situations — file absent, file present
   but in no source, and file indexed under a different name. Haiku could not
   distinguish them and neither could a human without running `ark files`. That

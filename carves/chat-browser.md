@@ -10,14 +10,13 @@ landed and it became the record two queue items point at.
 
 ## Status
 
-Keyed by queue item. The checkbox is authoritative where the markings on a line
-disagree.
+Keyed `Item N`; the queue ID rides in the marker. The checkbox is authoritative
+where the markings on a line disagree.
 
-- [x] ~~**#73** — the Go substrate: listing, pairing, the Lua surface.~~
-      **LANDED (2026-07-28.)** Behavior is canonical in
-      `specs/chat-transcript.md` as R3284–R3292.
-- [ ] **#71 `/ui-thorough`** — the Frictionless chat panel. **OPEN.** The
-      substrate is ready and the panel must use it, through
+- [x] ~~**Item 1 — the Go substrate: listing, pairing, the Lua surface.**~~ **LANDED (2026-07-28 — `#73`.)**
+      Behavior is canonical in `specs/chat-transcript.md` as R3284–R3292.
+- [ ] **Item 2 — the Frictionless chat panel** (`/ui-thorough`). **OPEN (#71.)**
+      The substrate is ready and the panel must use it, through
       `mcp.chatSessions` / `mcp.chatTranscript` rather than shelling out; going
       through the bindings is what makes R3291's no-drift guarantee real and
       discharges gap **O177**.
@@ -133,7 +132,7 @@ UI runtime — the lua-VM-to-binding hop — is gap **O177** rather than a fake.
 
 ## Open part
 
-### #71 — the Frictionless chat panel (`/ui-thorough`)
+### Item 2 — the Frictionless chat panel (`/ui-thorough`)
 
 Select a source, get a tab listing that project's conversations newest first,
 each openable into the rendered transcript.
