@@ -134,6 +134,35 @@ suppressed, and because it also had no non-server path, its default output form
 could not succeed in **either** state: with a server it hit the lock, without
 one it refused at the door.
 
+## A path argument is resolved on the client, not the server
+
+A path argument names a file relative to *the caller's* working directory.
+The server has its own, and under `ark serve` it is `~/.ark`, never the
+directory the user ran the command from. So a relative path that crosses the
+socket unchanged is resolved against the wrong directory. The index stores
+absolute paths, so the lookup misses — reporting "not indexed" against a path
+the user never typed — and a command that opens the file instead reads the
+wrong file or none.
+
+The caller's cwd is the client's to know, and by the time the request reaches
+the server it is gone. So the client absolutizes every filesystem path
+argument against its own cwd before sending it, and the server receives only
+absolute paths. `fetch` was the case that proved it: `ark fetch --wrap
+knowledge requests/foo.md` run from a project directory came back `404 not
+indexed: /home/deck/requests/foo.md`, the server having joined the relative
+path to `~`.
+
+One client helper applies the rule at the proxy boundary. It holds for every
+proxied argument that names a specific file: `fetch`, `chunks` (and `chunks
+-anchor`), `tag chunk` / `tag get -all` and `tag inspect --target`, `config
+why`, `schedule change`, and `add`. Two kinds of argument are left untouched.
+A `tmp://` argument is a virtual key rather than a filesystem path. A
+glob-pattern argument (`remove`, the search `-files` / `-exclude-files`
+filters) is matched by the matcher against the already-absolute indexed paths,
+where a blanket absolutization would change its meaning. The local-dispatch
+arm is unaffected: it already resolves against the client's cwd, and
+`filepath.Abs` on an already-absolute path is a no-op.
+
 ## Server endpoints behind the proxy
 
 Commands that work concurrently with a running server proxy to a

@@ -3,6 +3,7 @@ name: luhmann-researcher
 description: "Slow-path Luhmann role for ark — exploratory research, connection-finding, audit work. Spawn via Task from any session when you want a Sonnet-grade investigation that reads broadly across the corpus, tries multiple angles, and writes a findings directory under .scratch/luhmann/<topic-slug>/. Not for fast lookups (use Hermes) and not for hosting the recall loop (use the /luhmann orchestrator skill)."
 tools: Bash, Read, Grep, Glob, Write, Edit
 model: sonnet
+effort: high
 color: blue
 ---
 

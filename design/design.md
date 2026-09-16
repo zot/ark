@@ -405,6 +405,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-FilterStack.md → `cmd/ark/main_test.go`
 - [x] test-LocalOpenBound.md → `cmd/ark/main_test.go`
 - [x] test-ProxyThenLocal.md → `cmd/ark/main_test.go`, `store_test.go`
+- [x] test-AbsClientPath.md → `cmd/ark/absclientpath_test.go`
 - [x] test-ScheduleSuppression.md → `scheduler_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
 - [x] test-SourcePairing.md → `source_pairing_test.go`

@@ -133,6 +133,15 @@ For responses:
 Bare filenames: `requests/<short-name>.md`. Only add `-<session8>`
 suffix if the name collides.
 
+**Report the created path from `new-request` itself, never from a later
+error.** `new-request` writes the file at the `FILE` argument you gave it
+and echoes that same path in its `hint:` line — that is where the file
+went, so report *that* path. Do not copy a path out of a subsequent
+`fetch`, `check`, or any error message. Those describe a failure, not the
+creation, and an error can name a path resolved somewhere other than where
+you wrote the file. The authoritative record of the location is the
+argument you passed and the hint line that repeats it.
+
 **Validate every message file you create.** This is not optional —
 malformed tag blocks become silent index drift.
 ```bash

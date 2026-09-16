@@ -3,6 +3,7 @@ name: ark-connections
 description: "Find Connections sidecar. Runs the lotto tube loop for the curation view: reads pinned chunks, proposes themes and shared-tag candidates with evidence chunk IDs, posts results. Invoke when find-connections should be active."
 tools: Bash
 model: haiku
+effort: low
 memory: local
 hooks:
   PreToolUse:

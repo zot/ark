@@ -3,6 +3,7 @@ name: ark-messenger
 description: "Manage cross-project messages. Use when the user needs to send/locate/manage messages between projects."
 tools: Bash, Read, Write
 model: haiku
+effort: low
 color: blue
 memory: local
 hooks:

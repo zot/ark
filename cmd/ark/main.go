@@ -465,6 +465,27 @@ func proxyOK(client *http.Client, method, path string, body any) error {
 	return err
 }
 
+// absClientPath resolves a filesystem path argument against the client's
+// working directory before it crosses the socket. The server resolves a
+// relative path against ITS own cwd (`~/.ark` under `ark serve`), not the
+// caller's, so a relative path sent as-is is looked up under the wrong
+// directory — the index stores absolute paths, so the lookup misses, or a
+// bare open reads the wrong file. Empty strings and tmp:// paths are
+// returned unchanged: "" would resolve to the cwd, and a tmp:// path is a
+// virtual key rather than a filesystem path. filepath.Abs is idempotent, so
+// an already-absolute path is unchanged and the local-dispatch arm — which
+// already resolves against the client cwd — is unaffected.
+// CRC: crc-CLI.md | R3403
+func absClientPath(p string) string {
+	if p == "" || strings.HasPrefix(p, "tmp://") {
+		return p
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
@@ -778,8 +799,14 @@ Options:`)
 
 	proxyOrLocal(
 		func(client *http.Client) error {
+			// R3403: absolutize each path against the client cwd before it
+			// crosses the socket; the server's Add stats against its own cwd.
+			absPaths := make([]string, len(paths))
+			for i, p := range paths {
+				absPaths[i] = absClientPath(p)
+			}
 			if err := proxyOK(client, "POST", "/add", map[string]any{
-				"paths": paths, "strategy": *strategy,
+				"paths": absPaths, "strategy": *strategy,
 			}); err != nil {
 				return err
 			}
@@ -3418,11 +3445,7 @@ func cmdFetch(args []string) {
 	}
 
 	emit := func(source, content string) {
-		if !strings.HasPrefix(source, "tmp://") {
-			if abs, err := filepath.Abs(source); err == nil {
-				source = abs
-			}
-		}
+		source = absClientPath(source) // R3403
 		// CRC: crc-CLI.md | R178 — ark fetch --wrap <name> (files/fetch form: source attr, no range).
 		if *wrap != "" {
 			fmt.Printf("<%s source=%q>\n", *wrap, source)
@@ -3435,7 +3458,9 @@ func cmdFetch(args []string) {
 
 	if client := serverClient(arkDir); client != nil {
 		for _, filePath := range paths {
-			data, err := proxyRaw(client, "POST", "/fetch", map[string]string{"path": filePath})
+			// R3403: absolutize against the client cwd; the server resolves
+			// a relative path against its own (`~/.ark`), not the caller's.
+			data, err := proxyRaw(client, "POST", "/fetch", map[string]string{"path": absClientPath(filePath)})
 			if err != nil {
 				fatal(err)
 			}
@@ -3553,7 +3578,7 @@ Options:`)
 		func(client *http.Client) error {
 			var res ark.ChunkFetchResult
 			if err := proxyDecode(client, "POST", "/chunks", map[string]any{
-				"path": filePath, "range": chunkRange, "anchor": anchor,
+				"path": absClientPath(filePath), "range": chunkRange, "anchor": anchor, // R3403
 				"before": *before, "after": *after,
 			}, &res); err != nil {
 				return err
@@ -3590,7 +3615,7 @@ func cmdChunksAnchor(args []string) {
 				Target string `json:"target"`
 			}
 			if err := proxyDecode(client, "POST", "/chunks/anchor", map[string]any{
-				"path": filePath, "range": chunkRange,
+				"path": absClientPath(filePath), "range": chunkRange, // R3403
 			}, &res); err != nil {
 				return err
 			}

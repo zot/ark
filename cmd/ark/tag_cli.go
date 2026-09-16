@@ -488,7 +488,7 @@ func tagInspectAction(_ context.Context, c *ucli.Command) error {
 			var rep ark.ExtInspectReport
 			body := map[string]any{"scope": scope}
 			if target != "" {
-				body["target"] = target
+				body["target"] = absClientPath(target) // R3403: resolve the path filter against the client cwd
 			}
 			if err := proxyDecode(client, "POST", "/tags/inspect", body, &rep); err != nil {
 				return err
@@ -564,7 +564,8 @@ func runAllTagsForFile(path string, filter []string) {
 	proxyOrLocal(
 		func(client *http.Client) error {
 			var tvs []ark.TagValue
-			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": path}, &tvs); err != nil {
+			// R3403: absolutize against the client cwd before crossing the socket.
+			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": absClientPath(path)}, &tvs); err != nil {
 				return err
 			}
 			printTagValues(tvs, filter)
@@ -588,7 +589,8 @@ func runAllTagsForChunk(path, rng string) {
 	proxyOrLocal(
 		func(client *http.Client) error {
 			var tvs []ark.TagValue
-			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": path, "range": rng}, &tvs); err != nil {
+			// R3403: absolutize against the client cwd before crossing the socket.
+			if err := proxyDecode(client, "POST", "/tags/chunk", map[string]any{"path": absClientPath(path), "range": rng}, &tvs); err != nil {
 				return err
 			}
 			printTagValues(tvs, nil)

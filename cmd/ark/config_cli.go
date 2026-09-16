@@ -231,7 +231,9 @@ func configShowWhyAction(_ context.Context, c *ucli.Command) error {
 	filePath := c.Args().First()
 	if client := serverClient(arkDir); client != nil {
 		var result ark.WhyResult
-		if err := proxyDecode(client, "POST", "/config/show-why", map[string]string{"path": filePath}, &result); err != nil {
+		// R3403: absolutize against the client cwd; ShowWhy matches the path
+		// against absolute source dirs, so a relative path resolves to nothing.
+		if err := proxyDecode(client, "POST", "/config/show-why", map[string]string{"path": absClientPath(filePath)}, &result); err != nil {
 			fatal(err)
 		}
 		data, _ := json.MarshalIndent(result, "", "  ")

@@ -3,6 +3,7 @@ name: ark-expansion
 description: "Spectral search expansion sidecar. Runs the lotto tube loop, expands tag queries, curates results. Invoke when spectral search should be active."
 tools: Bash
 model: haiku
+effort: low
 memory: local
 hooks:
   PreToolUse:

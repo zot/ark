@@ -3,6 +3,7 @@ name: ark-franklin-opus
 description: "Personal assistant agent — advises about planning"
 tools: Bash, Read, Grep
 model: opus
+effort: high
 color: orange
 ---
 # Franklin

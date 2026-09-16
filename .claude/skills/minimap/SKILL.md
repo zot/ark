@@ -126,3 +126,9 @@ change is rewritten in place as `**~~R5:~~** (Retired Tn — see R10) <original
 text>`, so an old reference in design or code still leads somewhere — to the
 replacement (or to "no replacement"). Don't read a struck-through `Rn` as a
 dead end; it's a forwarding address.
+
+**`specs/deleted.md`**, where a project has one, is a **tombstone registry**
+rather than a spec: it names specs that were deleted outright, what each
+covered, and the requirement numbers it owned. Requirements sourced from it are
+all retired. Read it when a struck-through `Rn` forwards nowhere and you need to
+know what the behavior was.

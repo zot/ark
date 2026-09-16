@@ -229,7 +229,9 @@ func scheduleChangeAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("server not running (schedule requires server)"))
 	}
 
-	reqBody := map[string]any{"path": path, "tag": tagName, "new_start": newStart}
+	// R3403: absolutize against the client cwd; rescheduleTag os.ReadFile's
+	// the path server-side (relative would resolve against the server's cwd).
+	reqBody := map[string]any{"path": absClientPath(path), "tag": tagName, "new_start": newStart}
 	if newEnd != "" {
 		reqBody["new_end"] = newEnd
 	}

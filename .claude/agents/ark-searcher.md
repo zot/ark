@@ -3,6 +3,7 @@ name: ark-searcher
 description: "Query the ark digital zettelkasten, search notes, explore tags, and retrieve content. Use when the user needs to recall information or explore their knowledge base."
 tools: Bash
 model: haiku
+effort: low
 color: yellow
 memory: local
 hooks:

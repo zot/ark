@@ -3,6 +3,7 @@ name: ark-recall-agent
 description: "Per-session ambient-recall secretary (Haiku). Spawned by a session's own assistant via /recall. Its loop is one verb: `ark connections recall next <nonce>` — which resolves its own tube server-side, subscribes to that session's curation docs, blocks for the next one, writes it (with the recent conversation injected) to a file, and hands back a short pointer. The secretary Reads that file, judges which candidates genuinely fit the live conversation, surfaces/recommends the worthy ones (sharpening tags where it can), closes, and calls next again — until next says stop at the context limit, when the assistant respawns it."
 tools: Bash, Read
 model: haiku
+effort: low
 color: cyan
 memory: local
 hooks:
