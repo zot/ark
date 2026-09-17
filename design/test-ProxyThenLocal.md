@@ -28,6 +28,7 @@ are one table.
   `localChunks` is false; this is the case that used to hang.
 - server up, plain → proxy, no chunk work at all.
 - no server → one local open answers everything, `--tokenize` allowed.
+**Alarm:** 1
 **Fire alarm:** make the `serverUp && wantChunks` case return `localChunks:
 true` — the literal pre-repair behaviour — and confirm the table goes red on
 that row and only that row. A change that reintroduces the defect cannot be
@@ -50,6 +51,7 @@ conversion `Status()` delegates to. Asserted at the Store rather than through
 **Expected:** both conditions come back, keyed by name, each carrying its text
 (a name with no text tells the user nothing to do, R1566). Empty map, not a
 nil-crash, on a fresh store, so R1567's "nothing extra is printed" still holds.
+**Alarm:** 2
 **Fire alarm:** make the conversion drop its values and confirm red. This is the
 one that would otherwise pass by default — a status carrying no warnings looks
 exactly like a healthy index, which is the whole reason the old arrangement went
@@ -71,6 +73,7 @@ calls `proxyDecode` / `proxyRaw` / `proxyOK` and tests `err == nil`. Comments ar
 stripped first: the prose here describes the trap, and only code sets it.
 **Expected:** zero occurrences. A hit names the file and line, and says what to
 use instead and why.
+**Alarm:** 3
 **Fire alarm:** put the literal pre-repair line back into `message inbox` and
 confirm this goes red naming that file. Chosen over `search` deliberately —
 inbox is the site the `#115` audit could never make fail, because nothing would

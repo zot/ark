@@ -27,6 +27,7 @@ non-symlink reasons keep the ordinary test in both directions.
 exists*. Without that, "dead" would be consistent with the old code having
 simply found a missing path, and the case would prove nothing about which path
 was tested.
+**Alarm:** 1
 **Fire alarm:** disable the symlink branch so liveness asks the target again —
 the literal pre-fix logic — and confirm the repoint and delete cases go red
 while the rest stay green.
@@ -43,6 +44,7 @@ that does not name its link cannot be withdrawn or promoted.
 **Input:** a symlink-reason record with a proposer, stored and read back.
 **Expected:** reason and proposer survive the round trip; `FirstSeen` is
 stamped by the writer so no caller has to remember.
+**Alarm:** 2
 **Fire alarm:** rebuild the record from path and dir alone before storing —
 what the two-argument form did — and confirm both fields come back empty.
 **Inject:** store.go:AddUnresolved
@@ -61,6 +63,7 @@ zero-bearing cases.
 user works through them, patterns then chunkers then sources — with zero-count
 reasons omitted, because a zero is noise rather than information. A map whose
 counts are all zero reads as nothing at all.
+**Alarm:** 3
 **Fire alarm:** return the empty string unconditionally, which is the bare
 total the line used to carry, and confirm every non-empty row goes red.
 **Inject:** cmd/ark/main.go:formatUnresolvedReasons

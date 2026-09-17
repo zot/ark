@@ -408,6 +408,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-AbsClientPath.md → `cmd/ark/absclientpath_test.go`
 - [x] test-ScheduleSuppression.md → `scheduler_test.go`
 - [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
+- [x] test-InboxTree.md → `cmd/ark/message_cli_test.go`
 - [x] test-SourcePairing.md → `source_pairing_test.go`
 - [x] test-ConnectionsCLI.md → `cmd/ark/main_test.go`
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`

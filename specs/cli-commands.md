@@ -983,7 +983,7 @@ ark message new-response  --from P --to P --request ID [--content BODY | --conte
 ark message set-tags      FILE TAG VAL [TAG VAL ...]
 ark message get-tags      FILE [TAG ...]
 ark message check         FILE
-ark message inbox         [--project P] [--to P] [--from P] [--all] [--include-archived] [--counts] [--unmatched]
+ark message inbox         [--project P] [--to P] [--from P] [--all] [--include-archived] [--compact] [--counts] [--unmatched]
 ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] [--subject TEXT] [--ref ID] --content TEXT
 ```
 
@@ -1006,21 +1006,35 @@ ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] 
 | `--from P`           | —       | Filter by `from-project`                                    |
 | `--all`              | `false` | Include `completed`/`denied` messages in the display (they are always considered for pair lookup) |
 | `--include-archived` | `false` | Include `@archived: true` messages                          |
-| `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows                |
+| `--compact`          | `false` | Legacy tab-separated output instead of the markdown tree    |
+| `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows (takes precedence over the tree and `--compact`) |
 | `--unmatched`        | `false` | Show only requests with no matching response. Pair lookup is global — `--unmatched` combines correctly with `--to`/`--from`. |
 
 Filters combine as intersection: `--from ark --to frictionless`
 shows only the ark→frictionless slice.
 
-Default inbox row is tab-separated:
+**Default output is an agent-readable markdown tree** (the same "baby
+food" style as `ark search -tags`). One bullet per request — its
+status, `from → to`, summary, `@status-date`, and path — with its
+paired response nested beneath (the response's own status, `from →
+to`, `@status-date`, and path). Each side's bookmark lag is stated in
+words ("PROJECT has not handled this response yet" / "PROJECT has not
+handled this request yet"); an unanswered request prints an explicit
+`no response` line. **A response nests under its request even when the
+default completed/denied hide or a directional filter would drop it as
+its own row** — pairing precedes filtering, so this is display-only.
+When no message matches, the tree names the from-/to-projects present
+in the unfiltered set, so a mistyped filter is correctable.
+
+`--compact` emits the legacy tab-separated rows instead, byte-for-byte:
 `DATE STATUS TO FROM SUMMARY PATH LAG`. Lag format
 `lag:PROJECT:STATUS` describes a stale `response-handled` /
 `request-handled` bookmark relative to the counterpart's status.
 
-Pair lookup (used by `--unmatched` and by the LAG column) consults
-the **full inbox**, not the post-filter slice. A directional or
-status filter changes what's *shown*; the matcher always sees both
-sides of a pair. See R2484.
+Pair lookup (used by `--unmatched`, by the nested-response display, and
+by the LAG column / bookmark lines) consults the **full inbox**, not
+the post-filter slice. A directional or status filter changes what's
+*shown*; the matcher always sees both sides of a pair. See R2484.
 
 ### `nano` — embedded shell-agent loop
 

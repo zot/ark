@@ -53,13 +53,23 @@ mechanics.
 
 ### Inbox output
 
-Default output is tab-separated:
+Default output is a **markdown tree** (baby-food style): one bullet per
+request (`- STATUS  FROM → TO  SUMMARY  (DATE)` then its path), with the
+paired response nested beneath on its own `- response: STATUS  FROM → TO
+(DATE)` line, or an explicit `- no response`. **Read a request's answered
+state from the nested line, never from the request's own status** — a
+`completed` reply nests under an `open` request even though the default
+hides completed rows. A bookmark line ("PROJECT has not handled this
+response yet") names who still owes an ack. On an empty result the tree
+lists the from-/to-projects present, so a `minispec`/`mini-spec` typo is
+correctable.
+
+`--compact` gives the legacy tab-separated rows instead:
 ```
 date  status  to-project  from-project  summary  path  lag
 ```
-
-The `lag` field shows bookmark lag (empty when current, otherwise
-`lag:PROJECT:STATUS` showing who is behind and what they haven't handled).
+where `lag` is bookmark lag (empty when current, else `lag:PROJECT:STATUS`).
+`--counts` is unchanged (`status\tcount`).
 
 ## Gotchas
 

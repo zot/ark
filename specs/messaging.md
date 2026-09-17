@@ -245,7 +245,7 @@ can be added by passing heading names to `ark tag check` directly.
 ### inbox
 
 ```
-ark message inbox [--project PROJECT] [--from PROJECT] [--all] [--include-archived] [--counts]
+ark message inbox [--project PROJECT] [--to PROJECT] [--from PROJECT] [--all] [--include-archived] [--compact] [--counts]
 ```
 
 Lists messages. Unlike the other message subcommands, inbox is a
@@ -256,31 +256,59 @@ Finds all indexed files that contain `@status:` tags in `requests/`
 directories, reads each file's tag block, and applies filters.
 
 Filters (all composable):
-- `--project PROJECT`: only messages where `@to-project` matches
+- `--project PROJECT`: only messages where either `@to-project` or `@from-project` matches
+- `--to PROJECT`: only messages where `@to-project` matches
 - `--from PROJECT`: only messages where `@from-project` matches
 - `--all`: include completed/done/denied (default: excluded)
 - `--include-archived`: include `@archived: true` (default: excluded)
+- `--compact`: legacy tab-separated output instead of the tree
 - `--counts`: output status counts instead of individual rows
 
-When `--project` and `--from` are both given, a message must match
-both (intersection).
+When more than one directional filter is given, a message must match
+all of them (intersection).
 
-Output is sorted: `@status:open` messages first, then others. Within
-each group, sorted by file path.
+Output is sorted most-recent first, by each request/response pair's
+latest `@status-date`.
 
-Output format: one line per message, tab-separated:
+**Default output is an agent-readable markdown tree** — the same
+"baby food" style as `ark search -tags` (see
+[tags-baby-food.md](tags-baby-food.md)). One bullet per request,
+carrying its status, `from → to`, issue summary, `@status-date` and
+path, with its paired response nested beneath — the response's own
+status, `from → to`, `@status-date` and path. Each side's bookmark
+lag is stated in words ("PROJECT has not handled this response yet" /
+"PROJECT has not handled this request yet"); a request with no
+response prints an explicit `no response` line.
+
+The response nests under its request **even when the default
+completed/denied hide or a directional filter (`--project`, `--to`,
+`--from`) would drop it as its own row** — pairing happens before
+filtering, so this is a display concern only. This is the property
+that fixes the miss where a completed reply's status was folded into
+a `lag:` suffix on the request's own row and read as absent.
+
+`--compact` emits the legacy tab-separated output instead, one line
+per message, byte-for-byte as before:
 ```
-status	to-project	from-project	issue-or-response	path
+status-date	status	to-project	from-project	summary	path	lag
 ```
+where `lag` is `lag:PROJECT:STATUS` (empty when current). Scripts and
+the dashboard read `--compact`.
 
 With `--counts`, output is one line per status, tab-separated:
 ```
 status	count
 ```
+`--counts` takes precedence over the tree and over `--compact`.
 
-The `issue-or-response` field is the `@issue` value (for requests)
-or `ark-response:<id>` (for responses). If neither tag exists, the
-field is empty.
+The `summary` field is the `@issue` value (for requests) or
+`ark-response:<id>` (for responses). If neither tag exists, the field
+is empty.
+
+When no message matches the filters, the tree output names the from-
+and to-projects present in the unfiltered set, so a mistyped
+`--from`/`--to`/`--project` is correctable rather than a silent empty
+result.
 
 Uses the server proxy when available, falls back to cold-start
 (`withDB`). Read-only operation.

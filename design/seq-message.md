@@ -1,6 +1,6 @@
 # Sequence: ark message subcommands
 
-**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584, R617, R618, R619, R620, R768-R777
+**Requirements:** R450-R478, R489-R501, R525, R530-R540, R580-R584, R617, R618, R619, R620, R768-R777, R3404, R3406, R3407, R3408, R3409, R3410
 
 ## Flow: set-tags
 
@@ -141,11 +141,18 @@ CLI ──> parse flags: --project, --from, --all, --include-archived,
          │
          ├──> sort: @status:open first, then by path
          │
-         ├──> if --counts:
+         ├──> if --counts:                                  ← R3409 (counts wins)
          │      count entries per status value
          │      output tab-separated: status\tcount (sorted alphabetically)
-         │    else:
-         │      output tab-separated lines + lag field      ← R718, R722
+         │    else if --compact:                             ← R3409
+         │      output legacy TSV: date,status,to,from,summary,path,lag
+         │    else if filtered is empty:                     ← R3410
+         │      print from-/to-projects present in unfiltered entries
+         │    else:                                          ← R3404-R3408
+         │      printInboxTree: one bullet per request
+         │        (status, from → to, summary, @status-date, path),
+         │        paired response nested beneath (even if filtered out),
+         │        bookmark lag in words, or `no response`
 ```
 
 ## Flow: mcp.setTags (Lua)

@@ -110,6 +110,7 @@ Its contents are then unreachable with no error and no log line.
 once; neither `s2/link` nor `s2/link/a.txt` in NewFiles. One file keeps
 one index entry while gaining a legal address, because the alias lives on
 the link rather than on each file beneath it.
+**Alarm:** 1
 **Fire alarm:** delete the symlink branch and confirm this goes red. The
 link then falls to the file branch exactly as it does today, which is the
 state the whole feature exists to change.
@@ -137,6 +138,7 @@ a directory holding two real subdirectories and one symlink to one of them.
 directory, the glob pattern (which names no file to lstat) and the missing path
 (the sources check's business, R198) all pass. The glob expansion adds the two
 real directories and not the link.
+**Alarm:** 2
 **Fire alarm:** disable the lstat branch and confirm the first goes red; put
 `os.Stat` back in the expansion — the literal pre-fix line, which follows the
 link so it passes `IsDir()` — and confirm the second reports the link among the
@@ -160,6 +162,7 @@ source, so it starts tracked. Then remove the target's source — the edit a use
 makes in `ark.toml` — rebind, and rebuild.
 **Expected:** the link is no longer tracked and comes back as a proposal naming
 its own path.
+**Alarm:** 3
 **Fire alarm:** make `SetConfig` a no-op and confirm red on both assertions.
 Injected in `links.go` rather than by deleting the call in the test, which only
 produced an unused variable and a *build* failure — a build error is not
@@ -205,6 +208,7 @@ exactly that event.
 answers under `s1b`. Asserting the *new* target rather than merely that
 something changed, because the old answer is a real path that still exists
 and still reads as correct.
+**Alarm:** 4
 **Fire alarm:** return early when `Lookup` already knows the path — the
 "we've seen this link" shortcut, which is the plausible wrong
 implementation. Confirm this goes red; every other test here still passes.
@@ -221,6 +225,7 @@ it can no longer reach.
 **Expected:** the table no longer tracks it, and `Resolve(s2/link/a.md)`
 falls back to the literal address. Not an error — a vanished alias is
 ark's ordinary not-indexed answer (R3361).
+**Alarm:** 5
 **Fire alarm:** drop the `Remove` from the gone branch, returning the status
 alone. Confirm red.
 **Inject:** links.go:SyncPath
@@ -235,6 +240,7 @@ file here, and in both cases has already lost the question it was asked.
 the same path; `SyncPath(s2/link)`.
 **Expected:** untracked, and the path is handed back as not the table's
 business so the caller indexes it as the file it now is.
+**Alarm:** 6
 **Fire alarm:** swap `os.Lstat` for `os.Stat` in `SyncPath`. The repoint test
 above goes red too, which is the point — one wrong call breaks both
 directions.
@@ -249,6 +255,7 @@ disagree about what a link is are worse than one that is consistently wrong.
 **Input:** a DB whose only source is `s2`; create `s2/link` → `outside/`;
 `DB.SyncLinkPath(s2/link)`.
 **Expected:** an unresolved record for `outside/`, and the link untracked.
+**Alarm:** 7
 **Fire alarm:** delete the proposal arm of `SyncLinkPath`. Confirm red.
 **Inject:** db.go:SyncLinkPath
 **Refs:** crc-DB.md, crc-Store.md
@@ -283,6 +290,7 @@ stops being tracked and that resolution falls back to the literal path. Both
 were assumptions rather than the spec's words — `followLinkChain` reads the
 chain with `readlink`, which does not stat the target. Falling back to the
 literal is the **cycle** case, below.
+**Alarm:** 8
 **Fire alarm:** replace the prefix walk with a leaf-only lookup — the pre-fix
 shape — and confirm the mid-path case goes red.
 **Inject:** links.go:ResolveVia
@@ -310,6 +318,7 @@ main goroutine runs every reader — `Resolve`, `ResolvePattern`, `Expand`,
 `Links`, `Len`, `Lookup`. Judged by `-race`, which is the only thing that can
 see this.
 **Expected:** no race, and no torn read.
+**Alarm:** 9
 **Fire alarm:** have `mutate` write the published snapshot in place instead of
 cloning and swapping, and confirm `-race` reports an actual `DATA RACE`. That
 is the point of the whole design, and it is not visible any other way — the
@@ -343,6 +352,7 @@ one-file rig while `-regex` finds the file.
 `t.Fatalf`. Without it every assertion below is vacuous — an earlier
 measurement of this same defect proved nothing because both spellings
 returned nothing and the corpus simply was not matching.
+**Alarm:** 10
 **Fire alarm:** delete the resolution from `BuildChunkFilters` and confirm
 the alias glob and the alias exact path both go red while the control stays
 green.
@@ -371,6 +381,7 @@ agree perfectly and prove nothing.
 with only one tested is what let gap O208 live for as long as both paths
 existed, and it is the third instance of that shape in this repo (see also
 the `withFTS`/extmap note).
+**Alarm:** 11
 **Fire alarm:** make `handleFilesExpand` return `req.Paths` unchanged — the
 shape this door had while O212 was open — and confirm the test goes red. The
 property is invisible when absent: an unexpanded answer under a `--links`
@@ -398,6 +409,7 @@ one in both.
 `t.Fatalf`. A corpus that matches nothing answers empty for every spelling,
 so without the control the alias assertion proves nothing — the same trap
 that made an earlier O204 measurement vacuous.
+**Alarm:** 12
 **Fire alarm:** delete the `ResolvePattern` loop in `handleFilesStatus` and
 confirm the alias case goes red while the control stays green. Invisible when
 absent: an alias query that resolves nothing returns an empty listing, which

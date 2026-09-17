@@ -55,6 +55,7 @@ All flags compose (intersection when combined):
 - `--from PROJECT` — filter by `from-project` (outgoing only)
 - `--all` — include completed/denied (default: excluded)
 - `--include-archived` — include archived messages (default: excluded)
+- `--compact` — legacy tab-separated output instead of the tree
 - `--counts` — output `status\tcount` lines instead of individual rows
 - `--unmatched` — show only requests with no matching response (by requestId).
   Pair lookup is global — works correctly with `--to`, `--from`, and
@@ -63,21 +64,41 @@ All flags compose (intersection when combined):
 
 ### Inbox Output
 
-First line is a date header: `# inbox YYYY-MM-DD`
+First line is a date header: `# inbox YYYY-MM-DD`. Then a **markdown
+tree**, sorted most-recent first (undated entries last):
 
-Then one tab-separated line per message, sorted by date descending
-(most recent first, undated entries last):
+```
+- open  microfts2 → mini-spec  harvest scope  (2026-08-06)
+  /home/deck/work/microfts2/requests/minispec-impl-ref-harvest-scope.md
+  - response: completed  mini-spec → microfts2  (2026-09-16)
+    /home/deck/work/mini-spec/requests/RESP-...md
+    - microfts2 has not handled this response yet
+- open  ui-engine → ark  svc ordering  (2026-08-01)
+  /home/deck/work/ark/requests/svc-ordering.md
+  - no response
+```
+
+**How to read it — this is the rule that stops the miss.** A request's
+own status is the word after the leading `-`. **The reply is a separate
+fact and lives on its own nested `response:` line** — do not judge
+whether a request was answered from the request's status. A request is
+answered only if a `- response:` line is nested under it; if instead you
+see `- no response`, nothing has come back. The nested `response:` shows
+the reply's own status and date, so a `completed` reply appears even
+though the default view hides completed rows — the miss this format
+fixes was reading `open` on the request and calling the completed reply
+absent. The bookmark line ("PROJECT has not handled this response yet")
+names who still owes an acknowledgement.
+
+`--compact` gives the legacy tab-separated rows instead, one per file:
 ```
 date	status	to-project	from-project	issue-or-response	path	lag
 ```
-
-The `date` column (1st) is the most recent `@status-date:` from
-either the request or its paired response. Shows `-` if neither
-has a date.
-
-The `lag` field (7th column) shows bookmark lag — when a participant
-hasn't handled the counterpart's current status. Format: `lag:PROJECT:STATUS`.
-Empty when bookmarks are current or no counterpart exists.
+where `date` (1st) is the latest `@status-date:` of the pair (`-` if
+none) and `lag` (7th) is `lag:PROJECT:STATUS`, empty when bookmarks are
+current. In `--compact` a reply's status is folded into the `lag` suffix
+of the *request's* row — which is exactly why the tree is the default;
+prefer the tree unless a script needs the columns.
 
 With `--counts`: one tab-separated line per status:
 ```

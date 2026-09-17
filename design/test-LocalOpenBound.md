@@ -26,6 +26,7 @@ copying whichever helper it finds; this is what tells it.
 `withDB`) are the permitted ones.
 **Expected:** zero occurrences. A hit names the file and line and says why the
 unbounded form is the server's alone.
+**Alarm:** 1
 **Fire alarm:** put `ark.Open(arkDir)` back into `withDB` and confirm this goes
 red. That is the literal pre-2026-08-01 code, so the alarm re-creates the
 defect exactly rather than approximating it.

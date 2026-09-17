@@ -38,6 +38,7 @@ path that is gone.
 present in `ignoredPaths`; gone → link. Assert specifically that `link` is
 **absent** from `ignoredPaths` afterward — caching it is what makes the
 second and every subsequent event disappear.
+**Alarm:** 1
 **Fire alarm:** delete the `linkCandidate` arm of `classifyEvent`. The link
 path then falls to the cache exactly as it does today, which is the state
 this requirement exists to change. Confirm red.

@@ -16,6 +16,7 @@ path to its own `~`).
 is absolute, and is NOT `filepath.Join(<home>, rel)`.
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/absclientpath_test.go
+**Alarm:** 1
 **Fire alarm:** revert `absClientPath` to return its argument unchanged
 (the pre-fix behavior — the relative path shipped as-is). The cwd-relative
 assertion then fails because the raw relative string is not absolute.
@@ -29,6 +30,7 @@ assertion then fails because the raw relative string is not absolute.
 **Expected:** returned unchanged.
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/absclientpath_test.go
+**Alarm:** 2
 **Fire alarm:** drop the `strings.HasPrefix(p, "tmp://")` guard so a tmp://
 path is fed to filepath.Abs; the tmp:// case then comes back as
 `<cwd>/tmp:/luhmann/launch.md` and the equality assertion fails.
@@ -42,4 +44,5 @@ be a no-op so that arm is unaffected.
 **Expected:** returned unchanged.
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/absclientpath_test.go
+**Alarm:** 3
 **Fire alarm:** none distinct from the two above; documents the invariant.

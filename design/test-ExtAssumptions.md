@@ -44,6 +44,7 @@ removed); retrieve.
 **Expected:** the routing is reported unresolved and counted in
 `ext-unresolved`. Asserting specifically that the previously-recorded
 fileid is *not* returned.
+**Alarm:** 1
 **Fire alarm:** replace the fail-closed branch with the recorded value and
 confirm this test goes red. Without that check the test passes whether the
 code fails closed or open, because the recorded value is the correct answer
@@ -58,6 +59,7 @@ non-directory, matches it against file patterns, and drops it — so the
 event already fires and nothing acts on it.
 **Input:** a single-hop tracked link feeding a routing; repoint it; retrieve.
 **Expected:** the association is recomputed and reflects the new target.
+**Alarm:** 2
 **Fire alarm:** make the refresh path ignore directory-symlink entries and
 confirm this goes red. This is the test that would have caught the original
 defect, and the property is invisible when absent — the association simply
@@ -93,6 +95,7 @@ indexed file's canonical path *and* its alias addresses.
 **Input:** an `@ext` whose TARGET names a path through a tracked link;
 index the target file at its canonical path.
 **Expected:** the routing fires.
+**Alarm:** 3
 **Fire alarm:** drop the alias-address arm of the lookup and confirm this
 goes red — with only the canonical arm, a routing written through a link
 never fires, and a routing that never fires is indistinguishable from one
@@ -124,6 +127,7 @@ returns; it does not wait for the write.
 R3350 beneath it).
 **Input:** a retrieval that posts a re-resolution and then a continuation.
 **Expected:** the continuation observes the mutation's effects.
+**Alarm:** 4
 **Fire alarm:** re-introduce the spawned post in the closure actor and
 confirm this goes red. It is the same injection that scrambled delivery to
 `[0 3 1 2 10 4 …]` when the guarantee was restored, and it is what makes

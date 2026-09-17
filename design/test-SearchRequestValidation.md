@@ -38,6 +38,7 @@ struct, since a test can only ask the question you thought to ask. Both
 polarities are covered (`without` takes a different microfts2 option), and a
 `contains` row carrying a paren is covered from the other side: it is text, not
 a pattern, and compiling it would reject a legitimate search.
+**Alarm:** 1
 **Fire alarm:** two, pulled separately. Delete the `regex`/`exceptRegex` loops,
 leaving only the pre-existing mode check — literally the state that produced the
 500 — and confirm those rows go red while the mode row stays green. Then delete

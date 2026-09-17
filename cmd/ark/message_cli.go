@@ -87,6 +87,7 @@ func messageCommand() *ucli.Command {
 					&ucli.StringFlag{Name: "from", Usage: "filter by from-project"},
 					&ucli.BoolFlag{Name: "all", Usage: "include completed/denied messages"},
 					&ucli.BoolFlag{Name: "include-archived", Usage: "include archived messages"},
+					&ucli.BoolFlag{Name: "compact", Usage: "legacy tab-separated output instead of the markdown tree"},
 					&ucli.BoolFlag{Name: "counts", Usage: "output status counts instead of rows"},
 					&ucli.BoolFlag{Name: "unmatched", Usage: "show only requests with no matching response"},
 				},
@@ -328,6 +329,125 @@ func messageCheckAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
+// Inbox output vocabulary — the baby-food markdown tree (R3404-R3408),
+// the legacy TSV header shared with --compact (R3409), and the empty-set
+// hint (R3410). Named so the shape is edited in one place, not sprinkled.
+const (
+	inboxDateLayout       = "2006-01-02"
+	inboxTreeHeaderPrefix = "# inbox "
+	inboxArrow            = " → "
+	inboxNoDate           = "-"
+	inboxNoResponse       = "no response"
+	inboxResponseLabel    = "response: "
+	inboxLagResponse      = "%s has not handled this response yet"
+	inboxLagRequest       = "%s has not handled this request yet"
+	inboxHintNoMatch      = "no messages match"
+	inboxHintFrom         = "from-projects present: "
+	inboxHintTo           = "to-projects present: "
+	inboxHintNone         = "(none)"
+)
+
+// Indent widths for the tree, in spaces. The request bullet sits at column
+// zero; its path and response nest under it, the response's path and
+// bookmark lines nest under the response.
+const (
+	inboxIndentPath     = 2
+	inboxIndentResponse = 2
+	inboxIndentNested   = 4
+)
+
+// arrowPair renders "from → to".
+func arrowPair(from, to string) string { return from + inboxArrow + to }
+
+// inboxDate returns the entry's @status-date, or "-" when unset.
+func inboxDate(e *ark.InboxEntry) string {
+	if e.StatusDate == "" {
+		return inboxNoDate
+	}
+	return e.StatusDate
+}
+
+// printInboxNode renders one request and its paired response as a bullet
+// subtree. Either side may be nil: a request with no response prints an
+// explicit "no response" line (R3408); an orphan response (no request in
+// the inbox) is rendered on its own.
+// CRC: crc-CLI.md | Seq: seq-message.md | R3404, R3405, R3406, R3408
+func printInboxNode(req, resp *ark.InboxEntry) {
+	if req == nil {
+		if resp == nil {
+			return
+		}
+		fmt.Printf("- %s%s  %s  %s  (%s)\n",
+			inboxResponseLabel, resp.Status, arrowPair(resp.From, resp.To), resp.Summary, inboxDate(resp))
+		fmt.Printf("%s%s\n", spaces(inboxIndentPath), resp.Path)
+		return
+	}
+	fmt.Printf("- %s  %s  %s  (%s)\n",
+		req.Status, arrowPair(req.From, req.To), req.Summary, inboxDate(req))
+	fmt.Printf("%s%s\n", spaces(inboxIndentPath), req.Path)
+	if resp == nil {
+		fmt.Printf("%s- %s\n", spaces(inboxIndentResponse), inboxNoResponse)
+		return
+	}
+	fmt.Printf("%s- %s%s  %s  (%s)\n",
+		spaces(inboxIndentResponse), inboxResponseLabel, resp.Status, arrowPair(resp.From, resp.To), inboxDate(resp))
+	fmt.Printf("%s%s\n", spaces(inboxIndentNested), resp.Path)
+	// CRC: crc-CLI.md | R3407 — bookmark lag stated in words, same comparison as --compact.
+	if resp.Status != "" && req.ResponseHandled != resp.Status {
+		fmt.Printf("%s- %s\n", spaces(inboxIndentNested), fmt.Sprintf(inboxLagResponse, req.From))
+	}
+	if req.Status != "" && resp.RequestHandled != req.Status {
+		fmt.Printf("%s- %s\n", spaces(inboxIndentNested), fmt.Sprintf(inboxLagRequest, resp.From))
+	}
+}
+
+// printInboxEmptyHint names the from-/to-projects present in the unfiltered
+// entries, so a mistyped directional filter is correctable rather than a
+// silent empty result.
+// CRC: crc-CLI.md | Seq: seq-message.md | R3410
+func printInboxEmptyHint(entries []ark.InboxEntry, project, to, from string) {
+	fromSet, toSet := map[string]bool{}, map[string]bool{}
+	for i := range entries {
+		if entries[i].From != "" {
+			fromSet[entries[i].From] = true
+		}
+		if entries[i].To != "" {
+			toSet[entries[i].To] = true
+		}
+	}
+	var applied []string
+	if project != "" {
+		applied = append(applied, "--project "+project)
+	}
+	if to != "" {
+		applied = append(applied, "--to "+to)
+	}
+	if from != "" {
+		applied = append(applied, "--from "+from)
+	}
+	line := inboxHintNoMatch
+	if len(applied) > 0 {
+		line += " (" + strings.Join(applied, ", ") + ")"
+	}
+	fmt.Println(line)
+	fmt.Printf("%s%s\n", inboxHintFrom, sortedKeysOrNone(fromSet))
+	fmt.Printf("%s%s\n", inboxHintTo, sortedKeysOrNone(toSet))
+}
+
+// sortedKeysOrNone returns the set's keys comma-joined and sorted, or a
+// placeholder when the set is empty.
+func sortedKeysOrNone(set map[string]bool) string {
+	if len(set) == 0 {
+		return inboxHintNone
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
 // CRC: crc-CLITree.md, crc-CLI.md | Seq: seq-message.md | R708, R709, R710, R713, R718
 func messageInboxAction(_ context.Context, c *ucli.Command) error {
 	// R2430, R2431: --project matches either side; --to is the strict
@@ -337,6 +457,7 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 	from := c.String("from")
 	all := c.Bool("all")
 	includeArchived := c.Bool("include-archived")
+	compact := c.Bool("compact")
 	counts := c.Bool("counts")
 	unmatched := c.Bool("unmatched")
 
@@ -483,15 +604,43 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 			return di > dj
 		})
 
-		fmt.Printf("# inbox %s\n", time.Now().Format("2006-01-02"))
-		for _, d := range datedEntries {
-			lag := lagFor(d.entry)
-			date := d.date
-			if date == "" {
-				date = "-"
+		fmt.Printf("%s%s\n", inboxTreeHeaderPrefix, time.Now().Format(inboxDateLayout))
+
+		// CRC: crc-CLI.md | Seq: seq-message.md | R3409 — legacy TSV, byte-for-byte
+		if compact {
+			for _, d := range datedEntries {
+				lag := lagFor(d.entry)
+				date := d.date
+				if date == "" {
+					date = inboxNoDate
+				}
+				fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					date, d.entry.Status, d.entry.To, d.entry.From, d.entry.Summary, d.entry.Path, lag)
 			}
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				date, d.entry.Status, d.entry.To, d.entry.From, d.entry.Summary, d.entry.Path, lag)
+			return
+		}
+
+		// CRC: crc-CLI.md | Seq: seq-message.md | R3410 — name the projects a typo'd filter missed
+		if len(filtered) == 0 {
+			printInboxEmptyHint(entries, project, to, from)
+			return
+		}
+
+		// CRC: crc-CLI.md | Seq: seq-message.md | R3404, R3406 — one node per request,
+		// paired response nested beneath even when it was filtered out of the rows.
+		seen := make(map[string]bool)
+		for _, d := range datedEntries {
+			id := d.entry.RequestID
+			if id == "" {
+				id = d.entry.Path
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if p := byID[id]; p != nil {
+				printInboxNode(p.request, p.response)
+			}
 		}
 	}
 

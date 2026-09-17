@@ -52,6 +52,7 @@ CLI ──> Server.Serve(dbPath, opts)
          │
          └──> http.Serve(listener, router)
                └── blocks, serving requests until shutdown
+```
 
 ## Flow: UI Reload (keep port)
 

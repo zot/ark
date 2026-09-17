@@ -25,6 +25,7 @@ declare.
 **Expected:** exactly the suppressed tag's events come back with `Suppressed ==
 true`. The undeclared tag is false, not a panic — an event can name a tag whose
 `[schedule.tag.X]` block was removed between the log write and the query.
+**Alarm:** 1
 **Fire alarm:** make `MarkSuppressed` a no-op and confirm red. Worth pulling
 because the assertion is on a *false-by-default* boolean: a function that never
 sets it passes every test that only checks the unsuppressed rows.
@@ -44,6 +45,7 @@ spec; `NewEventScheduler(nil, nil, dir, cfg)`; a date range covering two
 occurrences.
 **Expected:** both occurrences returned, with tag, source and times populated.
 No panic — the point is that the query half touches neither collaborator.
+**Alarm:** 2
 **Fire alarm:** add a `es.pubsub.Publish(...)` call inside `QueryRange` and
 confirm this goes red with a nil dereference. That is a Sleeping Sentry: the
 guarantee being kept is *the absence of a dependency*, which nothing else in the
