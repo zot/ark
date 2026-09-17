@@ -359,6 +359,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-EmbedOffSlot.md → `embed_offslot_test.go`
 - [x] test-Patterns.md → `patterns_test.go`, `cmd/ark/patterns_cli_test.go`
 - [x] test-checkpoint.md → `cmd/ark/checkpoint_test.go`
 - [x] test-PtyProtocol.md → `luhmann-terminal/src/pty-protocol.test.ts`

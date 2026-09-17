@@ -4,7 +4,7 @@
 it is a Haiku, and on 2026-09-16 it missed two completed replies from mini-spec
 that were sitting in the listing. This carve moves the messenger-facing outputs
 to the same agent-readable markdown that `ark search -tags` already uses
-([specs/tags-baby-food.md](../specs/tags-baby-food.md)), and keeps the TSV
+([specs/tags-baby-food.md](../../specs/tags-baby-food.md)), and keeps the TSV
 behind a flag.
 
 ## Status

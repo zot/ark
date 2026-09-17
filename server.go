@@ -62,6 +62,7 @@ type Server struct {
 	pubsub             *PubSub             // R799: subscription registry
 	scheduler          *EventScheduler     // R805: time-based event queue
 	librarian          *Librarian          // R1379: sidecar expansion request queue for spectral search
+	embedding          bool                // R3416: re-entrancy guard for the post-reconcile embed pass; read/set on the DB actor only
 	curation           *Curation           // R2355: Go-owned curation workshop state; sys.curation in Lua
 	recallWatcher      *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
 	recallAgentBuilder *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
@@ -904,18 +905,58 @@ func (srv *Server) doReconcile(db *DB) {
 			log.Println("reconcile: complete")
 		})
 	})
-	// Batch embed missing embeddings after reconcile. R1292, R1295, R1609
-	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() {
-		db.enqueueWrite(func(_ *microfts2.DB) {
+	// Batch embed missing embeddings after reconcile. The GPU compute runs
+	// off the write slot in a plain goroutine (holding no write transaction)
+	// so a long embed never freezes interleaving UI writes; the pass's EC/EF
+	// and tag store writes route back onto the write actor in small per-batch
+	// closures (see Librarian.BatchEmbed / BatchEmbedChunks). srv.embedding
+	// guards re-entrancy — read and set here on the db.svc actor (doReconcile
+	// runs on it), cleared on the actor when the pass ends — so a second
+	// reconcile never launches a concurrent embed goroutine.
+	// CRC: crc-Server.md | Seq: seq-reconcile.md | R1292, R1295, R1609, R3414, R3416
+	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() && srv.beginEmbedPass() {
+		go func() {
+			// Clear the guard only after this pass's store writes drain, so the
+			// next pass's Pass-1 EC check sees them committed (the old
+			// one-closure ordering, preserved). The clear is enqueued as a
+			// trailing write closure — it runs after every embed write already
+			// queued (FIFO) and posts endEmbedPass back to the actor. R3416
+			defer func() {
+				SyncVoid(db, func(d *DB) error {
+					d.enqueueWrite(func(_ *microfts2.DB) {
+						svc(d.svc, func() { srv.endEmbedPass() })
+					})
+					return nil
+				})
+			}()
 			if err := srv.librarian.BatchEmbed(); err != nil {
 				log.Printf("reconcile: batch embed tags: %v", err)
 			}
 			if err := srv.librarian.BatchEmbedChunks(); err != nil {
 				log.Printf("reconcile: batch embed chunks: %v", err)
 			}
-		})
+		}()
 	}
 	log.Println("reconcile: queued")
+}
+
+// beginEmbedPass claims the single embed-pass slot, returning false if a pass
+// is already running. It must run on the db.svc actor (doReconcile does), so
+// srv.embedding needs no lock or atomic — the actor serializes the
+// check-and-set (R1067's actor discipline, applied to a launch decision).
+// CRC: crc-Server.md | R3416
+func (srv *Server) beginEmbedPass() bool {
+	if srv.embedding {
+		return false
+	}
+	srv.embedding = true
+	return true
+}
+
+// endEmbedPass releases the embed-pass slot. Must run on the db.svc actor.
+// CRC: crc-Server.md | R3416
+func (srv *Server) endEmbedPass() {
+	srv.embedding = false
 }
 
 // processScheduleItems runs EnsureUpcoming for accumulated schedule items

@@ -1946,6 +1946,24 @@ func (l *Librarian) EmbedSimilarTagValues(query string, k int) ([]TagMatch, erro
 	return matches, nil
 }
 
+// enqueueStoreWrite routes a store mutation from the off-slot embed goroutine
+// back onto the DB write actor. The GPU compute stays off the single write
+// slot; only the short store write holds it, and the slot is released between
+// batches so other writes (tmp:// UI docs, DMs, config) interleave. The write
+// must not run directly here — an embedding write is a DB mutation and stays
+// serialized on the actor like every other (R1058 cache invalidation, R1067
+// one-at-a-time). SyncVoid blocks only until the actor appends the closure;
+// the write itself completes asynchronously on the write goroutine.
+// CRC: crc-Librarian.md | R3415
+func (l *Librarian) enqueueStoreWrite(write func()) {
+	if err := SyncVoid(l.db, func(db *DB) error {
+		db.enqueueWrite(func(_ *microfts2.DB) { write() })
+		return nil
+	}); err != nil {
+		log.Printf("librarian: enqueue embed store write: %v", err)
+	}
+}
+
 // BatchEmbed scans for missing tag name, tag value, and tag-definition
 // embeddings, embeds them in batches, and writes the results to LMDB.
 // Called post-reconcile from the write goroutine — also the rebuild
@@ -1996,15 +2014,18 @@ func (l *Librarian) BatchEmbed() error {
 		for j, tag := range batch {
 			texts[j] = strings.ReplaceAll(tag, "-", " ")
 		}
-		vecs, err := l.EmbedBatch(texts)
+		vecs, err := l.EmbedBatch(texts) // GPU dispatch, off the write slot
 		if err != nil {
 			return fmt.Errorf("embed tag names batch: %w", err)
 		}
-		for j, tag := range batch {
-			if err := l.db.store.WriteTagNameEmbedding(tag, vecs[j]); err != nil {
-				log.Printf("librarian: write tag embedding %q: %v", tag, err)
+		// Store on the slot: this batch's T writes in one write closure. R3415
+		l.enqueueStoreWrite(func() {
+			for j, tag := range batch {
+				if err := l.db.store.WriteTagNameEmbedding(tag, vecs[j]); err != nil {
+					log.Printf("librarian: write tag embedding %q: %v", tag, err)
+				}
 			}
-		}
+		})
 	}
 
 	// Batch embed tag values ("tag: value" with hyphens → spaces in tag).
@@ -2028,15 +2049,18 @@ func (l *Librarian) BatchEmbed() error {
 		if len(texts) == 0 {
 			continue
 		}
-		vecs, err := l.EmbedBatch(texts)
+		vecs, err := l.EmbedBatch(texts) // GPU dispatch, off the write slot
 		if err != nil {
 			return fmt.Errorf("embed tag values batch: %w", err)
 		}
-		for j, tvid := range validTvids {
-			if err := l.db.store.WriteTagValueEmbedding(tvid, vecs[j]); err != nil {
-				log.Printf("librarian: write value embedding tvid=%d: %v", tvid, err)
+		// Store on the slot: this batch's EV writes in one write closure. R3415
+		l.enqueueStoreWrite(func() {
+			for j, tvid := range validTvids {
+				if err := l.db.store.WriteTagValueEmbedding(tvid, vecs[j]); err != nil {
+					log.Printf("librarian: write value embedding tvid=%d: %v", tvid, err)
+				}
 			}
-		}
+		})
 	}
 
 	// Batch embed tag definitions. The embed text is the description
@@ -2049,15 +2073,18 @@ func (l *Librarian) BatchEmbed() error {
 		for j, ref := range batch {
 			texts[j] = ref.Description
 		}
-		vecs, err := l.EmbedBatch(texts)
+		vecs, err := l.EmbedBatch(texts) // GPU dispatch, off the write slot
 		if err != nil {
 			return fmt.Errorf("embed tag defs batch: %w", err)
 		}
-		for j, ref := range batch {
-			if err := l.db.store.WriteTagDefEmbedding(ref.Tag, ref.FileID, vecs[j]); err != nil {
-				log.Printf("librarian: write tag-def embedding %q@%d: %v", ref.Tag, ref.FileID, err)
+		// Store on the slot: this batch's ED writes in one write closure. R3415
+		l.enqueueStoreWrite(func() {
+			for j, ref := range batch {
+				if err := l.db.store.WriteTagDefEmbedding(ref.Tag, ref.FileID, vecs[j]); err != nil {
+					log.Printf("librarian: write tag-def embedding %q@%d: %v", ref.Tag, ref.FileID, err)
+				}
 			}
-		}
+		})
 	}
 
 	log.Printf("librarian: tag embedding complete (%d names, %d values, %d defs)",
@@ -2187,6 +2214,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 	seen := make(map[uint64]bool) // R1862: in-batch dedup
 	var totalSkipped int
 	var totalDeduped int
+	var noTierSentinels []uint64 // R3004: chunkIDs fitting no tier, sentineled on the actor after Pass 1
 
 	for _, fp := range sorted {
 		fileID := fp.fileID
@@ -2233,10 +2261,9 @@ func (l *Librarian) BatchEmbedChunks() error {
 			} else {
 				// R3004: chunk fits no tier — nil sentinel EC so the queue
 				// check (R1846) treats it as handled and it isn't re-queued.
+				// Collected here and stored on the actor after Pass 1 (R3415).
 				// CRC: crc-Librarian.md | R3004
-				if err := l.db.store.WriteChunkEmbedding(fce.ChunkID, nil); err != nil {
-					log.Printf("chunk embed: sentinel write chunkID=%d: %v", fce.ChunkID, err)
-				}
+				noTierSentinels = append(noTierSentinels, fce.ChunkID)
 				totalSkipped++
 			}
 		}
@@ -2244,6 +2271,18 @@ func (l *Librarian) BatchEmbedChunks() error {
 			filesWithNewEmbeddings[fileID] = true
 			log.Printf("chunk embed: queue %s (id=%d): %d new, %d total", fp.path, fileID, fileQueued, len(finfo.Chunks))
 		}
+	}
+
+	// Store the no-tier sentinels on the write actor (R3415). These carry no
+	// GPU work, so one closure after Pass 1 suffices.
+	if len(noTierSentinels) > 0 {
+		l.enqueueStoreWrite(func() {
+			for _, chunkID := range noTierSentinels {
+				if err := l.db.store.WriteChunkEmbedding(chunkID, nil); err != nil {
+					log.Printf("chunk embed: sentinel write chunkID=%d: %v", chunkID, err)
+				}
+			}
+		})
 	}
 
 	// --- Pass 2: embed one tier at a time ---
@@ -2282,6 +2321,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 
 			texts := make([]string, 0, len(batch))
 			valid := make([]chunkRef, 0, len(batch))
+			var tagOnlySentinels []uint64 // R3004: all-@tag chunkIDs, sentineled on the actor
 			for _, ref := range batch {
 				if ref.fileID != cachedFileID {
 					cachedChunks = nil
@@ -2317,33 +2357,47 @@ func (l *Librarian) BatchEmbedChunks() error {
 						// meaning vector. Record a nil sentinel EC so the queue
 						// check (R1846) treats it as handled and it isn't
 						// re-queued every reconcile (the tag axis carries it).
+						// Stored on the actor after this batch's scan (R3415).
 						// CRC: crc-Librarian.md | R3004
-						if err := l.db.store.WriteChunkEmbedding(ref.chunkID, nil); err != nil {
-							log.Printf("chunk embed: tag-only sentinel write chunkID=%d: %v", ref.chunkID, err)
-						}
+						tagOnlySentinels = append(tagOnlySentinels, ref.chunkID)
 						totalEmptyStripped++
 					}
 				}
+			}
+			// Store this batch's tag-only sentinels on the actor. Done before
+			// the empty-texts short-circuit so an all-tag batch still records
+			// them (R3415).
+			if len(tagOnlySentinels) > 0 {
+				l.enqueueStoreWrite(func() {
+					for _, chunkID := range tagOnlySentinels {
+						if err := l.db.store.WriteChunkEmbedding(chunkID, nil); err != nil {
+							log.Printf("chunk embed: tag-only sentinel write chunkID=%d: %v", chunkID, err)
+						}
+					}
+				})
 			}
 			if len(texts) == 0 {
 				continue
 			}
 
-			vecs, err := l.embedWithCtx(ctx, texts)
+			vecs, err := l.embedWithCtx(ctx, texts) // GPU dispatch, off the write slot
 			if err != nil {
 				log.Printf("librarian: embed tier %d/%d batch: %v", tier.Ctx, tier.Parallel, err)
 				continue
 			}
 
-			// R1833: write EC records keyed by chunkID
+			// R1833: write EC records keyed by chunkID. GPU is done; the store
+			// write goes on the actor in its own closure so the slot is
+			// released between tier batches (R3415).
 			cvs := make([]ChunkVec, len(valid))
 			for j, ref := range valid {
 				cvs[j] = ChunkVec{ChunkID: ref.chunkID, Vec: vecs[j]}
 			}
-			if err := l.db.store.WriteChunkEmbeddingBatch(cvs); err != nil {
-				log.Printf("librarian: write EC batch: %v", err)
-				continue
-			}
+			l.enqueueStoreWrite(func() {
+				if err := l.db.store.WriteChunkEmbeddingBatch(cvs); err != nil {
+					log.Printf("librarian: write EC batch: %v", err)
+				}
+			})
 			totalEmbedded += len(valid)
 		}
 
@@ -2353,36 +2407,41 @@ func (l *Librarian) BatchEmbedChunks() error {
 	// R1608, R1618, R1848: recompute EF centroids from scratch for files that
 	// got new embeddings — read every chunk vec and accumulate the running sum
 	// (R1618: sum += vec, count++; centroid is sum/count). A full re-index of a
-	// file lands here.
+	// file lands here. Each file's recompute is enqueued on the write actor
+	// after the EC writes above (FIFO), so the read sees them committed, and
+	// per-file enqueue releases the slot between files (R3415).
 	for fileID := range filesWithNewEmbeddings {
-		finfo, err := l.db.fts.FileInfoByID(fileID)
-		if err != nil || len(finfo.Chunks) == 0 {
-			continue
-		}
-		chunkIDs := make([]uint64, len(finfo.Chunks))
-		for i, fce := range finfo.Chunks {
-			chunkIDs[i] = fce.ChunkID
-		}
-		vecs := l.db.store.ReadChunkEmbeddings(chunkIDs)
-		var sum []float32
-		var count uint32
-		for _, vec := range vecs {
-			if len(vec) == 0 {
-				continue
+		fileID := fileID
+		l.enqueueStoreWrite(func() {
+			finfo, err := l.db.fts.FileInfoByID(fileID)
+			if err != nil || len(finfo.Chunks) == 0 {
+				return
 			}
-			if sum == nil {
-				sum = make([]float32, len(vec))
+			chunkIDs := make([]uint64, len(finfo.Chunks))
+			for i, fce := range finfo.Chunks {
+				chunkIDs[i] = fce.ChunkID
 			}
-			for i, v := range vec {
-				sum[i] += v
+			vecs := l.db.store.ReadChunkEmbeddings(chunkIDs)
+			var sum []float32
+			var count uint32
+			for _, vec := range vecs {
+				if len(vec) == 0 {
+					continue
+				}
+				if sum == nil {
+					sum = make([]float32, len(vec))
+				}
+				for i, v := range vec {
+					sum[i] += v
+				}
+				count++
 			}
-			count++
-		}
-		if count > 0 {
-			if err := l.db.store.WriteFileCentroid(fileID, sum, count); err != nil {
-				log.Printf("librarian: write centroid fileID=%d: %v", fileID, err)
+			if count > 0 {
+				if err := l.db.store.WriteFileCentroid(fileID, sum, count); err != nil {
+					log.Printf("librarian: write centroid fileID=%d: %v", fileID, err)
+				}
 			}
-		}
+		})
 	}
 
 	if totalEmbedded > 0 || totalSkipped > 0 || totalDeduped > 0 || totalEmptyStripped > 0 { // R1864, R3004

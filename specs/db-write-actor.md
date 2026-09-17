@@ -92,6 +92,36 @@ When a scan produces N files to index:
 4. Write goroutine processes each batch
 5. Reconcile returns to main actor, commits, dequeues next
 
+## Post-reconcile embedding: compute off-slot, store on-slot
+
+The post-reconcile embedding pass (tag name/value/definition embeddings and
+chunk EC/EF records) must not hold the single write slot for the duration of
+its GPU compute. A full embed of every missing chunk can run for many seconds;
+held inside one write closure it freezes every interleaving write — tmp:// UI
+documents, DMs, config edits — for that whole time. Measured 2026-09-17: a
+tmp:// write that costs ~45 ms idle blocked 16.2 s during a reconcile burst,
+while reads (MVCC) stayed flat.
+
+The pass is therefore split:
+
+- **Compute off the slot.** The GPU embedding runs in a plain goroutine holding
+  no write transaction. The reads it needs — missing-embedding scans, chunk
+  content, existing-EC lookups — use MVCC and never block.
+- **Store on the slot, in small batches.** Each batch's store writes —
+  `WriteChunkEmbedding` / `WriteChunkEmbeddingBatch`, `WriteFileCentroid`, and
+  the tag `WriteTagNameEmbedding` / `WriteTagValueEmbedding` /
+  `WriteTagDefEmbedding` — are applied inside their own write closure via
+  `enqueueWrite`, so the mutation stays serialized on the write actor (cache
+  invalidation and the one-at-a-time contract preserved) while the slot is
+  released between batches. A file's EF centroid recompute is enqueued after
+  that file's EC writes, so it reads them committed.
+- **One pass at a time.** Because the pass now runs off the actor, a second
+  reconcile could otherwise launch a concurrent embed goroutine. A re-entrancy
+  guard, checked and set on the DB actor, admits only one.
+
+An embedding store write is a DB mutation and routes through the write actor
+like every other — it is never called directly from the off-slot goroutine.
+
 ## microfts2 interface
 
 Two methods needed:
