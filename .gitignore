@@ -25,3 +25,4 @@ node_modules
 /luhmann-terminal/dist/
 /release/
 /.minispec/backup
+/.claude/skills/ui*/

@@ -238,9 +238,18 @@ Output file:
 These are aliases for `ark tag set`, `ark tag get`, and `ark tag check`.
 See specs/tag-block-commands.md for full documentation.
 
+`ark message get-tags` (like `ark tag get`) prints a markdown bullet
+list by default — one `- tag: value` line per tag, values verbatim —
+so an agent reads it the same way as the inbox tree and `search
+-tags`. `--compact` restores the legacy `tag\tvalue` TSV for scripts.
+
 `ark message check` calls `ark tag check` with no heading arguments
 (generic structural validation). Message-specific heading validation
-can be added by passing heading names to `ark tag check` directly.
+can be added by passing heading names to `ark tag check` directly. On
+success it prints one line naming the file and stating its tag block
+is well-formed (exit 0); on failure it prints the problems (exit 1).
+The success line matters because a silent exit reads to an agent
+exactly like a command that did nothing.
 
 ### inbox
 

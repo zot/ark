@@ -4334,7 +4334,19 @@ func cmdTagSet(args []string) {
 }
 
 // CRC: crc-CLI.md | R608, R609
-func cmdTagGet(args []string) {
+// Output vocabulary for tag get / check (shared by `ark tag …` and the
+// `ark message …` aliases). Bullet is the agent-readable default; the TSV
+// lives behind --compact, matching `ark message inbox`. Values are printed
+// verbatim in both forms.
+const (
+	tagGetBullet   = "- %s: %s\n"
+	tagGetCompact  = "%s\t%s\n"
+	tagCheckOKFmt  = "%s: tag block is well-formed\n"
+	tagCheckBadFmt = "The file %s has format problems:\n"
+)
+
+// CRC: crc-CLI.md | R608, R609, R3411
+func cmdTagGet(args []string, compact bool) {
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(os.Stderr, "usage: ark tag get FILE [TAG ...]")
 		os.Exit(0)
@@ -4351,11 +4363,17 @@ func cmdTagGet(args []string) {
 	tb := ark.ParseTagBlock(data)
 	exitCode := 0
 
+	// R3411: markdown bullet by default, legacy TSV under --compact.
+	format := tagGetBullet
+	if compact {
+		format = tagGetCompact
+	}
+
 	if len(requestedTags) > 0 {
 		for _, name := range requestedTags {
 			v, ok := tb.Get(name)
 			if ok {
-				fmt.Printf("%s\t%s\n", name, v)
+				fmt.Printf(format, name, v)
 			} else {
 				fmt.Fprintf(os.Stderr, "tag not found: %s\n", name)
 				exitCode = 1
@@ -4363,7 +4381,7 @@ func cmdTagGet(args []string) {
 		}
 	} else {
 		for _, t := range tb.Tags() {
-			fmt.Printf("%s\t%s\n", t.Name, t.Value)
+			fmt.Printf(format, t.Name, t.Value)
 		}
 	}
 
@@ -4396,11 +4414,15 @@ func cmdTagCheck(args []string) {
 		bodyProblems = append(bodyProblems, tb.CheckHeadings(allowedHeadings)...)
 	}
 
+	// R3412: state the outcome rather than staying silent — a silent exit 0
+	// reads to an agent exactly like a command that did nothing. Success line
+	// to stdout; problems to stderr, exit 1. Exit-code contract unchanged.
 	if len(problems) == 0 && len(bodyProblems) == 0 {
+		fmt.Printf(tagCheckOKFmt, filePath)
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "The file %s has format problems:\n", filePath)
+	fmt.Fprintf(os.Stderr, tagCheckBadFmt, filePath)
 	for _, p := range problems {
 		fmt.Fprintf(os.Stderr, "- %s\n", p)
 	}

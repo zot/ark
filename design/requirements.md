@@ -5130,3 +5130,7 @@ reason.
 - **R3408:** A request with no paired response prints an explicit `no response` line.
 - **R3409:** `--compact` emits the legacy tab-separated inbox output (status-date, status, to, from, summary, path, lag) byte-for-byte; `--counts` is unchanged and takes precedence over both the tree and `--compact`.
 - **R3410:** When no message matches the filters, the default (tree) output names the from- and to-projects present in the unfiltered set, so a mistyped `--from`/`--to`/`--project` is correctable rather than a silent empty result.
+
+- **R3411:** `ark tag get` / `ark message get-tags` default output is a markdown bullet list (`- tag: value`, values verbatim); `--compact` emits the legacy `tag\tvalue` TSV. Applies to both the full-tag-block listing and the requested-tag form.
+- **R3412:** `ark tag check` / `ark message check` prints one line on success naming the file and stating its tag block is well-formed (to stdout); on failure it prints the problems (to stderr). Exit codes are unchanged: 0 on success, 1 on problems.
+- **R3413:** `ark message inbox --counts` default output is a markdown bullet list (`- status (N)`); `--compact` emits the legacy `status\tcount` TSV. Same flag, same meaning.

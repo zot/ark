@@ -992,8 +992,8 @@ ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] 
 | `new-request`  | `--from`, `--to`, `--issue`\|`--issue-file`, `--content`\|`--content-file` (else stdin until lone `.`) | Create FILE (must not exist), set ark-request/from-project/to-project/status=open/status-date=today/issue tags. Issue from `--issue` or verbatim `--issue-file` (one required). Body from `--content`, verbatim `--content-file`, or stdin. `*-file` flags read verbatim (trailing newline trimmed) and are mutually exclusive with their inline twin. |
 | `new-response` | `--from`, `--to`, `--request`, `--content`\|`--content-file` (else stdin)              | Create FILE, set ark-response=ID/status=accepted/status-date=today. Body from `--content`, verbatim `--content-file`, or stdin.                                                                             |
 | `set-tags`     | none                                                                 | Alias for `tag set`                                                                                                                             |
-| `get-tags`     | none                                                                 | Alias for `tag get`                                                                                                                             |
-| `check`        | none                                                                 | Calls `tag check` with the standard message heading list                                                                                        |
+| `get-tags`     | `--compact`                                                          | Alias for `tag get` (bullet list default, `--compact` for TSV)                                                                                 |
+| `check`        | none                                                                 | Calls `tag check` with the standard message heading list; prints a well-formed line on success                                                  |
 | `inbox`        | see below                                                            | Server-first; pairs requests/responses by ID                                                                                                    |
 | `dm`           | `--from` ⨯ `--from-service`, `--to` (repeatable), `--subject`, `--ref`, `--content` | Server-required; appends a tagged chunk to `tmp://<sender>/dm-<to0>` where sender is the `--from` session or the `--from-service` identity (e.g. `ARK-RECALL`). Emits `@dm: r1 r2: subject` per the multi-recipient/subject grammar. See [messaging.md](messaging.md). |
 
@@ -1007,7 +1007,7 @@ ark message dm            (--from S | --from-service NAME) --to R [--to R2 ...] 
 | `--all`              | `false` | Include `completed`/`denied` messages in the display (they are always considered for pair lookup) |
 | `--include-archived` | `false` | Include `@archived: true` messages                          |
 | `--compact`          | `false` | Legacy tab-separated output instead of the markdown tree    |
-| `--counts`           | `false` | Output `STATUS\tCOUNT` lines instead of rows (takes precedence over the tree and `--compact`) |
+| `--counts`           | `false` | Status counts instead of rows: `- status (N)` bullets by default, `STATUS\tCOUNT` under `--compact`; takes precedence over the tree |
 | `--unmatched`        | `false` | Show only requests with no matching response. Pair lookup is global — `--unmatched` combines correctly with `--to`/`--from`. |
 
 Filters combine as intersection: `--from ark --to frictionless`
@@ -1489,7 +1489,7 @@ ark tag files TAG... [--context] [-with|-without] [-files G]...
 ark tag values TAG... [--show-files] [-with|-without] [-files G]...
 ark tag defs [TAG...] [--path]
 ark tag set FILE TAG VAL [TAG VAL ...]
-ark tag get FILE [TAG ...] [--all]
+ark tag get FILE [TAG ...] [--all] [--compact]
 ark tag chunk FILE | FILE:TARGET [--all]
 ark tag check FILE [HEADING...]
 ark tag verify [--repair] [--scope SCOPE]
@@ -1511,9 +1511,9 @@ normalization (see "Filter stack").
 | `values TAG...` | cold-start | Values for each tag (`tag\tvalue\tcount`); with `--show-files`, follows up with per-file lines |
 | `defs [TAG...]` | optional | Tag definitions (`tag description`); with `--path`, prefixes the source path (no dedup) |
 | `set FILE TAG VAL ...` | none (file I/O) | Pairs of TAG VAL into FILE's tag block. Setting `status` auto-sets `status-date` to today. Hint when setting `*-handled` bookmarks |
-| `get FILE [TAG...] [--all]` | none / optional (`--all`) | Read tags from FILE's tag block. Without TAGs, dump all. Missing tags exit 1. `--all`: every tag in the file (union across all chunks), not just the block — needs the index; the `[TAG...]` filter composes |
-| `chunk ADDRESS [--all]` | none / optional | List tags at a file or chunk address (`tag\tvalue` per line), reusing the `ark chunks` / `@ext` grammar. Bare `FILE`: the file tag block (== `get`, no index). `FILE --all`: file-wide union across all chunks. `FILE:TARGET` (RANGE, `:"SNIPPET"`, or chunkID): that chunk's tag union — the only per-chunk view. Index-backed forms proxy to the server or cold-start |
-| `check FILE [HEADING...]` | none | Validate FILE's tag block. Optional headings restrict allowed body headings |
+| `get FILE [TAG...] [--all] [--compact]` | none / optional (`--all`) | Read tags from FILE's tag block as a `- tag: value` bullet list (values verbatim); `--compact` gives the legacy `tag\tvalue` TSV. Without TAGs, dump all. Missing tags exit 1. `--all`: every tag in the file (union across all chunks), not just the block — needs the index; the `[TAG...]` filter composes |
+| `chunk ADDRESS [--all]` | none / optional | List tags at a file or chunk address, reusing the `ark chunks` / `@ext` grammar. Bare `FILE`: the file tag block (== `get`, no index). `FILE --all`: file-wide union across all chunks. `FILE:TARGET` (RANGE, `:"SNIPPET"`, or chunkID): that chunk's tag union — the only per-chunk view. Index-backed forms proxy to the server or cold-start |
+| `check FILE [HEADING...]` | none | Validate FILE's tag block. Prints a well-formed line on success (exit 0), the problems on failure (exit 1). Optional headings restrict allowed body headings |
 | `verify` | refused | Cross-check F/V/T/X records and the in-memory ExtMap. `--repair` writes corrections in a single write transaction. `--scope` is `ext`, `tag-totals`, or `all` (default). Refuses if the server is running. Exit 1 on issues, 2 on tool failure or invalid scope |
 | `inspect` | optional | Read-only observability for `@ext` state. Server-aware: proxies via the running server (in-memory ExtMap section included) or opens the index read-only when stopped (disk-only with a note). `--scope ext` (v1 only); `--target PATH` narrows to one file's chunks; `--json` for machine output. Output sections: on-disk (X / V[ext] / F[ext]), in-memory ExtMap maps, per-tvid_ext bridges with decoded paths and routed (tag, value) pairs |
 

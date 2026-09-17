@@ -70,7 +70,10 @@ func messageCommand() *ucli.Command {
 				Name:      "get-tags",
 				Usage:     "read tags from a file's tag block (alias for tag get)",
 				ArgsUsage: "FILE [TAG ...]",
-				Action:    messageGetTagsAction,
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{Name: "compact", Usage: "legacy tab-separated output instead of the markdown bullet list"},
+				},
+				Action: messageGetTagsAction,
 			},
 			{
 				Name:      "check",
@@ -315,7 +318,7 @@ func messageSetTagsAction(_ context.Context, c *ucli.Command) error {
 
 // CRC: crc-CLITree.md, crc-CLI.md | R614, R616
 func messageGetTagsAction(_ context.Context, c *ucli.Command) error {
-	cmdTagGet(c.Args().Slice())
+	cmdTagGet(c.Args().Slice(), c.Bool("compact"))
 	return nil
 }
 
@@ -345,6 +348,8 @@ const (
 	inboxHintFrom         = "from-projects present: "
 	inboxHintTo           = "to-projects present: "
 	inboxHintNone         = "(none)"
+	inboxCountsBullet     = "- %s (%d)\n"
+	inboxCountsCompact    = "%s\t%d\n"
 )
 
 // Indent widths for the tree, in spaces. The request bullet sits at column
@@ -527,7 +532,8 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 			filtered = um
 		}
 
-		// CRC: crc-CLI.md | R537, R538 — --counts prints one tab-separated status\tcount line per status, sorted
+		// CRC: crc-CLI.md | R537, R538, R3413 — one line per status, sorted:
+		// a markdown bullet "- status (N)" by default, the legacy TSV under --compact.
 		if counts {
 			statusCounts := make(map[string]int)
 			for _, e := range filtered {
@@ -538,8 +544,12 @@ func messageInboxAction(_ context.Context, c *ucli.Command) error {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
+			format := inboxCountsBullet
+			if compact {
+				format = inboxCountsCompact
+			}
 			for _, k := range keys {
-				fmt.Printf("%s\t%d\n", k, statusCounts[k])
+				fmt.Printf(format, k, statusCounts[k])
 			}
 			return
 		}

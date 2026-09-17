@@ -9,10 +9,10 @@ behind a flag.
 
 ## Status
 
-- [x] **Item 1 — `inbox` in baby food, `--compact` keeps the TSV.** **IMPLEMENTED — NOT COMMITTED (#128, 2026-09-16.)** R3404-R3409; `printInboxNode`/`printInboxCompact` in `cmd/ark/message_cli.go`, tests + 3 alarms in `test-InboxTree.md` (pulled, rang).
-- [x] **Item 2 — say when a filter matched nothing and what it could have matched.** **IMPLEMENTED — NOT COMMITTED (2026-09-16.)** R3410; `printInboxEmptyHint`. Was cheap (one pass over the unfiltered entries), so folded in.
-- [ ] **Item 3 — the other message verbs (`get-tags`, `check`, `--counts`).** **OPEN.**
-- [x] **Item 4 — the readers follow: `hermes-messaging.md`, `ark-usage`, `cli-commands.md`.** **IMPLEMENTED — NOT COMMITTED (2026-09-16.)** All three plus `specs/messaging.md` describe the tree default, `--compact`, and the reading rule (a reply's status is on the nested line; `no response` is stated).
+- [x] ~~**Item 1 — `inbox` in baby food, `--compact` keeps the TSV.**~~ **LANDED (`77c93ff`, 2026-09-17.)** R3404-R3409; `printInboxNode`/`printInboxCompact` in `cmd/ark/message_cli.go`, tests + 3 alarms in `test-InboxTree.md` (pulled, rang).
+- [x] ~~**Item 2 — say when a filter matched nothing and what it could have matched.**~~ **LANDED (`77c93ff`, 2026-09-17.)** R3410; `printInboxEmptyHint`. Was cheap (one pass over the unfiltered entries), so folded in.
+- [x] **Item 3 — the other message verbs (`get-tags`, `check`, `--counts`).** **IMPLEMENTED — NOT COMMITTED (2026-09-17.)** R3411-R3413. `get-tags`/`tag get` default to `- tag: value` bullets (`--compact` for TSV); `check`/`tag check` print a well-formed line on success (exit codes unchanged); `inbox --counts` defaults to `- status (N)` bullets (`--compact` for TSV). No repo consumer parses these TSVs, so nothing needed a compact fallback for compatibility — the flags are for scripts written later.
+- [x] ~~**Item 4 — the readers follow: `hermes-messaging.md`, `ark-usage`, `cli-commands.md`.**~~ **LANDED (`77c93ff`, 2026-09-17; the two skill files are fossil-side.)** All three plus `specs/messaging.md` describe the tree default, `--compact`, and the reading rule (a reply's status is on the nested line; `no response` is stated).
 
 ## How it surfaced
 
@@ -48,7 +48,9 @@ from a suffix. The reader is the least capable party in the chain.
 tree too: request, then its response nested beneath, then each side's
 bookmark stated as a sentence.
 
-## Shape (thinking, not decided)
+## Shape
+
+_Shipped in `77c93ff` (Items 1/2/4); the tree below is what landed._
 
 ```
 - open  microfts2 → mini-spec  impl-ref harvest scope  (2026-08-06)

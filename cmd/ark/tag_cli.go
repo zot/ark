@@ -93,6 +93,7 @@ func tagCommand() *ucli.Command {
 				ArgsUsage: "FILE [TAG ...]",
 				Flags: []ucli.Flag{
 					&ucli.BoolFlag{Name: "all", Usage: "every tag in the file (union across all chunks), not just the tag block"},
+					&ucli.BoolFlag{Name: "compact", Usage: "legacy tab-separated output instead of the markdown bullet list"},
 				},
 				Action: tagGetAction,
 			},
@@ -421,7 +422,7 @@ func tagGetAction(_ context.Context, c *ucli.Command) error {
 		runAllTagsForFile(args[0], normalizeTagNames(args[1:]))
 		return nil
 	}
-	cmdTagGet(c.Args().Slice())
+	cmdTagGet(c.Args().Slice(), c.Bool("compact"))
 	return nil
 }
 
@@ -532,7 +533,7 @@ func tagChunkAction(_ context.Context, c *ucli.Command) error {
 	// positional is the address.
 	path, rng, _, err := resolveChunksTarget(args[:1])
 	if err != nil || rng == "" {
-		cmdTagGet(args[:1])
+		cmdTagGet(args[:1], false) // bare FILE fallthrough → bullet default
 		return nil
 	}
 	runAllTagsForChunk(path, rng)

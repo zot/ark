@@ -45,7 +45,7 @@ mechanics.
 ~/.ark/ark tag set FILE status completed
 
 # Read tags
-~/.ark/ark tag get FILE
+~/.ark/ark tag get FILE          # bullet list `- tag: value`; --compact for TSV
 
 # Validate format (do this after creating/editing)
 ~/.ark/ark tag check FILE
@@ -69,7 +69,7 @@ correctable.
 date  status  to-project  from-project  summary  path  lag
 ```
 where `lag` is bookmark lag (empty when current, else `lag:PROJECT:STATUS`).
-`--counts` is unchanged (`status\tcount`).
+`--counts` prints `- status (N)` bullets by default, `status\tcount` under `--compact`.
 
 ## Gotchas
 

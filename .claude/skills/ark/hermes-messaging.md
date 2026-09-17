@@ -100,10 +100,8 @@ current. In `--compact` a reply's status is folded into the `lag` suffix
 of the *request's* row — which is exactly why the tree is the default;
 prefer the tree unless a script needs the columns.
 
-With `--counts`: one tab-separated line per status:
-```
-status	count
-```
+With `--counts`: one line per status — a `- status (N)` bullet list by
+default, the legacy `status	count` TSV under `--compact`.
 
 ## Creating Messages
 
@@ -188,8 +186,13 @@ hand-writing the file; the CLI lays down the canonical shape.
 ~/.ark/ark tag set <path> status in-progress
 ~/.ark/ark tag set <path> status completed
 
-# Read tags
+# Read tags — bullet list `- tag: value` by default (values verbatim);
+# add --compact for the legacy tag<TAB>value TSV
 ~/.ark/ark tag get <path> [TAG ...]
+
+# Validate a message file — prints a well-formed line on success (exit 0),
+# the problems on failure (exit 1). Silence is never success.
+~/.ark/ark message check <path>
 
 # Read message content
 ~/.ark/ark fetch --wrap knowledge <path>
