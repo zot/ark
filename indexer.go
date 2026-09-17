@@ -222,7 +222,16 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("fts add %s: %w", path, err)
 	}
+	return fileid, idx.afterAddStore(fileid, path, strategy, content, &acc)
+}
 
+// afterAddStore runs the post-store bookkeeping for a fresh add: pdf/bible
+// flushes, then chunkid-keyed tag values, file-level tag defs, @ext routing, tag
+// pubsub, and the schedule date index. Shared by the fused AddFile and the
+// prepared-store path (storeScan → StorePrepared), so the bookkeeping has one
+// home and cannot drift between them. (R3426)
+// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md, seq-ext-routing.md | R1883, R1891, R1996, R2000-R2007, R2913, R3426
+func (idx *Indexer) afterAddStore(fileid uint64, path, strategy string, content []byte, acc *chunkAccumulator) error {
 	if idx.pdfChunker != nil {
 		if err := idx.pdfChunker.FlushBlobs(path, fileid); err != nil {
 			log.Printf("pdf: flush blobs %s: %v", path, err)
@@ -242,19 +251,16 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 	if idx.store != nil {
 		// File-level tags + defs come straight from the source content
 		// (faithful to dedup'd chunks; keeps map-typed defs out of Attrs).
-		// CRC: crc-Indexer.md | R2913
 		fileVals, fileDefs := idx.fileLevelTags(path, content, strategy)
-		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
-			return fileid, fmt.Errorf("update tag values %s: %w", path, err)
+			return fmt.Errorf("update tag values %s: %w", path, err)
 		}
 		if err := idx.store.UpdateTagDefs(fileid, fileDefs); err != nil {
-			return fileid, fmt.Errorf("update tag defs %s: %w", path, err)
+			return fmt.Errorf("update tag defs %s: %w", path, err)
 		}
-		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
 		added := chunkIDsOf(acc.chunkTags)
 		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
-			return fileid, fmt.Errorf("ext routing %s: %w", path, err)
+			return fmt.Errorf("ext routing %s: %w", path, err)
 		}
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
@@ -264,7 +270,7 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 		idx.writeDateIndex(path, fileVals)
 	}
 
-	return fileid, nil
+	return nil
 }
 
 // chunkIDsOf returns the chunkids from a ChunkTagValues slice,
@@ -333,38 +339,64 @@ func (idx *Indexer) RemoveByID(fileid uint64) error {
 // CleanupSource must run before tt.Commit drops tvid_exts whose source V
 // records emptied. (R1899, R2008, R2009, R2022, R2024, R3064)
 func (idx *Indexer) cleanupOrphans(txn *bbolt.Tx, tt *TvidTxn, orphanedChunkIDs []uint64) error {
-	type extPair struct {
-		sourceChunkID uint64
-		tvidExt       uint64
-	}
-	var extPairs []extPair
-	if idx.extmap != nil {
-		for _, id := range orphanedChunkIDs {
-			ts, err := idx.store.ReadExtFamilyTvidsForChunk(txn, id)
-			if err != nil {
-				return err
-			}
-			for _, te := range ts {
-				extPairs = append(extPairs, extPair{sourceChunkID: id, tvidExt: te})
-			}
-		}
-	}
 	for _, id := range orphanedChunkIDs {
-		if err := idx.store.DeleteChunkEmbeddingInTxn(txn, id); err != nil {
-			return err
-		}
-		if err := idx.store.RemoveTagValuesInTxn(txn, tt, id); err != nil {
+		if err := idx.cleanupOrphanChunk(txn, tt, id); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// cleanupOrphanChunk drops the EC record and inline F/V/T contributions for one
+// orphaned chunk, striking its @ext-family derived records first. The @ext
+// family tvids must be read before RemoveTagValuesInTxn wipes F[orphan][ext*],
+// and CleanupSource must run before the surrounding TvidTxn commits — both hold
+// per chunk, since the records are keyed by this chunk and removing another
+// orphan's F records cannot change this one's family read. Shared by the batched
+// reindex/remove cleanup (cleanupOrphans) and the per-fire WithRemovedChunkCallback
+// on the prepared-store path. (R1899, R2008, R2009, R2022, R2024, R3064)
+func (idx *Indexer) cleanupOrphanChunk(txn *bbolt.Tx, tt *TvidTxn, chunkID uint64) error {
+	var extTvids []uint64
 	if idx.extmap != nil {
-		for _, p := range extPairs {
-			if err := idx.extmap.CleanupSource(txn, tt, idx.db, p.sourceChunkID, p.tvidExt); err != nil {
+		ts, err := idx.store.ReadExtFamilyTvidsForChunk(txn, chunkID)
+		if err != nil {
+			return err
+		}
+		extTvids = ts
+	}
+	if err := idx.store.DeleteChunkEmbeddingInTxn(txn, chunkID); err != nil {
+		return err
+	}
+	if err := idx.store.RemoveTagValuesInTxn(txn, tt, chunkID); err != nil {
+		return err
+	}
+	if idx.extmap != nil {
+		for _, te := range extTvids {
+			if err := idx.extmap.CleanupSource(txn, tt, idx.db, chunkID, te); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// removedChunkCleanup returns a microfts2 RemovedChunkCallback that runs
+// cleanupOrphanChunk for each chunk orphaned during a prepared store
+// (ReindexPrepared / AppendPrepared). The callback carries the store txn on its
+// CRecord (crec.Tx()); the shipped seam has no error return, so a cleanup
+// failure is captured in *cleanupErr for the caller to surface as a re-scan
+// (R3425) rather than being silently dropped. (R1899)
+// CRC: crc-FileScanActor.md | R3426
+func (idx *Indexer) removedChunkCleanup(tt *TvidTxn, cleanupErr *error) microfts2.RemovedChunkCallback {
+	return func(crec microfts2.CRecord) {
+		if idx.store == nil {
+			return
+		}
+		if err := idx.cleanupOrphanChunk(crec.Tx(), tt, crec.ChunkID); err != nil && *cleanupErr == nil {
+			*cleanupErr = err
+			log.Printf("index: orphan cleanup chunk %d: %v", crec.ChunkID, err)
+		}
+	}
 }
 
 // removeCallback returns a RemoveCallback that cleans up orphaned EC records
@@ -860,48 +892,50 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		// yields no chunks is the case worth seeing: the file grew and
 		// nothing downstream re-ran.
 		Logv(1, "index: %s APPENDED %d bytes → %d new chunk(s)", prep.path, len(prep.newBytes), len(acc.chunkTags))
-		// Embeddings: orphan EC/EF cleanup ran inside the reindex callback;
-		// new chunks will be embedded by Librarian.BatchEmbedChunks
-		// post-reconcile (R1923, R1926).
-		// Tags: chunkid-keyed; chunkids arrive via the indexed callback.
-		if idx.store != nil {
-			// Append file-level tags + defs from the appended bytes only
-			// (incremental, matching the prior callback semantics).
-			// CRC: crc-Indexer.md | R2913
-			fileVals, fileDefs := idx.fileLevelTags(prep.path, prep.newBytes, prep.strategy)
-			// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1884, R1894
-			if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
-				return fmt.Errorf("append tag values %s: %w", prep.path, err)
-			}
-			if err := idx.store.AppendTagDefs(prep.oldID, fileDefs); err != nil {
-				return fmt.Errorf("append tag defs %s: %w", prep.path, err)
-			}
-			// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R2007
-			added := chunkIDsOf(acc.chunkTags)
-			if err := idx.runExtRouting(prep.oldID, added, nil, acc.chunkTags); err != nil {
-				return fmt.Errorf("ext routing %s: %w", prep.path, err)
-			}
-			// R795, R796: publish tag events from appended content
-			if idx.pubsub != nil {
-				idx.pubsub.PublishAndWatch("", prep.path, fileVals)
-			}
-			idx.writeDateIndex(prep.path, fileVals)
-			// CRC: crc-Indexer.md | Seq: seq-recall-watcher.md#1 | R2696, R2729
-			// Simple-recall watcher hook: hand the freshly-appended
-			// bytes and the chunkIDs the chunker emitted to the
-			// watcher's turn-boundary state machine. The watcher
-			// applies its own enable + source-qualification gates
-			// internally. Live-append is the only path that drives
-			// the watcher — full reindex (executeFullRefresh) and
-			// initial add (AddFile) would amount to backfill, which
-			// R2698 disallows.
-			if idx.recallWatcher != nil {
-				idx.recallWatcher.OnAppend(prep.path, prep.strategy, prep.newBytes, added)
-			}
-		}
-		return nil
+		return idx.afterAppendStore(prep.oldID, prep.path, prep.strategy, prep.newBytes, &acc)
 	}
 	return idx.executeFullRefresh(prep)
+}
+
+// afterAppendStore runs the post-store bookkeeping for an append: incremental
+// file-level tags + defs from the appended bytes only, @ext routing, tag pubsub,
+// the schedule date index, and the recall-watcher hook. Shared by the fused
+// executeRefresh append branch and the prepared-store path (storeScan →
+// AppendPrepared). (R3426)
+// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md, seq-recall-watcher.md#1 | R1884, R1894, R2007, R2696, R2729, R2913, R3426
+func (idx *Indexer) afterAppendStore(oldID uint64, path, strategy string, newBytes []byte, acc *chunkAccumulator) error {
+	// Embeddings: orphan EC/EF cleanup ran inside the append callback; new
+	// chunks will be embedded by Librarian.BatchEmbedChunks post-reconcile
+	// (R1923, R1926). Tags: chunkid-keyed; chunkids arrive via the indexed callback.
+	if idx.store == nil {
+		return nil
+	}
+	// Append file-level tags + defs from the appended bytes only
+	// (incremental, matching the prior callback semantics).
+	fileVals, fileDefs := idx.fileLevelTags(path, newBytes, strategy)
+	if err := idx.store.AppendTagValues(acc.chunkTags); err != nil {
+		return fmt.Errorf("append tag values %s: %w", path, err)
+	}
+	if err := idx.store.AppendTagDefs(oldID, fileDefs); err != nil {
+		return fmt.Errorf("append tag defs %s: %w", path, err)
+	}
+	added := chunkIDsOf(acc.chunkTags)
+	if err := idx.runExtRouting(oldID, added, nil, acc.chunkTags); err != nil {
+		return fmt.Errorf("ext routing %s: %w", path, err)
+	}
+	// R795, R796: publish tag events from appended content
+	if idx.pubsub != nil {
+		idx.pubsub.PublishAndWatch("", path, fileVals)
+	}
+	idx.writeDateIndex(path, fileVals)
+	// Simple-recall watcher hook: hand the freshly-appended bytes and the
+	// chunkIDs the chunker emitted to the watcher's turn-boundary state
+	// machine. Live-append is the only path that drives the watcher — full
+	// reindex and initial add would amount to backfill (R2698 disallows).
+	if idx.recallWatcher != nil {
+		idx.recallWatcher.OnAppend(path, strategy, newBytes, added)
+	}
+	return nil
 }
 
 // executeFullRefresh does a complete reindex. Per-chunk tags arrive via
@@ -924,51 +958,57 @@ func (idx *Indexer) executeFullRefresh(prep *refreshPrep) error {
 	}); err != nil {
 		return fmt.Errorf("fts reindex %s: %w", prep.path, err)
 	}
+	return idx.afterReindexStore(fileid, prep.oldID, prep.path, prep.strategy, prep.data, &acc)
+}
 
+// afterReindexStore runs the post-store bookkeeping for a content-diff reindex:
+// pdf/bible flushes, removal of file-keyed records still under the old fileid,
+// then chunkid-keyed tag values, file-level defs, @ext routing, tag pubsub, and
+// the schedule date index. Shared by the fused executeFullRefresh and the
+// prepared-store path (storeScan → ReindexPrepared). (R3426)
+// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md, seq-ext-routing.md | R1883, R1891, R1996, R2000-R2007, R2913, R3426
+func (idx *Indexer) afterReindexStore(fileid, oldID uint64, path, strategy string, data []byte, acc *chunkAccumulator) error {
 	if idx.pdfChunker != nil {
-		if err := idx.pdfChunker.FlushBlobs(prep.path, fileid); err != nil {
-			log.Printf("pdf: flush blobs %s: %v", prep.path, err)
+		if err := idx.pdfChunker.FlushBlobs(path, fileid); err != nil {
+			log.Printf("pdf: flush blobs %s: %v", path, err)
 		}
 	}
 	// R3214: same book-index flush as the add path — a reindex re-walks the
 	// file, so its chapter set is staged again and overwrites in place.
 	if idx.bibleChunker != nil {
-		if err := idx.bibleChunker.FlushBookIndex(prep.path); err != nil {
-			log.Printf("bible: flush book index %s: %v", prep.path, err)
+		if err := idx.bibleChunker.FlushBookIndex(path); err != nil {
+			log.Printf("bible: flush book index %s: %v", path, err)
 		}
 	}
 
-	// EC/EF cleanup ran inside reindexCb; new EC records arrive on the
-	// next BatchEmbedChunks pass. (R1923, R1926)
+	// EC/EF cleanup ran inside the reindex/removed callback; new EC records
+	// arrive on the next BatchEmbedChunks pass. (R1923, R1926)
 
 	if idx.store != nil {
-		if fileid != prep.oldID {
+		if fileid != oldID {
 			// File-keyed records that survived the reindex callback
 			// belong to oldID and need explicit removal.
-			idx.store.RemoveTagDefs(prep.oldID)
-			idx.store.RemovePageContents(prep.oldID)
+			idx.store.RemoveTagDefs(oldID)
+			idx.store.RemovePageContents(oldID)
 		}
 		// File-level tags + defs re-extracted from the full file content.
-		// CRC: crc-Indexer.md | R2913
-		fileVals, fileDefs := idx.fileLevelTags(prep.path, prep.data, prep.strategy)
-		// CRC: crc-Indexer.md | Seq: seq-tag-value-index.md | R1883, R1891
+		fileVals, fileDefs := idx.fileLevelTags(path, data, strategy)
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
-			return fmt.Errorf("update tag values %s: %w", prep.path, err)
+			return fmt.Errorf("update tag values %s: %w", path, err)
 		}
 		if err := idx.store.UpdateTagDefs(fileid, fileDefs); err != nil {
-			return fmt.Errorf("update tag defs %s: %w", prep.path, err)
+			return fmt.Errorf("update tag defs %s: %w", path, err)
 		}
-		// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R1996, R2000-R2007
 		added := chunkIDsOf(acc.chunkTags)
 		if err := idx.runExtRouting(fileid, added, nil, acc.chunkTags); err != nil {
-			return fmt.Errorf("ext routing %s: %w", prep.path, err)
+			return fmt.Errorf("ext routing %s: %w", path, err)
 		}
 		// R795, R796: publish tag events from refreshed content
 		if idx.pubsub != nil {
-			idx.pubsub.PublishAndWatch("", prep.path, fileVals)
+			idx.pubsub.PublishAndWatch("", path, fileVals)
 		}
 		// R866: write schedule log entries
-		idx.writeDateIndex(prep.path, fileVals)
+		idx.writeDateIndex(path, fileVals)
 	}
 
 	return nil
@@ -986,6 +1026,190 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 		return err
 	}
 	return idx.executeRefresh(prep)
+}
+
+// scanPrep is the off-slot compute result for one per-file scan: a microfts2
+// prepared handle plus ark's own content snapshot and its length+hash, used for
+// the store-boundary content-staleness escape (R3423). Produced by prepareScan
+// off the write slot; consumed by storeScan on it.
+// CRC: crc-FileScanActor.md | R3426
+type scanPrep struct {
+	path, strategy string
+	oldID          uint64 // 0 for a fresh add
+	isAppend       bool
+	prepared       *microfts2.PreparedFile   // full add / reindex
+	appendPrep     *microfts2.PreparedAppend // append
+	data           []byte                    // full file content, for fileLevelTags + the escape
+	newBytes       []byte                    // append: the bytes past the committed length
+	fullHash       string
+	fileSize       int64
+	modTime        int64
+}
+
+// prepareScan runs one file's index compute off the write slot: read the file,
+// compute its length+hash, detect append-vs-full against the committed F record,
+// and run exactly one microfts2 Prepare* call holding no write transaction. Safe
+// to call from a plain goroutine — the LMDB read (FileInfoByID) is MVCC-safe and
+// runs on a private fts copy. Returns a scanPrep for storeScan.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426
+func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool) (*scanPrep, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	prep := &scanPrep{
+		path: path, strategy: strategy, oldID: oldID, data: data,
+		fullHash: fmt.Sprintf("%x", sha256.Sum256(data)),
+		fileSize: int64(len(data)),
+	}
+	if fi, statErr := os.Stat(path); statErr == nil {
+		prep.modTime = fi.ModTime().UnixNano()
+	}
+
+	// Append detection off the same snapshot we hashed: the current file's first
+	// FileLength bytes match the committed content hash AND the file grew. Using
+	// `data` rather than a second read keeps the (length, hash) pair coherent
+	// under a concurrent append. (R360-R362, R3008)
+	if known {
+		info, infoErr := idx.fts.FileInfoByID(oldID)
+		if infoErr == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength &&
+			sha256.Sum256(data[:info.FileLength]) == info.ContentHash {
+			newBytes := data[info.FileLength:]
+			baseLine := 0
+			var lastLocator []byte
+			if n := len(info.Chunks); n > 0 {
+				_, endLine := parseRange(info.Chunks[n-1].Location)
+				baseLine = endLine
+				lastLocator = info.Chunks[n-1].Locator
+			}
+			ap, apErr := idx.fts.PrepareAppend(path, lastLocator, newBytes, strategy,
+				microfts2.WithBaseLine(baseLine))
+			if apErr != nil {
+				return nil, fmt.Errorf("prepare append %s: %w", path, apErr)
+			}
+			prep.isAppend = true
+			prep.newBytes = newBytes
+			prep.appendPrep = ap
+			return prep, nil
+		}
+	}
+
+	// Full add (oldID == 0) or full reindex. PrepareFile reads and chunks the
+	// file exactly as the fused AddFileWithContent/Reindex path does internally.
+	pf, pfErr := idx.fts.PrepareFile(path, strategy)
+	if pfErr != nil {
+		return nil, fmt.Errorf("prepare file %s: %w", path, pfErr)
+	}
+	prep.prepared = pf
+	return prep, nil
+}
+
+// contentUnchangedForStore is the pure store-boundary staleness decision: a full
+// store may be skipped only when the committed index already holds this exact
+// content — same length AND same hash. An append is never skipped (its new bytes
+// are past the committed length by construction), which is the load-bearing
+// exemption. R3423
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.9.1 | R3423
+func contentUnchangedForStore(isAppend bool, committedLen int64, committedHash [32]byte, prepSize int64, prepHash string) bool {
+	if isAppend {
+		return false
+	}
+	if committedLen <= 0 {
+		return false
+	}
+	return committedLen == prepSize && fmt.Sprintf("%x", committedHash) == prepHash
+}
+
+// storeContentUnchanged fetches the committed F record and applies the pure
+// content-staleness decision. R3423
+func (idx *Indexer) storeContentUnchanged(prep *scanPrep) bool {
+	info, err := idx.fts.FileInfoByID(prep.oldID)
+	if err != nil {
+		return false
+	}
+	return contentUnchangedForStore(prep.isAppend, info.FileLength, info.ContentHash, prep.fileSize, prep.fullHash)
+}
+
+// storeScan applies a prepared scan on the write slot: the length+hash
+// content-staleness escape (full only), then StorePrepared / ReindexPrepared /
+// AppendPrepared, then the shared post-store bookkeeping. Runs on the write
+// goroutine (idx bound to the write copy). The compute already happened
+// off-slot, so only this short store + record work holds the slot. R3423, R3426
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.9 | R3423, R3426
+func (idx *Indexer) storeScan(prep *scanPrep) error {
+	if prep.isAppend {
+		return idx.storeAppendScan(prep)
+	}
+	// R3423: the file changed on disk between prepare and store to nothing new —
+	// or an interleaving scan already stored this exact content. Skip the
+	// redundant re-chunk.
+	if prep.oldID != 0 && idx.storeContentUnchanged(prep) {
+		Logv(1, "index: %s UNCHANGED (skipped — same length and hash)", prep.path)
+		return nil
+	}
+	acc := chunkAccumulator{strategy: prep.strategy}
+	if prep.oldID == 0 {
+		fileid, err := idx.fts.StorePrepared(prep.prepared,
+			microfts2.WithIndexedChunkCallback(acc.indexedCallback))
+		if err != nil {
+			return fmt.Errorf("store %s: %w", prep.path, err)
+		}
+		Logv(1, "index: %s ADDED (fileID=%d)", prep.path, fileid)
+		return idx.afterAddStore(fileid, prep.path, prep.strategy, prep.data, &acc)
+	}
+
+	Logv(1, "index: %s REINDEXED in full (fileID=%d)", prep.path, prep.oldID)
+	var fileid uint64
+	var cleanupErr error
+	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		var e error
+		fileid, e = idx.fts.ReindexPrepared(prep.prepared,
+			microfts2.WithIndexedChunkCallback(acc.indexedCallback),
+			microfts2.WithRemovedChunkCallback(idx.removedChunkCleanup(tt, &cleanupErr)))
+		return e
+	}); err != nil {
+		return fmt.Errorf("reindex %s: %w", prep.path, err)
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("reindex orphan cleanup %s: %w", prep.path, cleanupErr)
+	}
+	// A reindex allocates a fresh fileid, so the old fileid's EF centroid is now
+	// stale. The fused path drops it inside the reindex txn (reindexCallback →
+	// DeleteFileCentroidInTxn); the prepared seam exposes no positive reindex
+	// callback (only WithRemovedChunkCallback, which never fires when nothing is
+	// orphaned), so drop it here on the serialized write goroutine. A crash in
+	// the tiny gap leaves only a stale centroid the next embed pass recomputes.
+	if idx.store != nil {
+		if err := idx.store.DeleteFileCentroid(prep.oldID); err != nil {
+			log.Printf("index: drop stale centroid %d: %v", prep.oldID, err)
+		}
+	}
+	return idx.afterReindexStore(fileid, prep.oldID, prep.path, prep.strategy, prep.data, &acc)
+}
+
+// storeAppendScan stores a prepared append on the write slot. Appends skip the
+// content-staleness escape (R3423). On ErrAppendTailMoved — or any store error —
+// the caller re-emits one change event (R3425) rather than falling through to a
+// full reindex on the slot. R3426, R3427
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.9.4 | R3426, R3427
+func (idx *Indexer) storeAppendScan(prep *scanPrep) error {
+	acc := chunkAccumulator{strategy: prep.strategy}
+	var cleanupErr error
+	if err := idx.store.WithTvidTxn(func(tt *TvidTxn) error {
+		return idx.fts.AppendPrepared(prep.oldID, prep.appendPrep,
+			microfts2.WithContentHash(prep.fullHash),
+			microfts2.WithModTime(prep.modTime),
+			microfts2.WithFileLength(prep.fileSize),
+			microfts2.WithIndexedChunkCallback(acc.indexedCallback),
+			microfts2.WithRemovedChunkCallback(idx.removedChunkCleanup(tt, &cleanupErr)))
+	}); err != nil {
+		return fmt.Errorf("append %s: %w", prep.path, err)
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("append orphan cleanup %s: %w", prep.path, cleanupErr)
+	}
+	Logv(1, "index: %s APPENDED %d bytes → %d new chunk(s)", prep.path, len(prep.newBytes), len(acc.chunkTags))
+	return idx.afterAppendStore(prep.oldID, prep.path, prep.strategy, prep.newBytes, &acc)
 }
 
 // DetectAppend checks whether a file change is append-only by hashing
@@ -1250,78 +1474,6 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		log.Printf("refresh: %d file(s) had errors", errCount)
 	}
 	return missing, nil
-}
-
-// CRC: crc-Indexer.md | Seq: seq-write-actor.md | R1053, R1055
-// refreshBatch re-indexes a list of stale files using parallel workers
-// for prep and sequential writes. Designed to run in the write goroutine
-// (off the main actor).
-func (idx *Indexer) refreshBatch(stale []microfts2.FileStatus) {
-	if len(stale) == 0 {
-		return
-	}
-
-	// Single file: skip goroutine overhead
-	if len(stale) == 1 {
-		s := stale[0]
-		prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
-		if err != nil {
-			log.Printf("refresh: skip %s: %v", s.Path, err)
-			return
-		}
-		if err := idx.executeRefresh(prep); err != nil {
-			log.Printf("refresh: %s: %v", s.Path, err)
-		}
-		return
-	}
-
-	// Parallel prep, sequential write (same pattern as RefreshStale)
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(stale) {
-		numWorkers = len(stale)
-	}
-
-	jobCh := make(chan microfts2.FileStatus, len(stale))
-	writeCh := make(chan func() error, numWorkers)
-
-	// Sequential writer
-	var writeWg sync.WaitGroup
-	writeWg.Add(1)
-	go func() {
-		defer writeWg.Done()
-		for fn := range writeCh {
-			if err := fn(); err != nil {
-				log.Printf("refresh: %v", err)
-			}
-		}
-	}()
-
-	// Parallel workers
-	var workerWg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
-			for s := range jobCh {
-				prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
-				if err != nil {
-					log.Printf("refresh: skip %s: %v", s.Path, err)
-					continue
-				}
-				writeCh <- func() error {
-					return idx.executeRefresh(prep)
-				}
-			}
-		}()
-	}
-
-	for _, s := range stale {
-		jobCh <- s
-	}
-	close(jobCh)
-	workerWg.Wait()
-	close(writeCh)
-	writeWg.Wait()
 }
 
 // (tagWindowForAppend removed per R1895 — append-boundary handling is

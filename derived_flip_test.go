@@ -38,7 +38,7 @@ func setupFileBackedRecall(t *testing.T) (*Librarian, *DB) {
 	// Register "lines" (the default strategy .md mirrors resolve to) as the
 	// line chunker, and configure two sources so both the target files (test
 	// index dir) and the authored mirrors (~/.ark/external) resolve — what
-	// resolveExtMirror and the propose pass's syncOnePath both need.
+	// resolveExtMirror and the propose pass's per-file scan both need.
 	_ = db.indexer.fts.AddStrategyFunc("lines", microfts2.LineChunkFunc)
 	db.config.Sources = []Source{
 		{Dir: db.dbPath},

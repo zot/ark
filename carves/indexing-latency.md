@@ -12,9 +12,10 @@ Full evidence in
 
 ## Status
 
-- [ ] **Item 1 — per-file actor: compute chunks/grams off-slot, store on-slot.** **OPEN (not queued.)** Needs a microfts2 compute/store seam (request drafted).
-- [ ] **Item 2 — changeNum preemption + length+hash store-boundary check.** **OPEN (not queued.)** Folded into the Item 1 actor design. Appends exempt.
-- [ ] **Item 3 — move embedding out of the write closure.** **OPEN (#129.)**
+- [ ] **Item 1a — per-file actor, WHOLE-FILE compute off-slot, store on-slot.** **OPEN (#130.)** Against microfts2's current whole-file Prepare*/Store*/Reindex*/Append* seam.
+- [ ] **Item 1b — per-chunk preemption + chunk-hash reuse map.** **OPEN (not queued — buildable now, follow-on to #130).** microfts2 per-chunk API shipped; see the granularity fork in Item 1.
+- [ ] **Item 2 — changeNum preemption + length+hash store-boundary check.** **OPEN (#130.)** Folded into the Item 1 actor design. Appends exempt.
+- [x] ~~**Item 3 — move embedding out of the write closure.**~~ **LANDED (`4eb50b9`, 2026-09-17.)** Embed compute off-slot, EC/EF store in per-batch enqueueWrite closures (R3414-R3416). Measured burst first-write stall 16.2s → 10.3s; the residual ~10s is the on-slot refresh batch (Items 1/2, not yet built), which runs before the embed. See `.scratch/LATENCY-FINDINGS-20260917.md`.
 - **Item 4 — yield the slot between files in a batch reconcile.** **SUBSUMED by Items 1/2 (Bill, 2026-09-17).** No checkbox: per-file actors make yielding between files automatic — the write actor only ever holds a store.
 
 ## How it surfaced
@@ -113,6 +114,15 @@ and let the file actor drive compute → store as above. The whole-batch
 `enqueueWrite` closures (db.go:1601/1666/1685) are replaced by per-file store
 closures — which is also why Item 4 is subsumed.
 
+**DECIDED (Bill, 2026-09-17): build the per-file actor whole-file now; per-chunk
+preemption and the reuse map follow when microfts2 ships the per-chunk API.** So
+Item 1 splits: **1a** (whole-file, #130) builds the per-file actor against the
+current whole-file seam — the off-slot compute is a single `Prepare*` call and a
+superseded scan abandons one whole-file compute (no reuse map); **1b** (per-chunk,
+blocked on the request) adds chunk-granularity preemption and the chunk-hash→result
+reuse map when the per-chunk API lands. The store side and the actor/registry shape
+are shared, so 1b changes only the compute phase.
+
 ## Items
 
 - **Item 1 — per-file actor (design above).** The file actor computes FTS data
@@ -170,6 +180,53 @@ closures — which is also why Item 4 is subsumed.
   One open option: `ReindexPrepared` exposes only the option-based callbacks, not
   the raw positional `ReindexCallback`; ark can request a `WithReindexCallback`
   option later if the hot path needs it.
+
+  **Granularity fork (recorded honestly, 2026-09-17).** microfts2's shipped seam
+  is **whole-file and un-preemptible**: `PrepareFile` (microfts2 db.go:1435) →
+  `collectChunks` (db.go:1328) computes every chunk's grams in one call, and
+  `*PreparedFile` (db.go:1406) is opaque, so the per-chunk `process-chunk` loop
+  and the chunk-hash→result reuse map in the Design section **cannot be built
+  against it**. The two disagree: the Design section (per-chunk) was written
+  ahead of the coarser seam that landed. **Per-chunk remains the target — Bill's
+  DECIDED stands.** whole-file is what microfts2 has *today*. A per-chunk request
+  was sent: `.scratch/microfts2-per-chunk-prepare-request-20260917.md`.
+  `@ark-request-sent: requests/microfts2-per-chunk-prepare.md`
+
+  **microfts2 reply — COMPLETED (2026-09-17), per-chunk API in ~/work/microfts2
+  working tree.** They gave exactly the split we asked for (nothing declined),
+  with two shaping decisions:
+  - **Split (txn-free):** `SplitFile(fpath, strategy) ([]SplitChunk, FileMeta,
+    error)` (microfts2 db.go:1436), `SplitContent` (db.go:1475), `SplitAppend`
+    (db.go:2491) — cheap boundaries + text, no grams. `SplitChunk` carries
+    `Hash = sha256(Content)`, **microfts2's authoritative hash** (db.go:1332).
+  - **Per-chunk (content-pure, cacheable):** `PrepareChunk(content)
+    *PreparedChunk` (db.go:1494) — grams-only (trigram counts + tokens), no
+    positions.
+  - **Assemble:** `AssembleFile(fpath, strategy, []PreparedEntry, FileMeta)
+    (*PreparedFile, error)` (db.go:1546), `AssembleAppend` (db.go:2500) → the
+    existing opaque handles → `StorePrepared`/`ReindexPrepared`/`AppendPrepared`
+    unchanged.
+
+  **Two changes from our ask (note, not a redesign):** (1) **microfts2 computes
+  the hash in split, ark never hashes** — so the reuse-map key IS the dedup key
+  by construction (no drift). Bill's design said "chunk-content hash" as the key;
+  it becomes microfts2's `SplitChunk.Hash`. (2) `*PreparedChunk` is **grams-only**;
+  positions (Range/Locator/Attrs) come from each scan's `SplitChunk` at assemble,
+  so a reused token lands each occurrence at its own range — reuse is safe across
+  scans *and* files.
+
+  **What it means for the process loop + reuse map:** fully buildable. The 1b
+  loop is: `SplitFile` once → key the reuse map on `SplitChunk.Hash` →
+  `PrepareChunk` only on a miss → preempt between chunks on `changeNum` with
+  finished grams cached → on completion `Assemble` → `StorePrepared`. The store
+  side and the actor/registry from 1a are shared, so **1b changes only the
+  compute phase** (replace 1a's single `Prepare*` call with split→loop→assemble).
+  Requirements R690-R699 microfts2-side; standing precondition: the reuse map is
+  valid while trigram config (case-fold/aliases) is stable.
+  Until it lands, ark may build the **whole-file** path first (per-file actor,
+  whole-file preemption — a superseded scan abandons one whole-file compute, no
+  reuse map; not a regression, just the un-taken optimization) and switch the
+  compute phase when per-chunk arrives; the store side is shared.
 - **Item 2 — length+hash redo-escape.** On the actor, before storing, recompare
   the file's length + content hash against what prep computed; if changed,
   requeue the path (the R3005 coalescing claim/release machinery already exists
@@ -190,6 +247,23 @@ closures — which is also why Item 4 is subsumed.
   per-file store closures. No separate work remains.
 
 ## Open questions
+
+- **R3005 coalescing vs the `changeNum` registry — DECIDED (Bill, 2026-09-17):
+  retire R3005 in favor of `changeNum` if fully subsumed, else layer and say why.**
+  The registry keeps one file-actor per path and `changeNum` supersedes an
+  in-flight scan, which is the same "don't accumulate duplicate refresh work"
+  purpose `pendingRefresh` served — so the expectation is retirement (a `Tn`).
+  The implementer confirms full subsumption against `claimRefreshPaths`/
+  `releaseRefreshPath` while wiring the entry points; if any coalescing purpose
+  remains uncovered, layer and document why instead.
+- **`ErrAppendTailMoved` (microfts2 db.go:2266) — DECIDED: add the fire-alarm
+  test.** "Never fires under the per-file actor" holds only if start-scan/retire
+  are strictly serialized on the write actor; a fire alarm asserts the guard.
+- **Store-failure / retire path — DECIDED (Bill, 2026-09-17): log + re-emit one
+  change event (bounded), not an inline full reindex.** A failed store logs,
+  retires the file actor, and re-emits a single change event for the path so the
+  normal machinery re-scans it once; no inline `executeFullRefresh` fallback
+  (indexer.go:848) under the actor.
 
 - Does the microfts2 seam for Item 1 already partly exist (the indexed-chunk
   callback returns chunks; is there a write-free compute mode)? Verify before

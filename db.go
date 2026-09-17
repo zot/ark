@@ -68,14 +68,21 @@ type DB struct {
 	onWriteComplete  func([]scheduleItem)  // callback for schedule items from write goroutines
 	writeIdleWaiters []chan struct{}       // R2989: one-shot signals when the write queue drains; actor-only
 
-	refreshMu      sync.Mutex          // R3005: guards pendingRefresh
-	pendingRefresh map[string]struct{} // R3005: paths with a refresh queued or in flight
+	// Per-file scan actor registry (R3420). One entry per changed path with an
+	// in-flight scan, each carrying the changeNum stamp of its authoritative
+	// scan. Actor-owned — read and written only inside DB-actor closures, so it
+	// needs no mutex (the actor serializes access). Replaces the R3005
+	// pendingRefresh coalescing set (retired T280): a new event for a path with a
+	// scan in flight bumps the changeNum, superseding the older scan's store.
+	// CRC: crc-FileScanActor.md | R3420
+	fileScans map[string]*fileScan
+	scanSeq   uint64 // R3421: process-global monotonic changeNum counter, never reset per entry (ABA guard)
 
 	// reconcilePending is set while a reconcile scan is queued but has not yet
 	// begun, so further requests merge into it instead of queueing scans of
 	// their own (R346, R3351). Actor-owned — read and written only inside
-	// closures, which is what lets it be a plain bool rather than needing
-	// refreshMu's treatment. Cleared as the scan *starts*, so a request
+	// closures, which is what lets it be a plain bool needing no lock. Cleared
+	// as the scan *starts*, so a request
 	// arriving mid-scan queues a fresh one rather than being swallowed by a
 	// scan that may already have walked past whatever changed.
 	reconcilePending bool
@@ -574,7 +581,7 @@ func (db *DB) startNextWrite() {
 					if len(db.writeQueue) > 0 {
 						db.startNextWrite()
 					} else {
-						db.signalWriteIdle() // R2989
+						db.checkWriteIdle() // R2989
 					}
 				})
 			}
@@ -590,10 +597,28 @@ func (db *DB) startNextWrite() {
 			if len(db.writeQueue) > 0 {
 				db.startNextWrite() // R1058: continuation
 			} else {
-				db.signalWriteIdle() // R2989
+				db.checkWriteIdle() // R2989
 			}
 		})
 	}()
+}
+
+// writeIdle reports whether every enqueued write has committed AND every
+// per-file scan has retired. The file-scan registry is included (R3420) because
+// a rebuild's WaitWritesIdle must not return while off-slot compute is still in
+// flight — those goroutines have not enqueued their store closures yet, so the
+// write queue can be momentarily empty while indexing is unfinished.
+// CRC: crc-FileScanActor.md | R2989, R3420
+func (db *DB) writeIdle() bool {
+	return !db.writing && len(db.writeQueue) == 0 && len(db.fileScans) == 0
+}
+
+// checkWriteIdle signals write-idle waiters only when writeIdle() holds. Called
+// from the write-completion path and from file-scan retirement.
+func (db *DB) checkWriteIdle() {
+	if db.writeIdle() {
+		db.signalWriteIdle()
+	}
 }
 
 // CRC: crc-DB.md | Seq: seq-rebuild-read-serve.md#2.6 | R2989
@@ -615,7 +640,7 @@ func (db *DB) signalWriteIdle() {
 func (db *DB) WaitWritesIdle() {
 	ch := make(chan struct{})
 	SyncVoid(db, func(db *DB) error {
-		if !db.writing && len(db.writeQueue) == 0 {
+		if db.writeIdle() {
 			close(ch)
 			return nil
 		}
@@ -1593,28 +1618,17 @@ func (db *DB) ScanAsync() (*ScanResults, error) {
 		return results, nil
 	}
 
-	// R1053, R1648: queue evictions + content adds for the write goroutine
-	// so LMDB writes serialize behind any in-flight write, and the actor
-	// returns immediately.
-	files := contentFiles         // capture for closure
-	empties := results.EmptyFiles // capture for closure
-	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
-		evictEmpty(ftsCopy, empties)
-		idx := db.indexer.withFTS(ftsCopy)
-		for _, f := range files {
-			if _, err := idx.AddFile(f.Path, f.Strategy); err != nil {
-				if errors.Is(err, microfts2.ErrNoChunks) || errors.Is(err, microfts2.ErrAlreadyIndexed) {
-					continue
-				}
-				if errors.Is(err, os.ErrNotExist) {
-					log.Printf("scan: skipping %s: %v", f.Path, err)
-					continue
-				}
-				log.Printf("scan: add %s: %v", f.Path, err)
-			}
-		}
-		db.drainWriteSchedule(idx)
-	})
+	// R1648: evictions are a short metadata write — queue them on the write
+	// actor. R3419: each new content file becomes its own per-file scan, so its
+	// chunk+trigram compute runs off the write slot.
+	if empties := results.EmptyFiles; len(empties) > 0 {
+		db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+			evictEmpty(ftsCopy, empties)
+		})
+	}
+	for _, f := range contentFiles {
+		db.startFileScan(db.indexer, f.Path)
+	}
 	return results, nil
 }
 
@@ -1654,81 +1668,212 @@ func (db *DB) RefreshAsync() error {
 		return nil
 	}
 
-	// R1053: queue refresh work for write goroutine
-	files := stale // capture for closure
-	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
-		idx := db.indexer.withFTS(ftsCopy)
-		idx.refreshBatch(files)
-		db.drainWriteSchedule(idx)
-	})
+	// R3419: each stale file is its own scan — compute off-slot, store on-slot.
+	for _, s := range stale {
+		db.startFileScan(db.indexer, s.Path)
+	}
 	return nil
 }
 
-// IndexPathsAsync schedules per-path index updates through the write actor.
-// For each path: stat → decide add/refresh/remove based on disk and index
-// state. One closure for the whole batch (R991). Must be called from inside
-// the actor.
+// IndexPathsAsync schedules per-path index updates through the per-file scan
+// actor. Each path's expensive chunk+trigram compute runs off the write slot;
+// the slot runs only the store step. Must be called from inside the actor.
 //
-// CRC: crc-DB.md | Seq: seq-file-change.md#1.4 | R991, R3005
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.1 | R991, R3419
 func (db *DB) IndexPathsAsync(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	// Settle each path's link status here, on the actor that owns the table,
-	// before anything is queued for the write actor that runs off it. Order
-	// matters as well as goroutine: a link replaced by an indexable file must
-	// stop being an alias prefix before its replacement is indexed, or the
-	// two answers disagree for as long as the queue is deep. R3390
 	for _, path := range paths {
+		// Settle each path's link status here, on the actor that owns the table,
+		// before its scan is dispatched. Order matters as well as goroutine: a
+		// link replaced by an indexable file must stop being an alias prefix
+		// before its replacement is indexed, or the two answers disagree. R3390
 		db.SyncLinkPath(path)
+		db.startFileScan(db.indexer, path)
 	}
-	// R3005: coalesce — skip paths whose refresh is already queued or in
-	// flight, so a saturated write actor doesn't accumulate duplicate no-op
-	// refresh closures for the same file.
-	fresh := db.claimRefreshPaths(paths)
-	if len(fresh) == 0 {
-		return nil
-	}
-	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
-		idx := db.indexer.withFTS(ftsCopy)
-		for _, path := range fresh {
-			// Release before processing so a change arriving during the
-			// refresh re-queues rather than being dropped. (R3005)
-			db.releaseRefreshPath(path)
-			db.syncOnePath(idx, path)
-		}
-		db.drainWriteSchedule(idx)
-	})
 	return nil
 }
 
-// claimRefreshPaths returns the subset of paths without a refresh already
-// queued or in flight, marking those it returns as queued. Coalesces
-// duplicate watcher events under refreshMu.
-// CRC: crc-DB.md | R3005
-func (db *DB) claimRefreshPaths(paths []string) []string {
-	db.refreshMu.Lock()
-	defer db.refreshMu.Unlock()
-	if db.pendingRefresh == nil {
-		db.pendingRefresh = make(map[string]struct{})
-	}
-	var fresh []string
-	for _, p := range paths {
-		if _, busy := db.pendingRefresh[p]; busy {
-			continue
-		}
-		db.pendingRefresh[p] = struct{}{}
-		fresh = append(fresh, p)
-	}
-	return fresh
+// fileScan is one path's in-flight scan state in the write actor's registry. In
+// the whole-file variant (indexing-latency #130 Item 1a) it carries only the
+// changeNum stamp; per-chunk preemption (Item 1b) will add a chunk-hash→result
+// reuse map here when microfts2 ships the per-chunk API.
+// CRC: crc-FileScanActor.md | R3420, R3421
+type fileScan struct {
+	changeNum uint64
 }
 
-// releaseRefreshPath clears a path's queued mark so later events re-queue it.
-// CRC: crc-DB.md | R3005
-func (db *DB) releaseRefreshPath(path string) {
-	db.refreshMu.Lock()
-	delete(db.pendingRefresh, path)
-	db.refreshMu.Unlock()
+// storeOutcome is what to do after a store attempt.
+type storeOutcome struct {
+	retire bool
+	reEmit bool
+}
+
+// storeResultAction decides the post-store action: always retire the entry;
+// re-emit one bounded change event only on failure (never an inline reindex).
+// A pure function so the "re-scan on failure, exactly once" property is testable
+// without a live store. R3425
+// CRC: crc-FileScanActor.md | R3425
+func storeResultAction(err error) storeOutcome {
+	return storeOutcome{retire: true, reEmit: err != nil}
+}
+
+// stampFileScan looks up or creates path's registry entry and stamps it with the
+// next changeNum from the global monotonic counter. On the DB actor. The counter
+// is never reset per entry, so a stale compute from a retired-and-recreated
+// entry can never match a fresh stamp (ABA guard). R3421
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2 | R3420, R3421
+func (db *DB) stampFileScan(path string) uint64 {
+	if db.fileScans == nil {
+		db.fileScans = make(map[string]*fileScan)
+	}
+	db.scanSeq++
+	fs := db.fileScans[path]
+	if fs == nil {
+		fs = &fileScan{}
+		db.fileScans[path] = fs
+	}
+	fs.changeNum = db.scanSeq
+	return db.scanSeq
+}
+
+// fileScanCurrent reports whether path's entry still carries stamp my — i.e. no
+// newer event superseded it and it has not been retired. On the DB actor. R3422
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.7 | R3422
+func (db *DB) fileScanCurrent(path string, my uint64) bool {
+	fs := db.fileScans[path]
+	return fs != nil && fs.changeNum == my
+}
+
+// retireFileScanIfCurrent removes path's entry only if it still carries stamp my
+// — a newer scan keeps its entry. On the DB actor, which closes the
+// retire-vs-new-event race. Signals write-idle when the registry empties. R3424
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.10 | R3424
+func (db *DB) retireFileScanIfCurrent(path string, my uint64) {
+	if fs := db.fileScans[path]; fs != nil && fs.changeNum == my {
+		delete(db.fileScans, path)
+		db.checkWriteIdle()
+	}
+}
+
+// startFileScan stamps path's registry entry with the next changeNum and
+// launches its off-slot compute. Config files (ark.toml) index synchronously on
+// the actor, unchanged — they are small and must complete before dependent
+// writes. On the DB actor.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2 | R3419, R3421
+func (db *DB) startFileScan(idx *Indexer, path string) {
+	my := db.stampFileScan(path)
+
+	fi, statErr := os.Stat(path)
+	status, checkErr := db.fts.CheckFile(path)
+	known := checkErr == nil && status.FileID != 0
+
+	// Deleted on disk: remove if known (a short write), then retire. R3419
+	if statErr != nil {
+		if known {
+			db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+				if err := idx.withFTS(ftsCopy).RemoveFile(path); err != nil {
+					log.Printf("watch: remove %s: %v", path, err)
+				}
+				svc(db.svc, func() { db.retireFileScanIfCurrent(path, my) })
+			})
+		} else {
+			db.retireFileScanIfCurrent(path, my)
+		}
+		return
+	}
+	if fi.IsDir() {
+		db.retireFileScanIfCurrent(path, my)
+		return
+	}
+	src, rel, ok := db.findSourceForPath(path)
+	if !ok {
+		db.retireFileScanIfCurrent(path, my)
+		return
+	}
+	strategy := db.config.StrategyForFile(rel, src.Strategies)
+
+	// Config files stay synchronous on the actor (R1052) — dependent content
+	// writes must see the chunker registered first.
+	if filepath.Base(path) == "ark.toml" {
+		if known {
+			if err := idx.RefreshFile(path, strategy); err != nil {
+				log.Printf("scan: config refresh %s: %v", path, err)
+			}
+		} else if _, err := idx.AddFile(path, strategy); err != nil {
+			if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, microfts2.ErrAlreadyIndexed) && !errors.Is(err, os.ErrNotExist) {
+				log.Printf("scan: config add %s: %v", path, err)
+			}
+		}
+		db.retireFileScanIfCurrent(path, my)
+		return
+	}
+
+	// Content file: compute off the slot on a private fts copy, store on-slot.
+	prepIdx := idx.withFTS(db.fts.Copy())
+	go db.prepareFileScan(prepIdx, path, strategy, status.FileID, known, my)
+}
+
+// prepareFileScan runs a content file's index compute off the write slot (no
+// write transaction), then enqueues the store step back through the write actor.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426
+func (db *DB) prepareFileScan(idx *Indexer, path, strategy string, oldID uint64, known bool, my uint64) {
+	prep, err := idx.prepareScan(path, strategy, oldID, known)
+	if err != nil {
+		if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("index: prepare %s: %v", path, err)
+		}
+		// Nothing to store — retire so a later event re-scans cleanly.
+		SyncVoid(db, func(db *DB) error {
+			db.retireFileScanIfCurrent(path, my)
+			return nil
+		})
+		return
+	}
+	SyncVoid(db, func(db *DB) error {
+		db.finishFileScan(path, prep, my)
+		return nil
+	})
+}
+
+// finishFileScan applies the changeNum redo-escape and, if the scan is still
+// current, enqueues the store step. On the DB actor.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.7 | R3422
+func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
+	// R3422: a newer event bumped the changeNum (or the entry was retired) — drop
+	// without storing. The newer scan owns the entry and will store + retire.
+	if !db.fileScanCurrent(path, my) {
+		return
+	}
+	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		idx := db.indexer.withFTS(ftsCopy)
+		err := idx.storeScan(prep)
+		db.drainWriteSchedule(idx)
+		// R3424/R3425: retire on the actor; re-emit one bounded change event on
+		// failure. Fire-and-forget back to the actor is safe from a write
+		// goroutine (the loop is free to receive).
+		svc(db.svc, func() {
+			act := storeResultAction(err)
+			if act.reEmit {
+				log.Printf("index: store %s failed (%v) — re-scanning once", path, err)
+			}
+			if act.retire {
+				db.retireFileScanIfCurrent(path, my)
+			}
+			if act.reEmit {
+				db.reEmitFileChange(path)
+			}
+		})
+	})
+}
+
+// reEmitFileChange posts one change event for path back through the scan
+// machinery so a failed store is re-scanned once — bounded, never an inline
+// full reindex (R3425). On the DB actor; the post defers to the queue tail.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.10.1 | R3425
+func (db *DB) reEmitFileChange(path string) {
+	db.Do(func(db *DB) { db.startFileScan(db.indexer, path) })
 }
 
 // SyncLinkPath brings the link table in line with one path, and records a
@@ -1800,45 +1945,6 @@ func (db *DB) SyncLinkPath(path string) {
 		Reason: UnresolvedReasonSymlink, Symlink: entry.Path,
 	}); err != nil {
 		log.Printf("watch: unresolved %s (proposed by %s): %v", entry.Resolved, entry.Path, err)
-	}
-}
-
-// syncOnePath brings one path's index entry in line with disk. Inside the
-// write actor (caller's responsibility). Add/refresh/remove dispatched by
-// (disk-exists, index-known) state.
-//
-// CRC: crc-DB.md | Seq: seq-file-change.md#1.4.1.1
-func (db *DB) syncOnePath(idx *Indexer, path string) {
-	fi, statErr := os.Stat(path)
-	status, checkErr := idx.fts.CheckFile(path)
-	known := checkErr == nil && status.FileID != 0
-
-	if statErr != nil {
-		if known {
-			if err := idx.RemoveFile(path); err != nil {
-				log.Printf("watch: remove %s: %v", path, err)
-			}
-		}
-		return
-	}
-	if fi.IsDir() {
-		return
-	}
-
-	src, rel, ok := db.findSourceForPath(path)
-	if !ok {
-		return
-	}
-	strategy := db.config.StrategyForFile(rel, src.Strategies)
-
-	if known {
-		if err := idx.RefreshFile(path, strategy); err != nil {
-			log.Printf("watch: refresh %s: %v", path, err)
-		}
-		return
-	}
-	if _, err := idx.AddFile(path, strategy); err != nil {
-		log.Printf("watch: add %s: %v", path, err)
 	}
 }
 

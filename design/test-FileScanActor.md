@@ -1,0 +1,87 @@
+# Test Design: FileScanActor
+**Source:** crc-FileScanActor.md
+
+Cheap deterministic tests over the registry/changeNum decision logic on a
+zero-value `*DB` (just the maps + counter — no bbolt, no server). The
+properties here are all "invisible when violated": a wrong changeNum comparison,
+a retire that fires when it shouldn't, or a content-staleness escape that skips
+a real change all pass a naive suite while corrupting the index or starving a
+file.
+
+## Test: stamp monotonic + ABA-safe
+**Purpose:** each startFileScan draws a strictly larger stamp from the global
+counter, even across retire-and-recreate, so a stale compute can never match a
+fresh entry. (R3421)
+**Input:** stampFileScan("a") → s1; retire; stampFileScan("a") → s2.
+**Expected:** s2 > s1; a fileScanCurrent("a", s1) after recreate is false.
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.2
+**Code:** filescan_test.go
+**Alarm:** 1
+**Fire alarm:** reset the counter per-entry (stamp from 1 each create) — then s1
+== s2 and the stale check passes, letting a superseded compute overwrite a fresh
+one. Red: s2 == s1 assertion fails.
+**Inject:** db.go:stampFileScan
+**Pulled:** 2026-09-17 — rang
+
+## Test: changeNum redo-escape drops a superseded scan
+**Purpose:** finishFileScan stores only the current stamp; a scan whose stamp
+was bumped by a later event is dropped. This is also the guard that keeps
+ErrAppendTailMoved from firing. (R3422, R3427)
+**Input:** stamp("a")→my1; stamp("a")→my2 (a newer event); fileScanCurrent("a", my1).
+**Expected:** fileScanCurrent("a", my1) == false; fileScanCurrent("a", my2) == true.
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.7
+**Code:** filescan_test.go
+**Alarm:** 2
+**Fire alarm:** make fileScanCurrent compare `>=` instead of `==` — then a stale
+scan (my1) reads as current and both stores land (double index / stale
+overwrite). Red: the my1==false assertion fails.
+**Inject:** db.go:fileScanCurrent
+**Pulled:** 2026-09-17 — rang
+
+## Test: retire only when current
+**Purpose:** retireFileScanIfCurrent removes the entry only if its changeNum
+still matches; a newer event's entry survives. Closes the retire-vs-new-event
+race. (R3424)
+**Input:** stamp("a")→my1; stamp("a")→my2; retireFileScanIfCurrent("a", my1).
+**Expected:** entry still present with changeNum == my2 (stale retire is a no-op).
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.10
+**Code:** filescan_test.go
+**Alarm:** 3
+**Fire alarm:** drop the changeNum check in retireFileScanIfCurrent (always
+delete) — then a stale store's retire deletes the entry a newer in-flight event
+just created, and the newer scan's store is dropped as "not current" (file left
+unindexed). Red: entry-present assertion fails.
+**Inject:** db.go:retireFileScanIfCurrent
+**Pulled:** 2026-09-17 — rang
+
+## Test: content-staleness escape, full-only, append-exempt
+**Purpose:** the full-store escape skips only when committed length AND hash
+already match the prepared file; an append is never escaped. (R3423)
+**Input:** (a) committed (len,hash) == prep (len,hash), op=reindex → skip; (b)
+same equality, op=append → do not skip; (c) hash differs → do not skip.
+**Expected:** contentUnchangedForStore true only for (a).
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.9.1
+**Code:** filescan_test.go
+**Alarm:** 4
+**Fire alarm:** remove the `!isAppend` guard so an append with a coincidentally
+matching stored hash gets skipped — an append that grows the file is silently
+dropped, invisibly, because the happy path rarely hits a hash collision. Red:
+case (b) expects false-skip but gets true.
+**Inject:** indexer.go:contentUnchangedForStore
+**Pulled:** 2026-09-17 — rang
+
+## Test: store-failure re-emits exactly once, never inline reindex
+**Purpose:** a failed store retires the entry and re-emits one change event; a
+successful store retires without re-emitting. No inline executeFullRefresh
+fallback. (R3425)
+**Input:** storeResultAction(err) and storeResultAction(nil).
+**Expected:** err → {retire:true, reEmit:true}; nil → {retire:true, reEmit:false}.
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.10.1
+**Code:** filescan_test.go
+**Alarm:** 5
+**Fire alarm:** make storeResultAction return reEmit:false on error — a transient
+store failure then leaves the file unindexed with nothing to re-scan it until the
+next periodic reconcile, which a green suite never notices. Red: err case expects
+reEmit:true.
+**Inject:** db.go:storeResultAction
+**Pulled:** 2026-09-17 — rang

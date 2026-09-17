@@ -122,6 +122,74 @@ The pass is therefore split:
 An embedding store write is a DB mutation and routes through the write actor
 like every other — it is never called directly from the off-slot goroutine.
 
+## Per-file scan actor: index compute off-slot, store on-slot
+
+File indexing has the same shape of problem the embedding pass had, one layer
+earlier. A file's chunk + trigram + token compute (microfts2's `collectChunks`)
+is the expensive part, and until now it ran *inside* the write closure, fused
+with the store. So while the server reindexes a burst of files, every
+interleaving write — a tmp:// UI document, a DM, a config edit — queues behind
+the whole chunk-and-gram pass. Measured 2026-09-17: after the embedding pass
+moved off-slot, the residual first-write stall in a reconcile burst was ~10 s,
+and it is this fused refresh batch.
+
+The three server-side async entry points — new-file add (`ScanAsync`), stale
+refresh (`RefreshAsync`), and per-path watcher updates (`IndexPathsAsync`) —
+therefore index each changed file through a **per-file scan actor** rather than
+running the indexer on the write slot. Config files (`ark.toml`) stay
+synchronous in the DB actor, as before.
+
+The split mirrors the embedding split:
+
+- **Compute off the slot.** For each changed file a plain goroutine reads the
+  file and runs a single microfts2 `Prepare*` call — `PrepareFile` for a full
+  add or reindex, `PrepareAppend` for an append — holding no write transaction.
+  This is where chunking, trigram, and token computation happens. The reads it
+  needs (the committed tail locator for an append) use MVCC and never block.
+- **Store on the slot.** The store step runs through `enqueueWrite`:
+  `StorePrepared` (fresh add), `ReindexPrepared` (content-diff reindex, which
+  derives its own old-chunk removal set in-transaction from the committed F
+  record — the caller hands only the prepared handle), or `AppendPrepared`. All
+  post-store bookkeeping is preserved (chunkid-keyed tag values and defs, @ext
+  routing, tag pubsub, the schedule date index, pdf blob flush, bible
+  book-index flush, and the recall-watcher append hook), fed by microfts2's
+  `WithIndexedChunkCallback` during store and `WithRemovedChunkCallback` for
+  orphan cleanup.
+
+### The registry and the changeNum
+
+The **write actor owns a registry** of in-flight file scans, keyed by path,
+each carrying a monotonically-stamped `changeNum`. Lookup, create, and retire
+all run on the DB actor — no mutex, the actor serializes them. This is what
+makes the per-path coalescing the old `pendingRefresh` set did (skipping
+duplicate refresh work for a saturated write actor) fall out of the model: a
+new change event for a path with a scan already in flight bumps the
+`changeNum`, superseding the older scan, so only the last store lands.
+
+- **start-scan** (on the DB actor) stamps the file's registry entry with the
+  next `changeNum` and launches the off-slot compute tagged with that stamp.
+- **The store step re-checks `changeNum` equality** before storing. A scan
+  whose stamp no longer matches the registry entry (a newer change bumped it)
+  is dropped without storing — the **changeNum redo-escape**. Both full and
+  append respect supersession, which is why the append tail-moved guard never
+  fires in practice: a superseded stale append is dropped before its store is
+  ever attempted.
+- **A full store also runs a content-staleness escape**: before storing, the
+  committed (FileLength, ContentHash) is compared against the prepared file's
+  length + hash; if already identical, the store is a redundant no-op and is
+  skipped. **Appends are exempt** from this escape — an append's new bytes are
+  by definition beyond the committed length.
+- **Retire runs on the DB actor, after the store, and only if the entry's
+  `changeNum` still matches** — a newer scan keeps the entry. Retiring on the
+  actor (never off it) closes the retire-versus-new-event race.
+- **A store failure logs, retires the entry, and re-emits a single (bounded)
+  change event** for the path so the normal machinery re-scans it once. It is
+  never an inline full reindex.
+
+The stamp is drawn from a single monotonic counter, not reset per entry, so a
+stale compute from a retired-and-recreated entry can never collide with a fresh
+one (the ABA guard).
+
 ## microfts2 interface
 
 Two methods needed:
@@ -136,6 +204,20 @@ Two methods needed:
   forcing lazy reload on next access. Called by the main actor
   after committing a write transaction. No state transfer needed —
   just "your cache is stale now."
+
+The per-file scan actor additionally needs the transaction-free compute /
+transaction-bound store split:
+
+- `PrepareFile(fpath, strategy, opts) (*PreparedFile, error)` and
+  `PrepareAppend(path, lastLocator, content, strategy, opts) (*PreparedAppend,
+  error)` — the off-slot compute. They open no bbolt transaction and return an
+  opaque, single-use handle carrying the derived per-chunk data.
+- `StorePrepared(*PreparedFile, opts)`, `ReindexPrepared(*PreparedFile, opts)`,
+  and `AppendPrepared(fileid, *PreparedAppend, opts)` — the on-slot store. They
+  open the write transaction. `ReindexPrepared` derives the old-chunk removal
+  set in-transaction from the committed F record. `WithIndexedChunkCallback`
+  and `WithRemovedChunkCallback` fire during store; `AppendPrepared` returns
+  `ErrAppendTailMoved` if the committed tail moved since prepare.
 
 ## Why not a second ChanSvc
 
