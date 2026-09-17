@@ -1,5 +1,5 @@
 # Scanner
-**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373
+**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373, R3433
 
 Walks configured source directories and classifies files using the
 pattern matcher. Identifies new files to index and new unresolved
@@ -49,7 +49,16 @@ files.
   single-hop tier is defined on that event (crc-ExtMap.md, R3384). What the
   Scanner owns is the *first* sighting and the rule the refresh copies:
   dispatch on what the path **is** before following it anywhere
-- ScanResults: struct with NewFiles []FileEntry, NewUnresolved []UnresolvedRecord, EmptyFiles []string
+- **deferLinks (off-actor reconcile walk):** the reconcile now runs Scan() in a
+  throwaway Scanner off the DB actor, bound to a private fts.Copy, a captured
+  Config/Matcher snapshot, and a cloned EmptyFiles. With deferLinks set the walk
+  does **not** Observe symlinks (the LinkTable is actor-owned) — it collects their
+  paths in walk order into ScanResults.PendingLinks, and the actor runs
+  linksToRegularFile + Observe on them afterward (DB.observeScannedLink). Every
+  synchronous caller keeps deferLinks zero (inline Observe). (R3433)
+- EmptyFiles.Clone(): deep-copy the empty-set so the off-actor walk mutates a
+  private clone the actor swaps back in — no on-actor scan can race it. (R3433)
+- ScanResults: struct with NewFiles []FileEntry, NewUnresolved []UnresolvedRecord, EmptyFiles []string, PendingLinks []string
 - FileEntry: struct with path, strategy (from Config.StrategyForFile with source's strategies merged over global — matched through Matcher in the same source-scoped context, R3202)
 
 ## Collaborators

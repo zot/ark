@@ -86,6 +86,40 @@ type DB struct {
 	// arriving mid-scan queues a fresh one rather than being swallowed by a
 	// scan that may already have walked past whatever changed.
 	reconcilePending bool
+
+	// reconcileWalking is set while the reconcile scan enumeration runs off the
+	// DB actor in a goroutine (R3433); reconcileWalkPending records that a
+	// reconcile arrived during that window. Both are actor-owned — read and set
+	// only inside DB-actor closures, so they need no lock (changeNum's spirit).
+	// The walk is off-actor but the enumeration is coalesced to one at a time:
+	// a reconcile finding reconcileWalking set marks pending and returns, and the
+	// walk's completion re-triggers one reconcile if pending, so a request made
+	// during a walk is delayed rather than lost. reconcileWalking also holds
+	// writeIdle open so a rebuild's WaitWritesIdle cannot return mid-walk. R3434
+	reconcileWalking     bool
+	reconcileWalkPending bool
+
+	// reconcileStats holds the stale/missing/unresolved counts the most recent
+	// reconcile computed, with the wall-clock time it computed them. Written on
+	// the DB actor by captureReconcileStats (at the end of RefreshAsync) and read
+	// via the bindStatusRead snapshot for `ark status`; actor-owned, a plain
+	// struct needing no mutex (changeNum's spirit). The zero value (at.IsZero())
+	// means no reconcile has completed in this process — status renders `-`. This
+	// is what lets `ark status` report staleness without re-walking the corpus.
+	// CRC: crc-DB.md | R3435
+	reconcileStats reconcileCounts
+}
+
+// reconcileCounts is the snapshot of a reconcile's file counts that `ark status`
+// reports off the actor. All fields are set together on the DB actor by
+// captureReconcileStats; the zero value means no reconcile has run yet.
+// CRC: crc-DB.md | R3435
+type reconcileCounts struct {
+	stale      int
+	missing    int
+	unresolved int
+	byReason   map[string]int // unresolved broken down by reason (R3370)
+	at         time.Time      // wall-clock time the counts were computed; zero = never
 }
 
 // InitOpts are options for creating a new ark database.
@@ -497,6 +531,44 @@ func (db *DB) postCoalescedReconcile(scan func(*DB)) {
 	})
 }
 
+// launchReconcileWalk runs the reconcile scan enumeration (walk) off the DB
+// actor and applies its result back on the actor, coalescing so at most one walk
+// is in flight. Must be called on the DB actor.
+//
+//   - If a walk is already in flight, it records the pending mark and returns
+//     without launching a second walk (walk is NOT called).
+//   - Otherwise it sets reconcileWalking, runs walk() in a plain goroutine (off
+//     the actor, so the actor stays free to serve interleaving writes), then
+//     posts apply() back on the actor. apply() runs before the flag clears; when
+//     it returns the flag clears, write-idle is re-checked, and if a reconcile
+//     arrived during the walk, relaunch() re-triggers exactly one.
+//
+// The off-actor property and the coalescing are both invisible when violated
+// (the actor would merely be held, or a second walk would merely duplicate
+// work), so the split into this primitive is what makes them testable with a
+// blocking fake walk and a marker on a zero-value DB. R3433, R3434
+// CRC: crc-DB.md | Seq: seq-reconcile.md#2.2 | R3433, R3434
+func (db *DB) launchReconcileWalk(walk, apply, relaunch func()) {
+	if db.reconcileWalking {
+		db.reconcileWalkPending = true // one is in flight; re-run after it
+		return
+	}
+	db.reconcileWalking = true
+	go func() {
+		walk() // off the actor — no write transaction, private read view
+		SyncVoid(db, func(db *DB) error {
+			apply()
+			db.reconcileWalking = false
+			db.checkWriteIdle() // R2989: the walk may have added nothing
+			if db.reconcileWalkPending {
+				db.reconcileWalkPending = false
+				relaunch()
+			}
+			return nil
+		})
+	}()
+}
+
 // Sync sends an operation to the DB actor and blocks until it completes.
 // Used by HTTP handlers and CLI for operations that return results. R988
 // CRC: crc-DB.md | R989
@@ -608,9 +680,13 @@ func (db *DB) startNextWrite() {
 // a rebuild's WaitWritesIdle must not return while off-slot compute is still in
 // flight — those goroutines have not enqueued their store closures yet, so the
 // write queue can be momentarily empty while indexing is unfinished.
-// CRC: crc-FileScanActor.md | R2989, R3420
+// R3434: reconcileWalking is included because the reconcile scan enumeration
+// now runs off the actor in a goroutine that has not yet dispatched its per-file
+// scans — the write queue and registry can be momentarily empty while a walk is
+// still enumerating, so a rebuild's WaitWritesIdle must wait for it too.
+// CRC: crc-FileScanActor.md | R2989, R3420, R3434
 func (db *DB) writeIdle() bool {
-	return !db.writing && len(db.writeQueue) == 0 && len(db.fileScans) == 0
+	return !db.writing && len(db.writeQueue) == 0 && len(db.fileScans) == 0 && !db.reconcileWalking
 }
 
 // checkWriteIdle signals write-idle waiters only when writeIdle() holds. Called
@@ -1664,6 +1740,12 @@ func (db *DB) RefreshAsync() error {
 		}
 	}
 
+	// R3435: record what this reconcile computed (the stale partition, plus the
+	// M/U record counts) so `ark status` reports staleness off the actor with an
+	// as-of time and never re-walks the corpus. Runs before the early return so
+	// a reconcile that finds nothing stale still stamps a fresh, zeroed count.
+	db.captureReconcileStats(len(stale))
+
 	if len(stale) == 0 {
 		return nil
 	}
@@ -1673,6 +1755,129 @@ func (db *DB) RefreshAsync() error {
 		db.startFileScan(db.indexer, s.Path)
 	}
 	return nil
+}
+
+// captureReconcileStats records, on the DB actor, the counts the just-finished
+// reconcile computed, so `ark status` can report stale/missing/unresolved off
+// the actor with an as-of time — never re-walking the corpus (R3435). staleCount
+// is the reconcile's stale-file partition; missing and unresolved come from the
+// M/U record scans (cheap bbolt reads, no file I/O), matching what Status
+// reported when it read them live. On the DB actor.
+// CRC: crc-DB.md | Seq: seq-reconcile.md#2.3 | R3435
+func (db *DB) captureReconcileStats(staleCount int) {
+	rc := reconcileCounts{stale: staleCount, at: timeNow()}
+	if missing, err := db.store.ListMissing(); err == nil {
+		rc.missing = len(missing)
+	}
+	if unresolved, err := db.store.ListUnresolved(); err == nil {
+		rc.unresolved = len(unresolved)
+		rc.byReason = unresolvedReasonCounts(unresolved)
+	}
+	db.reconcileStats = rc
+}
+
+// unresolvedReasonCounts breaks an unresolved-record list down by reason for the
+// status line (R3370). A record written before reasons existed counts as
+// `uncovered`, which is what it was.
+// CRC: crc-DB.md | R3370
+func unresolvedReasonCounts(unresolved []UnresolvedRecord) map[string]int {
+	byReason := make(map[string]int, 3)
+	for _, u := range unresolved {
+		reason := u.Reason
+		if reason == "" {
+			reason = UnresolvedReasonUncovered
+		}
+		byReason[reason]++
+	}
+	return byReason
+}
+
+// applyReconcileScan applies an off-actor reconcile walk's results back on the
+// DB actor: the deferred directory-symlink Observe, the batched metadata writes,
+// the synchronous config-file adds, the empty-file evictions, and the per-file
+// scan dispatches. It mirrors ScanAsync's post-walk body — the difference is only
+// that the walk (and its per-file classification) already ran off the actor. On
+// the DB actor. R3433
+// CRC: crc-DB.md | Seq: seq-reconcile.md#2.3 | R3383, R3433
+func (db *DB) applyReconcileScan(results *ScanResults) {
+	// Directory-symlink classification was deferred off the actor (the LinkTable
+	// is actor-owned); run Observe on the collected paths here, in walk order,
+	// exactly as the inline walk did. R3433
+	for _, linkPath := range results.PendingLinks {
+		db.observeScannedLink(results, linkPath)
+	}
+
+	// R3383: record the links this walk met, deliberately AHEAD of the unresolved
+	// loop — that loop can fail mid-way, and losing the link records as collateral
+	// damage to an unrelated failure is how a partial scan becomes a silently wrong
+	// table. (Here the loop logs and continues rather than returning, since the
+	// reconcile walk is fire-and-forget; the ordering is preserved regardless.)
+	db.recordScannedLinks(results)
+
+	for _, u := range results.NewUnresolved {
+		if err := db.store.AddUnresolvedRecord(u); err != nil {
+			log.Printf("reconcile: track unresolved %s: %v", u.Path, err)
+		}
+	}
+	if err := db.store.CleanUnresolved(); err != nil {
+		log.Printf("reconcile: clean unresolved: %v", err)
+	}
+
+	// R1052: config files indexed synchronously in the actor; content files become
+	// per-file scans.
+	var contentFiles []FileEntry
+	for _, f := range results.NewFiles {
+		if filepath.Base(f.Path) == "ark.toml" {
+			if _, err := db.indexer.AddFile(f.Path, f.Strategy); err != nil {
+				if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, microfts2.ErrAlreadyIndexed) && !errors.Is(err, os.ErrNotExist) {
+					log.Printf("reconcile: config add %s: %v", f.Path, err)
+				}
+			}
+		} else {
+			contentFiles = append(contentFiles, f)
+		}
+	}
+
+	// R1648: evictions are a short metadata write. R3419: each new content file
+	// becomes its own per-file scan.
+	if empties := results.EmptyFiles; len(empties) > 0 {
+		db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+			evictEmpty(ftsCopy, empties)
+		})
+	}
+	for _, f := range contentFiles {
+		db.startFileScan(db.indexer, f.Path)
+	}
+}
+
+// observeScannedLink runs the deferred directory-symlink classification for one
+// path on the shared, actor-owned LinkTable, appending to results.TrackedLinks or
+// results.NewUnresolved exactly as the inline walk did before the enumeration
+// moved off the actor. On the DB actor. R3433
+// CRC: crc-DB.md | R3352, R3355, R3357, R3433
+func (db *DB) observeScannedLink(results *ScanResults, path string) {
+	if linksToRegularFile(path) {
+		return // a link to a regular file keeps today's handling
+	}
+	entry, status := db.scanner.Links().Observe(path)
+	switch status {
+	case LinkTracked:
+		results.TrackedLinks = append(results.TrackedLinks, entry)
+	case LinkProposed:
+		// The link proposes its target; the candidate is keyed on the target, so
+		// it needs the source the link lives in to say where the proposal came
+		// from. R3355, R3357
+		src, _, ok := findSourceIn(db.config, entry.Path)
+		if !ok {
+			return
+		}
+		results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
+			Path:    entry.Resolved,
+			Dir:     src.Dir,
+			Reason:  UnresolvedReasonSymlink,
+			Symlink: entry.Path,
+		})
+	}
 }
 
 // IndexPathsAsync schedules per-path index updates through the per-file scan
@@ -1834,18 +2039,43 @@ func (db *DB) retireFileScanIfCurrent(path string, my uint64) {
 }
 
 // startFileScan stamps path's registry entry with the next changeNum and
-// launches its off-slot compute. Config files (ark.toml) index synchronously on
-// the actor, unchanged — they are small and must complete before dependent
-// writes. On the DB actor.
-// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2 | R3419, R3421
+// launches its off-slot scan. Only the stamp here and the registry touches the
+// off-slot goroutine posts back run on the DB actor; the per-file os.Stat +
+// CheckFile + classification move off-slot into prepareFileScan (R3433). Config
+// files (ark.toml) index fully synchronously on the actor, unchanged — they are
+// small and must complete before dependent writes. On the DB actor.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2 | R3419, R3421, R3433
 func (db *DB) startFileScan(idx *Indexer, path string) {
 	my := db.stampFileScan(path)
 
+	// Config files stay fully synchronous on the actor (R1052) — dependent content
+	// writes must see the chunker registered first. Their os.Stat + CheckFile stay
+	// on the actor (rare, cheap). R3433
+	if filepath.Base(path) == "ark.toml" {
+		db.scanConfigOnActor(idx, path, my)
+		return
+	}
+
+	// Content file: everything — os.Stat, CheckFile (on a private copy),
+	// classification, and the chunk+gram compute — runs off the slot. The Config
+	// captured here on the actor is the snapshot the goroutine classifies against
+	// (Config is replaced by pointer swap, never mutated in place). R3433
+	cfg := db.config
+	prepIdx := idx.withFTS(db.fts.Copy())
+	go db.prepareFileScan(prepIdx, cfg, path, my)
+}
+
+// scanConfigOnActor indexes a config file (ark.toml) synchronously on the DB
+// actor. A dependent content write must see the chunker registered first
+// (R1052), so a config file keeps its full on-actor path — os.Stat, CheckFile,
+// classification, and add/refresh/remove — rather than moving off-slot. On the
+// DB actor. R1052, R3433
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2.1 | R1052, R3433
+func (db *DB) scanConfigOnActor(idx *Indexer, path string, my uint64) {
 	fi, statErr := os.Stat(path)
 	status, checkErr := db.fts.CheckFile(path)
 	known := checkErr == nil && status.FileID != 0
 
-	// Deleted on disk: remove if known (a short write), then retire. R3419
 	if statErr != nil {
 		if known {
 			db.enqueueWrite(func(ftsCopy *microfts2.DB) {
@@ -1869,36 +2099,65 @@ func (db *DB) startFileScan(idx *Indexer, path string) {
 		return
 	}
 	strategy := db.config.StrategyForFile(rel, src.Strategies)
-
-	// Config files stay synchronous on the actor (R1052) — dependent content
-	// writes must see the chunker registered first.
-	if filepath.Base(path) == "ark.toml" {
-		if known {
-			if err := idx.RefreshFile(path, strategy); err != nil {
-				log.Printf("scan: config refresh %s: %v", path, err)
-			}
-		} else if _, err := idx.AddFile(path, strategy); err != nil {
-			if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, microfts2.ErrAlreadyIndexed) && !errors.Is(err, os.ErrNotExist) {
-				log.Printf("scan: config add %s: %v", path, err)
-			}
+	if known {
+		if err := idx.RefreshFile(path, strategy); err != nil {
+			log.Printf("scan: config refresh %s: %v", path, err)
 		}
-		db.retireFileScanIfCurrent(path, my)
-		return
+	} else if _, err := idx.AddFile(path, strategy); err != nil {
+		if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, microfts2.ErrAlreadyIndexed) && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("scan: config add %s: %v", path, err)
+		}
 	}
-
-	// Content file: compute off the slot on a private fts copy, store on-slot.
-	prepIdx := idx.withFTS(db.fts.Copy())
-	go db.prepareFileScan(prepIdx, path, strategy, status.FileID, known, my)
+	db.retireFileScanIfCurrent(path, my)
 }
 
-// prepareFileScan runs a content file's index compute off the write slot (no
-// write transaction), then enqueues the store step back through the write actor.
-// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426
-func (db *DB) prepareFileScan(idx *Indexer, path, strategy string, oldID uint64, known bool, my uint64) {
+// prepareFileScan classifies a content file and runs its index compute off the
+// write slot (no write transaction), then posts the registry touches (delete
+// enqueue, retire, or the store via finishFileScan) back through the DB actor.
+// The os.Stat + CheckFile (on the private copy) + deleted/dir/outside-source
+// classification all run here off the actor (R3433); cfg is the Config snapshot
+// startFileScan captured on the actor. idx is copy-bound (idx.fts is a private
+// fts.Copy).
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.3 | R3419, R3426, R3433
+func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64) {
+	fi, statErr := os.Stat(path)
+	status, checkErr := idx.fts.CheckFile(path) // private copy — off-actor safe
+	known := checkErr == nil && status.FileID != 0
+
+	// Deleted on disk: remove if known (a short write), then retire. Both the
+	// enqueue and the retire are registry touches, so they post back to the
+	// actor. R3419, R3433
+	if statErr != nil {
+		SyncVoid(db, func(db *DB) error {
+			if known {
+				db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+					if err := db.indexer.withFTS(ftsCopy).RemoveFile(path); err != nil {
+						log.Printf("watch: remove %s: %v", path, err)
+					}
+					svc(db.svc, func() { db.retireFileScanIfCurrent(path, my) })
+				})
+			} else {
+				db.retireFileScanIfCurrent(path, my)
+			}
+			return nil
+		})
+		return
+	}
+	if fi.IsDir() {
+		SyncVoid(db, func(db *DB) error { db.retireFileScanIfCurrent(path, my); return nil })
+		return
+	}
+	src, rel, ok := findSourceIn(cfg, path)
+	if !ok {
+		SyncVoid(db, func(db *DB) error { db.retireFileScanIfCurrent(path, my); return nil })
+		return
+	}
+	strategy := cfg.StrategyForFile(rel, src.Strategies)
+
 	// R3428-R3431: the gate carries per-chunk reuse + changeNum preemption for the
 	// full-file compute; its map hops run on the DB actor.
 	gate := dbScanGate{db: db, path: path, my: my}
-	prep, err := idx.prepareScan(path, strategy, oldID, known, gate)
+	prep, err := idx.prepareScan(path, strategy, status.FileID, known, gate)
 	if err != nil {
 		// errScanSuperseded is a clean abandon (a newer scan owns the entry), not a
 		// failure — don't log it. R3430
@@ -2034,8 +2293,15 @@ func (db *DB) SyncLinkPath(path string) {
 // findSourceForPath locates the non-glob source whose Dir is a prefix of path.
 // Returns the source, the path relative to src.Dir, and ok=true on hit.
 func (db *DB) findSourceForPath(path string) (*Source, string, bool) {
-	for i := range db.config.Sources {
-		s := &db.config.Sources[i]
+	return findSourceIn(db.config, path)
+}
+
+// findSourceIn is findSourceForPath against an explicit config snapshot, so the
+// off-slot content scan can classify a path against the Config captured on the
+// actor without reading the live db.config off the actor. R3433
+func findSourceIn(cfg *Config, path string) (*Source, string, bool) {
+	for i := range cfg.Sources {
+		s := &cfg.Sources[i]
 		if IsGlob(s.Dir) {
 			continue
 		}
@@ -3751,48 +4017,88 @@ func percentile(sorted []int, p int) int {
 	return sorted[idx]
 }
 
-// Status returns database status counts.
-func (db *DB) Status() (*StatusInfo, error) {
-	stale, err := db.fts.StaleFiles()
+// statusBinding is the actor-captured state a status read needs to run off the
+// DB actor: a read-only view over an fts.Copy(), the last reconcile's counts,
+// and the tmp-file count (the view carries no tmpPaths of its own).
+// CRC: crc-DB.md | R3436
+type statusBinding struct {
+	view     *DB
+	counts   reconcileCounts
+	tmpCount int
+}
+
+// bindStatusRead captures, on the DB actor, everything a status read needs so
+// the heavy record enumeration runs OFF the actor. A trivial in-memory hop — it
+// holds the actor only for the capture, never for the walk. Must be called on
+// the DB actor.
+// CRC: crc-DB.md | Seq: seq-reconcile.md#3.1 | R3436
+func (db *DB) bindStatusRead() statusBinding {
+	db.tmpMu.RLock()
+	tmpCount := len(db.tmpPaths)
+	db.tmpMu.RUnlock()
+	return statusBinding{
+		view:     db.withFTS(db.fts.Copy()),
+		counts:   db.reconcileStats,
+		tmpCount: tmpCount,
+	}
+}
+
+// readStatusOffActor binds the status view on the DB actor (one trivial Sync via
+// bindStatusRead) and then runs read(binding) OFF the actor, on the caller's
+// goroutine, so the index-wide file-record enumeration never holds the actor.
+// The off-actor property is invisible when violated — the actor would merely be
+// held — so this is the single seam a fire alarm injects against (moving read
+// inside the bind Sync). R3436
+// CRC: crc-DB.md | Seq: seq-reconcile.md#3.1 | R3436
+func readStatusOffActor[T any](db *DB, read func(b statusBinding) (T, error)) (T, error) {
+	b, err := Sync(db, func(db *DB) (statusBinding, error) {
+		return db.bindStatusRead(), nil
+	})
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return read(b) // OFF the actor — the enumeration runs here, not on the actor
+}
+
+// StatusRead returns database status counts, running the read off the DB actor
+// on a bound fts.Copy() view (R3436). This is the exported entry point for the
+// cold CLI `ark status` path; the server's statusOp calls readStatusOffActor
+// directly because it also runs StatusDB conditionally on the same view.
+// CRC: crc-DB.md | R3435, R3436
+func (db *DB) StatusRead() (*StatusInfo, error) {
+	return readStatusOffActor(db, func(b statusBinding) (*StatusInfo, error) {
+		return b.view.Status(b.counts, b.tmpCount)
+	})
+}
+
+// Status returns database status counts. It runs off the DB actor on a bound
+// fts.Copy() view (readStatusOffActor) and NEVER walks the corpus (R3435): it
+// does not call StaleFiles and stats/hashes no indexed file. The
+// stale/missing/unresolved counts and their as-of time come from rc — the last
+// reconcile's captured counts; tmpCount is snapshotted on the actor at bind time
+// (the view carries no tmpPaths). Everything else is a read over the file
+// records via the bound view.
+// CRC: crc-DB.md | R252, R253, R254, R258, R3435, R3436
+func (db *DB) Status(rc reconcileCounts, tmpCount int) (*StatusInfo, error) {
+	// R252, R253, R254, R258 — enumerate the file records (no os.Stat/hash of any
+	// corpus file) for the chunk total (sum of per-file ChunkRanges), the total
+	// size (sum of FileLength), and the per-strategy file tally.
+	paths, err := db.fts.FileIDPaths()
 	if err != nil {
 		return nil, err
 	}
-
-	missing, err := db.store.ListMissing()
-	if err != nil {
-		return nil, err
-	}
-
-	unresolved, err := db.store.ListUnresolved()
-	if err != nil {
-		return nil, err
-	}
-	// CRC: crc-DB.md | R3370 — the total alone is unreadable once one
-	// reason dominates. A record written before reasons existed counts as
-	// uncovered, which is what it was.
-	byReason := make(map[string]int, 3)
-	for _, u := range unresolved {
-		reason := u.Reason
-		if reason == "" {
-			reason = UnresolvedReasonUncovered
-		}
-		byReason[reason]++
-	}
-
-	// CRC: crc-DB.md | R252, R253, R254, R258 — chunk total (sum of per-file ChunkRanges), per-strategy file tally, source count
-	var staleCount, totalChunks int
+	var totalChunks int
 	var totalSize int64
 	strategies := make(map[string]int)
-	for _, s := range stale {
-		if s.Status == "stale" {
-			staleCount++
+	for id := range paths {
+		info, err := db.fts.FileInfoByID(id)
+		if err != nil {
+			continue
 		}
-		strategies[s.Strategy]++
-		info, err := db.fts.FileInfoByID(s.FileID)
-		if err == nil {
-			totalChunks += len(info.Chunks)
-			totalSize += info.FileLength
-		}
+		strategies[info.Strategy]++
+		totalChunks += len(info.Chunks)
+		totalSize += info.FileLength
 	}
 
 	// DB format version
@@ -3800,7 +4106,8 @@ func (db *DB) Status() (*StatusInfo, error) {
 
 	// Database file size on disk. bbolt has no LMDB-style preallocated map
 	// ceiling — the file itself is the storage — so used and total both
-	// report the on-disk size of microfts2's bbolt file.
+	// report the on-disk size of microfts2's bbolt file. One stat of the DB
+	// file, not the corpus.
 	// CRC: crc-DB.md | R2982
 	var mapUsed, mapTotal int64
 	if fi, err := os.Stat(db.fts.DB().Path()); err == nil {
@@ -3813,17 +4120,14 @@ func (db *DB) Status() (*StatusInfo, error) {
 	// proxied `ark status` used to print none at all.
 	warnings, _ := db.store.Warnings()
 
-	db.tmpMu.RLock()
-	tmpCount := len(db.tmpPaths)
-	db.tmpMu.RUnlock()
 	return &StatusInfo{
 		Version:    Version,
 		DBFormat:   dbFormat,
-		Files:      len(stale),
+		Files:      len(paths),
 		TotalSize:  totalSize,
-		Stale:      staleCount,
-		Missing:    len(missing),
-		Unresolved: len(unresolved),
+		Stale:      rc.stale,
+		Missing:    rc.missing,
+		Unresolved: rc.unresolved,
 		Chunks:     totalChunks,
 		Sources:    len(db.config.Sources),
 		Strategies: strategies,
@@ -3832,7 +4136,8 @@ func (db *DB) Status() (*StatusInfo, error) {
 		TmpFiles:   tmpCount,
 		Warnings:   warnings,
 
-		UnresolvedByReason: byReason,
+		UnresolvedByReason: rc.byReason,
+		ReconcileAt:        rc.at,
 	}, nil
 }
 
@@ -3880,6 +4185,11 @@ type StatusInfo struct {
 	UIIndexing bool `json:"uiIndexing"`
 	// R1249: spectral search availability
 	Spectral bool `json:"spectral"`
+	// ReconcileAt is the wall-clock time the last reconcile computed the
+	// Stale/Missing/Unresolved counts above (R3435). Zero means no reconcile has
+	// completed in this process, which `ark status` renders as `-`. Status never
+	// walks the corpus, so those three counts are as-of this time, not live.
+	ReconcileAt time.Time `json:"reconcileAt,omitempty"`
 	// UnresolvedByReason breaks the unresolved total down (R3370). One
 	// reason normally dominates — `unindexable` is usually the great
 	// majority — so a bare total lets a handful of actionable entries hide

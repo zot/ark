@@ -38,3 +38,16 @@ func (e *EmptyFiles) Record(path string, mtime time.Time) {
 func (e *EmptyFiles) Forget(path string) {
 	delete(e.known, path)
 }
+
+// Clone returns a deep copy of the set. The reconcile walk runs off the DB actor
+// on a private clone so its Has/Record/Forget never race an on-actor scan; the
+// actor swaps the refreshed clone in when the walk returns. Empty files are few,
+// so the copy is cheap. R3433
+// CRC: crc-Scanner.md | R3433
+func (e *EmptyFiles) Clone() *EmptyFiles {
+	cp := &EmptyFiles{known: make(map[string]time.Time, len(e.known))}
+	for k, v := range e.known {
+		cp.known[k] = v
+	}
+	return cp
+}

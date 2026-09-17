@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263, R3344, R3346, R3351, R3390, R3395, R3358, R3370, R3381, R3359, R3360, R3361, R3367, R3382
+**Requirements:** R1, R2, R3, R5, R6, R7, R28, R29, R30, R33, R40, R31, R32, R34, R127, R128, R129, R136, R138, R130, R135, R137, R161, R162, R163, R166, R167, R168, R196, R197, R198, R199, R200, R236, R246, R248, R237, R238, R239, R240, R241, R242, R243, R244, R245, R247, R249, R250, R251, R252, R253, R254, R255, R257, R258, R382, R383, R392, R506, R510, R563, R564, R565, R566, R567, R568, R605, R606, R617, R618, R619, R621, R622, R624, R625, R626, R627, R628, R629, R630, R636, R637, R638, R663, R666, R667, R682, R664, R665, R668, R692, R714, R716, R719, R720, R721, R723, R765, R766, R909, R2473, R2478, R2479, R2480, R2481, R2482, R986, R987, R988, R989, R990, R993, R995, R1020, R1021, R1022, R1051, R1052, R1053, R1054, R1055, R1056, R1057, R1058, R1059, R1060, R1061, R1062, R1063, R1064, R1065, R1066, R1067, R1068, R1130, R1145, R1146, R1147, R1148, R1149, R1150, R1507, R1508, R1517, R1518, R1519, R1520, R1521, R1522, R1539, R1540, R1541, R1542, R1550, R1551, R1552, R1553, R1554, R1555, R1832, R1871, R1879, R1880, R1881, R1882, R1903, R1909, R1910, R1911, R1912, R1923, R1924, R1925, R1948, R1952, R1976, R1977, R1985, R1986, R1987, R2028, R2086, R2087, R2088, R2090, R2138, R2139, R2140, R2141, R2142, R2147, R2148, R2149, R2150, R2162, R2271, R2272, R2273, R2274, R2275, R2281, R2285, R2286, R2287, R2366, R2367, R2368, R2369, R2370, R2371, R2372, R2373, R2374, R2375, R2376, R2377, R2378, R2386, R2387, R2389, R2390, R2391, R2392, R2393, R2394, R2395, R2396, R2397, R2398, R2399, R2400, R2401, R2403, R2407, R1978, R2913, R2914, R2952, R2954, R2955, R2974, R2976, R2977, R2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051, R3052, R3053, R3054, R3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100, R3101, R3102, R3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3266, R3264, R3263, R3344, R3346, R3351, R3390, R3395, R3358, R3370, R3381, R3359, R3360, R3361, R3367, R3382, R3433, R3434, R3435, R3436
 
 Main ark facade. Owns the bbolt database lifecycle — the file is microfts2's
 (`fts.DB() *bbolt.DB`); ark opens its own `ark` bucket inside it, and a
@@ -43,6 +43,18 @@ document this on the API. (R986, R993, R995, R3163)
   running scan cannot be relied on to have seen a change made after it walked
   past that part of the tree. Same rule and reason as pendingRefresh's
   per-path clearing.
+- reconcileWalking / reconcileWalkPending: bool — the reconcile scan enumeration
+  now runs off the actor in a goroutine; reconcileWalking is set while it is in
+  flight and reconcileWalkPending records a reconcile that arrived during it.
+  Actor-owned, plain bools with no guard. reconcileWalking also holds writeIdle
+  open so a rebuild's WaitWritesIdle cannot return mid-walk. (R3433, R3434)
+- reconcileStats: reconcileCounts — the stale/missing/unresolved counts (plus
+  the unresolved-by-reason map) the last reconcile computed, with the wall-clock
+  time it computed them. Written on the actor by captureReconcileStats, read via
+  the bindStatusRead snapshot; actor-owned, a plain struct with no guard. The
+  zero value (at.IsZero()) means no reconcile has completed in this process,
+  which `ark status` renders as `-`. This is what lets status report staleness
+  without a fresh corpus walk. (R3435)
 
 ## Does
 - Init(path, opts): create new database — open microfts2, create ark
@@ -167,13 +179,20 @@ document this on the API. (R986, R993, R995, R3163)
   directory, so a liveness question asked of the target would keep the record
   forever. "No longer proposing" covers both ways a proposal ends: the target
   became a source, or the link went away.
-- Status(): return StatusInfo with file counts, total size, chunk count,
-  strategy breakdown, source count, database file size.
-  Computes the file size from os.Stat on the database file. Computes chunk
-  count by summing ChunkRanges from FileInfoByID per file. Computes
-  total size by summing FileLength from FileInfoByID per file. Counts
-  files per strategy from StaleFiles.
-  Also fills `StatusInfo.UnresolvedByReason` (R3370): the total alone is
+- Status(rc, tmpCount): return StatusInfo with file counts, total size, chunk
+  count, strategy breakdown, source count, database file size. **Runs off the
+  DB actor** on a bound fts.Copy() view (R3436) and **never walks the corpus**
+  (R3435): it does not call StaleFiles and stats/hashes no indexed file. The
+  stale/missing/unresolved counts and their as-of time come from `rc` — the
+  last reconcile's captured counts, passed in by the caller; the tmp-file count
+  comes from `tmpCount`, snapshotted on the actor at bind time (the view carries
+  no tmpPaths). Computes the database file size from os.Stat on the database
+  file (one stat, not the corpus). Enumerates the file records via FileIDPaths;
+  computes chunk count by summing ChunkRanges from FileInfoByID per file, total
+  size by summing FileLength, and the per-strategy tally from each FRecord's
+  Strategy — all off the bound view. Fills `StatusInfo.ReconcileAt` from `rc.at`
+  (zero → `ark status` prints `-` for the three counts).
+  Also fills `StatusInfo.UnresolvedByReason` from `rc` (R3370): the total alone is
   unreadable once one reason dominates, and `unindexable` normally does, so a
   handful of actionable entries would hide behind thousands no user action can
   clear. A record written before reasons existed counts as `uncovered`, which
@@ -184,11 +203,28 @@ document this on the API. (R986, R993, R995, R3163)
   used to print none.
 - StatusDB(): return DBRecordCounts with per-prefix counts for both
   buckets. Delegates to microfts2.RecordCounts() and
-  Store.RecordCounts(). The package-level `arkLabels` map is the
+  Store.RecordCounts(). Both are index-wide record scans, so — like Status —
+  StatusDB runs off the DB actor on the bound fts.Copy() view (R3436). The
+  package-level `arkLabels` map is the
   status-db allowlist — one label per shown ark record class in
   record-formats.md (minus no-status-display classes like S); an
   unlabeled class is silently omitted by buildRecordCounts. (R2473,
   R2478, R2479, R2480, R2481, R2482, R3078)
+- captureReconcileStats(staleCount): on the DB actor, record what the reconcile
+  just computed for `ark status` to report off-actor — `staleCount` (the
+  stale-file partition), plus the M-record and U-record counts and the
+  unresolved-by-reason breakdown, stamped with the wall-clock time — into the
+  actor-owned `reconcileStats` field. Called at the end of RefreshAsync, which
+  runs on the actor in the reconcile's apply step. (R3435)
+- bindStatusRead(): on the DB actor, capture everything a status read needs to
+  run off the actor — a read-only view over fts.Copy(), the actor-owned
+  reconcileStats snapshot, and the tmp-file count (read under tmpMu) — into a
+  statusBinding. A trivial in-memory hop; holds the actor only for the capture,
+  not the enumeration. (R3436)
+- readStatusOffActor(read): bind the status view on the actor (bindStatusRead
+  via one Sync), then run read(binding) OFF the actor on the caller's goroutine.
+  The single seam the off-actor fire alarm injects against — moving read inside
+  the bind Sync would hold the actor for the whole enumeration. (R3436)
 - ChunkStats(filterFiles, excludeFiles []string, tokenize func(string) int):
   iterate all indexed files (filtered by path globs via Matcher rather than
   an inline glob test — R3195; the globs arrive already cwd-anchored from
@@ -268,6 +304,22 @@ document this on the API. (R986, R993, R995, R3163)
   delivers in order (R3344). A merged request's scan closure is **discarded**, so
   callers must pass work equivalent on every call — a reconcile is, by
   construction. Server.reconcile is the sole caller.
+- launchReconcileWalk(walk, apply, relaunch): run the reconcile scan enumeration
+  off the actor and coalesce it. On the actor: if a walk is in flight, mark
+  pending and return without launching a second; else set reconcileWalking, run
+  walk() in a goroutine (off the actor, which stays free for interleaving writes),
+  then post apply() back on the actor; when apply returns the flag clears,
+  write-idle is re-checked, and a pending reconcile is re-triggered once. The
+  off-actor property and the coalescing are both invisible when violated, so this
+  primitive is what makes them testable with a blocking fake walk. (R3433, R3434)
+- applyReconcileScan(results): apply an off-actor walk's results on the actor —
+  the deferred directory-symlink Observe (observeScannedLink over PendingLinks),
+  the batched metadata writes (recordScannedLinks / AddUnresolvedRecord /
+  CleanUnresolved), the synchronous config-file adds, the empty-file evictions,
+  and the per-file scan dispatches. Mirrors ScanAsync's post-walk body. (R3383, R3433)
+- observeScannedLink(results, path): run one deferred directory-symlink's Observe
+  on the shared, actor-owned LinkTable, appending to TrackedLinks or NewUnresolved
+  exactly as the inline walk did. (R3352, R3355, R3357, R3433)
 - actor lifecycle: the ChanSvc is built with the DB (`newChanSvc`) and its loop
   started in `OpenWithTimeout`, once the rest of the DB's state exists; `Close`
   stops it. There is no `StartActor`/`StopActor` pair — this card named one until

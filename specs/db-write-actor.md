@@ -238,6 +238,52 @@ additive and usually one new chunk, per-chunk preemption of a one-chunk compute
 buys nothing, and a superseded append is already dropped whole at the changeNum
 redo-escape.
 
+### Enumeration off the actor: the reconcile walk
+
+Moving the per-file *compute* off the write slot (above) left one on-actor hold
+per reconcile burst: the *enumeration and classification*. The reconcile ran
+`scanner.Scan()` — a walk of every source directory, one `os.Stat` plus a
+stale-classification read per file — synchronously on the DB actor, followed by
+a per-file `os.Stat` + `CheckFile` in start-scan before each dispatch. Because a
+tmp:// write must hop onto the DB actor to enqueue its store, it blocks for the
+whole walk. Measured 2026-09-17: 36 of 37 reconcile-burst writes cost ~50 ms and
+exactly one, at burst start, cost 15.7 s — the walk.
+
+The enumeration therefore runs **off the DB actor**, leaving only the registry
+stamp and the dispatch on it:
+
+- **The scan walk runs in a plain goroutine.** Its DB reads (`CheckFile`) go
+  through the off-actor read path — a private `fts.Copy()` whose caches the
+  reconcile step's `InvalidateCaches` never touches — never a mutex. It reads its
+  own captured `Config`/`Matcher` snapshot and a private clone of the empty-file
+  set, so it touches no shared actor state during the walk. Directory-symlink
+  classification is **deferred**: the walk collects symlink paths in walk order
+  and the actor runs `LinkTable.Observe` on them afterward, because the link
+  table is actor-owned. When the walk returns, its results are applied back on
+  the actor in one step: the batched metadata writes (`recordScannedLinks`, the
+  new-unresolved records, `CleanUnresolved`), the synchronous config-file adds,
+  and the per-file scan dispatches. The refreshed empty-file clone is swapped in
+  on the actor.
+- **The per-file `os.Stat` + `CheckFile` in start-scan move off-slot too.** For a
+  content file, start-scan does only the `changeNum` stamp and then launches the
+  off-slot goroutine; the stat, the `CheckFile` (via the goroutine's private
+  copy), the deleted/dir/outside-source classification, and the strategy lookup
+  all run off the actor, and only the registry touches they produce (a delete
+  enqueue, a retire, or the store) come back on it. Config files (`ark.toml`)
+  stay fully synchronous on the DB actor, stat and all — they are rare and a
+  dependent content write must see the chunker registered first.
+- **A reconcile walk in flight coalesces.** A single in-flight flag, read and set
+  only on the DB actor (`changeNum`'s spirit — no mutex, no atomic), admits one
+  walk at a time. A reconcile arriving while a walk runs sets a pending mark and
+  returns without starting a second walk; when the walk completes it re-triggers
+  one coalesced reconcile if the mark is set, so a request made during a walk is
+  delayed, never lost. The flag also holds `writeIdle` open, so a rebuild's
+  `WaitWritesIdle` cannot return mid-walk.
+
+The batched metadata writes stay on the actor because they are writes; only the
+enumeration reads and the per-file classification move off. Same records land —
+only *where* the enumeration runs changes.
+
 ## microfts2 interface
 
 Two methods needed:

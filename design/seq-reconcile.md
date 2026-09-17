@@ -1,61 +1,53 @@
 # Sequence: Reconciliation
-**Requirements:** R343, R344, R345, R346, R347, R2138, R2139, R2140, R2141, R2142
+**Requirements:** R343, R344, R345, R346, R347, R2138, R2139, R2140, R2141, R2142, R3433, R3434, R3435, R3436
 
 Covers the reconciliation cycle — called on startup, after config
-mutations, and on ark.toml fsnotify events.
+mutations, and on ark.toml fsnotify events. Since indexing-latency #132
+(R3433) the scan *enumeration* runs off the DB actor; diagram 1 is the
+on-actor cycle and diagram 2 is the off-actor walk it kicks.
 
 ## Participants
 - Server
-- DB
-- Scanner
+- DB (db.svc actor)
+- Scanner (a throwaway, deferLinks copy for the off-actor walk)
 - Indexer
 - Store
+- Goroutine (the off-actor walk)
 
 ## Flow
 
 ```
-Trigger (startup | config mutation | ark.toml change)
-  │
-  ├──> Server.Reconcile()
-  │     │
-  │     ├── send to reconcileCh
-  │     │   (if reconcile already running, waits for it to finish
-  │     │    then runs again — not dropped)
-  │     │
-  │     ├──> reconcile goroutine receives
-  │     │
-  │     ├──> DB.SourcesCheck()
-  │     │     ├── Config.ResolveGlobs()
-  │     │     ├── diff against DB sources
-  │     │     ├── add new sources
-  │     │     └── flag MIA sources
-  │     │
-  │     ├──> DB.Sweep()                          (R2138, R2139)
-  │     │     ├── microfts2.StaleFiles()         [iterate every indexed path]
-  │     │     ├── for each path:
-  │     │     │     ├── find claiming source (src.Dir prefix)
-  │     │     │     ├── no source → Indexer.RemoveFile(path)  (R2140)
-  │     │     │     └── Matcher.Classify(abs, src.Dir) ≠ Included
-  │     │     │           → Indexer.RemoveFile(path)            (R2141)
-  │     │     └── log sweep summary
-  │     │
-  │     ├──> DB.Scan()
-  │     │     ├── Scanner.Scan(config)
-  │     │     ├── Indexer.AddFile(path, strategy)  [for each new file]
-  │     │     ├── Store.AddUnresolved(...)         [for each unresolved]
-  │     │     └── Store.CleanUnresolved()
-  │     │
-  │     ├──> DB.Refresh(nil)
-  │     │     ├── microfts2.StaleFiles()
-  │     │     ├── for each stale: Indexer.RefreshFile(path)
-  │     │     └── for each missing: Store.AddMissing(fileid, path)
-  │     │
-  │     ├──> if Phase B: Server.StartWatching(new source dirs)
-  │     │                Server.StopWatching(removed source dirs)
-  │     │
-  │     └── log reconciliation summary
-  │
-  └── (trigger returns immediately — reconcile is async)
+1. Reconcile cycle (Server.doReconcile — on the DB actor)
+
+1.1  Trigger (startup | config mutation | ark.toml change) → Server.reconcile() → postCoalescedReconcile   (R345, R346)
+1.2  DBActor: if reconcileWalking → set reconcileWalkPending, return (a walk is in flight; coalesce)   (R3434)
+1.3  DBActor: SourcesCheck → add/remove fsnotify watches; setIndexing(sourceDirs)   (R347)
+1.4  DBActor: SweepAsync — StaleFiles read, enqueueWrite(RemoveFile) for paths no longer Included   (R2138, R2142)
+1.5  DBActor: startReconcileWalk(db) → diagram 2   (R3433)
+```
+
+```
+2. Off-actor scan walk (startReconcileWalk → DB.launchReconcileWalk)
+
+2.1  DBActor: capture cfg/matcher snapshot, ftsCopy = fts.Copy(), empties = emptyFiles.Clone()   (R3433)
+2.2  DBActor: launchReconcileWalk sets reconcileWalking, then `go walk()` off the actor so the actor stays free for interleaving writes   (R3433, R3434)
+       2.2.1  Goroutine: NewScanner{deferLinks}.Scan() over the private copies → ScanResults{NewFiles, NewUnresolved, EmptyFiles, PendingLinks}. CheckFile via the private copy; symlink Observe deferred (PendingLinks in walk order)   (R3433)
+2.3  Goroutine → SyncVoid(db, apply): DBActor applies the result   (R3433)
+       2.3.1  swap db.scanner.emptyFiles = empties (the refreshed clone)
+       2.3.2  applyReconcileScan: observeScannedLink over PendingLinks (deferred Observe on the shared, actor-owned LinkTable), recordScannedLinks, AddUnresolvedRecord loop, CleanUnresolved, config-file adds, evictEmpty, startFileScan per content file   (R3383, R3433)
+       2.3.3  RefreshAsync — StaleFiles read, startFileScan per stale file
+       2.3.4  captureReconcileStats(len(stale)): record stale + M/U-record counts + unresolved-by-reason + timeNow() into db.reconcileStats, so `ark status` reports staleness off-actor without a fresh walk   (R3435)
+2.4  DBActor: finishReconcile — DrainSchedule (config-index schedule items), enqueueWrite(setIndexing(nil)), kick the off-slot embed pass   (R1014, R1058, R3433)
+2.5  DBActor: reconcileWalking = false; checkWriteIdle; if reconcileWalkPending → relaunch one coalesced reconcile   (R3434)
+```
+
+```
+3. Off-actor status read (Server.statusOp.run → DB.readStatusOffActor)
+
+3.1  Handler goroutine: Sync(db, bindStatusRead) — one trivial actor hop captures {view = withFTS(fts.Copy()), rc = reconcileStats snapshot, tmpCount} and returns; the actor is free again   (R3436)
+3.2  Handler goroutine (OFF the actor): view.Status(rc, tmpCount) — FileIDPaths + FileInfoByID enumeration for chunk/strategy/size totals; rc supplies stale/missing/unresolved + as-of; NO StaleFiles, no corpus stat   (R3435, R3436)
+       3.2.1  when ?db=true: view.StatusDB() — RecordCounts scans, also off the actor   (R3436)
+3.3  Handler goroutine: enrich with UI/spectral fields, write JSON
 ```
 
 ## Config Mutation Path

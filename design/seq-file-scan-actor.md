@@ -4,18 +4,20 @@ Participants: EntryPoint (ScanAsync / RefreshAsync / IndexPathsAsync),
 DBActor (db.svc), OffSlotGoroutine, WriteActor (write goroutine), Registry
 (db.fileScans), microfts2.
 
-Covers R3419-R3427. The numbered steps are the anchor targets.
+Covers R3419-R3427 and R3433 (the enumeration + per-file classification moving off the actor). The numbered steps are the anchor targets.
 
 ```
 1. change event → store/retire
 
-1.1  EntryPoint (on DBActor): for each changed content file, call startFileScan(path)
+1.1  EntryPoint (on DBActor): for each changed file, call startFileScan(path)
 1.2  DBActor: fs = lookupOrCreateFileScan(path); fs.changeNum = nextScanSeq()   [Registry write, actor-only]  (R3420, R3421)
-1.3  DBActor: dispatch by (os.Stat, fts.CheckFile):
-       1.3.1  gone + known   → enqueueWrite(RemoveFile) then retire            (remove path)
-       1.3.2  present + known → op = reindex-or-append (decided in compute)
-       1.3.3  present + new   → op = add
-1.4  DBActor: my = fs.changeNum; go prepareScan(path, strategy, oldID, known, my)   (R3421)
+       1.2.1  ark.toml → scanConfigOnActor: os.Stat + CheckFile + refresh/add/remove synchronously on the actor, then retire   (R1052, R3433)
+       1.2.2  content file → capture cfg snapshot; go prepareFileScan(copyIdx, cfg, path, my)   [only the stamp + this dispatch run on the actor]  (R3433)
+1.3  OffSlotGoroutine: classify off the actor — os.Stat + fts.CheckFile on the private copy   (R3433)
+       1.3.1  gone + known   → SyncVoid(enqueueWrite(RemoveFile) then retire)   (remove path)
+       1.3.2  gone+unknown | isDir | outside-source → SyncVoid(retire)
+       1.3.3  else → strategy = cfg.StrategyForFile(rel); op decided in compute (reindex/append/add)
+1.4  OffSlotGoroutine: my is the stamp startFileScan drew; proceed to the compute   (R3421)
 1.5  OffSlotGoroutine (no write txn): read file → data, fullHash, fileSize
        1.5.1  detect append (DetectAppend on a copy) — grew + prefix hash matches
        1.5.2  append  → microfts2.PrepareAppend(path, lastLocator, newBytes, strategy, WithBaseLine)   (R3426)

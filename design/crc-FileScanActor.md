@@ -1,5 +1,5 @@
 # FileScanActor
-**Requirements:** R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427, R3428, R3429, R3430, R3431, R3432
+**Requirements:** R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427, R3428, R3429, R3430, R3431, R3432, R3433
 
 The per-file scan machinery that moves index compute (chunk + trigram + token)
 off the write slot. A registry of in-flight scans lives on the DB actor; each
@@ -25,8 +25,19 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
 
 ## Does
 - startFileScan (on the DB actor): stamp the path's registry entry with the next
-  scanSeq, dispatch by (disk-exists, index-known) into add/reindex/append/remove,
-  and launch the off-slot compute tagged with the stamp. (R3421)
+  scanSeq, then either handle a config file synchronously (scanConfigOnActor) or
+  launch the off-slot content scan. Only the stamp and the registry touches the
+  goroutine posts back run on the actor — the per-file os.Stat + CheckFile +
+  classification moved off-slot. (R3421, R3433)
+- scanConfigOnActor (on the DB actor): a config file (ark.toml) keeps its full
+  on-actor path — os.Stat, CheckFile, deleted/dir/outside-source classification,
+  and add/refresh/remove — because a dependent content write must see the chunker
+  registered first (R1052). (R1052, R3433)
+- prepareFileScan (off-slot goroutine, no write txn): classify a content file off
+  the actor — os.Stat, CheckFile on the private fts copy, and the
+  deleted/dir/outside-source decision against the captured Config snapshot — then
+  run the compute (prepareScan) and post the registry touches (delete enqueue,
+  retire, or finishFileScan's store) back on the actor. (R3419, R3426, R3433)
 - prepareScan (off-slot goroutine, no write txn): read the file, compute
   fullHash/fileSize, detect append-vs-full. For a full add/reindex it runs the
   per-chunk compute — `SplitFile` once, then `buildEntries` (reuse map + chunk

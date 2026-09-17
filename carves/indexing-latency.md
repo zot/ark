@@ -12,11 +12,13 @@ Full evidence in
 
 ## Status
 
-- [x] ~~**Item 1a — per-file actor, WHOLE-FILE compute off-slot, store on-slot.**~~ **LANDED (`23bba08`, 2026-09-17.)** R3419-R3427; per-file scan actor in db.go/indexer.go, R3005 retired T280. Burst write-stall after-number still pending Bill's server restart.
-- [ ] **Item 1b — per-chunk preemption + chunk-hash reuse map.** **OPEN (#131.)** microfts2 per-chunk API shipped (SplitFile/PrepareChunk/AssembleFile); follow-on to #130.
+- [x] ~~**Item 1a — per-file actor, WHOLE-FILE compute off-slot, store on-slot.**~~ **LANDED (`23bba08`, 2026-09-17.)** R3419-R3427; per-file scan actor in db.go/indexer.go, R3005 retired T280. Measured on `3401d2b`: burst steady-state writes stay ~47ms under load (a fused batch held them all before); the single first-write-during-burst sample (16.2→10.3→12.1s across #baseline/#129/#130+#131) is too noisy to score by — the store step stays on-slot by design. See `.scratch/LATENCY-FINDINGS-20260917.md`.
+- [x] ~~**Item 1b — per-chunk preemption + chunk-hash reuse map.**~~ **LANDED (`3401d2b`, 2026-09-17.)** SplitFile→reuse-map(SplitChunk.Hash)→PrepareChunk-on-miss→changeNum-between-chunks→AssembleFile; R3428-R3432, alarms 6+7. Appends kept whole-append (A78).
 - [x] ~~**Item 2 — changeNum preemption + length+hash store-boundary check.**~~ **LANDED (`23bba08`, 2026-09-17.)** changeNum supersession + length+hash escape at the store boundary; appends exempt.
 - [x] ~~**Item 3 — move embedding out of the write closure.**~~ **LANDED (`4eb50b9`, 2026-09-17.)** Embed compute off-slot, EC/EF store in per-batch enqueueWrite closures (R3414-R3416). Measured burst first-write stall 16.2s → 10.3s; the residual ~10s is the on-slot refresh batch (Items 1/2, not yet built), which runs before the embed. See `.scratch/LATENCY-FINDINGS-20260917.md`.
 - **Item 4 — yield the slot between files in a batch reconcile.** **SUBSUMED by Items 1/2 (Bill, 2026-09-17).** No checkbox: per-file actors make yielding between files automatic — the write actor only ever holds a store.
+- [ ] **Item 5 — scan enumeration + classification off the DB actor.** **OPEN (#132.)** Measured 2026-09-17: the residual ~15s hold per reconcile burst is the enumeration (`scanner.Scan()` — 8k `os.Stat` + stale reads — plus per-file `os.Stat`/`CheckFile` in `startFileScan`), synchronous on the `db.svc` actor inside `doReconcile`→`ScanAsync`. Only the per-file compute left the slot (#130/#131). Fix: enumeration + classification off the actor; only the registry stamp + enqueue stay on it.
+- [ ] **Item 6 — parallelize the scan walk to ncdu/dust/gdu-class speed.** **OPEN (not queued.)** Parallel per-directory walk with a bounded worker pool; stat-only stale classification; and the cap on the currently-unbounded per-file compute goroutines.
 
 ## How it surfaced
 
@@ -245,6 +247,66 @@ are shared, so 1b changes only the compute phase.
   is its own actor and the write actor only ever holds a store, yielding between
   files is automatic — the whole-batch `enqueueWrite` (db.go:1666) is replaced by
   per-file store closures. No separate work remains.
+
+- **Item 5 — enumeration off the actor.** #130/#131 moved the per-file *compute*
+  off the slot, but the reconcile's *enumeration and classification* stayed on the
+  `db.svc` DB actor and is the measured ~15s hold: `doReconcile` (server.go:867,
+  on the actor) calls `ScanAsync` (db.go:1569) synchronously → `scanner.Scan()`
+  (db.go:1574) stats ~8k files and classifies stale, then `startFileScan`
+  (db.go:1760) does `os.Stat` + `fts.CheckFile` per file before dispatch. A tmp://
+  write must hop onto `db.svc` to `enqueueWrite`, so it blocks for the whole
+  enumeration. Fix: run `scanner.Scan()` and the per-file classification off the
+  actor; only `stampFileScan` + the dispatch run on it. Evidence:
+  `.scratch/LATENCY-FINDINGS-20260917.md` (36 of 37 writes ~50ms, one 15.7s at
+  burst start).
+
+  **DECIDED (Bill, 2026-09-17): enumeration and classification off the actor;
+  only stamp + dispatch on it.** `scanner.Scan()`'s walk (8k `os.Stat` + stale
+  classification) runs in a goroutine, reading the DB through the existing
+  off-actor read path (`fts.Copy()`/`withFTS` operation objects, never a mutex);
+  the per-file `os.Stat`+`fts.CheckFile` (db.go:1763-1764) move into the file
+  actor's off-slot phase. `recordScannedLinks`/`NewUnresolved`/`CleanUnresolved`
+  (db.go:1590-1599) stay on the actor as writes but batched after the walk
+  returns, not interleaved. `doReconcile` kicks the goroutine rather than walking
+  synchronously; a second reconcile while a walk is in flight coalesces on a
+  single in-flight flag held on the actor (changeNum's spirit).
+
+  **DECIDED (Bill, 2026-09-17): `ark status` reads off the actor and reports the
+  last reconcile's stale count, never walking files.** Folded into the #132 pass
+  (no separate item). `DB.Status()` was calling `fts.StaleFiles()` — an `os.Stat`
+  (+read/hash on mtime mismatch) per F record — inside the db.svc actor Sync
+  (server.go:1537), so every `ark status` re-stat'd ~8k files on the actor; at
+  cold-cache startup that is the long-standing ~1min `ark status` (NOT a #132
+  regression — that path was on the actor before and after). Fix: `Status()` runs
+  off the actor on a bound `fts.Copy()`, and the `stale:`/`missing:`/`unresolved:`
+  counts come from what the last reconcile computed (stored when
+  `applyReconcileScan` lands, actor-owned, no mutex), printed with an as-of time
+  (`stale: 211 (as of 12:47:03)`, `-` before the first reconcile). Status never
+  hashes; length+hash stays at the store boundary.
+
+  **DECIDED (Bill, 2026-09-17): the reconcile walk targets ncdu/dust/gdu-class
+  speed.** Concrete target: the ~8k-file corpus walked **and** classified in well
+  under 1s warm, ≤2s cold. Those tools hit that by a **parallel per-directory walk
+  with a bounded worker pool**, using the `DirEntry` type from `readdir` so
+  recursion needs no `stat`, **one `lstat` per leaf** for size+mtime, and **no
+  hashing**. ark's `Scanner.Scan` (scanner.go:84-91) is today a single-goroutine
+  sequential `filepath.WalkDir` per source — the opposite shape.
+
+- **Item 6 — parallelize the scan walk.** Rewrite `Scanner.Scan` (scanner.go:84-91)
+  as a parallel per-directory walk: an errgroup / worker pool sized to
+  `GOMAXPROCS` or a named constant, walking subtrees concurrently, results merged
+  into the batched apply (`applyReconcileScan`, db.go:1739). Stale classification
+  stays **stat-only** — compare `mtime`+`size` against the stored F record and hash
+  **only on a mismatch** (already the rule in `classifyFile`); the walk itself does
+  one `lstat` per leaf and never reads file contents. Fold in the cap the earlier
+  note flagged: the per-file compute goroutines are **currently unbounded** — one
+  `go db.prepareFileScan` per in-flight file (db.go:2002), no pool/semaphore — so
+  Item 6 adds a bounded worker pool there too (a reconcile of thousands of stale
+  files must not spawn thousands of concurrent computes). Ship a **stamped rig**
+  measuring walk wall time warm and cold (dropping caches needs root — if
+  unavailable, measure warm and say so). This is the last piece of the latency
+  goal after #130/#131/#132 moved the work off the actor: those made the walk not
+  *block* anything; Item 6 makes it *fast*.
 
 ## Open questions
 

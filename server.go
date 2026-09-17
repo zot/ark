@@ -850,11 +850,10 @@ func (srv *Server) reconcile() {
 			go srv.processScheduleItems(items)
 		}
 		srv.doReconcile(db)
-		// Drain any schedule items from synchronous config indexing
-		pending := db.indexer.DrainSchedule()
-		if len(pending) > 0 {
-			go srv.processScheduleItems(pending)
-		}
+		// The schedule drain from synchronous config indexing moved into
+		// finishReconcile (seq-reconcile.md#2.4): config files are now indexed in
+		// the off-actor walk's apply step, so draining here — before the walk has
+		// run — would miss them. R3433
 	})
 }
 
@@ -863,8 +862,15 @@ func (srv *Server) reconcile() {
 // new/removed sources. Sweep drops files that no longer
 // classify as Included (R2138, R2142). Called inside the DB actor.
 //
-// CRC: crc-Server.md | Seq: seq-reconcile.md | R204, R347, R351, R2138, R2142
+// CRC: crc-Server.md | Seq: seq-reconcile.md | R204, R347, R351, R2138, R2142, R3433, R3434
 func (srv *Server) doReconcile(db *DB) {
+	// A reconcile scan enumeration is already in flight off the actor: coalesce.
+	// Mark pending so the walk's completion re-triggers one reconcile, and return
+	// without re-running sources-check / sweep / a second walk. R3434
+	if db.reconcileWalking {
+		db.reconcileWalkPending = true
+		return
+	}
 	if result, err := db.SourcesCheck(); err != nil {
 		log.Printf("reconcile: sources check error: %v", err)
 	} else {
@@ -889,13 +895,65 @@ func (srv *Server) doReconcile(db *DB) {
 	if err := db.SweepAsync(); err != nil {
 		log.Printf("reconcile: sweep error: %v", err)
 	}
-	log.Println("reconcile: scanning...")
-	if _, err := db.ScanAsync(); err != nil {
-		log.Printf("reconcile: scan error: %v", err)
-	}
-	log.Println("reconcile: refreshing...")
-	if err := db.RefreshAsync(); err != nil {
-		log.Printf("reconcile: refresh error: %v", err)
+
+	// The scan enumeration (8k os.Stat + CheckFile) runs OFF the actor. The
+	// stale-file refresh, the indexing-state clear, and the embed pass run when
+	// the walk returns — see startReconcileWalk / finishReconcile. R3433
+	srv.startReconcileWalk(db)
+}
+
+// startReconcileWalk runs the reconcile scan enumeration off the DB actor and,
+// when it returns, applies its results and runs the stale-file refresh, the
+// schedule drain, the indexing-state clear, and the embed pass back on the actor.
+// A walk in flight coalesces (launchReconcileWalk). On the DB actor. R3433, R3434
+// CRC: crc-Server.md | Seq: seq-reconcile.md#2.2 | R3433, R3434
+func (srv *Server) startReconcileWalk(db *DB) {
+	// Snapshots captured on the actor so the walk touches no shared state.
+	cfg := db.config
+	matcher := db.matcher
+	ftsCopy := db.fts.Copy()
+	empties := db.scanner.emptyFiles.Clone()
+	var results *ScanResults
+	var walkErr error
+	db.launchReconcileWalk(
+		func() {
+			// Off the actor: a throwaway Scanner bound to private copies. Deferred
+			// links keep it from touching the shared, actor-owned LinkTable. R3433
+			walker := NewScanner(cfg, matcher, ftsCopy, empties)
+			walker.deferLinks = true
+			results, walkErr = walker.Scan()
+		},
+		func() {
+			// On the actor: apply the walk's result, then refresh + tail.
+			log.Println("reconcile: scanning...")
+			if walkErr != nil {
+				log.Printf("reconcile: scan error: %v", walkErr)
+			} else {
+				db.scanner.emptyFiles = empties // swap the refreshed empty-set in
+				db.applyReconcileScan(results)
+			}
+			log.Println("reconcile: refreshing...")
+			if err := db.RefreshAsync(); err != nil {
+				log.Printf("reconcile: refresh error: %v", err)
+			}
+			srv.finishReconcile(db)
+		},
+		func() { srv.reconcile() }, // re-trigger a reconcile requested during the walk
+	)
+}
+
+// finishReconcile runs the reconcile tail on the DB actor after the off-actor
+// walk's results have been applied: drain schedule items from the synchronous
+// config indexing, clear the indexing state once all queued writes complete, and
+// kick the off-slot embed pass. Split out of doReconcile because the enumeration
+// now runs off the actor, so the tail must run when the walk returns rather than
+// synchronously inside doReconcile. On the DB actor. R3433
+// CRC: crc-Server.md | Seq: seq-reconcile.md#2.4 | R1014, R1058, R1292, R1295, R1609, R3414, R3416, R3433
+func (srv *Server) finishReconcile(db *DB) {
+	// R1014, R3433: schedule items from synchronous config indexing (now in the
+	// walk's apply step) drain here, on the actor, after that indexing has run.
+	if pending := db.indexer.DrainSchedule(); len(pending) > 0 {
+		go srv.processScheduleItems(pending)
 	}
 
 	// Clear indexing state after all queued writes complete. R1058
@@ -910,10 +968,10 @@ func (srv *Server) doReconcile(db *DB) {
 	// so a long embed never freezes interleaving UI writes; the pass's EC/EF
 	// and tag store writes route back onto the write actor in small per-batch
 	// closures (see Librarian.BatchEmbed / BatchEmbedChunks). srv.embedding
-	// guards re-entrancy — read and set here on the db.svc actor (doReconcile
+	// guards re-entrancy — read and set here on the db.svc actor (finishReconcile
 	// runs on it), cleared on the actor when the pass ends — so a second
 	// reconcile never launches a concurrent embed goroutine.
-	// CRC: crc-Server.md | Seq: seq-reconcile.md | R1292, R1295, R1609, R3414, R3416
+	// CRC: crc-Server.md | Seq: seq-reconcile.md#2.4 | R1292, R1295, R1609, R3414, R3416
 	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() && srv.beginEmbedPass() {
 		go func() {
 			// Clear the guard only after this pass's store writes drain, so the
@@ -1470,20 +1528,24 @@ func (o *statusOp) init(srv *Server, r *http.Request) {
 	o.wantDB = r.URL.Query().Get("db") == "true"
 }
 
-// CRC: crc-Server.md | R257, R2477, R2480
+// CRC: crc-Server.md | R257, R2477, R2480, R3436
 func (o *statusOp) run() (any, error) {
 	type statusResult struct {
 		status   *StatusInfo
 		dbCounts *DBRecordCounts
 	}
-	result, err := Sync(o.srv.db, func(db *DB) (statusResult, error) {
-		status, err := db.Status()
+	// R3436: bind an fts.Copy() view + snapshot the last-reconcile counts and the
+	// tmp count in one trivial actor hop, then run the file-record enumeration
+	// (Status) and the record-count scan (StatusDB) OFF the actor — so a
+	// cold-cache status never holds the actor for the index-wide walk.
+	result, err := readStatusOffActor(o.srv.db, func(b statusBinding) (statusResult, error) {
+		status, err := b.view.Status(b.counts, b.tmpCount)
 		if err != nil {
 			return statusResult{}, err
 		}
 		var dbCounts *DBRecordCounts
 		if o.wantDB {
-			dbCounts, err = db.StatusDB()
+			dbCounts, err = b.view.StatusDB()
 			if err != nil {
 				return statusResult{}, err
 			}

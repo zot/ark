@@ -495,7 +495,9 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   Start the server.
 - `ark status [--dir <path>]`
   Show counts: files, stale, missing, unresolved. Index built.
-  Server running or not.
+  Server running or not. The stale/missing/unresolved counts are as-of
+  the last reconcile (status never re-walks the corpus) — see
+  specs/status-enhanced.md.
 - `ark files [--dir <path>] [--status] [<pattern>...]`
   List indexed files. If patterns given, only list matching files.
   `--status` prefixes each line with a status letter:

@@ -252,7 +252,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-install.md → `cmd/ark/main.go`
-- [x] seq-reconcile.md → `server.go`
+- [x] seq-reconcile.md → `server.go`, `db.go`
 - [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
 - [x] seq-file-scan-actor.md → `db.go`, `indexer.go`, `server.go`
@@ -268,6 +268,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-write-actor.md → `db.go`, `svc.go`, `indexer.go`, `server.go`
 - [x] crc-ChanSvc.md → `svc.go`
 - [x] test-DBReconcile.md → `reconcile_coalesce_test.go`
+- [x] test-ReconcileWalk.md → `reconcile_walk_test.go`
+- [x] test-Status.md → `status_test.go`
 - [x] test-ChanSvc.md → `svc_test.go`
 - [ ] test-LinkTable.md → `links_test.go`, `config_test.go`, `link_view_test.go`, `cmd/ark/link_view_test.go`
 - [ ] test-ExtAssumptions.md → `ext_assumptions_test.go`

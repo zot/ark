@@ -27,6 +27,11 @@ type ScanResults struct {
 	// files: the alias lives on the link rather than on each file beneath
 	// it, so the cost is one entry per link. R3352, R3373
 	TrackedLinks []*LinkEntry
+	// PendingLinks lists every symlink path the walk met, in walk order, when the
+	// scanner ran with deferLinks (the off-actor reconcile walk). Classification —
+	// linksToRegularFile, Observe, and the resulting TrackedLinks / NewUnresolved
+	// entries — is done later on the DB actor, which owns the LinkTable. R3433
+	PendingLinks []string
 }
 
 // Scanner walks configured source directories and classifies files.
@@ -39,6 +44,12 @@ type Scanner struct {
 	// links classifies each directory symlink the walk meets and follows
 	// its chain with the cycle guard. R3352, R3353
 	links *LinkTable
+	// deferLinks is set on the throwaway scanner the reconcile walk runs off the
+	// DB actor. The LinkTable is actor-owned, so instead of Observing links inline
+	// the off-actor walk collects their paths (walk order) into ScanResults.PendingLinks
+	// and the actor runs Observe on them afterward. Zero (inline Observe) for the
+	// shared scanner every synchronous caller uses. R3433
+	deferLinks bool
 }
 
 // NewScanner assembles a Scanner with every collaborator it needs.
@@ -103,8 +114,15 @@ func (sc *Scanner) Scan() (*ScanResults, error) {
 			// A dangling link cannot answer that, and is recorded anyway:
 			// readlink still succeeds, so recording turns an invisible
 			// omission into a statable fact.
-			// CRC: crc-Scanner.md | R3352, R3353, R3373
+			// CRC: crc-Scanner.md | R3352, R3353, R3373, R3433
 			if d.Type()&os.ModeSymlink != 0 {
+				if sc.deferLinks {
+					// Off-actor reconcile walk: the LinkTable is actor-owned, so
+					// defer classification. Collect the path in walk order and let
+					// the actor run linksToRegularFile + Observe. R3433
+					results.PendingLinks = append(results.PendingLinks, path)
+					return nil
+				}
 				if linksToRegularFile(path) {
 					return nil // a link to a regular file keeps today's handling
 				}

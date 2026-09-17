@@ -204,6 +204,16 @@ already serialized and need no view. A handler that mixes both keeps the
 live `srv.db` for its `Sync` calls — a read view carries no actor — and
 uses the bound view for everything off-actor.
 
+`ark status` is the canonical mixed case. The status read enumerates every
+file record for the chunk total, per-strategy tally, and total size, and
+`ark status --db` additionally scans every record class for its counts —
+both are index-wide reads that must not run on the actor. So the handler
+does a single trivial actor hop that binds an `fts.Copy()` view and
+snapshots the last-reconcile counts and the tmp-file count, then runs the
+enumeration (`Status`) and the record-count scan (`StatusDB`) off the actor
+on that view. The actor is held only for the bind, never for the walk, so a
+cold-cache `ark status` never blocks an interleaving write.
+
 ## Watcher Batching
 
 The watcher currently triggers a full reconcile (walk all source

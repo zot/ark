@@ -2448,7 +2448,24 @@ func cmdServe(args []string) {
 	}
 }
 
-// CRC: crc-CLI.md, crc-DB.md | R250, R255, R256 — output order (files, stale, missing, unresolved, chunks, sources, strategies, map, server); new fields after existing; map in human-readable MB/GB via formatBytes
+// Status-line rendering for the last-reconcile counts (R3435). The
+// stale/missing/unresolved counts are as-of the last reconcile: `-` before the
+// first reconcile completes, else "<n> (as of HH:MM:SS)".
+const (
+	statusUnknownValue   = "-"        // printed before the first reconcile
+	reconcileClockLayout = "15:04:05" // the as-of timestamp format
+)
+
+// formatStatusCount renders one last-reconcile count value: "-" before the first
+// reconcile (at is zero), else "<n> (as of HH:MM:SS)". R3435
+func formatStatusCount(n int, at time.Time) string {
+	if at.IsZero() {
+		return statusUnknownValue
+	}
+	return fmt.Sprintf("%d (as of %s)", n, at.Format(reconcileClockLayout))
+}
+
+// CRC: crc-CLI.md, crc-DB.md | R250, R255, R256, R3435 — output order (files, stale, missing, unresolved, chunks, sources, strategies, map, server); new fields after existing; map in human-readable MB/GB via formatBytes
 func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	server := "not running"
 	if serverRunning {
@@ -2457,10 +2474,16 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 	if status.DBFormat != "" {
 		fmt.Printf("db format: %s\n", status.DBFormat)
 	}
-	// R605, R606: total size parenthesized after file count
-	fmt.Printf("files: %d (%s)\nstale: %d\nmissing: %d\nunresolved: %d%s\n",
-		status.Files, formatBytes(status.TotalSize), status.Stale, status.Missing,
-		status.Unresolved, formatUnresolvedReasons(status.UnresolvedByReason))
+	// R605, R606: total size parenthesized after file count.
+	// R3435: stale/missing/unresolved are as-of the last reconcile — "-" before
+	// the first reconcile, else "<n> (as of HH:MM:SS)".
+	asOf := status.ReconcileAt
+	fmt.Printf("files: %d (%s)\nstale: %s\nmissing: %s\nunresolved: %s%s\n",
+		status.Files, formatBytes(status.TotalSize),
+		formatStatusCount(status.Stale, asOf),
+		formatStatusCount(status.Missing, asOf),
+		formatStatusCount(status.Unresolved, asOf),
+		formatUnresolvedReasons(status.UnresolvedByReason))
 	fmt.Printf("chunks: %d\nsources: %d\n", status.Chunks, status.Sources)
 	if status.TmpFiles > 0 {
 		fmt.Printf("tmp files: %d\n", status.TmpFiles)
@@ -2641,7 +2664,10 @@ func cmdStatus(args []string) {
 	}
 
 	withDB(func(d *ark.DB) {
-		status, err := d.Status()
+		// R3435, R3436: StatusRead runs off the DB actor and reports staleness
+		// from the last reconcile, never a fresh corpus walk. A cold CLI has run
+		// no reconcile, so the stale/missing/unresolved lines print `-`.
+		status, err := d.StatusRead()
 		if err != nil {
 			fatal(err)
 		}
