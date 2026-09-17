@@ -5,6 +5,7 @@ package ark
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1046,13 +1047,59 @@ type scanPrep struct {
 	modTime        int64
 }
 
+// errScanSuperseded is returned by the per-chunk compute when a newer event
+// bumped the path's changeNum: the scan abandons between chunks and stores
+// nothing (its finished grams stay cached for the newer scan). Not a real error
+// — prepareFileScan drops it without logging, and retire is a no-op since the
+// entry is no longer this scan's. R3430
+var errScanSuperseded = errors.New("scan superseded by a newer change")
+
+// scanGate mediates per-chunk grams reuse and changeNum preemption for an
+// off-slot full-file scan. Its methods run on the DB actor, where the per-path
+// reuse map lives (no mutex), so buildEntries never touches shared state itself.
+// Realized by dbScanGate in production and a fake in tests.
+// CRC: crc-FileScanActor.md | R3429, R3430
+type scanGate interface {
+	// reuse consults the reuse map: superseded reports a newer scan won (abandon),
+	// cached is reusable grams for hash (nil on a miss).
+	reuse(hash [32]byte) (superseded bool, cached *microfts2.PreparedChunk)
+	// keep caches freshly computed grams under hash for the newer scan to reuse.
+	keep(hash [32]byte, pc *microfts2.PreparedChunk)
+}
+
+// buildEntries is the per-chunk compute loop: for each split chunk consult the
+// gate, preempt on supersession (between chunks, never inside a PrepareChunk),
+// reuse cached grams on a hash hit, else compute them once and cache. Returns the
+// ordered PreparedEntry list AssembleFile takes, or errScanSuperseded. prepareChunk
+// is injected (idx.fts.PrepareChunk in production) so the loop is testable with a
+// fake gate and a counting compute — no DB, no fts, no fixtures.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5.3.2 | R3428, R3429, R3430, R3431
+func buildEntries(splits []microfts2.SplitChunk, gate scanGate, prepareChunk func([]byte) *microfts2.PreparedChunk) ([]microfts2.PreparedEntry, error) {
+	entries := make([]microfts2.PreparedEntry, 0, len(splits))
+	for _, sc := range splits {
+		superseded, cached := gate.reuse(sc.Hash) // R3430: preemption checkpoint
+		if superseded {
+			return nil, errScanSuperseded
+		}
+		pc := cached
+		if pc == nil {
+			pc = prepareChunk(sc.Chunk.Content) // R3428: grams only on a reuse miss
+			gate.keep(sc.Hash, pc)              // R3431: deposit for the newer scan
+		}
+		entries = append(entries, microfts2.PreparedEntry{Chunk: sc.Chunk, Hash: sc.Hash, Grams: pc})
+	}
+	return entries, nil
+}
+
 // prepareScan runs one file's index compute off the write slot: read the file,
 // compute its length+hash, detect append-vs-full against the committed F record,
-// and run exactly one microfts2 Prepare* call holding no write transaction. Safe
-// to call from a plain goroutine — the LMDB read (FileInfoByID) is MVCC-safe and
-// runs on a private fts copy. Returns a scanPrep for storeScan.
-// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426
-func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool) (*scanPrep, error) {
+// and compute grams holding no write transaction. A full add/reindex runs the
+// per-chunk compute (SplitFile → buildEntries → AssembleFile) with the reuse gate;
+// an append keeps the single PrepareAppend call. Safe to call from a plain
+// goroutine — the LMDB read (FileInfoByID) is MVCC-safe and runs on a private fts
+// copy. Returns a scanPrep for storeScan.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426, R3428
+func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool, gate scanGate) (*scanPrep, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -1094,11 +1141,22 @@ func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool)
 		}
 	}
 
-	// Full add (oldID == 0) or full reindex. PrepareFile reads and chunks the
-	// file exactly as the fused AddFileWithContent/Reindex path does internally.
-	pf, pfErr := idx.fts.PrepareFile(path, strategy)
-	if pfErr != nil {
-		return nil, fmt.Errorf("prepare file %s: %w", path, pfErr)
+	// Full add (oldID == 0) or full reindex. Per-chunk compute (R3428): split the
+	// file once (cheap boundaries + hashes, no grams), compute grams per chunk
+	// through the reuse gate, then assemble the same opaque handle StorePrepared/
+	// ReindexPrepared take — equivalent to the fused PrepareFile, plus reuse and
+	// per-chunk preemption.
+	splits, meta, splitErr := idx.fts.SplitFile(path, strategy)
+	if splitErr != nil {
+		return nil, fmt.Errorf("split file %s: %w", path, splitErr)
+	}
+	entries, buildErr := buildEntries(splits, gate, idx.fts.PrepareChunk)
+	if buildErr != nil {
+		return nil, buildErr // errScanSuperseded: the newer scan owns the store
+	}
+	pf, asmErr := idx.fts.AssembleFile(path, strategy, entries, meta)
+	if asmErr != nil {
+		return nil, fmt.Errorf("assemble file %s: %w", path, asmErr)
 	}
 	prep.prepared = pf
 	return prep, nil

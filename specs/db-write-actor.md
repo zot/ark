@@ -190,6 +190,54 @@ The stamp is drawn from a single monotonic counter, not reset per entry, so a
 stale compute from a retired-and-recreated entry can never collide with a fresh
 one (the ABA guard).
 
+### Per-chunk compute: preemption and the reuse map
+
+The whole-file compute above abandons a *whole file's* work when a newer event
+supersedes it, and recomputes every chunk's grams on each scan even when only
+one chunk changed. For a large, rapidly-edited file both costs add up. The
+compute phase is therefore taken to chunk granularity — the store phase, the
+registry, and the changeNum machinery are unchanged.
+
+For a full add or reindex the off-slot goroutine:
+
+- **Splits once.** `SplitFile` cuts the file into content-hashed chunks with no
+  gram computation — cheap. Each chunk carries microfts2's authoritative
+  `SplitChunk.Hash` (SHA-256 of its content), which is also the store's dedup
+  key, so the reuse map keyed on it never drifts from what the store deduplicates.
+- **Computes grams per chunk, reusing where it can.** A **chunk-hash → grams
+  reuse map** lives in the path's registry entry. For each split chunk, on a map
+  hit the cached grams are reused; on a miss `PrepareChunk` computes them and the
+  result is cached. Positions come from the current scan's `SplitChunk`, so a
+  reused gram lands each occurrence at its own range — reuse is safe across scans.
+- **Preempts between chunks.** Before computing each chunk the goroutine consults
+  the registry entry on the DB actor; if a newer event has bumped the path's
+  `changeNum` past this scan's stamp, the scan abandons **between chunks** (never
+  inside a `PrepareChunk`) and stores nothing. Its already-finished per-chunk
+  grams stay in the reuse map, so the newer scan reuses them and a rapidly-edited
+  file converges instead of starving.
+- **Assembles and stores unchanged.** `AssembleFile` folds the per-chunk grams and
+  file metadata into the same opaque `*PreparedFile` the store step already takes;
+  the store side (`StorePrepared` / `ReindexPrepared`) is unchanged.
+
+The reuse map lives in the registry entry and is touched only on the DB actor
+(no mutex); the off-slot loop consults and updates it through actor hops, which
+are also the changeNum preemption checkpoints. It survives across superseded
+scans of the path (that is what makes convergence work) and is discarded when
+the entry retires after the store.
+
+**No runtime invalidation is needed.** Grams are a pure function of chunk content
+and the trigram configuration, and ark's trigram configuration (case-insensitivity
+and character aliases) is fixed at microfts2 `Create` and immutable for the
+process lifetime — a case-fold change is deferred to a restart. So a cached gram
+can never observe a trigram-config change within its lifetime. A chunker change
+alters chunk boundaries and therefore hashes, which produces reuse *misses*, not
+stale hits.
+
+Appends keep the single whole-append `PrepareAppend` compute: an append is
+additive and usually one new chunk, per-chunk preemption of a one-chunk compute
+buys nothing, and a superseded append is already dropped whole at the changeNum
+redo-escape.
+
 ## microfts2 interface
 
 Two methods needed:
@@ -218,6 +266,17 @@ transaction-bound store split:
   set in-transaction from the committed F record. `WithIndexedChunkCallback`
   and `WithRemovedChunkCallback` fire during store; `AppendPrepared` returns
   `ErrAppendTailMoved` if the committed tail moved since prepare.
+
+The per-chunk compute (above) uses the finer split of the same seam:
+
+- `SplitFile(fpath, strategy) ([]SplitChunk, FileMeta, error)` — chunk boundaries
+  and content hashes with no grams, transaction-free. `SplitChunk.Hash` is the
+  authoritative dedup key.
+- `PrepareChunk(content) *PreparedChunk` — one chunk's grams (trigram counts +
+  tokens), a pure function of content and the trigram config, cacheable by hash.
+- `AssembleFile(fpath, strategy, []PreparedEntry, FileMeta) (*PreparedFile, error)`
+  — folds the ordered per-chunk grams and file metadata into the same opaque
+  `*PreparedFile` the store accepts. Positions come from each entry's `Chunk`.
 
 ## Why not a second ChanSvc
 

@@ -85,3 +85,42 @@ next periodic reconcile, which a green suite never notices. Red: err case expect
 reEmit:true.
 **Inject:** db.go:storeResultAction
 **Pulled:** 2026-09-17 — rang
+
+## Test: per-chunk changeNum preemption abandons between chunks
+**Purpose:** when the reuse gate reports supersession, buildEntries returns
+errScanSuperseded and does NOT compute the abandoned chunks — a superseded scan
+neither recomputes nor stores, and preemption lands strictly between chunks.
+(R3430)
+**Input:** three split chunks; a fake gate superseding from the second reuse()
+call; a counting PrepareChunk.
+**Expected:** err is errScanSuperseded; PrepareChunk ran exactly once (chunk 0).
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.5.3.3
+**Code:** filescan_test.go
+**Alarm:** 6
+**Fire alarm:** drop the `if superseded { return errScanSuperseded }` early return
+in buildEntries — the superseded scan then runs to the end, recomputing chunks a
+newer scan owns and building a full entry set that a stale store could land
+(silent: the write still happens, just the wrong one). Red: err is nil and
+PrepareChunk ran 3 times instead of 1.
+**Inject:** indexer.go:buildEntries
+**Pulled:** 2026-09-17 — rang
+
+## Test: per-chunk hash reuse skips recompute
+**Purpose:** buildEntries computes grams once per unique chunk hash and reuses the
+cached grams pointer — intra-scan (a repeated chunk) and cross-scan (a prior
+scan's deposits), which is the convergence a rapidly-edited large file relies on.
+(R3428, R3429)
+**Input:** intra-scan [A,B,A] with an empty gate; cross-scan [A,B] with both
+hashes preloaded; a counting PrepareChunk.
+**Expected:** intra-scan computes 2 (A reused, and entries[0].Grams ==
+entries[2].Grams); cross-scan computes 0.
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.5.3.4
+**Code:** filescan_test.go
+**Alarm:** 7
+**Fire alarm:** make the loop ignore the gate's cached grams (always-miss) — every
+chunk then re-runs PrepareChunk, so a large file with a one-chunk edit recomputes
+every chunk's grams on every scan. Silent: the index is correct, only slow, so no
+naive test notices. Red: intra-scan computes 3 (want 2); cross-scan computes 2
+(want 0).
+**Inject:** indexer.go:buildEntries
+**Pulled:** 2026-09-17 — rang

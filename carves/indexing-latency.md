@@ -12,9 +12,9 @@ Full evidence in
 
 ## Status
 
-- [ ] **Item 1a — per-file actor, WHOLE-FILE compute off-slot, store on-slot.** **OPEN (#130.)** Against microfts2's current whole-file Prepare*/Store*/Reindex*/Append* seam.
-- [ ] **Item 1b — per-chunk preemption + chunk-hash reuse map.** **OPEN (not queued — buildable now, follow-on to #130).** microfts2 per-chunk API shipped; see the granularity fork in Item 1.
-- [ ] **Item 2 — changeNum preemption + length+hash store-boundary check.** **OPEN (#130.)** Folded into the Item 1 actor design. Appends exempt.
+- [x] ~~**Item 1a — per-file actor, WHOLE-FILE compute off-slot, store on-slot.**~~ **LANDED (`23bba08`, 2026-09-17.)** R3419-R3427; per-file scan actor in db.go/indexer.go, R3005 retired T280. Burst write-stall after-number still pending Bill's server restart.
+- [ ] **Item 1b — per-chunk preemption + chunk-hash reuse map.** **OPEN (#131.)** microfts2 per-chunk API shipped (SplitFile/PrepareChunk/AssembleFile); follow-on to #130.
+- [x] ~~**Item 2 — changeNum preemption + length+hash store-boundary check.**~~ **LANDED (`23bba08`, 2026-09-17.)** changeNum supersession + length+hash escape at the store boundary; appends exempt.
 - [x] ~~**Item 3 — move embedding out of the write closure.**~~ **LANDED (`4eb50b9`, 2026-09-17.)** Embed compute off-slot, EC/EF store in per-batch enqueueWrite closures (R3414-R3416). Measured burst first-write stall 16.2s → 10.3s; the residual ~10s is the on-slot refresh batch (Items 1/2, not yet built), which runs before the embed. See `.scratch/LATENCY-FINDINGS-20260917.md`.
 - **Item 4 — yield the slot between files in a batch reconcile.** **SUBSUMED by Items 1/2 (Bill, 2026-09-17).** No checkbox: per-file actors make yielding between files automatic — the write actor only ever holds a store.
 

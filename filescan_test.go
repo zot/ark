@@ -2,8 +2,11 @@ package ark
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/zot/microfts2"
 )
 
 // CRC: crc-FileScanActor.md | R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427
@@ -120,5 +123,135 @@ func TestStoreResultAction(t *testing.T) {
 	ok := storeResultAction(nil)
 	if !ok.retire || ok.reEmit {
 		t.Fatalf("store success: got %+v, want {retire:true reEmit:false}", ok)
+	}
+}
+
+// --- Item 1b: per-chunk reuse + preemption (R3428-R3432) ---
+
+// fakeGate is a test scanGate backed by a single in-memory grams map, exactly as
+// the DB-actor reuseLookup/reuseKeep back the real one by fs.reuse. supersedeAt
+// makes reuse report supersession from a given call index onward (-1 = never), so
+// a test can drive preemption deterministically without a DB or a real changeNum.
+type fakeGate struct {
+	grams       map[[32]byte]*microfts2.PreparedChunk
+	supersedeAt int
+	calls       int
+}
+
+func newFakeGate() *fakeGate {
+	return &fakeGate{grams: map[[32]byte]*microfts2.PreparedChunk{}, supersedeAt: -1}
+}
+
+func (g *fakeGate) reuse(hash [32]byte) (bool, *microfts2.PreparedChunk) {
+	c := g.calls
+	g.calls++
+	if g.supersedeAt >= 0 && c >= g.supersedeAt {
+		return true, nil
+	}
+	return false, g.grams[hash]
+}
+
+func (g *fakeGate) keep(hash [32]byte, pc *microfts2.PreparedChunk) { g.grams[hash] = pc }
+
+// splitChunk builds a microfts2.SplitChunk with a distinct hash and content —
+// enough for buildEntries, which only reads Hash and Chunk.Content.
+func splitChunk(id byte, content string) microfts2.SplitChunk {
+	var h [32]byte
+	h[0] = id
+	return microfts2.SplitChunk{Chunk: microfts2.Chunk{Content: []byte(content)}, Hash: h}
+}
+
+// TestBuildEntriesReuse: buildEntries computes grams once per unique hash and
+// reuses cached grams — both intra-scan (a repeated chunk) and cross-scan (a
+// prior scan's deposits preloaded into the gate). This is the REUSE fire alarm's
+// subject: without the map lookup PrepareChunk runs for every chunk. R3428, R3429
+func TestBuildEntriesReuse(t *testing.T) {
+	// Intra-scan: [A, B, A] — A computed once, reused on its second occurrence.
+	splits := []microfts2.SplitChunk{splitChunk(1, "a"), splitChunk(2, "b"), splitChunk(1, "a")}
+	gate := newFakeGate()
+	computes := 0
+	compute := func([]byte) *microfts2.PreparedChunk { computes++; return &microfts2.PreparedChunk{} }
+
+	entries, err := buildEntries(splits, gate, compute)
+	if err != nil {
+		t.Fatalf("buildEntries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries: got %d, want 3 (positions come from each occurrence)", len(entries))
+	}
+	if computes != 2 {
+		t.Fatalf("intra-scan dedup: PrepareChunk ran %d times, want 2 (A reused)", computes)
+	}
+	if entries[0].Grams != entries[2].Grams {
+		t.Fatalf("repeated chunk A did not share one *PreparedChunk")
+	}
+
+	// Cross-scan: a second scan whose two chunks were both finished by a prior
+	// scan (preloaded into the gate) recomputes nothing.
+	var hA, hB [32]byte
+	hA[0], hB[0] = 1, 2
+	warm := newFakeGate()
+	warm.grams[hA] = &microfts2.PreparedChunk{}
+	warm.grams[hB] = &microfts2.PreparedChunk{}
+	computes = 0
+	if _, err := buildEntries([]microfts2.SplitChunk{splitChunk(1, "a"), splitChunk(2, "b")}, warm, compute); err != nil {
+		t.Fatalf("buildEntries (warm): %v", err)
+	}
+	if computes != 0 {
+		t.Fatalf("cross-scan reuse: PrepareChunk ran %d times on an all-hit scan, want 0", computes)
+	}
+}
+
+// TestBuildEntriesPreemption: when the gate reports supersession, buildEntries
+// abandons between chunks — it returns errScanSuperseded and does NOT compute the
+// abandoned chunks. This is the PREEMPTION fire alarm's subject: without the
+// early return the loop recomputes work a newer scan owns. R3430
+func TestBuildEntriesPreemption(t *testing.T) {
+	splits := []microfts2.SplitChunk{splitChunk(1, "a"), splitChunk(2, "b"), splitChunk(3, "c")}
+	gate := newFakeGate()
+	gate.supersedeAt = 1 // superseded from the second reuse() call onward (before chunk index 1)
+	computes := 0
+	compute := func([]byte) *microfts2.PreparedChunk { computes++; return &microfts2.PreparedChunk{} }
+
+	entries, err := buildEntries(splits, gate, compute)
+	if !errors.Is(err, errScanSuperseded) {
+		t.Fatalf("superseded scan: got err=%v entries=%d, want errScanSuperseded", err, len(entries))
+	}
+	if computes != 1 {
+		t.Fatalf("superseded scan recomputed abandoned chunks: PrepareChunk ran %d times, want 1 (only chunk 0)", computes)
+	}
+}
+
+// TestReuseLookupKeep: the DB-actor reuse map — a deposit is visible to the same
+// stamp, survives supersession (so the newer scan reuses it: convergence), and is
+// dropped when the entry retires. All on a zero-value *DB. R3429, R3431
+func TestReuseLookupKeep(t *testing.T) {
+	db := &DB{}
+	my := db.stampFileScan("a")
+	var hA [32]byte
+	hA[0] = 1
+
+	if r := db.reuseLookup("a", my, hA); r.superseded || r.cached != nil {
+		t.Fatalf("fresh entry: got %+v, want a clean miss", r)
+	}
+	pc := &microfts2.PreparedChunk{}
+	db.reuseKeep("a", hA, pc)
+	if r := db.reuseLookup("a", my, hA); r.superseded || r.cached != pc {
+		t.Fatalf("after keep: got %+v, want cached==pc", r)
+	}
+
+	// A newer event supersedes my but shares the entry's reuse map.
+	my2 := db.stampFileScan("a")
+	if r := db.reuseLookup("a", my, hA); !r.superseded {
+		t.Fatalf("stale stamp read as current: %+v", r)
+	}
+	if r := db.reuseLookup("a", my2, hA); r.superseded || r.cached != pc {
+		t.Fatalf("convergence: newer scan did not inherit the deposit: %+v", r)
+	}
+
+	// Retire drops the entry (and its map).
+	db.retireFileScanIfCurrent("a", my2)
+	if r := db.reuseLookup("a", my2, hA); !r.superseded {
+		t.Fatalf("retired entry still served a lookup: %+v", r)
 	}
 }

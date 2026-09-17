@@ -19,7 +19,12 @@ Covers R3419-R3427. The numbered steps are the anchor targets.
 1.5  OffSlotGoroutine (no write txn): read file → data, fullHash, fileSize
        1.5.1  detect append (DetectAppend on a copy) — grew + prefix hash matches
        1.5.2  append  → microfts2.PrepareAppend(path, lastLocator, newBytes, strategy, WithBaseLine)   (R3426)
-       1.5.3  full    → microfts2.PrepareFile(path, strategy)                       (R3426)
+       1.5.3  full    → per-chunk compute: SplitFile → buildEntries → AssembleFile   (R3428)
+       1.5.3.1  microfts2.SplitFile(path, strategy) → []SplitChunk (hashed, no grams) + FileMeta   (R3428)
+       1.5.3.2  buildEntries: for each split chunk, gate.reuse(hash) on the DBActor   (R3429, R3430)
+       1.5.3.3  if superseded (changeNum bumped past my) → return errScanSuperseded (abandon between chunks)   (R3430)
+       1.5.3.4  else reuse cached grams on a hit; on a miss PrepareChunk(content) then gate.keep(hash, grams)   (R3429, R3431)
+       1.5.3.5  microfts2.AssembleFile(path, strategy, entries, FileMeta) → *PreparedFile   (R3428)
 1.6  OffSlotGoroutine: SyncVoid(db, enqueueWrite→) finishFileScan(prep, my)          (R3419)
 1.7  DBActor: if fileScans[path] == nil || fileScans[path].changeNum != my → drop (superseded)   (R3422 redo-escape)
 1.8  DBActor: else enqueueWrite(storeScan(prep, my))
@@ -34,6 +39,12 @@ Covers R3419-R3427. The numbered steps are the anchor targets.
 ```
 
 Notes:
+- The per-chunk compute (1.5.3.x) applies to the full path only; appends keep the
+  single whole-append PrepareAppend (1.5.2). gate.reuse/gate.keep run on the
+  DBActor, where the path's reuse map lives (no mutex); those actor hops are also
+  the changeNum preemption checkpoints, so preemption is strictly between chunks.
+  A superseded scan deposits its finished grams before abandoning, so the newer
+  scan reuses them and a rapidly-edited file converges (R3428-R3431).
 - The redo-escape (step seven) applies to full AND append; a superseded stale
   append is dropped there, which is why the append-tail-moved guard in the
   append store never fires in practice (R3427).

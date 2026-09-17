@@ -1695,13 +1695,89 @@ func (db *DB) IndexPathsAsync(paths []string) error {
 	return nil
 }
 
-// fileScan is one path's in-flight scan state in the write actor's registry. In
-// the whole-file variant (indexing-latency #130 Item 1a) it carries only the
-// changeNum stamp; per-chunk preemption (Item 1b) will add a chunk-hash→result
-// reuse map here when microfts2 ships the per-chunk API.
-// CRC: crc-FileScanActor.md | R3420, R3421
+// fileScan is one path's in-flight scan state in the write actor's registry. It
+// carries the changeNum stamp (R3421) and, since indexing-latency #131 Item 1b,
+// a per-path chunk-hash → grams reuse map (R3429). The map survives across
+// superseded scans of the path so a rapidly-edited file's finished per-chunk
+// grams are reused instead of recomputed. Both fields are DB-actor state (no
+// mutex); the off-slot compute reaches the map only through reuseLookup/reuseKeep.
+//
+// The map needs no runtime invalidation: grams are a pure function of content and
+// the trigram config, and ark's trigram config (CaseInsensitive + Aliases) is
+// fixed at microfts2.Create and immutable for the process (a case-fold change is
+// ActionDefer → restart), so a cached gram can never observe a config change. A
+// chunker change alters boundaries and thus hashes → reuse misses, not stale hits.
+// R3432
+// CRC: crc-FileScanActor.md | R3420, R3421, R3429, R3432
 type fileScan struct {
 	changeNum uint64
+	reuse     map[[32]byte]*microfts2.PreparedChunk // R3429: nil until first deposit
+}
+
+// reuseResult is one reuse-map consultation on the DB actor: superseded reports
+// the scan lost to a newer event (abandon between chunks); cached is reusable
+// grams for the hash, nil on a miss.
+type reuseResult struct {
+	superseded bool
+	cached     *microfts2.PreparedChunk
+}
+
+// reuseLookup consults path's per-chunk reuse map on the DB actor. It reports
+// supersession (a newer event bumped the entry's changeNum past my, or the entry
+// was retired) so the off-slot loop abandons between chunks, and otherwise returns
+// the cached grams for hash (nil on a miss). R3429, R3430
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5.3.2 | R3429, R3430
+func (db *DB) reuseLookup(path string, my uint64, hash [32]byte) reuseResult {
+	fs := db.fileScans[path]
+	if fs == nil || fs.changeNum != my {
+		return reuseResult{superseded: true}
+	}
+	if fs.reuse == nil {
+		return reuseResult{}
+	}
+	return reuseResult{cached: fs.reuse[hash]}
+}
+
+// reuseKeep caches freshly computed grams under hash for path's scan on the DB
+// actor. It deposits whenever the entry still exists — even for a scan whose
+// changeNum has since been bumped — because grams are content-pure, so the
+// deposit is valid for the newer scan and is what makes a rapidly-edited file
+// converge instead of starving. R3431
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5.3.4 | R3429, R3431
+func (db *DB) reuseKeep(path string, hash [32]byte, pc *microfts2.PreparedChunk) {
+	fs := db.fileScans[path]
+	if fs == nil {
+		return
+	}
+	if fs.reuse == nil {
+		fs.reuse = make(map[[32]byte]*microfts2.PreparedChunk)
+	}
+	fs.reuse[hash] = pc
+}
+
+// dbScanGate is the production scanGate: its methods hop onto the DB actor to
+// consult and update the path's reuse map, so the map stays actor-owned (no
+// mutex) while the expensive PrepareChunk runs off-actor between hops. Those hops
+// are also buildEntries' changeNum preemption checkpoints.
+// CRC: crc-FileScanActor.md | R3429, R3430, R3431
+type dbScanGate struct {
+	db   *DB
+	path string
+	my   uint64
+}
+
+func (g dbScanGate) reuse(hash [32]byte) (bool, *microfts2.PreparedChunk) {
+	res, _ := Sync(g.db, func(db *DB) (reuseResult, error) {
+		return db.reuseLookup(g.path, g.my, hash), nil
+	})
+	return res.superseded, res.cached
+}
+
+func (g dbScanGate) keep(hash [32]byte, pc *microfts2.PreparedChunk) {
+	_ = SyncVoid(g.db, func(db *DB) error {
+		db.reuseKeep(g.path, hash, pc)
+		return nil
+	})
 }
 
 // storeOutcome is what to do after a store attempt.
@@ -1819,12 +1895,19 @@ func (db *DB) startFileScan(idx *Indexer, path string) {
 // write transaction), then enqueues the store step back through the write actor.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426
 func (db *DB) prepareFileScan(idx *Indexer, path, strategy string, oldID uint64, known bool, my uint64) {
-	prep, err := idx.prepareScan(path, strategy, oldID, known)
+	// R3428-R3431: the gate carries per-chunk reuse + changeNum preemption for the
+	// full-file compute; its map hops run on the DB actor.
+	gate := dbScanGate{db: db, path: path, my: my}
+	prep, err := idx.prepareScan(path, strategy, oldID, known, gate)
 	if err != nil {
-		if !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, os.ErrNotExist) {
+		// errScanSuperseded is a clean abandon (a newer scan owns the entry), not a
+		// failure — don't log it. R3430
+		if !errors.Is(err, errScanSuperseded) && !errors.Is(err, microfts2.ErrNoChunks) && !errors.Is(err, os.ErrNotExist) {
 			log.Printf("index: prepare %s: %v", path, err)
 		}
-		// Nothing to store — retire so a later event re-scans cleanly.
+		// Nothing to store — retire so a later event re-scans cleanly. When
+		// superseded this is a no-op (changeNum != my); the newer scan keeps the
+		// entry and its already-cached grams.
 		SyncVoid(db, func(db *DB) error {
 			db.retireFileScanIfCurrent(path, my)
 			return nil
