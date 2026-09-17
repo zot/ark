@@ -998,14 +998,29 @@ func (srv *Server) processScheduleItems(items []scheduleItem) {
 	})
 }
 
-// CRC: crc-Server.md | R62 — PID file written outside the db directory, for emergency kill only
+// PidFileName is the emergency-kill PID file, ark infrastructure that lives in
+// the ark home directory beside ark.sock and index.db — not corpus content.
+const PidFileName = "ark.pid"
+
+// CRC: crc-Server.md | R3417 — PID file in the ark home dir, for emergency kill only.
+// DECIDED (Bill, 2026-09-17): the PID file lives in the ark home directory, not
+// os.TempDir(). The old temp path honored TMPDIR, so a server started from a
+// plain shell wrote /tmp/ark_..._.pid while `ark stop` from a nix-shell
+// (TMPDIR=/tmp/nix-shell.*) looked elsewhere and reported "no PID file found"
+// against a running server. Beside ark.sock the path is TMPDIR-independent.
 func PidFilePath(dbPath string) string {
-	// PID file outside the database directory, derived from dbPath
+	return filepath.Join(dbPath, PidFileName)
+}
+
+// LegacyPidFilePath returns the pre-2026-09-17 temp-dir PID path (a flat
+// TMPDIR-derived name). `ark stop` falls back to it once (R3418) so a server
+// started by the old binary is still stoppable.
+// CRC: crc-Server.md | R3418
+func LegacyPidFilePath(dbPath string) string {
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
 		absPath = dbPath
 	}
-	// Replace path separators to make a flat filename
 	name := strings.ReplaceAll(absPath, string(filepath.Separator), "_")
 	return filepath.Join(os.TempDir(), "ark"+name+".pid")
 }

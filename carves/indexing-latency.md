@@ -94,6 +94,25 @@ its finished work.
 equality**, and content staleness is length+hash (what `prepareRefresh` already
 computes), never an mtime re-stat.
 
+**DECIDED (Bill, 2026-09-17): every entry point that indexes a file emits
+per-file change events into the per-file-actor machinery instead of calling the
+indexer on the write slot; the write slot only ever runs the store step.** Today
+these entry points run indexing inside `enqueueWrite` closures and must move
+off-actor like the rest — implementer checklist:
+
+- **watcher events** → `IndexPathsAsync` → `syncOnePath` (db.go:1685)
+- **startup + periodic reconcile** → `doReconcile` (server.go:866, driven by
+  `reconcile` server.go:842) → `RefreshAsync` (server.go:896) and the trailing
+  embed/complete closures
+- **`ark scan`** → scan → `AddFile` in the scan-content closure (db.go:1601)
+- **`RefreshAsync`** → `refreshBatch` (db.go:1666)
+- **`IndexPathsAsync`** (db.go:1685)
+
+Each becomes: read the changed file, emit its chunk slice into the file actor,
+and let the file actor drive compute → store as above. The whole-batch
+`enqueueWrite` closures (db.go:1601/1666/1685) are replaced by per-file store
+closures — which is also why Item 4 is subsumed.
+
 ## Items
 
 - **Item 1 — per-file actor (design above).** The file actor computes FTS data
@@ -112,8 +131,45 @@ computes), never an mtime re-stat.
   returning prepared chunks (Chunk + hash + triCounts + tokens), and a *store*
   entry taking a fileid + those prepared chunks + the old chunk set to remove,
   doing only `addFileInTxn`'s work. Request drafted at
-  `microfts2-precomputed-chunks-request-20260917.md` (private working note; not
-  sent — for the ark-messenger).
+  `requests/precomputed-chunks-request.md`.
+  `@ark-request-sent: requests/precomputed-chunks-request.md`
+
+  **microfts2 reply — COMPLETED (2026-09-17), API implemented in ~/work/microfts2
+  working tree.** They built the two-phase split as opaque handles (as ark
+  preferred):
+  - **Compute (no bbolt txn, any goroutine):** `PrepareFile(fpath, strategy,
+    opts) (*PreparedFile, error)` (microfts2 db.go:1435), `PrepareContent(fpath,
+    strategy, content, opts)` (db.go:1447), `PrepareAppend(path, lastLocator,
+    content, strategy, opts) (*PreparedAppend, error)` (db.go:2346). The handle
+    carries derived per-chunk data (hash, trigrams, tokens) + modTime/hash/length;
+    record layout stays private.
+  - **Store (opens the write txn):** `StorePrepared(*PreparedFile) (uint64,
+    error)` (db.go:1518, fresh add), `ReindexPrepared(*PreparedFile) (uint64,
+    error)` (db.go:2038, content-diff reindex), `AppendPrepared(fileid,
+    *PreparedAppend) error`.
+  - Handles are single-use (store releases the content); `WithChunkCallback`
+    fires during compute, `WithIndexedChunkCallback`/`WithRemovedChunkCallback`
+    during store. Fused AddFile/Reindex/AppendChunks are unchanged (now
+    compute-then-store internally), so existing calls keep working during
+    migration. Spec: microfts2 specs/indexing.md, specs/append.md; R676-R689.
+
+  **What they declined/changed from our ask (affects the store step, not a
+  redesign):** ark asked to hand microfts2 the *old-chunk removal set*.
+  microfts2 **declined** — it derives the removal set **in-txn** from the
+  committed F record (chunk refcounts are shared across files, so the orphan
+  cascade must be consistent with committed state; an off-actor set could race a
+  concurrent store). So **ark's store closure supplies only the prepared handle,
+  not a diff**: `ReindexPrepared(handle)` looks up the old file and drops
+  occurrences itself, preserving chunkids for unchanged content (add-before-drop,
+  R673). For Bill's per-file-actor design this *simplifies* the store step — it
+  passes the handle, and the `changeNum`-equality dirty check stays ark-side
+  before the call; the "old chunk set to remove" line in the design section is
+  now microfts2's job, not ark's. Append adds `ErrAppendTailMoved` (db.go:2266)
+  if the committed tail moved between prepare and store — under the per-file
+  actor (which owns the tail) it never fires; it guards a stale handle only.
+  One open option: `ReindexPrepared` exposes only the option-based callbacks, not
+  the raw positional `ReindexCallback`; ark can request a `WithReindexCallback`
+  option later if the hot path needs it.
 - **Item 2 — length+hash redo-escape.** On the actor, before storing, recompare
   the file's length + content hash against what prep computed; if changed,
   requeue the path (the R3005 coalescing claim/release machinery already exists

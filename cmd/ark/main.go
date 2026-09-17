@@ -3746,11 +3746,20 @@ func cmdStop(args []string) {
 	force := fs.Bool("f", false, "send SIGKILL instead of SIGTERM")
 	fs.Parse(args)
 
+	// CRC: crc-CLI.md, crc-Server.md | R3417, R3418 — read the ark-home PID
+	// file; fall back once to the legacy temp-dir path so a server started by
+	// the old binary is still stoppable, and log that we did.
 	pidPath := ark.PidFilePath(arkDir)
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "no PID file found — server may not be running")
-		os.Exit(1)
+		legacyPath := ark.LegacyPidFilePath(arkDir)
+		legacyData, legacyErr := os.ReadFile(legacyPath)
+		if legacyErr != nil {
+			fmt.Fprintln(os.Stderr, "no PID file found — server may not be running")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "using legacy temp-dir PID file %s (server predates the ark-home PID move)\n", legacyPath)
+		data = legacyData
 	}
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))

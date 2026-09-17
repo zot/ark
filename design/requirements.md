@@ -108,7 +108,9 @@
 ### Server
 
 - **R61:** `ark serve` binds a Unix domain socket in the database directory
-- **R62:** Server writes a PID file outside the database directory (for emergency kill only)
+- **~~R62:~~** (Retired T279 — see R3417) Server writes a PID file outside the database directory (for emergency kill only)
+- **R3417:** Server writes the PID file `ark.pid` inside the ark home directory (beside `ark.sock`/`index.db`), for emergency kill only; it is ark infrastructure, not corpus content. Supersedes R62's temp-dir location, which honored `TMPDIR` — a server started from a plain shell wrote `/tmp/ark_..._.pid` while `ark stop` from a nix-shell (`TMPDIR=/tmp/nix-shell.*`) looked elsewhere and reported "no PID file found" against a running server.
+- **R3418:** `ark stop` reads the ark-home PID file; if it is absent it falls back once to the legacy temp-dir path (`LegacyPidFilePath`, logging that it did) so a server started by the pre-move binary is still stoppable.
 - **R63:** Server opens the database with exclusive lock
 - **R64:** Server loads the embedding model and keeps it warm
 - **R65:** Server accepts HTTP requests over the Unix socket

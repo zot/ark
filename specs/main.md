@@ -391,7 +391,7 @@ JSONL lines, and eliminates the exec-per-file overhead.
 
 `ark serve` starts a long-running server:
 - Binds a Unix domain socket (path in database directory)
-- Writes a PID file outside the database (for emergency kill only)
+- Writes a PID file `ark.pid` inside the ark home directory, beside `ark.sock` (for emergency kill only)
 - Opens the database with exclusive lock
 - Loads the embedding model (keeps warm for fast queries)
 - Accepts HTTP requests over the socket
@@ -417,7 +417,13 @@ detects this (connect fails), unlinks the stale socket, and proceeds
 with cold-start.
 
 The PID file is an ops convenience for manual shutdown, not a
-correctness mechanism. Location TBD (e.g. `~/.ark/ark.pid`).
+correctness mechanism. It lives at `<ark-home>/ark.pid` (e.g.
+`~/.ark/ark.pid`), beside `ark.sock` and `index.db` — ark
+infrastructure, not corpus content. It is deliberately **not** in
+`os.TempDir()`: that path honors `TMPDIR`, so a server started from a
+plain shell and an `ark stop` run from a shell with a different
+`TMPDIR` (e.g. a nix-shell) disagreed on the location, and `stop`
+reported "no PID file found" against a running server.
 
 ### Server Lifecycle
 
@@ -425,10 +431,12 @@ correctness mechanism. Location TBD (e.g. `~/.ark/ark.pid`).
 sure it's up" — already up means success). Message on stderr for
 humans.
 
-`ark stop` reads the PID file, verifies the process exists and is
-ark (handles PID rollover), sends SIGTERM, and polls until the
+`ark stop` reads the ark-home PID file, verifies the process exists
+and is ark (handles PID rollover), sends SIGTERM, and polls until the
 process exits. Returns 1 if the process doesn't die within timeout.
-`-f` flag sends SIGKILL instead.
+`-f` flag sends SIGKILL instead. If the ark-home PID file is absent it
+falls back once to the legacy temp-dir path (logging that it did) so a
+server started by the pre-move binary is still stoppable.
 
 Server signal handling: catch SIGTERM, close socket, close DB, exit
 0. The server process never removes the PID file — stale PID files
