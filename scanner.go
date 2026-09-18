@@ -5,6 +5,11 @@ package ark
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/zot/microfts2"
 )
@@ -49,7 +54,8 @@ type Scanner struct {
 	// the off-actor walk collects their paths (walk order) into ScanResults.PendingLinks
 	// and the actor runs Observe on them afterward. Zero (inline Observe) for the
 	// shared scanner every synchronous caller uses. R3433
-	deferLinks bool
+	deferLinks  bool
+	walkWorkers int // 0 => runtime.NumCPU(); walk pool size (test seam). R3437
 }
 
 // NewScanner assembles a Scanner with every collaborator it needs.
@@ -76,132 +82,216 @@ func NewScanner(config *Config, matcher *Matcher, fts *microfts2.DB, emptyFiles 
 // CRC: crc-Scanner.md | R3359
 func (sc *Scanner) Links() *LinkTable { return sc.links }
 
-// Scan walks all configured source directories and returns new files
-// to index and new unresolved files.
+// Scan enumerates every configured source directory (in parallel, via
+// walkSources) and then applies the stateful classification serially. The
+// parallel phase reads only the filesystem and the mutation-free Matcher; the
+// serial merge is the only place that touches the actor-confined emptyFiles, the
+// shared fts, and the LinkTable, so a symlink's classification and its position
+// in the reverse index never depend on which worker reached it first. R3437
+// CRC: crc-Scanner.md | R3437
 func (sc *Scanner) Scan() (*ScanResults, error) {
 	results := &ScanResults{}
 
-	for _, src := range sc.config.Sources {
-		if IsGlob(src.Dir) {
-			continue // glob sources are directives, not walkable dirs
+	leaves, links, err := walkSources(sc.config, sc.matcher, sc.walkWorkers)
+	if err != nil {
+		return results, err
+	}
+
+	// Serial merge, in deterministic walk order. R3437
+	for _, lf := range leaves {
+		switch lf.class {
+		case Included:
+			// R1645, R1646, R1647: an empty file yields no chunks, so record and
+			// report it separately; the caller evicts prior index entries.
+			if sc.emptyFiles != nil && lf.size == 0 {
+				if sc.emptyFiles.Has(lf.path, lf.mtime) {
+					continue
+				}
+				sc.emptyFiles.Record(lf.path, lf.mtime)
+				results.EmptyFiles = append(results.EmptyFiles, lf.path)
+				continue
+			}
+			if sc.emptyFiles != nil {
+				// Non-empty: forget any prior empty record so a later truncation
+				// is re-detected.
+				sc.emptyFiles.Forget(lf.path)
+			}
+			// Already indexed (fresh or stale) means known — stale is Refresh's job.
+			status, cerr := sc.fts.CheckFile(lf.path)
+			if cerr == nil && (status.Status == "fresh" || status.Status == "stale") {
+				continue
+			}
+			results.NewFiles = append(results.NewFiles, FileEntry{Path: lf.path, Strategy: lf.strategy})
+		case Unresolved:
+			// Seen during the walk and matched no pattern. R3356
+			results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
+				Path:   lf.path,
+				Dir:    lf.dir,
+				Reason: UnresolvedReasonUncovered,
+			})
 		}
-		includes, excludes := sc.config.EffectivePatterns(src)
-		dir := src.Dir
+	}
 
-		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip inaccessible paths
-			}
-
-			// Get path relative to the source directory for pattern matching
-			relPath, err := filepath.Rel(dir, path)
-			if err != nil {
-				return nil
-			}
-			if relPath == "." {
-				return nil
-			}
-
-			// A symlink is recorded as an entity and the walk stops there
-			// — it never descends. WalkDir does not follow links, so
-			// d.IsDir() is false for a directory symlink and it would
-			// otherwise fall through to the file branch below, be matched
-			// against *file* patterns, and be silently dropped when its
-			// name fails them. That is the originating defect: its
-			// contents unreachable, with no error and no log line.
-			//
-			// Stat follows the link to learn whether it names a directory.
-			// A dangling link cannot answer that, and is recorded anyway:
-			// readlink still succeeds, so recording turns an invisible
-			// omission into a statable fact.
-			// CRC: crc-Scanner.md | R3352, R3353, R3373, R3433
-			if d.Type()&os.ModeSymlink != 0 {
-				if sc.deferLinks {
-					// Off-actor reconcile walk: the LinkTable is actor-owned, so
-					// defer classification. Collect the path in walk order and let
-					// the actor run linksToRegularFile + Observe. R3433
-					results.PendingLinks = append(results.PendingLinks, path)
-					return nil
-				}
-				if linksToRegularFile(path) {
-					return nil // a link to a regular file keeps today's handling
-				}
-				entry, status := sc.links.Observe(path)
-				switch status {
-				case LinkTracked:
-					results.TrackedLinks = append(results.TrackedLinks, entry)
-				case LinkProposed:
-					// The link proposes its target; it never admits it.
-					// R3355, R3357
-					results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
-						Path:    entry.Resolved,
-						Dir:     dir,
-						Reason:  UnresolvedReasonSymlink,
-						Symlink: entry.Path,
-					})
-				}
-				return nil
-			}
-
-			isDir := d.IsDir()
-
-			// Classify directories: if excluded, skip entirely
-			if isDir {
-				// CRC: crc-Scanner.md | R2133
-				cls := sc.matcher.Classify(includes, excludes, path, dir, true)
-				if cls == Excluded {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			// Classify files
-			// CRC: crc-Scanner.md | R2133
-			cls := sc.matcher.Classify(includes, excludes, path, dir, false)
-			switch cls {
-			case Included:
-				// R1645, R1646, R1647: detect empty files (size == 0) up front —
-				// any chunker would yield nothing, so we record and report the
-				// path separately. The caller evicts prior index entries.
-				if sc.emptyFiles != nil {
-					info, infoErr := d.Info()
-					if infoErr == nil && info.Size() == 0 {
-						mtime := info.ModTime()
-						if sc.emptyFiles.Has(path, mtime) {
-							return nil
-						}
-						sc.emptyFiles.Record(path, mtime)
-						results.EmptyFiles = append(results.EmptyFiles, path)
-						return nil
-					}
-					// Non-empty file: forget any prior empty record so a later
-					// truncation is re-detected.
-					sc.emptyFiles.Forget(path)
-				}
-				// Check if already indexed (fresh or stale — both mean it's known;
-				// stale files are handled by Refresh, not re-added as new)
-				status, err := sc.fts.CheckFile(path)
-				if err == nil && (status.Status == "fresh" || status.Status == "stale") {
-					return nil
-				}
-				results.NewFiles = append(results.NewFiles, FileEntry{
-					Path:     path,
-					Strategy: sc.config.StrategyForFile(relPath, src.Strategies),
-				})
-			case Unresolved:
-				// Seen during the walk and matched no pattern. R3356
-				results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
-					Path:   path,
-					Dir:    dir,
-					Reason: UnresolvedReasonUncovered,
-				})
-			}
-			// Excluded files: do nothing
-			return nil
-		})
-		if err != nil {
-			return results, err
+	// Directory symlinks, Observed in deterministic walk order. R3352, R3373, R3433
+	for _, lc := range links {
+		if sc.deferLinks {
+			// Off-actor reconcile walk: the LinkTable is actor-owned, so defer
+			// classification — collect the path in walk order and let the actor
+			// run linksToRegularFile + Observe afterward. R3433
+			results.PendingLinks = append(results.PendingLinks, lc.path)
+			continue
+		}
+		if linksToRegularFile(lc.path) {
+			continue // a link to a regular file keeps today's handling
+		}
+		entry, status := sc.links.Observe(lc.path)
+		switch status {
+		case LinkTracked:
+			results.TrackedLinks = append(results.TrackedLinks, entry)
+		case LinkProposed:
+			// The link proposes its target; it never admits it. R3355, R3357
+			results.NewUnresolved = append(results.NewUnresolved, UnresolvedRecord{
+				Path:    entry.Resolved,
+				Dir:     lc.srcDir,
+				Reason:  UnresolvedReasonSymlink,
+				Symlink: entry.Path,
+			})
 		}
 	}
 	return results, nil
+}
+
+// scanLeaf is one classified file the parallel walk found, carrying everything
+// the serial merge needs so the walk itself touches no shared Scanner state.
+type scanLeaf struct {
+	path     string
+	dir      string // the source dir this leaf was found under
+	class    Classification
+	size     int64
+	mtime    time.Time
+	strategy string // precomputed for an Included leaf
+}
+
+// linkCand is one directory-symlink path the walk met, plus the source dir it
+// lives in — needed to attribute a proposed link (see observeScannedLink). R3352
+type linkCand struct {
+	path   string
+	srcDir string
+}
+
+// walkSources enumerates every configured source directory concurrently with a
+// bounded worker pool (workers <= 0 means runtime.NumCPU()) and classifies each
+// leaf with the Matcher. It reads only the filesystem and the mutation-free
+// Matcher — no fts, no emptyFiles, no LinkTable — so it is safe across the pool
+// and testable without a *DB. Directory symlinks are recorded and never
+// descended (matching filepath.WalkDir). It returns the classified leaves and
+// the link candidates in deterministic component-wise DFS order, so the serial
+// merge's Observe order equals a sequential walk's. R3437
+func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []linkCand, error) {
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var leaves []scanLeaf
+	var links []linkCand
+
+	// spawn runs fn in a pool goroutine, or inline when the pool is full — the
+	// select's default is what keeps a bounded recursive walk from deadlocking on
+	// the semaphore. Each fn is a walkDir that calls wg.Done itself. R3437
+	spawn := func(fn func()) {
+		wg.Add(1)
+		select {
+		case sem <- struct{}{}:
+			go func() {
+				defer func() { <-sem }()
+				fn()
+			}()
+		default:
+			fn()
+		}
+	}
+
+	var walkDir func(dir string, src Source, includes, excludes []string)
+	walkDir = func(dir string, src Source, includes, excludes []string) {
+		defer wg.Done()
+		entries, rderr := os.ReadDir(dir)
+		if rderr != nil {
+			return // inaccessible: skip, as the sequential walk did
+		}
+		for _, e := range entries {
+			path := filepath.Join(dir, e.Name())
+
+			// A symlink is recorded as an entity and the walk stops there — it is
+			// never descended (WalkDir does not follow links). R3352, R3373
+			if e.Type()&os.ModeSymlink != 0 {
+				mu.Lock()
+				links = append(links, linkCand{path: path, srcDir: src.Dir})
+				mu.Unlock()
+				continue
+			}
+
+			relPath, relErr := filepath.Rel(src.Dir, path)
+			if relErr != nil || relPath == "." {
+				continue
+			}
+
+			if e.IsDir() {
+				// Excluded directory → do not descend (filepath.SkipDir). R2133
+				if matcher.Classify(includes, excludes, path, src.Dir, true) == Excluded {
+					continue
+				}
+				spawn(func() { walkDir(path, src, includes, excludes) })
+				continue
+			}
+
+			// A regular file: classify; keep only Included / Unresolved. R2133
+			cls := matcher.Classify(includes, excludes, path, src.Dir, false)
+			if cls != Included && cls != Unresolved {
+				continue // Excluded files: do nothing
+			}
+			leaf := scanLeaf{path: path, dir: src.Dir, class: cls}
+			if info, infoErr := e.Info(); infoErr == nil {
+				leaf.size = info.Size()
+				leaf.mtime = info.ModTime()
+			}
+			if cls == Included {
+				leaf.strategy = cfg.StrategyForFile(relPath, src.Strategies)
+			}
+			mu.Lock()
+			leaves = append(leaves, leaf)
+			mu.Unlock()
+		}
+	}
+
+	for _, src := range cfg.Sources {
+		if IsGlob(src.Dir) {
+			continue // glob sources are directives, not walkable dirs
+		}
+		includes, excludes := cfg.EffectivePatterns(src)
+		spawn(func() { walkDir(src.Dir, src, includes, excludes) })
+	}
+	wg.Wait()
+
+	// Deterministic DFS order (component-wise, matching filepath.WalkDir) so a
+	// parallel walk's Observe order equals a sequential walk's — files are a set,
+	// but the link reverse-index order must be preserved. R3437
+	sort.Slice(links, func(i, j int) bool { return dfsLess(links[i].path, links[j].path) })
+	sort.Slice(leaves, func(i, j int) bool { return dfsLess(leaves[i].path, leaves[j].path) })
+	return leaves, links, nil
+}
+
+// dfsLess orders two paths the way filepath.WalkDir visits them: component by
+// component, so a directory's descendants sort between it and its siblings and
+// each directory's entries sort by name. R3437
+func dfsLess(a, b string) bool {
+	as := strings.Split(a, string(os.PathSeparator))
+	bs := strings.Split(b, string(os.PathSeparator))
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if as[i] != bs[i] {
+			return as[i] < bs[i]
+		}
+	}
+	return len(as) < len(bs)
 }

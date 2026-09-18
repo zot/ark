@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -77,6 +78,11 @@ type DB struct {
 	// CRC: crc-FileScanActor.md | R3420
 	fileScans map[string]*fileScan
 	scanSeq   uint64 // R3421: process-global monotonic changeNum counter, never reset per entry (ABA guard)
+	// scanSem bounds concurrent off-slot file preparations to runtime.NumCPU(),
+	// so a reconcile of thousands of stale files never spawns thousands of
+	// concurrent computes. Enforces R519 under the per-file scan-actor model.
+	// CRC: crc-FileScanActor.md | R3438
+	scanSem chan struct{}
 
 	// reconcilePending is set while a reconcile scan is queued but has not yet
 	// begun, so further requests merge into it instead of queueing scans of
@@ -359,6 +365,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		dbPath:        dbPath,
 		svc:           newChanSvc(chanSvcSlots),
 		chunkerByName: make(map[string]any),
+		scanSem:       make(chan struct{}, runtime.NumCPU()),
 	}
 
 	// CRC: crc-DB.md | R370, R382, R2273, R2386, R2389
@@ -2038,6 +2045,21 @@ func (db *DB) retireFileScanIfCurrent(path string, my uint64) {
 	}
 }
 
+// runScanBounded runs fn under the per-file dispatch semaphore, so at most
+// cap(scanSem) preparations execute at once. Always called from a goroutine the
+// DB actor spawned, never on the actor itself: the spawn returns immediately and
+// fn blocks here for a slot, so the bound never blocks the actor. Realizes R519's
+// worker-count bound under the per-file scan-actor model. A nil scanSem (a
+// zero-value *DB) runs unbounded, which only a test constructs.
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2.2 | R3438
+func (db *DB) runScanBounded(fn func()) {
+	if db.scanSem != nil {
+		db.scanSem <- struct{}{}
+		defer func() { <-db.scanSem }()
+	}
+	fn()
+}
+
 // startFileScan stamps path's registry entry with the next changeNum and
 // launches its off-slot scan. Only the stamp here and the registry touches the
 // off-slot goroutine posts back run on the DB actor; the per-file os.Stat +
@@ -2062,7 +2084,10 @@ func (db *DB) startFileScan(idx *Indexer, path string) {
 	// (Config is replaced by pointer swap, never mutated in place). R3433
 	cfg := db.config
 	prepIdx := idx.withFTS(db.fts.Copy())
-	go db.prepareFileScan(prepIdx, cfg, path, my)
+	// Bound the dispatch: the actor's spawn returns immediately, and the
+	// goroutine acquires scanSem before the heavy prepareScan, so at most
+	// runtime.NumCPU() preparations run at once and the actor never blocks. R3438
+	go db.runScanBounded(func() { db.prepareFileScan(prepIdx, cfg, path, my) })
 }
 
 // scanConfigOnActor indexes a config file (ark.toml) synchronously on the DB

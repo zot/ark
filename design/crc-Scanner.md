@@ -1,5 +1,5 @@
 # Scanner
-**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373, R3433
+**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373, R3433, R3437
 
 Walks configured source directories and classifies files using the
 pattern matcher. Identifies new files to index and new unresolved
@@ -12,6 +12,16 @@ files.
 - emptyFiles: *EmptyFiles — in-memory map of size-zero paths → mtime. Access is confined to the DB actor goroutine (R1644, R1651)
 
 ## Does
+- **Scan = parallel walk + serial merge (R3437).** `walkSources` enumerates the
+  source directories concurrently with a bounded pool (`walkWorkers`, default
+  `runtime.NumCPU()`): each directory is one `os.ReadDir`, each leaf one `lstat`
+  (`DirEntry.Info`) for type/size/mtime, `Matcher.Classify` per entry (pure,
+  read-only), no file contents read. It returns leaf records and directory-symlink
+  candidates. `Scan` then runs the **serial merge** in deterministic walk order —
+  the empty-file set, the already-indexed `CheckFile`, and symlink `Observe` — so
+  the actor-confined `emptyFiles`, the shared `fts`, and the `LinkTable` are
+  touched by one goroutine, and a symlink's classification and reverse-index
+  position never depend on which worker reached it first
 - Scan(config): walk all source directories, classify each file
   - For each file: Matcher.Classify(includes, excludes, absPath, src.Dir, isDir) — passing `src.Dir` selects the **source-scoped** anchoring context, and passing both path forms lets the matcher pick filesystem-absolute or root-relative per pattern (R3196, R3198)
   - included + size == 0 + already in empty-set with current mtime → skip (R1645, R1646)

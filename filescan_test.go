@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/zot/microfts2"
 )
@@ -253,5 +255,60 @@ func TestReuseLookupKeep(t *testing.T) {
 	db.retireFileScanIfCurrent("a", my2)
 	if r := db.reuseLookup("a", my2, hA); !r.superseded {
 		t.Fatalf("retired entry still served a lookup: %+v", r)
+	}
+}
+
+// TestRunScanBoundedCapsConcurrency proves the per-file dispatch runs at most
+// cap(scanSem) preparations at once — the semaphore, not the number of stale
+// files, sets the ceiling. A cap violation is invisible (the index still ends up
+// correct), so this pins it directly. test-FileScanActor.md alarm 8. R3438
+func TestRunScanBoundedCapsConcurrency(t *testing.T) {
+	const cap, m = 3, 30
+	db := &DB{scanSem: make(chan struct{}, cap)}
+
+	var mu sync.Mutex
+	live, peak := 0, 0
+	entered := make(chan struct{}, m)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < m; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db.runScanBounded(func() {
+				mu.Lock()
+				live++
+				if live > peak {
+					peak = live
+				}
+				mu.Unlock()
+				entered <- struct{}{}
+				<-release
+				mu.Lock()
+				live--
+				mu.Unlock()
+			})
+		}()
+	}
+
+	// The first cap preparations acquire slots and block on release; the rest
+	// must be stuck on the semaphore. Drain exactly cap, then prove no (cap+1)th
+	// slips through within a generous window.
+	for i := 0; i < cap; i++ {
+		<-entered
+	}
+	select {
+	case <-entered:
+		t.Fatalf("more than cap=%d preparations ran concurrently", cap)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	wg.Wait()
+
+	if peak > cap {
+		t.Fatalf("peak concurrency %d exceeded cap %d", peak, cap)
+	}
+	if peak < 1 {
+		t.Fatal("nothing ran under runScanBounded")
 	}
 }

@@ -943,6 +943,8 @@
 - **R522:** (inferred) Applies to RefreshStale (used by rebuild, refresh, and server reconcile) — single-file paths unchanged
 - **R523:** (inferred) No changes to microfts2 API — all writes go through existing methods
 - **R524:** (inferred) No changes to fsnotify coordination — reconcileLoop already serializes via channel
+- **R3437:** The scan directory walk enumerates and classifies source directories concurrently with a bounded worker pool (default `runtime.NumCPU()`), taking one `lstat` per leaf and reading no file contents. It applies its stateful results — the empty-file set, the already-indexed `CheckFile`, and directory-symlink `Observe` — in a serial merge in deterministic walk order, so file results are a set and a symlink's classification and reverse-index position never depend on walk concurrency.
+- **R3438:** Under the per-file scan-actor model, at most `runtime.NumCPU()` file preparations run concurrently: a semaphore on the per-file dispatch (`startFileScan`) enforces R519's worker-count bound without the DB actor ever blocking to acquire it.
 
 ## Feature: Vector Benchmark
 **Source:** specs/vec-bench.md

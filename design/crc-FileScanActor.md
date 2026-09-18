@@ -1,5 +1,5 @@
 # FileScanActor
-**Requirements:** R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427, R3428, R3429, R3430, R3431, R3432, R3433
+**Requirements:** R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427, R3428, R3429, R3430, R3431, R3432, R3433, R3438
 
 The per-file scan machinery that moves index compute (chunk + trigram + token)
 off the write slot. A registry of in-flight scans lives on the DB actor; each
@@ -10,6 +10,11 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
 ## Knows
 - fileScans: map[string]*fileScan — the registry, keyed by path. DB-actor state,
   no mutex. (R3420)
+- scanSem: chan struct{} — the per-file dispatch semaphore, cap `runtime.NumCPU()`.
+  The DB actor spawns a goroutine per changed file, but each acquires scanSem
+  before the heavy prepareScan, so a burst of thousands of stale files never runs
+  more than NumCPU preparations at once. Enforces R519's worker-count bound under
+  the per-file model without the actor ever blocking. (R3438)
 - scanSeq: uint64 — process-global monotonic changeNum counter. Never reset per
   entry, so a stale compute from a retired-and-recreated entry cannot collide
   with a fresh one. (R3421)
@@ -26,9 +31,15 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
 ## Does
 - startFileScan (on the DB actor): stamp the path's registry entry with the next
   scanSeq, then either handle a config file synchronously (scanConfigOnActor) or
-  launch the off-slot content scan. Only the stamp and the registry touches the
-  goroutine posts back run on the actor — the per-file os.Stat + CheckFile +
-  classification moved off-slot. (R3421, R3433)
+  launch the off-slot content scan. The content-file dispatch goes through
+  `runScanBounded`, which acquires `scanSem` before running `prepareFileScan` and
+  releases after: the spawn never blocks the actor, but the compute is bounded to
+  NumCPU. Only the stamp and the registry touches the goroutine posts back run on
+  the actor — the per-file os.Stat + CheckFile + classification moved off-slot.
+  (R3421, R3433, R3438)
+- runScanBounded (off the actor): acquire scanSem, run the prepare closure, release.
+  Extracted so the bound is testable without a live prepareFileScan — a fake
+  closure tracking peak concurrency proves at most cap(scanSem) run at once. (R3438)
 - scanConfigOnActor (on the DB actor): a config file (ark.toml) keeps its full
   on-actor path — os.Stat, CheckFile, deleted/dir/outside-source classification,
   and add/refresh/remove — because a dependent content write must see the chunker

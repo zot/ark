@@ -124,3 +124,22 @@ naive test notices. Red: intra-scan computes 3 (want 2); cross-scan computes 2
 (want 0).
 **Inject:** indexer.go:buildEntries
 **Pulled:** 2026-09-17 — rang
+
+## Test: per-file dispatch is bounded to the worker cap
+**Purpose:** startFileScan's dispatch admits at most `cap(scanSem)` concurrent
+file preparations — the semaphore, not the number of stale files, sets the
+ceiling. A cap violation is invisible: the index still ends up correct, only a
+burst spawns unbounded compute and memory. (R3438)
+**Input:** a zero-value `*DB` with `scanSem` cap N; launch M >> N goroutines each
+calling `runScanBounded(fn)`, where fn increments a live-counter on entry (record
+peak), blocks on a release channel, decrements on exit.
+**Expected:** observed peak concurrency <= N; after release all M complete.
+**Refs:** crc-FileScanActor.md, seq-file-scan-actor.md#1.2.2
+**Code:** filescan_test.go
+**Alarm:** 8
+**Fire alarm:** make `runScanBounded` run fn without acquiring `scanSem` — then all
+M preparations run at once and a reconcile of thousands of stale files spawns
+thousands of concurrent computes, the exact unboundedness Item 6 removes. Silent:
+the index is still correct, the burst just melts the box. Red: peak == M (>> N).
+**Inject:** db.go:runScanBounded
+**Pulled:** 2026-09-18 — rang (peak concurrency exceeded cap=3)
