@@ -5,6 +5,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zot/ark"
 )
@@ -68,6 +69,29 @@ func TestInboxEmptyHintNamesProjects(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\ngot:\n%s", want, out)
+		}
+	}
+}
+
+// TestNewMessageStampsCreated pins R3439: new-request and new-response stamp an
+// immutable @created date at creation, equal to @status-date at that moment.
+// CRC: test-MessageCreated.md | R3439
+func TestNewMessageStampsCreated(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		tb   *ark.TagBlock
+	}{
+		{"request", newRequestTags("fix-bug", "ark", "microfts2", "the issue", now)},
+		{"response", newResponseTags("fix-bug", "microfts2", "ark", now)},
+	}
+	for _, tc := range cases {
+		created, ok := tc.tb.Get("created")
+		if !ok || created != "2026-09-18" {
+			t.Errorf("%s: @created = %q (ok=%v), want 2026-09-18", tc.name, created, ok)
+		}
+		if sd, _ := tc.tb.Get("status-date"); sd != created {
+			t.Errorf("%s: @created %q != @status-date %q at creation", tc.name, created, sd)
 		}
 	}
 }

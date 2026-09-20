@@ -527,7 +527,7 @@
 - **R281:** `ark setup` creates `~/.ark/` if it doesn't exist
 - **R323:** `ark setup` installs the ark skill to `~/.claude/skills/ark/SKILL.md` from bundled assets
 - **R324:** `ark setup` installs the ui skill to `~/.claude/skills/ui/SKILL.md` from bundled assets
-- **R325:** `ark setup` installs the ark agent to `~/.claude/agents/ark.md` from bundled assets
+- **R325:** `ark setup` copies each agent found in `~/.ark/agents/*.md` (globbed, so it never drifts from the bundled agent set) to `~/.claude/agents/` from bundled assets
 - **R326:** `ark setup` reports what was installed/updated — no crank-handle output
 
 ### ark init — Setup Integration
@@ -761,7 +761,7 @@
 - **R429:** `ark install` runs `ark init --if-needed` internally to bootstrap `~/.ark/`
 - **R430:** `ark install` starts the server if not already running
 - **R431:** `ark install` creates symlinks in `.claude/skills/` pointing to `~/.ark/skills/`
-- **R432:** `ark install` creates a symlink for `.claude/agents/ark.md` pointing to `~/.ark/agents/ark.md`
+- **R432:** `ark install` creates a symlink in `.claude/agents/` for each agent found in `~/.ark/agents/*.md`, pointing to the corresponding `~/.ark/agents/` file (globbed, so it never drifts from the bundled agent set); warns once naming the agents dir if the glob matches nothing
 - **R433:** `ark install` prints a crank-handle prompt instructing Claude to add `load /ark first` to CLAUDE.md
 - **R434:** (inferred) Symlinks are idempotent — re-running `ark install` updates existing symlinks without error
 - **R435:** (inferred) `ark install` creates `.claude/skills/` and `.claude/agents/` directories if they don't exist
@@ -816,6 +816,7 @@
 - **R583:** If stdin is not a terminal, new-response reads body text from stdin until a lone `.` on a line
 - **R584:** Stdin body is appended after the `# RESP <id>` heading
 - **R852:** `--content TEXT` flag provides body text for new-response (same behavior as R849-R851)
+- **R3439:** `new-request` and `new-response` stamp an immutable `@created:` date (YYYY-MM-DD) into the tag block at creation. `@created` is written once and never rewritten by any later tag update — `set-tags` touches only the tags it is given plus `@status-date`, so it leaves `@created` intact — so every successive response in a thread records the date it was authored. The inbox keeps ordering by `@status-date` (which stands in for creation on a request until its status first changes), so no ordering change; existing messages are not backfilled.
 
 ## Feature: Multisearch
 **Source:** specs/multisearch.md

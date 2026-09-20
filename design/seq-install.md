@@ -32,7 +32,9 @@ CLI.cmdUIInstall(cwd)
   │
   ├──> symlink cwd/.claude/skills/ark → ~/.ark/skills/ark
   ├──> symlink cwd/.claude/skills/ui  → ~/.ark/skills/ui
-  ├──> symlink cwd/.claude/agents/ark.md → ~/.ark/agents/ark.md
+  ├──> for each ~/.ark/agents/*.md:
+  │      symlink cwd/.claude/agents/<name>.md → ~/.ark/agents/<name>.md
+  │      (glob — no hardcoded ark.md; warn once if none found)
   │
   └──> print crank-handle prompt for CLAUDE.md
        ("add `load /ark first` to CLAUDE.md")
@@ -53,7 +55,8 @@ CLI.cmdSetup()
   │
   ├──> install ~/.claude/skills/ark/SKILL.md
   ├──> install ~/.claude/skills/ui/SKILL.md
-  ├──> install ~/.claude/agents/ark.md
+  ├──> for each ~/.ark/agents/*.md:
+  │      copy → ~/.claude/agents/<name>.md   (glob — no hardcoded ark.md)
   │
   └──> report what was installed/updated
 ```

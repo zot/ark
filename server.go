@@ -4255,12 +4255,7 @@ func (srv *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tb := ParseTagBlock(data)
-	for name, value := range req.Tags {
-		tb.Set(name, value)
-		if name == "status" {
-			tb.Set("status-date", time.Now().Format("2006-01-02"))
-		}
-	}
+	applyTagUpdates(tb, req.Tags, time.Now())
 
 	if err := os.WriteFile(req.Path, tb.Render(), 0644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -7479,5 +7474,19 @@ func jsonToLua(L *lua.LState, v any) lua.LValue {
 		return lua.LNil
 	default:
 		return lua.LString(fmt.Sprintf("%v", val))
+	}
+}
+
+// applyTagUpdates sets each requested tag on tb, restamping @status-date whenever
+// @status changes. It never writes @created, so a message's creation date is
+// preserved across every later status or bookmark change — the write-once half of
+// R3439. Pure (no I/O), so the preservation is testable without a server.
+// CRC: crc-Server.md | R3439
+func applyTagUpdates(tb *TagBlock, tags map[string]string, now time.Time) {
+	for name, value := range tags {
+		tb.Set(name, value)
+		if name == "status" {
+			tb.Set("status-date", now.Format("2006-01-02"))
+		}
 	}
 }

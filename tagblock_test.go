@@ -5,6 +5,7 @@ package ark
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWellFormed(t *testing.T) {
@@ -212,5 +213,21 @@ func TestMultipleSetPreservesOrder(t *testing.T) {
 	expected := "@a: 1  \n@b: X  \n@c: 3  \n@d: 4  \n\nBody\n"
 	if result != expected {
 		t.Errorf("expected:\n%s\ngot:\n%s", expected, result)
+	}
+}
+
+// TestApplyTagUpdatesPreservesCreated pins R3439's write-once half: a set-tags
+// update (a status change plus a bookmark) restamps @status-date but never
+// touches @created, so a message's creation date survives every status change.
+// CRC: test-MessageCreated.md | R3439
+func TestApplyTagUpdatesPreservesCreated(t *testing.T) {
+	tb := ParseTagBlock([]byte("@ark-response: fix-bug\n@from-project: microfts2\n@to-project: ark\n@status: accepted\n@status-date: 2026-09-18\n@created: 2026-09-18\n\nbody\n"))
+	later := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	applyTagUpdates(tb, map[string]string{"status": "completed", "response-handled": "completed"}, later)
+	if created, _ := tb.Get("created"); created != "2026-09-18" {
+		t.Errorf("@created rewritten by a later update: got %q, want 2026-09-18 (must be write-once)", created)
+	}
+	if sd, _ := tb.Get("status-date"); sd != "2026-10-01" {
+		t.Errorf("@status-date should move to 2026-10-01 on a status change, got %q", sd)
 	}
 }

@@ -565,7 +565,7 @@ func runSetup() error {
 	return nil
 }
 
-// installBundledSkillsAndAgent copies skills and agent from ~/.ark/ to ~/.claude/.
+// installBundledSkillsAndAgent copies skills and agents from ~/.ark/ to ~/.claude/.
 func installBundledSkillsAndAgent(arkDir, claudeDir string) []string {
 	var installed []string
 
@@ -586,15 +586,21 @@ func installBundledSkillsAndAgent(arkDir, claudeDir string) []string {
 		}
 	}
 
-	// Agent: ~/.ark/agents/ark.md → ~/.claude/agents/ark.md
-	agentSrc := filepath.Join(arkDir, "agents", "ark.md")
-	if _, err := os.Stat(agentSrc); err == nil {
+	// R325: Agents: copy every ~/.ark/agents/*.md → ~/.claude/agents/.
+	// Globbed (not a hardcoded ark.md) so install never drifts from what
+	// the build bundles — the ark agent was split into ark-franklin.md /
+	// ark-messenger.md / ark-searcher.md and ark.md no longer exists.
+	// ~/.ark/agents/ holds only ark's own agents, so globbing is safe.
+	agentMatches, _ := filepath.Glob(filepath.Join(arkDir, "agents", "*.md"))
+	if len(agentMatches) > 0 {
 		agentDstDir := filepath.Join(claudeDir, "agents")
 		os.MkdirAll(agentDstDir, 0755)
-		agentDst := filepath.Join(agentDstDir, "ark.md")
-		if data, err := os.ReadFile(agentSrc); err == nil {
-			if err := os.WriteFile(agentDst, data, 0644); err == nil {
-				installed = append(installed, agentDst)
+		for _, agentSrc := range agentMatches {
+			agentDst := filepath.Join(agentDstDir, filepath.Base(agentSrc))
+			if data, err := os.ReadFile(agentSrc); err == nil {
+				if err := os.WriteFile(agentDst, data, 0644); err == nil {
+					installed = append(installed, agentDst)
+				}
 			}
 		}
 	}
@@ -3923,18 +3929,25 @@ func cmdUIInstall(args []string) {
 		fmt.Printf("Linked: %s → %s\n", dst, src)
 	}
 
-	// R432: Symlink agent from ~/.ark/agents/ark.md into project
-	agentSrc := filepath.Join(arkDir, "agents", "ark.md")
-	if _, err := os.Stat(agentSrc); err == nil {
-		agentDst := filepath.Join(agentsDir, "ark.md")
+	// R432: Symlink every ~/.ark/agents/*.md into the project.
+	// Globbed (not a hardcoded ark.md) so install never drifts from what
+	// the build bundles — the ark agent was split into ark-franklin.md /
+	// ark-messenger.md / ark-searcher.md and ark.md no longer exists.
+	// ~/.ark/agents/ holds only ark's own agents, so globbing is safe.
+	agentsSrcDir := filepath.Join(arkDir, "agents")
+	agentMatches, _ := filepath.Glob(filepath.Join(agentsSrcDir, "*.md"))
+	if len(agentMatches) == 0 {
+		fmt.Fprintf(os.Stderr, "warning: no agents found in %s\n", agentsSrcDir)
+	}
+	for _, agentSrc := range agentMatches {
+		agentDst := filepath.Join(agentsDir, filepath.Base(agentSrc))
+		// R434: Remove existing (file, symlink, or directory) — idempotent
 		os.Remove(agentDst)
 		if err := os.Symlink(agentSrc, agentDst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: symlink agent: %v\n", err)
-		} else {
-			fmt.Printf("Linked: %s → %s\n", agentDst, agentSrc)
+			fmt.Fprintf(os.Stderr, "warning: symlink agent %s: %v\n", filepath.Base(agentSrc), err)
+			continue
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "warning: agent not found at %s\n", agentSrc)
+		fmt.Printf("Linked: %s → %s\n", agentDst, agentSrc)
 	}
 
 	// R433: Crank-handle — tell Claude what to do next

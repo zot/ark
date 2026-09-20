@@ -71,6 +71,10 @@ Reference tags (in any file, for citing messages):
 - `@ark-request-ref: <path-or-id>` — see this request
 - `@ark-response-ref: <path-or-id>` — see this response
 
+Auto-stamped date tags (written by `new-request`/`new-response`, not passed by the caller):
+- `@created: <YYYY-MM-DD>` — the date the request or response file was created. Written **once** at creation and never rewritten, so every successive response in a thread records when it was actually authored (unlike `@status-date`, which moves).
+- `@status-date: <YYYY-MM-DD>` — the date of the file's current `@status`; rewritten on every status change. The inbox orders by it, so for a request it doubles as the creation date until the status first changes — which is why `@created` is the immutable record and the inbox ordering needs no change.
+
 ## Direct messages (`@dm`)
 
 Request/response messaging routes through files in `requests/`
@@ -197,6 +201,8 @@ Output file:
 @from-project: <from>
 @to-project: <to>
 @status: open
+@status-date: <YYYY-MM-DD>
+@created: <YYYY-MM-DD>
 @issue: <issue text>
 
 # <id>
@@ -227,6 +233,8 @@ Output file:
 @from-project: <from>
 @to-project: <to>
 @status: accepted
+@status-date: <YYYY-MM-DD>
+@created: <YYYY-MM-DD>
 
 # RESP <id>
 

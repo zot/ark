@@ -294,8 +294,9 @@ dispatches operations via proxy or cold-start.
   via GET /status for UI fields.
 - cmdSetup: extract bundled UI assets to dbPath using
   bundle.ExtractBundle, run linkapp, install global skills
-  (~/.claude/skills/ark/, ~/.claude/skills/ui/) and agent
-  (~/.claude/agents/ark.md) from bundled assets. Idempotent.
+  (~/.claude/skills/ark/, ~/.claude/skills/ui/) and every agent
+  in ~/.ark/agents/*.md (globbed — no hardcoded ark.md) into
+  ~/.claude/agents/ from bundled assets. Idempotent.
 - cmdInit: seed case_insensitive/aliases from ark.toml if present;
   CLI flags override seeded values. Runs setup first if ~/.ark/
   not bootstrapped (no html/ dir). --no-setup skips setup.
@@ -306,8 +307,9 @@ dispatches operations via proxy or cold-start.
 - cmdUIInstall: single entry point for per-project setup. Runs
   init --if-needed internally. Starts server if not running.
   Creates .claude/skills/ and .claude/agents/ dirs if needed.
-  Creates symlinks in .claude/skills/ pointing to ~/.ark/skills/,
-  symlink for .claude/agents/ark.md pointing to ~/.ark/agents/ark.md.
+  Creates symlinks in .claude/skills/ pointing to ~/.ark/skills/, and
+  a symlink in .claude/agents/ for each ~/.ark/agents/*.md (globbed —
+  no hardcoded ark.md; warns once if none found).
   Symlinks are idempotent — re-running updates existing ones.
   Prints crank-handle prompt for CLAUDE.md bootstrap line.
 - cmdInstall: alias for cmdUIInstall (`ark install` = `ark ui install`).

@@ -8,7 +8,7 @@ recall doc, and config change queues behind it. Bill sees this as very bad UI
 latency. Measured 2026-09-17: a tmp:// write that costs ~45 ms idle blocked
 **16.2 s** during a reconcile burst, while reads (MVCC, main actor) stayed flat.
 Full evidence in
-[.scratch/LATENCY-FINDINGS-20260917.md](../.scratch/LATENCY-FINDINGS-20260917.md).
+[.scratch/LATENCY-FINDINGS-20260917.md](../../.scratch/LATENCY-FINDINGS-20260917.md).
 
 ## Status
 

@@ -1354,7 +1354,7 @@ ark setup
 
 Idempotent. Extracts bundled assets (`html/`, `lua/`, `viewdefs/`,
 `apps/`, `skills/`, `agents/`) into `~/.ark/`, runs `linkapp` for the
-`ark` app, and installs global skills + agent into `~/.claude/`.
+`ark` app, and installs global skills + every bundled agent into `~/.claude/`.
 Requires the running binary to be bundled.
 
 ### `sources` — manage source directories
@@ -1551,7 +1551,7 @@ opens a socket.
 | `checkpoint CMD APP [MSG]` | Fossil-backed checkpoints (see below) |
 | `display APP` | `POST /api/ui_display` — show app in browser |
 | `event` | `GET /wait?timeout=120` — block until next UI event; retries on transient. Errors (409, exit 1) while a Luhmann orchestrator owns event routing (`ark luhmann events`), which reroutes these events onto its own tube — not retryable, since only that owner releases it. Unaffected when no orchestrator has asked. |
-| `install` | Per-project setup (alias `ark install`): runs `init --if-needed`, starts server if down, symlinks `~/.ark/skills/{ark,ui}` and `~/.ark/agents/ark.md` into `.claude/`, prints crank-handle prompt |
+| `install` | Per-project setup (alias `ark install`): runs `init --if-needed`, starts server if down, symlinks `~/.ark/skills/{ark,ui}` and every `~/.ark/agents/*.md` into `.claude/`, prints crank-handle prompt |
 | `linkapp add APP` / `remove APP` | Manage `~/.ark/lua/<app>` and `~/.ark/viewdefs/` symlinks |
 | `patterns` | List `~/.ark/patterns/*.md` with frontmatter description |
 | `progress APP PCT STAGE` | `mcp:appProgress` + agent-thinking line |

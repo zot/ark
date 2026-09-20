@@ -14,11 +14,9 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 
 	ucli "github.com/urfave/cli/v3"
 	"github.com/zot/ark"
@@ -177,7 +175,7 @@ func luhmannAttachAction(_ context.Context, _ *ucli.Command) error {
 	// Report the initial size, then track SIGWINCH (R3120).
 	sendSize(conn, fd)
 	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
+	notifyWinch(winch) // SIGWINCH on Unix; a no-op on Windows (no such signal)
 	go func() {
 		for range winch {
 			sendSize(conn, fd)

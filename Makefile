@@ -112,17 +112,23 @@ $(FRICTIONLESS_BIN):
 	@echo "Building frictionless..."
 	@cd $(FRICTIONLESS_DIR); $(MAKE) build
 
+# Skills and agents bundled into the binary. Single source of truth for both
+# the cache-invalidation prerequisites (CACHE_SRC) and the copy step in the
+# $(CACHE_DIR)/.cached recipe below, so the two lists cannot drift apart. Named
+# here; the SKILL.md / .md source paths derive from the names.
+CACHE_SKILLS := ark ark-search ark-usage bloodhound luhmann recall ui
+CACHE_AGENTS := ark-franklin ark-franklin-opus ark-messenger ark-recall-agent ark-searcher
+CACHE_SKILL_SRC := $(foreach s,$(CACHE_SKILLS),.claude/skills/$(s)/SKILL.md)
+CACHE_AGENT_SRC := $(foreach a,$(CACHE_AGENTS),.claude/agents/$(a).md)
+
 # Source files whose edits should invalidate the cache. find/wildcard
 # are evaluated at parse time, so adding a new file requires a fresh
 # `make` invocation — but edits to existing files are picked up.
 CACHE_SRC := \
 	$(shell find apps/ark -type f 2>/dev/null) \
 	$(shell find install -type f 2>/dev/null) \
-	.claude/skills/ark/SKILL.md \
-	.claude/skills/ui/SKILL.md \
-	.claude/agents/ark-franklin.md \
-	.claude/agents/ark-messenger.md \
-	.claude/agents/ark-searcher.md \
+	$(CACHE_SKILL_SRC) \
+	$(CACHE_AGENT_SRC) \
 	$(wildcard markdown-editor/dist/*) \
 	$(wildcard ark-search/dist/*) \
 	$(wildcard pdf-chunk/dist/*) \
@@ -140,10 +146,12 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@mkdir -p $(CACHE_DIR)/apps/mcp
 	cp -r apps/mcp/* $(CACHE_DIR)/apps/mcp/
 	@echo "Layering skills, agents, and install assets..."
-	@mkdir -p $(CACHE_DIR)/skills/ark $(CACHE_DIR)/skills/ui $(CACHE_DIR)/agents $(CACHE_DIR)/install
-	cp .claude/skills/ark/SKILL.md $(CACHE_DIR)/skills/ark/
-	cp .claude/skills/ui/SKILL.md $(CACHE_DIR)/skills/ui/
-	cp .claude/agents/ark-franklin.md .claude/agents/ark-messenger.md .claude/agents/ark-searcher.md $(CACHE_DIR)/agents/
+	@mkdir -p $(CACHE_DIR)/agents $(CACHE_DIR)/install
+	@for s in $(CACHE_SKILLS); do \
+		mkdir -p $(CACHE_DIR)/skills/$$s; \
+		cp .claude/skills/$$s/SKILL.md $(CACHE_DIR)/skills/$$s/; \
+	done
+	cp $(CACHE_AGENT_SRC) $(CACHE_DIR)/agents/
 	cp -r install/* $(CACHE_DIR)/install/
 	@echo "Layering markdown editor and content templates..."
 	@mkdir -p $(CACHE_DIR)/html

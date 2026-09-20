@@ -237,13 +237,7 @@ func messageNewRequestAction(_ context.Context, c *ucli.Command) error {
 	base := filepath.Base(filePath)
 	id := strings.TrimSuffix(base, filepath.Ext(base))
 
-	tb := ark.ParseTagBlock(nil)
-	tb.Set("ark-request", id)
-	tb.Set("from-project", from)
-	tb.Set("to-project", to)
-	tb.Set("status", "open")
-	tb.Set("status-date", time.Now().Format("2006-01-02"))
-	tb.Set("issue", issue)
+	tb := newRequestTags(id, from, to, issue, time.Now())
 
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
@@ -283,12 +277,7 @@ func messageNewResponseAction(_ context.Context, c *ucli.Command) error {
 		fatal(fmt.Errorf("file already exists: %s", filePath))
 	}
 
-	tb := ark.ParseTagBlock(nil)
-	tb.Set("ark-response", request)
-	tb.Set("from-project", from)
-	tb.Set("to-project", to)
-	tb.Set("status", "accepted")
-	tb.Set("status-date", time.Now().Format("2006-01-02"))
+	tb := newResponseTags(request, from, to, time.Now())
 
 	var buf bytes.Buffer
 	buf.Write(tb.Render())
@@ -715,4 +704,38 @@ func messageDMAction(_ context.Context, c *ucli.Command) error {
 		fatal(err)
 	}
 	return nil
+}
+
+// newRequestTags builds a new request's tag block. @created (R3439) is stamped
+// once here at creation, alongside @status-date, and never rewritten afterward:
+// set-tags touches only the tags it is given plus @status-date, so a request's
+// creation date survives every later status change.
+// CRC: crc-CLITree.md | R3439
+func newRequestTags(id, from, to, issue string, now time.Time) *ark.TagBlock {
+	date := now.Format("2006-01-02")
+	tb := ark.ParseTagBlock(nil)
+	tb.Set("ark-request", id)
+	tb.Set("from-project", from)
+	tb.Set("to-project", to)
+	tb.Set("status", "open")
+	tb.Set("status-date", date)
+	tb.Set("created", date)
+	tb.Set("issue", issue)
+	return tb
+}
+
+// newResponseTags builds a new response's tag block, stamping @created once at
+// creation (R3439) so every successive response in a thread records when it was
+// authored.
+// CRC: crc-CLITree.md | R3439
+func newResponseTags(request, from, to string, now time.Time) *ark.TagBlock {
+	date := now.Format("2006-01-02")
+	tb := ark.ParseTagBlock(nil)
+	tb.Set("ark-response", request)
+	tb.Set("from-project", from)
+	tb.Set("to-project", to)
+	tb.Set("status", "accepted")
+	tb.Set("status-date", date)
+	tb.Set("created", date)
+	return tb
 }

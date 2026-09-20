@@ -608,8 +608,10 @@ run after every binary update.
    `~/.claude/skills/ui/SKILL.md`. These are the lightweight
    interaction skills — every session gets them.
 
-3. **Install agent.** Copy the ark agent doc to
-   `~/.claude/agents/ark.md`.
+3. **Install agents.** Copy each agent doc in `~/.ark/agents/*.md` to
+   `~/.claude/agents/`. Globbed rather than a hardcoded `ark.md`, so
+   install never drifts from the bundled agent set (the ark agent is
+   split into `ark-franklin.md` / `ark-messenger.md` / `ark-searcher.md`).
 
 4. **Link the ark app.** Run `linkapp add ark` so the Frictionless
    UI can serve the ark search interface.

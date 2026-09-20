@@ -56,8 +56,12 @@ to connect a project to ark. Run in any project directory:
    the ark skill (search/recall) and the UI skills (ui, ui-fast,
    etc.). Symlinks, not copies — upstream updates flow through.
 
-3. **Symlink agent.** Create symlink for `.claude/agents/ark.md`
-   pointing to `~/.ark/agents/ark.md`.
+3. **Symlink agents.** For each agent file in `~/.ark/agents/*.md`,
+   create a symlink in the project's `.claude/agents/` pointing to it.
+   Globbed rather than a hardcoded `ark.md`, so install never drifts
+   from the bundled agent set (the ark agent is split into
+   `ark-franklin.md` / `ark-messenger.md` / `ark-searcher.md`). Warn
+   once naming the agents dir if none are found.
 
 4. **Crank-handle output.** Print a prompt instructing Claude to
    add `load /ark first` to the project's CLAUDE.md. The binary
