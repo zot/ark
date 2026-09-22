@@ -463,6 +463,16 @@ reply before the process exits. The server process never removes the
 PID file — stale PID files are safe because `ark stop` verifies before
 killing.
 
+A requested shutdown exits 0 deterministically. The teardown sets a
+`shuttingDown` latch before it closes the listener, so the main serve
+loop reads the resulting closed-listener `Accept` error as an expected
+shutdown and returns cleanly instead of propagating it as a fatal
+error. Without the latch that error would reach `ark serve`'s
+top-level `fatal` and exit 1, racing the teardown's own `os.Exit(0)` —
+a supervisor would read a normal stop as a crash, and `db.Close()`
+might not run. With it, the teardown's exit is the sole, deterministic
+one and the database always closes cleanly.
+
 The current `defer os.Remove(pidPath)` in server.go should be
 removed.
 

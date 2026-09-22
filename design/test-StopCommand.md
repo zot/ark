@@ -62,6 +62,26 @@ child was killed), not blocking the full sleep.
 **Inject:** cmd/ark/stop_fallback_unix.go:timeoutKill
 **Pulled:** 2026-09-22 — rang: "child still alive 2s after timeoutKill"
 
+## Test: serve-loop error is clean under the shutdown latch
+**Purpose:** `serveExitError` returns nil when the `shuttingDown` latch is set —
+so a graceful shutdown's closed-listener `Accept` error is not propagated as a
+fatal that would race the teardown's `os.Exit(0)` and skip `db.Close()` (R3446).
+Pure decision logic, tested on a zero-value `Server` with no socket, DB, or
+server: latch set swallows any serve error (and nil); latch clear swallows only
+`net.ErrClosed` (wrapped or bare) and propagates every other error unchanged.
+**Input:** a zero-value `Server`; `shuttingDown` toggled via `Store(true)`;
+sample errors (a plain accept error, `net.ErrClosed`, a `%w`-wrapped
+`net.ErrClosed`, and nil).
+**Expected:** latched → nil for all inputs; unlatched → nil for `net.ErrClosed`
+(bare or wrapped) and nil, the original error otherwise.
+**Refs:** crc-Server.md
+**Code:** shutdown_race_test.go
+**Fire alarm:** replace `serveExitError`'s body with `return err` (the
+pre-fix behavior) — the latched cases and the `net.ErrClosed` cases go red
+("serveExitError = … , want nil").
+**Inject:** server.go:serveExitError
+**Pulled:** 2026-09-22 — rang: latched-swallow and ErrClosed cases returned the error where nil was wanted
+
 ## Test: Windows timeout fallback errors without killing
 **Purpose:** on Windows, `timeoutKill` returns an error (no TerminateProcess in
 the default path) pointing the user at `ark stop -f` (R3444).

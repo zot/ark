@@ -77,7 +77,9 @@ and unknown items carry the negative marker rather than a false green.
       and it re-bound cleanly over the stale `ark.sock` left on disk. `sun_path`
       was 26 bytes, far under the ceiling. The gate is open — the sequence below
       is unblocked.
-- [ ] **Part 2 — `ark stop` speaks only Unix signals.** **OPEN. Do second: the
+- [x] **Test part 5 on Windows** — 2026-09-20 serve run: listen + dial
+      round-trip verified on the dockur VM.
+- [x] **Part 2 — `ark stop` speaks only Unix signals.** **Was the do-second item: the
       testing-rate multiplier.** A live server, `ps` shows it, stop reports "not
       running." The fallback is a manual kill, and kill-then-restart is how the
       old binary ends up still serving while you believe you restarted, so a
@@ -88,19 +90,29 @@ and unknown items carry the negative marker rather than a false green.
       `POST /shutdown` on every platform, socket-dial liveness, timeout then
       Linux-kills / Windows-errors. **IMPLEMENTED 2026-09-22 (R3440–R3445)**,
       compiles Linux + Windows and stop tests pass; validate failures are
-      pre-existing debt, not Part 2. Uncommitted, pending review.
+      pre-existing debt, not Part 2. Committed 8bfea51 (2026-09-22).
+- [x] **Test part 2 on Windows** — 2026-09-22 live on the dockur VM: `ark stop`
+      cleanly stopped a running server (reported "ark server stopped (pid 5220)",
+      process gone, server logged `received POST /shutdown, shutting down`), where
+      the 09-19 binary said "not running." Surfaced a pre-existing shutdown-race
+      (process exits 1 on the closed-listener error, racing gracefulShutdown's
+      exit 0; safe under bbolt). **Fixed by R3446** (atomic shutdown latch); re-verified live
+      2026-09-22: graceful stop now exits 0 with no `error: accept` line.
 - [ ] **Part 4 — the managed-pty path assumes a Unix terminal.** **OPEN. Before
       Part 1's test.** Required under parity: Luhmann must host on Windows (ConPTY
       child, `ResizePseudoConsole`, `TerminateProcess`, VT-mode attach). Proving
       Part 1 end to end needs a Windows-hosted session to attach to, so this
       precedes it.
+- [ ] **Test part 4 on Windows**
 - [ ] **Part 1 — SIGWINCH.** Compile break **FIXED** (committed 2026-09-20);
       **Windows resize detection still OPEN** (the Windows body is a no-op, a
       stopgap not a finish). The detector is unit-testable alone (resize the
       console, assert a send); its end-to-end test waits on Part 4.
+- [ ] **Test part 1 on Windows**
 - [ ] **Part 3 — `os.Symlink` needs privilege on Windows.** **OPEN. Independent
       track** once the binary runs. Install, linkapp, and bundle extraction all
       create symlinks.
+- [ ] **Test part 3 on Windows**
 - [ ] **Part 6 — llama.cpp embedding provisioning on Windows.** **UNKNOWN.
       Independent track.** Whether `ark embed install` has Windows artifacts at
       all is unexamined.
@@ -149,6 +161,9 @@ client.
 <a id="2"></a>
 
 ## Part 2
+
+**IMPLEMENTED and committed: 8bfea51, 2026-09-22 (R3440–R3445).** The analysis
+below is the record of why; the code is in the tree.
 
 `cmd/ark/main.go` `cmdStop` (near 3776) is Unix signals end to end, and there
 are three separate failure points, not one:

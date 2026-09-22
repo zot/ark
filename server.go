@@ -49,6 +49,7 @@ import (
 type Server struct {
 	db                 *DB
 	listener           net.Listener
+	shuttingDown       atomic.Bool // R3446: set once by gracefulShutdown before it closes the listener, so the serve loop reads the resulting Accept error as an expected shutdown, not a fatal
 	pidPath            string
 	noScan             bool
 	uiRuntime          *flib.Runtime
@@ -615,7 +616,24 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// R3146: the gate wraps the whole mux so `ark ui event` is refused while an
 	// orchestrator owns event routing. A wrapper rather than a route because
 	// flib already registered /wait and a second registration would collide.
-	return http.Serve(listener, srv.gateFrictionlessWait(mux))
+	// CRC: crc-Server.md | R3446
+	return srv.serveExitError(http.Serve(listener, srv.gateFrictionlessWait(mux)))
+}
+
+// serveExitError maps the main serve loop's exit error to what Serve should
+// return. A graceful shutdown closes the listener (gracefulShutdown), which
+// makes http.Serve's Accept fail with net.ErrClosed; that is expected, not
+// fatal, so return nil and let gracefulShutdown's own os.Exit(0) be the sole,
+// deterministic exit — otherwise the caller's fatal() would race it to exit 1
+// and skip db.Close(). The shuttingDown latch is the primary signal; the
+// ErrClosed check is belt-and-suspenders for a listener closed by any other
+// path. R3446
+// CRC: crc-Server.md | R3446
+func (srv *Server) serveExitError(err error) error {
+	if srv.shuttingDown.Load() || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 // gracefulShutdown tears the server down cleanly and exits 0: stop the
@@ -624,8 +642,12 @@ func Serve(dbPath string, opts ServeOpts) error {
 // (R175) and the POST /shutdown endpoint (R3441), so the sequence is identical
 // on every platform — nothing external need deliver a signal, which Windows
 // does not do for SIGTERM.
-// CRC: crc-Server.md | R175, R3440
+// CRC: crc-Server.md | R175, R3440, R3446
 func (srv *Server) gracefulShutdown(reason string) {
+	// R3446: latch first, before closing the listener below, so the main serve
+	// loop reads the resulting Accept error as an expected shutdown and returns
+	// nil rather than propagating it as a fatal (which would race this exit).
+	srv.shuttingDown.Store(true)
 	log.Printf("%s, shutting down", reason)
 	if srv.scheduler != nil {
 		srv.scheduler.Stop()

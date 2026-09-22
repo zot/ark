@@ -326,6 +326,7 @@
 - **R3443:** `ark stop` decides liveness and release by dialing the unix socket — a successful dial means the server is up, a refused dial means it is down and has released — never via `ark status` (which succeeds even with no server) or a process signal. The release wait is bounded by a timeout (a named constant).
 - **R3444:** On graceful-stop timeout the fallback is platform-split: on Linux, `ark stop` force-kills the PID read from the PID file (SIGKILL) and re-polls the socket, erroring if the kill fails or the process still will not release; on Windows it errors without killing (no `TerminateProcess` in the default path).
 - **R3445:** `ark stop -f` force-kills the server via `proc.Kill()` (`TerminateProcess` on Windows) on every platform, the one sanctioned ungraceful kill.
+- **R3446:** The graceful teardown sets a `shuttingDown` latch on the `Server` once, before it closes the listener, so the main serve loop reads the resulting `Accept` error as an expected shutdown-time listener close and returns nil rather than propagating it as a fatal error. This makes `gracefulShutdown`'s `os.Exit(0)` (or a clean main return) the sole, deterministic exit: on a graceful shutdown the process exits 0 and `db.Close()` always runs, never racing an exit 1 from the serve loop's error reaching `fatal`.
 
 ## Feature: Context Wrapping
 **Source:** specs/search.md

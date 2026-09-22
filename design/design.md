@@ -237,7 +237,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
 - [x] crc-PtyBrowser.md → `pty_browser.go`
-- [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`
+- [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
 
