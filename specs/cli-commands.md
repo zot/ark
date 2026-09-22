@@ -97,7 +97,7 @@ so no agent types a routing address either. Canonical:
 | `sources`          | `sources [check | pair]`                                                                                             | optional                 | `check` reconciles globs; `pair` proposes `logs_for` |
 | `stale`            | `stale [PATTERN...]`                                                                                                 | optional                 |                                                      |
 | `status`           | `status [--db] [--chunks] [--tokenize] [-with\|-without] [-files G]...`                                       | preferred                |                                                      |
-| `stop`             | `stop [-f]`                                                                                                          | required                 | reads PID file, sends SIGTERM (or SIGKILL with `-f`) |
+| `stop`             | `stop [-f]`                                                                                                          | required                 | graceful shutdown over the socket (`POST /shutdown`); `-f` force-kills |
 | `subscribe`        | `subscribe --session ID [--tag T]... [--file-tag T]... [--cancel] [--list] [--stats] [-with\|-without] [-files G]...` | required                 |                                                      |
 | `subscribers`      | `subscribers --tag T [--quiet]`                                                                                      | required                 | count subscriptions matching a tag                   |
 | `sweep`            | `sweep correlations`                                                                                                | required                 | hot-correlations top-K cache refresh (subcommands below) |
@@ -1411,9 +1411,26 @@ server/UI status, plus a `warnings:` section listing E records (each
 ark stop [-f]
 ```
 
-Reads the PID file, verifies the process is alive, sends SIGTERM (or
-SIGKILL with `-f`), polls every 100ms for up to 10 seconds. Exits 1
-on missing PID file, dead PID, or timeout.
+Requests a graceful shutdown over the unix socket (`POST /shutdown`),
+which responds then tears the server down (stop scheduler, close
+watcher, shut UI runtime, close socket, close DB, exit 0) — the same
+teardown the Unix SIGTERM/SIGINT handler runs. A 200 or the connection
+dropping mid-request counts as "teardown initiated". `stop` then polls
+for release by dialing the socket (a refused dial means down); it does
+**not** use `ark status`, which succeeds even with no server. The
+release wait is bounded by a timeout.
+
+On timeout the fallback is platform-split. On Linux, `stop` force-kills
+the PID (from the ark-home PID file, falling back once to the legacy
+temp-dir path) and re-polls, erroring if the kill fails or the process
+still will not release. On Windows, `stop` errors without killing — a
+failed graceful stop is left for the user to resolve rather than
+risking a `TerminateProcess` that can leave the socket or DB lock held.
+
+`-f` force-kills immediately on every platform (`TerminateProcess` on
+Windows), the sanctioned ungraceful kill. Exits 1 when the server is
+not running, on a Windows graceful-stop timeout, or if a kill fails to
+release.
 
 ### `subscribe` — manage tag subscriptions for `listen`
 

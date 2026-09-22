@@ -216,7 +216,7 @@ func flatCommands() []*ucli.Command {
 		},
 		{
 			Name: "stop", Usage: "stop the running server",
-			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "f", Usage: "send SIGKILL instead of SIGTERM"}},
+			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "f", Usage: "force-kill (ungraceful; TerminateProcess on Windows) instead of a graceful shutdown"}},
 			Action: flatStopAction,
 		},
 		{Name: "install", Usage: "connect this project to ark (alias for ui install)", Action: flatDelegate(cmdUIInstall)},

@@ -26,7 +26,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/zot/ark"
@@ -3773,14 +3772,69 @@ func cmdChunksStatus(patterns []string) {
 }
 
 // CRC: crc-CLI.md, crc-Server.md | R172, R173, R174, R176
+// Stop-command timing (windows-support Part 2). Liveness and release are a
+// socket dial, never a signal or `ark status`, so the poll cadence and the two
+// bounds are named here rather than sprinkled as literals.
+const (
+	stopGraceTimeout = 5 * time.Second        // wait for graceful release after POST /shutdown
+	stopKillTimeout  = 2 * time.Second        // wait for release after a force-kill
+	stopPollInterval = 100 * time.Millisecond // socket re-dial cadence
+)
+
+// cmdStop asks the server to shut down gracefully over its own socket, the
+// portable path that works without a signal on every platform (R3442). It reads
+// liveness and release by dialing the socket, never `ark status` (which succeeds
+// even with no server) or a process signal (R3443). On a graceful-stop timeout
+// the fallback is platform-split (timeoutKill, R3444); `-f` force-kills outright
+// on every platform (R3445).
+// CRC: crc-CLI.md | R3442, R3443, R3444, R3445
 func cmdStop(args []string) {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
-	force := fs.Bool("f", false, "send SIGKILL instead of SIGTERM")
+	force := fs.Bool("f", false, "force-kill the server (ungraceful; TerminateProcess on Windows) instead of a graceful shutdown")
 	fs.Parse(args)
 
-	// CRC: crc-CLI.md, crc-Server.md | R3417, R3418 — read the ark-home PID
-	// file; fall back once to the legacy temp-dir path so a server started by
-	// the old binary is still stoppable, and log that we did.
+	socketPath := filepath.Join(arkDir, "ark.sock")
+	// The PID is the kill target for -f and the Linux timeout fallback.
+	pid := readStopPid()
+
+	// -f: the one sanctioned ungraceful kill, on every platform. R3445.
+	if *force {
+		if err := forceKill(pid, socketPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "ark server force-killed (pid %d)\n", pid)
+		return
+	}
+
+	// Graceful: POST /shutdown. A 200 or the connection dropping after the
+	// request both mean teardown initiated, so the POST error is ignored. R3442.
+	client := serverClient(arkDir)
+	if client == nil {
+		fmt.Fprintf(os.Stderr, "ark server not running (socket %s refused)\n", socketPath)
+		os.Exit(1)
+	}
+	_, _ = proxyRaw(client, "POST", "/shutdown", nil)
+
+	// Poll for release by dialing the socket — refused dial means down. R3443.
+	if socketReleasedWithin(socketPath, stopGraceTimeout) {
+		fmt.Fprintf(os.Stderr, "ark server stopped (pid %d)\n", pid)
+		return
+	}
+
+	// Timeout: Linux kills and re-polls, Windows errors without killing. R3444.
+	if err := timeoutKill(pid, socketPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ark server killed after graceful-stop timeout (pid %d)\n", pid)
+}
+
+// readStopPid reads the server PID from the ark-home PID file, falling back once
+// to the legacy temp-dir path so a server started by the old binary is still
+// stoppable. Exits if neither is present or the contents do not parse.
+// CRC: crc-CLI.md | R3417, R3418
+func readStopPid() int {
 	pidPath := ark.PidFilePath(arkDir)
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
@@ -3793,47 +3847,49 @@ func cmdStop(args []string) {
 		fmt.Fprintf(os.Stderr, "using legacy temp-dir PID file %s (server predates the ark-home PID move)\n", legacyPath)
 		data = legacyData
 	}
-
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid PID file: %v\n", err)
 		os.Exit(1)
 	}
+	return pid
+}
 
-	// Verify process exists and is ark (handles PID rollover)
+// socketReleasedWithin polls by dialing the unix socket until a dial is refused
+// — the server is down and has released the socket — or the timeout elapses. A
+// successful dial means the server is still up. This is the portable liveness
+// check Part 5 proved on Windows; it replaces the proc.Signal(0) probe. R3443.
+func socketReleasedWithin(socketPath string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.Dial("unix", socketPath)
+		if err != nil {
+			return true // refused / no socket: down and released
+		}
+		conn.Close()
+		if time.Now().After(deadline) {
+			return false // still accepting connections
+		}
+		time.Sleep(stopPollInterval)
+	}
+}
+
+// forceKill kills the process ungracefully — SIGKILL on Unix, TerminateProcess
+// on Windows via proc.Kill — and waits for the socket to release. Shared across
+// platforms because proc.Kill is the one signal os.Process honors on Windows.
+// R3445.
+func forceKill(pid int, socketPath string) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "process %d not found\n", pid)
-		os.Exit(1)
+		return fmt.Errorf("process %d not found: %w", pid, err)
 	}
-	// Check if process is alive by sending signal 0
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		fmt.Fprintf(os.Stderr, "process %d not running: %v\n", pid, err)
-		os.Exit(1)
+	if err := proc.Kill(); err != nil {
+		return fmt.Errorf("failed to kill process %d: %w", pid, err)
 	}
-
-	// Send signal
-	sig := syscall.SIGTERM
-	if *force {
-		sig = syscall.SIGKILL
+	if !socketReleasedWithin(socketPath, stopKillTimeout) {
+		return fmt.Errorf("process %d killed but socket %s not released", pid, socketPath)
 	}
-	if err := proc.Signal(sig); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to send signal: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Poll until process exits (timeout 10s)
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
-			fmt.Fprintf(os.Stderr, "ark server stopped (pid %d)\n", pid)
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	fmt.Fprintf(os.Stderr, "server did not stop within timeout (pid %d)\n", pid)
-	os.Exit(1)
+	return nil
 }
 
 // uiClient returns an http.Client connected to the ark unix socket.

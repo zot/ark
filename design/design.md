@@ -210,9 +210,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
-- [ ] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
 - [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/session_identity.go`, `cmd/ark/link_view.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`, `cmd/ark/patterns_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
@@ -237,6 +237,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
 - [x] crc-PtyBrowser.md → `pty_browser.go`
+- [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
 
@@ -1199,3 +1200,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O214: full-Scan integration test (parallel walk end-to-end over a real `fts`) deferred to #121. `walkSources`' parallel enumeration is unit-tested in `scanner_test.go` with a temp tree + `Matcher` (no `fts`); the serial-merge branch calling `fts.CheckFile` has no cheap fake until #121's `*DB` harness lands. Write the end-to-end `Scan` test (temp tree + real `fts`; parallel == sequential results) when #121 lands. Disproportionate now: needs the harness, not a fake-and-zero-value. R3437.
 - [x] O215: Successive ark-responses in a message thread record no creation date — a request accumulates responses over time and each carries only `@status-date`, which is rewritten on every status change, so there is no immutable record of when each response was written. Stamp a `@created:` date on **every** ark-response when it is authored, never updated, so a thread's responses can be ordered and aged by creation rather than by last status flip (cover the originating request the same way). Queued as #134.
 - [ ] O216: A UI (tmp://) write's store closure serializes on the single write actor (R1067) behind a reconcile burst's per-file store closures, so on a heavy reconcile a UI write can queue behind them. Measured 2026-09-18 on a cold restart: 51 of 52 tmp:// writes stayed ~50–80ms through the reconcile, but one blocked 11.7s behind the ~214 stale-file stores paging in cold. The compute and walk holds are gone (indexing-latency #129–#133); this store-queue backlog is the remaining latency residual, worst on cold start. Stores cannot parallelize (single-writer), so the only levers are ordering (let a UI write interleave ahead of reconcile stores) and batching (fewer, larger store closures). Queued as #135.
+- T281: R172 retired by R3442 (2026-09-22 windows-support Part 2: stop no longer sends SIGTERM; it POSTs /shutdown over the socket)
+- T282: R173 retired by R3443 (2026-09-22 windows-support Part 2: release is a socket dial poll, not a process-exit poll)
+- T283: R174 retired by R3445 (2026-09-22 windows-support Part 2: stop -f force-kills on every platform (TerminateProcess on Windows), not SIGKILL-only)

@@ -314,12 +314,18 @@
 
 - **R170:** `ark serve` exits 0 if a server is already running — intent is "make sure it's up"
 - **R171:** `ark serve` prints a message on stderr when server is already running
-- **R172:** `ark stop` reads PID file, verifies process exists and is ark (handles PID rollover), sends SIGTERM
-- **R173:** `ark stop` polls until process exits; returns exit code 1 if process doesn't die within timeout
-- **R174:** `ark stop -f` sends SIGKILL instead of SIGTERM
-- **R175:** Server catches SIGTERM: closes socket, closes DB, exits 0
+- **~~R172:~~** (Retired T281 — see R3442) `ark stop` reads PID file, verifies process exists and is ark (handles PID rollover), sends SIGTERM
+- **~~R173:~~** (Retired T282 — see R3443) `ark stop` polls until process exits; returns exit code 1 if process doesn't die within timeout
+- **~~R174:~~** (Retired T283 — see R3445) `ark stop -f` sends SIGKILL instead of SIGTERM
+- **R175:** Server catches SIGTERM/SIGINT (Ctrl+C) and runs the shared graceful teardown (R3440): closes socket, closes DB, exits 0
 - **R176:** Server never removes the PID file — stale PID files are safe because `ark stop` verifies before killing
 - **R177:** Remove the current `defer os.Remove(pidPath)` in server.go
+- **R3440:** The graceful teardown (stop scheduler, close watcher, shut the UI runtime, close listener, close DB, exit 0) is a single reusable `Server` method invoked by both the SIGTERM/SIGINT handler and the `POST /shutdown` endpoint, so every platform shares one shutdown path (nothing external need deliver a signal, which Windows does not for SIGTERM).
+- **R3441:** `POST /shutdown` on the unix-socket mux writes its response and flushes it before invoking the graceful teardown (R3440), so the client receives its reply before the process exits.
+- **R3442:** `ark stop` requests shutdown by POSTing `/shutdown` over the unix socket; a 200 response or the connection dropping after the request both count as "teardown initiated".
+- **R3443:** `ark stop` decides liveness and release by dialing the unix socket — a successful dial means the server is up, a refused dial means it is down and has released — never via `ark status` (which succeeds even with no server) or a process signal. The release wait is bounded by a timeout (a named constant).
+- **R3444:** On graceful-stop timeout the fallback is platform-split: on Linux, `ark stop` force-kills the PID read from the PID file (SIGKILL) and re-polls the socket, erroring if the kill fails or the process still will not release; on Windows it errors without killing (no `TerminateProcess` in the default path).
+- **R3445:** `ark stop -f` force-kills the server via `proc.Kill()` (`TerminateProcess` on Windows) on every platform, the one sanctioned ungraceful kill.
 
 ## Feature: Context Wrapping
 **Source:** specs/search.md

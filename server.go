@@ -368,27 +368,16 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// Reconciliation goes through the DB actor via srv.reconcile()
 	// CRC: crc-DB.md | R990
 
-	// Signal handling: catch SIGTERM, shut down UI engine, close socket, close DB, exit 0
-	// CRC: crc-Server.md | R175
+	// Signal handling: catch SIGTERM/SIGINT (Ctrl+C) and run the shared graceful
+	// teardown — the same path the /shutdown endpoint (R3441) drives, so it is no
+	// longer the only way to stop the server (nothing external delivers SIGTERM
+	// on Windows).
+	// CRC: crc-Server.md | R175, R3440
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigCh
-		log.Printf("received %s, shutting down", sig)
-		if srv.scheduler != nil {
-			srv.scheduler.Stop()
-		}
-		if srv.watcher != nil {
-			srv.watcher.Close()
-		}
-		if srv.uiRuntime != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			srv.uiRuntime.Shutdown(ctx)
-			cancel()
-		}
-		listener.Close()
-		db.Close()
-		os.Exit(0)
+		srv.gracefulShutdown(fmt.Sprintf("received %s", sig))
 	}()
 
 	// Start embedded UI engine (optional — failure is non-fatal). R2988:
@@ -555,6 +544,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /luhmann/attach", srv.handleLuhmannAttach)
 	mux.HandleFunc("GET /luhmann/pty-status", srv.handleLuhmannStatus)
 	mux.HandleFunc("POST /luhmann/stop", srv.handleLuhmannStop)
+	// Portable graceful shutdown (windows-support Part 2): respond then tear
+	// down, so `ark stop` works without a signal on every platform. R3441.
+	mux.HandleFunc("POST /shutdown", srv.handleShutdown)
 	// External CLI directed hunt (bloodhound-CLI S3): submit + blocking result.
 	mux.HandleFunc("POST /bloodhound/search", srv.handleBloodhoundSearch)
 	mux.HandleFunc("GET /bloodhound/result", srv.handleBloodhoundResult)
@@ -624,6 +616,44 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// orchestrator owns event routing. A wrapper rather than a route because
 	// flib already registered /wait and a second registration would collide.
 	return http.Serve(listener, srv.gateFrictionlessWait(mux))
+}
+
+// gracefulShutdown tears the server down cleanly and exits 0: stop the
+// scheduler, close the watcher, shut the UI runtime, close the listener, close
+// the DB. It is the single teardown path shared by the SIGTERM/SIGINT handler
+// (R175) and the POST /shutdown endpoint (R3441), so the sequence is identical
+// on every platform — nothing external need deliver a signal, which Windows
+// does not do for SIGTERM.
+// CRC: crc-Server.md | R175, R3440
+func (srv *Server) gracefulShutdown(reason string) {
+	log.Printf("%s, shutting down", reason)
+	if srv.scheduler != nil {
+		srv.scheduler.Stop()
+	}
+	if srv.watcher != nil {
+		srv.watcher.Close()
+	}
+	if srv.uiRuntime != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		srv.uiRuntime.Shutdown(ctx)
+		cancel()
+	}
+	srv.listener.Close()
+	srv.db.Close()
+	os.Exit(0)
+}
+
+// handleShutdown responds and flushes, then runs the graceful teardown, so the
+// client receives its reply before the process exits — tearing down first would
+// drop the connection mid-request. This is the portable stop path `ark stop`
+// uses on every platform, since nothing external delivers SIGTERM on Windows.
+// CRC: crc-Server.md | R3441
+func (srv *Server) handleShutdown(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]string{"status": "shutting down"})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	srv.gracefulShutdown("received POST /shutdown")
 }
 
 // CRC: crc-Server.md | Seq: seq-rebuild-read-serve.md#2.3 | R2987

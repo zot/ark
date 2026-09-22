@@ -431,16 +431,37 @@ reported "no PID file found" against a running server.
 sure it's up" — already up means success). Message on stderr for
 humans.
 
-`ark stop` reads the ark-home PID file, verifies the process exists
-and is ark (handles PID rollover), sends SIGTERM, and polls until the
-process exits. Returns 1 if the process doesn't die within timeout.
-`-f` flag sends SIGKILL instead. If the ark-home PID file is absent it
-falls back once to the legacy temp-dir path (logging that it did) so a
-server started by the pre-move binary is still stoppable.
+`ark stop` requests a graceful shutdown over the unix socket: it POSTs
+`/shutdown` and treats a 200 response or the connection dropping
+mid-request as "teardown initiated". It then polls for release by
+dialing the socket — a successful dial means the server is still up, a
+refused dial means it is down and has released. It never uses `ark
+status` as a liveness check (status succeeds even with no server). The
+release wait is bounded by a timeout.
 
-Server signal handling: catch SIGTERM, close socket, close DB, exit
-0. The server process never removes the PID file — stale PID files
-are safe because `ark stop` verifies before killing.
+On timeout the fallback is platform-split. On Linux, `stop` force-kills
+the PID (read from the ark-home PID file, falling back once to the
+legacy temp-dir path, logging that it did) and re-polls, erroring if
+the kill fails or the process still will not release; the OS frees the
+socket and DB lock on death, so a kill is a safe last resort. On
+Windows, `stop` errors without killing — a failed graceful stop is
+surfaced for the user to resolve rather than risking a
+`TerminateProcess` that can leave the socket or DB lock held.
+
+`ark stop -f` force-kills the server on every platform (the one
+sanctioned `TerminateProcess` on Windows), the explicit escape hatch
+the user owns.
+
+Server shutdown: the graceful teardown (stop scheduler, close watcher,
+shut the UI runtime, close socket, close DB, exit 0) is a single
+reusable path invoked both by the Unix SIGTERM/SIGINT (Ctrl+C) handler
+and by the `POST /shutdown` endpoint, so `ark stop` shuts the server
+down the same way on every platform — nothing external need deliver a
+signal, which Windows does not do for SIGTERM. The endpoint responds
+and flushes before running the teardown so the client receives its
+reply before the process exits. The server process never removes the
+PID file — stale PID files are safe because `ark stop` verifies before
+killing.
 
 The current `defer os.Remove(pidPath)` in server.go should be
 removed.
