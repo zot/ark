@@ -140,7 +140,8 @@ The fan-out contract, all of it multi-client by design:
   is the user's business (tmux behaviour), not an error to arbitrate.
 - **Resize, smallest-wins.** The pty size is the minimum of all attached
   clients' sizes (tmux behaviour), recomputed whenever a client attaches,
-  detaches, or resizes, then pushed to the child via `SIGWINCH`. A disconnect
+  detaches, or resizes, then pushed to the child through the backend — a real
+`SIGWINCH` on Unix, `ResizePseudoConsole` on Windows. A disconnect
   is not special-cased: it re-runs the same minimum, so the pty *grows* when the
   smallest client leaves, just as it shrinks when a smaller client joins. With a
   single client this degenerates to that client's size.
@@ -348,7 +349,8 @@ Server required.
 ### `attach`
 
 A raw-mode client over the unix socket: stdin → pty, pty → stdout, with a
-tmux-style detach escape and `SIGWINCH` (resize) propagation. Detaching leaves
+tmux-style detach escape and resize propagation (`SIGWINCH` on Unix, a
+window-rect poll on Windows, which has no `SIGWINCH`). Detaching leaves
 the session running. On exit it restores the terminal **fully** — the termios
 line discipline *and* a sanitizing sequence undoing the DEC private modes the
 child set through its output (cursor visibility, bracketed paste, mouse

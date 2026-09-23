@@ -121,11 +121,20 @@ and unknown items carry the negative marker rather than a false green.
       stand-in (`ping -n 3`) self-cleared awake→asleep on its own, the watcher
       closing the master so the read chain EOF'd and finalize fired, with the
       launch reporting `claude exited during startup`.
-- [ ] **Part 1 — SIGWINCH.** Compile break **FIXED** (committed 2026-09-20);
-      **Windows resize detection still OPEN** (the Windows body is a no-op, a
-      stopgap not a finish). The detector is unit-testable alone (resize the
-      console, assert a send); its end-to-end test waits on Part 4.
-- [ ] **Test part 1 on Windows**
+- [x] **Part 1 — SIGWINCH.** Compile break **FIXED** (committed 2026-09-20).
+      **IMPLEMENTED 2026-09-23 (R3451, R3452):** the Windows client polls the
+      console window rect (no `SIGWINCH`) and re-reports its size. A second
+      Windows bug surfaced and was fixed: `term.GetSize` on the stdin console
+      handle returns "the handle is invalid" (measured on the VM), so the client's
+      size reads moved to stdout (R3451). Compiles Linux + Windows; the fd fix is
+      VM-confirmed, and the **interactive attach+resize is VERIFIED live
+      2026-09-23**: a real attach with a window resize showed the child's reported
+      size updating as the window changed, so the whole chain fired (poller →
+      resize frame → host → `ResizePseudoConsole`).
+- [x] **Test part 1 on Windows** — 2026-09-23, interactive attach over ssh: a live
+      window resize showed the size-printing stand-in updating its reported size
+      as the window changed, confirming client detection through to the host
+      resize.
 - [ ] **Part 3 — `os.Symlink` needs privilege on Windows.** **OPEN. Independent
       track** once the binary runs. Install, linkapp, and bundle extraction all
       create symlinks.

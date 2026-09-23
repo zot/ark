@@ -172,13 +172,13 @@ func luhmannAttachAction(_ context.Context, _ *ucli.Command) error {
 		})
 	}
 
-	// Report the initial size, then track SIGWINCH (R3120).
-	sendSize(conn, fd)
+	// Report the initial size, then track local resizes (R3120, R3452).
+	sendSize(conn)
 	winch := make(chan os.Signal, 1)
-	notifyWinch(winch) // SIGWINCH on Unix; a no-op on Windows (no such signal)
+	notifyWinch(winch) // SIGWINCH on Unix; a window-rect poll on Windows (R3452)
 	go func() {
 		for range winch {
-			sendSize(conn, fd)
+			sendSize(conn)
 		}
 	}()
 
@@ -206,7 +206,7 @@ func luhmannAttachAction(_ context.Context, _ *ucli.Command) error {
 // when the child repaints (on cancel via the repaint frame, R3136) or the client
 // exits (on detach).
 func showDetachPrompt() {
-	_, rows, err := term.GetSize(int(os.Stdin.Fd()))
+	_, rows, err := term.GetSize(sizeFd())
 	if err != nil || rows < 1 {
 		return
 	}
@@ -220,7 +220,7 @@ func showDetachPrompt() {
 // frame. Instant and local — the client wipes the overlay it painted, with no
 // child round-trip (a repaint frame would race the imminent disconnect).
 func clearDetachPrompt() {
-	_, rows, err := term.GetSize(int(os.Stdin.Fd()))
+	_, rows, err := term.GetSize(sizeFd())
 	if err != nil || rows < 1 {
 		return
 	}
@@ -228,9 +228,11 @@ func clearDetachPrompt() {
 	fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[2K\x1b8", rows)
 }
 
-// sendSize reports the local terminal size as a resize frame (R3120).
-func sendSize(conn net.Conn, fd int) {
-	w, h, err := term.GetSize(fd)
+// sendSize reports the local terminal size as a resize frame (R3120). The size
+// fd is platform-split (R3451): stdout on Windows, where GetConsoleScreenBufferInfo
+// rejects the stdin console handle.
+func sendSize(conn net.Conn) {
+	w, h, err := term.GetSize(sizeFd())
 	if err != nil {
 		return
 	}

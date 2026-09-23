@@ -1,5 +1,5 @@
 # PtyAttach
-**Requirements:** R3117, R3120, R3123, R3137, R3138, R3140, R3329
+**Requirements:** R3117, R3120, R3123, R3137, R3138, R3140, R3329, R3451, R3452
 
 The CLI-side `ark luhmann attach` client: a raw-mode terminal loop that connects
 to the hosted session over the unix socket. It is one implementation of
@@ -15,7 +15,7 @@ implementation of the same contract.
 ## Does
 - launchAction: proxy `ark luhmann launch` to `POST /luhmann/launch`, sending `bootstrap` and `model` only when the corresponding flag was given (R3329). Omitting an unset flag is what lets the server treat absent and empty identically and fall back to config, so the CLI never has to know the default.
 - attach: put the local terminal in raw mode, connect to the PtyHost, then pipe stdin → host and host → stdout until detach or disconnect (R3123). Detaching leaves the session running.
-- reportSize: send the terminal size on connect and on every local `SIGWINCH`, so the host can recompute the min (R3120).
+- reportSize: send the terminal size on connect and on every local resize, so the host can recompute the min (R3120). A local resize is a `SIGWINCH` on Unix and a polled window-rect change on Windows, which has no `SIGWINCH` (R3452). The size is read from a platform-valid handle — stdout on Windows, where `GetConsoleScreenBufferInfo` rejects the stdin console handle that still serves raw mode (R3451).
 - receiveOutput: write the host's broadcast bytes to stdout — the client-interface output sink (R3117).
 - sendInput: forward local stdin to the host — the client-interface input source (R3117) — except the detach escape, which it consumes locally (R3123).
 - requestRepaint: send a `repaint` frame to the host immediately after connecting, so this freshly attached (or re-attached) client sees the current full screen at once instead of only subsequent output (R3137). The host does the redraw via a forced `SIGWINCH` (R3136); the client cannot, since neither it nor ark models the screen (R3115).
@@ -24,7 +24,7 @@ implementation of the same contract.
 
 ## Collaborators
 - PtyHost: the server-side host it attaches to as one client (R3117); receives broadcast output, sends input and size.
-- local terminal: raw mode and `SIGWINCH` (R3123, R3120).
+- local terminal: raw mode on stdin, and local-resize detection — `SIGWINCH` on Unix, a window-rect poll on Windows (R3123, R3120, R3452).
 
 ## Sequences
 - seq-pty-attach.md
