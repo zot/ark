@@ -96,14 +96,31 @@ and unknown items carry the negative marker rather than a false green.
       process gone, server logged `received POST /shutdown, shutting down`), where
       the 09-19 binary said "not running." Surfaced a pre-existing shutdown-race
       (process exits 1 on the closed-listener error, racing gracefulShutdown's
-      exit 0; safe under bbolt). **Fixed by R3446** (atomic shutdown latch); re-verified live
+      exit 0; safe under bbolt). **Fixed by R3446** (atomic shutdown latch, committed 1e4643c); re-verified live
       2026-09-22: graceful stop now exits 0 with no `error: accept` line.
-- [ ] **Part 4 — the managed-pty path assumes a Unix terminal.** **OPEN. Before
-      Part 1's test.** Required under parity: Luhmann must host on Windows (ConPTY
+- [x] **Part 4 — the managed-pty path assumes a Unix terminal.** **VERIFIED on
+      Windows 2026-09-23. Was the gate before Part 1's test.** Required under parity: Luhmann must host on Windows (ConPTY
       child, `ResizePseudoConsole`, `TerminateProcess`, VT-mode attach). Proving
       Part 1 end to end needs a Windows-hosted session to attach to, so this
-      precedes it.
-- [ ] **Test part 4 on Windows**
+      precedes it. **DESIGN DECIDED 2026-09-23 (Bill, after a live Windows spike):
+      (b) — creack/pty on Unix + UserExistsError/conpty on Windows, behind a
+      `ptyMaster`/`ptyChild` seam** (a type substitution for the `*os.File`
+      master, not a three-syscall swap). The spike ruled out both unified
+      libraries: go-pty drags in x/crypto+u-root, and phuslu/pty mis-binds its
+      ConPTY child on Windows 26200. **IMPLEMENTED 2026-09-23 (R3447–R3450):**
+      `pty_backend.go` (the seam), `pty_backend_unix.go` (creack),
+      `pty_backend_windows.go` (conpty), and the `ptyhost.go` rework; compiles
+      Linux + Windows, the 31 Unix PtyHost tests pass, and the Windows path is
+      **VERIFIED live 2026-09-23** (dockur VM, build 26200): ConPTY spawn, hosted
+      session, `stop` then TerminateProcess, and self-exit then finalize all
+      confirmed. See Part 4.
+- [x] **Test part 4 on Windows** — 2026-09-23 live on the dockur VM (build
+      26200). A `[luhmann] command` stand-in launched a ConPTY session (`status`
+      reported awake, the master installed); `luhmann stop` terminated it
+      (TerminateProcess) and status returned to asleep; and a self-exiting
+      stand-in (`ping -n 3`) self-cleared awake→asleep on its own, the watcher
+      closing the master so the read chain EOF'd and finalize fired, with the
+      launch reporting `claude exited during startup`.
 - [ ] **Part 1 — SIGWINCH.** Compile break **FIXED** (committed 2026-09-20);
       **Windows resize detection still OPEN** (the Windows body is a no-op, a
       stopgap not a finish). The detector is unit-testable alone (resize the
@@ -290,26 +307,147 @@ SIGWINCH spot Part 1 touched, and under the parity commitment every one of those
 assumptions is now in scope: a Windows user hosts a Luhmann session on their own
 box, so this is a required part, not a dev-box luxury. (The earlier draft marked
 it low priority on the reasoning that a Windows user is only a client; parity
-retires that reasoning.) The Unix-only spots found so far:
+retires that reasoning.) The Unix-only spots, now each confirmed against the code:
 
-- **Spawning the child in a terminal.** The host runs the session under a Unix
-  pty. Windows has no pty; the equivalent is a pseudoconsole (ConPTY,
-  `CreatePseudoConsole`, Windows 10 1809+). The clean shape is a cross-platform
-  pty seam behind the current interface, the same move fsnotify already gives
-  Part 8; a Go ConPTY wrapper exists, so this is known-shape work rather than a
-  research unknown, but it is real and unbuilt.
-- **Resizing the child.** `ResizePseudoConsole` on Windows where Unix does a pty
-  `TIOCSWINSZ`. This is the host end of Part 1.
-- **Stopping the child.** `ptyhost.go:890` sends `SIGTERM`, which fails on
-  Windows; the Windows path is `TerminateProcess` (or a console `CTRL_BREAK` to
-  the group for a graceful stop), the same platform split Part 2 faces on the
-  server.
+- **Spawning the child in a terminal.** `ptyhost.go:372` calls
+  `pty.StartWithSize(cmd, …)`. creack/pty's `start_windows.go` is a compile-only
+  stub returning `ErrUnsupported` (confirmed 2026-09-23), so the feature links on
+  Windows and then dies at the first launch with no master. The equivalent is a
+  pseudoconsole (ConPTY, `CreatePseudoConsole`, Windows 10 1809+). A Go ConPTY
+  wrapper exists, so this is known-shape work, not a research unknown.
+- **Resizing the child.** `setSizeLocked` (`ptyhost.go:727`) calls
+  `pty.Setsize(master, …)`, the same Windows stub returning `ErrUnsupported`
+  (`winsize_unsupported.go`). Its analog is `ResizePseudoConsole`. This is the
+  host end of Part 1; R3120 is met on both ends of the wire or on neither.
+- **Stopping the child.** `gracefulShutdown` (`ptyhost.go:890`) sends
+  `syscall.SIGTERM`. The escalation `child.Process.Kill()` at 896 already maps to
+  `TerminateProcess` and is portable, but the graceful first step is not. The
+  Windows analog is a console `CTRL_BREAK` to the process group, the platform
+  split Part 2 already settled for the server.
 - **Raw-mode attach.** The client hijacks the socket into raw terminal mode and
-  reads a byte stream; on Windows that means enabling the console's VT
-  input/output modes and settling the `pipeInput` reader question from Part 1.
+  reads a byte stream. On Windows that means enabling the console's VT
+  input/output modes and settling the single-reader `pipeInput` question Part 1
+  raised.
+
+**What the seam actually is.** The instinct is to read this as three missing
+syscalls behind three build tags. The code says otherwise. `PtyHost` stores the
+master as a concrete `*os.File` (`ptyhost.go:185`) and mirrors it in an
+`atomic.Pointer[os.File]` (177) for the lock-free input path. That one handle
+does three jobs at once: the output stream the reader chain blocks on (`m.Read`,
+478), the input stream `inputLoop` writes (`m.Write`, 631), and the object
+`pty.Setsize` resizes (727). A Unix pty master is all three because the kernel
+makes one fd carry them. ConPTY does not. It hands back an input pipe, an output
+pipe, and a separate `HPCON` that `ResizePseudoConsole` acts on. The Unix
+assumption at the center of Part 4 is a *type*, "the master is one file," rather
+than a call.
+
+That makes the honest seam a pair of small interfaces, not a `//go:build` swap of
+three functions:
+
+- `ptyMaster`: `io.ReadWriteCloser` plus `Resize(cols, rows uint16) error`. The
+  Unix build wraps the creack/pty `*os.File`, where read, write, and close pass
+  through and `Resize` calls `pty.Setsize`. The Windows build wraps the ConPTY
+  object, where `Read` drains the output pipe, `Write` fills the input pipe,
+  `Resize` calls `ResizePseudoConsole`, and `Close` tears down the pseudoconsole
+  and its pipes.
+- `ptyChild`: `Wait()` plus a graceful `Stop()` and a `Kill()`. The Unix build
+  wraps `*exec.Cmd` (SIGTERM, then the existing Kill). The Windows build wraps
+  whatever the ConPTY spawn returns (`CTRL_BREAK`, then `TerminateProcess`).
+
+A construction seam ties them together: `startPty(argv, size) (ptyMaster,
+ptyChild, error)`, build-tag split, replacing the bare `exec.Command` plus
+`pty.StartWithSize` pair at `ptyhost.go:369`. One cost surfaces here rather than
+mid-implementation: `atomic.Pointer[os.File]` cannot hold an interface, so
+`masterPtr` becomes `atomic.Pointer[T]` over the concrete wrapper struct (or an
+`atomic.Value`), and that is the most load-bearing line in the concurrency model.
+
+**The library fork (open).** Four ways to get a real ConPTY behind that seam, and
+the choice is a principle question as much as a code one.
+
+(a) **One cross-platform pty library** (`aymanbagabas/go-pty` or similar): a
+single API wrapping creack/pty on Unix and ConPTY on Windows, so `ptyMaster` and
+`ptyChild` have one implementation each and both platforms run the same
+integration code. This is the shape Part 2 chose deliberately, a unified path
+both platforms exercise, so a bug surfaces on Linux where it is cheap and no
+Windows-only branch is left to rot the way O212 and the `withFTS` dead code did.
+The catch: it reworks the verified Steam Deck path to gain Windows, and it adds a
+dependency in the concurrency-critical spot.
+
+(b) **Keep creack/pty on Unix, add a Windows-only ConPTY**
+(`UserExistsError/conpty` behind the seam): the verified Linux path stays
+untouched byte-for-byte and Windows gets its own implementation. This is
+don't-poke-the-bear applied to the path that is load-bearing on the Steam Deck.
+The catch is the mirror of (a)'s virtue: the Windows pty code becomes a config
+only Windows users ever run, the rot-shape Part 2 argued against, kept honest
+only by the Windows test loop.
+
+(c) **A creack/pty fork with ConPTY** (`photostorm/pty` or similar): smallest diff
+if the fork truly presents ConPTY under creack's existing API, since the import
+path changes and little else. Two doubts hold it back until a spike checks them:
+a fork's maintenance and trust, and whether a drop-in `Setsize(*os.File)` can
+honestly carry a resize that is fundamentally an `HPCON` operation.
+
+(d) **Hand-roll ConPTY on `x/sys/windows`**: no dependency beyond what is already
+transitive, maximum control, most code. The carve's own "a Go ConPTY wrapper
+exists" is the argument against reinventing it.
+
+The tension that decides this is (a) versus (b). Part 2's precedent points at the
+unified path (a); the don't-poke-the-bear rule points at the isolated one (b).
+The pull toward (a) is stronger than it first looks, because go-pty wraps creack
+on Unix, so the bear being poked is ark's integration code, not the pty syscalls.
+The tension that first decided this was (a) versus (b), and (a) won on the
+unified-path argument. A verification spike overturned it. Run 2026-09-23 against
+the dockur VM (Windows 10.0.26200), it disqualified both unified libraries and
+validated the isolated one:
+
+- **go-pty (a): rejected.** Its `ssh.go` is unconditionally in `package pty` and
+  imports `x/crypto/ssh` and `u-root/pkg/termios`, so importing it forces two new
+  modules into ark for a feature ark never calls, with no opt-out.
+- **phuslu/pty (a-variant): rejected on the evidence, reluctantly.** Zero
+  dependencies, and its Unix path is flawless (the spike drove a real bash from
+  24×80 to 40×120 and the child observed it). But on Windows 26200 its ConPTY
+  child fails to bind to the pseudoconsole: the child renders to the *parent*
+  console and the read pipe carries only conhost's control stream, so the child's
+  real output is lost. phuslu's own test suite reproduces it (four round-trip
+  tests fail), so it is a genuine library bug on this build rather than a harness
+  artifact. The likely mechanism is a `CreateProcess` isolation gap, fixable in
+  principle, but not a bet worth making on an untagged single-author library for a
+  shipped binary.
+- **UserExistsError/conpty (b): validated.** It binds the child reliably in every
+  console state, and the full-job probe passed: interactive input round-trips,
+  `Resize` drove the child's real dimensions (`mode con` reported the new 40×120),
+  and Wait+Close gave a clean EOF teardown. It needs no new module, since x/sys is
+  already present. Its one quirk, an output pipe that stays open until Close
+  rather than EOF-ing on child exit, is documented behavior and matches ark's
+  existing finalize-then-close flow. (The symptom class and this EOF behavior are
+  the ones openai/codex #45504 and egarim/telekinesis #49 describe.)
+
+**DECIDED (Bill, 2026-09-23): (b) — creack/pty on Unix, UserExistsError/conpty on
+Windows, behind the `ptyMaster`/`ptyChild` seam.** The unified-path virtue that
+first favoured (a) turned out to be unreachable: one candidate is too heavy, the
+other mis-binds on the target build. (b)'s cost is the two implementations ark
+maintains, the rot risk Part 2 named, held in check by the Windows test loop this
+spike established.
+
+Implementation notes the seam already absorbs: conpty takes a command-line string
+instead of an `*exec.Cmd`, so the Windows `ptyChild` wraps a `*conpty.ConPty`
+(Pid, Wait, Close) and composes argv into a command line; there is no
+`cmd.Process` on Windows; the child's output EOF arrives from Wait+Close, not from
+the read itself; and the Windows stop is a terminate rather than a graceful
+`CTRL_BREAK`, the same platform asymmetry Part 2 already accepts.
+
+**Landed 2026-09-23.** The seam is `pty_backend.go` (the `ptyMaster`/`ptyChild`
+interfaces plus a `ptyMasterRef` so `masterPtr` stays an `atomic.Pointer` that can
+clear to nil), `pty_backend_unix.go` (creack + `*exec.Cmd`, byte-for-byte the old
+behavior), and `pty_backend_windows.go` (conpty). One Windows-specific wrinkle the
+VM test confirmed live 2026-09-23: conpty's output pipe does not EOF on child exit until Close,
+so the Windows backend runs a watcher that closes the master when the child exits,
+which is what makes the read chain's self-exit finalize fire (R3343). The graceful
+flush window is Unix-only (Windows `SignalGraceful` is a no-op), so a Windows stop
+elapses the grace then `TerminateProcess`es the child.
 
 Kept as its own part so "ark works on Windows" is never claimed while a whole
-verb group silently does not — but now as work owed, not work waived.
+verb group silently does not, now as work owed rather than work waived.
 
 <a id="5"></a>
 

@@ -235,6 +235,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-LuhmannSend.md → `luhmann_send.go`
 - [x] crc-LuhmannEvents.md → `luhmann_events.go`
 - [x] crc-PtyHost.md → `ptyhost.go`, `pty_server.go`
+- [x] crc-PtyBackend.md → `pty_backend.go`, `pty_backend_unix.go`, `pty_backend_windows.go`
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`
 - [x] crc-PtyBrowser.md → `pty_browser.go`
 - [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
@@ -1203,3 +1204,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T281: R172 retired by R3442 (2026-09-22 windows-support Part 2: stop no longer sends SIGTERM; it POSTs /shutdown over the socket)
 - T282: R173 retired by R3443 (2026-09-22 windows-support Part 2: release is a socket dial poll, not a process-exit poll)
 - T283: R174 retired by R3445 (2026-09-22 windows-support Part 2: stop -f force-kills on every platform (TerminateProcess on Windows), not SIGKILL-only)
+- [ ] O217: The Windows pty backend has no automated test; it is verified live on the VM instead. `pty_backend_windows.go` is `//go:build windows`, so the conpty-based `windowsMaster`/`windowsChild`, `composeCmdline`, and the self-exit watcher cannot run on the Linux CI box; and the root package's test binary will not cross-compile to Windows, because unrelated yzma/llama `_test.go` files reference a Unix-only llama API, so `GOOS=windows go test -c ./` fails to build. So the Windows path is proven by a live dockur-VM run (2026-09-23, build 26200: ConPTY spawn, hosted `status`, `luhmann stop` then TerminateProcess, and a self-exiting stand-in then watcher then finalize then asleep) rather than by an automated test. Disproportionate to automate now: it needs a Windows VM, not a fake-and-zero-value. Close it if/when the root test binary is made to cross-compile (tag or move the llama tests) and a windows-tagged ptyhost integration test lands. R3447, R3449, R3450.

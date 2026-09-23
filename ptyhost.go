@@ -13,15 +13,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 const (
@@ -174,7 +170,7 @@ type PtyHost struct {
 	jobs *ChanSvc    // actor: client set + lifecycle state
 	inCh chan []byte // serialized input funnel → inputLoop → master (R3119)
 
-	masterPtr atomic.Pointer[os.File] // current master, for inputLoop's lock-free read
+	masterPtr atomic.Pointer[ptyMasterRef] // current master, for inputLoop's lock-free read
 
 	// There is no client-count mirror. R3328 kept one so the reader could skip a
 	// *synchronous* actor round-trip when nobody was attached; the reader posts
@@ -182,15 +178,16 @@ type PtyHost struct {
 	// actor is once again the only place the client set is known.
 
 	// actor-owned — touch ONLY inside a jobs closure:
-	master    *os.File
-	child     *exec.Cmd
+	master    ptyMaster
+	child     ptyChild
 	clients   map[*ptyClientReg]struct{}
 	sessionID string
 	launching bool
 
-	// resizeSink applies a recomputed pty size. nil in production → pty.Setsize
-	// on the master (the real SIGWINCH). A seam so the deterministic smallest-
-	// wins logic (R3120) is unit-testable without a real pty (test-PtyHost.md).
+	// resizeSink applies a recomputed pty size. nil in production → the master's
+	// Resize (a real SIGWINCH on Unix, ResizePseudoConsole on Windows). A seam so
+	// the deterministic smallest-wins logic (R3120) is unit-testable without a
+	// real pty (test-PtyHost.md).
 	resizeSink func(PtyWinsize)
 
 	// No trust-dialog state lives here: it is per-launch and owned by that
@@ -366,10 +363,8 @@ func (h *PtyHost) LaunchReserved(bootstrap, model string) (sessionID string, err
 		return "", fmt.Errorf("launch: empty child command")
 	}
 	// Fork the pty and start the child as a child of the server (R3116).
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = h.env.LuhmannDir()
-	cmd.Env = ptyChildEnv()
-	master, ferr := pty.StartWithSize(cmd, &pty.Winsize{Rows: ptyInitRows, Cols: ptyInitCols})
+	dir := h.env.LuhmannDir()
+	master, child, ferr := startPty(argv, dir, ptyChildEnv(), ptyInitCols, ptyInitRows)
 	if ferr != nil {
 		return "", fmt.Errorf("start claude: %w", ferr)
 	}
@@ -379,10 +374,10 @@ func (h *PtyHost) LaunchReserved(bootstrap, model string) (sessionID string, err
 	// *state*; that comes from the JSONL tap, not this stream (R3115).
 	_ = svcSyncVoid(h.jobs, func() error {
 		h.master = master
-		h.child = cmd
+		h.child = child
 		return nil
 	})
-	h.masterPtr.Store(master)
+	h.masterPtr.Store(&ptyMasterRef{master})
 
 	// R3128: a directory Claude Code has not seen shows a "trust this folder"
 	// dialog that would swallow the bootstrap. If this project is new, arm the
@@ -390,7 +385,7 @@ func (h *PtyHost) LaunchReserved(bootstrap, model string) (sessionID string, err
 	// dialog first. Armed only for new projects, so it cannot misfire on a
 	// normal session's later output.
 	var trust *trustAccepter
-	if isNewClaudeProject(cmd.Dir) {
+	if isNewClaudeProject(dir) {
 		trust = newTrustAccepter(h.Input)
 	}
 	// One buffer, allocated once for this launch, then handed around for the life
@@ -437,7 +432,7 @@ func (h *PtyHost) LaunchReserved(bootstrap, model string) (sessionID string, err
 
 // hosting reports whether m is still the installed master — false once the child
 // has exited and finalize has run. The launch fail-fast check.
-func (h *PtyHost) hosting(m *os.File) bool {
+func (h *PtyHost) hosting(m ptyMaster) bool {
 	var ok bool
 	_ = svcSyncVoid(h.jobs, func() error { ok = h.master == m; return nil })
 	return ok
@@ -473,7 +468,7 @@ func (h *PtyHost) hosting(m *os.File) bool {
 // avoid paying; a blocking send on a full jobs queue is the only back-pressure,
 // and it cannot deadlock because the actor never waits on a reader.
 // CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.1 | R3333, R3334, R3335
-func (h *PtyHost) startRead(m *os.File, buf []byte, trust *trustAccepter) {
+func (h *PtyHost) startRead(m ptyMaster, buf []byte, trust *trustAccepter) {
 	go func() {
 		n, rerr := m.Read(buf)
 		if n > 0 && trust != nil && trust.armed.Load() {
@@ -504,7 +499,7 @@ func (h *PtyHost) startRead(m *os.File, buf []byte, trust *trustAccepter) {
 // rather than finalize: this closure is already running on the actor, and the
 // wrapper would post to the actor it is running on and self-deadlock.
 // CRC: crc-PtyHost.md | Seq: seq-pty-attach.md#1.3.3 | R3115, R3323, R3333, R3343
-func (h *PtyHost) onRead(m *os.File, buf []byte, n int, rerr error, trust *trustAccepter) {
+func (h *PtyHost) onRead(m ptyMaster, buf []byte, n int, rerr error, trust *trustAccepter) {
 	live := h.master == m
 	if n > 0 && live {
 		h.distributeLocked(buf[:n])
@@ -717,14 +712,15 @@ func (h *PtyHost) minSizeLocked() (PtyWinsize, bool) {
 }
 
 // setSizeLocked applies a pty size to the child — through the resizeSink seam
-// when set (tests), else a real TIOCSWINSZ on the master.
+// when set (tests), else the master's Resize (a real SIGWINCH on Unix,
+// ResizePseudoConsole on Windows).
 func (h *PtyHost) setSizeLocked(size PtyWinsize) {
 	if h.resizeSink != nil {
 		h.resizeSink(size)
 		return
 	}
 	if h.master != nil {
-		_ = pty.Setsize(h.master, &pty.Winsize{Rows: size.Rows, Cols: size.Cols})
+		_ = h.master.Resize(size.Cols, size.Rows)
 	}
 }
 
@@ -790,7 +786,7 @@ func (h *PtyHost) ForceRepaint() {
 // never reaches this function at all (R3323).
 // CRC: crc-PtyHost.md | R3125, R3324
 func (h *PtyHost) Stop() error {
-	var m *os.File
+	var m ptyMaster
 	_ = svcSyncVoid(h.jobs, func() error {
 		m = h.master
 		return nil
@@ -835,7 +831,7 @@ func (h *PtyHost) Status() (hosted bool, sessionID string) {
 // driven by deregistration then finds no seat owner, so it cannot stand a fresh
 // secretary up into the session being torn down.
 // CRC: crc-PtyHost.md | R3114, R3116, R3125, R3323, R3324
-func (h *PtyHost) finalize(m *os.File, reason string) {
+func (h *PtyHost) finalize(m ptyMaster, reason string) {
 	// Set only by the call that actually finalizes, so it doubles as the
 	// exactly-once guard for the off-actor recording below.
 	var session string
@@ -857,7 +853,7 @@ func (h *PtyHost) finalize(m *os.File, reason string) {
 // minSizeLocked). The caller owns the recording, which must stay off the actor
 // (DB appends) and after the seat release (R3323).
 // CRC: crc-PtyHost.md | R3114, R3116, R3125, R3323
-func (h *PtyHost) finalizeLocked(m *os.File) string {
+func (h *PtyHost) finalizeLocked(m ptyMaster) string {
 	if h.master != m {
 		return "" // already finalized (self-exit + Stop race)
 	}
@@ -880,20 +876,23 @@ func (h *PtyHost) finalizeLocked(m *os.File) string {
 	return session
 }
 
-// gracefulShutdown asks the child to exit with SIGTERM, waits up to ptyStopGrace,
-// escalates to SIGKILL if it is still alive, reaps it, then closes the master
-// (R3125). Safe for both a Stop (child alive → graceful, then hard-kill on hang)
-// and a child self-exit (child already dead → the signal is a harmless no-op).
-// Without this, a launch-confirmation failure or a Stop would leak `claude`.
-func gracefulShutdown(child *exec.Cmd, m *os.File) {
-	if child != nil && child.Process != nil {
-		_ = child.Process.Signal(syscall.SIGTERM)
+// gracefulShutdown asks the child to exit gracefully, waits up to ptyStopGrace,
+// escalates to a hard kill if it is still alive, reaps it, then closes the master
+// (R3125, R3450). The graceful signal is a SIGTERM on Unix and a no-op on Windows,
+// and the kill is SIGKILL / TerminateProcess; both go through the backend so this
+// function names no OS. Safe for both a Stop (child alive → graceful, then
+// hard-kill on hang) and a child self-exit (child already dead → the primitives
+// are harmless no-ops). Without this, a launch-confirmation failure or a Stop
+// would leak `claude`.
+func gracefulShutdown(child ptyChild, m ptyMaster) {
+	if child != nil {
+		_ = child.SignalGraceful()
 		done := make(chan struct{})
-		go func() { _, _ = child.Process.Wait(); close(done) }() // reap; avoid a zombie
+		go func() { _ = child.Wait(); close(done) }() // reap; avoid a zombie
 		select {
 		case <-done:
 		case <-time.After(ptyStopGrace):
-			_ = child.Process.Kill()
+			_ = child.Kill()
 			<-done
 		}
 	}
@@ -909,7 +908,7 @@ func gracefulShutdown(child *exec.Cmd, m *os.File) {
 // This is the authoritative, content-free launch confirmation: it fires only
 // once the launched session has loaded /luhmann and run `ark luhmann next
 // --first`. Fails fast if the child exits before claiming (master uninstalled).
-func (h *PtyHost) waitSeatClaim(m *os.File, timeout time.Duration) (string, error) {
+func (h *PtyHost) waitSeatClaim(m ptyMaster, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		if owner := h.env.SeatOwner(); owner != "" {

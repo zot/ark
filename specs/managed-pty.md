@@ -1,8 +1,9 @@
 # Managed PTY Session — ark hosts a Claude Code session in a pty
 
 Language: Go. Environment: `ark serve` (the long-running server process)
-holds the pty master via `creack/pty` (pure Go, so the CGO-free build is
-preserved); the CLI `attach` client rides the existing unix-socket API.
+holds the pty master through a platform-neutral backend seam: `creack/pty` on
+Unix, a ConPTY (pseudoconsole) on Windows, both pure Go so the CGO-free build is
+preserved. The CLI `attach` client rides the existing unix-socket API.
 
 `ark serve` can host a Claude Code session inside a pty: it holds the pty
 **master**, runs `claude` as a child process, and fans the byte stream out to
@@ -41,6 +42,27 @@ own terminal, or a browser xterm.js later). ark's own reading of what the
 session did comes from the **JSONL chat log** (the RecallWatcher tap). "Send
 and receive" are therefore two different wires: send is the pty write side,
 receive is the JSONL read side.
+
+## Platform backend — Unix pty and Windows ConPTY
+
+The host runs on Windows as well as Unix, under ark's parity commitment: a
+Windows install hosts its own Luhmann session, so the pty host is not Unix-only.
+The mechanism that differs by OS is confined behind a backend seam, so the host,
+the fan-out, the resize logic, and the teardown are all platform-neutral and the
+platform code lives in one place.
+
+The seam offers three operations to the host: spawn a child attached to a
+terminal, resize that terminal, and read and write its byte stream. On Unix the
+backend is `creack/pty` driving a real pty, and the child is stopped with process
+signals (SIGTERM then SIGKILL). On Windows the backend is a ConPTY pseudoconsole
+(`CreatePseudoConsole` / `ResizePseudoConsole`), and the child is stopped with
+`TerminateProcess`. Both are pure Go, so the CGO-free build holds on both targets.
+
+One behavior does not cross: the graceful flush window `stop` gives the child.
+It comes from a Unix SIGTERM the child traps; the Windows pseudoconsole has no
+equivalent, so a Windows stop terminates the child directly. This is the same
+platform asymmetry the server's own shutdown accepts, and it is stated here
+rather than papered over.
 
 ## Architecture
 
@@ -345,7 +367,8 @@ is what a UI lamp and the CLI test both read. Server required.
 
 A **graceful teardown** of the hosted session, not a bare kill: the child is
 asked to exit and given time to flush its transcript before it is killed
-outright. The seat-lease release and the pool secretaries' exit records are not
+outright. On Windows there is no graceful-signal equivalent, so the child is
+terminated directly (see Platform backend). The seat-lease release and the pool secretaries' exit records are not
 this verb's own doing — they are the teardown obligations above, discharged
 identically when the child exits on its own. What `stop` contributes is the
 reason carried into those records, which says the teardown was ark's. (UI

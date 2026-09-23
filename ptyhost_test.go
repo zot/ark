@@ -162,18 +162,28 @@ func testPipe(t *testing.T) (r, w *os.File) {
 	return r, w
 }
 
-// fakeMaster returns a non-nil *os.File to stand in for the pty master.
-func fakeMaster(t *testing.T) *os.File {
+// testMaster adapts an *os.File to a ptyMaster for tests. Resize is a no-op: the
+// fan-out tests drive resize through resizeSink, never the real master.
+type testMaster struct{ f *os.File }
+
+func (m *testMaster) Read(p []byte) (int, error)     { return m.f.Read(p) }
+func (m *testMaster) Write(p []byte) (int, error)    { return m.f.Write(p) }
+func (m *testMaster) Close() error                   { return m.f.Close() }
+func (m *testMaster) Resize(cols, rows uint16) error { return nil }
+
+// fakeMaster returns a ptyMaster backed by a fresh pipe's write end, to stand in
+// for the real pty master.
+func fakeMaster(t *testing.T) ptyMaster {
 	t.Helper()
 	_, w := testPipe(t)
-	return w
+	return &testMaster{f: w}
 }
 
 // installMaster wires a fake master (and optional resize sink) through the actor.
-func installMaster(h *PtyHost, m *os.File, sink func(PtyWinsize)) {
+func installMaster(h *PtyHost, m ptyMaster, sink func(PtyWinsize)) {
 	_ = svcSyncVoid(h.jobs, func() error {
 		h.master = m
-		h.masterPtr.Store(m)
+		h.masterPtr.Store(&ptyMasterRef{m})
 		h.resizeSink = sink
 		return nil
 	})
@@ -489,7 +499,7 @@ func TestPtyHostReadCycleDeliversEveryChunk(t *testing.T) {
 func TestPtyHostInputSerialized(t *testing.T) {
 	h := NewPtyHost(fakePtyEnv{})
 	r, w := testPipe(t)
-	h.masterPtr.Store(w) // Input drains through masterPtr
+	h.masterPtr.Store(&ptyMasterRef{&testMaster{f: w}}) // Input drains through masterPtr
 
 	a := bytes.Repeat([]byte{'A'}, 1000)
 	b := bytes.Repeat([]byte{'B'}, 1000)
@@ -797,12 +807,13 @@ func installSession(h *PtyHost, sid string) {
 func hostOnPipe(t *testing.T, env PtyEnv, sid string) (*PtyHost, *os.File) {
 	t.Helper()
 	r, w := testPipe(t)
+	rm := &testMaster{f: r}
 	h := NewPtyHost(env)
-	installMaster(h, r, func(PtyWinsize) {})
+	installMaster(h, rm, func(PtyWinsize) {})
 	if sid != "" {
 		installSession(h, sid)
 	}
-	h.startRead(r, make([]byte, ptyReadChunk), nil)
+	h.startRead(rm, make([]byte, ptyReadChunk), nil)
 	return h, w
 }
 
